@@ -4,20 +4,23 @@
 
 #pragma once
 
-#include <QQuickRhiItem>
 #include <QtGui/rhi/qrhi.h>
-#include <QtGui/rhi/qshader.h>
 
+#include <QQuickRhiItem>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
+#include "ui/editor_rhi/viewport_composite_pass.hpp"
+#include "ui/editor_rhi/viewport_mask_coverage_layer.hpp"
 #include "ui/viewer/viewer_view_state.hpp"
 
 namespace alcedo::editor_rhi {
@@ -32,6 +35,15 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   EditorViewportRenderer();
   ~EditorViewportRenderer() override;
 
+  /// Shared slot published by EditorViewportItem so a render-thread
+  /// presentation opportunity can reach this renderer without the GUI thread.
+  /// The destructor clears the slot with CAS when it still points at `this`.
+  void SetConsumeArmSlot(std::shared_ptr<std::atomic<EditorViewportRenderer*>> slot);
+  /// Arm the owning node's render-pending flag so the current render pass
+  /// consumes a Ready frame. Render thread only (inside beforeRendering or
+  /// the node's render path).
+  void ArmForPresent();
+
  protected:
   void initialize(QRhiCommandBuffer* command_buffer) override;
   void synchronize(QQuickRhiItem* item) override;
@@ -45,30 +57,20 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   };
 
   struct LayerState {
-    QRhiTexture* texture = nullptr;
-    int width = 0;
-    int height = 0;
-    bool imported = false;
-    bool valid = false;
-    int slot_index = -1;
+    QRhiTexture*                   texture    = nullptr;
+    int                            width      = 0;
+    int                            height     = 0;
+    bool                           imported   = false;
+    bool                           valid      = false;
+    int                            slot_index = -1;
     // Keeps Metal (or other producer-owned) textures alive until QRhi release.
-    std::shared_ptr<const void> imported_owner{};
-    std::uintptr_t imported_native_handle = 0;
-    FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
-    FramePreviewMetadata preview_metadata{};
+    std::shared_ptr<const void>    imported_owner{};
+    std::uintptr_t                 imported_native_handle = 0;
+    FramePresentationMode          presentation_mode      = FramePresentationMode::FullFrame;
+    FramePreviewMetadata           preview_metadata{};
+    // ResolveRenderGeometry result of the frame; maps coverage to this layer (SM8.6).
+    ResolvedRenderGeometry         geometry{};
     DirectPresentQueue::ReadyFrame ready_frame{};
-  };
-
-  struct UniformData {
-    float scale_zoom[4] = {1.0f, 1.0f, 1.0f, 0.0f};
-    float pan_mode[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    float detail_roi[4] = {0.0f, 0.0f, 1.0f, 1.0f};
-    float detail_flags[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-  };
-
-  struct VertexData {
-    float position[2];
-    float uv[2];
   };
 
  private:
@@ -76,64 +78,59 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
     return static_cast<std::size_t>(layer);
   }
   [[nodiscard]] auto layerForRole(FrameRole role) const -> LayerId;
-  [[nodiscard]] auto loadShader(const char* path) const -> QShader;
-  void destroyResource(QRhiTexture*& resource);
-  void destroyResource(QRhiBuffer*& resource);
-  void destroyResource(QRhiSampler*& resource);
-  void destroyResource(QRhiShaderResourceBindings*& resource);
-  void destroyResource(QRhiGraphicsPipeline*& resource);
-  void releaseLayer(LayerState& layer);
-  void releaseResources();
-  void releaseQueuedNatives();
-  void ensureStaticResources(QRhiRenderTarget* render_target,
-                             QRhiCommandBuffer* command_buffer);
+  void               destroyResource(QRhiTexture*& resource);
+  void               releaseLayer(LayerState& layer);
+  void               releaseResources();
+  void               releaseQueuedNatives();
   void fulfillTargetRequests();
   void consumeDirectFrames();
-  void consumeHostFrames(QRhiResourceUpdateBatch* updates);
+  void               consumeHostFrames(QRhiResourceUpdateBatch* updates);
   void consumeImportedGpuFrames();
   [[nodiscard]] auto selectedPrimaryLayer() const -> const LayerState*;
   [[nodiscard]] auto selectedDetailLayer() const -> const LayerState*;
   [[nodiscard]] auto hasVisibleDetailPatch() const -> bool;
   // base: QualityBase preferred, else full-frame InteractivePrimary.
-  [[nodiscard]] auto detailPatchAspectOk(const LayerState& detail,
-                                         const LayerState& base) const -> bool;
+  [[nodiscard]] auto detailPatchAspectOk(const LayerState& detail, const LayerState& base) const
+      -> bool;
   void traceDetailDecision(const char* decision, const LayerState* detail, const LayerState* base,
                            const std::optional<FrameRoiRect>& current_roi) const;
-  void recreateShaderResources(QRhiTexture* primary, QRhiTexture* detail);
   void publishDiagnosticsIfChanged();
 
-  EditorViewportItem* item_ = nullptr;
-  std::shared_ptr<DirectPresentQueue> present_queue_;
+  EditorViewportItem*                  item_ = nullptr;
+  std::shared_ptr<DirectPresentQueue>  present_queue_;
+  // Coverage presentation channel (SM8.5): the viewport coverage input of the composite. Its
+  // frames never enter the photo layers.
+  std::shared_ptr<DirectPresentQueue>                   coverage_queue_;
+  ViewportMaskCoverageLayer                             coverage_layer_;
+  // Coverage of the detail ROI render (Mask ranges D10), composited inside the DetailPatch ROI.
+  std::shared_ptr<DirectPresentQueue>                   detail_coverage_queue_;
+  ViewportMaskCoverageLayer                             detail_coverage_layer_;
+  // The one display composite (SM8.6): photo base/detail selection and the coverage tint.
+  ViewportCompositePass                                 composite_;
+  // Copied from EditorViewportItem::maskCoverageStyle in synchronize().
+  MaskCoverageDisplayStyle                              coverage_style_{};
+  std::shared_ptr<std::atomic<EditorViewportRenderer*>> consume_arm_slot_;
   std::unique_ptr<ILeaseTargetAdapter> adapter_;
   // Maps adapter_cookie (native_handle) -> last WritableTargetLease for destroy.
-  std::vector<WritableTargetLease> owned_natives_;
-  ViewerViewState view_state_{};
-  std::array<LayerState, 3> layers_{};
-  EditorBackend backend_ = EditorBackend::Cuda;
-  std::uint64_t target_generation_ = 0;
-  std::uint64_t session_epoch_ = 0;
-  std::uint64_t image_identity_ = 0;
-  QRhi* rhi_ = nullptr;
-  QRhiRenderTarget* render_target_ = nullptr;
-
-  QRhiTexture* placeholder_texture_ = nullptr;
-  QRhiSampler* primary_sampler_ = nullptr;
-  QRhiSampler* detail_sampler_ = nullptr;
-  QRhiBuffer* uniform_buffer_ = nullptr;
-  QRhiBuffer* vertex_buffer_ = nullptr;
-  QRhiShaderResourceBindings* shader_resource_bindings_ = nullptr;
-  QRhiGraphicsPipeline* pipeline_ = nullptr;
-  QRhiTexture* bound_primary_texture_ = nullptr;
-  QRhiTexture* bound_detail_texture_ = nullptr;
-  bool static_upload_pending_ = false;
-  bool content_dirty_ = false;
-  std::string target_error_;
-  // Stdout ROI tracing is transition-based so a rejected patch does not print
+  std::vector<WritableTargetLease>     owned_natives_;
+  ViewerViewState                      view_state_{};
+  std::array<LayerState, 3>            layers_{};
+  EditorBackend                        backend_                  = EditorBackend::Cuda;
+  std::uint64_t                        target_generation_        = 0;
+  std::uint64_t                        session_epoch_            = 0;
+  std::uint64_t                        image_identity_           = 0;
+  QRhi*                                rhi_                      = nullptr;
+  bool                                 content_dirty_            = false;
+  std::string                          target_error_;
+  // ROI tracing is transition-based so a rejected patch does not print
   // once per scene-graph frame and create a second performance problem.
-  mutable std::string   last_detail_trace_decision_;
-  mutable std::uint64_t last_detail_trace_request_id_ = 0;
-  mutable bool          last_detail_trace_has_roi_     = false;
-  mutable FrameRoiRect  last_detail_trace_roi_{};
+  mutable std::string                  last_detail_trace_decision_;
+  mutable std::uint64_t                last_detail_trace_request_id_ = 0;
+  mutable bool                         last_detail_trace_has_roi_    = false;
+  mutable FrameRoiRect                 last_detail_trace_roi_{};
+  mutable float                        last_detail_trace_zoom_  = 0.0f;
+  mutable float                        last_detail_trace_pan_x_ = 0.0f;
+  mutable float                        last_detail_trace_pan_y_ = 0.0f;
 };
 
 }  // namespace alcedo::editor_rhi

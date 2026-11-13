@@ -87,13 +87,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--source",
         type=Path,
-        default=Path("alcedo/src/config/lens_calib"),
+        default=Path("alcedo_studio/src/config/lens_calib"),
         help="Directory containing lens calibration XML files.",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("alcedo/src/config/lens_calib/lens_catalog.json"),
+        default=Path("alcedo_studio/src/config/lens_calib/lens_catalog.json"),
         help="Output JSON file path.",
     )
     return parser.parse_args()
@@ -110,7 +110,7 @@ def main() -> int:
     catalog = build_catalog(source_dir)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
+    with output_path.open("w", encoding="utf-8", newline="\n") as f:
         json.dump(catalog, f, indent=2, ensure_ascii=True)
         f.write("\n")
 

@@ -1,0 +1,53 @@
+Alcedo Studio 0.3.2
+
+Before you upgrade
+------------------
+- The diffusion filter has a new highlight curve. Old photos with this filter can look
+  different after the upgrade: the glow around near-white areas is softer and has no
+  hard edge.
+
+New
+---
+- JPEG, PNG, TIFF, and OpenEXR images: import and edit them like RAW photos. Alcedo
+  Studio reads each file's embedded color profile and converts the image into its ACES
+  workflow. OpenEXR and PQ or HLG images are marked as HDR. The file content, not the
+  file extension, decides how a file is read.
+- Raster input color: for these images, the RAW panel shows the input color and an
+  input profile menu instead of white balance and RAW decode settings.
+- Folder import file types: a File types row selects RAW, JPEG, TIFF, PNG, or OpenEXR,
+  with a file count for each. Import takes only the selected types, and Alcedo Studio
+  remembers the selection. Files of other types are counted and shown as excluded.
+- LUT input and output encodings: choose the color encoding that a LUT expects and the
+  one it produces, from scene encodings (camera log curves and ACES) or display
+  encodings (sRGB, BT.1886, PQ, HLG, and more). A display output is brought back into
+  the scene with the ACES 2.0 inverse output transform. One change is one history step.
+- Remember for this LUT: the LUT library can store an encoding pair for one LUT and
+  apply it each time you use that LUT. Official package LUTs default to ACEScc.
+  Adjustment copy and paste includes the LUT encodings.
+- Library edit time: sort the library by the last edit time, or group it by edit day
+  with one group for unedited photos. When a project opens, the library goes to the
+  photo you edited last.
+
+Improved
+--------
+- Background tasks: the bottom task bar is replaced by a small status lamp in the top
+  toolbar. It opens to show a running task or an error, and quick tasks no longer
+  flash a bar. Click the lamp to open or close it.
+- LUT browser: one row of Category, Source, Brand, and Print filters replaces the
+  filter sidebar, and each filter lists only values with matching LUTs. Print has a
+  "No print" value. User LUTs are under "User", and a hint shows the folder for your
+  own LUT files. The browser scrolls to the applied LUT, and the footer names it.
+- Settings > LUTs can remove an installed official LUT package after a confirmation.
+  Photos that use its LUTs lose that look until it is installed again.
+- Warnings and errors use a red badge with white text, which is easier to read.
+- The Settings category list scrolls, so every category, including About, can be
+  reached.
+
+Fixed
+-----
+- Library: collapsing or expanding a group no longer jumps to the top, and the grouped
+  view keeps its position after a visit to the editor. Sorting by the group field now
+  also orders the groups.
+- OpenCL: a crash that could happen when white balance changed while a LUT was applied
+  is fixed. Image uploads to the GPU are also faster.
+- Long labels in adjustment drop-down menus are no longer cut off.

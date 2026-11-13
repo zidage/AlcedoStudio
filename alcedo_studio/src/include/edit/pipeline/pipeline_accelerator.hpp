@@ -24,6 +24,5 @@ auto IsImplementedMergedPipelineBackend(GpuBackendKind backend) -> bool;
 auto IsImplementedGeometryOperatorBackend(GpuBackendKind backend) -> bool;
 auto AcceleratorBackendPreferenceToString(AcceleratorBackendPreference preference)
     -> std::string_view;
-auto GpuBackendKindToRawGpuBackendString(GpuBackendKind backend) -> std::string_view;
 
 }  // namespace alcedo

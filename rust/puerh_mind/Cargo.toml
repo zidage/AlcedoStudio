@@ -12,43 +12,28 @@ prost = "0.14"
 prost-types = "0.14"
 tonic-prost = "0.14"
 tracing = "0.1"
-tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 anyhow = "1"
-thiserror = "2"
 image = "0.25.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "api-24", "tls-rustls", "directml", "coreml"] }
+# ONNX Runtime 1.28 or later: ONNX Runtime 1.24 to 1.27 fold the two `If` nodes of the SAM 2.1
+# tiny image encoder into freed memory (microsoft/onnxruntime#29071), so the AI Mask encoder output
+# is wrong. `ort` 2.0.0-rc.13 is the last release that builds with Rust 1.91. The pyke binaries
+# are split by execution provider, so DirectML and Core ML are target-specific features below.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "api-28", "tls-rustls"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
-zeroize = { version = "1", features = ["alloc"] }
-# Phase 5c: outbound HTTPS to remote image-analysis providers. `default-features =
-# false` + an explicit rustls TLS backend means we never pull native-tls/OpenSSL,
-# never enable invalid-cert acceptance, and never enable plaintext HTTP for
-# production providers (validation already enforces HTTPS-only except localhost
-# dev in provider_config). `rustls-tls-webpki-roots` bundles the webpki root store
-# for verification and is built on `rustls-tls-no-provider`, so it does NOT force the
-# aws-lc-rs crypto provider; we install `ring` (already used by ort's tls-rustls)
-# as the rustls crypto provider at client construction, reusing the existing native
-# build rather than introducing aws-lc-rs.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json", "system-proxy"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["directml"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["coreml"] }
 apple-cf = "0.9.3"
 coreml = "0.3.5"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-
-[dev-dependencies]
-# Mock HTTP server for the Phase 5c provider driver tests (auth headers, request
-# body shape, response parsing, rate-limit/5xx retry, cancellation, timeout).
-wiremock = "0.6"
-# Loads `.env.test` for the environment-gated live provider smokes (the file is
-# gitignored; tests skip without the matching API key env var).
-dotenvy = "0.15"
 
 [build-dependencies]
 tonic-prost-build = "0.14"

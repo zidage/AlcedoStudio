@@ -9,15 +9,16 @@
 #include <QString>
 #include <cstdint>
 #include <filesystem>
-#include <memory>
 #include <string>
+#include <vector>
 
 #include "app/download_service.hpp"
+#include "app/model_asset_catalog.hpp"
 
 namespace alcedo {
 
-// Progress for an in-flight model profile download. Mirrors the byte/file
-// contract the QML layer already consumes through SemanticGenerationController.
+// Progress for an in-flight model profile download: the byte and file counts
+// that ModelDownloadController shows on the row of the profile.
 struct ModelDownloadProgress {
   std::string  phase;
   std::string  current_file;
@@ -28,26 +29,34 @@ struct ModelDownloadProgress {
   std::string  message;
 };
 
-// Downloads a semantic model profile from Hugging Face using an aria2c
-// JSON-RPC daemon (one daemon per download). Runs the orchestration on a
-// dedicated worker thread and reports progress/completion via signals that are
-// safe to connect from the UI thread. Cancellation is cooperative: it removes
-// the active aria2 download, shuts the daemon down, and reports a cancelled
-// result.
+// Downloads a semantic model profile from Hugging Face through the shared
+// DownloadService (aria2c, one job at a time). Reports progress and completion
+// through signals on the owner thread. Cancellation removes the active aria2
+// download and reports a canceled result.
 class ModelDownloadService final : public QObject {
   Q_OBJECT
 
  public:
+  // Downloads the profiles of SemanticModelProfiles().
   explicit ModelDownloadService(DownloadService& downloads, QObject* parent = nullptr);
+  // Downloads the given profiles. Tests pass profiles with small files.
+  ModelDownloadService(DownloadService& downloads, std::vector<ModelProfileSpec> profiles,
+                       QObject* parent = nullptr);
   ~ModelDownloadService() override;
 
   ModelDownloadService(const ModelDownloadService&)            = delete;
   ModelDownloadService& operator=(const ModelDownloadService&) = delete;
 
+  // The profiles that this service downloads, in catalog order.
+  [[nodiscard]] auto Profiles() const -> const std::vector<ModelProfileSpec>& { return profiles_; }
+  // Looks up a profile by profile_id or model_id. Returns nullptr if unknown.
+  [[nodiscard]] auto FindProfile(const std::string& profile_or_model_id) const
+      -> const ModelProfileSpec*;
+
   // Begins downloading the given profile into model_root (per-profile files are
   // placed under "<model_root>/<profile_id>"). Returns false if a download is
-  // already running or the profile is unknown. ProgressChanged and Finished are
-  // emitted asynchronously.
+  // already running, the shared DownloadService runs another job, or the profile
+  // is unknown. ProgressChanged and Finished are emitted asynchronously.
   auto StartDownload(const std::string& profile_id, const std::filesystem::path& model_root,
                      const std::string& hf_endpoint) -> bool;
 
@@ -55,17 +64,20 @@ class ModelDownloadService final : public QObject {
   void CancelDownload();
 
   [[nodiscard]] auto IsRunning() const -> bool;
+  // Profile of the running download; empty when none runs.
+  [[nodiscard]] auto RunningProfileId() const -> std::string;
 
  signals:
   void ProgressChanged(const alcedo::ModelDownloadProgress& progress);
   void Finished(bool ok, const QString& error);
 
  private:
-  DownloadService& downloads_;
-  QString          request_id_;
-  std::string      profile_id_;
-  std::filesystem::path model_root_;
-  bool             running_ = false;
+  DownloadService&              downloads_;
+  std::vector<ModelProfileSpec> profiles_;
+  QString                       request_id_;
+  std::string                   profile_id_;
+  std::filesystem::path         model_root_;
+  bool                          running_ = false;
 };
 
 }  // namespace alcedo

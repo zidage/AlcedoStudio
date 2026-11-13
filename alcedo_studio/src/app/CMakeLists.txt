@@ -49,6 +49,32 @@ def_library(DownloadService
     PUBLIC_DEPS Qt6::Core Qt6::Network
 )
 
+# Package archive transfer over the shared DownloadService admission (LUT and AI model packages).
+def_library(PackageArchiveDownload
+    SOURCES
+        "${ALCEDO_APP_ROOT}/package_archive_download.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/package_archive_download.hpp"
+    PUBLIC_DEPS DownloadService Qt6::Core
+)
+
+# Signed small-file fetch (manifest + detached signature) shared by the update, LUT, and AI
+# model feeds.
+def_library(SignedFeedFetch
+    SOURCES
+        "${ALCEDO_APP_ROOT}/signed_feed_fetch.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/signed_feed_fetch.hpp"
+    PUBLIC_DEPS Qt6::Core Qt6::Network
+)
+
+# Package archive verification and safe 7z extraction shared by LUT and AI model install.
+def_library(PackageArchive
+    SOURCES
+        "${ALCEDO_APP_ROOT}/package_archive.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/package_archive.hpp"
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS LibArchive::LibArchive
+)
+
 if(WIN32)
     def_library(UpdateInstallerWindows
         SOURCES
@@ -58,14 +84,23 @@ if(WIN32)
     )
 endif()
 
+# Exact-byte Ed25519 check shared by the software-update and LUT package feeds.
+def_library(DetachedSignature
+    SOURCES
+        "${ALCEDO_APP_ROOT}/detached_signature.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/detached_signature.hpp"
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS unofficial::ed25519::ed25519
+)
+
 def_library(UpdateService
     SOURCES
         "${ALCEDO_APP_ROOT}/update_manifest.cpp"
         "${ALCEDO_APP_ROOT}/update_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/update_manifest.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/update_service.hpp"
-    PUBLIC_DEPS DownloadService Qt6::Core Qt6::Network
-    PRIVATE_DEPS unofficial::ed25519::ed25519 Qt6::Gui
+    PUBLIC_DEPS DownloadService SignedFeedFetch Qt6::Core Qt6::Network
+    PRIVATE_DEPS DetachedSignature Qt6::Gui
 )
 if(ALCEDO_UPDATE_ALLOW_INSTALL)
     set(_alcedo_update_allow_install 1)
@@ -82,17 +117,110 @@ target_compile_definitions(UpdateService PRIVATE
 )
 unset(_alcedo_update_allow_install)
 
+# Signed LUT package feed (no expiry; see docs/lut-package-system.md).
+def_library(LutPackageManifest
+    SOURCES
+        "${ALCEDO_APP_ROOT}/lut_package_manifest.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_package_manifest.hpp"
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS DetachedSignature
+)
+
+# DCP library folder setting and scans (dcp_camera_profile_plan.md, C2). The index and the loaded
+# profiles live in DcpProfileLibrary (Image); this service owns only the QSettings folder path.
+def_library(CameraProfileLibraryService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/camera_profile_library_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/camera_profile_library_service.hpp"
+    PUBLIC_DEPS Image Qt6::Core ThreadPool
+)
+
+# Owner of the local LUT library: root choice, inventory, favorites, import,
+# and root migration (lut_library_and_package_management_plan.md, L2).
+# Package extraction and activation (L3) run as a library operation. The published state is
+# the render-side LUT resolver (L4).
+def_library(LutLibraryService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/lut_library_inventory.cpp"
+        "${ALCEDO_APP_ROOT}/lut_library_migration.cpp"
+        "${ALCEDO_APP_ROOT}/lut_library_publication.cpp"
+        "${ALCEDO_APP_ROOT}/lut_library_service.cpp"
+        "${ALCEDO_APP_ROOT}/lut_package_install.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_library_inventory.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_library_migration.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_library_publication.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_library_service.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_package_install.hpp"
+    PUBLIC_DEPS LutMetadata EditLutResources Qt6::Core ThreadPool
+    PRIVATE_DEPS ColorEncodingCatalog JSON Qt6::Gui PackageArchive AppDiagnostics
+)
+
+# Signed LUT package feed check, per-package status, and download (L3).
+def_library(LutPackageService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/lut_package_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_package_service.hpp"
+    PUBLIC_DEPS LutLibraryService LutPackageManifest PackageArchiveDownload SignedFeedFetch
+        DownloadService Qt6::Core Qt6::Network
+)
+target_compile_definitions(LutPackageService PRIVATE
+    ALCEDO_LUT_PACKAGE_FEED_URL="${ALCEDO_LUT_PACKAGE_FEED_URL}"
+    ALCEDO_UPDATE_PUBLIC_KEY_BASE64="${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}"
+)
+
+# Signed AI model package feed (docs/roadmap/alcedo_studio/ai/external_ai_model_download_plan.md,
+# AM1). No expiry, like the LUT feed.
+def_library(AiModelPackageManifest
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_model_package_manifest.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_model_package_manifest.hpp"
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS DetachedSignature PackageArchive
+)
+
+# AI model package install, removal, recovery, and the installed model set query (the AI Mask
+# tool reads it in AM5).
+def_library(AiModelPackageInstall
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_model_package_install.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_model_package_install.hpp"
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS PackageArchive
+)
+
+# AI model package feed check, per-package status, download, install, and removal (AM1).
+def_library(AiModelPackageService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_model_package_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_model_package_service.hpp"
+    PUBLIC_DEPS AiModelPackageInstall AiModelPackageManifest PackageArchiveDownload
+        SignedFeedFetch Qt6::Core Qt6::Network
+    PRIVATE_DEPS PackageArchive
+)
+target_compile_definitions(AiModelPackageService PRIVATE
+    ALCEDO_AI_MODEL_FEED_URL="${ALCEDO_AI_MODEL_FEED_URL}"
+    ALCEDO_UPDATE_PUBLIC_KEY_BASE64="${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}"
+)
+
 def_library(FSService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_service.cpp"
-    PUBLIC_DEPS SleeveFS EditHistory
+    PUBLIC_DEPS SleeveFS PipelineHistory
 )
 
 def_library(SleeveFilterService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_filter_service.cpp"
         "${ALCEDO_APP_ROOT}/search_query_classifier.cpp"
+        "${ALCEDO_APP_ROOT}/search_query_parser.cpp"
     PUBLIC_DEPS SleeveElement Storage SleeveFilter StrConv
+)
+
+# LRU cache of natural-language query embeddings (global search GS1).
+def_library(SemanticQueryEmbeddingCache
+    SOURCES
+        "${ALCEDO_APP_ROOT}/semantic_query_embedding_cache.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/semantic_query_embedding_cache.hpp"
 )
 
 def_library(AlbumBrowseService
@@ -123,8 +251,7 @@ set(ALCEDO_SEMANTIC_PROTO_HDRS
 # both generated command dependencies and the semantic target.
 set(ALCEDO_AI_PROTO_DIR "${ALCEDO_SEMANTIC_PROTO_DIR}")
 set(ALCEDO_AI_COMMON_PROTO "${ALCEDO_AI_PROTO_DIR}/ai_common.proto")
-set(ALCEDO_AI_RUNTIME_PROTO "${ALCEDO_AI_PROTO_DIR}/ai_runtime.proto")
-set(ALCEDO_AI_IMAGE_ANALYSIS_PROTO "${ALCEDO_AI_PROTO_DIR}/image_analysis.proto")
+set(ALCEDO_AI_SEGMENTATION_PROTO "${ALCEDO_AI_PROTO_DIR}/segmentation.proto")
 set(ALCEDO_AI_PROTO_GEN_DIR "${ALCEDO_BINARY_ROOT}/generated/ai")
 
 add_custom_command(
@@ -158,55 +285,32 @@ add_custom_command(
 
 add_custom_command(
     OUTPUT
-        "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.pb.cc"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.pb.h"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.grpc.pb.h"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.grpc.pb.cc"
+        "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.pb.cc"
+        "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.pb.h"
+        "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.grpc.pb.h"
+        "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.grpc.pb.cc"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_AI_PROTO_GEN_DIR}"
     COMMAND ${PUERHLAB_PROTOC_EXECUTABLE}
         --proto_path=${ALCEDO_AI_PROTO_DIR}
         --cpp_out=${ALCEDO_AI_PROTO_GEN_DIR}
         --grpc_out=${ALCEDO_AI_PROTO_GEN_DIR}
         --plugin=protoc-gen-grpc=${PUERHLAB_GRPC_CPP_PLUGIN_EXECUTABLE}
-        "${ALCEDO_AI_RUNTIME_PROTO}"
+        "${ALCEDO_AI_SEGMENTATION_PROTO}"
     DEPENDS
-        "${ALCEDO_AI_RUNTIME_PROTO}"
-        "${ALCEDO_AI_COMMON_PROTO}"
-    VERBATIM
-)
-
-add_custom_command(
-    OUTPUT
-        "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.pb.cc"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.pb.h"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.grpc.pb.h"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.grpc.pb.cc"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_AI_PROTO_GEN_DIR}"
-    COMMAND ${PUERHLAB_PROTOC_EXECUTABLE}
-        --proto_path=${ALCEDO_AI_PROTO_DIR}
-        --cpp_out=${ALCEDO_AI_PROTO_GEN_DIR}
-        --grpc_out=${ALCEDO_AI_PROTO_GEN_DIR}
-        --plugin=protoc-gen-grpc=${PUERHLAB_GRPC_CPP_PLUGIN_EXECUTABLE}
-        "${ALCEDO_AI_IMAGE_ANALYSIS_PROTO}"
-    DEPENDS
-        "${ALCEDO_AI_IMAGE_ANALYSIS_PROTO}"
+        "${ALCEDO_AI_SEGMENTATION_PROTO}"
         "${ALCEDO_AI_COMMON_PROTO}"
     VERBATIM
 )
 
 set(ALCEDO_AI_PROTO_SRCS
     "${ALCEDO_AI_PROTO_GEN_DIR}/ai_common.pb.cc"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.pb.cc"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.grpc.pb.cc"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.pb.cc"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.grpc.pb.cc"
+    "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.pb.cc"
+    "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.grpc.pb.cc"
 )
 set(ALCEDO_AI_PROTO_HDRS
     "${ALCEDO_AI_PROTO_GEN_DIR}/ai_common.pb.h"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.pb.h"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.grpc.pb.h"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.pb.h"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.grpc.pb.h"
+    "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.pb.h"
+    "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.grpc.pb.h"
 )
 
 add_library(AiProto ${ALCEDO_AI_PROTO_SRCS} ${ALCEDO_AI_PROTO_HDRS})
@@ -226,6 +330,28 @@ def_library(AiSidecarRuntimeService
         "${ALCEDO_INCLUDE_ROOT}/app/ai_sidecar_runtime_service.hpp"
     PUBLIC_DEPS Qt6::Core Qt6::Network SidecarClient
     PRIVATE_DEPS AppDiagnostics
+)
+
+# AI Mask segmentation (SM3.A): one tool activation over the sidecar segmentation service.
+def_library(AiMaskSegmentationService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_mask_segmentation_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_mask_segmentation_service.hpp"
+    PUBLIC_DEPS SidecarClient
+)
+
+# AI Mask edit session (SM5.2): the session step history, the model outputs of its steps, the
+# host composition of the coverage, and the commit payload.
+def_library(AiMaskEditSession
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_mask_edit_session.cpp"
+        "${ALCEDO_APP_ROOT}/ai_mask_model_output_store.cpp"
+        "${ALCEDO_APP_ROOT}/ai_mask_coverage_composition.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_mask_edit_session.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_mask_model_output_store.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_mask_coverage_composition.hpp"
+    PUBLIC_DEPS AiMaskSegmentationService EditMaskCore
+    PRIVATE_DEPS opencv_core opencv_imgproc
 )
 
 def_library(AiCredentialStore
@@ -262,34 +388,87 @@ def_library(ProjectService
         "${ALCEDO_APP_ROOT}/project_package_service.cpp"
         "${ALCEDO_SRC_ROOT}/ui/alcedo_main/album_backend/path_utils.cpp"
     PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService
-                AiSidecarRuntimeService ModelDownloadService
-                StrConv JSON xxHash stduuid
+                AiSidecarRuntimeService ModelDownloadService SemanticQueryEmbeddingCache
+                StrConv JSON xxHash stduuid EditMaskCore
     PRIVATE_DEPS
         AppDiagnostics
         Qt6::Core
         Qt6::Gui
         opencv_core
 )
+if(WIN32)
+    # Restart Manager names the processes that hold a runtime workspace file open
+    # (CleanupWorkspaceDirectory in path_utils.cpp).
+    target_link_libraries(ProjectService PRIVATE Rstrtmgr)
+endif()
 
 def_library(PipelineMgmtService
     SOURCES "${ALCEDO_APP_ROOT}/pipeline_service.cpp"
-    PUBLIC_DEPS ProjectService EditPipeline
+            "${ALCEDO_APP_ROOT}/pipeline_root_state.cpp"
+            "${ALCEDO_APP_ROOT}/committed_snapshot_cache.cpp"
+            "${ALCEDO_APP_ROOT}/source_dng_profile_binding.cpp"
+            "${ALCEDO_APP_ROOT}/project_mask_asset_reader.cpp"
+    PUBLIC_DEPS ProjectService EditPipeline EditGraph EditLutResources EditMaskRaster
 )
 
 def_library(AdjustmentTransferService
-    SOURCES "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
-    PUBLIC_DEPS PipelineMgmtService EditPipeline
-    PRIVATE_DEPS EditorAdjustmentPipeline
+    SOURCES
+        "${ALCEDO_APP_ROOT}/adjustment_transfer_package_builder.cpp"
+        "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
+        "${ALCEDO_APP_ROOT}/document_transfer.cpp"
+        "${ALCEDO_APP_ROOT}/document_transfer_planner.cpp"
+    PUBLIC_DEPS PipelineMgmtService EditPipeline EditGraph EditMaskCore PipelineHistory
+                PipelineHistoryApplier
+    PRIVATE_DEPS EditorAdjustmentPipeline EditorPipelineCommandService
 )
 
-def_library(EditHistoryMgmtService
-    SOURCES "${ALCEDO_APP_ROOT}/history_mgmt_service.cpp"
-    PUBLIC_DEPS ProjectService EditHistory
+# Read-only Version catalog for the Adjustment Transfer source column. Replays
+# one selected Version from the immutable root into an independent document and
+# builds stable node/item descriptors. Qt-free application layer.
+def_library(AdjustmentTransferCatalog
+    SOURCES
+        "${ALCEDO_APP_ROOT}/adjustment_transfer_catalog.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/adjustment_transfer_catalog.hpp"
+    PUBLIC_DEPS PipelineHistoryApplier EditGraph PipelineHistory
 )
 
-def_library(EditorHistoryMaterializer
-    SOURCES "${ALCEDO_APP_ROOT}/editor_history_materializer.cpp"
-    PUBLIC_DEPS ProjectService EditHistory Storage
+# Read-only inputs of the editor comparison. Replays a selected state from the held history and
+# gives it the current sensor settings; never writes history or the working document.
+def_library(EditorComparisonInputs
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_comparison_inputs.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_comparison_inputs.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_comparison_types.hpp"
+    PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory
+)
+
+# The analysis image of the AI Mask tool: the import root look with the current Develop settings,
+# rendered without crop and rotation, its image key, and its RGB8 conversion (AI Mask SM4).
+def_library(AiMaskAnalysisImage
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_mask_analysis_image.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_mask_analysis_image.hpp"
+    PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory xxHash ${ALCEDO_OPENCV_CORE_DEPS}
+)
+
+# The LUT browser preview of one LUT: the import root with the LUT on its primary Color Grade,
+# rendered at a long edge of 256 (issue #598).
+def_library(LutPreviewImage
+    SOURCES
+        "${ALCEDO_APP_ROOT}/lut_preview_image.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_preview_image.hpp"
+    PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory EditorParameterWrite
+                ${ALCEDO_OPENCV_CORE_DEPS}
+)
+
+# The open editor comparison: captured working values, selected sources, and the image job of the
+# selected pair. A collaborator of the session facade; reads history and renders only through ports.
+def_library(EditorComparisonService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_comparison_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_comparison_service.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_image_render_port.hpp"
+    PUBLIC_DEPS EditGraph ${ALCEDO_OPENCV_CORE_DEPS}
 )
 
 def_library(EditorSaveCheckpointCoordinator
@@ -328,7 +507,7 @@ def_library(EditorSessionNavigationController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_navigation_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_navigation_controller.hpp"
-    PUBLIC_DEPS EditHistory xxHash
+    PUBLIC_DEPS PipelineHistory xxHash
     PRIVATE_DEPS EditorSessionLifecycle EditorSaveCheckpointService
                  EditorSessionRenderController EditorSessionEditController
                  EditorMiniGitMaterializer
@@ -344,6 +523,7 @@ def_library(EditorSessionRenderController
 # Session headers pull image_buffer.hpp -> metal_image.hpp under HAVE_METAL.
 # Provide metal-cpp include/link deps the same way ThreadPool does.
 if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(EditorComparisonService PUBLIC alcedo::metal_cpp)
     target_link_libraries(EditorSessionCommandQueue PUBLIC alcedo::metal_cpp)
     target_link_libraries(EditorSessionLifecycle PUBLIC alcedo::metal_cpp)
     target_link_libraries(EditorSessionRenderController PUBLIC alcedo::metal_cpp)
@@ -353,28 +533,28 @@ def_library(EditorSessionEditController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_edit_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_edit_controller.hpp"
-    PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
-    PRIVATE_DEPS EditHistory
+    PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} EditorPendingInput
+    PRIVATE_DEPS PipelineHistory EditorAdjustmentPipeline
 )
 
 def_library(EditorMiniGitJournalFold
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_journal_fold.cpp"
-    PUBLIC_DEPS EditHistory
+    PUBLIC_DEPS PipelineHistory
 )
 
 def_library(EditorMiniGitCommitWriter
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_commit_writer.cpp"
-    PUBLIC_DEPS ProjectService EditHistory Storage
+    PUBLIC_DEPS ProjectService PipelineHistory Storage
 )
 
 def_library(EditorMiniGitJournalRecovery
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_journal_recovery.cpp"
-    PUBLIC_DEPS EditHistory Storage
+    PUBLIC_DEPS PipelineHistory Storage
 )
 
 def_library(EditorMiniGitMaterializer
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_materializer.cpp"
-    PUBLIC_DEPS ProjectService EditHistory Storage
+    PUBLIC_DEPS ProjectService PipelineHistory Storage
     PRIVATE_DEPS EditorSaveCheckpointCoordinator
                  EditorMiniGitCommitWriter EditorMiniGitJournalRecovery
 )
@@ -383,7 +563,142 @@ def_library(EditorAdjustmentPipeline
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_adjustment_pipeline.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_pipeline.hpp"
-    PUBLIC_DEPS EditPipeline EditHistory JSON
+    PUBLIC_DEPS EditPipeline PipelineHistory JSON EditorPipelineCommandService
+)
+
+# Qt-free crop, color temperature, and HLS equations of the editor panels.
+def_library(EditorSupportModules
+    SOURCES
+        "${ALCEDO_SRC_ROOT}/ui/alcedo_main/editor_support/modules/geometry.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/geometry.hpp"
+        "${ALCEDO_SRC_ROOT}/ui/alcedo_main/editor_support/modules/color_temp.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/color_temp.hpp"
+        "${ALCEDO_SRC_ROOT}/ui/alcedo_main/editor_support/modules/hls_math.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/hls_math.hpp"
+)
+
+# UI ranges, defaults, and UI-to-Model conversions of the editor fields. Qt-free; the QML value
+# models and the automation editor commands read the same table.
+def_library(EditorParameterCatalog
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_parameter_catalog.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_catalog.hpp"
+    PUBLIC_DEPS EditorAdjustmentPipeline EditorPanelProjection EditorSupportModules EditGeometry
+                EditGraph JSON
+)
+
+# Version name rules of the Versions panel and the automation Version commands. Qt-free.
+def_library(VersionNameRules
+    SOURCES
+        "${ALCEDO_APP_ROOT}/version_name_rules.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/version_name_rules.hpp"
+)
+
+# Resolution of the Develop camera_profile_file reference through the DCP library
+# (dcp_camera_profile_plan.md, C4): the selection write, history replay, and document binding.
+def_library(DcpCameraProfileBinding
+    SOURCES
+        "${ALCEDO_APP_ROOT}/dcp_camera_profile_binding.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/dcp_camera_profile_binding.hpp"
+    PUBLIC_DEPS EditGraph Image
+)
+
+def_library(EditorParameterWrite
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_parameter_write.cpp"
+        "${ALCEDO_APP_ROOT}/editor_parameter_write_parse.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_write.hpp"
+    PUBLIC_DEPS EditGraph JSON
+    PRIVATE_DEPS DcpCameraProfileBinding
+)
+
+def_library(EditorPipelineCommandService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_pipeline_command_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_pipeline_command_service.hpp"
+    PUBLIC_DEPS EditGraph JSON EditorParameterWrite
+    PRIVATE_DEPS DcpCameraProfileBinding
+)
+
+def_library(EditorPanelProjection
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_panel_projection.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_panel_projection.hpp"
+        "${ALCEDO_APP_ROOT}/editor_adjustment_context.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_context.hpp"
+    PUBLIC_DEPS EditorPipelineCommandService EditGraph Image
+)
+
+def_library(EditorNodeGraphProjection
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_node_graph_projection.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_node_graph_projection.hpp"
+    PUBLIC_DEPS EditGraph
+)
+
+def_library(EditorNodeGraphDraft
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_node_graph_draft.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_node_graph_draft.hpp"
+    PUBLIC_DEPS EditorNodeGraphProjection PipelineHistory EditGraph
+)
+
+def_library(PipelineHistoryApplier
+    SOURCES
+        "${ALCEDO_APP_ROOT}/pipeline_history_applier.cpp"
+        "${ALCEDO_APP_ROOT}/pipeline_document_history.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/pipeline_history_applier.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/pipeline_document_history.hpp"
+    PUBLIC_DEPS EditorPipelineCommandService EditorAdjustmentPipeline PipelineHistory EditGraph
+                EditMaskCore
+)
+
+target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorAdjustmentPipeline
+    DcpCameraProfileBinding)
+
+def_library(EditorMaskCreationController
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_mask_creation_controller.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_mask_creation_controller.hpp"
+    PUBLIC_DEPS EditGraph PipelineHistoryApplier
+)
+
+def_library(EditorPendingInput
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_pending_input.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_pending_input.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_types.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_write.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_session_types.hpp"
+    PUBLIC_DEPS EditGraph JSON
+)
+
+def_library(EditorSerialFrameAdmission
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_serial_frame_admission.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_serial_frame_admission.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_interactive_pacing.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_monotonic_clock.hpp"
+)
+
+# Working document of the image open in the editor and the preview snapshots published from it.
+# The editor history writes it; the session and the render port read its previews.
+def_library(EditorWorkingDocument
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_working_document.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_working_document.hpp"
+    PUBLIC_DEPS EditGraph
+)
+
+# Coverage preview of the editor (SM8.7): the candidate or committed AI Mask selection and its
+# presentation requests on the editor executor.
+def_library(EditorMaskCoveragePreview
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_mask_coverage_preview.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_mask_coverage_preview.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_mask_coverage_port.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/edit/runtime/mask_coverage_selection.hpp"
+    PUBLIC_DEPS EditMaskCore
 )
 
 def_library(EditorSessionService
@@ -392,6 +707,7 @@ def_library(EditorSessionService
         "${ALCEDO_APP_ROOT}/editor_render_coordinator.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_types.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_types.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_pending_input.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_render_intent.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_ports.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_service.hpp"
@@ -400,11 +716,15 @@ def_library(EditorSessionService
         "${ALCEDO_INCLUDE_ROOT}/edit/frame_presentation_types.hpp"
     # The session facade is application-only; no Widgets dependency belongs
     # on this target or on its public link interface.
-    PRIVATE_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} AppDiagnostics
-                 EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
+    PRIVATE_DEPS EditorPendingInput xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} AppDiagnostics
+                 PipelineHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
+                 EditorSerialFrameAdmission EditorMaskCreationController EditorComparisonService
+                 AiMaskAnalysisImage LutPreviewImage
 )
+# The session header holds the coverage preview by value.
+target_link_libraries(EditorSessionService PUBLIC EditorMaskCoveragePreview)
 
 # Facade consumers (tests/UI) include session headers that pull metal_image.hpp
 # under HAVE_METAL. Private session-controller deps do not propagate metal-cpp
@@ -412,18 +732,42 @@ def_library(EditorSessionService
 if(ALCEDO_METAL_ENABLED)
     target_link_libraries(EditorSessionService PUBLIC alcedo::metal_cpp)
 endif()
+# The pipeline port publishes previews of the editor's working document.
+target_link_libraries(EditorSessionService PUBLIC EditorWorkingDocument)
 
 def_library(ImportService
     SOURCES "${ALCEDO_APP_ROOT}/import_service.cpp"
-    # Import assembly calls LoadPipeline / SyncPipeline / InitializeImageRoot /
-    # SavePipeline on the optional PipelineMgmtService injected at construction.
+    # Import creates each image's history root through InitializeImageRoot on the
+    # PipelineMgmtService injected at construction; it constructs no executor.
     PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService
 )
 
 def_library(ThumbnailService
     SOURCES "${ALCEDO_APP_ROOT}/thumbnail_service.cpp"
-    PUBLIC_DEPS EditPipeline ThreadPool StrConv ImagePoolService PipelineMgmtService
-                ThumbnailDiskCacheService Storage
+    # Thumbnails decode RAW sources (EditInput, ImageLoader) on their own CPU workers.
+    PUBLIC_DEPS EditPipeline EditInput ImageLoader ThreadPool StrConv ImagePoolService
+                PipelineMgmtService ThumbnailDiskCacheService Storage
+)
+
+def_library(MaskThumbnailService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/mask_thumbnail_spec.cpp"
+        "${ALCEDO_APP_ROOT}/mask_thumbnail_evaluate.cpp"
+        "${ALCEDO_APP_ROOT}/mask_thumbnail_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mask_thumbnail_spec.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mask_thumbnail_evaluate.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mask_thumbnail_service.hpp"
+    PUBLIC_DEPS Qt6::Core Qt6::Gui EditGeometry EditMaskCore
+)
+
+# Model input images of semantic generation: camera previews of unedited RAW files and renders
+# of the committed state on its own CPU workers and batch executor.
+def_library(SemanticInputImageService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/semantic_input_image_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/semantic_input_image_service.hpp"
+    PUBLIC_DEPS EditPipeline EditInput ImageLoader ThreadPool ImagePoolService PipelineMgmtService
+    PRIVATE_DEPS EmbeddedPreviewReader opencv_core opencv_imgproc
 )
 
 def_library(SemanticGenerationService
@@ -431,22 +775,7 @@ def_library(SemanticGenerationService
         "${ALCEDO_APP_ROOT}/semantic_generation_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/semantic_generation_service.hpp"
         "${ALCEDO_INCLUDE_ROOT}/storage/store/semantic/semantic_label_config.hpp"
-    PUBLIC_DEPS AiSidecarRuntimeService ThumbnailService Storage opencv_core opencv_imgproc
-    PRIVATE_DEPS AppDiagnostics
-)
-
-def_library(ImageAnalysisEncoder
-    SOURCES
-        "${ALCEDO_APP_ROOT}/image_analysis_encoder.cpp"
-        "${ALCEDO_INCLUDE_ROOT}/app/image_analysis_encoder.hpp"
-    PUBLIC_DEPS ThumbnailService ImageBuffer OpenImageIO::OpenImageIO opencv_core opencv_imgproc
-)
-
-def_library(ImageAnalysisService
-    SOURCES
-        "${ALCEDO_APP_ROOT}/image_analysis_service.cpp"
-        "${ALCEDO_INCLUDE_ROOT}/app/image_analysis_service.hpp"
-    PUBLIC_DEPS AiSidecarRuntimeService AiCredentialStore ThumbnailService ImageAnalysisEncoder ImageBuffer
+    PUBLIC_DEPS AiSidecarRuntimeService SemanticInputImageService Storage
     PRIVATE_DEPS AppDiagnostics
 )
 

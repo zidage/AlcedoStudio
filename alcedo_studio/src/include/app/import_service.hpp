@@ -4,17 +4,22 @@
 
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <stdexcept>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #include "app/sleeve_service.hpp"
 #include "concurrency/thread_pool.hpp"
 #include "image_pool_service.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
+#include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/import/import_error_code.hpp"
 #include "utils/import/import_log.hpp"
@@ -36,6 +41,13 @@ struct ImportOptions {
 
   // If set, record the sequence for deterministic import order.
   bool           write_import_sequence_            = true;
+
+  /// Content categories that import accepts. A file of another category is counted as
+  /// excluded_type_. Folder import passes the dialog selection; the file picker allows all.
+  ImportCategoryMask allowed_categories_               = kAllImportCategories;
+  /// Paths (native form) that import accepts in every category, whatever allowed_categories_
+  /// says: the dropped files of a Library drop that also holds folders (issue #757).
+  ImportPathSet      any_category_paths_{};
 };
 
 struct ImportProgress {
@@ -48,6 +60,29 @@ struct ImportProgress {
   std::atomic<uint32_t> metadata_done_        = 0;
 
   std::atomic<uint32_t> failed_               = 0;
+
+  /// Subset of failed_: files whose content is not a supported RAW or raster image (CMYK
+  /// included). These are expected in a folder import (sidecars, videos) and are reported as
+  /// skipped, not as errors.
+  std::atomic<uint32_t> unsupported_          = 0;
+
+  /// Subset of failed_: supported files whose content category is not allowed.
+  std::atomic<uint32_t> excluded_type_        = 0;
+
+  /// Subset of failed_: files left unread because the job was canceled, both files the
+  /// placeholder loop did not reach and queued metadata tasks that had not started.
+  std::atomic<uint32_t> canceled_             = 0;
+
+  /// Files whose extension names the RAW category, set before the job starts. The import dialog
+  /// shows RAW files and the other files as separate progress rings, and only the extension is
+  /// known before a file is read. The other files are total_ - raw_total_.
+  uint32_t              raw_total_            = 0;
+
+  /// Subset of metadata_done_: imported files with a RAW extension.
+  std::atomic<uint32_t> raw_imported_         = 0;
+
+  /// Subset of failed_: failed files with a RAW extension.
+  std::atomic<uint32_t> raw_failed_           = 0;
 };
 
 struct ImportError {
@@ -60,6 +95,18 @@ struct ImportResult {
   uint32_t requested_ = 0;
   uint32_t imported_  = 0;
   uint32_t failed_    = 0;
+  /// Subset of failed_: files that are not a supported RAW or raster image.
+  uint32_t unsupported_   = 0;
+  /// Subset of failed_: supported files whose content category is not allowed.
+  uint32_t excluded_type_ = 0;
+  /// Subset of failed_: files left unread because the job was canceled.
+  uint32_t canceled_      = 0;
+  /// Subset of requested_: files with a RAW extension.
+  uint32_t raw_requested_ = 0;
+  /// Subset of imported_: files with a RAW extension.
+  uint32_t raw_imported_  = 0;
+  /// Subset of failed_: files with a RAW extension.
+  uint32_t raw_failed_    = 0;
 };
 
 class ImportJob {
@@ -67,7 +114,9 @@ class ImportJob {
   using ProgressCallback = std::function<void(const ImportProgress&)>;
   using FinishedCallback = std::function<void(const ImportResult&)>;
 
-  // Cancellation toke observed by implementation
+  /// Set by the caller to cancel the job. The placeholder loop stops submitting files, and a
+  /// queued metadata task that has not started marks its file CANCELED without reading it.
+  /// Tasks already reading finish, and their roots are written.
   std::atomic<bool>          canceled_{false};
   std::atomic<bool>          cancelation_acked_{false};
   std::atomic<bool>          submission_closed_{false};
@@ -78,6 +127,10 @@ class ImportJob {
   FinishedCallback           on_finished_{};
 
   std::shared_ptr<ImportLog> import_log_ = nullptr;
+
+  /// Live counters of this job, set by ImportToFolder. A caller that coalesces on_progress_
+  /// reports reads the latest counts here instead of keeping its own copy.
+  std::shared_ptr<ImportProgress> progress_ = nullptr;
 
   ~ImportJob()                           = default;
 
@@ -94,18 +147,28 @@ class ImportService {
                               std::shared_ptr<ImportJob> job     = nullptr)
       -> std::shared_ptr<ImportJob>                                                         = 0;
 
+  /// Persist a finished import. Each `metadata_failed_` entry loses its library element and
+  /// its placeholder Image, so a failed import writes no Element, FileImage, or Image row;
+  /// then the image pool and the sleeve file system are written to storage.
+  /// Throws when the image store rejects the removal of failed Images.
   virtual void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) = 0;
 };
 
 class ImportServiceImpl final : public ImportService {
  public:
   ImportServiceImpl() = delete;
-  ImportServiceImpl(std::shared_ptr<SleeveServiceImpl> fs_service,
-                    std::shared_ptr<ImagePoolService>  image_pool_service,
-                    std::shared_ptr<PipelineMgmtService> pipeline_service = nullptr)
+  /// @throws std::invalid_argument when @p pipeline_service is null: every imported image gets
+  ///         its history root at import, and only the pipeline service can create it.
+  ImportServiceImpl(std::shared_ptr<SleeveServiceImpl>   fs_service,
+                    std::shared_ptr<ImagePoolService>    image_pool_service,
+                    std::shared_ptr<PipelineMgmtService> pipeline_service)
       : fs_service_(std::move(fs_service)),
         image_pool_service_(std::move(image_pool_service)),
-        pipeline_service_(std::move(pipeline_service)) {}
+        pipeline_service_(std::move(pipeline_service)) {
+    if (!pipeline_service_) {
+      throw std::invalid_argument("ImportServiceImpl: pipeline service is required");
+    }
+  }
 
   ~ImportServiceImpl() = default;
 
@@ -113,17 +176,36 @@ class ImportServiceImpl final : public ImportService {
 
   std::shared_ptr<ImagePoolService> image_pool_service_ = nullptr;
 
-  /// Assembles and saves full operator params (including image-local RAW/lens/CCT)
-  /// after metadata extraction succeeds. Optional for unit tests that only exercise
-  /// placeholder creation.
+  /// Assembles and saves full operator params (including image-local RAW/lens/CCT) and creates
+  /// the image's history root after metadata extraction succeeds.
   std::shared_ptr<PipelineMgmtService> pipeline_service_ = nullptr;
 
-  ThreadPool                            thread_pool_{8};
+  /// Metadata workers: open RAW headers, read the HDR probe bytes and encode history roots.
+  /// The work is short file reads plus CPU, so it scales with the logical core count.
+  ThreadPool thread_pool_{std::max<size_t>(8, std::thread::hardware_concurrency())};
 
+  /// Runs the placeholder loop of each import (sleeve element + pinned Image per file, then one
+  /// metadata task on thread_pool_), so ImportToFolder returns without walking the file list on
+  /// the caller's (UI) thread. Declared after thread_pool_: it is destroyed first, and its
+  /// destructor finishes a running loop while thread_pool_ still accepts the loop's tasks.
+  ThreadPool submission_thread_{1};
+
+  /// Start an import and return @p job (or a new job) without waiting for the placeholders: the
+  /// placeholder loop runs on submission_thread_, metadata extraction on thread_pool_.
+  /// job->on_progress_ reports the placeholder count while the loop runs, and job->on_finished_
+  /// fires once every file is imported or failed.
   auto ImportToFolder(const std::vector<image_path_t>& paths, const image_path_t& dest,
                       const ImportOptions& options = {}, std::shared_ptr<ImportJob> job = nullptr)
       -> std::shared_ptr<ImportJob> override;
 
   void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) override;
+
+ private:
+  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>& paths, const image_path_t& dest,
+                                   const std::shared_ptr<ImportJob>&      job,
+                                   const std::shared_ptr<ImportLog>&      import_log,
+                                   const std::shared_ptr<ImportProgress>& progress,
+                                   ImportCategoryMask                     allowed_categories,
+                                   const ImportPathSet&                   any_category_paths);
 };
 };  // namespace alcedo

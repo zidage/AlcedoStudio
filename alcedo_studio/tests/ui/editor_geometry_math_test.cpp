@@ -63,4 +63,27 @@ TEST(EditorGeometryMathTest, LensCatalogProvidesDefaultOperatorShape) {
   EXPECT_TRUE(catalog.modelsForBrand(QStringLiteral("missing-brand")).isEmpty());
 }
 
+TEST(EditorGeometryMathTest, LensCatalogListsProfileNamesOfShippedLensfunDatabase) {
+  EditorLensCatalogModel catalog;
+  const auto             has_model = [&catalog](const char* brand, const char* model) {
+    for (const auto& entry : catalog.modelsForBrand(QString::fromUtf8(brand))) {
+      if (entry.toMap().value(QStringLiteral("value")).toString() == QString::fromUtf8(model)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Profiles added in Lensfun 43f9e001.
+  EXPECT_TRUE(has_model("Nikon", "Nikkor Z 24-105mm f/4-7.1"));
+  EXPECT_TRUE(has_model("Nikon", "Nikkor Z DX 16-50mm f/2.8 VR"));
+  EXPECT_TRUE(has_model("Sony", "FE 50mm f/1.4 GM"));
+  EXPECT_TRUE(has_model("Canon", "Canon RF 50mm F1.4 L VCM"));
+  // Profiles renamed in Lensfun 43f9e001: the catalog lists only the new names.
+  EXPECT_TRUE(has_model("Tamron", "Tamron 17-70mm F2.8 B070 Z/RF/X/E"));
+  EXPECT_FALSE(has_model("Tamron", "E 17-70mm F2.8 B070"));
+  EXPECT_TRUE(has_model("Sony", "E PZ 16-50mm f/3.5-5.6 OSS I/II"));
+  EXPECT_FALSE(has_model("Sony", "E PZ 16-50mm f/3.5-5.6 OSS"));
+}
+
 }  // namespace alcedo::ui::test

@@ -25,8 +25,8 @@ Near-term candidates include:
 
 The exchange format should therefore be unified only at the control plane. Each task still owns
 its task-specific protobuf payload, because embeddings, captioning, scoring, and editor recipes
-do not share a meaningful request schema. What should be common is the envelope around those
-payloads: request identity, task name, timeout, cancellation, priority, trace metadata, capability
+do not share a meaningful request schema. What should be common is the shared control fields
+around those payloads: request identity, task name, timeout, cancellation, priority, trace metadata, capability
 description, and credential handles.
 
 ## Current C++ Integration Points
@@ -59,7 +59,7 @@ description, and credential handles.
   own typed payload and response.
 - Move direct sidecar protocol code into a real `sidecar_client` module under
   `alcedo_studio/src/sidecar_client` and `alcedo_studio/src/include/sidecar_client`. The runtime
-  service owns the process; the client owns gRPC, request envelopes, stubs, and protobuf mapping.
+  service owns the process; the client owns gRPC, `AiRequestHeader` filling, stubs, and protobuf mapping.
 - Make DTO/protobuf conversion explicit on the DTO types through a shared CRTP-style mapper helper.
   Call sites should read as `Dto::FromProto(proto)` or `dto.ToProto(&proto)`, not as anonymous
   helper functions hidden in `ai_sidecar_runtime_service.cpp`.
@@ -1093,7 +1093,7 @@ Goal: stop growing `app/ai_sidecar_runtime_service.cpp` as the place where every
 lands. Phase 6d proved the product flow can call the sidecar from album code; the next phase is a
 structural cutover before persistence/search work adds more permanent call sites. The runtime
 service should manage the sidecar process lifecycle. A new `sidecar_client` module should own every
-direct gRPC API, protobuf DTO conversion, request envelope, and task-specific client.
+direct gRPC API, protobuf DTO conversion, request-header filling, and task-specific client.
 
 Reflection on the current shape:
 
@@ -1161,7 +1161,7 @@ DTO/protobuf conversion rules:
 
 - Request DTOs own `ToProto(...)`; response DTOs own `FromProto(...)`; bidirectional DTOs own both.
   The implementation lives in `src/sidecar_client/dto/*.cpp` beside generated protobuf includes.
-- Shared envelope fields (`AiRequestHeader`, `AiResponseHeader`, deadlines, credential refs,
+- Shared control fields (`AiRequestHeader`, `AiResponseHeader`, deadlines, credential refs,
   request ids, task ids) move into `sidecar_client`, not `AiSidecarRuntimeService`.
 - No anonymous `ToRuntimeModelInfo`, `ToEmbeddingResult`, `ToImageRatingResult`, or equivalent mapper
   helpers remain in `ai_sidecar_runtime_service.cpp`.
@@ -1263,7 +1263,7 @@ live `sidecar_client::Client` session's narrow modules (`runtime`, `credentials`
 What changed:
 
 - Added the `SidecarClient` CMake target and `sidecar_client` public interfaces/DTO headers.
-- Moved gRPC stub creation, request-envelope filling, protobuf-to-DTO mapping, credential calls,
+- Moved gRPC stub creation, request-header filling, protobuf-to-DTO mapping, credential calls,
   model-manager calls, semantic v2 embedding calls, runtime control, and image-analysis calls out of
   `app/ai_sidecar_runtime_service.cpp`.
 - Deleted the app-layer `IAiSidecarRuntimeClient` / `GrpcAiSidecarRuntimeClient` boundary and the
@@ -2300,7 +2300,7 @@ Test results:
   `bearer_required_without_credential_errors`, `no_secret_image_prompt_or_body_in_logs_or_error_strings`,
   `client_4xx_is_not_retried_and_maps_to_provider_error`) and the Volcengine equivalents
   (`sends_bearer_authorization`, `request_body_uses_responses_shape_with_structured_output`,
-  `extracts_output_text_from_responses_envelope`, `parses_rating_response_and_captures_usage`,
+  `extracts_output_text_from_responses_output_text`, `parses_rating_response_and_captures_usage`,
   `ark_error_body_maps_to_provider_error_without_leaking_text`,
   `missing_output_text_maps_to_schema_validation`, `schema_failure_does_not_produce_active_result`,
   `rate_limit_maps_to_transient`, `server_500_is_retried_then_succeeds`,
@@ -2412,7 +2412,7 @@ Test results:
   filtered (the 3 live smokes). vs 169 mock tests at 5c close (+16 `anthropic_messages` driver tests; the
   `http_util` image-encode test was a 1:1 replacement, not a net add). The 16 new driver tests:
   `sends_authorization_and_anthropic_version_headers`, `request_body_uses_messages_shape_with_tool_use`,
-  `extracts_tool_use_input_from_messages_envelope`, `parses_understanding_response_and_captures_usage`,
+  `extracts_tool_use_input_from_messages_tool_use_input`, `parses_understanding_response_and_captures_usage`,
   `parses_rating_response_and_captures_usage`, `rate_limit_maps_to_transient`, `server_500_is_retried_then_succeeds`,
   `client_4xx_is_not_retried_and_maps_to_provider_error`, `schema_failure_does_not_produce_active_result`,
   `missing_tool_use_maps_to_schema_validation`, `wrong_tool_name_maps_to_schema_validation`,
@@ -2780,7 +2780,7 @@ Implemented (file-by-file, per the plan):
   `FakeThumbnailProvider` to a blockable mode (pending-request queue +
   `SetBlockMode`/`WaitForPending`) for the consumer-waits-for-encoded-item case.
   New includes `<condition_variable>`, `<deque>`, `<vector>`.
-- `alcedo_studio/tests/app/image_analysis_live_smoke_test.cpp` - NEW env-gated
+- `alcedo_studio/tests/app/image_analysis_live_provider_test.cpp` - NEW env-gated
   live smoke (Phase 5g live-smoke territory, built early here as the bonus
   real-image end-to-end). Skips unless `ALCEDO_IA_LIVE_RUNTIME_PATH`,
   `ALCEDO_TEST_PACKED_PROJECT_PATH`, and `ALCEDO_IA_LIVE_ENV_TEST_PATH` are set
@@ -2794,7 +2794,7 @@ Implemented (file-by-file, per the plan):
   from every result field. Calls `RegisterAllOperators()` at start (see harness
   note below). The key var is `ALCEDO_VOLCENGINE_ARK_API_KEY` for any
   `volcengine*` provider, else `ALCEDO_OPENROUTER_API_KEY`.
-- `alcedo_studio/tests/CMakeLists.txt` - new `ImageAnalysisLiveSmokeTest` target
+- `alcedo_studio/tests/CMakeLists.txt` - new `ImageAnalysisLiveProviderTest` target
   (links `ImageAnalysisService ProjectService GTest::gtest_main`), registered in
   the `ci_raw_flow` label.
 
@@ -2891,7 +2891,7 @@ caption is printed only to the env-gated test stdout, not recorded here, per the
 Test results:
 
 - C++ MSVC build (PowerShell tool): `--target ImageAnalysisServiceTest
-  ImageAnalysisLiveSmokeTest` built clean. The two live-smoke edits this phase
+  ImageAnalysisLiveProviderTest` built clean. The two live-smoke edits this phase
   (`RegisterAllOperators()` + the `volcengine*` key-var fix) rebuilt in one pass.
 - ctest Phase 5d/5e group (`-R "ImageAnalysisServiceTest|ImageAnalysisEncoderTest
   |AiSidecarRuntimeServiceTest"`): 46/46 passed (19 `ImageAnalysisServiceTest`
@@ -2906,7 +2906,7 @@ Test results:
   phase: `live_openrouter_smoke_*` -> HTTP 401, `live_volcengine_ark_smoke_*` ->
   HTTP 404, `live_volcengine_ark_coding_smoke_*` -> PASSED (real caption of the
   32x32 fixture PNG), confirming the driver / endpoint / key matrix above.
-- C++ env-gated live smoke `ImageAnalysisLiveSmokeTest.DescribesOneImageFrom
+- C++ env-gated live smoke `ImageAnalysisLiveProviderTest.DescribesOneImageFrom
   PackedProject`: PASSED with `volcengine_ark_coding` (real describe of a real
   `.alcd` image through the full C++ -> sidecar -> HTTP-provider path); SKIPPED
   cleanly without the env vars.
@@ -3124,7 +3124,7 @@ Implemented (file-by-file, per the plan):
   filename/metadata) and `AiRatingReasonsAreNotInFullScreenSearch` (a token from
   persisted rating reasons is NOT searchable — rating stays out of full-text
   search). These are always-run deterministic coverage, not env-gated.
-- `alcedo_studio/tests/app/image_analysis_live_smoke_test.cpp` - the env-gated
+- `alcedo_studio/tests/app/image_analysis_live_provider_test.cpp` - the env-gated
   live smoke is extended with a NEW `RatesOneImageFromPackedProject` (validates
   Task #1's 1..5 integer rating rule end-to-end) and the existing
   `DescribesOneImageFromPackedProject` is strengthened: after the live describe,
@@ -3246,16 +3246,16 @@ same Ark key. Both live tests this phase used
 Test results:
 
 - C++ MSVC build (PowerShell tool): the new `AiStoreTest` target and
-  the edited `FilterServiceTest` / `ImageAnalysisLiveSmokeTest` targets built
+  the edited `FilterServiceTest` / `ImageAnalysisLiveProviderTest` targets built
   clean.
 - ctest Phase 5f group (`-R "AiStoreTest|FilterServiceTest|
-  ImageAnalysisServiceTest|ImageAnalysisLiveSmokeTest|AiSidecarRuntimeServiceTest"`):
+  ImageAnalysisServiceTest|ImageAnalysisLiveProviderTest|AiSidecarRuntimeServiceTest"`):
   88/88 — 85 passed, 3 Skipped, 0 failed. Composition: 32 `FilterServiceTest`
   (incl. the 2 new AI cases `AiUnderstandingCaptionAndTagsSearchableOnlyAfter
   ActivePersistence`, `AiRatingReasonsAreNotInFullScreenSearch`), 24
   `AiSidecarRuntimeServiceTest` (23 passed + 1 pre-existing live-runtime Skip —
   `ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH` not set), 11 `AiStoreTest` (all
-  new, all passed), 19 `ImageAnalysisServiceTest`, 2 `ImageAnalysisLiveSmokeTest`
+  new, all passed), 19 `ImageAnalysisServiceTest`, 2 `ImageAnalysisLiveProviderTest`
   (both Skipped — the live env vars are not set in the ctest shell; run
   individually below).
 - Rust (Task #1 schema change): `cargo test --release -- --skip live_smoke`
@@ -3273,7 +3273,7 @@ Test results:
   exactly the OpenRouter 401 and Volcengine Ark 404 live smokes above; they are
   environment outcomes, not code defects, so the offline count excludes them via
   `--skip live_smoke`.)
-- C++ env-gated live smoke: `ImageAnalysisLiveSmokeTest.DescribesOneImageFrom
+- C++ env-gated live smoke: `ImageAnalysisLiveProviderTest.DescribesOneImageFrom
   PackedProject` PASSED (with search attribution) and
   `RatesOneImageFromPackedProject` PASSED (1..5 integer, no confidence), both with
   `ALCEDO_IA_LIVE_PROVIDER_ID=volcengine_ark_coding` against the real `.alcd`

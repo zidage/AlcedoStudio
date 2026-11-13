@@ -7,26 +7,63 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_HIGHLIGHT_RECONSTRUCT_CL "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_shader/highlight_reconstruct.cl")
     set(OPENCL_CVT_REF_SPACE_CL "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_shader/cvt_ref_space.cl")
     set(OPENCL_PRNG_CL "${ALCEDO_SRC_ROOT}/opencl/opencl_shader/prng.cl")
-    set(OPENCL_EDIT_PIPELINE_FUSED_PARAMS_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/fused_params.cl")
-    set(OPENCL_EDIT_PIPELINE_FUSED_PARAMS_VALIDATION_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/fused_params_validation.cl")
-    set(OPENCL_EDIT_PIPELINE_FUSED_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/edit_pipeline_fused.cl")
-    set(OPENCL_EDIT_PIPELINE_DETAIL_COMMON_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/detail_common.cl")
-    set(OPENCL_EDIT_PIPELINE_FILM_GRAIN_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/film_grain.cl")
-    set(OPENCL_EDIT_PIPELINE_HALATION_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/halation.cl")
-    set(OPENCL_EDIT_PIPELINE_DETAIL_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/edit_pipeline_detail.cl")
-    set(OPENCL_EDIT_PIPELINE_COMMON_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/common.cl")
-    set(OPENCL_EDIT_PIPELINE_BASIC_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/basic.cl")
-    set(OPENCL_EDIT_PIPELINE_TONE_MAPPING_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/tone_mapping.cl")
-    set(OPENCL_EDIT_PIPELINE_COLOR_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/color.cl")
-    set(OPENCL_EDIT_PIPELINE_CST_CL "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/cst.cl")
     set(OPENCL_XTRANS_INTERPOLATE_CL "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_shader/xtrans_interpolate.cl")
     set(OPENCL_DEMOSAICNET_CONV_CL "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_shader/demosaicnet_conv.cl")
     set(OPENCL_DEMOSAICNET_STRUCTURAL_CL "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_shader/demosaicnet_structural.cl")
     set(OPENCL_GEOMETRY_UTILS_CL "${ALCEDO_SRC_ROOT}/opencl/opencl_shader/geometry_utils.cl")
-    set(OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL "${ALCEDO_SRC_ROOT}/edit/operators/geometry/opencl_shader/lens_calib.cl")
+    set(OPENCL_LENS_CALIB_CL "${ALCEDO_SRC_ROOT}/edit/runtime/lens/opencl/shader/lens_calib.cl")
     set(OPENCL_SCOPE_ANALYZER_CL "${ALCEDO_SRC_ROOT}/edit/scope/opencl_shader/scope_analyzer.cl")
+    set(OPENCL_DAG_GEOMETRY_CAMERA_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/geometry_camera.cl")
+    set(OPENCL_DAG_PRIMARY_GRADE_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/primary_grade.cl")
+    set(OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/primary_grade_neighbor.cl")
+    set(OPENCL_DAG_LOCAL_TONE_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/local_tone.cl")
+    set(OPENCL_DAG_MASK_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/mask.cl")
+    # LinearAp1ToOkLab and the ACEScc decode of the Contrast and Mask range kernels.
+    set(OPENCL_DAG_OKLAB_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/oklab.cl")
+    set(OPENCL_DAG_AI_MASK_COVERAGE_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/ai_mask_coverage.cl")
+    set(OPENCL_DAG_DRT_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/drt.cl")
+    set(OPENCL_DAG_FILM_PRINT_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/film_print.cl")
+    set(OPENCL_DAG_FILM_PRINT_SCAN_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/film_print_scan.cl")
+    set(OPENCL_DAG_FILM_GRAIN_POST_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/film_grain_post.cl")
+    set(OPENCL_DAG_FILM_GRAIN_NEGATIVE_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/film_grain_negative.cl")
+    # DRT parameter struct, ACEScc helpers, and ACES 2.0 / OpenDRT math.
+    set(OPENCL_DAG_DRT_PARAMS_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/drt_params.cl")
+    set(OPENCL_DAG_COMMON_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/common.cl")
+    set(OPENCL_DAG_CST_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/cst.cl")
+    set(OPENCL_DAG_DISPLAY_TO_AP1_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/display_to_ap1.cl")
 
-    # On Windows, first-party CUDA pipeline targets (RawProcessorOp, Operators,
+    # Shared C headers that OpenCL programs load as source. The .cl directories are
+    # installed whole, but these headers sit in include/ next to non-OpenCL headers,
+    # so the install rules copy exactly this list. Every *_H source define below
+    # must come from here, or the packaged app fails to open the header at runtime.
+    set(OPENCL_COLOR_ENCODING_MATH_H "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h")
+    set(OPENCL_DNG_PROFILE_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/dng_profile_gpu_math.h")
+    set(OPENCL_ACES_RGC_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h")
+    set(OPENCL_PROFILE_TONE_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/profile_tone_gpu_math.h")
+    set(OPENCL_ACES2_REFERENCE_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces2_reference_math.h")
+    set(OPENCL_DISPLAY_TO_AP1_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/display_to_ap1_math.h")
+    set(OPENCL_RASTER_LINEARIZE_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/raster_linearize_math.h")
+    set(OPENCL_FILM_PRINT_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_print_math.h")
+    set(OPENCL_FILM_GRAIN_FIELD_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_field.h")
+    set(OPENCL_FILM_GRAIN_POST_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_post.h")
+    set(OPENCL_FILM_GRAIN_TILE_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_tile.h")
+    set(OPENCL_FILM_GRAIN_NEGATIVE_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_negative.h")
+    set(ALCEDO_OPENCL_PACKAGED_HEADERS
+        "${OPENCL_COLOR_ENCODING_MATH_H}"
+        "${OPENCL_DNG_PROFILE_MATH_H}"
+        "${OPENCL_ACES_RGC_H}"
+        "${OPENCL_PROFILE_TONE_MATH_H}"
+        "${OPENCL_ACES2_REFERENCE_MATH_H}"
+        "${OPENCL_DISPLAY_TO_AP1_MATH_H}"
+        "${OPENCL_RASTER_LINEARIZE_MATH_H}"
+        "${OPENCL_FILM_PRINT_MATH_H}"
+        "${OPENCL_FILM_GRAIN_FIELD_H}"
+        "${OPENCL_FILM_GRAIN_POST_H}"
+        "${OPENCL_FILM_GRAIN_TILE_H}"
+        "${OPENCL_FILM_GRAIN_NEGATIVE_H}"
+        CACHE INTERNAL "Header sources of OpenCL programs that the install rules package.")
+
+    # On Windows, first-party CUDA pipeline targets (RawProcessorOp, EditRuntimeLens,
     # EditPipeline, …) are SHARED by default. If OpenCL context/program runtime
     # stays STATIC, each DLL and alcedo_main gets its own Meyers singleton for
     # OpenClContext / OpenClProgramLibrary / OpenClBackendProgramRegistry.
@@ -48,9 +85,10 @@ if(ALCEDO_OPENCL_ENABLED)
         "${ALCEDO_SRC_ROOT}/opencl/opencl_runtime.cpp"
         "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_raw_programs.cpp"
         "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_demosaicnet_programs.cpp"
-        "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_pipeline_programs.cpp"
         "${ALCEDO_SRC_ROOT}/edit/scope/opencl_scope_programs.cpp"
         "${ALCEDO_SRC_ROOT}/opencl/opencl_geometry_programs.cpp"
+        "${ALCEDO_SRC_ROOT}/opencl/opencl_kernel_cache.cpp"
+        "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_gpu_dag_programs.cpp"
     )
 
     if(_alcedo_opencl_shared)
@@ -102,24 +140,40 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_HIGHLIGHT_RECONSTRUCT_CL="${OPENCL_HIGHLIGHT_RECONSTRUCT_CL}"
         ALCEDO_OPENCL_CVT_REF_SPACE_CL="${OPENCL_CVT_REF_SPACE_CL}"
         ALCEDO_OPENCL_PRNG_CL="${OPENCL_PRNG_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_FUSED_PARAMS_CL="${OPENCL_EDIT_PIPELINE_FUSED_PARAMS_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_FUSED_PARAMS_VALIDATION_CL="${OPENCL_EDIT_PIPELINE_FUSED_PARAMS_VALIDATION_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_FUSED_CL="${OPENCL_EDIT_PIPELINE_FUSED_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_DETAIL_COMMON_CL="${OPENCL_EDIT_PIPELINE_DETAIL_COMMON_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_FILM_GRAIN_CL="${OPENCL_EDIT_PIPELINE_FILM_GRAIN_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_HALATION_CL="${OPENCL_EDIT_PIPELINE_HALATION_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_DETAIL_CL="${OPENCL_EDIT_PIPELINE_DETAIL_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_COMMON_CL="${OPENCL_EDIT_PIPELINE_COMMON_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_BASIC_CL="${OPENCL_EDIT_PIPELINE_BASIC_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_TONE_MAPPING_CL="${OPENCL_EDIT_PIPELINE_TONE_MAPPING_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_COLOR_CL="${OPENCL_EDIT_PIPELINE_COLOR_CL}"
-        ALCEDO_OPENCL_EDIT_PIPELINE_CST_CL="${OPENCL_EDIT_PIPELINE_CST_CL}"
         ALCEDO_OPENCL_XTRANS_INTERPOLATE_CL="${OPENCL_XTRANS_INTERPOLATE_CL}"
         ALCEDO_OPENCL_DEMOSAICNET_CONV_CL="${OPENCL_DEMOSAICNET_CONV_CL}"
         ALCEDO_OPENCL_DEMOSAICNET_STRUCTURAL_CL="${OPENCL_DEMOSAICNET_STRUCTURAL_CL}"
         ALCEDO_OPENCL_GEOMETRY_UTILS_CL="${OPENCL_GEOMETRY_UTILS_CL}"
-        ALCEDO_OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL="${OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL}"
+        ALCEDO_OPENCL_LENS_CALIB_CL="${OPENCL_LENS_CALIB_CL}"
         ALCEDO_OPENCL_SCOPE_ANALYZER_CL="${OPENCL_SCOPE_ANALYZER_CL}"
+        ALCEDO_OPENCL_COLOR_ENCODING_MATH_H="${OPENCL_COLOR_ENCODING_MATH_H}"
+        ALCEDO_OPENCL_DNG_PROFILE_MATH_H="${OPENCL_DNG_PROFILE_MATH_H}"
+        ALCEDO_OPENCL_ACES_RGC_H="${OPENCL_ACES_RGC_H}"
+        ALCEDO_OPENCL_PROFILE_TONE_MATH_H="${OPENCL_PROFILE_TONE_MATH_H}"
+        ALCEDO_OPENCL_DAG_GEOMETRY_CAMERA_CL="${OPENCL_DAG_GEOMETRY_CAMERA_CL}"
+        ALCEDO_OPENCL_DAG_PRIMARY_GRADE_CL="${OPENCL_DAG_PRIMARY_GRADE_CL}"
+        ALCEDO_OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL="${OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL}"
+        ALCEDO_OPENCL_DAG_LOCAL_TONE_CL="${OPENCL_DAG_LOCAL_TONE_CL}"
+        ALCEDO_OPENCL_DAG_MASK_CL="${OPENCL_DAG_MASK_CL}"
+        ALCEDO_OPENCL_DAG_OKLAB_CL="${OPENCL_DAG_OKLAB_CL}"
+        ALCEDO_OPENCL_DAG_AI_MASK_COVERAGE_CL="${OPENCL_DAG_AI_MASK_COVERAGE_CL}"
+        ALCEDO_OPENCL_DAG_DRT_CL="${OPENCL_DAG_DRT_CL}"
+        ALCEDO_OPENCL_DAG_FILM_PRINT_CL="${OPENCL_DAG_FILM_PRINT_CL}"
+        ALCEDO_OPENCL_DAG_FILM_PRINT_SCAN_CL="${OPENCL_DAG_FILM_PRINT_SCAN_CL}"
+        ALCEDO_OPENCL_FILM_PRINT_MATH_H="${OPENCL_FILM_PRINT_MATH_H}"
+        ALCEDO_OPENCL_DAG_FILM_GRAIN_POST_CL="${OPENCL_DAG_FILM_GRAIN_POST_CL}"
+        ALCEDO_OPENCL_FILM_GRAIN_FIELD_H="${OPENCL_FILM_GRAIN_FIELD_H}"
+        ALCEDO_OPENCL_FILM_GRAIN_POST_H="${OPENCL_FILM_GRAIN_POST_H}"
+        ALCEDO_OPENCL_FILM_GRAIN_TILE_H="${OPENCL_FILM_GRAIN_TILE_H}"
+        ALCEDO_OPENCL_FILM_GRAIN_NEGATIVE_H="${OPENCL_FILM_GRAIN_NEGATIVE_H}"
+        ALCEDO_OPENCL_DAG_FILM_GRAIN_NEGATIVE_CL="${OPENCL_DAG_FILM_GRAIN_NEGATIVE_CL}"
+        ALCEDO_OPENCL_DAG_DRT_PARAMS_CL="${OPENCL_DAG_DRT_PARAMS_CL}"
+        ALCEDO_OPENCL_DAG_COMMON_CL="${OPENCL_DAG_COMMON_CL}"
+        ALCEDO_OPENCL_DAG_CST_CL="${OPENCL_DAG_CST_CL}"
+        ALCEDO_OPENCL_DAG_DISPLAY_TO_AP1_CL="${OPENCL_DAG_DISPLAY_TO_AP1_CL}"
+        ALCEDO_OPENCL_ACES2_REFERENCE_MATH_H="${OPENCL_ACES2_REFERENCE_MATH_H}"
+        ALCEDO_OPENCL_DISPLAY_TO_AP1_MATH_H="${OPENCL_DISPLAY_TO_AP1_MATH_H}"
+        ALCEDO_OPENCL_RASTER_LINEARIZE_MATH_H="${OPENCL_RASTER_LINEARIZE_MATH_H}"
         ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_OPENCL_SHADER_SOURCE_ROOT}"
     )
 endif()

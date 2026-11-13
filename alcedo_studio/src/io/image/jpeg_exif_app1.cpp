@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
-#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -18,7 +17,11 @@
 namespace alcedo {
 namespace {
 
-auto RatingPercentFor(int rating) -> uint16_t {
+constexpr uint16_t kExifIfdTag          = 0x8769;
+constexpr uint16_t kGpsIfdTag           = 0x8825;
+constexpr size_t   kMaxApp1PayloadBytes = 65533;
+
+auto               RatingPercentFor(int rating) -> uint16_t {
   switch (ExifDisplayMetaData::NormalizeRating(rating)) {
     case 1:
       return 1;
@@ -44,11 +47,12 @@ auto HasMeaningfulExportMetadata(const ExifDisplayMetaData& metadata) -> bool {
          ExifDisplayMetaData::NormalizeRating(metadata.rating_) > 0;
 }
 
-auto RationalFromFloat(float value, int denominator) -> std::pair<int, int> {
+auto RationalFromFloat(float value, int denominator) -> std::pair<uint32_t, uint32_t> {
   if (!std::isfinite(value) || value <= 0.0f || denominator <= 0) {
     return {0, 1};
   }
-  return {std::max(1, static_cast<int>(std::lround(value * denominator))), denominator};
+  return {static_cast<uint32_t>(std::max(1L, std::lround(value * denominator))),
+          static_cast<uint32_t>(denominator)};
 }
 
 auto ExifDateTimeString(std::string value) -> std::optional<std::string> {
@@ -104,189 +108,143 @@ auto AppendU32LE(std::vector<uint8_t>& out, uint32_t value) -> void {
   out.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
 }
 
-struct ExifIfdEntry {
-  uint16_t             tag   = 0;
-  uint16_t             type  = 0;  // 2=ASCII, 3=SHORT, 4=LONG, 5=RATIONAL
-  uint32_t             count = 1;
-  std::vector<uint8_t> inline_or_offset;
-  std::vector<uint8_t> overflow;
-};
+void WriteU32LE(uint8_t* out, uint32_t value) {
+  out[0] = static_cast<uint8_t>(value & 0xFF);
+  out[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+  out[2] = static_cast<uint8_t>((value >> 16) & 0xFF);
+  out[3] = static_cast<uint8_t>((value >> 24) & 0xFF);
+}
 
-auto MakeAsciiEntry(uint16_t tag, const std::string& text) -> ExifIfdEntry {
-  ExifIfdEntry entry;
-  entry.tag  = tag;
-  entry.type = 2;
-  std::vector<uint8_t> bytes(text.begin(), text.end());
-  bytes.push_back(0);
-  entry.count = static_cast<uint32_t>(bytes.size());
-  if (bytes.size() <= 4) {
-    entry.inline_or_offset = bytes;
-    entry.inline_or_offset.resize(4, 0);
+auto MakeAsciiTag(uint16_t tag, const std::string& text) -> ExifIfdTag {
+  ExifIfdTag result{.tag_ = tag, .type_ = 2, .count_ = 0, .value_ = {text.begin(), text.end()}};
+  result.value_.push_back(0);
+  result.count_ = static_cast<uint32_t>(result.value_.size());
+  return result;
+}
+
+auto MakeUndefinedTag(uint16_t tag, std::vector<uint8_t> bytes) -> ExifIfdTag {
+  const auto count = static_cast<uint32_t>(bytes.size());
+  return ExifIfdTag{.tag_ = tag, .type_ = 7, .count_ = count, .value_ = std::move(bytes)};
+}
+
+auto MakeShortTag(uint16_t tag, uint16_t value) -> ExifIfdTag {
+  ExifIfdTag result{.tag_ = tag, .type_ = 3, .count_ = 1, .value_ = {}};
+  AppendU16LE(result.value_, value);
+  return result;
+}
+
+auto MakeLongTag(uint16_t tag, uint32_t value) -> ExifIfdTag {
+  ExifIfdTag result{.tag_ = tag, .type_ = 4, .count_ = 1, .value_ = {}};
+  AppendU32LE(result.value_, value);
+  return result;
+}
+
+auto MakeRationalTag(uint16_t tag, std::pair<uint32_t, uint32_t> value) -> ExifIfdTag {
+  ExifIfdTag result{.tag_ = tag, .type_ = 5, .count_ = 1, .value_ = {}};
+  AppendU32LE(result.value_, value.first);
+  AppendU32LE(result.value_, value.second);
+  return result;
+}
+
+auto FindTag(std::vector<ExifIfdTag>& tags, uint16_t tag) -> std::vector<ExifIfdTag>::iterator {
+  return std::find_if(tags.begin(), tags.end(),
+                      [tag](const ExifIfdTag& entry) { return entry.tag_ == tag; });
+}
+
+/// True when @p tag is an ASCII value of only NUL and space characters.
+auto IsBlankAsciiTag(const ExifIfdTag& tag) -> bool {
+  return tag.type_ == 2 && std::all_of(tag.value_.begin(), tag.value_.end(),
+                                       [](uint8_t byte) { return byte == 0 || byte == ' '; });
+}
+
+/// Write @p tag into @p tags; it replaces an entry with the same tag number.
+void SetTag(std::vector<ExifIfdTag>& tags, ExifIfdTag tag) {
+  if (auto it = FindTag(tags, tag.tag_); it != tags.end()) {
+    *it = std::move(tag);
   } else {
-    entry.overflow = std::move(bytes);
+    tags.push_back(std::move(tag));
   }
-  return entry;
 }
 
-auto MakeShortEntry(uint16_t tag, uint16_t value) -> ExifIfdEntry {
-  ExifIfdEntry entry;
-  entry.tag   = tag;
-  entry.type  = 3;
-  entry.count = 1;
-  AppendU16LE(entry.inline_or_offset, value);
-  entry.inline_or_offset.resize(4, 0);
-  return entry;
+/// Write @p tag into @p tags when they have no value for its tag number (or only a blank text).
+void SetTagWhenMissing(std::vector<ExifIfdTag>& tags, ExifIfdTag tag) {
+  if (auto it = FindTag(tags, tag.tag_); it != tags.end()) {
+    if (IsBlankAsciiTag(*it)) *it = std::move(tag);
+    return;
+  }
+  tags.push_back(std::move(tag));
 }
 
-auto MakeLongEntry(uint16_t tag, uint32_t value) -> ExifIfdEntry {
-  ExifIfdEntry entry;
-  entry.tag   = tag;
-  entry.type  = 4;
-  entry.count = 1;
-  AppendU32LE(entry.inline_or_offset, value);
-  return entry;
+void SortByTag(std::vector<ExifIfdTag>& tags) {
+  std::stable_sort(tags.begin(), tags.end(),
+                   [](const ExifIfdTag& a, const ExifIfdTag& b) { return a.tag_ < b.tag_; });
 }
 
-auto MakeRationalEntry(uint16_t tag, uint32_t numerator, uint32_t denominator) -> ExifIfdEntry {
-  ExifIfdEntry entry;
-  entry.tag   = tag;
-  entry.type  = 5;
-  entry.count = 1;
-  AppendU32LE(entry.overflow, numerator);
-  AppendU32LE(entry.overflow, denominator);
-  return entry;
+auto WritableTags(const std::vector<ExifIfdTag>& tags) -> std::vector<ExifIfdTag> {
+  std::vector<ExifIfdTag> writable;
+  for (const auto& tag : tags) {
+    if (IsWritableExifIfdTag(tag)) writable.push_back(tag);
+  }
+  return writable;
 }
 
-auto EncodeIfd(std::vector<uint8_t>& tiff, const std::vector<ExifIfdEntry>& entries,
-               uint32_t next_ifd_offset) -> void {
-  AppendU16LE(tiff, static_cast<uint16_t>(entries.size()));
+/// Append an IFD of @p tags (sorted by tag) to @p tiff, with value data after the entries.
+/// Returns the position of the IFD in @p tiff.
+auto EncodeIfd(std::vector<uint8_t>& tiff, const std::vector<ExifIfdTag>& tags) -> size_t {
+  // IFD offsets must be word aligned; an odd-length value can end the previous IFD on an odd
+  // offset.
+  if (tiff.size() % 2 != 0) tiff.push_back(0);
+  const size_t ifd_pos = tiff.size();
+  AppendU16LE(tiff, static_cast<uint16_t>(tags.size()));
   const size_t entries_pos = tiff.size();
-  tiff.resize(tiff.size() + entries.size() * 12u + 4u, 0);
+  tiff.resize(tiff.size() + tags.size() * 12u + 4u, 0);
 
-  for (size_t i = 0; i < entries.size(); ++i) {
-    const auto& entry = entries[i];
-    uint8_t*    slot  = tiff.data() + entries_pos + i * 12u;
-    slot[0]           = static_cast<uint8_t>(entry.tag & 0xFF);
-    slot[1]           = static_cast<uint8_t>((entry.tag >> 8) & 0xFF);
-    slot[2]           = static_cast<uint8_t>(entry.type & 0xFF);
-    slot[3]           = static_cast<uint8_t>((entry.type >> 8) & 0xFF);
-    slot[4]           = static_cast<uint8_t>(entry.count & 0xFF);
-    slot[5]           = static_cast<uint8_t>((entry.count >> 8) & 0xFF);
-    slot[6]           = static_cast<uint8_t>((entry.count >> 16) & 0xFF);
-    slot[7]           = static_cast<uint8_t>((entry.count >> 24) & 0xFF);
-
-    if (entry.overflow.empty()) {
-      for (size_t b = 0; b < entry.inline_or_offset.size() && b < 4; ++b) {
-        slot[8 + b] = entry.inline_or_offset[b];
-      }
+  for (size_t i = 0; i < tags.size(); ++i) {
+    const auto& tag  = tags[i];
+    const auto  slot = entries_pos + i * 12u;
+    tiff[slot]       = static_cast<uint8_t>(tag.tag_ & 0xFF);
+    tiff[slot + 1]   = static_cast<uint8_t>((tag.tag_ >> 8) & 0xFF);
+    tiff[slot + 2]   = static_cast<uint8_t>(tag.type_ & 0xFF);
+    tiff[slot + 3]   = static_cast<uint8_t>((tag.type_ >> 8) & 0xFF);
+    WriteU32LE(tiff.data() + slot + 4, tag.count_);
+    if (tag.value_.size() <= 4) {
+      std::copy(tag.value_.begin(), tag.value_.end(), tiff.begin() + slot + 8);
     } else {
-      const uint32_t offset = static_cast<uint32_t>(tiff.size());
-      slot[8]               = static_cast<uint8_t>(offset & 0xFF);
-      slot[9]               = static_cast<uint8_t>((offset >> 8) & 0xFF);
-      slot[10]              = static_cast<uint8_t>((offset >> 16) & 0xFF);
-      slot[11]              = static_cast<uint8_t>((offset >> 24) & 0xFF);
-      tiff.insert(tiff.end(), entry.overflow.begin(), entry.overflow.end());
+      // Value offsets must be word aligned.
+      if (tiff.size() % 2 != 0) tiff.push_back(0);
+      WriteU32LE(tiff.data() + slot + 8, static_cast<uint32_t>(tiff.size()));
+      tiff.insert(tiff.end(), tag.value_.begin(), tag.value_.end());
     }
   }
-
-  uint8_t* next = tiff.data() + entries_pos + entries.size() * 12u;
-  next[0]       = static_cast<uint8_t>(next_ifd_offset & 0xFF);
-  next[1]       = static_cast<uint8_t>((next_ifd_offset >> 8) & 0xFF);
-  next[2]       = static_cast<uint8_t>((next_ifd_offset >> 16) & 0xFF);
-  next[3]       = static_cast<uint8_t>((next_ifd_offset >> 24) & 0xFF);
+  // The next-IFD offset stays 0: the export writes no IFD1 (thumbnail).
+  return ifd_pos;
 }
 
-}  // namespace
-
-auto BuildJpegExifApp1Payload(const JpegExifApp1Options& options) -> std::vector<uint8_t> {
-  const bool has_metadata =
-      options.metadata_.has_value() && HasMeaningfulExportMetadata(*options.metadata_);
-  if (!options.include_software_ && !has_metadata && options.width_ <= 0 && options.height_ <= 0) {
-    return {};
-  }
-
-  std::vector<ExifIfdEntry> exif_ifd;
-  std::vector<ExifIfdEntry> ifd0;
-  ifd0.push_back(MakeShortEntry(0x0112, 1));  // Orientation = upright
-
-  if (options.include_software_) {
-    ifd0.push_back(MakeAsciiEntry(0x0131, AlcedoSoftwareExifString()));  // Software
-  }
-
-  if (options.width_ > 0) {
-    ifd0.push_back(MakeLongEntry(0x0100, static_cast<uint32_t>(options.width_)));  // ImageWidth
-    exif_ifd.push_back(
-        MakeLongEntry(0xA002, static_cast<uint32_t>(options.width_)));  // PixelXDimension
-  }
-  if (options.height_ > 0) {
-    ifd0.push_back(MakeLongEntry(0x0101, static_cast<uint32_t>(options.height_)));  // ImageLength
-    exif_ifd.push_back(
-        MakeLongEntry(0xA003, static_cast<uint32_t>(options.height_)));  // PixelYDimension
-  }
-
-  if (has_metadata) {
-    const auto& metadata = *options.metadata_;
-    if (const auto exif_dt = ExifDateTimeString(metadata.date_time_str_); exif_dt.has_value()) {
-      exif_ifd.push_back(MakeAsciiEntry(0x9003, *exif_dt));  // DateTimeOriginal
-      exif_ifd.push_back(MakeAsciiEntry(0x9004, *exif_dt));  // DateTimeDigitized
-      ifd0.push_back(MakeAsciiEntry(0x0132, *exif_dt));      // DateTime
-    }
-    if (!metadata.lens_make_.empty()) {
-      exif_ifd.push_back(MakeAsciiEntry(0xA433, metadata.lens_make_));
-    }
-    if (!metadata.lens_.empty()) {
-      exif_ifd.push_back(MakeAsciiEntry(0xA434, metadata.lens_));
-    }
-    if (metadata.aperture_ > 0.0f) {
-      const auto rational = RationalFromFloat(metadata.aperture_, 100);
-      exif_ifd.push_back(MakeRationalEntry(0x829D, static_cast<uint32_t>(rational.first),
-                                           static_cast<uint32_t>(rational.second)));
-    }
-    if (metadata.focal_ > 0.0f) {
-      const auto rational = RationalFromFloat(metadata.focal_, 100);
-      exif_ifd.push_back(MakeRationalEntry(0x920A, static_cast<uint32_t>(rational.first),
-                                           static_cast<uint32_t>(rational.second)));
-    }
-    if (metadata.focal_35mm_ > 0.0f) {
-      exif_ifd.push_back(MakeShortEntry(
-          0xA405, static_cast<uint16_t>(std::lround(metadata.focal_35mm_))));  // FocalLengthIn35mmFilm
-    }
-    if (metadata.focus_distance_m_ > 0.0f) {
-      const auto rational = RationalFromFloat(metadata.focus_distance_m_, 1000);
-      exif_ifd.push_back(MakeRationalEntry(0x9206, static_cast<uint32_t>(rational.first),
-                                           static_cast<uint32_t>(rational.second)));
-    }
-    if (metadata.iso_ > 0) {
-      exif_ifd.push_back(MakeShortEntry(
-          0x8827, static_cast<uint16_t>(std::min<uint64_t>(metadata.iso_, 65535))));
-    }
-    if (metadata.shutter_speed_.first > 0 && metadata.shutter_speed_.second > 0) {
-      exif_ifd.push_back(MakeRationalEntry(0x829A, static_cast<uint32_t>(metadata.shutter_speed_.first),
-                                           static_cast<uint32_t>(metadata.shutter_speed_.second)));
-    }
-    if (!metadata.make_.empty()) {
-      ifd0.push_back(MakeAsciiEntry(0x010F, metadata.make_));
-    }
-    if (!metadata.model_.empty()) {
-      ifd0.push_back(MakeAsciiEntry(0x0110, metadata.model_));
-    }
-    const int normalized_rating = ExifDisplayMetaData::NormalizeRating(metadata.rating_);
-    if (normalized_rating > 0) {
-      ifd0.push_back(MakeShortEntry(0x4746, static_cast<uint16_t>(normalized_rating)));
-      ifd0.push_back(MakeShortEntry(0x4749, RatingPercentFor(normalized_rating)));
+/// Write @p offset into the value of the IFD entry @p tag (an IFD pointer of type LONG).
+void PatchIfdPointer(std::vector<uint8_t>& tiff, size_t ifd_pos, uint16_t tag, uint32_t offset) {
+  const uint16_t count =
+      static_cast<uint16_t>(tiff[ifd_pos] | (static_cast<uint16_t>(tiff[ifd_pos + 1]) << 8));
+  for (uint16_t i = 0; i < count; ++i) {
+    uint8_t*       slot = tiff.data() + ifd_pos + 2 + i * 12;
+    const uint16_t entry_tag =
+        static_cast<uint16_t>(slot[0] | (static_cast<uint16_t>(slot[1]) << 8));
+    if (entry_tag == tag) {
+      WriteU32LE(slot + 8, offset);
+      return;
     }
   }
+}
 
-  constexpr uint16_t kExifIfdTag   = 0x8769;
-  const bool         need_exif_ifd = !exif_ifd.empty();
-  if (need_exif_ifd) {
-    ifd0.push_back(MakeLongEntry(kExifIfdTag, 0));
-  }
-
-  std::sort(ifd0.begin(), ifd0.end(),
-            [](const ExifIfdEntry& a, const ExifIfdEntry& b) { return a.tag < b.tag; });
-  std::sort(exif_ifd.begin(), exif_ifd.end(),
-            [](const ExifIfdEntry& a, const ExifIfdEntry& b) { return a.tag < b.tag; });
+/// Encode the TIFF header, IFD0, and the EXIF and GPS IFDs that IFD0 points to.
+auto EncodeTiffBlock(const ExifIfdEntries& entries) -> std::vector<uint8_t> {
+  std::vector<ExifIfdTag> ifd0 = WritableTags(entries.ifd0_);
+  std::vector<ExifIfdTag> exif = WritableTags(entries.exif_);
+  std::vector<ExifIfdTag> gps  = WritableTags(entries.gps_);
+  if (!exif.empty()) SetTag(ifd0, MakeLongTag(kExifIfdTag, 0));
+  if (!gps.empty()) SetTag(ifd0, MakeLongTag(kGpsIfdTag, 0));
+  SortByTag(ifd0);
+  SortByTag(exif);
+  SortByTag(gps);
 
   std::vector<uint8_t> tiff;
   tiff.push_back('I');
@@ -294,38 +252,187 @@ auto BuildJpegExifApp1Payload(const JpegExifApp1Options& options) -> std::vector
   AppendU16LE(tiff, 42);
   AppendU32LE(tiff, 8);
 
-  const size_t ifd0_start = tiff.size();
-  EncodeIfd(tiff, ifd0, 0);
-  if (need_exif_ifd) {
-    const uint32_t exif_ifd_offset = static_cast<uint32_t>(tiff.size());
-    EncodeIfd(tiff, exif_ifd, 0);
-    const uint16_t count = static_cast<uint16_t>(
-        tiff[ifd0_start] | (static_cast<uint16_t>(tiff[ifd0_start + 1]) << 8));
-    for (uint16_t i = 0; i < count; ++i) {
-      uint8_t*       slot = tiff.data() + ifd0_start + 2 + i * 12;
-      const uint16_t tag  = static_cast<uint16_t>(slot[0] | (static_cast<uint16_t>(slot[1]) << 8));
-      if (tag == kExifIfdTag) {
-        slot[8]  = static_cast<uint8_t>(exif_ifd_offset & 0xFF);
-        slot[9]  = static_cast<uint8_t>((exif_ifd_offset >> 8) & 0xFF);
-        slot[10] = static_cast<uint8_t>((exif_ifd_offset >> 16) & 0xFF);
-        slot[11] = static_cast<uint8_t>((exif_ifd_offset >> 24) & 0xFF);
-        break;
+  const size_t ifd0_pos = EncodeIfd(tiff, ifd0);
+  if (!exif.empty()) {
+    const size_t exif_pos = EncodeIfd(tiff, exif);
+    PatchIfdPointer(tiff, ifd0_pos, kExifIfdTag, static_cast<uint32_t>(exif_pos));
+  }
+  if (!gps.empty()) {
+    const size_t gps_pos = EncodeIfd(tiff, gps);
+    PatchIfdPointer(tiff, ifd0_pos, kGpsIfdTag, static_cast<uint32_t>(gps_pos));
+  }
+  return tiff;
+}
+
+auto MakeApp1Payload(const ExifIfdEntries& entries) -> std::vector<uint8_t> {
+  constexpr uint8_t          kExifPrefix[] = {'E', 'x', 'i', 'f', 0, 0};
+  const std::vector<uint8_t> tiff          = EncodeTiffBlock(entries);
+  std::vector<uint8_t>       payload(std::begin(kExifPrefix), std::end(kExifPrefix));
+  payload.insert(payload.end(), tiff.begin(), tiff.end());
+  return payload;
+}
+
+auto IsSameTag(const ExifIfdTag& a, const ExifIfdTag& b) -> bool {
+  return a.tag_ == b.tag_ && a.type_ == b.type_ && a.count_ == b.count_ && a.value_ == b.value_;
+}
+
+/// Remove the largest entry of @p entries that is an unchanged copy of a @p source entry.
+/// Returns false when no such entry with a value larger than 4 bytes exists.
+auto RemoveLargestSourceEntry(ExifIfdEntries& entries, const ExifIfdEntries& source) -> bool {
+  std::vector<ExifIfdTag>* largest_list = nullptr;
+  size_t                   largest_pos  = 0;
+  size_t                   largest_size = 4;
+  const auto scan = [&](std::vector<ExifIfdTag>& list, const std::vector<ExifIfdTag>& from) {
+    for (size_t i = 0; i < list.size(); ++i) {
+      const bool from_source = std::any_of(
+          from.begin(), from.end(), [&](const ExifIfdTag& tag) { return IsSameTag(tag, list[i]); });
+      if (from_source && list[i].value_.size() > largest_size) {
+        largest_list = &list;
+        largest_pos  = i;
+        largest_size = list[i].value_.size();
       }
+    }
+  };
+  scan(entries.ifd0_, source.ifd0_);
+  scan(entries.exif_, source.exif_);
+  scan(entries.gps_, source.gps_);
+  if (largest_list == nullptr) return false;
+  largest_list->erase(largest_list->begin() + static_cast<std::ptrdiff_t>(largest_pos));
+  return true;
+}
+
+}  // namespace
+
+auto ExifColorSpaceFor(const ExportColorProfileConfig& profile) -> uint16_t {
+  const bool srgb_curve = profile.encoding_eotf == ColorUtils::EOTF::SRGB_PIECEWISE ||
+                          profile.encoding_eotf == ColorUtils::EOTF::GAMMA_2_2;
+  return profile.encoding_space == ColorUtils::ColorSpace::REC709 && srgb_curve ? 1 : 0xFFFF;
+}
+
+auto BuildExportExifIfdEntries(const ExportExifOptions& options) -> ExifIfdEntries {
+  ExifIfdEntries entries;
+  entries.ifd0_ = WritableTags(options.source_entries_.ifd0_);
+  entries.exif_ = WritableTags(options.source_entries_.exif_);
+  entries.gps_  = WritableTags(options.source_entries_.gps_);
+  // The source image data does not describe the exported file.
+  std::erase_if(entries.ifd0_,
+                [](const ExifIfdTag& tag) { return IsExifImageStructureTag(tag.tag_); });
+
+  auto& ifd0 = entries.ifd0_;
+  auto& exif = entries.exif_;
+  SetTag(ifd0, MakeShortTag(0x0112, 1));  // Orientation: the exported pixels are upright.
+  if (options.include_software_) {
+    SetTag(ifd0, MakeAsciiTag(0x0131, AlcedoSoftwareExifString()));  // Software
+  }
+  SetTag(exif, MakeUndefinedTag(0x9000, {'0', '2', '3', '2'}));  // ExifVersion
+  SetTag(exif, MakeUndefinedTag(0xA000, {'0', '1', '0', '0'}));  // FlashpixVersion
+  if (options.color_space_.has_value()) {
+    SetTag(exif, MakeShortTag(0xA001, *options.color_space_));  // ColorSpace
+  }
+  if (options.width_ > 0) {
+    SetTag(exif, MakeLongTag(0xA002, static_cast<uint32_t>(options.width_)));  // PixelXDimension
+  }
+  if (options.height_ > 0) {
+    SetTag(exif, MakeLongTag(0xA003, static_cast<uint32_t>(options.height_)));  // PixelYDimension
+  }
+
+  if (options.metadata_.has_value() && HasMeaningfulExportMetadata(*options.metadata_)) {
+    const auto& metadata = *options.metadata_;
+    // The capture time and the rating are the current values of the photo.
+    if (const auto exif_dt = ExifDateTimeString(metadata.date_time_str_); exif_dt.has_value()) {
+      SetTag(ifd0, MakeAsciiTag(0x0132, *exif_dt));  // DateTime
+      SetTag(exif, MakeAsciiTag(0x9003, *exif_dt));  // DateTimeOriginal
+      SetTag(exif, MakeAsciiTag(0x9004, *exif_dt));  // DateTimeDigitized
+    }
+    const int normalized_rating = ExifDisplayMetaData::NormalizeRating(metadata.rating_);
+    if (normalized_rating > 0) {
+      SetTag(ifd0, MakeShortTag(0x4746, static_cast<uint16_t>(normalized_rating)));  // Rating
+      SetTag(ifd0, MakeShortTag(0x4749, RatingPercentFor(normalized_rating)));  // RatingPercent
+    }
+
+    // The source values of the camera and the exposure are exact; the display values are
+    // normalized names and rounded numbers. Use the display values only where the source has no
+    // value.
+    if (!metadata.make_.empty()) SetTagWhenMissing(ifd0, MakeAsciiTag(0x010F, metadata.make_));
+    if (!metadata.model_.empty()) SetTagWhenMissing(ifd0, MakeAsciiTag(0x0110, metadata.model_));
+    if (!metadata.lens_make_.empty()) {
+      SetTagWhenMissing(exif, MakeAsciiTag(0xA433, metadata.lens_make_));  // LensMake
+    }
+    if (!metadata.lens_.empty()) {
+      SetTagWhenMissing(exif, MakeAsciiTag(0xA434, metadata.lens_));  // LensModel
+    }
+    if (metadata.aperture_ > 0.0f) {
+      SetTagWhenMissing(exif, MakeRationalTag(0x829D, RationalFromFloat(metadata.aperture_, 100)));
+    }
+    if (metadata.focal_ > 0.0f) {
+      SetTagWhenMissing(exif, MakeRationalTag(0x920A, RationalFromFloat(metadata.focal_, 100)));
+    }
+    if (metadata.focal_35mm_ > 0.0f) {
+      SetTagWhenMissing(exif, MakeShortTag(0xA405, static_cast<uint16_t>(std::lround(
+                                                       metadata.focal_35mm_))));  // 35 mm focal
+    }
+    if (metadata.focus_distance_m_ > 0.0f) {
+      SetTagWhenMissing(
+          exif, MakeRationalTag(0x9206, RationalFromFloat(metadata.focus_distance_m_, 1000)));
+    }
+    if (metadata.iso_ > 0) {
+      SetTagWhenMissing(
+          exif,
+          MakeShortTag(0x8827, static_cast<uint16_t>(std::min<uint64_t>(metadata.iso_, 65535))));
+    }
+    if (metadata.shutter_speed_.first > 0 && metadata.shutter_speed_.second > 0) {
+      SetTagWhenMissing(
+          exif, MakeRationalTag(0x829A, {static_cast<uint32_t>(metadata.shutter_speed_.first),
+                                         static_cast<uint32_t>(metadata.shutter_speed_.second)}));
     }
   }
 
-  constexpr uint8_t    kExifPrefix[] = {'E', 'x', 'i', 'f', 0, 0};
-  std::vector<uint8_t> payload(std::begin(kExifPrefix), std::end(kExifPrefix));
-  payload.insert(payload.end(), tiff.begin(), tiff.end());
-  if (payload.size() > 65533) {
+  SortByTag(entries.ifd0_);
+  SortByTag(entries.exif_);
+  SortByTag(entries.gps_);
+  return entries;
+}
+
+auto BuildJpegExifApp1Payload(const ExportExifOptions& options) -> std::vector<uint8_t> {
+  ExifIfdEntries entries = BuildExportExifIfdEntries(options);
+
+  // The IFD0 fields of a JPEG file with EXIF data. The JPEG frame header holds the image size;
+  // EXIF does not allow ImageWidth and ImageLength in JPEG files.
+  auto&          ifd0    = entries.ifd0_;
+  const double   dpi     = std::isfinite(options.resolution_dpi_) && options.resolution_dpi_ > 0.0
+                               ? options.resolution_dpi_
+                               : 72.0;
+  const auto     dpi_rational = RationalFromFloat(static_cast<float>(dpi), 100);
+  SetTag(ifd0, MakeRationalTag(0x011A, dpi_rational));            // XResolution
+  SetTag(ifd0, MakeRationalTag(0x011B, dpi_rational));            // YResolution
+  SetTag(ifd0, MakeShortTag(0x0128, 2));                          // ResolutionUnit: inches
+  SetTag(ifd0, MakeShortTag(0x0213, 1));                          // YCbCrPositioning: centered
+  SetTag(entries.exif_, MakeUndefinedTag(0x9101, {1, 2, 3, 0}));  // ComponentsConfiguration: YCbCr
+
+  std::vector<uint8_t> payload = MakeApp1Payload(entries);
+  while (payload.size() > kMaxApp1PayloadBytes &&
+         RemoveLargestSourceEntry(entries, options.source_entries_)) {
+    payload = MakeApp1Payload(entries);
+  }
+  if (payload.size() > kMaxApp1PayloadBytes) {
     return {};
   }
   return payload;
 }
 
+auto BuildExifTiffBlock(const ExifIfdEntries& entries) -> std::vector<uint8_t> {
+  ExifIfdEntries block = entries;
+  std::erase_if(block.ifd0_,
+                [](const ExifIfdTag& tag) { return IsExifImageStructureTag(tag.tag_); });
+  if (block.ifd0_.empty() && block.exif_.empty() && block.gps_.empty()) {
+    return {};
+  }
+  return EncodeTiffBlock(block);
+}
+
 auto ReplaceJpegExifApp1Segment(const std::filesystem::path& path,
                                 const std::vector<uint8_t>&  exif_payload) -> bool {
-  if (exif_payload.empty() || exif_payload.size() > 65533) {
+  if (exif_payload.empty() || exif_payload.size() > kMaxApp1PayloadBytes) {
     return false;
   }
 
@@ -394,8 +501,8 @@ auto ReplaceJpegExifApp1Segment(const std::filesystem::path& path,
   return WriteFileBytes(path, out);
 }
 
-auto ApplyJpegExifApp1Metadata(const std::filesystem::path& path,
-                               const JpegExifApp1Options&   options) -> bool {
+auto ApplyJpegExifApp1Metadata(const std::filesystem::path& path, const ExportExifOptions& options)
+    -> bool {
   const std::vector<uint8_t> exif_payload = BuildJpegExifApp1Payload(options);
   if (exif_payload.empty()) {
     return false;

@@ -15,18 +15,18 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSpinBox>
+#include <QTimer>
 #include <QVariantMap>
 #include <QWidget>
 #include <algorithm>
 
 #include "alcedo_version.hpp"
+#include "image/color_label.hpp"
 
-// resource.qrc lives in the AlcedoMainQml static library. MSVC drops that
-// object unless something in the final executable references
-// qInitResources_resource(). Q_INIT_RESOURCE must sit outside any namespace.
-static void InitAlcedoBundledResources() {
-  Q_INIT_RESOURCE(resource);
-}
+// resource.qrc is compiled into the AppTheme library. MSVC still drops that
+// object unless the final executable references qInitResources_resource().
+// Q_INIT_RESOURCE must sit outside any namespace.
+static void InitAlcedoBundledResources() { Q_INIT_RESOURCE(resource); }
 
 namespace alcedo::ui {
 namespace {
@@ -61,10 +61,11 @@ struct ThemeColors {
   QColor button_pressed_fill;
   QColor button_selected_fill;
   QColor disabled_surface;  // bg_panel blended toward bg_canvas (simulates 0.55 opacity)
-  QColor merge_current_color;
-  QColor merge_current_fill_color;
-  QColor merge_incoming_color;
-  QColor merge_incoming_fill_color;
+  // Raised controls (secondary buttons, combo fields, tool icon actions).
+  QColor control_fill;
+  QColor control_hovered_fill;
+  QColor control_pressed_fill;
+  QColor control_border;
 };
 
 auto BrandBlueBase() -> QColor { return QColor(104, 146, 185); }
@@ -108,10 +109,11 @@ auto MakePuerhTheme() -> ThemeColors {
       .button_pressed_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover / bg_deep
       .button_selected_fill = QColor(0x1A, 0x1A, 0x1A),  // = pressed / hover
       .disabled_surface     = QColor(0x0E, 0x0E, 0x0E),  // between panel and canvas
-      .merge_current_color      = QColor(0xF8, 0x51, 0x49),  // Git red
-      .merge_current_fill_color = QColor(0x2A, 0x14, 0x16),  // deeper red well
-      .merge_incoming_color      = QColor(0x3F, 0xB9, 0x50),  // Git green
-      .merge_incoming_fill_color = QColor(0x14, 0x28, 0x1A),  // deeper green well
+      // Raised controls: about 0x13 above the panel, so they read apart from it.
+      .control_fill         = QColor(0x24, 0x24, 0x24),
+      .control_hovered_fill = QColor(0x2E, 0x2E, 0x2E),
+      .control_pressed_fill = QColor(0x1E, 0x1E, 0x1E),
+      .control_border       = QColor(255, 255, 255, 28),
   };
 }
 
@@ -147,10 +149,10 @@ auto MakeClassicTheme() -> ThemeColors {
       .button_pressed_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover
       .button_selected_fill = QColor(0x1A, 0x1A, 0x1A),  // = pressed / hover
       .disabled_surface     = QColor(0x0E, 0x0E, 0x0E),  // between panel and canvas
-      .merge_current_color      = QColor(0xF8, 0x51, 0x49),  // Git red
-      .merge_current_fill_color = QColor(0x2A, 0x14, 0x16),  // deeper red well
-      .merge_incoming_color      = QColor(0x3F, 0xB9, 0x50),  // Git green
-      .merge_incoming_fill_color = QColor(0x14, 0x28, 0x1A),  // deeper green well
+      .control_fill         = QColor(0x27, 0x27, 0x27),
+      .control_hovered_fill = QColor(0x31, 0x31, 0x31),
+      .control_pressed_fill = QColor(0x21, 0x21, 0x21),
+      .control_border       = QColor(255, 255, 255, 28),
   };
 }
 
@@ -185,12 +187,13 @@ auto IsChineseLanguageCode(const QString& code) -> bool {
   return code.startsWith(QStringLiteral("zh"), Qt::CaseInsensitive);
 }
 
+// Inter stays the primary UI family in every language; Chinese glyphs come from the Inter ->
+// Noto Sans SC substitution (ApplyUiFontSubstitutions). Noto Sans SC as the primary family laid
+// Latin text out with its taller line box (ascent 1.160 / descent 0.288 em, against Inter's
+// 0.969 / 0.241), which put Latin text about 0.16 em below the vertical center in Chinese mode.
 auto ActiveUiFamily(const FontFamilies& families) -> const QString& {
   if (!families.ui_override.isEmpty()) {
     return families.ui_override;
-  }
-  if (IsChineseLanguageCode(families.effective_language_code)) {
-    return families.ui_zh;
   }
   return families.ui_latin;
 }
@@ -365,10 +368,12 @@ void AppTheme::RegisterFonts() {
   families.data =
       RegisterFontResource(QStringLiteral(":/fonts/main_IBM.ttf"), QStringLiteral("IBM Plex Sans"));
   // Minigit / diagnostic monospace only (Versions commit ids, transaction
-  // timeline hashes and before/after lines). Do not use for general metrics —
-  // those stay on dataFontFamily (IBM Plex Sans).
-  families.mono = RegisterFontResource(QStringLiteral(":/fonts/data_DMMono.ttf"),
-                                       QStringLiteral("DM Mono"));
+  // timeline hashes and before/after lines). Do not use for general metrics.
+  // Data display (counts, sizes, revisions, paths) moves to headlineFontFamily
+  // (Manrope, variable weight 200-800); dataFontFamily (IBM Plex Sans) is being
+  // retired page by page, so new or redesigned pages must not use it.
+  families.mono =
+      RegisterFontResource(QStringLiteral(":/fonts/data_DMMono.ttf"), QStringLiteral("DM Mono"));
   // Chinese fallback for the Manrope headline font. The struct default is
   // "Noto Sans SC" (same family used for the rest of the UI's Chinese text);
   // we intentionally do NOT override it with the decorative Dinglie Song
@@ -976,8 +981,123 @@ auto AppTheme::editorListFavoriteActiveOnSelectedColor() const -> QColor {
   return editorListSelectedInkColor();
 }
 
+auto AppTheme::ratingStarEmptyColor() const -> QColor {
+  // Between the card surface and the muted text: visible on a card and in the Inspector, but
+  // clearly below a filled star.
+  return Blend(cardSurfaceColor(), textMutedColor(), 0.6);
+}
+
+auto AppTheme::thumbnailEditMarkFillColor() const -> QColor {
+  // Deep base under the light icon, so the mark reads on bright and dark photos alike.
+  return WithAlpha(bgDeepColor(), 200);
+}
+
+auto AppTheme::thumbnailDetailsScrimColor() const -> QColor {
+  // Deep base under the hover details of a justified-rows tile: the text and the stars read on
+  // bright photos, and the photo stays visible through it.
+  return WithAlpha(bgDeepColor(), 180);
+}
+
 auto AppTheme::scopeGridColor() const -> QColor {
   return Blend(bgDeepColor(), textMutedColor(), 0.32);
+}
+
+auto AppTheme::graphCanvasColor() const -> QColor { return bgDeepColor(); }
+
+auto AppTheme::graphEdgeColor() const -> QColor { return textMutedColor(); }
+
+auto AppTheme::graphCandidateEdgeColor() const -> QColor {
+  return Blend(textMutedColor(), textColor(), 0.35);
+}
+
+auto AppTheme::graphPortFillColor() const -> QColor { return QColor(0, 0, 0, 0); }
+
+auto AppTheme::graphPortBorderColor() const -> QColor { return QColor(0x3F, 0xB9, 0x50); }
+
+auto AppTheme::graphNodeBorderColor() const -> QColor {
+  return Blend(cardSurfaceColor(), textMutedColor(), 0.5);
+}
+
+auto AppTheme::graphMaskDrawerSurfaceColor() const -> QColor { return bgBaseColor(); }
+
+auto AppTheme::graphSelectionOutlineColor() const -> QColor { return textColor(); }
+
+auto AppTheme::graphNodeWidth() const -> int { return 220; }
+
+auto AppTheme::graphNodeVerticalGap() const -> int { return 48; }
+
+auto AppTheme::graphNodeOriginX() const -> int { return 48; }
+
+auto AppTheme::graphNodeOriginY() const -> int { return 48; }
+
+auto AppTheme::graphEndpointHeight() const -> int { return 40; }
+
+auto AppTheme::graphNameRowHeight() const -> int { return 32; }
+
+auto AppTheme::graphNameRowDividerHeight() const -> int { return 1; }
+
+auto AppTheme::graphMaskDrawerHeaderHeight() const -> int { return 28; }
+
+auto AppTheme::graphMaskRowHeight() const -> int { return 28; }
+
+auto AppTheme::maskGroupPreviewSize() const -> int { return 40; }
+
+auto AppTheme::maskGroupMaskPreviewSize() const -> int { return 32; }
+
+auto AppTheme::graphPortSize() const -> int { return 8; }
+
+auto AppTheme::graphPortHitSize() const -> int { return 16; }
+
+auto AppTheme::graphEdgeWidth() const -> int { return 2; }
+
+auto AppTheme::graphSelectionOutlineWidth() const -> int { return 1; }
+
+auto AppTheme::maskOverlayControlColor() const -> QColor { return textColor(); }
+
+auto AppTheme::maskOverlayControlOutlineColor() const -> QColor { return bgCanvasColor(); }
+
+auto AppTheme::maskOverlayInactiveColor() const -> QColor { return textMutedColor(); }
+
+auto AppTheme::maskOverlayHandleRadius() const -> int { return 5; }
+
+auto AppTheme::maskOverlayHandleOutlineWidth() const -> qreal { return 1.2; }
+
+auto AppTheme::maskOverlayStrokeWidth() const -> qreal { return 1.5; }
+
+auto AppTheme::maskOverlayAntialiasWidth() const -> qreal { return 1.0; }
+
+auto AppTheme::maskOverlayHandleHitRadius() const -> int { return 12; }
+
+auto AppTheme::maskOverlayRotateHandleOffset() const -> int { return 24; }
+
+auto AppTheme::maskOverlayGuideOuterWidth() const -> qreal { return 3.0; }
+
+auto AppTheme::maskOverlayGuideInnerWidth() const -> qreal { return 1.2; }
+
+auto AppTheme::maskOverlayGripOuterWidth() const -> qreal { return 5.0; }
+
+auto AppTheme::maskOverlayGripInnerWidth() const -> qreal { return 2.4; }
+
+auto AppTheme::maskOverlayGripSpanT0() const -> qreal { return 0.38; }
+
+auto AppTheme::maskOverlayGripSpanT1() const -> qreal { return 0.62; }
+
+// A fixed light red: no theme accent, so the tint stays visible on sky, water, and foliage (#515).
+auto AppTheme::maskCoverageTintColor() const -> QColor { return QColor(0xFF, 0x50, 0x50); }
+
+auto AppTheme::maskCoverageTintOpacity() const -> qreal { return 0.5; }
+
+auto AppTheme::aiMaskInputAddColor() const -> QColor { return QColor(0x30, 0xA4, 0x6C); }
+
+auto AppTheme::aiMaskInputSubtractColor() const -> QColor { return QColor(0xE5, 0x48, 0x4D); }
+
+auto AppTheme::colorLabelColors() const -> QVariantList {
+  // alcedo-cli library.color_labels reads the same table.
+  QVariantList colors;
+  for (const std::uint32_t rgb : kColorLabelDisplayRgb) {
+    colors.push_back(QColor(QRgb(rgb)));
+  }
+  return colors;
 }
 
 auto AppTheme::scopePlotBorderColor() const -> QColor {
@@ -996,6 +1116,30 @@ auto AppTheme::scopeHistogramBlueColor() const -> QColor {
   return Blend(QColor(0x8E, 0xB9, 0xE5), textColor(), 0.18);
 }
 
+auto AppTheme::scopeMarkerColor() const -> QColor { return textColor(); }
+
+auto AppTheme::dateGraphLevel0Color() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.22);
+}
+
+// Levels 1-4 are a neutral ramp from bgBaseColor toward textColor. The peak stays below
+// textColor so the 1 px textColor outline of the selected day still reads on it.
+auto AppTheme::dateGraphLevel1Color() const -> QColor {
+  return Blend(bgBaseColor(), textColor(), 0.25);
+}
+
+auto AppTheme::dateGraphLevel2Color() const -> QColor {
+  return Blend(bgBaseColor(), textColor(), 0.45);
+}
+
+auto AppTheme::dateGraphLevel3Color() const -> QColor {
+  return Blend(bgBaseColor(), textColor(), 0.65);
+}
+
+auto AppTheme::dateGraphLevel4Color() const -> QColor {
+  return Blend(bgBaseColor(), textColor(), 0.85);
+}
+
 auto AppTheme::uiFontFamily() const -> QString {
   RegisterFonts();
   return ActiveUiFamily(FontState());
@@ -1012,9 +1156,7 @@ auto AppTheme::monoFontFamily() const -> QString {
   RegisterFonts();
   return FontState().mono;
 }
-auto AppTheme::appVersion() const -> QString {
-  return QStringLiteral(ALCEDO_APP_VERSION);
-}
+auto AppTheme::appVersion() const -> QString { return QStringLiteral(ALCEDO_APP_VERSION); }
 
 auto AppTheme::toneGold() const -> QColor { return GetTheme(current_theme_index_).tone_gold; }
 auto AppTheme::toneWine() const -> QColor { return GetTheme(current_theme_index_).tone_wine; }
@@ -1041,9 +1183,15 @@ auto AppTheme::dangerColor() const -> QColor { return toneWine(); }
 auto AppTheme::dangerTintColor() const -> QColor {
   return GetTheme(current_theme_index_).danger_tint;
 }
+auto AppTheme::alertBadgeFillColor() const -> QColor { return dangerColor(); }
+auto AppTheme::alertBadgeTextColor() const -> QColor { return QColor(0xFF, 0xFF, 0xFF); }
 auto AppTheme::backgroundTaskFinishedColor() const -> QColor { return QColor(0x3F, 0xB9, 0x50); }
 auto AppTheme::backgroundTaskWorkingColor() const -> QColor { return QColor(0xD2, 0xA8, 0x3A); }
+auto AppTheme::importRawRingColor() const -> QColor { return accentColor(); }
+// Green apart from the blue and the gold accents of the themes.
+auto AppTheme::importOtherRingColor() const -> QColor { return QColor(0x4C, 0xC2, 0x7A); }
 auto AppTheme::backgroundTaskFailedColor() const -> QColor { return dangerColor(); }
+auto AppTheme::activeModelBorderColor() const -> QColor { return backgroundTaskFinishedColor(); }
 auto AppTheme::selectedTintColor() const -> QColor {
   return GetTheme(current_theme_index_).selected_tint;
 }
@@ -1059,7 +1207,7 @@ auto AppTheme::overlayColor() const -> QColor { return GetTheme(current_theme_in
 auto AppTheme::panelRadius() const -> int { return GetTheme(current_theme_index_).panel_radius; }
 
 // ── Design tokens — structural (theme-invariant) ───────────────────────────
-// Values are the canonical VI contract documented in DESIGN.md. Literal
+// Values are the canonical VI specification documented in DESIGN.md. Literal
 // getters keep a single source of truth shared by QML and (future) QWidget
 // consumers; do not duplicate these numbers in feature QML.
 auto AppTheme::controlRadius() const -> int { return 10; }
@@ -1076,10 +1224,98 @@ auto AppTheme::iconButtonHitSizeCompact() const -> int { return 40; }
 auto AppTheme::editorSidePanelWidth() const -> int { return 320; }
 auto AppTheme::editorSidePanelWidthMin() const -> int { return 260; }
 auto AppTheme::editorSidePanelWidthMax() const -> int { return 460; }
-auto AppTheme::editorMergeDialogWidth() const -> int { return 960; }
 auto AppTheme::editorScopeHeight() const -> int { return 192; }
 auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
+// EXIF caption line + spaceXs + compact Mask-tool hit row (DESIGN.md).
+auto AppTheme::editorAdjustmentHeaderMinHeight() const -> int { return 58; }
+// LUT browser rail page (DESIGN.md "LUT browser"): filter card + tile grid card.
+auto AppTheme::editorLutBrowserPanelWidth() const -> int { return 560; }
+auto AppTheme::editorLutBrowserPanelWidthMin() const -> int { return 280; }
+auto AppTheme::editorLutBrowserFilterWidth() const -> int { return 184; }
+auto AppTheme::editorLutTileMinWidth() const -> int { return 128; }
+// Narrowest single tile column the docked filter sidebar leaves beside it.
+auto AppTheme::editorLutTileCompactWidth() const -> int { return 88; }
+auto AppTheme::editorLutTileIconSize() const -> int { return 36; }
 auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }
+auto AppTheme::collectionRowHeight() const -> int { return 26; }
+auto AppTheme::collectionIndentStep() const -> int { return 14; }
+auto AppTheme::collectionMenuMaxRows() const -> int { return 12; }
+auto AppTheme::collectionMenuFilterThreshold() const -> int { return 15; }
+// Search palette (DESIGN.md "Search palette"): palette width, window inset.
+auto AppTheme::searchPaletteMaxWidth() const -> int { return 960; }
+auto AppTheme::searchPaletteWindowMarginX() const -> int { return 28; }
+auto AppTheme::searchPaletteWindowMarginY() const -> int { return 36; }
+// Welcome surface (DESIGN.md "Welcome surface"): card, columns, and cover block.
+auto AppTheme::welcomeCardWidth() const -> int { return 1040; }
+auto AppTheme::welcomeCardHeight() const -> int { return 600; }
+auto AppTheme::welcomeSidebarWidth() const -> int { return 260; }
+auto AppTheme::welcomeCoverWidth() const -> int { return 300; }
+auto AppTheme::welcomeCoverCompactWidth() const -> int { return 240; }
+auto AppTheme::welcomeCoverHeight() const -> int { return 224; }
+auto AppTheme::welcomeInfoMinWidth() const -> int { return 260; }
+auto AppTheme::welcomeEmptyContentWidth() const -> int { return 400; }
+// One sweep of the SkeletonBlock highlight band. Not scaled by reduceMotion:
+// under reduceMotion the band does not run at all.
+auto AppTheme::skeletonCycleMs() const -> int { return 1200; }
+
+// StaggeredGridMark wave clock. One pass of the wave takes loadingWaveCycleMs; the phase advances
+// every loadingWaveFrameMs (about 30 updates per second) while a mark holds the clock. A mark
+// under reduceMotion holds nothing and draws its tiles at rest.
+auto AppTheme::loadingWaveCycleMs() const -> int { return 1200; }
+auto AppTheme::loadingWaveFrameMs() const -> int { return 33; }
+auto AppTheme::loadingWavePhase() const -> qreal { return loading_wave_phase_; }
+auto AppTheme::loadingWaveHolders() const -> int {
+  return static_cast<int>(loading_wave_holders_.size());
+}
+
+void AppTheme::setLoadingWaveHolder(QObject* holder, bool holds) {
+  if (holder == nullptr) {
+    return;
+  }
+  const auto it = loading_wave_holders_.find(holder);
+  if (holds && it == loading_wave_holders_.end()) {
+    loading_wave_holders_.insert(holder,
+                                 connect(holder, &QObject::destroyed, this, [this, holder]() {
+                                   loading_wave_holders_.remove(holder);
+                                   UpdateLoadingWaveTimer();
+                                 }));
+  } else if (!holds && it != loading_wave_holders_.end()) {
+    disconnect(it.value());
+    loading_wave_holders_.erase(it);
+  }
+  UpdateLoadingWaveTimer();
+}
+
+void AppTheme::UpdateLoadingWaveTimer() {
+  const bool run = !loading_wave_holders_.isEmpty();
+  if (!run) {
+    if (loading_wave_timer_ != nullptr) {
+      loading_wave_timer_->stop();
+    }
+    return;
+  }
+  if (loading_wave_timer_ == nullptr) {
+    loading_wave_timer_ = new QTimer(this);
+    loading_wave_timer_->setInterval(loadingWaveFrameMs());
+    connect(loading_wave_timer_, &QTimer::timeout, this, &AppTheme::AdvanceLoadingWave);
+  }
+  if (loading_wave_timer_->isActive()) {
+    return;
+  }
+  if (!loading_wave_clock_.isValid()) {
+    loading_wave_clock_.start();
+  }
+  AdvanceLoadingWave();
+  loading_wave_timer_->start();
+}
+
+void AppTheme::AdvanceLoadingWave() {
+  const auto cycle = static_cast<qint64>(loadingWaveCycleMs());
+  loading_wave_phase_ =
+      static_cast<qreal>(loading_wave_clock_.elapsed() % cycle) / static_cast<qreal>(cycle);
+  emit LoadingWavePhaseChanged();
+}
+
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
 auto AppTheme::lineHeightBody() const -> int { return 16; }
 auto AppTheme::lineHeightTitle() const -> int { return 18; }
@@ -1090,12 +1326,15 @@ auto AppTheme::spaceSm() const -> int { return 8; }
 auto AppTheme::spaceMd() const -> int { return 12; }
 auto AppTheme::spaceLg() const -> int { return 16; }
 auto AppTheme::spaceXl() const -> int { return 20; }
+auto AppTheme::dateGraphCellMinSize() const -> int { return 10; }
+auto AppTheme::dateGraphCellGap() const -> int { return 3; }
+auto AppTheme::dateGraphCellRadius() const -> int { return 2; }
+auto AppTheme::librarySectionHeaderHeight() const -> int { return 40; }
+auto AppTheme::inspectorHeaderActionSize() const -> int { return 24; }
 auto AppTheme::motionFoldOpenMs() const -> int { return 200; }
 auto AppTheme::motionFoldCloseMs() const -> int { return 160; }
 auto AppTheme::motionFadeMs() const -> int { return 120; }
-auto AppTheme::motionEasing() const -> int {
-  return static_cast<int>(QEasingCurve::OutCubic);
-}
+auto AppTheme::motionEasing() const -> int { return static_cast<int>(QEasingCurve::OutCubic); }
 auto AppTheme::backgroundTaskAutoCollapseMs() const -> int { return 3000; }
 
 auto AppTheme::reduceMotion() const -> bool {
@@ -1124,6 +1363,7 @@ auto AppTheme::fontSizeBody() const -> int { return 12; }
 auto AppTheme::fontSizeTitle() const -> int { return 13; }
 auto AppTheme::fontSizeSection() const -> int { return 14; }
 auto AppTheme::fontSizeHeadline() const -> int { return 22; }
+auto AppTheme::fontSizeDisplay() const -> int { return 72; }
 auto AppTheme::fontWeightRegular() const -> int { return 500; }
 auto AppTheme::fontWeightStrong() const -> int { return 600; }
 auto AppTheme::fontWeightHeading() const -> int { return 700; }
@@ -1145,17 +1385,17 @@ auto AppTheme::buttonSelectedFillColor() const -> QColor {
 auto AppTheme::disabledSurfaceColor() const -> QColor {
   return GetTheme(current_theme_index_).disabled_surface;
 }
-auto AppTheme::mergeCurrentColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_current_color;
+auto AppTheme::controlFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).control_fill;
 }
-auto AppTheme::mergeCurrentFillColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_current_fill_color;
+auto AppTheme::controlHoveredFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).control_hovered_fill;
 }
-auto AppTheme::mergeIncomingColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_incoming_color;
+auto AppTheme::controlPressedFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).control_pressed_fill;
 }
-auto AppTheme::mergeIncomingFillColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_incoming_fill_color;
+auto AppTheme::controlBorderColor() const -> QColor {
+  return GetTheme(current_theme_index_).control_border;
 }
 
 auto AppTheme::currentThemeIndex() const -> int { return current_theme_index_; }

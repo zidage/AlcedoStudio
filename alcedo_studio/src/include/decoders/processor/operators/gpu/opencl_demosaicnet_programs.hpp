@@ -31,6 +31,12 @@ inline constexpr const char* kPackReflectXTransNhwc4KernelName =
     "demosaicnet_pack_reflect_xtrans_nhwc4";
 inline constexpr const char* kUnpackReflectConcatKernelName =
     "demosaicnet_unpack_reflect_concat_nhwc4";
+inline constexpr const char* kPackReflectBayerNhwc4MonoKernelName =
+    "demosaicnet_pack_reflect_bayer_nhwc4_mono";
+inline constexpr const char* kPackReflectXTransNhwc4MonoKernelName =
+    "demosaicnet_pack_reflect_xtrans_nhwc4_mono";
+inline constexpr const char* kUnpackReflectConcatMonoKernelName =
+    "demosaicnet_unpack_reflect_concat_nhwc4_mono";
 inline constexpr const char* kPackBayerNchwKernelName     = "demosaicnet_pack_bayer_nchw_to_nhwc4";
 inline constexpr const char* kPackXTransNchwKernelName    = "demosaicnet_pack_xtrans_nchw_to_nhwc4";
 inline constexpr const char* kResidualAddCropKernelName   = "demosaicnet_residual_add_crop";

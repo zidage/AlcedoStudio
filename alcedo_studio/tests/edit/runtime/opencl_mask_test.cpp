@@ -1,0 +1,744 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include "../graph/grade_owned_mask_support.hpp"
+#include "../graph/test_camera_profile.hpp"
+#include "../input/prepared_raw_test_support.hpp"
+#include "ai_mask_gpu_coverage_test_support.hpp"
+#include "ai_mask_raster_test_support.hpp"
+#include "edit/input/raw_input_loader.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/runtime/compiled_mask_stack.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
+#include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_develop_pass.hpp"
+#include "edit/runtime/opencl/opencl_mask_pass.hpp"
+#include "edit/runtime/opencl/opencl_pass_encoder.hpp"
+#include "edit/runtime/opencl/opencl_primary_grade_pass.hpp"
+#include "edit/runtime/opencl/opencl_scene_work.hpp"
+#include "edit/runtime/pass_kind.hpp"
+#include "edit/runtime/texture_format.hpp"
+#include "gpu/transient_allocation_policy.hpp"
+#include "mask_range_test_support.hpp"
+#include "multi_grade_runtime_test_support.hpp"
+#include "multi_mask_runtime_test_support.hpp"
+#include "opencl/opencl_program_library.hpp"
+#include "opencl/opencl_runtime.hpp"
+
+namespace alcedo {
+namespace {
+
+struct Rgba {
+  float r = 0.0f;
+  float g = 0.0f;
+  float b = 0.0f;
+  float a = 1.0f;
+};
+
+struct GradeFrame {
+  OpenClPrimaryGradeResult result;
+  std::vector<Rgba>        source;
+  std::vector<Rgba>        output;
+};
+
+class OpenClMaskFixture : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    if (!TryInitializeOpenClRuntime()) {
+      GTEST_SKIP() << "No OpenCL device available.";
+    }
+    device_ = std::make_unique<OpenClRenderDevice>();
+    SetExtent(16, 12);
+  }
+
+  void SetExtent(std::uint32_t width, std::uint32_t height) {
+    width_    = width;
+    height_   = height;
+    prepared_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(width, height),
+                                              gpu_dag_test::FullSensor(width, height));
+    document_ = CreateDefaultPipelineDocument();
+    gpu_dag_test::EnsureTestCameraProfile(document_);
+  }
+
+  auto AttachAnalytic(MaskSourceKind kind) -> const MaskModel& {
+    MaskModel mask;
+    mask.id = MaskId{"mask.analytic"};
+    if (kind == MaskSourceKind::Radial) {
+      mask.source = RadialMaskSource{};
+    } else {
+      mask.source = LinearGradientMaskSource{};
+    }
+    const auto& result = grade_mask_test::AddMask(*document_.PrimaryGrade(), std::move(mask));
+    document_.MarkTopologyChanged();
+    return result;
+  }
+
+  void Compile(RenderRequest request = {}) {
+    plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), request);
+  }
+
+  auto DownloadMask() -> std::vector<std::uint8_t> {
+    auto* lease = device_->Workspace().Images().Find(plan_.FirstGrade()->mask_output);
+    EXPECT_NE(lease, nullptr);
+    if (lease == nullptr) {
+      return {};
+    }
+    std::vector<std::uint8_t> pixels(lease->Texture().Bytes());
+    device_->Workspace().Device().DownloadTexture2D(
+        lease->Texture(),
+        std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()), pixels.size()),
+        device_->CommandContext());
+    return pixels;
+  }
+
+  auto DownloadImage(const GraphValueId& id) -> std::vector<Rgba> {
+    auto* lease = device_->Workspace().Images().Find(id);
+    EXPECT_NE(lease, nullptr);
+    if (lease == nullptr) {
+      return {};
+    }
+    std::vector<Rgba> pixels(static_cast<std::size_t>(lease->Texture().Width()) *
+                             lease->Texture().Height());
+    device_->Workspace().Device().DownloadTexture2D(
+        lease->Texture(),
+        std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                             pixels.size() * sizeof(Rgba)),
+        device_->CommandContext());
+    return pixels;
+  }
+
+  auto DownloadBinding(const FrameSceneBinding& binding) -> std::vector<Rgba> {
+    if (binding.IsWorkImage()) {
+      auto& image = device_->Workspace().SceneWork().Member(binding.member);
+      std::vector<Rgba> pixels(static_cast<std::size_t>(image.Width()) * image.Height());
+      device_->Workspace().Device().DownloadBufferRange(
+          image.Storage(), 0,
+          std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                               pixels.size() * sizeof(Rgba)),
+          device_->CommandContext());
+      return pixels;
+    }
+    return DownloadImage(binding.graph_id);
+  }
+
+  auto DownloadGrade() -> std::vector<Rgba> { return DownloadBinding(last_grade_binding_); }
+
+  auto DownloadR8(const GraphValueId& id) -> std::vector<std::uint8_t> {
+    auto* lease = device_->Workspace().Images().Find(id);
+    EXPECT_NE(lease, nullptr);
+    if (lease == nullptr) {
+      return {};
+    }
+    std::vector<std::uint8_t> pixels(lease->Texture().Bytes());
+    device_->Workspace().Device().DownloadTexture2D(
+        lease->Texture(),
+        std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()), pixels.size()),
+        device_->CommandContext());
+    return pixels;
+  }
+
+  void ExecutePlan() {
+    ASSERT_EQ(device_->Execute(plan_, prepared_, document_), plan_.display_output);
+    device_->WaitIdle();
+  }
+
+  void ExpectPrimaryUnionMatchesReference() {
+    const auto expected = multi_mask_test::EvaluateEnabledUnionR8(
+        document_.PrimaryGrade()->Masks(), plan_.geometry);
+    multi_mask_test::ExpectR8WithinTolerance(DownloadMask(), expected);
+  }
+
+  void RenderMask() {
+    device_->BeginRender();
+    (void)ExecuteOpenClMask(*device_, plan_, document_);
+    device_->EndRender();
+    device_->WaitIdle();
+  }
+
+  auto RenderGrade() -> GradeFrame {
+    device_->BeginRender();
+    try {
+      ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
+      ExecuteOpenClGeometryResample(*device_, plan_);
+      ExecuteOpenClCameraColor(*device_, plan_, document_);
+      if (plan_.FirstGrade() != nullptr && plan_.FirstGrade()->mask_stack.has_value()) {
+        (void)ExecuteOpenClMask(*device_, plan_, document_);
+        device_->Workspace().TransientBuffers().Reset();
+      }
+      auto result = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_);
+      last_grade_binding_ = result.output_binding;
+      device_->EndRender();
+      device_->WaitIdle();
+      GradeFrame frame;
+      frame.result = result;
+      frame.source = DownloadImage(plan_.develop_output);
+      frame.output = DownloadBinding(result.output_binding);
+      device_->PublishResults();
+      return frame;
+    } catch (...) {
+      device_->CancelRender();
+      throw;
+    }
+  }
+
+  /// SM6.2: the shared AI Mask checks over this fixture, at the 64 x 48 analysis size.
+  auto AiMaskHarness() -> ai_mask_test::AiMaskBackendHarness {
+    SetExtent(ai_mask_test::kAnalysisExtent.width, ai_mask_test::kAnalysisExtent.height);
+    ai_mask_test::AiMaskBackendHarness h;
+    h.document    = [this]() -> PipelineDocument& { return document_; };
+    h.compile     = [this](RenderRequest request) { Compile(request); };
+    h.plan        = [this]() -> const ExecutionPlan& { return plan_; };
+    h.render_mask = [this] {
+      device_->BeginRender();
+      try {
+        (void)ExecuteOpenClMask(*device_, plan_, document_);
+      } catch (...) {
+        device_->CancelRender();
+        throw;
+      }
+      device_->EndRender();
+      device_->WaitIdle();
+    };
+    h.download_mask = [this] { return DownloadMask(); };
+    h.set_reader    = [this](std::shared_ptr<const MaskAssetReader> reader) {
+      device_->Workspace().SetMaskAssets(std::move(reader));
+    };
+    h.cache_entries   = [this] { return device_->Workspace().MaskCoverage().EntryCount(); };
+    h.cache_uploads   = [this] { return device_->Workspace().MaskCoverage().UploadCount(); };
+    h.release_session = [this] {
+      device_->WaitIdle();
+      device_->Workspace().ReleaseSessionResources();
+    };
+    h.execute_plan     = [this] { ExecutePlan(); };
+    h.photo_result_ids = [this] { return ai_mask_test::PublishedPhotoResultIds(*device_, plan_); };
+    h.published_count  = [this] { return device_->Workspace().Images().PublishedCount(); };
+    h.texture_allocations = [this] { return device_->Workspace().Textures().AllocationCount(); };
+    h.pass_stats          = [this] { return device_->PassStats(); };
+    h.reset_pass_stats    = [this] { device_->ResetPassStats(); };
+    h.candidate_coverage  = [this](const AiMaskCoveragePixels& pixels, Extent2D analysis,
+                                  AiMaskEdgeAdjustment edge) {
+      return ai_mask_test::AcquireCandidateInCoverageWork(*device_, pixels, analysis, edge);
+    };
+    h.stored_coverage = [this](const AiSegmentationMaskSource& source) {
+      return ai_mask_test::AcquireStoredInCoverageWork(*device_, source);
+    };
+    h.cache_edge_work  = [this] { return device_->Workspace().MaskCoverage().EdgeWorkCount(); };
+    h.cache_used_bytes = [this] { return device_->Workspace().MaskCoverage().UsedBytes(); };
+    h.fail_texture_allocation_after = [this](std::uint32_t allocations_to_pass) {
+      device_->Workspace().Device().FailTextureAllocationAfter(allocations_to_pass);
+    };
+    return h;
+  }
+
+  /// The shared Luminance Range and Hue Range checks over this fixture, at the 64 x 48 scene size.
+  auto MaskRangeHarness() -> mask_range_test::MaskRangeBackendHarness {
+    using mask_range_reference::ScenePixel;
+    SetExtent(mask_range_reference::kSceneExtent.width, mask_range_reference::kSceneExtent.height);
+    mask_range_test::MaskRangeBackendHarness h;
+    h.backend                = "opencl";
+    h.document               = [this]() -> PipelineDocument& { return document_; };
+    h.compile                = [this] { Compile(); };
+    h.plan                   = [this]() -> const ExecutionPlan& { return plan_; };
+    h.render_mask_with_scene = [this](const MaskId& mask_id, std::span<const ScenePixel> scene) {
+      const auto& grade  = *plan_.FirstGrade();
+      const auto* source = grade.mask_stack->FindSource(mask_id);
+      EXPECT_NE(source, nullptr);
+      const auto binding = FrameSceneBinding::CachedImage(
+          GraphValueId{NodeId{"test.range_scene"}, PortId{scene.empty() ? "missing" : "image"}});
+      device_->BeginRender();
+      try {
+        if (!scene.empty()) {
+          auto& lease = device_->Workspace().AcquireImageForWrite(
+              binding.graph_id, {width_, height_, TextureFormat::Rgba32f});
+          device_->Workspace().Device().UploadTexture2D(lease.Texture(), std::as_bytes(scene),
+                                                        device_->CommandContext());
+        }
+        (void)ExecuteOpenClMask(*device_, plan_, document_, grade, *source, binding);
+      } catch (...) {
+        device_->CancelRender();
+        throw;
+      }
+      device_->EndRender();
+      device_->WaitIdle();
+      return DownloadR8(source->effective_output);
+    };
+    h.set_reader = [this](std::shared_ptr<const MaskAssetReader> reader) {
+      device_->Workspace().SetMaskAssets(std::move(reader));
+    };
+    h.execute_plan   = [this] { ExecutePlan(); };
+    h.download_scene = [this](const FrameSceneBinding& binding) {
+      std::vector<ScenePixel> pixels;
+      if (binding.IsWorkImage()) {
+        auto& image = device_->Workspace().SceneWork().Member(binding.member);
+        pixels.resize(static_cast<std::size_t>(image.Width()) * image.Height());
+        device_->Workspace().Device().DownloadBufferRange(image.Storage(), 0,
+                                                          std::as_writable_bytes(std::span(pixels)),
+                                                          device_->CommandContext());
+        return pixels;
+      }
+      auto* lease = device_->Workspace().Images().Find(binding.graph_id);
+      EXPECT_NE(lease, nullptr);
+      if (lease == nullptr) {
+        return pixels;
+      }
+      pixels.resize(static_cast<std::size_t>(lease->Texture().Width()) * lease->Texture().Height());
+      device_->Workspace().Device().DownloadTexture2D(
+          lease->Texture(), std::as_writable_bytes(std::span(pixels)), device_->CommandContext());
+      return pixels;
+    };
+    h.download_r8 = [this](const GraphValueId& id) { return DownloadR8(id); };
+    return h;
+  }
+
+  std::uint32_t                       width_  = 0;
+  std::uint32_t                       height_ = 0;
+  PreparedRawInput                    prepared_;
+  PipelineDocument                    document_;
+  ExecutionPlan                       plan_;
+  std::unique_ptr<OpenClRenderDevice> device_;
+  FrameSceneBinding                   last_grade_binding_{};
+};
+
+TEST_F(OpenClMaskFixture, OpenClAnalyticMaskMatchesReferenceAtCropRotationAndDynamicResolution) {
+  auto radial = std::get<RadialMaskSource>(AttachAnalytic(MaskSourceKind::Radial).source);
+  radial.major_radius = 0.35f;
+  radial.minor_radius = 0.25f;
+  document_.PrimaryGrade()->ReplaceMaskSource(MaskId{"mask.analytic"}, radial);
+  const auto& node = *document_.PrimaryGrade()->FindMask(MaskId{"mask.analytic"});
+  document_.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
+  document_.Geometry().SetRotationDegrees(15.0f);
+  Compile();
+  RenderMask();
+  auto check_analytic = [&]() {
+    const auto pixels  = DownloadMask();
+    float      max_err = 0.0f;
+    for (std::uint32_t y = 0; y < plan_.geometry.render_extent.height; ++y) {
+      for (std::uint32_t x = 0; x < plan_.geometry.render_extent.width; ++x) {
+        const float expected =
+            multi_mask_test::EffectiveCoverageAt(node, plan_.geometry, x, y);
+        const float actual =
+            pixels[static_cast<std::size_t>(y) * plan_.geometry.render_extent.width + x] / 255.0f;
+        max_err = std::max(max_err, std::fabs(expected - actual));
+      }
+    }
+    EXPECT_LT(max_err, 2.0f / 255.0f);
+  };
+  check_analytic();
+
+  RenderRequest request;
+  request.resolution.render_scale = 0.5f;
+  Compile(request);
+  RenderMask();
+  check_analytic();
+}
+
+TEST_F(OpenClMaskFixture, OpenClLinearGradientMaskFollowsReferenceSpaceNormal) {
+  AttachAnalytic(MaskSourceKind::LinearGradient);
+  LinearGradientMaskSource params;
+  params.origin_x            = 0.35f;
+  params.origin_y            = 0.4f;
+  params.normal_x            = 0.6f;
+  params.normal_y            = 0.8f;
+  params.transition_distance = 0.7f;
+  params.start_value         = 0.9f;
+  params.end_value           = 0.1f;
+  document_.PrimaryGrade()->ReplaceMaskSource(MaskId{"mask.analytic"}, params);
+  document_.PrimaryGrade()->SetMaskInvert(MaskId{"mask.analytic"}, true);
+  const auto& node = *document_.PrimaryGrade()->FindMask(MaskId{"mask.analytic"});
+  document_.Geometry().SetCropRect({0.1f, 0.05f, 0.8f, 0.85f});
+  document_.Geometry().SetRotationDegrees(12.0f);
+  Compile();
+  RenderMask();
+  const auto pixels  = DownloadMask();
+  float      max_err = 0.0f;
+  for (std::uint32_t y = 0; y < plan_.geometry.render_extent.height; ++y) {
+    for (std::uint32_t x = 0; x < plan_.geometry.render_extent.width; ++x) {
+      const float expected = multi_mask_test::EffectiveCoverageAt(node, plan_.geometry, x, y);
+      const float actual =
+          pixels[static_cast<std::size_t>(y) * plan_.geometry.render_extent.width + x] / 255.0f;
+      max_err = std::max(max_err, std::fabs(expected - actual));
+    }
+  }
+  EXPECT_LT(max_err, 2.0f / 255.0f);
+}
+
+TEST_F(OpenClMaskFixture, OpenClDisconnectedMaskUsesConstantOneWithoutImageAllocation) {
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(1.0f);
+  document_.PrimaryGrade()->SetMix(0.5f);
+  Compile();
+  const auto mixed = RenderGrade();
+  EXPECT_EQ(device_->Workspace().Images().Find(plan_.FirstGrade()->mask_output), nullptr);
+  document_.PrimaryGrade()->SetMix(1.0f);
+  const auto full = RenderGrade();
+  ASSERT_EQ(mixed.source.size(), mixed.output.size());
+  ASSERT_EQ(full.output.size(), mixed.output.size());
+  float max_error = 0.0f;
+  for (std::size_t index = 0; index < mixed.output.size(); ++index) {
+    max_error = std::max(
+        max_error,
+        std::fabs(mixed.output[index].r -
+                  (mixed.source[index].r + (full.output[index].r - mixed.source[index].r) * 0.5f)));
+  }
+  EXPECT_LT(max_error, 2.0e-3f);
+}
+
+TEST_F(OpenClMaskFixture, OpenClColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne) {
+  LinearGradientMaskSource full_coverage;
+  full_coverage.start_value         = 1.0f;
+  full_coverage.end_value           = 1.0f;
+  grade_mask_test::AddLinearGradientMask(document_, MaskId{"mask.linear"}, full_coverage);
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(1.0f);
+  Compile();
+  const auto full = RenderGrade();
+
+  LinearGradientMaskSource split;
+  split.origin_x            = 0.5f;
+  split.normal_x            = 1.0f;
+  split.normal_y            = 0.0f;
+  split.transition_distance = 0.001f;
+  split.start_value         = 0.0f;
+  split.end_value           = 1.0f;
+  document_.PrimaryGrade()->ReplaceMaskSource(MaskId{"mask.linear"}, split);
+  Compile();
+  const auto mixed = RenderGrade();
+  ASSERT_EQ(mixed.source.size(), mixed.output.size());
+  const auto left  = static_cast<std::size_t>(5 * width_ + 2);
+  const auto right = static_cast<std::size_t>(5 * width_ + width_ - 2);
+  EXPECT_NEAR(mixed.output[left].r, mixed.source[left].r, 1.0e-5f);
+  EXPECT_NEAR(mixed.output[right].r, full.output[right].r, 1.0e-5f);
+}
+
+TEST_F(OpenClMaskFixture, OpenClPlanExecutorRunsMaskBeforePrimaryGrade) {
+  LinearGradientMaskSource full_coverage;
+  full_coverage.start_value         = 1.0f;
+  full_coverage.end_value           = 1.0f;
+  grade_mask_test::AddLinearGradientMask(document_, MaskId{"mask.linear"}, full_coverage);
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(1.0f);
+  Compile();
+  ExecutePlan();
+  const auto mask = DownloadMask();
+  ASSERT_EQ(mask.size(), static_cast<std::size_t>(plan_.geometry.render_extent.width) *
+                            plan_.geometry.render_extent.height);
+  EXPECT_TRUE(
+      std::all_of(mask.begin(), mask.end(), [](std::uint8_t value) { return value == 255; }));
+  ASSERT_NE(plan_.FirstGrade(), nullptr);
+  last_grade_binding_ = FrameSceneBinding::WorkImage(SceneWorkMember::Member0);
+  const auto output   = DownloadGrade();
+  EXPECT_FALSE(output.empty());
+}
+
+TEST_F(OpenClMaskFixture, EnabledMasksUseMaximumCoverage) {
+  RadialMaskSource left;
+  left.center_x     = 0.25f;
+  left.major_radius = 0.2f;
+  left.minor_radius = 0.2f;
+  RadialMaskSource right;
+  right.center_x     = 0.75f;
+  right.major_radius = 0.2f;
+  right.minor_radius = 0.2f;
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.a"}, left);
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.z"}, right);
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.a"}, 180.0f / 255.0f);
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.z"}, 200.0f / 255.0f);
+  Compile();
+  ExecutePlan();
+  ExpectPrimaryUnionMatchesReference();
+  const auto unified  = DownloadMask();
+  const auto left_px  = (height_ / 2) * width_ + width_ / 4;
+  const auto right_px = (height_ / 2) * width_ + width_ - width_ / 4;
+  EXPECT_NEAR(unified[left_px], 180, multi_mask_test::kR8ToleranceCodes);
+  EXPECT_NEAR(unified[right_px], 200, multi_mask_test::kR8ToleranceCodes);
+  EXPECT_NE(unified[left_px], unified[right_px]);
+}
+
+TEST_F(OpenClMaskFixture, RadialAndLinearGradientShareUnionRules) {
+  RadialMaskSource radial;
+  radial.major_radius = 0.25f;
+  radial.minor_radius = 0.25f;
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.radial"}, radial);
+  LinearGradientMaskSource gradient;
+  gradient.transition_distance = 1.0f;
+  grade_mask_test::AddLinearGradientMask(document_, MaskId{"mask.linear"}, gradient);
+  Compile();
+  ExecutePlan();
+  const auto combined = DownloadMask();
+  ExpectPrimaryUnionMatchesReference();
+
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.linear"}, false);
+  Compile();
+  ExecutePlan();
+  const auto radial_only = DownloadMask();
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.radial"}, false);
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.linear"}, true);
+  Compile();
+  ExecutePlan();
+  const auto linear_only = DownloadMask();
+  ASSERT_EQ(combined.size(), radial_only.size());
+  for (std::size_t i = 0; i < combined.size(); ++i) {
+    const auto separate_max =
+        static_cast<std::uint8_t>(std::max(radial_only[i], linear_only[i]));
+    EXPECT_NEAR(combined[i], separate_max, multi_mask_test::kR8ToleranceCodes) << "index " << i;
+  }
+}
+
+TEST_F(OpenClMaskFixture, MaskOpacityAndInvertApplyBeforeUnion) {
+  RadialMaskSource radial;
+  radial.major_radius = 0.45f;
+  radial.minor_radius = 0.45f;
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.invert"}, radial, true);
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.invert"}, 0.25f);
+  LinearGradientMaskSource flat;
+  flat.start_value         = 128.0f / 255.0f;
+  flat.end_value           = 128.0f / 255.0f;
+  flat.transition_distance = 1.0f;
+  grade_mask_test::AddLinearGradientMask(document_, MaskId{"mask.flat"}, flat);
+  Compile();
+  ExecutePlan();
+  ExpectPrimaryUnionMatchesReference();
+  const auto unified = DownloadMask();
+  EXPECT_NEAR(unified.front(), 128, multi_mask_test::kR8ToleranceCodes);
+  EXPECT_LT(unified.front(), 200);
+  EXPECT_NEAR(unified[(height_ / 2) * width_ + width_ / 2], 128,
+              multi_mask_test::kR8ToleranceCodes);
+}
+
+TEST_F(OpenClMaskFixture, OpenClMultiMaskUnionMatchesReference) {
+  {
+    SCOPED_TRACE("empty list");
+    Compile();
+    EXPECT_FALSE(plan_.Contains(GpuPassKind::MaskEvaluate));
+    ExecutePlan();
+  }
+  {
+    SCOPED_TRACE("three disabled");
+    SetExtent(16, 12);
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.a"});
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.b"});
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.c"});
+    document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.a"}, false);
+    document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.b"}, false);
+    document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.c"}, false);
+    Compile();
+    ExecutePlan();
+    ExpectPrimaryUnionMatchesReference();
+    const auto disabled = DownloadMask();
+    EXPECT_TRUE(std::all_of(disabled.begin(), disabled.end(),
+                            [](std::uint8_t value) { return value == 0; }));
+  }
+  {
+    SCOPED_TRACE("one radial");
+    SetExtent(16, 12);
+    RadialMaskSource radial;
+    radial.major_radius = 0.35f;
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.radial"}, radial);
+    Compile();
+    ExecutePlan();
+    ExpectPrimaryUnionMatchesReference();
+  }
+  {
+    SCOPED_TRACE("one linear gradient");
+    SetExtent(16, 12);
+    LinearGradientMaskSource gradient;
+    gradient.transition_distance = 0.8f;
+    grade_mask_test::AddLinearGradientMask(document_, MaskId{"mask.linear"}, gradient);
+    Compile();
+    ExecutePlan();
+    ExpectPrimaryUnionMatchesReference();
+  }
+  {
+    SCOPED_TRACE("two source kinds");
+    SetExtent(16, 12);
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.radial"});
+    grade_mask_test::AddLinearGradientMask(document_, MaskId{"mask.linear"});
+    Compile();
+    ExecutePlan();
+    ExpectPrimaryUnionMatchesReference();
+  }
+  {
+    SCOPED_TRACE("two grades");
+    SetExtent(16, 12);
+    multi_grade_test::AddCleanGradesBeforeDrt(document_, {"grade.b"});
+    RadialMaskSource wide;
+    wide.major_radius = 0.4f;
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.primary"}, wide);
+    auto* extra = multi_grade_test::GradeNode(document_, "grade.b");
+    ASSERT_NE(extra, nullptr);
+    LinearGradientMaskSource gradient;
+    gradient.transition_distance = 1.0f;
+    grade_mask_test::AddMask(
+        *extra, grade_mask_test::MakeLinearGradientMask(MaskId{"mask.second"}, gradient));
+    document_.MarkTopologyChanged();
+    Compile();
+    ExecutePlan();
+    ASSERT_EQ(plan_.grade_nodes.size(), 2U);
+    const auto primary = multi_mask_test::EvaluateEnabledUnionR8(
+        document_.PrimaryGrade()->Masks(), plan_.geometry);
+    multi_mask_test::ExpectR8WithinTolerance(DownloadR8(plan_.grade_nodes[0].mask_output),
+                                             primary);
+    const auto second =
+        multi_mask_test::EvaluateEnabledUnionR8(extra->Masks(), plan_.geometry);
+    multi_mask_test::ExpectR8WithinTolerance(DownloadR8(plan_.grade_nodes[1].mask_output),
+                                             second);
+    EXPECT_NE(primary, second);
+  }
+}
+
+TEST_F(OpenClMaskFixture, AiMaskCoverageMatchesIndependentReferenceAtFullAndPreviewScale) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckAiMaskMatchesReferenceAtFullAndPreviewScale(h);
+}
+
+TEST_F(OpenClMaskFixture, AiMaskCoverageFollowsCropAndRotation) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckAiMaskFollowsCropAndRotation(h);
+}
+
+TEST_F(OpenClMaskFixture, AiMaskOutsideTextureBoundsIsZero) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckAiMaskOutsideTextureBoundsIsZero(h);
+}
+
+TEST_F(OpenClMaskFixture, AiMaskInvertAndOpacityApplyBeforeUnion) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckAiMaskInvertAndOpacityApplyBeforeUnion(h);
+}
+
+TEST_F(OpenClMaskFixture, AiMaskFeatherAndExpandChangeCoverage) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckAiMaskFeatherAndExpandChangeCoverage(h);
+}
+
+TEST_F(OpenClMaskFixture, AiMaskCoverageTextureUploadsOncePerAsset) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckAiMaskCoverageTextureUploadsOncePerAsset(h);
+}
+
+TEST_F(OpenClMaskFixture, CoverageOnlyWorkKeepsPhotoResults) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckCoverageOnlyWorkKeepsPhotoResults(h);
+}
+
+TEST_F(OpenClMaskFixture, AiMaskMissingAssetFailsRender) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckAiMaskMissingAssetFailsRender(h);
+}
+
+TEST_F(OpenClMaskFixture, GpuExpandMatchesAlternatingMorphologyExactly) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuExpandMatchesAlternatingMorphologyExactly(h);
+}
+
+TEST_F(OpenClMaskFixture, GpuFeatherMatchesIndependentGaussianWithinOneCode) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuFeatherMatchesIndependentGaussianWithinOneCode(h);
+}
+
+TEST_F(OpenClMaskFixture, GpuCoverageIncludesFullMarginAtImageBorders) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuCoverageIncludesFullMarginAtImageBorders(h);
+}
+
+TEST_F(OpenClMaskFixture, EdgeChangeDoesNotUploadOriginalAgain) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckEdgeChangeDoesNotUploadOriginalAgain(h);
+}
+
+TEST_F(OpenClMaskFixture, FailedEdgeWorkKeepsPublishedCoverage) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckFailedEdgeWorkKeepsPublishedCoverage(h);
+}
+
+/// SM8.3: repeated edge updates build the coverage program once and register nothing.
+TEST_F(OpenClMaskFixture, OpenClCoverageProgramIsNotRegisteredPerUpdate) {
+  auto       h        = AiMaskHarness();
+  const auto analysis = ai_mask_test::kEdgeAnalysisExtent;
+  const auto pixels   = ai_mask_test::MakeEdgeTestCandidate(analysis);
+  // The first edge work with Expand and Feather builds the program and creates its kernels.
+  (void)h.candidate_coverage(pixels, analysis, AiMaskEdgeAdjustment{2.0f, 2});
+  auto& library = OpenClProgramLibrary::Instance();
+  ASSERT_TRUE(library.IsProgramBuilt(OpenCL::GpuDag::kAiMaskCoverageProgramName));
+  const auto names = library.RegisteredProgramNames();
+  EXPECT_EQ(std::count(names.begin(), names.end(),
+                       std::string{OpenCL::GpuDag::kAiMaskCoverageProgramName}),
+            1);
+  auto&      backend = device_->Workspace().Device();
+  const auto builds  = backend.ProgramBuildCount();
+  const auto kernels = backend.KernelCreateCount();
+  const auto work    = h.cache_edge_work();
+
+  for (int update = 1; update <= 12; ++update) {
+    const AiMaskEdgeAdjustment edge{0.5f * static_cast<float>(update), (update % 5) - 2};
+    (void)h.candidate_coverage(pixels, analysis, edge);
+  }
+  EXPECT_EQ(h.cache_edge_work(), work + 12);
+  EXPECT_EQ(backend.ProgramBuildCount(), builds);
+  EXPECT_EQ(backend.KernelCreateCount(), kernels);
+  EXPECT_EQ(library.RegisteredProgramNames().size(), names.size());
+}
+
+TEST_F(OpenClMaskFixture, LuminanceAndHueRangesMatchTheDoublePrecisionReference) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckRangesMatchDoublePrecisionReference(h);
+}
+
+TEST_F(OpenClMaskFixture, WrappingHueRangeSelectsHuesOnBothSidesOfZero) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckWrappingHueRangeSelectsHuesOnBothSidesOfZero(h);
+}
+
+TEST_F(OpenClMaskFixture, FullySelectingRangeMatchesTheMaskWithoutRangesByteForByte) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckFullySelectingRangeMatchesTheMaskWithoutRangesByteForByte(h);
+}
+
+TEST_F(OpenClMaskFixture, OnlyRangedMasksReadTheGradeInput) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckOnlyRangedMasksReadTheGradeInput(h);
+}
+
+TEST_F(OpenClMaskFixture, DefaultSaturationThresholdKeepsTheFixedChromaGate) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckDefaultMinChromaKeepsTheFixedChromaGate(h);
+}
+
+TEST_F(OpenClMaskFixture, RaisedSaturationThresholdDropsLowChromaPixels) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckRaisedMinChromaDropsLowChromaPixels(h);
+}
+
+TEST_F(OpenClMaskFixture, AiMaskRangeMatchesReference) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckAiMaskRangeMatchesReference(h);
+}
+
+TEST_F(OpenClMaskFixture, SecondGradeHueRangeReadsFirstGradeOutput) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckSecondGradeHueRangeReadsFirstGradeOutput(h);
+}
+
+}  // namespace
+}  // namespace alcedo

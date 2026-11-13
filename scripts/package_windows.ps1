@@ -19,13 +19,24 @@ param(
     [string]$DuckDbFtsExtension = $env:ALCEDO_DUCKDB_FTS_EXTENSION,
     [bool]$RequireOpenCLAssets = $true,
     [ValidateRange(0, [long]::MaxValue)][long]$BuildNumber = 0,
-    [ValidateSet('stable','beta')][string]$Channel = 'stable'
+    [ValidateSet('stable','beta')][string]$Channel = 'stable',
+    # Output directory of build_product_resources.py of alcedo-film-lab. Required: the editor can
+    # select the film print, and a render stops with an error when the resources are missing.
+    [string]$FilmPrintResourceDir = $env:ALCEDO_FILM_PRINT_RESOURCE_DIR
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $FilmPrintResourceDir) {
+    throw "Film print resources are required: pass -FilmPrintResourceDir DIR or set ALCEDO_FILM_PRINT_RESOURCE_DIR. build_product_resources.py of alcedo-film-lab makes the directory."
+}
 $repoRoot = Resolve-Path "$PSScriptRoot\.."
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $PackageOutDir = [IO.Path]::GetFullPath($PackageOutDir)
+Set-Location -LiteralPath $repoRoot
+
+& (Join-Path $repoRoot 'scripts\msvc_env.cmd') "-DALCEDO_FILM_PRINT_RESOURCE_DIR=$FilmPrintResourceDir" `
+    -P (Join-Path $repoRoot 'scripts\cmake\verify_film_print_resources.cmake')
+if ($LASTEXITCODE -ne 0) { throw 'Input film print resource verification failed.' }
 
 function Invoke-BuildNumberState {
     param([ValidateSet('resolve','commit')][string]$Mode)
@@ -44,6 +55,16 @@ function Invoke-BuildNumberState {
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to $Mode the Windows package build number."
     }
+}
+
+# publish_update.py refuses a package whose recorded commit differs from the manifest commit,
+# so a package from another checkout or from uncommitted changes cannot be published.
+$packagedCommit = (& git -C $repoRoot.Path rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "git rev-parse HEAD failed."
+}
+if (& git -C $repoRoot.Path status --porcelain) {
+    $packagedCommit = "$packagedCommit-dirty"
 }
 
 Invoke-BuildNumberState -Mode resolve
@@ -136,7 +157,7 @@ Write-Host ""
 # 1. Configure (re-run to pick up new packaging tools like WiX/NSIS)
 # ------------------------------------------------------------------
 Write-Host "Configuring CMake with preset '$Preset' ..." -ForegroundColor Yellow
-$configureCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --preset $Preset -DCMAKE_PREFIX_PATH=`"$QtPrefix`" -DALCEDO_DUCKDB_VSS_EXTENSION=`"$resolvedDuckDbVssExtension`" -DALCEDO_DUCKDB_FTS_EXTENSION=`"$resolvedDuckDbFtsExtension`" -DALCEDO_UPDATE_ALLOW_INSTALL=ON -DALCEDO_UPDATE_CHANNEL=$Channel -DALCEDO_BUILD_NUMBER=$resolvedBuildNumber"
+$configureCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --preset $Preset -B `"$BuildDir`" -DCMAKE_INSTALL_PREFIX=`"$repoRoot\build\install`" -DCMAKE_PREFIX_PATH=`"$QtPrefix`" -DALCEDO_DUCKDB_VSS_EXTENSION=`"$resolvedDuckDbVssExtension`" -DALCEDO_DUCKDB_FTS_EXTENSION=`"$resolvedDuckDbFtsExtension`" -DALCEDO_UPDATE_ALLOW_INSTALL=ON -DALCEDO_UPDATE_CHANNEL=$Channel -DALCEDO_BUILD_NUMBER=$resolvedBuildNumber -DALCEDO_FILM_PRINT_RESOURCE_DIR=`"$FilmPrintResourceDir`""
 Write-Host "> $configureCmd"
 Invoke-Expression $configureCmd
 if ($LASTEXITCODE -ne 0) {
@@ -144,14 +165,30 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ------------------------------------------------------------------
-# 2. Build install target
+# 2. Build, then install the application component into a fresh tree
 # ------------------------------------------------------------------
-Write-Host "Building install target ..." -ForegroundColor Yellow
-$buildCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --build $BuildDir --target install --parallel 4"
+Write-Host "Building ..." -ForegroundColor Yellow
+$buildCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --build $BuildDir --parallel 4"
 Write-Host "> $buildCmd"
 Invoke-Expression $buildCmd
 if ($LASTEXITCODE -ne 0) {
-    throw "Build/install failed."
+    throw "Build failed."
+}
+
+# Verify exactly what CPack packages: the application component (bundled gRPC/RE2
+# development files are a separate component), installed without stale files left
+# by earlier installs.
+$installDir = Join-Path $repoRoot "build\install"
+if (Test-Path -LiteralPath $installDir) {
+    Write-Host "Removing previous install tree: $installDir" -ForegroundColor Gray
+    Remove-Item -LiteralPath $installDir -Recurse -Force
+}
+Write-Host "Installing application component ..." -ForegroundColor Yellow
+$installCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --install $BuildDir --component Unspecified"
+Write-Host "> $installCmd"
+Invoke-Expression $installCmd
+if ($LASTEXITCODE -ne 0) {
+    throw "Install failed."
 }
 
 # ------------------------------------------------------------------
@@ -159,19 +196,15 @@ if ($LASTEXITCODE -ne 0) {
 # ------------------------------------------------------------------
 Write-Host "Verifying install tree ..." -ForegroundColor Yellow
 $verifyScript = Join-Path $repoRoot "scripts\verify_windows_install_tree.ps1"
-$installDir = Join-Path $repoRoot "build\install"
-$verifyArgs = @(
-    '-ExecutionPolicy', 'Bypass',
-    '-File', $verifyScript,
-    '-InstallDir', $installDir
-)
-if (-not $RequireOpenCLAssets) {
-    $verifyArgs += '-SkipOpenCLAssetCheck'
+function Invoke-InstallTreeVerification {
+    param([string]$Directory)
+    $verifyArgs = @('-ExecutionPolicy', 'Bypass', '-File', $verifyScript, '-InstallDir', $Directory)
+    if (-not $RequireOpenCLAssets) { $verifyArgs += '-SkipOpenCLAssetCheck' }
+    $verifyArgs += '-RequireFilmPrintResources'
+    & powershell @verifyArgs
+    if ($LASTEXITCODE -ne 0) { throw "Install tree verification failed: $Directory" }
 }
-& powershell @verifyArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "Install tree verification failed."
-}
+Invoke-InstallTreeVerification -Directory $installDir
 
 # ------------------------------------------------------------------
 # 4. Run CPack
@@ -183,12 +216,34 @@ foreach ($legacyZipPackage in $legacyZipPackages) {
     Write-Host "Removing legacy Windows ZIP: $($legacyZipPackage.Name)" -ForegroundColor Gray
     Remove-Item -LiteralPath $legacyZipPackage.FullName -Force
 }
+$cpackConfig = Get-Content -LiteralPath "$BuildDir\CPackConfig.cmake" -Raw
+if ($cpackConfig -notmatch '(?m)^set\(CPACK_PACKAGE_FILE_NAME "([^"]+)"\)') {
+    throw "CPACK_PACKAGE_FILE_NAME was not found in $BuildDir\CPackConfig.cmake."
+}
+$updatePackage = Join-Path $PackageOutDir "$($Matches[1]).exe"
+$packagedCommitFile = "$updatePackage.commit"
+Remove-Item -LiteralPath $packagedCommitFile -Force -ErrorAction SilentlyContinue
+$stagingRoot = [IO.Path]::GetFullPath((Join-Path $PackageOutDir '_CPack_Packages'))
+if ([IO.Path]::GetDirectoryName($stagingRoot).TrimEnd('\', '/') -ne $PackageOutDir.TrimEnd('\', '/')) {
+    throw "CPack staging path is outside the package output directory: $stagingRoot"
+}
+if (Test-Path -LiteralPath $stagingRoot) {
+    Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+}
 Write-Host "Running CPack ..." -ForegroundColor Yellow
 $cpackCmd = "cpack --config `"$BuildDir\CPackConfig.cmake`" -B `"$PackageOutDir`""
 Write-Host "> $cpackCmd"
 Invoke-Expression $cpackCmd
 if ($LASTEXITCODE -ne 0) {
     throw "CPack failed."
+}
+
+# CPack runs its own install step. Verify that payload as well as build/install.
+$stagedExecutables = @(Get-ChildItem -LiteralPath $stagingRoot `
+    -Filter 'alcedo_main.exe' -Recurse -File)
+if ($stagedExecutables.Count -eq 0) { throw 'CPack produced no application staging tree.' }
+foreach ($stagedExe in $stagedExecutables) {
+    Invoke-InstallTreeVerification -Directory $stagedExe.Directory.Parent.FullName
 }
 
 # ------------------------------------------------------------------
@@ -207,6 +262,19 @@ if ($packages) {
     }
 } else {
     throw "No package files were generated in $PackageOutDir."
+}
+
+if ((& git -C $repoRoot.Path rev-parse HEAD).Trim() -ne ($packagedCommit -replace '-dirty$', '')) {
+    throw "HEAD changed while packaging from $packagedCommit; package again."
+}
+if (Test-Path -LiteralPath $updatePackage) {
+    Set-Content -LiteralPath $packagedCommitFile -Value $packagedCommit -Encoding ascii
+} else {
+    Write-Warning "NSIS update package not generated ($updatePackage); publish_update.py needs it."
+}
+Write-Host "  Packaged commit: $packagedCommit" -ForegroundColor Green
+if ($packagedCommit.EndsWith('-dirty')) {
+    Write-Warning "The worktree had uncommitted changes. publish_update.py will refuse this package."
 }
 
 # Only consume the number after configure, build, install verification, CPack,

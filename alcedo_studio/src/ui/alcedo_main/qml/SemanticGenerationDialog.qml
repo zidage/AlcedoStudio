@@ -1,8 +1,15 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Effects
+import "DataFormat.js" as DataFormat
 
+// The AI label dialog after an import (#762): the prompt (photo count, "Remember my choice",
+// "Skip", "Generate") and the progress view (ring, completed / total, remaining time,
+// "Move task to background", "Cancel"). Neutral colors as on Settings > Local Content
+// Recognition; numbers in Manrope with tabular figures.
 Popup {
     id: root
     objectName: "semanticGenerationDialog"
@@ -13,9 +20,8 @@ Popup {
     closePolicy: showingGeneration ? Popup.NoAutoClose
                                    : Popup.CloseOnEscape | Popup.CloseOnPressOutside
     anchors.centerIn: parent
-    width: Math.min(parent ? parent.width - 56 : 560, 560)
-    height: contentColumn.implicitHeight + 48
-    padding: 0
+    width: Math.min(parent ? parent.width - 56 : 480, 480)
+    padding: 24
 
     property bool promptVisible: false
     property bool generationRunning: false
@@ -25,12 +31,12 @@ Popup {
     property int skipped: 0
     property int failed: 0
     property int canceled: 0
-    property string statusText: ""
     property Item backgroundSource: null
     property bool startTransitionPending: false
     property bool backgrounded: false
-    property real elapsedSecs: 0
-    property var generationStart: null
+    // Seconds until the generation finishes, from the controller's rate of the last minute; -1
+    // while no estimate exists.
+    property int remainingSeconds: -1
 
     signal startRequested(bool rememberChoice)
     signal skipRequested(bool rememberChoice)
@@ -40,33 +46,12 @@ Popup {
     readonly property real progressValue: total > 0 ? completed / total : 0
     readonly property bool showingGeneration: startTransitionPending
                                               || (generationRunning && !backgrounded)
-    // Rough ETA: batch size is fixed (64 or 4), so once the first batch lands the
-    // completion rate stabilizes and remaining time = remaining / rate.
-    readonly property real processingRate: (elapsedSecs > 0 && completed > 0)
-                                           ? completed / elapsedSecs : 0
-    readonly property real remainingSecs: processingRate > 0
-                                          ? (total - completed) / processingRate : 0
-    readonly property color panelColor: appTheme.toneGraphite
-    readonly property color sectionColor: appTheme.bgBaseColor
-    readonly property color textColor: appTheme.textColor
-    readonly property color mutedTextColor: appTheme.textMutedColor
-    readonly property color accentColor: appTheme.accentColor
-    readonly property string dataFontFamily: appTheme.dataFontFamily
 
     onGenerationRunningChanged: {
         if (generationRunning || !promptVisible) {
             startTransitionPending = false
         }
-        if (generationRunning) {
-            backgrounded = false
-            generationStart = Date.now()
-            elapsedSecs = 0
-            etaTimer.start()
-        } else {
-            backgrounded = false
-            etaTimer.stop()
-            generationStart = null
-        }
+        backgrounded = false
     }
 
     onPromptVisibleChanged: {
@@ -84,32 +69,6 @@ Popup {
         }
         backgrounded = true
         close()
-    }
-
-    function _pad2(n) {
-        n = Math.floor(n)
-        return n < 10 ? "0" + n : "" + n
-    }
-
-    function formatDuration(secs) {
-        var s = Math.max(0, Math.floor(secs))
-        var h = Math.floor(s / 3600)
-        var m = Math.floor((s % 3600) / 60)
-        if (h > 0) {
-            return h + ":" + _pad2(m) + ":" + _pad2(s % 60)
-        }
-        return _pad2(m) + ":" + _pad2(s % 60)
-    }
-
-    Timer {
-        id: etaTimer
-        interval: 1000
-        repeat: true
-        onTriggered: {
-            if (root.generationStart !== null) {
-                root.elapsedSecs = Math.max(0, (Date.now() - root.generationStart) / 1000)
-            }
-        }
     }
 
     Overlay.modal: Item {
@@ -135,150 +94,163 @@ Popup {
 
     background: Rectangle {
         radius: 14
-        color: root.panelColor
-        border.width: 0
+        color: appTheme.toneGraphite
+        border.width: 1
+        border.color: appTheme.cardBorderColor
     }
 
     contentItem: ColumnLayout {
-        id: contentColumn
-        width: root.width
-        spacing: 18
+        spacing: appTheme.spaceLg
 
-        ColumnLayout {
+        Label {
+            objectName: "semanticGenerationDialogTitle"
             Layout.fillWidth: true
-            Layout.margins: 24
-            spacing: 6
-
-            Label {
-                Layout.fillWidth: true
-                text: root.showingGeneration
-                      ? qsTr("Generating semantic labels")
-                      : qsTr("Use AI to analyze image content?")
-                color: root.textColor
-                font.family: appTheme.headlineFontFamily
-                font.pixelSize: 24
-                font.weight: 700
-                wrapMode: Text.WordWrap
-            }
-
-            Label {
-                Layout.fillWidth: true
-                visible: root.showingGeneration
-                text: root.showingGeneration
-                      ? (root.statusText.length > 0
-                         ? root.statusText
-                         : qsTr("Starting semantic generation..."))
-                      : ""
-                color: root.mutedTextColor
-                font.pixelSize: 13
-                font.weight: 500
-                lineHeight: 1.25
-                wrapMode: Text.WordWrap
-            }
+            text: root.showingGeneration ? qsTr("Generating AI labels")
+                                         : qsTr("Generate AI labels for the new photos?")
+            color: appTheme.textColor
+            font.family: appTheme.headlineFontFamily
+            font.pixelSize: appTheme.fontSizeHeadline
+            font.weight: Font.Bold
+            wrapMode: Text.WordWrap
         }
 
-        ColumnLayout {
-            Layout.alignment: Qt.AlignHCenter
-            Layout.leftMargin: 24
-            Layout.rightMargin: 24
-            visible: root.showingGeneration
-            spacing: 12
-
-            ImportProgressRing {
-                Layout.alignment: Qt.AlignHCenter
-                Layout.preferredWidth: 132
-                Layout.preferredHeight: 132
-                ringWidth: 11
-                trackColor: Qt.rgba(1, 1, 1, 0.07)
-                fillColor: root.accentColor
-                progress: root.progressValue
-            }
+        // Prompt: the number of photos that need labels.
+        RowLayout {
+            visible: !root.showingGeneration
+            spacing: appTheme.spaceSm
 
             Label {
-                Layout.alignment: Qt.AlignHCenter
-                text: root.total > 0
-                      ? qsTr("%1 / %2").arg(root.completed).arg(root.total)
-                      : qsTr("Preparing")
-                color: root.textColor
-                font.family: root.dataFontFamily
-                font.pixelSize: 22
-                font.weight: 700
+                objectName: "semanticGenerationDialogPendingCount"
+                text: DataFormat.grouped(root.pendingCount, Qt.locale())
+                color: appTheme.textColor
+                font.family: appTheme.headlineFontFamily
+                font.pixelSize: appTheme.fontSizeSection
+                font.weight: Font.DemiBold
+                font.features: { "tnum": 1 }
             }
-
             Label {
-                Layout.alignment: Qt.AlignHCenter
-                visible: root.generationRunning && root.generationStart !== null
-                text: {
-                    var elapsed = root.formatDuration(root.elapsedSecs)
-                    if (root.completed > 0 && root.processingRate > 0) {
-                        var rem = root.formatDuration(root.remainingSecs)
-                        return qsTr("Elapsed %1 · ~%2 remaining").arg(elapsed).arg(rem)
-                    }
-                    return qsTr("Elapsed %1 · estimating…").arg(elapsed)
-                }
-                color: root.mutedTextColor
-                font.pixelSize: 12
-                font.weight: 500
+                text: qsTr("photos need labels")
+                color: appTheme.textMutedColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeBody
             }
         }
 
         CheckBox {
             id: rememberChoice
+            objectName: "semanticGenerationDialogRememberChoice"
             visible: !root.showingGeneration
             Layout.fillWidth: true
-            Layout.leftMargin: 24
-            Layout.rightMargin: 24
-            Layout.preferredHeight: 30
-            text: qsTr("Remember My Choice")
+            text: qsTr("Remember my choice")
             checked: false
             spacing: 10
+            padding: 0
             indicator: Rectangle {
-                implicitWidth: 22
-                implicitHeight: 22
+                implicitWidth: 18
+                implicitHeight: 18
                 x: 0
-                y: Math.round((parent.height - height) / 2)
+                y: Math.round((rememberChoice.height - height) / 2)
                 radius: 5
-                color: rememberChoice.checked
-                       ? Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.22)
-                       : Qt.rgba(1, 1, 1, 0.04)
+                color: rememberChoice.checked ? appTheme.textColor : "transparent"
                 border.width: 2
                 border.color: rememberChoice.checked
-                              ? root.accentColor
-                              : Qt.rgba(root.textColor.r, root.textColor.g, root.textColor.b, 0.62)
+                              ? appTheme.textColor
+                              : Qt.rgba(appTheme.textColor.r, appTheme.textColor.g,
+                                        appTheme.textColor.b, 0.62)
 
                 Rectangle {
                     visible: rememberChoice.checked
                     anchors.centerIn: parent
-                    width: 10
-                    height: 10
-                    radius: 3
-                    color: root.accentColor
+                    width: 8
+                    height: 8
+                    radius: 2
+                    color: appTheme.toneGraphite
                 }
             }
             contentItem: Label {
                 text: rememberChoice.text
                 leftPadding: rememberChoice.indicator.width + rememberChoice.spacing
                 verticalAlignment: Text.AlignVCenter
-                color: root.mutedTextColor
-                font.pixelSize: 12
-                font.weight: 600
+                color: appTheme.textMutedColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeBody
+                font.weight: appTheme.fontWeightStrong
+            }
+        }
+
+        // Progress: the ring, completed / total, and the remaining time.
+        RowLayout {
+            visible: root.showingGeneration
+            spacing: 22
+
+            ImportProgressRing {
+                Layout.preferredWidth: 112
+                Layout.preferredHeight: 112
+                ringWidth: 10
+                trackColor: Qt.rgba(1, 1, 1, 0.07)
+                fillColor: appTheme.textColor
+                progress: root.progressValue
+                indeterminate: root.total <= 0
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: appTheme.spaceXs
+
+                Label {
+                    objectName: "semanticGenerationDialogProgressText"
+                    Layout.fillWidth: true
+                    visible: root.total > 0
+                    textFormat: Text.PlainText
+                    text: qsTr("%1 / %2").arg(DataFormat.grouped(root.completed, Qt.locale()))
+                                          .arg(DataFormat.grouped(root.total, Qt.locale()))
+                    color: appTheme.textColor
+                    font.family: appTheme.headlineFontFamily
+                    font.pixelSize: 34
+                    font.weight: Font.Light
+                    font.features: { "tnum": 1 }
+                    fontSizeMode: Text.HorizontalFit
+                    minimumPixelSize: 20
+                }
+                Label {
+                    objectName: "semanticGenerationDialogRemainingText"
+                    Layout.fillWidth: true
+                    text: root.total > 0 ? DataFormat.remaining(root.remainingSeconds)
+                                         : qsTr("Preparing")
+                    color: appTheme.textMutedColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeBody
+                    wrapMode: Text.WordWrap
+                }
             }
         }
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 24
-            Layout.rightMargin: 24
-            Layout.bottomMargin: 24
-            spacing: 12
+            Layout.topMargin: appTheme.spaceXs
+            spacing: appTheme.spaceSm
 
             Item { Layout.fillWidth: true }
 
-            AiButton {
+            IconButton {
+                objectName: "semanticGenerationDialogBackgroundButton"
+                visible: root.showingGeneration
+                buttonSize: 34
+                buttonRadius: appTheme.controlRadius
+                iconSize: 17
+                iconSrc: "qrc:/panel_icons/to_bg.svg"
+                normalColor: appTheme.controlFillColor
+                borderColor: appTheme.controlBorderColor
+                tooltipText: qsTr("Move task to background")
+                enabled: root.generationRunning
+                onClicked: root.runInBackground()
+            }
+
+            DialogActionButton {
                 objectName: "semanticGenerationDialogSkipButton"
-                Layout.preferredWidth: 142
+                buttonWidth: Math.max(96, implicitContentWidth + 36)
+                buttonHeight: 34
                 text: root.showingGeneration ? qsTr("Cancel") : qsTr("Skip")
-                primary: false
                 onClicked: {
                     if (root.showingGeneration) {
                         root.startTransitionPending = false
@@ -289,75 +261,19 @@ Popup {
                 }
             }
 
-            IconButton {
-                visible: root.showingGeneration
-                buttonWidth: 54
-                buttonHeight: 48
-                buttonRadius: 10
-                iconSize: 18
-                kind: "accent"
-                accentColor: root.accentColor
-                bordered: true
-                borderColor: Qt.rgba(root.accentColor.r,
-                                     root.accentColor.g,
-                                     root.accentColor.b,
-                                     0.20)
-                iconSrc: "qrc:/panel_icons/to_bg.svg"
-                tooltipText: qsTr("Move task to background")
-                enabled: root.generationRunning
-                onClicked: root.runInBackground()
-            }
-
-            AiButton {
+            DialogActionButton {
+                objectName: "semanticGenerationDialogGenerateButton"
                 visible: !root.showingGeneration
-                Layout.preferredWidth: 168
+                kind: "light"
+                buttonWidth: Math.max(112, implicitContentWidth + 36)
+                buttonHeight: 34
                 text: qsTr("Generate")
-                primary: true
                 enabled: root.pendingCount > 0
                 onClicked: {
                     root.startTransitionPending = true
                     root.startRequested(rememberChoice.checked)
                 }
             }
-        }
-    }
-
-    component AiButton: Button {
-        property bool primary: false
-
-        Layout.preferredHeight: 48
-        topInset: 0
-        bottomInset: 0
-        leftInset: 0
-        rightInset: 0
-        font.pixelSize: 15
-        font.weight: 800
-        hoverEnabled: true
-        contentItem: Label {
-            text: parent.text
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            color: root.textColor
-            font.pixelSize: parent.font.pixelSize
-            font.weight: parent.font.weight
-            elide: Text.ElideRight
-        }
-        background: Rectangle {
-            radius: 10
-            color: parent.primary
-                   ? (parent.down
-                      ? Qt.darker(root.accentColor, 1.16)
-                      : (parent.hovered ? Qt.lighter(root.accentColor, 1.06)
-                                        : root.accentColor))
-                   : (parent.down
-                      ? Qt.rgba(1, 1, 1, 0.07)
-                      : (parent.hovered ? Qt.rgba(1, 1, 1, 0.14)
-                                        : Qt.rgba(1, 1, 1, 0.10)))
-            border.width: 1
-            border.color: parent.primary
-                          ? Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.20)
-                          : Qt.rgba(1, 1, 1, 0.10)
-            opacity: parent.enabled ? 1.0 : 0.45
         }
     }
 }

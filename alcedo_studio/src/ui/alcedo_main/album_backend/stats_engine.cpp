@@ -101,84 +101,57 @@ void StatsEngine::BindCollaborators(SearchController* search,
 
 void StatsEngine::ToggleStatsFilter(const QString& category, const QString& label) {
   ToggleFilter(category, label);
-  RebuildThumbnailView();
-  // The stats panel must apply the same merged predicate as the thumbnail
-  // grid so both surfaces stay consistent for one UI filter state.
-  RefreshStats();
+  // The grid, the groups, and the statistics apply the same merged predicate in one read.
+  library_->RequestLibraryRefresh();
   emit StatsFilterChanged();
 }
 
 void StatsEngine::ClearStatsFilter() {
   ClearFilters();
-  RebuildThumbnailView();
-  RefreshStats();
+  library_->RequestLibraryRefresh();
   emit StatsFilterChanged();
 }
 
-void StatsEngine::RebuildThumbnailView() {
-  library_->LoadThumbnailWindow(BuildStatsFilterNode(), true);
-}
+void StatsEngine::RebuildThumbnailView() { library_->RequestLibraryRefresh(); }
 
-bool StatsEngine::LoadMoreThumbnailView() {
-  return library_->LoadThumbnailWindow(BuildStatsFilterNode(), false);
-}
+bool StatsEngine::LoadMoreThumbnailView() { return library_->LoadMoreThumbnails(); }
 
-void StatsEngine::RefreshStats() {
-  auto proj = project_->handler().project();
-  if (!proj) {
-    date_stats_.clear();
-    camera_stats_.clear();
-    lens_stats_.clear();
-    label_stats_.clear();
-    rating_stats_.clear();
-    total_photo_count_ = 0;
-    emit StatsChanged();
-    return;
-  }
+void StatsEngine::RefreshStats() { library_->RequestLibraryRefresh(); }
 
-  auto filter_service = proj->GetSleeveFilterService();
-  if (!filter_service) {
-    emit StatsChanged();
-    return;
-  }
-
-  try {
-    const auto folder_id = folders_->CurrentFolderElementId();
-    if (!folder_id.has_value()) {
-      date_stats_.clear();
-      camera_stats_.clear();
-      lens_stats_.clear();
-      label_stats_.clear();
-      rating_stats_.clear();
-      total_photo_count_ = 0;
-      emit StatsChanged();
-      return;
-    }
-
-    const auto merged_filter =
-        MergeFilterNodes(BuildStatsFilterNode(), search_->ActiveSearchFilterNode());
-    const auto stats = filter_service->BuildFolderStats(folder_id.value(), merged_filter);
-    total_photo_count_ = stats.total_photo_count_;
-    date_stats_        = ToStatsRows(stats.date_stats_);
-    camera_stats_      = ToStatsRows(stats.camera_stats_);
-    lens_stats_        = ToStatsRows(stats.lens_stats_);
-    label_stats_       = ToStatsRows(stats.label_stats_, true, true);
-    rating_stats_      = ToStatsRows(stats.rating_stats_);
-  } catch (...) {
-    // Keep previous stats if service query failed.
-  }
-
+void StatsEngine::ClearStats() {
+  date_stats_.clear();
+  camera_stats_.clear();
+  lens_stats_.clear();
+  label_stats_.clear();
+  rating_stats_.clear();
+  import_date_stats_.clear();
+  color_label_counts_.clear();
+  delete_mark_count_ = 0;
+  total_photo_count_ = 0;
   emit StatsChanged();
 }
 
-auto StatsEngine::FormatPhotoInfo(int shown, int total) const -> QString {
-  if (total <= 0) {
-    return PL_TEXT("No images loaded.").Render();
+auto StatsEngine::ActiveSemanticModelKey() const -> std::string {
+  return semantic_ ? semantic_->ActiveModelKey() : std::string{};
+}
+
+void StatsEngine::ApplyFolderStats(const AlbumStatsView& stats, bool emit_changed) {
+  total_photo_count_ = stats.total_photo_count_;
+  date_stats_        = ToStatsRows(stats.date_stats_);
+  camera_stats_      = ToStatsRows(stats.camera_stats_);
+  lens_stats_        = ToStatsRows(stats.lens_stats_);
+  label_stats_       = ToStatsRows(stats.label_stats_, true, true);
+  rating_stats_      = ToStatsRows(stats.rating_stats_);
+  import_date_stats_ = ToStatsRows(stats.import_date_stats_);
+  color_label_counts_.clear();
+  color_label_counts_.reserve(kColorLabelCount);
+  for (const int count : stats.color_label_counts_) {
+    color_label_counts_.push_back(count);
   }
-  if (shown == total) {
-    return PL_TEXT("Showing %1 images", total).Render();
+  delete_mark_count_ = stats.delete_mark_count_;
+  if (emit_changed) {
+    emit StatsChanged();
   }
-  return PL_TEXT("Showing %1 of %2", shown, total).Render();
 }
 
 auto StatsEngine::MakeThumbMap(const AlbumItem& image, int index) const -> QVariantMap {
@@ -202,10 +175,12 @@ auto StatsEngine::MakeThumbMap(const AlbumItem& image, int index) const -> QVari
       {"captureDate",
        image.capture_date.isValid() ? image.capture_date.toString("yyyy-MM-dd") : "--"},
       {"rating", image.rating},
+      {"colorLabels", static_cast<int>(image.color_labels)},
+      {"deleteMark", image.delete_mark},
       {"tags", image.tags},
       {"accent", image.accent.isEmpty() ? album_util::AccentForIndex(static_cast<size_t>(index))
                                         : image.accent},
-      {"thumbUrl", image.thumb_data_url},
+      {"thumbUrl", image.thumb_url},
       {"thumbLoading", image.thumb_loading},
       {"thumbMissingSource", image.thumb_missing_source},
       {"thumbErrorText", image.thumb_error_text}};
@@ -235,6 +210,17 @@ void StatsEngine::ToggleFilter(const QString& category, const QString& label) {
     filter_label_ = (filter_label_ == label) ? QString{} : label;
   } else if (category == u"rating") {
     filter_rating_ = (filter_rating_ == label) ? QString{} : label;
+  } else if (category == u"import") {
+    filter_import_date_ = (filter_import_date_ == label) ? QString{} : label;
+  } else if (category == u"colorLabel") {
+    bool       ok   = false;
+    const auto code = ColorLabelFromIndex(label.toInt(&ok));
+    if (!ok || !code.has_value()) {
+      return;
+    }
+    filter_color_label_ = filter_color_label_ == code ? std::optional<ColorLabel>{} : code;
+  } else if (category == u"deleted") {
+    filter_delete_mark_ = !filter_delete_mark_;
   }
 }
 
@@ -244,11 +230,15 @@ void StatsEngine::ClearFilters() {
   filter_lens_.clear();
   filter_label_.clear();
   filter_rating_.clear();
+  filter_import_date_.clear();
+  filter_color_label_.reset();
+  filter_delete_mark_ = false;
 }
 
 bool StatsEngine::HasActiveFilter() const {
   return !filter_date_.isEmpty() || !filter_camera_.isEmpty() || !filter_lens_.isEmpty() ||
-         !filter_label_.isEmpty() || !filter_rating_.isEmpty();
+         !filter_label_.isEmpty() || !filter_rating_.isEmpty() || !filter_import_date_.isEmpty() ||
+         filter_color_label_.has_value() || filter_delete_mark_;
 }
 
 auto StatsEngine::BuildStatsFilterNode() const -> std::optional<FilterNode> {
@@ -274,13 +264,31 @@ auto StatsEngine::BuildStatsFilterNode() const -> std::optional<FilterNode> {
 
   if (!filter_label_.isEmpty()) {
     const auto active_model_key = semantic_ ? semantic_->ActiveModelKey() : std::string{};
-    const auto aliases = SemanticLabelAliases(filter_label_.toUtf8().toStdString());
-    children.push_back(
-        sleeve_filter::BuildSemanticLabelExistsFilter(active_model_key, aliases));
+    // The bar shows the translated text of the stored key; StoredSemanticLabel maps a
+    // translated text back to that key (a label outside the taxonomy stays its own key).
+    const auto label_key        = StoredSemanticLabel(filter_label_.toUtf8().toStdString());
+    children.push_back(sleeve_filter::BuildSemanticLabelBucketFilter(active_model_key, label_key));
   }
 
   if (!filter_rating_.isEmpty()) {
     children.push_back(sleeve_filter::BuildRatingBucketFilter(filter_rating_.toStdWString()));
+  }
+
+  if (!filter_import_date_.isEmpty()) {
+    if (filter_import_date_ == PL_TEXT("(unknown)").Render()) {
+      children.push_back(sleeve_filter::BuildImportDateUnknownFilter());
+    } else {
+      children.push_back(sleeve_filter::BuildImportDateBucketFilter(
+          filter_import_date_.toStdWString(), CurrentLocalDayTimeZone()));
+    }
+  }
+
+  if (filter_color_label_.has_value()) {
+    children.push_back(sleeve_filter::BuildColorLabelFilter(*filter_color_label_));
+  }
+
+  if (filter_delete_mark_) {
+    children.push_back(sleeve_filter::BuildDeleteMarkFilter());
   }
 
   if (children.empty()) {
@@ -327,6 +335,15 @@ bool StatsEngine::MatchesActiveFilters(const AlbumItem& image) const {
     bool ok        = false;
     int  filterVal = filter_rating_.toInt(&ok);
     if (ok && image.rating != filterVal) return false;
+  }
+
+  if (filter_color_label_.has_value() &&
+      !HasColorLabel(image.color_labels, *filter_color_label_)) {
+    return false;
+  }
+
+  if (filter_delete_mark_ && !image.delete_mark) {
+    return false;
   }
 
   return true;

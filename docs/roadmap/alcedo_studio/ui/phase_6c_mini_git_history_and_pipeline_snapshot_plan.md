@@ -19,6 +19,17 @@ advances **once per commit** (merge may perform many `SetOperator` calls first);
 assigns `working_head_commit_hash` / chain fold to a “live pipeline snapshot” as if it were a
 second tip cache is **historical** and must not guide new code.
 
+**Superseded by 2026-09-27 executor ownership refactor** (2026-09-29): wording in this plan that
+says `PipelineMgmtService` owns the live pipeline snapshot or its executor, operator instances,
+launchers, and transient caches (definition of **Pipeline snapshot**; Section 5 "Pipeline
+snapshots are runtime objects"; the call chains that return or restore a live snapshot through the
+service) no longer describes the code. The editor session owns the working document and history of
+the open image. `PipelineMgmtService` keeps committed `PipelineGraphSnapshot`s (CPU values, no
+executor) and the editor lease. Each render owner holds its executors. See
+[Executor ownership refactor plan](../../../refactor/2026-09-27-executor-ownership-refactor-plan.md).
+The checkpoint rules in Section 5 (validate root, head, and chain; otherwise replay from root) still
+apply; they now run in `PipelineMgmtService::AcquireEditorLease`.
+
 Related documents:
 
 - [QML Editor and Qt RHI Unified Workspace Refactor Plan](qml_editor_rhi_unified_workspace_plan.md)
@@ -211,6 +222,9 @@ Merge second-parent ancestry is retained for history and garbage collection, but
 merge commit's resolved payload on top of its first parent.
 
 ### 5. Pipeline snapshots are runtime objects, not params bags
+
+> **Superseded by 2026-09-27 executor ownership refactor** — see the note under the document
+> status. The first paragraph below is historical.
 
 `PipelineMgmtService` owns the focused image's live pipeline snapshot. That snapshot includes the
 executor graph, operator instances, launchers, and the transient cache state selected by

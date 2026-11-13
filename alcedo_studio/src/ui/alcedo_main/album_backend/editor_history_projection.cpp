@@ -7,12 +7,31 @@
 #include <algorithm>
 
 #include "app/pipeline_service.hpp"
+#include "edit/history/mini_git_working_history.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
+
+#include "app/editor_panel_projection.hpp"
 
 namespace alcedo::ui {
 
 EditorHistoryProjection::EditorHistoryProjection(EditorHistoryState& state) : state_(state) {}
+
+auto EditorHistoryProjection::ReadActiveVersionId(
+    const alcedo::EditorHistoryGuardHandle& guard, alcedo::version_ref_id_t* version_id,
+    std::string* error) -> bool {
+  if (version_id == nullptr) {
+    if (error != nullptr) *error = "Active Version identity output is null";
+    return false;
+  }
+  auto state = state_.PeekWorkingState(guard.element_id);
+  if (!state) {
+    *version_id = {};
+    return true;
+  }
+  *version_id = state->graph->GetActiveVersionId();
+  return true;
+}
 
 auto EditorHistoryProjection::ReadHistorySnapshot(
     const alcedo::EditorHistoryGuardHandle& guard, alcedo::EditorHistorySnapshot* snapshot,
@@ -33,12 +52,11 @@ auto EditorHistoryProjection::ReadHistorySnapshot(
   bool can_redo = false;
   std::vector<alcedo::EditorHistoryVersion> versions;
   std::vector<ProjectionCommitSource> commit_sources;
-  if (snapshot == nullptr || !state->pipeline_guard || !state->pipeline_guard->commit_graph_ ||
-      !state->history) {
+  if (snapshot == nullptr || !state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  const auto& graph = *state->pipeline_guard->commit_graph_;
+  const auto& graph    = *state->graph;
   active_version_id = graph.GetActiveVersionId();
   active_head = graph.GetActiveVersionRef().head_commit_hash;
   recovered_head = state->recovered_head;
@@ -86,25 +104,30 @@ auto EditorHistoryProjection::ReadHistorySnapshot(
 
   projection.commits.reserve(commit_sources.size());
   for (const auto& source : commit_sources) {
-    projection.commits.push_back(CommitRowFromEdit(source.commit, source.position));
+    auto row = CommitRowFromEdit(source.commit, source.position);
+    if (const auto* attribution = graph.FindCommitAttribution(row.commit_hash)) {
+      row.author = attribution->author_;
+      row.note   = attribution->note_;
+    }
+    projection.commits.push_back(std::move(row));
   }
   *snapshot = std::move(projection);
   return true;
 }
 
-auto EditorHistoryProjection::ReadAdjustmentSnapshot(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error) -> bool {
+auto EditorHistoryProjection::ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
+                                                  alcedo::EditorPanelProjection* projection,
+                                                  std::string* error) -> bool {
   auto state = state_.PeekWorkingState(guard.element_id);
   if (!state) {
-    if (snapshot) *snapshot = {};
+    if (projection) *projection = {};
     return true;
   }
-  if (snapshot == nullptr) {
-    if (error) *error = "Adjustment snapshot output is null";
+  if (projection == nullptr) {
+    if (error) *error = "Panel projection output is null";
     return false;
   }
-  *snapshot = state->committed_snapshot;
+  *projection = state->panel_projection;
   return true;
 }
 

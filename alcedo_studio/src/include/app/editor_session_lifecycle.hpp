@@ -5,6 +5,8 @@
 #pragma once
 
 #include <cassert>
+#include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -42,16 +44,28 @@ struct ReleaseOutcome {
 /// Owns the current editor session image, identity, state, pipeline/history
 /// guards, and the last error. All state transitions are semantic: callers
 /// name the transition they want; this type validates and applies it. The
-/// facade and other controllers never access the fields. Every method is
-/// called on the session owner thread.
+/// facade and other controllers never access the fields.
+///
+/// Mutations serialize on `mutex_` and must run on the session owner thread:
+/// `AssertMutationThread` checks the installed owner predicate (the service
+/// binds the command queue's `IsOwnerThread`, so the owning thread is the
+/// executor's, not a fixed construction thread). Read accessors take the same
+/// mutex and are safe from any thread, so the GUI may observe session state
+/// while mutations continue on the session thread.
 class EditorSessionLifecycle final {
  public:
   struct Dependencies {
-    std::shared_ptr<IEditorPipelinePort> pipeline;
-    std::shared_ptr<IEditorHistoryPort>  history;
+    std::shared_ptr<IEditorHistoryPort> history;
   };
 
+  /// Returns true when the calling thread owns session mutations.
+  using OwnerCheck = std::function<bool()>;
+
   explicit EditorSessionLifecycle(Dependencies dependencies);
+
+  /// Install the owner-thread predicate used by `AssertMutationThread`.
+  /// Called by the facade once the command queue exists.
+  void               SetOwnerCheck(OwnerCheck check);
 
   /// Begin acquiring a new image: allocate a new image-load request id,
   /// transition to Acquiring (open) or Switching (switch), and recover the
@@ -60,8 +74,8 @@ class EditorSessionLifecycle final {
   auto               BeginAcquire(sl_element_id_t element_id, image_id_t image_id, bool is_switch,
                                   IEditorCheckpointStore* checkpoint_store, std::string* error) -> bool;
 
-  /// Acquire pipeline and history guards for the current image. Returns false
-  /// and transitions to Failed on failure. Must be called after BeginAcquire.
+  /// Acquire the history guard (and with it the editor lease) for the current image. Returns
+  /// false and transitions to Failed on failure. Must be called after BeginAcquire.
   auto               AcquireGuards(std::string* error) -> bool;
 
   /// Mark the image ready after guards succeed. Stays in Loading until the
@@ -77,8 +91,9 @@ class EditorSessionLifecycle final {
   void               KeepCurrentAfterCheckpointFailure(std::string message);
 
   /// Release the current image's guards after a successful checkpoint. Returns
-  /// the released identity for diagnostics.
-  auto               ReleaseAfterCheckpoint() -> ReleaseOutcome;
+  /// the released identity for diagnostics. @p discard_unmaterialized drops
+  /// the commits that only the recovery journal records (a release without Save).
+  auto               ReleaseAfterCheckpoint(bool discard_unmaterialized = false) -> ReleaseOutcome;
 
   /// Release the current image's guards immediately (discard / no-save paths).
   void               ReleaseGuards();
@@ -120,9 +135,9 @@ class EditorSessionLifecycle final {
   /// image visible, use `KeepCurrentAfterCheckpointFailure` instead.
   void               Fail(std::string message);
 
-  /// Read-only snapshot of the current state. Owner-thread only.
+  /// Read-only snapshot of the current state. Safe from any thread.
   [[nodiscard]] auto state() const -> EditorSessionState;
-  /// Read-only snapshot of the current identity. Owner-thread only.
+  /// Read-only snapshot of the current identity. Safe from any thread.
   [[nodiscard]] auto identity() const -> EditorSessionIdentity;
   /// Opaque id for the active image-load / switch acquire. Invalid when no
   /// image is being acquired or held.
@@ -132,7 +147,7 @@ class EditorSessionLifecycle final {
   [[nodiscard]] auto has_image() const -> bool;
   /// True when the session is active (not NoImage and not ShuttingDown).
   [[nodiscard]] auto active() const -> bool;
-  /// Last error message. Owner-thread only.
+  /// Last error message. Safe from any thread.
   [[nodiscard]] auto last_error() const -> std::string;
   /// The active history guard handle. Used by the edit controller and save
   /// path to commit adjustments and capture checkpoints. Returns an invalid
@@ -148,15 +163,20 @@ class EditorSessionLifecycle final {
   [[nodiscard]] auto MatchesImageLoadRequest(ImageLoadRequestId request) const -> bool;
 
  private:
-  void            AssertOwnerThread() const { assert(std::this_thread::get_id() == owner_thread_); }
+  void            AssertMutationThread() const {
+    // With no installed predicate the mutator must run on the constructing
+    // thread (the legacy single-threaded contract).
+    assert(owner_check_ ? owner_check_() : std::this_thread::get_id() == owner_thread_);
+  }
 
-  Dependencies    deps_;
-  std::thread::id owner_thread_;
+  Dependencies           deps_;
+  mutable std::mutex     mutex_;
+  OwnerCheck             owner_check_;
+  std::thread::id        owner_thread_;
   EditorSessionState        state_ = EditorSessionState::NoImage;
   EditorSessionIdentity     identity_{};
   ImageLoadRequestId        active_load_request_{};
   std::uint64_t             next_load_request_id_ = 1;
-  EditorPipelineGuardHandle pipeline_guard_{};
   EditorHistoryGuardHandle  history_guard_{};
   std::string               last_error_;
 };

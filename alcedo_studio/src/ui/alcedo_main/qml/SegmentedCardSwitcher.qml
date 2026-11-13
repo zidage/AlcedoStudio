@@ -40,9 +40,13 @@ Rectangle {
     property color selectedFillColor: appTheme.editorListSelectedFillColor
     property color selectedInkColor: appTheme.editorListSelectedInkColor
 
+    // Optional small mark before each title (for example a film swatch). The
+    // component reads `entry` (the segment entry) and `selected` from its Loader.
+    property Component segmentDecoration: null
+
     signal selected(int index, string value)
 
-    implicitHeight: segmentHeight + 2 * trackInset
+    implicitHeight: Math.max(segmentHeight, cardRow.implicitHeight) + 2 * trackInset
     implicitWidth: 200
     radius: trackRadius
     color: trackColor
@@ -89,6 +93,7 @@ Rectangle {
 
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                implicitHeight: segmentLabel.implicitHeight + appTheme.spaceSm
                 activeFocusOnTab: segmentEnabled
                 Accessible.role: Accessible.RadioButton
                 Accessible.name: modelData ? String(modelData.label || "") : ""
@@ -111,7 +116,38 @@ Rectangle {
                     }
                 }
 
+                // Mark and title, centred together, when the switcher has a decoration.
+                Row {
+                    visible: root.segmentDecoration !== null
+                    anchors.centerIn: parent
+                    spacing: appTheme.spaceXs
+
+                    Loader {
+                        id: segmentDecorationLoader
+                        readonly property var entry: segment.modelData
+                        readonly property bool selected: segment.sel
+                        anchors.verticalCenter: parent.verticalCenter
+                        active: root.segmentDecoration !== null
+                        sourceComponent: root.segmentDecoration
+                    }
+
+                    Label {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.min(implicitWidth, segment.width - appTheme.spaceSm
+                                        - segmentDecorationLoader.width - parent.spacing)
+                        text: segment.modelData ? segment.modelData.label : ""
+                        color: segment.sel ? root.selectedInkColor : root.textColor
+                        font.family: appTheme.uiFontFamily
+                        font.pixelSize: appTheme.fontSizeBody
+                        font.weight: segment.sel ? appTheme.fontWeightStrong
+                                                 : appTheme.fontWeightRegular
+                        elide: Text.ElideRight
+                    }
+                }
+
                 Label {
+                    id: segmentLabel
+                    visible: root.segmentDecoration === null
                     anchors.centerIn: parent
                     width: parent.width - appTheme.spaceSm
                     horizontalAlignment: Text.AlignHCenter
@@ -121,7 +157,7 @@ Rectangle {
                     font.pixelSize: appTheme.fontSizeBody
                     font.weight: sel ? appTheme.fontWeightStrong
                                       : appTheme.fontWeightRegular
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
 
                 MouseArea {

@@ -8,6 +8,7 @@
 
 #include <condition_variable>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -21,6 +22,7 @@ namespace alcedo {
 
 namespace detail {
 auto FormatPathForOpenClDiagnostics(const std::filesystem::path& path) -> std::string;
+auto ResolveOpenClSourcePath(const std::filesystem::path& path) -> std::filesystem::path;
 }
 
 struct OpenClProgramDescriptor {
@@ -42,6 +44,8 @@ class OpenClProgramLibrary {
 
   mutable std::mutex                                            mutex_;
   std::unordered_map<std::string, std::shared_ptr<ProgramSlot>> programs_;
+  std::mutex                                                    trace_mutex_;
+  std::function<void(std::string_view)>                         build_trace_sink_;
 
   OpenClProgramLibrary() = default;
 
@@ -52,6 +56,7 @@ class OpenClProgramLibrary {
       -> std::vector<std::string>;
   static auto GetBuildLog(cl_program program, cl_device_id device) -> std::string;
   auto        BuildProgram(const std::shared_ptr<ProgramSlot>& slot) -> cl_program;
+  void        TraceBuild(std::string_view message);
 
  public:
   OpenClProgramLibrary(const OpenClProgramLibrary&)                      = delete;
@@ -65,6 +70,11 @@ class OpenClProgramLibrary {
   // but should not know how OpenCL programs are sourced or built.
   void        RegisterProgram(OpenClProgramDescriptor descriptor);
 
+  // Receives one line before and one line after each program build. The line before the
+  // build is what remains in the log when the driver's compiler crashes the process, so the
+  // sink must write it out before returning.
+  void        SetBuildTraceSink(std::function<void(std::string_view)> sink);
+
   void        WarmUpRequiredPrograms();
   void        WarmUpAllPrograms();
 
@@ -75,6 +85,14 @@ class OpenClProgramLibrary {
   auto        IsProgramBuilt(std::string_view name) const -> bool;
 
   auto        RegisteredProgramNames() const -> std::vector<std::string>;
+
+  // Source files of the named program in build order, or empty when it is not registered. Does
+  // not trigger compilation. Used by tests that check where a program's sources live.
+  auto RegisteredSourcePaths(std::string_view name) const -> std::vector<std::filesystem::path>;
+
+  // Build options of the named program, or empty when it is not registered. Does not trigger
+  // compilation. Used by tests that rebuild a program from another copy of its sources.
+  auto RegisteredBuildOptions(std::string_view name) const -> std::string;
 };
 
 }  // namespace alcedo

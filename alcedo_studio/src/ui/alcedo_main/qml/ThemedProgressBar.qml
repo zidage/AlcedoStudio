@@ -3,7 +3,8 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // Shared themed progress indicator. Download callers can opt into the metric
-// row; existing background/export callers retain the compact track-only form.
+// row; existing background/export callers retain the compact track-only form. The detail text is
+// data: Manrope with tabular figures, so the digits do not shift while the values change.
 Item {
     id: root
     objectName: "themedProgressBar"
@@ -26,7 +27,7 @@ Item {
 
     Layout.fillWidth: true
     Layout.preferredHeight: implicitHeight
-    implicitHeight: trackHeight + (showDetails ? appTheme.lineHeightCaption + appTheme.spaceXs : 0)
+    implicitHeight: trackHeight + (showDetails ? detailsRow.implicitHeight + appTheme.spaceXs : 0)
     implicitWidth: 120
     Accessible.role: Accessible.ProgressBar
     Accessible.name: qsTr("Progress")
@@ -69,6 +70,7 @@ Item {
     }
 
     RowLayout {
+        id: detailsRow
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -78,7 +80,8 @@ Item {
         Label {
             text: root.percentText
             color: appTheme.textColor
-            font.family: appTheme.dataFontFamily
+            font.family: appTheme.headlineFontFamily
+            font.features: { "tnum": 1 }
             font.pixelSize: appTheme.fontSizeCaption
             font.weight: appTheme.fontWeightStrong
         }
@@ -87,16 +90,18 @@ Item {
             Layout.fillWidth: true
             text: root.leadingText
             color: appTheme.textMutedColor
-            font.family: appTheme.dataFontFamily
+            font.family: appTheme.headlineFontFamily
+            font.features: { "tnum": 1 }
             font.pixelSize: appTheme.fontSizeCaption
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
         }
 
         Label {
             visible: text.length > 0
             text: root.speedText
             color: appTheme.textMutedColor
-            font.family: appTheme.dataFontFamily
+            font.family: appTheme.headlineFontFamily
+            font.features: { "tnum": 1 }
             font.pixelSize: appTheme.fontSizeCaption
             font.weight: appTheme.fontWeightStrong
         }
@@ -105,7 +110,8 @@ Item {
             visible: text.length > 0
             text: root.etaText
             color: appTheme.textMutedColor
-            font.family: appTheme.dataFontFamily
+            font.family: appTheme.headlineFontFamily
+            font.features: { "tnum": 1 }
             font.pixelSize: appTheme.fontSizeCaption
         }
     }

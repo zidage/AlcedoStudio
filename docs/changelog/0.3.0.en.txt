@@ -1,0 +1,79 @@
+Alcedo Studio 0.3.0
+
+Before you upgrade
+------------------
+- Alcedo Studio 0.3.0 cannot open projects from 0.2.9 or earlier. It does not convert
+  them. To use an old project, keep 0.2.9 installed, or export your images from 0.2.9
+  first. Your original photo files do not change.
+- Import accepts camera RAW files only. The import refuses JPEG, TIFF, PNG, HEIC, and
+  other non-RAW files.
+
+New
+---
+- Nodes panel: use more than one Color Grade in a node graph between Develop and the
+  display transform. You can add, rename, delete, and connect Color Grades. Undo, redo,
+  and Versions keep the graph.
+- Radial and Gradient masks: draw a mask on the photo and adjust it with handles. Each
+  Color Grade has its own masks, with invert, opacity, and feather controls.
+- Mask Groups panel: each Color Grade shows as a group with mask thumbnails. You can
+  add and delete groups, and drag a group to change the grade order. You can lock a
+  grade against deletion. The first grade is locked by default.
+- When you select a node, the adjustment panels edit that node. A header above the
+  panels shows the node name, focal length, aperture, shutter speed, and ISO.
+- Grade White Balance in the Look panel sets the temperature and tint of one Color
+  Grade or mask. Camera white balance is now in the RAW Decode panel.
+- Contrast now changes lightness around middle gray. It keeps hue and does not move
+  middle gray. New images start at Contrast +15.
+- A Keyboard page in Settings lets you change each shortcut. It shows conflicts, and
+  you can restore the default of each shortcut. Changes apply immediately.
+- DNG files with embedded color profiles now use the HueSatMap, LookTable, and
+  related profile data. Their color is now correct.
+- The album inspector has an Activity view. It shows the number of photos for each
+  capture date. Click a day to filter the album to that date.
+
+Editor and library
+------------------
+- Copy Adjustments: select a source Version, then select the items for each Color Grade
+  and for the display transform. Paste makes a new Version. Paste does not copy RAW
+  decode, lens, or crop and rotation settings. The Merge action in History is removed.
+- Lens correction is now in the RAW Decode panel. A search field finds lenses by brand
+  and model. Auto-recognition selects the lens from the photo metadata.
+- Search now finds capture dates (June 7, 2026-06-07, 6月7日), file types (raw, dng,
+  jpg), and capture settings (iso800, f/2.8, 35mm). Search terms combine with AND. A
+  number alone no longer finds ISO values. Type iso800 instead.
+- Clarity, Sharpen, Film Grain, and Halation now apply one time to the full image,
+  after the display transform. The preview and the full-size result look the same.
+- The editor tool rail shows a label below each icon. Settings has a Language / Theme
+  page and a Default Behavior page. The About page has links to the documentation and
+  to GitHub.
+- On small screens, long labels go onto a second line. They are not cut short.
+- Crop and mask handles show cursors for rotate, move, and resize.
+- All new functions are available in Simplified Chinese.
+
+Performance
+-----------
+- A new GPU render engine runs on CUDA and OpenCL on Windows and on Metal on macOS. A
+  change renders only the steps that it affects. Thumbnails use the same engine, so
+  they agree with the editor.
+- The preview follows slider changes at the refresh rate of the display.
+- Search runs in the background and does not stop the interface. In a library of
+  20,000 photos, a search takes approximately 20 ms.
+- Large library imports no longer use more and more memory. In a test with 20,000
+  photos, memory use fell from 16.3 GB to 150 MB, and the time fell from approximately
+  5 minutes to 39 seconds.
+
+Fixed
+-----
+- Imports of more than 1,024 files no longer lose images. Unsaved ratings are no longer
+  lost.
+- macOS: Neural Engine demosaic no longer makes a checkerboard pattern.
+- macOS: highlight recovery no longer makes artifacts on some image sizes.
+- macOS: lens correction now finds its lens data in the installed application.
+- The installed application now identifies Nikon lenses by their lens ID. This gives
+  the correct lens name and lens correction.
+- Sony A7C II ARW files and their linear DNG files have correct colors and levels.
+  Canon EOS R6 Mark III CR3 files no longer clip.
+- Windows: File Explorer, the Start menu, and desktop shortcuts show the new
+  application icon.
+- In the Versions panel, a click on + makes a new Version immediately.
+- The album inspector scrolls with the mouse wheel.

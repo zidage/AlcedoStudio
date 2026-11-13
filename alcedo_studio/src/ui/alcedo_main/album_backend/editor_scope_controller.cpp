@@ -47,25 +47,36 @@ void EditorScopeController::Shutdown() {
   // in-flight analysis finishes. The session calls this before releasing the
   // render pipeline so a scope worker never outlives the pipeline stream or
   // scratch buffers it would otherwise still reference.
+  // Polling resumes when the session sets the next image identity.
   poll_timer_.stop();
   scope_pool_.clear();
   scope_pool_.waitForDone();
+  // clear() can drop a queued refresh task before the task resets the in-flight
+  // flag. Later refreshes use a new flag that no dropped task holds.
+  refresh_in_flight_ = std::make_shared<std::atomic_bool>(false);
 }
 
 void EditorScopeController::set_visual_active(bool active) {
   if (visual_active_ == active) {
     return;
   }
-  visual_active_ = active;
-  frame_tap_->SetScopeActive(active);
+  visual_active_                     = active;
   last_scheduled_display_generation_ = 0;
   last_scheduled_frame_id_           = 0;
-  if (active) {
-    poll_timer_.start();
-  } else {
-    poll_timer_.stop();
-  }
+  updatePolling();
   emit VisualActiveChanged();
+}
+
+void EditorScopeController::updatePolling() {
+  // visual_active_ is the panel's value; only the panel writes it. The scope
+  // polls while the panel is shown and the session has an image.
+  const bool polling = visual_active_ && image_identity_ != 0;
+  frame_tap_->SetScopeActive(polling);
+  if (!polling) {
+    poll_timer_.stop();
+  } else if (!poll_timer_.isActive()) {
+    poll_timer_.start();
+  }
 }
 
 void EditorScopeController::set_active_view(int view) {
@@ -105,9 +116,7 @@ void EditorScopeController::SetImageIdentity(qulonglong image_identity,
   image_identity_   = next_identity;
   session_epoch_ = next_generation;
   frame_tap_->SetFrameIdentity(image_identity_, session_epoch_);
-  if (image_identity_ == 0 && visual_active_) {
-    set_visual_active(false);
-  }
+  updatePolling();
   clearSnapshot();
 }
 

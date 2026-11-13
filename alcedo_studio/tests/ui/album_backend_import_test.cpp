@@ -9,17 +9,34 @@
 /// decode input), CTD prevention, mixed-format import, cancellation, and
 /// edge-case inputs.  All tests run headlessly via QCoreApplication.
 
-#include "ui/album_backend_test_fixture.hpp"
-#include "ui/alcedo_main/album_backend/search_controller.hpp"
-
+#include <QCoreApplication>
+#include <QDir>
+#include <QSettings>
 #include <QSignalSpy>
+#include <QUrl>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <string>
+
+#include "type/supported_file_type.hpp"
+#include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/folder_import_scan_model.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/search_controller.hpp"
+#include "ui/saved_project_invariants.hpp"
 
 namespace alcedo::ui::test {
 namespace {
 
-using ImportTests = ApplicationModuleHostTestFixture;
+class ImportTests : public ApplicationModuleHostTestFixture {
+ protected:
+  /// Checks the storage invariants of each project package that the test saved (#805).
+  void TearDown() override {
+    ExpectSavedProjectInvariants(temp_dir_);
+    ApplicationModuleHostTestFixture::TearDown();
+  }
+};
 
 auto FindPackedProjectPath(const std::filesystem::path& dir)
     -> std::optional<std::filesystem::path> {
@@ -70,6 +87,23 @@ auto WaitForSearchPreviewThumbnail(QSignalSpy& spy, uint element_id, int timeout
       }
     }
     spy.wait(200);
+  }
+  return {};
+}
+
+/// Queue a search dialog page on the search worker and wait for its response.
+auto RequestSearchPage(SearchController& search, const QString& query, int offset, int limit)
+    -> QVariantMap {
+  QSignalSpy responses(&search, &SearchController::SearchResponseReady);
+  const auto request_id = search.RequestSearch(query, offset, limit);
+  const auto deadline   = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (std::chrono::steady_clock::now() < deadline) {
+    for (const auto& args : responses) {
+      if (args.at(0).toULongLong() == request_id) {
+        return args.at(2).toMap();
+      }
+    }
+    responses.wait(100);
   }
   return {};
 }
@@ -216,13 +250,13 @@ TEST_F(ImportTests, SearchPreview_ReturnsPagedResultsAndTotalCount) {
   const QString query = PathToQString(images.front().stem()).left(4);
   ASSERT_FALSE(query.isEmpty());
 
-  const QVariantMap first_page = search->SearchPreview(query, 0, 3);
+  const QVariantMap first_page = RequestSearchPage(*search, query, 0, 3);
   const auto        first_rows = first_page.value("rows").toList();
   ASSERT_EQ(first_rows.size(), 3);
   EXPECT_GE(first_page.value("total").toInt(), backend.import_export()->ImportCompleted());
   EXPECT_TRUE(first_page.value("hasMore").toBool());
 
-  const QVariantMap second_page = search->SearchPreview(query, 3, 3);
+  const QVariantMap second_page = RequestSearchPage(*search, query, 3, 3);
   const auto        second_rows = second_page.value("rows").toList();
   ASSERT_EQ(second_rows.size(), 3);
   EXPECT_EQ(second_page.value("offset").toInt(), 3);
@@ -252,7 +286,7 @@ TEST_F(ImportTests, SearchPreviewThumbnail_LoadsForPagedVisibleResult) {
   const QString query = PathToQString(images.front().stem()).left(4);
   ASSERT_FALSE(query.isEmpty());
 
-  const QVariantMap second_page = search->SearchPreview(query, 3, 3);
+  const QVariantMap second_page = RequestSearchPage(*search, query, 3, 3);
   const auto        second_rows = second_page.value("rows").toList();
   ASSERT_FALSE(second_rows.empty());
 
@@ -386,6 +420,39 @@ TEST_F(ImportTests, Import_CancelImmediate_NoCrash) {
   EXPECT_FALSE(backend.import_export()->ImportRunning());
 }
 
+TEST_F(ImportTests, CancelImportShowsStoppingStateUntilTheImportEnds) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  auto images = CollectRawTestImages("batch_import", 40);
+  if (images.empty()) {
+    GTEST_SKIP() << "No DNG files for cancel test";
+  }
+
+  auto* import_export = backend.import_export();
+  import_export->StartImport(PathsToQStringList(images));
+  ASSERT_TRUE(import_export->ImportRunning());
+  EXPECT_FALSE(import_export->ImportCanceling());
+
+  // The job finishes through a queued call, so it is still running here: the stop shows at once.
+  QSignalSpy state_spy(import_export, &ImportExportHandler::ImportStateChanged);
+  import_export->CancelImport();
+  EXPECT_TRUE(import_export->ImportCanceling());
+  EXPECT_EQ(state_spy.count(), 1);
+
+  // A repeated click does not cancel again.
+  import_export->CancelImport();
+  EXPECT_TRUE(import_export->ImportCanceling());
+  EXPECT_EQ(state_spy.count(), 1);
+
+  WaitForImportFinished(backend, 60000);
+  EXPECT_FALSE(import_export->ImportRunning());
+  EXPECT_FALSE(import_export->ImportCanceling());
+  EXPECT_LE(import_export->ImportCanceled(), import_export->ImportFailed());
+  EXPECT_EQ(import_export->ImportCompleted() + import_export->ImportFailed(),
+            import_export->ImportTotal());
+}
+
 // ── Unsupported extension — silently ignored ───────────────────────────────
 
 TEST_F(ImportTests, Import_UnsupportedExtension_Ignored) {
@@ -402,10 +469,12 @@ TEST_F(ImportTests, Import_UnsupportedExtension_Ignored) {
   QStringList list;
   list << PathToQString(fakePath);
   backend.import_export()->StartImport(list);
-  ProcessEvents(200);
+  WaitForImportFinished(backend, 15000);
 
-  // The file should be silently skipped (not a supported extension).
+  // The file is skipped as not RAW; the import finishes without importing it.
   EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), 0);
+  EXPECT_EQ(backend.import_export()->ImportUnsupported(), 1);
 }
 
 // ── Corrupted file with valid extension — no crash ─────────────────────────
@@ -487,54 +556,561 @@ TEST_F(ImportTests, ImportIntoSubfolder_PersistsAcrossFreshProjectLoad) {
   EXPECT_EQ(imported.value("fileName").toString(), expected_name);
 }
 
-TEST_F(ImportTests, ImportIntoNestedSubfolder_PersistsAcrossProjectReload) {
-  auto images = CollectRawTestImages("airplane", 1);
+// ── Folder import ──────────────────────────────────────────────────────────
+
+void WriteTextFiles(const std::filesystem::path& dir, const std::string& prefix, int count) {
+  std::filesystem::create_directories(dir);
+  for (int i = 0; i < count; ++i) {
+    std::ofstream(dir / (prefix + std::to_string(i) + ".txt")) << "not a raw file";
+  }
+}
+
+void WaitForScanFinished(FolderImportScanModel& scan, int timeoutMs = 30000) {
+  QSignalSpy spy(&scan, &FolderImportScanModel::ScanStateChanged);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  while (!scan.ScanFinished() && std::chrono::steady_clock::now() < deadline) {
+    spy.wait(100);
+  }
+}
+
+TEST_F(ImportTests, FolderScanListsNestedFilesAndFolderImportTakesOnlySelectedTypes) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto source = temp_dir_ / "folder_import_source";
+  WriteTextFiles(source, "top_", 20);
+  WriteTextFiles(source / "a", "a_", 40);
+  WriteTextFiles(source / "b" / "c", "c_", 60);
+  constexpr int kTextFiles = 120;
+  int           raw_files  = 0;
+  for (const auto& raw : CollectRawTestImages("airplane", 2)) {
+    std::filesystem::copy_file(raw, source / "b" / raw.filename());
+    ++raw_files;
+  }
+
+  auto* scan = backend.import_export()->FolderScan();
+  ASSERT_NE(scan, nullptr);
+  scan->Start(PathToQString(source));
+  // Start returns before the tree is read.
+  EXPECT_TRUE(scan->Scanning());
+  WaitForScanFinished(*scan);
+  ASSERT_TRUE(scan->ScanFinished());
+  EXPECT_TRUE(scan->FolderValid());
+  EXPECT_FALSE(scan->Scanning());
+  ASSERT_EQ(scan->FileCount(), kTextFiles + raw_files);
+  // The list shows the files of the selected types; text files are Other and never imported.
+  ASSERT_EQ(scan->rowCount(), raw_files);
+  EXPECT_EQ(scan->AllowedFileCount(), raw_files);
+  EXPECT_EQ(scan->CategoryCounts().at(static_cast<int>(ImportFileCategory::Other)).toInt(),
+            kTextFiles);
+
+  // Rows are sorted by path once the scan ends and name each file and its folder.
+  const auto expected_dir = PathToQString(std::filesystem::path("b").make_preferred());
+  for (int row = 0; row < scan->rowCount(); ++row) {
+    const auto index = scan->index(row);
+    EXPECT_EQ(scan->data(index, FolderImportScanModel::RelativeDirectoryRole).toString(),
+              expected_dir);
+    EXPECT_EQ(scan->data(index, FolderImportScanModel::CategoryRole).toInt(),
+              static_cast<int>(ImportFileCategory::Raw));
+  }
+
+  QStringList phases;
+  QObject::connect(backend.import_export(), &ImportExportHandler::ImportStateChanged,
+                   [&phases, &backend]() {
+                     const auto phase = backend.import_export()->ImportPhase();
+                     if (phases.isEmpty() || phases.back() != phase) phases.push_back(phase);
+                   });
+  backend.import_export()->StartFolderImport();
+  EXPECT_TRUE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportTotal(), raw_files);
+  // The scanned paths moved into the import.
+  EXPECT_EQ(scan->FileCount(), 0);
+  EXPECT_FALSE(scan->ScanFinished());
+
+  WaitForImportFinished(backend, 120000);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), raw_files);
+  EXPECT_EQ(backend.import_export()->ImportFailed(), 0);
+  EXPECT_EQ(backend.import_export()->ImportUnsupported(), 0);
+  EXPECT_TRUE(backend.import_export()->ImportPhase().isEmpty());
+  ASSERT_FALSE(phases.isEmpty());
+  EXPECT_EQ(phases.front(), QStringLiteral("preparing"));
+  EXPECT_TRUE(phases.contains(QStringLiteral("finalizing")));
+  EXPECT_TRUE(phases.back().isEmpty());
+}
+
+TEST_F(ImportTests, FolderScanRestartAfterCancelListsOnlyTheNewFolder) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto large_folder = temp_dir_ / "large_folder";
+  for (int dir = 0; dir < 20; ++dir) {
+    WriteTextFiles(large_folder / ("d" + std::to_string(dir)), "large_", 100);
+  }
+  const auto small_folder = temp_dir_ / "small_folder";
+  WriteTextFiles(small_folder, "small_", 5);
+
+  auto* scan = backend.import_export()->FolderScan();
+  scan->Start(PathToQString(large_folder));
+  ProcessEvents(5);
+  scan->Cancel();
+  EXPECT_FALSE(scan->Scanning());
+  EXPECT_EQ(scan->FileCount(), 0);
+  scan->Start(PathToQString(small_folder));
+  WaitForScanFinished(*scan);
+  // Let any batch the cancelled scan queued be delivered.
+  ProcessEvents(200);
+
+  ASSERT_TRUE(scan->ScanFinished());
+  ASSERT_EQ(scan->FileCount(), 5);
+  for (int row = 0; row < scan->rowCount(); ++row) {
+    EXPECT_TRUE(scan->data(scan->index(row), FolderImportScanModel::FileNameRole)
+                    .toString()
+                    .startsWith("small_"));
+  }
+}
+
+TEST_F(ImportTests, FolderImportBeforeScanFinishesDoesNotStartAndMissingFolderIsInvalid) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto folder = temp_dir_ / "pending_folder";
+  WriteTextFiles(folder, "pending_", 50);
+  auto* scan = backend.import_export()->FolderScan();
+  scan->Start(PathToQString(folder));
+  backend.import_export()->StartFolderImport();
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  WaitForScanFinished(*scan);
+  EXPECT_EQ(scan->FileCount(), 50);
+
+  scan->Start(PathToQString(temp_dir_ / "does_not_exist"));
+  WaitForScanFinished(*scan);
+  EXPECT_TRUE(scan->ScanFinished());
+  EXPECT_FALSE(scan->FolderValid());
+  EXPECT_EQ(scan->FileCount(), 0);
+}
+
+// ── Folder import file types (raster_image_input_plan.md, section 9) ─────
+
+auto RasterFixture(const char* name) -> std::filesystem::path {
+  return std::filesystem::path(std::string(TEST_IMG_PATH)).parent_path() / "raster" / name;
+}
+
+void WriteEmptyFile(const std::filesystem::path& path) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream(path, std::ios::binary) << "x";
+}
+
+/// Folder import selection is an application setting. QSettings needs an organization name, which
+/// this test binary does not set, so the guard sets a test-only one and removes the key before and
+/// after.
+class FolderImportSettingsReset {
+ public:
+  FolderImportSettingsReset()
+      : organization_(QCoreApplication::organizationName()),
+        application_(QCoreApplication::applicationName()) {
+    QCoreApplication::setOrganizationName(QStringLiteral("AlcedoStudioTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("AlbumBackendImportTest"));
+    QSettings{}.remove(QStringLiteral("import/folderAllowedCategories"));
+  }
+  ~FolderImportSettingsReset() {
+    QSettings{}.remove(QStringLiteral("import/folderAllowedCategories"));
+    QCoreApplication::setOrganizationName(organization_);
+    QCoreApplication::setApplicationName(application_);
+  }
+
+ private:
+  QString organization_;
+  QString application_;
+};
+
+TEST_F(ImportTests, FolderScanCountsFilesPerCategory) {
+  FolderImportSettingsReset settings;
+  ApplicationModuleHost     backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto source = temp_dir_ / "category_source";
+  for (const char* name : {"a.ARW", "b.Nef", "c.JPG", "d.jpeg", "e.tif", "f.png", "g.exr",
+                           "notes.txt", "sidecar.xmp"}) {
+    WriteEmptyFile(source / name);
+  }
+  auto* scan = backend.import_export()->FolderScan();
+  scan->Start(PathToQString(source));
+  WaitForScanFinished(*scan);
+  ASSERT_TRUE(scan->ScanFinished());
+
+  const QVariantList expected{2, 2, 1, 1, 1, 2};
+  EXPECT_EQ(scan->CategoryCounts(), expected);
+  EXPECT_EQ(scan->FileCount(), 9);
+  EXPECT_EQ(scan->AllowedCategories(), static_cast<int>(kAllImportCategories));
+  EXPECT_EQ(scan->AllowedFileCount(), 7);
+  EXPECT_EQ(scan->rowCount(), 7);
+
+  // A checkbox change rebuilds the rows without a rescan.
+  scan->SetCategoryAllowed(static_cast<int>(ImportFileCategory::Jpeg), false);
+  EXPECT_EQ(scan->AllowedFileCount(), 5);
+  EXPECT_EQ(scan->rowCount(), 5);
+  EXPECT_EQ(scan->CategoryCounts(), expected);
+}
+
+TEST_F(ImportTests, OtherCategoryCannotBeEnabled) {
+  FolderImportSettingsReset settings;
+  ApplicationModuleHost     backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  auto* scan = backend.import_export()->FolderScan();
+
+  scan->SetCategoryAllowed(static_cast<int>(ImportFileCategory::Other), true);
+  EXPECT_EQ(scan->AllowedCategories(), static_cast<int>(kAllImportCategories));
+  scan->SetAllowedCategories(0xFF);
+  EXPECT_EQ(scan->AllowedCategories(), static_cast<int>(kAllImportCategories));
+}
+
+TEST_F(ImportTests, FolderImportImportsOnlyCheckedCategories) {
+  FolderImportSettingsReset settings;
+  ApplicationModuleHost     backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto source = temp_dir_ / "checked_source";
+  std::filesystem::create_directories(source);
+  std::filesystem::copy_file(RasterFixture("srgb_icc_8bit.jpg"), source / "photo.jpg");
+  std::filesystem::copy_file(RasterFixture("srgb_chunk.png"), source / "graphic.png");
+  std::filesystem::copy_file(RasterFixture("prophoto_icc_16bit.tif"), source / "scan.tif");
+
+  auto* scan = backend.import_export()->FolderScan();
+  scan->Start(PathToQString(source));
+  WaitForScanFinished(*scan);
+  ASSERT_EQ(scan->AllowedFileCount(), 3);
+  scan->SetCategoryAllowed(static_cast<int>(ImportFileCategory::Jpeg), false);
+  ASSERT_EQ(scan->AllowedFileCount(), 2);
+
+  backend.import_export()->StartFolderImport();
+  EXPECT_EQ(backend.import_export()->ImportTotal(), 2);
+  WaitForImportFinished(backend, 120000);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), 2);
+  EXPECT_EQ(backend.import_export()->ImportFailed(), 0);
+}
+
+TEST_F(ImportTests, RenamedJpegWithOnlyRawAllowedIsReportedAsExcludedType) {
+  FolderImportSettingsReset settings;
+  ApplicationModuleHost     backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto source = temp_dir_ / "renamed_source";
+  std::filesystem::create_directories(source);
+  std::filesystem::copy_file(RasterFixture("srgb_icc_8bit.jpg"), source / "renamed_jpeg.nef");
+  int raw_files = 0;
+  for (const auto& raw : CollectRawTestImages("airplane", 1)) {
+    std::filesystem::copy_file(raw, source / raw.filename());
+    ++raw_files;
+  }
+
+  auto* scan = backend.import_export()->FolderScan();
+  scan->Start(PathToQString(source));
+  WaitForScanFinished(*scan);
+  scan->SetAllowedCategories(ImportCategoryBit(ImportFileCategory::Raw));
+  ASSERT_EQ(scan->AllowedFileCount(), 1 + raw_files) << "the extension lists both as RAW";
+
+  backend.import_export()->StartFolderImport();
+  WaitForImportFinished(backend, 120000);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), raw_files);
+  EXPECT_EQ(backend.import_export()->ImportExcluded(), 1);
+  EXPECT_EQ(backend.import_export()->ImportUnsupported(), 0);
+  EXPECT_EQ(backend.import_export()->ImportFailed(), 1);
+}
+
+TEST_F(ImportTests, AllowedCategoriesAreRestoredFromSettings) {
+  FolderImportSettingsReset settings;
+  const int stored = ImportCategoryBit(ImportFileCategory::Raw) | ImportFileCategory::Png;
+  QSettings{}.setValue(QStringLiteral("import/folderAllowedCategories"), stored);
+  {
+    ApplicationModuleHost backend;
+    auto*                 scan = backend.import_export()->FolderScan();
+    EXPECT_EQ(scan->AllowedCategories(), stored);
+    scan->SetCategoryAllowed(static_cast<int>(ImportFileCategory::OpenExr), true);
+  }
+  const int updated = stored | ImportCategoryBit(ImportFileCategory::OpenExr);
+  EXPECT_EQ(QSettings{}.value(QStringLiteral("import/folderAllowedCategories")).toInt(), updated);
+  ApplicationModuleHost reopened;
+  EXPECT_EQ(reopened.import_export()->FolderScan()->AllowedCategories(), updated);
+}
+
+/// The export folder is an application setting, kept the same way as the folder import selection.
+class ExportFolderSettingsReset {
+ public:
+  ExportFolderSettingsReset()
+      : organization_(QCoreApplication::organizationName()),
+        application_(QCoreApplication::applicationName()) {
+    QCoreApplication::setOrganizationName(QStringLiteral("AlcedoStudioTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("AlbumBackendImportTest"));
+    QSettings{}.remove(QStringLiteral("export/lastFolder"));
+  }
+  ~ExportFolderSettingsReset() {
+    QSettings{}.remove(QStringLiteral("export/lastFolder"));
+    QCoreApplication::setOrganizationName(organization_);
+    QCoreApplication::setApplicationName(application_);
+  }
+
+ private:
+  QString organization_;
+  QString application_;
+};
+
+TEST_F(ImportTests, ExportFolderIsRestoredFromSettings) {
+  ExportFolderSettingsReset settings;
+  const auto                folder = temp_dir_ / "export_target";
+  std::filesystem::create_directories(folder);
+  const QString local = QDir::fromNativeSeparators(PathToQString(folder));
+  {
+    ApplicationModuleHost backend;
+    auto*                 handler = backend.import_export();
+    EXPECT_EQ(handler->LoadExportFolder(), handler->DefaultExportFolder());
+    // The folder dialog returns a file URL; the handler stores and returns the local path.
+    EXPECT_EQ(handler->SaveExportFolder(QUrl::fromLocalFile(local).toString()), local);
+  }
+  ApplicationModuleHost reopened;
+  auto*                 handler = reopened.import_export();
+  EXPECT_EQ(handler->LoadExportFolder(), local);
+  EXPECT_EQ(handler->ExportFolderUrl(QString{}), QUrl::fromLocalFile(local));
+  EXPECT_EQ(handler->ExportFolderUrl(local), QUrl::fromLocalFile(local));
+}
+
+// The folder dialog returns percent-encoded file URLs (e.g. file:///Users/me/My%20Exports on
+// macOS). Every URL form of the same folder must store the same local path.
+TEST_F(ImportTests, ExportFolderUrlFormsStoreTheSameLocalPath) {
+  ExportFolderSettingsReset settings;
+  ApplicationModuleHost     backend;
+  auto*                     handler = backend.import_export();
+  const auto folder = temp_dir_ / std::filesystem::path(u8"导出 folder #1");
+  std::filesystem::create_directories(folder);
+  const QString local = QDir::cleanPath(QDir::fromNativeSeparators(PathToQString(folder)));
+  const QUrl    url   = QUrl::fromLocalFile(local);
+
+  const QStringList inputs{local,
+                           local + QStringLiteral("/"),
+                           url.toString(),
+                           url.toString(QUrl::FullyEncoded),
+                           url.toString(QUrl::FullyEncoded) + QStringLiteral("/")};
+  for (const QString& input : inputs) {
+    SCOPED_TRACE(input.toStdString());
+    EXPECT_EQ(handler->SaveExportFolder(input), local);
+    EXPECT_EQ(handler->LoadExportFolder(), local);
+    EXPECT_EQ(handler->ExportFolderUrl(input), url);
+    EXPECT_EQ(handler->ExportFolderUrl(input).toLocalFile(), local);
+  }
+  EXPECT_TRUE(url.toString(QUrl::FullyEncoded).contains(QStringLiteral("%20")));
+}
+
+TEST_F(ImportTests, MissingExportFolderFallsBackToDefault) {
+  ExportFolderSettingsReset settings;
+  ApplicationModuleHost     backend;
+  auto*                     handler = backend.import_export();
+  const auto                missing = temp_dir_ / "removed_export_target";
+  std::filesystem::create_directories(missing);
+  ASSERT_FALSE(handler->SaveExportFolder(PathToQString(missing)).isEmpty());
+  std::filesystem::remove(missing);
+
+  EXPECT_EQ(handler->LoadExportFolder(), handler->DefaultExportFolder());
+  EXPECT_TRUE(handler->SaveExportFolder(QStringLiteral("  ")).isEmpty());
+  EXPECT_EQ(handler->LoadExportFolder(), handler->DefaultExportFolder());
+}
+
+// Section 9.2: a checkbox change rebuilds the rows of a 200k-file folder in at most 30 ms.
+TEST_F(ImportTests, FilterRebuildOver200kPathsTakesAtMost30Milliseconds) {
+  std::vector<ImportFileCategory> categories(200000);
+  for (std::size_t i = 0; i < categories.size(); ++i) {
+    categories[i] = static_cast<ImportFileCategory>(i % 6);
+  }
+  const auto mask  = ImportCategoryBit(ImportFileCategory::Raw) | ImportFileCategory::Png;
+  const auto start = std::chrono::steady_clock::now();
+  const auto rows  = BuildAllowedRows(categories, mask);
+  const auto elapsed_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  RecordProperty("filter_rebuild_ms", std::to_string(elapsed_ms));
+  // Indices 0 and 3 of every 6: 33,334 RAW and 33,333 PNG.
+  EXPECT_EQ(rows.size(), 66667u);
+  EXPECT_LE(elapsed_ms, 30.0);
+}
+
+// ── Library file drop (issue #757) ─────────────────────────────────────────
+
+TEST(LibraryDropImport, CommonParentFolderIsTheDeepestFolderOfEveryItem) {
+  const std::filesystem::path base = std::filesystem::path("D:/photos").make_preferred();
+  const std::vector<std::filesystem::path> same_folder{base / "a.ARW", base / "trip"};
+  EXPECT_EQ(CommonParentFolder(same_folder), base);
+
+  const std::vector<std::filesystem::path> nested{base / "2026" / "a.ARW",
+                                                  base / "2025" / "spring" / "b.NEF"};
+  EXPECT_EQ(CommonParentFolder(nested), base);
+
+  const std::vector<std::filesystem::path> one_folder{base / "trip"};
+  EXPECT_EQ(CommonParentFolder(one_folder), base);
+  EXPECT_TRUE(CommonParentFolder({}).empty());
+}
+
+/// Select @p folder_id and return how many photos the Library shows for it.
+auto ShownCountInFolder(ApplicationModuleHost& backend, uint folder_id) -> int {
+  backend.folders()->SelectFolder(folder_id);
+  ProcessEvents(500);
+  return backend.library()->ShownCount();
+}
+
+TEST_F(ImportTests, DropScanKeepsDroppedFilesOfEveryTypeAndFiltersTheFolderFiles) {
+  FolderImportSettingsReset settings;
+  ApplicationModuleHost     backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto drop   = temp_dir_ / "drop_source";
+  const auto folder = drop / "trip";
+  for (const auto& path : {folder / "a.ARW", folder / "b.jpg", folder / "sub" / "c.png",
+                           folder / "notes.txt", drop / "loose.jpg", drop / "readme.txt"}) {
+    WriteEmptyFile(path);
+  }
+  QStringList sources{PathToQString(folder), PathToQString(drop / "loose.jpg"),
+                      PathToQString(drop / "readme.txt"), PathToQString(folder / "b.jpg")};
+  EXPECT_TRUE(backend.import_export()->DropHoldsFolder(sources));
+  EXPECT_FALSE(backend.import_export()->DropHoldsFolder(
+      {PathToQString(drop / "loose.jpg"), PathToQString(drop / "readme.txt")}));
+
+  auto* scan = backend.import_export()->FolderScan();
+  scan->StartSources(sources);
+  WaitForScanFinished(*scan);
+  ASSERT_TRUE(scan->ScanFinished());
+  EXPECT_TRUE(scan->FolderValid());
+  EXPECT_EQ(scan->FolderPath(), PathToQString(drop.lexically_normal()));
+  // b.jpg is dropped and inside the dropped folder: one dropped row.
+  EXPECT_EQ(scan->FileCount(), 6);
+  EXPECT_EQ(scan->DroppedFileCount(), 3);
+  // The type counts cover the folder files only: a.ARW, c.png, notes.txt.
+  const QVariantList expected_counts{1, 0, 0, 1, 0, 1};
+  EXPECT_EQ(scan->CategoryCounts(), expected_counts);
+  // Every dropped file (readme.txt included) plus the folder RAW and PNG.
+  EXPECT_EQ(scan->AllowedFileCount(), 5);
+
+  scan->SetCategoryAllowed(static_cast<int>(ImportFileCategory::Raw), false);
+  scan->SetCategoryAllowed(static_cast<int>(ImportFileCategory::Jpeg), false);
+  ASSERT_EQ(scan->rowCount(), 4);
+  QStringList rows;
+  for (int row = 0; row < scan->rowCount(); ++row) {
+    const auto index = scan->index(row);
+    rows.push_back(scan->data(index, FolderImportScanModel::RelativeDirectoryRole).toString() +
+                   QLatin1Char('|') +
+                   scan->data(index, FolderImportScanModel::FileNameRole).toString() +
+                   QLatin1Char('|') +
+                   (scan->data(index, FolderImportScanModel::DroppedRole).toBool()
+                        ? QStringLiteral("dropped")
+                        : QStringLiteral("folder")));
+  }
+  const auto trip     = PathToQString(std::filesystem::path("trip"));
+  const auto trip_sub = PathToQString((std::filesystem::path("trip") / "sub").make_preferred());
+  rows.sort();
+  QStringList expected_rows{QStringLiteral("|loose.jpg|dropped"),
+                                  QStringLiteral("|readme.txt|dropped"),
+                                  trip + QStringLiteral("|b.jpg|dropped"),
+                                  trip_sub + QStringLiteral("|c.png|folder")};
+  expected_rows.sort();
+  EXPECT_EQ(rows, expected_rows);
+
+  ImportPathSet dropped;
+  const auto    paths = scan->TakeFilePaths(&dropped);
+  EXPECT_EQ(paths.size(), 4u);
+  EXPECT_EQ(dropped.size(), 3u);
+  EXPECT_TRUE(dropped.contains((drop / "loose.jpg").lexically_normal().native()));
+  EXPECT_FALSE(dropped.contains((folder / "sub" / "c.png").lexically_normal().native()));
+}
+
+TEST_F(ImportTests, DropScanOfMissingItemsIsInvalid) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  auto* scan = backend.import_export()->FolderScan();
+  scan->StartSources({PathToQString(temp_dir_ / "gone_folder"),
+                      PathToQString(temp_dir_ / "gone.ARW")});
+  WaitForScanFinished(*scan);
+  EXPECT_TRUE(scan->ScanFinished());
+  EXPECT_FALSE(scan->FolderValid());
+  EXPECT_EQ(scan->FileCount(), 0);
+}
+
+TEST_F(ImportTests, FileDropImportsIntoTheDropTargetAndKeepsTheCurrentCollection) {
+  auto images = CollectRawTestImages("airplane", 2);
   if (images.empty()) {
     GTEST_SKIP() << "No test RAW images available";
   }
-
-  const QString expected_name = PathToQString(images.front().filename());
-
+  const int             count = static_cast<int>(images.size());
   ApplicationModuleHost backend;
-  ASSERT_TRUE(CreateTestProject(backend, "nested_subfolder_import_reload"));
-
-  backend.folders()->CreateFolder("ParentFolder");
-  ProcessEvents(500);
-
-  const uint parent_folder_id = FindFolderId(backend.folders()->Folders(), "ParentFolder");
-  ASSERT_NE(parent_folder_id, 0u);
-
-  backend.folders()->SelectFolder(parent_folder_id);
+  ASSERT_TRUE(CreateTestProject(backend, "drop_target_import"));
+  ASSERT_NE(backend.folders()->CreateFolderIn(0, "Current"), 0u);
   ProcessEvents(300);
-  backend.folders()->CreateFolder("ChildFolder");
-  ProcessEvents(500);
-
-  const uint child_folder_id = FindFolderId(backend.folders()->Folders(), "ChildFolder");
-  ASSERT_NE(child_folder_id, 0u);
-
-  backend.folders()->SelectFolder(child_folder_id);
+  ASSERT_NE(backend.folders()->CreateFolderIn(0, "Target"), 0u);
   ProcessEvents(300);
-  ASSERT_EQ(backend.folders()->CurrentFolderPath(), "\\ParentFolder\\ChildFolder");
+  const uint current_id = FindFolderId(backend.folders()->Folders(), "Current");
+  const uint target_id  = FindFolderId(backend.folders()->Folders(), "Target");
+  ASSERT_NE(current_id, 0u);
+  ASSERT_NE(target_id, 0u);
+  backend.folders()->SelectFolder(current_id);
+  ProcessEvents(300);
+  const auto current_path = backend.folders()->CurrentFolderFsPath();
 
-  backend.import_export()->StartImport(PathsToQStringList(images));
-  WaitForImportFinished(backend);
+  // A drop that holds no file names nothing to import.
+  backend.import_export()->StartImportToFolder({PathToQString(temp_dir_)}, static_cast<int>(target_id));
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.project()->TaskStatus(), QStringLiteral("No files selected."));
+  // A folder row that does not exist is refused.
+  backend.import_export()->StartImportToFolder(PathsToQStringList(images), 987654);
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.project()->TaskStatus(),
+            QStringLiteral("The collection is no longer in the library."));
 
+  backend.import_export()->StartImportToFolder(PathsToQStringList(images),
+                                               static_cast<int>(target_id));
+  ASSERT_TRUE(backend.import_export()->ImportRunning());
+  EXPECT_NE(backend.import_export()->import_target_folder_path(), current_path);
+  WaitForImportFinished(backend, 120000);
   ASSERT_FALSE(backend.import_export()->ImportRunning());
-  ASSERT_EQ(backend.library()->ShownCount(), 1);
-  ASSERT_EQ(backend.library()->Thumbnails().size(), 1);
-  EXPECT_EQ(backend.library()->Thumbnails().front().toMap().value("fileName").toString(), expected_name);
-  const auto packed_project_path = FindPackedProjectPath(temp_dir_);
-  ASSERT_TRUE(packed_project_path.has_value());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), count);
 
-  QSignalSpy project_spy(backend.project(), &ProjectModule::ProjectChanged);
-  ASSERT_TRUE(backend.project()->LoadProject(PathToQString(*packed_project_path)));
-  ASSERT_TRUE(WaitForSignal(project_spy, 15000));
-  ProcessEvents(500);
+  // The current collection stays selected and the target returns to it.
+  EXPECT_EQ(backend.folders()->CurrentFolderId(), current_id);
+  EXPECT_EQ(backend.import_export()->import_target_folder_path(), current_path);
+  EXPECT_EQ(backend.library()->ShownCount(), 0);
+  // The photos are in the target collection and in All Photos.
+  EXPECT_EQ(ShownCountInFolder(backend, target_id), count);
+  EXPECT_EQ(ShownCountInFolder(backend, 0), count);
+}
 
-  EXPECT_EQ(backend.folders()->CurrentFolderPath(), "\\ParentFolder\\ChildFolder");
-  ASSERT_EQ(backend.library()->ShownCount(), 1);
-  ASSERT_EQ(backend.library()->Thumbnails().size(), 1);
-  EXPECT_EQ(backend.library()->Thumbnails().front().toMap().value("fileName").toString(), expected_name);
+TEST_F(ImportTests, MixedDropImportsDroppedFilesOfEveryTypeAndCheckedFolderTypes) {
+  FolderImportSettingsReset settings;
+  ApplicationModuleHost     backend;
+  ASSERT_TRUE(CreateTestProject(backend, "mixed_drop_import"));
+  ASSERT_NE(backend.folders()->CreateFolderIn(0, "Target"), 0u);
+  ProcessEvents(300);
+  const uint target_id = FindFolderId(backend.folders()->Folders(), "Target");
+  ASSERT_NE(target_id, 0u);
+
+  const auto drop   = temp_dir_ / "mixed_drop";
+  const auto folder = drop / "scans";
+  std::filesystem::create_directories(folder);
+  std::filesystem::copy_file(RasterFixture("srgb_chunk.png"), folder / "graphic.png");
+  // JPEG content under a RAW extension: listed as RAW, read as JPEG.
+  std::filesystem::copy_file(RasterFixture("srgb_icc_8bit.jpg"), folder / "renamed.nef");
+  std::filesystem::copy_file(RasterFixture("srgb_icc_8bit.jpg"), drop / "loose.nef");
+
+  auto* scan = backend.import_export()->FolderScan();
+  scan->StartSources({PathToQString(folder), PathToQString(drop / "loose.nef")});
+  WaitForScanFinished(*scan);
+  scan->SetAllowedCategories(ImportCategoryBit(ImportFileCategory::Raw) | ImportFileCategory::Png);
+  ASSERT_EQ(scan->AllowedFileCount(), 3);
+
+  backend.import_export()->StartFolderImportToFolderAsUser(static_cast<int>(target_id));
+  ASSERT_TRUE(backend.import_export()->ImportRunning());
+  WaitForImportFinished(backend, 120000);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  // The folder file follows the content check of the checked types; the dropped file does not.
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), 2);
+  EXPECT_EQ(backend.import_export()->ImportExcluded(), 1);
+  EXPECT_EQ(ShownCountInFolder(backend, target_id), 2);
+  EXPECT_EQ(ShownCountInFolder(backend, 0), 2);
 }
 
 }  // namespace

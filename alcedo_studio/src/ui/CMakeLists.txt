@@ -2,3 +2,4 @@
 
 add_subdirectory(editor_rhi)
 add_subdirectory(alcedo_main)
+add_subdirectory(alcedo_cli)

@@ -89,6 +89,9 @@ License text file: third_party_licenses/Little-CMS-LICENSE.txt
 Upstream: https://github.com/AcademySoftwareFoundation/OpenColorIO
 License: BSD-3-Clause
 License text file: third_party_licenses/OpenColorIO-LICENSE.txt
+Usage note: the raster input ACES 2.0 output transform inverse ports OpenColorIO 2.5.1 code
+(ops/fixedfunction/ACES2/Transform.cpp, FixedFunctionOpCPU.cpp, FixedFunctionOpGPU.cpp and the
+matrix helpers). Test targets link the OpenColorIO library as the reference.
 
 16) OpenImageIO
 Upstream: https://github.com/AcademySoftwareFoundation/OpenImageIO
@@ -128,6 +131,16 @@ Upstream: https://github.com/orlp/ed25519
 Pinned revision: b1f19fab4aebe607805620d25a5e42566ce46a0e
 License: Zlib
 License text file: third_party_licenses/ed25519-LICENSE.txt
+
+20b) QuickQanava
+Upstream: https://github.com/cneben/QuickQanava
+Git submodule: alcedo_studio/src/third_party/QuickQanava
+Pinned tag: 2.50
+Pinned revision: 56bdf78d5b1d41fb60ae3b8ea2292df45787ecff
+License: BSD-3-Clause (upstream file labelled "BSD License 2.0"; text is the three-clause BSD license)
+License text file: third_party_licenses/QuickQanava-licence.txt
+Bundled bezier (https://github.com/oysteinmyrmo/bezier, MIT):
+- third_party_licenses/QuickQanava-bezier-LICENSE.txt
 
 21) CUDAToolkit / OpenMP / OpenGL
 Status: Referenced by CMake as system/runtime/toolchain components. They are not mirrored here from GitHub in this folder.
@@ -173,10 +186,62 @@ C) File-level adaptation pointers in this repository
 - alcedo/src/decoders/processor/operators/gpu/cuda_debayer_rcd.cu
   Includes RCD authorship header and algorithm attribution.
 
-- alcedo/src/include/edit/operators/GPU_kernels/color_mgmt/*.cuh
+- alcedo/src/include/edit/runtime/cuda/drt/*.cuh
   ACES core links are referenced in comments for ported formulas.
 
-D) Redistribution reminder
+- alcedo_studio/src/include/edit/runtime/aces2_reference_math.h
+- alcedo_studio/src/edit/runtime/drt/aces2_reference_runtime.cpp
+  Include the OpenColorIO copyright notice (BSD-3-Clause) for the ported ACES 2.0 code.
+
+D) AI models that the application downloads at run time
+
+These models are not part of the installer. The AI Models settings page downloads the AI Mask
+model set (one package per platform) from https://static.aoraw.org/ai-models/v1/. Each package
+contains its license texts in licenses/ and a NOTICE.txt with the source and the training data of
+each model. The package is built by scripts/ai_models/prepare_ai_model_packages.py.
+
+27) SAM 2.1 Hiera tiny (AI Mask: image encoder, prompt encoder, and mask decoder)
+Upstream: https://github.com/facebookresearch/sam2
+License: Apache-2.0
+License text file: third_party_licenses/SAM2-LICENSE.txt
+Usage note: converted to ONNX and Core ML; the weights are not changed.
+
+28) S3OD, weights s3od-synth (AI Mask: Subject)
+Upstream: https://github.com/KupynOrest/s3od, https://huggingface.co/okupyn/s3od-synth
+License: MIT
+License text file: third_party_licenses/S3OD-LICENSE.txt
+Usage note: converted to ONNX and Core ML. The training images are generated with FLUX.1 Krea [dev]
+and their labels come from a teacher decoder supervised with DIS5K, HR-SOD, UHRSD, and DUTS; see
+the NOTICE.txt of the package.
+
+29) DINOv3 (the image encoder inside the S3OD weights)
+Upstream: https://github.com/facebookresearch/dinov3
+License: DINOv3 License
+License text file: third_party_licenses/DINOv3-LICENSE.md
+Usage note: the license text is distributed with the weights (DINOv3 License, section 1.b.i).
+
+30) People and sky locator, Sky model (AI Mask: People and Sky)
+Upstream: trained by Alcedo Studio (alcedo-ai-mask-lab)
+License: GPL-3.0 (the root LICENSE of this repository, without the additional permission)
+Usage note: the people and sky locator is trained on COCO 2017 and Open Images V7. The Sky model
+is trained on MaSS13K (https://github.com/xiechenxi99/mass13k), which does not state a clear
+license; for commercial use of the Sky model or its output, contact the authors of the dataset.
+
+31) aria2 1.37.0 (bundled downloader)
+Upstream: https://github.com/aria2/aria2
+License: GPL-2.0-or-later
+License text file: third_party_licenses/aria2-COPYING.txt
+macOS binary and corresponding source archives:
+https://github.com/zidage/AlcedoStudio/releases/tag/aria2-1.37.0-macos-arm64-r1
+The source archive includes the build recipe and the unmodified upstream source archives.
+
+32) c-ares 1.34.5 (linked statically into the macOS downloader)
+Upstream: https://github.com/c-ares/c-ares
+License: MIT
+License text file: third_party_licenses/c-ares-LICENSE.md
+The corresponding source archive is in the aria2 release above.
+
+E) Redistribution reminder
 
 - Keep this notice, the root LICENSE, the root NOTICE, and all files in third_party_licenses/ when redistributing source/binaries.
 - Preserve original copyright and license headers in source files.

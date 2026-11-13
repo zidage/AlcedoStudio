@@ -9,8 +9,13 @@
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QObject>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
+#include <QQmlEngine>
+#include <QQmlError>
+#include <QQmlExtensionPlugin>
 #include <qqml.h>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -20,23 +25,34 @@
 #include <QString>
 #include <QtGlobal>
 
+#include <QuickQanava>
+
 #include <exiv2/error.hpp>
+#include <clocale>
+#include <cstdio>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "alcedo_version.hpp"
+#include "automation/automation_session_file.hpp"
+#include "image/exiv2_xmp_toolkit_scope.hpp"
 #include "ui/alcedo_main/application_module_qml_types.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/alcedo_main/automation/automation_host_session.hpp"
+#include "ui/alcedo_main/automation/headless_host.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_controller.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_startup.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "utils/diagnostics/app_logging.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 #include "utils/clock/time_provider.hpp"
+
+Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
 #ifdef Q_OS_WIN
 #include "windows_frameless_window.hpp"
@@ -52,6 +68,15 @@ constexpr auto kAcceleratorBackendSettingsKey = "gpu/acceleratorBackend";
 // writes after QApplication exists. Do not rely on QSettings{} alone before QApp.
 constexpr auto kSettingsOrganization = "Alcedo";
 constexpr auto kSettingsApplication  = "Alcedo";
+
+[[nodiscard]] auto HasFlag(int argc, char** argv, std::string_view flag) -> bool {
+  for (int i = 1; i < argc; ++i) {
+    if (std::string_view(argv[i] ? argv[i] : "") == flag) {
+      return true;
+    }
+  }
+  return false;
+}
 
 auto FindArgValue(int argc, char** argv, std::string_view option_name)
     -> std::optional<std::string_view> {
@@ -71,8 +96,8 @@ auto FindArgValue(int argc, char** argv, std::string_view option_name)
   return std::nullopt;
 }
 
-// Same semantics as --editor-backend: accept only backend tokens that this
-// build can host. CPU is a real host-upload presentation backend on Linux.
+// Same semantics as --editor-backend: accept only cuda|opencl|metal tokens that
+// this build can host. "auto"/"cpu" are pipeline preferences, not RHI backends.
 auto ParseStoredEditorBackendToken(const QString& raw)
     -> std::optional<alcedo::editor_rhi::EditorBackend> {
   const QString stored_value = raw.trimmed().toLower();
@@ -83,12 +108,13 @@ auto ParseStoredEditorBackendToken(const QString& raw)
   const auto parsed = alcedo::editor_rhi::ParseEditorBackendToken(
       std::string_view(encoded_value.constData(), static_cast<size_t>(encoded_value.size())));
   if (!parsed.has_value()) {
-    qWarning("Ignoring unsupported saved accelerator backend: %s", encoded_value.constData());
+    qCWarning(alcedo::diag::appLog, "Ignoring unsupported saved accelerator backend: %s",
+              encoded_value.constData());
     return std::nullopt;
   }
   if (!alcedo::editor_rhi::IsBackendAvailableInThisBuild(*parsed)) {
-    qWarning("Saved accelerator backend is unavailable in this build: %s",
-             alcedo::editor_rhi::ToString(*parsed));
+    qCWarning(alcedo::diag::appLog, "Saved accelerator backend is unavailable in this build: %s",
+              alcedo::editor_rhi::ToString(*parsed));
     return std::nullopt;
   }
   return parsed;
@@ -101,8 +127,8 @@ auto ReadConfiguredEditorBackend() -> std::optional<alcedo::editor_rhi::EditorBa
                            QLatin1String(kSettingsApplication));
   const QString stored_value =
       settings.value(QLatin1String(kAcceleratorBackendSettingsKey)).toString();
-  qInfo("editor.backend.settings key=%s value=\"%s\" file=%s", kAcceleratorBackendSettingsKey,
-        qPrintable(stored_value), qPrintable(settings.fileName()));
+  qCInfo(alcedo::diag::appLog, "editor.backend.settings key=%s value=\"%s\" file=%s",
+         kAcceleratorBackendSettingsKey, qPrintable(stored_value), qPrintable(settings.fileName()));
   return ParseStoredEditorBackendToken(stored_value);
 }
 
@@ -115,15 +141,63 @@ auto ToAcceleratorPreference(alcedo::editor_rhi::EditorBackend backend)
       return alcedo::AcceleratorBackendPreference::OpenCL;
     case alcedo::editor_rhi::EditorBackend::Metal:
       return alcedo::AcceleratorBackendPreference::Metal;
-    case alcedo::editor_rhi::EditorBackend::Cpu:
-      return alcedo::AcceleratorBackendPreference::CPU;
   }
   return alcedo::AcceleratorBackendPreference::CPU;
+}
+
+constexpr char kQuickQanavaImportProbeQml[] = R"qml(
+import QtQuick
+import QuickQanava 2.0 as Qan
+Item { objectName: "quickQanavaImportProbe" }
+)qml";
+
+/**
+ * @brief Load the pinned QuickQanava module and exit without opening the app.
+ *
+ * Used by install/package verification. Does not initialize an editor backend,
+ * create a window, or start a photo render. Failure prints the real QML error
+ * and returns a non-zero status; there is no substitute canvas.
+ *
+ * @pre A QApplication exists. QuickQanava is linked and the QML plugin is
+ *      imported. @p engine has `qrc:/` on its import path.
+ * @return 0 when the probe object is created; 1 when the import or create fails.
+ */
+auto VerifyQuickQanavaQmlImport(QQmlEngine& engine) -> int {
+  QuickQanava::initialize(&engine);
+  QQmlComponent component(&engine);
+  component.setData(QByteArray(kQuickQanavaImportProbeQml),
+                    QUrl(QStringLiteral("qrc:/QuickQanavaImportProbe.qml")));
+  if (component.isError()) {
+    const auto errors = component.errors();
+    for (const auto& error : errors) {
+      std::fprintf(stderr, "%s\n", qPrintable(error.toString()));
+    }
+    return 1;
+  }
+  std::unique_ptr<QObject> probe{component.create()};
+  if (probe == nullptr || probe->objectName() != QLatin1String("quickQanavaImportProbe")) {
+    std::fprintf(stderr, "QuickQanava import probe failed to create an Item\n");
+    return 1;
+  }
+  std::fprintf(stdout, "qml.imports.ok=QuickQanava\n");
+  std::fflush(stdout);
+  return 0;
 }
 
 }  // namespace
 
 int main(int argc, char* argv[]) {
+  // Keep the same org/app identity ProjectModule uses after QApplication exists.
+  QCoreApplication::setOrganizationName(QStringLiteral("Alcedo"));
+  QCoreApplication::setOrganizationDomain(QStringLiteral("alcedo.app"));
+  QCoreApplication::setApplicationName(QStringLiteral("Alcedo"));
+  QCoreApplication::setApplicationVersion(QStringLiteral(ALCEDO_APP_VERSION));
+
+  // The headless automation host runs without a GUI application, QML, or a window.
+  if (alcedo::automation::IsHeadlessHostRequested(argc, argv)) {
+    return alcedo::automation::RunHeadlessHost(argc, argv);
+  }
+
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
   QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
   QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
@@ -132,11 +206,13 @@ int main(int argc, char* argv[]) {
       Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 #endif
 
-  // Keep the same org/app identity ProjectModule uses after QApplication exists.
-  QCoreApplication::setOrganizationName(QStringLiteral("Alcedo"));
-  QCoreApplication::setOrganizationDomain(QStringLiteral("alcedo.app"));
-  QCoreApplication::setApplicationName(QStringLiteral("Alcedo"));
-  QCoreApplication::setApplicationVersion(QStringLiteral(ALCEDO_APP_VERSION));
+  if (HasFlag(argc, argv, "--verify-qml-imports")) {
+    QApplication app(argc, argv);
+    QQuickStyle::setStyle("Basic");
+    QQmlEngine engine;
+    engine.addImportPath("qrc:/");
+    return VerifyQuickQanavaQmlImport(engine);
+  }
 
   // Priority matches the old manual override model:
   //   1) --editor-backend (debug/force, same as before)
@@ -144,7 +220,7 @@ int main(int argc, char* argv[]) {
   //   3) platform default
   const auto backend_parse = alcedo::editor_rhi::ParseEditorBackendArgs(argc, argv);
   if (backend_parse.present && !backend_parse.error.empty()) {
-    qCritical("Invalid --editor-backend: %s", backend_parse.error.c_str());
+    qCCritical(alcedo::diag::appLog, "Invalid --editor-backend: %s", backend_parse.error.c_str());
     return 1;
   }
 
@@ -160,7 +236,7 @@ int main(int argc, char* argv[]) {
     editor_backend = *def;
     backend_source = "default";
   } else {
-    qCritical("No editor backend available for this platform/build");
+    qCCritical(alcedo::diag::appLog, "No editor backend available for this platform/build");
     return 1;
   }
 
@@ -174,42 +250,39 @@ int main(int argc, char* argv[]) {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
   } else if (editor_backend == alcedo::editor_rhi::EditorBackend::Metal) {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
-  } else if (editor_backend == alcedo::editor_rhi::EditorBackend::Cpu) {
-    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
   }
 
   alcedo::TimeProvider::Refresh();
-  alcedo::RegisterAllOperators();
   Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::error);
+  // Thumbnail and import workers read XMP in parallel; the toolkit must start before they do.
+  const alcedo::Exiv2XmpToolkitScope xmp_toolkit;
+  if (!xmp_toolkit.initialized()) {
+    qCCritical(alcedo::diag::appLog, "The Exiv2 XMP toolkit cannot be initialized");
+    return 1;
+  }
 
   QApplication app(argc, argv);
+  // QApplication applies the user's locale on macOS and Linux (setlocale(LC_ALL, "")). Keep
+  // number parsing and formatting in the C locale, as Qt recommends: .cube LUT values, search
+  // terms like f/2.8 and lens names all use a decimal point, and strtof/stod/snprintf would
+  // read or write a decimal comma under locales such as de_DE.
+  std::setlocale(LC_NUMERIC, "C");
   const QString log_path = alcedo::diag::InitializeApplicationLogging();
+  // Preview timing is a developer diagnostic. Turn it on only when
+  // ALCEDO_PREVIEW_PERF_LOG names an output file.
+  if (!qEnvironmentVariableIsEmpty("ALCEDO_PREVIEW_PERF_LOG")) {
+    alcedo::diag::PreviewPerformance::Initialize();
+  }
   qCInfo(alcedo::diag::appLog).noquote()
       << QStringLiteral("app.start log_path=%1").arg(log_path);
 
   // After QApplication, before any QQuickWindow / QML load: select graphics API
   // and initialize CUDA adapter or OpenCL/GL sharing.
-#if defined(Q_OS_LINUX)
-  auto startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(editor_backend);
-  if (!startup.ok && editor_backend == alcedo::editor_rhi::EditorBackend::OpenCl &&
-      !backend_parse.present) {
-    // Linux defaults to OpenCL when it is compiled in, but a loader can be
-    // present without an Intel/Mesa device or without a usable GL-sharing
-    // session. Keep the normal application usable in that case; an explicit
-    // --editor-backend=opencl remains a hard diagnostic request.
-    qWarning("OpenCL startup failed on Linux (%s); falling back to CPU host upload",
-             startup.error.c_str());
-    editor_backend = alcedo::editor_rhi::EditorBackend::Cpu;
-    backend_source = "runtime-cpu-fallback";
-    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
-    startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(editor_backend);
-  }
-#else
   const auto startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(editor_backend);
-#endif
   if (!startup.ok) {
-    qCritical("Editor backend startup failed (%s): %s",
-              alcedo::editor_rhi::ToString(editor_backend), startup.error.c_str());
+    qCCritical(alcedo::diag::appLog, "Editor backend startup failed (%s): %s",
+               alcedo::editor_rhi::ToString(editor_backend), startup.error.c_str());
+    alcedo::diag::PreviewPerformance::Shutdown();
     alcedo::diag::ShutdownApplicationLogging();
     return 1;
   }
@@ -268,63 +341,103 @@ int main(int argc, char* argv[]) {
   // backgrounds; Basic leaves those custom surfaces alone.
   QQuickStyle::setStyle("Basic");
 
-  alcedo::ui::ApplicationModuleHost app_modules;
-  app_modules.project()->SetRuntimeAcceleratorPreference(
-      ToAcceleratorPreference(editor_backend));
-  alcedo::ui::RegisterApplicationModuleTypes();
-  alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
+  int exit_code = 0;
+  {
+    alcedo::ui::ApplicationModuleHost app_modules;
+    app_modules.project()->SetRuntimeAcceleratorPreference(
+        ToAcceleratorPreference(editor_backend));
+    alcedo::ui::RegisterApplicationModuleTypes();
+    alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
 
-  QQmlApplicationEngine engine;
-  engine.addImportPath("qrc:/");
-  language_manager.AttachEngine(&engine);
-  app_modules.AttachQmlEngine(&engine);
-  engine.rootContext()->setContextProperty("appModules", &app_modules);
-  engine.rootContext()->setContextProperty("appTheme", &alcedo::ui::AppTheme::Instance());
-  engine.rootContext()->setContextProperty("languageManager", &language_manager);
-  engine.rootContext()->setContextProperty("automationMode", false);
+    QQmlApplicationEngine engine;
+    engine.addImportPath("qrc:/");
+    QuickQanava::initialize(&engine);
+    language_manager.AttachEngine(&engine);
+    app_modules.AttachQmlEngine(&engine);
+    engine.rootContext()->setContextProperty("appModules", &app_modules);
+    engine.rootContext()->setContextProperty("appTheme", &alcedo::ui::AppTheme::Instance());
+    engine.rootContext()->setContextProperty("languageManager", &language_manager);
+    engine.rootContext()->setContextProperty("automationMode", false);
 #ifdef Q_OS_WIN
-  engine.rootContext()->setContextProperty("nativeFrameManaged", true);
+    engine.rootContext()->setContextProperty("nativeFrameManaged", true);
 #else
-  engine.rootContext()->setContextProperty("nativeFrameManaged", false);
+    engine.rootContext()->setContextProperty("nativeFrameManaged", false);
 #endif
-  // Production starts as the real maximized app. Tests and the automation host
-  // leave this unset so they keep the declared 1200x760 windowed geometry.
-  engine.rootContext()->setContextProperty("startMaximized", true);
+    // Production starts as the real maximized app. Tests and the automation host
+    // leave this unset so they keep the declared 1200x760 windowed geometry.
+    engine.rootContext()->setContextProperty("startMaximized", true);
 
-  QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
-                   []() { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
+                     []() { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
 
-  engine.loadFromModule("Alcedo.Main", "Main");
+    engine.loadFromModule("Alcedo.Main", "Main");
 
 #ifdef Q_OS_WIN
-  alcedo::ui::WindowsFramelessWindow native_window_frame;
+    alcedo::ui::WindowsFramelessWindow native_window_frame;
 #endif
 #ifdef Q_OS_MACOS
-  alcedo::ui::MacosFramelessWindow native_window_frame;
+    alcedo::ui::MacosFramelessWindow native_window_frame;
 #endif
 
-  // Install platform frame behavior before the hidden production window is
-  // shown, then bind the editor renderer to that final native window.
-  if (!engine.rootObjects().isEmpty()) {
-    if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst())) {
+    // Install platform frame behavior before the hidden production window is
+    // shown, then bind the editor renderer to that final native window.
+    if (!engine.rootObjects().isEmpty()) {
+      if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst())) {
 #ifdef Q_OS_WIN
-      if (!native_window_frame.Install(window)) {
-        qWarning("Could not install the native Windows frame integration");
-      }
+        if (!native_window_frame.Install(window)) {
+          qCWarning(alcedo::diag::appLog, "Could not install the native Windows frame integration");
+        }
 #endif
 #ifdef Q_OS_MACOS
-      if (!native_window_frame.Install(window)) {
-        qWarning("Could not install the native macOS traffic-light integration");
-      }
+        if (!native_window_frame.Install(window)) {
+          qCWarning(alcedo::diag::appLog,
+                    "Could not install the native macOS traffic-light integration");
+        }
 #endif
-      alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);
-      window->setProperty("nativeFrameReady", true);
-      window->showMaximized();
+        alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);
+        window->setProperty("nativeFrameReady", true);
+        window->showMaximized();
+      }
     }
-  }
 
-  const int exit_code = app.exec();
-  qCInfo(alcedo::diag::appLog) << "app.exit code=" << exit_code;
+    // The automation server of the GUI host. An agent changes the session state only while it
+    // holds agent control. A start failure leaves the app without the server.
+    std::optional<alcedo::automation::AutomationHostSession> automation_session;
+    if (alcedo::automation::IsGuiAutomationServerEnabled()) {
+      const QString session_dir = alcedo::automation::DefaultAutomationSessionDir();
+      alcedo::automation::AutomationHostSessionOptions session_options;
+      session_options.host_mode      = QStringLiteral("gui");
+      session_options.session_name   = alcedo::automation::GuiAutomationSessionName(session_dir);
+      session_options.session_dir    = session_dir;
+      session_options.after_shutdown = [&app]() {
+        // Quit after the event loop writes the response.
+        QMetaObject::invokeMethod(&app, &QCoreApplication::quit, Qt::QueuedConnection);
+      };
+      automation_session.emplace(&app_modules, std::move(session_options));
+      QString session_error;
+      if (automation_session->Start(&session_error)) {
+        qCInfo(alcedo::diag::appLog).noquote()
+            << QStringLiteral("automation.session.ready name=%1 socket=%2")
+                   .arg(automation_session->session_name(), automation_session->socket_name());
+      } else {
+        qCWarning(alcedo::diag::appLog).noquote()
+            << "automation.session.start.failed" << session_error;
+        automation_session.reset();
+      }
+    }
+
+    exit_code = app.exec();
+    if (automation_session.has_value()) {
+      automation_session->Stop();
+    }
+    // The QML engine owns the editor viewport and its frame sink, and it is destroyed before
+    // app_modules. Shut the modules down (and drain the in-flight editor frame) while it lives.
+    app_modules.Shutdown();
+    qCInfo(alcedo::diag::appLog) << "app.exit code=" << exit_code;
+  }
+  // The modules are destroyed above, after the QML engine. The host destructor removes the
+  // runtime workspace and writes a removal failure with qWarning, so logging stays up until then.
+  alcedo::diag::PreviewPerformance::Shutdown();
   alcedo::diag::ShutdownApplicationLogging();
   return exit_code;
 }

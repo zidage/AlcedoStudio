@@ -1,4 +1,5 @@
 import QtQuick
+import QtQml.Models
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Effects
@@ -39,7 +40,24 @@ Dialog {
     property string pendingLanguageCode: languageManager.currentLanguageCode
     property string pendingSemanticImportPreference: appModules.semanticGeneration.importPreference
     property string pendingAcceleratorBackend: appModules.project.acceleratorBackend
+    property string pendingLockedNodeMaskAction: appModules.editorBehavior.lockedNodeMaskAction
+    property string pendingLibraryGridLayout: appModules.libraryView.gridLayout
+    // User names of the seven color label codes; an empty entry keeps the color name.
+    property var pendingColorLabelNames: Array.from(appModules.libraryView.colorLabelUserNames)
     property int requestedCategory: 0
+    // The next opening scrolls the Language / Theme page to Library > Color Labels (the pencil of
+    // By Custom Label in the Library Overview).
+    property bool revealColorLabelsOnOpen: false
+    // Category indices used by callers outside this dialog.
+    readonly property int colorLabelsCategory: 0
+    readonly property int updatesCategory: 6
+    // LUTs and Color Management: the LUT library and the DCP camera profile folder.
+    readonly property int lutCategory: 8
+    readonly property int aiModelsCategory: 9
+    readonly property int aboutCategory: 10
+    // The AI Models page checks the signed AI model feed once per Settings opening, when it is
+    // first shown (AI Models plan, P6).
+    property bool aiModelFeedCheckedThisOpening: false
     readonly property bool canCompleteSettings: appModules.interactionPolicy.canRunSemanticGeneration
     readonly property bool acceleratorRestartHintVisible:
         pendingAcceleratorBackend.length > 0
@@ -51,7 +69,39 @@ Dialog {
     onVisibleChanged: {
         if (visible) {
             resetPendingValues()
+            aiModelFeedCheckedThisOpening = false
             currentCategory = requestedCategory
+            if (revealColorLabelsOnOpen) {
+                revealColorLabelsOnOpen = false
+                Qt.callLater(revealColorLabels)
+            }
+            // Each Settings opening checks the signed LUT package list once; the
+            // application never checks it at startup (plan L6B).
+            if (appModules.lutPackages)
+                appModules.lutPackages.checkPackages()
+            // Settings can open on the AI Models page; no category change follows then.
+            showAiModelsPage()
+        }
+    }
+
+    // Scroll the Language / Theme page so that the Color Labels row is at its top.
+    function revealColorLabels() {
+        const flick = languageScroll.contentItem
+        if (!flick || !colorLabelsRow)
+            return
+        const rowY = colorLabelsRow.mapToItem(flick.contentItem, 0, 0).y
+        const maxY = Math.max(0, flick.contentHeight - flick.height)
+        flick.contentY = Math.max(0, Math.min(maxY, rowY - 26))
+    }
+
+    function showAiModelsPage() {
+        if (!visible || currentCategory !== aiModelsCategory)
+            return
+        if (appModules.modelDownload)
+            appModules.modelDownload.refreshModels()
+        if (!aiModelFeedCheckedThisOpening && appModules.aiModelPackages) {
+            aiModelFeedCheckedThisOpening = true
+            appModules.aiModelPackages.checkPackages()
         }
     }
 
@@ -60,11 +110,8 @@ Dialog {
             cachePanel.refreshStats()
         } else if (currentCategory === 3) {
             appModules.semanticGeneration.RefreshAlbumSummary()
-        } else if (currentCategory === 4) {
-            // Refresh credential/configured state when the Advanced Content
-            // Analysis page is shown, so the API-key label and model box reflect
-            // any changes made since the last visit.
-            appModules.imageAnalysis.RefreshCredentialState()
+        } else if (currentCategory === aiModelsCategory) {
+            showAiModelsPage()
         }
     }
 
@@ -73,7 +120,16 @@ Dialog {
         pendingLanguageCode = languageManager.currentLanguageCode
         pendingSemanticImportPreference = appModules.semanticGeneration.importPreference
         pendingAcceleratorBackend = appModules.project.acceleratorBackend
+        pendingLockedNodeMaskAction = appModules.editorBehavior.lockedNodeMaskAction
+        pendingLibraryGridLayout = appModules.libraryView.gridLayout
+        pendingColorLabelNames = Array.from(appModules.libraryView.colorLabelUserNames)
         cachePanel.reloadPending()
+    }
+
+    function setPendingColorLabelName(code, name) {
+        const names = pendingColorLabelNames.slice()
+        names[code] = name
+        pendingColorLabelNames = names
     }
 
     function acceleratorIndexForValue(value) {
@@ -105,12 +161,32 @@ Dialog {
         return 0
     }
 
+    function lockedNodeMaskActionIndex(action) {
+        const entries = lockedNodeMaskComboModel.entries
+        for (let i = 0; i < entries.length; ++i) {
+            if (entries[i].value === action) {
+                return i
+            }
+        }
+        return 0
+    }
+
+    function libraryGridLayoutIndex(layout) {
+        const entries = libraryGridLayoutComboModel.entries
+        for (let i = 0; i < entries.length; ++i) {
+            if (entries[i].value === layout) {
+                return i
+            }
+        }
+        return 0
+    }
+
     function currentPageTitle() {
         if (currentCategory === 0) {
-            return qsTr("Language")
+            return qsTr("Language / Theme")
         }
         if (currentCategory === 1) {
-            return qsTr("Theme and color")
+            return qsTr("Default Behavior")
         }
         if (currentCategory === 2) {
             return qsTr("Cache")
@@ -119,7 +195,7 @@ Dialog {
             return qsTr("Local Content Recognition")
         }
         if (currentCategory === 4) {
-            return qsTr("Advanced Content Analysis")
+            return qsTr("Saved AI Keys")
         }
         if (currentCategory === 5) {
             return qsTr("Acceleration")
@@ -127,12 +203,21 @@ Dialog {
         if (currentCategory === 6) {
             return qsTr("Updates")
         }
+        if (currentCategory === 7) {
+            return qsTr("Keyboard")
+        }
+        if (currentCategory === lutCategory) {
+            return qsTr("LUTs and Color Management")
+        }
+        if (currentCategory === aiModelsCategory) {
+            return qsTr("AI Models")
+        }
         return qsTr("About")
     }
 
     function currentPageInfoText() {
         if (currentCategory === 3) {
-            return qsTr("本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。\n\n默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。\n\n本地模型特点：\nSigLIP2 B/32 256 Multilingual：默认推荐，多语言、质量稳定、适合长期使用。\nMobileCLIP2 S2 English：更轻更快，偏英文场景，适合低配电脑或快速试用。\nJina CLIP v2 INT8 Multilingual：多语言，512px 输入，模型更大，适合需要更细图文语义的场景。\nSigLIP2 Base CoreML macOS：macOS 原生 CoreML 版本，适合 Apple Silicon 设备。\n\nCLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义空间，因此可以理解“海边日落”“人像”“建筑细节”等自然语言概念，并用于生成标签和语义检索。")
+            return qsTr("The AI model runs on this computer, and no photo is uploaded. The labeling speed depends on the CPU, the GPU, and the disk.")
         }
         if (currentCategory === 4) {
             return qsTr("高级内容识别会通过你配置的 Anthropic / OpenAI 兼容提供商，与指定 agent 交互来识别图像内容并进行评分。数据保留、隐私与合规政策请咨询你使用的 AI 提供商；Alcedo Studio 不会保留任何内容。\n\n这个设置界面的灵感来自 ccswitch，使用方式也类似。")
@@ -146,6 +231,19 @@ Dialog {
         }
         if (languageManager.currentLanguageCode !== pendingLanguageCode) {
             languageManager.setLanguage(pendingLanguageCode)
+        }
+        if (appModules.editorBehavior.lockedNodeMaskAction !== pendingLockedNodeMaskAction) {
+            appModules.editorBehavior.setLockedNodeMaskAction(pendingLockedNodeMaskAction)
+        }
+        if (appModules.libraryView.gridLayout !== pendingLibraryGridLayout) {
+            appModules.libraryView.setGridLayout(pendingLibraryGridLayout)
+        }
+        const storedColorLabelNames = appModules.libraryView.colorLabelUserNames
+        for (let code = 0; code < pendingColorLabelNames.length; ++code) {
+            const pendingName = String(pendingColorLabelNames[code] || "").trim()
+            if (pendingName !== storedColorLabelNames[code]) {
+                appModules.libraryView.SetColorLabelName(code, pendingName)
+            }
         }
         cachePanel.applyPending()
         if (appModules.semanticGeneration.importPreference !== pendingSemanticImportPreference) {
@@ -196,6 +294,39 @@ Dialog {
             const item = entries[index]
             if (item)
                 dialog.pendingThemeIndex = item.value
+        }
+    }
+
+    QtObject {
+        id: lockedNodeMaskComboModel
+        property string label: ""
+        property bool enabled: true
+        readonly property var entries: [
+            { value: "ask", label: qsTr("Ask every time") },
+            { value: "newLayer", label: qsTr("Create a new layer, then draw") },
+            { value: "currentNode", label: qsTr("Draw on the current node") }
+        ]
+        property int currentIndex: dialog.lockedNodeMaskActionIndex(dialog.pendingLockedNodeMaskAction)
+        function selectIndex(index) {
+            const item = entries[index]
+            if (item)
+                dialog.pendingLockedNodeMaskAction = item.value
+        }
+    }
+
+    QtObject {
+        id: libraryGridLayoutComboModel
+        property string label: ""
+        property bool enabled: true
+        readonly property var entries: [
+            { value: "classic", label: qsTr("Classic grid") },
+            { value: "justified", label: qsTr("Justified rows") }
+        ]
+        property int currentIndex: dialog.libraryGridLayoutIndex(dialog.pendingLibraryGridLayout)
+        function selectIndex(index) {
+            const item = entries[index]
+            if (item)
+                dialog.pendingLibraryGridLayout = item.value
         }
     }
 
@@ -293,93 +424,120 @@ Dialog {
                         Label {
                             Layout.fillWidth: true
                             text: qsTr("Setting")
-                            color: dialog.primaryAccent
+                            color: dialog.textColor
                             font.family: dialog.headlineFontFamily
-                            font.pixelSize: 26
-                            font.weight: 800
-                            elide: Text.ElideRight
+                            font.pixelSize: appTheme.fontSizeHeadline
+                            font.weight: appTheme.fontWeightStrong
+                            wrapMode: Text.Wrap
                         }
 
-                        ColumnLayout {
+                        // Scrolls once the categories outgrow the dialog height.
+                        ScrollView {
+                            id: categoryNavScroll
+                            objectName: "settingsNavScroll"
                             Layout.fillWidth: true
-                            spacing: 8
+                            Layout.fillHeight: true
+                            contentWidth: availableWidth
+                            clip: true
 
-                            Repeater {
-                                model: [
-                                    { label: qsTr("Language"), icon: "qrc:/panel_icons/language.svg" },
-                                    { label: qsTr("Theme and color"), icon: "qrc:/panel_icons/palette.svg" },
-                                    { label: qsTr("Cache"), icon: "qrc:/panel_icons/box.svg" },
-                                    { label: qsTr("Local Content Recognition"), icon: "qrc:/panel_icons/search.svg" },
-                                    { label: qsTr("Advanced Content Analysis"), icon: "qrc:/panel_icons/flask.svg" },
-                                    { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
-                                    { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
-                                    { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
-                                ]
+                            ColumnLayout {
+                                id: categoryNavColumn
+                                width: categoryNavScroll.availableWidth
+                                spacing: 2
 
-                                delegate: Rectangle {
-                                    required property int index
-                                    required property var modelData
+                                // Instantiator, not Repeater: the Repeater's
+                                // delegate-model never completes under an
+                                // offscreen test window, so nav items would never
+                                // materialize for QML tests (and this list is
+                                // fixed at eleven entries, so eager creation is
+                                // equivalent in production).
+                                Instantiator {
+                                    model: [
+                                        { label: qsTr("Language / Theme"), icon: "qrc:/panel_icons/language.svg" },
+                                        { label: qsTr("Default Behavior"), icon: "qrc:/panel_icons/zero-config.svg" },
+                                        { label: qsTr("Cache"), icon: "qrc:/panel_icons/box.svg" },
+                                        { label: qsTr("Local Content Recognition"), icon: "qrc:/panel_icons/search.svg" },
+                                        { label: qsTr("Saved AI Keys"), icon: "qrc:/panel_icons/flask.svg" },
+                                        { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
+                                        { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
+                                        { label: qsTr("Keyboard"), icon: "qrc:/panel_icons/keyboard.svg" },
+                                        { label: qsTr("LUTs and Color Management"), icon: "qrc:/panel_icons/lut-cube.svg" },
+                                        { label: qsTr("AI Models"), icon: "qrc:/panel_icons/sparkles.svg" },
+                                        { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
+                                    ]
 
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 48
-                                    radius: 6
-                                    color: dialog.currentCategory === index
-                                           ? Qt.rgba(dialog.primaryAccent.r, dialog.primaryAccent.g, dialog.primaryAccent.b, 0.22)
-                                           : (categoryMouse.containsMouse ? dialog.hoverColor : "transparent")
-
-                                    RowLayout {
-                                        anchors.fill: parent
-                                        anchors.leftMargin: 12
-                                        anchors.rightMargin: 12
-                                        spacing: 12
-
-                                        Image {
-                                            Layout.preferredWidth: 20
-                                            Layout.preferredHeight: 20
-                                            source: modelData.icon
-                                            sourceSize.width: 20
-                                            sourceSize.height: 20
-                                            asynchronous: true
-                                            opacity: dialog.currentCategory === index ? 0.95 : 0.72
-                                        }
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            text: modelData.label
-                                            color: dialog.currentCategory === index ? dialog.textColor : dialog.mutedTextColor
-                                            font.pixelSize: 15
-                                            font.weight: dialog.currentCategory === index ? 700 : 500
-                                            elide: Text.ElideRight
-                                        }
-
-                                        Rectangle {
-                                            Layout.preferredWidth: 8
-                                            Layout.preferredHeight: 8
-                                            Layout.alignment: Qt.AlignVCenter
-                                            radius: 4
-                                            visible: index === 6
-                                                     && appModules.updates
-                                                     && (appModules.updates.updateDeferred
-                                                         || appModules.updates.updateAvailable)
-                                            color: appTheme.backgroundTaskFinishedColor
-                                            Accessible.name: qsTr("Update available")
-                                            Accessible.role: Accessible.Indicator
-                                        }
+                                    onObjectAdded: function(index, object) {
+                                        object.parent = categoryNavColumn
                                     }
 
-                                    MouseArea {
-                                        id: categoryMouse
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: dialog.currentCategory = index
+                                    delegate: Rectangle {
+                                        required property int index
+                                        required property var modelData
+
+                                        objectName: "settingsNavItem:" + index
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: Math.max(36, categoryNavRow.implicitHeight
+                                                                         + appTheme.spaceSm)
+                                        radius: 6
+                                        // Neutral selection: a light wash of the text color.
+                                        color: dialog.currentCategory === index
+                                               ? Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.08)
+                                               : (categoryMouse.containsMouse ? dialog.hoverColor : "transparent")
+
+                                        RowLayout {
+                                            id: categoryNavRow
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 10
+                                            anchors.rightMargin: 10
+                                            spacing: 10
+
+                                            Image {
+                                                Layout.preferredWidth: 16
+                                                Layout.preferredHeight: 16
+                                                source: modelData.icon
+                                                sourceSize.width: 32
+                                                sourceSize.height: 32
+                                                asynchronous: true
+                                                opacity: dialog.currentCategory === index ? 0.95 : 0.72
+                                            }
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: modelData.label
+                                                color: dialog.currentCategory === index ? dialog.textColor : dialog.mutedTextColor
+                                                font.family: appTheme.uiFontFamily
+                                                font.pixelSize: appTheme.fontSizeTitle
+                                                font.weight: dialog.currentCategory === index
+                                                             ? appTheme.fontWeightStrong
+                                                             : appTheme.fontWeightRegular
+                                                wrapMode: Text.Wrap
+                                            }
+
+                                            Rectangle {
+                                                Layout.preferredWidth: 8
+                                                Layout.preferredHeight: 8
+                                                Layout.alignment: Qt.AlignVCenter
+                                                radius: 4
+                                                visible: index === dialog.updatesCategory
+                                                         && appModules.updates
+                                                         && (appModules.updates.updateDeferred
+                                                             || appModules.updates.updateAvailable)
+                                                color: appTheme.backgroundTaskFinishedColor
+                                                Accessible.name: qsTr("Update available")
+                                                Accessible.role: Accessible.Indicator
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            id: categoryMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: dialog.currentCategory = index
+                                        }
                                     }
                                 }
                             }
-                        }
-
-                        Item {
-                            Layout.fillHeight: true
                         }
                     }
                 }
@@ -391,9 +549,11 @@ Dialog {
 
                     Item {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 96
+                        Layout.preferredHeight: Math.max(72, pageHeaderColumn.implicitHeight
+                                                         + appTheme.spaceMd)
 
                         ColumnLayout {
+                            id: pageHeaderColumn
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
@@ -406,12 +566,14 @@ Dialog {
                                 spacing: 10
 
                                 Label {
+                                    objectName: "settingsPageTitle"
+                                    Layout.fillWidth: true
                                     text: dialog.currentPageTitle()
                                     color: dialog.textColor
                                     font.family: dialog.headlineFontFamily
-                                    font.pixelSize: 34
-                                    font.weight: 800
-                                    elide: Text.ElideRight
+                                    font.pixelSize: appTheme.fontSizeHeadline
+                                    font.weight: appTheme.fontWeightStrong
+                                    wrapMode: Text.Wrap
                                 }
 
                                 InfoBadge {
@@ -474,8 +636,8 @@ Dialog {
                                             Layout.preferredWidth: 160
                                             text: qsTr("Language")
                                             color: dialog.textColor
-                                            font.pixelSize: 15
-                                            font.weight: 600
+                                            font.pixelSize: appTheme.fontSizeTitle
+                                            font.weight: appTheme.fontWeightStrong
                                         }
 
                                         AdjustmentCombo {
@@ -488,21 +650,10 @@ Dialog {
                                         }
                                     }
                                 }
-                            }
-                        }
-
-                        ScrollView {
-                            id: themeScroll
-                            contentWidth: availableWidth
-                            clip: true
-
-                            ColumnLayout {
-                                width: themeScroll.availableWidth
-                                spacing: 18
 
                                 SettingsSection {
                                     Layout.fillWidth: true
-                                    Layout.topMargin: 26
+                                    Layout.topMargin: 8
                                     Layout.leftMargin: 34
                                     Layout.rightMargin: 34
                                     title: qsTr("Workspace appearance")
@@ -518,8 +669,8 @@ Dialog {
                                             Layout.preferredWidth: 160
                                             text: qsTr("Theme")
                                             color: dialog.textColor
-                                            font.pixelSize: 15
-                                            font.weight: 600
+                                            font.pixelSize: appTheme.fontSizeTitle
+                                            font.weight: appTheme.fontWeightStrong
                                         }
 
                                         AdjustmentCombo {
@@ -532,6 +683,150 @@ Dialog {
                                         }
                                     }
                                 }
+
+                                SettingsSection {
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 8
+                                    Layout.leftMargin: 34
+                                    Layout.rightMargin: 34
+                                    Layout.bottomMargin: 26
+                                    title: qsTr("Library")
+                                    textColor: dialog.textColor
+                                    mutedTextColor: dialog.mutedTextColor
+                                    dividerColor: dialog.dividerColor
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 10
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 16
+
+                                            Label {
+                                                Layout.preferredWidth: 160
+                                                text: qsTr("Photo layout")
+                                                color: dialog.textColor
+                                                font.pixelSize: appTheme.fontSizeTitle
+                                                font.weight: appTheme.fontWeightStrong
+                                                wrapMode: Text.Wrap
+                                            }
+
+                                            AdjustmentCombo {
+                                                objectName: "settingsLibraryGridLayoutControl"
+                                                controlObjectName: "settingsLibraryGridLayoutCombo"
+                                                Layout.fillWidth: true
+                                                controlHeight: 36
+                                                showResetButton: false
+                                                model: libraryGridLayoutComboModel
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            Layout.leftMargin: 176
+                                            text: qsTr("Classic grid shows each photo in a card of the same size, with its details below it. Justified rows show the photos in rows of one height that fill the width; each photo keeps its shape, and its details and rating show when the pointer is on it. Grouped photos always use the classic grid.")
+                                            wrapMode: Text.WordWrap
+                                            color: dialog.mutedTextColor
+                                            font.pixelSize: appTheme.fontSizeBody
+                                            font.weight: appTheme.fontWeightRegular
+                                            lineHeight: 1.25
+                                        }
+
+                                        RowLayout {
+                                            id: colorLabelsRow
+                                            objectName: "settingsColorLabelsRow"
+                                            Layout.fillWidth: true
+                                            Layout.topMargin: 8
+                                            spacing: 16
+
+                                            Label {
+                                                Layout.preferredWidth: 160
+                                                Layout.alignment: Qt.AlignTop
+                                                Layout.topMargin: 8
+                                                text: qsTr("Color Labels")
+                                                color: dialog.textColor
+                                                font.pixelSize: appTheme.fontSizeTitle
+                                                font.weight: appTheme.fontWeightStrong
+                                                wrapMode: Text.Wrap
+                                            }
+
+                                            ColorLabelNamesEditor {
+                                                objectName: "settingsColorLabelNames"
+                                                Layout.fillWidth: true
+                                                Layout.maximumWidth: 520
+                                                userNames: dialog.pendingColorLabelNames
+                                                defaultNames: appModules.libraryView.colorLabelDefaultNames
+                                                onNameEdited: function(code, name) {
+                                                    dialog.setPendingColorLabelName(code, name)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        ScrollView {
+                            id: defaultBehaviorScroll
+                            objectName: "defaultBehaviorSettingsScroll"
+                            contentWidth: availableWidth
+                            clip: true
+
+                            ColumnLayout {
+                                width: defaultBehaviorScroll.availableWidth
+                                spacing: 18
+
+                                SettingsSection {
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 26
+                                    Layout.leftMargin: 34
+                                    Layout.rightMargin: 34
+                                    Layout.bottomMargin: 26
+                                    title: qsTr("Masks")
+                                    textColor: dialog.textColor
+                                    mutedTextColor: dialog.mutedTextColor
+                                    dividerColor: dialog.dividerColor
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 10
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 16
+
+                                            Label {
+                                                Layout.preferredWidth: 160
+                                                text: qsTr("Adding a Mask on a locked node")
+                                                color: dialog.textColor
+                                                font.pixelSize: appTheme.fontSizeTitle
+                                                font.weight: appTheme.fontWeightStrong
+                                                wrapMode: Text.Wrap
+                                            }
+
+                                            AdjustmentCombo {
+                                                objectName: "settingsLockedNodeMaskControl"
+                                                controlObjectName: "settingsLockedNodeMaskCombo"
+                                                Layout.fillWidth: true
+                                                controlHeight: 36
+                                                showResetButton: false
+                                                model: lockedNodeMaskComboModel
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            Layout.leftMargin: 176
+                                            text: qsTr("The default adjustment node applies Alcedo's default adjustments, so it is locked. A Mask drawn on it also limits those defaults to the masked area. Layers you add yourself are not locked and are never affected by this setting.")
+                                            wrapMode: Text.WordWrap
+                                            color: dialog.mutedTextColor
+                                            font.pixelSize: appTheme.fontSizeBody
+                                            font.weight: appTheme.fontWeightRegular
+                                            lineHeight: 1.25
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -540,61 +835,51 @@ Dialog {
                             contentWidth: availableWidth
                             clip: true
 
-                            CacheSettingsPanel {
-                                id: cachePanel
-                                width: cacheScroll.availableWidth
-                                libraryModule: appModules.library
-                                projectReady: appModules.project.serviceReady
-                                textColor: dialog.textColor
-                                mutedTextColor: dialog.mutedTextColor
-                                canvasColor: dialog.canvasColor
-                                dividerColor: dialog.dividerColor
-                                dangerColor: dialog.dangerColor
-                                dataFontFamily: dialog.dataFontFamily
-                                onMessageRequested: function(message) {
-                                    dialog.messageRequested(message)
-                                }
-                            }
-                        }
-
-                        ScrollView {
-                            id: semanticScroll
-                            contentWidth: availableWidth
-                            clip: true
-
                             ColumnLayout {
-                                width: semanticScroll.availableWidth
-                                spacing: 20
+                                width: cacheScroll.availableWidth
+                                spacing: 0
 
-                                SemanticGenerationSettingsPanel {
-                                    Layout.fillWidth: true
-                                    Layout.topMargin: 26
-                                    Layout.leftMargin: 34
-                                    Layout.rightMargin: 34
-                                    Layout.bottomMargin: 26
-                                    semanticController: appModules.semanticGeneration
-                                    downloadController: appModules.modelDownload
-                                    interactionPolicy: appModules.interactionPolicy
-                                    importPreference: dialog.pendingSemanticImportPreference
-                                    primaryAccent: dialog.primaryAccent
-                                    secondaryAccent: dialog.secondaryAccent
+                                CacheSettingsPanel {
+                                    id: cachePanel
+                                    width: parent.width
+                                    libraryModule: appModules.library
+                                    projectReady: appModules.project.serviceReady
                                     textColor: dialog.textColor
                                     mutedTextColor: dialog.mutedTextColor
                                     canvasColor: dialog.canvasColor
                                     dividerColor: dialog.dividerColor
                                     dangerColor: dialog.dangerColor
                                     dataFontFamily: dialog.dataFontFamily
-                                    onImportPreferenceRequested: function(preference) {
-                                        dialog.pendingSemanticImportPreference = preference
-                                    }
                                     onMessageRequested: function(message) {
                                         dialog.messageRequested(message)
                                     }
-                                    onBackgroundRequested: {
-                                        dialog.semanticGenerationBackgroundRequested()
-                                        dialog.close()
-                                    }
                                 }
+                            }
+                        }
+
+                        // The page fits the dialog (#762); the scroll view only serves a window
+                        // smaller than the dialog's full size.
+                        ScrollView {
+                            id: semanticScroll
+                            objectName: "semanticSettingsScroll"
+                            contentWidth: availableWidth
+                            clip: true
+
+                            SemanticGenerationSettingsPanel {
+                                width: semanticScroll.availableWidth
+                                semanticController: appModules.semanticGeneration
+                                interactionPolicy: appModules.interactionPolicy
+                                projectOpen: appModules.project.serviceReady
+                                languageCode: languageManager.effectiveLanguageCode
+                                importPreference: dialog.pendingSemanticImportPreference
+                                onImportPreferenceRequested: function(preference) {
+                                    dialog.pendingSemanticImportPreference = preference
+                                }
+                                onBackgroundRequested: {
+                                    dialog.semanticGenerationBackgroundRequested()
+                                    dialog.close()
+                                }
+                                onAiModelsPageRequested: dialog.currentCategory = dialog.aiModelsCategory
                             }
                         }
 
@@ -603,20 +888,14 @@ Dialog {
                             Layout.fillHeight: true
                             width: parent ? parent.width : 0
                             profileController: appModules.aiProviderProfiles
-                            analysisController: appModules.imageAnalysis
-                            interactionPolicy: appModules.interactionPolicy
                             backgroundSource: dialog.blurSource
                             primaryAccent: dialog.primaryAccent
                             secondaryAccent: dialog.secondaryAccent
                             textColor: dialog.textColor
                             mutedTextColor: dialog.mutedTextColor
-                            canvasColor: dialog.canvasColor
                             dividerColor: dialog.dividerColor
                             dangerColor: dialog.dangerColor
                             dataFontFamily: dialog.dataFontFamily
-                            onMessageRequested: function(message) {
-                                dialog.messageRequested(message)
-                            }
                         }
 
                         ScrollView {
@@ -651,8 +930,8 @@ Dialog {
                                                 Layout.preferredWidth: 160
                                                 text: qsTr("Backend")
                                                 color: dialog.textColor
-                                                font.pixelSize: 15
-                                                font.weight: 600
+                                                font.pixelSize: appTheme.fontSizeTitle
+                                                font.weight: appTheme.fontWeightStrong
                                             }
 
                                             AdjustmentCombo {
@@ -673,8 +952,8 @@ Dialog {
                                             text: qsTr("Restart Alcedo yourself to apply this backend change.")
                                             wrapMode: Text.WordWrap
                                             color: dialog.mutedTextColor
-                                            font.pixelSize: 12
-                                            font.weight: 500
+                                            font.pixelSize: appTheme.fontSizeBody
+                                            font.weight: appTheme.fontWeightRegular
                                             lineHeight: 1.25
                                         }
 
@@ -685,8 +964,8 @@ Dialog {
                                             text: appModules.project.acceleratorWarning
                                             wrapMode: Text.WordWrap
                                             color: dialog.dangerColor
-                                            font.pixelSize: 12
-                                            font.weight: 500
+                                            font.pixelSize: appTheme.fontSizeBody
+                                            font.weight: appTheme.fontWeightRegular
                                             lineHeight: 1.25
                                         }
                                     }
@@ -710,22 +989,71 @@ Dialog {
                         }
 
                         ScrollView {
+                            id: keyboardScroll
+                            objectName: "keyboardSettingsScroll"
+                            contentWidth: availableWidth
+                            clip: true
+
+                            KeyboardSettingsPanel {
+                                id: keyboardPanel
+                                objectName: "keyboardSettingsPanel"
+                                width: keyboardScroll.availableWidth
+                                textColor: dialog.textColor
+                                mutedTextColor: dialog.mutedTextColor
+                                accentColor: dialog.primaryAccent
+                                canvasColor: dialog.canvasColor
+                                dividerColor: dialog.dividerColor
+                                panelBorderColor: dialog.panelBorderColor
+                                hoverColor: dialog.hoverColor
+                                dangerColor: dialog.dangerColor
+                                dataFontFamily: dialog.dataFontFamily
+                            }
+                        }
+
+                        ScrollView {
+                            id: lutScroll
+                            objectName: "lutSettingsScroll"
+                            contentWidth: availableWidth
+                            clip: true
+
+                            LutSettingsPanel {
+                                width: lutScroll.availableWidth
+                                library: appModules.lutLibrary
+                                packageService: appModules.lutPackages
+                                cameraProfiles: appModules.cameraProfiles
+                                textColor: dialog.textColor
+                                mutedTextColor: dialog.mutedTextColor
+                                dividerColor: dialog.dividerColor
+                                dangerColor: dialog.dangerColor
+                            }
+                        }
+
+                        ScrollView {
+                            id: aiModelsScroll
+                            objectName: "aiModelsSettingsScroll"
+                            contentWidth: availableWidth
+                            clip: true
+
+                            AiModelsSettingsPanel {
+                                width: aiModelsScroll.availableWidth
+                                packageService: appModules.aiModelPackages
+                                downloadController: appModules.modelDownload
+                                semanticController: appModules.semanticGeneration
+                                interactionPolicy: appModules.interactionPolicy
+                                projectOpen: appModules.project.serviceReady
+                            }
+                        }
+
+                        ScrollView {
                             id: aboutScroll
+                            objectName: "aboutScroll"
                             contentWidth: availableWidth
                             clip: true
 
                             AboutPage {
                                 Layout.fillWidth: true
                                 updateService: appModules.updates
-                                primaryAccent: dialog.primaryAccent
-                                secondaryAccent: dialog.secondaryAccent
-                                textColor: dialog.textColor
-                                mutedTextColor: dialog.mutedTextColor
-                                canvasColor: dialog.canvasColor
-                                panelColor: dialog.panelColor
-                                dividerColor: dialog.dividerColor
-                                dangerColor: dialog.dangerColor
-                                headlineFontFamily: dialog.headlineFontFamily
+                                logFolder: appModules.logFolder
                             }
                         }
                     }
@@ -738,7 +1066,7 @@ Dialog {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 82
+                        Layout.preferredHeight: 64
                         Layout.leftMargin: 34
                         Layout.rightMargin: 34
                         spacing: 16
@@ -747,30 +1075,16 @@ Dialog {
                             Layout.fillWidth: true
                         }
 
-                        Button {
+                        // The main action of the dialog: the light button of neutral surfaces.
+                        DialogActionButton {
                             id: applyButton
-                            Layout.preferredWidth: 168
-                            Layout.preferredHeight: 48
+                            objectName: "settingsDoneButton"
+                            kind: "light"
+                            buttonWidth: Math.max(120, implicitContentWidth + 36)
+                            buttonHeight: 34
                             text: qsTr("Done")
                             enabled: dialog.canCompleteSettings
-                            font.pixelSize: 15
-                            font.weight: 800
-                            palette.buttonText: appTheme.editorListSelectedInkColor
                             onClicked: dialog.applySettings()
-                            background: Rectangle {
-                                radius: 10
-                                color: applyButton.down
-                                       ? Qt.darker(dialog.primaryAccent, 1.16)
-                                       : (applyButton.hovered
-                                          ? Qt.lighter(dialog.primaryAccent, 1.06)
-                                          : dialog.primaryAccent)
-                                border.width: 1
-                                border.color: Qt.rgba(dialog.secondaryAccent.r,
-                                                      dialog.secondaryAccent.g,
-                                                      dialog.secondaryAccent.b,
-                                                      0.18)
-                                opacity: applyButton.enabled ? 1.0 : 0.45
-                            }
                         }
                     }
                 }
@@ -790,8 +1104,8 @@ Dialog {
             Layout.fillWidth: true
             text: title
             color: textColor
-            font.pixelSize: 18
-            font.weight: 800
+            font.pixelSize: appTheme.fontSizeSection
+            font.weight: appTheme.fontWeightStrong
         }
 
         Rectangle {
@@ -875,8 +1189,8 @@ Dialog {
                 text: "i"
                 color: infoMouse.containsMouse ? badge.accentColor : badge.mutedTextColor
                 font.family: badge.dataFontFamily
-                font.pixelSize: 14
-                font.weight: 800
+                font.pixelSize: appTheme.fontSizeSection
+                font.weight: appTheme.fontWeightStrong
             }
         }
 
@@ -903,8 +1217,8 @@ Dialog {
                 width: Math.max(236, badge.toolTipWidth - 24)
                 text: badge.text
                 color: badge.textColor
-                font.pixelSize: 13
-                font.weight: 500
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightRegular
                 wrapMode: Text.WordWrap
                 lineHeight: 1.22
             }

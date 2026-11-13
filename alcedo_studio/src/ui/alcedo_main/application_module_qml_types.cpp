@@ -7,11 +7,16 @@
 #include <qqml.h>
 
 #include "app/ai_provider_profile.hpp"
+#include "ui/alcedo_main/album_backend/agent_control_owner.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
+#include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
+#include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
+#include "ui/alcedo_main/shortcut_registry.hpp"
 
 namespace alcedo::ui {
 
 void RegisterApplicationModuleTypes() {
+  RegisterShortcutRegistryQmlType();
   qmlRegisterUncreatableType<ProjectModule>("Alcedo.Main", 1, 0, "ProjectModule",
                                             "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<LibraryModule>("Alcedo.Main", 1, 0, "LibraryModule",
@@ -32,6 +37,8 @@ void RegisterApplicationModuleTypes() {
       "Alcedo.Main", 1, 0, "BackgroundTaskController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<InteractionPolicyController>(
       "Alcedo.Main", 1, 0, "InteractionPolicyController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<AgentControlOwner>("Alcedo.Main", 1, 0, "AgentControlOwner",
+                                                "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<ModelDownloadController>(
       "Alcedo.Main", 1, 0, "ModelDownloadController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<alcedo::UpdateService>(
@@ -40,16 +47,27 @@ void RegisterApplicationModuleTypes() {
       "Alcedo.Main", 1, 0, "SemanticGenerationController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<alcedo::AiProviderProfileController>(
       "Alcedo.Main", 1, 0, "AiProviderProfileController", "Owned by ApplicationModuleHost");
-  qmlRegisterUncreatableType<ImageAnalysisController>(
-      "Alcedo.Main", 1, 0, "ImageAnalysisController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<AdjustmentTransferController>(
       "Alcedo.Main", 1, 0, "AdjustmentTransferController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<AdjustmentTransferDialogModel>(
+      "Alcedo.Main", 1, 0, "AdjustmentTransferDialogModel",
+      "Owned by AdjustmentTransferController");
   qmlRegisterUncreatableType<EditorSessionController>(
       "Alcedo.Main", 1, 0, "EditorSessionController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<EditorComparisonController>(
+      "Alcedo.Main", 1, 0, "EditorComparisonController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<EditorAiMaskTool>("Alcedo.Main", 1, 0, "EditorAiMaskTool",
+                                               "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<EditorMaskCreationAdapter>(
+      "Alcedo.Main", 1, 0, "EditorMaskCreationAdapter", "Owned by EditorSessionController");
   qmlRegisterUncreatableType<EditorScopeController>("Alcedo.Main", 1, 0, "EditorScopeController",
                                                     "Owned by EditorSessionController");
   qmlRegisterUncreatableType<WorkspaceRouter>("Alcedo.Main", 1, 0, "WorkspaceRouter",
                                               "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<EditorBehaviorPreferences>(
+      "Alcedo.Main", 1, 0, "EditorBehaviorPreferences", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<LibraryViewPreferences>(
+      "Alcedo.Main", 1, 0, "LibraryViewPreferences", "Owned by ApplicationModuleHost");
 }
 
 }  // namespace alcedo::ui

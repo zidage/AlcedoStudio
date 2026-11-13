@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <opencv2/core.hpp>
 
 #include "image/image_buffer.hpp"
 

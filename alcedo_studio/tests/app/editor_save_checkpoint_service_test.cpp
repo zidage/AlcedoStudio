@@ -51,7 +51,6 @@ TEST_F(EditorSaveCheckpointServiceTest, AsynchronousSuccessEndsTaskAndCompletesC
   EXPECT_FALSE(completion_called);
   EXPECT_TRUE(fixture_.service().active());
 
-  fixture_.CompleteJournalTruncate(true);
   EXPECT_FALSE(completion_called);
   EXPECT_TRUE(fixture_.service().active());
 
@@ -76,7 +75,6 @@ TEST_F(EditorSaveCheckpointServiceTest, AsynchronousMaterializationFailureReport
     completion_result = result;
   });
 
-  fixture_.CompleteJournalTruncate(true);
   fixture_.CompleteDatabaseWrite(false, "A materialization failed");
 
   EXPECT_TRUE(completion_called);
@@ -101,7 +99,6 @@ TEST_F(EditorSaveCheckpointServiceTest, StaleOnCheckpointFinishedIsIgnored) {
   EXPECT_FALSE(completion_called);
   EXPECT_TRUE(fixture_.service().active());
 
-  fixture_.CompleteJournalTruncate(true);
   fixture_.CompleteDatabaseWrite(true);
   EXPECT_TRUE(completion_called);
   EXPECT_FALSE(fixture_.service().active());
@@ -111,7 +108,6 @@ TEST_F(EditorSaveCheckpointServiceTest, StaleOnCheckpointFinishedIsIgnored) {
 TEST_F(EditorSaveCheckpointServiceTest, DuplicateOnCheckpointFinishedDoesNotDoubleEndTask) {
   const auto ticket = fixture_.StartCheckpoint(42, 7, [](const SaveCheckpointResult&) {});
 
-  fixture_.CompleteJournalTruncate(true);
   fixture_.CompleteDatabaseWrite(true);
   ASSERT_EQ(fixture_.tasks().end_count, 1);
 
@@ -132,15 +128,14 @@ TEST_F(EditorSaveCheckpointServiceTest, CancelAndWaitStopsCallbacksAndJoins) {
   });
 
   fixture_.CancelAndWait();
-  // Exactly one terminal cancellation; later journal/materialize cannot complete again.
+  // Exactly one terminal cancellation; a later materialize cannot complete again.
   EXPECT_EQ(completion_count, 1);
   EXPECT_FALSE(completion_result.checkpoint_completed);
   EXPECT_NE(completion_result.error.find("cancelled"), std::string::npos);
   EXPECT_EQ(fixture_.tasks().end_count, 1);
   EXPECT_FALSE(fixture_.tasks().ended_success.front());
 
-  fixture_.CompleteJournalTruncate(true);
-  EXPECT_FALSE(static_cast<bool>(fixture_.checkpoint_store().pending_materialize));
+  fixture_.CompleteDatabaseWrite(true);
   EXPECT_EQ(completion_count, 1);
   EXPECT_EQ(fixture_.tasks().end_count, 1);
 }
@@ -148,14 +143,15 @@ TEST_F(EditorSaveCheckpointServiceTest, CancelAndWaitStopsCallbacksAndJoins) {
 TEST_F(EditorSaveCheckpointServiceTest, MaterializeStartFailureCompletesWithFailure) {
   bool                 completion_called = false;
   SaveCheckpointResult completion_result;
-  fixture_.StartCheckpoint(42, 7, [&](const SaveCheckpointResult& result) {
+  fixture_.checkpoint_store().fail_materialize_start = true;
+  const auto ticket = fixture_.StartCheckpoint(42, 7, [&](const SaveCheckpointResult& result) {
     completion_called = true;
     completion_result = result;
   });
 
-  fixture_.checkpoint_store().fail_materialize_start = true;
-  fixture_.CompleteJournalTruncate(true);
+  EXPECT_TRUE(ticket.valid());
   EXPECT_TRUE(completion_called);
+  EXPECT_FALSE(fixture_.coordinator().is_saving());
   EXPECT_FALSE(completion_result.checkpoint_completed);
   EXPECT_EQ(completion_result.error, "Materialization could not start");
   EXPECT_EQ(fixture_.tasks().end_count, 1);
@@ -175,7 +171,6 @@ TEST_F(EditorSaveCheckpointServiceTest, StaleSessionGenerationIsIgnoredByOnCheck
   EXPECT_FALSE(completion_called);
   EXPECT_TRUE(fixture_.service().active());
 
-  fixture_.CompleteJournalTruncate(true);
   fixture_.CompleteDatabaseWrite(true);
   EXPECT_TRUE(completion_called);
   EXPECT_FALSE(fixture_.service().active());
@@ -193,7 +188,6 @@ TEST_F(EditorSaveCheckpointServiceTest, GlobalSaveLockReleasesBeforeTerminalCall
   EXPECT_TRUE(fixture_.coordinator().is_saving());
   EXPECT_EQ(fixture_.coordinator().active_element_id(), 42u);
 
-  fixture_.CompleteJournalTruncate(true);
   EXPECT_FALSE(completion_called);
   EXPECT_TRUE(fixture_.coordinator().is_saving());
 
@@ -224,7 +218,6 @@ TEST_F(EditorSaveCheckpointServiceTest, SecondStartFailsWhileGlobalSaveLockIsHel
   EXPECT_FALSE(second_result.checkpoint_completed);
   EXPECT_NE(second_result.error.find("global save lock"), std::string::npos);
 
-  fixture_.CompleteJournalTruncate(true);
   fixture_.CompleteDatabaseWrite(true);
   EXPECT_TRUE(first_done);
   EXPECT_FALSE(fixture_.coordinator().is_saving());
@@ -245,7 +238,7 @@ TEST_F(EditorSaveCheckpointServiceTest, CancelAndWaitReleasesGlobalSaveLock) {
   EXPECT_FALSE(fixture_.coordinator().is_saving());
 }
 
-/// Phase 4A: missing capture must not report a successful no-op after journal durability.
+/// Phase 4A: a missing capture must not report a successful no-op save.
 TEST_F(EditorSaveCheckpointServiceTest, ConfiguredProjectWithoutHistoryStoreOrStorageFails) {
   fixture_.fail_capture = true;
   bool                 done = false;
@@ -256,7 +249,6 @@ TEST_F(EditorSaveCheckpointServiceTest, ConfiguredProjectWithoutHistoryStoreOrSt
                     result = r;
                   })
                   .valid());
-  fixture_.CompleteJournalTruncate(true);
   EXPECT_TRUE(done);
   EXPECT_FALSE(result.checkpoint_completed);
   EXPECT_NE(result.error.find("capture"), std::string::npos);
@@ -265,16 +257,13 @@ TEST_F(EditorSaveCheckpointServiceTest, ConfiguredProjectWithoutHistoryStoreOrSt
   EXPECT_FALSE(fixture_.tasks().ended_success.front());
 }
 
-TEST_F(EditorSaveCheckpointServiceTest, MissingCheckpointStoreFailsAfterDurableJournal) {
-  auto journal          = std::make_shared<test::FakeEditorJournalPort>();
+TEST_F(EditorSaveCheckpointServiceTest, MissingCheckpointStoreFailsWithoutMaterialization) {
   auto tasks            = std::make_shared<test::FakeEditorTaskPort>();
   auto coordinator      = std::make_shared<EditorSaveCheckpointCoordinator>();
   auto thumbnails       = std::make_shared<test::FakeEditorThumbnailPort>();
   auto executor         = std::make_shared<EditorSessionManualCommandExecutor>();
-  journal->async_commit = true;
 
   EditorSaveCheckpointService::Dependencies deps;
-  deps.journal          = journal;
   deps.tasks            = tasks;
   deps.save_coordinator = coordinator;
   deps.checkpoint_store = nullptr;
@@ -297,7 +286,6 @@ TEST_F(EditorSaveCheckpointServiceTest, MissingCheckpointStoreFailsAfterDurableJ
         result = r;
       });
   ASSERT_TRUE(ticket.valid());
-  journal->CompleteCommit(true);
   executor->DrainAll();
   EXPECT_TRUE(done);
   EXPECT_FALSE(result.checkpoint_completed);
@@ -328,7 +316,6 @@ TEST_F(EditorSaveCheckpointServiceTest, CapturePointerReachesCheckpointStoreWith
       });
   ASSERT_TRUE(ticket.valid());
   fixture_.DrainCompletions();
-  fixture_.CompleteJournalTruncate(true);
   EXPECT_EQ(fixture_.checkpoint_store().last_capture.get(), capture.get());
   fixture_.CompleteDatabaseWrite(true);
   EXPECT_TRUE(done);

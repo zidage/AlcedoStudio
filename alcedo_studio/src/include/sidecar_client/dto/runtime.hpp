@@ -26,24 +26,21 @@ struct AiSidecarRuntimeModelInfo {
   std::string prototype_config_hash;
 };
 
-struct AiSidecarRuntimeRemoteStatus {
-  std::string state;
-  std::string provider;
-  uint32_t    image_batch_cap     = 0;
-  uint32_t    image_batch_wait_ms = 0;
-  uint64_t    uptime_ms           = 0;
+/// Residency of one CLIP encoder of the sidecar (`text`, `image`, or `multimodal`).
+struct AiSidecarEncoderResidency {
+  std::string encoder;
+  bool        loaded = false;
+  std::string device;
+  uint64_t    idle_ms = 0;  ///< Time since the last request; 0 before the first request.
 };
 
-struct AiSidecarCapability {
-  std::string      task_id;
-  std::string      provider_id;
-  std::string      model_id;
-  std::vector<int> input_kinds;
-  std::vector<int> output_kinds;
-  bool             supports_batch      = false;
-  bool             supports_cancel     = false;
-  bool             requires_credential = false;
-  int64_t          max_payload_bytes   = 0;
+struct AiSidecarRuntimeRemoteStatus {
+  std::string                            state;
+  std::string                            provider;
+  uint32_t                               image_batch_cap     = 0;
+  uint32_t                               image_batch_wait_ms = 0;
+  uint64_t                               uptime_ms           = 0;
+  std::vector<AiSidecarEncoderResidency> encoders;
 };
 
 }  // namespace alcedo

@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -11,10 +12,12 @@
 #include <iostream>
 #include <numeric>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
-#include "edit/pipeline/opencl_pipeline_programs.hpp"
+#include "decoders/processor/operators/gpu/opencl_raw_programs.hpp"
+#include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/scope/opencl_scope_programs.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_context.hpp"
@@ -295,52 +298,56 @@ __kernel void write_one(__global int* output) {
   EXPECT_NE(program.program, nullptr);
 }
 
-TEST(OpenClRuntimeTest, BuiltinEditPipelineFusedParamsProgramCompiles) {
+TEST(OpenClRuntimeTest, BuildTraceSinkGetsBeginAndEndLineForEachBuild) {
   auto& context = OpenClContext::Instance();
   if (!TryEnsureOpenClContext()) {
     GTEST_SKIP() << context.LastInitializationError();
   }
 
-  RegisterOpenClBackendPrograms();
-  cl_program program =
-      OpenClProgramLibrary::Instance().GetProgram(OpenCL::Pipeline::kFusedProgramName);
-  ASSERT_NE(program, nullptr);
+  TempDirectory temp_directory;
+  const auto    name        = UniqueProgramName("build_trace");
+  const auto    source_path = temp_directory.Path() / (name + ".cl");
+  WriteTextFile(source_path, R"(
+__kernel void write_two(__global int* output) {
+  output[get_global_id(0)] = 2;
+}
+)");
+  OpenClProgramLibrary::Instance().RegisterProgram(OpenClProgramDescriptor{
+      .name                = name,
+      .source_paths        = {source_path},
+      .build_options       = "-cl-std=CL1.2",
+      .required_at_startup = false,
+  });
 
-  cl_int    error = CL_SUCCESS;
-  cl_kernel kernel =
-      clCreateKernel(program, OpenCL::Pipeline::kValidateFusedParamsKernelName, &error);
-  EXPECT_EQ(error, CL_SUCCESS);
-  EXPECT_NE(kernel, nullptr);
-  if (kernel != nullptr) {
-    clReleaseKernel(kernel);
-  }
+  std::vector<std::string> lines;
+  OpenClProgramLibrary::Instance().SetBuildTraceSink(
+      [&](std::string_view message) { lines.emplace_back(message); });
+  (void)OpenClProgramLibrary::Instance().GetProgram(name);
+  OpenClProgramLibrary::Instance().SetBuildTraceSink({});
+
+  ASSERT_EQ(lines.size(), 2U);
+  EXPECT_TRUE(lines[0].starts_with("opencl.program.build.begin"));
+  EXPECT_NE(lines[0].find("program='" + name + "'"), std::string::npos);
+  EXPECT_NE(lines[0].find("device='"), std::string::npos);
+  EXPECT_TRUE(lines[1].starts_with("opencl.program.build.end"));
+  EXPECT_NE(lines[1].find("program='" + name + "'"), std::string::npos);
+  EXPECT_NE(lines[1].find("error=0"), std::string::npos);
 }
 
-TEST(OpenClRuntimeTest, BuiltinEditPipelineDetailProgramCompiles) {
-  auto& context = OpenClContext::Instance();
-  if (!TryEnsureOpenClContext()) {
-    GTEST_SKIP() << context.LastInitializationError();
-  }
-
+TEST(OpenClRuntimeTest, NoLegacyOpenClFusedProgramIsRegisteredOrPackaged) {
+  // The legacy edit_pipeline manifest is archived (G10.10). The install check for the package side
+  // is scripts/verify_windows_install_tree.ps1.
   RegisterOpenClBackendPrograms();
-  cl_program program =
-      OpenClProgramLibrary::Instance().GetProgram(OpenCL::Pipeline::kDetailProgramName);
-  ASSERT_NE(program, nullptr);
-
-  const char* detail_kernels[] = {
-      OpenCL::Pipeline::kNeighborBlurHorizontalKernelName,
-      OpenCL::Pipeline::kNeighborApplyVerticalKernelName,
-      OpenCL::Pipeline::kHsExtractLogIntensityKernelName,
-      OpenCL::Pipeline::kHsApplyAdjustedLKernelName,
-  };
-  for (const char* kernel_name : detail_kernels) {
-    cl_int    error  = CL_SUCCESS;
-    cl_kernel kernel = clCreateKernel(program, kernel_name, &error);
-    EXPECT_EQ(error, CL_SUCCESS) << kernel_name;
-    EXPECT_NE(kernel, nullptr) << kernel_name;
-    if (kernel != nullptr) {
-      clReleaseKernel(kernel);
-    }
+  const std::string legacy_manifest = std::string("edit_") + "pipeline";
+  const auto        manifests = OpenClBackendProgramRegistry::Instance().RegisteredManifestNames();
+  EXPECT_EQ(std::find(manifests.begin(), manifests.end(), legacy_manifest), manifests.end());
+  for (const char* expected : {OpenCL::RawProcessor::kManifestName, OpenCL::Geometry::kManifestName,
+                               OpenCL::Scope::kManifestName, OpenCL::DemosaicNet::kManifestName,
+                               OpenCL::GpuDag::kManifestName}) {
+    EXPECT_NE(std::find(manifests.begin(), manifests.end(), expected), manifests.end()) << expected;
+  }
+  for (const auto& program : OpenClProgramLibrary::Instance().RegisteredProgramNames()) {
+    EXPECT_NE(program.rfind(legacy_manifest, 0), 0U) << program;
   }
 }
 
@@ -360,6 +367,8 @@ TEST(OpenClRuntimeTest, BuiltinRawProcessorProgramsCompile) {
       {"raw_processor_debayer_rcd", "rcd_init_and_vh"},
       {"raw_processor_xtrans", "xtrans_green"},
       {"raw_processor_highlight", "hlr_build_mask"},
+      {"raw_processor_highlight", "hlr_build_mask_planar"},
+      {"raw_processor_highlight", "hlr_reconstruct_from_stats_planar_pack"},
       {"raw_processor_cvt_ref_space", "apply_inverse_cam_mul_rgba32f"},
   };
 
@@ -656,6 +665,12 @@ TEST(OpenClRuntimeTest, DemosaicNetProgramsCompileOnceOnFirstUseAndReuse) {
       {OpenCL::DemosaicNet::kStructuralProgramName, OpenCL::DemosaicNet::kOutputGammaHwcKernelName},
       {OpenCL::DemosaicNet::kStructuralProgramName,
        OpenCL::DemosaicNet::kAssembleRgbTileKernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName,
+       OpenCL::DemosaicNet::kPackReflectBayerNhwc4MonoKernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName,
+       OpenCL::DemosaicNet::kPackReflectXTransNhwc4MonoKernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName,
+       OpenCL::DemosaicNet::kUnpackReflectConcatMonoKernelName},
   };
 
   for (const auto& item : demosaicnet_kernels) {

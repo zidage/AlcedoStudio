@@ -9,6 +9,7 @@ use their own top-level category.
 - [AI Sidecar Backend Integration Plan](alcedo_studio/ai/ai_sidecar_backend_plan.md)
 - [AI Sidecar Phase 0 Requirements](alcedo_studio/ai/ai_sidecar_phase0_requirements.md)
 - [Semantic Generation and Search Integration Plan](alcedo_studio/ai/semantic_generation_search_plan.md)
+- [AI Sidecar Runtime Residency Plan](alcedo_studio/ai/ai_sidecar_runtime_residency_plan.md)
 
 ## Alcedo Studio — RAW processing and DemosaicNet
 
@@ -16,21 +17,50 @@ use their own top-level category.
 - [CUDA DemosaicNet Performance Follow-up](alcedo_studio/raw-processing/demosaicnet/cuda_demosaicnet_performance_next.md)
 - [OpenCL NN Forward DemosaicNet Migration and Performance Recovery](alcedo_studio/raw-processing/demosaicnet/opencl_nn_forward_demosaicnet_plan.md)
 - [Metal MPSGraph DemosaicNet Plan](alcedo_studio/raw-processing/demosaicnet/metal_nn_forward_demosaicnet_plan.md)
+- [DCP Camera Profile Plan](alcedo_studio/raw-processing/dcp_camera_profile_plan.md): external DCP
+  profiles from a user folder; shipped behavior in [Embedded DNG color profiles](../dng_color_profiles.md)
+- [DCP Profile Tone Curve Study](alcedo_studio/raw-processing/dcp_profile_tone_curve_study.md)
 
 ## Alcedo Studio — Storage
 
 - [duckorm Query Expression and Album Filter SQL Plan](alcedo_studio/storage/duckorm_query_expression_and_album_filter_sql_plan.md)
+- [Library Search Performance, Recall, and Project Size Plan](alcedo_studio/storage/library_search_and_project_size_plan.md)
+
+## Alcedo Studio — Image editing pipeline
+
+- [GPU DAG Pipeline Rebuild Phase Plan](alcedo_studio/edit/gpu_dag_pipeline_rebuild_phase_plan.md)
+- [GPU DAG OpenCL Migration Phase Plan](alcedo_studio/edit/gpu_dag_opencl_migration_phase_plan.md)
+- [GPU DAG Metal Migration Phase Plan](alcedo_studio/edit/gpu_dag_metal_migration_phase_plan.md)
+- [Phase G10 — Legacy Pipeline Removal and Release Qualification](alcedo_studio/edit/gpu_dag_final_removal_phase_plan.md)
+- [Node-aware Pipeline Editing and Mask Authoring Master Plan](alcedo_studio/edit/node_mask_editor_master_plan.md)
+- [Brush Mask Architecture, History, and Raster Materialization Master Plan](alcedo_studio/edit/brush_mask_architecture_master_plan.md)
+- [AI Segmentation Mask (EfficientSAM3) Master Plan](alcedo_studio/edit/ai_segmentation_mask_master_plan.md)
+- [Raster Image Input (JPEG, PNG, TIFF, OpenEXR) Plan](alcedo_studio/edit/raster_image_input_plan.md)
+- [Executor Ownership Refactor Review Findings](alcedo_studio/edit/executor_ownership_review_findings.md)
+- [Film Print DRT Plan](alcedo_studio/edit/film_print_drt_plan.md)
+- [Film Simulation Explained (Chinese; explanatory document)](alcedo_studio/edit/film_simulation/film_simulation_explained.md):
+  the spectral film model, its main flow, the GPU implementation, and a comparison with spektrafilm
+- [Film Grain Format and Stock Granularity Plan](alcedo_studio/edit/film_grain_format_and_stock_plan.md)
 
 ## Alcedo Studio — UI
 
+- [Editor Adjustment and Version Comparison Plan](alcedo_studio/ui/editor_adjustment_comparison_plan.md)
+- [LUT Library and Package Management Plan](alcedo_studio/ui/lut_library_and_package_management_plan.md)
 - [AI Sidecar Frontend Plan](alcedo_studio/ui/ai_sidecar_frontend_plan.md)
 - [Background Tasks and Declarative UI State Plan](alcedo_studio/ui/background_tasks_ui_state_plan.md)
 - [Editor Session Command Queue and Lock Simplification Plan](alcedo_studio/ui/editor_session_command_queue_and_lock_simplification_plan.md)
 - [Editor Render Path Simplification Plan](alcedo_studio/ui/editor_render_path_simplification_plan.md)
+- [PR 93-176 Simplified Chinese UI Translation Plan](alcedo_studio/ui/pr_93_176_simplified_chinese_ui_translation_plan.md)
+- [Configurable Keyboard Shortcut Registry Plan](alcedo_studio/ui/configurable_keyboard_shortcut_registry_plan.md)
 - [QML Editor and Qt RHI Unified Workspace Refactor Plan](alcedo_studio/ui/qml_editor_rhi_unified_workspace_plan.md)
 - [Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan](alcedo_studio/ui/editor_single_live_pipeline_wal_checkpoint_plan.md)
   (includes **Final locked identity model**: history owns HEAD; pipeline = params table; chain hash unit = one commit)
 - [UI Fuzz Automation Platform Plan](alcedo_studio/ui/ui_fuzz_automation_platform_plan.md)
+- [Global Search Redesign Plan](alcedo_studio/ui/global_search_redesign_plan.md)
+
+## Alcedo Studio — Automation
+
+- [CLI, MCP, and Shared-Session Automation Plan](alcedo_studio/automation/cli_mcp_automation_plan.md)
 
 ## External website
 

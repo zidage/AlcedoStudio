@@ -1,0 +1,609 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#ifdef HAVE_OPENCL
+
+#ifndef CL_TARGET_OPENCL_VERSION
+#define CL_TARGET_OPENCL_VERSION 120
+#endif
+#define CL_USE_DEPRECATED_OPENCL_1_2_APIS
+#include <CL/cl.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <span>
+#include <utility>
+#include <vector>
+
+#include "edit/geometry/types.hpp"
+#include "edit/input/prepared_raw_input.hpp"
+#include "edit/runtime/ai_mask_coverage_work.hpp"
+#include "edit/runtime/basic_render_device.hpp"
+#include "edit/runtime/byte_range.hpp"
+#include "edit/runtime/content_key.hpp"
+#include "edit/runtime/texture_format.hpp"
+#include "gpu/gpu_device_memory.hpp"
+#include "opencl/opencl_context.hpp"
+
+namespace alcedo {
+
+struct ExecutionPlan;
+struct OpenClNeuralSessionWorkspace;
+
+inline constexpr std::uint32_t kOpenClDagBackendCapabilityVersion = 1;
+
+struct OpenClLutBinding {
+  cl_mem        native      = nullptr;
+  std::uint64_t resource_id = 0;
+  std::uint32_t edge_size   = 0;
+};
+
+/**
+ * @brief In-order product-queue encode state for one OpenCL render.
+ *
+ * Holds the current submission id, events, copied upload bytes and immutable pixel owners.
+ * Does not own a command queue. Not thread-safe.
+ */
+class OpenClCommandContext {
+ public:
+  OpenClCommandContext() = default;
+  ~OpenClCommandContext();
+
+  OpenClCommandContext(const OpenClCommandContext&)                    = delete;
+  auto operator=(const OpenClCommandContext&) -> OpenClCommandContext& = delete;
+  OpenClCommandContext(OpenClCommandContext&& other) noexcept;
+  auto operator=(OpenClCommandContext&& other) noexcept -> OpenClCommandContext&;
+
+  [[nodiscard]] auto SubmissionId() const -> std::uint64_t { return submission_id_; }
+  void               SetSubmissionId(std::uint64_t id) { submission_id_ = id; }
+
+  /**
+   * @brief Take ownership of an enqueue-produced event (refcount 1).
+   * @param event Event to release when this render waits or is cancelled.
+   */
+  void TrackEvent(cl_event event);
+
+  [[nodiscard]] auto TrackedEventCount() const -> std::size_t { return live_events_.size(); }
+  [[nodiscard]] auto FinalEvent() const -> cl_event { return final_event_; }
+  [[nodiscard]] auto RetainedUploadByteCount() const -> std::size_t;
+  [[nodiscard]] auto RetainedUploadOwnerCount() const -> std::size_t {
+    return upload_owners_.size();
+  }
+
+  /**
+   * @brief Release every tracked event and host upload owner after completion.
+   * Waits for writes when host upload bytes are still retained. Normal backend
+   * completion already waits and clears those bytes before calling this function.
+   * @return Number of events released.
+   */
+  auto ReleaseTrackedEvents() noexcept -> std::size_t;
+
+ private:
+  friend class OpenClBackend;
+
+  /**
+   * @brief Copy an upload's bytes into storage owned until command completion.
+   *
+   * Upload APIs accept borrowed spans, including arrays destroyed or overwritten while
+   * OpenCL work is queued. They cannot extend the caller's lifetime. Only the submitted
+   * bytes are copied; these allocations are immutable until completion and never written back.
+   * Reuse small allocations only after the render's existing wait completes all uploads.
+   * Reserve event storage before enqueue so tracking the write cannot allocate and fail.
+   */
+  auto RetainUploadBytes(std::span<const std::byte> bytes) -> std::span<const std::byte>;
+  void ReserveUploadEvent();
+  /** @brief Drop upload owners and reset copied storage after GPU completion. */
+  void ResetUploadStorage() noexcept;
+
+  std::vector<cl_event>               live_events_;
+  std::vector<std::vector<std::byte>> upload_bytes_;
+  std::size_t                        active_upload_count_ = 0;
+  // Retain the immutable prepared pixel allocation itself, without duplicating image data.
+  std::vector<std::shared_ptr<const std::byte>> upload_owners_;
+  // Borrowed from live_events_; one in-order queue makes this write cover all uploads.
+  cl_event                            last_upload_event_ = nullptr;
+  cl_event                            final_event_       = nullptr;
+  std::uint64_t                       submission_id_     = 0;
+};
+
+/**
+ * @brief OpenCL 1.2 resource factory for the DAG workspace.
+ *
+ * Uses OpenClContext::Instance() device and context. Session devices submit on
+ * the shared product queue; batch devices call @ref UseDedicatedQueue so
+ * parallel thumbnail/export renders never enqueue onto one shared queue object.
+ * Move-only Buffer and Texture2D wrappers own cl_mem. One in-flight submission.
+ * Not thread-safe.
+ */
+class OpenClBackend {
+ public:
+  static constexpr std::uint32_t kCapabilityVersion = kOpenClDagBackendCapabilityVersion;
+  static constexpr const char*   kName              = "OpenCL";
+
+  class Buffer {
+   public:
+    Buffer() = default;
+    Buffer(OpenClBackend* owner, cl_mem native, void* device_pointer, std::size_t bytes,
+           std::uint64_t id);
+    ~Buffer();
+    Buffer(const Buffer&)                    = delete;
+    auto operator=(const Buffer&) -> Buffer& = delete;
+    Buffer(Buffer&& other) noexcept;
+    auto               operator=(Buffer&& other) noexcept -> Buffer&;
+
+    [[nodiscard]] auto DevicePointer() const -> void* { return ptr_; }
+    [[nodiscard]] auto Native() const -> cl_mem { return native_; }
+    [[nodiscard]] auto Bytes() const -> std::size_t { return bytes_; }
+    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
+    [[nodiscard]] auto Empty() const -> bool { return native_ == nullptr; }
+    void               Reset() noexcept;
+
+   private:
+    OpenClBackend* owner_       = nullptr;
+    cl_mem         native_      = nullptr;
+    void*          ptr_         = nullptr;
+    std::size_t    bytes_       = 0;
+    std::uint64_t  resource_id_ = 0;
+  };
+
+  class Texture2D {
+   public:
+    Texture2D() = default;
+    Texture2D(OpenClBackend* owner, cl_mem native, std::size_t bytes, std::uint32_t width,
+              std::uint32_t height, TextureFormat format, std::uint64_t id);
+    ~Texture2D();
+    Texture2D(const Texture2D&)                    = delete;
+    auto operator=(const Texture2D&) -> Texture2D& = delete;
+    Texture2D(Texture2D&& other) noexcept;
+    auto               operator=(Texture2D&& other) noexcept -> Texture2D&;
+
+    [[nodiscard]] auto DevicePointer() const -> void* { return native_; }
+    [[nodiscard]] auto Native() const -> cl_mem { return native_; }
+    [[nodiscard]] auto Bytes() const -> std::size_t { return bytes_; }
+    [[nodiscard]] auto Width() const -> std::uint32_t { return width_; }
+    [[nodiscard]] auto Height() const -> std::uint32_t { return height_; }
+    [[nodiscard]] auto Format() const -> TextureFormat { return format_; }
+    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
+    [[nodiscard]] auto Empty() const -> bool { return native_ == nullptr; }
+    void               Reset() noexcept;
+
+   private:
+    OpenClBackend* owner_       = nullptr;
+    cl_mem         native_      = nullptr;
+    std::size_t    bytes_       = 0;
+    std::uint32_t  width_       = 0;
+    std::uint32_t  height_      = 0;
+    TextureFormat  format_      = TextureFormat::R8;
+    std::uint64_t  resource_id_ = 0;
+  };
+
+  /**
+   * @brief RGBA32F row-major buffer used only as a scene-work member.
+   *
+   * Not an image-backed Texture2D. Cached Develop/Geometry/Camera Color/Mask/
+   * display textures stay on Texture2D. Width and height are stored here because
+   * a generic Buffer has no image geometry.
+   */
+  class SceneWorkImage {
+   public:
+    SceneWorkImage() = default;
+    SceneWorkImage(Buffer buffer, std::uint32_t width, std::uint32_t height)
+        : buffer_(std::move(buffer)), width_(width), height_(height) {}
+
+    SceneWorkImage(const SceneWorkImage&)                    = delete;
+    auto operator=(const SceneWorkImage&) -> SceneWorkImage& = delete;
+    SceneWorkImage(SceneWorkImage&&)                         = default;
+    auto operator=(SceneWorkImage&&) -> SceneWorkImage&      = default;
+
+    [[nodiscard]] auto Native() const -> cl_mem { return buffer_.Native(); }
+    [[nodiscard]] auto DevicePointer() const -> void* { return buffer_.DevicePointer(); }
+    [[nodiscard]] auto Bytes() const -> std::size_t { return buffer_.Bytes(); }
+    [[nodiscard]] auto Width() const -> std::uint32_t { return width_; }
+    [[nodiscard]] auto Height() const -> std::uint32_t { return height_; }
+    [[nodiscard]] auto Format() const -> TextureFormat { return TextureFormat::Rgba32f; }
+    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return buffer_.ResourceId(); }
+    [[nodiscard]] auto Empty() const -> bool { return buffer_.Empty(); }
+    [[nodiscard]] auto Storage() -> Buffer& { return buffer_; }
+    [[nodiscard]] auto Storage() const -> const Buffer& { return buffer_; }
+
+    void Reset() noexcept {
+      buffer_.Reset();
+      width_  = 0;
+      height_ = 0;
+    }
+
+   private:
+    Buffer        buffer_{};
+    std::uint32_t width_  = 0;
+    std::uint32_t height_ = 0;
+  };
+
+  using Slab           = Buffer;
+  using CommandContext = OpenClCommandContext;
+
+  OpenClBackend();
+  ~OpenClBackend();
+  OpenClBackend(const OpenClBackend&)                                  = delete;
+  auto               operator=(const OpenClBackend&) -> OpenClBackend& = delete;
+
+  /**
+   * @brief Switch this device to its own in-order command queue.
+   *
+   * Parallel batch renders must not share the product queue object: host
+   * threads enqueueing onto one cl_command_queue exhaust driver staging
+   * resources (OpenCL error -5 on UploadDeviceMemory) and serialize unrelated
+   * submissions. The session device keeps the product queue because OpenCL/GL
+   * interop acquires, copies, and releases on that queue in order; a
+   * dedicated-queue device must only produce host output (Download), never
+   * present into GL-backed sinks.
+   * Idempotent. Not valid after work has been submitted.
+   */
+  void               UseDedicatedQueue();
+  [[nodiscard]] auto HasDedicatedQueue() const -> bool { return owned_queue_ != nullptr; }
+
+  /**
+   * @brief Bind this device's queue as OpenClContext::Queue() on the calling thread.
+   *
+   * The returned scope keeps the binding for its lifetime; keep it alive for
+   * the whole DAG encode so helpers that resolve the submission queue through
+   * the context (lens calibration, geometry resize/crop) submit on this
+   * device's queue instead of the shared product queue. Only installs when
+   * this device owns a dedicated queue — the session device returns an
+   * inactive scope so the profiling queue override keeps working.
+   */
+  [[nodiscard]] auto BindThreadQueue() const -> OpenClThreadQueueScope;
+
+  [[nodiscard]] auto CreateBuffer(std::size_t bytes) -> Buffer;
+  [[nodiscard]] auto CreateSlab(std::size_t bytes) -> Buffer { return CreateBuffer(bytes); }
+  /**
+   * @brief Largest legal `clCreateBuffer` size for this device.
+   *
+   * Taken from `CL_DEVICE_MAX_MEM_ALLOC_SIZE` when the OpenCL context is created,
+   * aligned down to 256 bytes for the transient arena. Tests may override with
+   * @ref SetMaxSlabBytes; 0 restores the device-reported value.
+   */
+  [[nodiscard]] auto MaxSlabBytes() const -> std::size_t;
+  [[nodiscard]] auto MaxTransientBytes() const -> std::size_t;
+  /**
+   * @brief Override @ref MaxSlabBytes. Zero restores the device-reported cap.
+   * @param bytes Slab cap in bytes, or 0 for the device default.
+   */
+  void SetMaxSlabBytes(std::size_t bytes);
+  [[nodiscard]] auto CreateTexture2D(std::uint32_t width, std::uint32_t height,
+                                     TextureFormat format) -> Texture2D;
+  /**
+   * @brief Allocate one RGBA32F scene-work member as a row-major OpenCL buffer.
+   *
+   * Does not call @ref CreateTexture2D. Owned by SceneWorkImagePair.
+   */
+  [[nodiscard]] auto CreateSceneWorkImage(std::uint32_t width, std::uint32_t height)
+      -> SceneWorkImage;
+
+  void UploadBufferRange(Buffer& buffer, std::uint32_t offset, std::span<const std::byte> bytes,
+                         CommandContext& command_context);
+  void DownloadBufferRange(const Buffer& buffer, std::uint32_t offset, std::span<std::byte> out,
+                           CommandContext& command_context);
+  void UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
+                       CommandContext& command_context);
+  void CopyTexture2D(const Texture2D& src, Texture2D& dst, CommandContext& command_context);
+  void UploadR8TextureRect(Texture2D& texture, RectI rectangle, std::span<const std::byte> bytes,
+                           CommandContext& command_context);
+  void DownloadTexture2D(const Texture2D& texture, std::span<std::byte> out,
+                         CommandContext& command_context);
+  void CopyBufferToImage(const Buffer& src, std::uint32_t src_offset, Texture2D& dst,
+                         CommandContext& command_context);
+  void CopyImageToBuffer(const Texture2D& src, Buffer& dst, std::uint32_t dst_offset,
+                         CommandContext& command_context);
+  void CopyImageToDeviceMemory(const Texture2D& src, void* dst, std::size_t bytes,
+                               CommandContext& command_context);
+  void CopyDeviceMemoryToImage(void* src, Texture2D& dst, CommandContext& command_context);
+  void UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
+                          CommandContext& command_context);
+  /**
+   * @brief Record the Feather and Expand passes of @p dispatch on this device's queue (SM8.3):
+   *        the morphology steps and the two Feather passes of @ref AiMaskEdgeDispatch, from
+   *        `textures.source` to `textures.output`. Defined in opencl_ai_mask_coverage.cpp.
+   *
+   * Uses the kernels of the registered program `opencl_dag_ai_mask_coverage` through the
+   * per-thread kernel cache; it registers and compiles nothing per call. Tracks each enqueue
+   * event in @p command_context. Does not wait. The caller keeps every texture alive until the
+   * submission completes.
+   *
+   * @throws std::runtime_error when a required texture is missing or has the wrong size or
+   *         format, or when a kernel lookup, argument, or enqueue fails. Recorded passes then
+   *         write only the output and work textures, which the caller discards.
+   */
+  void RecordAiMaskEdge(const AiMaskEdgeDispatch&            dispatch,
+                        const AiMaskEdgeTextures<Texture2D>& textures,
+                        CommandContext&                      command_context);
+  /**
+   * @brief Upload prepared pixels without a CPU copy; retain their immutable owner until wait.
+   * The caller must not write through another alias while the upload is pending.
+   */
+  void UploadDeviceMemory(void* dst, const HostImagePlane& pixels, CommandContext& command_context);
+  void FillDeviceMemory(void* dst, std::size_t bytes, std::uint8_t value,
+                        CommandContext& command_context);
+  void CopyDeviceMemoryToBuffer(void* src, Buffer& dst, std::uint32_t dst_offset, std::size_t bytes,
+                                CommandContext& command_context);
+  [[nodiscard]] auto ResolveDeviceMemory(void* device_pointer, std::size_t bytes) const
+      -> std::pair<cl_mem, std::uint32_t>;
+
+  /**
+   * @brief Take ownership of an enqueue event (refcount 1) and count it.
+   * @param command_context Current render command context.
+   * @param event Event produced by clEnqueue*; null is ignored.
+   */
+  void TrackKernelEvent(CommandContext& command_context, cl_event event);
+
+  void Submit(CommandContext& command_context);
+  /** @brief Append and flush presentation work to the current product submission. */
+  void FinalizePresentation(CommandContext& command_context);
+  /** @brief Neural Engine tile executor for this backend. Created on first Neural develop. */
+  [[nodiscard]] auto NeuralDemosaicWorkspace() -> OpenClNeuralSessionWorkspace&;
+  /** @brief Release Neural Engine tile activations after develop scratch is discarded. */
+  void ReleaseNeuralDemosaicWorkspace();
+  void Wait(CommandContext& command_context);
+
+  /**
+   * @brief Enqueue a profiling marker for the current preview pass or sub-stage.
+   *
+   * No host wait. Elapsed time is read in Wait when the queue supports profiling.
+   */
+  void BeginGpuWorkSample(CommandContext& command_context);
+  void EndGpuWorkSample(CommandContext& command_context);
+  void ResolveGpuTimestamps();
+  void DiscardGpuTimestamps();
+  /**
+   * @brief Flush and wait for commands already on the product queue.
+   *
+   * Used to free Develop scratch after SensorDevelop. Flushes before
+   * `clWaitForEvents` so a large in-order dispatch cannot stall forever with
+   * work still sitting in the host queue. Does not replace product Submit/Wait
+   * with `clFinish`.
+   */
+  void SynchronizeRecordedWork(CommandContext& command_context);
+
+  void WarmUpPlan(const ExecutionPlan& plan);
+
+  [[nodiscard]] auto AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
+                                std::uint32_t edge, CommandContext& command_context)
+      -> OpenClLutBinding;
+  /**
+   * @brief A device buffer of @p bytes in the byte budget and the cache of @ref AcquireLut.
+   *
+   * The film print reads its tables through this function. @p key names the bytes.
+   * @throws std::runtime_error for an empty key or table.
+   */
+  [[nodiscard]] auto AcquireKeyedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                        CommandContext& command_context) -> OpenClLutBinding;
+  [[nodiscard]] auto DummyLut() -> OpenClLutBinding;
+  /**
+   * @brief 1x1 RGBA32F image bound to unused @c read_only image2d_t scene arguments.
+   *
+   * Distinct from @ref DummySceneWriteImage. OpenCL 1.2 forbids one image object as
+   * both read_only and write_only in the same kernel. Owned by this backend.
+   */
+  [[nodiscard]] auto DummySceneReadImage() -> cl_mem;
+  /**
+   * @brief 1x1 RGBA32F image bound to unused @c write_only image2d_t scene arguments.
+   */
+  [[nodiscard]] auto DummySceneWriteImage() -> cl_mem;
+  /**
+   * @brief 16-byte buffer bound to unused const scene-work buffer arguments.
+   *
+   * Distinct from @ref DummySceneWriteBuffer so a dual-storage kernel never binds
+   * one dummy buffer as both const and mutable pointers.
+   */
+  [[nodiscard]] auto DummySceneReadBuffer() -> cl_mem;
+  /**
+   * @brief 16-byte buffer bound to unused mutable scene-work buffer arguments.
+   */
+  [[nodiscard]] auto DummySceneWriteBuffer() -> cl_mem;
+  void               SetLutByteBudget(std::size_t bytes);
+  /** @brief Release busy markers belonging to an encode cancelled before submission. */
+  void               ReleaseUnsubmittedResourceUses() noexcept;
+  void               SetGradeCommandTopologyHash(std::uint64_t hash) {
+    grade_command_topology_hash_ = hash;
+  }
+
+  [[nodiscard]] auto HasInFlightSubmission() const -> bool { return in_flight_submission_ != 0; }
+  [[nodiscard]] auto CompletedSubmission() const -> std::uint64_t { return completed_submission_; }
+  [[nodiscard]] auto IsResourceBusy(std::uint64_t submitted_on) const -> bool {
+    return submitted_on != 0 && submitted_on > completed_submission_;
+  }
+  [[nodiscard]] auto NextSubmissionId() -> std::uint64_t { return ++next_submission_; }
+
+  void               NoteFree(std::size_t bytes) noexcept {
+    ++free_count_;
+    live_bytes_ -= bytes;
+    --live_allocations_;
+  }
+  void               ResetCounters();
+  void               FailNextUpload();
+  /**
+   * @brief Test hook: let @p uploads_to_pass more upload calls run, then fail the next one
+   *        with std::runtime_error. @ref FailNextUpload is `FailUploadAfter(0)`.
+   */
+  void FailUploadAfter(std::uint32_t uploads_to_pass) { uploads_before_failure_ = uploads_to_pass; }
+  /**
+   * @brief Test hook: let @p allocations_to_pass more CreateTexture2D calls run, then fail the
+   *        next one with std::runtime_error.
+   */
+  void FailTextureAllocationAfter(std::uint32_t allocations_to_pass) {
+    allocations_before_failure_ = allocations_to_pass;
+  }
+  void               NoteHostToDeviceBegin() { last_h2d_ranges_.clear(); }
+
+  [[nodiscard]] auto NativeDevice() const -> cl_device_id { return device_; }
+  [[nodiscard]] auto NativeContext() const -> cl_context { return context_; }
+  [[nodiscard]] auto NativeQueue() const -> cl_command_queue { return queue_; }
+  [[nodiscard]] auto WorkingSetBudgetBytes() const -> std::size_t;
+  [[nodiscard]] auto QueryDeviceMemory() const -> GpuDeviceMemorySnapshot;
+  /// Device memory of the live buffers and images of this backend.
+  [[nodiscard]] auto AllocationTotals() const -> GpuBackendAllocationTotals {
+    return {.live_bytes = live_bytes_, .live_allocations = live_allocations_};
+  }
+  [[nodiscard]] auto MallocCount() const -> std::uint64_t { return malloc_count_; }
+  [[nodiscard]] auto FreeCount() const -> std::uint64_t { return free_count_; }
+  [[nodiscard]] auto BufferCreateCount() const -> std::uint64_t { return buffer_create_count_; }
+  [[nodiscard]] auto TextureCreateCount() const -> std::uint64_t { return texture_create_count_; }
+  [[nodiscard]] auto ProgramBuildCount() const -> std::uint64_t;
+  [[nodiscard]] auto KernelCreateCount() const -> std::uint64_t;
+  [[nodiscard]] auto KernelHitCount() const -> std::uint64_t;
+  [[nodiscard]] auto EventCreateCount() const -> std::uint64_t { return event_create_count_; }
+  [[nodiscard]] auto EventReleaseCount() const -> std::uint64_t { return event_release_count_; }
+  [[nodiscard]] auto FlushCount() const -> std::uint64_t { return flush_count_; }
+  [[nodiscard]] auto WaitCount() const -> std::uint64_t { return wait_count_; }
+  [[nodiscard]] auto HostToDeviceCopyCount() const -> std::uint64_t { return h2d_copy_count_; }
+  /// Host downloads (DownloadTexture2D, DownloadBufferRange) since construction or the last
+  /// counter reset.
+  [[nodiscard]] auto DeviceToHostCopyCount() const -> std::uint64_t { return d2h_copy_count_; }
+  [[nodiscard]] auto HostToDeviceBytes() const -> std::uint64_t { return h2d_bytes_; }
+  [[nodiscard]] auto LastHostToDeviceRanges() const -> const std::vector<ByteRange>& {
+    return last_h2d_ranges_;
+  }
+  [[nodiscard]] auto LastTextureRectangles() const -> const std::vector<RectI>& {
+    return last_texture_rectangles_;
+  }
+  [[nodiscard]] auto LutUploadBytes() const -> std::uint64_t { return lut_upload_bytes_; }
+  [[nodiscard]] auto LastLutResourceId() const -> std::uint64_t { return last_lut_resource_id_; }
+  [[nodiscard]] auto GradeCommandTopologyHash() const -> std::uint64_t {
+    return grade_command_topology_hash_;
+  }
+
+ private:
+  /// True when the armed test failure is due on this call; disarms it then.
+  [[nodiscard]] static auto ConsumeInjectedFailure(std::optional<std::uint32_t>& calls_to_pass)
+      -> bool {
+    if (!calls_to_pass.has_value()) {
+      return false;
+    }
+    if (*calls_to_pass == 0) {
+      calls_to_pass.reset();
+      return true;
+    }
+    --*calls_to_pass;
+    return false;
+  }
+  [[nodiscard]] auto ConsumeInjectedUploadFailure() -> bool {
+    return ConsumeInjectedFailure(uploads_before_failure_);
+  }
+
+  friend class Buffer;
+  friend class Texture2D;
+
+  struct LiveBuffer {
+    cl_mem        native      = nullptr;
+    std::uint64_t gpu_address = 0;
+    std::size_t   bytes       = 0;
+  };
+
+  /// Counts a successful allocation of @p bytes. The first one of this backend writes
+  /// gpu.alloc.first.
+  void NoteMalloc(std::size_t bytes, const char* operation);
+  void NoteBufferCreate(std::size_t bytes) {
+    ++buffer_create_count_;
+    NoteMalloc(bytes, "OpenClBackend::CreateBuffer");
+  }
+  void NoteTextureCreate(std::size_t bytes) {
+    ++texture_create_count_;
+    NoteMalloc(bytes, "OpenClBackend::CreateTexture2D");
+  }
+  /// Writes gpu.alloc.failed, then throws std::runtime_error with @p message.
+  [[noreturn]] void  ThrowAllocationFailure(const char* operation, std::size_t bytes,
+                                            const std::string& message) const;
+  void NoteEventCreate() noexcept { ++event_create_count_; }
+  void NoteEventRelease(std::size_t count = 1) noexcept { event_release_count_ += count; }
+  void UnregisterBuffer(cl_mem native) noexcept;
+  [[nodiscard]] auto AcquireCachedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                         std::uint32_t edge, CommandContext& command_context)
+      -> OpenClLutBinding;
+  void TrackEnqueueEvent(CommandContext& command_context, cl_event event);
+  auto EnqueueMarker(CommandContext& command_context) -> cl_event;
+  void FlushQueue();
+  void EnqueueDeviceMemoryUpload(cl_mem buffer, std::uint32_t offset,
+                                std::span<const std::byte> bytes, CommandContext& command_context);
+  [[nodiscard]] auto MakeDummySceneImage(cl_mem_flags flags, const char* what) -> cl_mem;
+  [[nodiscard]] auto MakeDummySceneBuffer(cl_mem_flags flags, const char* what) -> cl_mem;
+
+  cl_device_id           device_  = nullptr;
+  cl_context             context_ = nullptr;
+  cl_command_queue       queue_   = nullptr;
+  cl_command_queue       owned_queue_ = nullptr;
+  std::vector<LiveBuffer> live_buffers_;
+  std::uint64_t          next_virtual_address_     = 0x100000000ull;
+  std::uint64_t          malloc_count_             = 0;
+  // Not cleared by ResetCounters: they describe the device memory, not a measurement window.
+  std::size_t                  live_bytes_               = 0;
+  std::uint64_t                live_allocations_         = 0;
+  bool                         first_allocation_logged_  = false;
+  std::uint64_t          free_count_               = 0;
+  std::uint64_t          buffer_create_count_      = 0;
+  std::uint64_t          texture_create_count_     = 0;
+  std::uint64_t          event_create_count_       = 0;
+  std::uint64_t          event_release_count_      = 0;
+  std::uint64_t          flush_count_              = 0;
+  std::uint64_t          wait_count_               = 0;
+  std::uint64_t          h2d_copy_count_           = 0;
+  mutable std::uint64_t   d2h_copy_count_           = 0;
+  std::uint64_t          h2d_bytes_                = 0;
+  std::uint64_t          next_resource_id_         = 1;
+  std::uint64_t          next_submission_          = 0;
+  std::uint64_t          in_flight_submission_     = 0;
+  std::uint64_t          completed_submission_     = 0;
+  std::uint64_t          kernel_create_baseline_   = 0;
+  std::uint64_t          kernel_hit_baseline_      = 0;
+  std::uint64_t          program_build_baseline_   = 0;
+  std::optional<std::uint32_t> uploads_before_failure_;
+  std::optional<std::uint32_t> allocations_before_failure_;
+  std::vector<ByteRange> last_h2d_ranges_;
+  std::vector<RectI>     last_texture_rectangles_;
+  std::uint64_t          lut_upload_bytes_     = 0;
+  std::uint64_t          last_lut_resource_id_ = 0;
+  std::uint64_t          grade_command_topology_hash_ = 0;
+  cl_mem                 dummy_scene_read_image_      = nullptr;
+  cl_mem                 dummy_scene_write_image_     = nullptr;
+  cl_mem                 dummy_scene_read_buffer_     = nullptr;
+  cl_mem                 dummy_scene_write_buffer_    = nullptr;
+  std::size_t            lut_byte_budget_      = 64ull << 20;
+  std::size_t            lut_cache_bytes_      = 0;
+  std::uint64_t          lut_lru_clock_        = 0;
+  struct LutCacheEntry {
+    ContentKey    key;
+    Buffer        buffer;
+    std::uint32_t edge_size = 0;
+    std::size_t   bytes     = 0;
+    std::uint64_t lru_tick  = 0;
+    std::uint64_t last_used_submission = 0;
+  };
+  std::vector<LutCacheEntry> lut_cache_;
+  Buffer                     dummy_lut_;
+  std::unique_ptr<OpenClNeuralSessionWorkspace> neural_workspace_;
+  struct GpuTimestampSlot {
+    cl_event      start      = nullptr;
+    cl_event      stop       = nullptr;
+    std::uint64_t request_id = 0;
+    std::uint8_t  pass_index = 0;
+    std::uint8_t  sub_index  = 0;
+    bool          is_sub     = false;
+    bool          recorded   = false;
+  };
+  std::vector<GpuTimestampSlot> gpu_timestamps_;
+  std::vector<std::size_t>      gpu_open_stack_;
+  std::size_t                max_slab_bytes_device_   = 0;
+  std::size_t                max_slab_bytes_override_ = 0;
+  std::size_t                max_image_width_         = 0;
+  std::size_t                max_image_height_        = 0;
+};
+
+using OpenClRenderDevice    = BasicRenderDevice<OpenClBackend>;
+using OpenClRenderWorkspace = BasicRenderWorkspace<OpenClBackend>;
+
+}  // namespace alcedo
+
+#endif  // HAVE_OPENCL

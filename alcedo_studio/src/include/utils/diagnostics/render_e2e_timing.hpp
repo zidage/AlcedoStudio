@@ -9,34 +9,9 @@
 
 namespace alcedo::diag {
 
-/// Wall-clock end-to-end timing for editor preview frames.
-///
-/// Marks the request when the coordinator accepts Submit (user slider / intent
-/// issued) and prints one stdout line when the viewport renderer successfully
-/// imports the frame for composition (closest production point to "on screen").
-///
-/// Always enabled; output is a single line per presented request:
-///   [RENDER_E2E] request=N ... total=..ms queue=..ms pipeline=..ms
-///     present=..ms (wake=..ms gui_wait=..ms sg_wait=..ms import=..ms)
-///     display_dt=..ms (~.. fps)
-///
-/// present breakdown:
-/// - wake:     NotifyReady → requestPresentUpdate posted (worker side)
-/// - gui_wait: update posted → GUI thread actually runs update()/requestUpdate
-/// - sg_wait:  GUI update() → render-thread render() entry (scene-graph / vsync)
-/// - import:   render() entry → QRhi createFrom / layer bind complete
-///
-/// total is request age (submit → import), not frame time. display_dt is the
-/// interval since the previous presented request of the same role; the trailing
-/// fps is 1000/display_dt (on-screen cadence). The first sample of a role has
-/// no prior display and prints display_dt=n/a.
-///
-/// Large gui_wait ⇒ main/GUI thread backlog. Large sg_wait ⇒ missed frame /
-/// vsync phase. Large import ⇒ work inside the render pass before the texture
-/// is bound (usually tiny).
-///
-/// Terminal outcomes (replaced / cancelled / dropped / failed) remove the
-/// pending sample without printing so coalesced work does not leak state.
+/// Compatibility notes for preview timing. Implementation forwards to
+/// PreviewPerformance. Process start turns Detail on.
+/// Qt frame identity is attached only to the request imported in that render().
 
 void NoteRenderE2eSubmit(std::uint64_t request_id, std::string_view reason,
                          std::string_view quality, std::string_view role);
@@ -44,6 +19,13 @@ void NoteRenderE2eSubmit(std::uint64_t request_id, std::string_view reason,
 /// Coordinator handed the request to the pipeline scheduler (left the pending
 /// slot). Time from Submit to here is coalesce / single-flight queue wait.
 void NoteRenderE2eScheduled(std::uint64_t request_id);
+
+/// Pipeline worker thread started the scheduled task (after pool wait).
+void NoteRenderE2eWorkerStart(std::uint64_t request_id);
+
+/// FramePresenter is about to EnsureSize / MapResourceForWrite / submit the
+/// native texture to the sink.
+void NoteRenderE2eSinkSubmit(std::uint64_t request_id);
 
 /// Producer finished GPU/host write and handed the frame to the present queue
 /// (NotifyFrameReady / SubmitMetalFrame). Covers pipeline + pool wait after
@@ -54,9 +36,9 @@ void NoteRenderE2eProducerReady(std::uint64_t request_id);
 /// (requestPresentUpdate posted from the producer path).
 void NoteRenderE2ePresentWake(std::uint64_t request_id);
 
-/// GUI thread executed the coalesced update()/window->requestUpdate() for
-/// pending Ready frames. No request id: stamps every sample that already has
-/// present_wake and still lacks gui_update.
+/// GUI thread executed the coalesced QQuickItem::update() for pending Ready
+/// frames. No request id: stamps every sample that already has present_wake
+/// and still lacks gui_update.
 void NoteRenderE2eGuiUpdate();
 
 /// Render-thread QQuickRhiItemRenderer::render() entry. Stamps every sample
@@ -66,9 +48,17 @@ void NoteRenderE2eRenderEnter();
 /// Render thread picked the Ready frame and is about to import it into QRhi.
 void NoteRenderE2eConsumeBegin(std::uint64_t request_id);
 
-/// Viewport renderer imported the frame for the next composition pass.
-/// Prints the e2e line and drops the sample.
+/// Viewport renderer imported the frame into QRhi. Does not complete the sample.
+void NoteRenderE2eImported(std::uint64_t request_id);
+
+/// DAG / no-window helper: complete at import.
 void NoteRenderE2eDisplayed(std::uint64_t request_id);
+
+/// Qt queued the window frame that imported pending requests (`frameSwapped`).
+void NoteRenderE2eFrameSwapped();
+
+/// Qt finished the window frame (`afterFrameEnd`). Does not complete.
+void NoteRenderE2eFrameEnd();
 
 /// Request will never display (replaced, cancelled, failed, present drop).
 void NoteRenderE2eTerminal(std::uint64_t request_id, std::string_view outcome);

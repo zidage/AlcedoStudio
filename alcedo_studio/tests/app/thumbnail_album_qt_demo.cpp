@@ -40,7 +40,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <opencv2/opencv.hpp>
+#include <opencv2/core/mat.hpp>
 #include <optional>
 #include <string>
 #include <thread>
@@ -54,9 +54,9 @@
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
 #include "app/thumbnail_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "storage/query/filter_compiler.hpp"
 #include "type/supported_file_type.hpp"
 
 namespace alcedo {
@@ -794,7 +794,8 @@ static AlbumIds ImportBatchToTempProject(const std::filesystem::path& db_path,
   ProjectService            project(db_path, meta_path);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
 
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/batch_import"};
   std::vector<image_path_t> paths;
@@ -1354,7 +1355,6 @@ class AlbumWidget final : public QWidget {
 
 int main(int argc, char** argv) {
   Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-  alcedo::RegisterAllOperators();
 
   QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
       Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);

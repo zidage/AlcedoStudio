@@ -7,11 +7,14 @@
 #include <algorithm>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
+#include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "sleeve/sleeve_filesystem.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
@@ -427,6 +430,63 @@ TEST(SleeveFSTest, DeletingFromRootDeletesFileEverywhere) {
     EXPECT_THROW(fs.Get(L"/DeleteEverywhere.arw", false), std::runtime_error);
     EXPECT_THROW(fs.Get(L"/AlbumA/DeleteEverywhere.arw", false), std::runtime_error);
     EXPECT_THROW(fs.Get(L"/AlbumB/DeleteEverywhere.arw", false), std::runtime_error);
+  } catch (std::exception& e) {
+    std::cout << e.what() << std::endl;
+    FAIL();
+  }
+
+  CleanupTestFiles();
+}
+
+TEST(SleeveFSTest, DeleteFilesEverywhereRemovesBatchFromEveryFolderAndKeepsOtherFiles) {
+  CleanupTestFiles();
+  try {
+    Storage    storage_service{db_path};
+    FileSystem fs{db_path, storage_service, 0};
+    fs.InitRoot();
+
+    auto                         album_a = fs.Create(L"", L"AlbumA", ElementType::FOLDER);
+    auto                         album_b = fs.Create(L"", L"AlbumB", ElementType::FOLDER);
+    std::vector<sl_element_id_t> deleted_ids;
+    std::vector<sl_element_id_t> kept_ids;
+    for (int i = 0; i < 40; ++i) {
+      auto file = fs.CreateFileInLibrary(L"Batch" + std::to_wstring(i) + L".arw");
+      ASSERT_NE(file, nullptr);
+      fs.LinkFileToFolder(file->element_id_, album_a->element_id_);
+      if (i % 2 == 0) {
+        fs.LinkFileToFolder(file->element_id_, album_b->element_id_);
+      }
+      (i % 4 == 3 ? kept_ids : deleted_ids).push_back(file->element_id_);
+    }
+    // Duplicates and unknown ids are ignored, as with DeleteFileEverywhere.
+    std::vector<sl_element_id_t> request = deleted_ids;
+    request.push_back(deleted_ids.front());
+    request.push_back(999999);
+
+    const auto removed = fs.DeleteFilesEverywhere(request);
+
+    EXPECT_EQ(removed.size(), deleted_ids.size());
+    const auto root_content    = fs.ListFolderContent(0);
+    const auto album_a_content = fs.ListFolderContent(album_a->element_id_);
+    const auto album_b_content = fs.ListFolderContent(album_b->element_id_);
+    for (const auto id : deleted_ids) {
+      EXPECT_TRUE(ContainsId(removed, id));
+      EXPECT_EQ(fs.Get(id)->sync_flag_, SyncFlag::DELETED);
+      EXPECT_FALSE(ContainsId(root_content, id));
+      EXPECT_FALSE(ContainsId(album_a_content, id));
+      EXPECT_FALSE(ContainsId(album_b_content, id));
+    }
+    for (const auto id : kept_ids) {
+      EXPECT_NE(fs.Get(id)->sync_flag_, SyncFlag::DELETED);
+      EXPECT_EQ(CountId(root_content, id), 1U);
+      EXPECT_EQ(CountId(album_a_content, id), 1U);
+    }
+    auto folder_a = std::static_pointer_cast<SleeveFolder>(album_a);
+    EXPECT_EQ(folder_a->ContentSize(), kept_ids.size());
+    // Files added and removed before the folder was written leave no pending content change.
+    for (const auto id : deleted_ids) {
+      EXPECT_FALSE(folder_a->ContentAddedSinceSync().contains(id));
+    }
   } catch (std::exception& e) {
     std::cout << e.what() << std::endl;
     FAIL();

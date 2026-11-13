@@ -147,26 +147,28 @@ ColumnLayout {
                 Label {
                     text: qsTr("Cache directory")
                     color: panel.textColor
-                    font.pixelSize: 15
-                    font.weight: 600
+                    font.pixelSize: appTheme.fontSizeTitle
+                    font.weight: appTheme.fontWeightStrong
                 }
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 36
+                    Layout.preferredHeight: Math.max(36, cacheRootLabel.implicitHeight
+                                                     + appTheme.spaceSm)
                     radius: appTheme.controlRadiusSmall
                     color: appTheme.bgBaseColor
                     border.width: 1
                     border.color: appTheme.cardBorderColor
 
                     Label {
+                        id: cacheRootLabel
                         anchors.fill: parent
                         anchors.leftMargin: appTheme.spaceSm
                         anchors.rightMargin: appTheme.spaceSm
                         text: panel.pendingRoot.length > 0
                               ? panel.pendingRoot
                               : panel.statLineValue("Root")
-                        elide: Text.ElideMiddle
+                        wrapMode: Text.Wrap
                         verticalAlignment: Text.AlignVCenter
                         color: panel.textColor
                         font.family: panel.dataFontFamily
@@ -208,8 +210,8 @@ ColumnLayout {
                 Layout.preferredWidth: 180
                 text: qsTr("Disk cache")
                 color: panel.textColor
-                font.pixelSize: 15
-                font.weight: 600
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightStrong
             }
 
             Switch {
@@ -256,8 +258,8 @@ ColumnLayout {
                     text: cacheEnabledSwitch.checked
                           ? qsTr("Enabled") : qsTr("Disabled")
                     color: panel.textColor
-                    font.pixelSize: 15
-                    font.weight: 600
+                    font.pixelSize: appTheme.fontSizeTitle
+                    font.weight: appTheme.fontWeightStrong
                     leftPadding: cacheEnabledSwitch.indicator.width + 12
                     verticalAlignment: Text.AlignVCenter
                 }
@@ -270,10 +272,10 @@ ColumnLayout {
 
             Label {
                 Layout.preferredWidth: 180
-                text: qsTr("Max entries")
+                text: qsTr("Max entries per project")
                 color: panel.textColor
-                font.pixelSize: 15
-                font.weight: 600
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightStrong
             }
 
             SettingsSpinBox {
@@ -296,8 +298,8 @@ ColumnLayout {
                 Layout.preferredWidth: 180
                 text: qsTr("JPEG quality")
                 color: panel.textColor
-                font.pixelSize: 15
-                font.weight: 600
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightStrong
             }
 
             SettingsSpinBox {
@@ -383,8 +385,8 @@ ColumnLayout {
             Layout.fillWidth: true
             text: title
             color: textColor
-            font.pixelSize: 18
-            font.weight: 800
+            font.pixelSize: appTheme.fontSizeSection
+            font.weight: appTheme.fontWeightStrong
         }
 
         Rectangle {
@@ -473,11 +475,12 @@ ColumnLayout {
         property string label: ""
         property string value: ""
 
-        implicitHeight: 84
+        implicitHeight: Math.max(84, cacheMetricColumn.implicitHeight + 28)
         radius: 8
         color: Qt.rgba(panel.canvasColor.r, panel.canvasColor.g, panel.canvasColor.b, 0.62)
 
         ColumnLayout {
+            id: cacheMetricColumn
             anchors.fill: parent
             anchors.margins: 14
             spacing: 6
@@ -486,9 +489,9 @@ ColumnLayout {
                 Layout.fillWidth: true
                 text: label
                 color: panel.mutedTextColor
-                font.pixelSize: 12
-                font.weight: 700
-                elide: Text.ElideRight
+                font.pixelSize: appTheme.fontSizeBody
+                font.weight: appTheme.fontWeightStrong
+                wrapMode: Text.Wrap
             }
 
             Label {
@@ -496,9 +499,9 @@ ColumnLayout {
                 text: value
                 color: panel.textColor
                 font.family: panel.dataFontFamily
-                font.pixelSize: 18
-                font.weight: 700
-                elide: Text.ElideRight
+                font.pixelSize: appTheme.fontSizeSection
+                font.weight: appTheme.fontWeightStrong
+                wrapMode: Text.Wrap
             }
         }
     }

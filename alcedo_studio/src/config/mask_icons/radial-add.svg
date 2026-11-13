@@ -1,0 +1,24 @@
+<!--
+  Source: Tabler Icons (https://tabler.io/icons/icon/wash-dryclean)
+  License: MIT
+  Derived from wash-dryclean (radial.svg); the arc opening and corner plus
+  follow the construction of Tabler's "*-plus" icons (for example clock-plus).
+  Add Radial Mask action icon. User-approved 2 px stroke exception (DESIGN.md).
+  The open arc leaves room for the plus sign in the bottom-right corner so the
+  action reads as "add a Radial Mask", distinct from the radial.svg type icon.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="white"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M20.985 12.522a9 9 0 1 0 -8.475 8.464" />
+  <path d="M16 19h6" />
+  <path d="M19 16v6" />
+</svg>

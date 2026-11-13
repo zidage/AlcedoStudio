@@ -187,7 +187,7 @@ Rectangle {
                 color: appTheme.textColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeSection
-                font.weight: appTheme.fontWeightHeading
+                font.weight: appTheme.fontWeightStrong
                 wrapMode: Text.WordWrap
             }
         }
@@ -291,7 +291,7 @@ Rectangle {
                 color: appTheme.textColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeBody
-                font.weight: appTheme.fontWeightHeading
+                font.weight: appTheme.fontWeightStrong
             }
 
             Rectangle {
@@ -360,7 +360,7 @@ Rectangle {
                 color: appTheme.textColor
                 font.family: appTheme.dataFontFamily
                 font.pixelSize: appTheme.fontSizeBody
-                font.weight: appTheme.fontWeightHeading
+                font.weight: appTheme.fontWeightStrong
                 wrapMode: Text.WordWrap
             }
         }

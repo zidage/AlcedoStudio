@@ -1,0 +1,67 @@
+Alcedo Studio 0.3.4
+
+Before you upgrade
+------------------
+- AI models are separate downloads in Settings > AI Models. Each model has its
+  own license. The license of the Sky model's training data is not clear; review
+  the model information and download statement before commercial use.
+- Color wheels now adjust shadows (Lift), midtones (Gamma), and highlights (Gain)
+  separately. The new Offset wheel shifts all tones. Older wheel values convert
+  when a project loads, and its history stays available. Master values now use EV;
+  scripts that set them must use the new units.
+
+New
+---
+- AI Masks: select Subject, Background, Sky, or People, or select objects with
+  points, a drawn path, or a box. Add or subtract selections, include or exclude
+  individual people, and adjust Feather and Expand. A red overlay shows the
+  selection. The tool has its own Undo and Redo; Confirm saves the result as one
+  history step. Saved masks stay in the project and render without running the
+  models again. Copy Adjustments skips AI Masks and lists the masks it skips.
+- Luminance/Hue Range: restrict any mask by brightness and hue, with two-handle
+  bars, numeric fields, softness, and a saturation threshold. Show selection
+  displays the resulting coverage. Shift-drag gives finer control; arrow keys
+  and the mouse wheel also move a handle. Ranges work while creating an AI Mask.
+  Selecting a saved AI Mask lets you change its ranges without loading AI models.
+- AI Models settings: download and manage the AI Mask model set and individual
+  CLIP models in one page. Model cards show licenses, size, progress, and actions.
+  Activate a downloaded CLIP model for the open project. AI models load on demand;
+  the idle-time setting controls how long the search runtime stays loaded.
+- Search palette: recent searches, commands, filters, and photo previews share one
+  window. Enter applies the search to the Library. Natural-language results are
+  ranked by relevance within the current folder; typing alone does not run the
+  semantic search. Search settings open in a drawer.
+- LUT browser: grid tiles preview each LUT on the open photo's import appearance,
+  before your later edits. Input and output encoding pickers are searchable, with
+  24 added encodings, including Canon Log, Cineon, Apple Log 2, F-Log2 C, and more
+  ARRI LogC3 exposure indices.
+
+Improved
+--------
+- Library and filmstrip: photo cards show edit marks and star ratings. Larger
+  Library cards let you rate a photo by clicking a star. Imports and deletions
+  update the view in place and keep your scroll position. The flat grid has a
+  scroll bar for all photos, and its zoom control shows photo and grid icons.
+  The filmstrip follows Library filters and distinguishes selected and open photos.
+- RAW and lens support: add 68 camera color-matrix entries, fix black Canon EOS
+  R50 V images, and add PowerShot V1 support. Update lens profiles and correct
+  automatic and manual lens matching, including Nikon lens IDs. Lossless JPEG
+  DNG files, including Leica Q3 files, decode in parallel for faster loading.
+- Histogram and waveform: filled RGB channels, clearer shadow/highlight clipping
+  markers, and sharper plots. A dominant histogram peak no longer makes the other
+  tones unreadable.
+
+Fixed
+-----
+- Masks and panels: fix Invert state after edits and Undo/Redo, add a one-click
+  mask-row Invert action, and fix radial and gradient drags ending early. Restore
+  AI Mask overlays after display-resource recreation. Add missing Simplified
+  Chinese AI Mask text and scrolling to reach all Display Transform controls.
+- Export and feedback: release retained editor GPU memory before export, then
+  restore editing resources afterward. Export keeps its quality and resolution.
+  Restore export, rating, and delete result messages, and fix Version creation
+  controls remaining disabled after an asynchronous save.
+- GPU packages and downloads: include missing native CUDA architectures and retain
+  PTX for newer GPUs. Package checks compile OpenCL programs and create Metal
+  compute pipelines from installed resources. Missing or damaged resources report
+  an error. Apple Silicon model and LUT downloads use a native arm64 downloader.

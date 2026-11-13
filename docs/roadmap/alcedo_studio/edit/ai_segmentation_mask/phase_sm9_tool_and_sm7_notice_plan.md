@@ -1,0 +1,757 @@
+# SM9 AI Mask Tool and SM7 Misalignment Notice - Phase Plan
+
+Date: 2026-10-24. Status: planned. Product code is unchanged by this plan.
+
+Parent: [AI Segmentation Mask Master Plan](../ai_segmentation_mask_master_plan.md), sections 9.6 and 9.8.
+Prerequisite: [SM8 GPU Coverage and One Display Composite](phase_sm8_gpu_coverage_and_display_plan.md).
+Source audit: `b3e1d479f60caa70b47205504348287b30114b47`, `main`.
+Read the SM3, SM4, SM5, and SM6 phase plans linked by the parent before implementation.
+
+## 1. Product specification
+
+Implement the user-requested order: SM8, SM9, SM7, SM2, SM10.
+SM7 does not block tool development. It remains required before release qualification.
+
+Use one AI Mask dialog bound to the main photo viewport.
+The dialog owns no second photo renderer and no second coverage composite.
+Its app controller owns the existing `AiMaskEditSession` on a serial worker.
+The QML model exposes values and focused actions through the application layer.
+QML never calls a GPU backend, asset store, or sidecar directly.
+
+Required control order (changed on 2026-10-25 by the user: icon actions instead of labeled
+buttons, three prompt tools, no Prompt/Tasks switch, no busy text; issue #519):
+
+```text
+AI Mask icon   New AI Mask / Edit AI Mask              Close (icon)
+Tasks (icons): Subject  Background  Sky  People
+People list (while People is the last component; click toggles a person)
+Prompt tools (icons): Point  Box  Path            Add / Subtract (icons)
+Click level (icons) when the last click has three levels
+Feather
+Expand
+Undo  Redo (icons)
+Error alert with Retry for a failed display; notice text
+Confirm (one full-width button; Close cancels)
+Stage progress (while an operation runs)
+```
+
+Every control is an icon action with an accessible name and a tooltip. The only text button is
+Confirm (Commit), a full-width button in the Browse LUTs style; there is no Cancel button,
+because Close in the header has the same result. Controls use the raised control fills of
+AppTheme (`controlFillColor`), so they read apart from the panel surface. The panel shows no
+busy text. While an operation runs, the existing yellow working border (`RotatingTaskBorder`)
+turns around the whole panel, and a progress bar at the bottom names the running stage. The
+Open stages are counted (1 to 5): open the edit, render the analysis image, start the AI
+runtime, load the models, read the image. A model run, an update, and the commit have no
+count and use the indeterminate bar. `DESIGN.md` ("AI Mask tool panel") has the icons.
+
+Open entry points (issue #517). The AI Mask header button opens a new AI Mask on the selected
+Color Grade, or the selected AI Mask. A click on an AI Mask row in the Mask Group panel or in the
+node Mask drawer selects that Mask and opens its AI Mask edit
+(`EditorAiMaskTool::openSelectedAiMask` -> `OpenAiMaskEdit(grade, mask_id)`): the stored coverage
+shows without a model call (SM5 M15). A click on a Radial or Linear Gradient row only selects the
+Mask, as before. While the tool is open, a row click opens nothing.
+
+Prompt tools and groups (SM5 M3 without the input mode switch):
+
+- Point: a click adds one point. It joins the open prompt group; Add and Subtract are its
+  point labels. Without an open group it starts one with the mode as the group operation.
+- Box: a drag adds a box. It always starts a new prompt group (a new object).
+- Path: the released stroke adds points at equal arc length, about 24 item pixels apart and
+  at most 16 points per stroke (`MapItemStrokeToAiMaskPromptPoints`). It always starts a new
+  prompt group. A group still holds at most 64 points.
+- A task and a person toggle close the group (M3). The tool does not call `SetInputMode`.
+- `AiMaskEditSession::AddPromptStep` takes `AiMaskPromptGroupStart::NewGroup` for Box and Path.
+
+Viewport input (`AiMaskInputOverlayItem`, QSG): green plus and red minus discs for the points
+of the open group, the Path stroke and the Box frame in the mode color, the outline of the
+union of the selected person boxes, and a dedicated cursor for each prompt tool (the platform
+cursor is hidden over the viewport). The left button belongs to the selected prompt tool;
+the middle button and the wheel keep pan and zoom.
+
+Preserve SM5 prompt-group rules, task ordering, person toggles, level rules, and the 64-point limit.
+Reject an input that exceeds 64 points with the existing explanatory error.
+Keep its previous valid group. Do not silently split it into another model operation.
+Run a prompt only after click, stroke release, or box release.
+Pointer movement draws input markers without inference.
+
+While inference runs, keep the previous coverage and controls visible.
+Disable new model input, Undo, Redo, and Commit until the request returns.
+Keep Cancel and viewport pan/zoom available.
+Show the working border and the stage progress. Do not blank the photo.
+Model errors and `NotFound` use the existing session result without adding a step.
+GPU errors follow SM8 section 4.3, including explicit previous-result display and Retry.
+
+Feather and Expand drag values preview through SM8 without appending a step for each move.
+Pointer release or keyboard acceptance adds one session edge step through `SetEdgeAdjustment`.
+Undo restores the previous accepted parameters and coverage without inference.
+Escape during an edge edit restores its starting parameters and adds no step.
+Mode changes, accepted prompts, task selections, level changes, and person toggles retain SM5 step semantics.
+
+Route dialog Undo/Redo actions and their shortcuts to the temporary stack.
+Do not send them to main history while the dialog owns the AI edit lease.
+Give controls accessible names and visible keyboard focus.
+Tab follows the control order. Space/Enter activates the focused control.
+Escape first cancels an active pointer edit, then cancels the dialog when no edit is active.
+Close has the same result as Cancel.
+
+Commit stores original coverage and publishes one main history operation through SM5.
+Keep the session open if asset write or history publication fails.
+Cancel writes no asset or history and restores the previous committed preview selection.
+Commit and Cancel both end the candidate display. The viewport then shows the photo without the
+coverage, unless the user selected the coverage of a committed Mask before the edit
+(`SelectMaskCoveragePreview`, for example from a Mask list selection that requests it; SM9.3 owns
+that control). Commit does not select the committed Mask. When the selected Mask is the committed
+one, it shows its new coverage (#516).
+The coverage tint is the AppTheme role `maskCoverageTintColor`, a fixed light red in every theme
+(#515).
+An image switch ends the edit through the existing editor lifecycle.
+Unload models when returning to ordinary adjustment, under D15 and D22.
+Drain the serial session worker safely before destroying its model-output store.
+
+Until SM2, a missing model shows the real error and expected local directory.
+SM2 later replaces this with the approved download panel.
+No different model, backend, resolution, or empty coverage is a substitute.
+
+## 2. Source and owner audit
+
+| Area | Existing owner and file | Work in this plan |
+| --- | --- | --- |
+| Temporary history | `src/include/app/ai_mask_edit_session.hpp`, `src/app/ai_mask_edit_session.cpp` | Call existing focused operations. Do not mirror its stack in QML. |
+| Model results | `src/include/app/ai_mask_model_output_store.hpp` | Keep earlier native outputs for session Undo/Redo. |
+| Open/Commit/Cancel | `src/app/editor_session_service.cpp` | Use the existing AI edit lease and asset-first history publication. |
+| Prompt mapping | `src/ui/edit_viewer/ai_mask_prompt_geometry.cpp` | Reuse ReferenceSpace mapping from SM4. |
+| Control drawing | `src/ui/editor_rhi/editor_overlay_item.cpp` | Add input marker presentation under its existing owner. No coverage image processing. |
+| Dialog theme | `src/ui/alcedo_main/DESIGN.md`, `AppTheme` | Reuse shared controls and named roles. |
+| Fingerprint | `MakeAiMaskGeometryFingerprint`, stored `AiSegmentationMaskSource::geometry_fingerprint` | SM7 compares through a scoped owner read. It does not recompute the Mask. |
+| Thumbnail | `src/app/mask_thumbnail_evaluate.cpp`, existing `ThumbnailService` executor | Request AI effective coverage through SM8, sample to 128x128, and download only that thumbnail. No model call or full-coverage readback. |
+
+Paths in this table start at `alcedo_studio/`.
+SM8 APIs are prerequisites, not verified current source behavior.
+There is no AI Mask tool dialog in this audited source revision.
+
+## 3. Module and API map
+
+Proposed app owner: `app/ai_mask_tool_controller.cpp` with its defining header in `include/app/`.
+It owns the session worker and exposes Open, Prompt, Task, TogglePerson, SelectLevel, PreviewEdge,
+AcceptEdge, Undo, Redo, RetryPreview, Commit, and Cancel operations.
+Reuse the existing recipe and result types.
+Do not add a second session-state object or copy full documents to supply QML properties.
+Project current values through focused const reads on the owning thread.
+
+Proposed UI adapter: `ui/alcedo_main/album_backend/editor_ai_mask_tool_model.cpp` with its header under `include/ui/`.
+It exposes control values, enabled states, stage progress, error and notice text, and app actions.
+Proposed QML file: `ui/alcedo_main/qml/AiMaskDialog.qml`.
+Register it in `ui/alcedo_main/CMakeLists.txt` and document its VI entry.
+
+SM7 adds a read operation that compares the current Develop fingerprint with each committed AI Mask fingerprint.
+The result names only mismatched Mask IDs and display names.
+Do not persist another fingerprint, notice table, or copied document.
+On failed owner reads, report the error instead of declaring the Mask aligned.
+
+## 4. Implementation assignments
+
+| Phase | Deliverable | Dependency | Expected diff | Status |
+| --- | --- | --- | ---: | --- |
+| SM9.1 | Tool controller, QML model, Open/Close, stage progress and error lifecycle | SM8 | 1100-1800 | planned |
+| SM9.2 | Prompt/task/People controls and viewport input markers | SM9.1 | 1200-1900 | planned |
+| SM9.3 | Edge preview, temporary history controls, Commit/Cancel, thumbnails | SM9.2 | 1100-1900 | planned |
+| SM7 | Per-Mask geometry misalignment notice | SM9.3 | 400-800 | planned |
+
+The three SM9 phases separate session lifecycle, model input, and edit completion.
+Each estimate includes tests, QML registration, VI documentation, and plan evidence.
+Split any assignment whose expected diff can exceed 2000 lines before implementing it.
+
+### 4.1 SM9.1 - Tool lifecycle
+
+**Objective and inputs.** Expose the SM8 request path in one dialog after SM8 completes.
+**Modules and invariants.** Add the proposed app controller, UI model, and registered QML dialog.
+The controller owns one serial session worker. No blocking inference runs on the GUI/render thread.
+
+**Steps.**
+
+1. Open through the existing editor lease and analysis-image operations. Open entry points:
+   the AI Mask header button, and a click on an AI Mask row in the Mask Group panel or the node
+   Mask drawer (section 1, issue #517).
+2. Construct or restore the existing session and display stored coverage through SM8.
+3. Expose loading, ready, previous-result/error, and closing states through focused model properties.
+4. Implement Cancel/Close and image-navigation cleanup with the existing lifecycle identities.
+5. Unload models on return to adjustment after pending model work drains.
+
+**Success chain.** UI action -> app Open -> analysis/session -> SM8 preview -> ready dialog.
+**Failure chain.** Missing model, analysis failure, or session error -> real error -> unchanged document -> Cancel remains available.
+
+**Tests.** Proposed `AiMaskToolControllerTest` checks `OpenStoredMaskDisplaysWithoutInference`,
+`OpenFailureLeavesDocumentUnchanged`, `CancelWhileInferenceRunsReleasesSessionAfterCompletion`,
+and `ReturningToAdjustmentUnloadsModels`.
+Test app ownership directly. Add manual keyboard and narrow-window verification.
+
+**Commands.** Use SM8 section 9 groups A/B for the registered controller target and `alcedo_main`.
+Run only named owner tests and their direct callers.
+**Exit.** Open/Close and failure lifecycle pass; QML loads in the product; manual checks are recorded.
+**Expected diff.** 1100-1800 lines. **Completion record.** Section 7; unfilled.
+
+### 4.2 SM9.2 - Prompt and task input
+
+**Objective and inputs.** Add complete model input after SM9.1.
+**Modules and invariants.** Use the app controller, SM4 geometry, existing overlay control owner, and dialog controls.
+Keep SM5 component order, add/subtract labels, level selection, and People semantics.
+
+**Steps.**
+
+1. Add Stroke, Click, Box, Add/Subtract, and Prompt/Tasks controls with existing shared components.
+2. Map released input to normalized ReferenceSpace and show markers in the existing overlay.
+3. Add Subject, Background, Sky, People, and person-box actions through the session owner.
+4. Expose level selection only for the valid three-level click result.
+5. Reject the 64-point overflow without changing the last valid group or rerunning on pointer movement.
+
+**Success chain.** Released input -> shared geometry -> session operation -> retained model output -> SM8 preview.
+**Failure chain.** Invalid input, `NotFound`, or inference error -> no session step -> previous display plus real message.
+
+**Tests.** `PointerMovementDoesNotRunInference`, `ReleasedStrokeRunsOnePrompt`,
+`PromptCoordinatesFollowCropAndRotation`, `PointLimitKeepsPreviousValidGroup`,
+`PersonToggleUsesOrderedSessionOperation`, and `LevelChangeUsesRetainedOutputs`.
+Use `AiMaskEditSessionTest`, `MaskEditGeometryTest`, and the proposed controller tests.
+
+**Commands.** SM8 section 9 groups A/B; target the named owner and geometry behaviors.
+**Exit.** All required input modes work in the production window; geometry and call counts pass.
+**Expected diff.** 1200-1900 lines. **Completion record.** Section 7; unfilled.
+
+### 4.3 SM9.3 - Edge editing and session completion
+
+**Objective and inputs.** Complete the usable edit dialog after SM9.2.
+**Modules and invariants.** Use the session edge API, SM8 display, existing history publication, and thumbnail owner.
+Store one original asset only at Commit. Do not read adjusted GPU pixels back for storage.
+
+**Steps.**
+
+1. Add Feather and Expand controls with display-only intermediate updates and one accepted stack step.
+2. Route local Undo/Redo and shortcuts to the session owner.
+3. Add a Show Mask icon toggle to the panel header and bind it to the SM8 presentation state without a main document edit.
+4. Connect Retry, Commit, Cancel, and previous-result error presentation to SM8 rules.
+5. Use the existing thumbnail executor and asset reader for AI effective coverage through SM8.
+   Sample the processed result to the existing 128x128 thumbnail grid. Download only this small result for the UI image.
+6. Check focus, Escape precedence, translated labels, accessibility, and narrow-window layout.
+
+**Success chain.** Edge preview -> same GPU operation/composite -> accepted local step -> original asset -> one main history operation.
+**Failure chain.** Preview error blocks Commit; store/history error keeps the session open; Cancel leaves original document unchanged.
+
+**Tests.** `FeatherDragCreatesOneSessionStep`, `EscapeRestoresStartingEdgeWithoutStep`,
+`DialogUndoDoesNotReachMainHistory`, `CommitFailureKeepsDialogAndTemporaryStack`,
+`CommitThenMainUndoRestoresOriginalMask`, `CancelWritesNoAssetOrHistory`, and
+`AiMaskThumbnailLoadsWithoutModel`.
+Use controller tests and the existing AI edit service tests. Check the real dialog manually.
+
+**Commands.** SM8 section 9 groups A-C as relevant. Discover the existing service/thumbnail tests before execution.
+**Exit.** A real photo completes Open, edit, Undo, Redo, Commit, main Undo, reopen, and Cancel.
+**Expected diff.** 1100-1900 lines. **Completion record.** Section 7; unfilled.
+
+### 4.4 SM7 - Misalignment notice after the tool
+
+**Objective and inputs.** Show D9/P6 on the completed SM9 surface.
+**Modules and invariants.** Read fingerprints through current app/document owners and show the notice in the tool/Mask list.
+Do not change the stored Mask or run inference after a Develop change.
+
+**Steps.**
+
+1. Compute the current fingerprint through `MakeAiMaskGeometryFingerprint` when relevant Develop values change.
+2. Compare it with each committed AI Mask through a scoped owner read.
+3. Show the warning only for mismatched Masks using the existing warning component.
+4. Explain that Lens/RAW changes can misalign this Mask and that the user can delete and recreate it.
+5. Refresh the comparison after Undo/Redo and image/version selection without persisted notice state.
+
+**Success chain.** Develop change -> current fingerprint -> per-Mask compare -> existing warning presentation.
+**Failure chain.** Owner read error -> explicit error -> no false aligned result and no Mask mutation.
+
+**Tests.** `GeometryChangeMarksOnlyMismatchedAiMasks`, `UndoRestoresFingerprintNoticeState`,
+`ColorOnlyChangeDoesNotMarkGeometryMismatch`, and `NoticeNeverRunsInferenceOrChangesMask`.
+Use proposed `AiMaskMisalignmentNoticeTest` and the tool-controller tests.
+
+**Commands.** SM8 section 9 groups A/B for those registered targets and `alcedo_main`.
+**Exit.** Per-Mask behavior and the warning display pass. SM7 completes before SM10 release qualification.
+**Expected diff.** 400-800 lines. **Completion record.** Section 7; unfilled.
+
+## 5. Evidence and build rules
+
+Reread `AGENTS.md`, `alcedo-qml-ui`, `qt-qml`, and `alcedo-msvc-cmake` before implementation.
+Read the complete current `DESIGN.md` and relevant VI entry before visual changes.
+Use the existing presets and wrapper commands from SM8 section 9.
+Register proposed tests in the relevant app/UI CMake file before building them.
+Do not run a full test suite. Do not weaken tests to solve offscreen focus/input delivery.
+Use C++ owners for deterministic behavior evidence and the real window for visual/input evidence.
+Keep temporary files under `build/tmp/<phase>/`, then remove task-created temporary files.
+
+## 6. Risks and stop conditions
+
+If SM8 lacks a required focused operation, amend that assignment before implementing UI work.
+Do not introduce a parallel renderer, stack, coverage cache, or sidecar client in QML.
+If a phase can exceed 2000 lines, split it before implementation.
+Report actual errors through the existing issue rules. Do not add a substitute model or display path.
+Preserve the stored source and earlier outputs during every new model request.
+
+## 7. Completion records
+
+Create one record per assignment. No completion evidence is filled during planning.
+
+```text
+Phase / date / status:
+Source revision and branch:
+Actual changed modules and diff size:
+Implemented behavior:
+Primary success call chain:
+Primary failure and restore call chain:
+Commands and exit codes:
+Discovered / passed / failed / skipped counts:
+Manual product, focus, and accessibility checks:
+Remaining issues or unavailable platforms:
+```
+
+### 7.1 SM9 MVP (issue #513), before SM9.1
+
+```text
+Phase / date / status: SM9 MVP / 2026-10-24 / implemented on Windows; not the SM9.1-SM9.3 product.
+Source revision and branch: 8e1d8058 (SM8.7, PR #512); branch feature/ai-segmentation-sm9-mvp.
+Actual changed modules and diff size: about 1300 lines.
+  - New UI-layer owner EditorAiMaskTool (album_backend/editor_ai_mask_tool.*), exposed as
+    appModules.aiMaskTool, destroyed and shut down by ApplicationModuleHost.
+  - New EditorAiMaskPanel.qml over the adjustment panel pages; AI Mask button in
+    EditorAdjustmentHeader; viewport routing and box rubber band in EditorWorkspace.
+  - AiMaskSegmentationService::Status() (focused read of the sidecar model set id).
+Implemented behavior:
+  - Open (new Mask on the selected Color Grade, or the selected AI Mask): OpenAiMaskEdit ->
+    RenderAiMaskAnalysisImage(KeyAndPixels) -> worker: sidecar lease and start, LoadModels from
+    <model download directory>/alcedo-ai-mask-v1, StartImage, AiMaskEditSession.
+  - Click prompt, box prompt (left drag), Add/Subtract, Prompt/Tasks mode, levels 0-2, Subject,
+    Background, Sky, People and person toggles, Feather/Expand (drag preview without a step,
+    release adds one step), session Undo/Redo, Retry preview, Commit, Cancel/Close.
+  - Every applied step presents AcquireCoveragePixels through UpdateAiMaskCandidateCoverage.
+  - Commit: PrepareCommit on the worker, CommitAiMaskEdit on the GUI thread; the result is
+    matched by operation id from SessionResultObserved. A failed commit keeps the session.
+  - The editor ending the edit (image change, close) closes the tool and unloads the models.
+Decisions made during the work:
+  - One UI-layer class instead of the app controller plus UI model of section 3: the MVP checks
+    the production owners together; SM9.1 still owns the split.
+  - The AiMaskEdit lease makes actions.canEdit false, which disabled the viewport pointer, wheel,
+    and pan handlers. EditorWorkspace.viewportInputEnabled keeps them on while the tool is active
+    (section 1: prompts and pan/zoom stay available).
+  - previewStatus/previewError notify through previewChanged, not toolChanged: a Feather drag
+    preview otherwise re-evaluated the slider value binding and reset the slider to the accepted
+    value on every move.
+  - The developer model set was copied to D:/Download/alcedo_models/alcedo-ai-mask-v1 (the
+    configured model download directory) from build/tmp/sm3c/models (D13 developer setup).
+Primary success call chain: header button -> EditorAiMaskTool::open -> OpenAiMaskEdit ->
+  RenderAiMaskAnalysisImage -> StartOnWorker -> AiMaskEditSession -> UpdateAiMaskCandidateCoverage
+  -> EditorMaskCoveragePreview -> EditorSessionRenderSchedulerPort -> viewport coverage channel.
+Primary failure and restore call chain: any Open/start failure -> Fail(real error), Close stays
+  available -> CancelAiMaskEdit + worker Close (unload, lease release).
+Commands and exit codes:
+  scripts\msvc_env.cmd --build --preset win_debug --target AiMaskSegmentationServiceTest alcedo_main: 0
+  ctest -R '^AiMaskSegmentationServiceTest\.': 14/14 passed.
+Manual product checks (real window, CUDA editor backend, DirectML sidecar, Sony ARW 2729x4096):
+  - Open: sidecar start 2.0-3.0 s, model load 3.1-4.9 s, first encoder 2.5-4.0 s, warm
+    re-open encoder 287 ms.
+  - Click prompt on a spruce: 166 ms end to end, coverage displayed at the right place.
+  - Sky task added to the tree: 212 ms; union displayed.
+  - Feather 29 px drag preview and accept: one step; Undo/Redo restore 0 / 29 px without a model.
+  - Closing the window during the edit ended the edit and unloaded the models.
+Remaining issues or unavailable platforms (tracking issue #520):
+  - #514: coverage disappears after the viewport releases its QRhi resources (window moved to
+    another display) while the preview state stays Current.
+  - #515: the accent-color tint at opacity 0.4 is often not visible; use a light red tint.
+  - #516: the coverage overlay stays in the viewport after Commit.
+  - #517: a click on an AI Mask in the Mask Group panel or node Mask drawer does not open the
+    AI Mask edit.
+  - #518: the sidecar start takes about 3 s; about 2.7 s is the CLIP profile preparation.
+  - #519: four tasks and three prompt input modes (Point +/-, Path, Box) instead of the
+    Prompt/Tasks switch; changes the section 1 control order.
+  - Commit, reopen of a stored AI Mask, and People were not run in the window: the display
+    layout changed during the run and the window input could no longer be mapped.
+  - Observation: the Sky union stops about 20 px short of thin branches and ridges (SAM region
+    decodes at 256 x 256 logits, SM3.C C5); visible as an untinted sky band.
+  - No stroke prompt, no input markers, no keyboard/Escape rules, no translations, no
+    thumbnails; SM9.1-SM9.3 own them. macOS not built.
+```
+
+### 7.2 MVP fixes #515 and #516
+
+```text
+Phase / date / status: SM9 MVP fixes / 2026-10-24 / implemented on Windows.
+Source revision and branch: 98039bdb; branch feature/ai-segmentation-sm9-mvp (PR #521).
+Actual changed modules and diff size: about 330 lines.
+  - AppTheme maskCoverageTintColor/maskCoverageTintOpacity, DESIGN.md, and the default
+    MaskCoverageDisplayStyle of the viewport (#515).
+  - EditorMaskCoveragePreview::EndCandidateAfterCommit replaces ReplaceCandidateWithCommitted;
+    EditorSessionService::CommitAiMaskEdit calls it (#516).
+Implemented behavior:
+  - #515: the coverage tint is #FF5050 at opacity 0.5 in every theme, not accentColor at 0.4.
+    The composite rule of SM8.6 and the uncovered pixels are unchanged.
+  - #516: Commit does not select the committed Mask. Commit and Cancel end the candidate with
+    the same rule: a committed selection made before the edit (SelectMaskCoveragePreview) is
+    shown again, with its new state when it is the committed Mask; without a selection the
+    coverage is hidden. Section 1 and SM8 section 4.3 state the rule.
+Decisions made during the work:
+  - The tint role is CONSTANT: it no longer depends on the theme.
+  - The selected Mask is presented again after its Commit also when no candidate was presented,
+    because the selection held the source from before the Commit.
+Primary success call chain: CommitAiMaskEdit -> PutMaskAsset -> publish -> ReadCommittedAiMask
+  -> EndCandidateAfterCommit -> EndCandidate -> Hide -> ClearMaskCoverage (no selection), or
+  -> committed-source job (selection).
+Primary failure and restore call chain: unchanged; a refused or failed Commit keeps the
+  candidate and the preview.
+Commands and exit codes:
+  scripts\msvc_env.cmd --build --preset win_debug --target EditorMaskCoveragePreviewTest
+    EditorComparisonServiceTest ViewportCoverageCompositeTest MaskCoveragePresentationTest
+    alcedo_main: 0
+  ctest -j 1 -R '^(EditorMaskCoveragePreviewTest|EditorComparisonServiceTest|
+    ViewportCoverageCompositeTest|MaskCoveragePresentationTest)\.': 64/64 passed, 0 skipped.
+  New or changed: CommitStoresOriginalCoverageAndPublishesOneHistoryOperation (Commit without a
+    selection: one clear, no job, Hidden), CommitOfSelectedMaskPresentsItsNewState,
+    CommitOfAnotherMaskRestoresTheSelection, ViewportCoverageCompositeTest
+    CommitWithoutSelectionShowsPhotoWithoutTint (CUDA and OpenCL: the tint of the default style
+    changes covered blue pixels by more than 0.2; after the Commit the composite equals the photo
+    bytes).
+Manual product checks (real window, debug build, CUDA editor backend, DirectML sidecar):
+  - DSC0027.ARW: Sky task, then point prompts on the pond and the forest: the tint is clearly
+    visible on pale sky, water, grass, and conifer forest. Commit: the panel closes and the
+    photo is shown without the tint; the Mask limits the Grade.
+  - om5ii.raw: point prompts on the ram face and the deep blue sky: the tint is clearly visible
+    on both. Close (Cancel): the photo is shown without the tint and unchanged.
+Remaining issues or unavailable platforms:
+  - No photo with skin was available in the test project; skin was not checked in the window.
+  - macOS not built.
+```
+
+### 7.3 Tool UI redesign (issue #519), before SM9.1
+
+```text
+Phase / date / status: SM9 tool UI / 2026-10-25 / implemented on Windows; uncommitted.
+Source revision and branch: 24048971 (main); branch feature/ai-mask-tool-ui.
+Actual changed modules and diff size: about 1900 lines added, 800 removed (300 of them moved).
+  - AiMaskEditSession: AiMaskPromptGroupStart on AddPromptStep, PromptGroupOpen().
+  - ai_mask_prompt_geometry: MapItemStrokeToAiMaskPromptPoints (Path input).
+  - New overlay_triangle_primitives (the QSG triangle helpers, moved out of
+    mask_overlay_geometry.cpp without change) and ai_mask_input_overlay_geometry (markers,
+    strokes, boxes, person union outline, tool cursors).
+  - New editor_rhi AiMaskInputOverlayItem (QSG), registered as an Alcedo.Main type.
+  - EditorAiMaskTool: stages instead of busy text, Point/Box/Path tools, levels, People list
+    reads, open-group markers, live input, person highlight; no Prompt/Tasks switch.
+  - EditorAiMaskPanel.qml rewritten; EditorWorkspace overlay and hidden platform cursor;
+    pencil-ai entry icon; box-multiple Mask Groups rail icon; 14 SVGs; 2 AppTheme roles;
+    DESIGN.md "AI Mask tool panel" and "AI Mask viewport input".
+Implemented behavior: section 1 as changed on 2026-10-25.
+Decisions made during the work:
+  - Point joins the open prompt group; Box and Path start a new group (one object per box or
+    stroke). Without the Prompt/Tasks switch this is the only way to start a second object
+    while a group is open, so the session got the focused NewGroup option instead of two
+    SetInputMode steps.
+  - A Path stroke gives at most 16 points about 24 item pixels apart, so four strokes fit in
+    one group of 64 points.
+  - A marker shows the mode that the user used (the group operation for the first step, the
+    point label for the later steps), the same sign as the cursor badge.
+  - The working border and the progress show after motionFadeMs, so Undo and an edge step do
+    not flash them. Error and notice text notify on their own signal, so clearing them at a
+    step start does not rebind the Feather and Expand sliders.
+  - Feather and Expand reuse AdjustmentSlider through a QML value model; the dragged value is
+    held until the session step returns.
+  - Subject uses the user's sparkles-2 icon as a new asset: the existing panel_icons/sparkles.svg
+    is the Tabler sparkles icon, not sparkles-2.
+Primary success call chain: viewport release -> EditorAiMaskTool::RunPointerInput ->
+  MapItemToAiMaskPromptPoint / MapItemRectToAiMaskPromptBox / MapItemStrokeToAiMaskPromptPoints
+  -> worker AddPromptStep(step, mode, start) -> ReadView (promptSteps, levels, people) ->
+  AiMaskInputOverlayItem markers and UpdateAiMaskCandidateCoverage.
+Primary failure and restore call chain: input outside the photo or a busy tool -> notice, no
+  step; Rejected/NotFound -> notice; Failed -> AlertBadge; the pending input clears and the
+  session coverage is shown again.
+Commands and exit codes:
+  scripts\msvc_env.cmd --build --preset win_debug --target AiMaskEditSessionTest
+    MaskEditGeometryTest alcedo_main: 0
+  scripts\msvc_env.cmd --build --preset win_debug --target MaskOverlayControlTest: 0
+  ctest -j 1 -R '^(AiMaskEditSessionTest|MaskEditGeometryTest)\.': 39/39 passed.
+  ctest -j 1 -R '^MaskOverlayControlTest\.': 16/16 passed (primitives move).
+  New: NewGroupStepStartsAGroupWhileAGroupIsOpen, PathStrokeSamplesEqualArcLengthUpToTheLimit,
+  PersonBoxesUniteIntoOneOutlinePerConnectedGroup, PromptMarkersUseTheColorOfTheirMode,
+  InputOutsideThePhotoIsClippedButTheCursorIsNot, BusyCursorUsesTheInactiveColorWithoutModeBadge.
+Manual product checks: alcedo_main started for 30 s without a new QML warning in the log. The
+  panel, cursors, and markers were not checked in the window with a photo.
+Remaining issues or unavailable platforms: no keyboard rules or translations yet (SM9.3);
+  macOS not built.
+```
+
+### 7.4 Mask list click opens the AI Mask edit (issue #517)
+
+```text
+Phase / date / status: SM9 MVP fix / 2026-10-25 / implemented on Windows.
+Source revision and branch: c86b1fbb (main); branch fix/ai-mask-list-click-opens-edit.
+Actual changed modules and diff size: about 200 lines.
+  - EditorAiMaskTool::openSelectedAiMask and IsAiMask (reads the published document).
+  - EditorMaskGroupsPanel.qml selectMaskFromGroup, EditorNodesPanel.qml selectMaskFromDrawer.
+  - Test harness: the fake backend records OpenAiMaskEdit; EditorNodesPanelQmlTest binds a real
+    EditorAiMaskTool as appModules.aiMaskTool.
+Implemented behavior: section 1 "Open entry points". A click on an AI Mask row selects the Mask
+  and opens its AI Mask edit (stored coverage, no model call). Radial and Linear Gradient rows
+  only select their Mask.
+Decisions made during the work:
+  - The Mask kind comes from the published document, not from the adapter tool kind: the
+    adapter sets the tool kind only after the owner applies the queued SelectMask.
+  - The open uses the adapter selection after the click, so a refused selection (another Mask
+    edit, comparison, locked structure) opens nothing new.
+  - Order is safe: OpenAiMaskEdit settles the pending Mask commands (SettleMaskInputForBoundary)
+    before it opens, so the queued SelectMask is applied first.
+Primary success call chain: row click -> selectMaskFromGroup / selectMaskFromDrawer ->
+  EditorMaskCreationAdapter::selectMask (queued SelectMask) ->
+  EditorAiMaskTool::openSelectedAiMask -> IsAiMask -> OpenFor(mask_id) ->
+  IEditorSessionBackend::OpenAiMaskEdit(grade, mask_id) -> stored source and asset (M15).
+Primary failure and restore call chain: unchanged from openSelectedMask; a refused open shows
+  the real error in the tool and Close ends it.
+Commands and exit codes:
+  scripts\msvc_env.cmd --build --preset win_debug --target EditorNodesPanelQmlTest
+    EditorVersionsPanelQmlTest EditorHistoryTransactionsPanelQmlTest
+    EditorHistoryVersionsRailLifecycleQmlTest alcedo_main: 0
+  EditorNodesPanelQmlTest.exe: 81/81 passed (1 disabled, existing).
+  EditorVersionsPanelQmlTest.exe 19/19, EditorHistoryTransactionsPanelQmlTest.exe 7/7,
+    EditorHistoryVersionsRailLifecycleQmlTest.exe 7/7 passed (shared harness changed).
+  New: MaskGroupAiMaskRowClickOpensStoredAiMaskEdit, NodeDrawerAiMaskRowClickOpensStoredAiMaskEdit.
+    Both fail without the QML change (0 OpenAiMaskEdit requests, expected 1).
+Manual product checks: not run in the window (no stored AI Mask was opened from the list by
+  hand).
+Remaining issues or unavailable platforms:
+  - #526: QTRY waits in the gtest QML panel tests return without a failure, and
+    MaskGroupDelegates() finds no ListView delegate; many existing panel tests check nothing.
+  - macOS not built.
+```
+
+### 7.5 Sidecar start without the CLIP profile preparation (issue #518)
+
+```text
+Phase / date / status: SM9 MVP fix / 2026-10-25 / implemented on Windows.
+Source revision and branch: ec3ac375 (PR #527); branch fix/ai-mask-sidecar-start-without-clip-prep.
+Actual changed modules and diff size: about 450 lines.
+  - Rust sidecar: new LazySemanticEngine; EmbeddingEngine::is_prepared; GetModelInfo runs on the
+    blocking pool; GetRuntimeStatus state "model_not_prepared"; step times in the ORT CLIP log.
+  - Host: the readiness probe sends GetModelInfo only when the start requires model information.
+Implemented behavior:
+  - The sidecar listens without the CLIP profile preparation. The first request that needs the
+    semantic model (GetModelInfo or an embed request) prepares it once; a concurrent request
+    waits for the same preparation. Status reads (GetRuntimeStatus, ListCapabilities, the idle
+    unload check) do not prepare it.
+  - A start for the AI Mask tool or image analysis (require_model_info = false) sends no
+    GetModelInfo, so no CLIP work runs. A semantic start (require_model_info = true) polls
+    GetModelInfo until the preparation ends, as before; a later semantic start on a process
+    that the AI Mask tool started also polls it until the preparation ends.
+Decisions made during the work:
+  - Lazy preparation instead of a preparation after listen: the profile validation reads and
+    hashes 1.5 GB of SigLIP2 model files, which competes with the segmentation model load.
+  - GetModelInfo returns failed_precondition only for a model that is not available; while the
+    preparation runs it waits on the blocking pool. The host 500 ms GetModelInfo time limit
+    ends that call, and the next poll waits for the same preparation.
+Measured step times (release alcedo_mind.exe, SigLIP2 B32 256, warm file cache, 3 runs):
+  - Profile validation (sizes and SHA-256 of the model files): 885-954 ms.
+  - ORT environment: 0 ms.
+  - Tokenizer (textual/tokenizer.json, 34 MB): 916-917 ms.
+  - Total preparation on first GetModelInfo: 1804-1872 ms.
+  - Process start to TCP listen (PowerShell harness): 2065-2600 ms before, 525-571 ms after;
+    after the first log line the server listens within 3 ms.
+Primary success call chain: EditorAiMaskTool open -> AiSidecarRuntimeService::StartAndWait
+  (require_model_info = false) -> WaitForReadiness -> RunReadinessProbe (Ping only) -> ready ->
+  LoadSegmentationModels. Semantic search: StartAndWait (require_model_info = true) ->
+  RunReadinessProbe -> GetModelInfo -> LazySemanticEngine::engine -> build_semantic_engine.
+Primary failure and restore call chain: a missing or invalid profile makes build_semantic_engine
+  return the unavailable engine; GetModelInfo returns failed_precondition with the reason, and
+  the host polls until its start time limit, as before.
+Commands and exit codes:
+  cargo test -- --skip live_ (rust/puerh_mind): 0; 371 + 10 passed, 0 failed.
+  scripts\msvc_env.cmd --build --preset win_debug --target AiSidecarRuntimeServiceTest alcedo_main: 0
+  ctest -R '^AiSidecarRuntimeServiceTest\.' with ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH and
+    ALCEDO_SEMANTIC_LIVE_MODEL_ROOT (MobileCLIP2 S2): 36/36 passed, live test included.
+  New: StartWithoutModelInfoRequirementDoesNotRequestModelInfo (fails without the host change:
+    GetModelInfo calls 1, expected 0); Rust lazy_semantic_engine tests (4) and
+    runtime_status_leaves_the_profile_unprepared_and_model_info_prepares_it.
+Manual product checks (real window, debug app, release sidecar, DirectML, Sony ARW 2729x4096,
+  log alcedo_20261025_152640_39092.log):
+  - Sidecar start to ready: 130 ms (before: 2952 ms).
+  - Sidecar start to first possible prompt: 5.34 s (before: 9.70 s): model load 4449 ms
+    (encoder 1798, decoder 1222, head 145, subject 1269), first image 346 ms (encoder 273 ms).
+  - AI Mask button to first possible prompt: about 6.3 s; the analysis image render before the
+    sidecar start takes about 1 s.
+Remaining issues or unavailable platforms:
+  - #528: the segmentation model load (4.4 s) is now most of the wait.
+  - macOS not built (CoreML semantic engine construction is behind the same LazySemanticEngine).
+```
+
+### 7.6 S3OD task step time in the app (issue #530)
+
+```text
+Phase / date / status: SM9 MVP investigation / 2026-10-25 / cause found on Windows; the fixes
+  are #531 and #532.
+Source revision and branch: 48f3a6f0 (PR #529); branch fix/ai-mask-s3od-task-step-time.
+Actual changed modules and diff size: about 20 lines.
+  - Rust sidecar: SegmentationEngine logs each computed task ("ran segmentation task Subject in
+    N ms") and each S3OD run ("ran S3OD in N ms (model run M ms)").
+Implemented behavior:
+  - The sidecar log shows the time of each task run and of each S3OD model run. Before, the
+    sidecar logged nothing for a task run, and the app log could not show where the time went.
+Measured split of one Subject step (release app and sidecar, DirectML, RTX 3080 Laptop GPU
+  8 GB, temporary log lines in the app and the sidecar, removed after the measurement):
+  - App: RunTask round trip 8989 ms, of which the sidecar reported model_ms 8981 ms; alpha
+    conversion with the guide 15 - 17 ms; compose 22 - 64 ms; ReadView 0 - 1 ms.
+  - Sidecar: pixel values 5 - 7 ms, subject model lock 0 ms, S3OD model run 8490 - 9711 ms,
+    alpha select 0 ms. The same time on every run: Subject on two photos, two person crops.
+    People after Subject reads the stored alpha (0 ms).
+Cause:
+  - The GPU memory does not fit. Without the app, one process with the four segmentation models
+    uses 838 MB dedicated after the load, 1,894 MB after the first encoder run, and 2,955 MB
+    after the first S3OD run (shared about 0.6 GB); S3OD runs in 196 - 288 ms, the encoder in
+    150 - 320 ms.
+  - The editor with one photo open (OpenCL backend) uses 2,707 MB dedicated GPU memory against
+    614 MB in the library. Other processes used 2.8 GB before the app started.
+  - With the editor open, the same process has 1,933 MB dedicated and 1,670 MB shared memory,
+    and S3OD takes 7.4 - 8.8 s per run; sometimes the encoder takes 1.5 - 1.9 s. In the app
+    during a Subject step, the GPU had 7,761 of 8,192 MiB in use and the sidecar had 1,422 MB
+    dedicated and 2,182 MB shared memory.
+  - Not the cause: the app-side steps, the gRPC transfer, a first-run cost of the DirectML
+    session (each run is slow), and the DLLs (the same DirectML.dll; ORT is linked statically).
+Decisions made during the work:
+  - The fixes need their own work: #532 reduces the GPU memory that the sidecar keeps (the
+    statement that the DirectML EP has no option to release its work buffers was wrong; see
+    7.7);
+    #531 reduces the GPU memory of the editor.
+  - The temporary app log lines are not kept: the tool already logs the step time, and the
+    new sidecar lines show the model time.
+Primary success call chain: EditorAiMaskTool step -> AiMaskEditSession::AddTask -> Apply ->
+  EnsureOutputs -> AiMaskModelOutputStore::EnsureTask -> AiMaskSegmentationService::RunTask ->
+  RunSegmentationTask (gRPC) -> SegmentationEngine::run_task -> subject_task ->
+  subject_alpha_of -> S3OD model run -> Compose -> ConvertModelOutputToCoverage.
+Commands and exit codes:
+  cargo test -- --skip live_ (rust/puerh_mind): 0; 371 + 10 passed, 0 failed.
+  cargo clippy --release --all-targets: 0; 70 warnings before and after the change.
+  Temporary engine timing test (4 rounds of start and Subject on a 4096 px JPEG), run without
+    the app and with the editor open; not committed.
+Manual product checks (real window, release app and sidecar, project sm9mvp, DSC00800.ARW and
+  020A0059.CR3): the new sidecar lines appear in the app log, for example
+  "ran S3OD in 8145 ms (model run 8138 ms)" and "ran segmentation task Subject in 8147 ms".
+Remaining issues or unavailable platforms:
+  - #532 (sidecar GPU memory) and #531 (editor GPU memory) fix the step time.
+  - macOS not measured (Core ML has a different memory model).
+```
+
+### 7.7 Sidecar GPU memory of the segmentation models (issue #532)
+
+```text
+Phase / date / status: SM9 MVP fix / 2026-10-25 / implemented on Windows.
+Source revision and branch: 9350942c (PR #533); branch fix/ai-mask-sidecar-directml-work-memory.
+Actual changed modules and diff size: about 40 lines.
+  - Rust sidecar ort_backend.rs: the DirectML sessions of the encoder and S3OD set the session
+    configuration entry "ep.dml.disable_memory_arena" = "1". The decoder and head sessions do not
+    change. One unit test for the role selection.
+Implemented behavior:
+  - The encoder and S3OD free their DirectML work buffers after each run. The sidecar keeps
+    895 MB dedicated GPU memory after the first encoder and S3OD runs, against 2,955 MB before.
+    The outputs are the same.
+Cause (ONNX Runtime 1.28 source, DmlExecutionProvider BucketizedBufferAllocator.cpp and
+  ExecutionProvider.cpp OnSessionInitializationEnd):
+  - After a session load, the DirectML allocator rounds each allocation up to a power of two and
+    keeps it in a pool of its session until the session closes. The encoder (about 690 MB of work
+    memory during a run) and S3OD (about 1,020 MB) each keep about 1,060 MB.
+  - Each session has its own allocator (CreatePreferredAllocators of each EP instance). This ORT
+    version has no way to share one DirectML allocator between sessions. With the arena off, a
+    shared allocator is not necessary.
+Measurements (release, DirectML, RTX 3080 Laptop GPU 8 GB, temporary engine test: load, then
+  4 rounds of start, Subject, and 6 clicks on a 2729 x 4096 JPEG; GPU Process Memory counters):
+  | Point                    | Before (dedicated) | After (dedicated) |
+  | After the model load     | 838 MB             | 838 MB            |
+  | After the first encoder  | 1,894 MB           | 866 MB            |
+  | After the first S3OD     | 2,955 MB           | 895 MB            |
+  - Time without the editor (rounds 2 - 4): encoder 157 - 168 ms before, 191 - 192 ms after;
+    Subject 200 - 201 ms before, 253 - 262 ms after; clicks 5 - 7 ms before and after.
+  - With a headless editor session (release alcedo_main, OpenCL, viewport 2560 x 1440) that
+    shows 020A0059.CR3 (45 MP; the editor process went from 284 MB to 2,234 MB dedicated):
+    Subject 7,812 - 10,379 ms before (the sidecar had 2,444 MB dedicated and 1,159 MB shared),
+    243 - 247 ms after (895 MB dedicated, 646 MB shared).
+  - Peak dedicated memory during a run, after the change: S3OD session alone 1,348 MB
+    (326 MB idle), encoder session alone 921 MB (233 MB idle).
+  - Output check: the Subject alpha and the click logits are bit-identical in two runs before and
+    two runs after the change. DirectML results of this model set were the same run to run.
+  - CLIP image encoder (SigLIP2 B/32 256, float32, DirectML): 434 MB dedicated and 393 MB shared
+    after the load; 443 MB after 5 runs with the arena, 435 MB without. It unloads after 60 s
+    idle; the text encoder runs on the CPU. No change.
+Decisions made during the work:
+  - The decoder and the head keep the arena. Without it, a decoder run took about 100 ms
+    instead of 10 ms (each run creates and frees its buffers), and the 4 decoder sessions keep only
+    about 270 MB with the arena.
+  - Rejected (measured on S3OD, arena off): "ep.dml.disable_graph_fusion" (13 s per run, 5.6 GB
+    peak); "disable_metacommands" (2 - 3 times slower, different outputs, the same peak);
+    S3OD split into the ViT and the full-size DPT tail as two sessions (1,376 MB peak, slower);
+    the 8 attention query chunks of each layer forced to run in sequence (the same 1,348 MB
+    peak, so the attention is not the peak). The peak comes from the float16 DPT tail at
+    1024 x 1024 (64-channel tensors of 128 MB each).
+  - Not done: float16 or smaller models (they change the model quality).
+Primary success call chain: SegmentationEngine::load -> OrtSegmentationBackend::load_encoder /
+  load_subject_model -> load_session -> session_builder(device, role) ->
+  frees_work_buffers_after_run(role) -> with_config_entry("ep.dml.disable_memory_arena", "1").
+Commands and exit codes:
+  cargo test --release -- --skip live_ (rust/puerh_mind): 0; 372 + 10 passed, 0 failed.
+  cargo clippy --release --all-targets: 0; 70 warnings before and after the change.
+  cargo fmt -- --check: 0.
+  Temporary engine memory test and DirectML option experiments (build/tmp/issue532); not
+    committed.
+  segmentation_port_check: not run; the SM3.D port reference (build/tmp/sm3d/port_reference)
+    no longer exists, and the SM3.C reference has no person fields. The bit-identical output
+    check above replaces it for this change.
+Remaining issues or unavailable platforms:
+  - #531 (editor GPU memory).
+  - macOS not changed (Core ML backend).
+```
+
+### 7.8 Coverage presented again after a QRhi release (issue #514)
+
+```text
+Phase / date / status: SM9 MVP fix / 2026-10-29 / implemented on Windows (CUDA, OpenCL).
+Source revision and branch: f6b4787d; branch fix/ai-mask-coverage-after-rhi-release.
+Actual changed modules and diff size: about 430 lines (tests about 300).
+  - ViewportMaskCoverageSink MarkDisplayLost/TakeDisplayLost and
+    ViewportMaskCoverageLayer::ReleaseWithDevice; EditorViewportRenderer::releaseResources uses it.
+  - EditorViewportItem::reportLostMaskCoverage and signal MaskCoverageDisplayLost.
+  - EditorMaskCoveragePreview::PresentAgain and the session facade PresentMaskCoverageAgain
+    (command kind PresentMaskCoverageAgain, presentation-only in EditorActionPolicy).
+  - EditorSessionController forwards the viewport signal and emits MaskCoveragePresentedAgain;
+    EditorAiMaskTool takes that result like its own coverage completions.
+Implemented behavior:
+  - A QRhi release of the viewport (device recreation in initialize(), or renderer teardown)
+    releases both coverage channels with ReleaseWithDevice. When a frame was published after the
+    last clear, the sink records the loss. The record outlives the renderer: the next
+    synchronize() of this renderer or of a new one reports it once, as MaskCoverageDisplayLost
+    on the GUI thread. initialize() asks for one more frame after a recreation.
+  - The session presents the newest request again with the same shared pixels and edge values
+    (no model call). The status is Pending until the frame is displayed, then Current; a failed
+    presentation labels the result Previous with the real error, so Retry is offered and Commit
+    is refused (SM8 section 4.3 states the rule).
+  - Nothing is presented again in the Hidden status, in the Previous status (Retry presents the
+    newest request), or for a range probe (the next photo frame carries its coverage).
+Decisions made during the work:
+  - Present again by the application, not only a Previous label: the issue allows both; the
+    user sees the coverage again without an action, and a failure still reaches the Retry rule.
+  - The loss is recorded on the sink, not the renderer, because the renderer destructor can run
+    after the item is gone; the sink is shared and never touches the item.
+  - The controller, not the AI Mask tool, sends the request: the committed selection preview has
+    the same loss, and the controller owns the viewport binding.
+Primary success call chain: EditorViewportRenderer::initialize (new QRhi) or destructor ->
+  releaseResources -> ViewportMaskCoverageLayer::ReleaseWithDevice ->
+  ViewportMaskCoverageSink::MarkDisplayLost -> next synchronize() ->
+  EditorViewportItem::reportLostMaskCoverage -> MaskCoverageDisplayLost (GUI) ->
+  EditorSessionController -> PresentMaskCoverageAgain -> EditorMaskCoveragePreview::PresentAgain
+  -> Enqueue -> EditorSessionRenderSchedulerPort job (waits for the new consumer) -> Current ->
+  MaskCoveragePresentedAgain -> EditorAiMaskTool::OnCoveragePresented.
+Primary failure and restore call chain: the job fails -> Previous with the real error ->
+  CommitAiMaskEdit refused -> Retry -> Current.
+Commands and exit codes:
+  scripts\msvc_env.cmd --build build/debug: 0
+  ctest -R 'MaskCoverage|ViewportCoverage|MaskRangeCoverage|EditorSession|EditorViewport|AiMask|
+    EditorActionPolicy|WorkspaceShell|EditorPreviewPresent|EditorOverlay': 547/548 passed; the
+    failure is EditorSessionHistoryPortTest.CheckoutAndPasteHashesAreUnchanged (open issue #555).
+  New: EditorMaskCoveragePreviewTest.LostDisplayedCoverageIsPresentedAgain;
+    ViewportCoverageCompositeTest.CoverageLostWithTheQRhiIsPresentedAgain (CUDA and OpenCL).
+Remaining issues or unavailable platforms:
+  - The monitor-layout change of the issue was not repeated in the real window; the test drives
+    the production release, report, and re-presentation on a real QRhi without a window.
+  - macOS (Metal) not built.
+```

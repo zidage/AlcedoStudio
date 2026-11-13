@@ -23,14 +23,16 @@
 #include <utility>
 #include <vector>
 
-#include "app/history_mgmt_service.hpp"
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
+#include "app/semantic_input_image_service.hpp"
 #include "image/image.hpp"
+#include "support/semantic_stores_test_support.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -49,38 +51,6 @@ auto MakeTextEmbeddingResult(const std::string& request_id, uint32_t dimension)
   }
   return result;
 }
-
-class CountingRealThumbnailProvider final : public ISemanticThumbnailProvider {
- public:
-  explicit CountingRealThumbnailProvider(std::shared_ptr<ThumbnailService> service)
-      : inner_(std::move(service)) {}
-
-  void RequestThumbnail(const SemanticGenerationItem& item, ThumbnailResolution resolution,
-                        SemanticThumbnailRequestCallback callback) override {
-    request_count_.fetch_add(1);
-    inner_.RequestThumbnail(item, resolution, std::move(callback));
-  }
-
-  void CancelThumbnail(const ThumbnailCacheKey& key) override {
-    cancel_count_.fetch_add(1);
-    inner_.CancelThumbnail(key);
-  }
-
-  void ReleaseThumbnail(const ThumbnailCacheKey& key) override {
-    release_count_.fetch_add(1);
-    inner_.ReleaseThumbnail(key);
-  }
-
-  auto RequestCount() const -> int { return request_count_.load(); }
-  auto ReleaseCount() const -> int { return release_count_.load(); }
-  auto CancelCount() const -> int { return cancel_count_.load(); }
-
- private:
-  ThumbnailServiceSemanticThumbnailProvider inner_;
-  std::atomic<int>                          request_count_{0};
-  std::atomic<int>                          release_count_{0};
-  std::atomic<int>                          cancel_count_{0};
-};
 
 class RecordingEmbeddingClient final : public ISemanticImageEmbeddingClient {
  public:
@@ -150,112 +120,135 @@ class RecordingEmbeddingClient final : public ISemanticImageEmbeddingClient {
   std::vector<size_t>       batch_sizes_;
 };
 
-class ImmediateThumbnailProvider final : public ISemanticThumbnailProvider {
+/// The real input service with request and source counts.
+class CountingRealInputSource final : public ISemanticInputImageSource {
  public:
-  void RequestThumbnail(const SemanticGenerationItem& item, ThumbnailResolution resolution,
-                        SemanticThumbnailRequestCallback callback) override {
+  explicit CountingRealInputSource(std::shared_ptr<SemanticInputImageService> inner)
+      : inner_(std::move(inner)) {}
+
+  void Request(sl_element_id_t element_id, image_id_t image_id, std::function<bool()> canceled,
+               SemanticInputImageCallback callback) override {
     request_count_.fetch_add(1);
-    ThumbnailRequestResult result;
-    result.key    = ThumbnailCacheKey{item.element_id, resolution};
-    result.status = ThumbnailRequestStatus::kReady;
-    result.guard  = std::make_shared<ThumbnailGuard>();
-    result.guard->thumbnail_buffer_ =
-        std::make_unique<ImageBuffer>(cv::Mat(3, 2, CV_8UC4, cv::Scalar(10, 20, 30, 255)));
-    callback(std::move(result));
+    inner_->Request(element_id, image_id, std::move(canceled),
+                    [this, callback = std::move(callback)](SemanticInputImageResult result) {
+                      if (result.status == SemanticInputImageStatus::kReady) {
+                        (result.image.source == SemanticInputImageSource::kEmbeddedPreview
+                             ? preview_count_
+                             : render_count_)
+                            .fetch_add(1);
+                      }
+                      callback(std::move(result));
+                    });
   }
 
-  void CancelThumbnail(const ThumbnailCacheKey& key) override {
-    (void)key;
-    cancel_count_.fetch_add(1);
-  }
-
-  void ReleaseThumbnail(const ThumbnailCacheKey& key) override {
-    (void)key;
-    release_count_.fetch_add(1);
-  }
+  auto ConcurrencyLimit() const -> size_t override { return inner_->ConcurrencyLimit(); }
 
   auto RequestCount() const -> int { return request_count_.load(); }
-  auto ReleaseCount() const -> int { return release_count_.load(); }
-  auto CancelCount() const -> int { return cancel_count_.load(); }
+  auto PreviewCount() const -> int { return preview_count_.load(); }
+  auto RenderCount() const -> int { return render_count_.load(); }
+
+ private:
+  std::shared_ptr<SemanticInputImageService> inner_;
+  std::atomic<int>                           request_count_{0};
+  std::atomic<int>                           preview_count_{0};
+  std::atomic<int>                           render_count_{0};
+};
+
+auto MakeReadyInput(sl_element_id_t element_id, image_id_t image_id) -> SemanticInputImageResult {
+  SemanticInputImageResult result;
+  result.element_id   = element_id;
+  result.image_id     = image_id;
+  result.status       = SemanticInputImageStatus::kReady;
+  result.image.width  = 2;
+  result.image.height = 3;
+  result.image.source = SemanticInputImageSource::kEmbeddedPreview;
+  result.image.rgba8.assign(2 * 3 * 4, 128);
+  return result;
+}
+
+/// Answers every request at once on the caller's thread with a 2x3 RGBA8 image.
+class ImmediateInputSource final : public ISemanticInputImageSource {
+ public:
+  void Request(sl_element_id_t element_id, image_id_t image_id, std::function<bool()> canceled,
+               SemanticInputImageCallback callback) override {
+    (void)canceled;
+    request_count_.fetch_add(1);
+    callback(MakeReadyInput(element_id, image_id));
+  }
+
+  auto ConcurrencyLimit() const -> size_t override { return 4; }
+  auto RequestCount() const -> int { return request_count_.load(); }
 
  private:
   std::atomic<int> request_count_{0};
-  std::atomic<int> release_count_{0};
-  std::atomic<int> cancel_count_{0};
 };
 
-class BatchGateThumbnailProvider final : public ISemanticThumbnailProvider {
+/// Holds the requests that @p hold selects until the test answers them; answers the others at
+/// once. Records the largest number of requests that were outstanding at one time.
+class HeldInputSource final : public ISemanticInputImageSource {
  public:
-  explicit BatchGateThumbnailProvider(size_t release_batch_size)
-      : release_batch_size_(release_batch_size) {}
+  HeldInputSource(size_t concurrency_limit, std::function<bool(sl_element_id_t)> hold)
+      : concurrency_limit_(concurrency_limit), hold_(std::move(hold)) {}
 
-  void RequestThumbnail(const SemanticGenerationItem& item, ThumbnailResolution resolution,
-                        SemanticThumbnailRequestCallback callback) override {
-    std::vector<PendingRequest> ready;
+  void Request(sl_element_id_t element_id, image_id_t image_id, std::function<bool()> canceled,
+               SemanticInputImageCallback callback) override {
+    (void)canceled;
     {
       std::unique_lock lock(lock_);
-      request_count_++;
-      pending_.push_back(
-          PendingRequest{.item = item, .resolution = resolution, .callback = std::move(callback)});
-      max_pending_ = std::max(max_pending_, pending_.size());
-      if (pending_.size() >= release_batch_size_) {
-        ready = std::move(pending_);
-        pending_.clear();
+      ++request_count_;
+      ++outstanding_;
+      max_outstanding_ = std::max(max_outstanding_, outstanding_);
+      if (hold_(element_id)) {
+        held_.push_back(Held{element_id, image_id, std::move(callback)});
+        return;
       }
+      --outstanding_;
     }
+    callback(MakeReadyInput(element_id, image_id));
+  }
 
-    for (auto& request : ready) {
-      ThumbnailRequestResult result;
-      result.key    = ThumbnailCacheKey{request.item.element_id, request.resolution};
-      result.status = ThumbnailRequestStatus::kReady;
-      result.guard  = std::make_shared<ThumbnailGuard>();
-      result.guard->thumbnail_buffer_ =
-          std::make_unique<ImageBuffer>(cv::Mat(3, 2, CV_8UC4, cv::Scalar(10, 20, 30, 255)));
-      request.callback(std::move(result));
+  auto ConcurrencyLimit() const -> size_t override { return concurrency_limit_; }
+
+  /// Answers every held request with a ready image.
+  void ReleaseAll() {
+    std::vector<Held> held;
+    {
+      std::unique_lock lock(lock_);
+      held.swap(held_);
+      outstanding_ -= held.size();
+    }
+    for (auto& request : held) {
+      request.callback(MakeReadyInput(request.element_id, request.image_id));
     }
   }
 
-  void CancelThumbnail(const ThumbnailCacheKey& key) override {
-    (void)key;
-    std::unique_lock lock(lock_);
-    cancel_count_++;
-  }
-
-  void ReleaseThumbnail(const ThumbnailCacheKey& key) override {
-    (void)key;
-    std::unique_lock lock(lock_);
-    release_count_++;
-  }
-
-  auto RequestCount() const -> int {
+  auto RequestCount() const -> size_t {
     std::unique_lock lock(lock_);
     return request_count_;
   }
-
-  auto MaxPendingCount() const -> size_t {
+  auto HeldCount() const -> size_t {
     std::unique_lock lock(lock_);
-    return max_pending_;
+    return held_.size();
   }
-
-  auto ReleaseCount() const -> int {
+  auto MaxOutstanding() const -> size_t {
     std::unique_lock lock(lock_);
-    return release_count_;
+    return max_outstanding_;
   }
 
  private:
-  struct PendingRequest {
-    SemanticGenerationItem           item{};
-    ThumbnailResolution              resolution = ThumbnailResolution::k256;
-    SemanticThumbnailRequestCallback callback{};
+  struct Held {
+    sl_element_id_t            element_id = 0;
+    image_id_t                 image_id   = 0;
+    SemanticInputImageCallback callback;
   };
 
-  size_t                      release_batch_size_;
-  mutable std::mutex          lock_;
-  std::vector<PendingRequest> pending_;
-  int                         request_count_ = 0;
-  int                         release_count_ = 0;
-  int                         cancel_count_  = 0;
-  size_t                      max_pending_   = 0;
+  size_t                               concurrency_limit_;
+  std::function<bool(sl_element_id_t)> hold_;
+  mutable std::mutex                   lock_;
+  std::vector<Held>                    held_;
+  size_t                               request_count_   = 0;
+  size_t                               outstanding_     = 0;
+  size_t                               max_outstanding_ = 0;
 };
 
 class ScriptedEmbeddingClient final : public ISemanticImageEmbeddingClient {
@@ -372,9 +365,9 @@ auto LabelIndex(SemanticLabelLanguage language, const std::string& label) -> siz
   return 0;
 }
 
-void RegisterSemanticTestModel(SemanticStore& semantic) {
+void RegisterSemanticTestModel(const semantic_test::SemanticStores& semantic) {
   std::string error;
-  ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = "mobileclip-test",
+  ASSERT_TRUE(semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = "mobileclip-test",
                                                        .model_id_      = "mock/mobileclip",
                                                        .revision_      = "mock-revision",
                                                        .embedding_dim_ = kSemanticEmbeddingDim,
@@ -383,9 +376,9 @@ void RegisterSemanticTestModel(SemanticStore& semantic) {
       << error;
 }
 
-void RegisterLocalizedSemanticTestModel(SemanticStore& semantic) {
+void RegisterLocalizedSemanticTestModel(const semantic_test::SemanticStores& semantic) {
   std::string error;
-  ASSERT_TRUE(semantic.UpsertModel(
+  ASSERT_TRUE(semantic.models_.UpsertModel(
       SemanticModelRecord{.model_key_     = "localized-zh-test",
                           .model_id_      = "mock/localized-zh",
                           .revision_      = "mock-zh-revision",
@@ -741,20 +734,11 @@ auto CollectSemanticRawFixturePaths(size_t max_count, bool recursive) -> std::ve
 
 class SemanticGenerationServiceTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
-    RegisterAllOperators();
-    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    db_path_ = std::filesystem::temp_directory_path() / ("semantic_generation_" + unique + ".db");
-    meta_path_ =
-        std::filesystem::temp_directory_path() / ("semantic_generation_" + unique + ".json");
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
-  }
-
-  void TearDown() override {
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   auto ImportItems(ProjectService& project, size_t count) -> std::vector<SemanticGenerationItem> {
@@ -769,7 +753,11 @@ class SemanticGenerationServiceTest : public ::testing::Test {
       return {};
     }
 
-    ImportServiceImpl          import_service(fs_service, img_pool);
+    // Product import writes camera/profile data into the stored document. Thumbnail
+    // DAG rendering reads that document; omitting PipelineMgmtService leaves a Default
+    // graph without camera matrices and Metal/CUDA camera color fails.
+    auto                       pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ImportServiceImpl          import_service(fs_service, img_pool, pipelines);
     auto                       import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> done;
     auto                       future = done.get_future();
@@ -800,7 +788,9 @@ class SemanticGenerationServiceTest : public ::testing::Test {
     auto                       fs_service = project.GetSleeveService();
     auto                       img_pool   = project.GetImagePoolService();
 
-    ImportServiceImpl          import_service(fs_service, img_pool);
+    // Same as ImportItems: assemble and persist camera/profile data before thumbnail DAG render.
+    auto                       pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ImportServiceImpl          import_service(fs_service, img_pool, pipelines);
     auto                       import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> done;
     auto                       future = done.get_future();
@@ -838,7 +828,7 @@ class SemanticGenerationServiceTest : public ::testing::Test {
 
 }  // namespace
 
-TEST_F(SemanticGenerationServiceTest, UsesRealThumbnailServiceAndBatchesMockEmbedding) {
+TEST_F(SemanticGenerationServiceTest, UsesRealInputServiceAndBatchesMockEmbedding) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
   auto           items = ImportItems(project, 3);
   if (items.size() < 3) {
@@ -846,33 +836,30 @@ TEST_F(SemanticGenerationServiceTest, UsesRealThumbnailServiceAndBatchesMockEmbe
                     "git-lfs fixtures to exercise real-import semantic generation";
   }
 
-  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto thumbnail_service = std::make_shared<ThumbnailService>(
-      project.GetSleeveService(), project.GetImagePoolService(), pipeline_service,
-      project.GetStorage(),
-      project.GetProjectUUID());
-
-  auto thumbnails = std::make_shared<CountingRealThumbnailProvider>(thumbnail_service);
-  auto embedder   = std::make_shared<RecordingEmbeddingClient>();
-  SemanticGenerationService service(thumbnails, embedder);
+  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto inputs =
+      std::make_shared<CountingRealInputSource>(std::make_shared<SemanticInputImageService>(
+          project.GetImagePoolService(), pipeline_service, 256));
+  auto                      embedder = std::make_shared<RecordingEmbeddingClient>();
+  SemanticGenerationService service(inputs, embedder);
 
   SemanticGenerationOptions options;
-  options.thumbnail_resolution = ThumbnailResolution::k256;
-  options.thumbnail_batch_size = 2;
-  options.embedding_batch_size = 2;
+  options.embedding_batch_size            = 2;
+  options.max_in_flight_embedding_batches = 1;
 
-  auto job                     = service.StartGeneration(items, options);
+  auto job                                = service.StartGeneration(items, options);
   job->Wait();
 
   const auto progress = job->SnapshotProgress();
   EXPECT_EQ(progress.total, 3u);
-  EXPECT_EQ(progress.thumbnails_ready, 3u);
+  EXPECT_EQ(progress.inputs_ready, 3u);
+  EXPECT_EQ(progress.preview_inputs + progress.render_inputs, 3u);
   EXPECT_EQ(progress.embedding_requested, 3u);
   EXPECT_EQ(progress.embedded, 3u);
   EXPECT_EQ(progress.failed, 0u);
   EXPECT_EQ(progress.canceled, 0u);
-  EXPECT_EQ(thumbnails->RequestCount(), 3);
-  EXPECT_EQ(thumbnails->ReleaseCount(), 3);
+  EXPECT_EQ(inputs->RequestCount(), 3);
+  EXPECT_EQ(inputs->PreviewCount() + inputs->RenderCount(), 3);
 
   const std::vector<size_t> expected_batches{2, 1};
   EXPECT_EQ(embedder->BatchSizes(), expected_batches);
@@ -888,34 +875,84 @@ TEST_F(SemanticGenerationServiceTest, UsesRealThumbnailServiceAndBatchesMockEmbe
   pipeline_service->Sync();
 }
 
-TEST_F(SemanticGenerationServiceTest, DecouplesThumbnailAndEmbeddingBatchSizes) {
-  auto                      thumbnails = std::make_shared<BatchGateThumbnailProvider>(2);
-  auto                      embedder   = std::make_shared<RecordingEmbeddingClient>(500ms);
-  SemanticGenerationService service(thumbnails, embedder);
+// The job keeps the source's concurrency limit of requests outstanding and starts the next request
+// when one answers; it does not wait for a whole group. The embedding batch size is independent.
+TEST_F(SemanticGenerationServiceTest, KeepsTheInputWindowFullAndBatchesEmbeddingsApart) {
+  auto inputs   = std::make_shared<HeldInputSource>(2, [](sl_element_id_t) { return true; });
+  auto embedder = std::make_shared<RecordingEmbeddingClient>(100ms);
+  SemanticGenerationService service(inputs, embedder);
 
   SemanticGenerationOptions options;
-  options.thumbnail_batch_size = 2;
   options.embedding_batch_size = 4;
   options.embedding_timeout    = 3s;
   auto job = service.StartGeneration({{1, 10}, {2, 20}, {3, 30}, {4, 40}}, options);
 
-  ASSERT_TRUE(WaitUntil([&]() { return thumbnails->MaxPendingCount() == 2U; }, 150ms));
-  EXPECT_EQ(thumbnails->MaxPendingCount(), 2U);
-  EXPECT_TRUE(WaitUntil([&]() { return thumbnails->RequestCount() == 4; }, 150ms));
-  ASSERT_TRUE(WaitUntil([&]() { return embedder->BatchSizes().size() == 1; }, 2s));
+  ASSERT_TRUE(WaitUntil([&]() { return inputs->HeldCount() == 2U; }, 2s));
+  std::this_thread::sleep_for(50ms);
+  EXPECT_EQ(inputs->RequestCount(), 2U);
 
+  inputs->ReleaseAll();
+  ASSERT_TRUE(
+      WaitUntil([&]() { return inputs->HeldCount() == 2U && inputs->RequestCount() == 4U; }, 2s));
+  inputs->ReleaseAll();
   job->Wait();
 
+  EXPECT_EQ(inputs->MaxOutstanding(), 2U);
   const auto progress = job->SnapshotProgress();
-  EXPECT_EQ(progress.thumbnails_ready, 4U);
+  EXPECT_EQ(progress.inputs_ready, 4U);
   EXPECT_EQ(progress.embedded, 4U);
-  EXPECT_EQ(thumbnails->ReleaseCount(), 4);
-
   const std::vector<size_t> expected_batches{4};
   EXPECT_EQ(embedder->BatchSizes(), expected_batches);
 }
 
-TEST_F(SemanticGenerationServiceTest, RealThumbnailFailureSkipsMockEmbeddingForThatItem) {
+// One input that takes long does not stop the others: every other image is requested and embedded
+// while that request is still outstanding.
+TEST_F(SemanticGenerationServiceTest, SlowInputDoesNotStopTheOtherImages) {
+  auto inputs   = std::make_shared<HeldInputSource>(3, [](sl_element_id_t id) { return id == 1; });
+  auto embedder = std::make_shared<RecordingEmbeddingClient>();
+  SemanticGenerationService service(inputs, embedder);
+
+  SemanticGenerationOptions options;
+  options.embedding_batch_size = 2;
+  auto job =
+      service.StartGeneration({{1, 10}, {2, 20}, {3, 30}, {4, 40}, {5, 50}, {6, 60}}, options);
+
+  ASSERT_TRUE(WaitUntil([&]() { return job->SnapshotProgress().embedded == 4U; }, 3s));
+  EXPECT_EQ(inputs->RequestCount(), 6U);
+  EXPECT_EQ(inputs->HeldCount(), 1U);
+
+  inputs->ReleaseAll();
+  job->Wait();
+  EXPECT_EQ(job->SnapshotProgress().embedded, 6U);
+  EXPECT_LE(inputs->MaxOutstanding(), 3U);
+}
+
+// Cancel ends the job without waiting for outstanding inputs; every image that has no embedding is
+// reported as canceled, and a late answer of the source changes nothing.
+TEST_F(SemanticGenerationServiceTest, CancelEndsTheJobWithOutstandingInputsCanceled) {
+  auto inputs   = std::make_shared<HeldInputSource>(2, [](sl_element_id_t) { return true; });
+  auto embedder = std::make_shared<RecordingEmbeddingClient>();
+  SemanticGenerationService service(inputs, embedder);
+
+  auto                      job = service.StartGeneration({{1, 10}, {2, 20}, {3, 30}});
+  ASSERT_TRUE(WaitUntil([&]() { return inputs->HeldCount() == 2U; }, 2s));
+
+  job->Cancel();
+  job->Wait();
+  inputs->ReleaseAll();
+
+  const auto progress = job->SnapshotProgress();
+  EXPECT_EQ(progress.embedded, 0U);
+  EXPECT_EQ(progress.canceled, 3U);
+  const auto results = job->Results();
+  ASSERT_EQ(results.size(), 3U);
+  for (const auto& result : results) {
+    EXPECT_EQ(result.status, SemanticGenerationItemStatus::kCanceled);
+  }
+  EXPECT_TRUE(embedder->BatchSizes().empty());
+}
+
+TEST_F(SemanticGenerationServiceTest, RealInputFailureSkipsMockEmbeddingForThatItem) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
   auto           items = ImportItems(project, 1);
   if (items.empty()) {
@@ -924,17 +961,14 @@ TEST_F(SemanticGenerationServiceTest, RealThumbnailFailureSkipsMockEmbeddingForT
   }
   items.push_back(SemanticGenerationItem{999999u, 999999u});
 
-  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto thumbnail_service = std::make_shared<ThumbnailService>(
-      project.GetSleeveService(), project.GetImagePoolService(), pipeline_service);
-
-  auto thumbnails = std::make_shared<CountingRealThumbnailProvider>(thumbnail_service);
-  auto embedder   = std::make_shared<RecordingEmbeddingClient>();
-  SemanticGenerationService service(thumbnails, embedder);
+  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto inputs =
+      std::make_shared<CountingRealInputSource>(std::make_shared<SemanticInputImageService>(
+          project.GetImagePoolService(), pipeline_service, 256));
+  auto                      embedder = std::make_shared<RecordingEmbeddingClient>();
+  SemanticGenerationService service(inputs, embedder);
 
   SemanticGenerationOptions options;
-  options.thumbnail_resolution = ThumbnailResolution::k256;
-  options.thumbnail_batch_size = 8;
   options.embedding_batch_size = 8;
 
   auto job                     = service.StartGeneration(items, options);
@@ -942,11 +976,10 @@ TEST_F(SemanticGenerationServiceTest, RealThumbnailFailureSkipsMockEmbeddingForT
 
   const auto progress = job->SnapshotProgress();
   EXPECT_EQ(progress.total, 2u);
-  EXPECT_EQ(progress.thumbnails_ready, 1u);
+  EXPECT_EQ(progress.inputs_ready, 1u);
   EXPECT_EQ(progress.embedded, 1u);
   EXPECT_EQ(progress.failed, 1u);
-  EXPECT_EQ(thumbnails->RequestCount(), 2);
-  EXPECT_EQ(thumbnails->ReleaseCount(), 1);
+  EXPECT_EQ(inputs->RequestCount(), 2);
 
   const std::vector<size_t> expected_batches{1};
   EXPECT_EQ(embedder->BatchSizes(), expected_batches);
@@ -954,7 +987,7 @@ TEST_F(SemanticGenerationServiceTest, RealThumbnailFailureSkipsMockEmbeddingForT
   pipeline_service->Sync();
 }
 
-TEST_F(SemanticGenerationServiceTest, CancelDuringMockEmbeddingDoesNotHoldRealThumbnailPin) {
+TEST_F(SemanticGenerationServiceTest, CancelDuringMockEmbeddingEndsWithTheImageCanceled) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
   auto           items = ImportItems(project, 1);
   if (items.empty()) {
@@ -962,16 +995,15 @@ TEST_F(SemanticGenerationServiceTest, CancelDuringMockEmbeddingDoesNotHoldRealTh
                     "git-lfs fixtures to exercise real-import semantic generation";
   }
 
-  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto thumbnail_service = std::make_shared<ThumbnailService>(
-      project.GetSleeveService(), project.GetImagePoolService(), pipeline_service);
-
-  auto thumbnails = std::make_shared<CountingRealThumbnailProvider>(thumbnail_service);
-  auto embedder   = std::make_shared<RecordingEmbeddingClient>(500ms);
-  SemanticGenerationService service(thumbnails, embedder);
+  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto inputs =
+      std::make_shared<CountingRealInputSource>(std::make_shared<SemanticInputImageService>(
+          project.GetImagePoolService(), pipeline_service, 256));
+  auto                      embedder = std::make_shared<RecordingEmbeddingClient>(500ms);
+  SemanticGenerationService service(inputs, embedder);
 
   auto                      job = service.StartGeneration(items);
-  ASSERT_TRUE(WaitUntil([&]() { return thumbnails->ReleaseCount() == 1; }));
+  ASSERT_TRUE(WaitUntil([&]() { return embedder->BatchSizes().size() == 1; }));
 
   job->Cancel();
   job->Wait();
@@ -979,16 +1011,14 @@ TEST_F(SemanticGenerationServiceTest, CancelDuringMockEmbeddingDoesNotHoldRealTh
   const auto progress = job->SnapshotProgress();
   EXPECT_EQ(progress.embedded, 0u);
   EXPECT_EQ(progress.canceled, 1u);
-  EXPECT_EQ(thumbnails->ReleaseCount(), 1);
-  EXPECT_EQ(thumbnails->CancelCount(), 0);
 
   pipeline_service->Sync();
 }
 
-TEST_F(SemanticGenerationServiceTest, RejectsModelInfoMismatchBeforeRequestingThumbnails) {
-  auto                      thumbnails = std::make_shared<ImmediateThumbnailProvider>();
-  auto                      embedder   = std::make_shared<RecordingEmbeddingClient>();
-  SemanticGenerationService service(thumbnails, embedder);
+TEST_F(SemanticGenerationServiceTest, RejectsModelInfoMismatchBeforeRequestingInputs) {
+  auto                       inputs   = std::make_shared<ImmediateInputSource>();
+  auto                       embedder = std::make_shared<RecordingEmbeddingClient>();
+  SemanticGenerationService  service(inputs, embedder);
 
   SemanticGenerationOptions options;
   AiSidecarRuntimeModelInfo  expected;
@@ -1005,8 +1035,8 @@ TEST_F(SemanticGenerationServiceTest, RejectsModelInfoMismatchBeforeRequestingTh
   const auto progress = job->SnapshotProgress();
   EXPECT_EQ(progress.total, 2u);
   EXPECT_EQ(progress.failed, 2u);
-  EXPECT_EQ(progress.thumbnails_ready, 0u);
-  EXPECT_EQ(thumbnails->RequestCount(), 0);
+  EXPECT_EQ(progress.inputs_ready, 0u);
+  EXPECT_EQ(inputs->RequestCount(), 0);
 
   const auto results = job->Results();
   ASSERT_EQ(results.size(), 2u);
@@ -1017,9 +1047,9 @@ TEST_F(SemanticGenerationServiceTest, RejectsModelInfoMismatchBeforeRequestingTh
 }
 
 TEST_F(SemanticGenerationServiceTest, MapsPartialFailureAndRequestIdMismatchPerItem) {
-  auto                      thumbnails = std::make_shared<ImmediateThumbnailProvider>();
-  auto                      embedder   = std::make_shared<ScriptedEmbeddingClient>();
-  SemanticGenerationService service(thumbnails, embedder);
+  auto                      inputs   = std::make_shared<ImmediateInputSource>();
+  auto                      embedder = std::make_shared<ScriptedEmbeddingClient>();
+  SemanticGenerationService service(inputs, embedder);
 
   SemanticGenerationOptions options;
   options.embedding_batch_size = 3;
@@ -1036,11 +1066,10 @@ TEST_F(SemanticGenerationServiceTest, MapsPartialFailureAndRequestIdMismatchPerI
 
   const auto progress = job->SnapshotProgress();
   EXPECT_EQ(progress.total, 3u);
-  EXPECT_EQ(progress.thumbnails_ready, 3u);
+  EXPECT_EQ(progress.inputs_ready, 3u);
   EXPECT_EQ(progress.embedding_requested, 3u);
   EXPECT_EQ(progress.embedded, 1u);
   EXPECT_EQ(progress.failed, 2u);
-  EXPECT_EQ(thumbnails->ReleaseCount(), 3);
 
   const auto results = job->Results();
   ASSERT_EQ(results.size(), 3u);
@@ -1052,9 +1081,9 @@ TEST_F(SemanticGenerationServiceTest, MapsPartialFailureAndRequestIdMismatchPerI
 }
 
 TEST_F(SemanticGenerationServiceTest, EmbeddingTimeoutFailsEveryPendingItem) {
-  auto                      thumbnails = std::make_shared<ImmediateThumbnailProvider>();
-  auto                      embedder   = std::make_shared<NeverRespondingEmbeddingClient>();
-  SemanticGenerationService service(thumbnails, embedder);
+  auto                      inputs   = std::make_shared<ImmediateInputSource>();
+  auto                      embedder = std::make_shared<NeverRespondingEmbeddingClient>();
+  SemanticGenerationService service(inputs, embedder);
 
   SemanticGenerationOptions options;
   options.embedding_batch_size = 2;
@@ -1087,12 +1116,12 @@ TEST_F(SemanticGenerationServiceTest, DefaultPhotographyLabelsLiveInConfigHeader
 
 TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticTestModel(semantic);
 
-  auto                      thumbnails = std::make_shared<ImmediateThumbnailProvider>();
-  auto                      embedder   = std::make_shared<Fixed512EmbeddingClient>(OneHot512(8));
-  SemanticGenerationService service(thumbnails, embedder);
+  auto                      inputs   = std::make_shared<ImmediateInputSource>();
+  auto                      embedder = std::make_shared<Fixed512EmbeddingClient>(OneHot512(8));
+  SemanticGenerationService service(inputs, embedder);
 
   SemanticGenerationOptions options;
   options.expected_model_info =
@@ -1102,7 +1131,8 @@ TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
                                .image_size          = 256,
                                .provider            = "mock"};
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller         = &semantic;
+  persistence.label_store                = &semantic.labels_;
+  persistence.embedding_store            = &semantic.embeddings_;
   persistence.model_key                  = "mobileclip-test";
   persistence.label_prototype_batch_size = 7;
   options.persistence                    = persistence;
@@ -1115,15 +1145,15 @@ TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
   EXPECT_EQ(progress.embedded, 1U);
   EXPECT_EQ(progress.failed, 0U);
   EXPECT_EQ(
-      semantic.CountLabelPrototypes("mobileclip-test", kDefaultSemanticPhotographyPromptConfigHash),
+      semantic.labels_.CountLabelPrototypes("mobileclip-test", kDefaultSemanticPhotographyPromptConfigHash),
       DefaultSemanticPhotographyLabelQueries().size());
   const auto text_batch_sizes = embedder->TextBatchSizes();
   ASSERT_GT(text_batch_sizes.size(), 1U);
   EXPECT_EQ(text_batch_sizes.front(), 7U);
   EXPECT_EQ(std::accumulate(text_batch_sizes.begin(), text_batch_sizes.end(), size_t{0}),
             DefaultSemanticPhotographyLabelQueries().size());
-  EXPECT_EQ(semantic.CountImageEmbeddingsForFile(42, "mobileclip-test"), 1U);
-  EXPECT_EQ(semantic.CountImageLabelsForFile(42, "mobileclip-test"), 1U);
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddingsForFile(42, "mobileclip-test"), 1U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(42, "mobileclip-test"), 1U);
 
   const auto results = job->Results();
   ASSERT_EQ(results.size(), 1U);
@@ -1131,8 +1161,10 @@ TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
   EXPECT_TRUE(results.front().has_label);
   EXPECT_EQ(results.front().label, "street");
   EXPECT_TRUE(results.front().label_confident);
+  // With persistence the store owns the vector; the job keeps no copy of it.
+  EXPECT_TRUE(results.front().embedding.empty());
 
-  const auto stored_label = semantic.GetImageLabelForFile(42, "mobileclip-test", &error);
+  const auto stored_label = semantic.labels_.GetImageLabelForFile(42, "mobileclip-test", &error);
   ASSERT_TRUE(stored_label.has_value()) << error;
   EXPECT_EQ(stored_label->label_, "street");
   // The image is a pure one-hot "street" vector; every other prototype scores at most 0.25
@@ -1141,15 +1173,17 @@ TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
   EXPECT_TRUE(stored_label->second_label_.empty());
 }
 
-TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDisplayText) {
+// A Chinese prompt profile ranks Chinese label text (风景). The label store keeps the canonical
+// key, and the UI translates that key for each language.
+TEST_F(SemanticGenerationServiceTest, PersistsCanonicalKeysForChinesePromptsAndMapsDisplayText) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterLocalizedSemanticTestModel(semantic);
 
-  auto thumbnails = std::make_shared<ImmediateThumbnailProvider>();
-  auto embedder   = std::make_shared<Localized512EmbeddingClient>(SemanticLabelLanguage::kChinese,
-                                                                  "\xE9\xA3\x8E\xE6\x99\xAF");
-  SemanticGenerationService service(thumbnails, embedder);
+  auto inputs   = std::make_shared<ImmediateInputSource>();
+  auto embedder = std::make_shared<Localized512EmbeddingClient>(SemanticLabelLanguage::kChinese,
+                                                                "\xE9\xA3\x8E\xE6\x99\xAF");
+  SemanticGenerationService service(inputs, embedder);
 
   SemanticGenerationOptions options;
   options.expected_model_info =
@@ -1161,7 +1195,8 @@ TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDispl
                                .image_size          = 256,
                                .provider            = "mock"};
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller = &semantic;
+  persistence.label_store     = &semantic.labels_;
+  persistence.embedding_store = &semantic.embeddings_;
   persistence.model_key          = "localized-zh-test";
   persistence.prompt_config_hash = kDefaultSemanticPhotographyZhPromptConfigHash;
   options.persistence            = persistence;
@@ -1173,20 +1208,20 @@ TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDispl
   const auto progress = job->SnapshotProgress();
   EXPECT_EQ(progress.embedded, 1U);
   EXPECT_EQ(progress.failed, 0U);
-  EXPECT_EQ(semantic.CountLabelPrototypes("localized-zh-test",
+  EXPECT_EQ(semantic.labels_.CountLabelPrototypes("localized-zh-test",
                                           kDefaultSemanticPhotographyZhPromptConfigHash),
             DefaultSemanticPhotographyLabelQueries(SemanticLabelLanguage::kChinese).size());
-  EXPECT_EQ(semantic.CountImageLabelsForFile(42, "localized-zh-test"), 1U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(42, "localized-zh-test"), 1U);
 
   const auto results = job->Results();
   ASSERT_EQ(results.size(), 1U);
   EXPECT_EQ(results.front().status, SemanticGenerationItemStatus::kEmbedded);
   EXPECT_TRUE(results.front().has_label);
-  EXPECT_EQ(results.front().label, "\xE9\xA3\x8E\xE6\x99\xAF");
+  EXPECT_EQ(results.front().label, "landscape");
 
-  const auto stored_label = semantic.GetImageLabelForFile(42, "localized-zh-test", &error);
+  const auto stored_label = semantic.labels_.GetImageLabelForFile(42, "localized-zh-test", &error);
   ASSERT_TRUE(stored_label.has_value()) << error;
-  EXPECT_EQ(stored_label->label_, "\xE9\xA3\x8E\xE6\x99\xAF");
+  EXPECT_EQ(stored_label->label_, "landscape");
   EXPECT_EQ(SemanticLabelDisplayText(stored_label->label_, SemanticLabelLanguage::kEnglish),
             "landscape");
   EXPECT_EQ(SemanticLabelDisplayText(stored_label->label_, SemanticLabelLanguage::kChinese),
@@ -1195,23 +1230,24 @@ TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDispl
 
 TEST_F(SemanticGenerationServiceTest, SkipsReadyEmbeddingsUnlessForceRegenerate) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticTestModel(semantic);
 
-  auto thumbnails = std::make_shared<ImmediateThumbnailProvider>();
-  auto embedder   = std::make_shared<Fixed512EmbeddingClient>(OneHot512(LabelIndex("street")));
-  SemanticGenerationService            service(thumbnails, embedder);
+  auto inputs   = std::make_shared<ImmediateInputSource>();
+  auto embedder = std::make_shared<Fixed512EmbeddingClient>(OneHot512(LabelIndex("street")));
+  SemanticGenerationService            service(inputs, embedder);
 
   SemanticGenerationOptions            options;
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller = &semantic;
+  persistence.label_store     = &semantic.labels_;
+  persistence.embedding_store = &semantic.embeddings_;
   persistence.model_key          = "mobileclip-test";
   options.persistence            = persistence;
 
   auto first                     = service.StartGeneration({{42, 420}}, options);
   first->Wait();
   EXPECT_EQ(first->SnapshotProgress().embedded, 1U);
-  EXPECT_EQ(thumbnails->RequestCount(), 1);
+  EXPECT_EQ(inputs->RequestCount(), 1);
   EXPECT_EQ(embedder->ImageItemCount(), 1);
 
   auto retry = service.StartGeneration({{42, 420}}, options);
@@ -1219,7 +1255,7 @@ TEST_F(SemanticGenerationServiceTest, SkipsReadyEmbeddingsUnlessForceRegenerate)
   const auto retry_progress = retry->SnapshotProgress();
   EXPECT_EQ(retry_progress.skipped, 1U);
   EXPECT_EQ(retry_progress.embedded, 0U);
-  EXPECT_EQ(thumbnails->RequestCount(), 1);
+  EXPECT_EQ(inputs->RequestCount(), 1);
   EXPECT_EQ(embedder->ImageItemCount(), 1);
   ASSERT_EQ(retry->Results().size(), 1U);
   EXPECT_EQ(retry->Results().front().status, SemanticGenerationItemStatus::kSkipped);
@@ -1228,7 +1264,7 @@ TEST_F(SemanticGenerationServiceTest, SkipsReadyEmbeddingsUnlessForceRegenerate)
   auto forced              = service.StartGeneration({{42, 420}}, options);
   forced->Wait();
   EXPECT_EQ(forced->SnapshotProgress().embedded, 1U);
-  EXPECT_EQ(thumbnails->RequestCount(), 2);
+  EXPECT_EQ(inputs->RequestCount(), 2);
   EXPECT_EQ(embedder->ImageItemCount(), 2);
 }
 
@@ -1241,7 +1277,7 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
   ASSERT_GT(paths.size(), 0U);
 
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticTestModel(semantic);
 
   const auto items = ImportPaths(project, paths);
@@ -1266,18 +1302,14 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
     }
   }
 
-  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto thumbnail_service = std::make_shared<ThumbnailService>(
-      project.GetSleeveService(), project.GetImagePoolService(), pipeline_service,
-      project.GetStorage(),
-      project.GetProjectUUID());
-  auto thumbnails = std::make_shared<CountingRealThumbnailProvider>(thumbnail_service);
-  auto embedder   = std::make_shared<Routed512EmbeddingClient>(std::move(routes));
-  SemanticGenerationService service(thumbnails, embedder);
+  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto inputs =
+      std::make_shared<CountingRealInputSource>(std::make_shared<SemanticInputImageService>(
+          project.GetImagePoolService(), pipeline_service, 256));
+  auto embedder = std::make_shared<Routed512EmbeddingClient>(std::move(routes));
+  SemanticGenerationService service(inputs, embedder);
 
   SemanticGenerationOptions options;
-  options.thumbnail_resolution = ThumbnailResolution::k256;
-  options.thumbnail_batch_size = 8;
   options.embedding_batch_size = 64;
   options.embedding_timeout    = 300s;
   options.expected_model_info =
@@ -1287,7 +1319,8 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
                                .image_size          = 256,
                                .provider            = "mock"};
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller = &semantic;
+  persistence.label_store     = &semantic.labels_;
+  persistence.embedding_store = &semantic.embeddings_;
   persistence.model_key          = "mobileclip-test";
   options.persistence            = persistence;
 
@@ -1299,12 +1332,12 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
   EXPECT_EQ(progress.embedded, items.size());
   EXPECT_EQ(progress.failed, 0U);
   EXPECT_EQ(progress.canceled, 0U);
-  EXPECT_EQ(thumbnails->RequestCount(), static_cast<int>(items.size()));
-  EXPECT_EQ(thumbnails->ReleaseCount(), static_cast<int>(items.size()));
+  EXPECT_EQ(inputs->RequestCount(), static_cast<int>(items.size()));
+  EXPECT_EQ(inputs->PreviewCount() + inputs->RenderCount(), static_cast<int>(items.size()));
   EXPECT_EQ(embedder->ImageItemCount(), static_cast<int>(items.size()));
 
   const auto item_count = static_cast<int64_t>(items.size());
-  auto       sql_guard  = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto       sql_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   EXPECT_EQ(RawScalarInt64(sql_guard.conn_,
                            "SELECT COUNT(*) FROM SemanticImageEmbedding "
                            "WHERE model_key = 'mobileclip-test' AND status = 'ready';"),
@@ -1330,18 +1363,19 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
 
 TEST_F(SemanticGenerationServiceTest, PersistenceRejectsBadVectorsWithoutWritingRows) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticTestModel(semantic);
 
   auto bad_embedding                   = OneHot512(3);
   bad_embedding[5]                     = std::numeric_limits<float>::quiet_NaN();
-  auto                      thumbnails = std::make_shared<ImmediateThumbnailProvider>();
+  auto                      inputs     = std::make_shared<ImmediateInputSource>();
   auto                      embedder   = std::make_shared<Fixed512EmbeddingClient>(bad_embedding);
-  SemanticGenerationService service(thumbnails, embedder);
+  SemanticGenerationService service(inputs, embedder);
 
   SemanticGenerationOptions options;
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller = &semantic;
+  persistence.label_store     = &semantic.labels_;
+  persistence.embedding_store = &semantic.embeddings_;
   persistence.model_key          = "mobileclip-test";
   options.persistence            = persistence;
 
@@ -1351,13 +1385,58 @@ TEST_F(SemanticGenerationServiceTest, PersistenceRejectsBadVectorsWithoutWriting
   const auto progress = job->SnapshotProgress();
   EXPECT_EQ(progress.embedded, 0U);
   EXPECT_EQ(progress.failed, 1U);
-  EXPECT_EQ(semantic.CountImageEmbeddingsForFile(77, "mobileclip-test"), 0U);
-  EXPECT_EQ(semantic.CountImageLabelsForFile(77, "mobileclip-test"), 0U);
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddingsForFile(77, "mobileclip-test"), 0U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(77, "mobileclip-test"), 0U);
 
   const auto results = job->Results();
   ASSERT_EQ(results.size(), 1U);
   EXPECT_EQ(results.front().status, SemanticGenerationItemStatus::kError);
   EXPECT_NE(results.front().error.find("NaN"), std::string::npos);
+}
+
+// The job reads the images that already have labels with one query. It selects exactly the images
+// for which the per-image check HasReadyImageEmbedding(..., require_label) is true: a labeled
+// embedding counts; an embedding without a label, another image id, and another model do not.
+TEST_F(SemanticGenerationServiceTest, ReadyLabeledImageListMatchesThePerImageCheck) {
+  ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
+  RegisterSemanticTestModel(semantic);
+
+  auto inputs   = std::make_shared<ImmediateInputSource>();
+  auto embedder = std::make_shared<Fixed512EmbeddingClient>(OneHot512(LabelIndex("street")));
+  SemanticGenerationService            service(inputs, embedder);
+  SemanticGenerationOptions            options;
+  SemanticGenerationPersistenceOptions persistence;
+  persistence.label_store     = &semantic.labels_;
+  persistence.embedding_store = &semantic.embeddings_;
+  persistence.model_key       = "mobileclip-test";
+  options.persistence         = persistence;
+  auto job                    = service.StartGeneration({{42, 420}, {43, 430}}, options);
+  job->Wait();
+  ASSERT_EQ(job->SnapshotProgress().embedded, 2U);
+
+  // An embedding without a label.
+  SemanticImageEmbeddingRecord unlabeled;
+  unlabeled.file_id_   = 44;
+  unlabeled.image_id_  = 440;
+  unlabeled.model_key_ = "mobileclip-test";
+  unlabeled.embedding_ = OneHot512(3);
+  std::string error;
+  ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbedding(unlabeled, &error)) << error;
+
+  const auto ready = semantic.embeddings_.ListReadyLabeledImages("mobileclip-test", &error);
+  EXPECT_TRUE(error.empty()) << error;
+  const std::vector<SemanticGenerationItem> probes{{42, 420}, {43, 430}, {44, 440}, {42, 999}};
+  for (const auto& probe : probes) {
+    const bool listed = std::find(ready.begin(), ready.end(),
+                                  std::pair<sl_element_id_t, image_id_t>{
+                                      probe.element_id, probe.image_id}) != ready.end();
+    EXPECT_EQ(listed, semantic.embeddings_.HasReadyImageEmbedding(probe.element_id, probe.image_id,
+                                                                  "mobileclip-test", true))
+        << probe.element_id << ":" << probe.image_id;
+  }
+  EXPECT_EQ(ready.size(), 2U);
+  EXPECT_TRUE(semantic.embeddings_.ListReadyLabeledImages("another-model", &error).empty());
 }
 
 }  // namespace alcedo

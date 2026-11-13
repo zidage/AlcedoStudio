@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <QString>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -70,10 +71,17 @@ struct ModelProfileSpec {
   uint32_t                    native_embedding_dimension = 0;
   uint32_t                    image_size                 = 0;
   const char*                 embedding_transform;
+  // License shown on the model card (AI Models plan, P13) and the web page of its text.
+  const char*                 license_name;
+  const char*                 license_url;
   std::vector<ModelAssetSpec> assets;
 };
 
-// Returns the canonical semantic model profiles. Backed by a function-local
+// Every profile of the catalog, on all platforms. The catalog test compares it with the Rust
+// catalog through tests/resources/clip_model_catalog/clip_model_profiles.json.
+auto AllSemanticModelProfiles() -> const std::vector<ModelProfileSpec>&;
+
+// Returns the canonical semantic model profiles of this platform. Backed by a function-local
 // static so the returned reference is stable and initialization order is
 // well-defined.
 auto SemanticModelProfiles() -> const std::vector<ModelProfileSpec>&;
@@ -86,6 +94,27 @@ auto FindSemanticProfile(const std::string& profile_or_model_id) -> const ModelP
 auto IsModelProfileSupportedOnCurrentPlatform(const ModelProfileSpec& profile) -> bool;
 
 auto ProfileTotalBytes(const ModelProfileSpec& profile) -> uint64_t;
+
+// ── CLIP model download settings (QSettings) ──
+// ModelDownloadController and ProjectService read these through the functions below, so the
+// source presets have one definition.
+inline constexpr const char* kSemanticModelDirectoryKey      = "semantic/modelDirectory";
+inline constexpr const char* kSemanticModelEndpointPresetKey = "semantic/modelEndpointPreset";
+inline constexpr const char* kSemanticCustomModelEndpointKey = "semantic/customModelEndpoint";
+
+// <application directory>/model, the model directory when no directory is set.
+auto                         DefaultSemanticModelDirectory() -> QString;
+// The configured model directory, or the default.
+auto                         ConfiguredSemanticModelDirectory() -> QString;
+// "mirror" (default), "huggingface", "sufy", or "custom".
+auto                         NormalizedModelEndpointPreset(QString preset) -> QString;
+// The Hugging Face endpoint of a source preset; "custom" uses @p custom_endpoint when it is
+// not empty, else the mirror.
+auto ModelEndpointForPreset(const QString& preset, const QString& custom_endpoint) -> QString;
+auto ConfiguredModelEndpointPreset() -> QString;
+auto ConfiguredCustomModelEndpoint() -> QString;
+// The endpoint of the configured source preset.
+auto EffectiveSemanticModelEndpoint() -> QString;
 
 // Sibling staging directory used while a profile download is in flight:
 // "<parent>/.<root-name>.download".

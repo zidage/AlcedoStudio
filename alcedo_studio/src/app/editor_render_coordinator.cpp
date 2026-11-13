@@ -36,6 +36,20 @@ auto ReasonLabel(const EditorRenderReason reason) -> const char* {
       return "CropRotate";
     case EditorRenderReason::ScopeRefresh:
       return "ScopeRefresh";
+    case EditorRenderReason::GraphTopologyChanged:
+      return "GraphTopologyChanged";
+    case EditorRenderReason::SettledMaskEdit:
+      return "SettledMaskEdit";
+    case EditorRenderReason::VersionDocumentChanged:
+      return "VersionDocumentChanged";
+    case EditorRenderReason::PastedPipelineDocument:
+      return "PastedPipelineDocument";
+    case EditorRenderReason::ResourceChanged:
+      return "ResourceChanged";
+    case EditorRenderReason::ComparisonClosed:
+      return "ComparisonClosed";
+    case EditorRenderReason::MaskCoverageProbeChanged:
+      return "MaskCoverageProbeChanged";
   }
   return "?";
 }
@@ -246,6 +260,12 @@ void EditorRenderCoordinator::Emit(EditorRenderResult result) {
         diag::NoteRenderE2eTerminal(result.request_id, "cancelled");
       }
       break;
+    case EditorRenderResultKind::PresentationSuspended:
+      ++cancelled_count_;
+      if (result.request_id != 0) {
+        diag::NoteRenderE2eTerminal(result.request_id, "presentation-suspended");
+      }
+      break;
     case EditorRenderResultKind::Failed:
       ++failed_count_;
       last_error_ = result.message.empty() ? "Render failed" : result.message;
@@ -415,44 +435,6 @@ void EditorRenderCoordinator::CancelSession(std::uint64_t image_load_request_id,
   }
 }
 
-void EditorRenderCoordinator::CancelSessionAndWait(std::uint64_t image_load_request_id) {
-  CancelSession(image_load_request_id);
-  if (scheduler_) {
-    scheduler_->WaitForSessionIdle(image_load_request_id);
-  }
-}
-
-void EditorRenderCoordinator::WaitForSessionIdle(std::uint64_t image_load_request_id) {
-  // History head moves queue behind the *current* frame only:
-  // - Drop not-yet-started pending (stale after rebuild; no point finishing them).
-  // - Do not cancel in-flight work — let it present, then take render_lock.
-  {
-    std::scoped_lock lock(mutex_);
-    for (auto& slot : slots_) {
-      if (!slot.has_value() ||
-          slot->request.intent.image_load_request_id.value != image_load_request_id) {
-        continue;
-      }
-      EditorRenderResult cancelled;
-      cancelled.kind       = EditorRenderResultKind::Cancelled;
-      cancelled.request_id = slot->request.request_id;
-      cancelled.intent     = slot->request.intent;
-      cancelled.message    = "Superseded while queueing behind in-flight frame";
-      Emit(std::move(cancelled));
-      terminal_request_ids_.insert(slot->request.request_id);
-      slot.reset();
-    }
-  }
-  DeliverPendingResults();
-  // Joins the scheduler worker for this session. Present waits release
-  // render_lock and the port pumps GUI events so this can complete on the
-  // owner thread. Coordinator inflight_ may lag one CompleteJob call; the
-  // worker has already left Apply/present before Wait returns.
-  if (scheduler_) {
-    scheduler_->WaitForSessionIdle(image_load_request_id);
-  }
-}
-
 auto EditorRenderCoordinator::CancelRequest(std::uint64_t request_id) -> bool {
   bool          did_cancel              = false;
   std::uint64_t scheduler_job_to_cancel = 0;
@@ -597,9 +579,12 @@ void EditorRenderCoordinator::NotifySchedulerCompleted(std::uint64_t request_id,
       const bool already_terminal = terminal_request_ids_.count(request_id) != 0;
       const bool cancelled = inflight_->request.intent.cancellation &&
                              inflight_->request.intent.cancellation->IsCancelled();
+      // A sink refusal while the viewport is minimized is not a render error.
+      const bool suspended = !success && IsPresentationSuspendedMessage(message);
       EditorRenderResult completed;
       completed.kind       = success     ? EditorRenderResultKind::FrameReady
                              : cancelled ? EditorRenderResultKind::Cancelled
+                             : suspended ? EditorRenderResultKind::PresentationSuspended
                                          : EditorRenderResultKind::Failed;
       completed.request_id = request_id;
       completed.intent     = inflight_->request.intent;

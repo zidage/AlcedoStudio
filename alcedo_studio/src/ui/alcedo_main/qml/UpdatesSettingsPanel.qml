@@ -59,7 +59,7 @@ ColumnLayout {
             color: section.textColor
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeSection
-            font.weight: appTheme.fontWeightHeading
+            font.weight: appTheme.fontWeightStrong
         }
 
         Rectangle {

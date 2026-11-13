@@ -5,11 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
 
-#include "app/editor_adjustment_types.hpp"
-#include "app/editor_render_intent.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -35,23 +32,6 @@ enum class EditorSessionState : std::uint8_t {
   ShuttingDown,
 };
 
-/// Typed session intents submitted by the QML facade or internal recovery paths.
-enum class EditorSessionIntentKind : std::uint8_t {
-  Open = 0,
-  Switch,
-  Close,
-  Patch,
-  CommitAdjustment,
-  Undo,
-  Redo,
-  Discard,
-  // Phase 5D: pure viewport/geometry view change (zoom, pan, resize, crop/
-  // rotation, ROI). Carries the render reason in EditorSessionIntent::view_reason;
-  // the coordinator decides reuse vs. InteractivePrimary vs. DetailPatch.
-  ViewChange,
-  Shutdown,
-};
-
 /// Outcomes published by EditorSessionService for UI and tests.
 enum class EditorSessionResultKind : std::uint8_t {
   Accepted = 0,
@@ -62,6 +42,17 @@ enum class EditorSessionResultKind : std::uint8_t {
   SaveFinished,
   Failed,
   Rejected,
+  /// A frame for `render_request_id` reached presentation. Published only for a render that a
+  /// command routed, so a client can wait for the frame of its own commit.
+  FramePresented,
+  /// The render of `render_request_id` failed; `message` has the reason. Published only for a
+  /// render that a command routed, like FramePresented: the command's commit stays, but no frame
+  /// of it will be presented.
+  FrameFailed,
+  /// The frame of `render_request_id` was not presented because the viewport is suspended
+  /// (window minimized or hidden). The command's commit stays; the session presents the current
+  /// state when the viewport is shown again.
+  FrameDeferred,
 };
 
 /// Public session identity carries durable domain ids only. Worker correlation
@@ -70,30 +61,6 @@ enum class EditorSessionResultKind : std::uint8_t {
 struct EditorSessionIdentity {
   sl_element_id_t element_id = 0;
   image_id_t      image_id   = 0;
-};
-
-struct EditorSessionIntent {
-  EditorSessionIntentKind             kind       = EditorSessionIntentKind::Open;
-  sl_element_id_t                     element_id = 0;
-  image_id_t                          image_id   = 0;
-  /// Full adjustment patch for Patch / CommitAdjustment (field + params).
-  EditorAdjustmentPatch               patch{};
-  /// Optional full snapshot when the producer already has one.
-  EditorRenderAdjustmentSnapshot      adjustment{};
-  /// ViewChange reason (zoom/pan/resize/crop-rotation/ROI). Ignored for other
-  /// intent kinds. Phase 5D.
-  EditorRenderReason                  view_reason = EditorRenderReason::ZoomPan;
-  /// ViewChange requested region (the visible viewport ROI). Attached to the
-  /// render intent for DetailRefresh so the request carries its requested
-  /// region (Phase 5D D5). Nullopt for full-frame view changes.
-  std::optional<ViewportRenderRegion> view_region{std::nullopt};
-  /// Optional human-readable failure/context payload for tests and diagnostics.
-  std::string                         note{};
-  /// Close persists by default. False means discard the current unflushed edit.
-  bool                                persist_changes = true;
-
-  /// Convenience: field key only (maps into patch.field_key).
-  [[nodiscard]] auto patch_key() const -> const std::string& { return patch.field_key; }
 };
 
 struct EditorSessionResult {
@@ -149,6 +116,9 @@ struct HistoryOperationEvent {
 [[nodiscard]] inline auto EditorSessionResultIsTerminal(EditorSessionResultKind kind) -> bool {
   switch (kind) {
     case EditorSessionResultKind::SaveStarted:
+    case EditorSessionResultKind::FramePresented:
+    case EditorSessionResultKind::FrameFailed:
+    case EditorSessionResultKind::FrameDeferred:
       return false;
     case EditorSessionResultKind::Accepted:
     case EditorSessionResultKind::StateChanged:

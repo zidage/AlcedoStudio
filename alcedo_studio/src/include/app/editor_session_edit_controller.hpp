@@ -9,6 +9,7 @@
 #include <string>
 
 #include "app/editor_adjustment_types.hpp"
+#include "app/editor_pending_input.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_types.hpp"
@@ -25,32 +26,47 @@ struct EditorEditOutcome {
     Failed,
     Rejected,
   };
-  Kind                    kind      = Kind::Accepted;
+  Kind                    kind            = Kind::Accepted;
   EditorSessionIdentity   identity{};
-  EditorRenderReason       reason    = EditorRenderReason::InteractiveAdjustment;
-  EditorRenderCommand      render_command;
-  std::string              message;
+  EditorRenderReason      reason          = EditorRenderReason::InteractiveAdjustment;
+  bool                    schedule_render = true;
+  EditorRenderCommand     render_command;
+  std::string             message;
 };
 
 /// Owns provisional/settled edit routing. All methods run during queue
 /// reduction; the type deliberately has no mutation mutex and never calls a live
 /// pipeline executor. Committed adjustment state lives in history and the live
-/// pipeline — not in this controller.
+/// document — not in this controller.
 class EditorSessionEditController final {
  public:
   struct Dependencies {
     std::shared_ptr<IEditorHistoryPort> history;
-    std::shared_ptr<IEditorJournalPort> journal;
   };
 
   explicit EditorSessionEditController(Dependencies dependencies);
 
   /// Apply an interactive (settled=false) or settled (settled=true) adjustment
-  /// patch. Captures the before-preview state, commits settled patches to
-  /// history, and returns a render command carrying only the current field patch.
+  /// patch. Unspecified current-panel targets are completed from the live
+  /// document in history. Explicit incomplete targets are rejected. Captures the
+  /// before-preview state, commits settled patches to history, and returns a
+  /// render command. The render reads the bound document; the command carries no
+  /// parameter values.
   auto HandlePatch(EditorAdjustmentPatch patch, bool settled,
                    const EditorHistoryGuardHandle& guard,
                    const EditorSessionIdentity& identity) -> EditorEditOutcome;
+
+  /**
+   * @brief Apply one pending-input sequence under the history owner.
+   *
+   * Captures first-before values, applies every field once, commits Release and
+   * NodeSwitch sequences, restores Cancel without committing, and returns a
+   * single render command. History capture writes the live document; the render
+   * reads that document and the command carries no parameter values.
+   */
+  auto HandlePendingSequence(const EditorPendingSequence& sequence,
+                             const EditorHistoryGuardHandle& guard,
+                             const EditorSessionIdentity& identity) -> EditorEditOutcome;
 
   /// Undo or redo the last history operation. History rebuilds the live pipeline;
   /// the render command carries no adjustment replay.

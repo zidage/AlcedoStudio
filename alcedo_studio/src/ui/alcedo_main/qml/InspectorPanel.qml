@@ -26,7 +26,6 @@ Item {
     // Phase 2: the interaction-policy controller (forwarded to ImageInspectorPanel
     // so its edit controls can bind enabled to the focused-image policy gates).
     property var interactionPolicy: null
-    property var exportQueueState: null
     property var selectionState: null
     property int selectedCount: 0
     property int currentPage: 0  // 0 = Album, 1 = Image, 2 = Export
@@ -34,6 +33,7 @@ Item {
     signal descriptionSaveRequested(string caption)
     signal ratingReasonSaveRequested(string reasons)
     signal contextMenuRequested(var item, real sceneX, real sceneY)
+    signal colorLabelSettingsRequested()
 
     readonly property color textColor: appTheme.textColor
     readonly property color mutedTextColor: appTheme.textMutedColor
@@ -56,7 +56,7 @@ Item {
     readonly property bool exportBusy: exportInspectorPage ? exportInspectorPage.exportBusy : false
     readonly property int exportQueueCount: exportInspectorPage
                                             ? exportInspectorPage.exportQueueCount
-                                            : (exportQueueState ? exportQueueState.exportQueueCount : 0)
+                                            : appModules.exportQueue.count
     readonly property bool exportSettingsValid: exportInspectorPage
                                                  ? exportInspectorPage.settingsValid : true
 
@@ -153,6 +153,7 @@ Item {
             AlbumInspectorPanel {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                onColorLabelSettingsRequested: root.colorLabelSettingsRequested()
             }
 
             ImageInspectorPanel {
@@ -178,7 +179,6 @@ Item {
                 id: exportInspectorPage
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                exportQueueState: root.exportQueueState
                 selectionState: root.selectionState
                 selectedCount: root.selectedCount
                 pageActive: root.currentPage === 2

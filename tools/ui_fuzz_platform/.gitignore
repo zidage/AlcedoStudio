@@ -1,6 +1,0 @@
-node_modules/
-dist/
-.next/
-.next-dev/
-/runs/
-*.log

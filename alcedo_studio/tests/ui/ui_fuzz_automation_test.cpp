@@ -131,7 +131,7 @@ void SeedLibraryThumbnails(alcedo::ui::ApplicationModuleHost& host, int count) {
     item.file_id        = static_cast<sl_element_id_t>(3000 + i);
     item.file_name      = QStringLiteral("test_%1.arw").arg(i);
     item.extension      = QStringLiteral("arw");
-    item.thumb_data_url = QString();
+    item.thumb_url      = QString();
     items.push_back(item);
   }
   host.library()->view_state().all_images_  = items;

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Grill Me"
+  short_description: "Pressure-test a plan through focused questions"
+  default_prompt: "Use $grill-me to pressure-test this plan before implementation."
+
+policy:
+  allow_implicit_invocation: false

@@ -19,6 +19,13 @@ add_compile_definitions(
   ALCEDO_QT_QML_IMPORT_PATH="${ALCEDO_QT_QML_IMPORT_DIR}"
 )
 
+# Production Main.qml now parses EditorNodesPanel, which imports QuickQanava.
+# Executables that load that tree must link the static plugin. Callers still
+# initialize after addImportPath("qrc:/").
+function(alcedo_link_quickqanava_qml target)
+  target_link_libraries(${target} PRIVATE QuickQanava QuickQanavaplugin)
+endfunction()
+
 function(alcedo_deploy_qt_offscreen_platform_plugin target_name)
   if(NOT WIN32 OR NOT TARGET ${target_name})
     return()
@@ -75,7 +82,7 @@ if(APPLE AND ALCEDO_ENABLE_METAL)
       ${ALCEDO_TEST_ROOT}/ui/editor_window_color_management_test.mm)
   target_include_directories(EditorWindowColorManagementTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(EditorWindowColorManagementTest
-      PRIVATE EditorRhiViewport GTest::gtest_main)
+      PRIVATE EditorRhiViewport ExportIccProfileResolver GTest::gtest_main)
   set_source_files_properties(
       ${ALCEDO_TEST_ROOT}/ui/editor_window_color_management_test.mm
       PROPERTIES LANGUAGE OBJCXX)
@@ -89,7 +96,6 @@ endif()
 macro(def_ui_test TARGET_NAME SOURCE_FILE)
     add_executable(${TARGET_NAME}
         ${ALCEDO_TEST_ROOT}/ui/${SOURCE_FILE}
-        ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
     )
     target_include_directories(${TARGET_NAME}
         PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -97,7 +103,9 @@ macro(def_ui_test TARGET_NAME SOURCE_FILE)
     )
     target_link_libraries(${TARGET_NAME}
         PRIVATE
+            AlcedoInProcessTestMain
             AlbumBackendLib
+            StorageInvariantsTestSupport
             GTest::gtest
             Qt6::Test
             Qt6::Core
@@ -118,8 +126,6 @@ add_executable(UiFuzzAutomationTest
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/application_module_qml_types.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/application_module_qml_types.hpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_json.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_json.hpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_item_tree.cpp
@@ -174,8 +180,8 @@ alcedo_register_test_target(UiFuzzAutomationTest ui)
 # Editor session history owns Mini-Git working state and immutable captures.
 # Link the production adapters directly (not AlbumBackendLib) so the binary does
 # not pull the full QML/Qt shell graph into a unit-test process.
-add_executable(EditorSessionHistoryPortTest
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
+# Production sources of the editor history port, shared by the binaries that drive it directly.
+set(ALCEDO_EDITOR_HISTORY_PORT_SOURCES
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_state_detail.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_shared_helpers.cpp
@@ -186,17 +192,39 @@ add_executable(EditorSessionHistoryPortTest
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_checkpoint.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_commit_presentation.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_pipeline_port.cpp)
+add_executable(EditorSessionHistoryPortTest
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_document_history_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_profile_tone_entry_history_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_version_checkout_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_node_topology_history_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_document_paste_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_committed_snapshot_publication_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_working_document_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
 target_include_directories(EditorSessionHistoryPortTest
-  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorSessionHistoryPortTest
   AdjustmentTransferService
+  AiMaskAnalysisImage
+  LutPreviewImage
+  EditorComparisonInputs
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
   EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
   EditorMiniGitMaterializer
   PipelineMgmtService
   ProjectService
-  EditHistory
+  PipelineHistory
   EditPipeline
-  Operators
+  EditRuntime
   GTest::gtest_main)
 # Land next to the shared tests runtime DLLs (not the heavier ui/ shell DLL set).
 set_target_properties(EditorSessionHistoryPortTest PROPERTIES
@@ -209,6 +237,166 @@ alcedo_ui_gtest_discover_tests(EditorSessionHistoryPortTest
 # Lands in the shared tests/ dir; still overwrite vcpkg applocal lensfun there.
 alcedo_register_test_target(EditorSessionHistoryPortTest ui)
 
+# Editor comparison inputs read the held history through the real history port; same direct
+# adapter link rule as EditorSessionHistoryPortTest.
+add_executable(EditorComparisonInputsTest
+    ${ALCEDO_TEST_ROOT}/app/editor_comparison_inputs_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/ai_mask_analysis_image_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorComparisonInputsTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorComparisonInputsTest
+  AiMaskAnalysisImage
+  LutPreviewImage
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorComparisonInputsTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorComparisonInputsTest
+  TEST_PREFIX "EditorComparisonInputsTest."
+  PROPERTIES LABELS "editor_history;editor_session;editor_comparison")
+alcedo_register_test_target(EditorComparisonInputsTest ui)
+
+# The editor comparison through the production session facade over the real history port: entry
+# admission, action restriction, captured working values, Version sources, close, and image switch.
+# Also the AI Mask edit Open, Commit, and Cancel over the same ports (SM5.3).
+add_executable(EditorComparisonServiceTest
+    ${ALCEDO_TEST_ROOT}/app/editor_comparison_service_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/editor_ai_mask_edit_service_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorComparisonServiceTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorComparisonServiceTest
+  EditorSessionService
+  EditorComparisonService
+  AiMaskAnalysisImage
+  LutPreviewImage
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorComparisonServiceTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorComparisonServiceTest
+  TEST_PREFIX "EditorComparisonServiceTest."
+  PROPERTIES LABELS "editor_session;editor_comparison")
+alcedo_register_test_target(EditorComparisonServiceTest ui)
+
+# The AI Mask coverage preview through the production session facade over the real history port
+# (SM8.7): a real AiMaskEditSession over a fake runner and a recording coverage port.
+add_executable(EditorMaskCoveragePreviewTest
+    ${ALCEDO_TEST_ROOT}/app/editor_mask_coverage_preview_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/editor_mask_range_coverage_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorMaskCoveragePreviewTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorMaskCoveragePreviewTest
+  EditorSessionService
+  EditorMaskCoveragePreview
+  AiMaskEditSession
+  EditorComparisonService
+  AiMaskAnalysisImage
+  LutPreviewImage
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorMaskCoveragePreviewTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorMaskCoveragePreviewTest
+  TEST_PREFIX "EditorMaskCoveragePreviewTest."
+  PROPERTIES LABELS "editor_session;ai_mask")
+alcedo_register_test_target(EditorMaskCoveragePreviewTest ui)
+
+# Undo, Redo, head moves, and Paste refused while a slider input sequence or a Mask edit is open,
+# through the production session facade over the real history port.
+add_executable(EditorHistoryMoveDuringInputTest
+    ${ALCEDO_TEST_ROOT}/app/editor_history_move_during_input_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorHistoryMoveDuringInputTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorHistoryMoveDuringInputTest
+  EditorSessionService
+  EditorComparisonService
+  AiMaskAnalysisImage
+  LutPreviewImage
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorHistoryMoveDuringInputTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorHistoryMoveDuringInputTest
+  TEST_PREFIX "EditorHistoryMoveDuringInputTest."
+  PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
+alcedo_register_test_target(EditorHistoryMoveDuringInputTest ui)
+
 # Checkpoint storage owns Mini-Git materialization and recovery.
 # Same direct-adapter link rule as history port: avoid AlbumBackendLib for unit runs.
 add_executable(EditorSessionCheckpointStoreTest
@@ -220,9 +408,8 @@ target_link_libraries(EditorSessionCheckpointStoreTest
   EditorMiniGitMaterializer
   EditorSaveCheckpointCoordinator
   ProjectService
-  EditHistory
+  PipelineHistory
   Storage
-  Operators
   GTest::gtest_main)
 set_target_properties(EditorSessionCheckpointStoreTest PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
@@ -245,26 +432,13 @@ alcedo_ui_gtest_discover_tests(EditorSessionThumbnailPortTest
   PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionThumbnailPortTest ui)
 
-# Phase 6C-5: per-image journal writer port. Owns writer lookup, locks,
-# append, and durability barrier. No database or QML dependency.
-add_executable(EditorSessionJournalWriterPortTest
-    ${ALCEDO_TEST_ROOT}/ui/editor_session_journal_writer_port_test.cpp)
-target_include_directories(EditorSessionJournalWriterPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorSessionJournalWriterPortTest
-  AlbumBackendLib
-  GTest::gtest_main)
-alcedo_ui_gtest_discover_tests(EditorSessionJournalWriterPortTest
-  TEST_PREFIX "EditorSessionJournalWriterPortTest."
-  PROPERTIES LABELS "editor_session")
-alcedo_register_test_target(EditorSessionJournalWriterPortTest ui)
-
 # Pipeline guard and task publication ports own their state independently.
 add_executable(EditorSessionPipelinePortTest
     ${ALCEDO_TEST_ROOT}/ui/editor_session_pipeline_port_test.cpp)
 target_include_directories(EditorSessionPipelinePortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorSessionPipelinePortTest
   AlbumBackendLib
-  EditHistory
+  PipelineHistory
   GTest::gtest_main)
 alcedo_ui_gtest_discover_tests(EditorSessionPipelinePortTest
   TEST_PREFIX "EditorSessionPipelinePortTest."
@@ -285,19 +459,52 @@ alcedo_register_test_target(EditorSessionTaskPortTest ui)
 add_executable(EditorSessionRenderSchedulerPortTest
     ${ALCEDO_TEST_ROOT}/ui/editor_session_render_scheduler_port_test.cpp)
 target_include_directories(EditorSessionRenderSchedulerPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+# The GPU fixture reads the sample DNG profile through LibRaw itself. The project LibRaw headers
+# must come before the vcpkg include directory, which also has a libraw/libraw.h.
+if(TARGET puerhlab_libraw)
+  target_include_directories(EditorSessionRenderSchedulerPortTest BEFORE PRIVATE
+    $<TARGET_PROPERTY:puerhlab_libraw,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
 target_link_libraries(EditorSessionRenderSchedulerPortTest
   AlbumBackendLib
+  libraw::raw_r
   GTest::gtest_main)
 alcedo_ui_gtest_discover_tests(EditorSessionRenderSchedulerPortTest
   TEST_PREFIX "EditorSessionRenderSchedulerPortTest."
   PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionRenderSchedulerPortTest ui)
 
+# Resource and timing evidence of a comparison pair of a large Bayer RAW on the editor executor
+# (CUDA). Same LibRaw include order as the port test.
+add_executable(EditorComparisonLargeRawPairTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_comparison_large_raw_pair_test.cpp)
+target_include_directories(EditorComparisonLargeRawPairTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+if(TARGET puerhlab_libraw)
+  target_include_directories(EditorComparisonLargeRawPairTest BEFORE PRIVATE
+    $<TARGET_PROPERTY:puerhlab_libraw,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
+target_link_libraries(EditorComparisonLargeRawPairTest
+  AlbumBackendLib
+  libraw::raw_r
+  GTest::gtest_main)
+alcedo_ui_gtest_discover_tests(EditorComparisonLargeRawPairTest
+  TEST_PREFIX "EditorComparisonLargeRawPairTest."
+  PROPERTIES LABELS "editor_session;editor_comparison")
+alcedo_register_test_target(EditorComparisonLargeRawPairTest ui)
+
 def_ui_test(AlbumBackendImportTest   album_backend_import_test.cpp)
 alcedo_register_test_target(AlbumBackendImportTest ui)
 
 def_ui_test(AlbumBackendProjectTest  album_backend_project_test.cpp)
 alcedo_register_test_target(AlbumBackendProjectTest ui)
+
+# CLIP model install, cancel, and remove per profile, and activation per project (AI Models
+# plan, AM3).
+def_ui_test(ClipModelInstallActivationTest clip_model_install_activation_test.cpp)
+target_compile_definitions(ClipModelInstallActivationTest PRIVATE
+    ALCEDO_RPC_FAKE_ARIA2_PATH="$<TARGET_FILE:DownloadServiceRpcFakeAria2>")
+add_dependencies(ClipModelInstallActivationTest DownloadServiceRpcFakeAria2)
+alcedo_register_test_target(ClipModelInstallActivationTest ui)
 
 def_ui_test(AlbumBackendFolderTest   album_backend_folder_test.cpp)
 alcedo_register_test_target(AlbumBackendFolderTest ui)
@@ -311,11 +518,36 @@ alcedo_register_test_target(AlbumBackendImageDetailsTest ui)
 def_ui_test(AlbumBackendRatingTest album_backend_rating_test.cpp "ci_raw_flow")
 alcedo_register_test_target(AlbumBackendRatingTest ui)
 
+# Library color labels and the Delete mark (#769).
+def_ui_test(AlbumBackendLibraryMarksTest album_backend_library_marks_test.cpp)
+alcedo_register_test_target(AlbumBackendLibraryMarksTest ui)
+
 def_ui_test(AlbumBackendThumbnailTest album_backend_thumbnail_test.cpp)
 alcedo_register_test_target(AlbumBackendThumbnailTest ui)
 
 def_ui_test(AlbumBackendStatsFilterTest album_backend_stats_filter_test.cpp)
 alcedo_register_test_target(AlbumBackendStatsFilterTest ui)
+
+# Phase S5 (library search): search worker coalescing and search SQL off the UI thread.
+def_ui_test(SearchRequestWorkerTest search_request_worker_test.cpp)
+alcedo_register_test_target(SearchRequestWorkerTest ui)
+
+# Automation AU13: routing, request matching, and the result window of the global search.
+def_ui_test(SearchSessionTest search_session_test.cpp)
+alcedo_register_test_target(SearchSessionTest ui)
+
+def_ui_test(AlbumBackendSearchWorkerTest album_backend_search_worker_test.cpp)
+alcedo_register_test_target(AlbumBackendSearchWorkerTest ui)
+
+# Library sort, group, and import time (album_sort_group_and_import_time_plan.md, Phase 2):
+# section projection geometry, and the one library query path of LibraryModule.
+def_ui_test(AlbumSectionModelTest album_section_model_test.cpp)
+alcedo_register_test_target(AlbumSectionModelTest ui)
+# Issue 745: justified-rows Library layout geometry, its window model, and the layout setting.
+def_ui_test(JustifiedLayoutTest justified_layout_test.cpp)
+alcedo_register_test_target(JustifiedLayoutTest ui)
+def_ui_test(AlbumBackendLibraryQueryTest album_backend_library_query_test.cpp)
+alcedo_register_test_target(AlbumBackendLibraryQueryTest ui)
 
 def_ui_test(AlbumBackendI18nTest album_backend_i18n_test.cpp)
 alcedo_register_test_target(AlbumBackendI18nTest ui)
@@ -328,8 +560,9 @@ alcedo_register_test_target(AlbumBackendBackgroundTaskTest ui)
 
 def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp "interaction_policy")
 alcedo_register_test_target(AlbumBackendInteractionPolicyTest ui)
-def_ui_test(AlbumBackendDbWriteBarrierTest album_backend_db_write_barrier_test.cpp)
-alcedo_register_test_target(AlbumBackendDbWriteBarrierTest ui)
+
+def_ui_test(AgentControlOwnerTest agent_control_owner_test.cpp "interaction_policy")
+alcedo_register_test_target(AgentControlOwnerTest ui)
 
 def_ui_test(ApplicationModuleHostLifecycleTest application_module_host_lifecycle_test.cpp)
 alcedo_register_test_target(ApplicationModuleHostLifecycleTest ui)
@@ -337,7 +570,40 @@ alcedo_register_test_target(ApplicationModuleHostLifecycleTest ui)
 def_ui_test(ApplicationModuleHostShutdownTest application_module_host_shutdown_test.cpp)
 alcedo_register_test_target(ApplicationModuleHostShutdownTest ui)
 
-# Phase 0: deterministic editor RHI contracts (backend parse, fixtures, lease schema).
+def_ui_test(ApplicationModuleHostIdleTest application_module_host_idle_test.cpp)
+alcedo_register_test_target(ApplicationModuleHostIdleTest ui)
+
+# Project launch and close owners moved out of QML (automation plan AU4).
+def_ui_test(ApplicationCloseCoordinatorTest application_close_coordinator_test.cpp)
+alcedo_register_test_target(ApplicationCloseCoordinatorTest ui)
+def_ui_test(ProjectLaunchCoordinatorTest project_launch_coordinator_test.cpp)
+alcedo_register_test_target(ProjectLaunchCoordinatorTest ui)
+def_ui_test(ProjectModuleTest project_module_close_test.cpp)
+alcedo_register_test_target(ProjectModuleTest ui)
+# Import name filters read by the QML file dialog (automation plan AU5).
+def_ui_test(ImportExportHandlerTest import_export_handler_test.cpp)
+alcedo_register_test_target(ImportExportHandlerTest ui)
+# Library selection and the delete and rating rules moved out of QML (automation plan AU6).
+def_ui_test(LibrarySelectionTest library_selection_test.cpp)
+alcedo_register_test_target(LibrarySelectionTest ui)
+def_ui_test(LibraryMutationOperationsTest library_mutation_operations_test.cpp)
+alcedo_register_test_target(LibraryMutationOperationsTest ui)
+# Export recipe rules, the export queue, and the file name pattern check moved out of QML
+# (automation plan AU12).
+def_ui_test(ExportRecipeBuilderTest export_recipe_builder_test.cpp)
+alcedo_register_test_target(ExportRecipeBuilderTest ui)
+def_ui_test(ExportQueueTest export_queue_test.cpp)
+alcedo_register_test_target(ExportQueueTest ui)
+def_ui_test(ExportNamePatternTest export_name_pattern_test.cpp)
+alcedo_register_test_target(ExportNamePatternTest ui)
+
+def_ui_test(AdjustmentTransferDialogModelTest adjustment_transfer_dialog_model_test.cpp)
+alcedo_register_test_target(AdjustmentTransferDialogModelTest ui)
+
+def_ui_test(AdjustmentTransferControllerTest adjustment_transfer_controller_test.cpp)
+alcedo_register_test_target(AdjustmentTransferControllerTest ui)
+
+# Phase 0: deterministic editor RHI checks (backend parse, fixtures, lease schema).
 add_executable(EditorRhiContractsTest
     ${ALCEDO_TEST_ROOT}/ui/editor_rhi_contracts_test.cpp
 )
@@ -412,9 +678,6 @@ endif()
 add_executable(GlobalSearchDialogQmlTest
     ${ALCEDO_TEST_ROOT}/ui/global_search_dialog_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(GlobalSearchDialogQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -439,12 +702,66 @@ target_compile_definitions(GlobalSearchDialogQmlTest
 alcedo_ui_gtest_discover_tests(GlobalSearchDialogQmlTest TEST_PREFIX "GlobalSearchDialogQmlTest.")
 alcedo_register_test_target(GlobalSearchDialogQmlTest ui)
 
+# Library sort, group, and section view QML (album_sort_group_and_import_time_plan.md, Phase 3).
+add_executable(AlbumSectionQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/album_section_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(AlbumSectionQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(AlbumSectionQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(AlbumSectionQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(AlbumSectionQmlTest TEST_PREFIX "AlbumSectionQmlTest.")
+alcedo_register_test_target(AlbumSectionQmlTest ui)
+
+# Library inspector button row QML (#731): Add to Export Queue opens the Export tab.
+add_executable(LibraryInspectorActionsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/library_inspector_actions_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LibraryInspectorActionsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(LibraryInspectorActionsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(LibraryInspectorActionsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(LibraryInspectorActionsQmlTest
+    TEST_PREFIX "LibraryInspectorActionsQmlTest.")
+alcedo_register_test_target(LibraryInspectorActionsQmlTest ui)
+
 add_executable(MainQmlWorkflowTest
     ${ALCEDO_TEST_ROOT}/ui/main_qml_workflow_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(MainQmlWorkflowTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -468,15 +785,13 @@ target_compile_definitions(MainQmlWorkflowTest
 )
 alcedo_ui_gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowTest.")
 alcedo_register_test_target(MainQmlWorkflowTest ui)
+alcedo_link_quickqanava_qml(MainQmlWorkflowTest)
 
 # Phase 6C-5 Phase 6B: QML entry surfaces blocked during save and recovered after.
 add_executable(EditorCheckpointQmlIntegrationTest
     ${ALCEDO_TEST_ROOT}/ui/editor_checkpoint_qml_integration_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorCheckpointQmlIntegrationTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -502,19 +817,22 @@ alcedo_ui_gtest_discover_tests(EditorCheckpointQmlIntegrationTest
     TEST_PREFIX "EditorCheckpointQmlIntegrationTest."
     PROPERTIES LABELS "workspace_qml;interaction_policy")
 alcedo_register_test_target(EditorCheckpointQmlIntegrationTest ui)
-add_executable(WorkspaceShellTest
-    ${ALCEDO_TEST_ROOT}/ui/workspace_shell_test.cpp
+alcedo_link_quickqanava_qml(EditorCheckpointQmlIntegrationTest)
+
+# Issue 747: the Library/editor switch on Main.qml runs no database read on the UI thread,
+# and the hidden workspace keeps its size while the collections sidebar folds.
+# Issue 751: the switch applies the sidebar at once and fades in; a manual toggle follows the
+# sidebar edge per frame and defers the cache and render size to the end of the fold.
+add_executable(EditorWorkspaceSwitchQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_workspace_switch_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
-target_include_directories(WorkspaceShellTest
+target_include_directories(EditorWorkspaceSwitchQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
     PRIVATE ${ALCEDO_TEST_DIR}
 )
-target_link_libraries(WorkspaceShellTest
+target_link_libraries(EditorWorkspaceSwitchQmlTest
     PRIVATE
         AlbumBackendLib
         GTest::gtest
@@ -527,12 +845,20 @@ target_link_libraries(WorkspaceShellTest
         Qt6::Svg
         Qt6::Widgets
 )
-target_compile_definitions(WorkspaceShellTest
+target_compile_definitions(EditorWorkspaceSwitchQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-alcedo_ui_gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTest."
-  PROPERTIES LABELS "workspace_qml")
-alcedo_register_test_target(WorkspaceShellTest ui)
+alcedo_ui_gtest_discover_tests(EditorWorkspaceSwitchQmlTest
+    TEST_PREFIX "EditorWorkspaceSwitchQmlTest."
+    PROPERTIES LABELS "workspace_qml")
+alcedo_register_test_target(EditorWorkspaceSwitchQmlTest ui)
+alcedo_link_quickqanava_qml(EditorWorkspaceSwitchQmlTest)
+
+# WorkspaceShellTest is retired: its monolithic workspace coverage accumulated
+# offscreen pointer/focus cases that cannot run reliably, so the suite is no
+# longer built or registered. Focused replacement coverage lives in the
+# dedicated *QmlTest targets below; workspace_shell_test.cpp stays in the tree
+# until the cases are redesigned and split.
 
 # Phase 7C: horizontal filmstrip model reuse, selection/focus, thumbnail pin
 # lifetime, collapse scroll preservation, busy badges, and context-menu
@@ -540,9 +866,6 @@ alcedo_register_test_target(WorkspaceShellTest ui)
 add_executable(EditorFilmstripQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_filmstrip_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/editor_filmstrip_qml_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorFilmstripQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -570,15 +893,345 @@ alcedo_ui_gtest_discover_tests(EditorFilmstripQmlTest
 )
 alcedo_register_test_target(EditorFilmstripQmlTest ui)
 
+# Issue 442: the editor closes its open image when the accepted, filtered
+# Library list no longer contains it (ImageActionsController list sync).
+add_executable(EditorLibraryListSyncQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_library_list_sync_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorLibraryListSyncQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorLibraryListSyncQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
+)
+target_compile_definitions(EditorLibraryListSyncQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(EditorLibraryListSyncQmlTest
+    TEST_PREFIX "EditorLibraryListSyncQmlTest."
+    PROPERTIES LABELS "workspace_qml;editor_filmstrip"
+)
+alcedo_register_test_target(EditorLibraryListSyncQmlTest ui)
+
+# Production QML handlers whose C++ signal starts with an upper-case letter (delete and rating
+# results, export end, accelerator preparation), driven through C++ fakes with the production
+# signal names.
+add_executable(UppercaseSignalQmlHandlersTest
+    ${ALCEDO_TEST_ROOT}/ui/uppercase_signal_qml_handlers_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(UppercaseSignalQmlHandlersTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(UppercaseSignalQmlHandlersTest
+    PRIVATE
+        AlbumBackendLib
+        AppTheme
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(UppercaseSignalQmlHandlersTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(UppercaseSignalQmlHandlersTest
+    TEST_PREFIX "UppercaseSignalQmlHandlersTest."
+    PROPERTIES LABELS "workspace_qml"
+)
+alcedo_register_test_target(UppercaseSignalQmlHandlersTest ui)
+
+# Issue #710: the Saved AI Keys settings page and the launch reminder, driven through a fake
+# profile controller with the names of AiProviderProfileController.
+add_executable(SavedAiKeysPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/saved_ai_keys_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(SavedAiKeysPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(SavedAiKeysPanelQmlTest
+    PRIVATE
+        AiProviderProfile
+        AppTheme
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(SavedAiKeysPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(SavedAiKeysPanelQmlTest
+    TEST_PREFIX "SavedAiKeysPanelQmlTest."
+    PROPERTIES LABELS "workspace_qml"
+)
+alcedo_register_test_target(SavedAiKeysPanelQmlTest ui)
+
+# Phase A2: RegisteredShortcut wrapper behavior (scope checks, editable-focus
+# suppression, live rebinding, auto-repeat) without booting the full shell.
+add_executable(RegisteredShortcutQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/registered_shortcut_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(RegisteredShortcutQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(RegisteredShortcutQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
+)
+target_compile_definitions(RegisteredShortcutQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(RegisteredShortcutQmlTest
+    TEST_PREFIX "RegisteredShortcutQmlTest."
+    PROPERTIES LABELS "workspace_qml;registered_shortcut"
+)
+alcedo_register_test_target(RegisteredShortcutQmlTest ui)
+
+# Phase B1: Settings > Keyboard grouped registry rows plus capture, conflict,
+# clear/restore, persistence-failure, and live-rebind interaction. The panel
+# harness loads KeyboardSettingsPanel/ShortcutCaptureField from source; the
+# dialog harness hosts the production SettingDialog on ApplicationModuleHost.
+add_executable(ShortcutSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/shortcut_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(ShortcutSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ShortcutSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(ShortcutSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(ShortcutSettingsQmlTest
+    TEST_PREFIX "ShortcutSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;shortcut_settings"
+)
+alcedo_register_test_target(ShortcutSettingsQmlTest ui)
+
+# LUT library plan L6B: Settings > LUTs on the production SettingDialog and module
+# host with a temporary library root, a counted local signed feed, and a held
+# downloader (feed checks per Settings opening, package actions, folder choices).
+add_executable(LutSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/lut_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LutSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(LutSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        unofficial::ed25519::ed25519
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(LutSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(LutSettingsQmlTest
+    TEST_PREFIX "LutSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;lut_settings"
+)
+alcedo_register_test_target(LutSettingsQmlTest ui)
+
+# Library color labels L2 (#770): Settings > Library > Color Labels on the production
+# SettingDialog and module host with isolated QSettings (typed names, reset glyph, restart).
+add_executable(LibraryColorLabelSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/library_color_label_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LibraryColorLabelSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(LibraryColorLabelSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(LibraryColorLabelSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(LibraryColorLabelSettingsQmlTest
+    TEST_PREFIX "LibraryColorLabelSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;library_settings"
+)
+alcedo_register_test_target(LibraryColorLabelSettingsQmlTest ui)
+
+# Settings > About and the Settings type scale (#824) on the production SettingDialog and module
+# host: Open Log Folder with a file-manager stand-in, theme type tokens on every page, and the
+# README acknowledgement links on About.
+add_executable(SettingsAboutQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/settings_about_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(SettingsAboutQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(SettingsAboutQmlTest
+    PRIVATE
+        AlbumBackendLib
+        AppDiagnostics
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(SettingsAboutQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(SettingsAboutQmlTest
+    TEST_PREFIX "SettingsAboutQmlTest."
+    PROPERTIES LABELS "workspace_qml;settings"
+)
+alcedo_register_test_target(SettingsAboutQmlTest ui)
+
+# AI Models plan AM4: Settings > AI Models on the production SettingDialog and module host with
+# the signed AI model test feed and a held downloader (feed check per page opening, download
+# statement), and the page alone with CLIP stand-ins (active border, Activate, Remove).
+add_executable(AiModelsSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/ai_models_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(AiModelsSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(AiModelsSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(AiModelsSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+    PRIVATE ALCEDO_AI_MODEL_PACKAGE_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/ai_model_packages"
+)
+alcedo_ui_gtest_discover_tests(AiModelsSettingsQmlTest
+    TEST_PREFIX "AiModelsSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;ai_models_settings"
+)
+alcedo_register_test_target(AiModelsSettingsQmlTest ui)
+
+# Issue #762: Settings > Local Content Recognition and the AI label dialog alone, with a QML
+# stand-in for the label controller (counts, split bar, short photo counts, generate buttons,
+# progress and remaining time, model row, dialog prompt and progress, page height).
+add_executable(SemanticSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/semantic_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(SemanticSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(SemanticSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+set_target_properties(SemanticSettingsQmlTest PROPERTIES AUTOMOC ON)
+target_compile_definitions(SemanticSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(SemanticSettingsQmlTest
+    TEST_PREFIX "SemanticSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;semantic_settings"
+)
+alcedo_register_test_target(SemanticSettingsQmlTest ui)
+
 # Phase 6A: typed adjustment models (no GPU/QML rendering; QSignalSpy drives the
 # debounce timer deterministically via the event loop).
 add_executable(EditorAdjustmentModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_model_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
-target_include_directories(EditorAdjustmentModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorAdjustmentModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorAdjustmentModelTest
   PRIVATE
+    AlcedoInProcessTestMain
     AlbumBackendLib
     EditorSessionService
     GTest::gtest
@@ -592,14 +1245,66 @@ target_link_libraries(EditorAdjustmentModelTest
 alcedo_ui_gtest_discover_tests(EditorAdjustmentModelTest TEST_PREFIX "EditorAdjustmentModelTest.")
 alcedo_register_test_target(EditorAdjustmentModelTest ui)
 
+# Rows and selections of the Camera Profile combo of the RAW panel (DCP plan C5). Synthetic DCP
+# files in a scratch folder; no GPU and no QML.
+add_executable(EditorCameraProfileListModelTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_camera_profile_list_model_test.cpp
+)
+target_include_directories(EditorCameraProfileListModelTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+    ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT})
+target_link_libraries(EditorCameraProfileListModelTest
+  PRIVATE
+    AlcedoInProcessTestMain
+    AlbumBackendLib
+    CameraProfileLibraryService
+    DcpCameraProfileBinding
+    GTest::gtest
+    Qt6::Core
+    Qt6::Qml
+    Qt6::Test
+)
+alcedo_ui_gtest_discover_tests(EditorCameraProfileListModelTest
+    TEST_PREFIX "EditorCameraProfileListModelTest.")
+alcedo_register_test_target(EditorCameraProfileListModelTest ui)
+
+# Slider-to-history-to-coordinator ownership boundaries. Uses a latch-blocked
+# renderer and the live Mini-Git history port; no GPU.
+add_executable(EditorSerialInputBoundaryTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_serial_input_boundary_test.cpp
+)
+target_include_directories(EditorSerialInputBoundaryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorSerialInputBoundaryTest
+  PRIVATE
+    AlcedoInProcessTestMain
+    AlbumBackendLib
+    EditorSessionService
+    EditPipeline
+    PipelineHistory
+    EditorAdjustmentPipeline
+    EditorPipelineCommandService
+    EditorSessionEditController
+    GTest::gtest
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+    Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(EditorSerialInputBoundaryTest
+    TEST_PREFIX "EditorSerialInputBoundaryTest."
+    PROPERTIES LABELS "editor_session"
+)
+alcedo_register_test_target(EditorSerialInputBoundaryTest ui)
+
 # Phase 6A: shared QML adjustment controls. Loads the controls from source via
 # an inline harness; a RecordingSubmitter stands in for editorSession.
 add_executable(EditorAdjustmentControlQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_control_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorAdjustmentControlQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -629,9 +1334,6 @@ set(ALCEDO_HISTORY_VERSIONS_RAIL_QML_HARNESS
     ${ALCEDO_TEST_ROOT}/ui/editor_history_versions_rail_qml_harness.cpp
     ${ALCEDO_TEST_ROOT}/ui/editor_history_versions_rail_qml_harness.hpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 
 add_executable(EditorVersionsPanelQmlTest
@@ -646,6 +1348,8 @@ target_include_directories(EditorVersionsPanelQmlTest
 target_link_libraries(EditorVersionsPanelQmlTest
     PRIVATE
         AlbumBackendLib
+        QuickQanava
+        QuickQanavaplugin
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -677,6 +1381,8 @@ target_include_directories(EditorHistoryTransactionsPanelQmlTest
 target_link_libraries(EditorHistoryTransactionsPanelQmlTest
     PRIVATE
         AlbumBackendLib
+        QuickQanava
+        QuickQanavaplugin
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -708,6 +1414,8 @@ target_include_directories(EditorHistoryVersionsRailLifecycleQmlTest
 target_link_libraries(EditorHistoryVersionsRailLifecycleQmlTest
     PRIVATE
         AlbumBackendLib
+        QuickQanava
+        QuickQanavaplugin
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -726,11 +1434,267 @@ alcedo_ui_gtest_discover_tests(EditorHistoryVersionsRailLifecycleQmlTest
     PROPERTIES LABELS "workspace_qml;editor_history;editor_versions")
 alcedo_register_test_target(EditorHistoryVersionsRailLifecycleQmlTest ui)
 
+# QuickQanava production integration: static-module initialization, a
+# Loader-owned graph, and repeated graph object teardown/recreation.
+add_executable(QuickQanavaProductionIntegrationTest
+    ${ALCEDO_TEST_ROOT}/ui/quickqanava_production_integration_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(QuickQanavaProductionIntegrationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(QuickQanavaProductionIntegrationTest
+    PRIVATE
+        QuickQanava
+        QuickQanavaplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(QuickQanavaProductionIntegrationTest
+    TEST_PREFIX "QuickQanavaProductionIntegrationTest."
+    PROPERTIES LABELS "quickqanava;workspace_qml")
+alcedo_register_test_target(QuickQanavaProductionIntegrationTest ui)
+
+# Read-only Qan adapter: NodeId maps, ports, role updates, generation replacement.
+add_executable(AlcedoQanGraphTest
+    ${ALCEDO_TEST_ROOT}/ui/alcedo_qan_graph_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/alcedo_qan_graph_performance_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(AlcedoQanGraphTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(AlcedoQanGraphTest
+    PRIVATE
+        AlcedoQanGraph
+        QuickQanava
+        QuickQanavaplugin
+        EditorNodeGraphDraft
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(AlcedoQanGraphTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(AlcedoQanGraphTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(AlcedoQanGraphTest
+    TEST_PREFIX "AlcedoQanGraphTest."
+    PROPERTIES LABELS "quickqanava;editor_nodes")
+alcedo_register_test_target(AlcedoQanGraphTest ui)
+
+# Delegate cache ownership and engine/graph recreation without the node controller.
+add_executable(QanDelegateLibraryTest
+    ${ALCEDO_TEST_ROOT}/ui/qan_delegate_library_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(QanDelegateLibraryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(QanDelegateLibraryTest
+    PRIVATE
+        AlcedoQanGraph
+        QuickQanava
+        QuickQanavaplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(QanDelegateLibraryTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(QanDelegateLibraryTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(QanDelegateLibraryTest
+    TEST_PREFIX "QanDelegateLibraryTest."
+    PROPERTIES LABELS "quickqanava;editor_nodes")
+alcedo_register_test_target(QanDelegateLibraryTest ui)
+
+# Alcedo node/endpoint/Mask-drawer delegates: VI bans, drawer fold, ports, icons.
+add_executable(EditorNodeDelegateQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_node_delegate_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorNodeDelegateQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(EditorNodeDelegateQmlTest
+    PRIVATE
+        AlcedoQanGraph
+        QuickQanava
+        QuickQanavaplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorNodeDelegateQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorNodeDelegateQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorNodeDelegateQmlTest
+    TEST_PREFIX "EditorNodeDelegateQmlTest."
+    PROPERTIES LABELS "quickqanava;editor_nodes;workspace_qml")
+alcedo_register_test_target(EditorNodeDelegateQmlTest ui)
+
+# Nodes-page selection, layout store, and tool-page key tests (no Qan graph).
+add_executable(EditorNodeSelectionLayoutTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_node_layout_store_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_node_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_behavior_preferences_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorNodeSelectionLayoutTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+    PRIVATE ${ALCEDO_TEST_ROOT}/edit/graph
+)
+target_link_libraries(EditorNodeSelectionLayoutTest
+    PRIVATE
+        AlbumBackendLib
+        EditorNodeGraphProjection
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::Widgets
+)
+target_compile_definitions(EditorNodeSelectionLayoutTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorNodeSelectionLayoutTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorNodeSelectionLayoutTest
+    TEST_PREFIX "EditorNodeSelectionLayoutTest."
+    PROPERTIES LABELS "editor_nodes;workspace_qml")
+alcedo_register_test_target(EditorNodeSelectionLayoutTest ui)
+
+add_executable(MaskThumbnailCoordinatorTest
+    ${ALCEDO_TEST_ROOT}/ui/mask_thumbnail_coordinator_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(MaskThumbnailCoordinatorTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/edit/graph
+)
+target_link_libraries(MaskThumbnailCoordinatorTest
+    PRIVATE
+        AlbumBackendLib
+        EditorNodeGraphProjection
+        MaskThumbnailService
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::Test
+)
+set_target_properties(MaskThumbnailCoordinatorTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(MaskThumbnailCoordinatorTest
+    TEST_PREFIX "MaskThumbnailCoordinatorTest."
+    PROPERTIES LABELS "editor_nodes")
+alcedo_register_test_target(MaskThumbnailCoordinatorTest ui)
+
+add_executable(ShortcutRegistryTest
+    ${ALCEDO_TEST_ROOT}/ui/shortcut_registry_test.cpp
+)
+target_include_directories(ShortcutRegistryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ShortcutRegistryTest
+    PRIVATE
+        AlcedoInProcessTestMain
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Test
+)
+set_target_properties(ShortcutRegistryTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(ShortcutRegistryTest
+    TEST_PREFIX "ShortcutRegistryTest."
+    PROPERTIES LABELS "keyboard_shortcuts;workspace_qml")
+alcedo_register_test_target(ShortcutRegistryTest ui)
+
+# Nodes rail page: Loader lifetime, selection, layout restore, Fit, no render.
+add_executable(EditorNodesPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_nodes_panel_qml_test.cpp
+    ${ALCEDO_HISTORY_VERSIONS_RAIL_QML_HARNESS}
+)
+target_include_directories(EditorNodesPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(EditorNodesPanelQmlTest
+    PRIVATE
+        AlbumBackendLib
+        AlcedoQanGraph
+        QuickQanava
+        QuickQanavaplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorNodesPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+    PRIVATE ALCEDO_ZH_CN_QM_FILE="${CMAKE_BINARY_DIR}/alcedo_studio/src/alcedo_main_zh_CN.qm"
+)
+add_dependencies(EditorNodesPanelQmlTest alcedo_main_lrelease)
+set_target_properties(EditorNodesPanelQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorNodesPanelQmlTest
+    TEST_PREFIX "EditorNodesPanelQmlTest."
+    PROPERTIES LABELS "quickqanava;editor_nodes;workspace_qml")
+alcedo_register_test_target(EditorNodesPanelQmlTest ui)
+
 # Phase 7B: final-display identity stamping, stale-output rejection, and
 # hidden/resume analyzer lifecycle.
 add_executable(EditorScopeControllerTest
     ${ALCEDO_TEST_ROOT}/ui/editor_scope_controller_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
 target_include_directories(EditorScopeControllerTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -738,6 +1702,7 @@ target_include_directories(EditorScopeControllerTest
 )
 target_link_libraries(EditorScopeControllerTest
     PRIVATE
+        AlcedoInProcessTestMain
         AlbumBackendLib
         GTest::gtest
         Qt6::Core
@@ -747,14 +1712,34 @@ alcedo_ui_gtest_discover_tests(EditorScopeControllerTest
     PROPERTIES LABELS "workspace_qml;editor_scope")
 alcedo_register_test_target(EditorScopeControllerTest ui)
 
+# Histogram plot painting: additive channel overlap, clip markers, and the break across a cut peak.
+add_executable(EditorScopeItemPaintTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_scope_item_paint_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorScopeItemPaintTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorScopeItemPaintTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Quick
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(EditorScopeItemPaintTest
+    TEST_PREFIX "EditorScopeItemPaintTest."
+    PROPERTIES LABELS "workspace_qml;editor_scope")
+alcedo_register_test_target(EditorScopeItemPaintTest ui)
+
 # Phase 6C-7: an already-restored snapshot must populate the QML Tone panel
 # during its first editor binding, without emitting a new adjustment patch.
 add_executable(EditorAdjustmentSnapshotQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_snapshot_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorAdjustmentSnapshotQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -780,14 +1765,229 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentSnapshotQmlTest
     TEST_PREFIX "EditorAdjustmentSnapshotQmlTest.")
 alcedo_register_test_target(EditorAdjustmentSnapshotQmlTest ui)
 
+add_executable(EditorAdjustmentHeaderQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_header_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorAdjustmentHeaderQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorAdjustmentHeaderQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorAdjustmentHeaderQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorAdjustmentHeaderQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorAdjustmentHeaderQmlTest
+    TEST_PREFIX "EditorAdjustmentHeaderQmlTest."
+    PROPERTIES LABELS "workspace_qml;adjustment_header")
+alcedo_register_test_target(EditorAdjustmentHeaderQmlTest ui)
+
+# Editor comparison presentation: SDR conversion and pair store/provider, source-space
+# alignment of the production canvas, and the production view and panel QML.
+add_executable(EditorComparisonImageProviderTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_comparison_image_provider_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorComparisonImageProviderTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorComparisonImageProviderTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorComparisonImageProviderTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorComparisonImageProviderTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorComparisonImageProviderTest
+    TEST_PREFIX "EditorComparisonImageProviderTest."
+    PROPERTIES LABELS "editor_comparison")
+alcedo_register_test_target(EditorComparisonImageProviderTest ui)
+
+add_executable(EditorComparisonGeometryTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_comparison_geometry_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorComparisonGeometryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorComparisonGeometryTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorComparisonGeometryTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorComparisonGeometryTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorComparisonGeometryTest
+    TEST_PREFIX "EditorComparisonGeometryTest."
+    PROPERTIES LABELS "editor_comparison")
+alcedo_register_test_target(EditorComparisonGeometryTest ui)
+
+add_executable(EditorComparisonControllerTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_comparison_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorComparisonControllerTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorComparisonControllerTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorComparisonControllerTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorComparisonControllerTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorComparisonControllerTest
+    TEST_PREFIX "EditorComparisonControllerTest."
+    PROPERTIES LABELS "editor_session;editor_comparison")
+alcedo_register_test_target(EditorComparisonControllerTest ui)
+
+# The Luminance Range and Hue Range bars of EditorMaskCreationAdapter (Mask ranges MR4) through
+# the production EditorSessionController and session facade over the real history port.
+add_executable(EditorMaskRangeAdapterTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_mask_range_adapter_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorMaskRangeAdapterTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph
+)
+target_link_libraries(EditorMaskRangeAdapterTest
+    PRIVATE
+        AlbumBackendLib
+        EditorSessionService
+        EditorMaskCoveragePreview
+        AiMaskEditSession
+        EditMaskCore
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+set_target_properties(EditorMaskRangeAdapterTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorMaskRangeAdapterTest
+    TEST_PREFIX "EditorMaskRangeAdapterTest."
+    PROPERTIES LABELS "editor_session;mask_ranges")
+alcedo_register_test_target(EditorMaskRangeAdapterTest ui)
+
+# AI Models plan, AM5: the AI Mask tool reads the installed AI Mask model set before it starts
+# the sidecar, through the production EditorSessionController and session facade.
+add_executable(EditorAiMaskModelSetTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_ai_mask_model_set_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorAiMaskModelSetTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph
+)
+target_link_libraries(EditorAiMaskModelSetTest
+    PRIVATE
+        AlbumBackendLib
+        EditorSessionService
+        EditorMaskCoveragePreview
+        AiMaskEditSession
+        EditMaskCore
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+set_target_properties(EditorAiMaskModelSetTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorAiMaskModelSetTest
+    TEST_PREFIX "EditorAiMaskModelSetTest."
+    PROPERTIES LABELS "editor_session;ai_mask")
+alcedo_register_test_target(EditorAiMaskModelSetTest ui)
+
+add_executable(EditorComparisonViewQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_comparison_view_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorComparisonViewQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorComparisonViewQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorComparisonViewQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorComparisonViewQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorComparisonViewQmlTest
+    TEST_PREFIX "EditorComparisonViewQmlTest."
+    PROPERTIES LABELS "workspace_qml;editor_comparison")
+alcedo_register_test_target(EditorComparisonViewQmlTest ui)
+
 # Display Transform QML snapshot: verifies ODT params populate the
 # Display Transform panel on first bind and method/space/EOTF changes.
 add_executable(EditorDisplayTransformSnapshotQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_display_transform_snapshot_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorDisplayTransformSnapshotQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -816,11 +2016,11 @@ alcedo_register_test_target(EditorDisplayTransformSnapshotQmlTest ui)
 # Phase 6F: shared crop equations and QML-facing lens catalog adapter.
 add_executable(EditorGeometryMathTest
     ${ALCEDO_TEST_ROOT}/ui/editor_geometry_math_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
 target_include_directories(EditorGeometryMathTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorGeometryMathTest
   PRIVATE
+    AlcedoInProcessTestMain
     AlbumBackendLib
     GTest::gtest
     JSON
@@ -838,9 +2038,6 @@ alcedo_register_test_target(EditorGeometryMathTest ui)
 add_executable(EditorGeometryPanelQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_geometry_panel_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorGeometryPanelQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -867,22 +2064,21 @@ alcedo_ui_gtest_discover_tests(EditorGeometryPanelQmlTest
     PROPERTIES LABELS "workspace_qml;geometry_panel")
 alcedo_register_test_target(EditorGeometryPanelQmlTest ui)
 
-# Phase 6G: RAW Decode capability gating, user input, complete operator params,
+# Phase 6G: RAW Decode capability checks, user input, complete operator params,
 # and session snapshot replay through the production QML panel.
 add_executable(EditorRawDecodePanelQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_raw_decode_panel_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorRawDecodePanelQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
-    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}
 )
 target_link_libraries(EditorRawDecodePanelQmlTest
     PRIVATE
         AlbumBackendLib
+        CameraProfileLibraryService
+        DcpCameraProfileBinding
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -901,27 +2097,414 @@ alcedo_ui_gtest_discover_tests(EditorRawDecodePanelQmlTest
     PROPERTIES LABELS "workspace_qml;raw_decode_panel")
 alcedo_register_test_target(EditorRawDecodePanelQmlTest ui)
 
-# Geometry overlay draft: crop-frame edits must not emit CropRotate view routing.
-add_executable(EditorGeometryOverlayDraftRoutingTest
-    ${ALCEDO_TEST_ROOT}/ui/editor_geometry_overlay_draft_routing_test.cpp
+# SM3.E (#537): the training data notice of the Sky model in the production AI Mask panel.
+add_executable(RangeSelectorBarQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/range_selector_bar_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
 )
-target_include_directories(EditorGeometryOverlayDraftRoutingTest
+target_include_directories(RangeSelectorBarQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(RangeSelectorBarQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
+)
+target_compile_definitions(RangeSelectorBarQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(RangeSelectorBarQmlTest
+    TEST_PREFIX "RangeSelectorBarQmlTest."
+    PROPERTIES LABELS "workspace_qml;mask")
+alcedo_register_test_target(RangeSelectorBarQmlTest ui)
+
+add_executable(EditorMasksPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_masks_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorMasksPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorMasksPanelQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorMasksPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(EditorMasksPanelQmlTest
+    TEST_PREFIX "EditorMasksPanelQmlTest."
+    PROPERTIES LABELS "workspace_qml;mask")
+alcedo_register_test_target(EditorMasksPanelQmlTest ui)
+
+add_executable(EditorAiMaskPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_ai_mask_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorAiMaskPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorAiMaskPanelQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorAiMaskPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(EditorAiMaskPanelQmlTest
+    TEST_PREFIX "EditorAiMaskPanelQmlTest."
+    PROPERTIES LABELS "workspace_qml;ai_mask")
+alcedo_register_test_target(EditorAiMaskPanelQmlTest ui)
+
+add_executable(MaskEditGeometryTest
+    ${ALCEDO_TEST_ROOT}/ui/mask_edit_geometry_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ai_mask_prompt_geometry_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ai_mask_input_overlay_geometry_test.cpp
+)
+target_include_directories(MaskEditGeometryTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
 )
-target_link_libraries(EditorGeometryOverlayDraftRoutingTest
+target_link_libraries(MaskEditGeometryTest
+    PRIVATE
+        AlcedoInProcessTestMain
+        EditorRhiViewport
+        EditGeometry
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+)
+alcedo_ui_gtest_discover_tests(MaskEditGeometryTest
+    TEST_PREFIX "MaskEditGeometryTest."
+    PROPERTIES LABELS "mask_edit;interaction")
+alcedo_register_test_target(MaskEditGeometryTest ui)
+
+add_executable(MaskOverlayControlTest
+    ${ALCEDO_TEST_ROOT}/ui/mask_overlay_control_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(MaskOverlayControlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(MaskOverlayControlTest
+    PRIVATE
+        EditorRhiViewport
+        AppTheme
+        EditGeometry
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Quick
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(MaskOverlayControlTest
+    TEST_PREFIX "MaskOverlayControlTest."
+    PROPERTIES LABELS "mask_overlay;editor_rhi")
+alcedo_register_test_target(MaskOverlayControlTest ui)
+
+# Crop and Mask overlay cursors: shared axis mapping, rotate bitmap, and the
+# overlay item showing the Crop rotate marker.
+add_executable(OverlayCursorTest
+    ${ALCEDO_TEST_ROOT}/ui/overlay_cursor_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(OverlayCursorTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(OverlayCursorTest
     PRIVATE
         EditorRhiViewport
         GTest::gtest
         Qt6::Core
         Qt6::Gui
         Qt6::Test
+        Qt6::Quick
+        Qt6::Widgets
 )
-alcedo_ui_gtest_discover_tests(EditorGeometryOverlayDraftRoutingTest
-    TEST_PREFIX "EditorGeometryOverlayDraftRoutingTest."
-    PROPERTIES LABELS "geometry_overlay;interaction")
-alcedo_register_test_target(EditorGeometryOverlayDraftRoutingTest ui)
+alcedo_ui_gtest_discover_tests(OverlayCursorTest
+    TEST_PREFIX "OverlayCursorTest."
+    PROPERTIES LABELS "mask_overlay;editor_rhi")
+alcedo_register_test_target(OverlayCursorTest ui)
 
+# Geometry crop frame (#221): presented-frame mapping, source size, frame-space
+# edits under the rotated preview, rotated-source constraint, and fit view lock.
+add_executable(EditorCropInteractionTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_crop_interaction_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorCropInteractionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorCropInteractionTest
+    PRIVATE
+        EditorRhiViewport
+        EditGeometry
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Quick
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(EditorCropInteractionTest
+    TEST_PREFIX "EditorCropInteractionTest."
+    PROPERTIES LABELS "geometry_overlay;interaction")
+alcedo_register_test_target(EditorCropInteractionTest ui)
+
+# Editor viewport pointer input (#708): mouse wheel zoom with and without Ctrl,
+# trackpad pan, pinch, true zoom, and overlay geometry at several DPRs.
+add_executable(EditorOverlayInteractionTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_overlay_interaction_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorOverlayInteractionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorOverlayInteractionTest
+    PRIVATE
+        EditorRhiViewport
+        EditorViewerLogic
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Quick
+        Qt6::Qml
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(EditorOverlayInteractionTest
+    TEST_PREFIX "EditorOverlayInteractionTest."
+    PROPERTIES LABELS "editor_rhi;interaction")
+alcedo_register_test_target(EditorOverlayInteractionTest ui)
+
+# Minimized editor window: the viewport sink refuses frames at once instead of
+# waiting for a scene-graph consumer, and the target is writable after restore.
+add_executable(EditorViewportSuspensionTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_viewport_suspension_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorViewportSuspensionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorViewportSuspensionTest
+    PRIVATE
+        EditorRhiViewport
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Quick
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(EditorViewportSuspensionTest
+    TEST_PREFIX "EditorViewportSuspensionTest."
+    PROPERTIES LABELS "editor_rhi;presentation")
+alcedo_register_test_target(EditorViewportSuspensionTest ui)
+
+# SM8.5: the coverage presentation channel with real native targets, a real QRhi, and a real
+# render device. The backend comes from ALCEDO_TEST_EDITOR_BACKEND (one process per test).
+add_executable(MaskCoveragePresentationTest
+    ${ALCEDO_TEST_ROOT}/ui/mask_coverage_presentation_test.cpp
+)
+target_include_directories(MaskCoveragePresentationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(MaskCoveragePresentationTest
+    PRIVATE
+        EditorRhiViewport
+        EditInput
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::GuiPrivate
+        Qt6::OpenGL
+)
+if(WIN32)
+    # editor_startup.hpp includes Windows.h; keep winsock.h out so winsock2.h users compile.
+    target_compile_definitions(MaskCoveragePresentationTest PRIVATE WIN32_LEAN_AND_MEAN)
+endif()
+if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(MaskCoveragePresentationTest PRIVATE EditRuntimeCuda)
+    alcedo_ui_gtest_discover_tests(MaskCoveragePresentationTest
+        TEST_PREFIX "MaskCoveragePresentationTest.Cuda."
+        TEST_LIST MaskCoveragePresentationCudaTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                   ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=cuda")
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(MaskCoveragePresentationTest PRIVATE EditRuntimeOpenCl)
+    if(NOT APPLE)
+        alcedo_ui_gtest_discover_tests(MaskCoveragePresentationTest
+            TEST_PREFIX "MaskCoveragePresentationTest.OpenCl."
+            TEST_LIST MaskCoveragePresentationOpenClTests
+            PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                       ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=opencl")
+    endif()
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(MaskCoveragePresentationTest PRIVATE EditRuntimeMetal)
+    alcedo_ui_gtest_discover_tests(MaskCoveragePresentationTest
+        TEST_PREFIX "MaskCoveragePresentationTest.Metal."
+        TEST_LIST MaskCoveragePresentationMetalTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu;metal")
+endif()
+alcedo_register_test_target(MaskCoveragePresentationTest ui)
+
+# SM8.6: the one viewport composite of the photo and the Mask coverage, on the real QRhi and coverage
+# channel of each backend (one process per backend, as MaskCoveragePresentationTest).
+add_executable(ViewportCoverageCompositeTest
+    ${ALCEDO_TEST_ROOT}/ui/viewport_coverage_composite_test.cpp
+)
+target_include_directories(ViewportCoverageCompositeTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ViewportCoverageCompositeTest
+    PRIVATE
+        EditorRhiViewport
+        EditorMaskCoveragePreview
+        EditInput
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::GuiPrivate
+        Qt6::OpenGL
+)
+if(WIN32)
+    target_compile_definitions(ViewportCoverageCompositeTest PRIVATE WIN32_LEAN_AND_MEAN)
+endif()
+if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(ViewportCoverageCompositeTest PRIVATE EditRuntimeCuda)
+    alcedo_ui_gtest_discover_tests(ViewportCoverageCompositeTest
+        TEST_PREFIX "ViewportCoverageCompositeTest.Cuda."
+        TEST_LIST ViewportCoverageCompositeCudaTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                   ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=cuda")
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(ViewportCoverageCompositeTest PRIVATE EditRuntimeOpenCl)
+    if(NOT APPLE)
+        alcedo_ui_gtest_discover_tests(ViewportCoverageCompositeTest
+            TEST_PREFIX "ViewportCoverageCompositeTest.OpenCl."
+            TEST_LIST ViewportCoverageCompositeOpenClTests
+            PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                       ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=opencl")
+    endif()
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(ViewportCoverageCompositeTest PRIVATE EditRuntimeMetal)
+    alcedo_ui_gtest_discover_tests(ViewportCoverageCompositeTest
+        TEST_PREFIX "ViewportCoverageCompositeTest.Metal."
+        TEST_LIST ViewportCoverageCompositeMetalTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu;metal")
+endif()
+alcedo_register_test_target(ViewportCoverageCompositeTest ui)
+
+# Mask ranges MR3: the coverage of one probed Mask from the photo render, in the viewport coverage
+# channel of each backend (one process per backend, as MaskCoveragePresentationTest).
+add_executable(MaskRangeCoverageProbeTest
+    ${ALCEDO_TEST_ROOT}/ui/mask_range_coverage_probe_test.cpp
+)
+target_include_directories(MaskRangeCoverageProbeTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(MaskRangeCoverageProbeTest
+    PRIVATE
+        EditorRhiViewport
+        EditInput
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::GuiPrivate
+        Qt6::OpenGL
+)
+if(WIN32)
+    target_compile_definitions(MaskRangeCoverageProbeTest PRIVATE WIN32_LEAN_AND_MEAN)
+endif()
+if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(MaskRangeCoverageProbeTest PRIVATE EditRuntimeCuda)
+    alcedo_ui_gtest_discover_tests(MaskRangeCoverageProbeTest
+        TEST_PREFIX "MaskRangeCoverageProbeTest.Cuda."
+        TEST_LIST MaskRangeCoverageProbeCudaTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                   ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=cuda")
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(MaskRangeCoverageProbeTest PRIVATE EditRuntimeOpenCl)
+    if(NOT APPLE)
+        alcedo_ui_gtest_discover_tests(MaskRangeCoverageProbeTest
+            TEST_PREFIX "MaskRangeCoverageProbeTest.OpenCl."
+            TEST_LIST MaskRangeCoverageProbeOpenClTests
+            PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                       ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=opencl")
+    endif()
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(MaskRangeCoverageProbeTest PRIVATE EditRuntimeMetal)
+    alcedo_ui_gtest_discover_tests(MaskRangeCoverageProbeTest
+        TEST_PREFIX "MaskRangeCoverageProbeTest.Metal."
+        TEST_LIST MaskRangeCoverageProbeMetalTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu;metal")
+endif()
+alcedo_register_test_target(MaskRangeCoverageProbeTest ui)
+
+add_executable(AnalyticMaskCreationTest
+    ${ALCEDO_TEST_ROOT}/ui/analytic_mask_creation_test.cpp
+)
+target_include_directories(AnalyticMaskCreationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph
+)
+target_link_libraries(AnalyticMaskCreationTest
+    PRIVATE
+        AlcedoInProcessTestMain
+        EditorMaskCreationController
+        EditorViewerLogic
+        EditGraph
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+)
+alcedo_ui_gtest_discover_tests(AnalyticMaskCreationTest
+    TEST_PREFIX "AnalyticMaskCreationTest."
+    PROPERTIES LABELS "mask_creation;interaction")
+alcedo_register_test_target(AnalyticMaskCreationTest ui)
 
 # Real-project regression: replay production Main.qml Copy/Paste and verify
 # that a reopened target publishes the saved Tone values to its QML models.
@@ -929,9 +2512,6 @@ add_executable(EditorAdjustmentTransferRealProjectE2eTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_transfer_real_project_e2e_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorAdjustmentTransferRealProjectE2eTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -957,15 +2537,13 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentTransferRealProjectE2eTest
     TEST_PREFIX "EditorAdjustmentTransferRealProjectE2eTest."
     PROPERTIES LABELS "workspace_qml;real_project")
 alcedo_register_test_target(EditorAdjustmentTransferRealProjectE2eTest ui)
+alcedo_link_quickqanava_qml(EditorAdjustmentTransferRealProjectE2eTest)
 
 # Phase 1D: extracted editor action components. Each target loads one QML
 # component from source with only explicit fake collaborators.
 add_executable(EditorWorkspaceNavigationQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_workspace_navigation_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorWorkspaceNavigationQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -973,6 +2551,7 @@ target_include_directories(EditorWorkspaceNavigationQmlTest
 )
 target_link_libraries(EditorWorkspaceNavigationQmlTest
     PRIVATE
+        AppTheme
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -994,9 +2573,6 @@ alcedo_register_test_target(EditorWorkspaceNavigationQmlTest ui)
 add_executable(EditorAdjustmentTransferActionsQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_transfer_actions_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorAdjustmentTransferActionsQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -1004,6 +2580,7 @@ target_include_directories(EditorAdjustmentTransferActionsQmlTest
 )
 target_link_libraries(EditorAdjustmentTransferActionsQmlTest
     PRIVATE
+        AppTheme
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -1022,15 +2599,12 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentTransferActionsQmlTest
 )
 alcedo_register_test_target(EditorAdjustmentTransferActionsQmlTest ui)
 
-# Paste/Merge strategy switcher dialog: verifies the real AdjustmentTransferDialog
-# loads in paste mode, exposes the SegmentedCardSwitcher, toggles the merge
-# notice with pasteStrategy, and reflects the strategy on the accept button.
+# Transfer dialog: verifies the real AdjustmentTransferDialog three-pane copy
+# surface and the read-only paste node/item summary, without a merge strategy
+# switcher or merge accept label.
 add_executable(AdjustmentTransferDialogQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_transfer_dialog_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(AdjustmentTransferDialogQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -1038,6 +2612,8 @@ target_include_directories(AdjustmentTransferDialogQmlTest
 )
 target_link_libraries(AdjustmentTransferDialogQmlTest
     PRIVATE
+        AlbumBackendLib
+        AppTheme
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -1050,7 +2626,9 @@ target_link_libraries(AdjustmentTransferDialogQmlTest
 )
 target_compile_definitions(AdjustmentTransferDialogQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+    PRIVATE ALCEDO_ZH_CN_QM_FILE="${CMAKE_BINARY_DIR}/alcedo_studio/src/alcedo_main_zh_CN.qm"
 )
+add_dependencies(AdjustmentTransferDialogQmlTest alcedo_main_lrelease)
 alcedo_ui_gtest_discover_tests(AdjustmentTransferDialogQmlTest
     TEST_PREFIX "AdjustmentTransferDialogQmlTest."
     PROPERTIES LABELS "workspace_qml"
@@ -1060,11 +2638,11 @@ alcedo_register_test_target(AdjustmentTransferDialogQmlTest ui)
 # Phase 6B: tone-curve model (pointer-drag behavior + operator params JSON).
 add_executable(EditorToneCurveModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_tone_curve_model_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
-target_include_directories(EditorToneCurveModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorToneCurveModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorToneCurveModelTest
   PRIVATE
+    AlcedoInProcessTestMain
     AlbumBackendLib
     GTest::gtest
     JSON
@@ -1081,11 +2659,11 @@ alcedo_register_test_target(EditorToneCurveModelTest ui)
 # Phase 6B: pure tone-curve scene geometry (no QQuickWindow / GPU).
 add_executable(EditorToneCurveGeometryTest
     ${ALCEDO_TEST_ROOT}/ui/editor_tone_curve_geometry_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
 target_include_directories(EditorToneCurveGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorToneCurveGeometryTest
   PRIVATE
+    AlcedoInProcessTestMain
     AlbumBackendLib
     GTest::gtest
     JSON
@@ -1102,11 +2680,11 @@ alcedo_register_test_target(EditorToneCurveGeometryTest ui)
 # Phase 6D: Look panel typed models (WB / HSL / CDL / LUT) — no QML/GPU.
 add_executable(EditorLookModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_look_model_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
-target_include_directories(EditorLookModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorLookModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorLookModelTest
   PRIVATE
+    AlcedoInProcessTestMain
     AlbumBackendLib
     GTest::gtest
     JSON
@@ -1120,14 +2698,42 @@ target_link_libraries(EditorLookModelTest
 alcedo_ui_gtest_discover_tests(EditorLookModelTest TEST_PREFIX "EditorLookModelTest.")
 alcedo_register_test_target(EditorLookModelTest ui)
 
+# LUT browser queries, Color Grade target binding (LUT library plan L5), and LUT previews (#598).
+add_executable(LutLibraryModelTest
+    ${ALCEDO_TEST_ROOT}/ui/lut_library_model_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/lut_library_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/lut_remembered_encodings_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/lut_preview_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LutLibraryModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(LutLibraryModelTest
+  PRIVATE
+    AlbumBackendLib
+    EditRuntime
+    GTest::gtest
+    JSON
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+    Qt6::Widgets
+)
+if(WIN32)
+  target_link_libraries(LutLibraryModelTest PRIVATE psapi)
+endif()
+alcedo_ui_gtest_discover_tests(LutLibraryModelTest TEST_PREFIX "LutLibraryModelTest.")
+alcedo_register_test_target(LutLibraryModelTest ui)
+
 # Phase 6D: pure CDL trackball disc geometry (no QQuickWindow / GPU).
 add_executable(EditorCdlTrackballGeometryTest
     ${ALCEDO_TEST_ROOT}/ui/editor_cdl_trackball_geometry_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
 target_include_directories(EditorCdlTrackballGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorCdlTrackballGeometryTest
   PRIVATE
+    AlcedoInProcessTestMain
     AlbumBackendLib
     GTest::gtest
     JSON
@@ -1141,19 +2747,20 @@ target_link_libraries(EditorCdlTrackballGeometryTest
 alcedo_ui_gtest_discover_tests(EditorCdlTrackballGeometryTest TEST_PREFIX "EditorCdlTrackballGeometryTest.")
 alcedo_register_test_target(EditorCdlTrackballGeometryTest ui)
 
-# LUT panel QML: selection scroll contract, favorites, filter, appTheme VI tokens.
-add_executable(EditorLutPanelQmlTest
-    ${ALCEDO_TEST_ROOT}/ui/editor_lut_panel_qml_test.cpp
+# Library date activity graph: rolling year from latest photo, leap-year cells,
+# histogram cache across a date filter, and calendar/activity style switch.
+add_executable(DateCommitGraphQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/date_commit_graph_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
-target_include_directories(EditorLutPanelQmlTest
+target_include_directories(DateCommitGraphQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
     PRIVATE ${ALCEDO_TEST_DIR}
 )
-target_link_libraries(EditorLutPanelQmlTest
+target_link_libraries(DateCommitGraphQmlTest
     PRIVATE
         GTest::gtest
         Qt6::Core
@@ -1164,23 +2771,89 @@ target_link_libraries(EditorLutPanelQmlTest
         Qt6::Svg
         Qt6::Widgets
 )
-target_compile_definitions(EditorLutPanelQmlTest
+target_compile_definitions(DateCommitGraphQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-set_target_properties(EditorLutPanelQmlTest PROPERTIES AUTOMOC ON)
-alcedo_ui_gtest_discover_tests(EditorLutPanelQmlTest
-    TEST_PREFIX "EditorLutPanelQmlTest."
+set_target_properties(DateCommitGraphQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(DateCommitGraphQmlTest
+    TEST_PREFIX "DateCommitGraphQmlTest."
+    PROPERTIES LABELS "workspace_qml;date_filter"
+)
+alcedo_register_test_target(DateCommitGraphQmlTest ui)
+
+# Collections sidebar tree (expand/collapse, inline create and rename, drag to move, keys) and
+# the image-menu "Add to" sub-menu (issue #732), over a C++ fake folder controller.
+add_executable(CollectionsPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/collections_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(CollectionsPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(CollectionsPanelQmlTest
+    PRIVATE
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(CollectionsPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(CollectionsPanelQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(CollectionsPanelQmlTest
+    TEST_PREFIX "CollectionsPanelQmlTest."
+    PROPERTIES LABELS "workspace_qml;collections"
+)
+alcedo_register_test_target(CollectionsPanelQmlTest ui)
+
+# LUT browser rail page QML (LUT library plan L6A): tiles, full titles, filter rows, and tile
+# application over the real LUT library model and target controller.
+add_executable(EditorLutBrowserPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_lut_browser_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorLutBrowserPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorLutBrowserPanelQmlTest
+    PRIVATE
+        AlbumBackendLib
+        AppTheme
+        GTest::gtest
+        JSON
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorLutBrowserPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorLutBrowserPanelQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorLutBrowserPanelQmlTest
+    TEST_PREFIX "EditorLutBrowserPanelQmlTest."
     PROPERTIES LABELS "workspace_qml;lut_panel"
 )
-alcedo_register_test_target(EditorLutPanelQmlTest ui)
+alcedo_register_test_target(EditorLutBrowserPanelQmlTest ui)
 
 # Export naming editor: pattern validity, ordered-field preview, and QML loading.
 add_executable(ExportNamingEditorQmlTest
     ${ALCEDO_TEST_ROOT}/ui/export_naming_editor_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(ExportNamingEditorQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -1188,6 +2861,8 @@ target_include_directories(ExportNamingEditorQmlTest
 )
 target_link_libraries(ExportNamingEditorQmlTest
     PRIVATE
+        AlbumBackendLib
+        AppTheme
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -1206,13 +2881,41 @@ alcedo_ui_gtest_discover_tests(ExportNamingEditorQmlTest
 )
 alcedo_register_test_target(ExportNamingEditorQmlTest ui)
 
+# Export presets: matching preset, applying a preset, and user presets in QML.
+add_executable(ExportPresetPickerQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/export_preset_picker_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(ExportPresetPickerQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ExportPresetPickerQmlTest
+    PRIVATE
+        AlbumBackendLib
+        AppTheme
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
+)
+target_compile_definitions(ExportPresetPickerQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(ExportPresetPickerQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(ExportPresetPickerQmlTest
+    TEST_PREFIX "ExportPresetPickerQmlTest."
+    PROPERTIES LABELS "workspace_qml;export_panel"
+)
+alcedo_register_test_target(ExportPresetPickerQmlTest ui)
+
 # Phase 6D Look panel interaction reproduction (layout, drag, double-click, flick).
 add_executable(EditorLookPanelInteractionTest
     ${ALCEDO_TEST_ROOT}/ui/editor_look_panel_interaction_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorLookPanelInteractionTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -1245,9 +2948,6 @@ alcedo_register_test_target(EditorLookPanelInteractionTest ui)
 # EditorSessionHistoryPort + pipeline guard + contended render worker.
 add_executable(EditorMultiSliderQuickTest
     ${ALCEDO_TEST_ROOT}/ui/editor_multi_slider_quicktest.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorMultiSliderQuickTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -1256,9 +2956,8 @@ target_include_directories(EditorMultiSliderQuickTest
 target_link_libraries(EditorMultiSliderQuickTest
     PRIVATE
         AlbumBackendLib
-        Operators
         EditPipeline
-        EditHistory
+        PipelineHistory
         EditorAdjustmentPipeline
         Qt6::Core
         Qt6::Gui
@@ -1286,11 +2985,49 @@ set_tests_properties(EditorMultiSliderQuickTest PROPERTIES
 )
 alcedo_register_test_target(EditorMultiSliderQuickTest ui)
 
+# Qt Quick Test: lens catalog picker (collapsible two-tier searchable menu,
+# normalized fuzzy matching, detection mapping) plus the RAW Decode
+# auto-recognition rules against a scripted-EXIF recording session.
+# QML under tests/ui/qml_lens_picker/.
+add_executable(EditorLensPickerQuickTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_lens_picker_quicktest.cpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorLensPickerQuickTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorLensPickerQuickTest
+    PRIVATE
+        AlbumBackendLib
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::QuickTest
+        Qt6::Svg
+        Qt6::Test
+        Qt6::Widgets
+)
+target_compile_definitions(EditorLensPickerQuickTest
+    PRIVATE
+        ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+        QUICK_TEST_SOURCE_DIR="${ALCEDO_TEST_ROOT}/ui/qml_lens_picker"
+)
+add_test(NAME EditorLensPickerQuickTest
+    COMMAND EditorLensPickerQuickTest
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorLensPickerQuickTest>
+)
+set_tests_properties(EditorLensPickerQuickTest PROPERTIES
+    LABELS "workspace_qml;raw_decode_panel;quicktest"
+    TIMEOUT 300
+)
+alcedo_register_test_target(EditorLensPickerQuickTest ui)
+
 add_executable(EditorRealRawGpuE2eTest
     ${ALCEDO_TEST_ROOT}/ui/editor_real_raw_gpu_e2e_test.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorRealRawGpuE2eTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -1313,6 +3050,43 @@ target_compile_definitions(EditorRealRawGpuE2eTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
 alcedo_register_test_target(EditorRealRawGpuE2eTest ui)
+alcedo_link_quickqanava_qml(EditorRealRawGpuE2eTest)
+
+add_executable(EditorPreviewPresentTrajectoryTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_preview_present_trajectory_test.cpp
+)
+target_include_directories(EditorPreviewPresentTrajectoryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorPreviewPresentTrajectoryTest
+    PRIVATE
+        AlbumBackendLib
+        PreviewPerformance
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Quick
+        Qt6::Widgets
+)
+target_compile_definitions(EditorPreviewPresentTrajectoryTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_register_test_target(EditorPreviewPresentTrajectoryTest ui)
+
+if(WIN32 AND ALCEDO_CUDA_ENABLED)
+  add_test(NAME EditorPreviewPresentTrajectoryTest.CudaSubmitWriteToFrameSwapped
+    COMMAND ${CMAKE_COMMAND} -E env
+      ALCEDO_TEST_EDITOR_BACKEND=cuda
+      $<TARGET_FILE:EditorPreviewPresentTrajectoryTest>
+  )
+  set_tests_properties(EditorPreviewPresentTrajectoryTest.CudaSubmitWriteToFrameSwapped PROPERTIES
+    LABELS "gpu;cuda;preview_performance"
+    TIMEOUT 1800
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorPreviewPresentTrajectoryTest>
+  )
+endif()
 
 if(WIN32 AND ALCEDO_CUDA_ENABLED)
   add_test(NAME EditorRealRawGpuE2eTest.CudaSustainedImageSwitches
@@ -1344,7 +3118,6 @@ endif()
 
 add_executable(LanguageManagerTest
     ${ALCEDO_TEST_ROOT}/ui/language_manager_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
 target_include_directories(LanguageManagerTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -1352,6 +3125,7 @@ target_include_directories(LanguageManagerTest
 )
 target_link_libraries(LanguageManagerTest
     PRIVATE
+        AlcedoInProcessTestMain
         UiLocalization
         GTest::gtest
         Qt6::Test
@@ -1361,14 +3135,37 @@ target_link_libraries(LanguageManagerTest
 alcedo_ui_gtest_discover_tests(LanguageManagerTest TEST_PREFIX "LanguageManagerTest.")
 alcedo_register_test_target(LanguageManagerTest ui)
 
+# PR93-176 zh_CN plan: focused catalog audit. Parses the TS source of truth,
+# then loads the compiled QM produced by alcedo_main_lrelease to prove the
+# packaged catalog translates one QML and one C++ context.
+add_executable(SimplifiedChineseCatalogTest
+    ${ALCEDO_TEST_ROOT}/ui/simplified_chinese_catalog_test.cpp
+)
+target_include_directories(SimplifiedChineseCatalogTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(SimplifiedChineseCatalogTest
+    PRIVATE
+        AlcedoInProcessTestMain
+        GTest::gtest
+        Qt6::Core
+)
+target_compile_definitions(SimplifiedChineseCatalogTest
+    PRIVATE ALCEDO_ZH_CN_TS_FILE="${ALCEDO_SRC_DIR}/ui/alcedo_main/i18n/alcedo_main_zh_CN.ts"
+    PRIVATE ALCEDO_ZH_CN_QM_FILE="${CMAKE_BINARY_DIR}/alcedo_studio/src/alcedo_main_zh_CN.qm"
+)
+add_dependencies(SimplifiedChineseCatalogTest alcedo_main_lrelease)
+alcedo_ui_gtest_discover_tests(SimplifiedChineseCatalogTest
+    TEST_PREFIX "SimplifiedChineseCatalogTest."
+    PROPERTIES LABELS "workspace_qml;i18n")
+alcedo_register_test_target(SimplifiedChineseCatalogTest ui)
+
 # Phase 6C-5 Phase 6C: production-style A-to-B integration test.
 add_executable(EditorCheckpointNavigationTest
     ${ALCEDO_TEST_ROOT}/integration/editor_checkpoint_navigation_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
-    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
-    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(EditorCheckpointNavigationTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -1394,3 +3191,4 @@ alcedo_ui_gtest_discover_tests(EditorCheckpointNavigationTest
     TEST_PREFIX "EditorCheckpointNavigationTest."
     PROPERTIES LABELS "workspace_qml;interaction_policy;integration")
 alcedo_register_test_target(EditorCheckpointNavigationTest ui)
+alcedo_link_quickqanava_qml(EditorCheckpointNavigationTest)

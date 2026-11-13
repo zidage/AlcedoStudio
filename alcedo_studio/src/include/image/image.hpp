@@ -10,17 +10,20 @@
 #include <filesystem>
 #include <json.hpp>
 #include <memory>
-#include <opencv2/opencv.hpp>
 #include <ostream>
 #include <string>
 #include <type/type.hpp>
 
 #include "decoders/processor/raw_color_context.hpp"
+#include "image/color_label.hpp"
 #include "image/image_buffer.hpp"
 #include "image/metadata.hpp"
+#include "image/raster_color_description.hpp"
 
 namespace alcedo {
-enum class ImageType { DEFAULT, JPEG, PNG, TIFF, ARW, CR2, CR3, NEF, DNG };
+/// Stored in `Image.type`. DEFAULT is RAW, or any image imported before raster input. New values
+/// are appended so that no stored integer changes meaning.
+enum class ImageType { DEFAULT, JPEG, PNG, TIFF, ARW, CR2, CR3, NEF, DNG, EXR };
 enum class ThumbState : uint8_t { NOT_PRESENT = 0, PENDING, READY, FAILED };
 enum class ImageSyncState : uint8_t { SYNCED, UNSYNCED, MODIFIED, DELETED };
 
@@ -39,8 +42,12 @@ class Image {
   Exiv2::Image::UniquePtr     exif_data_;
   nlohmann::json              exif_json_;
   ExifDisplayMetaData         exif_display_;
-  RawRuntimeColorContext       raw_color_context_;
+  RawRuntimeColorContext      raw_color_context_;
   std::atomic<bool>           has_raw_color_context_{false};
+  /// Source color description of a raster image, written once at import. Never present together
+  /// with the RAW color context.
+  RasterColorDescription      raster_color_description_;
+  std::atomic<bool>           has_raster_color_description_{false};
 
   ImageBuffer                 image_data_;
   ImageBuffer                 thumbnail_;
@@ -53,6 +60,11 @@ class Image {
   std::atomic<ImageSyncState> sync_state_  = ImageSyncState::SYNCED;
 
   p_hash_t                    checksum_;
+
+  /// Library marks (#768), stored in `Image.color_labels` and `Image.delete_mark`. Change them
+  /// with SetColorLabel and SetDeleteMark, under the image pool write lock.
+  ColorLabelMask              color_labels_ = 0;
+  bool                        delete_mark_  = false;
 
   std::atomic<bool>           has_full_img_;
   std::atomic<bool>           has_thumb_;
@@ -83,14 +95,25 @@ class Image {
   void                  SetId(image_id_t image_id);
   void                  SetExifDisplayMetaData(ExifDisplayMetaData&& exif_display);
   void                  SetHdrDisplayMetadata(bool is_hdr);
+  /// Set (@p on) or clear @p code; the other codes stay. A change marks the image MODIFIED.
+  void                  SetColorLabel(ColorLabel code, bool on);
+  /// Set or clear the Delete mark. A change marks the image MODIFIED.
+  void                  SetDeleteMark(bool on);
   void                  SetRawColorContext(RawRuntimeColorContext&& ctx);
   auto                  GetRawColorContext() const -> const RawRuntimeColorContext&;
   auto                  HasRawColorContext() const -> bool;
+  void                  SetRasterColorDescription(RasterColorDescription&& description);
+  auto                  GetRasterColorDescription() const -> const RasterColorDescription&;
+  auto                  HasRasterColorDescription() const -> bool;
 
   void                  ClearData();
   void                  ClearThumbnail();
   void                  ComputeChecksum();
   auto                  ExifToJson() -> std::string;
+  /// Display metadata only (capture, gear, exposure fields), without the RAW color context or
+  /// the raster color description.
+  /// For UI readers such as the EXIF details panel.
+  auto                  ExifDisplayToJson() const -> nlohmann::json;
   void                  JsonToExif(std::string json_str);
 
   void                  MarkSyncState(ImageSyncState state);

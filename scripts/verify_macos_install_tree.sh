@@ -4,10 +4,11 @@ set -euo pipefail
 install_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/build/install"
 bundle_name="AlcedoStudio"
 skip_metal_assets=0
+require_film_print_resources=0
 
 usage() {
   cat <<USAGE
-Usage: $0 [--install-dir PATH] [--bundle-name NAME] [--skip-metal-asset-check]
+Usage: $0 [--install-dir PATH] [--bundle-name NAME] [--skip-metal-asset-check] [--require-film-print-resources]
 
 Verify that the macOS .app install tree contains the payload needed on a clean user Mac.
 USAGE
@@ -25,6 +26,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-metal-asset-check)
       skip_metal_assets=1
+      shift
+      ;;
+    --require-film-print-resources)
+      require_film_print_resources=1
       shift
       ;;
     -h|--help)
@@ -86,10 +91,34 @@ assert_dir "$plugins_dir"
 main_exe="${macos_dir}/${bundle_name}"
 mind_exe="${macos_dir}/alcedo_mind"
 aria2c_exe="${macos_dir}/aria2c"
+cli_exe="${macos_dir}/alcedo-cli"
 
 assert_executable "$main_exe"
 assert_executable "$mind_exe"
 assert_executable "$aria2c_exe"
+assert_executable "$cli_exe"
+
+# Inspect all real files, including QML plugins, framework versions and the update helper.
+# The previous dependency list did not cover every Mach-O location in the bundle.
+declare -a macho_files=()
+while IFS= read -r -d '' candidate; do
+  if file -b "$candidate" | grep -q 'Mach-O'; then
+    archs="$(lipo -archs "$candidate")" || fail "cannot read Mach-O architectures: $candidate"
+    [[ " $archs " == *" arm64 "* ]] || fail "Mach-O has no arm64 slice ($archs): $candidate"
+    macho_files+=("$candidate")
+  fi
+done < <(find "$app_dir" -type f -print0)
+
+aria2_version="$(env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  "$aria2c_exe" --version)" || fail "bundled aria2c cannot run with a clean PATH"
+grep -F -q 'aria2 version 1.37.0' <<<"$aria2_version" || fail "bundled aria2c is not 1.37.0"
+grep -F -q 'AppleTLS' <<<"$aria2_version" || fail "bundled aria2c does not use AppleTLS"
+while IFS= read -r dep; do
+  case "$dep" in
+    /usr/lib/*|/System/Library/*) ;;
+    *) fail "aria2c has a non-system dependency: $dep" ;;
+  esac
+done < <(otool -L "$aria2c_exe" | awk 'NR > 1 {print $1}')
 
 required_files=(
   "${contents_dir}/Info.plist"
@@ -97,15 +126,30 @@ required_files=(
   "${macos_dir}/fonts/main_Inter.ttf"
   "${macos_dir}/fonts/main_NotoSans_zh.ttf"
   "${macos_dir}/config/icc/rec709_gamma22.icc"
+  "${macos_dir}/config/lens_calib/lens_catalog.json"
+  "${macos_dir}/config/lens_calib/mil-sony.xml"
+  "${macos_dir}/config/nikon_lens/id_map.json"
+  "${contents_dir}/Helpers/alcedo_update_installer"
   "${resources_dir}/duckdb_extensions/vss.duckdb_extension"
   "${resources_dir}/duckdb_extensions/fts.duckdb_extension"
   "${frameworks_dir}/QtCore.framework/QtCore"
   "${frameworks_dir}/QtGui.framework/QtGui"
+  "${frameworks_dir}/QtNetwork.framework/QtNetwork"
   "${frameworks_dir}/QtQml.framework/QtQml"
   "${frameworks_dir}/QtQuick.framework/QtQuick"
   "${frameworks_dir}/QtWidgets.framework/QtWidgets"
+  "${frameworks_dir}/QtQuickShapes.framework/QtQuickShapes"
+  "${frameworks_dir}/QtQuickEffects.framework/QtQuickEffects"
+  "${resources_dir}/qml/QtQuick/Shapes/qmldir"
+  "${resources_dir}/qml/QtQuick/Effects/qmldir"
   "${plugins_dir}/platforms/libqcocoa.dylib"
 )
+
+if [[ "$require_film_print_resources" -eq 1 ]]; then
+  film_print_dir="${macos_dir}/config/film_print"
+  cmake "-DALCEDO_FILM_PRINT_RESOURCE_DIR=${film_print_dir}" \
+    -P "$(dirname "${BASH_SOURCE[0]}")/cmake/verify_film_print_resources.cmake"
+fi
 
 for file in "${required_files[@]}"; do
   assert_file "$file"
@@ -119,24 +163,23 @@ assert_min_size "${macos_dir}/config/models/xtrans.safetensors" 10240
 if [[ "$skip_metal_assets" -eq 0 ]]; then
   metal_dir="${resources_dir}/metallib"
   assert_dir "$metal_dir"
-  # Keep in sync with ALCEDO_METAL_RUNTIME_LIBS in alcedo_studio/src/metal/CMakeLists.txt
-  metal_libs=(
-    metal_convert.metallib
-    geometry_utils.metallib
-    lens_calib.metallib
-    fused_pipeline.metallib
-    scope_analyzer.metallib
-    to_linear_ref.metallib
-    debayer_rcd.metallib
-    highlight_reconstruct.metallib
-    xtrans_interpolate.metallib
-    cvt_ref_space.metallib
-    demosaicnet_io.metallib
-  )
-  for lib in "${metal_libs[@]}"; do
-    # Empty/corrupt metallibs would still "exist"; require a non-trivial size.
-    assert_min_size "${metal_dir}/${lib}" 512
-  done
+  # The legacy fused edit pipeline metallib is archived (G10.10) and must not be packaged.
+  if [[ -e "${metal_dir}/fused_pipeline.metallib" ]]; then
+    fail "legacy fused pipeline metallib is packaged: ${metal_dir}/fused_pipeline.metallib"
+  fi
+  # The build targets own the inventory and hashes. Load each installed library
+  # and create every compute pipeline before accepting the bundle.
+  assert_executable "${macos_dir}/alcedo-gpu-check"
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin "${macos_dir}/alcedo-gpu-check" --metal
+fi
+
+# A run from the build tree writes the sidecar log next to alcedo_mind; logs must not be packaged.
+if [[ -e "${macos_dir}/log" ]]; then
+  fail "build-tree log directory is packaged: ${macos_dir}/log"
+fi
+packaged_logs="$(find "$app_dir" -type f -name '*.log*' -print -quit)"
+if [[ -n "$packaged_logs" ]]; then
+  fail "log file is packaged: ${packaged_logs}"
 fi
 
 if ! otool -L "$mind_exe" | grep -q '/System/Library/Frameworks/CoreML.framework/'; then
@@ -150,28 +193,18 @@ if otool -L "$mind_exe" | grep -q '@rpath/libswift'; then
 fi
 
 if command -v codesign >/dev/null 2>&1; then
+  # A signed bundle must still validate after CPack copies it into a package staging tree.
+  if codesign -dv "$app_dir" >/dev/null 2>&1; then
+    if ! codesign_verify_out="$(codesign --verify --deep --strict "$app_dir" 2>&1)"; then
+      fail "bundle code signature does not validate: ${codesign_verify_out}"
+    fi
+  fi
   main_codesign_details="$(codesign -dv --verbose=4 "$main_exe" 2>&1 || true)"
   if grep -q 'Signature=adhoc' <<<"$main_codesign_details" &&
      grep -q 'flags=.*runtime' <<<"$main_codesign_details"; then
     fail "main executable is ad-hoc signed with hardened runtime; this can fail at launch when loading bundled Qt/framework dylibs. Use empty ALCEDO_MACOS_CODESIGN_OPTIONS for ad-hoc builds, or sign the full bundle with a Developer ID identity."
   fi
 fi
-
-declare -a macho_files=("$main_exe" "$mind_exe" "$aria2c_exe")
-while IFS= read -r -d '' file; do
-  macho_files+=("$file")
-done < <(find "$macos_dir" "$frameworks_dir" "$plugins_dir" "${resources_dir}/duckdb_extensions" \
-  \( -name '*.dylib' -o -name '*.so' -o -name '*.duckdb_extension' \) -print0 2>/dev/null || true)
-
-while IFS= read -r -d '' framework; do
-  framework_name="$(basename "$framework" .framework)"
-  for candidate in \
-    "${framework}/${framework_name}" \
-    "${framework}/Versions/Current/${framework_name}" \
-    "${framework}/Versions/"*/"${framework_name}"; do
-    [[ -f "$candidate" ]] && macho_files+=("$candidate")
-  done
-done < <(find "$frameworks_dir" -maxdepth 1 -name '*.framework' -type d -print0 2>/dev/null || true)
 
 bad_deps=()
 missing_deps=()
@@ -225,9 +258,6 @@ verify_dep() {
 
 for file in "${macho_files[@]}"; do
   [[ -f "$file" ]] || continue
-  if ! file "$file" | grep -q 'Mach-O'; then
-    continue
-  fi
   while IFS= read -r dep; do
     [[ -n "$dep" ]] || continue
     verify_dep "$file" "$dep"
@@ -245,5 +275,78 @@ if [[ "${#missing_deps[@]}" -gt 0 ]]; then
   printf '  %s\n' "${missing_deps[@]}" >&2
   exit 1
 fi
+
+assert_file_contains() {
+  local path="$1"
+  local needle="$2"
+  assert_file "$path"
+  if ! grep -F -q -- "$needle" "$path"; then
+    fail "required notice text is missing from $path: $needle"
+  fi
+}
+
+assert_file "${resources_dir}/LICENSE"
+assert_file "${resources_dir}/NOTICE"
+assert_file "${resources_dir}/THIRD_PARTY_NOTICE.txt"
+assert_dir "${resources_dir}/third_party_licenses"
+assert_file_contains "${resources_dir}/THIRD_PARTY_NOTICE.txt" "aria2 1.37.0"
+assert_file_contains "${resources_dir}/third_party_licenses/aria2-COPYING.txt" "GNU GENERAL PUBLIC LICENSE"
+assert_file_contains "${resources_dir}/third_party_licenses/c-ares-LICENSE.md" "Permission is hereby granted"
+assert_file_contains "${resources_dir}/NOTICE" "QuickQanava"
+assert_file_contains "${resources_dir}/THIRD_PARTY_NOTICE.txt" "QuickQanava"
+assert_file_contains "${resources_dir}/THIRD_PARTY_NOTICE.txt" "bezier"
+assert_file_contains \
+  "${resources_dir}/third_party_licenses/QuickQanava-licence.txt" \
+  "Redistributions in binary form must reproduce"
+assert_file_contains \
+  "${resources_dir}/third_party_licenses/QuickQanava-bezier-LICENSE.txt" \
+  "MIT License"
+assert_file_contains \
+  "${resources_dir}/third_party_licenses/QuickQanava-bezier-LICENSE.txt" \
+  "Permission is hereby granted"
+
+qml_probe_out="$(mktemp "${TMPDIR:-/tmp}/alcedo_qml_import.XXXXXX")"
+if ! "$main_exe" --verify-qml-imports >"$qml_probe_out" 2>&1; then
+  fail "installed app --verify-qml-imports failed: $(cat "$qml_probe_out")"
+fi
+if ! grep -F -q "qml.imports.ok=QuickQanava" "$qml_probe_out"; then
+  fail "installed app did not report a QuickQanava QML import: $(cat "$qml_probe_out")"
+fi
+rm -f "$qml_probe_out"
+
+# alcedo-cli must run with only the system directories on PATH, and `session start` must find the
+# bundle executable beside it and start a headless session.
+cli_probe_dir="$(mktemp -d "${TMPDIR:-/tmp}/alcedo_cli_probe.XXXXXX")"
+mkdir -p "${cli_probe_dir}/project"
+cli_session_args=(--session-dir "${cli_probe_dir}/sessions" --session install_probe)
+run_cli() {
+  env -i HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" PATH=/usr/bin:/bin:/usr/sbin:/sbin "$cli_exe" "$@"
+}
+if ! cli_help="$(run_cli help 2>&1)" || ! grep -F -q "Usage: alcedo-cli" <<<"$cli_help"; then
+  fail "installed alcedo-cli help failed with a clean PATH: ${cli_help}"
+fi
+if ! cli_start="$(run_cli "${cli_session_args[@]}" session start --headless \
+    --create "${cli_probe_dir}/project,install_probe" \
+    --settings-dir "${cli_probe_dir}/settings" 2>&1)"; then
+  fail "installed alcedo-cli could not start a headless session: ${cli_start}"
+fi
+cli_film_status=0
+if [[ "$require_film_print_resources" -eq 1 ]]; then
+  cli_film="$(run_cli "${cli_session_args[@]}" --json call film.list 2>&1)" || cli_film_status=$?
+fi
+if ! cli_stop="$(run_cli "${cli_session_args[@]}" session stop 2>&1)"; then
+  fail "installed alcedo-cli could not stop the headless session: ${cli_stop}"
+fi
+if [[ "$require_film_print_resources" -eq 1 ]]; then
+  [[ "$cli_film_status" -eq 0 ]] || fail "installed film.list failed: ${cli_film}"
+  # Parse the actual result, including warnings: film.list can return success when resources fail.
+  printf '%s\n' "$cli_film" > "${cli_probe_dir}/films.json"
+  film_total="$(plutil -extract total raw -o - "${cli_probe_dir}/films.json")"
+  film_warnings="$(plutil -extract warnings json -o - "${cli_probe_dir}/films.json")"
+  [[ "$film_total" -gt 0 && "$film_warnings" == '[]' ]] ||
+    fail "installed film.list did not load the film resources: ${cli_film}"
+  echo "[alcedo] Installed film resources loaded: ${film_total} catalog entries."
+fi
+rm -rf "$cli_probe_dir"
 
 echo "[alcedo] macOS install tree verification passed: $app_dir"

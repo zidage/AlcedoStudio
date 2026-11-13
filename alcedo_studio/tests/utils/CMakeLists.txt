@@ -10,21 +10,42 @@ target_link_libraries(CudaDriverRequirementsTest PRIVATE GTest::gtest_main)
 gtest_discover_tests(CudaDriverRequirementsTest TEST_PREFIX "CudaDriverRequirementsTest.")
 alcedo_register_test_target(CudaDriverRequirementsTest core)
 
+# Qt-free logging interface (#822): compile-time floor, enabled flags, one handler call per line.
+add_executable(AlcedoLogTest
+    ${ALCEDO_TEST_ROOT}/utils/alcedo_log_test.cpp
+    ${ALCEDO_TEST_ROOT}/utils/alcedo_log_release_floor_test.cpp)
+target_include_directories(AlcedoLogTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(AlcedoLogTest PRIVATE AlcedoLog GTest::gtest_main)
+gtest_discover_tests(AlcedoLogTest TEST_PREFIX "AlcedoLogTest."
+  PROPERTIES LABELS "ci_core_flow;editor_logging")
+alcedo_register_test_target(AlcedoLogTest core ci_core)
+
 # Phase 7A R0/R1: presentation logging policy (disabled-by-default present
 # category, buffered info/debug writes, immediate warning/critical/fatal flush).
+# #822: messages of the Qt-free interface reach the log file through the Qt categories.
 add_executable(EditorAppLoggingTest
     ${ALCEDO_TEST_ROOT}/utils/editor_app_logging_test.cpp
     ${ALCEDO_SRC_DIR}/utils/diagnostics/app_logging.cpp)
 target_include_directories(EditorAppLoggingTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorAppLoggingTest PRIVATE GTest::gtest_main Qt6::Core)
+target_link_libraries(EditorAppLoggingTest PRIVATE GTest::gtest_main Qt6::Core AlcedoLog)
 gtest_discover_tests(EditorAppLoggingTest TEST_PREFIX "EditorAppLoggingTest."
   PROPERTIES LABELS "ci_core_flow;editor_logging")
 alcedo_register_test_target(EditorAppLoggingTest core)
 
-if(ALCEDO_CUDA_ENABLED)
-  add_executable(SharedToneCurveTest ${ALCEDO_TEST_ROOT}/edit/operators/basic/shared_tone_curve_test.cpp)
-  target_include_directories(SharedToneCurveTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_link_libraries(SharedToneCurveTest PRIVATE GTest::gtest_main Operators CUDA::cudart)
-  gtest_discover_tests(SharedToneCurveTest TEST_PREFIX "SharedToneCurveTest.")
-  alcedo_register_test_target(SharedToneCurveTest edit)
-endif()
+add_executable(PreviewPerformanceTest
+    ${ALCEDO_TEST_ROOT}/utils/preview_performance_test.cpp)
+target_include_directories(PreviewPerformanceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PreviewPerformanceTest
+    PRIVATE PreviewPerformance EditorPendingInput GTest::gtest_main)
+gtest_discover_tests(PreviewPerformanceTest TEST_PREFIX "PreviewPerformanceTest."
+  PROPERTIES LABELS "ci_core_flow;preview_performance")
+alcedo_register_test_target(PreviewPerformanceTest core)
+
+add_executable(LutMetadataTest ${ALCEDO_TEST_ROOT}/utils/lut_metadata_test.cpp)
+target_include_directories(LutMetadataTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_compile_definitions(LutMetadataTest PRIVATE
+  ALCEDO_LUT_METADATA_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/lut_metadata")
+target_link_libraries(LutMetadataTest PRIVATE LutMetadata JSON GTest::gtest_main)
+gtest_discover_tests(LutMetadataTest TEST_PREFIX "LutMetadataTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(LutMetadataTest core ci_core)

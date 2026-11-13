@@ -2,9 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include <exiv2/exiv2.hpp>
-
 #include <chrono>
+#include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <future>
 #include <iomanip>
@@ -27,12 +26,14 @@
 #include <shellapi.h>
 #endif
 
+#include "app/adjustment_transfer_service.hpp"
 #include "app/export_service.hpp"
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/history/commit_graph.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 
@@ -41,13 +42,18 @@ namespace {
 
 using namespace std::chrono_literals;
 
+// Study exposure and saturation of the reference exports. They are the values of the former legacy
+// clean baseline, so exports stay comparable with the earlier study runs.
+constexpr float kStudyExposureEv        = 1.5f;
+constexpr float kStudySaturationPercent = 30.0f;
+
 struct Options {
   std::filesystem::path              out_dir = std::filesystem::path("build") / "diagnostics" /
                                   "hs_reference_exports";
   std::vector<std::filesystem::path> raw_paths;
   float                              shadow_slider = 100.0f;
   float                              highlight_slider = -100.0f;
-  float                              saturation_slider = pipeline_defaults::kCleanBaselineSaturation;
+  float                              saturation_slider = kStudySaturationPercent;
   bool                               keep_project = false;
   bool                               use_default_lut = false;
 };
@@ -231,29 +237,32 @@ auto FindImportedEntry(const ImportLogSnapshot& snapshot, const std::filesystem:
   return nullptr;
 }
 
-void ApplyReferenceStudyAdjustments(CPUPipelineExecutor& exec, float shadow_slider,
+/// Write the study settings onto the image document through its Model owners. The Primary Color
+/// Grade of an imported image holds every adjustment below; a missing one is an error.
+void ApplyReferenceStudyAdjustments(PipelineDocument& document, float shadow_slider,
                                     float highlight_slider, float saturation_slider,
                                     const std::string& lut_path) {
-  exec.ResetToCleanBaselineAdjustments();
-
-  auto& global_params = exec.GetGlobalParams();
-  auto& basic_stage   = exec.GetStage(PipelineStageName::Basic_Adjustment);
-  auto& color_stage   = exec.GetStage(PipelineStageName::Color_Adjustment);
-
-  basic_stage.SetOperator(OperatorType::EXPOSURE,
-                          {{"exposure", pipeline_defaults::kCleanBaselineExposure}}, global_params);
-  basic_stage.SetOperator(OperatorType::CONTRAST, {{"contrast", 0.0f}}, global_params);
-  basic_stage.SetOperator(OperatorType::BLACK, {{"black", 0.0f}}, global_params);
-  basic_stage.SetOperator(OperatorType::WHITE, {{"white", 0.0f}}, global_params);
-  basic_stage.SetOperator(OperatorType::SHADOWS, {{"shadows", shadow_slider}}, global_params);
-  basic_stage.SetOperator(OperatorType::HIGHLIGHTS, {{"highlights", highlight_slider}},
-                          global_params);
-
-  color_stage.SetOperator(OperatorType::SATURATION,
-                          {{"saturation", saturation_slider}},
-                          global_params);
-  color_stage.SetOperator(OperatorType::TINT, {{"tint", 0.0f}}, global_params);
-  color_stage.SetOperator(OperatorType::LMT, {{"ocio_lmt", lut_path}}, global_params);
+  auto* grade = document.PrimaryGrade();
+  if (grade == nullptr) {
+    throw std::runtime_error("HS research export: document has no Primary Color Grade.");
+  }
+  const auto load = [grade](const OperatorTypeId& type, const nlohmann::json& params) {
+    auto* adjustment = grade->FindAdjustmentByType(type);
+    if (adjustment == nullptr) {
+      throw std::runtime_error("HS research export: missing adjustment " +
+                               std::string(type.Text()));
+    }
+    adjustment->LoadJson(params);
+  };
+  load(type_ids::Exposure(), {{"exposure_ev", kStudyExposureEv}});
+  load(type_ids::Contrast(), {{"contrast", 0.0f}});
+  load(type_ids::Black(), {{"black", 0.0f}});
+  load(type_ids::White(), {{"white", 0.0f}});
+  load(type_ids::Shadows(), {{"shadows", shadow_slider}});
+  load(type_ids::Highlights(), {{"highlights", highlight_slider}});
+  // The Saturation Model stores the multiplier; the study slider uses the panel's percent scale.
+  load(type_ids::Saturation(), {{"saturation", 1.0f + saturation_slider / 100.0f}});
+  load(type_ids::Lmt(), {{"cube_path", lut_path}});
 }
 
 void RemoveIfExists(const std::filesystem::path& path) {
@@ -316,7 +325,6 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
 
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    RegisterAllOperators();
 
     std::filesystem::create_directories(options.out_dir);
     const std::filesystem::path db_path   = MakeProjectPath(options.out_dir, L".db");
@@ -334,10 +342,10 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
       ProjectService project(db_path, meta_path, ProjectOpenMode::kCreateNew);
       auto           sleeve_service   = project.GetSleeveService();
       auto           image_pool       = project.GetImagePoolService();
-      auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-      pipeline_service->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
+      auto           pipeline_service = std::make_shared<PipelineMgmtService>(
+          project.GetStorage(), AcceleratorBackendPreference::CUDA);
 
-      ImportServiceImpl import_service(sleeve_service, image_pool);
+      ImportServiceImpl import_service(sleeve_service, image_pool, pipeline_service);
       const auto        snapshot = ImportBlocking(import_service, options.raw_paths);
 
       ExportService export_service(sleeve_service, image_pool, pipeline_service);
@@ -348,16 +356,23 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
           throw std::runtime_error("Failed to find imported entry for " + PathToUtf8(raw_path));
         }
 
-        auto pipeline_guard = pipeline_service->LoadPipeline(entry->element_id_);
-        if (!pipeline_guard || !pipeline_guard->pipeline_) {
-          throw std::runtime_error("Failed to load pipeline for " + PathToUtf8(raw_path));
-        }
-
-        ApplyReferenceStudyAdjustments(*pipeline_guard->pipeline_, options.shadow_slider,
+        // Export renders the committed history, so the study adjustments are committed first:
+        // pasted as a root-relative Version, the same history write a library Paste makes.
+        const auto base           = pipeline_service->LoadHistorySnapshot(entry->element_id_);
+        auto       study_document = ClonePipelineDocument(
+            pipeline_service->AcquireCommittedSnapshot(entry->element_id_)->Document());
+        ApplyReferenceStudyAdjustments(study_document, options.shadow_slider,
                                        options.highlight_slider, options.saturation_slider,
                                        default_lut_path);
-        pipeline_guard->dirty_ = true;
-        pipeline_service->SavePipeline(pipeline_guard);
+        CommitGraph graph  = *base.graph_;
+        const auto  pasted = AdjustmentTransferService::PasteAsRootRelativeVersion(
+            graph, base.root_->document, AdjustmentTransferService::Capture(study_document),
+            "Reference study");
+        if (!pasted.pasted) {
+          throw std::runtime_error("Failed to commit the study adjustments for " +
+                                   PathToUtf8(raw_path) + ": " + pasted.error);
+        }
+        (void)pipeline_service->PersistHistory(base, graph);
 
         ExportTask task;
         task.sleeve_id_              = entry->element_id_;
@@ -368,13 +383,12 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
         task.options_.export_path_   = options.out_dir /
                                      BuildOutputName(raw_path, options.shadow_slider,
                                                      options.highlight_slider);
+        task.recipe_ = ExportRecipe::FromLegacyOptions(task.options_);
         export_service.EnqueueExportTask(task);
 
         std::cout << "[HsResearchExportTool] queued " << PathToUtf8(raw_path) << " -> "
                   << PathToUtf8(task.options_.export_path_) << '\n';
       }
-
-      pipeline_service->Sync();
 
       std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
       auto                                                     future = done.get_future();

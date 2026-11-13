@@ -1,9 +1,20 @@
 {
   "meta": {
-    "source": "id_map.txt",
-    "generated_by": "parse_id_map.py",
+    "sources": [
+      "ExifTool 13.59 lib/Image/ExifTool/Nikon.pm",
+      "Exiv2 8c7eaff26857c9c0738c24dec4b472e61cac595e src/nikonmn_int.cpp nikonZMountLensId"
+    ],
+    "generated_by": "scripts/build_nikon_lens_id_map.py",
     "hex_entries": 611,
-    "numeric_entries": 45
+    "numeric_entries": 54,
+    "numeric_ids_from_exiv2_only": [
+      "53",
+      "55",
+      "2820",
+      "2822",
+      "53251",
+      "57346"
+    ]
   },
   "hex_id_map": {
     "00 00 00 00 00 00 00 01": "Manual Lens No CPU",
@@ -227,7 +238,7 @@
     "2D 48 80 80 30 30 21 02": "AF Micro-Nikkor 200mm f/4D IF-ED",
     "2E 48 5C 82 30 3C 22 02": "AF Nikkor 70-210mm f/4-5.6D",
     "2E 48 5C 82 30 3C 28 02": "AF Nikkor 70-210mm f/4-5.6D",
-    "2F 40 30 44 2C 34 29 02": "Tokina AF 235 II (AF 20-35mm f/3.5-4.5) | Tokina AF 193 (AF 19-35mm f/3.5-4.5)",
+    "2F 40 30 44 2C 34 29 02": "Tokina AF 193 (AF 19-35mm f/3.5-4.5) | Tokina AF 235 II (AF 20-35mm f/3.5-4.5)",
     "2F 48 30 44 24 24 29 02": "AF Zoom-Nikkor 20-35mm f/2.8D IF | Tokina AT-X 235 AF PRO (AF 20-35mm f/2.8)",
     "30 48 98 98 24 24 24 02": "AF-I Nikkor 400mm f/2.8D IF-ED",
     "30 48 98 98 24 24 E1 02": "AF-I Nikkor 400mm f/2.8D IF-ED + TC-17E",
@@ -659,10 +670,19 @@
     "47": "Nikkor Z 35mm f/1.2 S",
     "48": "Nikkor Z 28-400mm f/4-8 VR",
     "49": "Nikkor Z 28-135mm f/4 PZ",
+    "50": "Nikkor Z 24-70mm f/2.8 S II",
     "51": "Nikkor Z 35mm f/1.4",
     "52": "Nikkor Z 50mm f/1.4",
+    "53": "Nikkor Z DX 16-50mm f/2.8 VR",
+    "54": "Nikkor Z 70-200mm f/2.8 VR S II",
+    "55": "Nikkor Z DX MC 35mm f/1.7",
+    "57": "Nikkor Z 24-105mm f/4-7.1",
     "2305": "Laowa FFII 10mm F2.8 C&D Dreamer",
+    "2820": "Viltrox AF 16mm F1.8",
+    "2822": "Viltrox AF 20mm F2.8",
     "32768": "Nikkor Z 400mm f/2.8 TC VR S TC-1.4x",
-    "32769": "Nikkor Z 600mm f/4 TC VR S TC-1.4x"
+    "32769": "Nikkor Z 600mm f/4 TC VR S TC-1.4x",
+    "53251": "Sigma 56mm F1.4 DC DN | C",
+    "57346": "Tamron 35-150mm F/2-2.8 Di III VXD"
   }
 }

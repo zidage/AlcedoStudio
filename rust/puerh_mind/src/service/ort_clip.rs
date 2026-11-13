@@ -1,5 +1,7 @@
 use std::path::PathBuf;
+#[cfg(test)]
 use std::sync::Mutex;
+use std::time::Instant;
 
 use anyhow::{Result, bail};
 use image::RgbImage;
@@ -10,8 +12,9 @@ use ort::{
 use tokenizers::Tokenizer;
 use tracing::info;
 
-use crate::config::SemanticConfig;
+use crate::config::{EncoderResidencyConfig, SemanticConfig};
 use crate::service::embedding::{EmbeddingEngine, EngineModelInfo};
+use crate::service::encoder_residency::{EncoderResidency, EncoderStatus, IdleUnload};
 use crate::service::model_adapters::{EngineProfileAdapter, ImageResizeMode, TextInputElementType};
 #[cfg(test)]
 use crate::service::model_assets::ClipModelPaths;
@@ -24,6 +27,8 @@ use crate::service::ort_runtime::DeviceRequest;
 
 #[cfg(test)]
 const EMBEDDING_DIM: usize = 512;
+/// Threads that resize and normalize the images of one batch.
+const MAX_PREPROCESS_THREADS: usize = 8;
 
 #[derive(Debug, Clone)]
 struct SessionIo {
@@ -38,6 +43,18 @@ struct MultimodalSessionIo {
     image_input_name: String,
     text_output_name: String,
     image_output_name: String,
+}
+
+/// A loaded text or image encoder session with its input and output names.
+struct LoadedEncoder {
+    session: Session,
+    io: SessionIo,
+}
+
+/// A loaded single session that serves both text and image embeddings.
+struct LoadedMultimodal {
+    session: Session,
+    io: MultimodalSessionIo,
 }
 
 impl TextInputElementType {
@@ -63,12 +80,11 @@ pub struct OrtClipEngine {
     model_root: PathBuf,
     tokenizer: Tokenizer,
     adapter: EngineProfileAdapter,
-    text_session: Option<Mutex<Session>>,
-    vision_session: Option<Mutex<Session>>,
-    multimodal_session: Option<Mutex<Session>>,
-    text_io: Option<SessionIo>,
-    vision_io: Option<SessionIo>,
-    multimodal_io: Option<MultimodalSessionIo>,
+    // Each encoder loads on its first request and unloads after its idle time. A profile
+    // with a multimodal session has only `multimodal`; the others have `text` and `vision`.
+    text: Option<EncoderResidency<LoadedEncoder>>,
+    vision: Option<EncoderResidency<LoadedEncoder>>,
+    multimodal: Option<EncoderResidency<LoadedMultimodal>>,
 }
 
 impl OrtClipEngine {
@@ -508,17 +524,45 @@ impl OrtClipEngine {
             bail!("image batch must not be empty");
         }
 
-        let mut batch_data = Vec::with_capacity(rgbs.len() * 3 * self.image_size * self.image_size);
+        let image_len = 3 * self.image_size * self.image_size;
+        let mut batch_data = vec![0.0f32; rgbs.len() * image_len];
         let (mean, std) = self.adapter.image_mean_std();
-        for rgb in rgbs {
-            batch_data.extend(Self::prepare_image_tensor_data_for_size(
-                rgb,
-                self.image_size,
-                self.adapter.image_resize_mode(),
-                mean,
-                std,
-            )?);
-        }
+        let resize_mode = self.adapter.image_resize_mode();
+        let image_size = self.image_size;
+        // Each image fills its own slice of the batch tensor; the threads share nothing else.
+        let threads = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+            .clamp(1, MAX_PREPROCESS_THREADS)
+            .min(rgbs.len());
+        let images_per_thread = rgbs.len().div_ceil(threads);
+        std::thread::scope(|scope| -> Result<()> {
+            let workers: Vec<_> = batch_data
+                .chunks_mut(images_per_thread * image_len)
+                .zip(rgbs.chunks(images_per_thread))
+                .map(|(out, images)| {
+                    scope.spawn(move || -> Result<()> {
+                        for (slot, rgb) in out.chunks_mut(image_len).zip(images) {
+                            let data = Self::prepare_image_tensor_data_for_size(
+                                rgb,
+                                image_size,
+                                resize_mode,
+                                mean,
+                                std,
+                            )?;
+                            slot.copy_from_slice(&data);
+                        }
+                        Ok(())
+                    })
+                })
+                .collect();
+            for worker in workers {
+                worker
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("image preprocessing thread panicked"))??;
+            }
+            Ok(())
+        })?;
 
         Ok((batch_data, rgbs.len()))
     }
@@ -561,262 +605,278 @@ impl OrtClipEngine {
         )
     }
 
+    fn attention_mask_tensor<
+        T: ort::value::PrimitiveTensorElementType + std::fmt::Debug + Clone + Send + Sync + 'static,
+    >(
+        &self,
+        attention_mask: Option<Vec<T>>,
+        batch_size: usize,
+        seq_len: usize,
+    ) -> Result<Option<Tensor<T>>> {
+        if !self.adapter.requires_attention_mask() {
+            return Ok(None);
+        }
+        let mask = attention_mask.ok_or_else(|| anyhow::anyhow!("missing attention mask"))?;
+        Ok(Some(
+            Tensor::from_array(([batch_size, seq_len], mask))
+                .map_err(|e| anyhow::anyhow!("failed to build attention mask tensor: {e}"))?,
+        ))
+    }
+
+    fn text_residency(&self) -> Result<&EncoderResidency<LoadedEncoder>> {
+        self.text
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("text session is not initialized"))
+    }
+
+    fn vision_residency(&self) -> Result<&EncoderResidency<LoadedEncoder>> {
+        self.vision
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("vision session is not initialized"))
+    }
+
+    fn multimodal_residency(&self) -> Result<&EncoderResidency<LoadedMultimodal>> {
+        self.multimodal
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("multimodal session is not initialized"))
+    }
+
+    /// Text embeddings; loads the text encoder (or the multimodal session) on first use.
     pub fn forward_text_embeddings(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        if !self.adapter.uses_multimodal_session() {
-            if let Some(max_batch_size) = self
-                .text_io
-                .as_ref()
-                .and_then(|io| io.fixed_batch_size)
-                .filter(|max_batch_size| texts.len() > *max_batch_size)
-            {
-                let mut embeddings = Vec::with_capacity(texts.len());
-                for chunk in texts.chunks(max_batch_size) {
-                    embeddings.extend(self.forward_text_embeddings(chunk)?);
-                }
-                return Ok(embeddings);
+        if self.adapter.uses_multimodal_session() {
+            return self.forward_multimodal_text_embeddings(texts);
+        }
+        self.text_residency()?
+            .with_session(|loaded| self.forward_text_with_session(loaded, texts))
+    }
+
+    fn forward_text_with_session(
+        &self,
+        loaded: &mut LoadedEncoder,
+        texts: &[&str],
+    ) -> Result<Vec<Vec<f32>>> {
+        if let Some(max_batch_size) = loaded
+            .io
+            .fixed_batch_size
+            .filter(|max_batch_size| texts.len() > *max_batch_size)
+        {
+            let mut embeddings = Vec::with_capacity(texts.len());
+            for chunk in texts.chunks(max_batch_size) {
+                embeddings.extend(self.forward_text_with_session(loaded, chunk)?);
             }
+            return Ok(embeddings);
         }
 
         let (input_ids, attention_mask, batch_size) = self.prepare_text_batch(texts)?;
         let seq_len = self.adapter.text_sequence_length();
 
         if self.adapter.text_input_element_type() == TextInputElementType::Int32 {
-            return self.forward_text_embeddings_i32(
-                input_ids,
-                attention_mask,
-                batch_size,
-                seq_len,
-            );
+            let input_ids = input_ids
+                .into_iter()
+                .map(|value| {
+                    i32::try_from(value).map_err(|_| {
+                        anyhow::anyhow!("text input token id {value} does not fit Int32")
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let attention_mask = attention_mask
+                .map(|mask| {
+                    mask.into_iter()
+                        .map(|value| {
+                            i32::try_from(value).map_err(|_| {
+                                anyhow::anyhow!("attention_mask value {value} does not fit Int32")
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?;
+            let input_tensor = Tensor::from_array(([batch_size, seq_len], input_ids))
+                .map_err(|e| anyhow::anyhow!("failed to build text input tensor: {e}"))?;
+            let mask_tensor = self.attention_mask_tensor(attention_mask, batch_size, seq_len)?;
+            return self.run_text_session(loaded, input_tensor, mask_tensor, batch_size);
         }
 
-        self.forward_text_embeddings_i64(input_ids, attention_mask, batch_size, seq_len)
-    }
-
-    fn forward_text_embeddings_i32(
-        &self,
-        input_ids: Vec<i64>,
-        attention_mask: Option<Vec<i64>>,
-        batch_size: usize,
-        seq_len: usize,
-    ) -> Result<Vec<Vec<f32>>> {
-        let input_ids = input_ids
-            .into_iter()
-            .map(|value| {
-                i32::try_from(value)
-                    .map_err(|_| anyhow::anyhow!("text input token id {value} does not fit Int32"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let attention_mask = attention_mask
-            .map(|mask| {
-                mask.into_iter()
-                    .map(|value| {
-                        i32::try_from(value).map_err(|_| {
-                            anyhow::anyhow!("attention_mask value {value} does not fit Int32")
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?;
         let input_tensor = Tensor::from_array(([batch_size, seq_len], input_ids))
             .map_err(|e| anyhow::anyhow!("failed to build text input tensor: {e}"))?;
-
-        let attention_mask_tensor = if self.adapter.requires_attention_mask() {
-            Some(
-                Tensor::from_array((
-                    [batch_size, seq_len],
-                    attention_mask.ok_or_else(|| anyhow::anyhow!("missing attention mask"))?,
-                ))
-                .map_err(|e| anyhow::anyhow!("failed to build attention mask tensor: {e}"))?,
-            )
-        } else {
-            None
-        };
-
-        self.run_text_session(input_tensor, attention_mask_tensor, batch_size)
+        let mask_tensor = self.attention_mask_tensor(attention_mask, batch_size, seq_len)?;
+        self.run_text_session(loaded, input_tensor, mask_tensor, batch_size)
     }
 
-    fn forward_text_embeddings_i64(
-        &self,
-        input_ids: Vec<i64>,
-        attention_mask: Option<Vec<i64>>,
-        batch_size: usize,
-        seq_len: usize,
-    ) -> Result<Vec<Vec<f32>>> {
+    fn forward_multimodal_text_embeddings(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let (input_ids, _attention_mask, batch_size) = self.prepare_text_batch(texts)?;
+        let seq_len = self.adapter.text_sequence_length();
         let input_tensor = Tensor::from_array(([batch_size, seq_len], input_ids))
             .map_err(|e| anyhow::anyhow!("failed to build text input tensor: {e}"))?;
-
-        if self.adapter.uses_multimodal_session() {
-            let io = self
-                .multimodal_io
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("multimodal session IO is not initialized"))?;
-            let dummy_pixels = vec![0.0f32; batch_size * 3 * self.image_size * self.image_size];
-            let pixel_tensor = Tensor::from_array((
-                [batch_size, 3, self.image_size, self.image_size],
-                dummy_pixels,
-            ))
-            .map_err(|e| anyhow::anyhow!("failed to build dummy image input tensor: {e}"))?;
-            let mut session = self
-                .multimodal_session
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("multimodal session is not initialized"))?
-                .lock()
-                .map_err(|err| anyhow::anyhow!("multimodal session lock poisoned: {err}"))?;
+        let dummy_pixels = vec![0.0f32; batch_size * 3 * self.image_size * self.image_size];
+        let pixel_tensor = Tensor::from_array((
+            [batch_size, 3, self.image_size, self.image_size],
+            dummy_pixels,
+        ))
+        .map_err(|e| anyhow::anyhow!("failed to build dummy image input tensor: {e}"))?;
+        self.multimodal_residency()?.with_session(|loaded| {
             let run_options = RunOptions::new()
                 .map_err(|e| anyhow::anyhow!("failed to build multimodal run options: {e}"))?
-                .with_outputs(OutputSelector::no_default().with(io.text_output_name.clone()));
-            let outputs = session
+                .with_outputs(
+                    OutputSelector::no_default().with(loaded.io.text_output_name.clone()),
+                );
+            let outputs = loaded
+                .session
                 .run_with_options(
                     ort::inputs! {
-                        io.text_input_name.as_str() => input_tensor,
-                        io.image_input_name.as_str() => pixel_tensor,
+                        loaded.io.text_input_name.as_str() => input_tensor,
+                        loaded.io.image_input_name.as_str() => pixel_tensor,
                     },
                     &run_options,
                 )
                 .map_err(|e| anyhow::anyhow!("failed to run multimodal text ONNX model: {e}"))?;
-            return self.extract_embeddings_from_outputs(
+            self.extract_embeddings_from_outputs(
                 &outputs,
-                io.text_output_name.as_str(),
+                loaded.io.text_output_name.as_str(),
                 batch_size,
                 "text",
-            );
-        }
-
-        let attention_mask_tensor = if self.adapter.requires_attention_mask() {
-            Some(
-                Tensor::from_array((
-                    [batch_size, seq_len],
-                    attention_mask.ok_or_else(|| anyhow::anyhow!("missing attention mask"))?,
-                ))
-                .map_err(|e| anyhow::anyhow!("failed to build attention mask tensor: {e}"))?,
             )
-        } else {
-            None
-        };
-
-        self.run_text_session(input_tensor, attention_mask_tensor, batch_size)
+        })
     }
 
     fn run_text_session<
         T: ort::value::IntoTensorElementType + std::fmt::Debug + Clone + Send + Sync + 'static,
     >(
         &self,
+        loaded: &mut LoadedEncoder,
         input_tensor: Tensor<T>,
         attention_mask_tensor: Option<Tensor<T>>,
         batch_size: usize,
     ) -> Result<Vec<Vec<f32>>> {
-        let text_io = self
-            .text_io
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("text session IO is not initialized"))?;
-        let mut session = self
-            .text_session
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("text session is not initialized"))?
-            .lock()
-            .map_err(|err| anyhow::anyhow!("text session lock poisoned: {err}"))?;
         let outputs = if let Some(mask_tensor) = attention_mask_tensor {
-            session
-                .run(ort::inputs! {text_io.input_name.as_str() => input_tensor,
+            loaded
+                .session
+                .run(ort::inputs! {loaded.io.input_name.as_str() => input_tensor,
                 "attention_mask"                 => mask_tensor})
                 .map_err(|e| anyhow::anyhow!("failed to run text ONNX model: {e}"))?
         } else {
-            session
-                .run(ort::inputs! {text_io.input_name.as_str() => input_tensor})
+            loaded
+                .session
+                .run(ort::inputs! {loaded.io.input_name.as_str() => input_tensor})
                 .map_err(|e| anyhow::anyhow!("failed to run text ONNX model: {e}"))?
         };
 
         self.extract_embeddings_from_outputs(
             &outputs,
-            text_io.output_name.as_str(),
+            loaded.io.output_name.as_str(),
             batch_size,
             "text",
         )
     }
 
+    /// Image embeddings; loads the image encoder (or the multimodal session) on first use.
     pub fn forward_image_embeddings(&self, rgbs: &[RgbImage]) -> Result<Vec<Vec<f32>>> {
-        if !self.adapter.uses_multimodal_session() {
-            if let Some(max_batch_size) = self
-                .vision_io
-                .as_ref()
-                .and_then(|io| io.fixed_batch_size)
-                .filter(|max_batch_size| rgbs.len() > *max_batch_size)
-            {
-                let mut embeddings = Vec::with_capacity(rgbs.len());
-                for chunk in rgbs.chunks(max_batch_size) {
-                    embeddings.extend(self.forward_image_embeddings(chunk)?);
-                }
-                return Ok(embeddings);
+        if self.adapter.uses_multimodal_session() {
+            return self.forward_multimodal_image_embeddings(rgbs);
+        }
+        // The resize and normalization run before the encoder lock, on several threads, so the
+        // next batch is prepared while the encoder runs the current one.
+        let (pixel_values, batch_size) = self.prepare_image_batch_tensor_data(rgbs)?;
+        self.vision_residency()?.with_session(move |loaded| {
+            self.forward_image_with_session(loaded, pixel_values, batch_size)
+        })
+    }
+
+    fn forward_image_with_session(
+        &self,
+        loaded: &mut LoadedEncoder,
+        pixel_values: Vec<f32>,
+        batch_size: usize,
+    ) -> Result<Vec<Vec<f32>>> {
+        if let Some(max_batch_size) = loaded
+            .io
+            .fixed_batch_size
+            .filter(|max_batch_size| batch_size > *max_batch_size)
+        {
+            let image_len = 3 * self.image_size * self.image_size;
+            let mut embeddings = Vec::with_capacity(batch_size);
+            for chunk in pixel_values.chunks(max_batch_size * image_len) {
+                embeddings.extend(self.forward_image_with_session(
+                    loaded,
+                    chunk.to_vec(),
+                    chunk.len() / image_len,
+                )?);
             }
+            return Ok(embeddings);
         }
 
+        let input_tensor = Tensor::from_array((
+            [batch_size, 3, self.image_size, self.image_size],
+            pixel_values,
+        ))
+        .map_err(|e| anyhow::anyhow!("failed to build image input tensor: {e}"))?;
+        let outputs = loaded
+            .session
+            .run(ort::inputs! {loaded.io.input_name.as_str() => input_tensor})
+            .map_err(|e| anyhow::anyhow!("failed to run image ONNX model: {e}"))?;
+
+        self.extract_embeddings_from_outputs(
+            &outputs,
+            loaded.io.output_name.as_str(),
+            batch_size,
+            "image",
+        )
+    }
+
+    fn forward_multimodal_image_embeddings(&self, rgbs: &[RgbImage]) -> Result<Vec<Vec<f32>>> {
         let (pixel_values, batch_size) = self.prepare_image_batch_tensor_data(rgbs)?;
         let input_tensor = Tensor::from_array((
             [batch_size, 3, self.image_size, self.image_size],
             pixel_values,
         ))
         .map_err(|e| anyhow::anyhow!("failed to build image input tensor: {e}"))?;
-
-        if self.adapter.uses_multimodal_session() {
-            let io = self
-                .multimodal_io
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("multimodal session IO is not initialized"))?;
-            let seq_len = self.adapter.text_sequence_length();
-            let input_ids = vec![0i64; batch_size * seq_len];
-            let text_tensor = Tensor::from_array(([batch_size, seq_len], input_ids))
-                .map_err(|e| anyhow::anyhow!("failed to build dummy text input tensor: {e}"))?;
-            let mut session = self
-                .multimodal_session
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("multimodal session is not initialized"))?
-                .lock()
-                .map_err(|err| anyhow::anyhow!("multimodal session lock poisoned: {err}"))?;
+        let seq_len = self.adapter.text_sequence_length();
+        let input_ids = vec![0i64; batch_size * seq_len];
+        let text_tensor = Tensor::from_array(([batch_size, seq_len], input_ids))
+            .map_err(|e| anyhow::anyhow!("failed to build dummy text input tensor: {e}"))?;
+        self.multimodal_residency()?.with_session(|loaded| {
             let run_options = RunOptions::new()
                 .map_err(|e| anyhow::anyhow!("failed to build multimodal run options: {e}"))?
-                .with_outputs(OutputSelector::no_default().with(io.image_output_name.clone()));
-            let outputs = session
+                .with_outputs(
+                    OutputSelector::no_default().with(loaded.io.image_output_name.clone()),
+                );
+            let outputs = loaded
+                .session
                 .run_with_options(
                     ort::inputs! {
-                        io.text_input_name.as_str() => text_tensor,
-                        io.image_input_name.as_str() => input_tensor,
+                        loaded.io.text_input_name.as_str() => text_tensor,
+                        loaded.io.image_input_name.as_str() => input_tensor,
                     },
                     &run_options,
                 )
                 .map_err(|e| anyhow::anyhow!("failed to run multimodal image ONNX model: {e}"))?;
-            return self.extract_embeddings_from_outputs(
+            self.extract_embeddings_from_outputs(
                 &outputs,
-                io.image_output_name.as_str(),
+                loaded.io.image_output_name.as_str(),
                 batch_size,
                 "image",
-            );
-        }
-
-        let vision_io = self
-            .vision_io
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("vision session IO is not initialized"))?;
-        let mut session = self
-            .vision_session
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("vision session is not initialized"))?
-            .lock()
-            .map_err(|err| anyhow::anyhow!("vision session lock poisoned: {err}"))?;
-        let outputs = session
-            .run(ort::inputs! {vision_io.input_name.as_str() => input_tensor})
-            .map_err(|e| anyhow::anyhow!("failed to run image ONNX model: {e}"))?;
-
-        self.extract_embeddings_from_outputs(
-            &outputs,
-            vision_io.output_name.as_str(),
-            batch_size,
-            "image",
-        )
+            )
+        })
     }
 
+    /// An engine with the default encoder residency (text encoder on the CPU for 300 s, image
+    /// encoder on `config.device` for 60 s).
     pub fn new(config: &SemanticConfig) -> Result<Self> {
-        let device_request = Self::parse_device_request(&config.device)?;
+        Self::with_residency(config, &EncoderResidencyConfig::default())
+    }
 
+    /// Validates the model profile, the files, and both device values, and prepares the
+    /// encoder loaders. No encoder session loads here: each encoder loads on the first request
+    /// that needs it and unloads after its idle time (`unload_idle_encoders`).
+    pub fn with_residency(
+        config: &SemanticConfig,
+        residency: &EncoderResidencyConfig,
+    ) -> Result<Self> {
+        let text_device = Self::parse_device_request(&residency.text_device)?;
+        let vision_device = Self::parse_device_request(residency.vision_device_or(&config.device))?;
+        let text_idle_unload = IdleUnload::from_seconds(residency.text_idle_unload_seconds)?;
+        let vision_idle_unload = IdleUnload::from_seconds(residency.vision_idle_unload_seconds)?;
+
+        let validation_start = Instant::now();
         // Model asset downloading is handled by the C++ application layer (via
         // aria2). The Rust runtime only validates that the requested profile is
         // present on disk before loading it for inference.
@@ -839,61 +899,98 @@ impl OrtClipEngine {
             );
         }
 
+        let validation_ms = validation_start.elapsed().as_millis();
+
+        let environment_start = Instant::now();
         crate::service::ort_runtime::initialize_ort_environment()?;
+        let environment_ms = environment_start.elapsed().as_millis();
 
-        let device_description = Self::describe_device_request(device_request);
-        info!(
-            "loading ORT clip profile {} ({}) from {} on {}",
-            profile.profile_id, profile.engine_profile_id, config.model_root, device_description,
-        );
-
+        let text_device_description = Self::describe_device_request(text_device);
+        let vision_device_description = Self::describe_device_request(vision_device);
+        let tokenizer_start = Instant::now();
         let tokenizer = Self::tokenizer_for_profile(profile, &config.model_root)?;
+        let tokenizer_ms = tokenizer_start.elapsed().as_millis();
+        let image_size = manifest.image_size as usize;
+        let native_embedding_dim = manifest.native_embedding_dimension as usize;
 
-        let (text_session, vision_session, multimodal_session, text_io, vision_io, multimodal_io) =
-            if adapter.uses_multimodal_session() {
-                let multimodal_model =
-                    profile_asset_path(profile, &config.model_root, AssetRole::MultimodalModel)?;
-                let session =
-                    crate::service::ort_runtime::load_session(&multimodal_model, device_request)?;
-                let io = Self::validate_multimodal_session(
-                    &session,
-                    manifest.image_size as usize,
-                    manifest.native_embedding_dimension as usize,
-                    adapter,
-                )?;
-                (None, None, Some(Mutex::new(session)), None, None, Some(io))
-            } else {
-                let text_model =
-                    profile_asset_path(profile, &config.model_root, AssetRole::TextModel)?;
-                let vision_model =
-                    profile_asset_path(profile, &config.model_root, AssetRole::VisionModel)?;
-
-                let text_session =
-                    crate::service::ort_runtime::load_session(&text_model, device_request)?;
-                let text_io = Self::validate_text_session(
-                    &text_session,
-                    adapter.text_sequence_length(),
-                    manifest.native_embedding_dimension as usize,
-                    adapter.requires_attention_mask(),
-                    adapter.text_input_element_type(),
-                )?;
-
-                let vision_session =
-                    crate::service::ort_runtime::load_session(&vision_model, device_request)?;
-                let vision_io = Self::validate_vision_session(
-                    &vision_session,
-                    manifest.image_size as usize,
-                    manifest.native_embedding_dimension as usize,
-                )?;
-                (
-                    Some(Mutex::new(text_session)),
-                    Some(Mutex::new(vision_session)),
-                    None,
-                    Some(text_io),
-                    Some(vision_io),
-                    None,
-                )
-            };
+        let (text, vision, multimodal) = if adapter.uses_multimodal_session() {
+            let multimodal_model =
+                profile_asset_path(profile, &config.model_root, AssetRole::MultimodalModel)?;
+            info!(
+                "prepared ORT clip profile {} ({}) from {} (profile validation {} ms, ORT environment {} ms, tokenizer {} ms); the multimodal session loads on {} at first use",
+                profile.profile_id,
+                profile.engine_profile_id,
+                config.model_root,
+                validation_ms,
+                environment_ms,
+                tokenizer_ms,
+                vision_device_description,
+            );
+            let multimodal = EncoderResidency::new(
+                "multimodal",
+                vision_device_description.clone(),
+                text_idle_unload,
+                move || {
+                    let session = crate::service::ort_runtime::load_session(
+                        &multimodal_model,
+                        vision_device,
+                    )?;
+                    let io = Self::validate_multimodal_session(
+                        &session,
+                        image_size,
+                        native_embedding_dim,
+                        adapter,
+                    )?;
+                    Ok(LoadedMultimodal { session, io })
+                },
+            );
+            (None, None, Some(multimodal))
+        } else {
+            let text_model = profile_asset_path(profile, &config.model_root, AssetRole::TextModel)?;
+            let vision_model =
+                profile_asset_path(profile, &config.model_root, AssetRole::VisionModel)?;
+            info!(
+                "prepared ORT clip profile {} ({}) from {} (profile validation {} ms, ORT environment {} ms, tokenizer {} ms); the text encoder loads on {} and the image encoder on {} at first use",
+                profile.profile_id,
+                profile.engine_profile_id,
+                config.model_root,
+                validation_ms,
+                environment_ms,
+                tokenizer_ms,
+                text_device_description,
+                vision_device_description,
+            );
+            let text = EncoderResidency::new(
+                "text",
+                text_device_description,
+                text_idle_unload,
+                move || {
+                    let session =
+                        crate::service::ort_runtime::load_session(&text_model, text_device)?;
+                    let io = Self::validate_text_session(
+                        &session,
+                        adapter.text_sequence_length(),
+                        native_embedding_dim,
+                        adapter.requires_attention_mask(),
+                        adapter.text_input_element_type(),
+                    )?;
+                    Ok(LoadedEncoder { session, io })
+                },
+            );
+            let vision = EncoderResidency::new(
+                "image",
+                vision_device_description.clone(),
+                vision_idle_unload,
+                move || {
+                    let session =
+                        crate::service::ort_runtime::load_session(&vision_model, vision_device)?;
+                    let io =
+                        Self::validate_vision_session(&session, image_size, native_embedding_dim)?;
+                    Ok(LoadedEncoder { session, io })
+                },
+            );
+            (Some(text), Some(vision), None)
+        };
 
         Ok(Self {
             profile_id: manifest.profile_id,
@@ -902,19 +999,16 @@ impl OrtClipEngine {
             engine_profile_id: manifest.engine_profile_id,
             language: manifest.language,
             embedding_dim: manifest.embedding_dimension as usize,
-            native_embedding_dim: manifest.native_embedding_dimension as usize,
-            image_size: manifest.image_size as usize,
+            native_embedding_dim,
+            image_size,
             embedding_transform: manifest.embedding_transform,
-            provider: device_description,
+            provider: vision_device_description,
             model_root: PathBuf::from(manifest.model_root),
             tokenizer,
             adapter,
-            text_session,
-            vision_session,
-            multimodal_session,
-            text_io,
-            vision_io,
-            multimodal_io,
+            text,
+            vision,
+            multimodal,
         })
     }
 }
@@ -967,6 +1061,32 @@ impl EmbeddingEngine for OrtClipEngine {
             model_root: self.model_root.to_string_lossy().into_owned(),
             prototype_config_hash: String::new(),
         }
+    }
+
+    fn unload_idle_encoders(&self) {
+        if let Some(text) = &self.text {
+            text.unload_if_idle();
+        }
+        if let Some(vision) = &self.vision {
+            vision.unload_if_idle();
+        }
+        if let Some(multimodal) = &self.multimodal {
+            multimodal.unload_if_idle();
+        }
+    }
+
+    fn encoder_status(&self) -> Vec<EncoderStatus> {
+        let mut statuses = Vec::new();
+        if let Some(text) = &self.text {
+            statuses.push(text.status());
+        }
+        if let Some(vision) = &self.vision {
+            statuses.push(vision.status());
+        }
+        if let Some(multimodal) = &self.multimodal {
+            statuses.push(multimodal.status());
+        }
+        statuses
     }
 }
 
@@ -1357,6 +1477,79 @@ mod tests {
             data.iter()
                 .any(|value| (*value - (255.0 / 255.0)).abs() < 1e-6)
         );
+    }
+
+    fn encoder_loaded(engine: &OrtClipEngine, encoder: &str) -> bool {
+        engine
+            .encoder_status()
+            .into_iter()
+            .find(|status| status.encoder == encoder)
+            .unwrap_or_else(|| panic!("engine has a {encoder} encoder"))
+            .loaded
+    }
+
+    #[test]
+    fn model_info_is_served_before_any_encoder_loads() {
+        if !test_allow_download() && !has_test_model_assets() {
+            eprintln!(
+                "skipping ORT inference test; set ALCEDO_MIND_TEST_MODEL_ROOT or ALCEDO_MIND_TEST_ALLOW_DOWNLOAD=1"
+            );
+            return;
+        }
+
+        let engine = std::sync::Arc::new(make_test_engine());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        // The service starts its image batch worker on the current runtime.
+        let _runtime_guard = runtime.enter();
+        let service = crate::server::semantic::SemanticServiceImpl::new(
+            engine.clone(),
+            8,
+            std::time::Duration::from_millis(2),
+        );
+        use crate::proto::semantic::semantic_service_server::SemanticService;
+        let model_info = runtime
+            .block_on(service.get_model_info(tonic::Request::new(
+                crate::proto::semantic::GetModelInfoRequest {},
+            )))
+            .expect("model info is served without an encoder")
+            .into_inner();
+        assert_eq!(model_info.embedding_dimension as usize, EMBEDDING_DIM);
+        let status = runtime
+            .block_on(service.get_runtime_status(tonic::Request::new(
+                crate::proto::semantic::GetRuntimeStatusRequest {},
+            )))
+            .expect("runtime status")
+            .into_inner();
+        assert_eq!(status.encoders.len(), 2);
+        assert!(status.encoders.iter().all(|encoder| !encoder.loaded));
+        let text = status
+            .encoders
+            .iter()
+            .find(|encoder| encoder.encoder == "text")
+            .expect("text encoder status");
+        assert_eq!(text.device, "cpu");
+    }
+
+    #[test]
+    fn text_request_loads_only_the_text_encoder() {
+        if !test_allow_download() && !has_test_model_assets() {
+            eprintln!(
+                "skipping ORT inference test; set ALCEDO_MIND_TEST_MODEL_ROOT or ALCEDO_MIND_TEST_ALLOW_DOWNLOAD=1"
+            );
+            return;
+        }
+
+        let engine = make_test_engine();
+        assert!(!encoder_loaded(&engine, "text"));
+        assert!(!encoder_loaded(&engine, "image"));
+        engine
+            .embed_text("a red tea cake")
+            .expect("text embedding should succeed");
+        assert!(encoder_loaded(&engine, "text"));
+        assert!(!encoder_loaded(&engine, "image"));
     }
 
     #[test]

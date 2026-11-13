@@ -79,7 +79,8 @@ class EditorScopeController final : public QObject {
   /// Stop polling, cancel queued refresh tasks, and block until the
   /// in-flight scope analysis task finishes. The editor session must call
   /// this before releasing the render pipeline so a scope worker never
-  /// touches a destroyed pipeline stream or scratch buffer.
+  /// touches a destroyed pipeline stream or scratch buffer. Polling resumes
+  /// at the next image identity; visualActive keeps the panel's value.
   void               Shutdown();
 
  signals:
@@ -89,6 +90,7 @@ class EditorScopeController final : public QObject {
   void FrameRequested();
 
  private:
+  void updatePolling();
   void pollSnapshot();
   void scheduleSnapshotRefresh();
   auto refreshSnapshotNow() -> bool;

@@ -5,7 +5,6 @@
 #include "app/editor_save_checkpoint_service.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -56,8 +55,8 @@ auto EditorSaveCheckpointService::TryAcquireSaveLock(sl_element_id_t element_id)
 
 auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
                                         SaveCheckpointCompletion completion) -> CheckpointTicket {
-  // Hold the project-owned save lock through journal commit, materialization,
-  // and thumbnail invalidation. Prefer a pre-acquired lock (taken before
+  // Hold the project-owned save lock through materialization and thumbnail
+  // invalidation. Prefer a pre-acquired lock (taken before
   // capture on the GUI thread); otherwise TryAcquire here. Never block the GUI
   // thread.
   EditorSaveCheckpointCoordinator::SaveCheckpointLock save_lock = std::move(request.save_lock);
@@ -101,6 +100,7 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
     return next_request_id_++;
   }();
 
+  const auto capture = request.capture;
   {
     std::scoped_lock lock(mutex_);
     pending_saves_.push_back(PendingSave{
@@ -109,67 +109,44 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
         completion});
   }
 
-  struct StartObservation {
-    std::atomic<bool> completed{false};
-    std::atomic<bool> commit_succeeded{true};
-    std::string       error;
-  };
-  const auto observation = std::make_shared<StartObservation>();
-  const auto gate        = callback_gate_;
-  const auto on_commit   = [this, gate, observation, request_id,
-                          completion](EditorJournalCommitOutcome outcome) {
-    observation->error = outcome.error;
-    observation->commit_succeeded.store(outcome.accepted && outcome.durable,
-                                          std::memory_order_release);
-    observation->completed.store(true, std::memory_order_release);
-    if (!gate || !gate->Enter()) {
-      return;
-    }
-    HandleJournalCommit(request_id, std::move(outcome), completion);
-    gate->Leave();
-  };
+  const CheckpointTicket ticket{request_id, request.operation_id, request.image_load_request_id,
+                                request.element_id, task_id};
 
-  bool started_async = true;
-  if (deps_.journal) {
-    started_async = deps_.journal->CommitJournalAsync(request.element_id,
-                                                      request.image_load_request_id.value, on_commit);
+  // Fail closed: a save without an immutable capture or without a checkpoint
+  // store must not report a successful no-op materialization.
+  std::string start_error;
+  if (!deps_.checkpoint_store) {
+    start_error = "Editor checkpoint store is unavailable";
+  } else if (!capture) {
+    start_error = "Save capture is required";
   } else {
-    on_commit(EditorJournalCommitOutcome{true, true, false, 0, 0, {}});
-  }
-
-  if (!started_async) {
-    if (!observation->completed.load(std::memory_order_acquire)) {
-      std::uint64_t                                       rolled_task_id = 0;
-      SaveCheckpointCompletion                            rolled_completion;
-      EditorSaveCheckpointCoordinator::SaveCheckpointLock rolled_lock;
-      if (TakePendingSave(request_id, &rolled_task_id, &rolled_completion, &rolled_lock) &&
-          deps_.tasks && rolled_task_id != 0) {
-        deps_.tasks->EndTask(rolled_task_id, false, "Journal commit could not start");
-      }
-      if (rolled_completion) {
-        SaveCheckpointResult result;
-        result.request_id           = request_id;
-        result.operation_id         = request.operation_id;
-        result.image_load_request_id = request.image_load_request_id;
-        result.task_id              = rolled_task_id;
-        result.checkpoint_completed = false;
-        result.error =
-            observation->error.empty() ? "Journal commit could not start" : observation->error;
-        // Release lock before completion so the caller can observe a free lock.
-        rolled_lock.Release();
-        DeliverCompletion(std::move(rolled_completion), std::move(result));
-      }
+    const auto gate    = callback_gate_;
+    const bool started = deps_.checkpoint_store->MaterializeAsync(
+        capture,
+        [this, gate, request_id, completion](EditorMaterializeOutcome materialized) mutable {
+          if (!gate || !gate->Enter()) {
+            return;
+          }
+          HandleMaterialization(request_id, std::move(materialized), completion);
+          gate->Leave();
+        });
+    if (started) {
+      return ticket;
     }
-    return CheckpointTicket{};
+    start_error = "Materialization could not start";
   }
 
-  if (!deps_.command_executor && observation->completed.load(std::memory_order_acquire) &&
-      !observation->commit_succeeded.load(std::memory_order_acquire)) {
-    return CheckpointTicket{};
+  std::uint64_t                                       failed_task_id = 0;
+  SaveCheckpointCompletion                            failed_completion;
+  EditorSaveCheckpointCoordinator::SaveCheckpointLock failed_lock;
+  if (TakePendingSave(request_id, &failed_task_id, &failed_completion, &failed_lock)) {
+    FinishSave(request_id, request.operation_id, request.image_load_request_id, failed_task_id,
+               false, std::move(start_error), failed_completion, std::move(failed_lock),
+               std::nullopt);
   }
-
-  return CheckpointTicket{request_id, request.operation_id, request.image_load_request_id,
-                          request.element_id, task_id};
+  // Without a command executor the failure completion is dropped, so the
+  // caller learns about the failure only from the invalid ticket.
+  return deps_.command_executor ? ticket : CheckpointTicket{};
 }
 
 void EditorSaveCheckpointService::CancelAndWait() {
@@ -179,7 +156,7 @@ void EditorSaveCheckpointService::CancelAndWait() {
     abandoned.swap(pending_saves_);
   }
   // Publish exactly one terminal cancellation per abandoned request before
-  // joining in-flight callbacks. Later storage/journal completions find no
+  // joining in-flight callbacks. Later storage completions find no
   // matching pending entry and cannot finish the task a second time.
   for (auto& save : abandoned) {
     if (deps_.tasks && save.task_id != 0) {
@@ -239,94 +216,6 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
     delivered.operation_id         = operation_id;
     DeliverCompletion(std::move(completion), std::move(delivered));
   }
-}
-
-void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t              request_id,
-                                                      EditorJournalCommitOutcome outcome,
-                                                      SaveCheckpointCompletion   completion) {
-  std::uint64_t                                       task_id           = 0;
-  std::uint64_t                                       operation_id      = 0;
-  sl_element_id_t                                     element_id        = 0;
-  ImageLoadRequestId                                  load_request_id{};
-  bool                                                found             = false;
-  bool                                                start_materialize = false;
-  std::shared_ptr<const EditorMiniGitSaveCapture>     capture;
-  EditorSaveCheckpointCoordinator::SaveCheckpointLock early_lock;
-  {
-    std::scoped_lock lock(mutex_);
-    auto             it = std::find_if(
-        pending_saves_.begin(), pending_saves_.end(),
-        [request_id](const PendingSave& save) { return save.request_id == request_id; });
-    if (it == pending_saves_.end()) {
-      return;
-    }
-    found           = true;
-    task_id         = it->task_id;
-    operation_id    = it->operation_id;
-    element_id      = it->element_id;
-    load_request_id = it->image_load_request_id;
-
-    if (!outcome.accepted || !outcome.durable) {
-      early_lock = std::move(it->save_lock);
-      pending_saves_.erase(it);
-    } else {
-      capture = it->capture;
-      // Fail closed: a durable journal without an immutable capture or without a
-      // checkpoint store must not report a successful no-op materialization.
-      if (!deps_.checkpoint_store) {
-        early_lock = std::move(it->save_lock);
-        pending_saves_.erase(it);
-      } else if (!capture) {
-        early_lock = std::move(it->save_lock);
-        pending_saves_.erase(it);
-      } else {
-        start_materialize = true;
-      }
-    }
-  }
-
-  if (!found) {
-    return;
-  }
-
-  if (start_materialize) {
-    const auto gate    = callback_gate_;
-    const bool started = deps_.checkpoint_store->MaterializeAsync(
-        capture,
-        [this, gate, request_id, completion](EditorMaterializeOutcome materialized) mutable {
-          if (!gate || !gate->Enter()) {
-            return;
-          }
-          HandleMaterialization(request_id, std::move(materialized), completion);
-          gate->Leave();
-        });
-    if (!started) {
-      std::uint64_t                                       late_task_id = 0;
-      SaveCheckpointCompletion                            late_completion;
-      EditorSaveCheckpointCoordinator::SaveCheckpointLock late_lock;
-      if (TakePendingSave(request_id, &late_task_id, &late_completion, &late_lock)) {
-        FinishSave(request_id, operation_id, load_request_id, late_task_id, false,
-                   "Materialization could not start", late_completion, std::move(late_lock),
-                   std::nullopt);
-      }
-    }
-    return;
-  }
-
-  // Journal failed, or durable journal without capture/store (fail-closed).
-  std::string msg;
-  bool        ok = false;
-  if (!outcome.accepted || !outcome.durable) {
-    msg = outcome.error.empty() ? "Journal commit failed" : outcome.error;
-  } else if (!deps_.checkpoint_store) {
-    msg = "Editor checkpoint store is unavailable";
-  } else if (!capture) {
-    msg = "Save capture is required";
-  } else {
-    msg = outcome.error.empty() ? "Journal commit failed" : outcome.error;
-  }
-  FinishSave(request_id, operation_id, load_request_id, task_id, ok, msg, completion,
-             std::move(early_lock), std::nullopt);
 }
 
 void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t            request_id,

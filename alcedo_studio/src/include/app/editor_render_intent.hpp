@@ -10,9 +10,9 @@
 #include <optional>
 #include <string>
 
-#include "app/editor_adjustment_types.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "edit/frame_presentation_types.hpp"
+#include "edit/runtime/mask_coverage_probe.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -36,6 +36,24 @@ enum class EditorRenderReason : std::uint8_t {
   // A newly selected scope needs a fresh final-display frame, using the
   // current viewport region just like the deprecated QWidget scope switch.
   ScopeRefresh,
+  GraphTopologyChanged,
+  SettledMaskEdit,
+  // Same-image Version checkout / root / branch: one Quality rebuild of the
+  // live DAG. Distinct from InitialFrame so the session stays Interactive.
+  VersionDocumentChanged,
+  // Typed Paste replaced transferable Grades, Masks, and DRT/Post on a new
+  // root-relative Version. Quality rebuild of the live DAG.
+  PastedPipelineDocument,
+  // An external resource of the current document changed without a document edit: a
+  // referenced LUT file was updated, went missing, or became available again. Quality
+  // rebuild of the live DAG; result validity finds the affected Grades. No history change.
+  ResourceChanged,
+  // The editor comparison closed. One Quality render of the current document with the current
+  // view reconciles the downstream runtime state; no history change.
+  ComparisonClosed,
+  // The Mask coverage probe of the editor changed (Mask ranges D9): one Quality render presents
+  // the coverage of the newly probed Mask. The photo pixels do not change; no history change.
+  MaskCoverageProbeChanged,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -64,6 +82,11 @@ enum class EditorRenderResultKind : std::uint8_t {
   // task: the existing full frame is reused (renderer re-samples via the
   // item-to-renderer synchronize() path).
   Reused,
+  // The pipeline rendered the frame, but the presentation sink refused it
+  // because the viewport is suspended (window minimized or hidden). Not an
+  // error: the session renders the current state again when presentation
+  // resumes.
+  PresentationSuspended,
 };
 
 /// Opaque presentation-sink identity. The coordinator never owns the sink; the
@@ -91,7 +114,6 @@ struct EditorRenderIntent {
   std::uint64_t                                  operation_id       = 0;
   ImageLoadRequestId                             image_load_request_id{};
   EditorRenderReason                             reason = EditorRenderReason::InitialFrame;
-  EditorRenderAdjustmentSnapshot                 adjustment{};
   std::optional<ViewportRenderRegion>            view_region;
   int                                            requested_width  = 0;
   int                                            requested_height = 0;
@@ -100,11 +122,14 @@ struct EditorRenderIntent {
   EditorRenderPriority                           priority = EditorRenderPriority::Normal;
   std::shared_ptr<EditorRenderCancellationToken> cancellation;
   PresentationSinkId                             presentation_sink_id  = 0;
-  // Geometry-panel previews keep the full source frame visible while the
-  // crop/rotation overlay is being edited. The adjustment state is still
-  // carried by the intent, but the scheduler disables CROP_ROTATE for this
-  // preview frame so its aspect matches the overlay's source-image UV space.
+  // Geometry-panel previews show the whole rotated source while the crop frame is
+  // edited. The port maps this to DocumentGeometryUse::RotatedUncroppedSource; the
+  // overlay maps the crop frame through the presented frame's geometry. The
+  // document is not changed.
   bool                                           geometry_overlay_only = false;
+  // The Mask whose coverage this frame also presents (Mask ranges D9). Presentation state: the
+  // port hands it to the renderer with the coverage channel of the frame role; it is in no key.
+  std::optional<MaskCoverageProbe>               mask_coverage_probe;
 };
 
 struct EditorRenderRequest {
@@ -147,6 +172,13 @@ struct EditorRenderResult {
     case EditorRenderReason::UndoRedo:
     case EditorRenderReason::CropRotate:
     case EditorRenderReason::ScopeRefresh:
+    case EditorRenderReason::GraphTopologyChanged:
+    case EditorRenderReason::SettledMaskEdit:
+    case EditorRenderReason::VersionDocumentChanged:
+    case EditorRenderReason::PastedPipelineDocument:
+    case EditorRenderReason::ResourceChanged:
+    case EditorRenderReason::ComparisonClosed:
+    case EditorRenderReason::MaskCoverageProbeChanged:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -159,6 +191,13 @@ struct EditorRenderResult {
       return EditorRenderQuality::Detail;
     case EditorRenderReason::SettledAdjustment:
     case EditorRenderReason::UndoRedo:
+    case EditorRenderReason::GraphTopologyChanged:
+    case EditorRenderReason::SettledMaskEdit:
+    case EditorRenderReason::VersionDocumentChanged:
+    case EditorRenderReason::PastedPipelineDocument:
+    case EditorRenderReason::ResourceChanged:
+    case EditorRenderReason::ComparisonClosed:
+    case EditorRenderReason::MaskCoverageProbeChanged:
       return EditorRenderQuality::Quality;
     case EditorRenderReason::InitialFrame:
     case EditorRenderReason::InteractiveAdjustment:
@@ -181,38 +220,12 @@ struct EditorRenderResult {
   return reason == EditorRenderReason::ZoomPan || reason == EditorRenderReason::Resize;
 }
 
-/// Whether frame configuration applies the full adjustment snapshot.
-///
-/// Pipeline operators are updated incrementally when a field changes
-/// (SetOperator + SetGlobalParams). Replaying a full adjustment snapshot every
-/// frame is only correct for content-bearing renders (open, edit, undo, crop
-/// commit). View-dependent work (Detail ROI, scope ROI, pure zoom/pan/resize)
-/// must only retarget Geometry render params (RESIZE ROI / user crop) so
-/// Image Loading caches such as RAW_DECODE stay warm.
-[[nodiscard]] inline auto ReasonAppliesAdjustmentSnapshot(EditorRenderReason reason) -> bool {
-  switch (reason) {
-    case EditorRenderReason::ZoomPan:
-    case EditorRenderReason::Resize:
-    case EditorRenderReason::DetailRefresh:
-    case EditorRenderReason::ScopeRefresh:
-      return false;
-    case EditorRenderReason::InitialFrame:
-    case EditorRenderReason::InteractiveAdjustment:
-    case EditorRenderReason::SettledAdjustment:
-    case EditorRenderReason::UndoRedo:
-    case EditorRenderReason::ImageSwitch:
-    case EditorRenderReason::Retry:
-    case EditorRenderReason::CropRotate:
-      return true;
-  }
-  return true;
-}
-
 /// Scope reads image content, so view-only re-sampling and view-dependent ROI
 /// refreshes retain the last content frame instead of replacing the scope input.
 [[nodiscard]] inline auto ScopeUpdateAllowedForReason(EditorRenderReason reason) -> bool {
   return reason != EditorRenderReason::ZoomPan && reason != EditorRenderReason::Resize &&
-         reason != EditorRenderReason::DetailRefresh;
+         reason != EditorRenderReason::DetailRefresh &&
+         reason != EditorRenderReason::MaskCoverageProbeChanged;
 }
 
 /// Fill frame-role defaults derived from quality before Submit stores the

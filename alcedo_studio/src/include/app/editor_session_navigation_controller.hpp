@@ -21,7 +21,6 @@ namespace alcedo {
 
 class EditorSessionLifecycle;
 class EditorSessionRenderController;
-class IEditorJournalPort;
 class IEditorCheckpointStore;
 class IEditorHistoryPort;
 
@@ -104,6 +103,9 @@ struct NavigationCompletion {
   bool             retained_image = false;  ///< True when the image survived a failure.
   std::string      message;
   CheckpointTicket ticket;
+  /// The render routed by a Version action (checkout, root Version, branch); 0 when none was
+  /// routed. Empty for the other actions, whose frame is the first frame of the image.
+  std::optional<std::uint64_t> render_request_id;
 };
 
 using NavigationCompletionNotifier = std::function<void(const NavigationCompletion&)>;
@@ -125,9 +127,8 @@ class EditorSessionNavigationController final {
 
   explicit EditorSessionNavigationController(
       EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
-      EditorSessionRenderController& render, IEditorJournalPort* journal,
-      IEditorCheckpointStore* checkpoint_store, IEditorHistoryPort* history,
-      EditorSessionNavigationState* state = nullptr);
+      EditorSessionRenderController& render, IEditorCheckpointStore* checkpoint_store,
+      IEditorHistoryPort* history, EditorSessionNavigationState* state = nullptr);
 
   /// Stamp the operation currently being reduced onto saves and render work.
   void SetOperationId(std::uint64_t operation_id);
@@ -181,6 +182,17 @@ class EditorSessionNavigationController final {
   /// Post render-idle completion back onto the session owner thread.
   void               SetOwnerPoster(std::function<void(std::function<void()>)> poster);
 
+  /// Settles every queued edit of the current image before a persisting seal
+  /// captures it. Installed by the session facade, which owns the input queue.
+  /// A failure aborts the seal with that error instead of saving a partial state.
+  using SealPreparer = std::function<bool(std::string* error)>;
+  void SetSealPreparer(SealPreparer preparer) { seal_preparer_ = std::move(preparer); }
+
+  /// Inject the session-owner thread check. When unset, the assert falls back
+  /// to the construction thread (legacy single-thread use).
+  using OwnerCheck = std::function<bool()>;
+  void               SetOwnerCheck(OwnerCheck check) { owner_check_ = std::move(check); }
+
   /// Phase 7A: true when the session is in the RetainedImageFailure state and
   /// a pending recovery target exists (save failure with a pending navigation).
   [[nodiscard]] auto has_pending_recovery() const -> bool;
@@ -189,9 +201,9 @@ class EditorSessionNavigationController final {
   /// Returns a NavigationOutcome for the re-attempted save.
   auto               RetrySaveAfterFailure() -> NavigationOutcome;
 
-  /// Phase 7A: discard unflushed changes and continue the pending navigation.
-  /// Clears the journal, releases the current guards, and proceeds to the
-  /// pending target. Returns a NavigationOutcome.
+  /// Phase 7A: continue the pending navigation without saving. Releases the
+  /// current guards and proceeds to the pending target. Returns a
+  /// NavigationOutcome.
   auto               DiscardAndContinueAfterFailure() -> NavigationOutcome;
 
   /// Phase 7A: cancel the pending navigation and resume Interactive on the
@@ -199,12 +211,14 @@ class EditorSessionNavigationController final {
   void               CancelPendingNavigation();
 
  private:
-  /// Seal the current image: finalize edit, capture checkpoint, start save.
+  /// Seal the current image: capture checkpoint, start save.
   /// Returns a valid ticket on success.
   auto SealAndStartSave(bool persist_changes, bool start_background_save) -> CheckpointTicket;
   /// Continue to the target image after a successful save. Acquires guards and
   /// starts the first-frame render.
   void ContinueToTarget(sl_element_id_t element_id, image_id_t image_id, bool is_switch);
+  /// Cancel the frames of the sealed session. Switch and Close also wait until the in-flight
+  /// frame has left the viewport sink (render_idle); Version operations on the same image do not.
   void StartRenderIdleBarrier(ImageLoadRequestId image_load_request);
   void OnRenderSessionIdle(ImageLoadRequestId image_load_request);
   void TryCompletePendingAction();
@@ -231,25 +245,34 @@ class EditorSessionNavigationController final {
   void PromoteQueuedSwitchTarget();
   /// Publish the async completion to the registered notifier (if any).
   void NotifyCompletion(bool success, bool retained_image, std::string message,
-                        const CheckpointTicket& ticket);
+                        const CheckpointTicket&      ticket,
+                        std::optional<std::uint64_t> render_request_id = std::nullopt);
   /// Retain the current image and remember the pending target after a save or
   /// checkpoint failure. Callers are already on the session owner thread.
   void RetainPendingFailure(PendingEditorAction pending, std::string message);
 
-  void AssertOwnerThread() const { assert(std::this_thread::get_id() == owner_thread_); }
+  void AssertOwnerThread() const {
+    assert(owner_check_ ? owner_check_() : std::this_thread::get_id() == owner_thread_);
+  }
 
   EditorSessionLifecycle&        lifecycle_;
   EditorSaveCheckpointService&   save_service_;
   EditorSessionRenderController& render_;
-  IEditorJournalPort*            journal_;
   IEditorCheckpointStore*        checkpoint_store_;
   IEditorHistoryPort*            history_;
   EditorSessionNavigationState   owned_state_;
   EditorSessionNavigationState*  state_;
+  OwnerCheck                     owner_check_;
   std::thread::id                owner_thread_;
   std::uint64_t                  operation_id_ = 0;
+  /// The render request of the last Continue* Version action; 0 when it routed none.
+  std::uint64_t                  version_render_request_id_ = 0;
   NavigationCompletionNotifier   completion_notifier_;
   std::function<void(std::function<void()>)> owner_poster_;
+  SealPreparer                               seal_preparer_;
+  /// Real cause of the last failed SealAndStartSave, appended to the retained
+  /// failure message so recovery shows it instead of a generic "save failed".
+  std::string                                seal_error_;
 };
 
 }  // namespace alcedo

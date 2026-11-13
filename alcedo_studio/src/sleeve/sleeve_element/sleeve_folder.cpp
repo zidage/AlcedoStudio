@@ -5,11 +5,13 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
@@ -74,10 +76,31 @@ void SleeveFolder::AddElementToMap(const std::shared_ptr<SleeveElement> element,
   if (increment_ref_count) {
     element->IncrementRefCount();
   }
-  // Mark this folder as modified so the updated content list is persisted on next sync.
-  if (change_sync && sync_flag_ == SyncFlag::SYNCED) {
+  if (!change_sync) {
+    return;
+  }
+  RecordContentAdded(element->element_id_);
+  // Mark this folder as modified so the content change is persisted on next sync.
+  if (sync_flag_ == SyncFlag::SYNCED) {
     sync_flag_ = SyncFlag::MODIFIED;
   }
+}
+
+void SleeveFolder::RecordContentAdded(sl_element_id_t element_id) {
+  if (content_removed_since_sync_.erase(element_id) == 0) {
+    content_added_since_sync_.insert(element_id);
+  }
+}
+
+void SleeveFolder::RecordContentRemoved(sl_element_id_t element_id) {
+  if (content_added_since_sync_.erase(element_id) == 0) {
+    content_removed_since_sync_.insert(element_id);
+  }
+}
+
+void SleeveFolder::MarkContentSynced() {
+  content_added_since_sync_.clear();
+  content_removed_since_sync_.clear();
 }
 
 /**
@@ -90,8 +113,8 @@ void SleeveFolder::AddElementToMap(const std::shared_ptr<SleeveElement> element,
 void SleeveFolder::UpdateElementMap(const file_name_t& name, const sl_element_id_t old_id,
                                     const sl_element_id_t new_id) {
   contents_.erase(name);
-  contents_[name]     = new_id;
-  auto default_filter = indicies_cache_[default_filter_];
+  contents_[name]      = new_id;
+  auto& default_filter = indicies_cache_[default_filter_];
 
   for (auto& id : default_filter) {
     if (id == old_id) {
@@ -99,6 +122,8 @@ void SleeveFolder::UpdateElementMap(const file_name_t& name, const sl_element_id
       break;
     }
   }
+  RecordContentRemoved(old_id);
+  RecordContentAdded(new_id);
   // Mark this folder as modified so the updated content list is persisted on next sync.
   if (sync_flag_ == SyncFlag::SYNCED) {
     sync_flag_ = SyncFlag::MODIFIED;
@@ -136,6 +161,9 @@ auto SleeveFolder::ContainsElementId(sl_element_id_t element_id) const -> bool {
 
 auto SleeveFolder::Clear() -> bool {
   // TODO: Add Implementation
+  for (const auto id : indicies_cache_[default_filter_]) {
+    RecordContentRemoved(id);
+  }
   contents_.clear();
   indicies_cache_.clear();
   indicies_cache_[default_filter_] = {};
@@ -168,6 +196,7 @@ void SleeveFolder::RemoveNameFromMap(const file_name_t& name) {
   default_index.erase(std::remove(default_index.begin(), default_index.end(), removed_id),
                       default_index.end());
   contents_.erase(name);
+  RecordContentRemoved(removed_id);
   // Mark this folder as modified so the updated content list is persisted on next sync.
   if (sync_flag_ == SyncFlag::SYNCED) {
     sync_flag_ = SyncFlag::MODIFIED;
@@ -191,10 +220,48 @@ auto SleeveFolder::RemoveElementById(sl_element_id_t element_id) -> bool {
                       default_index.end());
   removed |= default_index.size() != old_size;
 
+  if (removed) {
+    RecordContentRemoved(element_id);
+  }
   if (removed && sync_flag_ == SyncFlag::SYNCED) {
     sync_flag_ = SyncFlag::MODIFIED;
   }
   return removed;
+}
+
+auto SleeveFolder::RemoveElementsById(const std::unordered_set<sl_element_id_t>& element_ids)
+    -> size_t {
+  if (element_ids.empty()) {
+    return 0;
+  }
+  std::unordered_set<sl_element_id_t> removed_ids;
+  for (auto it = contents_.begin(); it != contents_.end();) {
+    if (element_ids.contains(it->second)) {
+      removed_ids.insert(it->second);
+      it = contents_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  auto&       default_index = indicies_cache_[default_filter_];
+  std::size_t kept          = 0;
+  for (const auto element_id : default_index) {
+    if (element_ids.contains(element_id)) {
+      removed_ids.insert(element_id);
+    } else {
+      default_index[kept++] = element_id;
+    }
+  }
+  default_index.resize(kept);
+
+  for (const auto element_id : removed_ids) {
+    RecordContentRemoved(element_id);
+  }
+  if (!removed_ids.empty() && sync_flag_ == SyncFlag::SYNCED) {
+    sync_flag_ = SyncFlag::MODIFIED;
+  }
+  return removed_ids.size();
 }
 
 void SleeveFolder::CreateIndex(const std::vector<std::shared_ptr<SleeveElement>>& filtered_elements,

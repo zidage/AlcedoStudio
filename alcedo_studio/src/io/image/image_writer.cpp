@@ -5,6 +5,7 @@
 #include "io/image/image_writer.hpp"
 
 #include <OpenImageIO/imageio.h>
+#include <OpenImageIO/tiffutils.h>
 
 #include <algorithm>
 #include <cctype>
@@ -22,6 +23,7 @@
 
 #include "alcedo_version.hpp"
 #include "image/metadata.hpp"
+#include "io/image/exif_ifd_tags.hpp"
 #include "io/image/export_icc_profile_resolver.hpp"
 #include "io/image/jpeg_exif_app1.hpp"
 #include "io/image/ultra_hdr_writer.hpp"
@@ -409,15 +411,52 @@ void ApplyExportResolutionToOIIO(ImageSpec& spec, const ExportResizeSpec& resize
   spec.attribute("ResolutionUnit", "in");
 }
 
-void ApplyJpegExportMetadata(const std::filesystem::path&              export_path,
-                             const std::optional<ExifDisplayMetaData>& export_metadata,
-                             int width = 0, int height = 0) {
-  (void)ApplyJpegExifApp1Metadata(export_path, JpegExifApp1Options{
+/// The EXIF options of an export of @p width x @p height pixels.
+auto MakeExportExifOptions(const std::optional<ExifDisplayMetaData>&      export_metadata,
+                           const ExifIfdEntries&                          source_exif_entries,
+                           const std::optional<ExportColorProfileConfig>& pixel_color,
+                           const ExportRecipe& recipe, int width, int height) -> ExportExifOptions {
+  return ExportExifOptions{
       .metadata_         = export_metadata,
       .width_            = width,
       .height_           = height,
       .include_software_ = true,
-  });
+      .source_entries_   = source_exif_entries,
+      .color_space_      = pixel_color.has_value()
+                               ? std::optional<uint16_t>(ExifColorSpaceFor(*pixel_color))
+                               : std::nullopt,
+      .resolution_dpi_   = recipe.resize_.dpi_,
+  };
+}
+
+void ApplyJpegExportMetadata(const std::filesystem::path& export_path,
+                             const ExportExifOptions&     exif_options) {
+  if (!ApplyJpegExifApp1Metadata(export_path, exif_options)) {
+    throw std::runtime_error("ImageWriter: failed to write the EXIF metadata of the JPEG file");
+  }
+}
+
+/// Set the attributes of @p spec from the EXIF entries of the export. The OIIO PNG and EXR
+/// writers store them with the other EXIF attributes.
+void ApplyExifIfdEntriesToOIIO(ImageSpec& spec, const ExifIfdEntries& entries) {
+  const std::vector<uint8_t> tiff_block = BuildExifTiffBlock(entries);
+  if (tiff_block.empty()) return;
+  // decode_exif keeps the attributes that a spec already has, so decode into an empty spec and
+  // replace the attributes of the same names. ApplyExportMetadataToOIIO sets each display value
+  // under two names ("Make" and "Exif:Make"); remove the other name so that it cannot keep the
+  // display value.
+  ImageSpec exif_spec;
+  if (!decode_exif(cspan<uint8_t>(tiff_block.data(), tiff_block.size()), exif_spec)) {
+    throw std::runtime_error("OpenImageIO: failed to decode the EXIF metadata of the export");
+  }
+  constexpr std::string_view kExifPrefix = "Exif:";
+  for (const auto& attribute : exif_spec.extra_attribs) {
+    const std::string name       = attribute.name().string();
+    const std::string other_name = name.starts_with(kExifPrefix) ? name.substr(kExifPrefix.size())
+                                                                 : std::string(kExifPrefix) + name;
+    spec.extra_attribs.remove(other_name, TypeDesc::UNKNOWN, false);
+    spec.attribute(name, attribute.type(), attribute.data());
+  }
 }
 
 auto IsJpegExportPath(const std::filesystem::path& path) -> bool {
@@ -430,6 +469,7 @@ auto TryWriteWithOpenImageIO(const image_path_t& src_path, const std::filesystem
                              const cv::Mat& rgba32f, const ExportRecipe& recipe,
                              const std::optional<ExportColorProfileConfig>& color_profile,
                              const std::optional<ExifDisplayMetaData>&      export_metadata,
+                             const std::optional<ExportExifOptions>&        exif_options,
                              std::string&                                   out_error) -> bool {
   const std::string dst          = PathToUtf8(export_path);
 
@@ -457,6 +497,19 @@ auto TryWriteWithOpenImageIO(const image_path_t& src_path, const std::filesystem
     outspec.attribute("Exif:Software", software);
   }
   ApplyExportColorProfile(outspec, color_profile);
+  // The EXIF entries of the export (the source entries and the export values) replace the
+  // attributes above with the same names. JPEG output gets them in the APP1 segment that
+  // replaces the OIIO one after the write. The OIIO TIFF and PNG writers drop GPS (TIFF) and the
+  // EXIF tags that they do not know; WriteTiffExifIfdEntries and WritePngExifChunk write all
+  // entries after the write. EXR stores the attributes only.
+  std::optional<ExifIfdEntries> export_exif_entries;
+  if (exif_options.has_value()) {
+    export_exif_entries = BuildExportExifIfdEntries(*exif_options);
+  }
+  if (export_exif_entries.has_value() &&
+      (options.format_ == ImageFormatType::PNG || options.format_ == ImageFormatType::EXR)) {
+    ApplyExifIfdEntriesToOIIO(outspec, *export_exif_entries);
+  }
 
   // OIIO v3 exports ImageOutput::create(string_view, ...) (and a UTF-16 helper).
   // Avoid the deprecated create(std::string, std::string) overload, which can
@@ -480,7 +533,16 @@ auto TryWriteWithOpenImageIO(const image_path_t& src_path, const std::filesystem
     return false;
   }
 
-  out->close();
+  if (!out->close()) {
+    out_error = "OpenImageIO: failed to close output: " + out->geterror();
+    return false;
+  }
+  if (export_exif_entries.has_value() && options.format_ == ImageFormatType::TIFF) {
+    WriteTiffExifIfdEntries(export_path, *export_exif_entries);
+  }
+  if (export_exif_entries.has_value() && options.format_ == ImageFormatType::PNG) {
+    WritePngExifChunk(export_path, BuildExifTiffBlock(*export_exif_entries));
+  }
   return true;
 }
 
@@ -612,19 +674,31 @@ void ImageWriter::WriteImageToPath(const image_path_t&                     src_p
   // can be multi-hundred MB; cloning before downscale doubles peak memory.
   cv::Mat working = ShouldResize(recipe) ? ResizeRGBA32F(src_rgba32f, recipe) : src_rgba32f.clone();
 
-  if (recipe.metadata_.mode_ == ExportMetadataMode::NONE || !recipe.metadata_.include_exif_) {
+  const bool include_exif =
+      recipe.metadata_.mode_ == ExportMetadataMode::STANDARD && recipe.metadata_.include_exif_;
+  if (!include_exif) {
     export_metadata.reset();
   }
+  ExifIfdEntries source_exif_entries;
+  if (include_exif) {
+    try {
+      source_exif_entries = SelectExportExifIfdEntries(ReadExifIfdEntries(src_path),
+                                                       recipe.metadata_.include_location_,
+                                                       recipe.metadata_.include_device_serials_);
+    } catch (const std::exception& error) {
+      throw std::runtime_error(std::string("ImageWriter: ") + error.what());
+    }
+  }
+  const auto pixel_color = recipe.output_color_.has_value() ? recipe.output_color_ : color_profile;
   const auto embedded_profile = recipe.icc_ == ExportIccPolicy::EMBED_OUTPUT_PROFILE
-                                    ? color_profile
+                                    ? pixel_color
                                     : std::optional<ExportColorProfileConfig>{};
 
-  if (ShouldWriteUltraHdr(options, color_profile)) {
+  if (ShouldWriteUltraHdr(options, pixel_color)) {
 #if defined(ALCEDO_HAS_ULTRAHDR)
     UltraHdrWriter::WriteImageToPath(
-        src_path, export_path, working, options, *color_profile, export_metadata,
-        recipe.metadata_.mode_ == ExportMetadataMode::STANDARD && recipe.metadata_.include_exif_,
-        recipe.icc_ == ExportIccPolicy::EMBED_OUTPUT_PROFILE);
+        src_path, export_path, working, options, *pixel_color, export_metadata, include_exif,
+        recipe.icc_ == ExportIccPolicy::EMBED_OUTPUT_PROFILE, source_exif_entries);
     return;
 #else
     throw std::runtime_error(
@@ -632,35 +706,41 @@ void ImageWriter::WriteImageToPath(const image_path_t&                     src_p
 #endif
   }
 
-  if (color_profile.has_value() && IsUltraHdrTransfer(color_profile->encoding_eotf)) {
+  if (pixel_color.has_value() && IsUltraHdrTransfer(pixel_color->encoding_eotf)) {
     throw std::runtime_error("ImageWriter: HDR export requires Ultra HDR JPEG output.");
   }
 
+  // The writers keep the pixel size of `working`; MakeOIIOBuffer only converts the samples.
+  std::optional<ExportExifOptions> exif_options;
+  if (include_exif) {
+    exif_options = MakeExportExifOptions(export_metadata, source_exif_entries, pixel_color, recipe,
+                                         working.cols, working.rows);
+  }
+
   std::string oiio_err;
+  bool        written_with_oiio = false;
   try {
-    if (TryWriteWithOpenImageIO(src_path, export_path, working, recipe, embedded_profile,
-                                export_metadata, oiio_err)) {
-      if (IsJpegExportPath(export_path) &&
-          recipe.metadata_.mode_ == ExportMetadataMode::STANDARD &&
-          recipe.metadata_.include_exif_) {
-        ApplyJpegExportMetadata(export_path, export_metadata, working.cols, working.rows);
-      }
-      return;
-    }
+    written_with_oiio =
+        TryWriteWithOpenImageIO(src_path, export_path, working, recipe, embedded_profile,
+                                export_metadata, exif_options, oiio_err);
   } catch (const std::exception& e) {
     oiio_err = e.what();
+  }
+  if (written_with_oiio) {
+    if (IsJpegExportPath(export_path) && exif_options.has_value()) {
+      ApplyJpegExportMetadata(export_path, *exif_options);
+    }
+    return;
   }
 
   std::string cv_err;
   if (TryWriteWithOpenCV(export_path, working, recipe, cv_err)) {
-    if (IsJpegExportPath(export_path) &&
-        recipe.metadata_.mode_ == ExportMetadataMode::STANDARD &&
-        recipe.metadata_.include_exif_) {
-      ApplyJpegExportMetadata(export_path, export_metadata, working.cols, working.rows);
+    if (IsJpegExportPath(export_path) && exif_options.has_value()) {
+      ApplyJpegExportMetadata(export_path, *exif_options);
       return;
     }
-    if ((export_metadata.has_value() && recipe.metadata_.mode_ == ExportMetadataMode::STANDARD) ||
-        embedded_profile.has_value() || recipe.resize_.dpi_ > 0.0) {
+    if (export_metadata.has_value() || exif_options.has_value() || embedded_profile.has_value() ||
+        recipe.resize_.dpi_ > 0.0) {
       throw std::runtime_error(
           "ImageWriter: OpenCV fallback cannot satisfy metadata, ICC, or DPI settings. OIIO: " +
           oiio_err);

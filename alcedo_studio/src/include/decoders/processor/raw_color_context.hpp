@@ -4,16 +4,21 @@
 
 #pragma once
 
+#include "image/dng_color_profile.hpp"
+
 #include <json.hpp>
 #include <string>
 
 namespace alcedo {
 
 /// Lightweight struct carrying raw-file colour and lens metadata extracted
-/// during decode or import.  Factored out of raw_processor.hpp so that
-/// headers without heavyweight dependencies (Image, OperatorParams, …) can
-/// use it without pulling in libraw / decoder_scheduler.
+/// during decode or import.  Kept in its own header so that headers without
+/// heavyweight dependencies (Image, the Develop model, …) can use it without
+/// pulling in libraw / decoder_scheduler.
 struct RawRuntimeColorContext {
+  /// Bound at import. Project data keeps only the fingerprint; a context read from project data
+  /// holds an unbound reference until the pipeline service loads the profile from the source file.
+  DngColorProfileRef dng_profile_;
   bool              valid_                   = false;
   bool              output_in_camera_space_  = false;
   float             cam_mul_[3]              = {1.0f, 1.0f, 1.0f};
@@ -48,11 +53,12 @@ struct RawRuntimeColorContext {
   double            color_matrix_2_cct_      = 6504.0;
 };
 
-/// Serialize the complete import-resolved RAW color and lens state.
+/// Serialize the import-resolved RAW color and lens state. The DNG profile is written as its
+/// fingerprint only; the profile tables are never written.
 auto RawColorContextToJson(const RawRuntimeColorContext& context) -> nlohmann::json;
 
-/// Decode a previously serialized RAW color and lens state.
-/// Returns false when the JSON does not contain a usable RAW context.
+/// Decode a previously serialized RAW color and lens state. A DNG profile is read as an unbound
+/// reference. Returns false when the JSON does not contain a usable RAW context.
 auto RawColorContextFromJson(const nlohmann::json& value, RawRuntimeColorContext& context) -> bool;
 
 }  // namespace alcedo

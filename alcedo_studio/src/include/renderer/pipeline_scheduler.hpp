@@ -7,11 +7,12 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 #include "concurrency/thread_pool.hpp"
-#include "ui/edit_viewer/frame_sink.hpp"
 #include "pipeline_task.hpp"
+#include "ui/edit_viewer/frame_sink.hpp"
 #include "utils/id/id_generator.hpp"
 
 namespace alcedo {
@@ -27,6 +28,22 @@ class PipelineScheduler {
   [[nodiscard]] bool IsStaleForSink(IFrameSink* sink, std::uint64_t request_id);
   void               MarkSinkApplyStarted(IFrameSink* sink, std::uint64_t request_id);
 
+  /// Result that a finished task reports to PipelineTask::on_complete_.
+  struct TaskOutcome {
+    bool        success = false;
+    std::string message;
+  };
+
+  /**
+   * @brief Run @p task on the calling worker thread: prepare, load the input, then Apply the
+   *        task's snapshot under the executor render lock and deliver the result.
+   *
+   * Sets the blocking result and runs the callbacks of @p task. Does not call on_complete_; the
+   * caller calls it after this function returns, when the render lock is released.
+   * @return The outcome for on_complete_. Never throws.
+   */
+  auto RunTask(PipelineTask& task) -> TaskOutcome;
+
  public:
   explicit PipelineScheduler();
   explicit PipelineScheduler(size_t thread_count);
@@ -41,5 +58,13 @@ class PipelineScheduler {
   /// Run arbitrary work on the same pool as pipeline tasks (test producers,
   /// async failure completion). Prefer ScheduleTask for real renders.
   void ScheduleWork(std::function<void()> work);
+
+  /**
+   * @brief Drop queued tasks that have not started and wait for running ones to finish.
+   *
+   * For an owner whose tasks capture state it is about to destroy. Dropped tasks run no callback
+   * and no completion. Later ScheduleTask calls queue work that never runs.
+   */
+  void Shutdown();
 };
 };  // namespace alcedo

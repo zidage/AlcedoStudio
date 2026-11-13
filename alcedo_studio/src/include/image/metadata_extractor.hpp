@@ -9,10 +9,13 @@
 #include <exiv2/exif.hpp>
 #include <exiv2/exiv2.hpp>
 #include <json.hpp>
+#include <optional>
 #include <stdexcept>
 
 #include "decoders/processor/raw_color_context.hpp"
 #include "image.hpp"
+#include "image/dng_color_profile.hpp"
+#include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/import/import_error_code.hpp"
 
@@ -82,12 +85,40 @@ class MetadataExtractor {
                                        const Exiv2::Image* exif_image = nullptr) -> bool;
 
   /**
-   * @brief Extract EXIF metadata and populate the Image object
+   * @brief Import-time metadata read: populate @p image from a RAW or raster file.
    *
-   * @param image_path
-   * @param image
+   * The file content decides, never its extension. A raster file (JPEG, PNG, TIFF without
+   * camera data, OpenEXR) gets display metadata, `ImageType`, the HDR flag and its source color
+   * description. Any other file is accepted only when LibRaw (or the DNG fast path) opens it.
+   * Sidecars, containers and CMYK images throw MetadataExtractionError with
+   * ImportErrorCode::UNSUPPORTED_FORMAT. A supported file whose content category is not in
+   * @p allowed_categories throws ImportErrorCode::EXCLUDED_TYPE.
    */
-  static void ExtractEXIF_ToImage(const image_path_t& image_path, Image& image);
+  static void ExtractEXIF_ToImage(const image_path_t& image_path, Image& image,
+                                  ImportCategoryMask allowed_categories = kAllImportCategories);
+
+  /// Raster container of the file at @p image_path, or std::nullopt for RAW or other content.
+  static auto ClassifyRasterFile(const image_path_t& image_path) -> std::optional<RasterFileKind>;
+
+  /**
+   * @brief Populate @p image from a raster file of container @p kind.
+   * @throws MetadataExtractionError UNSUPPORTED_FORMAT for CMYK content, READ_FAILED or
+   *         METADATA_EXTRACTION_FAILED when the file or its header cannot be read.
+   */
+  static void ExtractRasterMetadata_ToImage(const image_path_t& image_path, RasterFileKind kind,
+                                            Image& image);
+
+  /**
+   * @brief Runtime read of the DNG color profile from a source file.
+   *
+   * Reads the same IFD0 tags as import (ColorMatrix, calibration, and profile tables), so the
+   * result has the same fingerprint as the profile bound at import when the file is unchanged.
+   * Project data does not store the profile; DngColorProfileCache calls this on a cache miss.
+   *
+   * @return The profile, or null when the file has no DNG color matrices.
+   * @throws std::exception when the file cannot be opened or a present profile tag is invalid.
+   */
+  static auto ReadDngColorProfileFromSource(const image_path_t& image_path) -> DngColorProfilePtr;
 
   /**
    * @brief Extract metadata from a raw file using libraw and populate the Image with
@@ -106,22 +137,13 @@ class MetadataExtractor {
    * @brief Populate a RawRuntimeColorContext from an already-opened LibRaw instance.
    *        Requires open_file + unpack to have been called.  This is the single source
    *        of truth for raw metadata extraction (camera/lens strings, color matrices,
-   *        Nikon lens ID lookup, etc.).
+   *        Nikon lens ID lookup, etc.). The lens name comes from
+   *        LensIdentityResolver::FromLibRaw; the EXIF lens sources are not read.
    *
    * @param raw_processor  A LibRaw instance after open_file + unpack
    * @param ctx            Output context to populate
    */
   static void PopulateRuntimeContextFromOpenLibRaw(LibRaw&                 raw_processor,
                                                    RawRuntimeColorContext& ctx);
-
-  /**
-   * @brief Merge an Exiv2-based ExifDisplayMetaData hint into a RawRuntimeColorContext,
-   *        filling in any fields that are still empty/zero.
-   *
-   * @param metadata_hint  The Exiv2-based metadata (may be nullptr — no-op in that case)
-   * @param ctx            Context to merge into
-   */
-  static void MergeMetadataHint(const ExifDisplayMetaData* metadata_hint,
-                                RawRuntimeColorContext&    ctx);
 };
 }  // namespace alcedo

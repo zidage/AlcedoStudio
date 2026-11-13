@@ -9,16 +9,20 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <string>
 
-#include "edit/operators/op_kernel.hpp"
-#include "edit/pipeline/pipeline.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/geometry/render_request.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
+struct PreparedRawInput;
+
 enum class RenderType {
   FAST_PREVIEW,
   QUALITY_BASE_PREVIEW,
@@ -42,42 +46,54 @@ struct RenderDesc {
   FramePreviewMetadata frame_metadata_      = {};
   uint32_t             max_edge_            = 1024;       // max edge for thumbnail/export resize
   DecodeRes            decode_res_ = DecodeRes::QUARTER;  // RAW decode resolution for thumbnails
+  // Copied unchanged into PipelineApplyRequest::geometry. Only the editor viewport port sets
+  // RotatedUncroppedSource (Geometry panel open); thumbnail, export, and the remote image analysis
+  // rendition keep the default. The AI Mask analysis render does not use a PipelineTask.
+  DocumentGeometryUse  document_geometry_ = DocumentGeometryUse::ApplyCropAndRotation;
+  // Editor frames only: the Mask coverage probe of the frame and the coverage channel of its frame
+  // role (Mask ranges D9, D10). An interactive render copies both into PipelineApplyRequest.
+  std::optional<MaskCoverageProbe> mask_coverage_probe_;
+  IMaskCoverageSink*               mask_coverage_sink_ = nullptr;
 };
 
 struct TaskOptions {
-  RenderDesc    render_desc_;
+  RenderDesc                                render_desc_;
 
-  bool          is_blocking_;      // if true, wait for the task to finish
-  bool          is_callback_;      // if true, use callback to return result
-  bool          is_seq_callback_;  // if true, use sequential callback to return result
-  PriorityLevel task_priority_;    // task priority level, not used yet
+  bool                                      is_blocking_;      // if true, wait for the task to finish
+  bool                                      is_callback_;      // if true, use callback to return result
+  bool                                      is_seq_callback_;  // if true, use sequential callback to return result
+  PriorityLevel                             task_priority_;    // task priority level, not used yet
+  std::optional<ExportColorProfileConfig>   export_output_color_;
 };
 struct PipelineTask {
   uint32_t                                                    task_id_;
-  std::shared_ptr<CPUPipelineExecutor>                        pipeline_executor_;
+  std::shared_ptr<PipelineExecutor>                           pipeline_executor_;
   std::shared_ptr<ImageBuffer>                                input_;
   std::shared_ptr<Image>                                      input_desc_;
+  // Batch only: a source already decoded at the task's decode resolution. A task that has it
+  // needs neither input_ nor input_desc_.
+  std::shared_ptr<const PreparedRawInput>                     prepared_input_;
 
   std::shared_ptr<std::promise<std::shared_ptr<ImageBuffer>>> result_;    // used for blocking tasks
   std::optional<std::function<void(ImageBuffer&)>>            callback_;  // used for callback tasks
   std::optional<std::function<void(ImageBuffer&, uint32_t)>>
                                                     seq_callback_;  // used for callback tasks
+  // Runs on the worker before the input is loaded and before the executor render lock is taken.
+  // The owner attaches its frame sink here; returning false drops the task without a result.
   std::optional<std::function<bool(PipelineTask&)>> prepare_;
-  // Request-specific executor configuration performed under the same render
-  // lock as Apply(). This is the only safe place to mutate a shared executor.
-  std::optional<std::function<bool(PipelineTask&)>> configure_under_render_lock_;
+  // Immutable graph this task renders. The owner freezes it before it schedules the task. Required
+  // for every task that renders; a task without one fails.
+  std::shared_ptr<const PipelineGraphSnapshot>           snapshot_;
   std::function<bool()>                             cancel_requested_;
   // Optional control-plane completion (preview + export). Invoked once on every
   // terminal path so callers do not need a dedicated blocking worker thread.
-  std::function<void(bool success)>                 on_complete_;
+  std::function<void(bool success, std::string message)> on_complete_;
 
   TaskOptions                                       options_;
 
   // Monotonic render request identity. Immutable after ScheduleTask stamps it.
   std::uint64_t                                     request_id_ = 0;
 
-  void                                              SetExecutorRenderParams();
-  void                                              ResetPreviewRenderParams();
-  void                                              ResetThumbnailRenderParams();
+  [[nodiscard]] auto MakeApplyRequest() const -> PipelineApplyRequest;
 };
 };  // namespace alcedo

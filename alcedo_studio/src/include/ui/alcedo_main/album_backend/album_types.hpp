@@ -7,11 +7,14 @@
 #include <QDate>
 #include <QString>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "image/color_label.hpp"
 #include "type/type.hpp"
 
 namespace alcedo::ui {
@@ -34,10 +37,21 @@ struct AlbumItem {
   QDate                 capture_date{};
   QDate                 import_date{};
   int                   rating = 0;
+  /// Library marks (#768): color label code bits and the Delete mark.
+  ColorLabelMask        color_labels = 0;
+  bool                  delete_mark  = false;
   bool                  is_hdr = false;
+  /// Width / height of the oriented photo (ExifDisplayMetaData::width_ / height_ are the
+  /// dimensions of the oriented image); 0 when the dimensions are unknown.
+  double                aspect_ratio = 0.0;
+  /// Creation time (UTC epoch nanoseconds) of the head commit of the active Version; empty
+  /// when the photo is unedited (the active Version's head is the image root).
+  std::optional<std::int64_t> edited_at_ns{};
+  /// Display name of the active Version of an edited photo; empty when unedited.
+  QString                     edit_version_name{};
   QString               tags{};
   QString               accent{};
-  QString               thumb_data_url{};
+  QString               thumb_url{};
   bool                  thumb_loading        = false;
   bool                  thumb_missing_source = false;
   QString               thumb_error_text{};

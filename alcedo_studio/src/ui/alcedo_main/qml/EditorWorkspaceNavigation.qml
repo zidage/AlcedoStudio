@@ -3,7 +3,7 @@ import QtQuick.Controls
 
 // Shared Library/Editor navigation for the application toolbar. The router,
 // policy, and editor re-entry lookup are explicit inputs so this component
-// owns only workspace navigation and its permission gate.
+// owns only workspace navigation and its permission check.
 //
 // VI (DESIGN.md): monochrome capsule — sunken bgBase track, sliding light
 // selected well (editorListSelectedFill), dark ink on the active segment.
@@ -16,7 +16,10 @@ Item {
     property var workspaceRouter: null
     property var interactionPolicy: null
     property var editorSession: null
-    property var editorImageExists: null
+    // function(elementId, imageId): routes to the editor with the last edited photo and checks
+    // it against the current Library list (ImageActionsController.openLastEditorImage). Null
+    // routes to the photo directly.
+    property var openLastEditorImage: null
     property var firstEditorImage: null
     property bool navigationEnabled: true
 
@@ -50,12 +53,6 @@ Item {
         return Qt.rgba(colorValue.r, colorValue.g, colorValue.b, alphaValue)
     }
 
-    // Returns whether the last editor image can be used for re-entry.
-    // A missing callback means the caller has no existence restriction.
-    function editorImageIsAvailable(elementId) {
-        return !editorImageExists || Boolean(editorImageExists(elementId))
-    }
-
     // Requests the library workspace after applying the authoritative policy.
     // A blocked request has no router side effect.
     function openLibrary() {
@@ -66,8 +63,12 @@ Item {
         workspaceRouter.openLibrary()
     }
 
-    // Requests the editor workspace and restores the last valid image when one
-    // is available. A blocked request has no router side effect.
+    // Requests the editor workspace and restores the last image when there is
+    // one. The editor list check then decides on the query worker whether the
+    // current Library list holds it; when a Library filter removed it, the
+    // editor shows no image and the session saves and closes it. The first
+    // library image opens only when there is no last image. A blocked request
+    // has no router side effect. No database read runs here.
     function openEditor() {
         if (!switchWorkspaceEnabled || !workspaceRouter
                 || currentWorkspace === "editor") {
@@ -76,9 +77,12 @@ Item {
 
         const lastElementId = editorSession ? Number(editorSession.lastElementId || 0) : 0
         const lastImageId = editorSession ? Number(editorSession.lastImageId || 0) : 0
-        if (lastElementId > 0 && lastImageId > 0
-                && editorImageIsAvailable(lastElementId)) {
-            workspaceRouter.openEditor(lastElementId, lastImageId)
+        if (lastElementId > 0 && lastImageId > 0) {
+            if (typeof openLastEditorImage === "function") {
+                openLastEditorImage(lastElementId, lastImageId)
+            } else {
+                workspaceRouter.openEditor(lastElementId, lastImageId)
+            }
             return
         }
         const first = (typeof firstEditorImage === "function") ? firstEditorImage() : null

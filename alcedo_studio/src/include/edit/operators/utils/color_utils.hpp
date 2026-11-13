@@ -13,6 +13,9 @@
 #include <string_view>
 #include <vector>
 
+#include "color/color_encoding_catalog.hpp"
+#include "color/color_encoding_math.h"
+
 namespace alcedo {
 namespace ColorUtils {
 
@@ -30,82 +33,57 @@ enum class ColorSpace : int {
 };
 
 enum class ODTMethod : int {
-  ACES_2_0 = 0,
-  OPEN_DRT = 1,
+  ACES_2_0   = 0,
+  OPEN_DRT   = 1,
+  FILM_PRINT = 2,
 };
 
 enum class EOTF : int {
-  LINEAR    = 0,
-  ST2084    = 1,
-  HLG       = 2,
-  GAMMA_2_6 = 3,
-  BT1886    = 4,
-  GAMMA_2_2 = 5,
-  GAMMA_1_8 = 6,
+  LINEAR         = 0,
+  ST2084         = 1,
+  HLG            = 2,
+  GAMMA_2_6      = 3,
+  BT1886         = 4,
+  GAMMA_2_2      = 5,
+  GAMMA_1_8      = 6,
+  /// sRGB (IEC 61966-2-1) curve of the color encoding catalog.
+  SRGB_PIECEWISE = 7,
 };
 
-struct ColorSpacePrimaries {
-  float red_[2];
-  float green_[2];
-  float blue_[2];
-  float white_[2];
-};
+static_assert(static_cast<int>(EOTF::LINEAR) == CE_TF_LINEAR);
+static_assert(static_cast<int>(EOTF::ST2084) == CE_TF_ST2084);
+static_assert(static_cast<int>(EOTF::HLG) == CE_TF_HLG);
+static_assert(static_cast<int>(EOTF::GAMMA_2_6) == CE_TF_GAMMA_2_6);
+static_assert(static_cast<int>(EOTF::BT1886) == CE_TF_BT1886);
+static_assert(static_cast<int>(EOTF::GAMMA_2_2) == CE_TF_GAMMA_2_2);
+static_assert(static_cast<int>(EOTF::GAMMA_1_8) == CE_TF_GAMMA_1_8);
+static_assert(static_cast<int>(EOTF::SRGB_PIECEWISE) == CE_TF_SRGB);
 
-const ColorSpacePrimaries AP0_PRIMARY = {
-    {0.73470f, 0.26530f}, {0.00000f, 1.00000f}, {0.00010f, -0.07700f}, {0.32168f, 0.33767f}};
-
-const ColorSpacePrimaries AP1_PRIMARY = {
-    {0.713f, 0.293f}, {0.165f, 0.830f}, {0.128f, 0.044f}, {0.32168f, 0.33767f}};
-
-const ColorSpacePrimaries REACH_PRIMARY = {
-    {0.713f, 0.293f}, {0.165f, 0.830f}, {0.128f, 0.044f}, {0.32168f, 0.33767f}};
-
-const ColorSpacePrimaries REC709_PRIMARY = {
-    {0.640f, 0.330f}, {0.300f, 0.600f}, {0.150f, 0.060f}, {0.3127f, 0.3290f}};
-
-const ColorSpacePrimaries REC2020_PRIMARY = {
-    {0.708f, 0.292f}, {0.170f, 0.797f}, {0.131f, 0.046f}, {0.3127f, 0.3290f}};
-
-const ColorSpacePrimaries P3_D65_PRIMARY = {
-    {0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}, {0.3127f, 0.3290f}};
-
-const ColorSpacePrimaries P3_D60_PRIMARY = {
-    {0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}, {0.32168f, 0.33767f}};
-
-const ColorSpacePrimaries P3_DCI_PRIMARY = {
-    {0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}, {0.314f, 0.351f}};
-
-const ColorSpacePrimaries PROPHOTO_PRIMARY = {
-    {0.734699f, 0.265301f}, {0.159597f, 0.840403f}, {0.036598f, 0.000105f}, {0.345704f, 0.358540f}};
-
-const ColorSpacePrimaries ADOBE_RGB_PRIMARY = {
-    {0.6400f, 0.3300f}, {0.2100f, 0.7100f}, {0.1500f, 0.0600f}, {0.3127f, 0.3290f}};
-
-inline ColorSpacePrimaries SpaceEnumToPrimary(ColorSpace cs) {
+/// The catalog gamut of @p cs. The enum keeps the DRT node's serialized values.
+inline auto ColorSpaceToGamutId(ColorSpace cs) -> color::ColorGamutId {
   switch (cs) {
     case ColorSpace::AP0:
-      return AP0_PRIMARY;
+      return color::ColorGamutId::Ap0;
     case ColorSpace::AP1:
-      return AP1_PRIMARY;
+      return color::ColorGamutId::Ap1;
     case ColorSpace::REC709:
-      return REC709_PRIMARY;
+      return color::ColorGamutId::Rec709;
     case ColorSpace::REC2020:
-      return REC2020_PRIMARY;
+      return color::ColorGamutId::Rec2020;
     case ColorSpace::P3_D65:
-      return P3_D65_PRIMARY;
+      return color::ColorGamutId::P3D65;
     case ColorSpace::P3_D60:
-      return P3_D60_PRIMARY;
+      return color::ColorGamutId::P3D60;
     case ColorSpace::P3_DCI:
-      return P3_DCI_PRIMARY;
-    case ColorSpace::PROPHOTO:
-      return PROPHOTO_PRIMARY;
-    case ColorSpace::ADOBE_RGB:
-      return ADOBE_RGB_PRIMARY;
+      return color::ColorGamutId::P3Dci;
     case ColorSpace::XYZ:
-      return REC709_PRIMARY;
-    default:
-      return REC709_PRIMARY;
+      return color::ColorGamutId::CieXyz;
+    case ColorSpace::PROPHOTO:
+      return color::ColorGamutId::ProPhoto;
+    case ColorSpace::ADOBE_RGB:
+      return color::ColorGamutId::AdobeRgb;
   }
+  return color::ColorGamutId::Rec709;
 }
 
 inline auto ColorSpaceFromString(std::string_view cs_str) -> ColorSpace {
@@ -173,6 +151,9 @@ inline auto ODTMethodFromString(std::string_view method_str) -> ODTMethod {
   if (method_str == "aces_2_0") {
     return ODTMethod::ACES_2_0;
   }
+  if (method_str == "film_print") {
+    return ODTMethod::FILM_PRINT;
+  }
   return ODTMethod::OPEN_DRT;
 }
 
@@ -182,57 +163,54 @@ inline auto ODTMethodToString(ODTMethod method) -> std::string {
       return "aces_2_0";
     case ODTMethod::OPEN_DRT:
       return "open_drt";
+    case ODTMethod::FILM_PRINT:
+      return "film_print";
     default:
       return "open_drt";
   }
 }
 
-inline cv::Matx33f RGB_TO_XYZ_f33(const ColorSpacePrimaries& C, float Y = 1.0f) {
-  // X and Z values of RGB value (1, 1, 1), or "white"
-  float X = C.white_[0] * Y / C.white_[1];
-  float Z = (1.f - C.white_[0] - C.white_[1]) * Y / C.white_[1];
-
-  // Scale factors for matrix rows
-  float d = C.red_[0] * (C.blue_[1] - C.green_[1]) + C.blue_[0] * (C.green_[1] - C.red_[1]) +
-            C.green_[0] * (C.red_[1] - C.blue_[1]);
-
-  float Sr = (X * (C.blue_[1] - C.green_[1]) -
-              C.green_[0] * (Y * (C.blue_[1] - 1) + C.blue_[1] * (X + Z)) +
-              C.blue_[0] * (Y * (C.green_[1] - 1) + C.green_[1] * (X + Z))) /
-             d;
-
-  float Sg =
-      (X * (C.red_[1] - C.blue_[1]) + C.red_[0] * (Y * (C.blue_[1] - 1) + C.blue_[1] * (X + Z)) -
-       C.blue_[0] * (Y * (C.red_[1] - 1) + C.red_[1] * (X + Z))) /
-      d;
-
-  float Sb =
-      (X * (C.green_[1] - C.red_[1]) - C.red_[0] * (Y * (C.green_[1] - 1) + C.green_[1] * (X + Z)) +
-       C.green_[0] * (Y * (C.red_[1] - 1) + C.red_[1] * (X + Z))) /
-      d;
-  cv::Matx33f M(Sr * C.red_[0], Sr * C.red_[1], Sr * (1.f - C.red_[0] - C.red_[1]),
-                Sg * C.green_[0], Sg * C.green_[1], Sg * (1.f - C.green_[0] - C.green_[1]),
-                Sb * C.blue_[0], Sb * C.blue_[1], Sb * (1.f - C.blue_[0] - C.blue_[1]));
-  return M;
+/**
+ * RGB to XYZ (Y(white) = 1) for row vectors (v * M), in single precision.
+ *
+ * Alcedo's forward ACES 2.0 DRT and its display encoding keep this single-precision construction
+ * from the catalog primaries: their output is fixed (lut_color_encoding_plan.md, L1 and section
+ * 7), and the double-precision catalog matrices move gamut-boundary pixels by up to 1.3e-3 code
+ * value at gamma 2.6. Other users take color::RgbToXyzMatrix.
+ */
+inline cv::Matx33f RGB_TO_XYZ_f33(const color::PrimariesXy& p) {
+  const float rx = p[0], ry = p[1], gx = p[2], gy = p[3], bx = p[4], by = p[5];
+  // X and Z of RGB (1, 1, 1), the white.
+  const float X = p[6] / p[7];
+  const float Y = 1.0f;
+  const float Z = (1.f - p[6] - p[7]) / p[7];
+  const float d = rx * (by - gy) + bx * (gy - ry) + gx * (ry - by);
+  const float Sr =
+      (X * (by - gy) - gx * (Y * (by - 1) + by * (X + Z)) + bx * (Y * (gy - 1) + gy * (X + Z))) / d;
+  const float Sg =
+      (X * (ry - by) + rx * (Y * (by - 1) + by * (X + Z)) - bx * (Y * (ry - 1) + ry * (X + Z))) / d;
+  const float Sb =
+      (X * (gy - ry) - rx * (Y * (gy - 1) + gy * (X + Z)) + gx * (Y * (ry - 1) + ry * (X + Z))) / d;
+  return cv::Matx33f(Sr * rx, Sr * ry, Sr * (1.f - rx - ry), Sg * gx, Sg * gy, Sg * (1.f - gx - gy),
+                     Sb * bx, Sb * by, Sb * (1.f - bx - by));
 }
 
-inline cv::Matx33f XYZ_TO_RGB_f33(const ColorSpacePrimaries& C, float Y = 1.0f) {
-  cv::Matx33f M = RGB_TO_XYZ_f33(C, Y);
-  return M.inv();
+inline cv::Matx33f XYZ_TO_RGB_f33(const color::PrimariesXy& primaries) {
+  return RGB_TO_XYZ_f33(primaries).inv();
 }
 
-inline cv::Matx33f RGB_TO_XYZ_f33(ColorSpace cs, float Y = 1.0f) {
+inline cv::Matx33f RGB_TO_XYZ_f33(ColorSpace cs) {
   if (cs == ColorSpace::XYZ) {
     return cv::Matx33f::eye();
   }
-  return RGB_TO_XYZ_f33(SpaceEnumToPrimary(cs), Y);
+  return RGB_TO_XYZ_f33(color::GamutPrimariesXy(ColorSpaceToGamutId(cs)));
 }
 
-inline cv::Matx33f XYZ_TO_RGB_f33(ColorSpace cs, float Y = 1.0f) {
+inline cv::Matx33f XYZ_TO_RGB_f33(ColorSpace cs) {
   if (cs == ColorSpace::XYZ) {
     return cv::Matx33f::eye();
   }
-  return XYZ_TO_RGB_f33(SpaceEnumToPrimary(cs), Y);
+  return XYZ_TO_RGB_f33(color::GamutPrimariesXy(ColorSpaceToGamutId(cs)));
 }
 
 inline auto EOTFFromString(std::string_view eotf_str) -> EOTF {
@@ -257,6 +235,9 @@ inline auto EOTFFromString(std::string_view eotf_str) -> EOTF {
   if (eotf_str == "gamma_1_8") {
     return EOTF::GAMMA_1_8;
   }
+  if (eotf_str == "srgb_piecewise") {
+    return EOTF::SRGB_PIECEWISE;
+  }
   return EOTF::GAMMA_2_2;
 }
 
@@ -276,6 +257,8 @@ inline auto EOTFToString(EOTF eotf) -> std::string {
       return "gamma_2_2";
     case EOTF::GAMMA_1_8:
       return "gamma_1_8";
+    case EOTF::SRGB_PIECEWISE:
+      return "srgb_piecewise";
     default:
       return "gamma_2_2";
   }
@@ -334,11 +317,7 @@ const float               gamma_maximum          = 5.0f;
 const float               gamma_search_step      = 0.4f;
 const float               gamma_accuracy         = 1e-5f;
 
-const ColorSpacePrimaries CAM16_PRI              = {
-    {0.8336f, 0.1735f}, {2.3854f, -1.4659f}, {0.087f, -0.125f}, {0.333f, 0.333f}};
-
-const cv::Matx33f CAM16_RGB_TO_XYZ          = RGB_TO_XYZ_f33(CAM16_PRI, 1.f);
-const cv::Matx33f MATRIX_16                 = XYZ_TO_RGB_f33(CAM16_PRI, 1.f);
+inline constexpr const color::PrimariesXy& CAM16_PRI                 = color::kAces2Cam16Primaries;
 
 const cv::Matx33f base_cone_repponse_to_Aab = {
     2.f, 1.f, 1.f / 9.f, 1.f, -12.f / 11.f, 1.f / 9.f, 1.f / 20.f, 1.f / 11.f, -2.f / 9.f};
@@ -572,7 +551,9 @@ inline float Y_to_Hellwig_J(float Y, float _surround = 0.59f, float _L_A = 100.f
   return signum(Y) * 100.f * powf(((400.f * F_L_Y) / (27.13f + F_L_Y)) / A_w, _surround * z);
 }
 
-inline float Achromatic_n_to_J(float A, float cz) { return J_scale * powf(A, cz); }
+inline float Achromatic_n_to_J(float A, float cz) {
+  return J_scale * powf(fmaxf(A, 0.f), cz);
+}
 
 inline float Y_to_J(float Y, JMhParams& p) {
   float abs_Y = fabsf(Y);
@@ -590,7 +571,9 @@ inline float wrap_to_360(float hue) {
   return y;
 }
 
-inline float J_to_Achromatic_n(float J, float inv_cz) { return powf(J * (1.f / J_scale), inv_cz); }
+inline float J_to_Achromatic_n(float J, float inv_cz) {
+  return powf(fmaxf(J, 0.f) * (1.f / J_scale), inv_cz);
+}
 
 inline cv::Matx13f JMh_to_Aab(cv::Matx13f& JMh, JMhParams& params) {
   float       J      = JMh(0);
@@ -1016,6 +999,9 @@ inline float get_focus_gain(float J, float analytical_threshold, float limit_J_M
   if (J > analytical_threshold) {
     float gain_adjustment =
         log10f((limit_J_Max - analytical_threshold) / fmaxf(0.0001f, limit_J_Max - J));
+    if (!std::isfinite(gain_adjustment)) {
+      gain_adjustment = 0.f;
+    }
     gain_adjustment = gain_adjustment * gain_adjustment + 1.f;
     gain            = gain * gain_adjustment;
   }
@@ -1023,22 +1009,25 @@ inline float get_focus_gain(float J, float analytical_threshold, float limit_J_M
 }
 
 inline float solve_J_intersect(float J, float M, float focus_J, float max_J, float slope_gain) {
-  const float M_scaled = M / slope_gain;
-  const float a        = M_scaled / focus_J;
+  const float sg       = fmaxf(fabsf(slope_gain), 1e-6f);
+  const float fj       = fmaxf(fabsf(focus_J), 1e-6f);
+  const float M_scaled = M / sg;
+  const float a        = M_scaled / fj;
 
   if (J < focus_J) {
     const float b    = 1.f - M_scaled;
     const float c    = -J;
     const float det  = b * b - 4.f * a * c;
-    const float root = sqrtf(det);
-    return -2.f * c / (b + root);
-  } else {
-    const float b    = -(1.f + M_scaled + max_J * a);
-    const float c    = max_J * M_scaled + J;
-    const float det  = b * b - 4.f * a * c;
-    const float root = sqrtf(det);
-    return -2.f * c / (b - root);
+    const float root = (det > 0.f) ? sqrtf(det) : 0.f;
+    const float den  = copysignf(fmaxf(fabsf(b + root), 1e-6f), b + root);
+    return -2.f * c / den;
   }
+  const float b    = -(1.f + M_scaled + max_J * a);
+  const float c    = max_J * M_scaled + J;
+  const float det  = b * b - 4.f * a * c;
+  const float root = (det > 0.f) ? sqrtf(det) : 0.f;
+  const float den  = copysignf(fmaxf(fabsf(b - root), 1e-6f), b - root);
+  return -2.f * c / den;
 }
 
 inline float compute_compression_vector_slope(float intersect_J, float focus_J, float limit_J_max,
@@ -1086,19 +1075,23 @@ inline float estimate_line_and_boundary_intersection_M(float J_axis_intersect, f
 
   // We calculate a shifted intersection from the original intersection using
   // the inverse of the exponential and the provided reference
-  const float normalized_J         = J_axis_intersect / J_intersection_reference;
-  const float shifted_intersection = J_intersection_reference * powf(normalized_J, inv_gamma);
+  const float refJ                 = fmaxf(J_intersection_reference, 1e-6f);
+  const float normalized_J         = fmaxf(J_axis_intersect / refJ, 0.0f);
+  const float shifted_intersection =
+      (normalized_J == 0.0f) ? 0.0f : refJ * powf(normalized_J, inv_gamma);
 
   // Now we find the M intersection of two lines
   // line from origin to J,M Max       l1(x) = J/M * x
   // line from J Intersect' with slope l2(x) = slope * x + Intersect'
 
   // return shifted_intersection / ((J_max / M_max) - slope);
-  return shifted_intersection * M_max / (J_max - slope * M_max);
+  const float denom = copysignf(fmaxf(fabsf(J_max - slope * M_max), 1e-6f), (J_max - slope * M_max));
+  return shifted_intersection * M_max / denom;
 }
 
 inline float smin_scaled(float a, float b, float scale_ref) {
   const float s_scaled = smooth_cusps * scale_ref;
+  if (s_scaled <= 1e-6f) return fminf(a, b);
   const float h        = fmaxf(s_scaled - fabsf(a - b), 0.f) / s_scaled;
   return fminf(a, b) - h * h * h * s_scaled * (1.f / 6.f);
 }
@@ -1208,6 +1201,9 @@ inline std::array<float, TOTAL_TABLE_SIZE> MakeUpperHullGammaTable(
       }
     }
     upper_hull_gammas[i] = 1.f / high;
+    if (!std::isfinite(upper_hull_gammas[i]) || upper_hull_gammas[i] <= 0.f) {
+      upper_hull_gammas[i] = 1.f / fmaxf(high, gamma_search_step);
+    }
   }
 
   // Copy last populated entry to first empty spot

@@ -8,6 +8,7 @@
 #include <QJSValue>
 #include <QString>
 #include <QVariantList>
+#include <QVariantMap>
 
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 
@@ -15,13 +16,12 @@ class QTimer;
 
 namespace alcedo::ui {
 
-/// Phase 6A typed adjustment models. Focused QObjects carrying value/range/enum/
-/// toggle state, defaults, validation, and pointer-drag state. The models submit
-/// one `EditorAdjustmentPatch` at a time through the
-/// `IEditorAdjustmentSubmitter` seam; they never touch the pipeline scheduler,
-/// the render coordinator, or the journal. One `settled=true` submit per
-/// completed pointer drag is required. Interactive previews while dragging use
-/// `settled=false` and are coalesced by the Phase 5D coordinator.
+/// Typed adjustment models. Focused QObjects carrying value/range/enum/
+/// toggle state, defaults, validation, and pointer-drag state. The models
+/// enqueue one field write at a time through the `IEditorAdjustmentSubmitter`
+/// seam; they never touch the pipeline scheduler, the render coordinator, or
+/// the journal. One `settled=true` enqueue per completed pointer drag seals
+/// that sequence. Interactive previews while dragging use `settled=false`.
 ///
 /// `fieldKey` is the stable history identifier; `label` is the display name the
 /// panel shows. The history layer derives the human-readable row label from
@@ -67,6 +67,10 @@ class EditorAdjustmentModelBase : public QObject {
   void enabledChanged();
   void submitterChanged();
   void paramsBuilderChanged();
+  /// Emitted after the submitter accepted a settled write of a user edit, after
+  /// onSettledWriteAccepted. A panel that keeps state outside the pipeline document for the
+  /// written value (for example, the remembered film print settings) reads it here.
+  void settledWriteAccepted();
 
  protected:
   /// Default params JSON shapes (used when paramsBuilder is unset).
@@ -77,11 +81,20 @@ class EditorAdjustmentModelBase : public QObject {
   /// otherwise return `defaultJson`.
   [[nodiscard]] auto resolveParams(const QJSValue& arg, const QString& defaultJson) const
       -> QString;
-  /// Submit one patch through the seam. Defensive: no-op (returns false) when
-  /// there is no submitter or the session cannot accept patches (canEdit()
-  /// false). `settled=false` requests an interactive preview; `settled=true`
-  /// finalizes one committed transaction.
-  auto submitNow(const QString& paramsJson, bool settled) -> bool;
+  /// Enqueue one typed field write through the seam. Defensive: no-op (returns false)
+  /// when there is no submitter or the session cannot accept input
+  /// (`canEdit()` false). `settled=false` continues the sequence;
+  /// `settled=true` seals it with Release. True means accepted for processing,
+  /// not live-applied or history-committed.
+  auto submitNow(alcedo::EditorParameterWrite write, bool settled) -> bool;
+  /// Parse QML-collected field JSON once, then enqueue the typed write.
+  auto submitJsonBoundary(const QString& paramsJson, bool settled) -> bool;
+  /// Called once after the submitter accepted a settled write of a user edit (submitNow never
+  /// runs for programmatic loads). The default does nothing. A model whose user edit also
+  /// changes state outside the pipeline document (for example, a library preference) overrides
+  /// it and forwards the change to the owner of that state. The document edit is already
+  /// accepted and is not undone when the owner rejects the change.
+  virtual void onSettledWriteAccepted() {}
   [[nodiscard]] auto submitterHandle() const -> IEditorAdjustmentSubmitter* {
     return submitter_;
   }
@@ -98,6 +111,11 @@ class EditorAdjustmentModelBase : public QObject {
 /// Numeric adjustment (exposure, contrast, saturation, …). Owns the pointer
 /// drag state and a debounced settled commit for keyboard/wheel bursts. One
 /// settled transaction per completed drag.
+///
+/// Values are UI units. When `fieldKey` names a scalar field of EditorParameterCatalog, the
+/// model takes minimum, maximum, defaultValue, step, and precision from the catalog entry, and
+/// converts UI values to Model values (and back in loadFromSnapshot) with the catalog
+/// conversion. A setter call after the field key change replaces the catalog value.
 class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   Q_OBJECT
   Q_PROPERTY(double value READ value WRITE setValue NOTIFY valueChanged)
@@ -151,6 +169,12 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   // and does NOT submit. A subsequent setValue/editValue clears it.
   Q_INVOKABLE void setInvalid(const QString& message);
   [[nodiscard]] Q_INVOKABLE bool hasPendingSettled() const;
+  /// Programmatic load of the `fieldKey` entry of an adjustment snapshot map (the panel
+  /// projection form). Converts the Model value to UI units with the catalog conversion and
+  /// sets it without a submit. Does nothing while a pointer drag owns the value, when the
+  /// entry is missing or not a catalog scalar, or when the value differs by less than a tenth
+  /// of a step.
+  Q_INVOKABLE void loadFromSnapshot(const QVariantMap& snapshot);
   // C++-only test hook: stabilization interval in ms (default 180). Setting 0
   // makes the debounce fire on the next event-loop iteration so QSignalSpy::wait
   // catches it deterministically.
@@ -170,11 +194,21 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   /// or commitImmediately). Tests QSignalSpy::wait on this.
   void settledCommitted();
 
+ protected:
+  /// Typed Model operation for the UI value @p v (used when paramsBuilder is unset). The
+  /// default writes a scalar, or a Sharpen amount for `sharpen`; a field whose Model takes
+  /// another operation overrides it.
+  [[nodiscard]] virtual auto valueWrite(double v) const -> alcedo::EditorParameterWrite;
+
  private:
+  /// Applies the catalog range of `fieldKey` when the field is a catalog scalar.
+  void applyCatalogEntry();
   [[nodiscard]] auto clamp(double v) const -> double;
   // Clamp + set + clear invalid + emit valueChanged. Returns whether the value
   // (or valid state) actually changed.
   auto applyValue(double v) -> bool;
+  // Re-clamp the value after a bound change, once minimum <= maximum.
+  void applyCompleteRange();
   void submitInteractive(double v);
   void submitSettled(double v);
   void onDebounceTimeout();
@@ -191,9 +225,9 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   bool valid_ = true;
   QString errorMessage_;
   bool dragActive_ = false;
-  /// True when updateDrag changed the value during the current gesture. A
+  /// True when updateDrag changed the value during the current pointer drag. A
   /// press+release without movement (including half of a double-click) must not
-  /// emit a settled commit; double-click reset owns that path instead.
+  /// emit a settled seal; double-click reset owns that path instead.
   bool dragMoved_ = false;
 };
 
@@ -227,6 +261,17 @@ class EditorAdjustmentEnumModel : public EditorAdjustmentModelBase {
   void entriesChanged();
   void currentIndexChanged();
   void defaultIndexChanged();
+
+ protected:
+  /// Submit the current entry as one settled write; called by selectIndex and reset after the
+  /// index changed. The default uses paramsBuilder when it is callable, else
+  /// @ref selectionWrite. A field whose write can fail before the submit overrides it.
+  /// @return True when the submitter accepted the write.
+  virtual auto               submitSelection() -> bool;
+  /// Typed Model operation for the selected entry @p value (used when paramsBuilder is unset).
+  /// The default writes an enum value; a field whose Model takes another operation overrides it.
+  [[nodiscard]] virtual auto selectionWrite(const QString& value) const
+      -> alcedo::EditorParameterWrite;
 
  private:
   bool clampIndex(int i) const;

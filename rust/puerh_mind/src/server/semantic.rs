@@ -7,14 +7,14 @@ use tracing::info;
 
 use tonic::{Request, Response, Status};
 
-use crate::proto::alcedo::ai::{AiRequestHeader, AiResponseHeader, AiResponseStatus};
+use crate::proto::alcedo::ai::{AiErrorCode, AiRequestHeader, AiResponseHeader, AiResponseStatus};
 use crate::proto::semantic::{
     EmbedImageBatchRequest, EmbedImageBatchRequestV2, EmbedImageRequest, EmbedImageRequestV2,
     EmbedTextBatchRequest, EmbedTextBatchRequestV2, EmbedTextRequest, EmbedTextRequestV2,
     EmbeddingBatchItem, EmbeddingBatchItemV2, EmbeddingBatchResponse, EmbeddingBatchResponseV2,
-    EmbeddingResponse, EmbeddingResponseV2, GetModelInfoRequest, GetModelInfoResponse,
-    GetRuntimeStatusRequest, GetRuntimeStatusResponse, PingRequest, PingResponse,
-    semantic_service_server::SemanticService,
+    EmbeddingResponse, EmbeddingResponseV2, EncoderResidencyStatus, GetModelInfoRequest,
+    GetModelInfoResponse, GetRuntimeStatusRequest, GetRuntimeStatusResponse, PingRequest,
+    PingResponse, semantic_service_server::SemanticService,
 };
 use crate::service::embedding::EmbeddingEngine;
 
@@ -52,6 +52,27 @@ impl SemanticServiceImpl {
             image_batch_wait,
             started_at: Instant::now(),
         }
+    }
+
+    /// The reason the engine cannot serve an embedding request, or `None` when it is ready.
+    /// The first call prepares a lazy engine (it reads the model files), so it runs on the
+    /// blocking pool.
+    async fn model_not_ready_reason(&self) -> Result<Option<String>, Status> {
+        let engine = self.engine.clone();
+        tokio::task::spawn_blocking(move || {
+            if engine.is_ready() {
+                None
+            } else {
+                Some(
+                    engine
+                        .unavailable_reason()
+                        .unwrap_or("semantic model is unavailable")
+                        .to_string(),
+                )
+            }
+        })
+        .await
+        .map_err(|err| Status::internal(format!("model preparation task failed: {err}")))
     }
 
     fn validate_text_request(&self, req: &EmbedTextRequest) -> Result<(), Status> {
@@ -253,10 +274,9 @@ impl SemanticServiceImpl {
 }
 
 /// Build a success `AiResponseHeader` for a v2 embedding call, echoing the caller's correlation
-/// ids and recording the model that actually served. Mirrors the success-only `ok_header` in
-/// `ai_runtime.rs`; the full structured-error-in-body mapping is deferred to Phase 5 (Phase 0
-/// §1.5), so v2 hard failures still propagate the v1 `tonic::Status` and the header travels only
-/// on success.
+/// ids and recording the model that actually served. The full structured-error-in-body mapping
+/// is deferred to Phase 5 (Phase 0 §1.5), so v2 hard failures still propagate the v1
+/// `tonic::Status` and the header travels only on success.
 fn build_response_header(
     req: &AiRequestHeader,
     model_id: &str,
@@ -271,6 +291,22 @@ fn build_response_header(
         provider: "local".to_string(),
         model_id: model_id.to_string(),
         elapsed_ms: elapsed_ms as i64,
+    }
+}
+
+/// Header of a v2 embedding call that the engine cannot serve: no model is configured (the
+/// process started without `--model-id`) or the configured profile failed to prepare. The
+/// error travels in the body as `AI_ERROR_MODEL_NOT_READY`, as segmentation reports it.
+fn model_not_ready_header(req: &AiRequestHeader, reason: &str) -> AiResponseHeader {
+    AiResponseHeader {
+        request_id: req.request_id.clone(),
+        task_id: req.task_id.clone(),
+        status: AiResponseStatus::AiStatusProviderUnavailable as i32,
+        error_code: AiErrorCode::AiErrorModelNotReady as i32,
+        error_message: reason.to_string(),
+        provider: "local".to_string(),
+        model_id: String::new(),
+        elapsed_ms: 0,
     }
 }
 
@@ -581,15 +617,22 @@ impl SemanticService for SemanticServiceImpl {
         &self,
         _request: Request<GetModelInfoRequest>,
     ) -> Result<Response<GetModelInfoResponse>, Status> {
-        if !self.engine.is_ready() {
-            return Err(Status::failed_precondition(
-                self.engine
+        // The first call prepares the model profile (`LazySemanticEngine`), which reads the
+        // model files, so it runs on the blocking pool.
+        let engine = self.engine.clone();
+        let readiness = tokio::task::spawn_blocking(move || {
+            if engine.is_ready() {
+                Ok(engine.model_info())
+            } else {
+                Err(engine
                     .unavailable_reason()
                     .unwrap_or("semantic model is unavailable")
-                    .to_string(),
-            ));
-        }
-        let info = self.engine.model_info();
+                    .to_string())
+            }
+        })
+        .await
+        .map_err(|err| Status::internal(format!("model preparation task failed: {err}")))?;
+        let info = readiness.map_err(Status::failed_precondition)?;
         Ok(Response::new(GetModelInfoResponse {
             model_id: info.model_id,
             revision: info.revision,
@@ -612,7 +655,10 @@ impl SemanticService for SemanticServiceImpl {
     ) -> Result<Response<GetRuntimeStatusResponse>, Status> {
         let info = self.engine.model_info();
         Ok(Response::new(GetRuntimeStatusResponse {
-            state: if self.engine.is_ready() {
+            // A status read does not prepare the model profile.
+            state: if !self.engine.is_prepared() {
+                "model_not_prepared".to_string()
+            } else if self.engine.is_ready() {
                 "ready".to_string()
             } else {
                 "model_unavailable".to_string()
@@ -621,6 +667,17 @@ impl SemanticService for SemanticServiceImpl {
             image_batch_cap: self.image_batch_cap as u32,
             image_batch_wait_ms: self.image_batch_wait.as_millis() as u32,
             uptime_ms: self.started_at.elapsed().as_millis() as u64,
+            encoders: self
+                .engine
+                .encoder_status()
+                .into_iter()
+                .map(|status| EncoderResidencyStatus {
+                    encoder: status.encoder,
+                    loaded: status.loaded,
+                    device: status.device,
+                    idle_ms: status.idle_ms,
+                })
+                .collect(),
         }))
     }
 
@@ -637,6 +694,12 @@ impl SemanticService for SemanticServiceImpl {
         info!("[SemanticService]: received EmbedTextV2 request");
         let req = request.into_inner();
         let header = req.header.unwrap_or_default();
+        if let Some(reason) = self.model_not_ready_reason().await? {
+            return Ok(Response::new(EmbeddingResponseV2 {
+                header: Some(model_not_ready_header(&header, &reason)),
+                ..Default::default()
+            }));
+        }
 
         let inner = self
             .embed_text(Request::new(EmbedTextRequest {
@@ -667,6 +730,12 @@ impl SemanticService for SemanticServiceImpl {
         info!("[SemanticService]: received EmbedImageV2 request");
         let req = request.into_inner();
         let header = req.header.unwrap_or_default();
+        if let Some(reason) = self.model_not_ready_reason().await? {
+            return Ok(Response::new(EmbeddingResponseV2 {
+                header: Some(model_not_ready_header(&header, &reason)),
+                ..Default::default()
+            }));
+        }
 
         let inner = self
             .embed_image(Request::new(EmbedImageRequest {
@@ -698,6 +767,12 @@ impl SemanticService for SemanticServiceImpl {
         info!("[SemanticService]: received EmbedTextBatchV2 request");
         let req = request.into_inner();
         let header = req.header.unwrap_or_default();
+        if let Some(reason) = self.model_not_ready_reason().await? {
+            return Ok(Response::new(EmbeddingBatchResponseV2 {
+                header: Some(model_not_ready_header(&header, &reason)),
+                ..Default::default()
+            }));
+        }
 
         let inner = self
             .embed_text_batch(Request::new(EmbedTextBatchRequest {
@@ -729,6 +804,12 @@ impl SemanticService for SemanticServiceImpl {
         info!("[SemanticService]: received EmbedImageBatchV2 request");
         let req = request.into_inner();
         let header = req.header.unwrap_or_default();
+        if let Some(reason) = self.model_not_ready_reason().await? {
+            return Ok(Response::new(EmbeddingBatchResponseV2 {
+                header: Some(model_not_ready_header(&header, &reason)),
+                ..Default::default()
+            }));
+        }
 
         let inner = self
             .embed_image_batch(Request::new(EmbedImageBatchRequest {
@@ -756,6 +837,7 @@ impl SemanticService for SemanticServiceImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use anyhow::Result as AnyResult;
@@ -765,6 +847,7 @@ mod tests {
     use crate::config::SemanticConfig;
     use crate::proto::semantic::{EmbedImageItemV2, EmbedTextItemV2};
     use crate::service::embedding::{EmbeddingEngine, EngineModelInfo, MockEmbeddingEngine};
+    use crate::service::lazy_semantic_engine::{LazySemanticEngine, NOT_PREPARED_PROVIDER};
     use crate::service::ort_clip::OrtClipEngine;
 
     fn test_model_root() -> String {
@@ -899,7 +982,6 @@ mod tests {
         assert_eq!(response.dimension as usize, response.embedding.len());
         assert!(!response.embedding.is_empty());
         assert_eq!(response.model_name, "plhery/mobileclip2-onnx:s2");
-        assert!(response.elapsed_ms <= u64::MAX);
     }
 
     #[tokio::test]
@@ -1141,9 +1223,53 @@ mod tests {
         assert_eq!(status.image_batch_wait_ms, 11);
     }
 
+    #[tokio::test]
+    async fn runtime_status_leaves_the_profile_unprepared_and_model_info_prepares_it() {
+        let builds = Arc::new(AtomicUsize::new(0));
+        let build_count = builds.clone();
+        let engine = LazySemanticEngine::with_builder(
+            EngineModelInfo {
+                provider: NOT_PREPARED_PROVIDER.to_string(),
+                ..MockEmbeddingEngine.model_info()
+            },
+            Box::new(move || {
+                build_count.fetch_add(1, Ordering::SeqCst);
+                Arc::new(MockEmbeddingEngine)
+            }),
+        );
+        let service = SemanticServiceImpl::new(Arc::new(engine), 7, Duration::from_millis(11));
+
+        let status = service
+            .get_runtime_status(Request::new(GetRuntimeStatusRequest {}))
+            .await
+            .expect("runtime status should return")
+            .into_inner();
+        assert_eq!(status.state, "model_not_prepared");
+        assert_eq!(status.provider, NOT_PREPARED_PROVIDER);
+        assert!(status.encoders.is_empty());
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+
+        let model_info = service
+            .get_model_info(Request::new(GetModelInfoRequest {}))
+            .await
+            .expect("model info should prepare the profile")
+            .into_inner();
+        assert_eq!(model_info.provider, "mock");
+        assert_eq!(model_info.profile_id, "mock-profile-v1");
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+
+        let status = service
+            .get_runtime_status(Request::new(GetRuntimeStatusRequest {}))
+            .await
+            .expect("runtime status should return")
+            .into_inner();
+        assert_eq!(status.state, "ready");
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+    }
+
     // ---- v2 embedding RPCs (Phase 4) ----
     // The v2 methods delegate to the frozen v1 methods and wrap the result with a shared
-    // AiResponseHeader. These tests mirror the v1 batch tests plus assert the header contract.
+    // AiResponseHeader. These tests mirror the v1 batch tests and also check the response header.
 
     fn v2_header(request_id: &str, task_id: &str) -> AiRequestHeader {
         AiRequestHeader {
@@ -1180,6 +1306,62 @@ mod tests {
         assert_eq!(header.model_id, response.model_name);
         assert!(!header.model_id.is_empty());
         assert_eq!(response.dimension as usize, response.embedding.len());
+    }
+
+    /// A process started without `--model-id` (no active model in the open project) answers
+    /// semantic requests with `AI_ERROR_MODEL_NOT_READY` and the reason, and starts no model.
+    #[tokio::test]
+    async fn without_model_id_semantic_requests_return_model_not_ready() {
+        use crate::service::embedding::{NO_SEMANTIC_MODEL_REASON, UnavailableEmbeddingEngine};
+        let service = SemanticServiceImpl::new(
+            Arc::new(UnavailableEmbeddingEngine::no_model()),
+            512,
+            Duration::from_millis(25),
+        );
+
+        let text = service
+            .embed_text_v2(Request::new(EmbedTextRequestV2 {
+                header: Some(v2_header("no-model-1", "semantic.embed_text")),
+                text: "a red tea cake".to_string(),
+                model_name: String::new(),
+            }))
+            .await
+            .expect("transport ok")
+            .into_inner();
+        let header = text.header.expect("header");
+        assert_eq!(header.request_id, "no-model-1");
+        assert_eq!(
+            header.status,
+            AiResponseStatus::AiStatusProviderUnavailable as i32
+        );
+        assert_eq!(header.error_code, AiErrorCode::AiErrorModelNotReady as i32);
+        assert_eq!(header.error_message, NO_SEMANTIC_MODEL_REASON);
+        assert!(text.embedding.is_empty());
+
+        let (bytes, hint) = raw_rgba8_image(2, 2, [10, 20, 30, 255]);
+        let images = service
+            .embed_image_batch_v2(Request::new(EmbedImageBatchRequestV2 {
+                header: Some(v2_header("no-model-2", "semantic.embed_image_batch")),
+                items: vec![EmbedImageItemV2 {
+                    request_id: "image-1".to_string(),
+                    image_bytes: bytes,
+                    image_format_hint: hint,
+                    model_name: String::new(),
+                }],
+            }))
+            .await
+            .expect("transport ok")
+            .into_inner();
+        let header = images.header.expect("header");
+        assert_eq!(header.error_code, AiErrorCode::AiErrorModelNotReady as i32);
+        assert!(images.items.is_empty());
+
+        let info = service
+            .get_model_info(Request::new(GetModelInfoRequest {}))
+            .await
+            .expect_err("no model information without a model");
+        assert_eq!(info.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(info.message(), NO_SEMANTIC_MODEL_REASON);
     }
 
     #[tokio::test]

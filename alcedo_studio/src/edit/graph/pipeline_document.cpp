@@ -1,0 +1,594 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#include "edit/graph/pipeline_document.hpp"
+
+#include <array>
+#include <cmath>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+#include "color/color_encoding_catalog.hpp"
+#include "color/color_encoding_math.h"
+#include "edit/operators/models/builtin_type_ids.hpp"
+
+namespace alcedo {
+
+namespace {
+
+template <class T>
+auto Downcast(INodeModel* node) -> T* {
+  return dynamic_cast<T*>(node);
+}
+
+template <class T>
+auto Downcast(const INodeModel* node) -> const T* {
+  return dynamic_cast<const T*>(node);
+}
+
+auto NodeFromJson(const nlohmann::json& json) -> std::unique_ptr<INodeModel> {
+  const auto type = json.at("type").get<std::string>();
+  if (type == type_ids::DevelopNode().Text()) {
+    return DevelopNodeModel::FromJson(json);
+  }
+  if (type == type_ids::ColorGradeNode().Text()) {
+    return ColorGradeNodeModel::FromJson(json);
+  }
+  if (type == type_ids::DrtNode().Text()) {
+    return DrtNodeModel::FromJson(json);
+  }
+  if (type == type_ids::AnalyticMaskNode().Text() || type == type_ids::RasterMaskNode().Text()) {
+    throw std::runtime_error(
+        "Unsupported pipeline document: top-level Mask nodes are not allowed");
+  }
+  throw std::runtime_error("Unknown node type: " + type);
+}
+
+void ValidateFiniteNumbers(const nlohmann::json& value, const std::string& path) {
+  if (value.is_number_float() && !std::isfinite(value.get<double>())) {
+    throw std::runtime_error("Pipeline document contains a non-finite number at " + path);
+  }
+  if (value.is_array()) {
+    for (std::size_t index = 0; index < value.size(); ++index) {
+      ValidateFiniteNumbers(value[index], path + "[" + std::to_string(index) + "]");
+    }
+    return;
+  }
+  if (value.is_object()) {
+    for (const auto& [key, child] : value.items()) {
+      ValidateFiniteNumbers(child, path + "." + key);
+    }
+  }
+}
+
+void ValidateDocumentShape(const nlohmann::json& json) {
+  if (!json.is_object()) {
+    throw std::runtime_error("Pipeline document must be an object");
+  }
+  if (!json.contains("format_version") || !json["format_version"].is_number_integer() ||
+      json["format_version"].get<std::uint32_t>() != kPipelineDocumentFormatVersion) {
+    throw std::runtime_error("Unsupported pipeline document format_version");
+  }
+  if (!json.contains("geometry") || !json["geometry"].is_object()) {
+    throw std::runtime_error("Pipeline document is missing an object geometry");
+  }
+  if (!json.contains("nodes") || !json["nodes"].is_array()) {
+    throw std::runtime_error("Pipeline document is missing a nodes array");
+  }
+  if (!json.contains("edges") || !json["edges"].is_array()) {
+    throw std::runtime_error("Pipeline document is missing an edges array");
+  }
+  if (!json.contains("next_color_grade_name_number")) {
+    throw std::runtime_error(
+        "Pipeline document requires a positive next_color_grade_name_number");
+  }
+  const auto& next_name_number = json.at("next_color_grade_name_number");
+  const bool  valid_next_name_number =
+      (next_name_number.is_number_unsigned() && next_name_number.get<std::uint64_t>() != 0) ||
+      (next_name_number.is_number_integer() && next_name_number.get<std::int64_t>() > 0);
+  if (!valid_next_name_number) {
+    throw std::runtime_error("Pipeline document requires a positive next_color_grade_name_number");
+  }
+
+  for (std::size_t index = 0; index < json["nodes"].size(); ++index) {
+    const auto& node = json["nodes"][index];
+    const auto  path = "nodes[" + std::to_string(index) + "]";
+    if (!node.is_object() || !node.contains("id") || !node["id"].is_string() ||
+        node["id"].get<std::string>().empty() || !node.contains("type") ||
+        !node["type"].is_string() || node["type"].get<std::string>().empty()) {
+      throw std::runtime_error("Pipeline document has an invalid node at " + path);
+    }
+
+    const auto type = node["type"].get<std::string>();
+    if (type == type_ids::AnalyticMaskNode().Text() || type == type_ids::RasterMaskNode().Text()) {
+      throw std::runtime_error(
+          "Unsupported pipeline document: top-level Mask nodes are not allowed");
+    }
+    if (type == type_ids::ColorGradeNode().Text() || type == type_ids::DrtNode().Text()) {
+      if (type == type_ids::DrtNode().Text() &&
+          (!node.contains("params") || !node["params"].is_object())) {
+        throw std::runtime_error("Pipeline document DRT is missing object params at " + path);
+      }
+      if (!node.contains("adjustments") || !node["adjustments"].is_array()) {
+        throw std::runtime_error("Pipeline document " +
+                                 (type == type_ids::DrtNode().Text() ? std::string{"DRT"}
+                                                                     : std::string{"ColorGrade"}) +
+                                 " is missing adjustments at " + path);
+      }
+      for (std::size_t adjustment_index = 0; adjustment_index < node["adjustments"].size();
+           ++adjustment_index) {
+        const auto& adjustment = node["adjustments"][adjustment_index];
+        const auto adjustment_path = path + ".adjustments[" +
+                                     std::to_string(adjustment_index) + "]";
+        if (!adjustment.is_object() || !adjustment.contains("id") ||
+            !adjustment["id"].is_string() || adjustment["id"].get<std::string>().empty() ||
+            !adjustment.contains("type") || !adjustment["type"].is_string() ||
+            adjustment["type"].get<std::string>().empty() || !adjustment.contains("params") ||
+            !adjustment["params"].is_object()) {
+          throw std::runtime_error("Pipeline document has an invalid adjustment at " +
+                                   adjustment_path);
+        }
+      }
+      if (type == type_ids::ColorGradeNode().Text() &&
+          (!node.contains("masks") || !node["masks"].is_array())) {
+        throw std::runtime_error("Pipeline document ColorGrade is missing a masks array at " +
+                                 path);
+      }
+      if (type == type_ids::ColorGradeNode().Text() &&
+          (!node.contains("display_name") || !node["display_name"].is_string() ||
+           node["display_name"].get<std::string>().empty())) {
+        throw std::runtime_error(
+            "Pipeline document ColorGrade requires a non-empty display_name at " + path);
+      }
+    } else if (!node.contains("params") || !node["params"].is_object()) {
+      throw std::runtime_error("Pipeline document node is missing object params at " + path);
+    }
+  }
+
+  for (std::size_t index = 0; index < json["edges"].size(); ++index) {
+    const auto& edge = json["edges"][index];
+    const auto  path = "edges[" + std::to_string(index) + "]";
+    if (!edge.is_object() || !edge.contains("from") || !edge.contains("to") ||
+        !edge["from"].is_array() || edge["from"].size() != 2 ||
+        !edge["to"].is_array() || edge["to"].size() != 2 ||
+        !edge["from"][0].is_string() || !edge["from"][1].is_string() ||
+        !edge["to"][0].is_string() || !edge["to"][1].is_string()) {
+      throw std::runtime_error("Pipeline document has an invalid edge at " + path);
+    }
+    const auto from_port = edge["from"][1].get<std::string>();
+    const auto to_port   = edge["to"][1].get<std::string>();
+    if (from_port == "mask" || to_port == "mask") {
+      throw std::runtime_error("Unsupported pipeline document: Mask edges are not allowed");
+    }
+  }
+
+  ValidateFiniteNumbers(json, "document");
+}
+
+void ApplyDefaultPipelineLook(ColorGradeNodeModel& grade) {
+  auto* exposure   = grade.FindAdjustmentByType(type_ids::Exposure());
+  auto* contrast   = grade.FindAdjustmentByType(type_ids::Contrast());
+  auto* saturation = grade.FindAdjustmentByType(type_ids::Saturation());
+  if (exposure == nullptr || contrast == nullptr || saturation == nullptr) {
+    throw std::logic_error("Default Color Grade is missing exposure, contrast, or saturation");
+  }
+  exposure->LoadJson({{"exposure_ev", kDefaultPipelineExposureEv}});
+  contrast->LoadJson({{"contrast", kDefaultPipelineContrast}});
+  saturation->LoadJson({{"saturation", kDefaultPipelineSaturation}});
+}
+
+}  // namespace
+
+void PipelineDocument::SetDefaultGradeId(NodeId id) {
+  if (!id.Empty() && dynamic_cast<const ColorGradeNodeModel*>(graph_.FindNode(id)) == nullptr) {
+    throw std::invalid_argument("Default Grade identity does not name a Color Grade: " +
+                                std::string{id.Value()});
+  }
+  default_grade_id_ = std::move(id);
+}
+
+auto PipelineDocument::ValidateUserDeletion(const NodeId& node_id,
+                                            std::optional<MaskId> mask_id) const
+    -> std::vector<GraphValidationError> {
+  const auto* node = graph_.FindNode(node_id);
+  const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
+  if (grade == nullptr) {
+    return {{node == nullptr ? GraphValidationCode::UnknownNode
+                             : GraphValidationCode::ProtectedEndpoint,
+             "Cannot delete node: " + std::string{node_id.Value()}, node_id, {}}};
+  }
+  std::vector<GraphValidationError> errors;
+  if (mask_id.has_value()) {
+    if (grade->FindMask(*mask_id) == nullptr) {
+      return {{GraphValidationCode::InvalidNodeValue,
+               "Unknown Mask: " + std::string{mask_id->Value()}, node_id, *mask_id}};
+    }
+    return errors;
+  }
+  if (grade->DeletionProtected()) {
+    errors.push_back({GraphValidationCode::DeletionProtected,
+                      "Unlock Color Grade before deletion: " + std::string{node_id.Value()},
+                      node_id, {}});
+  }
+  return errors;
+}
+
+void PipelineDocument::SetNextColorGradeNameNumber(std::uint64_t number) {
+  if (number == 0) {
+    throw std::invalid_argument("PipelineDocument next Color Grade name number must be positive");
+  }
+  next_color_grade_name_number_ = number;
+}
+
+void PipelineDocument::ConsumeNextColorGradeNameNumber() {
+  if (next_color_grade_name_number_ == std::numeric_limits<std::uint64_t>::max()) {
+    throw std::overflow_error("PipelineDocument Color Grade name number is exhausted");
+  }
+  ++next_color_grade_name_number_;
+}
+
+auto DefaultColorGradeDisplayName(std::uint64_t number) -> std::string {
+  if (number == 0) {
+    throw std::invalid_argument("Color Grade display-name number must be positive");
+  }
+  return "Color Grade " + std::to_string(number);
+}
+
+auto PipelineDocument::Freeze() const -> std::shared_ptr<const PipelineDocument> {
+  return std::shared_ptr<const PipelineDocument>(new PipelineDocument(*this));
+}
+
+// Each non-const accessor looks the node up read-only first, then asks the graph for write
+// access to that node alone, so a lookup never copies a node it does not return.
+auto PipelineDocument::Develop() -> DevelopNodeModel* {
+  const auto* develop = std::as_const(*this).Develop();
+  return develop == nullptr ? nullptr : Downcast<DevelopNodeModel>(graph_.FindNode(develop->Id()));
+}
+
+auto PipelineDocument::Develop() const -> const DevelopNodeModel* {
+  return Downcast<DevelopNodeModel>(graph_.FindNode("develop"));
+}
+
+auto PipelineDocument::PrimaryGrade() -> ColorGradeNodeModel* {
+  const auto* grade = std::as_const(*this).PrimaryGrade();
+  return grade == nullptr ? nullptr : Downcast<ColorGradeNodeModel>(graph_.FindNode(grade->Id()));
+}
+
+auto PipelineDocument::PrimaryGrade() const -> const ColorGradeNodeModel* {
+  if (const auto* named = Downcast<ColorGradeNodeModel>(graph_.FindNode("grade.primary"))) {
+    return named;
+  }
+  for (const auto& id : graph_.ImageBackboneNodeIds()) {
+    if (const auto* grade = Downcast<ColorGradeNodeModel>(graph_.FindNode(id))) {
+      return grade;
+    }
+  }
+  return nullptr;
+}
+
+auto PipelineDocument::Drt() -> DrtNodeModel* {
+  const auto* drt = std::as_const(*this).Drt();
+  return drt == nullptr ? nullptr : Downcast<DrtNodeModel>(graph_.FindNode(drt->Id()));
+}
+
+auto PipelineDocument::Drt() const -> const DrtNodeModel* {
+  return Downcast<DrtNodeModel>(graph_.FindNode("drt"));
+}
+
+auto PipelineDocument::RequireDevelopOfSameImage(const PipelineDocument& current) const
+    -> const DevelopNodeModel& {
+  const auto* own_develop     = Develop();
+  const auto* current_develop = current.Develop();
+  if (own_develop == nullptr || current_develop == nullptr) {
+    throw std::invalid_argument(
+        "PipelineDocument: Develop settings need a Develop node in both documents");
+  }
+  if (own_develop->Id() != current_develop->Id()) {
+    throw std::invalid_argument("PipelineDocument: Develop node " +
+                                std::string{own_develop->Id().Value()} + " differs from " +
+                                std::string{current_develop->Id().Value()});
+  }
+  const auto camera_profile = [](const DevelopNodeModel& develop) {
+    return develop.Params().Read(
+        [](const DevelopPayload& payload) { return payload.camera_profile; });
+  };
+  if (camera_profile(*own_develop) != camera_profile(*current_develop)) {
+    throw std::invalid_argument(
+        "PipelineDocument: the camera profiles differ, so the documents are not of one image");
+  }
+  return *current_develop;
+}
+
+void PipelineDocument::UseSensorSettingsFrom(const PipelineDocument& current) {
+  const auto& current_develop = RequireDevelopOfSameImage(current);
+  Develop()->Params().UseSensorSettingsFrom(current_develop.Params());
+}
+
+void PipelineDocument::UseDevelopSettingsFrom(const PipelineDocument& current) {
+  const auto& current_develop = RequireDevelopOfSameImage(current);
+  Develop()->Params().UseAllSettingsFrom(current_develop.Params());
+}
+
+void PipelineDocument::InsertAdjustment(const NodeId& grade_id, std::size_t index,
+                                        AdjustmentInstanceId instance_id,
+                                        std::unique_ptr<IOperatorModel> model) {
+  if (Downcast<ColorGradeNodeModel>(std::as_const(graph_).FindNode(grade_id)) == nullptr) {
+    throw std::invalid_argument("InsertAdjustment: node is not a ColorGrade");
+  }
+  auto* grade = Downcast<ColorGradeNodeModel>(graph_.FindNode(grade_id));
+  grade->InsertAdjustment(index, std::move(instance_id), std::move(model));
+  MarkTopologyChanged();
+}
+
+auto PipelineDocument::ToJson() const -> nlohmann::json {
+  nlohmann::json nodes = nlohmann::json::array();
+  for (const auto& node : graph_.Nodes()) {
+    nodes.push_back(node->ToJson());
+  }
+  nlohmann::json edges = nlohmann::json::array();
+  for (const auto& edge : graph_.Edges()) {
+    edges.push_back({{"from", nlohmann::json::array({std::string{edge.from_node.Value()},
+                                                     std::string{edge.from_port.Value()}})},
+                     {"to", nlohmann::json::array({std::string{edge.to_node.Value()},
+                                                   std::string{edge.to_port.Value()}})}});
+  }
+  return {{"format_version", format_version_},
+          {"geometry", geometry_.ToJson()},
+          {"next_color_grade_name_number", next_color_grade_name_number_},
+          {"default_grade_id", default_grade_id_.Empty() ? nlohmann::json(nullptr)
+                                                        : nlohmann::json(default_grade_id_.Value())},
+          {"nodes", std::move(nodes)},
+          {"edges", std::move(edges)}};
+}
+
+auto PipelineDocument::FromJson(const nlohmann::json& json) -> PipelineDocument {
+  ValidateDocumentShape(json);
+  PipelineDocument document;
+  document.format_version_ = kPipelineDocumentFormatVersion;
+  document.SetNextColorGradeNameNumber(json["next_color_grade_name_number"].get<std::uint64_t>());
+  document.geometry_ = ImageGeometryModel::FromJson(json["geometry"]);
+  for (const auto& node_json : json["nodes"]) {
+    document.graph_.AddNode(NodeFromJson(node_json));
+  }
+  for (const auto& edge_json : json["edges"]) {
+    const auto from = edge_json.at("from");
+    const auto to   = edge_json.at("to");
+    document.graph_.Connect(NodeId{from.at(0).get<std::string>()},
+                            PortId{from.at(1).get<std::string>()},
+                            NodeId{to.at(0).get<std::string>()}, PortId{to.at(1).get<std::string>()});
+  }
+  if (!json.contains("default_grade_id") ||
+      (!json.at("default_grade_id").is_null() &&
+       (!json.at("default_grade_id").is_string() ||
+        json.at("default_grade_id").get<std::string>().empty()))) {
+    throw std::runtime_error("Pipeline document requires null or nonempty default_grade_id");
+  }
+  document.SetDefaultGradeId(json.at("default_grade_id").is_null()
+                                 ? NodeId{}
+                                 : NodeId{json.at("default_grade_id").get<std::string>()});
+  return document;
+}
+
+namespace {
+
+auto NearlyEqualPrimaries(const std::array<float, 8>& a, const std::array<float, 8>& b) -> bool {
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    if (std::abs(a[i] - b[i]) > 0.005f) {
+      return false;
+    }
+  }
+  return true;
+}
+
+auto NearestDrtSpace(const std::array<float, 8>& primaries) -> DrtColorSpace {
+  if (NearlyEqualPrimaries(primaries, color::GamutPrimariesXy(color::ColorGamutId::Rec709))) {
+    return DrtColorSpace::Rec709;
+  }
+  if (NearlyEqualPrimaries(primaries, color::GamutPrimariesXy(color::ColorGamutId::P3D65))) {
+    return DrtColorSpace::P3D65;
+  }
+  return DrtColorSpace::Rec2020;
+}
+
+/// DRT EOTF whose curve is nearest the source transfer at mid code values.
+auto NearestDrtEotf(const RasterTransfer& transfer) -> DrtEotf {
+  switch (transfer.kind_) {
+    case RasterTransferKind::SrgbPiecewise:
+      return DrtEotf::SrgbPiecewise;
+    case RasterTransferKind::Bt1886:
+      return DrtEotf::Bt1886;
+    case RasterTransferKind::St2084:
+      return DrtEotf::St2084;
+    case RasterTransferKind::Hlg:
+      return DrtEotf::Hlg;
+    default:
+      break;
+  }
+  constexpr std::array<DrtEotf, 4>   kCandidates = {DrtEotf::Gamma18, DrtEotf::Gamma22,
+                                                    DrtEotf::Bt1886, DrtEotf::Gamma26};
+  // Compare the curves at code values 0.25, 0.5 and 0.75.
+  DrtEotf                            best        = DrtEotf::Gamma22;
+  float                              best_error  = std::numeric_limits<float>::max();
+  for (const auto& candidate : kCandidates) {
+    float error = 0.0f;
+    for (const float x : {0.25f, 0.5f, 0.75f}) {
+      error +=
+          std::abs(EvaluateRasterTransfer(transfer, x) - CeDecode(static_cast<int>(candidate), x));
+    }
+    if (error < best_error) {
+      best_error = error;
+      best       = candidate;
+    }
+  }
+  return best;
+}
+
+}  // namespace
+
+auto CreateDefaultRasterPipelineDocument(const RasterColorDescription& source_color)
+    -> PipelineDocument {
+  PipelineDocument document;
+  auto             develop         = std::make_unique<DevelopNodeModel>(NodeId{"develop"});
+  auto             develop_payload = develop->Params().Params();
+  develop_payload.input            = DevelopRasterInput{source_color, "auto"};
+  develop_payload.lens_enabled     = false;
+  develop->Params().ReplaceParams(std::move(develop_payload));
+  document.Graph().AddNode(std::move(develop));
+
+  auto grade = ColorGradeNodeModel::MakeDefault(NodeId{"grade.primary"});
+  grade->SetDisplayName(DefaultColorGradeDisplayName(1));
+  grade->SetDeletionProtected(true);
+  document.Graph().AddNode(std::move(grade));
+  document.SetDefaultGradeId(NodeId{"grade.primary"});
+
+  auto drt           = DrtNodeModel::MakeDefault(NodeId{"drt"});
+  auto drt_payload   = drt->Params().Params();
+  drt_payload.method = DrtMethod::Aces20;
+  if (source_color.referral_ == RasterReferral::SceneLinear) {
+    drt_payload.limiting_space = DrtColorSpace::Rec709;
+    drt_payload.encoding_space = DrtColorSpace::Rec709;
+    drt_payload.encoding_eotf  = DrtEotf::SrgbPiecewise;
+    drt_payload.peak_luminance = 100.0f;
+  } else {
+    drt_payload.limiting_space = NearestDrtSpace(source_color.primaries_xy_);
+    drt_payload.encoding_space = drt_payload.limiting_space;
+    drt_payload.encoding_eotf  = NearestDrtEotf(source_color.transfer_[0]);
+    drt_payload.peak_luminance = source_color.peak_luminance_nits_;
+  }
+  drt->Params().ReplaceParams(std::move(drt_payload));
+  document.Graph().AddNode(std::move(drt));
+
+  document.Graph().Connect(NodeId{"develop"}, PortId{"image"}, NodeId{"grade.primary"},
+                           PortId{"image"});
+  document.Graph().Connect(NodeId{"grade.primary"}, PortId{"image"}, NodeId{"drt"},
+                           PortId{"image"});
+  document.MarkTopologyChanged();
+  return document;
+}
+
+auto CreateDefaultPipelineDocument() -> PipelineDocument {
+  PipelineDocument document;
+  document.Graph().AddNode(std::make_unique<DevelopNodeModel>(NodeId{"develop"}));
+  auto grade = ColorGradeNodeModel::MakeDefault(NodeId{"grade.primary"});
+  grade->SetDisplayName(DefaultColorGradeDisplayName(1));
+  grade->SetDeletionProtected(true);
+  ApplyDefaultPipelineLook(*grade);
+  document.Graph().AddNode(std::move(grade));
+  document.SetDefaultGradeId(NodeId{"grade.primary"});
+  document.Graph().AddNode(DrtNodeModel::MakeDefault(NodeId{"drt"}));
+  document.Graph().Connect(NodeId{"develop"}, PortId{"image"}, NodeId{"grade.primary"},
+                           PortId{"image"});
+  document.Graph().Connect(NodeId{"grade.primary"}, PortId{"image"}, NodeId{"drt"}, PortId{"image"});
+  document.MarkTopologyChanged();
+  return document;
+}
+
+namespace {
+
+/**
+ * @brief Give @p clone the parameter stamps of @p src after a JSON round trip.
+ *
+ * The round trip gives every Model new stamps. Values are equal, so the stamps of @p src
+ * are also true for @p clone, and a renderer that already applied @p src does not repack
+ * the clone. Nodes are matched by ID and adjustments by instance ID.
+ */
+void CopyCloneRevisions(const PipelineDocument& src, PipelineDocument& clone) {
+  if (const auto* develop = src.Develop(); develop != nullptr && clone.Develop() != nullptr) {
+    clone.Develop()->Params().CopyRevisionsFrom(develop->Params());
+  }
+  if (const auto* drt = src.Drt(); drt != nullptr && clone.Drt() != nullptr) {
+    auto& target = *clone.Drt();
+    target.Params().CopyRevisionsFrom(drt->Params());
+    for (std::size_t index = 0; index < target.AdjustmentCount(); ++index) {
+      if (const auto* model = drt->FindAdjustment(target.AdjustmentIdAt(index)); model != nullptr) {
+        target.AdjustmentAt(index).CopyRevisionsFrom(*model);
+      }
+    }
+  }
+  std::vector<NodeId> grade_ids;
+  for (const auto& node : clone.Graph().Nodes()) {
+    if (Downcast<ColorGradeNodeModel>(node.get()) != nullptr) {
+      grade_ids.push_back(node->Id());
+    }
+  }
+  for (const auto& id : grade_ids) {
+    if (const auto* source = Downcast<ColorGradeNodeModel>(src.Graph().FindNode(id));
+        source != nullptr) {
+      Downcast<ColorGradeNodeModel>(clone.Graph().FindNode(id))->CopyRevisionsFrom(*source);
+    }
+  }
+  clone.CopyTopologyRevisionFrom(src);
+}
+
+void CombineFingerprint(std::uint64_t& hash, std::uint64_t value) {
+  // 64-bit FNV-1a over whole words; collisions only weaken a debug check.
+  hash ^= value;
+  hash *= 1099511628211ULL;
+}
+
+/// Every stamped field write also stamps @ref IOperatorModel::Revision.
+void CombineModelRevisions(std::uint64_t& hash, const IOperatorModel& model) {
+  CombineFingerprint(hash, model.Revision());
+}
+
+}  // namespace
+
+auto DocumentRevisionFingerprint(const PipelineDocument& document) -> std::uint64_t {
+  std::uint64_t hash = 14695981039346656037ULL;
+  CombineFingerprint(hash, document.TopologyRevision());
+  for (const auto& node : document.Graph().Nodes()) {
+    CombineFingerprint(hash, std::hash<std::string_view>{}(node->Id().Value()));
+    if (const auto* develop = Downcast<DevelopNodeModel>(node.get()); develop != nullptr) {
+      CombineModelRevisions(hash, develop->Params());
+    } else if (const auto* drt = Downcast<DrtNodeModel>(node.get()); drt != nullptr) {
+      CombineModelRevisions(hash, drt->Params());
+      for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
+        CombineModelRevisions(hash, drt->AdjustmentAt(index));
+      }
+    } else if (const auto* grade = Downcast<ColorGradeNodeModel>(node.get()); grade != nullptr) {
+      CombineFingerprint(hash, grade->MixRevision());
+      for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
+        CombineModelRevisions(hash, grade->AdjustmentAt(index));
+      }
+      for (const auto& mask : grade->Masks()) {
+        CombineFingerprint(hash, grade->MaskContentRevision(mask.id));
+      }
+    }
+  }
+  return hash;
+}
+
+auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument {
+  auto        clone          = PipelineDocument::FromJson(src.ToJson());
+  // JSON carries only the DNG profile fingerprint. Keep the profile the source has bound, so a
+  // clone renders like its source without another read of the source file.
+  const auto* source_develop = src.Develop();
+  auto*       clone_develop  = clone.Develop();
+  if (source_develop != nullptr && clone_develop != nullptr) {
+    const auto source_profile = source_develop->Params().DngProfile();
+    if (source_profile.IsBound()) {
+      clone_develop->Params().BindDngColorProfile(source_profile.Profile());
+    }
+  }
+  CopyCloneRevisions(src, clone);
+  return clone;
+}
+
+auto ColorGradesOnImageBackbone(const PipelineDocument& document)
+    -> std::vector<const ColorGradeNodeModel*> {
+  std::vector<const ColorGradeNodeModel*> grades;
+  for (const auto& id : document.Graph().ImageBackboneNodeIds()) {
+    const auto* grade = Downcast<ColorGradeNodeModel>(document.Graph().FindNode(id));
+    if (grade != nullptr) {
+      grades.push_back(grade);
+    }
+  }
+  return grades;
+}
+
+}  // namespace alcedo

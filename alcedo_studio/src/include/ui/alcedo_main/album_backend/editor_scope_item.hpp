@@ -33,6 +33,8 @@ class EditorScopeItem : public QQuickPaintedItem {
                  NOTIFY ColorsChanged)
   Q_PROPERTY(QColor histogramBlueColor READ histogram_blue_color WRITE set_histogram_blue_color
                  NOTIFY ColorsChanged)
+  Q_PROPERTY(QColor markerColor READ marker_color WRITE set_marker_color NOTIFY ColorsChanged)
+  Q_PROPERTY(qreal plotPadding READ plot_padding WRITE set_plot_padding NOTIFY PlotPaddingChanged)
 
  public:
   explicit EditorScopeItem(QQuickItem* parent = nullptr);
@@ -52,6 +54,10 @@ class EditorScopeItem : public QQuickPaintedItem {
   void               set_histogram_green_color(const QColor& color);
   [[nodiscard]] auto histogram_blue_color() const -> QColor { return histogram_blue_color_; }
   void               set_histogram_blue_color(const QColor& color);
+  [[nodiscard]] auto marker_color() const -> QColor { return marker_color_; }
+  void               set_marker_color(const QColor& color);
+  [[nodiscard]] auto plot_padding() const -> qreal { return plot_padding_; }
+  void               set_plot_padding(qreal padding);
 
   /// Register the item in the same URI used by the production QML module.
   static void        RegisterQmlType();
@@ -59,6 +65,7 @@ class EditorScopeItem : public QQuickPaintedItem {
  signals:
   void ControllerChanged();
   void ColorsChanged();
+  void PlotPaddingChanged();
 
  protected:
   void paint(QPainter* painter) override;
@@ -67,6 +74,8 @@ class EditorScopeItem : public QQuickPaintedItem {
   void                    bind_controller(EditorScopeController* controller);
   void                    sync_snapshot();
   void                    rebuild_waveform_image(const alcedo::ScopeWaveformRenderData& waveform);
+  void                    paint_histogram(QPainter* painter, const QRectF& plot) const;
+  void                    paint_clip_markers(QPainter* painter, const QRectF& plot) const;
 
   QObject*                controller_       = nullptr;
   EditorScopeController*  scope_controller_ = nullptr;
@@ -82,6 +91,8 @@ class EditorScopeItem : public QQuickPaintedItem {
   QColor                           histogram_red_color_   = QColor(0xE2, 0x8A, 0x8A);
   QColor                           histogram_green_color_ = QColor(0xA8, 0xD6, 0x9B);
   QColor                           histogram_blue_color_  = QColor(0x8E, 0xB9, 0xE5);
+  QColor                           marker_color_          = QColor(0xE8, 0xE8, 0xE8);
+  qreal                            plot_padding_          = 8.0;
 };
 
 }  // namespace alcedo::ui

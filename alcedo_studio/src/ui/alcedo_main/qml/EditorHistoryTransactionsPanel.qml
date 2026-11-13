@@ -15,7 +15,6 @@ Item {
 
     property var theme: null
     property var editorSession: null
-    property var adjustmentTransfer: null
     property var historyModel: null
     property string statusMessage: ""
     property Item blurSource: null
@@ -45,51 +44,6 @@ Item {
             historyList.contentY = Math.max(0, Math.min(historyList.preservedContentY, maxY))
             historyList.restoringContentY = false
         })
-    }
-
-    EditorMergeDialog {
-        id: mergeDialog
-        textColor: root.colText
-        mutedColor: root.colMuted
-        surfaceColor: root.colCardSurface
-        borderColor: root.colCardBorder
-        blurSource: root.blurSource
-        onMergeRequested: function(resolutions) {
-            if (!root.adjustmentTransfer) {
-                root.statusMessage = qsTr("Adjustment transfer is unavailable")
-                return
-            }
-            var result = root.adjustmentTransfer.CompleteMergeIntoEditor(root.editorSession,
-                                                                          resolutions)
-            root.statusMessage = result.message || qsTr("Merge completed")
-        }
-        onCancelled: {
-            if (root.adjustmentTransfer) {
-                var result = root.adjustmentTransfer.CancelMergeIntoEditor(root.editorSession)
-                root.statusMessage = result.message || qsTr("Merge cancelled")
-            }
-        }
-    }
-
-    function applyPaste() {
-        if (!root.adjustmentTransfer || !root.editorSession) return
-        var result = root.adjustmentTransfer.PasteIntoEditor(root.editorSession)
-        root.statusMessage = result.message || qsTr("Adjustments pasted")
-    }
-
-    function beginMerge() {
-        if (!root.adjustmentTransfer || !root.editorSession) return
-        var result = root.adjustmentTransfer.BeginMergeIntoEditor(root.editorSession)
-        if (!result.success) {
-            root.statusMessage = result.message || qsTr("Merge could not start")
-            return
-        }
-        if (result.hasConflicts) {
-            mergeDialog.openPreview(result)
-            return
-        }
-        var completed = root.adjustmentTransfer.CompleteMergeIntoEditor(root.editorSession, [])
-        root.statusMessage = completed.message || qsTr("Merge completed")
     }
 
     ColumnLayout {
@@ -128,7 +82,7 @@ Item {
                                                : qsTr("Version: —")
                     }
                     color: root.colMuted
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeCaption
                 }
@@ -153,6 +107,8 @@ Item {
                 fillSelected: appTheme.buttonSelectedFillColor
                 focusRingColor: root.colText
                 actionName: qsTr("Undo edit")
+                toolTipText: ShortcutRegistry.decorateTooltip(qsTr("Undo edit"),
+                                                              "editor.undo")
                 onClicked: root.historyModel.undo()
             }
 
@@ -169,42 +125,12 @@ Item {
                 fillSelected: appTheme.buttonSelectedFillColor
                 focusRingColor: root.colText
                 actionName: qsTr("Redo edit")
+                toolTipText: ShortcutRegistry.decorateTooltip(qsTr("Redo edit"),
+                                                              "editor.redo")
                 onClicked: root.historyModel.redo()
             }
 
             Item { Layout.fillWidth: true }
-
-            IconActionButton {
-                objectName: "editorHistoryPasteButton"
-                compact: true
-                enabled: root.editorSession && root.editorSession.actions.canPaste
-                iconSrc: "qrc:/panel_icons/to_bg.svg"
-                iconColorDefault: root.colMuted
-                iconColorMuted: root.colMuted
-                fillIdle: root.colCardSurface
-                fillHover: appTheme.buttonHoveredFillColor
-                fillPressed: appTheme.buttonPressedFillColor
-                fillSelected: appTheme.buttonSelectedFillColor
-                focusRingColor: root.colText
-                actionName: qsTr("Paste adjustments as a new Version")
-                onClicked: root.applyPaste()
-            }
-
-            IconActionButton {
-                objectName: "editorHistoryMergeButton"
-                compact: true
-                enabled: root.editorSession && root.editorSession.actions.canBeginMerge
-                iconSrc: "qrc:/panel_icons/git-branch.svg"
-                iconColorDefault: root.colMuted
-                iconColorMuted: root.colMuted
-                fillIdle: root.colCardSurface
-                fillHover: appTheme.buttonHoveredFillColor
-                fillPressed: appTheme.buttonPressedFillColor
-                fillSelected: appTheme.buttonSelectedFillColor
-                focusRingColor: root.colText
-                actionName: qsTr("Merge adjustments into this Version")
-                onClicked: root.beginMerge()
-            }
         }
 
         Label {
@@ -232,7 +158,7 @@ Item {
             }
             color: (root.editorSession && root.editorSession.lastHistoryFailed)
                    ? appTheme.dangerColor : root.colMuted
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeCaption
         }
@@ -300,7 +226,9 @@ Item {
                     function onModelReset() {
                         historyList.restoreScrollAfterReset()
                     }
-                    function onStateChanged() {
+                    // count NOTIFY StateChanged; a handler for StateChanged itself
+                    // does not run (upper-case name).
+                    function onCountChanged() {
                         if (historyList.restoringContentY)
                             historyList.restoreScrollAfterReset()
                     }

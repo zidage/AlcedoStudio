@@ -8,17 +8,21 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "app/adjustment_transfer_types.hpp"
 #include "app/editor_action_policy.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
+#include "support/editor_parameter_target_test.hpp"
 #include "support/editor_session_command_queue_test_support.hpp"
+#include "type/hash_type.hpp"
 
 namespace alcedo {
 namespace {
@@ -32,7 +36,6 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
     return ++next_job_;
   }
   void Cancel(std::uint64_t job_id) override { cancelled_.push_back(job_id); }
-  void WaitForSessionIdle(std::uint64_t) override {}
 
   std::vector<EditorRenderRequest> scheduled_;
   std::vector<std::uint64_t>       cancelled_;
@@ -45,12 +48,11 @@ class EditorSessionActionPolicyCq3Test : public ::testing::Test {
     history_          = std::make_shared<ControllableEditorHistoryPort>();
     pipeline_         = std::make_shared<FakeEditorPipelinePort>();
     tasks_            = std::make_shared<FakeEditorTaskPort>();
-    journal_          = std::make_shared<OrderRecordingJournalPort>();
     scheduler_        = std::make_shared<RecordingScheduler>();
-    checkpoint_store_ = std::make_shared<FakeEditorCheckpointStore>();
+    checkpoint_store_ = std::make_shared<OrderRecordingCheckpointStore>();
     thumbnails_       = std::make_shared<FakeEditorThumbnailPort>();
-    runtime_ = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, journal_,
-                                                     scheduler_, checkpoint_store_, thumbnails_);
+    runtime_ = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, scheduler_,
+        checkpoint_store_, thumbnails_);
     service_ = runtime_->service.get();
     service_->SetPresentationSinkId(1);
     service_->SetPresentationSize(640, 480);
@@ -88,9 +90,8 @@ class EditorSessionActionPolicyCq3Test : public ::testing::Test {
   std::shared_ptr<ControllableEditorHistoryPort> history_;
   std::shared_ptr<FakeEditorPipelinePort>        pipeline_;
   std::shared_ptr<FakeEditorTaskPort>            tasks_;
-  std::shared_ptr<OrderRecordingJournalPort>     journal_;
   std::shared_ptr<RecordingScheduler>            scheduler_;
-  std::shared_ptr<FakeEditorCheckpointStore>     checkpoint_store_;
+  std::shared_ptr<OrderRecordingCheckpointStore>     checkpoint_store_;
   std::shared_ptr<FakeEditorThumbnailPort>       thumbnails_;
   std::unique_ptr<EditorSessionRuntime>          runtime_;
   EditorSessionService*                          service_ = nullptr;
@@ -127,14 +128,164 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   EXPECT_EQ(undo.kind, EditorSessionResultKind::Rejected);
   EXPECT_FALSE(published.For(EditorAction::Undo).allowed);
 
-  const auto complete = service_->CompleteMerge({});
-  EXPECT_EQ(complete.kind, EditorSessionResultKind::Rejected);
-  EXPECT_FALSE(published.For(EditorAction::CompleteMerge).allowed);
-
   EXPECT_TRUE(published.For(EditorAction::SelectImage).allowed);
   EXPECT_TRUE(published.For(EditorAction::PreviewAdjustment).allowed);
   EXPECT_TRUE(published.For(EditorAction::ApplyPaste).allowed);
-  EXPECT_TRUE(published.For(EditorAction::BeginMerge).allowed);
+}
+
+TEST(EditorSessionComparisonPolicy,
+     ComparisonLeaseBlocksWritesHistoryAndViewButKeepsSelectionCloseAndShutdown) {
+  EditorActionInputs inputs;
+  inputs.session_state     = EditorSessionState::Interactive;
+  inputs.has_image         = true;
+  inputs.can_undo          = true;
+  inputs.can_redo          = true;
+  inputs.package_available = true;
+  EditorOperationLease lease;
+  lease.operation.command_id = 7;
+  lease.kind                 = EditorOperationLeaseKind::Comparison;
+  lease.blocked_actions = EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind::Comparison);
+  lease.blocking_reason = "Close the comparison first";
+  const auto availability = EditorActionPolicy::EvaluateAll(EditorCommandContext{{lease}}, inputs);
+
+  const std::set<EditorAction> allowed = {EditorAction::SelectImage, EditorAction::CloseEditor,
+                                          EditorAction::Shutdown};
+  for (std::size_t i = 0; i < EditorActionCount(); ++i) {
+    const auto action = static_cast<EditorAction>(i);
+    // Recovery actions have their own facts and are off without a pending recovery.
+    if (action == EditorAction::RetrySave || action == EditorAction::DiscardAndContinue ||
+        action == EditorAction::CancelPendingNavigation) {
+      continue;
+    }
+    EXPECT_EQ(availability.For(action).allowed, allowed.contains(action))
+        << EditorActionName(action);
+  }
+  EXPECT_EQ(availability.For(EditorAction::Undo).reason, "Close the comparison first");
+
+  // Comparison commands are admitted by the open comparison itself, Open by its own action.
+  EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::OpenComparison),
+            EditorAction::OpenComparison);
+  EXPECT_FALSE(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::CloseComparison));
+  EXPECT_FALSE(
+      EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::SelectComparisonSources));
+  // Every other in-flight operation refuses a new comparison.
+  for (const auto kind :
+       {EditorOperationLeaseKind::ImageLoad, EditorOperationLeaseKind::ImageSwitch,
+        EditorOperationLeaseKind::SaveCheckpoint, EditorOperationLeaseKind::PasteMaterialization,
+        EditorOperationLeaseKind::FailureRecovery}) {
+    const auto blocked = EditorActionPolicy::DefaultBlockedActions(kind);
+    EXPECT_NE(std::find(blocked.begin(), blocked.end(), EditorAction::OpenComparison),
+              blocked.end());
+  }
+  // Entry facts: HDR output and an open Mask edit refuse it with their reason.
+  inputs.current_output_is_hdr = true;
+  EXPECT_EQ(EditorActionPolicy::Evaluate(EditorAction::OpenComparison, {}, inputs).reason,
+            "Comparison is unavailable for HDR output.");
+  inputs.current_output_is_hdr = false;
+  inputs.mask_input_open       = true;
+  EXPECT_FALSE(EditorActionPolicy::Evaluate(EditorAction::OpenComparison, {}, inputs).allowed);
+}
+
+TEST(EditorSessionAiMaskEditPolicy, AiMaskEditLeaseBlocksDocumentWritesAndHistory) {
+  EditorActionInputs inputs;
+  inputs.session_state              = EditorSessionState::Interactive;
+  inputs.has_image                  = true;
+  inputs.can_undo                   = true;
+  inputs.can_redo                   = true;
+  inputs.package_available          = true;
+  inputs.has_unmaterialized_changes = true;
+  EditorOperationLease lease;
+  lease.operation.command_id = 9;
+  lease.kind                 = EditorOperationLeaseKind::AiMaskEdit;
+  lease.blocked_actions =
+      EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind::AiMaskEdit);
+  lease.blocking_reason   = "Commit or cancel the AI Mask edit first";
+  const auto availability = EditorActionPolicy::EvaluateAll(EditorCommandContext{{lease}}, inputs);
+
+  // SM5 M16: every document write, history move, Version write, Paste, and the comparison.
+  const std::set<EditorAction> blocked = {EditorAction::PreviewAdjustment,
+                                          EditorAction::CommitAdjustment,
+                                          EditorAction::Undo,
+                                          EditorAction::Redo,
+                                          EditorAction::MoveHead,
+                                          EditorAction::DiscardChanges,
+                                          EditorAction::CheckoutVersion,
+                                          EditorAction::CreateRootVersion,
+                                          EditorAction::BranchVersion,
+                                          EditorAction::RenameVersion,
+                                          EditorAction::RemoveVersion,
+                                          EditorAction::ApplyPaste,
+                                          EditorAction::OpenComparison};
+  for (std::size_t i = 0; i < EditorActionCount(); ++i) {
+    const auto action = static_cast<EditorAction>(i);
+    // Recovery actions have their own facts and are off without a pending recovery.
+    if (action == EditorAction::RetrySave || action == EditorAction::DiscardAndContinue ||
+        action == EditorAction::CancelPendingNavigation) {
+      continue;
+    }
+    EXPECT_EQ(availability.For(action).allowed, !blocked.contains(action))
+        << EditorActionName(action);
+  }
+  EXPECT_TRUE(availability.For(EditorAction::RequestViewChange).allowed);
+  EXPECT_TRUE(availability.For(EditorAction::SelectImage).allowed);
+  EXPECT_EQ(availability.For(EditorAction::CommitAdjustment).reason,
+            "Commit or cancel the AI Mask edit first");
+
+  // The session evaluates CommitAdjustment admission for Open and Commit itself, so the commands
+  // have no policy action: a refused Open still reaches its completion.
+  EXPECT_FALSE(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::OpenAiMaskEdit));
+  EXPECT_FALSE(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::CommitAiMaskEdit));
+  EXPECT_FALSE(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::CancelAiMaskEdit));
+  // Every in-flight operation that writes or moves the document refuses that admission.
+  for (const auto kind :
+       {EditorOperationLeaseKind::ImageLoad, EditorOperationLeaseKind::ImageSwitch,
+        EditorOperationLeaseKind::SaveCheckpoint, EditorOperationLeaseKind::PasteMaterialization,
+        EditorOperationLeaseKind::FailureRecovery, EditorOperationLeaseKind::Comparison}) {
+    const auto other = EditorActionPolicy::DefaultBlockedActions(kind);
+    EXPECT_NE(std::find(other.begin(), other.end(), EditorAction::CommitAdjustment), other.end());
+  }
+}
+
+TEST(EditorSessionInputSequencePolicy,
+     OpenInputSequenceOrMaskEditRefusesHistoryMovesAndPasteButKeepsEditing) {
+  EditorActionInputs inputs;
+  inputs.session_state                 = EditorSessionState::Interactive;
+  inputs.has_image                     = true;
+  inputs.can_undo                      = true;
+  inputs.can_redo                      = true;
+  inputs.package_available             = true;
+  const std::set<EditorAction> refused = {EditorAction::Undo, EditorAction::Redo,
+                                          EditorAction::MoveHead, EditorAction::ApplyPaste};
+  const auto closed = EditorActionPolicy::EvaluateAll(EditorCommandContext{}, inputs);
+  for (const auto action : refused) {
+    EXPECT_TRUE(closed.For(action).allowed) << EditorActionName(action);
+  }
+
+  for (const bool slider_input : {true, false}) {
+    auto open                = inputs;
+    open.input_sequence_open = slider_input;
+    open.mask_input_open     = !slider_input;
+    const auto availability  = EditorActionPolicy::EvaluateAll(EditorCommandContext{}, open);
+    for (std::size_t i = 0; i < EditorActionCount(); ++i) {
+      const auto action = static_cast<EditorAction>(i);
+      if (refused.contains(action)) {
+        EXPECT_FALSE(availability.For(action).allowed) << EditorActionName(action);
+        EXPECT_FALSE(availability.For(action).reason.empty()) << EditorActionName(action);
+      } else if (action != EditorAction::OpenComparison) {
+        // The input sequence itself continues; only the Mask edit also refuses a comparison.
+        EXPECT_EQ(availability.For(action).allowed, closed.For(action).allowed)
+            << EditorActionName(action);
+      }
+    }
+  }
+}
+
+TEST(EditorSessionNodeCommandPolicy,
+     RenameAndEditNodeGraphUseTheSameAdmissionDecisionAsSettledAdjustments) {
+  EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::RenameColorGrade),
+            EditorAction::CommitAdjustment);
+  EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::EditNodeGraph),
+            EditorAction::CommitAdjustment);
 }
 
 TEST_F(EditorSessionActionPolicyCq3Test,
@@ -146,7 +297,6 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   ASSERT_TRUE(Decision(EditorAction::PreviewAdjustment).allowed);
   ASSERT_TRUE(Decision(EditorAction::ApplyPaste).allowed);
 
-  journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
   availability_events_.clear();
   const auto started = service_->Switch(30, 40);
@@ -159,7 +309,6 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   // SelectImage remains admissible so a rapid follow-up can queue.
   EXPECT_TRUE(Decision(EditorAction::SelectImage).allowed);
 
-  journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
   drainQueue();
   presentFirstFrame();
@@ -167,6 +316,44 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
   EXPECT_TRUE(Decision(EditorAction::PreviewAdjustment).allowed);
   EXPECT_TRUE(Decision(EditorAction::ApplyPaste).allowed);
+}
+
+TEST_F(EditorSessionActionPolicyCq3Test, SavingCheckpointRejectsSettledEditCheckoutAndPaste) {
+  openInteractive();
+  service_->SetCopiedPackageAvailable(true);
+  checkpoint_store_->async_materialize = true;
+  const auto started                   = service_->Switch(30, 40);
+  ASSERT_EQ(started.kind, EditorSessionResultKind::SaveStarted);
+  drainQueue();
+  ASSERT_EQ(service_->state(), EditorSessionState::Saving);
+  const int commits_before   = history_->commit_count;
+  const int checkouts_before = history_->checkout_count;
+
+  auto       patch = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.0})", true});
+  const auto edit  = service_->CommitAdjustment(patch);
+  EXPECT_EQ(edit.kind, EditorSessionResultKind::Rejected);
+  EXPECT_FALSE(Decision(EditorAction::CommitAdjustment).allowed);
+
+  const auto checkout = service_->CheckoutVersion(Hash128{0x11ULL, 0x22ULL});
+  EXPECT_EQ(checkout.kind, EditorSessionResultKind::Rejected);
+  EXPECT_FALSE(Decision(EditorAction::CheckoutVersion).allowed);
+
+  AdjustmentTransferPackage package;
+  const auto                paste = service_->PasteAdjustments(package, "Pasted");
+  EXPECT_EQ(paste.kind, EditorSessionResultKind::Rejected);
+  EXPECT_FALSE(Decision(EditorAction::ApplyPaste).allowed);
+
+  EXPECT_EQ(history_->commit_count, commits_before);
+  EXPECT_EQ(history_->checkout_count, checkouts_before);
+  EXPECT_EQ(service_->identity().element_id, 10u);
+
+  checkpoint_store_->CompleteMaterialization(true);
+  drainQueue();
+  presentFirstFrame();
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  EXPECT_EQ(service_->identity().element_id, 30u);
+  EXPECT_TRUE(Decision(EditorAction::CommitAdjustment).allowed);
+  EXPECT_TRUE(Decision(EditorAction::CheckoutVersion).allowed);
 }
 
 TEST_F(EditorSessionActionPolicyCq3Test, RejectedCommandDoesNotChangeAvailability) {
@@ -213,7 +400,6 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   const auto a_load = service_->active_image_load_request();
   ASSERT_TRUE(a_load.valid());
 
-  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
   (void)service_->Switch(30, 40);  // B
   drainQueue();
@@ -257,11 +443,9 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   EXPECT_LE(availability_events_.size(), 1u);
 
   availability_events_.clear();
-  journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
   (void)service_->Switch(30, 40);
   EXPECT_LE(availability_events_.size(), 1u);
-  journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
   drainQueue();
   EXPECT_LE(availability_events_.size(), 2u);
@@ -276,7 +460,6 @@ TEST_F(EditorSessionActionPolicyCq3Test,
 
   EditorBackgroundActionRestrictions blocked;
   blocked.blocks_paste = true;
-  blocked.blocks_merge = true;
   service_->SetBackgroundActionRestrictions(blocked);
   (void)service_->RequestViewChange(EditorRenderReason::ZoomPan, std::nullopt);
   drainQueue();
@@ -288,16 +471,12 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   inputs.can_redo                = true;
   inputs.package_available       = true;
   inputs.background_blocks_paste = true;
-  inputs.background_blocks_merge = true;
 
   const auto paste = EditorActionPolicy::Evaluate(EditorAction::ApplyPaste, {}, inputs);
-  const auto merge = EditorActionPolicy::Evaluate(EditorAction::BeginMerge, {}, inputs);
   const auto undo  = EditorActionPolicy::Evaluate(EditorAction::Undo, {}, inputs);
   EXPECT_FALSE(paste.allowed);
-  EXPECT_FALSE(merge.allowed);
   EXPECT_TRUE(undo.allowed);
   EXPECT_EQ(Decision(EditorAction::ApplyPaste).allowed, paste.allowed);
-  EXPECT_EQ(Decision(EditorAction::BeginMerge).allowed, merge.allowed);
 }
 
 TEST_F(EditorSessionActionPolicyCq3Test,
@@ -308,9 +487,7 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   // interactive Patch does not bump history_revision.
   openInteractive();
   const auto before = service_->history_revision();
-  EditorAdjustmentPatch patch;
-  patch.field_key   = "exposure";
-  patch.params_json = R"({"ev":0.5})";
+  auto       patch  = WithColorGradeTarget({"exposure", R"({"exposure_ev":0.5})", false});
   (void)service_->Patch(patch);
   drainQueue();
   EXPECT_EQ(service_->history_revision(), before);

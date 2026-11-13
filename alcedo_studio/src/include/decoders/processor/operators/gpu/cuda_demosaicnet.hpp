@@ -24,8 +24,11 @@ namespace alcedo::CUDA {
 // activations, NCHW input boundary buffers, and the HWC tile output are stream-local.
 // Not thread-safe; use one instance for each concurrent CUDA decode.
 //
-// `allocation_generation()` increments whenever an owned device allocation grows.
-// After warm-up, timed hot-path iterations must keep the generation constant.
+// Product SensorDevelop binds these buffers from the exclusive-stage transient arena
+// (`BindExternal`) so tile scratch is discarded after the last tile's GPU last-use.
+// `EnsureCapacity` without a bind still owns grow-only allocations for RAW-processor
+// and tests. `allocation_generation()` increments whenever owned capacity grows or
+// when BindExternal installs a new borrowed working set.
 class NeuralDemosaicWorkspace {
  public:
   NeuralDemosaicWorkspace()                                          = default;
@@ -38,6 +41,23 @@ class NeuralDemosaicWorkspace {
   }
   [[nodiscard]] auto input_buffer() noexcept -> cuda::nn::DeviceBufferF32& { return input_buffer_; }
   [[nodiscard]] auto rgb_buffer() noexcept -> cv::cuda::GpuMat& { return rgb_buffer_; }
+
+  /**
+   * @brief Borrow tile input, activation bump, and HWC RGB from caller-owned device memory.
+   *
+   * Pointers must stay valid until the last enqueued tile forward completes.
+   * Subsequent @ref EnsureCapacity calls do not cudaMalloc.
+   */
+  void BindExternal(float* input, std::size_t input_numel, void* activation,
+                    std::size_t activation_bytes, void* rgb, int rgb_height, int rgb_width);
+
+  /**
+   * @brief Drop borrowed tile wraps. Does not cudaFree; the caller owns those slabs.
+   *
+   * GPU last-use of the bound pointers must already be complete. Owned
+   * EnsureCapacity allocations are left unchanged.
+   */
+  void ReleaseBorrowed() noexcept;
 
   // Grow-only reservation for a single forward of the given CFA spatial size.
   // Increments `allocation_generation()` when any owned capacity actually grows.
@@ -56,6 +76,7 @@ class NeuralDemosaicWorkspace {
   cuda::nn::DeviceBufferF32 input_buffer_;
   cv::cuda::GpuMat          rgb_buffer_;
   std::uint64_t             allocation_generation_ = 0;
+  bool                      borrowed_              = false;
 };
 
 struct NeuralDemosaicOptions {

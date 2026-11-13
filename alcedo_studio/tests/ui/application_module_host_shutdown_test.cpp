@@ -3,22 +3,86 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file application_module_host_shutdown_test.cpp
-/// @brief Verifies host shutdown waits for every registered task and drains
-/// analysis writes released by an export barrier.
+/// @brief Verifies host shutdown waits for every registered task, drains
+/// analysis writes released by an export barrier, repacks the project
+/// package only when the user entered the project, and removes the runtime
+/// workspace after the host closes the project database. On Windows a workspace file that
+/// stays locked is reported with the process that holds it. The editor session worker finishes
+/// its callbacks before the host destroys the controller that receives them.
 
 #include "ui/album_backend_test_fixture.hpp"
 
+#include <QMutex>
+#include <QMutexLocker>
+#include <QSignalSpy>
+#include <QStringList>
 #include <QTimer>
+#include <QtLogging>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <thread>
+#include <vector>
 
+#include "app/editor_session_service.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
+#include "ui/welcome_project_test_support.hpp"
 
 namespace alcedo::ui::test {
 namespace {
 
 using ApplicationModuleHostShutdownTests = ApplicationModuleHostTestFixture;
+
+// Collects the qWarning messages of all threads while it is alive.
+class ScopedWarningCapture {
+ public:
+  ScopedWarningCapture() {
+    {
+      QMutexLocker lock(&Mutex());
+      Messages().clear();
+    }
+    previous_ = qInstallMessageHandler(&ScopedWarningCapture::Capture);
+  }
+  ~ScopedWarningCapture() { qInstallMessageHandler(previous_); }
+  ScopedWarningCapture(const ScopedWarningCapture&)                    = delete;
+  auto operator=(const ScopedWarningCapture&) -> ScopedWarningCapture& = delete;
+
+  [[nodiscard]] auto CountContaining(const QString& text) const -> int {
+    QMutexLocker lock(&Mutex());
+    int          count = 0;
+    for (const auto& message : Messages()) {
+      if (message.contains(text)) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+ private:
+  static auto Mutex() -> QMutex& {
+    static QMutex mutex;
+    return mutex;
+  }
+  static auto Messages() -> QStringList& {
+    static QStringList messages;
+    return messages;
+  }
+  static void Capture(QtMsgType type, const QMessageLogContext&, const QString& message) {
+    if (type == QtWarningMsg) {
+      QMutexLocker lock(&Mutex());
+      Messages().push_back(message);
+    }
+  }
+
+  QtMessageHandler previous_ = nullptr;
+};
+
+constexpr auto kWorkspaceRemovalWarning = "Runtime workspace removal failed";
 
 auto RunningTask(BackgroundTaskKind kind, bool cancelable,
                  BackgroundTaskShutdownPolicy policy) -> BackgroundTaskSnapshot {
@@ -32,13 +96,13 @@ auto RunningTask(BackgroundTaskKind kind, bool cancelable,
 }
 
 TEST_F(ApplicationModuleHostShutdownTests,
-       ShutdownCancelsAndWaitsForImageAnalysisSemanticAndModelTasks) {
+       ShutdownCancelsAndWaitsForSemanticAndModelTasks) {
   ApplicationModuleHost host;
   auto*                 tasks = host.background_tasks();
   ASSERT_NE(tasks, nullptr);
 
-  const std::array kinds = {BackgroundTaskKind::ImageAnalysis,
-                            BackgroundTaskKind::SemanticGeneration,
+  const std::array kinds = {BackgroundTaskKind::SemanticGeneration,
+                            BackgroundTaskKind::ModelActivation,
                             BackgroundTaskKind::ModelDownload};
   for (const auto kind : kinds) {
     const auto id = std::make_shared<QString>();
@@ -55,35 +119,264 @@ TEST_F(ApplicationModuleHostShutdownTests,
   EXPECT_EQ(tasks->RunningCount(), 0);
 }
 
-TEST_F(ApplicationModuleHostShutdownTests,
-       ShutdownWaitsForExportBarrierAndDrainsAnalysisCompletion) {
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownWaitsForRunningExportToFinish) {
   ApplicationModuleHost host;
   auto*                 tasks = host.background_tasks();
-  auto*                 sink  = host.image_analysis_sink();
   ASSERT_NE(tasks, nullptr);
-  ASSERT_NE(sink, nullptr);
-
-  host.db_write_barrier().Acquire();
-  ImageAnalysisItemResult result;
-  result.item.element_id = 1;
-  ASSERT_TRUE(sink->PersistUnderstanding(result));
-  ASSERT_TRUE(sink->HasPendingWrites());
 
   const QString export_id = tasks->RegisterTask(
       RunningTask(BackgroundTaskKind::Export, false,
                   BackgroundTaskShutdownPolicy::WaitForFinish));
   ASSERT_FALSE(export_id.isEmpty());
 
-  QTimer::singleShot(0, [&host, tasks, export_id] {
-    host.db_write_barrier().Release();
+  QTimer::singleShot(0, [tasks, export_id] {
     tasks->FinishTask(export_id, BackgroundTaskState::Succeeded);
   });
 
   host.Shutdown();
   EXPECT_EQ(tasks->RunningCount(), 0);
-  EXPECT_FALSE(host.db_write_barrier().IsHeld());
-  EXPECT_FALSE(sink->HasPendingWrites());
 }
+
+// Issue 414: ShutdownModules queues the Shutdown command on the session-owner worker and returns.
+// The worker reduces it and calls the result observer that EditorSessionController installed,
+// while the host destructor went on to destroy that controller; a callback the worker had already
+// copied then reached a destroyed QObject. This observer stands in for the controller's: it holds
+// the worker inside the Shutdown result long enough for the destructor to reach the controller,
+// and records whether the controller was destroyed while the callback ran.
+TEST_F(ApplicationModuleHostShutdownTests,
+       SessionWorkerFinishesShutdownResultBeforeControllerIsDestroyed) {
+  using LifecycleEvent                = ApplicationModuleHost::LifecycleEvent;
+  constexpr auto    kCallbackDuration = std::chrono::milliseconds(300);
+  std::atomic<bool> controller_destroyed{false};
+  std::atomic<int>  shutdown_results{0};
+  std::atomic<int>  shutdown_results_after_controller_destroyed{0};
+  {
+    ApplicationModuleHost host(nullptr, [&controller_destroyed](const LifecycleEvent& event) {
+      if (event.kind == LifecycleEvent::Kind::Destroyed &&
+          event.type_name == "EditorSessionController") {
+        controller_destroyed.store(true);
+      }
+    });
+    auto*                 service = host.editor_session_service();
+    ASSERT_NE(service, nullptr);
+    service->SetResultObserver([&](const EditorSessionResult& result) {
+      if (result.kind != EditorSessionResultKind::StateChanged ||
+          result.state != EditorSessionState::ShuttingDown) {
+        return;
+      }
+      std::this_thread::sleep_for(kCallbackDuration);
+      shutdown_results.fetch_add(1);
+      if (controller_destroyed.load()) {
+        shutdown_results_after_controller_destroyed.fetch_add(1);
+      }
+    });
+  }
+
+  EXPECT_TRUE(controller_destroyed.load());
+  EXPECT_EQ(shutdown_results.load(), 1);
+  EXPECT_EQ(shutdown_results_after_controller_destroyed.load(), 0);
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownWithUnenteredProjectSkipsRepack) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "unentered_project");
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  ASSERT_TRUE(host.project()->ServiceReady());
+  ASSERT_FALSE(host.project()->ProjectEntered());
+  const auto package_before = CapturePackageFileState(package);
+
+  host.Shutdown();
+
+  // The workspace removal runs in the host destructor; see
+  // ShutdownRemovesUnenteredProjectWorkspace.
+  EXPECT_EQ(ReadFileBytes(package), package_before.bytes_);
+  EXPECT_EQ(std::filesystem::last_write_time(package), package_before.write_time_);
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownWithEnteredProjectRepacks) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "entered_project");
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  ASSERT_TRUE(host.project()->EnterLoadedProject());
+  const auto package_before = CapturePackageFileState(package);
+
+  host.Shutdown();
+
+  EXPECT_NE(std::filesystem::last_write_time(package), package_before.write_time_);
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownRemovesUnenteredProjectWorkspace) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "unentered_workspace");
+  ScopedWarningCapture        warnings;
+  std::filesystem::path       workspace;
+  PackageFileState            package_before;
+  {
+    ApplicationModuleHost host;
+    ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+    ASSERT_TRUE(WaitForProjectLoadIdle(host));
+    ASSERT_FALSE(host.project()->ProjectEntered());
+    workspace = host.project()->handler().workspace_dir();
+    ASSERT_FALSE(workspace.empty());
+    ASSERT_TRUE(std::filesystem::exists(workspace));
+    package_before = CapturePackageFileState(package);
+    host.Shutdown();
+  }
+
+  EXPECT_FALSE(std::filesystem::exists(workspace)) << workspace.string();
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
+  EXPECT_EQ(ReadFileBytes(package), package_before.bytes_);
+  EXPECT_EQ(std::filesystem::last_write_time(package), package_before.write_time_);
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownRemovesEnteredProjectWorkspace) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "entered_workspace");
+  ScopedWarningCapture        warnings;
+  std::filesystem::path       workspace;
+  PackageFileState            package_before;
+  {
+    ApplicationModuleHost host;
+    ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+    ASSERT_TRUE(WaitForProjectLoadIdle(host));
+    ASSERT_TRUE(host.project()->EnterLoadedProject());
+    workspace = host.project()->handler().workspace_dir();
+    ASSERT_FALSE(workspace.empty());
+    ASSERT_TRUE(std::filesystem::exists(workspace));
+    package_before = CapturePackageFileState(package);
+    host.Shutdown();
+  }
+
+  EXPECT_FALSE(std::filesystem::exists(workspace)) << workspace.string();
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
+  EXPECT_NE(std::filesystem::last_write_time(package), package_before.write_time_);
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownWithoutProjectRemovesNothing) {
+  ScopedWarningCapture warnings;
+  {
+    ApplicationModuleHost host;
+    ASSERT_FALSE(host.project()->ServiceReady());
+    EXPECT_TRUE(host.project()->handler().workspace_dir().empty());
+    EXPECT_NO_THROW(host.Shutdown());
+  }
+
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
+  EXPECT_TRUE(std::filesystem::exists(temp_dir_));
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, RepeatedShutdownRemovesWorkspaceOnce) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "repeated_shutdown");
+  ScopedWarningCapture        warnings;
+  std::filesystem::path       workspace;
+  PackageFileState            package_before;
+  {
+    ApplicationModuleHost host;
+    ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+    ASSERT_TRUE(WaitForProjectLoadIdle(host));
+    workspace = host.project()->handler().workspace_dir();
+    ASSERT_FALSE(workspace.empty());
+    package_before = CapturePackageFileState(package);
+    host.Shutdown();
+    host.Shutdown();
+    // The removal waits for the destructor: the project database is still open here.
+    EXPECT_TRUE(std::filesystem::exists(workspace)) << workspace.string();
+  }
+
+  EXPECT_FALSE(std::filesystem::exists(workspace)) << workspace.string();
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
+  EXPECT_EQ(ReadFileBytes(package), package_before.bytes_);
+}
+
+// A thumbnail request that is still pending at shutdown must not keep the thumbnail service, its
+// pipeline, and the project database alive after ProjectModule is destroyed.
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownWithPendingThumbnailsRemovesWorkspace) {
+  const std::filesystem::path        raw_root{std::string(TEST_IMG_PATH) + "/ci_rawfiles"};
+  std::vector<std::filesystem::path> images;
+  if (std::filesystem::exists(raw_root)) {
+    for (const auto& entry : std::filesystem::directory_iterator(raw_root)) {
+      if (entry.is_regular_file() && is_supported_file(entry.path())) {
+        images.push_back(entry.path());
+      }
+    }
+  }
+  if (images.empty()) {
+    GTEST_SKIP() << "CI RAW fixtures missing under TEST_IMG_PATH/ci_rawfiles";
+  }
+  std::sort(images.begin(), images.end());
+  images.resize(std::min<std::size_t>(images.size(), 2));
+
+  ScopedWarningCapture  warnings;
+  std::filesystem::path workspace;
+  {
+    ApplicationModuleHost host;
+    ASSERT_TRUE(CreateTestProject(host, QStringLiteral("pending_thumbnails")));
+    workspace = host.project()->handler().workspace_dir();
+    ASSERT_FALSE(workspace.empty());
+
+    host.import_export()->StartImport(PathsToQStringList(images));
+    QSignalSpy import_state(host.import_export(), &ImportExportHandler::ImportStateChanged);
+    for (int waited = 0; host.import_export()->ImportRunning() && waited < 120000; waited += 200) {
+      import_state.wait(200);
+    }
+    ASSERT_FALSE(host.import_export()->ImportRunning());
+    ProcessEvents(200);
+    const auto thumbnails = host.library()->Thumbnails();
+    ASSERT_FALSE(thumbnails.isEmpty());
+
+    // Request every thumbnail and shut down without waiting for the renders.
+    for (const auto& value : thumbnails) {
+      const auto item = value.toMap();
+      host.library()->SetThumbnailVisible(item.value(QStringLiteral("elementId")).toUInt(),
+                                          item.value(QStringLiteral("imageId")).toUInt(), true);
+    }
+    host.Shutdown();
+  }
+
+  EXPECT_EQ(warnings.CountContaining(QStringLiteral("outlived ProjectModule")), 0);
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
+  EXPECT_FALSE(std::filesystem::exists(workspace)) << workspace.string();
+}
+
+#ifdef _WIN32
+TEST_F(ApplicationModuleHostShutdownTests, LockedWorkspaceFileIsReportedWithItsHolder) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "locked_workspace");
+  ScopedWarningCapture        warnings;
+  std::filesystem::path       workspace;
+  std::ofstream               holder;
+  {
+    ApplicationModuleHost host;
+    ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+    ASSERT_TRUE(WaitForProjectLoadIdle(host));
+    workspace = host.project()->handler().workspace_dir();
+    ASSERT_FALSE(workspace.empty());
+    // The MSVC runtime opens the file without FILE_SHARE_DELETE, so it cannot be removed
+    // while this stream is open.
+    holder.open(workspace / "held_by_test.bin", std::ios::binary);
+    ASSERT_TRUE(holder.is_open());
+    host.Shutdown();
+  }
+
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 1);
+  EXPECT_EQ(warnings.CountContaining(QStringLiteral("Runtime workspace file is locked:")), 1);
+  EXPECT_EQ(warnings.CountContaining(QStringLiteral("held_by_test.bin")), 1);
+  EXPECT_EQ(warnings.CountContaining(QStringLiteral("(this process)")), 1);
+  EXPECT_EQ(warnings.CountContaining(QStringLiteral("outlived ProjectModule")), 0);
+
+  holder.close();
+  std::error_code ec;
+  std::filesystem::remove_all(workspace, ec);
+  EXPECT_FALSE(ec) << ec.message();
+}
+#endif
 
 }  // namespace
 }  // namespace alcedo::ui::test

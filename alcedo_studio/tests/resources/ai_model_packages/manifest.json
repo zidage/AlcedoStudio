@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "kind": "alcedo-ai-model-packages",
+  "sequence": 20261027120000,
+  "packages": [
+    {
+      "id": "alcedo-ai-mask",
+      "name": "AI Mask",
+      "model_set_version": 1,
+      "revision": "r1",
+      "licenses": [
+        {
+          "name": "Apache-2.0",
+          "file": "licenses/SAM2-Apache-2.0.txt"
+        },
+        {
+          "name": "MIT",
+          "file": "licenses/S3OD-MIT.txt"
+        },
+        {
+          "name": "DINOv3 License",
+          "file": "licenses/DINOv3-License.md"
+        },
+        {
+          "name": "GPL-3.0",
+          "file": "licenses/GPL-3.0.txt"
+        }
+      ],
+      "artifacts": {
+        "macos-arm64": {
+          "url": "https://static.aoraw.org/ai-models/v1/packages/alcedo-ai-mask/v1/r1/alcedo-ai-mask-v1-r1-macos-arm64.7z",
+          "size": 2264,
+          "sha256": "8b4898392e3ffe6cafaf91749e82e5fb7297e50de41a913c0deac0016c61198b",
+          "file_count": 27,
+          "unpacked_bytes": 4154,
+          "inventory_sha256": "63a97ecbc6020086d48073812777891626781cd14e3ba2fb7f6c79dc67d09575"
+        },
+        "windows-x86_64": {
+          "url": "https://static.aoraw.org/ai-models/v1/packages/alcedo-ai-mask/v1/r1/alcedo-ai-mask-v1-r1-windows-x86_64.7z",
+          "size": 1380,
+          "sha256": "699c683c406fe179ca950db3b2f3b084c69035b8c95dd3a6e86dd25f6a831d7b",
+          "file_count": 12,
+          "unpacked_bytes": 1665,
+          "inventory_sha256": "eb9afbe8188f16b8045b2112e495905954847a9e88df6d5638f685f9a985d219"
+        }
+      }
+    }
+  ]
+}

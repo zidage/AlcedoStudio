@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <QColor>
 #include <QMetaObject>
 #include <QQuickRhiItem>
 #include <QString>
@@ -12,8 +13,11 @@
 #include <memory>
 #include <mutex>
 
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
+#include "ui/editor_rhi/viewport_composite_pass.hpp"
+#include "ui/editor_rhi/viewport_mask_coverage_sink.hpp"
 #include "ui/viewer/viewer_view_state.hpp"
 
 namespace alcedo::editor_rhi {
@@ -28,7 +32,7 @@ class DirectFrameSink;
 //
 // Production call sequence (pipeline worker):
 //   GPU: EnsureSize → MapResourceForWrite → GPU write → UnmapResource → NotifyFrameReady
-//   CPU: SubmitHostFrame → scene-graph QRhi texture upload
+//   OpenCL without GL sharing: GPU readback → scene-graph QRhi texture upload
 class EditorViewportItem : public QQuickRhiItem {
   Q_OBJECT
   Q_PROPERTY(QString backendName READ backendName NOTIFY DiagnosticsChanged)
@@ -53,6 +57,14 @@ class EditorViewportItem : public QQuickRhiItem {
   Q_PROPERTY(bool extendedDynamicRangeRequested READ extendedDynamicRangeRequested NOTIFY
                  DisplayConfigChanged)
   Q_PROPERTY(bool windowColorSpaceApplied READ windowColorSpaceApplied NOTIFY DisplayConfigChanged)
+  // Coverage composite style (SM8.6): presentation state only. A change redraws the viewport and
+  // requests no photo render.
+  Q_PROPERTY(bool maskCoverageVisible READ maskCoverageVisible WRITE setMaskCoverageVisible NOTIFY
+                 MaskCoverageStyleChanged)
+  Q_PROPERTY(QColor maskCoverageColor READ maskCoverageColor WRITE setMaskCoverageColor NOTIFY
+                 MaskCoverageStyleChanged)
+  Q_PROPERTY(qreal maskCoverageOpacity READ maskCoverageOpacity WRITE setMaskCoverageOpacity NOTIFY
+                 MaskCoverageStyleChanged)
 
  public:
   explicit EditorViewportItem(QQuickItem* parent = nullptr);
@@ -104,6 +116,78 @@ class EditorViewportItem : public QQuickRhiItem {
   // Production IFrameSink. Owned by the item; safe while the viewport exists.
   [[nodiscard]] auto frameSink() -> DirectFrameSink*;
 
+  /**
+   * @brief Producer sink of the coverage presentation channel (SM8.5). Owned by the item; safe
+   *        while the viewport exists.
+   *
+   * The channel has its own queue (@ref maskCoverageQueue) and native targets. It follows the
+   * image session, suspension, and teardown of the photo queue, but a coverage frame never
+   * changes a photo slot or a scope input.
+   */
+  [[nodiscard]] auto maskCoverageSink() -> ViewportMaskCoverageSink* {
+    return coverage_sink_.get();
+  }
+  [[nodiscard]] auto maskCoverageQueue() const -> const std::shared_ptr<DirectPresentQueue>& {
+    return coverage_queue_;
+  }
+  /// Shared owner of @ref maskCoverageSink for the render-thread coverage layer.
+  [[nodiscard]] auto maskCoverageSinkShared() const
+      -> const std::shared_ptr<ViewportMaskCoverageSink>& {
+    return coverage_sink_;
+  }
+  /**
+   * @brief Producer sink of the coverage channel of the detail ROI (Mask ranges D10). Owned by
+   *        the item; safe while the viewport exists.
+   *
+   * A detail ROI render with a Mask coverage probe publishes here, so the zoomed overlay has the
+   * resolution of the detail photo. The viewport samples it only inside the visible DetailPatch
+   * ROI. Same queue rules as @ref maskCoverageSink, with its own queue and native targets.
+   */
+  [[nodiscard]] auto detailMaskCoverageSink() -> ViewportMaskCoverageSink* {
+    return detail_coverage_sink_.get();
+  }
+  [[nodiscard]] auto detailMaskCoverageQueue() const -> const std::shared_ptr<DirectPresentQueue>& {
+    return detail_coverage_queue_;
+  }
+  /// Shared owner of @ref detailMaskCoverageSink for the render-thread detail coverage layer.
+  [[nodiscard]] auto detailMaskCoverageSinkShared() const
+      -> const std::shared_ptr<ViewportMaskCoverageSink>& {
+    return detail_coverage_sink_;
+  }
+  /// Stop displaying coverage on both channels (ViewportMaskCoverageSink::ClearCoverage). The
+  /// render thread releases the displayed frames on its next pass; a frame published before the
+  /// call is never displayed. Idempotent; thread-safe.
+  void               clearMaskCoverage();
+  /**
+   * @brief Emit @ref MaskCoverageDisplayLost on the GUI thread when a coverage sink recorded that
+   *        a QRhi release dropped published coverage (ViewportMaskCoverageSink::MarkDisplayLost,
+   *        #514). Each recorded loss is reported once.
+   *
+   * Called by EditorViewportRenderer::synchronize() on the render thread while the GUI thread is
+   * blocked.
+   */
+  void               reportLostMaskCoverage();
+
+  /**
+   * @brief Style of the coverage composite (SM8 C10): visibility, display-encoded tint, and
+   *        opacity.
+   *
+   * GUI thread only. The renderer reads it in synchronize(), while the GUI thread is blocked. A
+   * change calls update() only: the viewport draws again with the displayed photo and coverage,
+   * and no photo frame, coverage frame, or render request is produced.
+   */
+  [[nodiscard]] auto maskCoverageStyle() const -> const MaskCoverageDisplayStyle& {
+    return mask_coverage_style_;
+  }
+  [[nodiscard]] auto maskCoverageVisible() const -> bool { return mask_coverage_style_.visible; }
+  [[nodiscard]] auto maskCoverageColor() const -> QColor;
+  [[nodiscard]] auto maskCoverageOpacity() const -> qreal { return mask_coverage_style_.opacity; }
+  void               setMaskCoverageVisible(bool visible);
+  /// Alpha of @p color is ignored; the opacity is a separate property.
+  void               setMaskCoverageColor(const QColor& color);
+  /// Clamped to [0, 1]; a value that is not finite is ignored.
+  void               setMaskCoverageOpacity(qreal opacity);
+
   Q_INVOKABLE void   requestRendererInvalidation();
   Q_INVOKABLE void   cancelPendingFrames();
   // Stop producer handshakes before a session close tears down this QML tree.
@@ -111,6 +195,12 @@ class EditorViewportItem : public QQuickRhiItem {
   // a reused viewport.
   void               suspendPresentation();
   void               resumePresentation();
+  // True between suspendPresentation and the next resumePresentation. While
+  // suspended the frame sink refuses frames at once instead of waiting for a
+  // consumer that a minimized window never provides.
+  [[nodiscard]] auto presentationSuspended() const -> bool {
+    return presentation_suspended_.load(std::memory_order_acquire);
+  }
   // Re-evaluate window exposure / minimize state (also used by tests after
   // programmatic hide/show where Qt may not emit the expected signals promptly).
   Q_INVOKABLE void   refreshPresentationAvailability();
@@ -121,9 +211,9 @@ class EditorViewportItem : public QQuickRhiItem {
   // frame can recycle stale presentation slots even if a worker-thread ready
   // notification is still queued behind continuous input events.
   void               prepareForAdjustmentFrame();
-  // Arm a vsync-sampled consume: every window present re-dirties this item so
-  // ConsumeNewestReady runs on the next scene-graph tick. Used while a slider
-  // or trackball drag submits unsettled patches.
+  // Arm a consume loop: afterRendering re-dirties this item only when a Ready
+  // frame is waiting, so the scene graph can import without pumping empty
+  // vsync frames. Used while a slider or trackball drag submits unsettled patches.
   void               beginInteractivePresentLoop();
   // Stop the vsync consume and request one more pass for the last Ready frame.
   void               endInteractivePresentLoop();
@@ -143,6 +233,19 @@ class EditorViewportItem : public QQuickRhiItem {
     return adjustment_frame_request_count_.load(std::memory_order_acquire);
   }
 
+  /**
+   * @brief Resolved geometry of the latest presented render-reference frame.
+   *
+   * Written by @c DirectFrameSink on the GUI thread after a submission is
+   * accepted. Mask pointer mapping must use this instead of a separately
+   * derived document geometry so the mask always tracks the displayed pixels.
+   */
+  void               NotePresentedMaskGeometry(const ResolvedRenderGeometry& geometry,
+                                               qulonglong                    request_id);
+  [[nodiscard]] auto presentedMaskGeometry() const -> const ResolvedRenderGeometry& {
+    return presented_mask_geometry_;
+  }
+
   // Called by the application composition root before loading QML. The
   // registration is idempotent and also makes visible-window QML tests use the
   // same real type.
@@ -156,6 +259,15 @@ class EditorViewportItem : public QQuickRhiItem {
   void DisplayConfigChanged();
   // camelCase for QML handler onTargetSizeRequested.
   void targetSizeRequested(int width, int height);
+  /// Emitted after @ref NotePresentedMaskGeometry stores a newer frame geometry.
+  void PresentedMaskGeometryChanged();
+  /// Emitted on the GUI thread when @ref presentationSuspended changes.
+  void PresentationSuspendedChanged();
+  /// Emitted on the GUI thread when @ref maskCoverageStyle changes.
+  void MaskCoverageStyleChanged();
+  /// Emitted on the GUI thread after a QRhi release dropped the displayed Mask coverage: the
+  /// coverage owner must present it again (#514).
+  void MaskCoverageDisplayLost();
 
  protected:
   auto createRenderer() -> QQuickRhiItemRenderer* override;
@@ -182,7 +294,23 @@ class EditorViewportItem : public QQuickRhiItem {
   void                                resetWindowDisplayConfig();
 
   std::shared_ptr<DirectPresentQueue> present_queue_;
-  std::unique_ptr<DirectFrameSink>    frame_sink_;
+  // Shared so the render-thread presentation-opportunity arm can hold the sink
+  // alive for the duration of one emission; `frameSink()` still returns the
+  // raw pointer to pipeline code.
+  std::shared_ptr<DirectFrameSink>    frame_sink_;
+  // Coverage presentation channel (SM8.5). The queue outlives the sink that writes into it.
+  std::shared_ptr<DirectPresentQueue>                   coverage_queue_;
+  std::shared_ptr<ViewportMaskCoverageSink>             coverage_sink_;
+  // Coverage channel of the detail ROI (Mask ranges D10); same lifecycle as the base channel.
+  std::shared_ptr<DirectPresentQueue>                   detail_coverage_queue_;
+  std::shared_ptr<ViewportMaskCoverageSink>             detail_coverage_sink_;
+  // GUI thread only; read by the renderer in synchronize().
+  MaskCoverageDisplayStyle                              mask_coverage_style_{};
+  /// Render-thread handoff for prompt Ready-frame consumption. createRenderer
+  /// publishes the active renderer; its destructor clears the slot with CAS so
+  /// a stale arm never dereferences a dead renderer. Read on the render thread
+  /// inside QQuickWindow::beforeRendering.
+  std::shared_ptr<std::atomic<EditorViewportRenderer*>> consume_arm_;
   mutable std::mutex                  mutex_;
   ViewerViewState                     view_state_{};
   ViewerDisplayConfig                 display_config_{};
@@ -192,16 +320,23 @@ class EditorViewportItem : public QQuickRhiItem {
   std::atomic<qulonglong>    session_epoch_{0};
   std::atomic<int>           view_state_push_count_{0};
   std::atomic<bool>          presentation_requested_{false};
+  std::atomic<bool>          presentation_suspended_{false};
   std::atomic<bool>          adjustment_frame_requested_{false};
   std::atomic<std::uint64_t> adjustment_frame_request_count_{0};
   std::atomic<bool>          interactive_present_loop_{false};
   std::atomic<std::uint64_t> interactive_present_loop_tick_count_{0};
+  // GUI-thread only: geometry of the last accepted render-reference frame.
+  ResolvedRenderGeometry     presented_mask_geometry_{};
+  qulonglong                 presented_mask_request_id_ = 0;
   QQuickWindow*              attached_window_ = nullptr;
   QMetaObject::Connection    window_visibility_connection_;
   QMetaObject::Connection    window_screen_connection_;
   QMetaObject::Connection    scene_graph_invalidated_connection_;
   QMetaObject::Connection    scene_graph_initialized_connection_;
+  QMetaObject::Connection    before_rendering_connection_;
   QMetaObject::Connection    after_rendering_connection_;
+  QMetaObject::Connection    frame_swapped_connection_;
+  QMetaObject::Connection    after_frame_end_connection_;
   std::atomic<bool>          window_color_space_applied_{false};
   bool                       last_diagnostics_available_      = false;
   qulonglong                 last_diag_target_gen_            = 0;

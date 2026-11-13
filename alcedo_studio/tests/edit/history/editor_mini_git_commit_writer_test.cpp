@@ -88,11 +88,8 @@ class EditorMiniGitCommitWriterTest : public ::testing::Test {
     const auto& serialized = stored->GetImageEditState().serialized_pipeline_state;
     if (serialized.has_value()) {
       snap.has_serialized_state = true;
-      if (serialized->contains("pipeline_params") &&
-          serialized->at("pipeline_params").contains("exposure")) {
-        snap.serialized_exposure =
-            serialized->at("pipeline_params").at("exposure").get<float>();
-      }
+      snap.serialized_exposure =
+          test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*serialized);
     }
     // Count journal bytes on disk.
     std::error_code ec;
@@ -135,10 +132,8 @@ TEST_F(EditorMiniGitCommitWriterTest,
   auto stored = project_.LoadStoredGraph(element_id);
   ASSERT_TRUE(stored.has_value());
   ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-  EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                      .serialized_pipeline_state->at("pipeline_params")
-                      .at("exposure")
-                      .get<float>(),
+  EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(
+                      *stored->GetImageEditState().serialized_pipeline_state),
                   1.5f);
 }
 

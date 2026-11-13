@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -15,11 +18,15 @@
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
+#include "app/editor_comparison_types.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_render_controller.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/graph/graph_ids.hpp"
 #include "edit/history/commit_types.hpp"
+#include "edit/history/edit_commit_attribution.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 
 namespace alcedo {
 
@@ -50,9 +57,6 @@ enum class EditorSessionCommandKind : std::uint8_t {
   RenameVersion,
   RemoveVersion,
   ApplyPaste,
-  BeginMerge,
-  CompleteMerge,
-  CancelMerge,
   RetrySave,
   DiscardAndContinue,
   CancelPendingNavigation,
@@ -60,6 +64,53 @@ enum class EditorSessionCommandKind : std::uint8_t {
   SetPresentationTarget,
   SetPresentationSize,
   SetGeometryOverlay,
+  /// The bound viewport was suspended (minimized/hidden) or resumed.
+  SetPresentationSuspended,
+  /// An export released the editor GPU resources, or ended.
+  SetSuspendedForExport,
+  SetAdjustmentProjectionNode,
+  RenameColorGrade,
+  SetColorGradeDeletionProtected,
+  EditNodeGraph,
+  /// Mask Groups: insert one clean Color Grade at the top of the backbone.
+  InsertColorGradeAtTop,
+  /// Mask Groups: remove one Color Grade and bridge its backbone neighbors.
+  RemoveColorGradeAndBridge,
+  PersistCurrent,
+  /// Open the editor comparison: capture the working values and render the default pair.
+  OpenComparison,
+  /// Select the kind and both sources of the open comparison and render the new pair.
+  SelectComparisonSources,
+  /// Render the selected pair of the open comparison again.
+  RetryComparison,
+  /// Close the open comparison and release its documents and images.
+  CloseComparison,
+  /// Render Root and the working values of the open image to host pixels for a client.
+  RenderPreviewImages,
+  /// Render the AI Mask analysis image of the open image, or give only its image key.
+  RenderAiMaskAnalysisImage,
+  /// Render the LUT browser preview of one LUT on the import root of the open image.
+  RenderLutPreview,
+  /// Open an AI Mask edit session on a Color Grade: acquire the AiMaskEdit lease.
+  OpenAiMaskEdit,
+  /// Store the asset of the open AI Mask edit and publish one AddMask or ReplaceMaskSource.
+  CommitAiMaskEdit,
+  /// End the open AI Mask edit without a change.
+  CancelAiMaskEdit,
+  /// Present the current coverage of the AI Mask edit session (SM8.7).
+  UpdateAiMaskCandidateCoverage,
+  /// Select one committed AI Mask as the coverage preview and present it.
+  SelectMaskCoveragePreview,
+  /// Forget and hide the coverage preview.
+  ClearMaskCoveragePreview,
+  /// Present the newest coverage request again after a failed presentation.
+  RetryMaskCoveragePreview,
+  /// Present the newest coverage request again after the viewport lost the displayed coverage.
+  PresentMaskCoverageAgain,
+  /// Show the coverage of one Mask from the photo renders (Mask ranges D8).
+  ShowMaskRangeCoverage,
+  /// Hide the range probe coverage.
+  HideMaskRangeCoverage,
 };
 
 /// Worker messages that are delivered back to the session owner.
@@ -72,7 +123,7 @@ enum class EditorSessionCompletionKind : std::uint8_t {
   PipelineSnapshotBuilt,
   WorkerRequestFailed,
   NavigationFinished,
-  /// A history save checkpoint (Rename/Remove/Paste/Merge publication or a
+  /// A history save checkpoint (Rename/Remove/Paste publication or a
   /// dirty-journal flush before a retained transfer) reached its terminal
   /// outcome. Carries success, session generation, last journal sequence, and
   /// the operation that started the checkpoint.
@@ -86,7 +137,7 @@ enum class EditorSessionQueueState : std::uint8_t {
   Stopped,
 };
 
-/// Fully typed user command envelope. The queue stamps `operation.command_id`
+/// Fully typed user command. The queue stamps `operation.command_id`
 /// before reduction; all other fields are immutable command input.
 struct EditorSessionCommand {
   EditorSessionOperationId                operation{};
@@ -99,19 +150,37 @@ struct EditorSessionCommand {
   version_ref_id_t                        version_id{};
   commit_hash_t                           commit_id{};
   AdjustmentTransferPackage               transfer_package{};
-  std::vector<AdjustmentMergeResolution>  merge_resolutions;
   std::string                             text;
+  /// ApplyPaste: author of the Paste commit; nullopt is the user.
+  std::optional<EditCommitAttribution>    attribution;
   bool                                    persist_changes = true;
-  std::shared_ptr<AdjustmentMergePreview> merge_preview;
   /// Presentation binding for SetPresentationTarget / SetPresentationSize /
   /// SetGeometryOverlay. Unused by other command kinds.
   PresentationSinkId                      presentation_sink_id = 0;
   int                                     presentation_width   = 0;
   int                                     presentation_height  = 0;
   bool                                    geometry_overlay_active = false;
+  /// SetPresentationSuspended only.
+  bool                                    presentation_suspended  = false;
+  /// SetSuspendedForExport only.
+  bool                                    suspended_for_export    = false;
+  NodeId                                  node_id;
+  /// Desired deletion-only protection for SetColorGradeDeletionProtected.
+  bool                                    deletion_protected = false;
+  /// InsertColorGradeAtTop only: the backbone node the caller expects directly
+  /// before DRT/Post. Re-verified on the owner thread so a queued request can
+  /// never insert above a predecessor that changed after submission.
+  NodeId                                  expected_predecessor_id;
+  NodeGraphTopologyChange                 topology_change{};
+  /// OpenComparison / SelectComparisonSources: comparison kind and sources.
+  EditorComparisonKind                    comparison_kind = EditorComparisonKind::BeforeAfter;
+  EditorComparisonSource                  comparison_a    = EditorComparisonSource::Root();
+  EditorComparisonSource                  comparison_b    = EditorComparisonSource::Current();
+  /// CloseComparison: refresh the current document with @ref view_region after the close.
+  bool                                    comparison_refresh = false;
 };
 
-/// Typed worker completion envelope. Payload-specific values are kept as
+/// Typed worker completion. Payload-specific values are kept as
 /// immutable fields so the worker never needs a callback into session code.
 struct EditorSessionCompletion {
   EditorSessionCompletionKind  kind = EditorSessionCompletionKind::WorkerRequestFailed;
@@ -129,6 +198,8 @@ struct EditorSessionCompletion {
   EditorRenderEvent            render_event{};
   bool                         navigation_success = false;
   bool                         retained_image     = false;
+  /// NavigationFinished: the render a Version action routed (NavigationCompletion).
+  std::optional<std::uint64_t> navigation_render_request_id;
   std::string                  message;
 };
 
@@ -141,29 +212,101 @@ class IEditorSessionCommandExecutor {
   /// inline from this method.
   virtual void               Post(std::function<void()> task) = 0;
 
+  /// Post work to the owning thread after `delay` has elapsed. Implementations
+  /// that have no timer may park the task for explicit test-driven delivery
+  /// (manual executor) or deliver it on their own schedule; they must still
+  /// never invoke `task` inline from this method.
+  virtual void               PostDelayed(std::function<void()>    task,
+                                         std::chrono::nanoseconds delay) = 0;
+
   /// True when the caller is already running on the owning thread.
   [[nodiscard]] virtual auto IsOwnerThread() const -> bool    = 0;
+
+  /// Stop accepting work and wait for in-flight tasks to finish. Executors
+  /// with a dedicated worker thread must join it here; executors that only
+  /// run when explicitly driven keep the default no-op. Idempotent.
+  virtual void               Shutdown() {}
 };
 
 /// Deterministic executor used by unit and integration tests. Posted work runs
-/// only when `DrainOne` or `DrainAll` is called from the owner thread.
+/// only when `DrainOne` or `DrainAll` is called from the owner thread. Delayed
+/// work is parked separately: tests deliver it explicitly through
+/// `DrainDelayedOne` / `DrainDelayedAll` after advancing their manual clock, so
+/// a parked deadline never fires implicitly inside `DrainAll`.
 class EditorSessionManualCommandExecutor final : public IEditorSessionCommandExecutor {
  public:
   EditorSessionManualCommandExecutor();
 
   void               Post(std::function<void()> task) override;
+  void               PostDelayed(std::function<void()>    task,
+                                 std::chrono::nanoseconds delay) override;
   [[nodiscard]] auto IsOwnerThread() const -> bool override;
 
   /// Run one posted task and return false when no task is pending.
   auto               DrainOne() -> bool;
   /// Run all currently posted work, including work posted by a drained task.
   void               DrainAll();
+  /// Run one parked delayed task and return false when none is parked.
+  auto               DrainDelayedOne() -> bool;
+  /// Run all currently parked delayed work.
+  void               DrainDelayedAll();
   [[nodiscard]] auto pending() const -> std::size_t;
+  [[nodiscard]] auto pending_delayed() const -> std::size_t;
 
  private:
   mutable std::mutex                mutex_;
   std::queue<std::function<void()>> pending_;
+  std::queue<std::function<void()>> delayed_;
   std::thread::id                   owner_thread_;
+};
+
+/// Production session-owner executor. A dedicated thread runs admitted work in
+/// admission order; `PostDelayed` waits on a condition variable until the
+/// deadline elapses, so interactive pacing deadlines no longer depend on the
+/// GUI thread's timer or event-loop availability. `Stop` lets the thread
+/// finish due work and exit; destruction joins.
+class EditorSessionThreadedCommandExecutor final : public IEditorSessionCommandExecutor {
+ public:
+  EditorSessionThreadedCommandExecutor();
+  ~EditorSessionThreadedCommandExecutor() override;
+
+  EditorSessionThreadedCommandExecutor(const EditorSessionThreadedCommandExecutor&) = delete;
+  auto operator=(const EditorSessionThreadedCommandExecutor&)
+      -> EditorSessionThreadedCommandExecutor&                                      = delete;
+
+  void               Post(std::function<void()> task) override;
+  void               PostDelayed(std::function<void()>    task,
+                                 std::chrono::nanoseconds delay) override;
+  [[nodiscard]] auto IsOwnerThread() const -> bool override;
+  /// Stops the worker and joins it. Safe to call from any thread except the
+  /// worker itself; pending tasks whose deadline has elapsed still run.
+  void               Shutdown() override;
+
+  /// Stop waiting for future work. The thread runs every task whose deadline
+  /// has already elapsed, then exits. Tasks posted after the thread exits are
+  /// discarded with the executor.
+  void               Stop();
+
+ private:
+  struct ScheduledTask {
+    std::chrono::steady_clock::time_point deadline;
+    std::uint64_t                         sequence = 0;
+    std::function<void()>                 task;
+  };
+
+  void               Run();
+  void               ScheduleLocked(ScheduledTask scheduled);
+
+  mutable std::mutex            mutex_;
+  std::condition_variable       cv_;
+  // Min-heap ordered by (deadline, sequence); front is the earliest deadline.
+  std::vector<ScheduledTask>    scheduled_;
+  std::uint64_t                 next_sequence_ = 0;
+  bool                          stopping_      = false;
+  // Initialized before thread_: Run() stores the worker id on the new thread, and a later
+  // member initializer would overwrite it, leaving no thread as the owner.
+  std::atomic<std::thread::id>  owner_thread_{};
+  std::thread                   thread_;
 };
 
 /// Serialized actor queue for editor-session command reduction and completion
@@ -192,9 +335,19 @@ class EditorSessionCommandQueue final {
   /// retained until the active reduction returns.
   auto               Submit(EditorSessionCommand command, CommandHandler handler) -> Submission;
 
+  /// Allocate a command id from the same sequence as Submit without queueing a command. Input
+  /// that the pending-input queue admits synchronously uses it so its boundary has an id that
+  /// the results of the later consume carry. Returns 0 once the queue stops accepting.
+  auto                       ReserveCommandId() -> std::uint64_t;
+
   /// Post a completion to the owner thread. Unlike Submit, this path never
   /// runs the task inline, including when called from the owner thread.
   void               PostCompletion(Task task);
+
+  /// Post a completion that the owner thread runs after `delay` elapses.
+  /// Interactive pacing deadlines use this path so the session owner, not a
+  /// GUI-thread timer, decides when the next serial consume happens.
+  void               PostCompletionDelayed(Task task, std::chrono::nanoseconds delay);
 
   /// Stop admitting user commands while allowing already-posted completion
   /// work to finish during shutdown.

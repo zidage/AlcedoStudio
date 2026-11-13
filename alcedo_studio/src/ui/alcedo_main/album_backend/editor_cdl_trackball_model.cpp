@@ -13,13 +13,44 @@
 namespace alcedo::ui {
 namespace {
 
-void UpdateDerived(CdlWheelState& wheel, bool add_unity, bool invert_delta) {
+constexpr std::array<EditorCdlTrackballModel::WheelId, 4> kAllWheels = {
+    EditorCdlTrackballModel::WheelId::Lift, EditorCdlTrackballModel::WheelId::Gamma,
+    EditorCdlTrackballModel::WheelId::Gain, EditorCdlTrackballModel::WheelId::Offset};
+
+auto WheelKey(EditorCdlTrackballModel::WheelId id) -> QString {
+  switch (id) {
+    case EditorCdlTrackballModel::WheelId::Lift:
+      return QStringLiteral("lift");
+    case EditorCdlTrackballModel::WheelId::Gamma:
+      return QStringLiteral("gamma");
+    case EditorCdlTrackballModel::WheelId::Gain:
+      return QStringLiteral("gain");
+    case EditorCdlTrackballModel::WheelId::Offset:
+      return QStringLiteral("offset");
+  }
+  return QStringLiteral("lift");
+}
+
+auto ClampMaster(double master) -> float {
+  return std::clamp(static_cast<float>(master), -color_wheel::kMasterMaxStops,
+                    color_wheel::kMasterMaxStops);
+}
+
+void UpdateDerived(CdlWheelState& wheel) {
   wheel.disc_position_ = color_wheel::ClampDiscPoint(wheel.disc_position_);
-  wheel.strength_      = std::clamp(wheel.strength_, 0.0f, color_wheel::kStrengthDefault);
-  const auto  delta    = color_wheel::DiscToCdlDelta(wheel.disc_position_, wheel.strength_);
-  const float base     = add_unity ? 1.0f : 0.0f;
-  const float sign     = invert_delta ? -1.0f : 1.0f;
-  wheel.color_offset_  = {base + sign * delta[0], base + sign * delta[1], base + sign * delta[2]};
+  wheel.strength_      = color_wheel::kDiscMaxStops;
+  wheel.color_offset_  = color_wheel::DiscToChannelStops(wheel.disc_position_, wheel.strength_);
+}
+
+auto WheelWrite(const CdlWheelState& wheel) -> alcedo::ColorWheelControlUpdate {
+  alcedo::ColorWheelControlUpdate update;
+  update.disc = alcedo::Vec2f{static_cast<float>(wheel.disc_position_.x()),
+                              static_cast<float>(wheel.disc_position_.y())};
+  update.strength = wheel.strength_;
+  update.color_offset =
+      alcedo::Vec3f{wheel.color_offset_[0], wheel.color_offset_[1], wheel.color_offset_[2]};
+  update.luminance_offset = wheel.master_offset_;
+  return update;
 }
 
 auto WheelJson(const CdlWheelState& wheel) -> QJsonObject {
@@ -34,8 +65,7 @@ auto WheelJson(const CdlWheelState& wheel) -> QJsonObject {
   out.insert(QStringLiteral("disc"), disc);
   out.insert(QStringLiteral("strength"), wheel.strength_);
   out.insert(QStringLiteral("color_offset"), color_offset);
-  out.insert(QStringLiteral("luminance_offset"),
-             std::clamp(wheel.master_offset_, -1.0f, 1.0f));
+  out.insert(QStringLiteral("luminance_offset"), wheel.master_offset_);
   return out;
 }
 
@@ -45,69 +75,50 @@ EditorCdlTrackballModel::EditorCdlTrackballModel(QObject* parent)
     : EditorAdjustmentModelBase(parent) {
   setFieldKey(QStringLiteral("color_wheel"));
   setLabel(QStringLiteral("Color Wheels"));
-  recomputeDerived(WheelId::Lift);
-  recomputeDerived(WheelId::Gamma);
-  recomputeDerived(WheelId::Gain);
-}
-
-auto EditorCdlTrackballModel::liftMasterUi() const -> int {
-  return color_wheel::CdlMasterToSliderUi(lift_.master_offset_);
+  for (const auto id : kAllWheels) {
+    recomputeDerived(id);
+  }
 }
 
 auto EditorCdlTrackballModel::liftDeltaText() const -> QString {
-  return FormatWheelDeltaText(lift_, false);
-}
-
-auto EditorCdlTrackballModel::gammaMasterUi() const -> int {
-  // Gamma master slider is inverted in the legacy panel for ergonomic direction.
-  return color_wheel::CdlMasterToSliderUi(-gamma_.master_offset_);
+  return FormatWheelDeltaText(wheel(WheelId::Lift));
 }
 
 auto EditorCdlTrackballModel::gammaDeltaText() const -> QString {
-  return FormatWheelDeltaText(gamma_, true);
-}
-
-auto EditorCdlTrackballModel::gainMasterUi() const -> int {
-  return color_wheel::CdlMasterToSliderUi(gain_.master_offset_);
+  return FormatWheelDeltaText(wheel(WheelId::Gamma));
 }
 
 auto EditorCdlTrackballModel::gainDeltaText() const -> QString {
-  return FormatWheelDeltaText(gain_, true);
+  return FormatWheelDeltaText(wheel(WheelId::Gain));
 }
 
-void EditorCdlTrackballModel::setWheelDisc(const QString& wheel, double x, double y) {
-  const auto id = ParseWheelId(wheel);
+auto EditorCdlTrackballModel::offsetDeltaText() const -> QString {
+  return FormatWheelDeltaText(wheel(WheelId::Offset));
+}
+
+auto EditorCdlTrackballModel::discPosition(const QString& wheel_key) const -> QPointF {
+  const auto id = ParseWheelId(wheel_key);
+  return id.has_value() ? wheel(*id).disc_position_ : QPointF(0.0, 0.0);
+}
+
+void EditorCdlTrackballModel::setWheelDisc(const QString& wheel_key, double x, double y) {
+  const auto id = ParseWheelId(wheel_key);
   if (!id.has_value()) {
     return;
   }
   applyDisc(*id, x, y);
 }
 
-void EditorCdlTrackballModel::setWheelMaster(const QString& wheel, double master) {
-  const auto id = ParseWheelId(wheel);
+void EditorCdlTrackballModel::setWheelMaster(const QString& wheel_key, double master) {
+  const auto id = ParseWheelId(wheel_key);
   if (!id.has_value()) {
     return;
   }
-  auto& state = wheelState(*id);
-  const float next = std::clamp(static_cast<float>(master), -1.0f, 1.0f);
-  if (std::abs(next - state.master_offset_) < 1e-6f) {
-    return;
-  }
-  state.master_offset_ = next;
-  recomputeDerived(*id);
-  emitWheel(*id);
+  applyMaster(*id, master);
 }
 
-void EditorCdlTrackballModel::setWheelMasterUi(const QString& wheel, int ui_value) {
-  const auto id = ParseWheelId(wheel);
-  if (!id.has_value()) {
-    return;
-  }
-  applyMasterUi(*id, ui_value);
-}
-
-void EditorCdlTrackballModel::beginDiscDrag(const QString& wheel) {
-  const auto id = ParseWheelId(wheel);
+void EditorCdlTrackballModel::beginDiscDrag(const QString& wheel_key) {
+  const auto id = ParseWheelId(wheel_key);
   if (!id.has_value()) {
     return;
   }
@@ -119,44 +130,41 @@ void EditorCdlTrackballModel::beginDiscDrag(const QString& wheel) {
   emit dragActiveChanged();
 }
 
-void EditorCdlTrackballModel::updateDiscDrag(const QString& wheel, double x, double y) {
+void EditorCdlTrackballModel::updateDiscDrag(const QString& wheel_key, double x, double y) {
   if (!dragActive_ || !draggingDisc_) {
     return;
   }
-  const auto id = ParseWheelId(wheel);
+  const auto id = ParseWheelId(wheel_key);
   if (!id.has_value() || *id != dragWheel_) {
     return;
   }
-  auto&       state = wheelState(*id);
-  const auto  next  = color_wheel::ClampDiscPoint(QPointF(x, y));
-  if (std::abs(next.x() - state.disc_position_.x()) < 1e-6 &&
-      std::abs(next.y() - state.disc_position_.y()) < 1e-6) {
+  const auto next    = color_wheel::ClampDiscPoint(QPointF(x, y));
+  const auto current = wheel(*id).disc_position_;
+  if (std::abs(next.x() - current.x()) < 1e-6 && std::abs(next.y() - current.y()) < 1e-6) {
     return;
   }
   applyDisc(*id, x, y);
   dragMoved_ = true;
-  submitInteractive();
+  submitWheels({*id}, false);
 }
 
 void EditorCdlTrackballModel::finishDiscDrag() {
   if (!dragActive_ || !draggingDisc_) {
     return;
   }
-  dragActive_     = false;
-  draggingDisc_   = false;
-  const bool moved = dragMoved_;
-  dragMoved_       = false;
-  emit dragActiveChanged();
+  const bool    moved = dragMoved_;
+  const WheelId id    = dragWheel_;
+  clearDrag();
   // Empty click / double-click press half: no settle. resetWheel owns reset.
   if (!moved) {
     return;
   }
-  submitSettled();
+  submitWheels({id}, true);
   emit settledCommitted();
 }
 
-void EditorCdlTrackballModel::beginMasterDrag(const QString& wheel) {
-  const auto id = ParseWheelId(wheel);
+void EditorCdlTrackballModel::beginMasterDrag(const QString& wheel_key) {
+  const auto id = ParseWheelId(wheel_key);
   if (!id.has_value()) {
     return;
   }
@@ -168,157 +176,95 @@ void EditorCdlTrackballModel::beginMasterDrag(const QString& wheel) {
   emit dragActiveChanged();
 }
 
-void EditorCdlTrackballModel::updateMasterDragUi(const QString& wheel, int ui_value) {
+void EditorCdlTrackballModel::updateMasterDrag(const QString& wheel_key, double master) {
   if (!dragActive_ || !draggingMaster_) {
     return;
   }
-  const auto id = ParseWheelId(wheel);
+  const auto id = ParseWheelId(wheel_key);
   if (!id.has_value() || *id != dragWheel_) {
     return;
   }
-  auto&       state = wheelState(*id);
-  const float sign  = invertDelta(*id) ? -1.0f : 1.0f;
-  const float next  = color_wheel::CdlSliderUiToMaster(ui_value) * sign;
-  if (std::abs(next - state.master_offset_) < 1e-6f) {
+  if (std::abs(ClampMaster(master) - wheel(*id).master_offset_) < 1e-6f) {
     return;
   }
-  applyMasterUi(*id, ui_value);
+  applyMaster(*id, master);
   dragMoved_ = true;
-  submitInteractive();
+  submitWheels({*id}, false);
 }
 
 void EditorCdlTrackballModel::finishMasterDrag() {
   if (!dragActive_ || !draggingMaster_) {
     return;
   }
-  dragActive_     = false;
-  draggingMaster_ = false;
-  const bool moved = dragMoved_;
-  dragMoved_       = false;
-  emit dragActiveChanged();
+  const bool    moved = dragMoved_;
+  const WheelId id    = dragWheel_;
+  clearDrag();
   if (!moved) {
     return;
   }
-  submitSettled();
+  submitWheels({id}, true);
   emit settledCommitted();
 }
 
-void EditorCdlTrackballModel::resetWheel(const QString& wheel) {
-  const auto id = ParseWheelId(wheel);
+void EditorCdlTrackballModel::resetWheel(const QString& wheel_key) {
+  const auto id = ParseWheelId(wheel_key);
   if (!id.has_value()) {
     return;
   }
   // Double-click arrives while a press/drag may still be open. Clear drag state
   // before submitting so finishDiscDrag cannot re-enter submit afterward.
-  if (dragActive_) {
-    dragActive_     = false;
-    draggingDisc_   = false;
-    draggingMaster_ = false;
-    dragMoved_      = false;
-    emit dragActiveChanged();
-  }
-  CdlWheelState defaults =
-      (*id == WheelId::Lift) ? DefaultLiftWheelState() : DefaultGammaGainWheelState();
-  auto& state = wheelState(*id);
-  state       = defaults;
+  clearDrag();
+  wheelState(*id) = CdlWheelState{};
   recomputeDerived(*id);
   emitWheel(*id);
-  submitSettled();
+  submitWheels({*id}, true);
   emit settledCommitted();
 }
 
 void EditorCdlTrackballModel::resetAll() {
-  if (dragActive_) {
-    dragActive_     = false;
-    draggingDisc_   = false;
-    draggingMaster_ = false;
-    dragMoved_      = false;
-    emit dragActiveChanged();
+  clearDrag();
+  for (const auto id : kAllWheels) {
+    wheelState(id) = CdlWheelState{};
+    recomputeDerived(id);
+    emitWheel(id);
   }
-  lift_  = DefaultLiftWheelState();
-  gamma_ = DefaultGammaGainWheelState();
-  gain_  = DefaultGammaGainWheelState();
-  recomputeDerived(WheelId::Lift);
-  recomputeDerived(WheelId::Gamma);
-  recomputeDerived(WheelId::Gain);
-  emit liftChanged();
-  emit gammaChanged();
-  emit gainChanged();
-  submitSettled();
+  submitWheels({WheelId::Lift, WheelId::Gamma, WheelId::Gain, WheelId::Offset}, true);
   emit settledCommitted();
 }
 
-auto EditorCdlTrackballModel::paramsJson() const -> QString { return buildParamsJson(); }
+auto EditorCdlTrackballModel::paramsJson() const -> QString {
+  QJsonObject color_wheel;
+  color_wheel.insert(QStringLiteral("version"), 2);
+  for (const auto id : kAllWheels) {
+    color_wheel.insert(WheelKey(id), WheelJson(wheel(id)));
+  }
+  QJsonObject root;
+  root.insert(QStringLiteral("color_wheel"), color_wheel);
+  return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
 
-auto EditorCdlTrackballModel::wheelDeltaText(const QString& wheel) const -> QString {
-  const auto id = ParseWheelId(wheel);
+auto EditorCdlTrackballModel::wheelDeltaText(const QString& wheel_key) const -> QString {
+  const auto id = ParseWheelId(wheel_key);
   if (!id.has_value()) {
     return {};
   }
-  switch (*id) {
-    case WheelId::Lift:
-      return FormatWheelDeltaText(lift_, false);
-    case WheelId::Gamma:
-      return FormatWheelDeltaText(gamma_, true);
-    case WheelId::Gain:
-      return FormatWheelDeltaText(gain_, true);
-  }
-  return {};
+  return FormatWheelDeltaText(wheel(*id));
 }
 
-void EditorCdlTrackballModel::setWheels(const CdlWheelState& lift, const CdlWheelState& gamma,
-                                        const CdlWheelState& gain) {
-  lift_  = lift;
-  gamma_ = gamma;
-  gain_  = gain;
-  recomputeDerived(WheelId::Lift);
-  recomputeDerived(WheelId::Gamma);
-  recomputeDerived(WheelId::Gain);
-  emit liftChanged();
-  emit gammaChanged();
-  emit gainChanged();
-}
-
-auto EditorCdlTrackballModel::ParseWheelId(const QString& wheel) -> std::optional<WheelId> {
-  if (wheel.compare(QStringLiteral("lift"), Qt::CaseInsensitive) == 0) {
-    return WheelId::Lift;
-  }
-  if (wheel.compare(QStringLiteral("gamma"), Qt::CaseInsensitive) == 0) {
-    return WheelId::Gamma;
-  }
-  if (wheel.compare(QStringLiteral("gain"), Qt::CaseInsensitive) == 0) {
-    return WheelId::Gain;
+auto EditorCdlTrackballModel::ParseWheelId(const QString& wheel_key) -> std::optional<WheelId> {
+  for (const auto id : kAllWheels) {
+    if (wheel_key.compare(WheelKey(id), Qt::CaseInsensitive) == 0) {
+      return id;
+    }
   }
   return std::nullopt;
 }
 
 auto EditorCdlTrackballModel::wheelState(WheelId id) -> CdlWheelState& {
-  switch (id) {
-    case WheelId::Lift:
-      return lift_;
-    case WheelId::Gamma:
-      return gamma_;
-    case WheelId::Gain:
-      return gain_;
-  }
-  return lift_;
+  return wheels_[static_cast<std::size_t>(id)];
 }
 
-auto EditorCdlTrackballModel::wheelState(WheelId id) const -> const CdlWheelState& {
-  switch (id) {
-    case WheelId::Lift:
-      return lift_;
-    case WheelId::Gamma:
-      return gamma_;
-    case WheelId::Gain:
-      return gain_;
-  }
-  return lift_;
-}
-
-void EditorCdlTrackballModel::recomputeDerived(WheelId id) {
-  UpdateDerived(wheelState(id), addUnity(id), invertDelta(id));
-}
+void EditorCdlTrackballModel::recomputeDerived(WheelId id) { UpdateDerived(wheelState(id)); }
 
 void EditorCdlTrackballModel::emitWheel(WheelId id) {
   switch (id) {
@@ -331,12 +277,26 @@ void EditorCdlTrackballModel::emitWheel(WheelId id) {
     case WheelId::Gain:
       emit gainChanged();
       break;
+    case WheelId::Offset:
+      emit offsetChanged();
+      break;
   }
 }
 
+void EditorCdlTrackballModel::clearDrag() {
+  if (!dragActive_) {
+    return;
+  }
+  dragActive_     = false;
+  draggingDisc_   = false;
+  draggingMaster_ = false;
+  dragMoved_      = false;
+  emit dragActiveChanged();
+}
+
 void EditorCdlTrackballModel::applyDisc(WheelId id, double x, double y) {
-  auto&       state = wheelState(id);
-  const auto  next  = color_wheel::ClampDiscPoint(QPointF(x, y));
+  auto&      state = wheelState(id);
+  const auto next  = color_wheel::ClampDiscPoint(QPointF(x, y));
   if (std::abs(next.x() - state.disc_position_.x()) < 1e-6 &&
       std::abs(next.y() - state.disc_position_.y()) < 1e-6) {
     return;
@@ -346,45 +306,41 @@ void EditorCdlTrackballModel::applyDisc(WheelId id, double x, double y) {
   emitWheel(id);
 }
 
-void EditorCdlTrackballModel::applyMasterUi(WheelId id, int ui_value) {
+void EditorCdlTrackballModel::applyMaster(WheelId id, double master) {
   auto&       state = wheelState(id);
-  const float sign  = invertDelta(id) ? -1.0f : 1.0f;
-  const float next  = color_wheel::CdlSliderUiToMaster(ui_value) * sign;
+  const float next  = ClampMaster(master);
   if (std::abs(next - state.master_offset_) < 1e-6f) {
     return;
   }
   state.master_offset_ = next;
-  recomputeDerived(id);
   emitWheel(id);
 }
 
-void EditorCdlTrackballModel::submitInteractive() { submitNow(buildParamsJson(), false); }
-
-void EditorCdlTrackballModel::submitSettled() { submitNow(buildParamsJson(), true); }
-
-auto EditorCdlTrackballModel::buildParamsJson() const -> QString {
-  CdlWheelState lift  = lift_;
-  CdlWheelState gamma = gamma_;
-  CdlWheelState gain  = gain_;
-  UpdateDerived(lift, false, false);
-  UpdateDerived(gamma, true, true);
-  UpdateDerived(gain, true, false);
-
-  QJsonObject color_wheel;
-  color_wheel.insert(QStringLiteral("lift"), WheelJson(lift));
-  color_wheel.insert(QStringLiteral("gamma"), WheelJson(gamma));
-  color_wheel.insert(QStringLiteral("gain"), WheelJson(gain));
-  QJsonObject root;
-  root.insert(QStringLiteral("color_wheel"), color_wheel);
-  return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+void EditorCdlTrackballModel::submitWheels(std::initializer_list<WheelId> ids, bool settled) {
+  submitNow(colorWheelWrite(ids), settled);
 }
 
-auto EditorCdlTrackballModel::addUnity(WheelId id) -> bool {
-  return id != WheelId::Lift;
-}
-
-auto EditorCdlTrackballModel::invertDelta(WheelId id) -> bool {
-  return id == WheelId::Gamma;
+auto EditorCdlTrackballModel::colorWheelWrite(std::initializer_list<WheelId> ids) const
+    -> alcedo::ColorWheelUpdate {
+  alcedo::ColorWheelUpdate update;
+  for (const auto id : ids) {
+    const auto control = WheelWrite(wheel(id));
+    switch (id) {
+      case WheelId::Lift:
+        update.lift = control;
+        break;
+      case WheelId::Gamma:
+        update.gamma = control;
+        break;
+      case WheelId::Gain:
+        update.gain = control;
+        break;
+      case WheelId::Offset:
+        update.offset = control;
+        break;
+    }
+  }
+  return update;
 }
 
 }  // namespace alcedo::ui

@@ -19,10 +19,10 @@
 ///   counts how many arrived while an initiating command was on the call
 ///   stack (the inline-completion sentinel).
 /// - `ControllableEditorHistoryPort`: a `FakeEditorHistoryPort` subclass that
-///   (a) exposes a shared worker gate that command operations deliberately do
+///   (a) exposes a shared worker lock that command operations deliberately do
 ///   not acquire, and (b) records the
-///   durable-publication order (save-started vs. version-created/merge-
-///   committed) and models a dirty journal for the Paste/Merge ordering tests.
+///   durable-publication order (save-started vs. version-created)
+///   and models a dirty journal for the Paste ordering tests.
 ///
 /// These types are test-only. They do not change production behavior. CQ1
 /// added the real `EditorSessionCommandQueue`; `SessionResultRecorder` and the
@@ -157,12 +157,12 @@ class SessionResultRecorder {
 
 /// History port used by the CQ0 baseline tests. Extends the focused fake with
 /// two controllable axes:
-/// - `render_lock`: retained as a worker-owned gate for the tests. History
+/// - `render_lock`: retained as a worker-owned lock for the tests. History
 ///   operations intentionally do not acquire it; a test that holds the lock
 ///   verifies the command path remains available.
 /// - `event_log` / `dirty_journal`: record the durable-publication order so
-///   the Paste/Merge tests can assert save-before-create. Paste and Merge
-///   succeed (the fake base rejects them) so the facade proceeds through the
+///   the Paste tests can assert save-before-create. Paste succeeds (the fake
+///   base rejects it) so the facade proceeds through the
 ///   real StartHistoryCheckpoint save path.
 class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
  public:
@@ -192,8 +192,8 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
     return true;
   }
 
-  /// Report the dirty journal through the same query the facade uses to gate
-  /// Paste/Merge and the discard action.
+  /// Report the dirty journal through the same query the facade uses to allow
+  /// Paste and the discard action.
   auto HasUnmaterializedChanges(const EditorHistoryGuardHandle& /*guard*/, std::string* /*error*/)
       -> bool override {
     return dirty_journal;
@@ -223,10 +223,11 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
     return FakeEditorHistoryPort::CheckoutVersion(guard, version_id, error);
   }
 
-  auto PasteLiveRootRelativeVersion(const EditorHistoryGuardHandle& guard,
+  auto PasteLiveRootRelativeVersion(const EditorHistoryGuardHandle&  guard,
                                     const AdjustmentTransferPackage& package,
                                     std::string /*version_display_name*/,
-                                    AdjustmentPasteResult* result, std::string* error)
+                                    AdjustmentPasteResult* result, std::string* error,
+                                    std::optional<EditCommitAttribution> /*attribution*/)
       -> bool override {
     (void)guard;
     if (package.Empty()) {
@@ -239,42 +240,6 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
       result->pasted = true;
       result->prior_version_id = Hash128{0x11111111ULL, 0x22222222ULL};
       result->new_version_id = Hash128{0x33333333ULL, 0x44444444ULL};
-    }
-    return true;
-  }
-
-  auto CancelLivePaste(const EditorHistoryGuardHandle& /*guard*/,
-                       const version_ref_id_t& /*prior_version_id*/,
-                       const version_ref_id_t& /*paste_version_id*/, std::string* /*error*/)
-      -> bool override {
-    record("paste_cancelled");
-    return true;
-  }
-
-  auto BeginLiveMerge(const EditorHistoryGuardHandle& /*guard*/,
-                      const AdjustmentTransferPackage& package, AdjustmentMergePreview* preview,
-                      std::string* error) -> bool override {
-    if (package.Empty()) {
-      if (error != nullptr) *error = "Adjustment transfer package is empty";
-      return false;
-    }
-    if (preview != nullptr) {
-      *preview               = {};
-      preview->has_conflicts = false;
-    }
-    return true;
-  }
-
-  auto CompleteLiveMerge(const EditorHistoryGuardHandle& /*guard*/,
-                         const AdjustmentTransferPackage& /*package*/,
-                         const AdjustmentMergePreview& /*preview*/,
-                         const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
-                         AdjustmentMergeResult* result, std::string* error) -> bool override {
-    (void)error;
-    record("merge_committed");
-    dirty_journal = true;
-    if (result != nullptr) {
-      result->merged = true;
     }
     return true;
   }
@@ -292,26 +257,20 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   }
 };
 
-/// Journal port that records when the save checkpoint starts, for the
-/// durable-publication ordering tests. `CommitJournalAsync` logs
-/// `save_started` before the (inline) save proceeds, so the test can compare
-/// save-start vs. version-create/merge-commit order.
-class OrderRecordingJournalPort : public FakeEditorJournalPort {
+/// Checkpoint store that records when the save checkpoint starts, for the
+/// durable-publication ordering tests. `MaterializeAsync` logs `save_started`
+/// before the (inline or deferred) materialization proceeds, so the test can
+/// compare save-start vs. version-create/merge-commit order.
+class OrderRecordingCheckpointStore final : public FakeEditorCheckpointStore {
  public:
   std::vector<std::string>* event_log = nullptr;
 
-  auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
-                          EditorJournalCommitCallback callback) -> bool override {
-    record("save_started");
-    return FakeEditorJournalPort::CommitJournalAsync(element_id, session_generation,
-                                                     std::move(callback));
-  }
-
- private:
-  void record(std::string event) {
+  auto MaterializeAsync(std::shared_ptr<const EditorMiniGitSaveCapture> capture,
+                        EditorMaterializeCallback callback) -> bool override {
     if (event_log != nullptr) {
-      event_log->push_back(std::move(event));
+      event_log->push_back("save_started");
     }
+    return FakeEditorCheckpointStore::MaterializeAsync(std::move(capture), std::move(callback));
   }
 };
 

@@ -4,8 +4,8 @@ import QtQuick.Controls.Material
 import QtQuick.Layouts
 
 // Full-width application toolbar: native traffic-light reserve, collections
-// toggle, workspace switch, File, Settings, update, inspector, and caption
-// actions. The wordmark remains on the collections card below this bar.
+// toggle, workspace switch, File, Settings, update, background-task island,
+// inspector, and caption actions. The wordmark remains on the collections card below this bar.
 Rectangle {
     id: root
     objectName: "topToolbar"
@@ -76,7 +76,7 @@ Rectangle {
             workspaceRouter: appModules.workspaceRouter
             interactionPolicy: appModules.interactionPolicy
             editorSession: appModules.editorSession
-            editorImageExists: root.host ? root.host.editorImageStillExists : null
+            openLastEditorImage: root.host ? root.host.openLastEditorImage : null
             firstEditorImage: root.host ? root.host.firstLibraryImage : null
             navigationEnabled: appModules.project.serviceReady
         }
@@ -100,17 +100,15 @@ Rectangle {
                     objectName: "fileMenuLoadProject"
                     text: qsTr("Load Project")
                     enabled: root.host && !root.host.projectLaunchBusy && !appModules.project.acceleratorPreparing
-                    onTriggered: root.host.beginProjectLaunch(function() {
-                        return appModules.project.PromptAndLoadProject()
-                    })
+                             && appModules.interactionPolicy.canChangeStateAsUser
+                    onTriggered: appModules.projectLaunch.BeginPromptOpen()
                 }
                 AppMenuItem {
                     objectName: "fileMenuCreateProject"
                     text: qsTr("Create Project")
                     enabled: root.host && !root.host.projectLaunchBusy && !appModules.project.acceleratorPreparing
-                    onTriggered: root.host.beginProjectLaunch(function() {
-                        return appModules.project.PromptAndCreateProject()
-                    })
+                             && appModules.interactionPolicy.canChangeStateAsUser
+                    onTriggered: appModules.projectLaunch.BeginPromptCreate()
                 }
                 AppMenuSeparator {
                 }
@@ -167,6 +165,13 @@ Rectangle {
         }
 
         Item { Layout.fillWidth: true }
+
+        // Background-task island: a status lamp that unfolds while a task runs
+        // or after one fails.
+        BackgroundTaskBar {
+            Layout.alignment: Qt.AlignVCenter
+            host: root.host
+        }
 
         // Inspector toggle: compact IconActionButton, same hit as the
         // collections sidebar control. Visible only in the Library workspace.

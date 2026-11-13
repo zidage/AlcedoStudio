@@ -265,8 +265,15 @@ auto EnqueueTiles(const Module& module, const MetalDemosaicNetTiledDispatch& dis
   }
 
   RunObjc("graph_encode", [&] {
-    id<MTLCommandQueue> queue = ToObjcQueue(ctx.Queue());
-    MPSCommandBuffer* mps_cb  = [MPSCommandBuffer commandBufferFromCommandQueue:queue];
+    MPSCommandBuffer* mps_cb = nil;
+    if (dispatch.command_buffer != nullptr) {
+      id<MTLCommandBuffer> existing =
+          (__bridge id<MTLCommandBuffer>)dispatch.command_buffer;
+      mps_cb = [MPSCommandBuffer commandBufferWithCommandBuffer:existing];
+    } else {
+      id<MTLCommandQueue> queue = ToObjcQueue(ctx.Queue());
+      mps_cb                    = [MPSCommandBuffer commandBufferFromCommandQueue:queue];
+    }
     if (mps_cb == nil) {
       ThrowStage("prepare", "failed to create MPSCommandBuffer", variant);
     }
@@ -322,8 +329,10 @@ auto EnqueueTiles(const Module& module, const MetalDemosaicNetTiledDispatch& dis
       }
     }
 
-    [mps_cb commit];
-    if (dispatch.commit_and_wait) {
+    if (dispatch.command_buffer == nullptr) {
+      [mps_cb commit];
+    }
+    if (dispatch.commit_and_wait && dispatch.command_buffer == nullptr) {
       [mps_cb waitUntilCompleted];
       ++result.host_wait_count;
       g_host_wait_count.fetch_add(1, std::memory_order_relaxed);

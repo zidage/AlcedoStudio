@@ -33,7 +33,7 @@ MenuItem {
             color: control.enabled ? appTheme.textColor : appTheme.textMutedColor
             font.pixelSize: appTheme.fontSizeBody
             font.weight: appTheme.fontWeightRegular
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             verticalAlignment: Text.AlignVCenter
         }
 

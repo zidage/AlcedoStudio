@@ -44,6 +44,8 @@ class PathResolver {
   auto Resolve(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;
   auto ResolveForWrite(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;
   void Invalidate(const std::filesystem::path& path);
+  /// Removes every cached path. A rename or a move changes the path of a whole subtree.
+  void InvalidateAll();
 
   auto Tree(const std::filesystem::path& path) -> std::wstring;
 };

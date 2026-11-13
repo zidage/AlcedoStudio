@@ -9,7 +9,7 @@ endif()
 #set(CMAKE_CXX_COMPILER "clang++")
 # Compiler flags.
 
-project(alcedo VERSION 0.2.9 LANGUAGES C CXX)
+project(alcedo VERSION 0.3.5 LANGUAGES C CXX)
 
 # Update metadata is compiled into the application. Release builds must set a
 # real Ed25519 public key. An empty key disables network update checks instead
@@ -42,6 +42,26 @@ else()
 endif()
 set(ALCEDO_UPDATE_MANIFEST_URL
     "${ALCEDO_UPDATE_BASE_URL}/v1/${ALCEDO_UPDATE_CHANNEL}/${_alcedo_update_platform}/manifest.json")
+# Signed LUT package feed (docs/lut-package-system.md). It is signed with the
+# update key and has no expiry. The application ships no LUTs, so Settings
+# downloads the official packages from this feed. Empty disables LUT package
+# checks and downloads in this build. A build directory configured before this
+# default existed keeps its cached value; pass -DALCEDO_LUT_PACKAGE_FEED_URL=...
+set(ALCEDO_LUT_PACKAGE_FEED_URL "https://static.aoraw.org/luts/v1/manifest.json"
+    CACHE STRING "HTTPS URL of the signed LUT package manifest. Empty disables LUT packages.")
+if(NOT "${ALCEDO_LUT_PACKAGE_FEED_URL}" STREQUAL "" AND
+   NOT "${ALCEDO_LUT_PACKAGE_FEED_URL}" MATCHES "^https://[^/@]+/.+")
+    message(FATAL_ERROR "ALCEDO_LUT_PACKAGE_FEED_URL must be an HTTPS URL without user info.")
+endif()
+# Signed AI model package feed (docs/roadmap/alcedo_studio/ai/external_ai_model_download_plan.md,
+# P2). It is signed with the update key and has no expiry. Settings downloads the AI Mask model
+# set from it. Empty disables AI model package checks and downloads in this build.
+set(ALCEDO_AI_MODEL_FEED_URL "https://static.aoraw.org/ai-models/v1/manifest.json"
+    CACHE STRING "HTTPS URL of the signed AI model package manifest. Empty disables AI model packages.")
+if(NOT "${ALCEDO_AI_MODEL_FEED_URL}" STREQUAL "" AND
+   NOT "${ALCEDO_AI_MODEL_FEED_URL}" MATCHES "^https://[^/@]+/.+")
+    message(FATAL_ERROR "ALCEDO_AI_MODEL_FEED_URL must be an HTTPS URL without user info.")
+endif()
 set(ALCEDO_UPDATE_PUBLIC_KEY_FILE
     "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/update_public_key.txt"
     CACHE FILEPATH "File containing the canonical Base64 Ed25519 update public key.")
@@ -106,10 +126,28 @@ endif()
 option(ALCEDO_ENABLE_CUDA "Enable CUDA-accelerated pipeline backends when CUDA is available." ${ALCEDO_ENABLE_CUDA_DEFAULT})
 option(ALCEDO_ENABLE_METAL "Enable Metal-accelerated pipeline backends when building on Apple platforms." ${ALCEDO_ENABLE_METAL_DEFAULT})
 option(ALCEDO_ENABLE_OPENCL "Enable OpenCL support when the OpenCL SDK/ICD loader is available." ${ALCEDO_ENABLE_OPENCL_DEFAULT})
+option(ALCEDO_ENABLE_BRUSH_MASK
+       "Compile the detached Brush mask module (model, overlay geometry, sampling); not part of the shipped product."
+       OFF)
 option(ALCEDO_BUILD_CUDA_DLLS
        "Build first-party CUDA implementation targets as DLLs to reduce incremental link time."
        ${WIN32})
 option(ALCEDO_BUILD_TESTS "Build alcedo tests and demos." ON)
+# Sanitizer of the first-party code (#809): "address" (MSVC or Clang AddressSanitizer) or
+# "thread" (Clang ThreadSanitizer). Third-party code built in the tree is not instrumented.
+# A sanitizer build has its own build directory (presets win_debug_asan, macos_debug_tsan).
+set(ALCEDO_SANITIZER ""
+    CACHE STRING
+    "Instrument first-party code with a sanitizer: empty (none), address, or thread.")
+set_property(CACHE ALCEDO_SANITIZER PROPERTY STRINGS "" address thread)
+if(NOT ALCEDO_SANITIZER STREQUAL "" AND
+   NOT ALCEDO_SANITIZER STREQUAL "address" AND
+   NOT ALCEDO_SANITIZER STREQUAL "thread")
+    message(FATAL_ERROR "ALCEDO_SANITIZER must be empty, address, or thread: '${ALCEDO_SANITIZER}'")
+endif()
+if(ALCEDO_SANITIZER STREQUAL "thread" AND MSVC)
+    message(FATAL_ERROR "ALCEDO_SANITIZER=thread needs Clang; MSVC has no ThreadSanitizer.")
+endif()
 option(ALCEDO_MACOS_BUNDLE
        "Build alcedo_main as a macOS .app bundle (intended for packaging/install)."
        OFF)
@@ -190,6 +228,7 @@ alcedo_append_existing_prefix("/opt/homebrew/opt/libraw")
 alcedo_append_existing_prefix("/opt/homebrew/opt/xxhash")
 alcedo_append_existing_prefix("/opt/homebrew/opt/duckdb")
 alcedo_append_existing_prefix("/opt/homebrew/opt/little-cms2")
+alcedo_append_existing_prefix("/opt/homebrew/opt/libarchive")
 alcedo_append_existing_prefix("/opt/homebrew/opt/highway")
 alcedo_append_existing_prefix("/opt/homebrew/opt/openblas")
 alcedo_append_existing_prefix("/opt/homebrew/opt/gcc")
@@ -205,6 +244,7 @@ alcedo_append_existing_prefix("/usr/local/opt/libraw")
 alcedo_append_existing_prefix("/usr/local/opt/xxhash")
 alcedo_append_existing_prefix("/usr/local/opt/duckdb")
 alcedo_append_existing_prefix("/usr/local/opt/little-cms2")
+alcedo_append_existing_prefix("/usr/local/opt/libarchive")
 alcedo_append_existing_prefix("/usr/local/opt/highway")
 alcedo_append_existing_prefix("/usr/local/opt/openblas")
 alcedo_append_existing_prefix("/usr/local/opt/gcc")
@@ -251,10 +291,27 @@ list(REMOVE_DUPLICATES ALCEDO_INCLUDE_HINTS)
 
 
 if (MSVC)
-    set(CMAKE_CXX_FLAGS_DEBUG "/Zi /arch:AVX /bigobj /W4 /external:anglebrackets /external:W0 /D_DEBUG /EHsc /openmp /Zc:preprocessor")
-    set(CMAKE_CXX_FLAGS_RELEASE "/O2 /arch:AVX2 /bigobj /W4 /external:anglebrackets /external:W0 /EHsc /openmp /GL /Zc:preprocessor /MP")
+    # /utf-8: read every source as UTF-8 and store literals as UTF-8, whatever the code page of
+    # the machine that builds the package.
+    set(CMAKE_CXX_FLAGS_DEBUG "/Zi /utf-8 /arch:AVX /bigobj /W4 /external:anglebrackets /external:W0 /D_DEBUG /EHsc /openmp /Zc:preprocessor")
+    set(CMAKE_CXX_FLAGS_RELEASE "/O2 /utf-8 /arch:AVX2 /bigobj /W4 /external:anglebrackets /external:W0 /EHsc /openmp /GL /Zc:preprocessor /MP")
     # add_link_options(/DEBUG)
     set(CMAKE_VS_USE_DEBUG_LIBRARIES "$<CONFIG:Debug,Custom>")
+    if(ALCEDO_SANITIZER STREQUAL "address")
+        # The STL container annotations of AddressSanitizer need every object of a binary built
+        # with /fsanitize=address (LNK2038 annotate_vector / annotate_string). Third-party and
+        # prebuilt libraries are not instrumented, so the annotations are off in every object.
+        add_compile_definitions(_DISABLE_VECTOR_ANNOTATION _DISABLE_STRING_ANNOTATION)
+        # /RTC and incremental linking do not work with /fsanitize=address.
+        string(REGEX REPLACE "/RTC[1csu]*" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+        foreach(_alcedo_link_flags_var
+                CMAKE_EXE_LINKER_FLAGS_DEBUG CMAKE_SHARED_LINKER_FLAGS_DEBUG
+                CMAKE_MODULE_LINKER_FLAGS_DEBUG)
+            string(REGEX REPLACE "/INCREMENTAL(:YES)?( |$)" " " ${_alcedo_link_flags_var}
+                   "${${_alcedo_link_flags_var}}")
+            string(APPEND ${_alcedo_link_flags_var} " /INCREMENTAL:NO")
+        endforeach()
+    endif()
     # FIXME: Hardcoded Qt path for Windows, consider making it configurable
     set(CMAKE_PREFIX_PATH "D:/misc/Qt/6.9.3/msvc2022_64/lib/cmake;${CMAKE_PREFIX_PATH}")
 else()
@@ -307,13 +364,44 @@ if (ALCEDO_ENABLE_CUDA AND CUDAToolkit_FOUND)
     enable_language(CUDA)
     add_definitions(-DHAVE_CUDA)
     set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
-    set(CMAKE_CUDA_ARCHITECTURES 60-real 61-real 75-real 86-real 86-virtual 89-real 90-real)
+    if(WIN32)
+        # NVCC --relocatable-ptx reads library inputs with fatbinary as well as
+        # the linker. fatbinary does not resolve bare .lib names through /LIBPATH.
+        foreach(_cuda_library_list IN ITEMS CMAKE_CUDA_STANDARD_LIBRARIES CMAKE_CXX_STANDARD_LIBRARIES
+                CMAKE_CUDA_RUNTIME_LIBRARY_LINK_OPTIONS_SHARED
+                CMAKE_CUDA_RUNTIME_LIBRARY_LINK_OPTIONS_STATIC)
+            if(_cuda_library_list MATCHES "_STANDARD_LIBRARIES$")
+                separate_arguments(_cuda_library_names WINDOWS_COMMAND "${${_cuda_library_list}}")
+            else()
+                set(_cuda_library_names "${${_cuda_library_list}}")
+            endif()
+            set(_cuda_library_paths "")
+            foreach(_cuda_library_name IN LISTS _cuda_library_names)
+                unset(_cuda_library_path CACHE)
+                find_file(_cuda_library_path NAMES "${_cuda_library_name}" "${_cuda_library_name}.lib"
+                    PATHS "${CUDAToolkit_LIBRARY_DIR}" $ENV{LIB} NO_DEFAULT_PATH REQUIRED)
+                list(APPEND _cuda_library_paths "${_cuda_library_path}")
+            endforeach()
+            if(_cuda_library_list MATCHES "_STANDARD_LIBRARIES$")
+                list(JOIN _cuda_library_paths "\" \"" _cuda_quoted_libraries)
+                if(_cuda_library_list STREQUAL "CMAKE_CXX_STANDARD_LIBRARIES")
+                    set(ALCEDO_CUDA_DEVICE_LINK_STANDARD_LIBRARIES "\"${_cuda_quoted_libraries}\"")
+                else()
+                    set(${_cuda_library_list} "\"${_cuda_quoted_libraries}\"")
+                endif()
+            else()
+                set(${_cuda_library_list} "${_cuda_library_paths}")
+            endif()
+        endforeach()
+    endif()
+    set(CMAKE_CUDA_ARCHITECTURES 60-real 61-real 70-real 75-real 80-real 86-real 86-virtual 89-real 90-real)
     include_directories(SYSTEM ${CUDAToolkit_INCLUDE_DIRS})
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3>)
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:--use_fast_math>)
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:--extra-device-vectorization>)
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G>)
     if(MSVC)
+        add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
         list(APPEND CMAKE_CUDA_HOST_COMPILER_OPTIONS /W4 /external:anglebrackets /external:W0 /D_DEBUG /EHsc /arch:AVX2 /openmp)
     endif()
     set(ALCEDO_CUDA_ENABLED ON)
@@ -332,10 +420,10 @@ endif()
 
 # OpenCL
 set(ALCEDO_OPENCL_ENABLED OFF)
-if(ALCEDO_ENABLE_OPENCL)
+if(ALCEDO_ENABLE_OPENCL AND (WIN32 OR (UNIX AND NOT APPLE)))
     find_package(OpenCL QUIET)
 endif()
-if(ALCEDO_ENABLE_OPENCL AND OpenCL_FOUND)
+if(ALCEDO_ENABLE_OPENCL AND (WIN32 OR (UNIX AND NOT APPLE)) AND OpenCL_FOUND)
     add_compile_definitions(HAVE_OPENCL)
     # HAVE_OPENCL is a project-wide feature definition because several public
     # image/editor headers expose OpenCL-backed types.  Those headers can be
@@ -358,6 +446,8 @@ if(ALCEDO_ENABLE_OPENCL AND OpenCL_FOUND)
     unset(_alcedo_opencl_include_dirs)
     unset(_alcedo_opencl_target_include_dirs)
     set(ALCEDO_OPENCL_ENABLED ON)
+elseif(ALCEDO_ENABLE_OPENCL AND NOT WIN32 AND NOT (UNIX AND NOT APPLE))
+    message(STATUS "The OpenCL editor backend requires Windows or Linux.")
 elseif(ALCEDO_ENABLE_OPENCL)
     message(STATUS "OpenCL SDK/ICD loader not found; building without OpenCL support.")
 endif()
@@ -423,7 +513,7 @@ set_target_properties(MurmurHash3 PROPERTIES
 # pkg-config/module search paths. The latter is needed on distributions that
 # ship libxxhash with a .pc file but no xxHashConfig.cmake package config.
 find_package(xxHash CONFIG QUIET)
-if(NOT TARGET xxHash::xxhash AND NOT TARGET xxhash)
+if(NOT TARGET xxHash AND NOT TARGET xxHash::xxhash AND NOT TARGET xxhash)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(ALCEDO_XXHASH QUIET IMPORTED_TARGET libxxhash)
@@ -474,7 +564,7 @@ target_include_directories(JSON INTERFACE "${CMAKE_SOURCE_DIR}/alcedo_studio/thi
 # OpenCV
 # OpenCV 5 split calib3d into geometry/calib/stereo/ptcloud; Alcedo only needs
 # core image processing modules, so do not require the removed calib3d target.
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
 
 # Eigen3
 find_package(Eigen3 CONFIG REQUIRED)
@@ -492,7 +582,7 @@ elseif(UNIX AND NOT APPLE AND ALCEDO_OPENCL_ENABLED)
 endif()
 
 # The editor RHI targets are built on every desktop platform and use both
-# qt_add_shaders() and Qt private GUI headers, including the Linux CPU path.
+# qt_add_shaders() and Qt private GUI headers, including the Linux OpenCL path.
 find_package(Qt6 REQUIRED COMPONENTS ShaderTools GuiPrivate)
 
 # Profiler/hwy/lcms2
@@ -502,8 +592,13 @@ find_package(Qt6 REQUIRED COMPONENTS ShaderTools GuiPrivate)
 # endif()
 find_package(hwy CONFIG REQUIRED)
 
-if(WIN32)
-    find_package(lcms2 CONFIG REQUIRED)
+# LibArchive reads the 7z (LZMA2) LUT packages in process. Windows: vcpkg
+# `libarchive[lzma]`. macOS: Homebrew `libarchive` (keg-only; its prefix is in the
+# search hints above). The macOS system library has no public headers.
+find_package(LibArchive 3.6 REQUIRED)
+
+if (WIN32)
+find_package(lcms2 CONFIG REQUIRED)
 elseif(APPLE)
     find_library(LCMS2_LIB NAMES lcms2 PATHS ${ALCEDO_LIBRARY_HINTS})
     find_path(LCMS2_INC NAMES lcms2.h PATHS ${ALCEDO_INCLUDE_HINTS})
@@ -544,6 +639,12 @@ elseif(UNIX)
         endif()
     endif()
 endif()
+
+# zlib inflates PNG iCCP profiles for the raster color description reader.
+find_package(ZLIB REQUIRED)
+
+# TurboJPEG decodes raster JPEG input with DCT scaling.
+find_package(libjpeg-turbo CONFIG REQUIRED)
 
 # OpenColorIO
 find_package(OpenColorIO CONFIG REQUIRED)
@@ -587,6 +688,9 @@ if (TARGET Exiv2::Exiv2 AND NOT TARGET Exiv2)
 elseif(WIN32)
     add_library(Exiv2 SHARED IMPORTED)
     set_target_properties(Exiv2 PROPERTIES
+        # Exiv2 exposes STL containers: Debug consumers need the matching MSVC iterator ABI.
+        IMPORTED_LOCATION_DEBUG "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/debug/bin/exiv2.dll"
+        IMPORTED_IMPLIB_DEBUG "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/debug/lib/exiv2.lib"
         IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/bin/exiv2.dll"
         IMPORTED_IMPLIB "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/lib/exiv2.lib"
         INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/include"
@@ -831,33 +935,20 @@ add_compile_definitions(
     TEST_PROFILER_OUTPUT_PATH=\"${TEST_RES_DIR}/temp_folder/test_profile.prof\"
     CONFIG_PATH=\"${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/\"
 )
+if(ALCEDO_ENABLE_BRUSH_MASK)
+    add_compile_definitions(ALCEDO_ENABLE_BRUSH_MASK)
+endif()
 
 include(GNUInstallDirs)
 
-function(alcedo_collect_packaged_luts out_var config_dir)
-    set(_lut_dir "${config_dir}/LUTs")
-    set(_packaged_luts "")
-    if(EXISTS "${_lut_dir}")
-        # Ship the curated film-stock LUT set only. This intentionally skips
-        # spektrafilm and the older generic LUT samples in the source tree.
-        file(GLOB _packaged_luts CONFIGURE_DEPENDS
-            "${_lut_dir}/Agfa_*.cube"
-            "${_lut_dir}/Fuji_*.cube"
-            "${_lut_dir}/Kodak_*.cube"
-        )
-        list(SORT _packaged_luts)
-    endif()
-    set(${out_var} ${_packaged_luts} PARENT_SCOPE)
-endfunction()
-
-function(alcedo_install_packaged_luts config_dir destination)
-    alcedo_collect_packaged_luts(_alcedo_packaged_luts "${config_dir}")
+# LUTs are not part of the application: official LUTs are signed packages that
+# Settings downloads into the user's library (~/.alcedo/luts by default; see
+# docs/lut-package-system.md). An install prefix reused from an older build can
+# still hold the previously bundled LUT folder, so the install removes it.
+function(alcedo_remove_installed_lut_payloads destination)
     install(CODE
         "file(REMOVE_RECURSE \"\${CMAKE_INSTALL_PREFIX}/${destination}\")"
     )
-    if(_alcedo_packaged_luts)
-        install(FILES ${_alcedo_packaged_luts} DESTINATION "${destination}")
-    endif()
 endfunction()
 
 function(alcedo_install_duckdb_extensions destination)
@@ -901,9 +992,42 @@ function(alcedo_install_demosaicnet_models config_dir destination)
     install(FILES ${_alcedo_demosaicnet_models} DESTINATION "${destination}/config/models")
 endfunction()
 
-# Install compiled .metallib assets. Paths are known at configure time; the
-# files themselves are produced during the build by Metal*Shaders custom
-# targets. install(FILES) fails at install time if any path is still missing.
+# Film print resources (docs/roadmap/alcedo_studio/edit/film_print_drt_plan.md, section 4). They are
+# not in Git. A release build names the output directory of build_product_resources.py of
+# alcedo-film-lab, and the installer ships an unchanged copy under config/film_print/.
+set(ALCEDO_FILM_PRINT_RESOURCE_DIR "" CACHE PATH
+    "Directory with manifest.json of the film print resources. Empty: the install tree has none.")
+set(ALCEDO_FILM_PRINT_EXPECTED_DIR "" CACHE PATH
+    "Directory with the lab values of FilmPrintTablesTest. Test input only; never installed.")
+function(alcedo_install_film_print_resources destination)
+    if("${ALCEDO_FILM_PRINT_RESOURCE_DIR}" STREQUAL "")
+        return()
+    endif()
+    include("${CMAKE_SOURCE_DIR}/scripts/cmake/verify_film_print_resources.cmake")
+    set(_alcedo_film_print_files "")
+    foreach(_alcedo_file IN ITEMS manifest.json film_stock_bundle.bin film_print_setup.bin
+            film_reflectance_table.bin)
+        set(_alcedo_path "${ALCEDO_FILM_PRINT_RESOURCE_DIR}/${_alcedo_file}")
+        if(NOT EXISTS "${_alcedo_path}")
+            message(FATAL_ERROR "[alcedo] Film print resource missing: ${_alcedo_path}")
+        endif()
+        list(APPEND _alcedo_film_print_files "${_alcedo_path}")
+    endforeach()
+    install(FILES ${_alcedo_film_print_files} DESTINATION "${destination}/config/film_print")
+endfunction()
+
+# The GPU build owners provide the input files for each install inventory.
+function(alcedo_install_gpu_asset_checksums source_root destination)
+    set(ALCEDO_GPU_ASSET_SOURCE_ROOT "${source_root}")
+    set(ALCEDO_GPU_ASSET_DESTINATION "${destination}")
+    set(ALCEDO_GPU_ASSET_FILES "${ARGN}")
+    string(MAKE_C_IDENTIFIER "${destination}" _script_name)
+    set(_script "${CMAKE_CURRENT_BINARY_DIR}/install_gpu_checksums_${_script_name}.cmake")
+    configure_file("${CMAKE_SOURCE_DIR}/scripts/cmake/install_gpu_asset_checksums.cmake.in"
+        "${_script}" @ONLY)
+    install(SCRIPT "${_script}")
+endfunction()
+
 function(alcedo_install_metal_runtime_libs destination)
     if(NOT ALCEDO_METAL_ENABLED)
         return()
@@ -913,12 +1037,111 @@ function(alcedo_install_metal_runtime_libs destination)
             "[alcedo] ALCEDO_METAL_ENABLED but ALCEDO_METAL_RUNTIME_LIBS is empty. "
             "Metal shaders were not registered for packaging.")
     endif()
+    # The bundle copy can contain libraries left by an earlier build. Install
+    # exactly the registered libraries before writing their checksums.
+    install(CODE "file(REMOVE_RECURSE \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${destination}\")")
     install(FILES ${ALCEDO_METAL_RUNTIME_LIBS} DESTINATION "${destination}")
+    alcedo_install_gpu_asset_checksums("" "${destination}" ${ALCEDO_METAL_RUNTIME_LIBS})
+endfunction()
+
+# Install the OpenCL program sources under ${destination}/opencl, mirroring their
+# paths below alcedo_studio/src. OpenClProgramLibrary treats a packaged shader
+# directory as authoritative, so any source a program registers but the package
+# omits fails at runtime with "failed to open source file". The .cl directories
+# go in whole; the shared headers come from ALCEDO_OPENCL_PACKAGED_HEADERS, the
+# same list that feeds the program source defines in src/opencl/CMakeLists.txt.
+function(alcedo_install_opencl_sources destination)
+    if(NOT ALCEDO_OPENCL_ENABLED)
+        return()
+    endif()
+    set(_src_root "${CMAKE_SOURCE_DIR}/alcedo_studio/src")
+    set(_sources "")
+    foreach(_shader_dir IN ITEMS
+            decoders/processor/operators/gpu/opencl_shader
+            edit/runtime/lens/opencl/shader
+            edit/scope/opencl_shader
+            opencl/opencl_shader
+            edit/runtime/opencl/shader)
+        install(DIRECTORY "${_src_root}/${_shader_dir}/"
+            DESTINATION "${destination}/opencl/${_shader_dir}")
+        file(GLOB_RECURSE _shader_sources CONFIGURE_DEPENDS
+            "${_src_root}/${_shader_dir}/*.cl" "${_src_root}/${_shader_dir}/*.h")
+        list(APPEND _sources ${_shader_sources})
+    endforeach()
+    if(NOT ALCEDO_OPENCL_PACKAGED_HEADERS)
+        message(FATAL_ERROR
+            "[alcedo] ALCEDO_OPENCL_ENABLED but ALCEDO_OPENCL_PACKAGED_HEADERS is empty. "
+            "OpenCL program headers were not registered for packaging.")
+    endif()
+    foreach(_header IN LISTS ALCEDO_OPENCL_PACKAGED_HEADERS)
+        file(RELATIVE_PATH _rel_header "${_src_root}" "${_header}")
+        if(IS_ABSOLUTE "${_rel_header}" OR _rel_header MATCHES "^\\.\\./")
+            message(FATAL_ERROR "[alcedo] OpenCL header is outside alcedo_studio/src: ${_header}")
+        endif()
+        get_filename_component(_rel_dir "${_rel_header}" DIRECTORY)
+        install(FILES "${_header}" DESTINATION "${destination}/opencl/${_rel_dir}")
+        list(APPEND _sources "${_header}")
+    endforeach()
+    alcedo_install_gpu_asset_checksums("${_src_root}" "${destination}/opencl" ${_sources})
+endfunction()
+
+# Ship Alcedo LICENSE/NOTICE plus gathered third-party texts, including the
+# QuickQanava BSD-3-Clause and vendored bezier MIT notices required for binary
+# redistribution. @p destination is next to the Windows executable or inside
+# the macOS bundle Resources directory so THIRD_PARTY_NOTICE.txt relative paths
+# to third_party_licenses/ remain valid.
+function(alcedo_install_legal_notices destination)
+    set(_alcedo_notice_root "${CMAKE_SOURCE_DIR}")
+    set(_alcedo_required_notices
+        "${_alcedo_notice_root}/LICENSE"
+        "${_alcedo_notice_root}/NOTICE"
+        "${_alcedo_notice_root}/THIRD_PARTY_NOTICE.txt"
+        "${_alcedo_notice_root}/third_party_licenses/QuickQanava-licence.txt"
+        "${_alcedo_notice_root}/third_party_licenses/QuickQanava-bezier-LICENSE.txt"
+    )
+    foreach(_alcedo_notice IN LISTS _alcedo_required_notices)
+        if(NOT EXISTS "${_alcedo_notice}")
+            message(FATAL_ERROR
+                "[alcedo] Required legal notice is missing: ${_alcedo_notice}")
+        endif()
+    endforeach()
+    install(FILES
+        "${_alcedo_notice_root}/LICENSE"
+        "${_alcedo_notice_root}/NOTICE"
+        "${_alcedo_notice_root}/THIRD_PARTY_NOTICE.txt"
+        DESTINATION "${destination}"
+    )
+    install(DIRECTORY "${_alcedo_notice_root}/third_party_licenses/"
+        DESTINATION "${destination}/third_party_licenses"
+        FILES_MATCHING
+            PATTERN "*"
+    )
 endfunction()
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/alcedo_studio/src/third_party)
 if(DEFINED ALCEDO_LENSFUN_LIBRARY_DIR AND NOT "${ALCEDO_LENSFUN_LIBRARY_DIR}" STREQUAL "")
     list(APPEND CMAKE_BUILD_RPATH "${ALCEDO_LENSFUN_LIBRARY_DIR}")
+endif()
+# ALCEDO_SANITIZER instruments the first-party code below; the third-party code above is not.
+if(ALCEDO_SANITIZER STREQUAL "address")
+    if(MSVC)
+        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/fsanitize=address>)
+        # The executables load the AddressSanitizer runtime DLL from the compiler directory;
+        # alcedo_copy_linked_runtime_dlls searches it and copies the DLL next to them.
+        get_filename_component(ALCEDO_SANITIZER_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        if(NOT EXISTS "${ALCEDO_SANITIZER_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.dll")
+            message(FATAL_ERROR
+                    "AddressSanitizer runtime DLL not found in ${ALCEDO_SANITIZER_RUNTIME_DIR}")
+        endif()
+    else()
+        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fsanitize=address>
+                            $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fno-omit-frame-pointer>)
+        add_link_options(-fsanitize=address)
+    endif()
+elseif(ALCEDO_SANITIZER STREQUAL "thread")
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fsanitize=thread>
+                        $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fno-omit-frame-pointer>)
+    add_link_options(-fsanitize=thread)
 endif()
 add_subdirectory(${CMAKE_SOURCE_DIR}/alcedo_studio/src)
 if(ALCEDO_BUILD_TESTS)
@@ -949,6 +1172,13 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         set(_bundle_macos_dest "${_alcedo_macos_app_bundle}/Contents/MacOS")
         set(_bundle_resources_dest "${_alcedo_macos_app_bundle}/Contents/Resources")
         set(_bundle_frameworks_dest "${_alcedo_macos_app_bundle}/Contents/Frameworks")
+        # alcedo-cli sits beside the bundle executable so that `session start` finds it.
+        install(TARGETS alcedo_cli RUNTIME DESTINATION "${_bundle_macos_dest}")
+        if(TARGET alcedo_gpu_check)
+            install(TARGETS alcedo_gpu_check RUNTIME DESTINATION "${_bundle_macos_dest}")
+            set_property(TARGET alcedo_gpu_check APPEND PROPERTY INSTALL_RPATH
+                "@executable_path/../Frameworks")
+        endif()
         # The build-tree .app can accumulate downloaded runtime models while
         # testing. Do not ship that cache in release packages; models are
         # downloaded per user through the app.
@@ -962,27 +1192,17 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/icc/" DESTINATION "${_bundle_macos_dest}/config/icc")
         install(DIRECTORY "${_config_dir}/lens_calib/" DESTINATION "${_bundle_macos_dest}/config/lens_calib")
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${_bundle_macos_dest}/config/nikon_lens")
+        alcedo_install_legal_notices("${_bundle_resources_dest}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${_bundle_macos_dest}")
-        alcedo_install_packaged_luts("${_config_dir}" "${_bundle_macos_dest}/LUTs")
-        if(ALCEDO_OPENCL_ENABLED)
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/decoders/processor/operators/gpu/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/pipeline/opencl_shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/edit/pipeline/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/operators/geometry/opencl_shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/edit/operators/geometry/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/scope/opencl_shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/edit/scope/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/opencl/opencl_shader")
-        endif()
+        alcedo_install_film_print_resources("${_bundle_macos_dest}")
+        alcedo_remove_installed_lut_payloads("${_bundle_macos_dest}/LUTs")
+        alcedo_install_opencl_sources("${_bundle_macos_dest}")
         alcedo_install_metal_runtime_libs("${_bundle_resources_dest}/metallib")
         alcedo_install_duckdb_extensions("${_bundle_resources_dest}")
         if(ALCEDO_BUILD_SEMANTIC_SIDECAR AND ALCEDO_MIND_BINARY)
             install(CODE
                 "set(ALCEDO_MIND_BINARY \"${ALCEDO_MIND_BINARY}\")
                  set(ALCEDO_MIND_TARGET_DIR \"${ALCEDO_MIND_TARGET_DIR}\")
-                 set(ALCEDO_MIND_PROMPTS_DIR \"${ALCEDO_MIND_PROMPTS_DIR}\")
                  set(ALCEDO_MIND_DEST_DIR \"\${CMAKE_INSTALL_PREFIX}/${_bundle_macos_dest}\")
                  include(\"${CMAKE_SOURCE_DIR}/scripts/cmake/copy_semantic_sidecar.cmake\")
                 "
@@ -1075,28 +1295,18 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/icc/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/icc")
         install(DIRECTORY "${_config_dir}/lens_calib/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/lens_calib")
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/nikon_lens")
+        alcedo_install_legal_notices("${CMAKE_INSTALL_BINDIR}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${CMAKE_INSTALL_BINDIR}")
+        alcedo_install_film_print_resources("${CMAKE_INSTALL_BINDIR}")
 
-        alcedo_install_packaged_luts("${_config_dir}" "${CMAKE_INSTALL_BINDIR}/LUTs")
-        if(ALCEDO_OPENCL_ENABLED)
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/decoders/processor/operators/gpu/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/pipeline/opencl_shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/pipeline/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/operators/geometry/opencl_shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/operators/geometry/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/scope/opencl_shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/scope/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/opencl/opencl_shader")
-        endif()
+        alcedo_remove_installed_lut_payloads("${CMAKE_INSTALL_BINDIR}/LUTs")
+        alcedo_install_opencl_sources("${CMAKE_INSTALL_BINDIR}")
         alcedo_install_duckdb_extensions("${CMAKE_INSTALL_BINDIR}")
 
         if(ALCEDO_BUILD_SEMANTIC_SIDECAR AND ALCEDO_MIND_BINARY)
             install(CODE
                 "set(ALCEDO_MIND_BINARY \"${ALCEDO_MIND_BINARY}\")
                  set(ALCEDO_MIND_TARGET_DIR \"${ALCEDO_MIND_TARGET_DIR}\")
-                 set(ALCEDO_MIND_PROMPTS_DIR \"${ALCEDO_MIND_PROMPTS_DIR}\")
                  set(ALCEDO_MIND_DEST_DIR \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
                  include(\"${CMAKE_SOURCE_DIR}/scripts/cmake/copy_semantic_sidecar.cmake\")
                 "
@@ -1118,21 +1328,48 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(TARGETS alcedo_update_installer
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         )
+        # alcedo-cli sits beside alcedo_main so that `session start` finds it.
+        install(TARGETS alcedo_cli
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+        if(TARGET alcedo_gpu_check)
+            install(TARGETS alcedo_gpu_check RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        endif()
     endif()
 endif()
 
 if(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION "${CMAKE_INSTALL_BINDIR}")
+    # /openmp makes alcedo_main.exe, EditPipeline.dll and raw_r.dll import vcomp140.dll. The
+    # runtime dependency scan drops it because the build PC resolves it from System32, so ship it
+    # with the other MSVC runtime DLLs: a PC without the VC++ redistributable cannot start the app.
+    set(CMAKE_INSTALL_OPENMP_LIBRARIES TRUE)
     include(InstallRequiredSystemLibraries)
 
     set(ALCEDO_RUNTIME_DEP_DIRS "" CACHE STRING "Extra directories to search for runtime DLL dependencies during install.")
-    set(ALCEDO_RUNTIME_EXES "$<TARGET_FILE:${ALCEDO_MAIN_BIN}>")
+    set(ALCEDO_RUNTIME_EXES "$<TARGET_FILE:${ALCEDO_MAIN_BIN}>" "$<TARGET_FILE:alcedo_cli>")
     set(ALCEDO_RUNTIME_SEARCH_DIRS "$<TARGET_FILE_DIR:${ALCEDO_MAIN_BIN}>")
+    if(TARGET alcedo_gpu_check)
+        list(APPEND ALCEDO_RUNTIME_EXES "$<TARGET_FILE:alcedo_gpu_check>")
+        list(APPEND ALCEDO_RUNTIME_SEARCH_DIRS "$<TARGET_FILE_DIR:alcedo_gpu_check>")
+    endif()
     if(ALCEDO_MIND_BINARY)
         list(APPEND ALCEDO_RUNTIME_EXES "${ALCEDO_MIND_BINARY}")
     endif()
     if(ALCEDO_MIND_TARGET_DIR)
         list(APPEND ALCEDO_RUNTIME_SEARCH_DIRS "${ALCEDO_MIND_TARGET_DIR}")
+    endif()
+
+    get_property(_cuda_targets GLOBAL PROPERTY ALCEDO_CUDA_RUNTIME_TARGETS)
+    if(_cuda_targets)
+        set(_cuda_module_names "")
+        foreach(_target IN LISTS _cuda_targets)
+            string(APPEND _cuda_module_names "$<TARGET_FILE_NAME:${_target}>\n")
+        endforeach()
+        file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/cuda-runtime-modules.txt"
+            CONTENT "${_cuda_module_names}")
+        install(FILES "${CMAKE_BINARY_DIR}/cuda-runtime-modules.txt"
+            DESTINATION "${CMAKE_INSTALL_BINDIR}")
     endif()
 
     set(_third_party_exiv2_bin "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/bin")
@@ -1171,9 +1408,6 @@ if(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
              \"${_cuda_bin_dir}\"
              \${ALCEDO_RUNTIME_DEP_DIRS}
          )
-         if(NOT \"${_third_party_dawn_bin}\" STREQUAL \"\")
-             list(APPEND _search_dirs \"${_third_party_dawn_bin}\")
-         endif()
          file(GET_RUNTIME_DEPENDENCIES
              EXECUTABLES ${ALCEDO_RUNTIME_EXES}
              DIRECTORIES \${_search_dirs}
@@ -1212,18 +1446,6 @@ if(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
          if(_unresolved)
              list(JOIN _unresolved \"\\n  \" _unresolved_text)
              message(FATAL_ERROR \"[alcedo] Unresolved runtime deps:\\n  \${_unresolved_text}\")
-         endif()
-         if(NOT \"${_third_party_dawn_bin}\" STREQUAL \"\")
-             # Explicitly copy bundled Dawn DLLs even if they are not direct linker dependencies
-             # (Dawn may load them dynamically at runtime).
-             file(GLOB _dawn_dlls \"${_third_party_dawn_bin}/*.dll\")
-             set(_alcedo_dawn_runtime_dlls \"${ALCEDO_DAWN_RUNTIME_DLLS}\")
-             if(_alcedo_dawn_runtime_dlls)
-                 list(APPEND _dawn_dlls \${_alcedo_dawn_runtime_dlls})
-             endif()
-             foreach(_dawn_dll IN LISTS _dawn_dlls)
-                 file(INSTALL DESTINATION \"\${_bindir}\" TYPE SHARED_LIBRARY FILES \"\${_dawn_dll}\")
-             endforeach()
          endif()
         "
     )
@@ -1430,7 +1652,6 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
             \"libopencv_core.412.dylib=@rpath/libopencv_core.412.dylib\"
             \"libopencv_imgproc.412.dylib=@rpath/libopencv_imgproc.412.dylib\"
             \"libopencv_imgcodecs.412.dylib=@rpath/libopencv_imgcodecs.412.dylib\"
-            \"libopencv_videoio.412.dylib=@rpath/libopencv_videoio.412.dylib\"
             \"libopencv_features2d.412.dylib=@rpath/libopencv_features2d.412.dylib\"
             \"libopencv_flann.412.dylib=@rpath/libopencv_flann.412.dylib\"
             \"libgcc_s.1.1.dylib=@rpath/libgcc_s.1.1.dylib\"
@@ -1476,12 +1697,16 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
              set(_alcedo_main_bin \"\${_alcedo_app_path}/Contents/MacOS/${ALCEDO_MACOS_BUNDLE_NAME}\")
              set(_alcedo_mind_bin \"\${_alcedo_app_path}/Contents/MacOS/alcedo_mind\")
              set(_alcedo_aria2c_bin \"\${_alcedo_app_path}/Contents/MacOS/aria2c\")
+             set(_alcedo_cli_bin \"\${_alcedo_app_path}/Contents/MacOS/alcedo-cli\")
 
              if(NOT EXISTS \"\${_alcedo_main_bin}\")
                  message(FATAL_ERROR \"macOS bundle executable not found: \${_alcedo_main_bin}\")
              endif()
+             if(NOT EXISTS \"\${_alcedo_cli_bin}\")
+                 message(FATAL_ERROR \"alcedo-cli not found in the macOS bundle: \${_alcedo_cli_bin}\")
+             endif()
 
-             set(_alcedo_macho_files \"\${_alcedo_main_bin}\")
+             set(_alcedo_macho_files \"\${_alcedo_main_bin}\" \"\${_alcedo_cli_bin}\")
              if(EXISTS \"\${_alcedo_mind_bin}\")
                  list(APPEND _alcedo_macho_files \"\${_alcedo_mind_bin}\")
              endif()
@@ -1647,6 +1872,17 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
         )
     endif()
 
+    # The install copies the build-tree bundle as a whole. A run from the build tree leaves the
+    # sidecar log directory next to alcedo_mind; it must not reach the packages.
+    install(CODE
+        "set(_alcedo_build_log_dir \"\${CMAKE_INSTALL_PREFIX}/${ALCEDO_MACOS_BUNDLE_NAME}.app/Contents/MacOS/log\")
+         if(EXISTS \"\${_alcedo_build_log_dir}\")
+             message(STATUS \"Removing build-tree log directory from bundle: \${_alcedo_build_log_dir}\")
+             file(REMOVE_RECURSE \"\${_alcedo_build_log_dir}\")
+         endif()
+        "
+    )
+
     # Sign only after all bundle mutations are complete.
     if(NOT "${ALCEDO_MACOS_CODESIGN_IDENTITY}" STREQUAL "")
         install(CODE
@@ -1729,14 +1965,12 @@ set(CPACK_PACKAGE_NAME "alcedo")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 if(APPLE AND ALCEDO_MACOS_BUNDLE)
-    set(CPACK_GENERATOR "DragNDrop;ZIP")
+    # The update ZIP is created from the same bundle by create_macos_update_zip.cmake.
+    set(CPACK_GENERATOR "DragNDrop")
     set(CPACK_PACKAGE_NAME "${ALCEDO_MACOS_BUNDLE_NAME}")
     set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
     set(CPACK_DMG_VOLUME_NAME "${ALCEDO_MACOS_BUNDLE_NAME}")
     set(CPACK_DMG_FORMAT "UDBZ")
-    # Include the .app bundle at the top level of the ZIP so the user
-    # extracts it and finds the app bundle directly.
-    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
     # Package / DMG volume icon (same brand mark as the .app bundle).
     set(_alcedo_macos_pkg_icns
         "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/ICON/alcedo_icon.icns")
@@ -1859,18 +2093,39 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
 else()
     set(CPACK_GENERATOR "ZIP")
 endif()
+# Package only the application install component. Bundled gRPC/RE2 development files are
+# installed under AlcedoGrpcDevelopment (see alcedo_studio/src/third_party/CMakeLists.txt).
+set(ALCEDO_PACKAGE_INSTALL_COMPONENT "Unspecified")
+set(CPACK_INSTALL_CMAKE_PROJECTS
+    "${CMAKE_BINARY_DIR};${CMAKE_PROJECT_NAME};${ALCEDO_PACKAGE_INSTALL_COMPONENT};/")
+if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
+    # Package the .app that `cmake --install` already deployed, signed, and verified. Running
+    # the install rules again would repeat macdeployqt and signing for each CPack generator,
+    # and the packages would not be the verified bundle.
+    set(CPACK_ALCEDO_MACOS_APP "${CMAKE_INSTALL_PREFIX}/${ALCEDO_MACOS_BUNDLE_NAME}.app")
+    set(CPACK_INSTALL_CMAKE_PROJECTS "")
+    set(CPACK_INSTALLED_DIRECTORIES "${CPACK_ALCEDO_MACOS_APP};${ALCEDO_MACOS_BUNDLE_NAME}.app")
+    set(CPACK_POST_BUILD_SCRIPTS "${CMAKE_SOURCE_DIR}/scripts/cmake/create_macos_update_zip.cmake")
+endif()
 include(CPack)
 
 if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
     add_custom_target(macos_package
+        COMMAND "${CMAKE_COMMAND}" -E rm -rf
+                "${CMAKE_INSTALL_PREFIX}/${ALCEDO_MACOS_BUNDLE_NAME}.app"
         COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}"
+                --component "${ALCEDO_PACKAGE_INSTALL_COMPONENT}"
         COMMAND "${CMAKE_SOURCE_DIR}/scripts/verify_macos_install_tree.sh"
                 --install-dir "${CMAKE_INSTALL_PREFIX}"
                 --bundle-name "${ALCEDO_MACOS_BUNDLE_NAME}"
+                --require-film-print-resources
         COMMAND "${CMAKE_CPACK_COMMAND}" --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake" -B "${CMAKE_INSTALL_PREFIX}"
         DEPENDS ${ALCEDO_MAIN_BIN}
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         COMMENT "Installing ${ALCEDO_MACOS_BUNDLE_NAME}.app and creating macOS packages"
         USES_TERMINAL
     )
+    if(TARGET alcedo_gpu_check)
+        add_dependencies(macos_package alcedo_gpu_check)
+    endif()
 endif()

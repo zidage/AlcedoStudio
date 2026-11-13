@@ -15,15 +15,28 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSignalSpy>
 #include <QTest>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <memory>
+#include <random>
+#include <string>
+#include <system_error>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "app/camera_profile_library_service.hpp"
+#include "image/dcp_profile_library.hpp"
+#include "image/dcp_test_file_writer.hpp"
+#include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
@@ -38,12 +51,16 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
   Q_PROPERTY(quint64 snapshotRevision READ snapshotRevision NOTIFY adjustmentSnapshotChanged)
   Q_PROPERTY(QString activeAdjustmentPanel READ activeAdjustmentPanel WRITE setActiveAdjustmentPanel
                  NOTIFY activeAdjustmentPanelChanged)
+  // Camera identity of the image RAW color context (EditorSessionController::cameraMake).
+  Q_PROPERTY(QString cameraMake MEMBER camera_make CONSTANT)
+  Q_PROPERTY(QString cameraModel MEMBER camera_model CONSTANT)
 
  public:
   struct Call {
-    QString field_key;
-    QString params_json;
-    bool    settled = false;
+    QString                      field_key;
+    QString                      params_json;
+    bool                         settled = false;
+    alcedo::EditorParameterWrite write   = alcedo::EditorScalarWrite{};
   };
 
   explicit RawDecodeSession(QVariantMap snapshot, QObject* parent = nullptr)
@@ -61,18 +78,52 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
   }
   [[nodiscard]] auto canEdit() const -> bool override { return true; }
 
-  bool               submitPatch(QString fieldKey, QString paramsJson, bool settled) override {
-    calls.push_back({std::move(fieldKey), std::move(paramsJson), settled});
+  auto               submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> bool override {
+    calls.push_back({fieldKey, QString(), settled, write});
     if (settled) {
-      const auto& call     = calls.back();
-      const auto  document = QJsonDocument::fromJson(call.params_json.toUtf8());
-      if (document.isObject()) {
-        snapshot_.insert(call.field_key, document.object().toVariantMap());
+      if (const auto* raw = std::get_if<alcedo::DevelopRawDecodeUpdate>(&write)) {
+        QVariantMap raw_map;
+        if (raw->demosaic_method.has_value()) {
+          raw_map.insert(QStringLiteral("method"), QString::fromStdString(*raw->demosaic_method));
+        }
+        if (raw->highlights_reconstruct.has_value()) {
+          raw_map.insert(QStringLiteral("highlights_reconstruct"), *raw->highlights_reconstruct);
+        }
+        if (raw->use_camera_wb.has_value()) {
+          raw_map.insert(QStringLiteral("use_camera_wb"), *raw->use_camera_wb);
+        }
+        if (raw->user_wb.has_value()) {
+          raw_map.insert(QStringLiteral("user_wb"), *raw->user_wb);
+        }
+        QVariantMap wrapper;
+        wrapper.insert(QStringLiteral("raw"), raw_map);
+        snapshot_.insert(QStringLiteral("raw_decode"), wrapper);
         ++snapshot_revision_;
         emit adjustmentSnapshotChanged();
       }
     }
     return true;
+  }
+
+  bool submitPatch(QString fieldKey, QString paramsJson, bool settled) override {
+    nlohmann::json parsed;
+    try {
+      parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                    : nlohmann::json::parse(paramsJson.toStdString());
+    } catch (const std::exception&) {
+      return false;
+    }
+    std::string error;
+    auto        write = alcedo::ParseEditorParameterWrite(fieldKey.toStdString(), parsed, &error);
+    if (!write.has_value()) {
+      return false;
+    }
+    const auto ok = submitWrite(fieldKey, std::move(*write), settled);
+    if (ok && !calls.empty()) {
+      calls.back().params_json = std::move(paramsJson);
+    }
+    return ok;
   }
 
   void SaveReplayAndReopen() { Publish(snapshot_); }
@@ -92,6 +143,8 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
   }
 
   std::vector<Call> calls;
+  QString           camera_make  = QStringLiteral("Canon");
+  QString           camera_model = QStringLiteral("Canon EOS R6");
 
  signals:
   void adjustmentSnapshotChanged();
@@ -204,6 +257,29 @@ class AdjustmentStackHarness {
   QList<QQmlError>            errors_;
 };
 
+// Sections can sit below the 760px viewport fold; a mouseClick at clipped
+// scene coordinates misses. Scroll the panel Flickable until the item's
+// bounds are inside the viewport before clicking it.
+auto ScrollItemIntoView(AdjustmentStackHarness& harness, QQuickItem* item) -> bool {
+  auto* flick = harness.findObject<QQuickItem>(QStringLiteral("editorRawDecodePanelScroll"));
+  if (flick == nullptr || item == nullptr) {
+    return false;
+  }
+  const QPointF view_pos  = item->mapToItem(flick, QPointF(0, 0));
+  const qreal   bottom    = view_pos.y() + item->height();
+  qreal         content_y = flick->property("contentY").toReal();
+  if (view_pos.y() < 0) {
+    content_y += view_pos.y() - 8;
+  } else if (bottom > flick->height()) {
+    content_y += bottom - flick->height() + 8;
+  }
+  const qreal max_y =
+      std::max<qreal>(0.0, flick->property("contentHeight").toReal() - flick->height());
+  flick->setProperty("contentY", std::clamp(content_y, 0.0, max_y));
+  ProcessEvents(50);
+  return true;
+}
+
 auto SelectSegmentedEntry(AdjustmentStackHarness& harness, const QString& objectName,
                           qsizetype index) -> bool {
   auto* switcher = harness.findObject<QQuickItem>(objectName);
@@ -222,6 +298,7 @@ auto SelectSegmentedEntry(AdjustmentStackHarness& harness, const QString& object
   if (segment == nullptr || !segment->isEnabled()) {
     return false;
   }
+  ScrollItemIntoView(harness, segment);
   QTest::mouseClick(harness.window(), Qt::LeftButton, {}, CenterInWindow(segment));
   ProcessEvents(80);
   return true;
@@ -237,20 +314,37 @@ TEST(EditorRawDecodePanelQmlTest, ControlsEnabledWhenImageSelected) {
   auto* method_model = harness.findObject<QObject>(QStringLiteral("rawDemosaicMethodModel"));
   auto* highlights   = harness.findObject<QQuickItem>(QStringLiteral("rawHighlightsControl"));
   auto* status       = harness.findObject<QObject>(QStringLiteral("rawDecodeStatus"));
-  auto* geometry_lens =
-      harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_geometry_lens"));
+  auto* raw_lens =
+      harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_raw_lens"));
   ASSERT_NE(method_model, nullptr);
   ASSERT_NE(highlights, nullptr);
-  ASSERT_NE(geometry_lens, nullptr);
+  ASSERT_NE(raw_lens, nullptr);
 
   EXPECT_TRUE(method_model->property("enabled").toBool());
   EXPECT_TRUE(
       highlights->findChild<QQuickItem*>(QStringLiteral("adjustmentToggleSwitch"))->isEnabled());
   EXPECT_EQ(status, nullptr);
-  EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_raw_lens")),
+  EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_geometry_lens")),
             nullptr);
-  EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel")), nullptr);
-  EXPECT_TRUE(geometry_lens->property("expanded").toBool());
+  EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("geometryLensEnabledModel")), nullptr);
+  EXPECT_NE(harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel")), nullptr);
+  EXPECT_TRUE(raw_lens->property("expanded").toBool());
+}
+
+TEST(EditorRawDecodePanelQmlTest, WhiteBalanceTracksUseCatalogRanges) {
+  RawDecodeSession       session(Snapshot(QStringLiteral("default"), true));
+  AdjustmentStackHarness harness(&session);
+
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* temperature = harness.findObject<QObject>(QStringLiteral("rawCctSlider"));
+  auto* tint        = harness.findObject<QObject>(QStringLiteral("rawTintSlider"));
+  ASSERT_NE(temperature, nullptr);
+  ASSERT_NE(tint, nullptr);
+  // The Kelvin track is the slider position scale of the catalog; tint is in UI units.
+  EXPECT_DOUBLE_EQ(temperature->property("from").toDouble(), 0.0);
+  EXPECT_DOUBLE_EQ(temperature->property("to").toDouble(), 4096.0);
+  EXPECT_DOUBLE_EQ(tint->property("from").toDouble(), -150.0);
+  EXPECT_DOUBLE_EQ(tint->property("to").toDouble(), 150.0);
 }
 
 TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
@@ -264,41 +358,40 @@ TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
   ASSERT_EQ(session.calls.size(), 1u);
   EXPECT_EQ(session.calls.back().field_key, QStringLiteral("raw_decode"));
   EXPECT_TRUE(session.calls.back().settled);
-  const auto raw_after_method = QJsonDocument::fromJson(session.calls.back().params_json.toUtf8())
-                                    .object()
-                                    .value(QStringLiteral("raw"))
-                                    .toObject();
-  EXPECT_EQ(raw_after_method.value(QStringLiteral("method")).toString(),
-            QStringLiteral("neural_engine"));
-  // The accelerator backend is never part of the edit params.
-  EXPECT_FALSE(raw_after_method.contains(QStringLiteral("gpu_backend")));
-  EXPECT_FALSE(raw_after_method.contains(QStringLiteral("cuda")));
-  EXPECT_FALSE(raw_after_method.contains(QStringLiteral("opencl")));
-  EXPECT_TRUE(raw_after_method.contains(QStringLiteral("decode_res")));
-  EXPECT_FALSE(raw_after_method.value(QStringLiteral("use_camera_wb")).toBool());
-  EXPECT_DOUBLE_EQ(raw_after_method.value(QStringLiteral("user_wb")).toDouble(), 5120.0);
+  const auto* raw_after_method =
+      std::get_if<alcedo::DevelopRawDecodeUpdate>(&session.calls.back().write);
+  ASSERT_NE(raw_after_method, nullptr);
+  ASSERT_TRUE(raw_after_method->demosaic_method.has_value());
+  EXPECT_EQ(*raw_after_method->demosaic_method, "neural_engine");
+  // The write is the catalog RAW Decode object: the panel projection has only the method and
+  // the highlight switch, so the white balance keys of the fixture do not carry over.
+  ASSERT_TRUE(raw_after_method->use_camera_wb.has_value());
+  EXPECT_TRUE(*raw_after_method->use_camera_wb);
+  ASSERT_TRUE(raw_after_method->user_wb.has_value());
+  EXPECT_DOUBLE_EQ(*raw_after_method->user_wb, 7600.0);
 
   auto* highlights = harness.findObject<QQuickItem>(QStringLiteral("rawHighlightsControl"));
   ASSERT_NE(highlights, nullptr);
   auto* highlight_switch =
       highlights->findChild<QQuickItem*>(QStringLiteral("adjustmentToggleSwitch"));
   ASSERT_NE(highlight_switch, nullptr);
+  ScrollItemIntoView(harness, highlight_switch);
   QTest::mouseClick(harness.window(), Qt::LeftButton, {}, CenterInWindow(highlight_switch));
   ProcessEvents(80);
   ASSERT_EQ(session.calls.size(), 2u);
-  const auto raw_after_toggle = QJsonDocument::fromJson(session.calls.back().params_json.toUtf8())
-                                    .object()
-                                    .value(QStringLiteral("raw"))
-                                    .toObject();
-  EXPECT_EQ(raw_after_toggle.value(QStringLiteral("method")).toString(),
-            QStringLiteral("neural_engine"));
-  EXPECT_FALSE(raw_after_toggle.value(QStringLiteral("highlights_reconstruct")).toBool());
+  const auto* raw_after_toggle =
+      std::get_if<alcedo::DevelopRawDecodeUpdate>(&session.calls.back().write);
+  ASSERT_NE(raw_after_toggle, nullptr);
+  ASSERT_TRUE(raw_after_toggle->demosaic_method.has_value());
+  EXPECT_EQ(*raw_after_toggle->demosaic_method, "neural_engine");
+  ASSERT_TRUE(raw_after_toggle->highlights_reconstruct.has_value());
+  EXPECT_FALSE(*raw_after_toggle->highlights_reconstruct);
 }
 
 TEST(EditorRawDecodePanelQmlTest,
      SnapshotReplayVersionReconstructionImageSwitchAndReopenAreLoadOnly) {
-  const auto image_a = Snapshot(QStringLiteral("legacy"), false);
-  const auto image_b = Snapshot(QStringLiteral("default"), true);
+  const auto             image_a = Snapshot(QStringLiteral("legacy"), false);
+  const auto             image_b = Snapshot(QStringLiteral("default"), true);
   RawDecodeSession       session(image_a);
   AdjustmentStackHarness harness(&session);
 
@@ -336,6 +429,362 @@ TEST(EditorRawDecodePanelQmlTest,
   EXPECT_EQ(method->property("currentValue").toString(), QStringLiteral("legacy"));
   EXPECT_FALSE(highlights->property("value").toBool());
   EXPECT_EQ(session.calls.size(), calls_after_replay);
+}
+
+TEST(EditorRawDecodePanelQmlTest, EnablingLensCalibrationSubmitsEnabledUpdate) {
+  RawDecodeSession       session(Snapshot(QStringLiteral("default"), true));
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* enabled = harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel"));
+  ASSERT_NE(enabled, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(enabled, "toggle"));
+  ASSERT_EQ(session.calls.size(), 1u);
+  const auto* lens = std::get_if<alcedo::DevelopLensCalibrationUpdate>(&session.calls.back().write);
+  ASSERT_NE(lens, nullptr);
+  ASSERT_TRUE(lens->lens_enabled.has_value());
+  EXPECT_TRUE(*lens->lens_enabled);
+}
+
+TEST(EditorRawDecodePanelQmlTest, LensSelectionKeepsLegacyDefaultsAndIsAvailableWhenDisabled) {
+  RawDecodeSession       session(Snapshot(QStringLiteral("default"), true));
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* enabled = harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel"));
+  auto* brand   = harness.findObject<QObject>(QStringLiteral("rawLensBrandModel"));
+  auto* model   = harness.findObject<QObject>(QStringLiteral("rawLensModelModel"));
+  ASSERT_NE(enabled, nullptr);
+  ASSERT_NE(brand, nullptr);
+  ASSERT_NE(model, nullptr);
+
+  EXPECT_FALSE(enabled->property("value").toBool());
+  EXPECT_TRUE(brand->property("enabled").toBool());
+  const auto brand_entries = brand->property("entries").toList();
+  ASSERT_GT(brand_entries.size(), 1);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(brand, "selectIndex", Q_ARG(int, 1)));
+  ASSERT_EQ(session.calls.size(), 1u);
+  const auto* lens = std::get_if<alcedo::DevelopLensCalibrationUpdate>(&session.calls.back().write);
+  ASSERT_NE(lens, nullptr);
+  EXPECT_TRUE(lens->apply_distortion.has_value());
+  EXPECT_TRUE(lens->lens_profile_db_path.has_value());
+  EXPECT_FALSE(lens->lens_profile_db_path->empty());
+  ASSERT_TRUE(lens->lens_maker.has_value());
+  EXPECT_FALSE(lens->lens_maker->empty());
+  ASSERT_TRUE(lens->lens_model.has_value());
+  EXPECT_FALSE(lens->lens_model->empty());
+  EXPECT_TRUE(model->property("enabled").toBool());
+  EXPECT_FALSE(model->property("currentValue").toString().isEmpty());
+}
+
+TEST(EditorRawDecodePanelQmlTest, LensSnapshotRestoresMakerModelWithoutSubmitting) {
+  QVariantMap lens;
+  lens.insert(QStringLiteral("enabled"), true);
+  lens.insert(QStringLiteral("lens_maker"), QStringLiteral("Unknown Maker"));
+  lens.insert(QStringLiteral("lens_model"), QStringLiteral("Unknown Model"));
+  QVariantMap lens_wrapper;
+  lens_wrapper.insert(QStringLiteral("lens_calib"), lens);
+  auto snapshot = Snapshot(QStringLiteral("default"), true);
+  snapshot.insert(QStringLiteral("lens_calib"), lens_wrapper);
+
+  RawDecodeSession       session(snapshot);
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* enabled = harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel"));
+  auto* brand   = harness.findObject<QObject>(QStringLiteral("rawLensBrandModel"));
+  auto* model   = harness.findObject<QObject>(QStringLiteral("rawLensModelModel"));
+  ASSERT_NE(enabled, nullptr);
+  ASSERT_NE(brand, nullptr);
+  ASSERT_NE(model, nullptr);
+  EXPECT_TRUE(enabled->property("value").toBool());
+  EXPECT_EQ(brand->property("currentValue").toString(), QStringLiteral("Unknown Maker"));
+  EXPECT_EQ(model->property("currentValue").toString(), QStringLiteral("Unknown Model"));
+  EXPECT_TRUE(session.calls.empty());
+}
+
+auto RasterSnapshot(const QString& profile_override) -> QVariantMap {
+  QVariantMap input;
+  input.insert(QStringLiteral("raster"), true);
+  input.insert(QStringLiteral("profile_override"), profile_override);
+  input.insert(QStringLiteral("profile_description"), QStringLiteral("Display P3"));
+  input.insert(QStringLiteral("origin"), QStringLiteral("icc_matrix_shaper"));
+  input.insert(QStringLiteral("referral"), QStringLiteral("display_referred"));
+  auto snapshot = Snapshot(QStringLiteral("default"), true);
+  snapshot.insert(QStringLiteral("input_profile"), QVariantMap{{QStringLiteral("input"), input}});
+  return snapshot;
+}
+
+// Raster input (raster_image_input_plan.md, section 6.6): the panel hides white balance and the
+// RAW decode controls, shows the input color, and writes the input profile through history.
+TEST(EditorRawDecodePanelQmlTest, RasterImageShowsInputColorAndSubmitsInputProfile) {
+  RawDecodeSession       session(RasterSnapshot(QStringLiteral("auto")));
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* input_section =
+      harness.findObject<QQuickItem>(QStringLiteral("editorAdjustmentGroupShell_raw_input"));
+  auto* raw_section =
+      harness.findObject<QQuickItem>(QStringLiteral("editorAdjustmentGroupShell_raw_decode"));
+  auto* white_balance = harness.findObject<QQuickItem>(QStringLiteral("editorWhiteBalanceSection"));
+  auto* color_label   = harness.findObject<QQuickItem>(QStringLiteral("rawInputColorLabel"));
+  auto* profile_model = harness.findObject<QObject>(QStringLiteral("rawInputProfileModel"));
+  ASSERT_NE(input_section, nullptr);
+  ASSERT_NE(raw_section, nullptr);
+  ASSERT_NE(white_balance, nullptr);
+  ASSERT_NE(color_label, nullptr);
+  ASSERT_NE(profile_model, nullptr);
+  EXPECT_TRUE(input_section->isVisible());
+  EXPECT_FALSE(raw_section->isVisible());
+  EXPECT_FALSE(white_balance->isVisible());
+  EXPECT_TRUE(color_label->property("text").toString().startsWith(QStringLiteral("Display P3")));
+  EXPECT_EQ(profile_model->property("currentValue").toString(), QStringLiteral("auto"));
+  EXPECT_TRUE(session.calls.empty());
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(profile_model, "selectIndex", Q_ARG(int, 3)));
+  ProcessEvents(80);
+  ASSERT_FALSE(session.calls.empty());
+  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("input_profile"));
+  EXPECT_TRUE(session.calls.back().settled);
+  const auto* update = std::get_if<alcedo::DevelopInputProfileUpdate>(&session.calls.back().write);
+  ASSERT_NE(update, nullptr);
+  EXPECT_EQ(update->profile_override, "adobe_rgb");
+
+  // Switching to a RAW image brings the RAW controls back.
+  session.SwitchImage(Snapshot(QStringLiteral("default"), true));
+  ProcessEvents(80);
+  EXPECT_FALSE(input_section->isVisible());
+  EXPECT_TRUE(raw_section->isVisible());
+  EXPECT_TRUE(white_balance->isVisible());
+}
+
+// DCP plan C5: the Camera Profile section above White Balance lists the default entry and the
+// matched DCP profiles, submits a selection as one settled camera_profile_file write, shows an
+// unresolved stored reference in dangerColor, and offers Choose Folder without a DCP folder.
+TEST(EditorRawDecodePanelQmlTest, CameraProfileSectionListsMatchedProfilesAndSubmitsSelection) {
+  namespace fs = std::filesystem;
+  std::random_device device;
+  const auto         temp = fs::temp_directory_path() /
+                    ("alcedo_raw_panel_camera_profile_test_" + std::to_string(device()) + "_" +
+                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const auto folder = temp / "Camera";
+  fs::create_directories(folder);
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Camera Standard").Write(folder / "standard.dcp");
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Adobe Color").Write(folder / "adobe.dcp");
+  alcedo::test::MinimalDcpProfile("Sony ILCE-7M4", "Camera ST").Write(folder / "sony.dcp");
+  struct Cleanup {
+    fs::path temp;
+    ~Cleanup() {
+      DcpProfileLibrary::Shared().Scan({});
+      std::error_code error;
+      fs::remove_all(temp, error);
+    }
+  } cleanup{temp};
+
+  // The selection parse resolves the identity in DcpProfileLibrary::Shared().
+  CameraProfileLibraryServiceOptions options;
+  options.settings_file = QString::fromStdWString((temp / "settings.ini").wstring());
+  CameraProfileLibraryService library(std::move(options));
+
+  auto                        snapshot = Snapshot(QStringLiteral("default"), true);
+  auto                        stored   = [](bool selected, const QString& name) {
+    QVariantMap reference;
+    reference.insert(QStringLiteral("raster"), false);
+    reference.insert(QStringLiteral("embedded_default"), false);
+    reference.insert(QStringLiteral("selected"), selected);
+    reference.insert(QStringLiteral("resolved"), false);
+    reference.insert(QStringLiteral("camera_model"),
+                     selected ? QStringLiteral("Canon EOS R6") : QString());
+    reference.insert(QStringLiteral("profile_name"), name);
+    return QVariantMap{{QStringLiteral("camera_profile_file"), reference}};
+  };
+  snapshot.insert(QStringLiteral("camera_profile_file"), stored(false, QString()));
+  RawDecodeSession       session(snapshot);
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* section   = harness.findObject<QQuickItem>(QStringLiteral("editorCameraProfileSection"));
+  auto* model     = harness.findObject<QObject>(QStringLiteral("rawCameraProfileModel"));
+  auto* combo_row = harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileComboRow"));
+  auto* note      = harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileNote"));
+  auto* white_balance = harness.findObject<QQuickItem>(QStringLiteral("editorWhiteBalanceSection"));
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(combo_row, nullptr);
+  ASSERT_NE(note, nullptr);
+  ASSERT_NE(white_balance, nullptr);
+  EXPECT_TRUE(section->isVisible());
+  EXPECT_LT(section->mapToScene({0, 0}).y(), white_balance->mapToScene({0, 0}).y());
+  // The folder is set in Settings only; the section has no folder button.
+  EXPECT_EQ(harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileChooseFolderButton")),
+            nullptr);
+
+  // No DCP folder: the default entry only, and a note that names the Settings page.
+  section->setProperty("library", QVariant::fromValue(static_cast<QObject*>(&library)));
+  ProcessEvents(50);
+  EXPECT_TRUE(note->isVisible());
+  EXPECT_EQ(note->property("text").toString(),
+            QStringLiteral("Set a DCP folder in Settings > LUTs and Color Management."));
+  EXPECT_LT(combo_row->mapToScene({0, 0}).y(), note->mapToScene({0, 0}).y());
+  EXPECT_EQ(model->property("entries").toList().size(), 1);
+
+  // A folder without a profile of this camera (Canon EOS R6): the default entry and a note.
+  const auto other_folder = temp / "Other";
+  fs::create_directories(other_folder);
+  alcedo::test::MinimalDcpProfile("Sony ILCE-7M4", "Camera ST").Write(other_folder / "sony.dcp");
+  QSignalSpy finished(&library, &CameraProfileLibraryService::ScanFinished);
+  library.setRootFolder(QUrl::fromLocalFile(QString::fromStdWString(other_folder.wstring())));
+  ASSERT_TRUE(finished.wait(10000));
+  ProcessEvents(50);
+  EXPECT_EQ(model->property("entries").toList().size(), 1);
+  EXPECT_TRUE(note->isVisible());
+  EXPECT_EQ(note->property("text").toString(),
+            QStringLiteral("The DCP folder has no profile of this camera."));
+
+  library.setRootFolder(QUrl::fromLocalFile(QString::fromStdWString(folder.wstring())));
+  ASSERT_TRUE(finished.wait(10000));
+  ProcessEvents(50);
+  EXPECT_FALSE(note->isVisible());
+  QStringList labels;
+  for (const auto& entry : model->property("entries").toList()) {
+    labels << entry.toMap().value(QStringLiteral("label")).toString();
+  }
+  EXPECT_EQ(labels, (QStringList{QStringLiteral("Built-in"), QStringLiteral("Adobe Color"),
+                                 QStringLiteral("Camera Standard")}));
+  EXPECT_TRUE(model->property("enabled").toBool());
+  EXPECT_FALSE(combo_row->property("warning").toBool());
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(model, "selectIndex", Q_ARG(int, 2)));
+  ProcessEvents(50);
+  ASSERT_EQ(session.calls.size(), 1u);
+  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("camera_profile_file"));
+  EXPECT_TRUE(session.calls.back().settled);
+  const auto* update =
+      std::get_if<alcedo::DevelopCameraProfileFileUpdate>(&session.calls.back().write);
+  ASSERT_NE(update, nullptr);
+  ASSERT_NE(update->profile, nullptr);
+  EXPECT_EQ(update->profile->profile_name, "Camera Standard");
+
+  // A stored reference that the folder does not hold: its name, in the warning color.
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(true, QStringLiteral("Camera Vivid")));
+  session.SwitchImage(snapshot);
+  ProcessEvents(80);
+  EXPECT_EQ(model->property("currentIndex").toInt(), 3);
+  EXPECT_TRUE(combo_row->property("warning").toBool());
+  auto* combo = harness.findObject<QObject>(QStringLiteral("rawCameraProfileCombo"));
+  ASSERT_NE(combo, nullptr);
+  EXPECT_EQ(combo->property("displayText").toString(), QStringLiteral("Camera Vivid"));
+
+  // A raster image hides the section.
+  session.SwitchImage(RasterSnapshot(QStringLiteral("auto")));
+  ProcessEvents(80);
+  EXPECT_FALSE(section->isVisible());
+}
+
+// T3 (dcp_profile_tone_curve_study.md, section 6.4): the Tone Curve switch under the profile combo
+// is shown for a bound profile with a ProfileToneCurve, commits one settled camera_profile_file
+// write, and is disabled while the DRT method is Film Print.
+TEST(EditorRawDecodePanelQmlTest, CameraProfileToneCurveSwitchCommitsAndFollowsTheDrtMethod) {
+  namespace fs = std::filesystem;
+  std::random_device device;
+  const auto         temp = fs::temp_directory_path() /
+                    ("alcedo_raw_panel_tone_curve_test_" + std::to_string(device()) + "_" +
+                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const auto folder = temp / "Camera";
+  fs::create_directories(folder);
+  constexpr std::uint16_t kProfileToneCurve = 50940;
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Camera Standard")
+      .Floats(kProfileToneCurve, {0.0f, 0.0f, 0.18f, 0.44f, 1.0f, 1.0f})
+      .Write(folder / "standard.dcp");
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Camera Flat").Write(folder / "flat.dcp");
+  struct Cleanup {
+    fs::path temp;
+    ~Cleanup() {
+      DcpProfileLibrary::Shared().Scan({});
+      std::error_code error;
+      fs::remove_all(temp, error);
+    }
+  } cleanup{temp};
+
+  CameraProfileLibraryServiceOptions options;
+  options.settings_file = QString::fromStdWString((temp / "settings.ini").wstring());
+  CameraProfileLibraryService library(std::move(options));
+
+  const auto stored = [](const QString& name, bool has_tone_curve, bool profile_tone) {
+    QVariantMap reference;
+    reference.insert(QStringLiteral("raster"), false);
+    reference.insert(QStringLiteral("embedded_default"), false);
+    reference.insert(QStringLiteral("selected"), true);
+    reference.insert(QStringLiteral("resolved"), true);
+    reference.insert(QStringLiteral("has_tone_curve"), has_tone_curve);
+    reference.insert(QStringLiteral("profile_tone"), profile_tone);
+    reference.insert(QStringLiteral("camera_model"), QStringLiteral("Canon EOS R6"));
+    reference.insert(QStringLiteral("profile_name"), name);
+    return QVariantMap{{QStringLiteral("camera_profile_file"), reference}};
+  };
+  const auto odt = [](const QString& method) {
+    QVariantMap value;
+    value.insert(QStringLiteral("method"), method);
+    return QVariantMap{{QStringLiteral("odt"), value}};
+  };
+  auto snapshot = Snapshot(QStringLiteral("default"), true);
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(QStringLiteral("Camera Standard"), true, true));
+  snapshot.insert(QStringLiteral("odt"), odt(QStringLiteral("aces_2_0")));
+  RawDecodeSession       session(snapshot);
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* section = harness.findObject<QQuickItem>(QStringLiteral("editorCameraProfileSection"));
+  auto* row     = harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileToneCurveRow"));
+  auto* tone_switch =
+      harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileToneCurveSwitch"));
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(row, nullptr);
+  ASSERT_NE(tone_switch, nullptr);
+  QSignalSpy finished(&library, &CameraProfileLibraryService::ScanFinished);
+  section->setProperty("library", QVariant::fromValue(static_cast<QObject*>(&library)));
+  library.setRootFolder(QUrl::fromLocalFile(QString::fromStdWString(folder.wstring())));
+  ASSERT_TRUE(finished.wait(10000));
+  ProcessEvents(50);
+
+  EXPECT_TRUE(row->isVisible());
+  EXPECT_TRUE(tone_switch->isEnabled());
+  EXPECT_TRUE(tone_switch->property("checked").toBool());
+
+  ScrollItemIntoView(harness, tone_switch);
+  QTest::mouseClick(harness.window(), Qt::LeftButton, {}, CenterInWindow(tone_switch));
+  ProcessEvents(80);
+  ASSERT_EQ(session.calls.size(), 1u);
+  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("camera_profile_file"));
+  EXPECT_TRUE(session.calls.back().settled);
+  const auto* update =
+      std::get_if<alcedo::DevelopCameraProfileFileUpdate>(&session.calls.back().write);
+  ASSERT_NE(update, nullptr);
+  ASSERT_NE(update->profile, nullptr);
+  EXPECT_EQ(update->profile->profile_name, "Camera Standard");
+  EXPECT_FALSE(update->profile_tone);
+
+  // The echo of the write; then Film Print disables the switch and keeps its stored value.
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(QStringLiteral("Camera Standard"), true, false));
+  snapshot.insert(QStringLiteral("odt"), odt(QStringLiteral("film_print")));
+  session.SwitchImage(snapshot);
+  ProcessEvents(80);
+  EXPECT_TRUE(row->isVisible());
+  EXPECT_FALSE(tone_switch->isEnabled());
+  EXPECT_FALSE(tone_switch->property("checked").toBool());
+
+  // A profile without a curve hides the switch.
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(QStringLiteral("Camera Flat"), false, true));
+  snapshot.insert(QStringLiteral("odt"), odt(QStringLiteral("open_drt")));
+  session.SwitchImage(snapshot);
+  ProcessEvents(80);
+  EXPECT_FALSE(row->isVisible());
+  EXPECT_EQ(session.calls.size(), 1u);
 }
 
 }  // namespace alcedo::ui::test

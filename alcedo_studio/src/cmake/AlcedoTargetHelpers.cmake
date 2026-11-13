@@ -38,6 +38,10 @@ endmacro()
 # keeps their host and device-link output out of unrelated executable relinks.
 # Other first-party and third-party libraries remain static.
 macro(def_cuda_library target_name)
+  if(WIN32 AND ALCEDO_CUDA_ENABLED)
+    # CMake uses the host link language's standard libraries in its device link.
+    set(CMAKE_CXX_STANDARD_LIBRARIES "${ALCEDO_CUDA_DEVICE_LINK_STANDARD_LIBRARIES}")
+  endif()
   if(WIN32 AND ALCEDO_CUDA_ENABLED AND ALCEDO_BUILD_CUDA_DLLS)
     def_library(${target_name} TYPE SHARED ${ARGN})
     set_target_properties(${target_name} PROPERTIES
@@ -52,8 +56,18 @@ macro(def_cuda_library target_name)
     install(TARGETS ${target_name}
       RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
     )
+    get_target_property(_cuda_sources ${target_name} SOURCES)
+    list(FILTER _cuda_sources INCLUDE REGEX "\\.cu$")
+    if(_cuda_sources)
+      set_property(GLOBAL APPEND PROPERTY ALCEDO_CUDA_RUNTIME_TARGETS ${target_name})
+    endif()
   else()
     def_library(${target_name} ${ARGN})
+  endif()
+  if(ALCEDO_CUDA_ENABLED)
+    # nvlink otherwise retains native cubins but discards the requested PTX
+    # from separately compiled objects. New GPU architectures need that PTX.
+    target_link_options(${target_name} PRIVATE "$<DEVICE_LINK:--relocatable-ptx>")
   endif()
 endmacro()
 
@@ -65,11 +79,20 @@ function(alcedo_copy_linked_runtime_dlls target_name)
   endif()
 
   set(_alcedo_runtime_search_dirs "$<TARGET_FILE_DIR:${target_name}>")
-  if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
-    list(APPEND _alcedo_runtime_search_dirs
-      "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>bin"
-    )
+  # Submodule lensfun and first-party product DLLs must win over vcpkg/installed.
+  # vcpkg lensfun 0.3.4 exports C++ names only; EditRuntimeLens imports the C lf_* API
+  # from alcedo_studio/src/third_party/lensfun. Searching vcpkg first yields
+  # STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139).
+  if(TARGET puerhlab_lensfun)
+    list(APPEND _alcedo_runtime_search_dirs "$<TARGET_FILE_DIR:puerhlab_lensfun>")
   endif()
+  list(APPEND _alcedo_runtime_search_dirs
+    "${CMAKE_BINARY_DIR}/alcedo_studio/src/decoders"
+    "${CMAKE_BINARY_DIR}/alcedo_studio/src/edit"
+    "${CMAKE_BINARY_DIR}/alcedo_studio/src/image"
+    "${CMAKE_BINARY_DIR}/alcedo_studio/src/opencl"
+    "${CMAKE_BINARY_DIR}/alcedo_studio/src/utils"
+  )
   if(DEFINED CUDAToolkit_BIN_DIR AND NOT "${CUDAToolkit_BIN_DIR}" STREQUAL "")
     list(APPEND _alcedo_runtime_search_dirs "${CUDAToolkit_BIN_DIR}")
   endif()
@@ -77,11 +100,17 @@ function(alcedo_copy_linked_runtime_dlls target_name)
     "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows"
     "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/bin"
   )
-  if(TARGET alcedo_lensfun)
-    list(APPEND _alcedo_runtime_search_dirs "$<TARGET_FILE_DIR:alcedo_lensfun>")
+  if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+    list(APPEND _alcedo_runtime_search_dirs
+      "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>bin"
+    )
   endif()
   if(TARGET Qt6::Core)
     list(APPEND _alcedo_runtime_search_dirs "$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+  # ALCEDO_SANITIZER=address with MSVC: the AddressSanitizer runtime DLL of the compiler.
+  if(DEFINED ALCEDO_SANITIZER_RUNTIME_DIR)
+    list(APPEND _alcedo_runtime_search_dirs "${ALCEDO_SANITIZER_RUNTIME_DIR}")
   endif()
 
   add_custom_command(TARGET ${target_name} POST_BUILD
@@ -94,4 +123,25 @@ function(alcedo_copy_linked_runtime_dlls target_name)
     COMMENT "Alcedo: copy linked runtime DLLs for ${target_name}"
     VERBATIM
   )
+
+  # POST_BUILD runs only when the executable relinks. A change inside a linked DLL that keeps
+  # its exports relinks the DLL but not the executable, so the copy beside the executable
+  # stays stale. This step copies the linked DLLs again whenever one is newer than the stamp.
+  set(_alcedo_runtime_stamp
+    "${CMAKE_CURRENT_BINARY_DIR}/${target_name}_runtime_dlls.stamp")
+  add_custom_command(
+    OUTPUT "${_alcedo_runtime_stamp}"
+    COMMAND ${CMAKE_COMMAND}
+      "-DALCEDO_RUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:${target_name}>,,>"
+      "-DALCEDO_RUNTIME_DEST=$<TARGET_FILE_DIR:${target_name}>"
+      -P "${CMAKE_SOURCE_DIR}/scripts/cmake/copy_linked_runtime_dlls.cmake"
+    COMMAND ${CMAKE_COMMAND} -E touch "${_alcedo_runtime_stamp}"
+    DEPENDS
+      $<TARGET_RUNTIME_DLLS:${target_name}>
+      "${CMAKE_SOURCE_DIR}/scripts/cmake/copy_linked_runtime_dlls.cmake"
+    COMMENT "Alcedo: refresh linked runtime DLLs for ${target_name}"
+    VERBATIM
+  )
+  add_custom_target(${target_name}_runtime_dlls DEPENDS "${_alcedo_runtime_stamp}")
+  add_dependencies(${target_name} ${target_name}_runtime_dlls)
 endfunction()

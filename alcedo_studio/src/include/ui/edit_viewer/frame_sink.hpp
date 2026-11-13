@@ -10,6 +10,7 @@
 #include <optional>
 
 #include "edit/frame_presentation_types.hpp"
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 
 namespace alcedo {
@@ -63,7 +64,25 @@ enum class FramePresentationMode {
 struct FrameCompletionSubmission {
   FramePreviewMetadata  metadata{};
   FramePresentationMode mode = FramePresentationMode::FullFrame;
+  /**
+   * @brief Exact @c ResolveRenderGeometry result of the presented frame.
+   *
+   * Stamped by the renderer so Mask pointer mapping, overlays, and pixels use
+   * the same displayed-photograph geometry the frame was produced with. Empty
+   * extents mean no geometry was attached (analysis-only or legacy frames).
+   */
+  ResolvedRenderGeometry geometry{};
 };
+
+/**
+ * @brief True when a frame of @p mode and @p role covers the whole render reference of the
+ *        image (a full photo frame), so its geometry is the reference of Mask mapping and coverage
+ *        display. A RoiFrame or a DetailPatch renders a subrect of the same reference space.
+ */
+[[nodiscard]] inline auto IsRenderReferenceFrame(FramePresentationMode mode, FrameRole role)
+    -> bool {
+  return mode != FramePresentationMode::RoiFrame && role != FrameRole::DetailPatch;
+}
 
 enum class FramePixelFormat {
   RGBA32F,
@@ -91,6 +110,13 @@ struct FrameWriteMapping {
   std::uintptr_t       native_object         = 0;
   void*                cuda_signal_semaphore = nullptr;
   std::uint64_t        cuda_signal_value     = 0;
+  /// Set on an empty mapping when the sink refused the write because its
+  /// viewport is suspended. The frame is not an error: the owner renders again
+  /// when presentation resumes.
+  bool                 presentation_suspended = false;
+  /// Set on an empty coverage mapping (IMaskCoverageSink) when the viewport changed to another
+  /// image session before the write. The frame is not an error: it belongs to a closed image.
+  bool                 image_changed          = false;
 
   explicit             operator bool() const { return data != nullptr || image_array != nullptr; }
 };
@@ -103,6 +129,9 @@ struct ViewerFrame {
   ViewerDisplayConfig         display_config{};
   FramePresentationMode       presentation_mode = FramePresentationMode::FullFrame;
   FramePreviewMetadata        preview_metadata  = {};
+
+  // Geometry of these completed pixels, retained until asynchronous presentation.
+  ResolvedRenderGeometry      geometry{};
 
   explicit                    operator bool() const {
     return width > 0 && height > 0 && row_bytes > 0 && pixels != nullptr;

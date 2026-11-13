@@ -6,12 +6,20 @@
 /// @brief Loads the production Main.qml and verifies its real module wiring.
 
 #include <QFont>
+#include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
+#include <QQmlExtensionPlugin>
+#include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSettings>
+#include <QTest>
 #include <QUrl>
+#include <QVariantList>
+#include <QVariantMap>
+#include <QuickQanava>
 #include <filesystem>
 #include <sstream>
 #include <vector>
@@ -19,6 +27,9 @@
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
+#include "ui/alcedo_main/shortcut_registry.hpp"
+
+Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
 namespace alcedo::ui::test {
 namespace {
@@ -48,6 +59,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
+  QuickQanava::initialize(&engine);
   language_manager.AttachEngine(&engine);
   host.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &host);
@@ -77,22 +89,58 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   EXPECT_TRUE(window->isVisible());
   EXPECT_EQ(root->objectName(), QStringLiteral("mainWindow"));
 
+  // The background-task island lives on the top toolbar and rests as a lamp.
   auto* task_bar = root->findChild<QObject*>(QStringLiteral("backgroundTaskBar"));
   ASSERT_NE(task_bar, nullptr);
-  EXPECT_FALSE(task_bar->property("layoutActive").toBool());
-  BackgroundTaskSnapshot task_snapshot;
-  task_snapshot.kind_             = BackgroundTaskKind::ImageAnalysis;
-  task_snapshot.state_            = BackgroundTaskState::Running;
-  task_snapshot.title_            = QStringLiteral("Analyzing");
-  task_snapshot.progress_percent_ = 25;
-  task_snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
-  const QString task_id           = host.background_tasks()->RegisterTask(task_snapshot);
-  ProcessEvents(50);
-  EXPECT_TRUE(task_bar->property("layoutActive").toBool());
+  auto* top_toolbar = root->findChild<QObject*>(QStringLiteral("topToolbar"));
+  ASSERT_NE(top_toolbar, nullptr);
+  EXPECT_EQ(top_toolbar->findChild<QObject*>(QStringLiteral("backgroundTaskBar")), task_bar);
+  EXPECT_FALSE(task_bar->property("expanded").toBool());
+  const int reveal_delay_ms = task_bar->property("revealDelayMs").toInt();
+  const int auto_collapse_ms = AppTheme::Instance().backgroundTaskAutoCollapseMs();
+  const auto register_running_task = [&host](const QString& title) {
+    BackgroundTaskSnapshot snapshot;
+    snapshot.kind_             = BackgroundTaskKind::SemanticGeneration;
+    snapshot.state_            = BackgroundTaskState::Running;
+    snapshot.title_            = title;
+    snapshot.progress_percent_ = 25;
+    snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
+    return host.background_tasks()->RegisterTask(snapshot);
+  };
+
+  // A task that finishes inside the grace delay never unfolds the island.
+  const QString quick_task_id = register_running_task(QStringLiteral("Quick"));
+  ProcessEvents(reveal_delay_ms / 4);
+  host.background_tasks()->FinishTask(quick_task_id, BackgroundTaskState::Succeeded);
+  ProcessEvents(reveal_delay_ms + 100);
+  EXPECT_FALSE(task_bar->property("expanded").toBool());
+
+  // A long task unfolds the island; success folds it back at once.
+  const QString task_id = register_running_task(QStringLiteral("Analyzing"));
+  ProcessEvents(reveal_delay_ms + 100);
+  EXPECT_TRUE(task_bar->property("expanded").toBool());
   host.background_tasks()->FinishTask(task_id, BackgroundTaskState::Succeeded);
-  ProcessEvents(AppTheme::Instance().backgroundTaskAutoCollapseMs() +
-                AppTheme::Instance().motionFoldOpenMs() + 100);
-  EXPECT_FALSE(task_bar->property("layoutActive").toBool());
+  ProcessEvents(50);
+  EXPECT_FALSE(task_bar->property("expanded").toBool());
+
+  // A failure unfolds the island, which folds back after the auto-collapse delay.
+  const QString failing_task_id = register_running_task(QStringLiteral("Failing"));
+  host.background_tasks()->FinishTask(failing_task_id, BackgroundTaskState::Failed,
+                                      QStringLiteral("boom"));
+  ProcessEvents(50);
+  EXPECT_TRUE(task_bar->property("expanded").toBool());
+  ProcessEvents(auto_collapse_ms + 100);
+  EXPECT_FALSE(task_bar->property("expanded").toBool());
+
+  // A hand-opened island stays open until the user closes it.
+  ASSERT_TRUE(QMetaObject::invokeMethod(task_bar, "toggleByUser"));
+  EXPECT_TRUE(task_bar->property("expanded").toBool());
+  EXPECT_TRUE(task_bar->property("pinned").toBool());
+  ProcessEvents(auto_collapse_ms + 100);
+  EXPECT_TRUE(task_bar->property("expanded").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(task_bar, "toggleByUser"));
+  EXPECT_FALSE(task_bar->property("expanded").toBool());
+  EXPECT_FALSE(task_bar->property("pinned").toBool());
 
   // Exercise the real project, folder, thumbnail, import, export, inspection,
   // search, settings, and editor-entry seams through their concrete modules.
@@ -103,7 +151,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   host.import_export()->StartExport(PathToQString(temp_dir_));
   host.import_export()->ResetExportState();
   (void)host.images()->GetFocusedImageInspection(0, 0);
-  (void)host.search()->SearchPreview(QStringLiteral(""), 0, 24);
+  (void)host.search()->RequestSearch(QStringLiteral(""), 0, 24);
 
   host.workspace_router()->OpenEditor(0, 0);
   ProcessEvents(50);
@@ -143,27 +191,32 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   ASSERT_NE(update_status, nullptr);
   EXPECT_TRUE(update_status->property("visible").toBool());
   EXPECT_FALSE(update_status->property("text").toString().trimmed().isEmpty());
-  settings->setProperty("currentCategory", 7);
+  settings->setProperty("currentCategory", 11);  // About
   ProcessEvents(50);
-  auto* version_label = settings->findChild<QObject*>(QStringLiteral("aboutVersionLabel"));
-  ASSERT_NE(version_label, nullptr);
-  EXPECT_TRUE(version_label->property("text").toString().contains(
+  auto* build_label = settings->findChild<QObject*>(QStringLiteral("aboutBuildLabel"));
+  ASSERT_NE(build_label, nullptr);
+  EXPECT_TRUE(build_label->property("text").toString().contains(
       QString::number(host.updates()->current_build())));
   EXPECT_EQ(root->findChild<QObject*>(QStringLiteral("updateOfferDialog")), nullptr);
   ASSERT_TRUE(QMetaObject::invokeMethod(settings, "close"));
 
   auto* collections = root->findChild<QObject*>(QStringLiteral("collectionsPanel"));
   auto* search      = root->findChild<QObject*>(QStringLiteral("globalSearchDialog"));
-  auto* analysis    = root->findChild<QObject*>(QStringLiteral("advancedContentAnalysisDialog"));
   auto* background_tasks_dialog =
       root->findChild<QObject*>(QStringLiteral("backgroundTasksDialog"));
   ASSERT_NE(collections, nullptr);
   ASSERT_NE(search, nullptr);
-  ASSERT_NE(analysis, nullptr);
   ASSERT_NE(background_tasks_dialog, nullptr);
+  // Advanced Content Analysis is removed (issue #710): no dialog and no utility tab.
+  EXPECT_EQ(root->findChild<QObject*>(QStringLiteral("advancedContentAnalysisDialog")), nullptr);
+  QStringList utility_tab_ids;
+  for (const QVariant& tab : collections->property("utilityTabs").toList()) {
+    utility_tab_ids.push_back(tab.toMap().value(QStringLiteral("tabId")).toString());
+  }
+  EXPECT_EQ(utility_tab_ids,
+            QStringList({QStringLiteral("search"), QStringLiteral("background-tasks")}));
   EXPECT_EQ(collections->property("folderController").value<QObject*>(), host.folders());
   EXPECT_EQ(search->property("searchController").value<QObject*>(), host.search());
-  EXPECT_EQ(analysis->property("imageController").value<QObject*>(), host.images());
   EXPECT_EQ(background_tasks_dialog->property("controller").value<QObject*>(),
             host.background_tasks());
 
@@ -175,6 +228,18 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
     completed_task.shutdown_policy_ = BackgroundTaskShutdownPolicy::WaitForFinish;
     const QString completed_task_id = host.background_tasks()->RegisterTask(completed_task);
     host.background_tasks()->FinishTask(completed_task_id, BackgroundTaskState::Succeeded);
+  }
+  // Several agent sessions must scroll with the other tasks, not overflow the dialog.
+  constexpr int kAgentSessionCount = 4;
+  for (int index = 0; index < kAgentSessionCount; ++index) {
+    BackgroundTaskSnapshot agent_task;
+    agent_task.kind_            = BackgroundTaskKind::AgentControl;
+    agent_task.state_           = BackgroundTaskState::Running;
+    agent_task.title_           = QStringLiteral("Agent session %1").arg(index);
+    agent_task.pinned_          = true;
+    agent_task.shutdown_policy_ = BackgroundTaskShutdownPolicy::WaitForFinish;
+    const QString agent_task_id = host.background_tasks()->RegisterTask(agent_task);
+    host.background_tasks()->FinishTask(agent_task_id, BackgroundTaskState::Succeeded);
   }
   BackgroundTaskSnapshot refreshing_task;
   refreshing_task.kind_             = BackgroundTaskKind::ModelDownload;
@@ -200,6 +265,23 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
             AppTheme::Instance().fontSizeHeadline());
 
   ProcessEvents(200);
+  // Repeater-created cards are visual children only, so walk the item tree of
+  // the scrolling list itself.
+  int agent_cards_in_list = 0;
+  std::vector<QQuickItem*> pending_items{qobject_cast<QQuickItem*>(background_tasks_list)};
+  while (!pending_items.empty()) {
+    QQuickItem* item = pending_items.back();
+    pending_items.pop_back();
+    if (item == nullptr) {
+      continue;
+    }
+    if (item->objectName() == QStringLiteral("agentSessionCard")) {
+      ++agent_cards_in_list;
+    }
+    const auto children = item->childItems();
+    pending_items.insert(pending_items.end(), children.begin(), children.end());
+  }
+  EXPECT_EQ(agent_cards_in_list, kAgentSessionCount);
   ASSERT_GT(background_tasks_list->property("contentHeight").toReal(),
             background_tasks_list->property("height").toReal());
   ASSERT_TRUE(background_tasks_list->setProperty("contentY", 100.0));
@@ -214,6 +296,337 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
 
   ASSERT_TRUE(QMetaObject::invokeMethod(background_tasks_dialog, "close"));
   EXPECT_TRUE(qml_warnings.empty()) << qml_warnings.front().toString().toStdString();
+}
+
+// Shared boot path for the B1 workflow cases: isolated QSettings (shortcut
+// commits must not touch real settings), real module host, and production
+// Main.qml. Mirrors the wiring in the load test above.
+auto LoadMainQml(ApplicationModuleHost& host, LanguageManager& language_manager,
+                 QQmlApplicationEngine& engine, std::vector<QQmlError>& warnings) -> QObject* {
+  engine.addImportPath(QStringLiteral("qrc:/"));
+  QuickQanava::initialize(&engine);
+  language_manager.AttachEngine(&engine);
+  host.AttachQmlEngine(&engine);
+  engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &host);
+  engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
+                                           &alcedo::ui::AppTheme::Instance());
+  engine.rootContext()->setContextProperty(QStringLiteral("languageManager"), &language_manager);
+  QObject::connect(&engine, &QQmlEngine::warnings,
+                   [&warnings](const QList<QQmlError>& emitted) {
+                     warnings.insert(warnings.end(), emitted.begin(), emitted.end());
+                   });
+  engine.load(MainQmlUrl());
+  return engine.rootObjects().empty() ? nullptr : engine.rootObjects().front();
+}
+
+TEST_F(MainQmlWorkflowTests, SettingsDoneDoesNotOverwriteCommittedShortcutChanges) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  // The capture field writes through the registry into QSettings; isolate the
+  // store before any module touches it.
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                     PathToQString(temp_dir_ / "settings"));
+  QCoreApplication::setOrganizationName(QStringLiteral("AlcedoTests"));
+  QCoreApplication::setApplicationName(QStringLiteral("MainQmlWorkflowTest"));
+  alcedo::ui::AppTheme::RegisterFonts();
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(CreateTestProject(host));
+  alcedo::ui::LanguageManager language_manager(QCoreApplication::instance());
+  alcedo::ui::AppTheme::SetEffectiveLanguageCode(language_manager.EffectiveLanguageCode());
+  QQuickStyle::setStyle(QStringLiteral("Material"));
+
+  QQmlApplicationEngine  engine;
+  std::vector<QQmlError> qml_warnings;
+  QObject*               root = LoadMainQml(host, language_manager, engine, qml_warnings);
+  ASSERT_NE(root, nullptr) << (qml_warnings.empty()
+                                   ? std::string{}
+                                   : qml_warnings.front().toString().toStdString());
+  auto* window = qobject_cast<QQuickWindow*>(root);
+  ASSERT_NE(window, nullptr);
+
+  auto* registry =
+      engine.singletonInstance<ShortcutRegistry*>(QStringLiteral("Alcedo.Main"),
+                                                  QStringLiteral("ShortcutRegistry"));
+  ASSERT_NE(registry, nullptr);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(root, "openSettingsDialog", Q_ARG(QVariant, QVariant(7))));
+  ProcessEvents(100);
+  auto* settings = root->findChild<QObject*>(QStringLiteral("settingsDialog"));
+  ASSERT_NE(settings, nullptr);
+  ASSERT_TRUE(settings->property("visible").toBool());
+  EXPECT_EQ(settings->property("currentCategory").toInt(), 7);
+
+  // Commit a real capture through the production field.
+  auto* field =
+      settings->findChild<QQuickItem*>(QStringLiteral("shortcutCaptureField:library.selectAll"));
+  ASSERT_NE(field, nullptr);
+  QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                    field->mapToScene(QPointF(field->width() * 0.5, field->height() * 0.5))
+                        .toPoint());
+  ProcessEvents(50);
+  ASSERT_TRUE(field->property("capturing").toBool());
+  QTest::keyClick(window, Qt::Key_K, Qt::ControlModifier);
+  QTest::keyClick(window, Qt::Key_Return);
+  ProcessEvents(50);
+  ASSERT_EQ(registry->keySequenceTexts(QStringLiteral("library.selectAll")),
+            QStringList{QStringLiteral("Ctrl+K")});
+
+  // Done applies the dialog's own pending values and closes; the committed
+  // binding is untouched — the dialog never staged a second shortcut set.
+  ASSERT_TRUE(QMetaObject::invokeMethod(settings, "applySettings"));
+  ProcessEvents(100);
+  EXPECT_FALSE(settings->property("visible").toBool());
+  EXPECT_EQ(registry->keySequenceTexts(QStringLiteral("library.selectAll")),
+            QStringList{QStringLiteral("Ctrl+K")});
+  EXPECT_EQ(field->property("displayText").toString(),
+            registry->shortcutText(QStringLiteral("library.selectAll")));
+
+  const auto restored = registry->restoreDefault(QStringLiteral("library.selectAll"));
+  EXPECT_TRUE(restored.value(QStringLiteral("succeeded")).toBool());
+}
+
+TEST_F(MainQmlWorkflowTests, TextInputAndCapturePriorityPreventProductCommandActivation) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                     PathToQString(temp_dir_ / "settings"));
+  QCoreApplication::setOrganizationName(QStringLiteral("AlcedoTests"));
+  QCoreApplication::setApplicationName(QStringLiteral("MainQmlWorkflowTest"));
+  alcedo::ui::AppTheme::RegisterFonts();
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(CreateTestProject(host));
+  alcedo::ui::LanguageManager language_manager(QCoreApplication::instance());
+  alcedo::ui::AppTheme::SetEffectiveLanguageCode(language_manager.EffectiveLanguageCode());
+  QQuickStyle::setStyle(QStringLiteral("Material"));
+
+  QQmlApplicationEngine  engine;
+  std::vector<QQmlError> qml_warnings;
+  QObject*               root = LoadMainQml(host, language_manager, engine, qml_warnings);
+  ASSERT_NE(root, nullptr) << (qml_warnings.empty()
+                                   ? std::string{}
+                                   : qml_warnings.front().toString().toStdString());
+  auto* window = qobject_cast<QQuickWindow*>(root);
+  ASSERT_NE(window, nullptr);
+
+  auto* select_all =
+      root->findChild<QQuickItem*>(QStringLiteral("librarySelectAllShortcut"));
+  ASSERT_NE(select_all, nullptr);
+  QSignalSpy activated_spy(select_all, SIGNAL(activated()));
+  ASSERT_TRUE(activated_spy.isValid());
+
+  // Editable text input keeps its native Ctrl+A while the product shortcut
+  // stays suppressed — no select-all fires on the library surface.
+  auto* search_dialog = root->findChild<QObject*>(QStringLiteral("globalSearchDialog"));
+  ASSERT_NE(search_dialog, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(search_dialog, "open"));
+  ProcessEvents(100);
+  auto* search_field = root->findChild<QQuickItem*>(QStringLiteral("globalSearchField"));
+  ASSERT_NE(search_field, nullptr);
+  search_field->setProperty("text", QStringLiteral("album cover"));
+  search_field->forceActiveFocus();
+  ProcessEvents(50);
+  EXPECT_FALSE(select_all->property("shortcutEnabled").toBool());
+  QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+  ProcessEvents(50);
+  EXPECT_EQ(activated_spy.count(), 0);
+  EXPECT_EQ(search_field->property("selectedText").toString(),
+            QStringLiteral("album cover"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(search_dialog, "close"));
+  ProcessEvents(100);
+
+  // An active capture row owns the same chord: Ctrl+A becomes the pending
+  // candidate instead of activating the library command.
+  ASSERT_TRUE(QMetaObject::invokeMethod(root, "openSettingsDialog", Q_ARG(QVariant, QVariant(7))));
+  ProcessEvents(100);
+  auto* settings = root->findChild<QObject*>(QStringLiteral("settingsDialog"));
+  ASSERT_NE(settings, nullptr);
+  auto* field =
+      settings->findChild<QQuickItem*>(QStringLiteral("shortcutCaptureField:library.selectAll"));
+  ASSERT_NE(field, nullptr);
+  QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                    field->mapToScene(QPointF(field->width() * 0.5, field->height() * 0.5))
+                        .toPoint());
+  ProcessEvents(50);
+  ASSERT_TRUE(field->property("capturing").toBool());
+  QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+  ProcessEvents(50);
+  EXPECT_EQ(activated_spy.count(), 0);
+  EXPECT_EQ(field->property("captureState").toString(), QStringLiteral("candidate"));
+  EXPECT_EQ(field->property("displayText").toString(),
+            QStringLiteral("Ctrl+A"));
+
+  // Tab cancels the candidate; the live binding is unchanged.
+  QTest::keyClick(window, Qt::Key_Tab);
+  ProcessEvents(50);
+  auto* registry =
+      engine.singletonInstance<ShortcutRegistry*>(QStringLiteral("Alcedo.Main"),
+                                                  QStringLiteral("ShortcutRegistry"));
+  ASSERT_NE(registry, nullptr);
+  EXPECT_EQ(registry->keySequenceTexts(QStringLiteral("library.selectAll")),
+            QStringList{QStringLiteral("Ctrl+A")});
+  ASSERT_TRUE(QMetaObject::invokeMethod(settings, "close"));
+}
+
+// A Connections handler onFoo reaches only a signal named foo. A handler that names no signal of
+// its target never runs, as the application close handlers did: the close owner finished and the
+// window stayed open behind the save dialog.
+TEST_F(MainQmlWorkflowTests, ConnectionsHandlersReachOwnerSignalsAndApplicationCloseClosesWindow) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                     PathToQString(temp_dir_ / "settings"));
+  QCoreApplication::setOrganizationName(QStringLiteral("AlcedoTests"));
+  QCoreApplication::setApplicationName(QStringLiteral("MainQmlWorkflowTest"));
+  alcedo::ui::AppTheme::RegisterFonts();
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(CreateTestProject(host));
+  alcedo::ui::LanguageManager language_manager(QCoreApplication::instance());
+  alcedo::ui::AppTheme::SetEffectiveLanguageCode(language_manager.EffectiveLanguageCode());
+  QQuickStyle::setStyle(QStringLiteral("Material"));
+
+  QQmlApplicationEngine  engine;
+  std::vector<QQmlError> qml_warnings;
+  QObject*               root = LoadMainQml(host, language_manager, engine, qml_warnings);
+  ASSERT_NE(root, nullptr) << (qml_warnings.empty()
+                                   ? std::string{}
+                                   : qml_warnings.front().toString().toStdString());
+  auto* window = qobject_cast<QQuickWindow*>(root);
+  ASSERT_NE(window, nullptr);
+  ProcessEvents(100);
+
+  for (const auto& warning : qml_warnings) {
+    EXPECT_FALSE(warning.description().contains(QStringLiteral("no signal of the target matches")))
+        << warning.toString().toStdString();
+  }
+
+  // The window closes in this test; the test process keeps running.
+  const bool quit_on_last_window_closed = QGuiApplication::quitOnLastWindowClosed();
+  QGuiApplication::setQuitOnLastWindowClosed(false);
+  ASSERT_TRUE(window->isVisible());
+  // No editor image is open, so the persist wait finishes at once and Main.qml closes the window.
+  ASSERT_FALSE(host.application_close()->CloseNeedsConfirmation());
+  host.application_close()->BeginPersistWait();
+  ProcessEvents(100);
+  EXPECT_FALSE(host.application_close()->waiting());
+  EXPECT_FALSE(window->isVisible());
+  QGuiApplication::setQuitOnLastWindowClosed(quit_on_last_window_closed);
+}
+
+// The export panel reads its defaults, checks, bit depths, and queue from the C++ owners
+// (ExportRecipeBuilder, ExportQueue) and shows the same values as before the move.
+TEST_F(MainQmlWorkflowTests, ExportPanelUsesRecipeDefaultsChecksAndQueue) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                     PathToQString(temp_dir_ / "settings"));
+  QCoreApplication::setOrganizationName(QStringLiteral("AlcedoTests"));
+  QCoreApplication::setApplicationName(QStringLiteral("MainQmlWorkflowTest"));
+  alcedo::ui::AppTheme::RegisterFonts();
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(CreateTestProject(host));
+  alcedo::ui::LanguageManager language_manager(QCoreApplication::instance());
+  alcedo::ui::AppTheme::SetEffectiveLanguageCode(language_manager.EffectiveLanguageCode());
+  QQuickStyle::setStyle(QStringLiteral("Material"));
+
+  QQmlApplicationEngine  engine;
+  std::vector<QQmlError> qml_warnings;
+  QObject*               root = LoadMainQml(host, language_manager, engine, qml_warnings);
+  ASSERT_NE(root, nullptr) << (qml_warnings.empty()
+                                   ? std::string{}
+                                   : qml_warnings.front().toString().toStdString());
+  ProcessEvents(100);
+  auto* panel = root->findChild<QObject*>(QStringLiteral("exportInspectorPanel"));
+  ASSERT_NE(panel, nullptr);
+
+  // The previous panel defaults.
+  EXPECT_EQ(panel->property("sdrFormat").toString(), QStringLiteral("JPEG"));
+  EXPECT_EQ(panel->property("sdrBitDepth").toInt(), 8);
+  EXPECT_EQ(panel->property("tiffCompression").toString(), QStringLiteral("NONE"));
+  EXPECT_EQ(panel->property("sdrResizeMode").toString(), QStringLiteral("original"));
+  EXPECT_EQ(panel->property("sdrMaxSideText").toString(), QStringLiteral("2048"));
+  EXPECT_EQ(panel->property("physicalWidthText").toString(), QStringLiteral("210"));
+  EXPECT_EQ(panel->property("physicalHeightText").toString(), QStringLiteral("297"));
+  EXPECT_EQ(panel->property("physicalUnit").toString(), QStringLiteral("mm"));
+  EXPECT_EQ(panel->property("dpiText").toString(), QStringLiteral("300"));
+  EXPECT_FALSE(panel->property("subfolderEnabled").toBool());
+  EXPECT_TRUE(panel->property("includeMetadata").toBool());
+  EXPECT_TRUE(panel->property("embedIccProfile").toBool());
+  EXPECT_TRUE(panel->property("ultraHdrDitherEnabled").toBool());
+  EXPECT_TRUE(panel->property("includeGps").toBool());
+  EXPECT_EQ(panel->property("ultraHdrMaxSideText").toString(), QStringLiteral("8192"));
+  EXPECT_TRUE(panel->property("settingsValid").toBool());
+
+  // The default options are the Standard preset; a preset sets the panel values.
+  auto* preset_picker = root->findChild<QObject*>(QStringLiteral("exportPresetPicker"));
+  ASSERT_NE(preset_picker, nullptr);
+  EXPECT_EQ(preset_picker->property("activePresetId").toString(),
+            QStringLiteral("builtin:standard"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(preset_picker, "selectPreset",
+                                        Q_ARG(QVariant, QStringLiteral("builtin:web"))));
+  ProcessEvents(20);
+  EXPECT_EQ(panel->property("sdrResizeMode").toString(), QStringLiteral("long_edge"));
+  EXPECT_EQ(panel->property("sdrMaxSideText").toString(), QStringLiteral("2048"));
+  EXPECT_FALSE(panel->property("includeGps").toBool());
+  EXPECT_EQ(panel->property("ultraHdrMaxSideText").toString(), QStringLiteral("2048"));
+  EXPECT_EQ(preset_picker->property("activePresetId").toString(), QStringLiteral("builtin:web"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(preset_picker, "selectPreset",
+                                        Q_ARG(QVariant, QStringLiteral("builtin:standard"))));
+  ProcessEvents(20);
+  EXPECT_EQ(panel->property("sdrResizeMode").toString(), QStringLiteral("original"));
+  EXPECT_TRUE(panel->property("includeGps").toBool());
+
+  // The size check follows the selected resize mode.
+  ASSERT_TRUE(panel->setProperty("sdrResizeMode", QStringLiteral("long_edge")));
+  ASSERT_TRUE(panel->setProperty("sdrMaxSideText", QStringLiteral("100")));
+  EXPECT_FALSE(panel->property("settingsValid").toBool());
+  ASSERT_TRUE(panel->setProperty("sdrMaxSideText", QStringLiteral("512")));
+  EXPECT_TRUE(panel->property("settingsValid").toBool());
+  ASSERT_TRUE(panel->setProperty("sdrResizeMode", QStringLiteral("print")));
+  ASSERT_TRUE(panel->setProperty("dpiText", QStringLiteral("0")));
+  EXPECT_FALSE(panel->property("settingsValid").toBool());
+  ASSERT_TRUE(panel->setProperty("dpiText", QStringLiteral("300")));
+  EXPECT_TRUE(panel->property("settingsValid").toBool());
+
+  // A format change keeps a bit depth that the format allows.
+  ASSERT_TRUE(panel->setProperty("sdrFormat", QStringLiteral("EXR")));
+  ProcessEvents(20);
+  EXPECT_EQ(panel->property("sdrBitDepth").toInt(), 16);
+  const QVariantList depths = panel->property("bitDepthEntries").toList();
+  ASSERT_EQ(depths.size(), 3);
+  EXPECT_FALSE(depths[0].toMap().value(QStringLiteral("enabled")).toBool());
+  EXPECT_TRUE(depths[1].toMap().value(QStringLiteral("enabled")).toBool());
+  EXPECT_TRUE(depths[2].toMap().value(QStringLiteral("enabled")).toBool());
+  ASSERT_TRUE(panel->setProperty("sdrFormat", QStringLiteral("JPEG")));
+  ProcessEvents(20);
+  EXPECT_EQ(panel->property("sdrBitDepth").toInt(), 8);
+
+  // The panel shows the C++ queue: one row for each element, cleared from the panel.
+  host.export_queue()->AddTargets(QVariantList{
+      QVariantMap{{"elementId", 4u}, {"imageId", 40u}, {"fileName", QStringLiteral("b.arw")}},
+      QVariantMap{{"elementId", 5u}, {"imageId", 50u}, {"fileName", QStringLiteral("a.arw")}},
+      QVariantMap{{"elementId", 4u}, {"imageId", 41u}, {"fileName", QStringLiteral("c.arw")}}});
+  ProcessEvents(20);
+  EXPECT_EQ(panel->property("exportQueueCount").toInt(), 2);
+  const QVariantList rows = panel->property("visibleExportRows").toList();
+  ASSERT_EQ(rows.size(), 2);
+  EXPECT_EQ(rows[0].toMap().value(QStringLiteral("label")).toString(), QStringLiteral("a.arw"));
+  EXPECT_EQ(rows[1].toMap().value(QStringLiteral("label")).toString(), QStringLiteral("c.arw"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(panel, "clearQueue"));
+  EXPECT_EQ(panel->property("exportQueueCount").toInt(), 0);
+
+  for (const auto& warning : qml_warnings) {
+    const QString text = warning.toString();
+    EXPECT_FALSE(text.contains(QStringLiteral("ExportInspectorPanel")) ||
+                 text.contains(QStringLiteral("ExportNamingEditor")) ||
+                 text.contains(QStringLiteral("ExportPresetPicker")) ||
+                 text.contains(QStringLiteral("ShellSignals")) ||
+                 text.contains(QStringLiteral("exportQueue")))
+        << text.toStdString();
+  }
 }
 
 }  // namespace

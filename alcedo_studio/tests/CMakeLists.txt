@@ -38,10 +38,6 @@ option(ALCEDO_BUILD_DEMO_TARGETS "Enable GUI/demo target category targets." OFF)
 option(ALCEDO_BUILD_CI_TESTS "Enable zero-extra-cost GitHub CI test targets." OFF)
 option(ALCEDO_ENABLE_CUDA_IMAGE_GEOMETRY_OPS_TEST
        "Enable CudaImageGeometryOpsTest discovery and execution." ON)
-option(ALCEDO_ENABLE_CUDA_PREVIEW_VRAM_RECLAMATION_TEST
-       "Enable CudaPreviewVramReclamationTest discovery and execution." ON)
-option(ALCEDO_ENABLE_GPU_PERF_TESTS
-       "Register GPU performance harnesses with the performance ctest label (opt-in)." OFF)
 
 add_custom_target(alcedo_tests_all)
 add_custom_target(alcedo_tests_core)
@@ -57,17 +53,34 @@ add_custom_target(alcedo_tests_demos)
 add_custom_target(alcedo_tests_ci_core)
 add_custom_target(alcedo_tests_ci_raw)
 add_custom_target(alcedo_tests_ci_metal)
+add_custom_target(alcedo_tests_ci_automation)
 
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
+
+# Shared main() of the in-process Qt tests. It starts the Exiv2 XMP toolkit before any import or
+# thumbnail worker reads metadata, as the GUI and headless hosts do, then creates the
+# QCoreApplication. Test targets link this library instead of compiling ui/ui_test_main.cpp.
+add_library(AlcedoInProcessTestMain OBJECT ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp)
+target_include_directories(AlcedoInProcessTestMain PRIVATE ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(AlcedoInProcessTestMain PUBLIC Exiv2 GTest::gtest Qt6::Core)
+
+# Storage invariant check (#805): the rules that the rows of a project database keep after any
+# sequence of production writes. Tests that write through production paths link this library and
+# run the check after their writes.
+add_library(StorageInvariantsTestSupport STATIC EXCLUDE_FROM_ALL
+  ${ALCEDO_TEST_SUPPORT_ROOT}/storage_invariants.cpp)
+target_include_directories(StorageInvariantsTestSupport
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(StorageInvariantsTestSupport PUBLIC Storage GTest::gtest)
 
 # ==============================================================================
 # Phase 3D test domain manifests
 # ==============================================================================
 add_subdirectory(utils)
+add_subdirectory(color)
 add_subdirectory(ui)
 add_subdirectory(sleeve)
 add_subdirectory(raw)
-add_subdirectory(perf)
 add_subdirectory(ml_ops)
 add_subdirectory(io)
 add_subdirectory(image)
@@ -75,6 +88,7 @@ add_subdirectory(edit)
 add_subdirectory(cuda)
 add_subdirectory(ci)
 add_subdirectory(app)
+add_subdirectory(automation)
 
 # Category aggregate membership is registered via alcedo_register_test_target
 # in each domain manifest. The root keeps infrastructure only.
@@ -84,3 +98,38 @@ add_subdirectory(app)
 # alcedo_register_test_target). Do not hand-roll POST_BUILD DLL copies in domain
 # manifests — that opt-in pattern is why 0xC0000139 kept returning for new tests.
 
+
+add_test(NAME PackagedNoticeSourcesContainQuickQanavaAndBezierClauses
+    COMMAND ${CMAKE_COMMAND}
+        -DALCEDO_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_SOURCE_DIR}/scripts/cmake/check_quickqanava_legal_notices.cmake
+)
+set_tests_properties(PackagedNoticeSourcesContainQuickQanavaAndBezierClauses PROPERTIES
+    LABELS "quickqanava;legal_notices"
+)
+
+# A CPU-only OpenCL ICD must never become an image-processing backend.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ALCEDO_OPENCL_ENABLED)
+    add_executable(OpenClGpuSelectionTest opencl/opencl_gpu_selection_test.cpp)
+    target_include_directories(OpenClGpuSelectionTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+    target_link_libraries(OpenClGpuSelectionTest PRIVATE OpenClContext GTest::gtest_main)
+    gtest_discover_tests(OpenClGpuSelectionTest TEST_PREFIX "OpenClGpuSelectionTest.")
+    alcedo_register_test_target(OpenClGpuSelectionTest gpu)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ALCEDO_OPENCL_ENABLED)
+    # Start a real GPU context without GL sharing so the production sink must upload host pixels.
+    add_executable(MaskCoverageHostUploadTest ui/mask_coverage_presentation_test.cpp)
+    target_include_directories(MaskCoverageHostUploadTest
+        PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+    target_compile_definitions(MaskCoverageHostUploadTest
+        PRIVATE ALCEDO_TEST_OPENCL_WITHOUT_GL_SHARING)
+    target_link_libraries(MaskCoverageHostUploadTest PRIVATE
+        EditorRhiViewport EditRuntimeOpenCl EditInput GTest::gtest
+        Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::OpenGL)
+    gtest_discover_tests(MaskCoverageHostUploadTest
+        TEST_PREFIX "MaskCoverageHostUploadTest."
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=opencl")
+    alcedo_register_test_target(MaskCoverageHostUploadTest gpu)
+endif()

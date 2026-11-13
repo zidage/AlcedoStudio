@@ -75,13 +75,11 @@ class EditorHistoryModel : public QAbstractListModel {
   enum Role {
     CommitIdRole = Qt::UserRole + 1,
     FirstParentIdRole,
-    SecondParentIdRole,
-    CommitKindRole,
     CreatedAtNsRole,
     LabelRole,
     FieldKeyRole,
     CurrentRole,
-    // Phase 7A P1: presentation roles derived from the semantic payload by the
+    // Presentation roles derived from the semantic payload by the
     // pure PresentEditorHistoryCommit helper. QML renders these strings and
     // never parses commit JSON.
     DisplayNameRole,
@@ -90,8 +88,10 @@ class EditorHistoryModel : public QAbstractListModel {
     DeltaTextRole,
     IconKeyRole,
     TimelinePositionRole,
-    IsMergeRole,
-    MergeSummaryRole,
+    /// "user", or the author of the commit attribution ("agent").
+    AuthorRole,
+    /// Note of the commit attribution; empty when there is none.
+    NoteRole,
   };
 
   explicit EditorHistoryModel(QObject* parent = nullptr);
@@ -124,6 +124,12 @@ class EditorHistoryModel : public QAbstractListModel {
   Q_INVOKABLE void   branchFromCommit(const QString& commitId, const QString& displayName);
   Q_INVOKABLE void   renameVersion(const QString& versionId, const QString& displayName);
   Q_INVOKABLE void   removeVersion(const QString& versionId);
+  /// The Version name that @p text gives (NormalizeVersionName); empty for an empty name.
+  Q_INVOKABLE QString normalizeVersionName(const QString& text) const;
+  /// The name of a new Version: @p pattern, a translated "Version %1", with the next number.
+  Q_INVOKABLE QString defaultVersionName(const QString& pattern) const;
+  /// True when renaming a Version called @p current to @p requested changes nothing.
+  Q_INVOKABLE bool isUnchangedVersionName(const QString& current, const QString& requested) const;
 
  signals:
   void EditorSessionChanged();

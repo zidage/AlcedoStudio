@@ -6,75 +6,119 @@
 
 #include <QCoreApplication>
 #include <QDeadlineTimer>
+#include <QDebug>
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QPointer>
 #include <QQmlEngine>
+#include <QStringList>
 #include <QThread>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
+#include <system_error>
+#include <vector>
 
-#include "app/editor_save_checkpoint_coordinator.hpp"
+#include "app/editor_adjustment_context.hpp"
+#include "app/editor_pending_input.hpp"
 #include "app/editor_session_bootstrap.hpp"
+#include "app/image_pool_service.hpp"
+#include "app/project_package_backend.hpp"
+#include "app/project_service.hpp"
+#include "image/image.hpp"
+#include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
-#include "ui/alcedo_main/album_backend/editor_session_journal_writer_port.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_mask_asset_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
+#include "ui/alcedo_main/album_backend/justified_layout_model.hpp"
+#include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
-
 namespace {
 
-class QtEditorSessionCommandExecutor final : public alcedo::IEditorSessionCommandExecutor {
- public:
-  explicit QtEditorSessionCommandExecutor(QObject* target) : target_(target) {}
-
-  void Post(std::function<void()> task) override {
-    const QPointer<QObject> target = target_;
-    if (!target || !task) {
-      return;
-    }
-    QMetaObject::invokeMethod(
-        target,
-        [target, task = std::move(task)]() mutable {
-          if (target) {
-            task();
-          }
-        },
-        Qt::QueuedConnection);
-  }
-
-  [[nodiscard]] auto IsOwnerThread() const -> bool override {
-    return target_ && QThread::currentThread() == target_->thread();
-  }
-
- private:
-  QPointer<QObject> target_;
+// Weak references to the project services that keep the DuckDB file open. The destructor
+// takes them before ProjectModule is destroyed and reports every service that outlives it.
+struct ProjectServiceWatch {
+  std::weak_ptr<alcedo::ProjectService>       project_;
+  std::weak_ptr<alcedo::Storage>              storage_;
+  std::weak_ptr<alcedo::ImagePoolService>     image_pool_;
+  std::weak_ptr<alcedo::PipelineMgmtService>  pipeline_;
+  std::weak_ptr<alcedo::ThumbnailService>     thumbnails_;
+  std::weak_ptr<alcedo::MaskThumbnailService> mask_thumbnails_;
+  std::weak_ptr<alcedo::ExportService>        export_;
 };
+
+auto WatchProjectServices(const ProjectModule* project) -> ProjectServiceWatch {
+  ProjectServiceWatch watch;
+  if (project == nullptr) {
+    return watch;
+  }
+  const auto& handler = project->handler();
+  if (const auto& service = handler.project()) {
+    watch.project_    = service;
+    watch.storage_    = service->GetStorage();
+    watch.image_pool_ = service->GetImagePoolService();
+  }
+  watch.pipeline_        = handler.pipeline_service();
+  watch.thumbnails_      = handler.thumbnail_service();
+  watch.mask_thumbnails_ = handler.mask_thumbnail_service();
+  watch.export_          = handler.export_service();
+  return watch;
+}
+
+void ReportSurvivingProjectServices(const ProjectServiceWatch& watch) {
+  const auto report = [](const char* name, long use_count) {
+    if (use_count > 0) {
+      qCWarning(alcedo::diag::appLog).noquote()
+          << "Project service outlived ProjectModule:" << name << "use_count=" << use_count;
+    }
+  };
+  report("ProjectService", watch.project_.use_count());
+  report("Storage", watch.storage_.use_count());
+  report("ImagePoolService", watch.image_pool_.use_count());
+  report("PipelineMgmtService", watch.pipeline_.use_count());
+  report("ThumbnailService", watch.thumbnails_.use_count());
+  report("MaskThumbnailService", watch.mask_thumbnails_.use_count());
+  report("ExportService", watch.export_.use_count());
+}
 
 }  // namespace
 
 // ── ApplicationModuleHost ───────────────────────────────────────────────────
 
-ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer)
+ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer,
+                                             PackageServiceFactories package_services)
     : QObject(parent), lifecycle_observer_(std::move(observer)) {
+  // Removes the runtime workspaces and DB snapshots that an abnormal exit or a failed removal
+  // left in the project temp root. Workspaces that a live process holds stay.
+  project_pack::RemoveAbandonedProjectTempFiles(project_pack::ProjectTempRoot());
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
   alcedo::ui::RegisterEditorAdjustmentQmlTypes();
+  alcedo::ui::RegisterJustifiedLayoutQmlType();
   alcedo::ui::RegisterEditorHistoryQmlTypes();
+  alcedo::ui::RegisterEditorNodeQmlTypes();
   background_tasks_ = std::make_unique<BackgroundTaskController>();
   RecordConstruction("BackgroundTaskController", background_tasks_.get());
   interaction_policy_ =
       std::make_unique<InteractionPolicyController>(background_tasks_.get(), this);
   RecordConstruction("InteractionPolicyController", interaction_policy_.get());
+  agent_control_ = std::make_unique<AgentControlOwner>(background_tasks_.get(), this);
+  RecordConstruction("AgentControlOwner", agent_control_.get());
   download_service_ = std::make_unique<alcedo::DownloadService>();
   RecordConstruction("DownloadService", download_service_.get());
   model_download_service_ =
@@ -82,8 +126,36 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("ModelDownloadService", model_download_service_.get());
   updates_ = std::make_unique<alcedo::UpdateService>(*download_service_, this);
   RecordConstruction("UpdateService", updates_.get());
+  // Loads the persisted LUT inventory without network access (plan 4.3).
+  lut_library_ = std::make_unique<alcedo::LutLibraryService>(
+      package_services.library_options ? package_services.library_options()
+                                       : alcedo::LutLibraryServiceOptions{});
+  RecordConstruction("LutLibraryService", lut_library_.get());
+  lut_library_->Start();
+  // Constructing the package service makes no network request; Settings starts
+  // the signed feed check (plan L3). Archives use the shared download admission.
+  {
+    alcedo::LutPackageServiceOptions lut_package_options =
+        package_services.package_options
+            ? package_services.package_options()
+            : alcedo::LutPackageServiceOptions::FromBuildConfiguration();
+    if (!lut_package_options.downloader) {
+      lut_package_options.downloader =
+          std::make_unique<alcedo::DownloadServicePackageArchiveDownloader>(*download_service_);
+    }
+    lut_packages_ =
+        std::make_unique<alcedo::LutPackageService>(std::move(lut_package_options), *lut_library_);
+  }
+  RecordConstruction("LutPackageService", lut_packages_.get());
+  // Reads the DCP folder setting and starts the first scan on its worker (DCP plan C2).
+  camera_profiles_ = std::make_unique<alcedo::CameraProfileLibraryService>();
+  RecordConstruction("CameraProfileLibraryService", camera_profiles_.get());
+  camera_profiles_->Start();
   project_ = std::make_unique<ProjectModule>(this);
   RecordConstruction("ProjectModule", project_.get());
+  // Every project's editor, thumbnail, and export executors resolve LUT references through
+  // the library (plan L4).
+  project_->SetLutResources(lut_library_->Resources());
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
   RecordConstruction("LibraryModule", library_.get());
   folders_ =
@@ -100,34 +172,64 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   model_download_ = std::make_unique<ModelDownloadController>(*model_download_service_,
                                                               background_tasks_.get(), this);
   RecordConstruction("ModelDownloadController", model_download_.get());
+  // Constructing the AI model package service reads the local receipts only; Settings starts
+  // the signed feed check (AI Models plan, P6). Archives use the shared download admission.
+  {
+    alcedo::AiModelPackageServiceOptions ai_model_options =
+        package_services.ai_model_package_options
+            ? package_services.ai_model_package_options()
+            : alcedo::AiModelPackageServiceOptions::FromBuildConfiguration();
+    if (!ai_model_options.downloader) {
+      ai_model_options.downloader =
+          std::make_unique<alcedo::DownloadServicePackageArchiveDownloader>(*download_service_);
+    }
+    if (!ai_model_options.model_directory) {
+      ai_model_options.model_directory = [this] {
+        return std::filesystem::path(model_download_->ModelDownloadDirectory().toStdU16String());
+      };
+    }
+    ai_model_packages_ =
+        std::make_unique<alcedo::AiModelPackageService>(std::move(ai_model_options));
+  }
+  RecordConstruction("AiModelPackageService", ai_model_packages_.get());
+  // One download statement covers the CLIP models and the AI Mask model set (plan P8).
+  model_download_->SetDownloadStatementCheck(
+      [packages = ai_model_packages_.get()] { return packages->download_statement_accepted(); });
+  ai_model_download_tasks_ =
+      std::make_unique<AiModelDownloadTaskPublisher>(*ai_model_packages_, *background_tasks_);
+  RecordConstruction("AiModelDownloadTaskPublisher", ai_model_download_tasks_.get());
+  // One directory setting serves all AI models (P7); a new directory has other installations.
+  QObject::connect(model_download_.get(), &ModelDownloadController::StateChanged,
+                   ai_model_packages_.get(),
+                   [packages = ai_model_packages_.get(), downloads = model_download_.get(),
+                    directory = model_download_->ModelDownloadDirectory()]() mutable {
+                     if (downloads->ModelDownloadDirectory() == directory) return;
+                     directory = downloads->ModelDownloadDirectory();
+                     packages->RefreshInstallations();
+                   });
   ai_provider_profiles_ = std::make_unique<alcedo::AiProviderProfileController>(this);
   RecordConstruction("AiProviderProfileController", ai_provider_profiles_.get());
   semantic_generation_ = std::make_unique<SemanticGenerationController>(
       project_.get(), library_.get(), model_download_.get(), background_tasks_.get(),
-      project_.get(), ai_provider_profiles_.get(), this);
+      project_.get(), this);
   RecordConstruction("SemanticGenerationController", semantic_generation_.get());
-  image_analysis_gate_ = std::make_shared<alcedo::ImageAnalysisInFlightGate>();
-  RecordConstruction("ImageAnalysisInFlightGate", image_analysis_gate_.get());
-  db_write_barrier_ = std::make_unique<ProjectDbWriteBarrier>();
-  RecordConstruction("ProjectDbWriteBarrier", db_write_barrier_.get());
-  image_analysis_sink_ = MakeAlbumImageAnalysisSink(project_.get(), images_.get(), stats_.get(),
-                                                    db_write_barrier_.get());
-  RecordConstruction("ImageAnalysisSink", image_analysis_sink_.get());
-  image_analysis_ = std::make_unique<ImageAnalysisController>(
-      MakeAlbumImageAnalysisEnvironment(project_.get(), semantic_generation_.get(),
-                                        ai_provider_profiles_.get(), image_analysis_gate_),
-      ai_provider_profiles_.get(), image_analysis_sink_, background_tasks_.get());
-  RecordConstruction("ImageAnalysisController", image_analysis_.get());
   import_export_ =
       std::make_unique<ImportExportHandler>(project_.get(), library_.get(), folders_.get(),
-                                            project_.get(), db_write_barrier_.get(), this);
+                                            project_.get(), this);
   RecordConstruction("ImportExportHandler", import_export_.get());
+  import_export_->SetInteractionPolicy(interaction_policy_.get());
+  export_queue_ = std::make_unique<ExportQueue>(project_.get(), import_export_.get(), this);
+  RecordConstruction("ExportQueue", export_queue_.get());
+  export_recipe_ = std::make_unique<ExportRecipeBuilder>(import_export_.get(), this);
+  RecordConstruction("ExportRecipeBuilder", export_recipe_.get());
+  export_recipe_->SetInteractionPolicy(interaction_policy_.get());
   nikon_he_recovery_ = std::make_unique<NikonHeRecoveryController>(project_.get(), images_.get(),
                                                                    project_.get(), this);
   RecordConstruction("NikonHeRecoveryController", nikon_he_recovery_.get());
   adjustment_transfer_ = std::make_unique<AdjustmentTransferController>(
-      project_.get(), library_.get(), import_export_.get(), this);
+      project_.get(), library_.get(), import_export_.get(), background_tasks_.get(), this);
   RecordConstruction("AdjustmentTransferController", adjustment_transfer_.get());
+  adjustment_transfer_->SetInteractionPolicy(interaction_policy_.get());
   // Phase 5B/5E: wire runtime first-frame ports, direct presentation, and
   // BackgroundTaskController-backed editor_save registration into the session
   // runtime. The session scheduler accepts intents without completing when
@@ -143,11 +245,6 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     pipeline_services.pipeline_service = [this]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
       return project_ ? project_->handler().pipeline_service() : nullptr;
     };
-    pipeline_services.load_editor_pipeline_guard =
-        [this](sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
-      auto service = project_ ? project_->handler().pipeline_service() : nullptr;
-      return service ? service->LoadEditorPipeline(element_id) : nullptr;
-    };
     std::function<std::shared_ptr<alcedo::ImagePoolService>()> image_pool =
         [this]() -> std::shared_ptr<alcedo::ImagePoolService> {
       if (!project_ || !project_->handler().project()) {
@@ -162,48 +259,31 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       }
       return project_->handler().project()->GetStorage();
     };
-    std::function<std::filesystem::path(sl_element_id_t)> journal_path =
-        [this](sl_element_id_t element_id) {
-          if (!project_) {
-            return std::filesystem::path{};
-          }
-          auto root = project_->handler().db_path().parent_path();
-          if (root.empty()) {
-            root = project_->handler().workspace_dir();
-          }
-          if (root.empty()) {
-            return std::filesystem::path{};
-          }
-          return root / "editor-journal" /
-                 ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) + ".wal");
-        };
     std::function<std::filesystem::path(sl_element_id_t)> mini_git_journal_path =
         [this](sl_element_id_t element_id) {
           if (!project_) {
             return std::filesystem::path{};
           }
-          auto root = project_->handler().db_path().parent_path();
-          if (root.empty()) {
-            root = project_->handler().workspace_dir();
-          }
-          if (root.empty()) {
+          const auto directory = project_->handler().editor_journal_directory();
+          if (directory.empty()) {
             return std::filesystem::path{};
           }
-          return root / "editor-journal" /
-                 ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) +
-                  ".mini-git.wal");
+          return directory / ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) +
+                              ".mini-git.wal");
         };
     auto refresh_focused_thumbnail =
-        [library = QPointer<LibraryModule>(library_.get())](sl_element_id_t element_id) {
+        [this, library = QPointer<LibraryModule>(library_.get())](sl_element_id_t element_id) {
           if (!library) {
             return;
           }
           QMetaObject::invokeMethod(
               library,
-              [library, element_id] {
+              [this, library, element_id] {
                 if (!library || library->project() == nullptr) {
                   return;
                 }
+                // The host owns the library, so it is alive while this queued call runs.
+                library->NoteEditHistoryChanged(editor_session_ && editor_session_->active());
                 if (auto thumbnails = library->project()->handler().thumbnail_service()) {
                   thumbnails->InvalidateThumbnail(element_id);
                 }
@@ -218,8 +298,6 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     session_history->SetServices(EditorSessionHistoryPort::Services{mini_git_journal_path});
     session_history->SetPipelinePort(session_pipeline);
     session_scheduler->SetServices(EditorSessionSchedulerServices{image_pool});
-    auto session_journal = std::make_shared<EditorSessionJournalWriterPort>(
-        EditorSessionJournalWriterPort::Services{journal_path});
     // One project-owned global save lock for capture → materialize → terminal
     // callback. Shared by EditorSaveCheckpointService and Mini-Git materializer.
     auto save_coordinator   = std::make_shared<alcedo::EditorSaveCheckpointCoordinator>();
@@ -229,10 +307,23 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     auto session_thumbnail =
         std::make_shared<EditorSessionThumbnailPort>(std::move(refresh_focused_thumbnail));
 
+    // The session owner runs on a dedicated worker so parameter reduction,
+    // pacing deadlines, and serial frame consumption never wait on the GUI
+    // thread's event loop or window-update waits.
+    // The scheduler port is also the comparison's image port: comparison pairs render on the
+    // editor's own executor and worker. It is also the coverage port of the AI Mask preview, on
+    // the same executor and device as the frames. ShutdownModules shuts it down (waiting for an
+    // image job or a coverage job) before the session service is destroyed.
+    // AI Mask R8 assets live in the project database of the open project.
+    auto session_mask_assets = std::make_shared<EditorSessionMaskAssetPort>(
+        [this]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
+          return project_ ? project_->handler().pipeline_service() : nullptr;
+        });
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
-        session_pipeline, session_history, session_tasks, session_journal, session_scheduler,
-        session_checkpoint, session_thumbnail, save_coordinator,
-        std::make_shared<QtEditorSessionCommandExecutor>(this));
+        session_pipeline, session_history, session_tasks, session_scheduler, session_checkpoint,
+        session_thumbnail, save_coordinator,
+        std::make_shared<alcedo::EditorSessionThreadedCommandExecutor>(), session_scheduler,
+        std::move(session_mask_assets), session_scheduler);
     // Completion is forward: coordinator installs on_complete at Schedule.
     editor_session_scheduler_ = std::move(session_scheduler);
   }
@@ -245,8 +336,82 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   editor_session_ =
       std::make_unique<EditorSessionController>(editor_session_runtime_->service.get(), this);
   RecordConstruction("EditorSessionController", editor_session_.get());
+  editor_comparison_ = std::make_unique<EditorComparisonController>(
+      editor_session_.get(), SharedComparisonImageStore(), this);
+  RecordConstruction("EditorComparisonController", editor_comparison_.get());
+  EditorAiMaskTool::Services ai_mask_services;
+  ai_mask_services.runtime = [this]() -> std::shared_ptr<alcedo::AiSidecarRuntimeService> {
+    if (!project_ || !project_->handler().project()) {
+      return nullptr;
+    }
+    return project_->handler().project()->GetAiSidecarRuntimeService();
+  };
+  ai_mask_services.runtime_options = [this]() {
+    return semantic_generation_->RuntimeOptionsForCurrentSidecarSnapshot(false);
+  };
+  // AI Models plan, AM5: the installed AI Mask model set of a supported version,
+  // <model directory>/alcedo-ai-mask-v<version>, read again at each Open.
+  ai_mask_services.model_set = [packages = ai_model_packages_.get()] {
+    return packages->ReadAiMaskModelSet();
+  };
+  ai_mask_tool_ =
+      std::make_unique<EditorAiMaskTool>(editor_session_.get(), std::move(ai_mask_services), this);
+  RecordConstruction("EditorAiMaskTool", ai_mask_tool_.get());
+  // A published inventory or root can change which LUT bytes the open image renders.
+  QObject::connect(lut_library_.get(), &alcedo::LutLibraryService::InventoryChanged,
+                   editor_session_.get(),
+                   [session = editor_session_.get()] { session->NotifyLutResourcesChanged(); });
   editor_session_->SetInteractionPolicy(interaction_policy_.get());
   editor_session_->SetAlbumCatalog(library_.get());
+  // control.acquire waits while the user drags a slider: the pending input of the editor has a
+  // sequence that no Release or Cancel boundary sealed. Every session result and state change
+  // can end that state, so the waiting acquires are tried again on both.
+  agent_control_->SetUnsealedInputReader([session = editor_session_.get()] {
+    const auto pending = session->PeekPendingInput();
+    return std::any_of(pending.sequences.begin(), pending.sequences.end(),
+                       [](const alcedo::EditorPendingSequence& sequence) {
+                         return sequence.seal == alcedo::EditorPendingInputBoundaryKind::None;
+                       });
+  });
+  QObject::connect(editor_session_.get(), &EditorSessionController::SessionResultObserved,
+                   agent_control_.get(),
+                   [control = agent_control_.get()] { control->RecheckPendingAcquires(); });
+  QObject::connect(editor_session_.get(), &EditorSessionController::StateChanged,
+                   agent_control_.get(),
+                   [control = agent_control_.get()] { control->RecheckPendingAcquires(); });
+  QObject::connect(library_.get(), &LibraryModule::LastEditedFileFound, editor_session_.get(),
+                   [session = editor_session_.get()](uint element_id, uint image_id) {
+                     session->restoreLastEditedImage(element_id, image_id);
+                   });
+  // Leaving the editor shows the library again: apply edits written while it was hidden.
+  QObject::connect(editor_session_.get(), &EditorSessionController::StateChanged, library_.get(),
+                   [session = editor_session_.get(), library = library_.get()] {
+                     if (!session->active()) {
+                       library->RefreshStaleEditOrder();
+                     }
+                   });
+  editor_session_->SetImageExifReader([this](uint image_id) -> alcedo::EditorImageExifDisplay {
+    if (image_id == 0 || project_ == nullptr || project_->handler().project() == nullptr) {
+      return {};
+    }
+    auto pool = project_->handler().project()->GetImagePoolService();
+    if (!pool) {
+      return {};
+    }
+    try {
+      return pool->Read<alcedo::EditorImageExifDisplay>(
+          static_cast<std::uint32_t>(image_id),
+          [](const std::shared_ptr<alcedo::Image>& image) {
+            if (!image) {
+              return alcedo::EditorImageExifDisplay{};
+            }
+            return alcedo::ReadEditorImageExifDisplay(*image);
+          });
+    } catch (const std::exception&) {
+      return {};
+    }
+  });
+  adjustment_transfer_->SetEditorSession(editor_session_.get());
   connect(adjustment_transfer_.get(), &AdjustmentTransferController::PackageChanged,
           editor_session_.get(), [this]() {
             if (editor_session_) {
@@ -258,9 +423,85 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     editor_session_scheduler_->SetSinkResolver([this]() -> alcedo::IFrameSink* {
       return editor_session_ ? editor_session_->presentation_frame_sink() : nullptr;
     });
+    editor_session_scheduler_->SetMaskCoverageSinkResolver([this]() -> alcedo::IMaskCoverageSink* {
+      return editor_session_ ? editor_session_->presentation_mask_coverage_sink() : nullptr;
+    });
+    editor_session_scheduler_->SetDetailMaskCoverageSinkResolver(
+        [this]() -> alcedo::IMaskCoverageSink* {
+          return editor_session_ ? editor_session_->presentation_detail_mask_coverage_sink()
+                                 : nullptr;
+        });
   }
+  // An export renders on its own executor. The editor releases its GPU resources before the
+  // export allocates, and allocates them again on its next frame after the export ends.
+  import_export_->SetExportGpuResourceRelease(ExportGpuResourceRelease{
+      .release_before_export =
+          [this](ExportGpuResourceRelease::ReleaseCompletion on_released) {
+            const auto scheduler = editor_session_scheduler_;
+            if (!scheduler) {
+              on_released(true, {});
+              return;
+            }
+            // Queued on the session owner before the port refuses its first frame, so the owner
+            // records every refused frame and routes it again only after the export.
+            if (editor_session_runtime_ && editor_session_runtime_->service) {
+              editor_session_runtime_->service->SetSuspendedForExport(true);
+            }
+            scheduler->ReleaseGpuResourcesForExport(
+                [on_released = std::move(on_released)](EditorGpuResourceRelease release) {
+                  on_released(release.success, std::move(release.error));
+                });
+          },
+      .resume_after_export =
+          [this] {
+            // The port renders again before the owner routes the refused frames.
+            if (editor_session_scheduler_) {
+              editor_session_scheduler_->ResumeGpuResourcesAfterExport();
+            }
+            if (editor_session_runtime_ && editor_session_runtime_->service) {
+              editor_session_runtime_->service->SetSuspendedForExport(false);
+            }
+          },
+  });
+  lut_browser_ = std::make_unique<LutLibraryModel>();
+  lut_browser_->setLibrary(lut_library_.get());
+  RecordConstruction("LutLibraryModel", lut_browser_.get());
+  lut_target_ = std::make_unique<LutLibraryController>();
+  lut_target_->setLibrary(lut_library_.get());
+  lut_target_->setEditorSession(editor_session_.get());
+  RecordConstruction("LutLibraryController", lut_target_.get());
+  // The browser marks the entry the target applies; the two stay separate owners.
+  QObject::connect(lut_target_.get(), &LutLibraryController::associationChanged,
+                   lut_browser_.get(), [browser = lut_browser_.get(), target = lut_target_.get()] {
+                     browser->setAppliedEntryId(target->associationEntryId());
+                   });
+  lut_browser_->setAppliedEntryId(lut_target_->associationEntryId());
+  lut_preview_ = std::make_unique<LutPreviewController>();
+  lut_preview_->setLibrary(lut_library_.get());
+  lut_preview_->setEditorSession(editor_session_.get());
+  RecordConstruction("LutPreviewController", lut_preview_.get());
   workspace_router_ = std::make_unique<WorkspaceRouter>(editor_session_.get(), this);
+  workspace_router_->SetInteractionPolicy(interaction_policy_.get());
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
+  editor_behavior_ = std::make_unique<EditorBehaviorPreferences>(this);
+  RecordConstruction("EditorBehaviorPreferences", editor_behavior_.get());
+  library_view_ = std::make_unique<LibraryViewPreferences>(this);
+  RecordConstruction("LibraryViewPreferences", library_view_.get());
+  log_folder_ = std::make_unique<LogFolderController>(this);
+  RecordConstruction("LogFolderController", log_folder_.get());
+  project_launch_ = std::make_unique<ProjectLaunchCoordinator>(project_.get(), this);
+  RecordConstruction("ProjectLaunchCoordinator", project_launch_.get());
+  project_launch_->SetInteractionPolicy(interaction_policy_.get());
+  application_close_ = std::make_unique<ApplicationCloseCoordinator>(
+      editor_session_.get(), workspace_router_.get(), project_.get(), this);
+  RecordConstruction("ApplicationCloseCoordinator", application_close_.get());
+  library_mutations_ = std::make_unique<LibraryMutationOperations>(
+      images_.get(), library_->selection(), folders_.get(), editor_session_.get(),
+      workspace_router_.get(), this);
+  RecordConstruction("LibraryMutationOperations", library_mutations_.get());
+  library_mutations_->SetInteractionPolicy(interaction_policy_.get());
+  connect(library_mutations_.get(), &LibraryMutationOperations::ElementsDeleted,
+          export_queue_.get(), &ExportQueue::RemoveElements);
 
   library_->BindCollaborators(folders_.get(), search_.get(), stats_.get());
   library_->SetSemanticLabelProvider(
@@ -269,7 +510,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       });
   folders_->BindCollaborators(stats_.get(), search_.get(), import_export_.get());
   images_->BindCollaborators(stats_.get(), import_export_.get(), semantic_generation_.get(),
-                             interaction_policy_.get());
+                             interaction_policy_.get(), background_tasks_.get());
   stats_->BindCollaborators(search_.get(), semantic_generation_.get());
   semantic_generation_->BindCollaborators(nikon_he_recovery_.get());
   import_export_->BindCollaborators(stats_.get(), nikon_he_recovery_.get(),
@@ -278,8 +519,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
 
   ProjectLifecycleHooks lifecycle_hooks;
   lifecycle_hooks.project_switch_block_reason = [import_export = import_export_.get()] {
-    if (import_export && import_export->current_import_job() &&
-        !import_export->current_import_job()->IsCancelationAcked()) {
+    // ImportRunning() stays true while the finished import is written to the project.
+    if (import_export && (import_export->ImportRunning() ||
+                          (import_export->current_import_job() &&
+                           !import_export->current_import_job()->IsCancelationAcked()))) {
       return QStringLiteral("Cannot switch project while an import is running.");
     }
     if (import_export && import_export->export_inflight()) {
@@ -300,6 +543,11 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     if (workspace_router) {
       workspace_router->OpenLibrary();
     }
+  };
+  lifecycle_hooks.editor_session_busy = [editor_session = editor_session_.get()] {
+    return editor_session != nullptr &&
+           (editor_session->active() || editor_session->has_image() ||
+            editor_session->close_in_flight() || editor_session->persist_in_flight());
   };
   lifecycle_hooks.clear_project_ui_state = [library = library_.get(), folders = folders_.get(),
                                             import_export = import_export_.get()] {
@@ -327,7 +575,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   };
   lifecycle_hooks.project_opened = [library = library_.get(), folders = folders_.get(),
                                     stats = stats_.get(), import_export = import_export_.get(),
-                                    semantic = semantic_generation_.get()] {
+                                    semantic = semantic_generation_.get(),
+                                    editor_session = editor_session_.get(),
+                                    project = project_.get()] {
     const auto preferred_folder_path =
         folders ? folders->current_folder_path() : std::filesystem::path{};
     if (import_export) {
@@ -341,6 +591,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     if (library) {
       library->ReloadCurrentFolder();
+      library->RevealLastEditedFile();
     }
     if (semantic) {
       semantic->RefreshSemanticState();
@@ -350,6 +601,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     if (library) {
       library->ApplyThumbnailDiskCacheSettingsToService();
+    }
+    if (editor_session && project) {
+      editor_session->SetMaskThumbnailService(project->handler().mask_thumbnail_service());
     }
   };
   lifecycle_hooks.should_keep_semantic_model_data =
@@ -384,12 +638,6 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
   };
   project_->SetLifecycleHooks(std::move(lifecycle_hooks));
-
-  db_write_barrier_->SetOnRelease([this] {
-    if (image_analysis_sink_) {
-      image_analysis_sink_->FlushPendingWrites();
-    }
-  });
 }
 
 void ApplicationModuleHost::ShutdownModules() {
@@ -410,11 +658,31 @@ void ApplicationModuleHost::ShutdownModules() {
     if (semantic_generation_) {
       semantic_generation_->CancelGeneration();
     }
+    // Cancel a LUT package download before the library worker stops; an
+    // installation that already committed its receipt completes in Shutdown().
+    if (lut_packages_) {
+      lut_packages_->Shutdown();
+    }
+    // Cancel an AI model download and wait for its install worker (AI Models plan, AM1).
+    if (ai_model_packages_) {
+      ai_model_packages_->Shutdown();
+    }
+    if (lut_library_) {
+      lut_library_->Shutdown();
+    }
+    if (camera_profiles_) {
+      camera_profiles_->Shutdown();
+    }
     if (search_) {
+      search_->CancelSearchRequests();
       search_->CancelSearchPreviewThumbnails();
     }
     if (library_) {
       library_->thumbs().ReleaseVisibleThumbnailPins();
+    }
+    // The AI Mask tool cancels its edit and unloads the models before the editor finalizes.
+    if (ai_mask_tool_) {
+      ai_mask_tool_->Shutdown();
     }
     if (editor_session_ && editor_session_->active()) {
       editor_session_->Finalize(true);
@@ -425,38 +693,31 @@ void ApplicationModuleHost::ShutdownModules() {
     if (editor_session_) {
       editor_session_->Shutdown();
     }
+    // The in-flight editor frame presents to the viewport sink or the scope sink of the editor
+    // session. Wait for it before either sink owner is destroyed.
+    if (editor_session_scheduler_) {
+      editor_session_scheduler_->Shutdown();
+    }
     if (import_export_) {
       import_export_->CancelImport();
     }
 
     // Deliver cancellation/finalization callbacks while every module is still
-    // alive. Export is a wait-for-finish task; its completion releases the DB
-    // barrier and the installed callback drains analysis results immediately.
+    // alive. Export is a wait-for-finish task.
     const QDeadlineTimer deadline(15000);
-    while (((background_tasks_ && background_tasks_->RunningCount() > 0) ||
-            (import_export_ &&
-             (import_export_->ImportRunning() || import_export_->export_inflight()))) &&
-           !deadline.hasExpired()) {
+    while (!IsIdle() && !deadline.hasExpired()) {
       QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
     }
-    if (image_analysis_sink_ && (!db_write_barrier_ || !db_write_barrier_->IsHeld())) {
-      image_analysis_sink_->FlushPendingWrites();
-    }
+    // The runtime workspace is removed in the destructor, after ProjectModule closes the
+    // project database (RemovePendingWorkspace).
     if (project_) {
-      auto psvc = project_->handler().pipeline_service();
-      if (psvc) {
-        psvc->Sync();
-        // Clean-exit Mini-Git garbage collection: delete EditCommit rows not
-        // reachable from any Version head (including abandoned redo paths).
-        // Abnormal shutdown must not run this path.
-        (void)psvc->CollectUnreachableEditCommits();
-      }
-      (void)project_->handler().PurgeUninstalledSemanticModels();
-      if (project_->handler().PersistCurrentProjectState()) {
-        QString ignored_error;
-        (void)project_->handler().PackageCurrentProjectFiles(&ignored_error);
-      }
-      album_util::CleanupWorkspaceDirectory(project_->handler().workspace_dir());
+      pending_workspace_removal_ = project_->handler().workspace_dir();
+    }
+    // A project that the user did not enter (welcome surface preview) has no user changes; its
+    // package stays as it is on disk and only the thumbnail cache index is flushed.
+    if (project_) {
+      QString ignored_error;
+      (void)project_->handler().PersistProjectForClose(&ignored_error);
     }
   } catch (...) {
   }
@@ -464,6 +725,13 @@ void ApplicationModuleHost::ShutdownModules() {
 
 ApplicationModuleHost::~ApplicationModuleHost() {
   ShutdownModules();
+  // The session-owner worker calls the observers that EditorSessionController installed, and a
+  // callback it already copied still runs after the controller clears its observer slots. The
+  // Shutdown command that ShutdownModules queued may still be running there, so join the worker
+  // before any module that receives session callbacks is destroyed.
+  if (editor_session_runtime_ && editor_session_runtime_->service) {
+    editor_session_runtime_->service->StopCommandExecutor();
+  }
 
   // Destroy explicitly so the lifecycle observer records the actual object
   // lifetime, including non-QObject infrastructure, and so dependent modules
@@ -473,12 +741,18 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     pointer.reset();
     RecordDestruction(type_name, object);
   };
-  auto destroy_shared = [this](auto& pointer, const char* type_name) {
-    const void* object = pointer.get();
-    pointer.reset();
-    RecordDestruction(type_name, object);
-  };
+  destroy(library_mutations_, "LibraryMutationOperations");
+  destroy(application_close_, "ApplicationCloseCoordinator");
+  destroy(project_launch_, "ProjectLaunchCoordinator");
+  destroy(log_folder_, "LogFolderController");
+  destroy(library_view_, "LibraryViewPreferences");
+  destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");
+  destroy(lut_preview_, "LutPreviewController");
+  destroy(lut_target_, "LutLibraryController");
+  destroy(lut_browser_, "LutLibraryModel");
+  destroy(ai_mask_tool_, "EditorAiMaskTool");
+  destroy(editor_comparison_, "EditorComparisonController");
   destroy(editor_session_, "EditorSessionController");
   if (editor_session_runtime_) {
     if (editor_session_runtime_->save_coordinator) {
@@ -492,31 +766,68 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   }
   destroy(adjustment_transfer_, "AdjustmentTransferController");
   destroy(nikon_he_recovery_, "NikonHeRecoveryController");
+  destroy(export_recipe_, "ExportRecipeBuilder");
+  destroy(export_queue_, "ExportQueue");
   destroy(import_export_, "ImportExportHandler");
-  destroy(image_analysis_, "ImageAnalysisController");
-  destroy_shared(image_analysis_sink_, "ImageAnalysisSink");
-  destroy(db_write_barrier_, "ProjectDbWriteBarrier");
-  destroy_shared(image_analysis_gate_, "ImageAnalysisInFlightGate");
   destroy(semantic_generation_, "SemanticGenerationController");
   destroy(ai_provider_profiles_, "AiProviderProfileController");
+  destroy(ai_model_download_tasks_, "AiModelDownloadTaskPublisher");
+  destroy(ai_model_packages_, "AiModelPackageService");
   destroy(model_download_, "ModelDownloadController");
   destroy(search_, "SearchController");
   destroy(stats_, "StatsEngine");
   destroy(images_, "ImageController");
   destroy(folders_, "FolderController");
   destroy(library_, "LibraryModule");
+  const auto project_services = WatchProjectServices(project_.get());
   destroy(project_, "ProjectModule");
+  ReportSurvivingProjectServices(project_services);
+  RemovePendingWorkspace();
+  destroy(camera_profiles_, "CameraProfileLibraryService");
+  destroy(lut_packages_, "LutPackageService");
+  destroy(lut_library_, "LutLibraryService");
   destroy(updates_, "UpdateService");
   destroy(model_download_service_, "ModelDownloadService");
   destroy(download_service_, "DownloadService");
+  destroy(agent_control_, "AgentControlOwner");
   destroy(interaction_policy_, "InteractionPolicyController");
   destroy(background_tasks_, "BackgroundTaskController");
 }
 
 void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
 
+auto ApplicationModuleHost::IsIdle() const -> bool {
+  if (background_tasks_ &&
+      background_tasks_->ActiveCountExcept(BackgroundTaskKind::AgentControl) > 0) {
+    return false;
+  }
+  return !import_export_ ||
+         (!import_export_->ImportRunning() && !import_export_->export_inflight());
+}
+
+void ApplicationModuleHost::RemovePendingWorkspace() {
+  if (pending_workspace_removal_.empty()) {
+    return;
+  }
+  (void)album_util::CleanupWorkspaceDirectory(pending_workspace_removal_);
+  pending_workspace_removal_.clear();
+}
+
 void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
-  if (engine == nullptr || library_ == nullptr) {
+  if (engine == nullptr) {
+    return;
+  }
+
+  engine->addImageProvider(QString::fromUtf8(kMaskThumbnailImageProviderId),
+                           new MaskThumbnailImageProvider(SharedMaskThumbnailImageStore()));
+  engine->addImageProvider(QString::fromUtf8(kSystemIconImageProviderId),
+                           new SystemIconImageProvider());
+  engine->addImageProvider(QString::fromUtf8(kComparisonImageProviderId),
+                           new ComparisonImageProvider(SharedComparisonImageStore()));
+  engine->addImageProvider(QString::fromUtf8(kLutPreviewImageProviderId),
+                           new LutPreviewImageProvider(SharedLutPreviewImageStore()));
+
+  if (library_ == nullptr) {
     return;
   }
 

@@ -4,7 +4,7 @@ CheckOptions:
   - { key: readability-identifier-naming.PrivateMemberSuffix,   value: "_"        }
   
   - { key: readability-identifier-naming.ProtectedMemberPrefix, value: ""         }
-  - { key: readability-identifier-naming.ProtectedMemberSuffix, value: "_"        }
+  - { key: readability-identifier-naming.ProtectedMemberSuffix, value: ""         }
 
   - { key: readability-identifier-naming.PublicMemberPrefix,    value: ""         }
-  - { key: readability-identifier-naming.PublicMemberSuffix,    value: "_"        }
+  - { key: readability-identifier-naming.PublicMemberSuffix,    value: ""         }

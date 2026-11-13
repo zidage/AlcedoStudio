@@ -27,7 +27,7 @@ void RegisterOpenClGeometryPrograms() {
                 },
                 OpenClProgramDescriptor{
                     .name                = OpenCL::Geometry::kLensCalibProgramName,
-                    .source_paths        = {ALCEDO_OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL},
+                    .source_paths        = {ALCEDO_OPENCL_LENS_CALIB_CL},
                     .build_options       = "-cl-std=CL1.2",
                     .required_at_startup = true,
                 },

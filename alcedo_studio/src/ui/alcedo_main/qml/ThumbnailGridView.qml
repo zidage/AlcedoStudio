@@ -3,30 +3,65 @@ import QtQuick.Controls
 import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
+import Alcedo.Main 1.0
+import "ColorLabelNames.js" as ColorLabelNames
 
+// Flat (ungrouped) Library photo area. Two layouts show the loaded photos of
+// LibraryModule.thumbnailModel; LibraryViewPreferences.gridLayout selects one:
+//
+// - "classic": a GridView of 3:2 cards with a fixed column count per zoom level.
+// - "justified": rows of one photo height that fill the view width (JustifiedLayoutModel and
+//   JustifiedThumbnailTile). The tile width follows the aspect ratio of the photo.
+//
+// Both layouts use one input overlay (selection, rubber band, stars, context menu, wheel), one
+// scroll bar, and the same geometry functions (layoutRect, cardIndexAt, delegateForIndex, ...).
+//
+// Zoom: a new zoom level is applied in one synchronous step (applyZoomTransition). Before the
+// layout changes, each shown card records its drawn rectangle; after the new layout and the new
+// scroll position are set, each card animates from that rectangle to its new one, and the card
+// under the pointer (Ctrl+wheel) or at the view centre keeps its height on the screen. A zoom
+// step during an animation starts from the drawn rectangles of that moment, so the cards do not
+// jump to the end of the running animation.
 Item {
     id: root
     objectName: "thumbnailGridView"
     clip: true
     readonly property color cardBg: appTheme.cardSurfaceColor
-    readonly property color cardBgSelected: appTheme.selectedTintColor
     readonly property color cardBgHover: appTheme.hoverColor
     readonly property color cardMuted: appTheme.textMutedColor
     readonly property color cardText: appTheme.textColor
-    readonly property color cardAccent: appTheme.accentColor
+    // Surface behind the justified tiles (the Library browser panel); the ring of the color
+    // label dots in their caption.
+    readonly property color justifiedCanvasColor: appTheme.glassPanelColor
     readonly property color cardDanger: appTheme.dangerColor
     readonly property color cardDangerTint: appTheme.dangerTintColor
     readonly property int dataFontWeight: 500
     readonly property real dataLetterSpacing: -0.2
 
-    property var selectedImagesById: ({})
+    // The library selection (LibrarySelection). A delegate asks it for its own photo.
+    readonly property var selection: appModules.library.selection
     property var exportQueueById: ({})
 
-    // ── Zoom control ──────────────────────────────────────────────────
+    // ── Layout ──
+    // "classic" or "justified" (LibraryViewPreferences.gridLayout).
+    property string layoutMode: appModules.libraryView ? appModules.libraryView.gridLayout
+                                                       : "classic"
+    // The layout that the view shows; it follows layoutMode in onLayoutModeChanged, which
+    // keeps the first shown photo at the top.
+    property bool _layoutJustified: false
+    readonly property bool justified: _layoutJustified
+    // The scrolled view of the shown layout: the GridView, or the justified-rows item with the
+    // same contentX, contentY, originY, and contentHeight properties.
+    readonly property Item view: _layoutJustified ? justifiedView : grid
+    readonly property Item inputOverlay: overlay
+
+    // ── Zoom control ──
     // zoomLevel maps to column counts: 2, 3, 4, 5, 6, 8, 11, 14
     readonly property var zoomColumns: [2, 3, 4, 5, 6, 8, 11, 14]
     // resolution tiers per zoom level (max edge px): 2048, 1024, 1024, 512, 512, 256, 256, 256
     readonly property var zoomResolutionEdges: [2048, 1024, 1024, 512, 512, 256, 256, 256]
+    // Target photo height of a justified row per zoom level.
+    readonly property var justifiedRowHeights: [480, 360, 280, 220, 180, 140, 104, 80]
     readonly property int zoomLevelCount: zoomColumns.length
     property int zoomLevel: 4  // default: 6 columns
     property bool zoomAdjusting: false
@@ -35,40 +70,71 @@ Item {
     property bool thumbnailBindingSuspended: false
     property var _deferredThumbnailReleases: ({})
     property int selectionAnchorIndex: -1
+    // Zoom level of the shown layout. applyZoomTransition sets it after the shown cards are
+    // recorded, so every size below changes together with the layout.
+    property int _layoutZoomLevel: 4
 
-    readonly property int columns: zoomColumns[Math.min(zoomLevel, zoomLevelCount - 1)]
+    readonly property int columns: zoomColumns[Math.min(_layoutZoomLevel, zoomLevelCount - 1)]
     readonly property int desiredMaxEdge: zoomResolutionEdges[Math.min(committedZoomLevel, zoomLevelCount - 1)]
     readonly property bool compactText: columns >= 8
     readonly property bool hideMetadata: columns >= 8
     readonly property bool hideAllText: columns >= 14
-    readonly property int cardInset: columns >= 11 ? 4 : (columns >= 8 ? 6 : 8)
-    readonly property int delegateGap: columns >= 11 ? 4 : (columns >= 8 ? 6 : 12)
-    readonly property int textAreaHeight: hideAllText ? 0 : (hideMetadata ? 18 : 42)
+    // 2 to 6 columns: the card stars are a control. At 8 and 11 columns a star is too small to
+    // hit, so the stars are display only and a click on them selects the card.
+    readonly property bool starsInteractive: columns <= 6
+    readonly property int cardInset: cardInsetForColumns(columns)
+    readonly property int delegateGap: delegateGapForColumns(columns)
+    readonly property int textAreaHeight: textAreaHeightForColumns(columns)
     readonly property int titleFontSize: columns >= 11 ? 9 : (columns >= 8 ? 10 : 12)
     readonly property int metadataFontSize: columns >= 8 ? 8 : 10
-    property bool _inZoomToCursor: false
+    // Justified rows: the target photo height, the file name line below the photo, the gap
+    // between tiles and rows, and the hover details (all levels with a file name).
+    readonly property real justifiedRowHeight: justifiedRowHeights[Math.min(_layoutZoomLevel,
+                                                                            zoomLevelCount - 1)]
+    readonly property real justifiedCaptionHeight: hideAllText ? 0 : (compactText ? 16 : 22)
+    readonly property real justifiedSpacing: cardInset
+    readonly property bool justifiedDetailsEnabled: !hideAllText
+    // Pointer targets of the input overlay, read by the delegates.
+    readonly property int hoveredCardIndex: overlay.hoveredIndex
+    readonly property int hoveredCardStar: overlay.hoveredStar
+    readonly property int hoveredEditMarkIndex: overlay.hoveredEditMarkIndex
+
     property bool _zoomLayoutAnimating: false
-    property var _zoomLayoutSnapshot: ({})
-    property int _layoutZoomLevel: Math.max(0, Math.min(zoomLevelCount - 1, zoomLevel))
+    // Focus point of the next zoom step in viewport coordinates; -1 is the view centre.
+    property real _zoomFocusX: -1
+    property real _zoomFocusY: -1
+    // Ctrl+wheel angle not yet used for a zoom step (a touchpad sends small steps).
+    property real _zoomWheelAngle: 0
     property int _layoutRequestId: 0
     property int _pendingLayoutRequestId: 0
-    property int _zoomRequestId: 0
-    property int _pendingZoomRequestId: 0
-    property real _pendingZoomFocusRatio: 0
-    property real _pendingZoomFocusY: 0
-    property int _pendingZoomTargetLevel: Math.max(0, Math.min(zoomLevelCount - 1, zoomLevel))
     readonly property int zoomSettleDelay: 90
     readonly property int thumbnailResumeDelay: 150
-    readonly property int delegateReflowDuration: 280
-    readonly property real delegateReflowTravelDamping: 0.32
-    readonly property real delegateReflowMaxTravel: 44
+    readonly property int delegateReflowDuration: appTheme.reduceMotion ? 0 : 280
+    // In-place change of the shown photos (an import or a delete): the cards before the change,
+    // read on libraryChangeAboutToApply. While a change animates, the cards slide from their old
+    // viewport positions.
+    property var _changeCapture: null
+    property bool _changeLayoutAnimating: false
+    // True while the view width follows the collections sidebar fold. The thumbnail cache size
+    // waits for the final size.
+    property bool geometryAnimating: false
+    // Calls of LibraryModule::SetThumbnailCacheHint; read by tests.
+    property int cacheHintUpdateCount: 0
+    // When more cards than this appear or disappear in the view, the change is shown without
+    // animation; the scroll anchor stays.
+    readonly property int changeAnimationLimit: 48
 
     signal imageSelectionChanged(int elementId, int imageId, string fileName, bool isHdr,
                                  bool selected)
     signal replaceSelection(var items)
+    // A star click on the card of @p item (2 to 6 columns): rate that photo only.
+    signal ratingRequested(var item, int rating)
     signal imageFocused(var item, int index)
     signal contextMenuRequested(var item, real sceneX, real sceneY)
     signal zoomChanged(int zoomLevel)
+    // Ctrl+wheel asks the owner for a zoom level, so an owner binding of zoomLevel stays. The
+    // view sets zoomLevel itself only when the owner did not.
+    signal zoomLevelRequested(int zoomLevel)
 
     function semanticTagTitle(rawTag) {
         const normalized = rawTag === undefined || rawTag === null
@@ -132,7 +198,10 @@ Item {
 
     Component.onCompleted: {
         committedZoomLevel = root.clampedZoomLevel(zoomLevel)
+        _layoutZoomLevel = committedZoomLevel
+        _layoutJustified = layoutMode === "justified"
         _zoomReady = true
+        root.applyJustifiedGeometry()
         root.relayoutAndClamp()
         root.updateCacheHint()
     }
@@ -141,13 +210,19 @@ Item {
         const clamped = root.clampedZoomLevel(zoomLevel)
         if (!_zoomReady) {
             committedZoomLevel = clamped
+            _layoutZoomLevel = clamped
             return
         }
         root.zoomChanged(clamped)
-        root.beginThumbnailBindingSuspension()
-        if (!_inZoomToCursor) {
-            root.prepareZoomLayoutTransition(clamped, grid.height * 0.5)
+        const focusX = _zoomFocusX >= 0 ? _zoomFocusX : root.view.width * 0.5
+        const focusY = _zoomFocusY >= 0 ? _zoomFocusY : root.view.height * 0.5
+        _zoomFocusX = -1
+        _zoomFocusY = -1
+        if (clamped === _layoutZoomLevel) {
+            return
         }
+        root.beginThumbnailBindingSuspension()
+        root.applyZoomTransition(clamped, focusX, focusY)
         if (zoomAdjusting) {
             zoomCommitTimer.stop()
             return
@@ -160,11 +235,30 @@ Item {
         }
         root.finishZoomCommit()
     }
+    onLayoutModeChanged: root.applyLayoutMode()
     onWidthChanged: {
-        root.relayoutAndClamp()
+        if (_layoutJustified) {
+            root.applyJustifiedGeometry()
+        } else {
+            root.relayoutAndClamp()
+        }
         root.updateCacheHint()
     }
     onHeightChanged: {
+        root.clampContentY()
+        root.updateCacheHint()
+    }
+    // The fold ends: one relayout and one cache size for the final size, at once. A relayout
+    // queued by the last frame is cancelled, so the cache size is set exactly once and before
+    // the next event.
+    onGeometryAnimatingChanged: {
+        if (geometryAnimating) {
+            return
+        }
+        relayoutAndClampTimer.stop()
+        if (!_layoutJustified) {
+            grid.forceLayout()
+        }
         root.clampContentY()
         root.updateCacheHint()
     }
@@ -193,48 +287,36 @@ Item {
         return columnCount >= 11 ? 4 : (columnCount >= 8 ? 6 : 12)
     }
 
+    // Caption height of a classic card: the file name, camera, and date lines (2 to 6 columns),
+    // one line (8 and 11 columns), or none (14 columns).
     function textAreaHeightForColumns(columnCount) {
         if (columnCount >= 14) {
             return 0
         }
-        return columnCount >= 8 ? 18 : 42
+        return columnCount >= 8 ? 18 : 50
     }
 
+    // Classic cell geometry of a zoom level for the current view width. The GridView cells and
+    // the old rectangles of a zoom animation both read it.
     function metricsForZoomLevel(level) {
         const visualCols = root.visualColumnsForZoomLevel(level)
         const inset = root.cardInsetForColumns(visualCols)
         const gap = root.delegateGapForColumns(visualCols)
         const textHeight = root.textAreaHeightForColumns(visualCols)
-        const cellW = Math.max(72, Math.floor(grid.width / visualCols))
+        const cellW = Math.max(72, Math.floor(root.width / visualCols))
         const cellH = Math.max(64, Math.round((cellW - inset * 2) * 2 / 3
                                               + textHeight
                                               + inset * 2
                                               + gap))
         return {
             visualCols: visualCols,
-            cols: Math.max(1, Math.floor(grid.width / cellW)),
+            cols: Math.max(1, Math.floor(root.width / cellW)),
             cellW: cellW,
             cellH: cellH,
             delegateGap: gap
         }
     }
-
-    function contentHeightForMetrics(metrics) {
-        if (!metrics || metrics.cellH <= 0) {
-            return 0
-        }
-        return Math.ceil(modelTotalCount() / Math.max(1, metrics.cols)) * metrics.cellH
-    }
-
-    function clampedUnitScale(rawScale) {
-        return Math.max(0.94, Math.min(1.06, rawScale))
-    }
-
-    function softenedReflowDelta(delta) {
-        const sign = delta < 0 ? -1 : 1
-        const softened = Math.abs(delta) * delegateReflowTravelDamping
-        return sign * Math.min(delegateReflowMaxTravel, softened)
-    }
+    readonly property var classicMetrics: metricsForZoomLevel(_layoutZoomLevel)
 
     function thumbnailBindingKey(elementId, imageId, maxEdge) {
         return String(Number(elementId)) + ":" + String(Number(imageId)) + ":" + String(Number(maxEdge))
@@ -262,16 +344,36 @@ Item {
         _deferredThumbnailReleases = pending
     }
 
-    function syncVisibleThumbnailBindings() {
-        if (!grid.contentItem) {
-            return
+    // Thumbnail bindings whose delegate got another photo; pinBindTimer binds each once, after
+    // the model has written every role of the change (ThumbnailPinBinding.schedulePhotoBind).
+    property var _pendingPinBinds: []
+
+    function schedulePinBind(pin) {
+        if (_pendingPinBinds.indexOf(pin) < 0) {
+            _pendingPinBinds.push(pin)
         }
-        const children = grid.contentItem.children
-        for (let i = 0; i < children.length; ++i) {
-            const child = children[i]
-            if (child && child.visible !== false && child.syncThumbnailBinding) {
-                child.syncThumbnailBinding()
-            }
+        pinBindTimer.start()
+    }
+
+    function unschedulePinBind(pin) {
+        const at = _pendingPinBinds.indexOf(pin)
+        if (at >= 0) {
+            _pendingPinBinds.splice(at, 1)
+        }
+    }
+
+    function bindPendingPins() {
+        const pins = _pendingPinBinds
+        _pendingPinBinds = []
+        for (let i = 0; i < pins.length; ++i) {
+            pins[i].bind(false)
+        }
+    }
+
+    function syncVisibleThumbnailBindings() {
+        const cards = root.photoDelegates()
+        for (let i = 0; i < cards.length; ++i) {
+            cards[i].syncThumbnailBinding()
         }
     }
 
@@ -285,37 +387,174 @@ Item {
         }
     }
 
+    // ── Geometry of the shown layout ──
+    // Layout coordinates: x from the left of the content, y from the top of the first row
+    // (GridView puts that row at originY; the justified view at 0).
+
+    // Rectangle of the card of photo @p index in layout coordinates, or null when the layout has
+    // no card for it (a justified photo that is not loaded).
+    function layoutRect(index) {
+        if (index < 0) {
+            return null
+        }
+        if (_layoutJustified) {
+            const r = justifiedModel.tileRect(index)
+            return r.width > 0 ? { x: r.x, y: r.y, w: r.width, h: r.height } : null
+        }
+        return root.classicRectForMetrics(index, {
+            cols: root.effectiveColumnCount(), cellW: grid.cellWidth, cellH: grid.cellHeight,
+            delegateGap: root.delegateGap
+        })
+    }
+
+    function classicRectForMetrics(index, metrics) {
+        const cols = Math.max(1, metrics.cols)
+        return {
+            x: (index % cols) * metrics.cellW,
+            y: Math.floor(index / cols) * metrics.cellH,
+            w: Math.max(1, metrics.cellW - metrics.delegateGap),
+            h: Math.max(1, metrics.cellH - metrics.delegateGap)
+        }
+    }
+
+    function layoutReady() {
+        if (root.view.width <= 0 || root.view.height <= 0) {
+            return false
+        }
+        return _layoutJustified ? justifiedModel.layoutRowCount > 0 : grid.cellHeight > 0
+    }
+
+    // Photo whose card holds the viewport point; -1 in a gap.
+    function cardIndexAt(viewX, viewY) {
+        if (_layoutJustified) {
+            return justifiedModel.indexAt(viewX + justifiedView.contentX,
+                                          viewY + justifiedView.contentY)
+        }
+        return grid.indexAt(viewX + grid.contentX, viewY + grid.contentY)
+    }
+
+    // Photo whose card is nearest to the viewport point; -1 without photos.
+    function nearestCardIndexAt(viewX, viewY) {
+        if (_layoutJustified) {
+            return justifiedModel.nearestIndex(viewX + justifiedView.contentX,
+                                               viewY + justifiedView.contentY)
+        }
+        const total = root.modelTotalCount()
+        if (total <= 0 || grid.cellWidth <= 0 || grid.cellHeight <= 0) {
+            return -1
+        }
+        const cols = root.effectiveColumnCount()
+        const col = Math.max(0, Math.min(cols - 1,
+                                         Math.floor((viewX + grid.contentX) / grid.cellWidth)))
+        const row = Math.max(0, Math.floor((viewY + grid.contentY - grid.originY) / grid.cellHeight))
+        return Math.min(total - 1, row * cols + col)
+    }
+
+    function delegateForIndex(index) {
+        if (index < 0) {
+            return null
+        }
+        if (_layoutJustified) {
+            const slot = justifiedModel.slotOfIndex(index)
+            return slot >= 0 && slot < justifiedRepeater.count ? justifiedRepeater.itemAt(slot)
+                                                               : null
+        }
+        return grid.itemAtIndex(index)
+    }
+
+    // The created photo delegates of the shown layout (not the empty slots of the justified rows
+    // or the cards in the pool of the grid).
+    function photoDelegates() {
+        const cards = []
+        if (_layoutJustified) {
+            for (let i = 0; i < justifiedRepeater.count; ++i) {
+                const tile = justifiedRepeater.itemAt(i)
+                if (tile && tile.photoIndex >= 0) {
+                    cards.push(tile)
+                }
+            }
+            return cards
+        }
+        if (!grid.contentItem) {
+            return cards
+        }
+        const children = grid.contentItem.children
+        for (let i = 0; i < children.length; ++i) {
+            const child = children[i]
+            if (child && child.cardIndex !== undefined && child.startZoomLayoutAnim
+                    && child.visible && !child.pooled) {
+                cards.push(child)
+            }
+        }
+        return cards
+    }
+
+    // Drawn rectangle of a card in viewport coordinates, with its running animation.
+    function drawnViewportRect(card) {
+        return {
+            x: card.x + card.zoomTranslateX - root.view.contentX,
+            y: card.y + card.zoomTranslateY - root.view.contentY,
+            w: card.width * card.zoomScaleX,
+            h: card.height * card.zoomScaleY
+        }
+    }
+
+    function rowPitch() {
+        return _layoutJustified ? justifiedRowHeight + justifiedCaptionHeight + justifiedSpacing
+                                : grid.cellHeight
+    }
+
+    function rowTopOfIndex(index) {
+        if (_layoutJustified) {
+            return justifiedModel.rowTopOfIndex(index)
+        }
+        return Math.floor(index / root.effectiveColumnCount()) * grid.cellHeight
+    }
+
+    // Photos of the rows that the viewport shows (the thumbnail cache size).
+    function visiblePhotoCount() {
+        if (_layoutJustified) {
+            const range = justifiedModel.indexRangeForY(justifiedView.contentY,
+                                                        justifiedView.contentY + justifiedView.height)
+            return Math.max(1, range.last - range.first + 1)
+        }
+        const rows = Math.max(1, Math.ceil(grid.height / grid.cellHeight))
+        return root.effectiveColumnCount() * rows
+    }
+
     // Exposed for library view-state restore across workspace Loader teardown.
-    readonly property real contentX: grid.contentX
-    readonly property real contentY: grid.contentY
+    readonly property real contentX: view.contentX
+    readonly property real contentY: view.contentY
     function restoreContentY(y) {
         if (y === undefined || y === null) {
             return
         }
-        grid.contentY = clampYForHeight(layoutContentHeight(), Number(y))
+        root.view.contentY = clampYForHeight(layoutContentHeight(), Number(y))
     }
 
-    // Put the requested image at the first visible Library row. GridView's
-    // content height is estimated from the complete model count, so this stays
-    // correct while thumbnail pages are still being appended.
+    // Put the requested image at the first visible Library row. The content height is
+    // estimated from the complete model count, so this stays correct while thumbnail pages are
+    // still being appended. A justified photo that is not loaded yet loads its page first;
+    // the caller asks again when the page arrives.
     function scrollToIndexAtTop(index) {
         const total = root.modelTotalCount()
-        if (total <= 0 || grid.width <= 0 || grid.height <= 0) {
+        if (total <= 0 || root.view.width <= 0 || root.view.height <= 0) {
             return false
         }
-
-        grid.forceLayout()
-        if (grid.cellHeight <= 0) {
-            return false
-        }
-
-        const columnsForZoom = root.effectiveColumnCount()
-        const totalRows = Math.max(1, Math.ceil(total / columnsForZoom))
         const clampedIndex = Math.max(0, Math.min(total - 1, Number(index)))
-        const targetRow = Math.max(0, Math.min(totalRows - 1,
-                                              Math.floor(clampedIndex / columnsForZoom)))
-        const targetY = grid.originY + targetRow * grid.cellHeight
-        grid.contentY = root.clampYForHeight(root.layoutContentHeight(), targetY)
+        if (_layoutJustified) {
+            if (clampedIndex >= root.modelCount()) {
+                appModules.library.LoadThumbnailsThroughIndex(clampedIndex)
+                return false
+            }
+        } else {
+            grid.forceLayout()
+            if (grid.cellHeight <= 0) {
+                return false
+            }
+        }
+        const targetY = root.view.originY + root.rowTopOfIndex(clampedIndex)
+        root.view.contentY = root.clampYForHeight(root.layoutContentHeight(), targetY)
         root.maybeLoadMoreThumbnails()
         return true
     }
@@ -341,7 +580,6 @@ Item {
             return
         }
         committedZoomLevel = root.clampedZoomLevel(zoomLevel)
-        grid.forceLayout()
         root.clampContentY()
         resumeThumbnailBindingTimer.restart()
     }
@@ -363,6 +601,9 @@ Item {
     }
 
     function estimatedContentHeight() {
+        if (_layoutJustified) {
+            return justifiedModel.contentHeight
+        }
         if (grid.cellHeight <= 0) {
             return 0
         }
@@ -370,6 +611,9 @@ Item {
     }
 
     function loadedContentHeight() {
+        if (_layoutJustified) {
+            return justifiedModel.loadedHeight
+        }
         if (grid.cellHeight <= 0) {
             return 0
         }
@@ -381,228 +625,434 @@ Item {
         if (estimated > 0 || modelTotalCount() === 0) {
             return estimated
         }
-        return grid.contentHeight
+        return root.view.contentHeight
     }
 
     function maxContentY() {
-        return maxContentYForHeight(layoutContentHeight(), grid.originY)
+        return maxContentYForHeight(layoutContentHeight(), root.view.originY)
     }
 
     function maxContentYForHeight(contentHeight, originY) {
-        return originY + Math.max(0, contentHeight - grid.height)
+        return originY + Math.max(0, contentHeight - root.view.height)
     }
 
     function clampYForHeight(contentHeight, contentY, originY) {
-        const minY = originY === undefined ? grid.originY : originY
+        const minY = originY === undefined ? root.view.originY : originY
         return Math.max(minY, Math.min(maxContentYForHeight(contentHeight, minY), contentY))
     }
 
     function clampContentY() {
-        if (_inZoomToCursor) {
-            return
-        }
-        grid.contentY = clampYForHeight(layoutContentHeight(), grid.contentY)
+        root.view.contentY = clampYForHeight(layoutContentHeight(), root.view.contentY)
     }
 
     function scrollBy(deltaY) {
-        grid.contentY = clampYForHeight(layoutContentHeight(), grid.contentY + deltaY)
+        root.view.contentY = clampYForHeight(layoutContentHeight(), root.view.contentY + deltaY)
     }
 
     function relayoutAndClamp() {
-        if (_inZoomToCursor) {
-            return
-        }
         _pendingLayoutRequestId = ++_layoutRequestId
         relayoutAndClampTimer.restart()
     }
 
     function finishRelayoutAndClamp() {
-        if (_pendingLayoutRequestId !== _layoutRequestId || _inZoomToCursor) {
+        if (_pendingLayoutRequestId !== _layoutRequestId) {
             return
         }
-        grid.forceLayout()
-        _layoutZoomLevel = root.clampedZoomLevel(zoomLevel)
+        if (!_layoutJustified) {
+            grid.forceLayout()
+        }
         root.clampContentY()
         root.updateCacheHint()
     }
 
-    function setZoomLevelAt(nextZoomLevel, focusViewportY) {
-        const clamped = Math.max(0, Math.min(zoomLevelCount - 1, nextZoomLevel))
-        if (clamped === zoomLevel) {
+    // Justified rows for the current width and zoom level. The photo at the top of the view
+    // keeps its place.
+    function applyJustifiedGeometry() {
+        if (!_layoutJustified) {
             return
         }
-
-        root.prepareZoomLayoutTransition(clamped, focusViewportY)
-        zoomLevel = clamped
+        const anchor = justifiedModel.layoutRowCount > 0 ? root.nearestCardIndexAt(0, 0) : -1
+        let fraction = 0
+        if (anchor >= 0) {
+            const r = justifiedModel.tileRect(anchor)
+            fraction = r.height > 0 ? (justifiedView.contentY - r.y) / r.height : 0
+        }
+        justifiedView.contentY = justifiedModel.setGeometryAnchored(
+            root.width, root.justifiedRowHeight, root.justifiedSpacing,
+            root.justifiedCaptionHeight, anchor, fraction, 0)
     }
 
-    function prepareZoomLayoutTransition(targetZoomLevel, focusViewportY) {
-        const target = root.clampedZoomLevel(targetZoomLevel)
-        const oldLevel = root.clampedZoomLevel(_layoutZoomLevel)
-        const oldMetrics = root.metricsForZoomLevel(oldLevel)
-        if (grid.width <= 0 || grid.height <= 0 || oldMetrics.cellW <= 0 || oldMetrics.cellH <= 0) {
-            root.relayoutAndClamp()
+    // Show the layout that layoutMode names. The first shown photo stays at the top.
+    function applyLayoutMode() {
+        const wantJustified = layoutMode === "justified"
+        if (!_zoomReady) {
+            _layoutJustified = wantJustified
             return
         }
-
+        if (wantJustified === _layoutJustified) {
+            return
+        }
+        const topIndex = root.layoutReady() ? root.nearestCardIndexAt(0, 0) : -1
         root.finishActiveZoomLayoutAnimations()
-        const oldOriginY = grid.originY
-        const oldHeight = Math.max(1, root.contentHeightForMetrics(oldMetrics))
-        const oldContentY = clampYForHeight(oldHeight, grid.contentY, oldOriginY)
-        const focusY = Math.max(0, Math.min(grid.height, focusViewportY))
-        const focusRatio = (oldContentY - oldOriginY + focusY) / oldHeight
-
-        _zoomLayoutSnapshot = {
-            cols: oldMetrics.cols,
-            cellW: oldMetrics.cellW,
-            cellH: oldMetrics.cellH,
-            delegateGap: oldMetrics.delegateGap,
-            originY: oldOriginY,
-            contentX: grid.contentX,
-            contentY: oldContentY,
-            viewportH: grid.height
+        root.finishChangeAnimations()
+        overlay.hoveredIndex = -1
+        _layoutJustified = wantJustified
+        root.applyJustifiedGeometry()
+        if (topIndex >= 0) {
+            if (!_layoutJustified) {
+                grid.forceLayout()
+            }
+            root.scrollToIndexAtTop(topIndex)
+        } else {
+            root.clampContentY()
         }
-        _inZoomToCursor = true
-        _zoomLayoutAnimating = true
-        ++_layoutRequestId
-        _pendingZoomRequestId = ++_zoomRequestId
-        _pendingZoomFocusRatio = focusRatio
-        _pendingZoomFocusY = focusY
-        _pendingZoomTargetLevel = target
-        zoomToCursorTimer.restart()
-    }
-
-    function finishZoomToCursor() {
-        if (_pendingZoomRequestId !== _zoomRequestId) {
-            return
-        }
-        grid.forceLayout()
-        const newOriginY = grid.originY
-        const newHeight = Math.max(1, layoutContentHeight())
-        const targetY = newOriginY + _pendingZoomFocusRatio * newHeight - _pendingZoomFocusY
-        grid.contentY = clampYForHeight(newHeight, targetY, newOriginY)
-        _inZoomToCursor = false
-        _layoutZoomLevel = _pendingZoomTargetLevel
-        zoomLayoutApplyTimer.restart()
         root.updateCacheHint()
     }
 
-    function applyZoomLayoutAnimation() {
-        const snap = _zoomLayoutSnapshot
-        if (!snap || !snap.cols || snap.cols <= 0 || snap.cellW <= 0 || snap.cellH <= 0) {
-            _zoomLayoutAnimating = false
+    function setZoomLevelAt(nextZoomLevel, focusViewportY, focusViewportX) {
+        const clamped = root.clampedZoomLevel(nextZoomLevel)
+        if (clamped === zoomLevel) {
             return
         }
-        const newCols = root.effectiveColumnCount()
-        const newCellW = grid.cellWidth
-        const newCellH = grid.cellHeight
-        const newOriginY = grid.originY
-        const newContentX = grid.contentX
-        const newContentY = grid.contentY
-        if (newCellW <= 0 || newCellH <= 0) {
-            _zoomLayoutAnimating = false
-            return
+        _zoomFocusY = focusViewportY === undefined ? -1 : Math.max(0, focusViewportY)
+        _zoomFocusX = focusViewportX === undefined ? -1 : Math.max(0, focusViewportX)
+        root.zoomLevelRequested(clamped)
+        if (zoomLevel !== clamped) {
+            zoomLevel = clamped
         }
-        const children = grid.contentItem.children
-        let animCount = 0
-        for (let i = 0; i < children.length; i++) {
-            const child = children[i]
-            if (!child || child.index === undefined || !child.startZoomLayoutAnim) {
-                continue
-            }
-            const idx = child.index
-            const oldCol = idx % snap.cols
-            const oldRow = Math.floor(idx / snap.cols)
-            const oldX = oldCol * snap.cellW
-            const oldY = oldRow * snap.cellH + snap.originY
-            const newCol = idx % newCols
-            const newRow = Math.floor(idx / newCols)
-            const newX = newCol * newCellW
-            const newY = newRow * newCellH + newOriginY
-            const oldViewportX = oldX - snap.contentX
-            const oldViewportY = oldY - snap.contentY
-            const newViewportX = newX - newContentX
-            const newViewportY = newY - newContentY
-            const dx = oldViewportX - newViewportX
-            const dy = oldViewportY - newViewportY
-            const oldBottom = oldViewportY + snap.cellH
-            const newBottom = newViewportY + newCellH
-            const wasNearViewport = oldBottom >= -snap.cellH
-                    && oldViewportY <= snap.viewportH + snap.cellH
-            const isNearViewport = newBottom >= -newCellH
-                    && newViewportY <= grid.height + newCellH
-            if (!wasNearViewport && !isNearViewport) {
-                continue
-            }
+    }
 
-            const oldDelegateW = Math.max(1, snap.cellW - snap.delegateGap)
-            const oldDelegateH = Math.max(1, snap.cellH - snap.delegateGap)
-            const newDelegateW = Math.max(1, newCellW - root.delegateGap)
-            const newDelegateH = Math.max(1, newCellH - root.delegateGap)
-            const travel = Math.sqrt(dx * dx + dy * dy)
-            const largeTravel = travel > Math.max(96, newCellH * 0.82)
-            const easedDx = largeTravel ? 0 : root.softenedReflowDelta(dx)
-            const easedDy = largeTravel ? root.softenedReflowDelta(dy) * 0.25
-                                        : root.softenedReflowDelta(dy)
-            const rawScale = wasNearViewport
-                    ? Math.sqrt((oldDelegateW / newDelegateW) * (oldDelegateH / newDelegateH))
-                    : 0.985
-            const scale = root.clampedUnitScale(1.0 + (rawScale - 1.0) * 0.34)
-            const startOpacity = wasNearViewport ? (largeTravel ? 0.56 : 1.0) : 0.0
-            if (Math.abs(easedDx) > 0.25 || Math.abs(easedDy) > 0.25
-                    || Math.abs(scale - 1.0) > 0.01
-                    || startOpacity < 1.0) {
-                child.startZoomLayoutAnim(easedDx, easedDy, scale, scale, startOpacity)
-                animCount++
+    // The drawn viewport rectangle and the thumbnail of each created card, by element id.
+    function captureShownCards() {
+        const shown = {}
+        const cards = root.photoDelegates()
+        for (let i = 0; i < cards.length; ++i) {
+            const card = cards[i]
+            if (card.elementId <= 0) {
+                continue
+            }
+            const r = root.drawnViewportRect(card)
+            r.thumb = card.liveThumbUrl
+            r.onScreen = r.y + r.h > 0 && r.y < root.view.height
+                    && r.x + r.w > 0 && r.x < root.view.width
+            shown[card.elementId] = r
+        }
+        return shown
+    }
+
+    // Apply zoom level @p target. The card nearest the viewport point (@p focusX, @p focusY)
+    // keeps the point at the same fraction of its height under @p focusY.
+    function applyZoomTransition(target, focusX, focusY) {
+        if (target === _layoutZoomLevel) {
+            return
+        }
+        if (!root.layoutReady()) {
+            _layoutZoomLevel = target
+            root.applyJustifiedGeometry()
+            root.relayoutAndClamp()
+            return
+        }
+        const before = root.captureShownCards()
+        const oldMetrics = _layoutJustified ? null : root.classicMetrics
+        const oldOriginY = root.view.originY
+        const oldContentX = root.view.contentX
+        const oldContentY = root.view.contentY
+        const fy = Math.max(0, Math.min(root.view.height, focusY))
+        const fx = Math.max(0, Math.min(root.view.width, focusX))
+        const focusIndex = root.nearestCardIndexAt(fx, fy)
+        let fraction = 0.5
+        if (focusIndex >= 0) {
+            const focusCard = root.delegateForIndex(focusIndex)
+            const lr = root.layoutRect(focusIndex)
+            const r = focusCard ? root.drawnViewportRect(focusCard)
+                                : (lr ? { y: lr.y + oldOriginY - oldContentY, h: lr.h } : null)
+            if (r && r.h > 0) {
+                fraction = Math.max(0, Math.min(1, (fy - r.y) / r.h))
             }
         }
-        _zoomLayoutSnapshot = ({})
-        if (animCount > 0) {
-            zoomLayoutAnimDoneTimer.restart()
+
+        root.finishActiveZoomLayoutAnimations()
+        _zoomLayoutAnimating = true
+        _layoutZoomLevel = target
+        ++_layoutRequestId
+        if (_layoutJustified) {
+            justifiedView.contentY = justifiedModel.setGeometryAnchored(
+                root.width, root.justifiedRowHeight, root.justifiedSpacing,
+                root.justifiedCaptionHeight, focusIndex, fraction, fy)
         } else {
-            _zoomLayoutAnimating = false
+            grid.forceLayout()
+            const nr = root.layoutRect(focusIndex)
+            if (nr) {
+                const targetY = grid.originY + nr.y + fraction * nr.h - fy
+                grid.contentY = root.clampYForHeight(root.layoutContentHeight(), targetY)
+            } else {
+                root.clampContentY()
+            }
+            grid.forceLayout()
         }
+
+        const seen = {}
+        const cards = root.photoDelegates()
+        for (let i = 0; i < cards.length; ++i) {
+            const card = cards[i]
+            const to = {
+                x: card.x - root.view.contentX,
+                y: card.y - root.view.contentY,
+                w: Math.max(1, card.width),
+                h: Math.max(1, card.height)
+            }
+            seen[card.elementId] = true
+            let from = before[card.elementId]
+            if (!from && oldMetrics) {
+                const r = root.classicRectForMetrics(card.cardIndex, oldMetrics)
+                from = { x: r.x - oldContentX, y: oldOriginY + r.y - oldContentY, w: r.w, h: r.h }
+            }
+            const toOnScreen = to.y + to.h > 0 && to.y < root.view.height
+            if (!toOnScreen && (!from || !(from.y + from.h > 0 && from.y < root.view.height))) {
+                continue
+            }
+            if (from) {
+                card.startZoomLayoutAnim(from.x - to.x, from.y - to.y, from.w / to.w,
+                                         from.h / to.h, 1)
+            } else {
+                card.startZoomLayoutAnim(0, 0, 1, 1, 0)
+            }
+        }
+
+        // Cards that leave the view slide to their new rectangle as ghosts.
+        const model = appModules.library.thumbnailModel
+        for (const key in before) {
+            const from = before[key]
+            if (seen[key] || !from.onScreen) {
+                continue
+            }
+            const r = root.layoutRect(model.rowByElementId(Number(key)))
+            const to = r ? { x: r.x - root.view.contentX, y: r.y + root.view.originY - root.view.contentY,
+                             w: r.w, h: r.h }
+                         : from
+            changeGhostComponent.createObject(changeGhostLayer, {
+                x: from.x, y: from.y, width: from.w, height: from.h,
+                toX: to.x, toY: to.y, toWidth: to.w, toHeight: to.h,
+                source: from.thumb
+            })
+        }
+        zoomLayoutAnimDoneTimer.restart()
+        root.updateCacheHint()
     }
 
     function finishActiveZoomLayoutAnimations() {
         zoomLayoutAnimDoneTimer.stop()
-        if (!grid.contentItem) {
-            _zoomLayoutAnimating = false
-            return
+        const cards = root.photoDelegates()
+        for (let i = 0; i < cards.length; i++) {
+            cards[i].finishZoomLayoutAnim()
         }
-        const children = grid.contentItem.children
-        for (let i = 0; i < children.length; i++) {
-            if (children[i] && children[i].finishZoomLayoutAnim) {
-                children[i].finishZoomLayoutAnim()
-            }
+        for (let g = changeGhostLayer.children.length - 1; g >= 0; --g) {
+            changeGhostLayer.children[g].destroy()
         }
         _zoomLayoutAnimating = false
     }
 
     function updateCacheHint() {
-        if (thumbnailBindingSuspended) {
+        if (thumbnailBindingSuspended || geometryAnimating || !root.layoutReady()) {
             return
         }
-        if (grid.width <= 0 || grid.cellWidth <= 0 || grid.cellHeight <= 0) {
+        root.cacheHintUpdateCount += 1
+        appModules.library.SetThumbnailCacheHint(root.visiblePhotoCount(), root.desiredMaxEdge)
+    }
+
+    // ── Scroll bar ──
+    // The view takes no flick input and its content height covers only the loaded rows, so the
+    // scroll bar is not attached to it: its size and position come from the height of all photos
+    // of the result (layoutContentHeight). A drag moves contentY there and loads the pages up to
+    // the rows that it shows.
+    function scrollFraction() {
+        const height = root.layoutContentHeight()
+        return height > 0 ? (root.view.contentY - root.view.originY) / height : 0
+    }
+
+    function scrollToFraction(fraction) {
+        const height = root.layoutContentHeight()
+        if (height <= 0 || !root.layoutReady()) {
             return
         }
-        const cols = effectiveColumnCount()
-        const rows = Math.max(1, Math.ceil(grid.height / grid.cellHeight))
-        appModules.library.SetThumbnailCacheHint(cols * rows, root.desiredMaxEdge)
+        root.view.contentY = root.clampYForHeight(height, root.view.originY + fraction * height)
+        let lastIndex = 0
+        if (_layoutJustified) {
+            lastIndex = justifiedModel.indexAtY(justifiedView.contentY + justifiedView.height
+                                                + root.rowPitch())
+        } else {
+            const columnsForZoom = root.effectiveColumnCount()
+            const topRow = Math.floor((grid.contentY - grid.originY) / grid.cellHeight)
+            const shownRows = Math.ceil(grid.height / grid.cellHeight) + 1
+            lastIndex = (topRow + shownRows) * columnsForZoom
+        }
+        lastIndex = Math.min(root.modelTotalCount() - 1, lastIndex)
+        if (lastIndex >= root.modelCount()) {
+            appModules.library.LoadThumbnailsThroughIndex(lastIndex)
+        }
     }
 
     function maybeLoadMoreThumbnails() {
         if (thumbnailBindingSuspended
                 || !appModules.library.thumbnailModel.hasMore
                 || appModules.library.thumbnailModel.loading
-                || grid.cellHeight <= 0) {
+                || root.rowPitch() <= 0) {
             return
         }
-        const threshold = Math.max(grid.cellHeight * 3, grid.height * 0.5)
-        const loadedMaxY = maxContentYForHeight(loadedContentHeight(), grid.originY)
-        if (grid.contentY >= loadedMaxY - threshold) {
+        const threshold = Math.max(root.rowPitch() * 3, root.view.height * 0.5)
+        const loadedMaxY = maxContentYForHeight(loadedContentHeight(), root.view.originY)
+        if (root.view.contentY >= loadedMaxY - threshold) {
             appModules.library.LoadMoreThumbnails()
         }
+    }
+
+    // A position read (RequestFocusPosition) loaded the page of the file; in the flat view the
+    // occurrence is the grid index.
+    Connections {
+        target: appModules.library
+        function onFocusPositionReady(fileId, occurrence, sectionRow) {
+            if (occurrence >= 0) {
+                root.scrollToIndexAtTop(occurrence)
+            }
+        }
+        function onLibraryChangeAboutToApply() { root.captureChange() }
+        function onLibraryChangeApplied() { root.applyChange() }
+    }
+
+    // ── In-place change (import or delete) ──
+    // The first visible card keeps its position on the screen: before the change each created
+    // card is recorded with its viewport position; after the change the row of the first
+    // recorded card that is still shown is put at the same height. Then each card that moved
+    // slides from its old place, a new card fades in, and a removed card fades out.
+    function changeCards() {
+        const cards = []
+        const shown = root.photoDelegates()
+        for (let i = 0; i < shown.length; ++i) {
+            const card = shown[i]
+            if (card.elementId <= 0) {
+                continue
+            }
+            cards.push({ target: card, elementId: card.elementId, index: card.cardIndex,
+                         x: card.x - root.view.contentX, y: card.y - root.view.contentY,
+                         w: card.width, h: card.height, thumb: card.liveThumbUrl })
+        }
+        cards.sort(function(a, b) { return a.index - b.index })
+        return cards
+    }
+
+    function finishChangeAnimations() {
+        changeLayoutAnimDoneTimer.stop()
+        const cards = root.photoDelegates()
+        for (let i = 0; i < cards.length; i++) {
+            cards[i].finishZoomLayoutAnim()
+        }
+        for (let g = changeGhostLayer.children.length - 1; g >= 0; --g) {
+            changeGhostLayer.children[g].destroy()
+        }
+        _changeLayoutAnimating = false
+    }
+
+    function captureChange() {
+        _changeCapture = null
+        if (!root.layoutReady()) {
+            return
+        }
+        finishChangeAnimations()
+        root.finishActiveZoomLayoutAnimations()
+        _changeLayoutAnimating = true
+        const cards = changeCards()
+        const byId = {}
+        for (let i = 0; i < cards.length; ++i) {
+            cards[i].onScreen = cards[i].y + cards[i].h > 0 && cards[i].y < root.view.height
+            byId[cards[i].elementId] = cards[i]
+        }
+        const anchorRow = appModules.library.thumbnailModel.getItemAt(selectionAnchorIndex)
+        _changeCapture = { cards: cards, byId: byId,
+                           selectionAnchorId: anchorRow && anchorRow.elementId
+                                              ? Number(anchorRow.elementId) : 0 }
+    }
+
+    function keepChangeAnchor(cards) {
+        const model = appModules.library.thumbnailModel
+        for (let i = 0; i < cards.length; ++i) {
+            const card = cards[i]
+            if (card.y + card.h <= 0) {
+                continue
+            }
+            const index = model.rowByElementId(card.elementId)
+            if (index < 0) {
+                continue
+            }
+            const item = root.delegateForIndex(index)
+            const y = item ? item.y : root.view.originY + root.rowTopOfIndex(index)
+            root.view.contentY = root.clampYForHeight(root.layoutContentHeight(), y - card.y)
+            if (!_layoutJustified) {
+                grid.forceLayout()
+            }
+            return
+        }
+    }
+
+    function applyChange() {
+        const capture = _changeCapture
+        _changeCapture = null
+        if (!capture) {
+            _changeLayoutAnimating = false
+            return
+        }
+        if (!_layoutJustified) {
+            grid.forceLayout()
+        }
+        keepChangeAnchor(capture.cards)
+        if (capture.selectionAnchorId > 0) {
+            selectionAnchorIndex = root.loadedIndexForElement(capture.selectionAnchorId)
+        }
+
+        const after = changeCards()
+        const shown = {}
+        const moves = []
+        const fades = []
+        for (let i = 0; i < after.length; ++i) {
+            const card = after[i]
+            shown[card.elementId] = true
+            const before = capture.byId[card.elementId]
+            const onScreen = card.y + card.h > 0 && card.y < root.view.height
+            if (before) {
+                const dx = before.x - card.x
+                const dy = before.y - card.y
+                if ((onScreen || before.onScreen) && (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5)) {
+                    moves.push({ target: card.target, dx: dx, dy: dy })
+                }
+            } else if (onScreen) {
+                fades.push(card.target)
+            }
+        }
+        const ghosts = []
+        for (let j = 0; j < capture.cards.length; ++j) {
+            const card = capture.cards[j]
+            if (card.onScreen && !shown[card.elementId]) {
+                ghosts.push(card)
+            }
+        }
+        if (moves.length === 0 && fades.length === 0 && ghosts.length === 0
+                || fades.length + ghosts.length > changeAnimationLimit) {
+            _changeLayoutAnimating = false
+            return
+        }
+        for (let m = 0; m < moves.length; ++m) {
+            moves[m].target.startZoomLayoutAnim(moves[m].dx, moves[m].dy, 1, 1, 1)
+        }
+        for (let f = 0; f < fades.length; ++f) {
+            fades[f].startZoomLayoutAnim(0, 0, 1, 1, 0)
+        }
+        for (let g = 0; g < ghosts.length; ++g) {
+            changeGhostComponent.createObject(changeGhostLayer, {
+                x: ghosts[g].x, y: ghosts[g].y, width: ghosts[g].w, height: ghosts[g].h,
+                toX: ghosts[g].x, toY: ghosts[g].y, toWidth: ghosts[g].w, toHeight: ghosts[g].h,
+                source: ghosts[g].thumb
+            })
+        }
+        changeLayoutAnimDoneTimer.restart()
     }
 
     Connections {
@@ -615,24 +1065,17 @@ Item {
     }
 
     Timer {
+        id: pinBindTimer
+        interval: 0
+        repeat: false
+        onTriggered: root.bindPendingPins()
+    }
+
+    Timer {
         id: relayoutAndClampTimer
         interval: 0
         repeat: false
         onTriggered: root.finishRelayoutAndClamp()
-    }
-
-    Timer {
-        id: zoomToCursorTimer
-        interval: 0
-        repeat: false
-        onTriggered: root.finishZoomToCursor()
-    }
-
-    Timer {
-        id: zoomLayoutApplyTimer
-        interval: 0
-        repeat: false
-        onTriggered: root.applyZoomLayoutAnimation()
     }
 
     Timer {
@@ -658,9 +1101,72 @@ Item {
 
     Timer {
         id: zoomLayoutAnimDoneTimer
-        interval: 650
+        interval: root.delegateReflowDuration + 50
         repeat: false
         onTriggered: root.finishActiveZoomLayoutAnimations()
+    }
+
+    Timer {
+        id: changeLayoutAnimDoneTimer
+        interval: root.delegateReflowDuration + 50
+        repeat: false
+        onTriggered: root.finishChangeAnimations()
+    }
+
+    // Removed cards of an in-place change fade out here, over the view, at their old viewport
+    // positions. Cards that leave the view in a zoom move to their new rectangle and fade out.
+    Item {
+        id: changeGhostLayer
+        objectName: "thumbnailGridView_changeGhosts"
+        anchors.fill: parent
+        clip: true
+        z: 1
+    }
+
+    Component {
+        id: changeGhostComponent
+        Rectangle {
+            id: ghost
+            property string source: ""
+            property real toX: 0
+            property real toY: 0
+            property real toWidth: 0
+            property real toHeight: 0
+            radius: root.columns >= 11 ? 6 : appTheme.panelRadius
+            color: root._layoutJustified ? appTheme.bgBaseColor : root.cardBg
+            Image {
+                anchors.fill: parent
+                anchors.margins: root._layoutJustified ? 0 : root.cardInset
+                visible: ghost.source.length > 0
+                source: ghost.source
+                fillMode: root._layoutJustified ? Image.PreserveAspectCrop
+                                                : Image.PreserveAspectFit
+            }
+            ParallelAnimation {
+                running: true
+                NumberAnimation {
+                    target: ghost; property: "x"; to: ghost.toX
+                    duration: root.delegateReflowDuration; easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: ghost; property: "y"; to: ghost.toY
+                    duration: root.delegateReflowDuration; easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: ghost; property: "width"; to: ghost.toWidth
+                    duration: root.delegateReflowDuration; easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: ghost; property: "height"; to: ghost.toHeight
+                    duration: root.delegateReflowDuration; easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: ghost; property: "opacity"; from: 1; to: 0
+                    duration: root.delegateReflowDuration; easing.type: Easing.OutCubic
+                }
+                onFinished: ghost.destroy()
+            }
+        }
     }
 
     function keyForElement(elementId) {
@@ -668,8 +1174,8 @@ Item {
     }
 
     function isImageSelected(elementId) {
-        return Object.prototype.hasOwnProperty.call(
-            selectedImagesById, keyForElement(elementId))
+        // Reading revision makes a binding that calls this read again after each change.
+        return selection.revision >= 0 && selection.IsSelected(Number(elementId))
     }
 
     function isImageQueued(elementId) {
@@ -678,7 +1184,8 @@ Item {
     }
 
     function hasMultiSelectModifier(modifiers) {
-        return (modifiers & Qt.ShiftModifier) || (modifiers & Qt.ControlModifier)
+        return ShortcutRegistry.modifierMatches("library.extendSelection", modifiers)
+               || ShortcutRegistry.modifierMatches("library.toggleSelection", modifiers)
     }
 
     function selectionItemForIndex(index) {
@@ -747,33 +1254,87 @@ Item {
         appModules.library.LoadThumbnailsThroughIndex(Math.max(anchor, index))
         const rangeItems = selectionItemsForRange(anchor, index)
         if (additive) {
-            root.replaceSelection(Object.values(selectedImagesById).concat(rangeItems))
+            root.selection.AddItems(rangeItems)
         } else {
             root.replaceSelection(rangeItems)
         }
         updateSelectionAnchor(index)
     }
 
+    // ── Justified rows ──
+    JustifiedLayoutModel {
+        id: justifiedModel
+        objectName: "thumbnailGridView_justifiedModel"
+        source: root._layoutJustified ? appModules.library.thumbnailModel : null
+        viewportY: justifiedView.contentY
+        viewportHeight: justifiedView.height
+        // The tile count stays while a scroll moves the window, so the window asks for pages.
+        onWindowChanged: root.maybeLoadMoreThumbnails()
+        // Another result shows from the top, as the classic GridView shows a reset model.
+        onViewportReset: justifiedView.contentY = 0
+    }
+
+    // A plain item with the scroll properties of a Flickable, not a Flickable: the view takes no
+    // flick input, and a Flickable moves contentY back into its bounds by itself when the content
+    // height changes, after the zoom transition has set the anchored position.
+    Item {
+        id: justifiedView
+        objectName: "thumbnailGridView_justified"
+        z: 0
+        anchors.fill: parent
+        visible: root._layoutJustified
+        clip: true
+        property real contentX: 0
+        property real contentY: 0
+        readonly property real originY: 0
+        readonly property real contentHeight: justifiedModel.contentHeight
+        onContentYChanged: root.maybeLoadMoreThumbnails()
+
+        Item {
+            id: justifiedContent
+            x: -justifiedView.contentX
+            y: -justifiedView.contentY
+            width: justifiedView.width
+            height: justifiedView.contentHeight
+
+            Repeater {
+                id: justifiedRepeater
+                model: justifiedModel
+                delegate: JustifiedThumbnailTile {
+                    view: root
+                }
+                onCountChanged: root.maybeLoadMoreThumbnails()
+            }
+        }
+    }
+
+    // ── Classic grid ──
     GridView {
         id: grid
         objectName: "thumbnailGridView_grid"
         z: 0
         anchors.fill: parent
-        model: appModules.library.thumbnailModel
+        visible: !root._layoutJustified
+        model: root._layoutJustified ? null : appModules.library.thumbnailModel
         clip: true
         cacheBuffer: 0
+        // A scroll gives the cards that leave the view to the rows that enter it.
+        reuseItems: true
         boundsBehavior: Flickable.StopAtBounds
-        cellWidth: Math.max(72, Math.floor(width / root.columns))
-        cellHeight: Math.max(64, Math.round((cellWidth - root.cardInset * 2) * 2 / 3
-                                            + root.textAreaHeight
-                                            + root.cardInset * 2
-                                            + root.delegateGap))
+        cellWidth: root.classicMetrics.cellW
+        cellHeight: root.classicMetrics.cellH
         interactive: false
         onContentYChanged: root.maybeLoadMoreThumbnails()
-        onContentHeightChanged: root.clampContentY()
-        onHeightChanged: root.clampContentY()
-        onCellWidthChanged: root.relayoutAndClamp()
-        onCellHeightChanged: root.clampContentY()
+        onContentHeightChanged: {
+            if (!root._zoomLayoutAnimating) {
+                root.clampContentY()
+            }
+        }
+        onCellWidthChanged: {
+            if (!root._zoomLayoutAnimating) {
+                root.relayoutAndClamp()
+            }
+        }
         onCountChanged: {
             root.relayoutAndClamp()
             root.maybeLoadMoreThumbnails()
@@ -787,156 +1348,142 @@ Item {
             required property int index
             required property int elementId
             required property int imageId
-        required property string fileName
-        required property string cameraModel
-        required property int iso
-        required property string aperture
-        required property string captureDate
-        required property int rating
-        required property bool isHdr
-        required property string tags
-        required property string accent
-        required property string thumbUrl
-        required property bool thumbLoading
-        required property bool thumbMissingSource
-        required property string thumbErrorText
-        property string liveThumbUrl: thumbUrl
-        onThumbUrlChanged: liveThumbUrl = thumbUrl
-        property bool liveThumbLoading: thumbLoading
-        onThumbLoadingChanged: liveThumbLoading = thumbLoading
-        property bool liveThumbMissingSource: thumbMissingSource
-        onThumbMissingSourceChanged: liveThumbMissingSource = thumbMissingSource
-        property string liveThumbErrorText: thumbErrorText
-        onThumbErrorTextChanged: liveThumbErrorText = thumbErrorText
-        readonly property string displayTags: root.semanticTagsDisplayText(tags)
-        property int pinnedElementId: 0
-        property int pinnedImageId: 0
-        property int pinnedMaxEdge: 0
-        readonly property bool thumbnailReady: liveThumbUrl.length > 0
-        readonly property bool thumbnailLoadingState: liveThumbLoading
-        readonly property bool thumbnailMissingState: !thumbnailReady && !thumbnailLoadingState && liveThumbMissingSource
-        readonly property bool thumbnailErrorState: !thumbnailReady && !thumbnailLoadingState
-                                                    && liveThumbErrorText.length > 0
-        readonly property bool thumbnailProblemState: thumbnailMissingState || thumbnailErrorState
-        readonly property string thumbnailProblemText: liveThumbErrorText.length > 0
-                                                       ? liveThumbErrorText
-                                                       : qsTr("Source file was moved or deleted")
-        readonly property bool thumbnailIdleState: !thumbnailReady && !thumbnailLoadingState
-                                                   && !thumbnailProblemState
+            required property string fileName
+            required property string cameraModel
+            required property int iso
+            required property string aperture
+            required property string captureDate
+            required property int rating
+            required property int colorLabels
+            required property bool deleteMark
+            required property bool isHdr
+            required property bool isEdited
+            required property var editedAt
+            required property string editVersionName
+            required property string tags
+            required property string accent
+            required property string thumbUrl
+            required property bool thumbLoading
+            required property bool thumbMissingSource
+            required property string thumbErrorText
+            // Photo index of the card; the view reads it from every delegate kind.
+            readonly property int cardIndex: index
+            readonly property alias liveThumbUrl: thumbPin.liveThumbUrl
+            readonly property string displayTags: root.semanticTagsDisplayText(tags)
+            readonly property bool thumbnailReady: thumbPin.liveThumbUrl.length > 0
+            readonly property bool thumbnailLoadingState: thumbPin.liveThumbLoading
+            readonly property bool thumbnailMissingState: !thumbnailReady && !thumbnailLoadingState
+                                                          && thumbPin.liveThumbMissingSource
+            readonly property bool thumbnailErrorState: !thumbnailReady && !thumbnailLoadingState
+                                                        && thumbPin.liveThumbErrorText.length > 0
+            readonly property bool thumbnailProblemState: thumbnailMissingState || thumbnailErrorState
+            readonly property string thumbnailProblemText: thumbPin.liveThumbErrorText.length > 0
+                                                           ? thumbPin.liveThumbErrorText
+                                                           : qsTr("Source file was moved or deleted")
 
-        function releasePinnedThumbnail() {
-            if (pinnedElementId !== 0 && pinnedImageId !== 0) {
-                appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, false,
-                                                 pinnedMaxEdge > 0 ? pinnedMaxEdge : root.desiredMaxEdge)
-            }
-            pinnedElementId = 0
-            pinnedImageId = 0
-            pinnedMaxEdge = 0
-        }
-
-        function bindThumbnailLifetime(force) {
-            liveThumbUrl = thumbUrl
-            liveThumbLoading = thumbLoading
-            liveThumbMissingSource = thumbMissingSource
-            liveThumbErrorText = thumbErrorText
-
-            if (root.thumbnailBindingSuspended && !force) {
-                return
+            ThumbnailPinBinding {
+                id: thumbPin
+                view: root
+                elementId: cardDelegate.elementId
+                imageId: cardDelegate.imageId
+                thumbUrl: cardDelegate.thumbUrl
+                thumbLoading: cardDelegate.thumbLoading
+                thumbMissingSource: cardDelegate.thumbMissingSource
+                thumbErrorText: cardDelegate.thumbErrorText
             }
 
-            if (pinnedElementId === elementId && pinnedImageId === imageId
-                    && pinnedMaxEdge === root.desiredMaxEdge) {
-                return
+            function syncThumbnailBinding() {
+                thumbPin.sync()
             }
 
-            if (pinnedElementId === elementId && pinnedImageId === imageId
-                    && pinnedMaxEdge !== root.desiredMaxEdge) {
-                const oldMaxEdge = pinnedMaxEdge
-                pinnedMaxEdge = root.desiredMaxEdge
-                if (pinnedElementId !== 0 && pinnedImageId !== 0) {
-                    appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, true,
-                                                     pinnedMaxEdge)
-                    appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, false,
-                                                     oldMaxEdge)
-                }
-                return
+            // A card in the pool of the grid: the grid only stops drawing it (visible stays true),
+            // and it keeps the values of its last photo. It pins nothing and shows its next photo
+            // at its new place at once.
+            property bool pooled: false
+            GridView.onPooled: {
+                pooled = true
+                layoutAnimation.finish()
+                thumbPin.release()
             }
-
-            releasePinnedThumbnail()
-            pinnedElementId = elementId
-            pinnedImageId = imageId
-            pinnedMaxEdge = root.desiredMaxEdge
-            liveThumbUrl = thumbUrl
-            liveThumbLoading = thumbLoading
-            liveThumbMissingSource = thumbMissingSource
-            liveThumbErrorText = thumbErrorText
-            if (pinnedElementId !== 0 && pinnedImageId !== 0) {
-                appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, true, pinnedMaxEdge)
+            GridView.onReused: {
+                pooled = false
+                thumbPin.bind(false)
             }
-        }
-
-        function syncThumbnailBinding() {
-            bindThumbnailLifetime(true)
-        }
-
-        function releaseThumbnailBinding() {
-            if (root.thumbnailBindingSuspended) {
-                root.deferThumbnailRelease(pinnedElementId, pinnedImageId,
-                                           pinnedMaxEdge > 0 ? pinnedMaxEdge : root.desiredMaxEdge)
-                pinnedElementId = 0
-                pinnedImageId = 0
-                pinnedMaxEdge = 0
-                return
-            }
-            releasePinnedThumbnail()
-        }
-
-        Component.onCompleted: bindThumbnailLifetime(false)
-        onElementIdChanged: bindThumbnailLifetime(false)
-        onImageIdChanged: bindThumbnailLifetime(false)
-        Component.onDestruction: releaseThumbnailBinding()
-
-        Connections {
-            target: root
-            function onDesiredMaxEdgeChanged() {
-                if (!root.thumbnailBindingSuspended) {
-                    cardDelegate.syncThumbnailBinding()
-                }
-            }
-        }
 
             readonly property bool isSelected: root.isImageSelected(elementId)
-            readonly property bool isHovered: overlay.hoveredIndex === index
+            readonly property bool isHovered: root.hoveredCardIndex === index
 
-        width: grid.cellWidth - root.delegateGap
-        height: grid.cellHeight - root.delegateGap
-        radius: root.columns >= 11 ? 6 : appTheme.panelRadius
-            color: isSelected ? root.cardBgSelected
-                   : (isHovered ? root.cardBgHover : root.cardBg)
+            // Star (1 to 5) under the overlay point @p x, @p y, or 0 (see ThumbnailStarRating).
+            function starAtOverlay(x, y) {
+                const stars = starControl()
+                if (!stars || !stars.visible) {
+                    return 0
+                }
+                const p = overlay.mapToItem(stars, x, y)
+                return stars.starAt(p.x, p.y)
+            }
+
+            function ratingForStar(star) {
+                const stars = starControl()
+                return stars ? stars.ratingForStar(star) : 0
+            }
+
+            // The star control of the card (2 to 6 columns); null at the other zoom levels.
+            function starControl() {
+                const caption = captionLoader.item
+                return caption && caption.stars ? caption.stars : null
+            }
+
+            function editMarkAtOverlay(x, y) {
+                const mark = editMark
+                if (!mark.visible) {
+                    return false
+                }
+                const p = overlay.mapToItem(mark, x, y)
+                return p.x >= 0 && p.y >= 0 && p.x < mark.width && p.y < mark.height
+            }
+
+            Accessible.role: Accessible.ListItem
+            Accessible.name: {
+                const parts = [fileName,
+                               rating > 0 ? qsTr("%n star(s)", "", rating) : qsTr("Unrated")]
+                if (isEdited) {
+                    parts.push(qsTr("Edited"))
+                }
+                if (colorLabels !== 0) {
+                    parts.push(ColorLabelNames.shownNames(
+                                   colorLabels,
+                                   appModules.libraryView ? appModules.libraryView.colorLabelNames
+                                                          : [],
+                                   appTheme.colorLabelColors.length).join(", "))
+                }
+                if (deleteMark) {
+                    parts.push(cardDeleteMark.Accessible.name)
+                }
+                return parts.join(", ")
+            }
+            Accessible.selected: isSelected
+
+            width: grid.cellWidth - root.delegateGap
+            height: grid.cellHeight - root.delegateGap
+            radius: root.columns >= 11 ? 6 : appTheme.panelRadius
+            // Monochrome selection: the normal card fill and a 2 px text-color outline, the
+            // same as AlbumSectionView; never an accent wash or frame.
+            color: isHovered ? root.cardBgHover : root.cardBg
             border.width: isSelected ? 2 : 0
-            border.color: root.cardAccent
-        Behavior on color { ColorAnimation { duration: 120 } }
+            border.color: root.cardText
+            Behavior on color { ColorAnimation { duration: 120 } }
             Behavior on border.width { NumberAnimation { duration: 150 } }
-            Behavior on x {
-                enabled: !root._zoomLayoutAnimating
-                SpringAnimation { spring: 2.5; damping: 0.42; epsilon: 0.25 }
-            }
-            Behavior on y {
-                enabled: !root._zoomLayoutAnimating
-                SpringAnimation { spring: 2.5; damping: 0.42; epsilon: 0.25 }
-            }
             opacity: zoomOpacity
 
+            // The card is drawn at (x + zoomTranslateX, y + zoomTranslateY) with its size
+            // scaled by zoomScaleX and zoomScaleY from its top-left corner.
             transform: [
                 Scale {
-                    id: zoomScale
-                    origin.x: cardDelegate.width * 0.5
-                    origin.y: cardDelegate.height * 0.5
                     xScale: cardDelegate.zoomScaleX
                     yScale: cardDelegate.zoomScaleY
                 },
                 Translate {
-                    id: zoomTranslate
                     x: cardDelegate.zoomTranslateX
                     y: cardDelegate.zoomTranslateY
                 }
@@ -947,76 +1494,19 @@ Item {
             property real zoomScaleY: 1
             property real zoomOpacity: 1
 
-            ParallelAnimation {
-                id: zoomLayoutAnim
-                NumberAnimation {
-                    target: cardDelegate
-                    property: "zoomTranslateX"
-                    to: 0
-                    duration: root.delegateReflowDuration
-                    easing.type: Easing.OutQuint
-                }
-                NumberAnimation {
-                    target: cardDelegate
-                    property: "zoomTranslateY"
-                    to: 0
-                    duration: root.delegateReflowDuration
-                    easing.type: Easing.OutQuint
-                }
-                NumberAnimation {
-                    target: cardDelegate
-                    property: "zoomScaleX"
-                    to: 1
-                    duration: root.delegateReflowDuration
-                    easing.type: Easing.OutQuint
-                }
-                NumberAnimation {
-                    target: cardDelegate
-                    property: "zoomScaleY"
-                    to: 1
-                    duration: root.delegateReflowDuration
-                    easing.type: Easing.OutQuint
-                }
-                NumberAnimation {
-                    target: cardDelegate
-                    property: "zoomOpacity"
-                    to: 1
-                    duration: Math.round(root.delegateReflowDuration * 0.72)
-                    easing.type: Easing.OutCubic
-                }
+            ThumbnailLayoutAnimation {
+                id: layoutAnimation
+                card: cardDelegate
+                duration: root.delegateReflowDuration
             }
 
             function startZoomLayoutAnim(fromX, fromY, fromScaleX, fromScaleY, fromOpacity) {
-                zoomLayoutAnim.stop()
-                zoomTranslateX = fromX
-                zoomTranslateY = fromY
-                zoomScaleX = fromScaleX
-                zoomScaleY = fromScaleY
-                zoomOpacity = fromOpacity
-                zoomLayoutAnim.restart()
+                layoutAnimation.start(fromX, fromY, fromScaleX, fromScaleY, fromOpacity)
             }
 
             function finishZoomLayoutAnim() {
-                zoomLayoutAnim.stop()
-                zoomTranslateX = 0
-                zoomTranslateY = 0
-                zoomScaleX = 1
-                zoomScaleY = 1
-                zoomOpacity = 1
+                layoutAnimation.finish()
             }
-
-        Connections {
-            target: appModules.library
-            ignoreUnknownSignals: true
-            function onThumbnailUpdated(updatedElementId, updatedUrl, loading, missingSource, errorText) {
-                if (updatedElementId === elementId) {
-                    liveThumbUrl = updatedUrl
-                    liveThumbLoading = loading
-                    liveThumbMissingSource = missingSource
-                    liveThumbErrorText = errorText
-                }
-            }
-        }
 
             Item {
                 anchors.left: parent.left
@@ -1034,21 +1524,23 @@ Item {
                     border.width: root.columns >= 11 ? 1 : 2
                     border.color: appTheme.dividerColor
                 }
-                BusyIndicator {
+                StaggeredGridMark {
                     anchors.centerIn: parent
-                    width: 28
-                    height: 28
-                    visible: thumbnailLoadingState
-                    running: visible
+                    width: 27
+                    height: 27
+                    visible: cardDelegate.thumbnailLoadingState
                 }
                 Image {
                     id: thumbImage
                     anchors.centerIn: parent
                     width: parent.width - 4
                     height: parent.height - 4
-                    source: liveThumbUrl
+                    source: thumbPin.liveThumbUrl
                     visible: false
                     asynchronous: true
+                    // A new tier of the same photo keeps the shown thumbnail until the new image is
+                    // ready; another photo (a reused delegate) does not show the old one.
+                    retainWhileLoading: thumbPin.retainShownImage
                     fillMode: Image.PreserveAspectFit
                 }
                 Rectangle {
@@ -1063,7 +1555,29 @@ Item {
                     source: thumbImage
                     maskEnabled: true
                     maskSource: thumbMask
-                    visible: thumbnailReady
+                    saturation: cardDeleteMark.photoSaturation
+                    visible: cardDelegate.thumbnailReady
+                }
+                // Delete mark: the scrim over the photo box, below the edit mark.
+                ThumbnailDeleteMark {
+                    id: cardDeleteMark
+                    objectName: "thumbnailGridDeleteMark"
+                    anchors.fill: parent
+                    radius: root.columns >= 11 ? 5 : 10
+                    marked: cardDelegate.deleteMark
+                    compact: root.columns >= 8
+                }
+                // Edit mark: a chip on the top-right corner of the photo.
+                ThumbnailEditMark {
+                    id: editMark
+                    image: thumbImage
+                    compact: root.columns >= 8
+                    // Left of the problem dot (8 px margin, 18 px) when the source is missing.
+                    rightInset: cardDelegate.thumbnailProblemState ? 30 : editMark.inset
+                    edited: isEdited
+                    editedAt: cardDelegate.editedAt
+                    versionName: editVersionName
+                    pointerOver: root.hoveredEditMarkIndex === index
                 }
                 Rectangle {
                     anchors.top: parent.top
@@ -1072,123 +1586,235 @@ Item {
                     width: 18
                     height: 18
                     radius: 9
-                    visible: thumbnailProblemState
+                    visible: cardDelegate.thumbnailProblemState
                     color: root.cardDangerTint
                     border.width: 1
                     border.color: root.cardDanger
                 }
-                Column {
+                // The text of a thumbnail problem, made only for a card that shows one.
+                Loader {
                     anchors.centerIn: parent
                     width: parent.width - 12
-                    visible: thumbnailProblemState
-                    spacing: 2
-                    Label {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: "!"
-                        color: root.cardDanger
-                        font.family: appTheme.dataFontFamily
-                        font.pixelSize: root.columns >= 11 ? 24 : 30
-                        font.weight: 700
-                    }
-                    Label {
-                        width: parent.width
-                        text: thumbnailProblemText
-                        color: root.cardDanger
-                        font.family: appTheme.dataFontFamily
-                        font.pixelSize: root.columns >= 11 ? 8 : 10
-                        font.weight: root.dataFontWeight
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.Wrap
-                        maximumLineCount: 2
-                        elide: Text.ElideRight
+                    active: cardDelegate.thumbnailProblemState
+                    sourceComponent: Component {
+                        Column {
+                            spacing: 2
+                            Label {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: "!"
+                                color: root.cardDanger
+                                font.family: appTheme.dataFontFamily
+                                font.pixelSize: root.columns >= 11 ? 24 : 30
+                                font.weight: 700
+                            }
+                            Label {
+                                width: parent.width
+                                text: cardDelegate.thumbnailProblemText
+                                color: root.cardDanger
+                                font.family: appTheme.dataFontFamily
+                                font.pixelSize: root.columns >= 11 ? 8 : 10
+                                font.weight: root.dataFontWeight
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
+                            }
+                        }
                     }
                 }
                 HoverHandler {
                     id: thumbHover
                 }
-                ToolTip.visible: thumbnailProblemState && thumbHover.hovered
-                ToolTip.text: thumbnailProblemText
+                ToolTip.visible: cardDelegate.thumbnailProblemState && thumbHover.hovered
+                ToolTip.text: cardDelegate.thumbnailProblemText
                 ToolTip.delay: 150
-        }
-
-        Column {
-            id: textColumn
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            anchors.margins: root.cardInset
-            height: root.textAreaHeight
-            visible: root.textAreaHeight > 0
-            spacing: root.compactText ? 0 : 2
-            Label {
-                visible: !root.hideAllText
-                text: fileName
-                color: root.cardText
-                font.family: appTheme.dataFontFamily
-                font.pixelSize: root.titleFontSize
-                font.weight: root.dataFontWeight
-                font.letterSpacing: root.dataLetterSpacing
-                elide: Text.ElideRight
-                width: parent.width
-                height: root.compactText ? root.textAreaHeight : implicitHeight
-                verticalAlignment: Text.AlignVCenter
             }
-            Label {
-                visible: !root.hideMetadata
-                text: qsTr("%1 | ISO %2 | f/%3").arg(cameraModel).arg(iso).arg(aperture)
-                color: root.cardMuted
-                font.family: appTheme.dataFontFamily
-                font.pixelSize: root.metadataFontSize
-                font.weight: root.dataFontWeight
-                font.letterSpacing: root.dataLetterSpacing
-                elide: Text.ElideRight
-                width: parent.width
+
+            // Caption below the photo. Only the caption of the shown zoom level exists: none at 14
+            // columns, one line at 8 and 11 columns, three lines at 2 to 6 columns. The caption is
+            // made between frames (asynchronous), so a zoom that changes the caption of every card
+            // and a page that fills the view do not stop the frames.
+            Loader {
+                id: captionLoader
+                asynchronous: true
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: root.cardInset
+                height: root.textAreaHeight
+                active: !root.hideAllText
+                sourceComponent: root.compactText ? compactCaption : fullCaption
             }
-            Row {
-                visible: !root.hideMetadata
-                width: parent.width
-                height: Math.max(ratingLabel.implicitHeight, hdrGridTag.height)
-                spacing: 5
 
-                Label {
-                    id: ratingLabel
-                    text: displayTags.length > 0
-                          ? qsTr("%1 | Rating %2/5 | %3").arg(captureDate).arg(rating).arg(displayTags)
-                          : qsTr("%1 | Rating %2/5").arg(captureDate).arg(rating)
-                    color: root.cardMuted
-                    font.family: appTheme.dataFontFamily
-                    font.pixelSize: root.metadataFontSize
-                    font.weight: root.dataFontWeight
-                    font.letterSpacing: root.dataLetterSpacing
-                    elide: Text.ElideRight
-                    width: isHdr ? Math.max(0, parent.width - hdrGridTag.width - parent.spacing)
-                                 : parent.width
-                    anchors.bottom: parent.bottom
-                }
+            // 8 and 11 columns: one line with the file name, the color label dots, and the filled
+            // stars. The file name elides first.
+            Component {
+                id: compactCaption
+                Item {
+                    Label {
+                        id: compactName
+                        objectName: "thumbnailGridCompactName"
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.min(implicitWidth, Math.max(0, parent.width
+                                        - compactTrailing.width
+                                        - (compactTrailing.width > 0 ? 4 : 0)
+                                        - (compactLabelDots.visible
+                                           ? compactLabelDots.width + compactLabelDots.leadingGap
+                                           : 0)))
+                        text: cardDelegate.fileName
+                        color: cardDelegate.deleteMark ? root.cardMuted : root.cardText
+                        font.family: appTheme.dataFontFamily
+                        font.pixelSize: root.titleFontSize
+                        font.weight: root.dataFontWeight
+                        font.letterSpacing: root.dataLetterSpacing
+                        elide: Text.ElideRight
+                    }
 
-                Rectangle {
-                    id: hdrGridTag
-                    visible: isHdr
-                    width: appTheme.iconSourceSizeCompact + appTheme.spaceSm
-                    height: appTheme.spaceLg
-                    radius: 3
-                    color: "#3A3020"
-                    border.width: 1
-                    border.color: "#D8A93B"
-                    anchors.bottom: parent.bottom
-                    ColorImage {
-                        anchors.centerIn: parent
-                        width: appTheme.iconSourceSize
-                        height: appTheme.iconSourceSize
-                        sourceSize.width: appTheme.iconSourceSize
-                        sourceSize.height: appTheme.iconSourceSize
-                        source: "qrc:/panel_icons/hdr.svg"
-                        color: "#F2C766"
+                    ThumbnailColorLabelDots {
+                        id: compactLabelDots
+                        objectName: "thumbnailGridCompactLabelDots"
+                        anchors.left: compactName.right
+                        anchors.leftMargin: leadingGap
+                        anchors.verticalCenter: parent.verticalCenter
+                        labels: cardDelegate.colorLabels
+                        compact: true
+                        ringColor: cardDelegate.color
+                    }
+
+                    Row {
+                        id: compactTrailing
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 3
+
+                        ThumbnailStarRating {
+                            objectName: "thumbnailGridCompactStars"
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: rating > 0
+                            photoId: cardDelegate.elementId
+                            rating: cardDelegate.rating
+                            interactive: false
+                            pixelSize: root.titleFontSize
+                        }
                     }
                 }
             }
-        }
 
+            // 2 to 6 columns: file name with the color label dots; camera line; date line with the
+            // stars.
+            Component {
+                id: fullCaption
+                Column {
+                    readonly property alias stars: cardStars
+                    spacing: 2
+
+                    Item {
+                        width: parent.width
+                        height: titleLabel.implicitHeight
+
+                        Label {
+                            id: titleLabel
+                            objectName: "thumbnailGridName"
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.min(implicitWidth, Math.max(0, parent.width
+                                            - (cardLabelDots.visible
+                                               ? cardLabelDots.width + cardLabelDots.leadingGap
+                                               : 0)))
+                            text: cardDelegate.fileName
+                            color: cardDelegate.deleteMark ? root.cardMuted : root.cardText
+                            font.family: appTheme.dataFontFamily
+                            font.pixelSize: root.titleFontSize
+                            font.weight: root.dataFontWeight
+                            font.letterSpacing: root.dataLetterSpacing
+                            elide: Text.ElideRight
+                        }
+                        ThumbnailColorLabelDots {
+                            id: cardLabelDots
+                            objectName: "thumbnailGridLabelDots"
+                            anchors.left: titleLabel.right
+                            anchors.leftMargin: leadingGap
+                            anchors.verticalCenter: parent.verticalCenter
+                            labels: cardDelegate.colorLabels
+                            ringColor: cardDelegate.color
+                        }
+                    }
+                    Label {
+                        text: qsTr("%1 | ISO %2 | f/%3").arg(cardDelegate.cameraModel)
+                                                         .arg(cardDelegate.iso)
+                                                         .arg(cardDelegate.aperture)
+                        color: root.cardMuted
+                        font.family: appTheme.dataFontFamily
+                        font.pixelSize: root.metadataFontSize
+                        font.weight: root.dataFontWeight
+                        font.letterSpacing: root.dataLetterSpacing
+                        elide: Text.ElideRight
+                        width: parent.width
+                    }
+                    Item {
+                        width: parent.width
+                        height: Math.max(dateLabel.implicitHeight, cardStars.implicitHeight,
+                                         hdrGridTag.visible ? hdrGridTag.height : 0)
+
+                        Label {
+                            id: dateLabel
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.max(0, (hdrGridTag.visible ? hdrGridTag.x
+                                                                   : cardStars.x) - 4)
+                            text: cardDelegate.displayTags.length > 0
+                                  ? qsTr("%1 | %2").arg(cardDelegate.captureDate)
+                                                    .arg(cardDelegate.displayTags)
+                                  : cardDelegate.captureDate
+                            color: root.cardMuted
+                            font.family: appTheme.dataFontFamily
+                            font.pixelSize: root.metadataFontSize
+                            font.weight: root.dataFontWeight
+                            font.letterSpacing: root.dataLetterSpacing
+                            elide: Text.ElideRight
+                        }
+
+                        // Neutral HDR mark: the Library has no accent color.
+                        Rectangle {
+                            id: hdrGridTag
+                            visible: cardDelegate.isHdr
+                            anchors.right: cardStars.left
+                            anchors.rightMargin: 5
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: appTheme.iconSourceSizeCompact + appTheme.spaceSm
+                            height: appTheme.spaceLg
+                            radius: 3
+                            color: appTheme.bgBaseColor
+                            border.width: 1
+                            border.color: appTheme.textMutedColor
+                            ColorImage {
+                                anchors.centerIn: parent
+                                width: appTheme.iconSourceSize
+                                height: appTheme.iconSourceSize
+                                sourceSize.width: appTheme.iconSourceSize
+                                sourceSize.height: appTheme.iconSourceSize
+                                source: "qrc:/panel_icons/hdr.svg"
+                                color: appTheme.textColor
+                            }
+                        }
+
+                        ThumbnailStarRating {
+                            id: cardStars
+                            objectName: "thumbnailGridStars"
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            photoId: cardDelegate.elementId
+                            rating: cardDelegate.rating
+                            interactive: root.starsInteractive
+                            cardHovered: cardDelegate.isHovered
+                            hoveredStar: root.hoveredCardIndex === cardDelegate.index
+                                         ? root.hoveredCardStar : 0
+                            pixelSize: root.titleFontSize
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1203,17 +1829,52 @@ Item {
         preventStealing: true
 
         property int hoveredIndex: -1
+        // Star (1 to 5) under the pointer on the hovered card, or 0 (2 to 6 columns only).
+        property int hoveredStar: 0
+        // Card index whose edit mark is under the pointer, or -1.
+        property int hoveredEditMarkIndex: -1
+        // Star and card under the left press; a release on the same star rates the photo.
+        property int pressedStar: 0
+        property int pressedStarIndex: -1
         property point dragStart: Qt.point(0, 0)
         property point dragCurrent: Qt.point(0, 0)
+        // Scroll position at the press, measured from the first row (view.originY), so that a
+        // band keeps its rows when the content origin moves.
         property real dragStartContentY: 0
         property bool isDragging: false
-        property var preDragSelection: ({})
         property bool dragAdditive: false
 
         cursorShape: hoveredIndex >= 0 ? Qt.PointingHandCursor : Qt.ArrowCursor
 
         function gridIndexAt(viewX, viewY) {
-            return grid.indexAt(viewX + grid.contentX, viewY + grid.contentY)
+            return root.cardIndexAt(viewX, viewY)
+        }
+
+        function starAt(idx, viewX, viewY) {
+            if (idx < 0 || !root.starsInteractive) {
+                return 0
+            }
+            const card = root.delegateForIndex(idx)
+            return card ? card.starAtOverlay(viewX, viewY) : 0
+        }
+
+        function updatePointerTargets(viewX, viewY) {
+            hoveredIndex = gridIndexAt(viewX, viewY)
+            hoveredStar = starAt(hoveredIndex, viewX, viewY)
+            const card = hoveredIndex >= 0 ? root.delegateForIndex(hoveredIndex) : null
+            hoveredEditMarkIndex = card && card.editMarkAtOverlay(viewX, viewY) ? hoveredIndex : -1
+        }
+
+        function hasSelectionModifier(modifiers) {
+            return ShortcutRegistry.modifierMatches("library.extendSelection", modifiers)
+                    || ShortcutRegistry.modifierMatches("library.toggleSelection", modifiers)
+        }
+
+        // Band edges in layout coordinates: 0 is the top of the first row. GridView moves
+        // originY away from 0 after a relayout or a change above the view, so contentY alone
+        // is not a row position.
+        function layoutContentY() {
+            return root.view.contentY - root.view.originY
         }
 
         function dragStartContentTop() {
@@ -1221,11 +1882,11 @@ Item {
         }
 
         function dragCurrentContentTop() {
-            return dragCurrent.y + grid.contentY
+            return dragCurrent.y + layoutContentY()
         }
 
         function rubberBandViewportY() {
-            return Math.min(dragStartContentTop(), dragCurrentContentTop()) - grid.contentY
+            return Math.min(dragStartContentTop(), dragCurrentContentTop()) - layoutContentY()
         }
 
         function rubberBandViewportHeight() {
@@ -1273,8 +1934,8 @@ Item {
         function applyRubberBandSelection() {
             const bandItems = collectRubberBandItems()
             if (dragAdditive) {
-                const merged = Object.values(preDragSelection).concat(bandItems)
-                root.replaceSelection(merged)
+                // The selection from before the drag plus the photos in the band.
+                root.selection.SetRangeItems(bandItems)
             } else {
                 root.replaceSelection(bandItems)
             }
@@ -1286,13 +1947,33 @@ Item {
             }
             isDragging = true
             dragAdditive = root.hasMultiSelectModifier(modifiers)
-            if (dragAdditive) {
-                preDragSelection = Object.assign({}, root.selectedImagesById)
-            }
+            root.selection.EndRange()
             applyRubberBandSelection()
         }
 
+        // Justified rows: the loaded tiles that the band covers.
+        function collectJustifiedBandItems() {
+            const bLeft = Math.max(0, Math.min(dragStart.x, dragCurrent.x))
+            const bRight = Math.min(justifiedView.width, Math.max(dragStart.x, dragCurrent.x))
+            const bTop = Math.max(0, Math.min(dragStartContentTop(), dragCurrentContentTop()))
+            const bBottom = Math.max(dragStartContentTop(), dragCurrentContentTop())
+            const indices = justifiedModel.indicesInRect(bLeft + justifiedView.contentX, bTop,
+                                                         Math.max(0, bRight - bLeft),
+                                                         Math.max(0, bBottom - bTop))
+            const items = []
+            for (let i = 0; i < indices.length; ++i) {
+                const item = root.selectionItemForIndex(indices[i])
+                if (item) {
+                    items.push(item)
+                }
+            }
+            return items
+        }
+
         function collectRubberBandItems() {
+            if (root._layoutJustified) {
+                return collectJustifiedBandItems()
+            }
             const bounds = rubberBandIndexBounds()
             if (bounds.last < 0) {
                 return []
@@ -1329,7 +2010,7 @@ Item {
                     applyRubberBandSelection()
                 }
             }
-            hoveredIndex = gridIndexAt(mouse.x, mouse.y)
+            updatePointerTargets(mouse.x, mouse.y)
         }
 
         onPressed: function(mouse) {
@@ -1347,10 +2028,12 @@ Item {
             }
             dragStart = Qt.point(mouse.x, mouse.y)
             dragCurrent = Qt.point(mouse.x, mouse.y)
-            dragStartContentY = grid.contentY
+            dragStartContentY = layoutContentY()
             isDragging = false
             dragAdditive = false
-            preDragSelection = ({})
+            pressedStarIndex = gridIndexAt(mouse.x, mouse.y)
+            pressedStar = hasSelectionModifier(mouse.modifiers)
+                    ? 0 : starAt(pressedStarIndex, mouse.x, mouse.y)
             mouse.accepted = true
         }
 
@@ -1359,15 +2042,35 @@ Item {
                 isDragging = false
                 return
             }
+            if (!isDragging && pressedStar > 0) {
+                // A click on a card star rates that photo only; the selection stays.
+                const idx = gridIndexAt(mouse.x, mouse.y)
+                const star = starAt(idx, mouse.x, mouse.y)
+                const card = idx >= 0 ? root.delegateForIndex(idx) : null
+                const item = idx >= 0 ? root.selectionItemForIndex(idx) : null
+                if (idx === pressedStarIndex && star === pressedStar && card && item) {
+                    root.ratingRequested(item, card.ratingForStar(star))
+                }
+                pressedStar = 0
+                pressedStarIndex = -1
+                isDragging = false
+                return
+            }
+            pressedStar = 0
+            pressedStarIndex = -1
             if (!isDragging) {
                 const idx = gridIndexAt(mouse.x, mouse.y)
                 if (idx >= 0) {
                     const item = root.selectionItemForIndex(idx)
                     if (item) {
                         root.imageFocused(item, idx)
-                        if (mouse.modifiers & Qt.ShiftModifier) {
-                            root.selectRangeToIndex(idx, mouse.modifiers & Qt.ControlModifier)
-                        } else if (mouse.modifiers & Qt.ControlModifier) {
+                        if (ShortcutRegistry.modifierMatches("library.extendSelection",
+                                                             mouse.modifiers)) {
+                            root.selectRangeToIndex(
+                                idx, ShortcutRegistry.modifierMatches("library.toggleSelection",
+                                                                      mouse.modifiers))
+                        } else if (ShortcutRegistry.modifierMatches("library.toggleSelection",
+                                                                    mouse.modifiers)) {
                             const next = !root.isImageSelected(item.elementId)
                             root.imageSelectionChanged(item.elementId, item.imageId, item.fileName,
                                                        item.isHdr === true, next)
@@ -1387,6 +2090,10 @@ Item {
 
         onDoubleClicked: function(mouse) {
             const idx = gridIndexAt(mouse.x, mouse.y)
+            // Two quick star clicks rate twice; they do not open the editor.
+            if (starAt(idx, mouse.x, mouse.y) > 0) {
+                return
+            }
             if (idx >= 0) {
                 const item = root.selectionItemForIndex(idx)
                 if (item) {
@@ -1396,13 +2103,27 @@ Item {
             }
         }
 
-        onExited: hoveredIndex = -1
+        onExited: {
+            hoveredIndex = -1
+            hoveredStar = 0
+            hoveredEditMarkIndex = -1
+        }
 
         onWheel: function(wheel) {
-            // Ctrl+Scroll → zoom, otherwise → scroll
+            // Ctrl+Scroll → zoom, otherwise → scroll. A zoom step needs one wheel notch
+            // (120); a touchpad sends smaller steps, which add up.
             if (wheel.modifiers & Qt.ControlModifier) {
-                const delta = wheel.angleDelta.y > 0 ? 1 : -1
-                root.setZoomLevelAt(root.zoomLevel + delta, wheel.y)
+                const angle = wheel.angleDelta.y
+                if (angle !== 0 && (root._zoomWheelAngle > 0) !== (angle > 0)) {
+                    root._zoomWheelAngle = 0
+                }
+                root._zoomWheelAngle += angle
+                while (Math.abs(root._zoomWheelAngle) >= 120) {
+                    const step = root._zoomWheelAngle > 0 ? 1 : -1
+                    root._zoomWheelAngle -= step * 120
+                    root.setZoomLevelAt(root.zoomLevel + step, wheel.y, wheel.x)
+                }
+                updatePointerTargets(wheel.x, wheel.y)
                 wheel.accepted = true
                 return
             }
@@ -1413,8 +2134,47 @@ Item {
             if (isDragging) {
                 applyRubberBandSelection()
             }
-            hoveredIndex = gridIndexAt(wheel.x, wheel.y)
+            updatePointerTargets(wheel.x, wheel.y)
             wheel.accepted = true
+        }
+
+        // A child of the overlay: the bar takes its own presses and drags, and a wheel over it
+        // reaches the overlay, which scrolls the view.
+        ScrollBar {
+            id: gridScrollBar
+            objectName: "thumbnailGridView_scrollBar"
+            z: 1
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            orientation: Qt.Vertical
+            policy: ScrollBar.AsNeeded
+            size: {
+                const height = root.layoutContentHeight()
+                return height > root.view.height ? root.view.height / height : 1
+            }
+            // Shown while it is hovered or dragged, and for a short time after a scroll.
+            active: hovered || pressed || scrollActivityTimer.running
+            onPositionChanged: {
+                if (pressed) {
+                    root.scrollToFraction(position)
+                }
+            }
+            Binding on position {
+                when: !gridScrollBar.pressed
+                value: root.scrollFraction()
+                restoreMode: Binding.RestoreNone
+            }
+        }
+
+        Timer {
+            id: scrollActivityTimer
+            interval: 800
+            repeat: false
+        }
+        Connections {
+            target: root.view
+            function onContentYChanged() { scrollActivityTimer.restart() }
         }
     }
 

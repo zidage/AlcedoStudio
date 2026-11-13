@@ -5,6 +5,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -13,15 +14,18 @@
 #include <string>
 #include <vector>
 
+#include "app/editor_image_render_port.hpp"
+#include "app/editor_mask_coverage_port.hpp"
 #include "app/editor_render_coordinator.hpp"
 #include "app/editor_render_intent.hpp"
-#include "app/pipeline_service.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "type/type.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "ui/edit_viewer/mask_coverage_sink.hpp"
 
 namespace alcedo {
 class ImagePoolService;
@@ -30,6 +34,8 @@ class ImagePoolService;
 namespace alcedo::ui {
 
 using EditorSessionFrameSinkResolver = std::function<alcedo::IFrameSink*()>;
+/// Resolves the coverage channel of the bound viewport; null when none is bound.
+using EditorSessionMaskCoverageSinkResolver = std::function<alcedo::IMaskCoverageSink*()>;
 
 struct EditorSessionSchedulerServices {
   /// Resolve the image pool used for render input acquisition at context bind.
@@ -38,38 +44,106 @@ struct EditorSessionSchedulerServices {
 };
 
 /// Stable render inputs for the currently open/switched editor image.
-/// Bound at open/switch (identity immediately; image/buffer/pipeline lazy-once).
-/// Image switch replaces the whole context under the new epoch.
+/// Bound at open/switch (identity immediately; image/buffer lazy-once).
+/// Image switch replaces the whole context under the new epoch. The graph to render is not part
+/// of the context: each frame renders the preview snapshot published at dispatch.
 struct EditorRenderSessionContext {
-  std::uint64_t                          epoch                 = 0;
-  sl_element_id_t                        element_id            = 0;
-  image_id_t                             image_id              = 0;
+  std::uint64_t                        epoch                = 0;
+  sl_element_id_t                      element_id           = 0;
+  image_id_t                           image_id             = 0;
   /// Presentation sink identity stamped at open/switch. Live `IFrameSink*` is
   /// resolved only at pipeline submit; this id is the session-scoped identity.
-  alcedo::PresentationSinkId             presentation_sink_id  = 0;
-  std::shared_ptr<alcedo::Image>         image;
-  std::shared_ptr<alcedo::ImageBuffer>   input;
-  std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
+  alcedo::PresentationSinkId           presentation_sink_id = 0;
+  std::shared_ptr<alcedo::Image>       image;
+  std::shared_ptr<alcedo::ImageBuffer> input;
 };
 
-/// Thin adapter: builds a PipelineTask from bound session context and hands it
-/// to PipelineScheduler. No private worker thread and no second request queue —
-/// the coordinator owns single-flight; PipelineScheduler owns execution.
-/// Completion is forward-only via the Schedule `on_complete` callback.
-class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSchedulerPort {
+/**
+ * @brief Outcome of @ref EditorSessionRenderSchedulerPort::ReleaseGpuResourcesForExport.
+ *
+ * The byte counts are @ref alcedo::PipelineExecutor::DeviceResourceBytes of the editor executor
+ * before and after the release; both are 0 when no frame has created the executor.
+ */
+struct EditorGpuResourceRelease {
+  bool        success             = false;
+  std::string error;
+  std::size_t device_bytes_before = 0;
+  std::size_t device_bytes_after  = 0;
+};
+
+using EditorGpuResourceReleaseCompletion = std::function<void(EditorGpuResourceRelease)>;
+
+/**
+ * @brief Render description for one editor viewport request.
+ *
+ * Maps the intent to render type, viewport region, and frame metadata. Sets
+ * `document_geometry_ = RotatedUncroppedSource` exactly when `intent.geometry_overlay_only` is true
+ * (Geometry panel open); otherwise the document crop and rotation apply. Pure value; reads no
+ * pipeline state.
+ */
+[[nodiscard]] auto MakeEditorRenderDesc(const alcedo::EditorRenderRequest& request)
+    -> alcedo::RenderDesc;
+
+/**
+ * @brief The editor's render adapter and the owner of the editor's only executor.
+ *
+ * Builds a PipelineTask from the bound session context and the preview snapshot the editor
+ * history published last, and hands it to the editor's PipelineScheduler(1). No second request
+ * queue: the coordinator owns single-flight; PipelineScheduler owns execution. Completion is
+ * forward-only via the Schedule `on_complete` callback.
+ *
+ * Executor: one Interactive PipelineExecutor, created on the first frame with the accelerator
+ * preference of the pipeline service and kept for the life of this port. No other module renders
+ * on it and nothing shares its render lock. A frame of another image (another lineage) releases
+ * every resource of the previous binding before it renders (executor binding rule);
+ * @ref ClearSessionContext releases them when the editor closes the image. Frame sink: the
+ * viewport sink resolved at submit is attached on the worker before the frame renders.
+ *
+ * Image jobs (@ref ScheduleImages): one-shot host images of the held image, rendered on the same
+ * executor and worker as the frames. A job is one work item that holds the executor for all of
+ * its documents, so no frame runs between A and B. Accepted jobs run in acceptance order. Its
+ * requests have no sink, so they never present; the attached viewport sink stays attached for the
+ * next frame.
+ *
+ * Coverage jobs (@ref ScheduleMaskCoverage, SM8.7): coverage-only presentation of the AI Mask
+ * candidate or a committed AI Mask on the same executor, worker, and device as the frames, into
+ * the coverage channel of the viewport. A job renders no photo and keeps every photo result.
+ */
+class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSchedulerPort,
+                                               public alcedo::IEditorImageRenderPort,
+                                               public alcedo::IEditorMaskCoveragePort {
  public:
   explicit EditorSessionRenderSchedulerPort(
       std::shared_ptr<alcedo::PipelineScheduler> pipeline_scheduler = nullptr);
   ~EditorSessionRenderSchedulerPort() override;
 
+  /**
+   * @brief Reject new frames and image jobs, cancel the in-flight frame and every accepted image
+   *        job, and wait until they complete.
+   *
+   * The in-flight frame presents to the viewport sink resolved at submit, and both capture this
+   * port in their completions. Call this before the sink owners (the editor session controller
+   * and the QML viewport) are destroyed. A GUI-thread caller keeps delivering events while it
+   * waits. Idempotent; the destructor calls it.
+   */
+  void Shutdown();
+
   void SetSinkResolver(EditorSessionFrameSinkResolver resolver);
+  /// Resolver of the coverage channel that coverage jobs and clears present to. It is called on
+  /// the caller thread of @ref ScheduleMaskCoverage and @ref ClearMaskCoverage; the sink must stay
+  /// valid until @ref Shutdown returns, like the frame sink.
+  void SetMaskCoverageSinkResolver(EditorSessionMaskCoverageSinkResolver resolver);
+  /// Resolver of the coverage channel of the detail ROI (Mask ranges D10): detail frames with a
+  /// Mask coverage probe present to it. Same thread and lifetime rules as the base resolver.
+  void SetDetailMaskCoverageSinkResolver(EditorSessionMaskCoverageSinkResolver resolver);
   void SetPipelinePort(std::shared_ptr<EditorSessionPipelinePort> pipeline_port);
   void SetServices(EditorSessionSchedulerServices services);
 
   /// Bind identity for the open/switched image. Replaces any prior context.
-  /// Image/buffer/pipeline load once on first production frame for this bind.
+  /// Image/buffer load once on first production frame for this bind.
   void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
                           alcedo::PresentationSinkId presentation_sink_id = 0) override;
+  /// Drop the bound context and release the executor's binding after the in-flight frame.
   void ClearSessionContext() override;
   /// Install a fully populated context (tests / preloaded open path).
   void InstallSessionContext(EditorRenderSessionContext context);
@@ -77,9 +151,74 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   auto Schedule(const alcedo::EditorRenderRequest& request,
                 alcedo::EditorPipelineScheduleCompletion on_complete = {})
       -> std::uint64_t override;
-  void Cancel(std::uint64_t scheduler_job_id) override;
-  void WaitForSessionIdle(std::uint64_t session_epoch) override;
+  void               Cancel(std::uint64_t scheduler_job_id) override;
+
+  /**
+   * @brief Release the GPU resources of the editor executor so an export can allocate them.
+   *
+   * From this call until @ref ResumeGpuResourcesAfterExport, the worker refuses every frame with
+   * a message that starts with `kPresentationSuspendedMessage`, so the coordinator reports the
+   * frame as PresentationSuspended and the render controller routes it again after the resume.
+   * Image jobs are rejected. Then one work item on the editor worker releases the executor
+   * binding (published results, texture pool, transient and parameter arenas, neural demosaic
+   * workspace, and the prepared source). It runs after the frame or image job in flight, so the
+   * release never races a render. The bound session context, the history, and the edits stay.
+   *
+   * @p on_released runs once on the editor worker after the release, with the real error if it
+   * failed.
+   */
+  void ReleaseGpuResourcesForExport(EditorGpuResourceReleaseCompletion on_released);
+  /// End the release of @ref ReleaseGpuResourcesForExport: the next frame binds the image again
+  /// and allocates its resources on the same executor.
+  void ResumeGpuResourcesAfterExport();
+  [[nodiscard]] auto gpu_resources_released_for_export() const -> bool;
+
+  /**
+   * @brief Render the documents of @p request to host pixels on the editor executor, in order.
+   *
+   * Checks on the caller thread that the bound context is the requested image, that the editor
+   * still holds it, and that every snapshot has the binding (lineage and element) of its current
+   * preview, so the executor keeps the prepared source and sensor result of the image. Then
+   * queues one work item on the editor worker. That item holds the executor render lock for the
+   * whole job and renders each document with the full-image Quality Base request
+   * (MakeQualityBaseApplyRequest), the request geometry, and the request output color: no sink,
+   * host output, no scope update. Each image is downloaded before the next document starts. A job
+   * accepted while another job is accepted renders after it.
+   *
+   * Completion runs once on the worker after the render lock is released: Completed with every
+   * image, Failed with the real error and no image, or Cancelled with no image.
+   */
+  auto               ScheduleImages(alcedo::EditorImageRenderRequest    request,
+                                    alcedo::EditorImageRenderCompletion on_complete, std::string* error)
+      -> std::uint64_t override;
+  void               CancelImages(std::uint64_t job_id) override;
+  [[nodiscard]] auto HasImageJob() const -> bool override;
+
+  /**
+   * @brief Present the coverage of @p request on the editor executor, after the frame or job in
+   *        flight (IEditorMaskCoveragePort).
+   *
+   * Checks on the caller thread that the bound context is the requested image, that a viewport
+   * frame created the executor, and that a coverage channel is bound; then queues one work item
+   * on the editor worker. That item holds the executor render lock and runs
+   * PipelineExecutor::PresentMaskCoverage with the device and the last presented photo frame
+   * geometry of the frames. While an export holds the GPU, the item fails with a message that
+   * starts with `kPresentationSuspendedMessage` and allocates nothing.
+   *
+   * Completion runs once on the worker after the render lock is released.
+   */
+  auto               ScheduleMaskCoverage(alcedo::EditorMaskCoverageRequest       request,
+                                          alcedo::EditorMaskCoverageJobCompletion on_complete, std::string* error)
+      -> std::uint64_t override;
+  /// Queue ClearCoverage of the bound coverage channel on the editor worker, after the accepted
+  /// coverage job (IEditorMaskCoveragePort).
+  void               ClearMaskCoverage() override;
+  /// True while an accepted coverage job or clear has not finished. Any thread.
+  [[nodiscard]] auto HasMaskCoverageWork() const -> bool;
+
   [[nodiscard]] auto last_scheduled() const -> std::vector<alcedo::EditorRenderRequest>;
+  /// The editor's executor, or null before the first frame. Diagnostics and tests only.
+  [[nodiscard]] auto interactive_executor() const -> std::shared_ptr<alcedo::PipelineExecutor>;
   /// Snapshot of the bound context identity and payload presence (for tests).
   [[nodiscard]] auto session_context() const -> std::optional<EditorRenderSessionContext>;
   /// Times image-pool resolution ran to load context payload (bind/hot-path).
@@ -95,12 +234,30 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
     bool                                       cancelled = false;
   };
 
+  /// One accepted image job; the worker removes it when the job completes.
+  struct ImageJob {
+    std::uint64_t job_id    = 0;
+    bool          cancelled = false;
+  };
+
   [[nodiscard]] auto CanProduceFrame(const alcedo::EditorRenderRequest& request) const -> bool;
   [[nodiscard]] auto EnsurePipelineScheduler() -> std::shared_ptr<alcedo::PipelineScheduler>;
+  /// Create the Interactive executor on first use with the pipeline service's accelerator
+  /// preference.
+  [[nodiscard]] auto EnsureExecutor() -> std::shared_ptr<alcedo::PipelineExecutor>;
   /// Ensure context identity matches the request and payload is loaded once.
   [[nodiscard]] auto EnsureContextForRequest(const alcedo::EditorRenderRequest& request,
                                              std::string* error)
       -> std::optional<EditorRenderSessionContext>;
+  /// Ensure the context has this identity and its payload is loaded once. A context of another
+  /// identity is replaced; @p presentation_sink_id stamps the replacement.
+  [[nodiscard]] auto        EnsureContext(std::uint64_t epoch, sl_element_id_t element_id,
+                                          image_id_t                 image_id,
+                                          alcedo::PresentationSinkId presentation_sink_id,
+                                          std::string* error) -> std::optional<EditorRenderSessionContext>;
+  [[nodiscard]] static auto ContextMatches(const EditorRenderSessionContext& context,
+                                           std::uint64_t epoch, sl_element_id_t element_id,
+                                           image_id_t image_id) -> bool;
   [[nodiscard]] auto ContextMatchesRequest(const EditorRenderSessionContext& context,
                                            const alcedo::EditorRenderRequest& request) const
       -> bool;
@@ -111,20 +268,53 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   void CompleteJob(const alcedo::EditorRenderRequest& request, bool success, std::string message,
                    alcedo::EditorPipelineScheduleCompletion on_complete);
   [[nodiscard]] auto JobIsCancelled(const Job& job) const -> bool;
+  /// Worker body of one image job: render each document under the executor render lock.
+  void RunImageJob(std::uint64_t job_id, const std::shared_ptr<alcedo::PipelineExecutor>& executor,
+                   const std::shared_ptr<alcedo::ImageBuffer>& input,
+                   const alcedo::EditorImageRenderRequest&     request,
+                   alcedo::EditorImageRenderCompletion         on_complete);
+  /// Run the completion of the image job, then clear it; a cancelled job publishes nothing.
+  void FinishImageJob(std::uint64_t job_id, alcedo::EditorImageRenderResult result,
+                      const alcedo::EditorImageRenderCompletion& on_complete);
+  [[nodiscard]] auto ImageJobIsCancelled(std::uint64_t job_id) const -> bool;
+  /// The accepted image job @p job_id, or null. Caller holds @ref mutex_.
+  [[nodiscard]] auto FindImageJob(std::uint64_t job_id) const -> const ImageJob*;
+  [[nodiscard]] auto FindImageJob(std::uint64_t job_id) -> ImageJob*;
+  /// Worker body of one coverage job: present under the executor render lock.
+  void               RunMaskCoverageJob(const std::shared_ptr<alcedo::PipelineExecutor>& executor,
+                                        const alcedo::EditorMaskCoverageRequest&         request,
+                                        alcedo::IMaskCoverageSink&                       sink,
+                                        const alcedo::EditorMaskCoverageJobCompletion&   on_complete);
+  /// End one accepted coverage job or clear and wake @ref Shutdown.
+  void               FinishMaskCoverageWork(bool coverage_job);
 
   std::shared_ptr<alcedo::PipelineScheduler> pipeline_scheduler_;
+  std::shared_ptr<alcedo::PipelineExecutor>  executor_;
   EditorSessionFrameSinkResolver             sink_resolver_;
+  EditorSessionMaskCoverageSinkResolver      mask_coverage_sink_resolver_;
+  EditorSessionMaskCoverageSinkResolver      detail_mask_coverage_sink_resolver_;
   std::shared_ptr<EditorSessionPipelinePort> pipeline_port_;
   EditorSessionSchedulerServices             services_{};
   mutable std::mutex                         mutex_;
   std::condition_variable                    jobs_changed_;
   std::uint64_t                              next_job_id_ = 0;
   std::optional<Job>                         running_job_;
+  std::uint64_t                              next_image_job_id_ = 0;
+  /// Accepted image jobs in acceptance order; the worker renders them in this order.
+  std::vector<ImageJob>                      image_jobs_;
+  std::uint64_t                              next_mask_coverage_job_id_    = 0;
+  /// True from an accepted coverage job until its completion returns; one job at a time.
+  bool                                       mask_coverage_job_            = false;
+  /// Queued clears that have not run; Shutdown waits for them, because they call the sink.
+  std::size_t                                pending_mask_coverage_clears_ = 0;
   std::vector<alcedo::EditorRenderRequest>   scheduled_;
   std::optional<EditorRenderSessionContext>  session_context_;
   std::uint64_t                              context_payload_load_count_ = 0;
   std::uint64_t                              sink_resolve_count_         = 0;
   bool                                       shutting_down_              = false;
+  /// Set from @ref ReleaseGpuResourcesForExport until @ref ResumeGpuResourcesAfterExport. The
+  /// worker reads it before each frame and image job, so no render allocates during an export.
+  bool                                       released_for_export_        = false;
 };
 
 }  // namespace alcedo::ui

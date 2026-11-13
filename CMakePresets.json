@@ -11,11 +11,33 @@
       "description": "Windows: Build with debug info",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/debug",
+      "environment": {
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlays"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "ALCEDO_BUILD_TESTS": "ON",
-        "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON"
+        "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
+      }
+    },
+    {
+      "name": "win_debug_asan",
+      "displayName": "Debug AddressSanitizer Build",
+      "description": "Windows: debug build with MSVC AddressSanitizer on the first-party code (#809)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug-asan",
+      "environment": {
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlays"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "ALCEDO_BUILD_TESTS": "ON",
+        "ALCEDO_BUILD_TESTS_BY_DEFAULT": "OFF",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF",
+        "ALCEDO_SANITIZER": "address"
       }
     },
     {
@@ -24,13 +46,16 @@
       "description": "Windows: Build release",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/release",
+      "environment": {
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlays"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install",
         "ALCEDO_BUILD_TESTS": "OFF",
-        "ALCEDO_ENABLE_WEBGPU": "OFF",
-        "ALCEDO_REQUIRE_UPDATE_KEY": "ON"
+        "ALCEDO_REQUIRE_UPDATE_KEY": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -39,12 +64,16 @@
       "description": "Windows: Build release test executables",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/release-test",
+      "environment": {
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlays"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "ALCEDO_BUILD_TESTS": "ON",
         "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON",
-        "ALCEDO_BUILD_DEMO_TARGETS": "ON"
+        "ALCEDO_BUILD_DEMO_TARGETS": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -54,7 +83,8 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -64,25 +94,8 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
-      }
-    },
-    {
-      "name": "linux_cpu_debug",
-      "displayName": "Linux CPU Debug",
-      "description": "Linux x86_64 CPU-only bring-up build",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/linux-cpu-debug",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
-        "ALCEDO_ENABLE_CUDA": "OFF",
-        "ALCEDO_ENABLE_METAL": "OFF",
-        "ALCEDO_ENABLE_OPENCL": "OFF",
-        "ALCEDO_ENABLE_WEBGPU": "OFF",
-        "ALCEDO_BUILD_TESTS": "OFF",
-        "ALCEDO_BUILD_ARIA2C_FETCH": "OFF"
+        "CMAKE_BUILD_TYPE": "Release",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -98,9 +111,9 @@
         "ALCEDO_ENABLE_CUDA": "OFF",
         "ALCEDO_ENABLE_METAL": "OFF",
         "ALCEDO_ENABLE_OPENCL": "ON",
-        "ALCEDO_ENABLE_WEBGPU": "OFF",
         "ALCEDO_BUILD_TESTS": "OFF",
-        "ALCEDO_BUILD_ARIA2C_FETCH": "OFF"
+        "ALCEDO_BUILD_ARIA2C_FETCH": "OFF",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -115,7 +128,8 @@
         "ALCEDO_ENABLE_CUDA": "OFF",
         "ALCEDO_BUILD_TESTS": "OFF",
         "ALCEDO_MACOS_BUNDLE": "OFF",
-        "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON"
+        "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -132,8 +146,26 @@
         "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON",
         "ALCEDO_BUILD_CI_TESTS": "ON",
         "ALCEDO_MACOS_BUNDLE": "OFF",
-        "ALCEDO_GENERATE_QMLTYPES": "OFF",
-        "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON"
+        "ALCEDO_GENERATE_QMLTYPES": "ON",
+        "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
+      }
+    },
+    {
+      "name": "macos_debug_tsan",
+      "displayName": "macOS Debug ThreadSanitizer",
+      "description": "macOS: debug test build with ThreadSanitizer on the first-party code (#809)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/macos-debug-tsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ALCEDO_ENABLE_CUDA": "OFF",
+        "ALCEDO_BUILD_TESTS": "ON",
+        "ALCEDO_BUILD_TESTS_BY_DEFAULT": "OFF",
+        "ALCEDO_MACOS_BUNDLE": "OFF",
+        "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF",
+        "ALCEDO_SANITIZER": "thread"
       }
     },
     {
@@ -147,15 +179,15 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "ALCEDO_ENABLE_CUDA": "OFF",
         "ALCEDO_ENABLE_METAL": "ON",
-        "ALCEDO_ENABLE_WEBGPU": "OFF",
         "ALCEDO_BUILD_TESTS": "ON",
         "ALCEDO_BUILD_TESTS_BY_DEFAULT": "OFF",
         "ALCEDO_BUILD_CI_TESTS": "ON",
         "ALCEDO_MACOS_BUNDLE": "OFF",
-        "ALCEDO_GENERATE_QMLTYPES": "OFF",
+        "ALCEDO_GENERATE_QMLTYPES": "ON",
         "PUERHLAB_USE_BUNDLED_LIBRAW": "ON",
         "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3"
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -174,7 +206,8 @@
         "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
         "ALCEDO_QT_PREFIX": "/Users/zidage/Qt/6.9.3/macos",
         "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install"
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     }
   ],
@@ -216,19 +249,6 @@
       "jobs": 8
     },
     {
-      "name": "linux_cpu_debug",
-      "configurePreset": "linux_cpu_debug",
-      "jobs": 4
-    },
-    {
-      "name": "linux_cpu_debug_app",
-      "configurePreset": "linux_cpu_debug",
-      "jobs": 4,
-      "targets": [
-        "alcedo_main"
-      ]
-    },
-    {
       "name": "linux_opencl_debug",
       "configurePreset": "linux_opencl_debug",
       "jobs": 4
@@ -261,7 +281,8 @@
       "targets": [
         "alcedo_tests_ci_core",
         "alcedo_tests_ci_raw",
-        "alcedo_tests_ci_metal"
+        "alcedo_tests_ci_metal",
+        "alcedo_tests_ci_automation"
       ]
     },
     {
@@ -298,14 +319,15 @@
       "configurePreset": "macos_arm_metal_ci",
       "filter": {
         "include": {
-          "label": "ci_core_flow|ci_raw_flow|ci_metal_runtime"
+          "label": "ci_core_flow|ci_raw_flow|ci_metal_runtime|ci_automation_flow"
         }
       },
       "output": {
         "outputOnFailure": true
       },
       "execution": {
-        "noTestsAction": "error"
+        "noTestsAction": "error",
+        "timeout": 300
       }
     }
   ]

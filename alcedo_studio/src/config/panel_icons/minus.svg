@@ -1,0 +1,20 @@
+<!--
+  Source: Tabler Icons (https://tabler.io/icons/icon/minus)
+  License: MIT
+  Tabler icon name: minus
+  Subtract mode of the AI Mask tool; pairs with plus.svg.
+  User-approved 2 px stroke exception (DESIGN.md).
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="white"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M5 12l14 0" />
+</svg>

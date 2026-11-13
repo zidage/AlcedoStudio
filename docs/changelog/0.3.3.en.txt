@@ -1,0 +1,59 @@
+Alcedo Studio 0.3.3
+
+Before you upgrade
+------------------
+- Exports now keep the GPS location of the source photo by default. To leave it out,
+  clear "GPS location in EXIF" in the export panel, or use the Web, Social Media, or
+  Email preset.
+- Export presets replace the file name presets. File name presets that you saved in
+  an earlier version are not shown in the new preset menu.
+- The capture time fix below applies to photos that you import after the upgrade.
+
+New
+---
+- AI agents can work with Alcedo Studio through alcedo-cli, which is now installed
+  next to the application (inside the app bundle on macOS). An agent can open
+  projects, import, rate, edit, make previews, search, and export, in a separate
+  session without a window or in the window that you use.
+- Agent in the window: while an agent has control, your edit controls are locked,
+  but you can still pan, zoom, and watch the scopes. The agent session stays at the
+  top of the task island and the Background Tasks dialog with a list of its actions.
+  Stop ends the agent's control at once. In the history, agent edits are marked and
+  show the agent's note.
+- Export presets: choose Standard, Web, Social Media, Email, Maximum Quality JPEG,
+  16-bit TIFF, or EXR Archive, or save your own. A preset sets all export options
+  except the destination. The panel shows Custom when no preset matches, and it
+  opens with the options of your last export.
+- Export metadata: the export panel has EXIF metadata, ICC profile, and GPS location
+  checkboxes. JPEG, UltraHDR, TIFF, PNG, and OpenEXR exports keep the EXIF and GPS
+  data of the source photo. Camera and lens serial numbers are not written. The HDR
+  options have a longest edge setting from 256 to 8192 pixels.
+- OpenDRT can now render to sRGB displays with Rec.709 and P3-D65. Before, this
+  combination failed to render.
+
+Improved
+--------
+- Select All (Ctrl+A) selects every photo of the current view, also when the view
+  has more than 1,000 photos.
+- Deleting photos runs in the background and shows as a background task, so the
+  window does not stop responding.
+- Folder import: large folders of RAW files import faster. Cancel now stops the
+  import quickly and does not read the files that are still waiting. The import
+  dialog has a close (X) button to cancel, and the progress ring shows the count of
+  imported photos.
+- Paste Adjustments: when you paste only some adjustments, the other adjustments of
+  the target photo stay as they were. Before, they could be reset.
+
+Fixed
+-----
+- RAW capture time: the library and exported files now show the camera clock time.
+  Before, the time could move by the time zone offset of your computer, for example
+  16:02 became 07:02 in UTC+9.
+- macOS: a crash that could happen a few seconds after a project opened, while
+  thumbnails of DNG files were made, is fixed.
+- macOS: Rec.709 exports with gamma 2.2 or BT.1886 now embed an ICC profile with the
+  matching curve, and the editor preview uses the same curve as the export.
+- When a project opens, the library again goes to the photo that you edited last.
+  After Paste Adjustments in the library, a message shows the result again.
+- After you restore a minimized window, the editor shows the current image again,
+  also the sharp detail of a zoomed view.

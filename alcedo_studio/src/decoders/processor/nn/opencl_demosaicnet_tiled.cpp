@@ -135,14 +135,26 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
   if (!module.weights_loaded()) {
     throw std::runtime_error("OpenClDemosaicNetTiledExecutor: module weights are not loaded");
   }
-  if (dispatch.input_aligned_hwc == nullptr || dispatch.output_aligned_hwc == nullptr ||
-      dispatch.aligned_width <= 0 || dispatch.aligned_height <= 0) {
+  const bool use_mono = dispatch.input_mono_cfa != nullptr;
+  if (dispatch.output_aligned_hwc == nullptr || dispatch.aligned_width <= 0 ||
+      dispatch.aligned_height <= 0) {
+    throw std::runtime_error("OpenClDemosaicNetTiledExecutor: invalid aligned output");
+  }
+  if (use_mono) {
+    if (dispatch.src_width <= 0 || dispatch.src_height <= 0 || dispatch.rgb_fc == nullptr ||
+        dispatch.period <= 0) {
+      throw std::runtime_error("OpenClDemosaicNetTiledExecutor: invalid mono CFA dispatch");
+    }
+  } else if (dispatch.input_aligned_hwc == nullptr) {
     throw std::runtime_error("OpenClDemosaicNetTiledExecutor: invalid aligned input or output");
   }
   if ((dispatch.aligned_width % Module::kCfaPeriod) != 0 ||
       (dispatch.aligned_height % Module::kCfaPeriod) != 0) {
     throw std::runtime_error(
         "OpenClDemosaicNetTiledExecutor: aligned dimensions violate CFA period");
+  }
+  if (dispatch.output_channels != 3 && dispatch.output_channels != 4) {
+    throw std::runtime_error("OpenClDemosaicNetTiledExecutor: output_channels must be 3 or 4");
   }
 
   const cl_command_queue queue = ResolveQueue(dispatch.queue);
@@ -170,9 +182,17 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
     const cl_int origin_x = job.input_origin.x;
     const cl_int tile_h   = job.input_h;
     const cl_int tile_w   = job.input_w;
-    module.ForwardReflectHwc3ToHwc(dispatch.input_aligned_hwc, frame_h, frame_w, origin_y, origin_x,
-                                   tile_h, tile_w, state.tile_output.get(), activation_slots, queue,
-                                   /*apply_gamma_decode=*/true);
+    if (use_mono) {
+      module.ForwardReflectMonoCfaToHwc(
+          dispatch.input_mono_cfa, dispatch.src_width, dispatch.src_height, dispatch.crop_x,
+          dispatch.crop_y, dispatch.aligned_width, dispatch.aligned_height, origin_y, origin_x,
+          tile_h, tile_w, dispatch.mono_offset_floats, dispatch.rgb_fc, dispatch.period,
+          state.tile_output.get(), activation_slots, queue, /*apply_gamma_decode=*/true);
+    } else {
+      module.ForwardReflectHwc3ToHwc(dispatch.input_aligned_hwc, frame_h, frame_w, origin_y,
+                                      origin_x, tile_h, tile_w, state.tile_output.get(),
+                                      activation_slots, queue, /*apply_gamma_decode=*/true);
+    }
 
     const cl_int canvas_w = dispatch.aligned_width;
     const cl_int canvas_h = dispatch.aligned_height;
@@ -193,8 +213,12 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
     SetArg(state.assemble.get(), 7, dst_y, "tile assemble arg7");
     SetArg(state.assemble.get(), 8, owned_w, "tile assemble arg8");
     SetArg(state.assemble.get(), 9, owned_h, "tile assemble arg9");
+    const cl_int canvas_off = dispatch.output_offset_floats;
+    const cl_int dst_ch     = dispatch.output_channels;
     SetArg(state.assemble.get(), 10, src_x, "tile assemble arg10");
     SetArg(state.assemble.get(), 11, src_y, "tile assemble arg11");
+    SetArg(state.assemble.get(), 12, canvas_off, "tile assemble arg12");
+    SetArg(state.assemble.get(), 13, dst_ch, "tile assemble arg13");
     Enqueue2D(state.assemble.get(), owned_w, owned_h, queue, "tile assembly enqueue");
     opencl::nn::FinishDemosaicNetStage("tile_assembly", queue);
   }

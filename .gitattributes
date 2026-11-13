@@ -2,3 +2,4 @@ alcedo/third_party/** linguist-vendored
 docs/doxygen/** linguist-generated
 *.xml linguist-detectable=false
 alcedo_studio/tests/resources/sample_images/ci_rawfiles/** filter=lfs diff=lfs merge=lfs -text
+alcedo_studio/tests/resources/compat/*.alcd filter=lfs diff=lfs merge=lfs -text

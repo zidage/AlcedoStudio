@@ -7,7 +7,8 @@
 #include <libraw/libraw_types.h>
 
 #include <filesystem>
-#include <opencv2/opencv.hpp>
+#include <opencv2/core/mat.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include "type/type.hpp"
 

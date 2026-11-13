@@ -14,7 +14,9 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
-#include <opencv2/opencv.hpp>
+#include <opencv2/core/mat.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -24,6 +26,7 @@
 #include "json.hpp"
 #include "type/hash_type.hpp"
 #include "utils/cache/lru_cache.hpp"
+#include "utils/logging/log.hpp"
 #include "utils/queue/queue.hpp"
 
 namespace alcedo {
@@ -33,13 +36,16 @@ OIIO_NAMESPACE_USING
 
 constexpr int         kDefaultJpegQuality     = 85;
 constexpr int         kDefaultWebPQuality     = 80;
+// Per project: each project directory keeps its own index and LRU budget.
 constexpr size_t      kDefaultMaxEntries      = 10000;
 constexpr uint32_t    kCacheSchemaVersion     = 1;
-constexpr auto        kGlobalMetadataFilename = "cache_global.json";
+constexpr auto        kProjectMetadataFilename = "cache_metadata.json";
 
 std::filesystem::path GetDefaultCacheRoot() {
 #if defined(_WIN32)
-  const char* local_app_data = std::getenv("LOCALAPPDATA");
+  // The narrow getenv result is in the ANSI code page and loses characters it cannot represent,
+  // which a non-ASCII user name needs.
+  const wchar_t* local_app_data = _wgetenv(L"LOCALAPPDATA");
   if (local_app_data) {
     return std::filesystem::path(local_app_data) / "alcedo" / "thumbnails";
   }
@@ -90,9 +96,15 @@ std::string MakeElementInvalidationKey(const std::string& project_uuid,
   return oss.str();
 }
 
+// path::string() converts through the ANSI code page on Windows. That code page is GBK on most
+// Chinese systems, so it can throw, and it never yields the UTF-8 that nlohmann::json requires.
 std::string PathToUtf8(const std::filesystem::path& path) {
   auto u8 = path.u8string();
   return std::string(u8.begin(), u8.end());
+}
+
+std::filesystem::path Utf8ToPath(const std::string& utf8) {
+  return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
 }
 
 cv::Mat PrepareForOiioEncoding(const cv::Mat& src) {
@@ -212,7 +224,6 @@ struct ThumbnailDiskCacheService::State {
   std::string                                project_uuid_;
   std::filesystem::path                      project_cache_dir_;
   std::filesystem::path                      metadata_file_path_;
-  std::filesystem::path                      global_metadata_path_;
 
   std::unordered_map<std::string, EntryMeta> index_;
   LRUCache<std::string, std::string>         lru_index_{kDefaultMaxEntries};
@@ -223,6 +234,8 @@ struct ThumbnailDiskCacheService::State {
   ConcurrentBlockingQueue<WriteTask>         write_queue_;
   std::thread                                writer_thread_;
   std::atomic<bool>                          writer_running_{false};
+  // Writes queued and not yet handled. The writer saves the metadata when this reaches zero.
+  std::atomic<size_t>                        pending_writes_{0};
 
   mutable std::mutex                         metadata_mutex_;
   mutable std::atomic<size_t>                hit_count_{0};
@@ -271,10 +284,9 @@ void ThumbnailDiskCacheService::Initialize(const std::string& project_uuid) {
     return;
   }
 
-  state_->project_uuid_         = project_uuid;
-  state_->project_cache_dir_    = state_->cache_root_ / project_uuid;
-  state_->metadata_file_path_   = state_->project_cache_dir_ / "cache_metadata.json";
-  state_->global_metadata_path_ = state_->cache_root_ / kGlobalMetadataFilename;
+  state_->project_uuid_       = project_uuid;
+  state_->project_cache_dir_  = state_->cache_root_ / project_uuid;
+  state_->metadata_file_path_ = state_->project_cache_dir_ / kProjectMetadataFilename;
 
   {
     std::unique_lock lock(state_->metadata_mutex_);
@@ -286,7 +298,6 @@ void ThumbnailDiskCacheService::Initialize(const std::string& project_uuid) {
   std::error_code ec;
   std::filesystem::create_directories(state_->project_cache_dir_, ec);
 
-  LoadGlobalMetadata();
   LoadMetadata();
 
   state_->writer_running_ = true;
@@ -433,6 +444,7 @@ void ThumbnailDiskCacheService::EnqueueWrite(const ThumbnailDiskCacheKey& key,
     task.invalidation_generation = state_->invalidation_generations_[invalidation_key];
     task.clear_generation        = state_->clear_generation_;
   }
+  ++state_->pending_writes_;
   state_->write_queue_.push(std::move(task));
 }
 
@@ -463,7 +475,7 @@ auto ThumbnailDiskCacheService::GetStats() const -> Stats {
     return s;
   }
 
-  s.cache_root_path = state_->cache_root_.string();
+  s.cache_root_path = PathToUtf8(state_->cache_root_);
   s.enabled         = state_->enabled_;
   s.max_entries     = state_->max_entries_;
 
@@ -544,12 +556,12 @@ void ThumbnailDiskCacheService::ClearAll() {
     state_->total_size_bytes_ = 0;
   }
 
+  // Everything under the root, including project directories of other projects and files that
+  // earlier versions kept there (the cache_global.json index).
   std::error_code ec;
   for (const auto& entry : std::filesystem::directory_iterator(state_->cache_root_, ec)) {
     if (ec) break;
-    const auto& entry_path = entry.path();
-    if (entry_path.filename() == kGlobalMetadataFilename) continue;
-    std::filesystem::remove_all(entry_path, ec);
+    std::filesystem::remove_all(entry.path(), ec);
   }
 
   FlushMetadata();
@@ -586,6 +598,7 @@ void ThumbnailDiskCacheService::ClearProject(const std::string& project_uuid) {
 }
 
 void ThumbnailDiskCacheService::WriterThreadLoop() {
+  bool index_changed = false;
   while (true) {
     auto task = state_->write_queue_.pop_r();
 
@@ -593,136 +606,164 @@ void ThumbnailDiskCacheService::WriterThreadLoop() {
       break;
     }
 
-    if (!state_->enabled_) {
-      continue;
+    // An exception escaping this thread function terminates the whole app, and a lost cache
+    // entry only costs a re-render.
+    try {
+      index_changed = WriteEntry(task) || index_changed;
+    } catch (const std::exception& e) {
+      ALCEDO_LOG_WARN(Thumbnail) << "ThumbnailDiskCache: failed to write cache entry: " << e.what();
+    } catch (...) {
+      ALCEDO_LOG_WARN(Thumbnail) << "ThumbnailDiskCache: failed to write cache entry";
     }
-
-    const auto invalidation_key =
-        MakeElementInvalidationKey(task.key.project_uuid, task.key.element_id);
-    {
-      std::unique_lock lock(state_->metadata_mutex_);
-      const auto       current_generation = state_->invalidation_generations_[invalidation_key];
-      if (current_generation != task.invalidation_generation ||
-          state_->clear_generation_ != task.clear_generation) {
-        continue;
-      }
+    // Save once per burst of writes, not once per thumbnail.
+    if (--state_->pending_writes_ == 0 && index_changed) {
+      FlushMetadata();
+      index_changed = false;
     }
-
-    if (!task.buffer->cpu_data_valid_) {
-      continue;
-    }
-
-    const auto& mat = task.buffer->GetCPUData();
-    if (mat.empty()) {
-      continue;
-    }
-
-    std::vector<uint8_t> encoded;
-    std::vector<int>     params;
-    ThumbnailCacheFormat effective_format = task.format;
-    const int            jpeg_q           = state_->jpeg_quality_;
-    const int            webp_q           = state_->webp_quality_;
-    if (task.format == ThumbnailCacheFormat::kJpeg) {
-      params = {cv::IMWRITE_JPEG_QUALITY, jpeg_q};
-    } else if (task.format == ThumbnailCacheFormat::kWebP) {
-      params = {cv::IMWRITE_WEBP_QUALITY, webp_q};
-    }
-
-    auto            file_path = DeriveFilePath(task.key_hash, effective_format);
-    std::error_code ec;
-    std::filesystem::create_directories(file_path.parent_path(), ec);
-    if (ec) {
-      continue;
-    }
-
-    bool   write_ok        = false;
-    size_t file_size_bytes = 0;
-    if (effective_format == ThumbnailCacheFormat::kJpeg ||
-        effective_format == ThumbnailCacheFormat::kWebP) {
-      const int quality = effective_format == ThumbnailCacheFormat::kJpeg ? jpeg_q : webp_q;
-      write_ok          = WriteWithOpenImageIO(file_path, mat, effective_format, quality);
-      if (write_ok) {
-        file_size_bytes = static_cast<size_t>(std::filesystem::file_size(file_path, ec));
-        if (ec || file_size_bytes == 0) {
-          std::filesystem::remove(file_path, ec);
-          write_ok = false;
-        }
-      }
-    }
-
-    if (!write_ok && effective_format != ThumbnailCacheFormat::kBmp) {
-      effective_format = ThumbnailCacheFormat::kBmp;
-      file_path        = DeriveFilePath(task.key_hash, effective_format);
-      std::filesystem::create_directories(file_path.parent_path(), ec);
-      if (ec) {
-        continue;
-      }
-      params.clear();
-      cv::Mat bgr8 = PrepareForOpenCvEncoding(mat);
-      if (bgr8.empty()) {
-        continue;
-      }
-      try {
-        write_ok =
-            cv::imencode(FormatFileExtension(ThumbnailCacheFormat::kBmp), bgr8, encoded, params);
-      } catch (const cv::Exception&) {
-        write_ok = false;
-      } catch (...) {
-        write_ok = false;
-      }
-
-      if (write_ok) {
-        {
-          std::ofstream file(file_path, std::ios::binary | std::ios::trunc);
-          if (!file) {
-            continue;
-          }
-          file.write(reinterpret_cast<const char*>(encoded.data()),
-                     static_cast<std::streamsize>(encoded.size()));
-        }
-        file_size_bytes = encoded.size();
-      }
-    }
-
-    if (!write_ok || file_size_bytes == 0) {
-      continue;
-    }
-
-    {
-      std::unique_lock lock(state_->metadata_mutex_);
-      const auto       current_generation = state_->invalidation_generations_[invalidation_key];
-      if (current_generation != task.invalidation_generation ||
-          state_->clear_generation_ != task.clear_generation) {
-        std::filesystem::remove(file_path, ec);
-        continue;
-      }
-
-      auto it = state_->index_.find(task.key_hash);
-      if (it != state_->index_.end()) {
-        state_->total_size_bytes_ -= it->second.file_size_bytes;
-      }
-
-      EntryMeta meta;
-      meta.key                      = task.key;
-      meta.file_size_bytes          = file_size_bytes;
-      meta.file_path                = file_path;
-      meta.last_access_time         = CurrentTimeSeconds();
-      state_->index_[task.key_hash] = meta;
-      RecordLruAccessLocked(task.key_hash);
-      state_->total_size_bytes_ += file_size_bytes;
-
-      if (state_->index_.size() > state_->max_entries_) {
-        EvictLruLocked(state_->max_entries_);
-      }
-    }
-
-    task.buffer.reset();
-
-    FlushMetadata();
   }
 }
 
+bool ThumbnailDiskCacheService::WriteEntry(WriteTask& task) {
+  if (!state_->enabled_) {
+    return false;
+  }
+
+  const auto invalidation_key =
+      MakeElementInvalidationKey(task.key.project_uuid, task.key.element_id);
+  {
+    std::unique_lock lock(state_->metadata_mutex_);
+    const auto       current_generation = state_->invalidation_generations_[invalidation_key];
+    if (current_generation != task.invalidation_generation ||
+        state_->clear_generation_ != task.clear_generation) {
+      return false;
+    }
+  }
+
+  if (!task.buffer->cpu_data_valid_) {
+    return false;
+  }
+
+  const auto& mat = task.buffer->GetCPUData();
+  if (mat.empty()) {
+    return false;
+  }
+
+  std::vector<uint8_t> encoded;
+  std::vector<int>     params;
+  ThumbnailCacheFormat effective_format = task.format;
+  const int            jpeg_q           = state_->jpeg_quality_;
+  const int            webp_q           = state_->webp_quality_;
+  if (task.format == ThumbnailCacheFormat::kJpeg) {
+    params = {cv::IMWRITE_JPEG_QUALITY, jpeg_q};
+  } else if (task.format == ThumbnailCacheFormat::kWebP) {
+    params = {cv::IMWRITE_WEBP_QUALITY, webp_q};
+  }
+
+  auto            file_path = DeriveFilePath(task.key_hash, effective_format);
+  std::error_code ec;
+  std::filesystem::create_directories(file_path.parent_path(), ec);
+  if (ec) {
+    return false;
+  }
+
+  bool   write_ok        = false;
+  size_t file_size_bytes = 0;
+  if (effective_format == ThumbnailCacheFormat::kJpeg ||
+      effective_format == ThumbnailCacheFormat::kWebP) {
+    const int quality = effective_format == ThumbnailCacheFormat::kJpeg ? jpeg_q : webp_q;
+    write_ok          = WriteWithOpenImageIO(file_path, mat, effective_format, quality);
+    if (write_ok) {
+      file_size_bytes = static_cast<size_t>(std::filesystem::file_size(file_path, ec));
+      if (ec || file_size_bytes == 0) {
+        std::filesystem::remove(file_path, ec);
+        write_ok = false;
+      }
+    }
+  }
+
+  if (!write_ok && effective_format != ThumbnailCacheFormat::kBmp) {
+    effective_format = ThumbnailCacheFormat::kBmp;
+    file_path        = DeriveFilePath(task.key_hash, effective_format);
+    std::filesystem::create_directories(file_path.parent_path(), ec);
+    if (ec) {
+      return false;
+    }
+    params.clear();
+    cv::Mat bgr8 = PrepareForOpenCvEncoding(mat);
+    if (bgr8.empty()) {
+      return false;
+    }
+    try {
+      write_ok =
+          cv::imencode(FormatFileExtension(ThumbnailCacheFormat::kBmp), bgr8, encoded, params);
+    } catch (const cv::Exception&) {
+      write_ok = false;
+    } catch (...) {
+      write_ok = false;
+    }
+
+    if (write_ok) {
+      {
+        std::ofstream file(file_path, std::ios::binary | std::ios::trunc);
+        if (!file) {
+          return false;
+        }
+        file.write(reinterpret_cast<const char*>(encoded.data()),
+                   static_cast<std::streamsize>(encoded.size()));
+      }
+      file_size_bytes = encoded.size();
+    }
+  }
+
+  if (!write_ok || file_size_bytes == 0) {
+    return false;
+  }
+
+  {
+    std::unique_lock lock(state_->metadata_mutex_);
+    const auto       current_generation = state_->invalidation_generations_[invalidation_key];
+    if (current_generation != task.invalidation_generation ||
+        state_->clear_generation_ != task.clear_generation) {
+      std::filesystem::remove(file_path, ec);
+      return false;
+    }
+
+    auto it = state_->index_.find(task.key_hash);
+    if (it != state_->index_.end()) {
+      state_->total_size_bytes_ -= it->second.file_size_bytes;
+    }
+
+    EntryMeta meta;
+    meta.key                      = task.key;
+    meta.file_size_bytes          = file_size_bytes;
+    meta.file_path                = file_path;
+    meta.last_access_time         = CurrentTimeSeconds();
+    state_->index_[task.key_hash] = meta;
+    RecordLruAccessLocked(task.key_hash);
+    state_->total_size_bytes_ += file_size_bytes;
+
+    if (state_->index_.size() > state_->max_entries_) {
+      EvictLruLocked(state_->max_entries_);
+    }
+  }
+
+  task.buffer.reset();
+  return true;
+}
+
 void ThumbnailDiskCacheService::FlushMetadata() {
+  // Runs on the writer thread and from the destructor, so it must not throw. An unsaved index
+  // only means the cache starts empty next time.
+  try {
+    FlushMetadataOrThrow();
+  } catch (const std::exception& e) {
+    ALCEDO_LOG_WARN(Thumbnail) << "ThumbnailDiskCache: failed to save cache index: " << e.what();
+  } catch (...) {
+    ALCEDO_LOG_WARN(Thumbnail) << "ThumbnailDiskCache: failed to save cache index";
+  }
+}
+
+void ThumbnailDiskCacheService::FlushMetadataOrThrow() {
   auto make_entry_json = [](const std::string& hash_str, const EntryMeta& meta) {
     nlohmann::json entry;
     entry["key_hash"]             = hash_str;
@@ -733,12 +774,11 @@ void ThumbnailDiskCacheService::FlushMetadata() {
     entry["edit_version_hash"]    = meta.key.edit_version_hash;
     entry["cache_schema_version"] = meta.key.cache_schema_version;
     entry["file_size_bytes"]      = meta.file_size_bytes;
-    entry["file_path"]            = meta.file_path.string();
+    entry["file_path"]            = PathToUtf8(meta.file_path);
     entry["last_access_time"]     = meta.last_access_time;
     return entry;
   };
 
-  // ── Per-project metadata ─────────────────────────────────────────────
   if (!state_->project_uuid_.empty()) {
     nlohmann::json j;
     j["cache_schema_version"] = kCacheSchemaVersion;
@@ -762,11 +802,12 @@ void ThumbnailDiskCacheService::FlushMetadata() {
     std::error_code ec;
     std::filesystem::create_directories(state_->metadata_file_path_.parent_path(), ec);
     if (!ec) {
-      const auto tmp_path = state_->metadata_file_path_.string() + ".tmp";
+      auto tmp_path = state_->metadata_file_path_;
+      tmp_path += ".tmp";
       {
         std::ofstream file(tmp_path, std::ios::trunc);
         if (file) {
-          file << j.dump(2);
+          file << j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
         }
       }
       // Windows rename fails when the destination already exists; replace atomically.
@@ -775,119 +816,6 @@ void ThumbnailDiskCacheService::FlushMetadata() {
     }
   }
 
-  // ── Global metadata ──────────────────────────────────────────────────
-  {
-    nlohmann::json global;
-    global["cache_schema_version"] = kCacheSchemaVersion;
-    global["total_entries"]        = state_->index_.size();
-    global["total_size_bytes"]     = state_->total_size_bytes_;
-    global["max_entries"]          = state_->max_entries_;
-    global["enabled"]              = state_->enabled_;
-
-    auto& entries_json             = global["entries"];
-    entries_json                   = nlohmann::json::array();
-
-    {
-      std::unique_lock lock(state_->metadata_mutex_);
-      for (const auto& hash_str : state_->lru_index_.GetLRUKeys()) {
-        auto it = state_->index_.find(hash_str);
-        if (it == state_->index_.end()) continue;
-        entries_json.push_back(make_entry_json(hash_str, it->second));
-      }
-    }
-
-    std::error_code ec;
-    std::filesystem::create_directories(state_->global_metadata_path_.parent_path(), ec);
-    if (!ec) {
-      const auto tmp_path = state_->global_metadata_path_.string() + ".tmp";
-      {
-        std::ofstream file(tmp_path, std::ios::trunc);
-        if (file) {
-          file << global.dump(2);
-        }
-      }
-      std::filesystem::remove(state_->global_metadata_path_, ec);
-      std::filesystem::rename(tmp_path, state_->global_metadata_path_, ec);
-    }
-  }
-}
-
-void ThumbnailDiskCacheService::LoadGlobalMetadata() {
-  std::error_code ec;
-  if (!std::filesystem::exists(state_->global_metadata_path_, ec)) {
-    return;
-  }
-
-  std::ifstream file(state_->global_metadata_path_);
-  if (!file) {
-    return;
-  }
-
-  nlohmann::json j;
-  try {
-    file >> j;
-  } catch (...) {
-    RebuildFromDirectoryScan();
-    return;
-  }
-
-  if (!j.contains("entries") || !j["entries"].is_array()) {
-    RebuildFromDirectoryScan();
-    return;
-  }
-
-  // Load all entries from the global index. Per-project metadata is still
-  // loaded afterwards to refresh current-project details when available.
-  std::unique_lock lock(state_->metadata_mutex_);
-
-  size_t           loaded_count = 0;
-  for (const auto& entry : j["entries"]) {
-    try {
-      const auto file_path_str = entry.value("file_path", std::string{});
-      if (file_path_str.empty()) continue;
-
-      const auto            project_uuid = entry.value("project_uuid", std::string{});
-
-      std::filesystem::path file_path(file_path_str);
-      if (!std::filesystem::exists(file_path, ec)) continue;
-
-      EntryMeta meta;
-      meta.file_path        = file_path;
-      meta.file_size_bytes  = entry.value("file_size_bytes", size_t{0});
-      meta.last_access_time = entry.value("last_access_time", int64_t{0});
-      meta.key.project_uuid = project_uuid;
-      meta.key.element_id   = entry.value("element_id", sl_element_id_t{0});
-      meta.key.resolution   = static_cast<ThumbnailResolution>(
-          entry.value("resolution", static_cast<uint32_t>(ThumbnailResolution::k1024)));
-      meta.key.purpose = static_cast<ThumbnailDiskCachePurpose>(
-          entry.value("purpose", static_cast<uint32_t>(ThumbnailDiskCachePurpose::kThumbnail)));
-      meta.key.edit_version_hash    = entry.value("edit_version_hash", std::string{});
-      meta.key.cache_schema_version = entry.value("cache_schema_version", uint32_t{0});
-
-      const auto key_hash           = entry.value("key_hash", std::string{});
-      if (key_hash.empty()) continue;
-
-      if (auto old_it = state_->index_.find(key_hash); old_it != state_->index_.end()) {
-        state_->total_size_bytes_ -= old_it->second.file_size_bytes;
-      }
-      state_->index_[key_hash] = meta;
-      RecordLruAccessLocked(key_hash);
-      state_->total_size_bytes_ += meta.file_size_bytes;
-      loaded_count++;
-    } catch (...) {
-      continue;
-    }
-  }
-
-  // If global metadata says there should be entries but we loaded none for
-  // other projects, it might still be valid (only current project has entries).
-  // But if the global metadata has bad structure, rebuild.
-  if (j.value("total_entries", size_t{0}) > 0 && loaded_count == 0 &&
-      !j.contains("cache_schema_version")) {
-    // Looks corrupt — rebuild from disk.
-    lock.unlock();
-    RebuildFromDirectoryScan();
-  }
 }
 
 void ThumbnailDiskCacheService::LoadMetadata() {
@@ -902,13 +830,18 @@ void ThumbnailDiskCacheService::LoadMetadata() {
   }
 
   nlohmann::json j;
+  bool           readable = true;
   try {
     file >> j;
   } catch (...) {
-    return;
+    readable = false;
   }
+  file.close();
 
-  if (!j.contains("entries") || !j["entries"].is_array()) {
+  if (!readable || !j.contains("entries") || !j["entries"].is_array()) {
+    // Cache files are named by key hash only, so without the index no entry can be found again.
+    std::filesystem::remove_all(state_->project_cache_dir_, ec);
+    std::filesystem::create_directories(state_->project_cache_dir_, ec);
     return;
   }
 
@@ -923,7 +856,7 @@ void ThumbnailDiskCacheService::LoadMetadata() {
       if (file_path_str.empty()) {
         continue;
       }
-      meta.file_path        = file_path_str;
+      meta.file_path        = Utf8ToPath(file_path_str);
       meta.file_size_bytes  = entry.value("file_size_bytes", size_t{0});
       meta.last_access_time = entry.value("last_access_time", int64_t{0});
       meta.key.project_uuid = entry.value("project_uuid", std::string{});
@@ -1008,74 +941,6 @@ void ThumbnailDiskCacheService::EvictLruLocked(size_t target_count) {
     std::filesystem::remove(it->second.file_path, ec);
     state_->index_.erase(it);
   }
-}
-
-void ThumbnailDiskCacheService::RebuildFromDirectoryScan() {
-  std::error_code ec;
-  if (!std::filesystem::exists(state_->cache_root_, ec)) {
-    return;
-  }
-
-  std::unique_lock lock(state_->metadata_mutex_);
-  state_->index_.clear();
-  state_->lru_index_.Flush();
-  state_->total_size_bytes_ = 0;
-
-  for (const auto& project_entry : std::filesystem::directory_iterator(state_->cache_root_, ec)) {
-    if (ec) break;
-    if (!project_entry.is_directory()) continue;
-
-    const auto project_metadata = project_entry.path() / "cache_metadata.json";
-    if (!std::filesystem::exists(project_metadata, ec)) continue;
-
-    std::ifstream file(project_metadata);
-    if (!file) continue;
-
-    nlohmann::json j;
-    try {
-      file >> j;
-    } catch (...) {
-      continue;
-    }
-
-    if (!j.contains("entries") || !j["entries"].is_array()) continue;
-
-    for (const auto& entry : j["entries"]) {
-      try {
-        const auto file_path_str = entry.value("file_path", std::string{});
-        if (file_path_str.empty()) continue;
-
-        std::filesystem::path file_path(file_path_str);
-        if (!std::filesystem::exists(file_path, ec)) continue;
-
-        EntryMeta meta;
-        meta.file_path        = file_path;
-        meta.file_size_bytes  = entry.value("file_size_bytes", size_t{0});
-        meta.last_access_time = entry.value("last_access_time", int64_t{0});
-        meta.key.project_uuid = entry.value("project_uuid", std::string{});
-        meta.key.element_id   = entry.value("element_id", sl_element_id_t{0});
-        meta.key.resolution   = static_cast<ThumbnailResolution>(
-            entry.value("resolution", static_cast<uint32_t>(ThumbnailResolution::k1024)));
-        meta.key.purpose = static_cast<ThumbnailDiskCachePurpose>(
-            entry.value("purpose", static_cast<uint32_t>(ThumbnailDiskCachePurpose::kThumbnail)));
-        meta.key.edit_version_hash    = entry.value("edit_version_hash", std::string{});
-        meta.key.cache_schema_version = entry.value("cache_schema_version", uint32_t{0});
-
-        const auto key_hash           = entry.value("key_hash", std::string{});
-        if (key_hash.empty()) continue;
-
-        state_->index_[key_hash] = meta;
-        RecordLruAccessLocked(key_hash);
-        state_->total_size_bytes_ += meta.file_size_bytes;
-      } catch (...) {
-        continue;
-      }
-    }
-  }
-
-  // Re-write global metadata with rebuilt state.
-  lock.unlock();
-  FlushMetadata();
 }
 
 void ThumbnailDiskCacheService::ReopenWithCacheRoot(const std::filesystem::path& cache_root) {

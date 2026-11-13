@@ -192,7 +192,7 @@ Item {
             font.weight: 700
             font.letterSpacing: 1.8
             font.capitalization: Font.AllUppercase
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
         }
     }
 
@@ -288,7 +288,7 @@ Item {
             font.family: appTheme.dataFontFamily
             font.pixelSize: 22
             font.weight: 700
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
 
@@ -363,7 +363,17 @@ Item {
                         width: 24
                         height: 26
                         text: (index + 1) <= stars.displayRating ? "\u2605" : "\u2606"
-                        color: (index + 1) <= stars.displayRating ? "#FFB923" : root.mutedTextColor
+                        // Card star inks: filled in textColor, hover preview in
+                        // textMutedColor, the others in ratingStarEmptyColor.
+                        color: {
+                            const r = index + 1;
+                            if (r <= root.currentRating
+                                    && (stars.hoverRating === 0 || r <= stars.hoverRating))
+                                return appTheme.textColor;
+                            if (stars.hoverRating > 0 && r <= stars.hoverRating)
+                                return appTheme.textMutedColor;
+                            return appTheme.ratingStarEmptyColor;
+                        }
                         font.family: appTheme.dataFontFamily
                         font.pixelSize: 21
                         horizontalAlignment: Text.AlignHCenter
@@ -472,9 +482,10 @@ Item {
 
             Item {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 116
+                Layout.preferredHeight: Math.max(116, inspectorHeaderColumn.implicitHeight + 34)
 
                 ColumnLayout {
+                    id: inspectorHeaderColumn
                     anchors.left: parent.left
                     anchors.right: menuButton.left
                     anchors.top: parent.top
@@ -492,7 +503,7 @@ Item {
                         font.family: appTheme.headlineFontFamily
                         font.pixelSize: 20
                         font.weight: 800
-                        elide: Text.ElideMiddle
+                        wrapMode: Text.Wrap
                     }
 
                     RowLayout {
@@ -516,7 +527,7 @@ Item {
                             font.family: appTheme.dataFontFamily
                             font.pixelSize: 13
                             font.weight: 500
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                         }
                     }
                 }
@@ -687,14 +698,14 @@ Item {
                         Layout.preferredWidth: 22
                         Layout.preferredHeight: 22
                         source: "qrc:/panel_icons/sparkles.svg"
-                        iconColor: root.accentColor
+                        iconColor: root.mutedTextColor
                     }
 
                     Rectangle {
                         Layout.alignment: Qt.AlignHCenter
                         Layout.preferredWidth: 3
                         Layout.fillHeight: true
-                        color: root.accentColor
+                        color: appTheme.dividerColor
                     }
                 }
 

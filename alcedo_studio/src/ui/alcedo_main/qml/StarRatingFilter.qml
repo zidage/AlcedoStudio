@@ -6,30 +6,25 @@ Item {
     id: root
 
     property string selectedRating: ""
-    property color accentColor: appTheme.toneGold
     signal starClicked(string rating)
 
     readonly property int starCount: 5
     property int hoveredRating: 0
 
-    implicitHeight: starRow.implicitHeight + 24
+    // The section header and its actions belong to the InspectorSection around the stars.
+    implicitHeight: starRow.implicitHeight
 
+    // Same star inks as the Library card rating: filled stars in textColor, the hover
+    // preview in textMutedColor, and the other stars in ratingStarEmptyColor.
     function starColor(starIndex) {
         const r = starIndex + 1;
         if (selectedRating !== "" && r <= Number(selectedRating)) {
-            return accentColor;
+            return appTheme.textColor;
         }
         if (hoveredRating > 0 && r <= hoveredRating) {
-            return Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.6);
+            return appTheme.textMutedColor;
         }
-        return appTheme.textMutedColor;
-    }
-
-    function starOpacity(starIndex) {
-        const r = starIndex + 1;
-        if (selectedRating !== "" && r <= Number(selectedRating)) return 1.0;
-        if (hoveredRating > 0 && r <= hoveredRating) return 0.7;
-        return 0.35;
+        return appTheme.ratingStarEmptyColor;
     }
 
     function starChar(starIndex) {
@@ -50,50 +45,37 @@ Item {
         }
     }
 
-    ColumnLayout {
+    RowLayout {
+        id: starRow
         anchors.left: parent.left
         anchors.right: parent.right
-        spacing: 6
+        spacing: 2
 
-        Label {
-            text: qsTr("BY RATING")
-            color: appTheme.textMutedColor
-            font.pixelSize: 10
-            font.weight: 700
-            font.letterSpacing: 1.6
-        }
+        Repeater {
+            model: root.starCount
 
-        RowLayout {
-            id: starRow
-            spacing: 2
+            delegate: Label {
+                required property int index
+                text: root.starChar(index)
+                color: root.starColor(index)
+                font.pixelSize: 16
 
-            Repeater {
-                model: root.starCount
-
-                delegate: Label {
-                    required property int index
-                    text: root.starChar(index)
-                    color: root.starColor(index)
-                    opacity: root.starOpacity(index)
-                    font.pixelSize: 16
-
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        hoverEnabled: true
-                        acceptedButtons: Qt.LeftButton
-                        onClicked: function(mouse) {
-                            if (mouse.button === Qt.LeftButton) {
-                                root.starClicked(String(index + 1));
-                            }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton
+                    onClicked: function(mouse) {
+                        if (mouse.button === Qt.LeftButton) {
+                            root.starClicked(String(index + 1));
                         }
-                        onEntered: root.hoveredRating = index + 1
-                        onExited: root.hoveredRating = 0
                     }
+                    onEntered: root.hoveredRating = index + 1
+                    onExited: root.hoveredRating = 0
                 }
             }
-
-            Item { Layout.fillWidth: true }
         }
+
+        Item { Layout.fillWidth: true }
     }
 }

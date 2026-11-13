@@ -8,24 +8,34 @@
 #include <QEventLoop>
 #include <QString>
 #include <QThread>
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
-#include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_image_render_port.hpp"
+#include "app/pipeline_service.hpp"
 #include "edit/frame_presentation_types.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/executor_role.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_mask_asset_port.hpp"
 #include "ui/alcedo_main/editor_support/controllers/image_controller.hpp"
-#include "ui/alcedo_main/editor_support/controllers/pipeline_controller.hpp"
+#include "ui/edit_viewer/frame_sink.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 using alcedo::diag::editorPresentLog;
 
 namespace {
+
+constexpr const char* kExportRunningMessage =
+    "An export is running; the editor renders again when it ends";
 
 auto RenderTypeForIntent(const alcedo::EditorRenderIntent& intent) -> alcedo::RenderType {
   switch (intent.quality) {
@@ -92,11 +102,28 @@ void TraceDetailRequest(const char* stage, const alcedo::EditorRenderRequest& re
 
 }  // namespace
 
+auto MakeEditorRenderDesc(const alcedo::EditorRenderRequest& request) -> alcedo::RenderDesc {
+  const auto&        intent = request.intent;
+  alcedo::RenderDesc desc;
+  desc.render_type_         = RenderTypeForIntent(intent);
+  desc.use_viewport_region_ = intent.quality == alcedo::EditorRenderQuality::Detail ||
+                              intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
+  desc.viewport_region_                        = intent.view_region;
+  desc.frame_metadata_                         = FrameRoleToPreviewMetadata(intent);
+  desc.frame_metadata_.presentation_request_id = request.request_id;
+  desc.document_geometry_ = intent.geometry_overlay_only
+                                ? alcedo::DocumentGeometryUse::RotatedUncroppedSource
+                                : alcedo::DocumentGeometryUse::ApplyCropAndRotation;
+  return desc;
+}
+
 EditorSessionRenderSchedulerPort::EditorSessionRenderSchedulerPort(
     std::shared_ptr<alcedo::PipelineScheduler> pipeline_scheduler)
     : pipeline_scheduler_(std::move(pipeline_scheduler)) {}
 
-EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() {
+EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() { Shutdown(); }
+
+void EditorSessionRenderSchedulerPort::Shutdown() {
   std::shared_ptr<alcedo::EditorRenderCancellationToken> running_cancellation;
   {
     std::scoped_lock lock(mutex_);
@@ -105,22 +132,33 @@ EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() {
       running_job_->cancelled = true;
       running_cancellation    = running_job_->request.intent.cancellation;
     }
-    sink_resolver_ = {};
+    for (auto& image_job : image_jobs_) {
+      // A document that has not started is skipped; a running one finishes and is dropped.
+      image_job.cancelled = true;
+    }
+    sink_resolver_                      = {};
+    mask_coverage_sink_resolver_        = {};
+    detail_mask_coverage_sink_resolver_ = {};
   }
   if (running_cancellation) {
     running_cancellation->Cancel();
   }
 
-  // Drain in-flight pool work before tearing down this port.
+  // Drain in-flight pool work before tearing down this port: its completion calls back into this
+  // object. The in-flight frame may wait for the scene graph to hand over a present slot, which
+  // needs the GUI thread, so a GUI-thread caller keeps delivering events while it waits.
+  const auto drained = [this] {
+    return !running_job_.has_value() && image_jobs_.empty() && !mask_coverage_job_ &&
+           pending_mask_coverage_clears_ == 0;
+  };
   for (;;) {
     {
       std::unique_lock lock(mutex_);
-      if (!running_job_) {
+      if (drained()) {
         return;
       }
-      jobs_changed_.wait_for(lock, std::chrono::milliseconds(16),
-                             [this] { return !running_job_.has_value(); });
-      if (!running_job_) {
+      jobs_changed_.wait_for(lock, std::chrono::milliseconds(16), drained);
+      if (drained()) {
         return;
       }
     }
@@ -134,6 +172,18 @@ EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() {
 void EditorSessionRenderSchedulerPort::SetSinkResolver(EditorSessionFrameSinkResolver resolver) {
   std::scoped_lock lock(mutex_);
   sink_resolver_ = std::move(resolver);
+}
+
+void EditorSessionRenderSchedulerPort::SetMaskCoverageSinkResolver(
+    EditorSessionMaskCoverageSinkResolver resolver) {
+  std::scoped_lock lock(mutex_);
+  mask_coverage_sink_resolver_ = std::move(resolver);
+}
+
+void EditorSessionRenderSchedulerPort::SetDetailMaskCoverageSinkResolver(
+    EditorSessionMaskCoverageSinkResolver resolver) {
+  std::scoped_lock lock(mutex_);
+  detail_mask_coverage_sink_resolver_ = std::move(resolver);
 }
 
 void EditorSessionRenderSchedulerPort::SetPipelinePort(
@@ -151,7 +201,7 @@ void EditorSessionRenderSchedulerPort::BindSessionContext(
     std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
     alcedo::PresentationSinkId presentation_sink_id) {
   std::scoped_lock lock(mutex_);
-  // Same open image: keep Image / ImageBuffer / PipelineGuard. RouteInitialRender
+  // Same open image: keep Image / ImageBuffer. RouteInitialRender
   // (undo, head-move, quality re-route) rebinds with the same element/image and
   // must not force another full-file LoadImageInputBuffer or drop the payload.
   // Only a true image identity change replaces the whole context.
@@ -170,8 +220,69 @@ void EditorSessionRenderSchedulerPort::BindSessionContext(
 }
 
 void EditorSessionRenderSchedulerPort::ClearSessionContext() {
+  std::shared_ptr<alcedo::PipelineExecutor> executor;
+  {
+    std::scoped_lock lock(mutex_);
+    session_context_.reset();
+    executor = executor_;
+  }
+  if (!executor) {
+    return;
+  }
+  // Every use of the executor runs on the single worker, which gives this work exclusive access
+  // after the in-flight frame: the release never waits and never races a render.
+  EnsurePipelineScheduler()->ScheduleWork([executor] { executor->ReleaseBinding(); });
+}
+
+void EditorSessionRenderSchedulerPort::ReleaseGpuResourcesForExport(
+    EditorGpuResourceReleaseCompletion on_released) {
+  std::shared_ptr<alcedo::PipelineExecutor> executor;
+  {
+    std::scoped_lock lock(mutex_);
+    released_for_export_ = true;
+    executor             = executor_;
+  }
+  // The single worker runs this after the frame or image job in flight; every later one reads
+  // released_for_export_ on the worker and renders nothing.
+  EnsurePipelineScheduler()->ScheduleWork(
+      [executor = std::move(executor), on_released = std::move(on_released)] {
+        EditorGpuResourceRelease release;
+        try {
+          if (executor) {
+            release.device_bytes_before = executor->DeviceResourceBytes();
+            executor->ReleaseBinding();
+            release.device_bytes_after = executor->DeviceResourceBytes();
+          }
+          release.success = true;
+        } catch (const std::exception& ex) {
+          release.error = ex.what();
+        } catch (...) {
+          release.error = "Releasing the editor GPU resources failed";
+        }
+        if (release.success) {
+          qCInfo(editorPresentLog).noquote()
+              << QStringLiteral("editor GPU resources released for export: %1 -> %2 bytes")
+                     .arg(release.device_bytes_before)
+                     .arg(release.device_bytes_after);
+        } else {
+          qCWarning(editorPresentLog).noquote()
+              << QStringLiteral("editor GPU resource release for export failed: %1")
+                     .arg(QString::fromStdString(release.error));
+        }
+        if (on_released) {
+          on_released(std::move(release));
+        }
+      });
+}
+
+void EditorSessionRenderSchedulerPort::ResumeGpuResourcesAfterExport() {
   std::scoped_lock lock(mutex_);
-  session_context_.reset();
+  released_for_export_ = false;
+}
+
+auto EditorSessionRenderSchedulerPort::gpu_resources_released_for_export() const -> bool {
+  std::scoped_lock lock(mutex_);
+  return released_for_export_;
 }
 
 void EditorSessionRenderSchedulerPort::InstallSessionContext(EditorRenderSessionContext context) {
@@ -195,18 +306,23 @@ auto EditorSessionRenderSchedulerPort::sink_resolve_count() const -> std::uint64
   return sink_resolve_count_;
 }
 
+auto EditorSessionRenderSchedulerPort::ContextMatches(const EditorRenderSessionContext& context,
+                                                      std::uint64_t                     epoch,
+                                                      sl_element_id_t                   element_id,
+                                                      image_id_t image_id) -> bool {
+  return context.epoch == epoch && context.element_id == element_id && context.image_id == image_id;
+}
+
 auto EditorSessionRenderSchedulerPort::ContextMatchesRequest(
     const EditorRenderSessionContext& context, const alcedo::EditorRenderRequest& request) const
     -> bool {
-  return context.epoch == request.intent.image_load_request_id.value &&
-         context.element_id == request.intent.element_id &&
-         context.image_id == request.intent.image_id;
+  return ContextMatches(context, request.intent.image_load_request_id.value,
+                        request.intent.element_id, request.intent.image_id);
 }
 
 auto EditorSessionRenderSchedulerPort::ContextPayloadReady(
     const EditorRenderSessionContext& context) const -> bool {
-  return context.image && !context.image->image_path_.empty() && context.input &&
-         context.pipeline_guard && context.pipeline_guard->pipeline_;
+  return context.image && !context.image->image_path_.empty() && context.input;
 }
 
 auto EditorSessionRenderSchedulerPort::Schedule(
@@ -263,9 +379,17 @@ auto EditorSessionRenderSchedulerPort::CanProduceFrame(
 auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
     const alcedo::EditorRenderRequest& request, std::string* error)
     -> std::optional<EditorRenderSessionContext> {
+  return EnsureContext(request.intent.image_load_request_id.value, request.intent.element_id,
+                       request.intent.image_id, request.intent.presentation_sink_id, error);
+}
+
+auto EditorSessionRenderSchedulerPort::EnsureContext(
+    std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
+    alcedo::PresentationSinkId presentation_sink_id, std::string* error)
+    -> std::optional<EditorRenderSessionContext> {
   {
     std::scoped_lock lock(mutex_);
-    if (session_context_ && ContextMatchesRequest(*session_context_, request) &&
+    if (session_context_ && ContextMatches(*session_context_, epoch, element_id, image_id) &&
         ContextPayloadReady(*session_context_)) {
       return session_context_;
     }
@@ -278,12 +402,12 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
     pipeline_port       = pipeline_port_;
     image_pool_resolver = services_.image_pool;
     // Align identity with this request when open/switch bind was skipped.
-    if (!session_context_ || !ContextMatchesRequest(*session_context_, request)) {
+    if (!session_context_ || !ContextMatches(*session_context_, epoch, element_id, image_id)) {
       EditorRenderSessionContext context;
-      context.epoch                = request.intent.image_load_request_id.value;
-      context.element_id           = request.intent.element_id;
-      context.image_id             = request.intent.image_id;
-      context.presentation_sink_id = request.intent.presentation_sink_id;
+      context.epoch                = epoch;
+      context.element_id           = element_id;
+      context.image_id             = image_id;
+      context.presentation_sink_id = presentation_sink_id;
       session_context_             = std::move(context);
     }
   }
@@ -295,12 +419,12 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
     return std::nullopt;
   }
 
-  std::string pipeline_error;
-  auto        guard = pipeline_port->EnsureLoaded(request.intent.element_id, &pipeline_error);
-  if (!guard || !guard->pipeline_) {
+  // Rendering only reads the image the editor session holds. A request for an image the
+  // session no longer (or not yet) holds is stale; loading here would rebind that image's
+  // history and working document behind the session.
+  if (!pipeline_port->CurrentPreview(element_id)) {
     if (error) {
-      *error = pipeline_error.empty() ? "No pipeline guard for image; open may lack a project"
-                                      : std::move(pipeline_error);
+      *error = "Editor pipeline is not held for this image; the render request is stale";
     }
     return std::nullopt;
   }
@@ -323,14 +447,14 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
   std::shared_ptr<alcedo::ImageBuffer> input;
   try {
     image_desc = image_pool->Read<std::shared_ptr<alcedo::Image>>(
-        request.intent.image_id, [](const std::shared_ptr<alcedo::Image>& image) { return image; });
+        image_id, [](const std::shared_ptr<alcedo::Image>& image) { return image; });
     if (!image_desc || image_desc->image_path_.empty()) {
       if (error) {
         *error = "Image descriptor is missing or has an empty path";
       }
       return std::nullopt;
     }
-    input = controllers::LoadImageInputBuffer(image_pool, request.intent.image_id);
+    input = controllers::LoadImageInputBuffer(image_pool, image_id);
   } catch (const std::exception& ex) {
     if (error) {
       *error = ex.what();
@@ -345,7 +469,7 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
 
   std::scoped_lock lock(mutex_);
   // Another bind/switch may have replaced the identity while we loaded.
-  if (!session_context_ || !ContextMatchesRequest(*session_context_, request)) {
+  if (!session_context_ || !ContextMatches(*session_context_, epoch, element_id, image_id)) {
     if (error) {
       *error = "Session render context was replaced during load";
     }
@@ -353,9 +477,8 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
   }
   // Only the first successful payload load for this identity counts.
   if (!ContextPayloadReady(*session_context_)) {
-    session_context_->image          = std::move(image_desc);
-    session_context_->input          = std::move(input);
-    session_context_->pipeline_guard = std::move(guard);
+    session_context_->image = std::move(image_desc);
+    session_context_->input = std::move(input);
     ++context_payload_load_count_;
   }
   return session_context_;
@@ -368,6 +491,43 @@ auto EditorSessionRenderSchedulerPort::EnsurePipelineScheduler()
     pipeline_scheduler_ = std::make_shared<alcedo::PipelineScheduler>(1);
   }
   return pipeline_scheduler_;
+}
+
+auto EditorSessionRenderSchedulerPort::EnsureExecutor()
+    -> std::shared_ptr<alcedo::PipelineExecutor> {
+  std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
+  {
+    std::scoped_lock lock(mutex_);
+    if (executor_) {
+      return executor_;
+    }
+    pipeline_port = pipeline_port_;
+  }
+  // The backend preference is fixed at construction; a preference change takes effect after the
+  // application restarts, like every other executor.
+  const auto service = pipeline_port ? pipeline_port->PipelineMapper() : nullptr;
+  // The executor lives for the application; its Mask asset reader reads from the open project.
+  auto       mask_assets = std::make_shared<const CurrentProjectMaskAssetReader>(
+      [pipeline_port]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
+        return pipeline_port ? pipeline_port->PipelineMapper() : nullptr;
+      });
+  auto executor = std::make_shared<alcedo::PipelineExecutor>(
+      alcedo::ExecutorRole::Interactive, service ? service->LutResources() : nullptr,
+      std::move(mask_assets));
+  if (service) {
+    executor->SetAcceleratorBackendPreference(service->GetAcceleratorBackendPreference());
+  }
+  std::scoped_lock lock(mutex_);
+  if (!executor_) {
+    executor_ = std::move(executor);
+  }
+  return executor_;
+}
+
+auto EditorSessionRenderSchedulerPort::interactive_executor() const
+    -> std::shared_ptr<alcedo::PipelineExecutor> {
+  std::scoped_lock lock(mutex_);
+  return executor_;
 }
 
 void EditorSessionRenderSchedulerPort::DispatchJob(Job job) {
@@ -428,49 +588,75 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     return;
   }
 
+  // The latest preview the history published: the working document at dispatch. A frame that
+  // starts after a later write renders that later preview, never a partly written document.
+  std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
+  EditorSessionMaskCoverageSinkResolver      coverage_resolver;
+  EditorSessionMaskCoverageSinkResolver      detail_coverage_resolver;
+  {
+    std::scoped_lock lock(mutex_);
+    pipeline_port            = pipeline_port_;
+    coverage_resolver        = mask_coverage_sink_resolver_;
+    detail_coverage_resolver = detail_mask_coverage_sink_resolver_;
+  }
+  // A frame with a Mask coverage probe presents its coverage to the channel of its frame role
+  // (Mask ranges D10). Without a bound channel the frame renders without the probe.
+  const auto& probe        = job.request.intent.mask_coverage_probe;
+  const bool  detail_frame = job.request.intent.frame_role == alcedo::FrameRole::DetailPatch;
+  alcedo::IMaskCoverageSink* coverage_sink        = nullptr;
+  alcedo::IMaskCoverageSink* detail_coverage_sink = nullptr;
+  if (probe.has_value()) {
+    detail_coverage_sink = detail_coverage_resolver ? detail_coverage_resolver() : nullptr;
+    coverage_sink =
+        detail_frame ? detail_coverage_sink : (coverage_resolver ? coverage_resolver() : nullptr);
+  }
+  // A base frame with a probe makes the detail coverage of an earlier frame stale: the detail
+  // channel is cleared before the base coverage is published, until the next detail frame.
+  alcedo::IMaskCoverageSink* stale_detail_coverage =
+      probe.has_value() && !detail_frame ? detail_coverage_sink : nullptr;
+  auto snapshot =
+      pipeline_port ? pipeline_port->CurrentPreview(job.request.intent.element_id) : nullptr;
+  if (!snapshot) {
+    scheduler->ScheduleWork([this, job]() mutable {
+      FinishJob(job, false,
+                "Editor pipeline is not held for this image; the render request is stale");
+    });
+    return;
+  }
+
   try {
     TraceDetailRequest("pipeline-submit", job.request);
-    auto                 exec = context->pipeline_guard->pipeline_;
-
     alcedo::PipelineTask task;
-    task.input_                             = context->input;
-    task.input_desc_                        = context->image;
-    task.pipeline_executor_                 = exec;
-    task.options_.render_desc_.render_type_ = RenderTypeForIntent(job.request.intent);
-    task.options_.render_desc_.use_viewport_region_ =
-        job.request.intent.quality == alcedo::EditorRenderQuality::Detail ||
-        job.request.intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
-    task.options_.render_desc_.viewport_region_ = job.request.intent.view_region;
-    task.options_.render_desc_.frame_metadata_  = FrameRoleToPreviewMetadata(job.request.intent);
-    task.options_.render_desc_.frame_metadata_.presentation_request_id = job.request.request_id;
-    task.request_id_                                                   = job.request.request_id;
-    task.options_.is_callback_                                         = false;
-    task.options_.is_seq_callback_                                     = false;
-    task.options_.is_blocking_                                         = false;
-    const bool apply_adjustment =
-        alcedo::ReasonAppliesAdjustmentSnapshot(job.request.intent.reason);
-    task.configure_under_render_lock_ = [snapshot = job.request.intent.adjustment, sink,
-                                         geometry_overlay_only =
-                                             job.request.intent.geometry_overlay_only,
-                                         apply_adjustment](alcedo::PipelineTask& locked_task) {
-      auto locked_exec = locked_task.pipeline_executor_;
-      if (!locked_exec) {
-        return false;
+    task.input_                      = context->input;
+    task.input_desc_                 = context->image;
+    task.pipeline_executor_          = EnsureExecutor();
+    task.snapshot_                   = std::move(snapshot);
+    task.options_.render_desc_       = MakeEditorRenderDesc(job.request);
+    if (coverage_sink != nullptr) {
+      task.options_.render_desc_.mask_coverage_probe_ = probe;
+      task.options_.render_desc_.mask_coverage_sink_  = coverage_sink;
+    }
+    task.request_id_                 = job.request.request_id;
+    task.options_.is_callback_       = false;
+    task.options_.is_seq_callback_   = false;
+    task.options_.is_blocking_       = false;
+    // The executor belongs to this port and every use of it runs on the single worker, which has
+    // exclusive access, so the viewport sink is attached there before the frame. It changes only
+    // when the viewport item is replaced.
+    task.prepare_ = [this, sink, stale_detail_coverage](alcedo::PipelineTask& prepared_task) {
+      // Read on the worker, which orders it against the release work item: a frame that runs
+      // after ReleaseGpuResourcesForExport allocates nothing while the export renders.
+      if (gpu_resources_released_for_export()) {
+        throw std::runtime_error(std::string(alcedo::kPresentationSuspendedMessage) +
+                                 "an export is running");
       }
-      if (apply_adjustment) {
-        std::string apply_error;
-        if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
-          throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
-                                                       : apply_error);
-        }
-        if (alcedo::SnapshotTouchesImageLoading(snapshot)) {
-          controllers::EnsureLoadingOperatorDefaults(locked_exec);
-        }
+      auto& executor = *prepared_task.pipeline_executor_;
+      if (executor.GetFrameSink() != sink) {
+        executor.AttachFrameSink(sink);
       }
-      if (geometry_overlay_only) {
-        alcedo::DisableEditorGeometryOperatorForOverlay(*locked_exec);
+      if (stale_detail_coverage != nullptr) {
+        stale_detail_coverage->ClearCoverage();
       }
-      controllers::AttachExecutionStages(locked_exec, sink);
       return true;
     };
     if (job.request.intent.cancellation) {
@@ -479,13 +665,18 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
       };
     }
     const auto request_for_trace = job.request;
-    task.on_complete_            = [this, job, request_for_trace](bool success) mutable {
+    task.on_complete_            = [this, job, request_for_trace](bool success,
+                                                       std::string message) mutable {
       TraceDetailRequest("pipeline-return", request_for_trace, success ? "success" : "failed");
       if (JobIsCancelled(job)) {
         FinishJob(job, false, "Cancelled during execution");
         return;
       }
-      FinishJob(job, success, success ? "Frame ready" : "Pipeline returned an empty result");
+      if (success) {
+        FinishJob(job, true, "Frame ready");
+        return;
+      }
+      FinishJob(job, false, message.empty() ? "Pipeline returned an empty result" : std::move(message));
     };
     scheduler->ScheduleTask(std::move(task));
   } catch (const std::exception& ex) {
@@ -515,28 +706,340 @@ void EditorSessionRenderSchedulerPort::Cancel(std::uint64_t scheduler_job_id) {
   // Completion arrives from the pipeline pool via on_complete_ / FinishJob.
 }
 
-void EditorSessionRenderSchedulerPort::WaitForSessionIdle(std::uint64_t session_epoch) {
-  const auto idle = [this, session_epoch] {
-    return !running_job_ ||
-           running_job_->request.intent.image_load_request_id.value != session_epoch;
-  };
-
-  for (;;) {
-    {
-      std::unique_lock lock(mutex_);
-      if (idle()) {
-        return;
-      }
-      jobs_changed_.wait_for(lock, std::chrono::milliseconds(16), idle);
-      if (idle()) {
-        return;
-      }
+auto EditorSessionRenderSchedulerPort::ScheduleImages(
+    alcedo::EditorImageRenderRequest request, alcedo::EditorImageRenderCompletion on_complete,
+    std::string* error) -> std::uint64_t {
+  const auto reject = [error](std::string message) -> std::uint64_t {
+    if (error) {
+      *error = std::move(message);
     }
-    if (QCoreApplication::instance() != nullptr &&
-        QThread::currentThread() == QCoreApplication::instance()->thread()) {
-      QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 16);
+    return 0;
+  };
+  if (request.snapshots.empty() || request.snapshots.size() > alcedo::kMaxEditorImagesPerJob) {
+    return reject("An image job renders one or two documents");
+  }
+  for (const auto& snapshot : request.snapshots) {
+    if (!snapshot) {
+      return reject("An image job document is missing");
     }
   }
+
+  std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
+  {
+    std::scoped_lock lock(mutex_);
+    if (shutting_down_) {
+      return reject("The editor render port is shutting down");
+    }
+    if (released_for_export_) {
+      return reject(kExportRunningMessage);
+    }
+    // An image job renders the image the session bound; it never binds another one.
+    if (!session_context_ || !ContextMatches(*session_context_, request.image_load_request_id.value,
+                                             request.element_id, request.image_id)) {
+      return reject("The requested image is not the bound editor image");
+    }
+    pipeline_port = pipeline_port_;
+  }
+
+  // Every document must keep the executor binding of the held image (its lineage and element);
+  // another binding would release the image's prepared source and sensor result.
+  const auto current = pipeline_port ? pipeline_port->CurrentPreview(request.element_id) : nullptr;
+  if (!current) {
+    return reject("Editor pipeline is not held for this image; the image job is stale");
+  }
+  const auto binding = alcedo::RenderBindingKey::Of(*current);
+  for (const auto& snapshot : request.snapshots) {
+    if (alcedo::RenderBindingKey::Of(*snapshot) != binding) {
+      return reject("An image job document does not belong to the loaded editor image");
+    }
+  }
+
+  std::string context_error;
+  const auto  context =
+      EnsureContext(request.image_load_request_id.value, request.element_id, request.image_id,
+                    alcedo::PresentationSinkId{0}, &context_error);
+  if (!context) {
+    return reject(context_error.empty() ? "Session render context is unavailable"
+                                        : std::move(context_error));
+  }
+
+  auto          executor  = EnsureExecutor();
+  auto          scheduler = EnsurePipelineScheduler();
+  std::uint64_t job_id    = 0;
+  {
+    std::scoped_lock lock(mutex_);
+    if (shutting_down_) {
+      return reject("The editor render port is shutting down");
+    }
+    job_id = ++next_image_job_id_;
+    image_jobs_.push_back(ImageJob{.job_id = job_id});
+  }
+  // One work item for the whole job: the single worker runs no frame between its documents. The
+  // worker runs work items in submission order, so accepted jobs render in acceptance order.
+  scheduler->ScheduleWork([this, job_id, executor = std::move(executor), input = context->input,
+                           request     = std::move(request),
+                           on_complete = std::move(on_complete)]() mutable {
+    RunImageJob(job_id, executor, input, request, std::move(on_complete));
+  });
+  return job_id;
+}
+
+void EditorSessionRenderSchedulerPort::CancelImages(std::uint64_t job_id) {
+  std::scoped_lock lock(mutex_);
+  if (auto* image_job = FindImageJob(job_id)) {
+    image_job->cancelled = true;
+  }
+}
+
+auto EditorSessionRenderSchedulerPort::HasImageJob() const -> bool {
+  std::scoped_lock lock(mutex_);
+  return !image_jobs_.empty();
+}
+
+void EditorSessionRenderSchedulerPort::RunImageJob(
+    std::uint64_t job_id, const std::shared_ptr<alcedo::PipelineExecutor>& executor,
+    const std::shared_ptr<alcedo::ImageBuffer>& input,
+    const alcedo::EditorImageRenderRequest&     request,
+    alcedo::EditorImageRenderCompletion         on_complete) {
+  alcedo::EditorImageRenderResult result;
+  try {
+    // An export that started after this job was accepted released the executor; the job must
+    // not allocate it again.
+    if (gpu_resources_released_for_export()) {
+      throw std::runtime_error(kExportRunningMessage);
+    }
+    alcedo::FramePreviewMetadata metadata;
+    metadata.image_identity       = static_cast<std::uint64_t>(request.image_id);
+    metadata.session_epoch        = request.image_load_request_id.value;
+    // A one-shot image is not a viewport frame; scope analysis must not read it.
+    metadata.scope_update_allowed = false;
+    auto apply = alcedo::MakeQualityBaseApplyRequest(metadata, request.geometry.document_geometry);
+    apply.geometry            = request.geometry;
+    apply.require_host_output = true;
+    apply.output_color        = request.output_color;
+    // The request's own sink: null, so the executor's viewport sink is never presented to.
+    apply.sink                = nullptr;
+
+    // The executor render lock for the whole job, as a frame holds it for its whole task.
+    std::unique_lock render_lock(executor->GetRenderLock());
+    for (const auto& snapshot : request.snapshots) {
+      if (ImageJobIsCancelled(job_id)) {
+        break;
+      }
+      // ApplyImage downloads this image before it returns, so the next document starts only after
+      // the host pixels of this one exist.
+      result.images.push_back(executor->ApplyImage(*snapshot, input, apply));
+    }
+    result.status = alcedo::EditorImageRenderStatus::Completed;
+  } catch (const std::exception& ex) {
+    result.status  = alcedo::EditorImageRenderStatus::Failed;
+    result.message = ex.what();
+  } catch (...) {
+    result.status  = alcedo::EditorImageRenderStatus::Failed;
+    result.message = "Image render failed";
+  }
+  if (result.status == alcedo::EditorImageRenderStatus::Failed) {
+    // A partial job publishes nothing; the host pixels of earlier documents are released here.
+    result.images.clear();
+  }
+  FinishImageJob(job_id, std::move(result), on_complete);
+}
+
+void EditorSessionRenderSchedulerPort::FinishImageJob(
+    std::uint64_t job_id, alcedo::EditorImageRenderResult result,
+    const alcedo::EditorImageRenderCompletion& on_complete) {
+  if (ImageJobIsCancelled(job_id)) {
+    result.status  = alcedo::EditorImageRenderStatus::Cancelled;
+    result.message = "Image job was cancelled";
+    result.images.clear();
+  }
+  // The job stays accepted until its completion returns: Shutdown waits for the completion,
+  // which calls into the owner that requested the job.
+  if (on_complete) {
+    try {
+      on_complete(std::move(result));
+    } catch (...) {
+    }
+  }
+  std::scoped_lock lock(mutex_);
+  std::erase_if(image_jobs_,
+                [job_id](const ImageJob& image_job) { return image_job.job_id == job_id; });
+  jobs_changed_.notify_all();
+}
+
+auto EditorSessionRenderSchedulerPort::ImageJobIsCancelled(std::uint64_t job_id) const -> bool {
+  std::scoped_lock lock(mutex_);
+  const auto*      image_job = FindImageJob(job_id);
+  return shutting_down_ || image_job == nullptr || image_job->cancelled;
+}
+
+auto EditorSessionRenderSchedulerPort::FindImageJob(std::uint64_t job_id) const -> const ImageJob* {
+  const auto found = std::find_if(image_jobs_.begin(), image_jobs_.end(),
+                                  [job_id](const ImageJob& job) { return job.job_id == job_id; });
+  return found == image_jobs_.end() ? nullptr : &*found;
+}
+
+auto EditorSessionRenderSchedulerPort::FindImageJob(std::uint64_t job_id) -> ImageJob* {
+  const auto found = std::find_if(image_jobs_.begin(), image_jobs_.end(),
+                                  [job_id](const ImageJob& job) { return job.job_id == job_id; });
+  return found == image_jobs_.end() ? nullptr : &*found;
+}
+
+auto EditorSessionRenderSchedulerPort::ScheduleMaskCoverage(
+    alcedo::EditorMaskCoverageRequest request, alcedo::EditorMaskCoverageJobCompletion on_complete,
+    std::string* error) -> std::uint64_t {
+  const auto reject = [error](std::string message) -> std::uint64_t {
+    if (error) {
+      *error = std::move(message);
+    }
+    return 0;
+  };
+  EditorSessionMaskCoverageSinkResolver     resolver;
+  EditorSessionMaskCoverageSinkResolver     detail_resolver;
+  std::shared_ptr<alcedo::PipelineExecutor> executor;
+  {
+    std::scoped_lock lock(mutex_);
+    if (shutting_down_) {
+      return reject("The editor render port is shutting down");
+    }
+    if (released_for_export_) {
+      return reject(std::string(alcedo::kPresentationSuspendedMessage) + kExportRunningMessage);
+    }
+    if (mask_coverage_job_) {
+      return reject("Another coverage job is running");
+    }
+    // Coverage belongs to the image the session bound; it never binds another one.
+    if (!session_context_ || !ContextMatches(*session_context_, request.image_load_request_id.value,
+                                             request.element_id, request.image_id)) {
+      return reject("The requested image is not the bound editor image");
+    }
+    resolver        = mask_coverage_sink_resolver_;
+    detail_resolver = detail_mask_coverage_sink_resolver_;
+    executor        = executor_;
+  }
+  // The coverage frame uses the grid and device of the photo frames: without a frame there is
+  // neither.
+  if (!executor) {
+    return reject("Mask coverage display: the editor has not presented a photo frame of the image");
+  }
+  auto* sink = resolver ? resolver() : nullptr;
+  if (sink == nullptr) {
+    return reject("No viewport coverage channel is bound");
+  }
+  // A coverage-only frame has no detail ROI frame: the detail coverage of a range probe goes.
+  auto*         detail_sink = detail_resolver ? detail_resolver() : nullptr;
+  std::uint64_t job_id = 0;
+  {
+    std::scoped_lock lock(mutex_);
+    if (shutting_down_ || mask_coverage_job_) {
+      return reject(shutting_down_ ? "The editor render port is shutting down"
+                                   : "Another coverage job is running");
+    }
+    job_id             = ++next_mask_coverage_job_id_;
+    mask_coverage_job_ = true;
+  }
+  EnsurePipelineScheduler()->ScheduleWork([this, executor = std::move(executor),
+                                           request     = std::move(request), sink, detail_sink,
+                                           on_complete = std::move(on_complete)] {
+    if (detail_sink != nullptr) {
+      detail_sink->ClearCoverage();
+    }
+    RunMaskCoverageJob(executor, request, *sink, on_complete);
+  });
+  return job_id;
+}
+
+void EditorSessionRenderSchedulerPort::RunMaskCoverageJob(
+    const std::shared_ptr<alcedo::PipelineExecutor>& executor,
+    const alcedo::EditorMaskCoverageRequest& request, alcedo::IMaskCoverageSink& sink,
+    const alcedo::EditorMaskCoverageJobCompletion& on_complete) {
+  alcedo::EditorMaskCoverageJobResult result;
+  try {
+    // An export that started after this job was accepted released the executor; the job must
+    // not allocate it again.
+    if (gpu_resources_released_for_export()) {
+      throw std::runtime_error(std::string(alcedo::kPresentationSuspendedMessage) +
+                               kExportRunningMessage);
+    }
+    const alcedo::MaskCoverageFrameIdentity identity{
+        .request_id     = request.request_id,
+        .session_epoch  = request.image_load_request_id.value,
+        .image_identity = static_cast<std::uint64_t>(request.image_id)};
+    std::unique_lock render_lock(executor->GetRenderLock());
+    const auto       publication =
+        executor->PresentMaskCoverage(request.selection, request.mask, identity, sink);
+    result.status = publication == alcedo::MaskCoveragePublication::Published
+                        ? alcedo::EditorMaskCoverageJobStatus::Presented
+                        : alcedo::EditorMaskCoverageJobStatus::DiscardedForImageChange;
+  } catch (const std::exception& ex) {
+    result.status  = alcedo::EditorMaskCoverageJobStatus::Failed;
+    result.message = ex.what();
+  } catch (...) {
+    result.status  = alcedo::EditorMaskCoverageJobStatus::Failed;
+    result.message = "Mask coverage display failed";
+  }
+  if (result.status == alcedo::EditorMaskCoverageJobStatus::Failed) {
+    qCWarning(editorPresentLog).noquote()
+        << QStringLiteral("editor coverage presentation failed: %1")
+               .arg(QString::fromStdString(result.message));
+  }
+  // The job stays accepted until its completion returns: Shutdown waits for the completion,
+  // which calls into the owner that requested the job.
+  if (on_complete) {
+    try {
+      on_complete(std::move(result));
+    } catch (...) {
+    }
+  }
+  FinishMaskCoverageWork(true);
+}
+
+void EditorSessionRenderSchedulerPort::ClearMaskCoverage() {
+  EditorSessionMaskCoverageSinkResolver resolver;
+  EditorSessionMaskCoverageSinkResolver detail_resolver;
+  {
+    std::scoped_lock lock(mutex_);
+    if (shutting_down_) {
+      return;
+    }
+    resolver        = mask_coverage_sink_resolver_;
+    detail_resolver = detail_mask_coverage_sink_resolver_;
+  }
+  auto* sink        = resolver ? resolver() : nullptr;
+  auto* detail_sink = detail_resolver ? detail_resolver() : nullptr;
+  if (sink == nullptr && detail_sink == nullptr) {
+    return;
+  }
+  {
+    std::scoped_lock lock(mutex_);
+    ++pending_mask_coverage_clears_;
+  }
+  // The single worker runs it after the accepted coverage job and the frames scheduled before
+  // it, so their coverage frames are cleared on both channels.
+  EnsurePipelineScheduler()->ScheduleWork([this, sink, detail_sink] {
+    if (sink != nullptr) {
+      sink->ClearCoverage();
+    }
+    if (detail_sink != nullptr) {
+      detail_sink->ClearCoverage();
+    }
+    FinishMaskCoverageWork(false);
+  });
+}
+
+auto EditorSessionRenderSchedulerPort::HasMaskCoverageWork() const -> bool {
+  std::scoped_lock lock(mutex_);
+  return mask_coverage_job_ || pending_mask_coverage_clears_ != 0;
+}
+
+void EditorSessionRenderSchedulerPort::FinishMaskCoverageWork(bool coverage_job) {
+  std::scoped_lock lock(mutex_);
+  if (coverage_job) {
+    mask_coverage_job_ = false;
+  } else if (pending_mask_coverage_clears_ != 0) {
+    --pending_mask_coverage_clears_;
+  }
+  jobs_changed_.notify_all();
 }
 
 auto EditorSessionRenderSchedulerPort::last_scheduled() const

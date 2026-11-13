@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include <duckdb.h>
-
+#include <atomic>
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -14,6 +13,7 @@
 
 #include "ai/ai_description.hpp"
 #include "ai/ai_rating.hpp"
+#include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/store/database.hpp"
 #include "type/type.hpp"
 
@@ -33,11 +33,29 @@ namespace alcedo {
 // replaces the prior row in place. `prompt_profile_id` (understanding) and
 // `rubric_id` / `rubric_version` (rating) are stored per row so a prompt/profile or
 // rubric change is never silently reinterpreted as the old row's score.
+//
+// The store also owns the per-file search rows derived from the active understandings:
+// `AiImageSearchText` (folded caption and tag text that library search matches) and
+// `AiImageFtsDocument` (the body of the BM25 index). They are rebuilt when the store is
+// constructed and rewritten for the affected files by every upsert and removal.
 class AiStore {
  private:
-  Database& database_;
+  Database&                 database_;
+  // True after a successful `create_fts_index` on this database. Written by the constructor
+  // and by `UpsertUnderstandings` after each rebuild; read by search without SQL. Atomic
+  // because search reads it on the search worker while AI results are written on another
+  // thread.
+  mutable std::atomic<bool> understanding_fts_index_ready_{false};
 
  public:
+  // Rebuilds `AiImageSearchText` and `AiImageFtsDocument` from the active understandings in
+  // one transaction. Throws when the search text rows cannot be written, so a project never
+  // opens with AI search text that does not match its understandings. Then prepares the BM25
+  // index and records whether it exists: with no documents it loads neither the fts extension
+  // nor the index (`HasUnderstandingFtsIndex()` is false until the first upsert); with
+  // unchanged documents and an existing index it only loads the extension; otherwise it
+  // recreates the index. The FTS index is best-effort: without the DuckDB fts extension,
+  // `HasUnderstandingFtsIndex()` is false and search omits BM25.
   explicit AiStore(Database& db_ctrl);
 
   // Persist a successful image-understanding result. `insert_or_replace` on the table's
@@ -50,9 +68,10 @@ class AiStore {
   [[nodiscard]] auto UpsertUnderstanding(const AiDescription& description) const -> bool;
 
   // Persist multiple successful image-understanding results in one DB transaction. Valid
-  // rows are upserted together, then the derived FTS document table and DuckDB FTS index
-  // are refreshed once after commit. Invalid rows or orphan file_ids are skipped; the
-  // return value is the number of rows accepted by storage.
+  // rows are upserted together with the `AiImageSearchText` and `AiImageFtsDocument` rows of
+  // their files; the DuckDB FTS index is rebuilt once after commit and the index state that
+  // `HasUnderstandingFtsIndex()` returns is updated. Invalid rows or orphan file_ids are
+  // skipped; the return value is the number of rows accepted by storage.
   [[nodiscard]] auto UpsertUnderstandings(std::span<const AiDescription> descriptions) const
       -> size_t;
 
@@ -69,8 +88,9 @@ class AiStore {
 
   // True when the derived AI-description FTS index exists and exposes its DuckDB
   // `match_bm25` function. Search callers use this to add the BM25 predicate only when
-  // it is safe; old project files or runtimes without the fts extension keep using the
-  // compatibility LIKE search path.
+  // it is safe; runtimes without the fts extension match the folded search text only.
+  // Reads the state recorded by the last index build: runs no SQL, takes no database lock,
+  // and may be called from any thread.
   [[nodiscard]] auto HasUnderstandingFtsIndex() const -> bool;
 
   // Persist a successful image-rating result (1..5 integer). Same upsert/identity
@@ -102,12 +122,14 @@ class AiStore {
   void               DeleteForFiles(std::span<const sl_element_id_t> file_ids) const;
 };
 
-// Delete every `AiImageUnderstanding` and `AiImageRating` row for the given files on the
-// supplied connection, via the duckorm `remove` path (this function does not write raw
-// DELETE statements — only the `file_id IN (...)` predicate). The element-deletion
-// cascade passes its own connection so the AI row cleanup shares the caller's
-// transaction. A no-op for an empty file list.
-void DeleteAiAnnotationRowsForFiles(duckdb_connection                conn,
+// Delete every `AiImageUnderstanding`, `AiImageRating`, `AiImageSearchText`, and
+// `AiImageFtsDocument` row for the given files on the supplied connection, via the duckorm
+// `remove` path (this function does not write raw DELETE statements — only the
+// `file_id IN (...)` predicate), then rebuild the FTS index. The element-deletion cascade
+// passes its own connection so the AI row cleanup shares the caller's transaction. The
+// rebuild does not change whether the index exists (see the definition), so the state held
+// by `AiStore` stays valid. A no-op for an empty file list.
+void DeleteAiAnnotationRowsForFiles(duckorm::Connection              conn,
                                     std::span<const sl_element_id_t> file_ids);
 
 }  // namespace alcedo

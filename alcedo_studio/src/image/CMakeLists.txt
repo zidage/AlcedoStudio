@@ -11,7 +11,11 @@ add_library(ImageBuffer ${IMAGE_BUFFER_SRCS})
 target_include_directories(ImageBuffer PUBLIC "${ALCEDO_INCLUDE_ROOT}")
 
 # Common dependencies
-set(IMAGE_BUFFER_DEPS Exiv2 ${ALCEDO_OPENCV_CORE_DEPS} libraw::raw_r TimeProvider JSON StrConv)
+# AlcedoLog is public here because ImageBuffer is the base of every core library: the templates in
+# the edit runtime and gpu headers (renderer, arenas, texture pool) log from any target that
+# includes them.
+set(IMAGE_BUFFER_DEPS Exiv2 ${ALCEDO_OPENCV_CORE_DEPS} libraw::raw_r TimeProvider JSON StrConv
+    AlcedoLog)
 
 # Platform specific dependencies
 if (WIN32)
@@ -65,29 +69,46 @@ if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(OpenClDemosaicNet PRIVATE
         ALCEDO_DEMOASICNET_MODEL_DIR="${ALCEDO_SRC_ROOT}/config/models"
     )
-
-    # Product-path OpenCL Neural demosaic entry. Soft-fail API for
-    # RawProcessor OpenCL branch; not part of the generic OpenClDemosaicNet module layer.
-    def_library(OpenClDemosaicNetEntry
-        SOURCES
-            ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_demosaicnet.cpp
-        PUBLIC_DEPS
-            OpenClDemosaicNet
-            ImageBuffer
-            OpenClProgramLibrary
-            OpenCL::OpenCL
-            ${ALCEDO_OPENCV_CORE_DEPS}
-    )
-    target_compile_definitions(OpenClDemosaicNetEntry PUBLIC HAVE_OPENCL)
 endif()
+
+# Raster source color description values: transfer evaluation, usability check and JSON. No
+# file parsing, so the pipeline document can link it.
+def_library(RasterColorModel
+    SOURCES ${ALCEDO_SRC_ROOT}/image/raster_color_model.cpp
+    PUBLIC_DEPS JSON ColorEncodingCatalog
+)
 
 # Image Base
 def_library(Image
     SOURCES ${ALCEDO_SRC_ROOT}/image/image.cpp 
     ${ALCEDO_SRC_ROOT}/image/metadata_extractor.cpp
-    PUBLIC_DEPS ImageBuffer
+    ${ALCEDO_SRC_ROOT}/image/metadata/camera_color_matrix_db.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/camera_name_match.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/dng_color_metadata.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/dng_import_fast_path.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/exif_display_mapper.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/hdr_marker_probe.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/lens_identity_resolver.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/libraw_metadata_mapper.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/metadata_values.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/nikon_lens_id_table.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/raster_metadata_reader.cpp
+    ${ALCEDO_SRC_ROOT}/image/dng_color_profile_import.cpp
+    ${ALCEDO_SRC_ROOT}/image/dng_color_profile_cache.cpp
+    ${ALCEDO_SRC_ROOT}/image/dcp_file_reader.cpp
+    ${ALCEDO_SRC_ROOT}/image/dcp_profile_library.cpp
+    ${ALCEDO_SRC_ROOT}/image/dcp_source_tables.cpp
+    ${ALCEDO_SRC_ROOT}/image/dng_tone_curve.cpp
+    ${ALCEDO_SRC_ROOT}/image/raster_color_description.cpp
+    ${ALCEDO_SRC_ROOT}/image/raster_container_reader.cpp
+    ${ALCEDO_SRC_ROOT}/image/icc_profile_reader.cpp
+    ${ALCEDO_SRC_ROOT}/image/image_content_class.cpp
+    PUBLIC_DEPS ImageBuffer RasterColorModel
 )
-target_link_libraries(Image PRIVATE OpenImageIO::OpenImageIO)
+# The bundled gRPC builds a static zlib with the same symbols. When it exists, Image uses it,
+# so that a target that links both gRPC and Image has one zlib.
+target_link_libraries(Image PRIVATE OpenImageIO::OpenImageIO lcms2::lcms2
+    $<IF:$<TARGET_EXISTS:zlibstatic>,zlibstatic,ZLIB::ZLIB> Sha256Digest)
 
 # Image Pool
 def_library(ImagePool

@@ -87,6 +87,8 @@ Item {
 
     // Repaint whenever progress changes
     onProgressChanged: canvas.requestPaint()
+    onFillColorChanged: canvas.requestPaint()
+    onTrackColorChanged: canvas.requestPaint()
     onIndeterminateChanged: {
         canvas.rotation = 0;
         canvas.requestPaint();

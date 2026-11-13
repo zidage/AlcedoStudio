@@ -4,4 +4,3 @@ CTLs
 !lens_calib/
 !lens_calib/lens_catalog.json
 !nikon_lens/id_map.json
-!nikon_lens/parse_id_map.py

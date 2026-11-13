@@ -35,6 +35,12 @@ namespace {
 
 [[nodiscard]] auto Allow() -> EditorActionDecision { return EditorActionDecision{true, {}}; }
 
+/// True while an input sequence or a Mask edit leaves uncommitted values on the working
+/// document. History moves and Paste replace that document, so they wait for the commit.
+[[nodiscard]] auto HasOpenEditorInput(const EditorActionInputs& inputs) -> bool {
+  return inputs.input_sequence_open || inputs.mask_input_open;
+}
+
 [[nodiscard]] auto IsRecoveryState(EditorSessionState state) -> bool {
   return state == EditorSessionState::RetainedImageFailure;
 }
@@ -81,12 +87,6 @@ auto EditorActionName(EditorAction action) -> const char* {
       return "RemoveVersion";
     case EditorAction::ApplyPaste:
       return "ApplyPaste";
-    case EditorAction::BeginMerge:
-      return "BeginMerge";
-    case EditorAction::CompleteMerge:
-      return "CompleteMerge";
-    case EditorAction::CancelMerge:
-      return "CancelMerge";
     case EditorAction::RetrySave:
       return "RetrySave";
     case EditorAction::DiscardAndContinue:
@@ -99,6 +99,8 @@ auto EditorActionName(EditorAction action) -> const char* {
       return "Shutdown";
     case EditorAction::RequestViewChange:
       return "RequestViewChange";
+    case EditorAction::OpenComparison:
+      return "OpenComparison";
     case EditorAction::Count:
       break;
   }
@@ -117,8 +119,7 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::Redo,              EditorAction::MoveHead,          EditorAction::DiscardChanges,
           EditorAction::CheckoutVersion,   EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,     EditorAction::ApplyPaste,
-          EditorAction::BeginMerge,        EditorAction::CompleteMerge,     EditorAction::CancelMerge,
-          EditorAction::RequestViewChange,
+          EditorAction::RequestViewChange, EditorAction::OpenComparison,
       };
     case EditorOperationLeaseKind::SaveCheckpoint:
       return {
@@ -126,10 +127,9 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::Redo,              EditorAction::MoveHead,          EditorAction::DiscardChanges,
           EditorAction::CheckoutVersion,   EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,     EditorAction::ApplyPaste,
-          EditorAction::BeginMerge,        EditorAction::CompleteMerge,     EditorAction::CancelMerge,
+          EditorAction::OpenComparison,
       };
     case EditorOperationLeaseKind::PasteMaterialization:
-    case EditorOperationLeaseKind::MergeMaterialization:
       return {
           EditorAction::SelectImage,       EditorAction::PreviewAdjustment,
           EditorAction::CommitAdjustment,  EditorAction::Undo,
@@ -137,22 +137,8 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::DiscardChanges,    EditorAction::CheckoutVersion,
           EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,
-          EditorAction::ApplyPaste,        EditorAction::BeginMerge,
-          EditorAction::CompleteMerge,     EditorAction::CancelMerge,
-          EditorAction::RequestViewChange,
-      };
-    case EditorOperationLeaseKind::MergePreview:
-      // Preview enables Complete/Cancel only; other mutation stays blocked by
-      // base Interactive + package facts. No broad block list — Complete/Cancel
-      // are gated by merge_preview_active in Evaluate.
-      return {
-          EditorAction::ApplyPaste,        EditorAction::BeginMerge,
-          EditorAction::CheckoutVersion,   EditorAction::CreateRootVersion,
-          EditorAction::BranchVersion,     EditorAction::RenameVersion,
-          EditorAction::RemoveVersion,     EditorAction::Undo,
-          EditorAction::Redo,              EditorAction::MoveHead,
-          EditorAction::DiscardChanges,    EditorAction::PreviewAdjustment,
-          EditorAction::CommitAdjustment,  EditorAction::SelectImage,
+          EditorAction::ApplyPaste,        EditorAction::RequestViewChange,
+          EditorAction::OpenComparison,
       };
     case EditorOperationLeaseKind::FailureRecovery:
       return {
@@ -162,9 +148,39 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::DiscardChanges,    EditorAction::CheckoutVersion,
           EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,
-          EditorAction::ApplyPaste,        EditorAction::BeginMerge,
-          EditorAction::CompleteMerge,     EditorAction::CancelMerge,
-          EditorAction::RequestViewChange,
+          EditorAction::ApplyPaste,        EditorAction::RequestViewChange,
+          EditorAction::OpenComparison,
+      };
+    case EditorOperationLeaseKind::Comparison:
+      // Image selection, leaving the editor, and shutdown stay available: each closes the
+      // comparison first.
+      return {
+          EditorAction::PreviewAdjustment, EditorAction::CommitAdjustment,
+          EditorAction::Undo,              EditorAction::Redo,
+          EditorAction::MoveHead,          EditorAction::DiscardChanges,
+          EditorAction::CheckoutVersion,   EditorAction::CreateRootVersion,
+          EditorAction::BranchVersion,     EditorAction::RenameVersion,
+          EditorAction::RemoveVersion,     EditorAction::ApplyPaste,
+          EditorAction::RequestViewChange, EditorAction::OpenComparison,
+      };
+    case EditorOperationLeaseKind::AiMaskEdit:
+      // The live document must not change under an open AI Mask edit, so its Commit needs no
+      // conflict check. View changes, image selection, leaving the editor, and shutdown stay
+      // available: an image change ends the session first.
+      return {
+          EditorAction::PreviewAdjustment,
+          EditorAction::CommitAdjustment,
+          EditorAction::Undo,
+          EditorAction::Redo,
+          EditorAction::MoveHead,
+          EditorAction::DiscardChanges,
+          EditorAction::CheckoutVersion,
+          EditorAction::CreateRootVersion,
+          EditorAction::BranchVersion,
+          EditorAction::RenameVersion,
+          EditorAction::RemoveVersion,
+          EditorAction::ApplyPaste,
+          EditorAction::OpenComparison,
       };
   }
   return {};
@@ -178,11 +194,18 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
       return EditorAction::SelectImage;
     case EditorSessionCommandKind::CloseEditor:
       return EditorAction::CloseEditor;
+    case EditorSessionCommandKind::PersistCurrent:
+      return std::nullopt;
     case EditorSessionCommandKind::Shutdown:
       return EditorAction::Shutdown;
     case EditorSessionCommandKind::PreviewAdjustment:
       return EditorAction::PreviewAdjustment;
     case EditorSessionCommandKind::CommitAdjustment:
+    case EditorSessionCommandKind::RenameColorGrade:
+    case EditorSessionCommandKind::SetColorGradeDeletionProtected:
+    case EditorSessionCommandKind::EditNodeGraph:
+    case EditorSessionCommandKind::InsertColorGradeAtTop:
+    case EditorSessionCommandKind::RemoveColorGradeAndBridge:
       return EditorAction::CommitAdjustment;
     case EditorSessionCommandKind::Undo:
       return EditorAction::Undo;
@@ -204,12 +227,6 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
       return EditorAction::RemoveVersion;
     case EditorSessionCommandKind::ApplyPaste:
       return EditorAction::ApplyPaste;
-    case EditorSessionCommandKind::BeginMerge:
-      return EditorAction::BeginMerge;
-    case EditorSessionCommandKind::CompleteMerge:
-      return EditorAction::CompleteMerge;
-    case EditorSessionCommandKind::CancelMerge:
-      return EditorAction::CancelMerge;
     case EditorSessionCommandKind::RetrySave:
       return EditorAction::RetrySave;
     case EditorSessionCommandKind::DiscardAndContinue:
@@ -218,9 +235,40 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
       return EditorAction::CancelPendingNavigation;
     case EditorSessionCommandKind::RequestViewChange:
       return EditorAction::RequestViewChange;
+    case EditorSessionCommandKind::OpenComparison:
+      return EditorAction::OpenComparison;
+    // The comparison service accepts these only while a comparison is open.
+    case EditorSessionCommandKind::SelectComparisonSources:
+    case EditorSessionCommandKind::RetryComparison:
+    case EditorSessionCommandKind::CloseComparison:
+      return std::nullopt;
+    // Reads the open image only; the reducer reports its own refusal to the caller.
+    case EditorSessionCommandKind::RenderPreviewImages:
+    case EditorSessionCommandKind::RenderAiMaskAnalysisImage:
+    case EditorSessionCommandKind::RenderLutPreview:
+      return std::nullopt;
+    // The AI Mask edit commands evaluate CommitAdjustment admission on the owner themselves, so
+    // that a refused Open still reaches its completion and Commit ignores its own lease.
+    case EditorSessionCommandKind::OpenAiMaskEdit:
+    case EditorSessionCommandKind::CommitAiMaskEdit:
+    case EditorSessionCommandKind::CancelAiMaskEdit:
+      return std::nullopt;
+    // Presentation only: no document, history, or Version write. The reducer reports its own
+    // refusal to the caller's completion.
+    case EditorSessionCommandKind::UpdateAiMaskCandidateCoverage:
+    case EditorSessionCommandKind::SelectMaskCoveragePreview:
+    case EditorSessionCommandKind::ClearMaskCoveragePreview:
+    case EditorSessionCommandKind::RetryMaskCoveragePreview:
+    case EditorSessionCommandKind::PresentMaskCoverageAgain:
+    case EditorSessionCommandKind::ShowMaskRangeCoverage:
+    case EditorSessionCommandKind::HideMaskRangeCoverage:
+      return std::nullopt;
     case EditorSessionCommandKind::SetPresentationTarget:
     case EditorSessionCommandKind::SetPresentationSize:
     case EditorSessionCommandKind::SetGeometryOverlay:
+    case EditorSessionCommandKind::SetPresentationSuspended:
+    case EditorSessionCommandKind::SetSuspendedForExport:
+    case EditorSessionCommandKind::SetAdjustmentProjectionNode:
       return std::nullopt;
   }
   return std::nullopt;
@@ -278,6 +326,9 @@ auto EditorActionPolicy::Evaluate(EditorAction action, const EditorCommandContex
       if (!inputs.can_undo) {
         return Deny("Nothing to undo");
       }
+      if (HasOpenEditorInput(inputs)) {
+        return Deny("Finish the current edit before Undo");
+      }
       return Allow();
 
     case EditorAction::Redo:
@@ -287,11 +338,17 @@ auto EditorActionPolicy::Evaluate(EditorAction action, const EditorCommandContex
       if (!inputs.can_redo) {
         return Deny("Nothing to redo");
       }
+      if (HasOpenEditorInput(inputs)) {
+        return Deny("Finish the current edit before Redo");
+      }
       return Allow();
 
     case EditorAction::MoveHead:
       if (inputs.session_state != EditorSessionState::Interactive || !inputs.has_image) {
         return Deny("Head move requires an interactive image");
+      }
+      if (HasOpenEditorInput(inputs)) {
+        return Deny("Finish the current edit before moving in the history");
       }
       return Allow();
 
@@ -327,34 +384,8 @@ auto EditorActionPolicy::Evaluate(EditorAction action, const EditorCommandContex
       if (inputs.background_blocks_paste) {
         return Deny("A background task blocks Paste");
       }
-      if (inputs.merge_preview_active) {
-        return Deny("Finish or cancel Merge before Paste");
-      }
-      return Allow();
-
-    case EditorAction::BeginMerge:
-      if (inputs.session_state != EditorSessionState::Interactive || !inputs.has_image) {
-        return Deny("Merge requires an interactive image");
-      }
-      if (!inputs.package_available) {
-        return Deny("No copied adjustments are available");
-      }
-      if (inputs.background_blocks_merge) {
-        return Deny("A background task blocks Merge");
-      }
-      if (inputs.merge_preview_active) {
-        return Deny("A Merge preview is already active");
-      }
-      return Allow();
-
-    case EditorAction::CompleteMerge:
-    case EditorAction::CancelMerge:
-      if (!inputs.merge_preview_active || !inputs.active_merge_preview.valid()) {
-        return Deny("No active Merge preview");
-      }
-      if (inputs.session_state != EditorSessionState::Interactive &&
-          !IsBusyNavigationState(inputs.session_state)) {
-        return Deny("Merge resolution requires an active editor session");
+      if (HasOpenEditorInput(inputs)) {
+        return Deny("Finish the current edit before Paste");
       }
       return Allow();
 
@@ -386,6 +417,18 @@ auto EditorActionPolicy::Evaluate(EditorAction action, const EditorCommandContex
       return Allow();
 
     case EditorAction::Shutdown:
+      return Allow();
+
+    case EditorAction::OpenComparison:
+      if (inputs.session_state != EditorSessionState::Interactive || !inputs.has_image) {
+        return Deny("Comparison requires an interactive image");
+      }
+      if (inputs.current_output_is_hdr) {
+        return Deny("Comparison is unavailable for HDR output.");
+      }
+      if (inputs.mask_input_open) {
+        return Deny("Finish the Mask edit before comparing");
+      }
       return Allow();
 
     case EditorAction::Count:

@@ -986,6 +986,9 @@ _deps
 
 # C/C++ binary extension file
 *.bin
+# Stored expected test data (GPU DAG G10.5 DRT parameter bytes and pixels).
+!alcedo_studio/tests/resources/expected_parameters/**/*.bin
+!alcedo_studio/tests/resources/expected_pixels/**/*.bin
 
 ##### C
 # Prerequisites
@@ -1065,21 +1068,23 @@ alcedo_studio/tests/resources/sample_images/**
 temp_folder/
 
 third_party/
-!alcedo/src/third_party/
-!alcedo/src/third_party/lensfun/
-!alcedo/src/third_party/lensfun/**
 !alcedo_studio/src/
 !alcedo_studio/src/third_party/
 alcedo_studio/src/third_party/*
 !alcedo_studio/src/third_party/CMakeLists.txt
+!alcedo_studio/src/third_party/README.md
 !alcedo_studio/src/third_party/cmake/
 !alcedo_studio/src/third_party/cmake/FindGLIB2.cmake
+!alcedo_studio/src/third_party/cmake/AlcedoQuickQanava.cmake
 !alcedo_studio/src/third_party/libultrahdr/
+!alcedo_studio/src/third_party/lensfun/
 !alcedo_studio/src/third_party/libraw
 !alcedo_studio/src/third_party/libraw/
 !alcedo_studio/src/third_party/libraw/**
 !alcedo_studio/src/third_party/protobuf/
 !alcedo_studio/src/third_party/grpc/
+!alcedo_studio/src/third_party/QuickQanava/
+!alcedo_studio/src/third_party/QuickQanava/**
 !alcedo_studio/src/third_party/include/
 !alcedo_studio/src/third_party/include/alcedo/
 !alcedo_studio/src/third_party/include/alcedo/metal/
@@ -1089,7 +1094,8 @@ alcedo_studio/src/third_party/*
 !alcedo_studio/src/third_party/include/puerhlab/metal/*.hpp
 !alcedo_studio/src/third_party/puerhlab_metal_cpp_implementation.cpp
 !alcedo_studio/third_party/
-!alcedo_studio/third_party/dawn/
+# Old checkouts of the removed Dawn submodule.
+alcedo_studio/third_party/dawn/
 !alcedo_studio/third_party/libduckdb-windows/
 alcedo_studio/third_party/libduckdb-windows/*
 !alcedo_studio/third_party/libduckdb-windows/extensions/
@@ -1127,3 +1133,13 @@ skills-lock.json
 /docs/social_media_pub/
 
 nul
+
+# Abandoned UI fuzz platform (kept locally, untracked)
+/tools/ui_fuzz_platform/
+
+# AMD OpenCL compile check: driver packages, extracted amdocl folders, ROCm SDK and the
+# built harness. Downloaded and used by scripts/amd_opencl/amd_opencl_check.py.
+/.amd_opencl/
+
+# Local example scripts and notes (not tracked)
+/docs/examples/

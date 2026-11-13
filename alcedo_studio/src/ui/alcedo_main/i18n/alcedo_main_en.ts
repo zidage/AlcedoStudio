@@ -4,22 +4,32 @@
 <context>
     <name>AboutPage</name>
     <message>
-        <location filename="../qml/AboutPage.qml" line="+79"/>
-        <source>New to Alcedo Studio?</source>
+        <location filename="../qml/AboutPage.qml" line="+82"/>
+        <source>Welcome to Alcedo Studio</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+10"/>
-        <source>The documentation website is the best place to learn how this software works — how to import, edit, and manage your photos, step by step. It is the tutorial for Alcedo Studio, and it is kept up to date with each release.</source>
+        <source>The documentation walks you through importing, editing, and managing your photos step by step. Follow development on GitHub, and if Alcedo Studio is useful to you, consider supporting it with a donation.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+17"/>
         <source>Open documentation</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+34"/>
+        <location line="+7"/>
+        <source>Open GitHub</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Sponsor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+18"/>
         <source>About</source>
         <translation type="unfinished"></translation>
     </message>
@@ -189,7 +199,7 @@
 <context>
     <name>AdjustmentSlider</name>
     <message>
-        <location filename="../qml/AdjustmentSlider.qml" line="+266"/>
+        <location filename="../qml/AdjustmentSlider.qml" line="+267"/>
         <source>Out of range</source>
         <translation type="unfinished"></translation>
     </message>
@@ -207,120 +217,152 @@
 <context>
     <name>AdjustmentTransferDialog</name>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="+132"/>
+        <location filename="../qml/AdjustmentTransferDialog.qml" line="+70"/>
         <source>Other</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+43"/>
-        <source>Imported</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+6"/>
+        <location line="+64"/>
+        <location line="+4"/>
         <source>Copy Adjustments</source>
         <translation>Copy Adjustments</translation>
     </message>
     <message>
-        <location line="+0"/>
-        <location line="+6"/>
+        <location line="-4"/>
+        <location line="+4"/>
         <source>Paste Adjustments</source>
         <translation>Paste Adjustments</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Copy %1 Settings</source>
+        <location line="+236"/>
+        <source>Items</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+107"/>
+        <location line="-127"/>
         <source>Close</source>
         <translation type="unfinished">Close</translation>
     </message>
     <message>
-        <location line="+177"/>
-        <source>Active · %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="-107"/>
-        <source>Source Versions</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="-180"/>
-        <source>Merge Adjustments</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+341"/>
-        <source>Transfer Strategy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Paste</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Merge</source>
-        <translation type="unfinished">Merge</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Merge resolves every conflict by using the incoming values only. Per-field conflict resolution isn&apos;t available when transferring to multiple images.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Parameters to Copy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="+133"/>
         <source>Parameters to Paste</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+9"/>
-        <source>Select All</source>
+        <location line="+50"/>
+        <source>Cancel</source>
+        <translation>Cancel</translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentTransferItemPane</name>
+    <message>
+        <location filename="../qml/AdjustmentTransferItemPane.qml" line="+19"/>
+        <source>Items</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+29"/>
-        <source>None</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+76"/>
-        <source>%1 of %2 settings selected</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>%1 settings · %2 target images</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+55"/>
-        <source>%1 section</source>
+        <location line="+16"/>
+        <source>Node</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Expanded</source>
+        <source>Tone</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+0"/>
-        <source>Collapsed</source>
+        <location line="+1"/>
+        <source>Look</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-42"/>
-        <source>Cancel</source>
-        <translation>Cancel</translation>
+        <location line="+1"/>
+        <source>LUT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display Transform</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Other</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Select All</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Clear</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <source>No transferable adjustments.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+75"/>
+        <location line="+32"/>
+        <location line="+43"/>
+        <source>Transfer all masks in this node</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentTransferNodePane</name>
+    <message>
+        <location filename="../qml/AdjustmentTransferNodePane.qml" line="+18"/>
+        <source>Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Select All</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Clear</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+113"/>
+        <source>Select all items in %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentTransferVersionPane</name>
+    <message>
+        <location filename="../qml/AdjustmentTransferVersionPane.qml" line="+17"/>
+        <source>Source Versions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Imported</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+65"/>
+        <source>Active Version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+91"/>
+        <source>Active</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -328,330 +370,330 @@
     <message>
         <location filename="../qml/AdvancedContentAnalysisDialog.qml" line="+74"/>
         <source>No provider selected</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>No model selected</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Chinese</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>English</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Follow app language</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+17"/>
         <source>评价严苛程度</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Rating strictness</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+227"/>
         <source>Analysis</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <location line="+386"/>
         <source>Description</source>
-        <translation type="unfinished">Description</translation>
+        <translation type="obsolete">Description</translation>
     </message>
     <message>
         <location line="-386"/>
         <location line="+389"/>
         <source>Rating</source>
-        <translation type="unfinished">Rating</translation>
+        <translation type="obsolete">Rating</translation>
     </message>
     <message>
         <location line="-373"/>
         <source>provider status %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>error code %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+6"/>
         <source>provider %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>model %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>request %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <source>No provider error message was returned.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+17"/>
         <source>Image %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>%1: %2</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+21"/>
         <source>Open a project before running remote analysis.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Select at least one image to analyze.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+5"/>
         <source>Choose at least one analysis task.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+73"/>
         <source>Canceled. Successful results already saved remain in place.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Finished with %1 successful item(s) and %2 failed item(s). First failure: %3</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Finished with %1 successful item(s) and %2 failed item(s).</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Analysis complete. Skipped %1 existing image(s).</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Analysis complete.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+105"/>
         <source>Advanced Content Analysis</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+10"/>
         <source>%1 selected image(s)</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+72"/>
         <source>Provider</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Model</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Output language</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+19"/>
         <source>Tasks</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+26"/>
         <source>Rating reason</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Overwrite</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+10"/>
         <source>Overwrite photo rating</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Overwrite rating reason</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Overwrite image description</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+92"/>
         <source>Running %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Finished</source>
-        <translation type="unfinished">Finished</translation>
+        <translation type="obsolete">Finished</translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Ready</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+9"/>
         <source>%1 / %2 image(s)</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+25"/>
         <source>Usage: %1 token(s)</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+29"/>
         <source>Failure details</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+39"/>
         <source>Results refresh the focused photo&apos;s Image inspector. Open the Image page to review and edit description, rating, and reasons.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+29"/>
         <source>Protected by interaction locks; safe to continue in the background.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Remote provider calls may incur cost.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+16"/>
         <source>Move task to background</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+7"/>
         <source>Analyze Selected</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+10"/>
         <source>Cancel</source>
-        <translation type="unfinished">Cancel</translation>
+        <translation type="obsolete">Cancel</translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Done</source>
-        <translation type="unfinished">Done</translation>
+        <translation type="obsolete">Done</translation>
     </message>
 </context>
 <context>
     <name>AiProviderSettingsPanel</name>
     <message>
-        <location filename="../qml/AiProviderSettingsPanel.qml" line="+69"/>
+        <location filename="../qml/AiProviderSettingsPanel.qml" line="+70"/>
         <source>Codex login did not finish yet. Complete `codex login`, then use Codex Login again.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+26"/>
         <source>Codex OAuth is connected. Open a project to refresh models.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Loading Codex models...</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+21"/>
         <source>This build does not include Codex OAuth import. Rebuild Alcedo Studio.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>Checking local Codex login...</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+9"/>
         <location line="+2"/>
         <source>Codex OAuth connected. Loading models...</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+21"/>
-        <location line="+378"/>
+        <location line="+404"/>
         <source>Finish the current AI task before changing provider settings.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
-        <location line="-374"/>
+        <location line="-400"/>
         <source>The field value could not be saved.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
-        <location line="+96"/>
+        <location line="+120"/>
         <source>Follow app language</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>English</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>中文</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+16"/>
         <source>Output language</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+32"/>
         <source>Provider settings</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+16"/>
-        <location line="+169"/>
+        <location line="+171"/>
         <source>Add provider</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="-111"/>
@@ -661,112 +703,112 @@
     <message>
         <location line="+33"/>
         <source>In use</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Use</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+12"/>
         <source>Edit</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+23"/>
         <source>No provider profiles</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+9"/>
         <source>Use the + button above to create one.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+43"/>
         <source>Choose a template to create a profile from.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
-        <location line="+95"/>
+        <location line="+97"/>
         <source>Provider</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+30"/>
         <source>OpenAI OAuth</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+11"/>
         <source>Use Codex Login</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+8"/>
         <source>Open Login</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+4"/>
         <source>This build does not include Codex login launch. Run `codex login` manually.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+9"/>
         <source>Codex login started. Complete the browser flow; models will load when login finishes.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+9"/>
         <source>Disconnect</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+5"/>
         <source>Codex OAuth disconnected</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Codex OAuth connected</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>No Codex OAuth credential imported</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+15"/>
         <source>API key</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Paste API key</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+13"/>
         <source>Save Key</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+6"/>
         <source>API key saved</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+6"/>
         <source>Delete Key</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+5"/>
         <source>API key deleted</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+8"/>
@@ -781,100 +823,100 @@
     <message>
         <location line="+13"/>
         <source>Model</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+17"/>
         <source>Search models</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>No matching models</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+22"/>
         <source>Test &amp; Refresh</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+27"/>
         <source>Advanced</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Display name</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Provider id</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Driver</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Base URL</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Endpoint</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Models endpoint</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Models response data pointer</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Auth type</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Credential slot</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Structured output</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Timeout ms</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Max image bytes</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Recommended rendition</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Duplicate</source>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+13"/>
-        <source>Duplicate</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+14"/>
         <location line="+71"/>
         <source>Delete</source>
         <translation type="unfinished"></translation>
@@ -898,6 +940,26 @@
         <location line="+11"/>
         <source>Cancel</source>
         <translation type="unfinished">Cancel</translation>
+    </message>
+    <message>
+        <source>Advanced Content Analysis is removed from this version. The next version also removes this page. Delete your saved API keys and the Codex login now. After that, Alcedo Studio can no longer delete them for you.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No saved keys</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete All Saved Keys</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete every saved API key and the Codex login? The provider profiles stay in the list.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete All</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -938,9 +1000,53 @@
         <translation>SEARCH FILTER</translation>
     </message>
     <message>
-        <location line="+36"/>
+        <location line="+38"/>
         <source>Filtered by search</source>
         <translation>Filtered by search</translation>
+    </message>
+    <message>
+        <source>capture time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>oldest first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>newest first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>By Import Time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>import time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>camera model</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>labels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>rating</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>lowest first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>highest first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>lens</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -1217,6 +1323,109 @@ Alcedo will use %1 instead.</translation>
         <source>Failed to save rating reason.</source>
         <translation>Failed to save rating reason.</translation>
     </message>
+    <message>
+        <source>Unknown sort field: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Unknown group field: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Import canceled: %1 imported, %2 not read, %3 not selected, %4 unsupported, %5 failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cancelling import...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Close the editor image before you close the project.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Project closed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>An agent controls the session.</source>
+        <translation type="unfinished">An agent controls the session.</translation>
+    </message>
+    <message>
+        <source>Control returned to you.</source>
+        <translation type="unfinished">Control returned to you.</translation>
+    </message>
+    <message>
+        <source>Waiting for the next command</source>
+        <translation type="unfinished">Waiting for the next command</translation>
+    </message>
+    <message>
+        <source>You stopped the agent.</source>
+        <translation type="unfinished">You stopped the agent.</translation>
+    </message>
+    <message>
+        <source>Stopped. Tell the agent to continue.</source>
+        <translation type="unfinished">Stopped. Tell the agent to continue.</translation>
+    </message>
+    <message>
+        <source>The agent took control.</source>
+        <translation type="unfinished">The agent took control.</translation>
+    </message>
+    <message>
+        <source>The agent continued.</source>
+        <translation type="unfinished">The agent continued.</translation>
+    </message>
+    <message>
+        <source>The agent gave control back to you.</source>
+        <translation type="unfinished">The agent gave control back to you.</translation>
+    </message>
+</context>
+<context>
+    <name>AgentSessionCard</name>
+    <message>
+        <source>Stopping</source>
+        <translation type="unfinished">Stopping</translation>
+    </message>
+    <message>
+        <source>Stopped</source>
+        <translation type="unfinished">Stopped</translation>
+    </message>
+    <message>
+        <source>Failed</source>
+        <translation type="unfinished">Failed</translation>
+    </message>
+    <message>
+        <source>Finished</source>
+        <translation type="unfinished">Finished</translation>
+    </message>
+    <message>
+        <source>Working</source>
+        <translation type="unfinished">Working</translation>
+    </message>
+    <message>
+        <source>Agent</source>
+        <translation type="unfinished">Agent</translation>
+    </message>
+    <message>
+        <source>Agent · %1</source>
+        <translation type="unfinished">Agent · %1</translation>
+    </message>
+    <message>
+        <source>Stop the agent</source>
+        <translation type="unfinished">Stop the agent</translation>
+    </message>
+    <message>
+        <source>Stopped. Tell the agent to continue.</source>
+        <translation type="unfinished">Stopped. Tell the agent to continue.</translation>
+    </message>
+    <message>
+        <source>Dismiss</source>
+        <translation type="unfinished">Dismiss</translation>
+    </message>
 </context>
 <context>
     <name>AppDialogs</name>
@@ -1241,7 +1450,7 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+95"/>
+        <location line="+93"/>
         <source>Discard</source>
         <translation type="unfinished">Discard</translation>
     </message>
@@ -1268,15 +1477,19 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location line="+212"/>
         <source>Select at least one image to analyze.</source>
+        <translation type="obsolete"></translation>
+    </message>
+    <message>
+        <source>Supported images (%1)</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>BackgroundTaskBar</name>
     <message>
-        <location filename="../qml/BackgroundTaskBar.qml" line="+64"/>
+        <location filename="../qml/BackgroundTaskBar.qml" line="+65"/>
         <source>AI Analysis</source>
-        <translation type="unfinished">AI Analysis</translation>
+        <translation type="obsolete">AI Analysis</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -1321,9 +1534,13 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+102"/>
+        <location line="+103"/>
         <source>+%1</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Agent</source>
+        <translation type="unfinished">Agent</translation>
     </message>
 </context>
 <context>
@@ -1346,7 +1563,7 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location line="+12"/>
         <source>AI Analysis</source>
-        <translation type="unfinished">AI Analysis</translation>
+        <translation type="obsolete">AI Analysis</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -1414,9 +1631,9 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished">Close</translation>
     </message>
     <message>
-        <location line="+171"/>
+        <location line="+170"/>
         <source>Details</source>
-        <translation type="unfinished">Details</translation>
+        <translation type="obsolete">Details</translation>
     </message>
     <message>
         <location line="+40"/>
@@ -1433,6 +1650,18 @@ Alcedo will use %1 instead.</translation>
         <source>Imports, exports, model work, and AI jobs will appear here.</source>
         <translation type="unfinished">Imports, exports, model work, and AI jobs will appear here.</translation>
     </message>
+    <message>
+        <source>Agent</source>
+        <translation type="unfinished">Agent</translation>
+    </message>
+    <message>
+        <source>Agent Sessions</source>
+        <translation type="unfinished">Agent Sessions</translation>
+    </message>
+    <message>
+        <source>Other Tasks</source>
+        <translation type="unfinished">Other Tasks</translation>
+    </message>
 </context>
 <context>
     <name>CacheSettingsPanel</name>
@@ -1448,12 +1677,12 @@ Alcedo will use %1 instead.</translation>
     </message>
     <message>
         <location line="+6"/>
-        <location line="+97"/>
+        <location line="+99"/>
         <source>Select Thumbnail Cache Folder</source>
         <translation>Select Thumbnail Cache Folder</translation>
     </message>
     <message>
-        <location line="-88"/>
+        <location line="-90"/>
         <source>Thumbnail cache</source>
         <translation>Thumbnail cache</translation>
     </message>
@@ -1483,7 +1712,7 @@ Alcedo will use %1 instead.</translation>
         <translation>Cache directory</translation>
     </message>
     <message>
-        <location line="+50"/>
+        <location line="+52"/>
         <source>Limits</source>
         <translation>Limits</translation>
     </message>
@@ -1505,8 +1734,8 @@ Alcedo will use %1 instead.</translation>
     </message>
     <message>
         <location line="+16"/>
-        <source>Max entries</source>
-        <translation>Max entries</translation>
+        <source>Max entries per project</source>
+        <translation>Max entries per project</translation>
     </message>
     <message>
         <location line="+24"/>
@@ -1547,7 +1776,7 @@ Alcedo will use %1 instead.</translation>
 <context>
     <name>CollapsibleSection</name>
     <message>
-        <location filename="../qml/CollapsibleSection.qml" line="+114"/>
+        <location filename="../qml/CollapsibleSection.qml" line="+116"/>
         <source>Collapse %1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1560,14 +1789,14 @@ Alcedo will use %1 instead.</translation>
 <context>
     <name>CollectionsPanel</name>
     <message>
-        <location filename="../qml/CollectionsPanel.qml" line="+20"/>
+        <location filename="../qml/CollectionsPanel.qml" line="+22"/>
         <source>Search</source>
         <translation>Search</translation>
     </message>
     <message>
         <location line="+5"/>
         <source>Advanced Content Analysis</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+5"/>
@@ -1580,14 +1809,24 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+186"/>
+        <location line="+119"/>
+        <source>Alcedo</source>
+        <translation type="unfinished">Alcedo</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Studio</source>
+        <translation type="unfinished">Studio</translation>
+    </message>
+    <message>
+        <location line="+87"/>
         <source>Open a project before running remote analysis.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Select one or more images for remote analysis.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+10"/>
@@ -1615,7 +1854,7 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+127"/>
+        <location line="+128"/>
         <source>No collections yet</source>
         <translation>No collections yet</translation>
     </message>
@@ -1633,6 +1872,62 @@ Alcedo will use %1 instead.</translation>
         <location line="+49"/>
         <source>Import Images</source>
         <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>DateCommitGraph</name>
+    <message>
+        <location filename="../qml/DateCommitGraph.qml" line="+54"/>
+        <source>Last year</source>
+        <translation>Last year</translation>
+    </message>
+    <message>
+        <location line="+63"/>
+        <source>Capture activity</source>
+        <translation>Capture activity</translation>
+    </message>
+    <message>
+        <location line="+300"/>
+        <source>No photos on %1</source>
+        <translation>No photos on %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>%1 photo on %2</source>
+        <translation>%1 photo on %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 photos on %2</source>
+        <translation>%1 photos on %2</translation>
+    </message>
+    <message>
+        <location line="+197"/>
+        <source>Less</source>
+        <translation>Less</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>More</source>
+        <translation>More</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>No capture dates</source>
+        <translation>No capture dates</translation>
+    </message>
+</context>
+<context>
+    <name>DateFilterSection</name>
+    <message>
+        <location filename="../qml/DateFilterSection.qml" line="+26"/>
+        <source>Calendar</source>
+        <translation>Calendar</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Activity</source>
+        <translation>Activity</translation>
     </message>
 </context>
 <context>
@@ -1660,58 +1955,86 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorAdjustmentHeader</name>
+    <message>
+        <location filename="../qml/EditorAdjustmentHeader.qml" line="+140"/>
+        <source>Add Radial Mask</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Add Gradient Mask</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>EditorAdjustmentStack</name>
     <message>
-        <location filename="../qml/EditorAdjustmentStack.qml" line="+134"/>
-        <location line="+61"/>
+        <location filename="../qml/EditorAdjustmentStack.qml" line="+51"/>
+        <location line="+126"/>
         <source>Look</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-60"/>
-        <location line="+62"/>
+        <location line="-124"/>
+        <location line="+125"/>
         <source>LUT</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-61"/>
-        <location line="+63"/>
+        <location line="-123"/>
+        <location line="+124"/>
         <source>Display Transform</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-62"/>
-        <location line="+65"/>
+        <location line="-121"/>
+        <location line="+122"/>
         <source>Geometry</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-64"/>
-        <location line="+67"/>
+        <location line="-120"/>
+        <location line="+121"/>
         <source>RAW Decode</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-66"/>
-        <location line="+54"/>
+        <location line="-132"/>
+        <location line="+134"/>
         <source>Tone</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-48"/>
+        <location line="-121"/>
+        <location line="+120"/>
+        <source>Mask</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Select an image to enable adjustments</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+2"/>
         <source>No adjustments yet</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Post Processing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Compare</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>EditorCloseConfirmDialog</name>
     <message>
-        <location filename="../qml/EditorCloseConfirmDialog.qml" line="+85"/>
+        <location filename="../qml/EditorCloseConfirmDialog.qml" line="+86"/>
         <source>Unsaved Edits</source>
         <translation>Unsaved Edits</translation>
     </message>
@@ -1739,6 +2062,141 @@ Original source files on disk will be kept.</source>
         <location line="+17"/>
         <source>Save</source>
         <translation>Save</translation>
+    </message>
+</context>
+<context>
+    <name>EditorPostProcessPanel</name>
+    <message>
+        <location filename="../qml/EditorPostProcessPanel.qml" line="+109"/>
+        <source>Clarity</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Sharpen</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Film Grain</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Halation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Strength</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <source>Diffusion</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <location line="+9"/>
+        <source>Detail</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Texture</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Post Processing</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorComparisonPanel</name>
+    <message>
+        <source>A</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>B</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Compare</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Complete images</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Divider</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Left/right</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Top/bottom</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Swap A and B</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Comparison is unavailable for HDR output.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rendering comparison images</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Both images use the current demosaic, highlight reconstruction, and lens settings. Each image keeps its own white balance and adjustments. Unadjusted is the imported image with these settings.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorComparisonView</name>
+    <message>
+        <source>A</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>B</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Comparison divider</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Move left or right to reveal A or B.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Move up or down to reveal A or B.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The comparison images could not be loaded.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rendering comparison images</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -2017,11 +2475,24 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorEndpointNodeDelegate</name>
+    <message>
+        <location filename="../qml/EditorEndpointNodeDelegate.qml" line="+27"/>
+        <source>Develop cannot be renamed or deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>DRT/Post cannot be renamed or deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>EditorFilmstrip</name>
     <message>
-        <location filename="../qml/EditorFilmstrip.qml" line="+241"/>
+        <location filename="../qml/EditorFilmstrip.qml" line="+296"/>
         <location line="+32"/>
-        <location line="+264"/>
+        <location line="+302"/>
         <source>(unnamed)</source>
         <translation type="unfinished">(unnamed)</translation>
     </message>
@@ -2051,12 +2522,12 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+283"/>
+        <location line="+300"/>
         <source> | Rating %1/5</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-211"/>
+        <location line="-227"/>
         <source>No images in filmstrip</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2066,18 +2537,18 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+108"/>
+        <location line="+124"/>
         <source>Source file was moved or deleted</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-193"/>
-        <location line="+202"/>
+        <location line="-209"/>
+        <location line="+218"/>
         <source>Image %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-276"/>
+        <location line="-293"/>
         <source>Editing %1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2087,7 +2558,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+277"/>
+        <location line="+294"/>
         <source>Current image</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2100,6 +2571,13 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>Open image</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n star</numerusform>
+            <numerusform>%n stars</numerusform>
+        </translation>
     </message>
 </context>
 <context>
@@ -2128,12 +2606,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorGeometryPanel</name>
     <message>
-        <location filename="../qml/EditorGeometryPanel.qml" line="+71"/>
-        <source>Auto (metadata)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+463"/>
+        <location filename="../qml/EditorGeometryPanel.qml" line="+409"/>
         <source>Crop X</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2173,27 +2646,17 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+11"/>
-        <source>Enable Lens Calibration</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Lens Brand</source>
-        <translation type="unfinished">Lens Brand</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Lens Model</source>
-        <translation type="unfinished">Lens Model</translation>
-    </message>
-    <message>
-        <location line="+172"/>
+        <location line="+160"/>
         <source>Geometry</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+10"/>
+        <source>Geometry applies to the whole image.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Source aspect %1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2212,21 +2675,11 @@ Original source files on disk will be kept.</source>
         <source>Reset crop and rotation</source>
         <translation type="unfinished"></translation>
     </message>
-    <message>
-        <location line="+11"/>
-        <source>Lens Calibration</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+51"/>
-        <source>Reset lens calibration</source>
-        <translation type="unfinished"></translation>
-    </message>
 </context>
 <context>
     <name>EditorHistoryTransactionEntry</name>
     <message>
-        <location filename="../qml/EditorHistoryTransactionEntry.qml" line="+65"/>
+        <location filename="../qml/EditorHistoryTransactionEntry.qml" line="+61"/>
         <source>Earlier</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2251,61 +2704,30 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+55"/>
+        <location line="+54"/>
         <source>Commit %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+40"/>
-        <source>Merge</source>
-        <translation type="unfinished">Merge</translation>
-    </message>
-    <message>
-        <location line="+2"/>
+        <location line="+41"/>
         <source>Adjustment</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+47"/>
-        <source>2nd %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Resolved adjustments</source>
+        <location line="+64"/>
+        <source>Agent</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>EditorHistoryTransactionsPanel</name>
     <message>
-        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+59"/>
-        <source>Adjustment transfer is unavailable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <location line="+28"/>
-        <source>Merge completed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="-23"/>
-        <source>Merge cancelled</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+53"/>
         <source>Adjustments pasted</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Merge could not start</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+28"/>
+        <location line="+20"/>
         <source>Edit History</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2321,22 +2743,19 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+27"/>
+        <location line="+1"/>
         <source>Undo edit</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+17"/>
+        <location line="+1"/>
         <source>Redo edit</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>Paste adjustments as a new Version</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Merge adjustments into this Version</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -2353,38 +2772,33 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorLookPanel</name>
     <message>
-        <location filename="../qml/EditorLookPanel.qml" line="+212"/>
+        <location filename="../qml/EditorLookPanel.qml" line="+720"/>
+        <source>White Balance</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>This white balance is a CAT02 chromatic adaptation in the grading color space. It assumes the image is already balanced to the ACES AP1 white point (about 6000 K), so the default is no change. It does not read the camera&apos;s data: use RAW Decode white balance to correct the capture, and this control for creative warming or cooling, including on JPEG and other non-RAW images. The same Kelvin value can look different here than on the RAW Decode page.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorLookPanel.qml" line="+186"/>
         <source>Saturation</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Vibrance</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+23"/>
-        <source>Clarity</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>Sharpen</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Film Grain</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Halation</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+320"/>
+        <location line="+287"/>
         <source>Master</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Changes the brightness of this tonal range, in stops (EV).</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -2394,36 +2808,6 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+9"/>
-        <source>White Balance</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>As Shot</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Custom</source>
-        <translation type="unfinished">Custom</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>White balance is unavailable for this image.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Temperature</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+20"/>
-        <source>Tint</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+23"/>
         <source>Color</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2464,17 +2848,42 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+14"/>
-        <source>Gamma</source>
+        <source>Shadows (Lift)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+12"/>
-        <source>Lift</source>
+        <location line="+1"/>
+        <source>Changes mostly the color and brightness of the shadows. The effect is largest near black, and the highlights stay almost the same.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+8"/>
-        <source>Gain</source>
+        <location line="+1"/>
+        <source>Midtones (Gamma)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Changes mostly the midtones. The effect is largest near middle grey, and the darkest and brightest areas stay almost the same.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Highlights (Gain)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Changes mostly the color and brightness of the highlights. The effect is largest near white, and the shadows stay almost the same.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Offset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Changes the color and brightness of all tones by the same amount, as an exposure change per color channel.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -2482,204 +2891,553 @@ Original source files on disk will be kept.</source>
         <source>Reset wheels</source>
         <translation type="unfinished"></translation>
     </message>
-    <message>
-        <location line="+10"/>
-        <source>Detail</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+29"/>
-        <source>Texture</source>
-        <translation type="unfinished"></translation>
-    </message>
 </context>
 <context>
-    <name>EditorMergeConflictCard</name>
+    <name>EditorMaskGroupDelegate</name>
     <message>
-        <location filename="../qml/EditorMergeConflictCard.qml" line="+40"/>
-        <source>HSL</source>
+        <location filename="../qml/EditorMaskGroupDelegate.qml" line="+88"/>
+        <source>Unlock %1 before deleting</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Output Transform</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>RAW Decode</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Color Temperature</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Crop &amp; Rotate</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Adjustment</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <location line="+15"/>
-        <source>No value</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="-13"/>
-        <source>On</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Off</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Empty</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+39"/>
-        <source>RESOLVED</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>CONFLICT</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+52"/>
-        <source>CURRENT (OURS)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Keep Current</source>
+        <location line="+223"/>
+        <source>Mask Group</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Use Current value for %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+44"/>
-        <source>INCOMING (THEIRS)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Use Incoming</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Use Incoming value for %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+43"/>
-        <source>MERGED (PREVIEW)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Pending Selection</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Waiting for resolution...</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
-    <name>EditorMergeDialog</name>
-    <message>
-        <location filename="../qml/EditorMergeDialog.qml" line="+176"/>
-        <source>Merge Conflicts</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Cancel</source>
-        <translation type="unfinished">Cancel</translation>
-    </message>
-    <message>
-        <location line="+34"/>
-        <source>Complete</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+81"/>
-        <source>No merge conflicts to resolve</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+25"/>
-        <source>Use All Current</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+33"/>
-        <source>Use All Incoming</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
-    <name>EditorMergeJsonValue</name>
-    <message>
-        <location filename="../qml/EditorMergeJsonValue.qml" line="+35"/>
-        <location line="+31"/>
-        <location line="+6"/>
-        <location line="+7"/>
-        <source>Value</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="-36"/>
-        <source>null</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>On</source>
+        <source>expanded</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+0"/>
-        <source>Off</source>
+        <source>collapsed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+10"/>
-        <source>Empty</source>
+        <location line="+2"/>
+        <source>Mask</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>deletion locked</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+3"/>
-        <source>No value</source>
+        <source>disabled</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+49"/>
-        <source>+%1 more fields</source>
+        <location line="+3"/>
+        <source>selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Press Left to collapse</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Press Right to expand</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Drag to reorder or press Ctrl+Up or Ctrl+Down</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+194"/>
+        <source>Unlock %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lock %1 against deletion</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Delete %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+70"/>
+        <source>No masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorMaskGroupMaskRow</name>
+    <message>
+        <location filename="../qml/EditorMaskGroupMaskRow.qml" line="+42"/>
+        <source>Gradient</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Radial</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Mask</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+133"/>
+        <location line="+1"/>
+        <source>%1% opacity</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-132"/>
+        <source>disabled</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+129"/>
+        <source>Off</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Delete %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>inverted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Inverted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Turn off Invert for %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invert %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorMaskGroupsPanel</name>
+    <message>
+        <location filename="../qml/EditorMaskGroupsPanel.qml" line="+55"/>
+        <source>Open an image to edit Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Finish the node graph first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Updating node graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>The session is not editable</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+314"/>
+        <location line="+7"/>
+        <source>Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Add Mask Group</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Locate unfinished node %1 in Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+259"/>
+        <location line="+8"/>
+        <source>Select an image to edit Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+8"/>
+        <source>Loading Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+8"/>
+        <source>No Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorMaskRangeSection</name>
+    <message>
+        <location filename="../qml/EditorMaskRangeSection.qml" line="+32"/>
+        <source>Luminance Range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Mask luminance range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Hue Range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Mask hue range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Show selection</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorMasksContextPanel</name>
+    <message>
+        <location filename="../qml/EditorMasksContextPanel.qml" line="+79"/>
+        <source>Mask</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Draw on the photograph to create the Mask.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Select a Mask in the Node drawer or choose a Mask tool.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Mask name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Enabled</source>
+        <translation type="unfinished">Enabled</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Invert</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Opacity</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask opacity</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <location line="+100"/>
+        <location line="+28"/>
+        <location line="+56"/>
+        <location line="+28"/>
+        <location line="+27"/>
+        <source>%1 percent</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-232"/>
+        <source>Position</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Mask position. Arrow keys move; Shift steps faster.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+53"/>
+        <source>Arrow keys move · Shift ×10</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Horizontal radius</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask horizontal radius</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Vertical radius</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask vertical radius</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Rotation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask rotation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>%1 degrees</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Inner feather</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask inner feather</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Outer feather</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask outer feather</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Transition width</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask transition width</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Confirm</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodeDelegate</name>
+    <message>
+        <location filename="../qml/EditorNodeDelegate.qml" line="+41"/>
+        <source>Locked against deletion</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Masks expanded</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Masks collapsed</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodeMaskDrawer</name>
+    <message>
+        <location filename="../qml/EditorNodeMaskDrawer.qml" line="+114"/>
+        <source>Collapse Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Expand Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+44"/>
+        <source>Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodeMaskTypeRow</name>
+    <message>
+        <location filename="../qml/EditorNodeMaskTypeRow.qml" line="+21"/>
+        <source>Gradient</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Radial</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+95"/>
+        <source>Delete %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodePortDelegate</name>
+    <message>
+        <location filename="../qml/EditorNodePortDelegate.qml" line="+19"/>
+        <source>Output</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Input</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodesPanel</name>
+    <message>
+        <location filename="../qml/EditorNodesPanel.qml" line="+434"/>
+        <location line="+7"/>
+        <source>Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <location line="+1"/>
+        <source>Add Color Grade</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Color Grade name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+241"/>
+        <location line="+1"/>
+        <source>Rename Color Grade</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-214"/>
+        <source>Accept Rename</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <location line="+6"/>
+        <location line="+98"/>
+        <source>Updating node graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-88"/>
+        <source>Select a destination node and press Enter</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+41"/>
+        <location line="+8"/>
+        <source>Select an image to edit nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+8"/>
+        <source>Loading node graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Nodes graph, connecting</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Nodes graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+90"/>
+        <location line="+1"/>
+        <source>Fit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Delete Selected Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Delete Color Grade</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorCameraProfileSection</name>
+    <message>
+        <location filename="../qml/EditorCameraProfileSection.qml" line="+59"/>
+        <source>Camera Profile</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Set a DCP folder in Settings &gt; LUTs and Color Management.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The DCP folder has no profile of this camera.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>EditorRawDecodePanel</name>
     <message>
-        <location filename="../qml/EditorRawDecodePanel.qml" line="+22"/>
+        <location filename="../qml/EditorRawDecodePanel.qml" line="+35"/>
         <source>Legacy</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2694,19 +3452,144 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+89"/>
-        <location line="+10"/>
+        <location line="+321"/>
+        <location line="+107"/>
         <source>RAW Decode</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+22"/>
+        <location line="+33"/>
         <source>Method</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+12"/>
         <source>Enable Highlight Reconstruction</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-403"/>
+        <source>Auto (metadata)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+248"/>
+        <source>Lens Calibration</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Auto-detect lens</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Manual selection required</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+45"/>
+        <source>Reset lens calibration</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+90"/>
+        <source>Enable Lens Calibration</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Lens Brand</source>
+        <translation type="unfinished">Lens Brand</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Lens Model</source>
+        <translation type="unfinished">Lens Model</translation>
+    </message>
+    <message>
+        <source>Input</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Input Color</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Input Profile</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Auto (from file)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>sRGB</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Display P3</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Adobe RGB</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rec.2020</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>ProPhoto</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Linear Rec.709</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>embedded ICC</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>embedded ICC, converted on import</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>PNG cICP</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>PNG sRGB chunk</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>PNG gamma and chromaticities</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>EXR chromaticities</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>EXR ACES container</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>EXIF Adobe RGB tag</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>no profile, assumed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Scene linear</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Display referred</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -2764,37 +3647,37 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorTonePanel</name>
     <message>
-        <location filename="../qml/EditorTonePanel.qml" line="+137"/>
+        <location filename="../qml/EditorTonePanel.qml" line="+130"/>
         <source>Exposure</source>
         <translation type="unfinished">Exposure</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Contrast</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Highlights</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Shadows</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Whites</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Blacks</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <location line="+148"/>
         <source>Tone Curve</source>
         <translation type="unfinished"></translation>
@@ -2814,12 +3697,13 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorVersionsPanel</name>
     <message>
-        <location filename="../qml/EditorVersionsPanel.qml" line="+114"/>
+        <location filename="../qml/EditorVersionsPanel.qml" line="+132"/>
+        <location line="+176"/>
         <source>Version %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="-138"/>
         <source>Version operation failed</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2829,7 +3713,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+106"/>
+        <location line="+118"/>
         <source>Versions</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2840,18 +3724,19 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+16"/>
+        <location line="+2"/>
         <source>Fork new version from root</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+25"/>
         <location line="+28"/>
-        <location line="+207"/>
+        <location line="+209"/>
         <source>Rename Version</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-234"/>
+        <location line="-236"/>
         <location line="+29"/>
         <source>Branch from current</source>
         <translation type="unfinished"></translation>
@@ -2884,12 +3769,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+24"/>
-        <location line="+169"/>
+        <location line="+171"/>
         <source>Version checkout is unavailable</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-104"/>
+        <location line="-105"/>
         <source>Active Version</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2899,13 +3784,13 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+40"/>
+        <location line="+41"/>
         <source>Commit %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Commit image root</source>
+        <source>Image root</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -2918,11 +3803,60 @@ Original source files on disk will be kept.</source>
         <source>No versions yet</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Compare</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Compare Versions</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorWhiteBalanceSection</name>
+    <message>
+        <location filename="../qml/EditorWhiteBalanceSection.qml" line="+45"/>
+        <source>White Balance</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>As Shot</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Custom</source>
+        <translation type="unfinished">Custom</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>White balance is unavailable for this image.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>RAW white balance sets the scene illuminant from the camera&apos;s own color data before the image enters the grading color space. As Shot uses the camera&apos;s recorded white balance. The Look page white balance is a separate creative adjustment applied after this one.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorWhiteBalanceSliders</name>
+    <message>
+        <location filename="../qml/EditorWhiteBalanceSliders.qml" line="+34"/>
+        <source>Temperature</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Tint</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>EditorWorkspace</name>
     <message>
-        <location filename="../qml/EditorWorkspace.qml" line="+124"/>
+        <location filename="../qml/EditorWorkspace.qml" line="+133"/>
         <source>Editor viewport</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2949,7 +3883,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+77"/>
+        <location line="+89"/>
         <source>Preparing image viewport</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2968,11 +3902,19 @@ Original source files on disk will be kept.</source>
         <source>FIT</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Compare</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Compare before and after</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>EditorWorkspaceNavigation</name>
     <message>
-        <location filename="../qml/EditorWorkspaceNavigation.qml" line="+142"/>
+        <location filename="../qml/EditorWorkspaceNavigation.qml" line="+148"/>
         <source>Library</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2985,12 +3927,12 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorWorkspaceRail</name>
     <message>
-        <location filename="../qml/EditorWorkspaceRail.qml" line="+37"/>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+38"/>
         <source>Resolve the editor save first</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+164"/>
+        <location line="+195"/>
         <source>Hide Edit History</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3010,9 +3952,54 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+20"/>
+        <source>Hide Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Show Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Hide Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Show Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location line="+16"/>
         <source>Background Tasks</source>
         <translation type="unfinished">Background Tasks</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>History</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Versions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Tasks</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -3454,15 +4441,6 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
-    <name>ExportQueueState</name>
-    <message>
-        <location filename="../qml/ExportQueueState.qml" line="+29"/>
-        <location line="+98"/>
-        <source>(unnamed)</source>
-        <translation type="unfinished">(unnamed)</translation>
-    </message>
-</context>
-<context>
     <name>FolderImportConfirmDialog</name>
     <message>
         <location filename="../qml/FolderImportConfirmDialog.qml" line="+84"/>
@@ -3484,165 +4462,47 @@ Original source files on disk will be kept.</source>
         <source>Import %1 File(s)</source>
         <translation type="unfinished"></translation>
     </message>
-</context>
-<context>
-    <name>GlobalSearchDialog</name>
     <message>
-        <location filename="../qml/GlobalSearchDialog.qml" line="+928"/>
-        <source>Suggestion</source>
-        <translation>Suggestion</translation>
-    </message>
-    <message>
-        <location line="-228"/>
-        <source>Search settings ▾</source>
-        <translation>Search settings ▾</translation>
-    </message>
-    <message>
-        <location line="-468"/>
-        <source>%1 matches</source>
+        <source>File types</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>0 of %1 matches</source>
+        <source>RAW</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+4"/>
-        <source>%1-%2 of %3 matches</source>
+        <source>JPEG</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+427"/>
-        <source>Search photos, cameras, lenses, dates...</source>
+        <source>TIFF</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+66"/>
-        <source>Search settings — choose which fields the search scans, or enable natural-language search</source>
-        <translation>Search settings — choose which fields the search scans, or enable natural-language search</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>Search</source>
-        <translation type="unfinished">Search</translation>
-    </message>
-    <message>
-        <location line="+64"/>
-        <source>Search conditions</source>
-        <translation>Search conditions</translation>
-    </message>
-    <message>
-        <location line="+19"/>
-        <source>Filename</source>
-        <translation>Filename</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>EXIF info</source>
-        <translation>EXIF info</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>AI description</source>
-        <translation>AI description</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>AI tags</source>
-        <translation>AI tags</translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Natural language search</source>
-        <translation>Natural language search</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Natural language search — use the CLIP model to search by meaning (Enter or Search button to run). Mutually exclusive with the field filters above.</source>
-        <translation>Natural language search — use the CLIP model to search by meaning (Enter or Search button to run). Mutually exclusive with the field filters above.</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Results</source>
+        <source>PNG</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+29"/>
-        <source>Active: %1</source>
+        <source>OpenEXR</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+39"/>
-        <source>No recent suggestions</source>
+        <source>Other</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+55"/>
-        <source>Load previous</source>
+        <source>%1 (%2)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+13"/>
-        <source>(unnamed)</source>
-        <translation type="unfinished">(unnamed)</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>%1  |  %2</source>
+        <source>Files of other types are skipped.</source>
         <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Rating %1/5</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+34"/>
-        <source>No matches</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+33"/>
-        <source>Load more</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+48"/>
-        <source>Source file is unavailable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+140"/>
-        <source>Preview image failed to load</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+80"/>
-        <source>%1  -  %2</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="-985"/>
-        <source>Query is too long for natural language search</source>
-        <translation>Query is too long for natural language search</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Natural language search is not available yet</source>
-        <translation>Natural language search is not available yet</translation>
-    </message>
-    <message>
-        <location line="-157"/>
-        <location line="+159"/>
-        <source>Press Enter or click Search for natural language search</source>
-        <translation>Press Enter or click Search for natural language search</translation>
     </message>
 </context>
 <context>
     <name>ImageActionsController</name>
     <message>
-        <location filename="../qml/ImageActionsController.qml" line="+61"/>
+        <location filename="../qml/ImageActionsController.qml" line="+62"/>
         <location line="+18"/>
         <location line="+88"/>
         <location line="+58"/>
@@ -3738,7 +4598,7 @@ Original source files on disk will be kept.</source>
         <translation>Unrated</translation>
     </message>
     <message>
-        <location line="+162"/>
+        <location line="+163"/>
         <source>Image actions</source>
         <translation>Image actions</translation>
     </message>
@@ -3805,6 +4665,34 @@ Original source files on disk will be kept.</source>
         <source>Cancel</source>
         <translation type="unfinished">Cancel</translation>
     </message>
+    <message>
+        <source>%1 file(s) skipped because their type is not selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 file(s) skipped because they are not supported images</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cancel import</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Canceling Import</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Saving Photos</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>RAW photos: %1 of %2 imported</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Other photos: %1 of %2 imported</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>InspectorPanel</name>
@@ -3827,20 +4715,88 @@ Original source files on disk will be kept.</source>
 <context>
     <name>InspectorToggleButton</name>
     <message>
-        <location filename="../qml/InspectorToggleButton.qml" line="+29"/>
+        <location filename="../qml/InspectorToggleButton.qml" line="+26"/>
+        <source>Hide editor panels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show editor panels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Collapse Inspector</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+0"/>
+        <location line="+1"/>
         <source>Expand Inspector</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>KeyboardSettingsPanel</name>
+    <message>
+        <location filename="../qml/KeyboardSettingsPanel.qml" line="+56"/>
+        <source>Select a shortcut field, then type the new input. Enter or Escape saves, Tab cancels, plain Delete clears the binding.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+113"/>
+        <source>Presses and releases a single modifier key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Clear shortcut for %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear shortcut</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Restore Default</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Restore default shortcut for %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Restores %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Restore default: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Press and release Shift, Ctrl, Alt, or Meta to choose it.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Type the new shortcut keys.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Conflicting scope: %1</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>LUTPanel</name>
     <message>
-        <location filename="../qml/LUTPanel.qml" line="+114"/>
+        <location filename="../qml/LUTPanel.qml" line="+115"/>
         <source>No LUTs found</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3855,7 +4811,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+305"/>
+        <location line="+328"/>
         <source>LUT</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3924,14 +4880,77 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>LensCatalogPicker</name>
+    <message>
+        <location filename="../qml/LensCatalogPicker.qml" line="+81"/>
+        <source>Lens</source>
+        <translation type="unfinished">Lens</translation>
+    </message>
+    <message>
+        <location line="+301"/>
+        <source>Select lens</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Auto</source>
+        <translation type="unfinished">Auto</translation>
+    </message>
+    <message>
+        <location line="+106"/>
+        <source>Brand</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <location line="+122"/>
+        <source>All brands</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-48"/>
+        <source>Search brands</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+177"/>
+        <source>Search lenses</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+144"/>
+        <source>No lenses match</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>LibraryInspectorActions</name>
+    <message>
+        <source>Add to Export Queue (%1)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Exporting...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Export 1 File</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Export %1 Files</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>LibraryWorkspace</name>
     <message>
-        <location filename="../qml/LibraryWorkspace.qml" line="+250"/>
+        <location filename="../qml/LibraryWorkspace.qml" line="+255"/>
         <source>Browser</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+105"/>
+        <location line="+132"/>
         <source>No Photos Yet</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3956,35 +4975,107 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished">Load Project</translation>
     </message>
     <message>
-        <location line="+70"/>
-        <source>Add to Queue</source>
+        <source>Library query failed: %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+31"/>
-        <source>Exporting...</source>
+        <source>Updating</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Export 1 File</source>
+        <source>Retry</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <source>Retry the library query</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No Matching Photos</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Change the filters or the search to show photos.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show more photos</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show larger photos</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>LockedNodeMaskPromptDialog</name>
+    <message>
+        <source>Add Mask to a Locked Node?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The default adjustment node applies Alcedo&apos;s default adjustments, so it is locked. A Mask drawn on it also limits those default adjustments to the masked area, which differs from traditional editing software.
+
+Create a new layer above it and draw the Mask there?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Don&apos;t ask again</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>You can change this later in Settings &gt; Default Behavior.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>New Layer, Then Draw</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Draw on Current Node</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>LutSettingsPanel</name>
+    <message numerus="yes">
+        <location filename="../qml/LutSettingsPanel.qml" line="+1"/>
+        <source>The folder already holds files, so its LUTs become the library. The %n LUT(s) in the current folder are not moved and stay where they are.</source>
+        <translation>
+            <numerusform>The folder already holds files, so its LUTs become the library. The %n LUT in the current folder is not moved and stays where it is.</numerusform>
+            <numerusform>The folder already holds files, so its LUTs become the library. The %n LUTs in the current folder are not moved and stay where they are.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <location line="+1"/>
-        <source>Export %1 Files</source>
-        <translation type="unfinished"></translation>
+        <source>%n LUT(s)</source>
+        <translation>
+            <numerusform>%n LUT</numerusform>
+            <numerusform>%n LUTs</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n file(s) changed after copying and stayed in the previous folder: %1</source>
+        <translation>
+            <numerusform>%n file changed after copying and stayed in the previous folder: %1</numerusform>
+            <numerusform>%n files changed after copying and stayed in the previous folder: %1</numerusform>
+        </translation>
     </message>
 </context>
 <context>
     <name>Main</name>
     <message>
-        <location filename="../qml/Main.qml" line="+22"/>
+        <location filename="../qml/Main.qml" line="+48"/>
         <source>Alcedo Studio</source>
         <translation type="unfinished">Alcedo Studio</translation>
     </message>
     <message>
-        <location line="+225"/>
+        <location line="+292"/>
         <source>Could not save edits. Resolve the save error, then quit again.</source>
         <translation>Could not save edits. Resolve the save error, then quit again.</translation>
     </message>
@@ -4012,7 +5103,7 @@ Original source files on disk will be kept.</source>
         <translation>Adobe DNG Converter executable</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+32"/>
         <source>No converter selected</source>
         <translation>No converter selected</translation>
     </message>
@@ -4047,7 +5138,7 @@ Original source files on disk will be kept.</source>
         <translation>Directory</translation>
     </message>
     <message>
-        <location line="+91"/>
+        <location line="+93"/>
         <source>%1 / %2 converted files reimported, %3 failed</source>
         <translation>%1 / %2 converted files reimported, %3 failed</translation>
     </message>
@@ -4068,7 +5159,7 @@ Original source files on disk will be kept.</source>
         <translation>Choose converter &amp; Continue</translation>
     </message>
     <message>
-        <location line="-295"/>
+        <location line="-297"/>
         <source>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</source>
         <translation>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</translation>
     </message>
@@ -4076,7 +5167,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>ProjectLoadingOverlay</name>
     <message>
-        <location filename="../qml/ProjectLoadingOverlay.qml" line="+35"/>
+        <location filename="../qml/ProjectLoadingOverlay.qml" line="+80"/>
         <source>Loading Project</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4089,7 +5180,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>QObject</name>
     <message>
-        <location filename="../album_backend/thumbnail_manager.cpp" line="+155"/>
+        <location filename="../album_backend/thumbnail_manager.cpp" line="+153"/>
         <location line="+106"/>
         <source>Source file was moved or deleted: %1</source>
         <translation type="unfinished"></translation>
@@ -4136,6 +5227,13 @@ Original source files on disk will be kept.</source>
         <location line="+2"/>
         <location line="+7"/>
         <source>Saving editor changes</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>SavedAiKeysReminder</name>
+    <message>
+        <source>Alcedo Studio still holds AI keys that you saved for Advanced Content Analysis, which this version removes. Delete them in Settings &gt; Saved AI Keys.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -4280,12 +5378,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+16"/>
-        <location line="+258"/>
+        <location line="+260"/>
         <source>Cancel</source>
         <translation type="unfinished">Cancel</translation>
     </message>
     <message>
-        <location line="-258"/>
+        <location line="-260"/>
         <source>Generate</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4311,12 +5409,12 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+71"/>
+        <location line="+73"/>
         <source>Source</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-352"/>
+        <location line="-354"/>
         <source>HF Mirror</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4336,7 +5434,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished">Custom</translation>
     </message>
     <message>
-        <location line="+374"/>
+        <location line="+376"/>
         <source>https://example.com</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4371,7 +5469,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-443"/>
+        <location line="-445"/>
         <source>Always</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4386,7 +5484,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+537"/>
+        <location line="+540"/>
         <source>Activating…</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4424,7 +5522,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+160"/>
+        <location filename="../qml/SettingDialog.qml" line="+164"/>
         <source>Settings applied</source>
         <translation>Settings applied</translation>
     </message>
@@ -4434,56 +5532,56 @@ Original source files on disk will be kept.</source>
         <translation>Setting</translation>
     </message>
     <message>
-        <location line="-185"/>
-        <location line="+199"/>
-        <location line="+166"/>
+        <location line="-188"/>
+        <location line="+209"/>
+        <location line="+178"/>
         <source>Language</source>
         <translation>Language</translation>
     </message>
     <message>
-        <location line="-362"/>
-        <location line="+197"/>
+        <location line="-384"/>
+        <location line="+207"/>
         <source>Theme and color</source>
         <translation>Theme and color</translation>
     </message>
     <message>
-        <location line="-194"/>
-        <location line="+195"/>
+        <location line="-204"/>
+        <location line="+205"/>
         <source>Cache</source>
         <translation>Cache</translation>
     </message>
     <message>
-        <location line="-192"/>
-        <location line="+193"/>
+        <location line="-202"/>
+        <location line="+203"/>
         <source>Local Content Recognition</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-190"/>
-        <location line="+191"/>
+        <location line="-200"/>
+        <location line="+201"/>
         <source>Advanced Content Analysis</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
-        <location line="-183"/>
-        <location line="+186"/>
+        <location line="-190"/>
+        <location line="+194"/>
         <source>About</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-191"/>
-        <location line="+189"/>
+        <location line="-202"/>
+        <location line="+199"/>
         <source>Acceleration</source>
         <translation>Acceleration</translation>
     </message>
     <message>
-        <location line="-186"/>
-        <location line="+187"/>
+        <location line="-196"/>
+        <location line="+197"/>
         <source>Updates</source>
         <translation>Updates</translation>
     </message>
     <message>
-        <location line="+322"/>
+        <location line="+339"/>
         <source>Image processing backend</source>
         <translation>Image processing backend</translation>
     </message>
@@ -4498,7 +5596,7 @@ Original source files on disk will be kept.</source>
         <translation>Restart Alcedo yourself to apply this backend change.</translation>
     </message>
     <message>
-        <location line="-538"/>
+        <location line="-562"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4513,19 +5611,25 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="-7"/>
+        <location line="+195"/>
+        <source>Keyboard</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-185"/>
         <source>高级内容识别会通过你配置的 Anthropic / OpenAI 兼容提供商，与指定 agent 交互来识别图像内容并进行评分。数据保留、隐私与合规政策请咨询你使用的 AI 提供商；Alcedo Studio 不会保留任何内容。
 
 这个设置界面的灵感来自 ccswitch，使用方式也类似。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+227"/>
+        <location line="+242"/>
         <source>Update available</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+99"/>
+        <location line="+103"/>
         <source>Application language</source>
         <translation>Application language</translation>
     </message>
@@ -4540,21 +5644,100 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Theme</translation>
     </message>
     <message>
-        <location line="+235"/>
+        <location line="+263"/>
         <source>Done</source>
         <translation>Done</translation>
+    </message>
+    <message>
+        <source>Language / Theme</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Default Behavior</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Adding a Mask on a locked node</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ask every time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Create a new layer, then draw</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Draw on the current node</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The default adjustment node applies Alcedo&apos;s default adjustments, so it is locked. A Mask drawn on it also limits those defaults to the masked area. Layers you add yourself are not locked and are never affected by this setting.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Saved AI Keys</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>ShellSignals</name>
     <message>
-        <location filename="../qml/ShellSignals.qml" line="+136"/>
+        <location filename="../qml/ShellSignals.qml" line="+160"/>
         <source>Imported %1 image(s).</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+23"/>
         <source>Exported %1 image(s).</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>ShortcutCaptureField</name>
+    <message>
+        <location filename="../qml/ShortcutCaptureField.qml" line="+82"/>
+        <source>Unassigned</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Press and release a modifier</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Press shortcut</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+104"/>
+        <source>%1 shortcut</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Shortcut</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Recording. Press and release Shift, Ctrl, Alt, or Meta to choose it. Enter or Escape saves, Tab cancels, plain Delete clears the binding.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Recording. Type the new keys. Enter or Escape saves, Tab cancels, plain Delete clears the binding.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Current shortcut: %1. Press Enter or click to record a new shortcut.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -4569,15 +5752,15 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>StatsCard</name>
     <message>
-        <location filename="../qml/StatsCard.qml" line="+270"/>
+        <location filename="../qml/StatsCard.qml" line="+273"/>
         <location line="+122"/>
-        <location line="+87"/>
+        <location line="+88"/>
         <location line="+163"/>
         <source>No data available</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-287"/>
+        <location line="-288"/>
         <source> more</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4587,7 +5770,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+274"/>
+        <location line="+275"/>
         <source>Show less ▲</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4623,7 +5806,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThumbnailGridView</name>
     <message>
-        <location filename="../qml/ThumbnailGridView.qml" line="+82"/>
+        <location filename="../qml/ThumbnailGridView.qml" line="+83"/>
         <source>Black &amp; White</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4633,7 +5816,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+617"/>
+        <location line="+618"/>
         <location line="+24"/>
         <source>(unnamed)</source>
         <translation type="unfinished">(unnamed)</translation>
@@ -4658,21 +5841,28 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>%1 | Rating %2/5</source>
         <translation type="unfinished"></translation>
     </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n star</numerusform>
+            <numerusform>%n stars</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>TopToolbar</name>
     <message>
-        <location filename="../qml/TopToolbar.qml" line="+42"/>
-        <source>Alcedo</source>
-        <translation type="unfinished">Alcedo</translation>
+        <location filename="../qml/TopToolbar.qml" line="+63"/>
+        <source>Hide collections sidebar</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Studio</source>
-        <translation>Studio</translation>
+        <location line="+1"/>
+        <source>Show collections sidebar</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+24"/>
         <source>File</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4892,19 +6082,189 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>WelcomeCoverMosaic</name>
+    <message>
+        <location filename="../qml/WelcomeCoverMosaic.qml" line="82"/>
+        <source>Project cover</source>
+        <translation>Project cover</translation>
+    </message>
+</context>
+<context>
     <name>WelcomeDialog</name>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="+168"/>
+        <location filename="../qml/WelcomeDialog.qml" line="163"/>
+        <source>CUDA unavailable</source>
+        <translation>CUDA unavailable</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="315"/>
+        <source>Welcome</source>
+        <translation>Welcome</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="338"/>
+        <source>Alcedo Studio</source>
+        <translation>Alcedo Studio</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="341"/>
+        <source>Alcedo</source>
+        <translation>Alcedo</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="357"/>
+        <source>Studio</source>
+        <translation>Studio</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="369"/>
+        <source>Each project is one .alcd file that holds the photo references, the edit history and the versions.</source>
+        <translation>Each project is one .alcd file that holds the photo references, the edit history and the versions.</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="391"/>
+        <source>Open Project…</source>
+        <translation>Open Project…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="402"/>
+        <location line="+103"/>
+        <source>New Project…</source>
+        <translation>New Project…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="472"/>
+        <source>Create your first project</source>
+        <translation>Create your first project</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="483"/>
+        <source>Choose a folder for the project file, then import your photos. Alcedo does not move or change the original photos.</source>
+        <translation>Choose a folder for the project file, then import your photos. Alcedo does not move or change the original photos.</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="515"/>
+        <source>Open Existing Project…</source>
+        <translation>Open Existing Project…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="573"/>
+        <source>Interface language</source>
+        <translation>Interface language</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="669"/>
+        <source>Quit</source>
+        <translation>Quit</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeNewProjectForm</name>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="16"/>
+        <location line="+13"/>
+        <source>Untitled Project</source>
+        <translation>Untitled Project</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="40"/>
+        <location line="+110"/>
+        <source>Select Project Storage Location</source>
+        <translation>Select Project Storage Location</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="52"/>
+        <source>Back</source>
+        <translation>Back</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="62"/>
+        <source>New Project</source>
+        <translation>New Project</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="73"/>
+        <source>Configure your workspace settings.</source>
+        <translation>Configure your workspace settings.</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="94"/>
+        <location line="+22"/>
+        <source>Project Name</source>
+        <translation>Project Name</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="133"/>
+        <source>Storage Location</source>
+        <translation>Storage Location</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="143"/>
+        <source>Select a parent folder...</source>
+        <translation>Select a parent folder...</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="174"/>
+        <source>Create Project</source>
+        <translation>Create Project</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeProjectOverview</name>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="36"/>
+        <source>Continue your last project</source>
+        <translation>Continue your last project</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="129"/>
+        <source>Photos</source>
+        <translation>Photos</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="138"/>
+        <source>Edited</source>
+        <translation>Edited</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="147"/>
+        <source>Capture dates</source>
+        <translation>Capture dates</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="164"/>
+        <source>Continue Editing</source>
+        <translation>Continue Editing</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeProjectPreviewAdapter</name>
+    <message>
+        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="96"/>
+        <source>No capture dates</source>
+        <translation>No capture dates</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="102"/>
+        <location line="+1"/>
+        <source>%1 to %2</source>
+        <translation>%1 to %2</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeRecentProjectList</name>
+    <message>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="25"/>
         <source>Opened recently</source>
         <translation>Opened recently</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="30"/>
         <source>Opened just now</source>
         <translation>Opened just now</translation>
     </message>
     <message numerus="yes">
-        <location line="+3"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="33"/>
         <source>Opened %n minute(s) ago</source>
         <translation>
             <numerusform>Opened %n minute ago</numerusform>
@@ -4912,7 +6272,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         </translation>
     </message>
     <message numerus="yes">
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="38"/>
         <source>Opened %n hour(s) ago</source>
         <translation>
             <numerusform>Opened %n hour ago</numerusform>
@@ -4920,12 +6280,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         </translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="43"/>
         <source>Opened yesterday</source>
         <translation>Opened yesterday</translation>
     </message>
     <message numerus="yes">
-        <location line="+3"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="46"/>
         <location line="+5"/>
         <source>Opened %n day(s) ago</source>
         <translation>
@@ -4934,107 +6294,25 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         </translation>
     </message>
     <message>
-        <location line="-2"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="49"/>
         <source>Opened last week</source>
         <translation>Opened last week</translation>
     </message>
     <message>
-        <location line="-147"/>
-        <location line="+17"/>
-        <source>Untitled Project</source>
-        <translation type="unfinished"></translation>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="56"/>
+        <source>Other recent projects</source>
+        <translation>Other recent projects</translation>
     </message>
     <message>
-        <location line="+14"/>
-        <source>Select Project Storage Location</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>CUDA unavailable</source>
-        <translation>CUDA unavailable</translation>
-    </message>
-    <message>
-        <location line="+209"/>
-        <source>Alcedo</source>
-        <translation type="unfinished">Alcedo</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Studio</source>
-        <translation>Studio</translation>
-    </message>
-    <message>
-        <location line="+17"/>
-        <source>Load Project</source>
-        <translation>Load Project</translation>
-    </message>
-    <message>
-        <location line="+66"/>
-        <location line="+518"/>
-        <source>Create Project</source>
-        <translation>Create Project</translation>
-    </message>
-    <message>
-        <location line="-415"/>
-        <source>Exit Application</source>
-        <translation>Exit Application</translation>
-    </message>
-    <message>
-        <location line="+48"/>
-        <source>Recent Projects</source>
-        <translation>Recent Projects</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Collapse</source>
-        <translation>Collapse</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>View All</source>
-        <translation>View All</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>No recent projects yet</source>
-        <translation>No recent projects yet</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Projects you open or create here will appear in this list.</source>
-        <translation>Projects you open or create here will appear in this list.</translation>
-    </message>
-    <message>
-        <location line="+142"/>
-        <source>New Project</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Configure your workspace settings.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Project Name</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+35"/>
-        <source>Storage Location</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+26"/>
-        <source>Select a parent folder...</source>
-        <translation type="unfinished"></translation>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="75"/>
+        <source>No other recent projects</source>
+        <translation>No other recent projects</translation>
     </message>
 </context>
 <context>
     <name>alcedo::UpdateService</name>
     <message>
-        <location filename="../../../app/update_service.cpp" line="+66"/>
+        <location filename="../../../app/update_service.cpp" line="+67"/>
         <source>%1 (build %2)</source>
         <translation type="unfinished"></translation>
     </message>
@@ -5177,16 +6455,31 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
-    <name>alcedo::ui::AppTheme</name>
+    <name>alcedo::ui::EditorCameraProfileListModel</name>
     <message>
-        <location filename="../app_theme.cpp" line="+1171"/>
-        <source>Alcedo</source>
-        <translation>Alcedo</translation>
+        <location filename="../album_backend/editor_camera_profile_list_model.cpp" line="+155"/>
+        <source>Embedded</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Classic</source>
-        <translation>Classic</translation>
+        <location line="+0"/>
+        <source>Built-in</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::EditorComparisonController</name>
+    <message>
+        <source>Unadjusted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Current working state</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 (working state)</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -5203,9 +6496,145 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>alcedo::ui::EditorNodeController</name>
+    <message>
+        <location filename="../album_backend/editor_node_controller.cpp" line="+461"/>
+        <source>Connect Color Grades into one Develop to DRT path.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The graph snapshot has no nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+74"/>
+        <source>The graph adapter is missing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+9"/>
+        <source>The node graph has no snapshot</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+207"/>
+        <location line="+670"/>
+        <location line="+125"/>
+        <source>No editor session is bound</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-684"/>
+        <source>No node supports the selected adjustment panel</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <location line="+27"/>
+        <location line="+531"/>
+        <source>That node is not in the current graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-435"/>
+        <source>Another node command is active</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+110"/>
+        <location line="+45"/>
+        <location line="+231"/>
+        <location line="+170"/>
+        <source>No editable node graph is available</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-552"/>
+        <source>The node graph is not editable in the current session state</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Finish the node graph before renaming</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Only a Color Grade can be renamed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Color Grade name cannot be empty</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Finish the node graph before changing deletion protection</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Only a Color Grade has editable deletion protection</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <location line="+44"/>
+        <source>Only a Color Grade can be deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-7"/>
+        <source>No node is selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+136"/>
+        <location line="+29"/>
+        <location line="+39"/>
+        <source>Finish the node graph before changing Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-62"/>
+        <location line="+73"/>
+        <source>The node graph has no editable Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-45"/>
+        <source>Only a Color Grade Mask Group can be removed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Only a Color Grade Mask Group can be moved</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>That Mask Group is not in the committed node graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>The Mask Group move did not produce a valid node graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+115"/>
+        <source>Connections must go from an output port to an input port</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>alcedo::ui::ProjectModule</name>
     <message>
-        <location filename="../album_backend/project_module.cpp" line="+390"/>
+        <location filename="../album_backend/project_module.cpp" line="+377"/>
         <source>Select Project Package</source>
         <translation type="unfinished"></translation>
     </message>
@@ -5215,7 +6644,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+10"/>
         <source>Select Parent Folder for New Project</source>
         <translation type="unfinished"></translation>
     </message>
@@ -5228,6 +6657,193 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+0"/>
         <source>Project name</source>
         <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>InspectorFieldActions</name>
+    <message>
+        <source>Ascending</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Descending</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sort photos by %1: %2.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Inside each day, the full time orders the photos.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Equal values inside a day keep the newest time first.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Equal values follow file ID order.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Text sorts by character code, not by language rules.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Select it again to clear the sort.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sort by %1, %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Group</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Group photos by %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Stop grouping photos by %1.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AlbumSectionView</name>
+    <message>
+        <source>Grouped photos</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>(unnamed)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Unlabelled</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n star</numerusform>
+            <numerusform>%n stars</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Loading photo</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Expand all</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Expand all groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Collapse all</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Collapse all groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Expand %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Collapse %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n photo(s)</source>
+        <translation>
+            <numerusform>%n photo</numerusform>
+            <numerusform>%n photos</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ApplicationCloseCoordinator</name>
+    <message>
+        <source>Another close is in progress.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No project is loaded yet.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The editor image cannot be saved.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::LibrarySelection</name>
+    <message>
+        <source>(unnamed)</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ExportQueue</name>
+    <message>
+        <source>(unnamed)</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::LibraryMutationOperations</name>
+    <message>
+        <source>(unnamed)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No valid image was selected.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rating must be between 0 and 5.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>ThumbnailStarRating</name>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n star</numerusform>
+            <numerusform>%n stars</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>ThumbnailEditMark</name>
+    <message numerus="yes">
+        <source>Edited %n minute(s) ago</source>
+        <translation>
+            <numerusform>Edited %n minute ago</numerusform>
+            <numerusform>Edited %n minutes ago</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Edited %n hour(s) ago</source>
+        <translation>
+            <numerusform>Edited %n hour ago</numerusform>
+            <numerusform>Edited %n hours ago</numerusform>
+        </translation>
     </message>
 </context>
 </TS>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Alcedo Create PR"
+  short_description: "Open an Alcedo GitHub pull request with Why/Changes/Verification"
+  default_prompt: "Use $alcedo-create-pr to commit this branch and open a GitHub pull request in the required English format."

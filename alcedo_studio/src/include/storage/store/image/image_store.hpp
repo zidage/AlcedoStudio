@@ -32,8 +32,11 @@ class ImageStore {
   void AddImages(std::span<const std::shared_ptr<Image>> images);
   void RemoveImageById(const image_id_t remove_id);
   void RemoveImagesByIds(std::span<const image_id_t> remove_ids);
+  /// Delete every Image row that no FileImage row references. Such a row belongs to no
+  /// library file, so nothing can display or edit it. Runs one DELETE under the connection
+  /// lock; throws when DuckDB rejects the statement.
+  void RemoveImagesWithoutFileBinding();
   void RemoveImageByType(const ImageType type);
-  void RemoveImageByPath(const std::wstring& path);
 
   void UpdateImage(const std::shared_ptr<Image> image);
   // Bulk-update a batch of images in a single transaction, keyed by image id.

@@ -1,0 +1,64 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <array>
+#include <cstdint>
+
+namespace alcedo {
+
+/**
+ * @brief Per-session execute/skip and source-upload counters for content-aware result cache.
+ *
+ * G7R.5 adds timing and allocation fields. Tests must assert these counters, not ResourceId.
+ */
+struct GpuNodePassStats {
+  std::uint64_t sensor_develop_execute = 0;
+  std::uint64_t sensor_develop_skip    = 0;
+  std::uint64_t geometry_execute       = 0;
+  std::uint64_t geometry_skip          = 0;
+  std::uint64_t camera_color_execute   = 0;
+  std::uint64_t camera_color_skip      = 0;
+  std::uint64_t display_to_ap1_execute       = 0;
+  std::uint64_t display_to_ap1_skip          = 0;
+  std::uint64_t mask_execute           = 0;
+  std::uint64_t mask_skip              = 0;
+  std::uint64_t mask_union_execute     = 0;
+  std::uint64_t mask_union_skip        = 0;
+  std::uint64_t primary_grade_execute  = 0;
+  std::uint64_t primary_grade_skip     = 0;
+  std::uint64_t diffusion_filter_execute = 0;
+  std::uint64_t diffusion_filter_skip    = 0;
+  /// Active diffusion encodes that sampled the published full-frame scatter image.
+  std::uint64_t diffusion_scatter_sample  = 0;
+  /// Active diffusion encodes that built the scatter image from the current render.
+  std::uint64_t diffusion_scatter_rebuild = 0;
+  /// Film print canonical results (Halation, Enlarger flare) that the render sampled as published.
+  std::uint64_t film_canvas_sample           = 0;
+  /// Film print canonical results that the render built from its own pixels.
+  std::uint64_t film_canvas_rebuild          = 0;
+  /// Negative Scan: host reads of the prescan for rule 'frame_auto_colour' (issue 664). Auto colour
+  /// off reads none.
+  std::uint64_t film_scan_prescan_reads      = 0;
+  /// Negative Scan: the auto colour shift of x of the last render with a prescan read, for tests.
+  std::array<double, 3> film_scan_auto_shift{};
+  /// Film print renders that added the grain to the dye amounts of the negative (phase G5).
+  std::uint64_t         film_grain_negative          = 0;
+  std::uint64_t drt_execute            = 0;
+  std::uint64_t drt_skip               = 0;
+  std::uint64_t source_h2d_count       = 0;
+  std::uint64_t source_h2d_bytes       = 0;
+  std::uint64_t result_content_hits         = 0;
+  std::uint64_t result_content_misses       = 0;
+  std::uint64_t result_revision_misses      = 0;
+  std::uint64_t result_representation_misses = 0;
+  std::uint64_t result_policy_bypass        = 0;
+  std::uint64_t persistent_result_lookups   = 0;
+  std::uint64_t persistent_result_publishes = 0;
+
+  void Reset() { *this = GpuNodePassStats{}; }
+};
+
+}  // namespace alcedo

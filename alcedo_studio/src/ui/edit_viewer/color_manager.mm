@@ -15,6 +15,12 @@
 #include <QString>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <vector>
+
+#include "io/image/export_color_profile_config.hpp"
+#include "io/image/export_icc_profile_resolver.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo {
 namespace {
@@ -81,6 +87,11 @@ auto ResolveLinearColorSpace(ColorUtils::ColorSpace encoding_space, bool* exact_
   }
 }
 
+/// CoreGraphics named color space for @p config. Sets @p exact_match to true when its primaries,
+/// white point and transfer curve equal the encoding, and to false when it is the closest
+/// available approximation. CoreGraphics has no named color space for a pure power curve on
+/// Rec.709 or P3-D65 primaries: kCGColorSpaceSRGB and kCGColorSpaceDisplayP3 carry the sRGB
+/// curve, and kCGColorSpaceITUR_709 and kCGColorSpaceITUR_2020 the BT.709 camera curve.
 auto ResolveNamedColorSpace(const ViewerDisplayConfig& config, bool* exact_match) -> CFStringRef {
   if (config.encoding_eotf == ColorUtils::EOTF::LINEAR) {
     return ResolveLinearColorSpace(config.encoding_space, exact_match);
@@ -97,8 +108,7 @@ auto ResolveNamedColorSpace(const ViewerDisplayConfig& config, bool* exact_match
           return kCGColorSpaceITUR_709_PQ;
         case ColorUtils::EOTF::HLG:
           return kCGColorSpaceITUR_709_HLG;
-        case ColorUtils::EOTF::BT1886:
-        case ColorUtils::EOTF::GAMMA_2_2:
+        case ColorUtils::EOTF::SRGB_PIECEWISE:
           return kCGColorSpaceSRGB;
         default:
           if (exact_match) {
@@ -112,7 +122,7 @@ auto ResolveNamedColorSpace(const ViewerDisplayConfig& config, bool* exact_match
           return kCGColorSpaceDisplayP3_PQ;
         case ColorUtils::EOTF::HLG:
           return kCGColorSpaceDisplayP3_HLG;
-        case ColorUtils::EOTF::GAMMA_2_2:
+        case ColorUtils::EOTF::SRGB_PIECEWISE:
           return kCGColorSpaceDisplayP3;
         default:
           if (exact_match) {
@@ -137,9 +147,16 @@ auto ResolveNamedColorSpace(const ViewerDisplayConfig& config, bool* exact_match
         case ColorUtils::EOTF::HLG:
           return kCGColorSpaceITUR_2100_HLG;
         default:
+          if (exact_match) {
+            *exact_match = false;
+          }
           return kCGColorSpaceITUR_2020;
       }
     case ColorUtils::ColorSpace::XYZ:
+      // kCGColorSpaceGenericXYZ holds linear XYZ values.
+      if (exact_match) {
+        *exact_match = false;
+      }
       return kCGColorSpaceGenericXYZ;
     default:
       if (exact_match) {
@@ -147,6 +164,33 @@ auto ResolveNamedColorSpace(const ViewerDisplayConfig& config, bool* exact_match
       }
       return kCGColorSpaceSRGB;
   }
+}
+
+/// Color space built from the ICC profile that export embeds for @p config, or nullptr when
+/// export has no profile for it. Used when CoreGraphics has no named color space with the
+/// encoding's curve, so the preview and an exported file decode the same pixels with the same
+/// curve. Linear encodings return nullptr: their export profiles are CoreGraphics named spaces.
+auto CreateExportProfileColorSpace(const ViewerDisplayConfig& config) -> CGColorSpaceRef {
+  if (config.encoding_eotf == ColorUtils::EOTF::LINEAR) {
+    return nullptr;
+  }
+
+  const ExportColorProfileConfig export_config{config.encoding_space, config.encoding_eotf,
+                                               config.peak_luminance};
+  const std::vector<uint8_t>     icc_bytes =
+      ExportIccProfileResolver::ResolveIccProfileBytes(export_config);
+  if (icc_bytes.empty()) {
+    return nullptr;
+  }
+
+  CFDataRef icc_data =
+      CFDataCreate(kCFAllocatorDefault, icc_bytes.data(), static_cast<CFIndex>(icc_bytes.size()));
+  if (!icc_data) {
+    return nullptr;
+  }
+  CGColorSpaceRef color_space = CGColorSpaceCreateWithICCData(icc_data);
+  CFRelease(icc_data);
+  return color_space;
 }
 
 void LogFallbackColorSpace(const ViewerDisplayConfig& config, CFStringRef resolved_name) {
@@ -157,7 +201,7 @@ void LogFallbackColorSpace(const ViewerDisplayConfig& config, CFStringRef resolv
       resolved = QString::fromUtf8(buffer);
     }
   }
-  qWarning().noquote()
+  qCWarning(alcedo::diag::editorLog).noquote()
       << QStringLiteral("ColorManager: falling back to %1 for encoding_space=%2 encoding_eotf=%3")
              .arg(resolved,
                   QString::fromStdString(ColorUtils::ColorSpaceToString(config.encoding_space)),
@@ -190,7 +234,10 @@ auto ResolveEDRMetadata(const ViewerDisplayConfig& config) -> CAEDRMetadata* {
 
 auto ColorManager::ApplyWindowColorSpace(void*                      native_view_or_window,
                                          const ViewerDisplayConfig& config) -> bool {
-  if (!native_view_or_window) {
+  const auto native_address = reinterpret_cast<std::uintptr_t>(native_view_or_window);
+  // Qt offscreen `QWindow::winId()` can be a non-zero dummy such as 1. Sending
+  // -isKindOfClass: to that pointer is a SIGSEGV, not a clean ObjC miss.
+  if (native_address < 4096u) {
     return false;
   }
 
@@ -219,10 +266,21 @@ auto ColorManager::ApplyWindowColorSpace(void*                      native_view_
     return false;
   }
 
-  bool        exact_match = true;
-  CFStringRef color_name  = ResolveNamedColorSpace(config, &exact_match);
-  if (!color_name) {
-    return false;
+  bool            exact_match = true;
+  CFStringRef     color_name  = ResolveNamedColorSpace(config, &exact_match);
+  CGColorSpaceRef color_space = nullptr;
+  if (!exact_match) {
+    color_space = CreateExportProfileColorSpace(config);
+    exact_match = color_space != nullptr;
+  }
+  if (!color_space) {
+    if (!color_name) {
+      return false;
+    }
+    color_space = CGColorSpaceCreateWithName(color_name);
+    if (!color_space) {
+      return false;
+    }
   }
 
   const bool uses_hdr_transfer = config.encoding_eotf == ColorUtils::EOTF::ST2084 ||
@@ -230,11 +288,6 @@ auto ColorManager::ApplyWindowColorSpace(void*                      native_view_
   metal_layer.wantsExtendedDynamicRangeContent = uses_hdr_transfer;
   if (@available(macOS 10.15, *)) {
     metal_layer.EDRMetadata = uses_hdr_transfer ? ResolveEDRMetadata(config) : nil;
-  }
-
-  CGColorSpaceRef color_space = CGColorSpaceCreateWithName(color_name);
-  if (!color_space) {
-    return false;
   }
 
   metal_layer.colorspace = color_space;

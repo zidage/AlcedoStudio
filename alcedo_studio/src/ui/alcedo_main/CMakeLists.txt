@@ -18,12 +18,26 @@ def_library(EditorViewerLogic
     SOURCES
         "${ALCEDO_UI_ROOT}/edit_viewer/edit_viewer_overlay_geometry.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/viewport_mapper.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/mask_edit_geometry.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/ai_mask_prompt_geometry.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/mask_overlay_geometry.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/overlay_triangle_primitives.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/ai_mask_input_overlay_geometry.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/mask_overlay_layout.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/overlay_cursor.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/crop_geometry.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/view_transform_controller.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/crop_interaction_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/viewer_state.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/viewport_mapper.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/mask_edit_geometry.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/ai_mask_prompt_geometry.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/mask_overlay_geometry.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/overlay_triangle_primitives.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/ai_mask_input_overlay_geometry.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/mask_overlay_layout.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/overlay_cursor.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/crop_geometry.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/view_transform_controller.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/crop_interaction_controller.hpp"
@@ -32,6 +46,8 @@ def_library(EditorViewerLogic
         Qt6::Core
         Qt6::Gui
         opencv_core
+        EditMaskCore
+        EditGeometry
 )
 
 def_library(BackgroundTaskController
@@ -41,57 +57,90 @@ def_library(BackgroundTaskController
     PUBLIC_DEPS Qt6::Core
 )
 
-def_library(ImageAnalysisController
+def_library(AgentControlOwner
     SOURCES
-        "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_analysis_controller.cpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/image_analysis_controller.hpp"
-    PUBLIC_DEPS ImageAnalysisService AiProviderProfile AiCredentialStore BackgroundTaskController
-                UiLocalization Qt6::Core
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/agent_control_owner.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/agent_control_owner.hpp"
+    PUBLIC_DEPS BackgroundTaskController UiLocalization Qt6::Core
+)
+
+# Publishes AI model package installs as background tasks (AI Models plan, AM1).
+def_library(AiModelDownloadTaskPublisher
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/ai_model_download_task_publisher.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/ai_model_download_task_publisher.hpp"
+    PUBLIC_DEPS AiModelPackageService BackgroundTaskController Qt6::Core
 )
 
 add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/application_module_host.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_module.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_module.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_module_edit_state.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/album_section_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/album_thumbnail_model.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/justified_row_layout.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/justified_layout_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/interaction_policy_controller.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_db_write_barrier.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_handler.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/thumbnail_manager.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/thumbnail_image_provider.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/mask_thumbnail_coordinator.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/mask_thumbnail_image_provider.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/comparison_presentation_image.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/comparison_image_provider.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_comparison_controller.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/system_icon_image_provider.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/folder_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_controller.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_analysis_environment.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_analysis_sink.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/stats_engine.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/search_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/search_request_worker.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/search_session.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/semantic_generation_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/model_download_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/folder_import_scan_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/import_export.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/nikon_he_recovery_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_mask_creation_adapter.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_ai_mask_tool.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_panel_presentation.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_item.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_operation_publisher.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_adjustment_models.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_models.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_node_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_node_layout_store.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_commit_presentation.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_node_graph_presentation.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/shortcut_registry.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/shortcut_registration.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_geometry_math.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_parameter_catalog_adapter.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lens_catalog_model.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_camera_profile_list_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_tone_curve_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_tone_curve_item.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_color_temp_model.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_grade_white_balance_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_hls_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_cdl_trackball_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_cdl_trackball_item.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lut_catalog_model.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lut_adjustment_model.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lut_encoding_model.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/lut_library_query.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/lut_library_model.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/lut_library_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/lut_preview_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/lut_preview_image_provider.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/curve.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/geometry.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/lens_calib.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/color_temp.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/color_wheel.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/hls.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/lut_catalog.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_pipeline_port.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_task_port.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_history_port.cpp"
@@ -102,37 +151,68 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_version_refs.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_transfer.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_checkpoint.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_journal_writer_port.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_checkpoint_store.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_thumbnail_port.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_mask_asset_port.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_render_scheduler_port.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/workspace_router.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_launch_coordinator.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/application_close_coordinator.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_selection.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_selection_marks.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_mutation_operations.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/export_queue.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/export_recipe_builder.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_behavior_preferences.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_view_preferences.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/log_folder_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_dialog_model.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_list_models.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_apply_coordinator.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/controllers/image_controller.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/editor_support/controllers/pipeline_controller.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/application_module_host.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_module.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_launch_coordinator.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/application_close_coordinator.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/library_selection.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/library_selection_marks.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/library_mutation_operations.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/export_queue.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/export_recipe_builder.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/library_module.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/album_catalog.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/ui_status_sink.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/album_section_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/justified_row_layout.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/justified_layout_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/album_types.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_db_write_barrier.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/path_utils.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_handler.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/thumbnail_manager.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/mask_thumbnail_coordinator.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/comparison_presentation_image.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/comparison_image_provider.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_comparison_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/folder_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/image_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/stats_engine.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/search_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/search_request_worker.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/search_session.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/model_download_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/folder_import_scan_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/import_export.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_scope_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_scope_item.hpp"
@@ -140,23 +220,33 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_history_models.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_node_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_node_graph_presentation.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/shortcut_registry.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_geometry_math.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_parameter_catalog_adapter.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_camera_profile_list_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_grade_white_balance_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_hls_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_cdl_trackball_item.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_lut_adjustment_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_lut_encoding_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/lut_library_query.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/lut_library_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/lut_library_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/lut_preview_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/lut_preview_image_provider.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/curve.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/color_temp.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/color_wheel.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/geometry.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/hls.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/lens_calib.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/lut_catalog.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/cdl_wheel_state.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_task_port.hpp"
@@ -168,14 +258,19 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_history_version_refs.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_history_transfer.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_history_checkpoint.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_journal_writer_port.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_mask_asset_port.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/workspace_router.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_behavior_preferences.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/library_view_preferences.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/log_folder_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_dialog_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_list_models.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_apply_coordinator.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/controllers/image_controller.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/controllers/pipeline_controller.hpp"
 )
 
 target_include_directories(AlbumBackendLib
@@ -190,7 +285,10 @@ target_link_libraries(AlbumBackendLib
     PUBLIC
         UiLocalization
         BackgroundTaskController
+        AgentControlOwner
         EditorRhiViewport
+        # The editor scope controller and item analyze the presented frame through EditScope.
+        EditScope
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2
@@ -199,40 +297,164 @@ target_link_libraries(AlbumBackendLib
         ExportService
         PipelineMgmtService
         AdjustmentTransferService
+        AdjustmentTransferCatalog
+        AiMaskAnalysisImage
+        LutPreviewImage
+        # The AI Mask tool runs the segmentation service and the edit session on its worker.
+        AiMaskSegmentationService
+        AiMaskEditSession
+        AiSidecarRuntimeService
+        EditorComparisonInputs
         EditorSessionService
+        EditorMaskCreationController
         EditorAdjustmentPipeline
+        EditorParameterCatalog
+        VersionNameRules
+        EditorPipelineCommandService
+        EditorPanelProjection
+        EditorNodeGraphDraft
+        PipelineHistoryApplier
         EditorMiniGitMaterializer
         ThumbnailService
+        MaskThumbnailService
         SemanticGenerationService
-        ImageAnalysisService
-        ImageAnalysisController
+        SemanticInputImageService
         AiProviderProfile
         AiCredentialStore
         ModelDownloadService
         UpdateService
+        LutLibraryService
+        LutPackageService
+        CameraProfileLibraryService
+        AiModelPackageService
+        AiModelDownloadTaskPublisher
         SleeveFilterService
         FSService
+        AcceleratorBackend
         EditPipeline
         PipelineScheduler
         ImageLoader
         xxHash
         CudaDriverRequirements
+        PreviewPerformance
+)
+
+# Canonical runtime theme tokens. DESIGN.md is the human VI spec; this library
+# is the only linkable source for colors, type, and graph metrics. Bundled
+# fonts/icons live here so RegisterFonts() and Q_INIT_RESOURCE share one owner.
+# Do not compile app_theme.cpp into executables that already link AppTheme.
+def_library(AppTheme
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
+        "${ALCEDO_SRC_ROOT}/config/resource.qrc"
+    PUBLIC_DEPS
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+)
+target_compile_definitions(AppTheme PRIVATE
+    ALCEDO_APP_VERSION="${PROJECT_VERSION}"
+)
+
+# Maps PipelineDocument snapshots onto pinned QuickQanava primitives. The QML
+# GraphView owns the qan::Graph; this adapter owns only identity maps.
+add_library(AlcedoQanGraph STATIC
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/alcedo_qan_graph.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/qan_delegate_library.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/qan_delegate_library.hpp"
+)
+target_include_directories(AlcedoQanGraph
+    PUBLIC
+        "${ALCEDO_INCLUDE_ROOT}"
+)
+target_link_libraries(AlcedoQanGraph
+    PUBLIC
+        AppTheme
+        EditorNodeGraphProjection
+        QuickQanava
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
 )
 
 # The editor shell is QML-only. Widgets remains private to the album backend for
 # the native project and Nikon recovery file dialogs.
 target_link_libraries(AlbumBackendLib PRIVATE Qt6::Widgets)
+target_link_libraries(AlbumBackendLib PUBLIC AlcedoQanGraph)
+
+# Automation command surface: JSON-RPC command registry, schema validation, the local socket
+# server, the session commands, and the headless host. alcedo_main hosts it; alcedo-cli talks to
+# it through AutomationProtocol.
+def_library(AutomationHostLib
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_json_schema.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_json_schema.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_command_registry.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_command_registry.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_server.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_server.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/session_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_session_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/host_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_host_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_command_support.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_command_support.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/project_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_project_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_task_tracker.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_task_tracker.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/task_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_task_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/library_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_library_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/export_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_export_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/label_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_label_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/search_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_search_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/lut_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_lut_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/film_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_film_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/editor_commands.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/render_commands.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/version_commands.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/adjustment_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_adjustment_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_editor_operation.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_editor_operation.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_editor_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_editor_notifier.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_editor_notifier.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/headless_frame_sink.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/headless_frame_sink.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/control_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_control_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_host_session.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_host_session.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/headless_host.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/headless_host.hpp"
+    PUBLIC_DEPS
+        AutomationProtocol
+        AlbumBackendLib
+        EditRuntimeFilm
+        Qt6::Core
+        Qt6::Network
+    PRIVATE_DEPS
+        AppDiagnostics
+        TimeProvider
+)
 
 set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_UI_SHELL_ROOT}/main.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/shortcut_registry.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/shortcut_registry.hpp"
     "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
 )
 if(WIN32)
@@ -295,6 +517,19 @@ if(WIN32)
     set_target_properties(alcedo_main PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${ALCEDO_BINARY_ROOT}"
     )
+
+    # Ship as a GUI-subsystem app so launching Alcedo does not pop a console
+    # window. Redirected stdout/stderr (e.g. --verify-qml-imports in
+    # verify_windows_install_tree.ps1) still work. Keep the standard main()
+    # entry point instead of WinMain. Developers who want a console for logs
+    # can configure with -DALCEDO_WINDOWS_CONSOLE=ON.
+    option(ALCEDO_WINDOWS_CONSOLE "Build alcedo_main as a console-subsystem app" OFF)
+    if(NOT ALCEDO_WINDOWS_CONSOLE)
+        set_target_properties(alcedo_main PROPERTIES WIN32_EXECUTABLE ON)
+        if(MSVC)
+            target_link_options(alcedo_main PRIVATE "/ENTRY:mainCRTStartup")
+        endif()
+    endif()
 
     # Make the build-tree executable directly runnable without a shell-specific
     # Qt environment. Packaging generates its own deployment configuration.
@@ -383,6 +618,9 @@ if(APPLE)
 endif()
 
 if(WIN32)
+    # MSVC merges a .manifest source into the default linker manifest.
+    target_sources(alcedo_main PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/alcedo_main.manifest")
+
     # Brand icon pipeline (Windows + macOS):
     #   scripts/build_app_icons.ps1  ->  cargo tauri icon
     # writes config/ICON/alcedo_icon.{png,ico,icns}. Explorer / Start Menu /
@@ -438,8 +676,11 @@ target_include_directories(alcedo_main
 target_link_libraries(alcedo_main
     PRIVATE
         AlbumBackendLib
+        AutomationHostLib
         AppDiagnostics
         UiLocalization
+        QuickQanava
+        QuickQanavaplugin
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2
@@ -490,48 +731,99 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/AppDialogs.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/FolderImportConfirmDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorCloseConfirmDialog.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/ExportQueueState.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ExportInspectorPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ExportNamingEditor.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ExportPresetPicker.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThemedProgressBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferVersionPane.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferNodePane.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferItemPane.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SettingDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ColorLabelNamesEditor.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/KeyboardSettingsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ShortcutCaptureField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/SkeletonBlock.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/StaggeredGridLoader.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/StaggeredGridMark.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeActionButton.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeCoverMosaic.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeNewProjectForm.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeProjectOverview.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeProjectPreviewAdapter.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeRecentProjectList.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdateNotice.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdatesSettingsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LutSettingsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/CameraProfileFolderTile.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelsSettingsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelDownloadStatementDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/PackageCard.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/BentoTile.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/CountTile.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LegendItem.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/SplitBar.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/SystemActionButton.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CacheSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/NikonHeRecoveryDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationDialog.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/AdvancedContentAnalysisDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/DialogActionButton.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThemeCheckBox.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThemeSwitch.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/IconButton.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/FolderPathField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/IconActionButton.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorRailButton.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/RegisteredShortcut.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SlidingIconNav.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollapsibleSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SegmentedCardSwitcher.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiProviderSettingsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/SavedAiKeysReminder.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SeveritySegmentedSlider.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/util/SearchComboBox.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AboutPage.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ImportProgressRing.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/InspectorPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AlbumInspectorPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/InspectorFieldActions.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/InspectorSection.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AlbumSectionView.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ImageInspectorPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollectionsPanel.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/GlobalSearchDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/CollectionTree.js"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ColorLabelNames.js"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/DataFormat.js"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/FileDrop.js"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailTier.js"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/SearchPalette.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/StatsCard.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/DateCommitGraph.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/DateFilterSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/StarRatingFilter.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AppContextMenu.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AppMenuItem.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AppMenuSeparator.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ImageContextMenu.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailGridView.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailStarRating.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailEditMark.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailColorLabelDots.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailDeleteMark.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailPinBinding.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailLayoutAnimation.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/JustifiedThumbnailTile.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTaskBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTasksDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AgentSessionCard.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/RotatingTaskBorder.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WorkspaceHost.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryWorkspace.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryInspectorActions.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryMarksControl.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ColorLabelFilterChips.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspace.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspaceNavigation.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorSaveRecoveryBar.qml"
@@ -543,27 +835,59 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionEntry.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryCommitGraphNode.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorVersionsPanel.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeDialog.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeChoiceButton.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeConflictCard.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeJsonValue.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorComparisonCanvas.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorComparisonView.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorComparisonPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentStack.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentHeader.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LockedNodeMaskPromptDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMonoSlider.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSection.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorCameraProfileSection.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSliders.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorInfoHint.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorPostProcessPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMasksContextPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskRangeSection.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/RangeSelectorBar.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAiMaskPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorScopePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorTonePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLookPanel.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/LUTPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLutBrowserPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLutResultCard.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AlertBadge.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLutControlPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDisplayTransformPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorGeometryPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorRawDecodePanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LensCatalogPicker.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/FilmStockPicker.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/FilmSwatch.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorEndpointNodeDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeMaskDrawer.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeMaskTypeRow.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodePortDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodePortDock.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeEdgeDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodesPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupMaskRow.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentSlider.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentToggle.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentCombo.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/SearchableAdjustmentCombo.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentGroup.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentResetButton.qml"
 )
 set(ALCEDO_MAIN_QML_RESOURCES
     "${ALCEDO_UI_SHELL_ROOT}/qml/util/qmldir"
+    # Compiled from qml/shaders/staggered_grid_mark.frag (see that file); committed so QML loaded
+    # from the source tree finds it too.
+    "${ALCEDO_UI_SHELL_ROOT}/qml/shaders/staggered_grid_mark.frag.qsb"
 )
 foreach(ALCEDO_MAIN_QML_FILE IN LISTS ALCEDO_MAIN_QML_FILES ALCEDO_MAIN_QML_RESOURCES)
     file(RELATIVE_PATH ALCEDO_MAIN_QML_ALIAS "${ALCEDO_UI_SHELL_ROOT}" "${ALCEDO_MAIN_QML_FILE}")
@@ -572,8 +896,9 @@ foreach(ALCEDO_MAIN_QML_FILE IN LISTS ALCEDO_MAIN_QML_FILES ALCEDO_MAIN_QML_RESO
     )
 endforeach()
 
+# QML module only. Fonts/icons are owned by AppTheme (resource.qrc).
 add_library(AlcedoMainQml STATIC
-    "${ALCEDO_SRC_ROOT}/config/resource.qrc"
+    "${ALCEDO_UI_SHELL_ROOT}/alcedo_main_qml_module.cpp"
 )
 target_include_directories(AlcedoMainQml PUBLIC "${ALCEDO_INCLUDE_ROOT}")
 target_link_libraries(AlcedoMainQml
@@ -621,8 +946,6 @@ set(ALCEDO_TEST_HOST_SOURCES
     "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/test_probe.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
-    "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
     "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
@@ -641,6 +964,8 @@ target_include_directories(alcedo_studio_test_host
 target_link_libraries(alcedo_studio_test_host
     PRIVATE
         AlbumBackendLib
+        QuickQanava
+        QuickQanavaplugin
         AlcedoMainQml
         AlcedoMainQmlplugin
         UiLocalization
@@ -726,8 +1051,6 @@ endif()
 
 set(ALCEDO_MIND_SOURCE_DIR "${CMAKE_SOURCE_DIR}/rust/puerh_mind"
     CACHE INTERNAL "Alcedo semantic sidecar source directory.")
-set(ALCEDO_MIND_PROMPTS_DIR "${ALCEDO_MIND_SOURCE_DIR}/configs/prompts"
-    CACHE INTERNAL "Alcedo semantic sidecar prompt profile config directory.")
 set(ALCEDO_MIND_BUILD_PROFILE "release"
     CACHE INTERNAL "Alcedo semantic sidecar cargo profile.")
 set(ALCEDO_MIND_TARGET_DIR "${ALCEDO_MIND_SOURCE_DIR}/target/${ALCEDO_MIND_BUILD_PROFILE}"
@@ -819,21 +1142,13 @@ if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
 
     # Ensure every packaged metallib is built before POST_BUILD copy, even when
     # an intermediate static lib is not linked into a particular configuration.
-    add_dependencies(alcedo_main
-        MetalUtilsShaders
-        MetalGeometryUtilsShaders
-        LensCalibOpMetalShaders
-        EditPipelineMetalShaders
-        ScopeAnalyzerMetalShaders
-        MetalToLinearRefShaders
-        MetalDebayerRcdShaders
-        MetalHighlightReconstructShaders
-        MetalXTransInterpolateShaders
-        MetalCvtRefSpaceShaders
-        MetalDemosaicNetIoShaders
-    )
+    add_dependencies(alcedo_main ${ALCEDO_METAL_SHADER_TARGETS})
 
+    # Recreate the directory so it holds exactly ALCEDO_METAL_RUNTIME_LIBS. The bundle install copies
+    # this directory, so a metallib removed from the list (for example the archived fused pipeline
+    # library) must not survive from an earlier build.
     add_custom_command(TARGET alcedo_main POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_alcedo_metallib_runtime_dir}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${_alcedo_metallib_runtime_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${ALCEDO_METAL_RUNTIME_LIBS}
@@ -866,10 +1181,22 @@ add_custom_command(TARGET alcedo_main POST_BUILD
     VERBATIM
 )
 
-if(WIN32 AND TARGET alcedo_lensfun)
+# The film print reads its resources from config/film_print next to the executable. They are not in
+# Git, so a build with no resource directory stops a film print render with the error that names
+# the file.
+if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+    add_custom_command(TARGET alcedo_main POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+            "$<TARGET_FILE_DIR:alcedo_main>/config/film_print"
+        VERBATIM
+    )
+endif()
+
+if(WIN32 AND TARGET puerhlab_lensfun)
     add_custom_command(TARGET alcedo_main POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:alcedo_lensfun>"
+            "$<TARGET_FILE:puerhlab_lensfun>"
             "$<TARGET_FILE_DIR:alcedo_main>/lensfun.dll"
         VERBATIM
     )
@@ -900,7 +1227,6 @@ if(ALCEDO_BUILD_SEMANTIC_SIDECAR AND TARGET alcedo_mind_sidecar)
         COMMAND ${CMAKE_COMMAND}
             "-DALCEDO_MIND_BINARY=${ALCEDO_MIND_BINARY}"
             "-DALCEDO_MIND_TARGET_DIR=${ALCEDO_MIND_TARGET_DIR}"
-            "-DALCEDO_MIND_PROMPTS_DIR=${ALCEDO_MIND_PROMPTS_DIR}"
             "-DALCEDO_MIND_DEST_DIR=$<TARGET_FILE_DIR:alcedo_main>"
             -P "${CMAKE_SOURCE_DIR}/scripts/cmake/copy_semantic_sidecar.cmake"
         DEPENDS alcedo_mind_sidecar
@@ -963,3 +1289,14 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND
         VERBATIM
     )
 endif()
+
+add_test(NAME ProductionBinaryLoadsQuickQanavaModule
+    COMMAND alcedo_main --verify-qml-imports
+)
+set_tests_properties(ProductionBinaryLoadsQuickQanavaModule PROPERTIES
+    PASS_REGULAR_EXPRESSION "qml.imports.ok=QuickQanava"
+    FAIL_REGULAR_EXPRESSION "module .*QuickQanava"
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:alcedo_main>"
+    LABELS "quickqanava;package"
+    TIMEOUT 60
+)

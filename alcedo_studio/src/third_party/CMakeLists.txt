@@ -111,83 +111,16 @@ set(PUERHLAB_LENSFUN_INSTALL_DIR
     CACHE PATH
     "Install prefix for the bundled Lensfun build.")
 
-set(_puerhlab_lensfun_use_system OFF)
-if(UNIX AND NOT APPLE AND NOT EXISTS "${PUERHLAB_LENSFUN_SOURCE_DIR}/CMakeLists.txt")
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(ALCEDO_LENSFUN_SYSTEM QUIET IMPORTED_TARGET lensfun)
-    endif()
+file(MAKE_DIRECTORY
+    "${PUERHLAB_LENSFUN_INSTALL_DIR}/bin"
+    "${PUERHLAB_LENSFUN_INSTALL_DIR}/include"
+    "${PUERHLAB_LENSFUN_INSTALL_DIR}/lib")
 
-    find_path(_puerhlab_lensfun_system_include_dir
-        NAMES lensfun/lensfun.h)
-    find_library(_puerhlab_lensfun_system_library
-        NAMES lensfun)
-
-    if(_puerhlab_lensfun_system_include_dir AND _puerhlab_lensfun_system_library)
-        add_library(puerhlab_lensfun INTERFACE)
-        target_include_directories(puerhlab_lensfun INTERFACE
-            "${_puerhlab_lensfun_system_include_dir}")
-        target_link_libraries(puerhlab_lensfun INTERFACE
-            "${_puerhlab_lensfun_system_library}")
-        get_filename_component(_puerhlab_lensfun_system_library_dir
-            "${_puerhlab_lensfun_system_library}" DIRECTORY)
-        set(_puerhlab_lensfun_use_system ON)
-    elseif(TARGET PkgConfig::ALCEDO_LENSFUN_SYSTEM)
-        add_library(puerhlab_lensfun INTERFACE)
-        target_link_libraries(puerhlab_lensfun
-            INTERFACE PkgConfig::ALCEDO_LENSFUN_SYSTEM)
-        if(ALCEDO_LENSFUN_SYSTEM_INCLUDEDIR)
-            target_include_directories(puerhlab_lensfun INTERFACE
-                "${ALCEDO_LENSFUN_SYSTEM_INCLUDEDIR}")
-            set(_puerhlab_lensfun_system_include_dir
-                "${ALCEDO_LENSFUN_SYSTEM_INCLUDEDIR}")
-        elseif(ALCEDO_LENSFUN_SYSTEM_INCLUDE_DIRS)
-            target_include_directories(puerhlab_lensfun
-                INTERFACE ${ALCEDO_LENSFUN_SYSTEM_INCLUDE_DIRS})
-            list(GET ALCEDO_LENSFUN_SYSTEM_INCLUDE_DIRS 0
-                _puerhlab_lensfun_system_include_dir)
-        endif()
-        if(ALCEDO_LENSFUN_SYSTEM_LIBDIR)
-            set(_puerhlab_lensfun_system_library_dir
-                "${ALCEDO_LENSFUN_SYSTEM_LIBDIR}")
-        elseif(ALCEDO_LENSFUN_SYSTEM_LIBRARY_DIRS)
-            list(GET ALCEDO_LENSFUN_SYSTEM_LIBRARY_DIRS 0
-                _puerhlab_lensfun_system_library_dir)
-        endif()
-        set(_puerhlab_lensfun_use_system ON)
-    endif()
-
-    if(NOT _puerhlab_lensfun_use_system)
-        message(FATAL_ERROR
-            "Bundled Lensfun source was not found at ${PUERHLAB_LENSFUN_SOURCE_DIR}, "
-            "and a usable system Lensfun installation was not detected. "
-            "Install Lensfun or provide its headers and library via CMAKE_PREFIX_PATH.")
-    endif()
+if(NOT EXISTS "${PUERHLAB_LENSFUN_SOURCE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR
+        "Bundled Lensfun source was not found at ${PUERHLAB_LENSFUN_SOURCE_DIR}. "
+        "Run `git submodule update --init alcedo_studio/src/third_party/lensfun` and re-configure.")
 endif()
-
-if(_puerhlab_lensfun_use_system)
-    message(STATUS "Using system Lensfun on Linux")
-    set(PUERHLAB_LENSFUN_INCLUDE_DIR
-        "${_puerhlab_lensfun_system_include_dir}" CACHE INTERNAL
-        "Header directory for the system Lensfun installation.")
-    set(PUERHLAB_LENSFUN_LIBRARY_DIR
-        "${_puerhlab_lensfun_system_library_dir}" CACHE INTERNAL
-        "Runtime library directory for the system Lensfun installation.")
-    set(ALCEDO_LENSFUN_INCLUDE_DIR "${PUERHLAB_LENSFUN_INCLUDE_DIR}" CACHE INTERNAL
-        "Header directory for the system Lensfun installation.")
-    set(ALCEDO_LENSFUN_LIBRARY_DIR "${PUERHLAB_LENSFUN_LIBRARY_DIR}" CACHE INTERNAL
-        "Runtime library directory for the system Lensfun installation.")
-else()
-    file(MAKE_DIRECTORY
-        "${PUERHLAB_LENSFUN_INSTALL_DIR}/bin"
-        "${PUERHLAB_LENSFUN_INSTALL_DIR}/include"
-        "${PUERHLAB_LENSFUN_INSTALL_DIR}/lib")
-
-    if(NOT EXISTS "${PUERHLAB_LENSFUN_SOURCE_DIR}/CMakeLists.txt")
-        message(FATAL_ERROR
-            "Bundled Lensfun source was not found at ${PUERHLAB_LENSFUN_SOURCE_DIR}. "
-            "Run `git submodule update --init --recursive alcedo_studio/src/third_party/lensfun` and re-configure.")
-    endif()
 
 set(_puerhlab_lensfun_cmake_args
     "-DCMAKE_INSTALL_PREFIX:PATH=${PUERHLAB_LENSFUN_INSTALL_DIR}"
@@ -333,12 +266,21 @@ if(WIN32)
 endif()
 add_dependencies(puerhlab_lensfun puerhlab_lensfun_build)
 
+# Product code links the bundled submodule. A package-manager lensfun target
+# (vcpkg 0.3.4 exports C++ names only) must not win this name.
+if(TARGET lensfun::lensfun)
+    get_target_property(_alcedo_lensfun_alias lensfun::lensfun ALIASED_TARGET)
+    if(NOT _alcedo_lensfun_alias STREQUAL "puerhlab_lensfun")
+        message(FATAL_ERROR
+            "lensfun::lensfun is already defined and is not the bundled submodule. "
+            "Remove the vcpkg lensfun package (`vcpkg remove lensfun`) and reconfigure. "
+            "Alcedo builds Lensfun from alcedo_studio/src/third_party/lensfun.")
+    endif()
+else()
+    add_library(lensfun::lensfun ALIAS puerhlab_lensfun)
+endif()
 if(NOT TARGET alcedo_lensfun)
     add_library(alcedo_lensfun ALIAS puerhlab_lensfun)
-endif()
-
-if(NOT TARGET lensfun::lensfun)
-    add_library(lensfun::lensfun ALIAS puerhlab_lensfun)
 endif()
 
 set(PUERHLAB_LENSFUN_INCLUDE_DIR "${PUERHLAB_LENSFUN_INSTALL_DIR}/include" CACHE INTERNAL
@@ -349,15 +291,6 @@ set(ALCEDO_LENSFUN_INCLUDE_DIR "${PUERHLAB_LENSFUN_INCLUDE_DIR}" CACHE INTERNAL
     "Header directory for the bundled Lensfun build.")
 set(ALCEDO_LENSFUN_LIBRARY_DIR "${PUERHLAB_LENSFUN_LIBRARY_DIR}" CACHE INTERNAL
     "Runtime library directory for the bundled Lensfun build.")
-endif()
-
-if(NOT TARGET alcedo_lensfun)
-    add_library(alcedo_lensfun ALIAS puerhlab_lensfun)
-endif()
-
-if(NOT TARGET lensfun::lensfun)
-    add_library(lensfun::lensfun ALIAS puerhlab_lensfun)
-endif()
 
 set(PUERHLAB_ULTRAHDR_SOURCE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/libultrahdr"
@@ -369,6 +302,12 @@ if(NOT EXISTS "${PUERHLAB_ULTRAHDR_SOURCE_DIR}/CMakeLists.txt")
         "libultrahdr source was not found at ${PUERHLAB_ULTRAHDR_SOURCE_DIR}. "
         "Run `git submodule update --init --recursive alcedo_studio/src/third_party/libultrahdr` "
         "and re-configure.")
+endif()
+
+# Resolve shared libjpeg before libultrahdr narrows its search to static archives.
+# Linux development packages can provide only the shared library.
+if(UNIX AND NOT APPLE)
+    find_package(JPEG REQUIRED)
 endif()
 
 set(UHDR_BUILD_EXAMPLES OFF CACHE BOOL "Disable libultrahdr examples" FORCE)
@@ -392,6 +331,13 @@ if(EXISTS "${PUERHLAB_ULTRAHDR_IMAGE_IO_HEADER}")
         "${PUERHLAB_ULTRAHDR_SOURCE_DIR}"
         "${CMAKE_BINARY_DIR}/third_party/libultrahdr"
     )
+
+    # The pinned UltraHDR headers use uint8_t without including its defining
+    # header. GCC 16 no longer supplies it through unrelated STL headers.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(core PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-include>"
+                                            "$<$<COMPILE_LANGUAGE:CXX>:cstdint>")
+    endif()
 
     if(TARGET uhdr)
         add_library(puerhlab_ultrahdr INTERFACE)
@@ -553,10 +499,23 @@ else()
         string(REPLACE "/GL" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
     endif()
 
+    # gRPC and its bundled RE2 install headers, static libraries, CMake/pkg-config files, and
+    # roots.pem even with gRPC_INSTALL=OFF. Alcedo links them statically and talks to the
+    # sidecar over an insecure local channel, so none of it belongs in the application package.
+    # Keep those rules out of the default component that CPack and package_windows.ps1 install.
+    if(DEFINED CMAKE_INSTALL_DEFAULT_COMPONENT_NAME AND
+       NOT CMAKE_INSTALL_DEFAULT_COMPONENT_NAME STREQUAL "Unspecified")
+        message(FATAL_ERROR
+            "CMAKE_INSTALL_DEFAULT_COMPONENT_NAME is already set to "
+            "'${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME}'. The package install component "
+            "(ALCEDO_PACKAGE_INSTALL_COMPONENT) assumes first-party rules use 'Unspecified'.")
+    endif()
+    set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME "AlcedoGrpcDevelopment")
     add_subdirectory(
         "${PUERHLAB_GRPC_SOURCE_DIR}"
         "${CMAKE_BINARY_DIR}/third_party/grpc"
     )
+    set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME "Unspecified")
 
     if(MSVC)
         set(CMAKE_C_FLAGS_RELEASE "${_puerhlab_saved_c_flags_release}")
@@ -620,7 +579,7 @@ set(PUERHLAB_METALCPP_HELPER_INCLUDE_DIR
 if(ALCEDO_METAL_ENABLED AND NOT EXISTS "${PUERHLAB_METALCPP_SOURCE_DIR}/Metal/Metal.hpp")
     message(FATAL_ERROR
         "Bundled metal-cpp source was not found at ${PUERHLAB_METALCPP_SOURCE_DIR}. "
-        "Run `git submodule update --init --recursive alcedo_studio/src/third_party/metal-cpp` and re-configure.")
+        "Run `git submodule update --init --recursive pu-erh_lab/src/third_party/metal-cpp` and re-configure.")
 endif()
 
 add_library(puerhlab_metal_cpp INTERFACE)
@@ -629,12 +588,10 @@ target_include_directories(puerhlab_metal_cpp
         "${PUERHLAB_METALCPP_HELPER_INCLUDE_DIR}"
 )
 if(EXISTS "${PUERHLAB_METALCPP_SOURCE_DIR}/Metal/Metal.hpp")
-    target_include_directories(puerhlab_metal_cpp
-        SYSTEM INTERFACE
-            "${PUERHLAB_METALCPP_SOURCE_DIR}"
-    )
-    target_compile_features(puerhlab_metal_cpp INTERFACE cxx_std_20)
+    target_include_directories(puerhlab_metal_cpp SYSTEM INTERFACE
+        "${PUERHLAB_METALCPP_SOURCE_DIR}")
 endif()
+target_compile_features(puerhlab_metal_cpp INTERFACE cxx_std_20)
 
 if(APPLE)
     find_library(PUERHLAB_FOUNDATION_FRAMEWORK Foundation REQUIRED)
@@ -682,3 +639,19 @@ endif()
 
 set(PUERHLAB_METALCPP_INCLUDE_DIR "${PUERHLAB_METALCPP_SOURCE_DIR}" CACHE INTERNAL
     "Header directory for the bundled metal-cpp checkout.")
+
+set(ALCEDO_QUICKQANAVA_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/QuickQanava"
+    CACHE PATH
+    "Path to the bundled QuickQanava source checkout.")
+
+if(NOT EXISTS "${ALCEDO_QUICKQANAVA_SOURCE_DIR}/src/CMakeLists.txt"
+   OR NOT EXISTS "${ALCEDO_QUICKQANAVA_SOURCE_DIR}/licence.txt")
+    message(FATAL_ERROR
+        "Bundled QuickQanava source was not found at ${ALCEDO_QUICKQANAVA_SOURCE_DIR}. "
+        "Run `git submodule update --init alcedo_studio/src/third_party/QuickQanava` "
+        "and re-configure.")
+endif()
+
+# Do not add_subdirectory() upstream CMake. Qt 6.9.3 rejects its qt_wrap_cpp call.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/AlcedoQuickQanava.cmake")

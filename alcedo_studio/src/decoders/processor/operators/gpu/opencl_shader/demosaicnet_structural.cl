@@ -217,6 +217,139 @@ __kernel void demosaicnet_unpack_reflect_concat_nhwc4(
       (float4)(vals[4], vals[5], vals[6], vals[7]);
 }
 
+// CUDA PackReflectPaddedCfaTile equivalent: sample the aligned mono CFA through
+// reflect-101, then sparse-pack by training-origin color. crop_* maps the aligned
+// lattice onto a full-frame plane; mono_off is a float element offset into a slab.
+inline float demosaicnet_sample_aligned_mono(__global const float* restrict mono,
+                                              const int src_w, const int src_h,
+                                              const int crop_x, const int crop_y,
+                                              const int aligned_w, const int aligned_h,
+                                              const int origin_x, const int origin_y,
+                                              const int x, const int y, const int mono_off,
+                                              int* aligned_x, int* aligned_y) {
+  *aligned_x = demosaicnet_reflect101(origin_x + x, aligned_w);
+  *aligned_y = demosaicnet_reflect101(origin_y + y, aligned_h);
+  const int sx = crop_x + *aligned_x;
+  const int sy = crop_y + *aligned_y;
+  if (sx < 0 || sy < 0 || sx >= src_w || sy >= src_h) {
+    return 0.0f;
+  }
+  return mono[mono_off + sy * src_w + sx];
+}
+
+inline int demosaicnet_aligned_rgb_color(__global const int* restrict rgb_fc, const int period,
+                                          const int aligned_x, const int aligned_y) {
+  return rgb_fc[(aligned_y % period) * period + (aligned_x % period)];
+}
+
+__kernel void demosaicnet_pack_reflect_bayer_nhwc4_mono(
+    __global const float* restrict mono, __global float4* restrict output, const int src_w,
+    const int src_h, const int crop_x, const int crop_y, const int aligned_h,
+    const int aligned_w, const int origin_y, const int origin_x, const int tile_h,
+    const int tile_w, const int mono_off) {
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  if (x >= tile_w / 2 || y >= tile_h / 2) {
+    return;
+  }
+
+  float vals[4];
+  for (int py = 0; py < 2; ++py) {
+    for (int px = 0; px < 2; ++px) {
+      int ax = 0;
+      int ay = 0;
+      const float v = demosaicnet_sample_aligned_mono(
+          mono, src_w, src_h, crop_x, crop_y, aligned_w, aligned_h, origin_x, origin_y,
+          x * 2 + px, y * 2 + py, mono_off, &ax, &ay);
+      vals[py * 2 + px] = demosaicnet_signed_gamma_encode(v);
+    }
+  }
+  output[demosaicnet_nhwc4_index(0, y, x, 0, tile_h / 2, tile_w / 2, 1)] =
+      (float4)(vals[0], vals[1], vals[2], vals[3]);
+}
+
+__kernel void demosaicnet_pack_reflect_xtrans_nhwc4_mono(
+    __global const float* restrict mono, __global float4* restrict output, const int src_w,
+    const int src_h, const int crop_x, const int crop_y, const int aligned_h,
+    const int aligned_w, const int origin_y, const int origin_x, const int tile_h,
+    const int tile_w, const int mono_off, const int period,
+    __global const int* restrict rgb_fc) {
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  if (x >= tile_w / 2 || y >= tile_h / 2) {
+    return;
+  }
+
+  for (int cb = 0; cb < 3; ++cb) {
+    float vals[4];
+    for (int lane = 0; lane < 4; ++lane) {
+      const int py = lane / 2;
+      const int px = lane % 2;
+      int ax = 0;
+      int ay = 0;
+      const float v = demosaicnet_sample_aligned_mono(
+          mono, src_w, src_h, crop_x, crop_y, aligned_w, aligned_h, origin_x, origin_y,
+          x * 2 + px, y * 2 + py, mono_off, &ax, &ay);
+      const int color = demosaicnet_aligned_rgb_color(rgb_fc, period, ax, ay);
+      vals[lane] = (color == cb) ? demosaicnet_signed_gamma_encode(v) : 0.0f;
+    }
+    output[demosaicnet_nhwc4_index(0, y, x, cb, tile_h / 2, tile_w / 2, 3)] =
+        (float4)(vals[0], vals[1], vals[2], vals[3]);
+  }
+}
+
+__kernel void demosaicnet_unpack_reflect_concat_nhwc4_mono(
+    __global const float* restrict mono, __global const float4* restrict residual,
+    __global float4* restrict cat, const int src_w, const int src_h, const int crop_x,
+    const int crop_y, const int aligned_h, const int aligned_w, const int origin_y,
+    const int origin_x, const int tile_h, const int tile_w, const int mono_off,
+    const int period, __global const int* restrict rgb_fc, const int residual_h,
+    const int residual_w, const int residual_channel_blocks) {
+  const int up_w = residual_w * 2;
+  const int up_h = residual_h * 2;
+  const int x    = get_global_id(0);
+  const int y    = get_global_id(1);
+  if (x >= up_w || y >= up_h) {
+    return;
+  }
+
+  const int crop_tx = (tile_w - up_w) / 2;
+  const int crop_ty = (tile_h - up_h) / 2;
+  int ax = 0;
+  int ay = 0;
+  const float v = demosaicnet_sample_aligned_mono(
+      mono, src_w, src_h, crop_x, crop_y, aligned_w, aligned_h, origin_x, origin_y,
+      x + crop_tx, y + crop_ty, mono_off, &ax, &ay);
+  const int color = demosaicnet_aligned_rgb_color(rgb_fc, period, ax, ay);
+  const float encoded = demosaicnet_signed_gamma_encode(v);
+
+  float vals[8];
+  vals[0] = (color == 0) ? encoded : 0.0f;
+  vals[1] = (color == 1) ? encoded : 0.0f;
+  vals[2] = (color == 2) ? encoded : 0.0f;
+
+  const int sub_y = y & 1;
+  const int sub_x = x & 1;
+  const int ry    = y / 2;
+  const int rx    = x / 2;
+  for (int g = 0; g < 3; ++g) {
+    const int rc     = g * 4 + sub_y * 2 + sub_x;
+    const int src_cb = rc / 4;
+    const int lane   = rc % 4;
+    vals[3 + g] = demosaicnet_float4_lane(
+        residual[demosaicnet_nhwc4_index(0, ry, rx, src_cb, residual_h, residual_w,
+                                           residual_channel_blocks)],
+        lane);
+  }
+  vals[6] = 0.0f;
+  vals[7] = 0.0f;
+
+  cat[demosaicnet_nhwc4_index(0, y, x, 0, up_h, up_w, 2)] =
+      (float4)(vals[0], vals[1], vals[2], vals[3]);
+  cat[demosaicnet_nhwc4_index(0, y, x, 1, up_h, up_w, 2)] =
+      (float4)(vals[4], vals[5], vals[6], vals[7]);
+}
+
 // Fixed Bayer collapse-colors pack: NCHW [N,3,H,W] → NHWC4 [N,H/2,W/2,C4].
 // out_c = py*2+px sums all three mosaic color planes at that sub-pixel (stride 2).
 __kernel void demosaicnet_pack_bayer_nchw_to_nhwc4(__global const float* restrict mosaic,
@@ -466,7 +599,8 @@ __kernel void demosaicnet_assemble_rgb_tile(__global const float* restrict tile,
                                             const int tile_h, const int canvas_w,
                                             const int canvas_h, const int dst_x, const int dst_y,
                                             const int owned_w, const int owned_h, const int src_x0,
-                                            const int src_y0) {
+                                            const int src_y0, const int canvas_offset,
+                                            const int dst_channels) {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
   if (x >= owned_w || y >= owned_h) {
@@ -483,10 +617,13 @@ __kernel void demosaicnet_assemble_rgb_tile(__global const float* restrict tile,
     return;
   }
   const int src_index = (src_y * tile_w + src_x) * 3;
-  const int dst_index = (dst_yy * canvas_w + dst_xx) * 3;
+  const int dst_index = canvas_offset + (dst_yy * canvas_w + dst_xx) * dst_channels;
   canvas[dst_index + 0] = tile[src_index + 0];
   canvas[dst_index + 1] = tile[src_index + 1];
   canvas[dst_index + 2] = tile[src_index + 2];
+  if (dst_channels == 4) {
+    canvas[dst_index + 3] = 1.0f;
+  }
 }
 
 // Product boundary: clamp linear CFA samples to [0,1] when highlight reconstruction is off.
@@ -532,14 +669,14 @@ __kernel void demosaicnet_pack_cfa_mono_to_hwc3(__global const float* restrict m
 // Product continuation: HWC3 camera RGB -> HWC4 RGBA with alpha = 1.
 __kernel void demosaicnet_rgb3_to_rgba4(__global const float* restrict rgb,
                                         __global float* restrict rgba, const int width,
-                                        const int height) {
+                                        const int height, const int rgb_off, const int rgba_off) {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
   if (x >= width || y >= height) {
     return;
   }
-  const int src = (y * width + x) * 3;
-  const int dst = (y * width + x) * 4;
+  const int src = rgb_off + (y * width + x) * 3;
+  const int dst = rgba_off + (y * width + x) * 4;
   rgba[dst + 0] = rgb[src + 0];
   rgba[dst + 1] = rgb[src + 1];
   rgba[dst + 2] = rgb[src + 2];

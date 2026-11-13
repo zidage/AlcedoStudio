@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
 
 #include "app/editor_action_policy.hpp"
 
@@ -26,15 +27,15 @@ class EditorActionAvailabilityModel final : public QObject {
   Q_PROPERTY(bool canRenameVersion READ can_rename_version NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canRemoveVersion READ can_remove_version NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canPaste READ can_paste NOTIFY AvailabilityChanged)
-  Q_PROPERTY(bool canBeginMerge READ can_begin_merge NOTIFY AvailabilityChanged)
-  Q_PROPERTY(bool canCompleteMerge READ can_complete_merge NOTIFY AvailabilityChanged)
-  Q_PROPERTY(bool canCancelMerge READ can_cancel_merge NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canRetrySave READ can_retry_save NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canDiscardAndContinue READ can_discard_and_continue NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canCancelPendingNavigation READ can_cancel_pending_navigation NOTIFY
                  AvailabilityChanged)
   Q_PROPERTY(bool canCloseEditor READ can_close_editor NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canSwitchWorkspace READ can_switch_workspace NOTIFY AvailabilityChanged)
+  Q_PROPERTY(bool canOpenComparison READ can_open_comparison NOTIFY AvailabilityChanged)
+  /// Why the comparison cannot open (for example HDR output); empty when it can.
+  Q_PROPERTY(QString openComparisonReason READ open_comparison_reason NOTIFY AvailabilityChanged)
 
  public:
   explicit EditorActionAvailabilityModel(QObject* parent = nullptr) : QObject(parent) {}
@@ -80,13 +81,6 @@ class EditorActionAvailabilityModel final : public QObject {
     return Allowed(alcedo::EditorAction::RemoveVersion);
   }
   [[nodiscard]] bool can_paste() const { return Allowed(alcedo::EditorAction::ApplyPaste); }
-  [[nodiscard]] bool can_begin_merge() const { return Allowed(alcedo::EditorAction::BeginMerge); }
-  [[nodiscard]] bool can_complete_merge() const {
-    return Allowed(alcedo::EditorAction::CompleteMerge);
-  }
-  [[nodiscard]] bool can_cancel_merge() const {
-    return Allowed(alcedo::EditorAction::CancelMerge);
-  }
   [[nodiscard]] bool can_retry_save() const { return Allowed(alcedo::EditorAction::RetrySave); }
   [[nodiscard]] bool can_discard_and_continue() const {
     return Allowed(alcedo::EditorAction::DiscardAndContinue);
@@ -99,6 +93,12 @@ class EditorActionAvailabilityModel final : public QObject {
   }
   /// Workspace leave uses CloseEditor admission (same decision as closing).
   [[nodiscard]] bool can_switch_workspace() const { return can_close_editor(); }
+  [[nodiscard]] bool can_open_comparison() const {
+    return Allowed(alcedo::EditorAction::OpenComparison);
+  }
+  [[nodiscard]] QString open_comparison_reason() const {
+    return QString::fromStdString(availability_.For(alcedo::EditorAction::OpenComparison).reason);
+  }
 
  signals:
   void AvailabilityChanged();

@@ -11,17 +11,24 @@
 #include <fstream>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <opencv2/core.hpp>
 #include <string>
 #include <vector>
 
 #include "app/import_service.hpp"
+#include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/graph/develop_color_transform.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
+#include "image/image.hpp"
 #include "image/image_buffer.hpp"
+#include "image/metadata_extractor.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
+#include "support/render_snapshot_source.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 
@@ -86,6 +93,21 @@ auto MakeTempPath(const char* suffix) -> std::filesystem::path {
          std::filesystem::path(std::string("alcedo_ci_") + std::to_string(tick) + suffix);
 }
 
+/** Create a Default document and install camera/profile data from the RAW file.
+ *  Product Apply reads those matrices from the rendered snapshot's document.
+ *  Returns null when the file has no RAW color context. */
+auto MakeDefaultDocumentWithImportedCamera(const std::filesystem::path& path)
+    -> std::shared_ptr<PipelineDocument> {
+  Image image(1, path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(path, image);
+  if (!image.HasRawColorContext()) {
+    return nullptr;
+  }
+  auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  BindImportedCameraProfile(*document, image.GetRawColorContext());
+  return document;
+}
+
 void AssertFloatImage(ImageBuffer& buffer) {
   ASSERT_TRUE(buffer.cpu_data_valid_);
   const cv::Mat& cpu = buffer.GetCPUData();
@@ -96,12 +118,29 @@ void AssertFloatImage(ImageBuffer& buffer) {
   EXPECT_GT(cpu.rows, 0);
 }
 
-auto RenderBlocking(RenderType render_type, std::vector<uint8_t> raw_bytes)
+auto RenderBlocking(RenderType render_type, const std::filesystem::path& path)
     -> std::shared_ptr<ImageBuffer> {
-  auto         pipeline = std::make_shared<CPUPipelineExecutor>();
+  auto raw_bytes = ReadFileToBuffer(path);
+  if (raw_bytes.empty()) {
+    ADD_FAILURE() << "Failed to read CI RAW fixture " << path.string();
+    return nullptr;
+  }
+
+  auto document = MakeDefaultDocumentWithImportedCamera(path);
+  if (!document) {
+    ADD_FAILURE() << "CI RAW fixture has no camera matrices: " << path.string();
+    return nullptr;
+  }
+  // Declared before the scheduler so it outlives the task.
+  test::RenderSnapshotSource source(document);
+  auto                       pipeline = std::make_shared<PipelineExecutor>(
+      render_type == RenderType::THUMBNAIL || render_type == RenderType::FULL_RES_EXPORT
+          ? ExecutorRole::Batch
+          : ExecutorRole::Interactive);
 
   PipelineTask task;
   task.pipeline_executor_                 = pipeline;
+  task.snapshot_                          = source.Freeze();
   task.input_                             = std::make_shared<ImageBuffer>(std::move(raw_bytes));
   task.options_.render_desc_.render_type_ = render_type;
   task.options_.is_blocking_              = true;
@@ -126,7 +165,6 @@ class CiRawWorkflowTest : public ::testing::Test {
   void SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    RegisterAllOperators();
   }
 };
 
@@ -154,7 +192,8 @@ TEST_F(CiRawWorkflowTest, RawImportPersistsAcrossProjectReload) {
     auto                      sleeve_service = project.GetSleeveService();
     auto                      image_pool     = project.GetImagePoolService();
 
-    ImportServiceImpl         import_service(sleeve_service, image_pool);
+    ImportServiceImpl         import_service(sleeve_service, image_pool,
+                                             std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
     std::vector<image_path_t> paths;
     paths.reserve(raw_files.size());
@@ -207,10 +246,20 @@ TEST_F(CiRawWorkflowTest, DefaultPipelineRendersCiRawFixture) {
   auto raw_bytes = ReadFileToBuffer(raw_files.front());
   ASSERT_FALSE(raw_bytes.empty());
 
-  CPUPipelineExecutor pipeline;
-  pipeline.SetForceCPUOutput(true);
+  PipelineExecutor pipeline(ExecutorRole::Interactive);
+  const auto       document = MakeDefaultDocumentWithImportedCamera(raw_files.front());
+  ASSERT_NE(document, nullptr) << raw_files.front().string();
+  const auto snapshot = test::FreezeInNewLineage(*document);
+  PipelineApplyRequest request;
+  request.geometry.resolution.quality = RenderQuality::Export;
+  request.require_host_output         = true;
 
-  auto output = pipeline.Apply(std::make_shared<ImageBuffer>(std::move(raw_bytes)));
+  std::shared_ptr<ImageBuffer> output;
+  {
+    std::unique_lock lock(pipeline.GetRenderLock());
+    output =
+        pipeline.Apply(*snapshot, std::make_shared<ImageBuffer>(std::move(raw_bytes)), request);
+  }
   ASSERT_NE(output, nullptr);
   if (!output->cpu_data_valid_) {
     ASSERT_NO_THROW(output->SyncToCPU());
@@ -225,7 +274,9 @@ TEST_F(CiRawWorkflowTest, SchedulerProducesThumbnailAndFastPreview) {
                  << " and /Users/zidage/Photos";
   }
 
-  auto thumbnail = RenderBlocking(RenderType::THUMBNAIL, ReadFileToBuffer(raw_files.front()));
+  // Album / semantic / analysis all schedule RenderType::THUMBNAIL: batch renderer,
+  // host download, no editor frame sink. Camera matrices come from the snapshot document.
+  auto thumbnail = RenderBlocking(RenderType::THUMBNAIL, raw_files.front());
   ASSERT_NE(thumbnail, nullptr);
   if (!thumbnail->cpu_data_valid_) {
     ASSERT_NO_THROW(thumbnail->SyncToCPU());
@@ -233,13 +284,11 @@ TEST_F(CiRawWorkflowTest, SchedulerProducesThumbnailAndFastPreview) {
   AssertFloatImage(*thumbnail);
   EXPECT_LE(std::max(thumbnail->GetCPUData().cols, thumbnail->GetCPUData().rows), 1024);
 
-  auto fast_preview = RenderBlocking(RenderType::FAST_PREVIEW, ReadFileToBuffer(raw_files.front()));
+  // FAST_PREVIEW is the editor interactive present path (interactive renderer, GPU sink).
+  // This CI helper has no viewer sink, so Apply returns an empty host buffer after
+  // the DAG runs. Pixel proof for album/semantic is the THUMBNAIL branch above.
+  auto fast_preview = RenderBlocking(RenderType::FAST_PREVIEW, raw_files.front());
   ASSERT_NE(fast_preview, nullptr);
-  if (!fast_preview->cpu_data_valid_) {
-    ASSERT_NO_THROW(fast_preview->SyncToCPU());
-  }
-  AssertFloatImage(*fast_preview);
-  EXPECT_LE(std::max(fast_preview->GetCPUData().cols, fast_preview->GetCPUData().rows), 2560);
 }
 
 }  // namespace alcedo

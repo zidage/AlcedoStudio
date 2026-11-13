@@ -57,15 +57,15 @@ TEST(EditorCdlTrackballGeometryTest, OutsidePointsClampToUnitCircle) {
   EXPECT_NEAR(clamped.y(), 0.0, 1e-6);
 }
 
-TEST(EditorCdlTrackballGeometryTest, DiscToCdlDeltaIsZeroAtCenter) {
-  const auto delta = color_wheel::DiscToCdlDelta(QPointF(0.0, 0.0), color_wheel::kStrengthDefault);
+TEST(EditorCdlTrackballGeometryTest, DiscToChannelStopsIsZeroAtCenter) {
+  const auto delta = color_wheel::DiscToChannelStops(QPointF(0.0, 0.0), color_wheel::kDiscMaxStops);
   EXPECT_NEAR(delta[0], 0.0f, 1e-5f);
   EXPECT_NEAR(delta[1], 0.0f, 1e-5f);
   EXPECT_NEAR(delta[2], 0.0f, 1e-5f);
 }
 
-TEST(EditorCdlTrackballGeometryTest, DiscToCdlDeltaProducesChromaticOffsetOffCenter) {
-  const auto  delta = color_wheel::DiscToCdlDelta(QPointF(0.8, 0.0), color_wheel::kStrengthDefault);
+TEST(EditorCdlTrackballGeometryTest, DiscToChannelStopsProducesChromaticOffsetOffCenter) {
+  const auto delta = color_wheel::DiscToChannelStops(QPointF(0.8, 0.0), color_wheel::kDiscMaxStops);
   const float abs_sum = std::abs(delta[0]) + std::abs(delta[1]) + std::abs(delta[2]);
   EXPECT_GT(abs_sum, 1e-4f);
 }

@@ -19,7 +19,7 @@
 #define MAX_REQUEST_SIZE 64u
 namespace alcedo {
 
-enum class DecodeType { SLEEVE_LOADING, THUMB, RAW, REGULAR };
+enum class DecodeType { SLEEVE_LOADING, THUMB, REGULAR };
 
 class DecoderScheduler {
  private:

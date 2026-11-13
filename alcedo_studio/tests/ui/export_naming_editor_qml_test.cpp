@@ -14,10 +14,9 @@
 #include <QTest>
 #include <QTimer>
 #include <QUrl>
-#include <QVariantList>
-#include <QVariantMap>
 #include <filesystem>
 
+#include "ui/alcedo_main/album_backend/export_recipe_builder.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 
 namespace alcedo::ui::test {
@@ -44,10 +43,6 @@ ApplicationWindow {
     height: 700
     visible: true
     color: appTheme.bgCanvasColor
-    property string savedPresetName: ""
-    property string savedPresetPattern: ""
-    property string replacedPresetName: ""
-    property string deletedPresetName: ""
 
     Loader {
         anchors.fill: parent
@@ -57,22 +52,15 @@ ApplicationWindow {
             item.objectName = "exportNamingEditor"
             item.sampleSourceName = "DSCF2074.RAF"
             item.outputExtension = ".jpg"
-            item.savePreset = function(name, pattern, replacedName) {
-                harnessRoot.savedPresetName = name
-                harnessRoot.savedPresetPattern = pattern
-                harnessRoot.replacedPresetName = replacedName
-                return true
-            }
-            item.deletePreset = function(name) {
-                harnessRoot.deletedPresetName = name
-                return true
-            }
+            item.patternRules = exportRecipe
         }
     }
 }
 )";
 
 struct NamingEditorHarness {
+  // The pattern rules of the export panel; no export starts in these tests.
+  ExportRecipeBuilder   export_recipe{nullptr};
   QQmlApplicationEngine engine;
   QQuickWindow*         window = nullptr;
   QQuickItem*           editor = nullptr;
@@ -84,6 +72,7 @@ struct NamingEditorHarness {
     });
     engine.addImportPath(SourceQmlDirectory());
     engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("exportRecipe"), &export_recipe);
     engine.rootContext()->setContextProperty(
         QStringLiteral("editorSourceUrl"),
         QUrl::fromLocalFile(SourceQmlDirectory() + QStringLiteral("/ExportNamingEditor.qml")));
@@ -108,18 +97,9 @@ TEST(ExportNamingEditorQmlTest, DefaultPatternLoadsWithSourcePreviewAndNoWarning
   EXPECT_EQ(harness.editor->property("previewName").toString(), QStringLiteral("DSCF2074.jpg"));
   EXPECT_NE(harness.window->findChild<QQuickItem*>(QStringLiteral("exportFileNamePatternField")),
             nullptr);
-  const auto* preset_combo =
-      harness.window->findChild<QQuickItem*>(QStringLiteral("exportNamingPresetCombo"));
-  ASSERT_NE(preset_combo, nullptr);
-  EXPECT_EQ(preset_combo->property("currentIndex").toInt(), 0);
-  const auto* save_button =
-      harness.window->findChild<QQuickItem*>(QStringLiteral("exportNamingSavePresetButton"));
-  ASSERT_NE(save_button, nullptr);
-  EXPECT_FALSE(save_button->isEnabled());
-  const auto* delete_button =
-      harness.window->findChild<QQuickItem*>(QStringLiteral("exportNamingDeletePresetButton"));
-  ASSERT_NE(delete_button, nullptr);
-  EXPECT_FALSE(delete_button->isEnabled());
+  // File name presets moved to the export presets (ExportPresetPicker).
+  EXPECT_EQ(harness.window->findChild<QQuickItem*>(QStringLiteral("exportNamingPresetCombo")),
+            nullptr);
   EXPECT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
 }
 
@@ -133,74 +113,12 @@ TEST(ExportNamingEditorQmlTest, PatternPreviewUpdatesForOrderedFieldsAndRejectsU
   EXPECT_TRUE(harness.editor->property("patternValid").toBool());
   EXPECT_EQ(harness.editor->property("previewName").toString(),
             QStringLiteral("2026 08 10-X-T5-0001.jpg"));
-  const auto* preset_combo =
-      harness.window->findChild<QQuickItem*>(QStringLiteral("exportNamingPresetCombo"));
-  ASSERT_NE(preset_combo, nullptr);
-  EXPECT_EQ(preset_combo->property("currentIndex").toInt(), 3);
-  const auto* save_button =
-      harness.window->findChild<QQuickItem*>(QStringLiteral("exportNamingSavePresetButton"));
-  ASSERT_NE(save_button, nullptr);
-  EXPECT_TRUE(save_button->isEnabled());
-  const auto* delete_button =
-      harness.window->findChild<QQuickItem*>(QStringLiteral("exportNamingDeletePresetButton"));
-  ASSERT_NE(delete_button, nullptr);
-  EXPECT_FALSE(delete_button->isEnabled());
 
   ASSERT_TRUE(harness.editor->setProperty("pattern", QStringLiteral("{unknown}")));
   ProcessEvents();
   EXPECT_FALSE(harness.editor->property("patternValid").toBool());
   EXPECT_EQ(harness.editor->property("previewName").toString(),
             QStringLiteral("Invalid pattern.jpg"));
-}
-
-TEST(ExportNamingEditorQmlTest, SavedPresetCanBeSelectedAndCurrentPatternCanBeNamed) {
-  NamingEditorHarness harness;
-  ASSERT_NE(harness.editor, nullptr) << harness.warnings.join('\n').toStdString();
-
-  const QVariantList saved_presets{
-      QVariantMap{{QStringLiteral("name"), QStringLiteral("Client")},
-                  {QStringLiteral("pattern"), QStringLiteral("Client-{sequence:000}")}}};
-  ASSERT_TRUE(harness.editor->setProperty("savedPresets", saved_presets));
-  ASSERT_TRUE(harness.editor->setProperty("pattern", QStringLiteral("Client-{sequence:000}")));
-  ProcessEvents();
-
-  const auto* preset_combo =
-      harness.window->findChild<QQuickItem*>(QStringLiteral("exportNamingPresetCombo"));
-  ASSERT_NE(preset_combo, nullptr);
-  EXPECT_EQ(preset_combo->property("currentIndex").toInt(), 3);
-  auto* delete_button =
-      harness.window->findChild<QQuickItem*>(QStringLiteral("exportNamingDeletePresetButton"));
-  ASSERT_NE(delete_button, nullptr);
-  EXPECT_TRUE(delete_button->isEnabled());
-
-  ASSERT_TRUE(harness.editor->setProperty("pattern", QStringLiteral("Client-v2-{sequence:000}")));
-  ProcessEvents();
-  EXPECT_EQ(preset_combo->property("currentIndex").toInt(), 4);
-  EXPECT_FALSE(delete_button->isEnabled());
-  EXPECT_EQ(harness.editor->property("selectedSavedPresetName").toString(),
-            QStringLiteral("Client"));
-  ASSERT_TRUE(QMetaObject::invokeMethod(harness.editor, "beginPresetNaming"));
-  ProcessEvents();
-  EXPECT_TRUE(harness.editor->property("namingPreset").toBool());
-
-  auto* name_field =
-      harness.window->findChild<QQuickItem*>(QStringLiteral("exportNamingPresetNameField"));
-  ASSERT_NE(name_field, nullptr);
-  EXPECT_EQ(name_field->property("text").toString(), QStringLiteral("Client"));
-  ASSERT_TRUE(name_field->setProperty("text", QStringLiteral("Archive")));
-  ASSERT_TRUE(QMetaObject::invokeMethod(harness.editor, "saveNamedPreset"));
-  ProcessEvents();
-
-  EXPECT_EQ(harness.window->property("savedPresetName").toString(), QStringLiteral("Archive"));
-  EXPECT_EQ(harness.window->property("savedPresetPattern").toString(),
-            QStringLiteral("Client-v2-{sequence:000}"));
-  EXPECT_EQ(harness.window->property("replacedPresetName").toString(), QStringLiteral("Client"));
-  EXPECT_FALSE(harness.editor->property("namingPreset").toBool());
-
-  ASSERT_TRUE(QMetaObject::invokeMethod(harness.editor, "deleteSavedPreset",
-                                        Q_ARG(QVariant, QStringLiteral("Archive"))));
-  EXPECT_EQ(harness.window->property("deletedPresetName").toString(), QStringLiteral("Archive"));
-  EXPECT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
 }
 
 }  // namespace

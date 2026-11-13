@@ -12,14 +12,17 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QTimer>
+#include <QuickQanava>
 #include <algorithm>
+#include <clocale>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <vector>
 
-#include "edit/operators/operator_registeration.hpp"
 #include "test_probe.hpp"
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
@@ -31,6 +34,9 @@
 #include "ui/editor_rhi/editor_startup.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
+
+Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
 namespace {
 
@@ -70,17 +76,9 @@ auto ParseOptions(int argc, char** argv) -> std::optional<HostOptions> {
   parser.addOption(QCommandLineOption(
       {QStringLiteral("reuse-project")},
       QStringLiteral("Open an existing project without starting a new import.")));
-#if defined(Q_OS_LINUX)
   parser.addOption(QCommandLineOption(
       {QStringLiteral("editor-backend")},
-      QStringLiteral("Editor backend token: cuda, opencl, metal, or cpu."),
-      QStringLiteral("backend")));
-#else
-  parser.addOption(QCommandLineOption(
-      {QStringLiteral("editor-backend")},
-      QStringLiteral("Editor backend token: cuda, opencl, or metal."),
-      QStringLiteral("backend")));
-#endif
+      QStringLiteral("Editor backend token: cuda, opencl, or metal."), QStringLiteral("backend")));
 
   const QStringList arguments = BuildArgumentList(argc, argv);
   if (!parser.parse(arguments)) {
@@ -121,8 +119,6 @@ auto ToAcceleratorPreference(alcedo::editor_rhi::EditorBackend backend)
       return alcedo::AcceleratorBackendPreference::OpenCL;
     case alcedo::editor_rhi::EditorBackend::Metal:
       return alcedo::AcceleratorBackendPreference::Metal;
-    case alcedo::editor_rhi::EditorBackend::Cpu:
-      return alcedo::AcceleratorBackendPreference::CPU;
   }
   return alcedo::AcceleratorBackendPreference::CPU;
 }
@@ -193,8 +189,6 @@ auto ConfigureGraphicsApi(alcedo::editor_rhi::EditorBackend backend) -> bool {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
   } else if (backend == alcedo::editor_rhi::EditorBackend::Metal) {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
-  } else if (backend == alcedo::editor_rhi::EditorBackend::Cpu) {
-    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
   } else {
     return false;
   }
@@ -218,9 +212,9 @@ int main(int argc, char* argv[]) {
     qCritical("Invalid --editor-backend: %s", backend_parse.error.c_str());
     return 1;
   }
-  auto editor_backend = backend_parse.backend.has_value()
-                            ? *backend_parse.backend
-                            : alcedo::editor_rhi::DefaultEditorBackendForPlatform();
+  const auto editor_backend = backend_parse.backend.has_value()
+                                  ? *backend_parse.backend
+                                  : alcedo::editor_rhi::DefaultEditorBackendForPlatform();
   if (!editor_backend.has_value()) {
     qCritical("No editor backend is available for this build.");
     return 1;
@@ -231,27 +225,22 @@ int main(int argc, char* argv[]) {
   }
 
   alcedo::TimeProvider::Refresh();
-  alcedo::RegisterAllOperators();
 
   QApplication app(argc, argv);
+  // QApplication applies the user's locale on macOS and Linux (setlocale(LC_ALL, "")). Keep
+  // number parsing and formatting in the C locale, as Qt recommends: .cube LUT values, search
+  // terms like f/2.8 and lens names all use a decimal point, and strtof/stod/snprintf would
+  // read or write a decimal comma under locales such as de_DE.
+  std::setlocale(LC_NUMERIC, "C");
   QQuickStyle::setStyle("Basic");
-
-#if defined(Q_OS_LINUX)
-  auto startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(*editor_backend);
-  if (!startup.ok && *editor_backend == alcedo::editor_rhi::EditorBackend::OpenCl &&
-      !backend_parse.present) {
-    qWarning("OpenCL startup failed on Linux (%s); falling back to CPU host upload",
-             startup.error.c_str());
-    *editor_backend = alcedo::editor_rhi::EditorBackend::Cpu;
-    if (!ConfigureGraphicsApi(*editor_backend)) {
-      qCritical("Could not configure the Linux CPU graphics API.");
-      return 1;
-    }
-    startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(*editor_backend);
+  if (!qEnvironmentVariableIsEmpty("ALCEDO_PREVIEW_PERF_LOG") ||
+      !qEnvironmentVariableIsEmpty("ALCEDO_TEST_FRAME_TRACE")) {
+    alcedo::diag::PreviewPerformance::Initialize();
+    QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                     [] { alcedo::diag::PreviewPerformance::Shutdown(); });
   }
-#else
+
   const auto startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(*editor_backend);
-#endif
   if (!startup.ok) {
     qCritical("Editor backend startup failed (%s): %s",
               alcedo::editor_rhi::ToString(*editor_backend), startup.error.c_str());
@@ -270,6 +259,7 @@ int main(int argc, char* argv[]) {
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
+  QuickQanava::initialize(&engine);
   language_manager.AttachEngine(&engine);
   app_modules.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty("appModules", &app_modules);
@@ -297,6 +287,68 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);
+  // Optional diagnostic capture for the complete UI. Signal timestamps are
+  // confined to the render thread; completed request records use the existing
+  // background diagnostic writer and never write files from the input handler.
+  if (!qEnvironmentVariableIsEmpty("ALCEDO_TEST_FRAME_TRACE")) {
+    auto output = std::make_shared<std::ofstream>(
+        alcedo::ui::album_util::InputToPath(qEnvironmentVariable("ALCEDO_TEST_FRAME_TRACE"))
+            .value());
+    if (!output->is_open()) {
+      qCritical("Could not open ALCEDO_TEST_FRAME_TRACE for writing.");
+      return 1;
+    }
+    *output << "id,input,submit,ready,wake,gui,consume,import,swap\n";
+    alcedo::diag::PreviewPerformance::InstallRecordSink([output](const auto& record) {
+      *output << record.request_id << ',' << record.latest_accepted_ns << ',' << record.submit_ns
+              << ',' << record.producer_ready_ns << ',' << record.present_wake_ns << ','
+              << record.gui_update_ns << ',' << record.consume_begin_ns << ',' << record.imported_ns
+              << ',' << record.frame_swapped_ns << '\n';
+      output->flush();
+    });
+    struct FrameTimes {
+      std::int64_t begin        = 0;
+      std::int64_t sync_begin   = 0;
+      std::int64_t sync_end     = 0;
+      std::int64_t render_begin = 0;
+      std::int64_t render_end   = 0;
+    };
+    const auto times = std::make_shared<FrameTimes>();
+    QObject::connect(
+        window, &QQuickWindow::beforeFrameBegin, window,
+        [times] {
+          *times       = {};
+          times->begin = alcedo::diag::PreviewPerformance::NowNs();
+        },
+        Qt::DirectConnection);
+    QObject::connect(
+        window, &QQuickWindow::beforeSynchronizing, window,
+        [times] { times->sync_begin = alcedo::diag::PreviewPerformance::NowNs(); },
+        Qt::DirectConnection);
+    QObject::connect(
+        window, &QQuickWindow::afterSynchronizing, window,
+        [times] { times->sync_end = alcedo::diag::PreviewPerformance::NowNs(); },
+        Qt::DirectConnection);
+    QObject::connect(
+        window, &QQuickWindow::beforeRendering, window,
+        [times] { times->render_begin = alcedo::diag::PreviewPerformance::NowNs(); },
+        Qt::DirectConnection);
+    QObject::connect(
+        window, &QQuickWindow::afterRendering, window,
+        [times] { times->render_end = alcedo::diag::PreviewPerformance::NowNs(); },
+        Qt::DirectConnection);
+    QObject::connect(
+        window, &QQuickWindow::afterFrameEnd, window,
+        [times] {
+          qInfo().nospace() << "[FrameTrace] begin=" << times->begin
+                            << " sync_begin=" << times->sync_begin
+                            << " sync_end=" << times->sync_end
+                            << " render_begin=" << times->render_begin
+                            << " render_end=" << times->render_end
+                            << " end=" << alcedo::diag::PreviewPerformance::NowNs();
+        },
+        Qt::DirectConnection);
+  }
   window->show();
   window->requestActivate();
 

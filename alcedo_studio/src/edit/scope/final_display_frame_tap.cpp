@@ -225,6 +225,11 @@ void FinalDisplayFrameTapSink::SubmitFinalDisplayFrame(const FinalDisplayFrameVi
     deferred       = scope_analysis_deferred_;
   }
 
+  // The display sink needs the encoding of these pixels before frame publication.
+  if (auto* sink = downstream_sink()) {
+    sink->SubmitFinalDisplayFrame(stamped_frame);
+  }
+
   // Stage a stable, analyzer-owned copy NOW on the render thread, while the
   // pipeline source (result_ptr / stream) is still valid. The deferred poll
   // later analyzes this staged frame instead of the pipeline's reused scratch.

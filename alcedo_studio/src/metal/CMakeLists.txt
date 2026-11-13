@@ -16,29 +16,14 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_GEOMETRY_UTILS_AIR "${ALCEDO_BINARY_ROOT}/metal/metal_utils/geometry_utils.air")
     set(METAL_GEOMETRY_UTILS_METALLIB "${ALCEDO_BINARY_ROOT}/metal/metal_utils/geometry_utils.metallib"
         CACHE INTERNAL "Metal geometry utils metallib path" FORCE)
-    set(METAL_LENS_CALIB_SRC "${ALCEDO_SRC_ROOT}/edit/operators/geometry/metal_shader/lens_calib.metal")
-    set(METAL_LENS_CALIB_AIR "${ALCEDO_BINARY_ROOT}/edit/operators/geometry/metal_shader/lens_calib.air")
-    set(METAL_LENS_CALIB_METALLIB "${ALCEDO_BINARY_ROOT}/edit/operators/geometry/metal_shader/lens_calib.metallib"
+    set(METAL_LENS_CALIB_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/lens/metal/shader/lens_calib.metal")
+    set(METAL_LENS_CALIB_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/lens/metal/shader/lens_calib.air")
+    set(METAL_LENS_CALIB_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/lens/metal/shader/lens_calib.metallib"
         CACHE INTERNAL "Metal lens calibration metallib path" FORCE)
-    set(METAL_FUSED_PIPELINE_SRC "${ALCEDO_SRC_ROOT}/edit/pipeline/metal_shader/fused_pipeline.metal")
-    set(METAL_FUSED_PIPELINE_AIR "${ALCEDO_BINARY_ROOT}/edit/pipeline/metal_shader/fused_pipeline.air")
-    set(METAL_FUSED_PIPELINE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/pipeline/metal_shader/fused_pipeline.metallib"
-        CACHE INTERNAL "Metal fused pipeline metallib path" FORCE)
     set(METAL_SCOPE_ANALYZER_SRC "${ALCEDO_SRC_ROOT}/edit/scope/metal_shader/scope_analyzer.metal")
     set(METAL_SCOPE_ANALYZER_AIR "${ALCEDO_BINARY_ROOT}/edit/scope/metal_shader/scope_analyzer.air")
     set(METAL_SCOPE_ANALYZER_METALLIB "${ALCEDO_BINARY_ROOT}/edit/scope/metal_shader/scope_analyzer.metallib"
         CACHE INTERNAL "Metal scope analyzer metallib path" FORCE)
-    set(METAL_FUSED_PIPELINE_DEPS
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/common.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/basic.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/tone_mapping.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/color.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/cst.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/detail.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/prng.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/film_grain.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/halation.metal"
-    )
     set(METAL_TO_LINEAR_REF_SRC "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.metal")
     set(METAL_TO_LINEAR_REF_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.air")
     set(METAL_TO_LINEAR_REF_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.metallib"
@@ -63,6 +48,40 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_DEMOSAICNET_IO_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.air")
     set(METAL_DEMOSAICNET_IO_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.metallib"
         CACHE INTERNAL "Metal DemosaicNet IO metallib path" FORCE)
+    set(METAL_GEOMETRY_RESAMPLE_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/geometry_resample.metal")
+    set(METAL_GEOMETRY_RESAMPLE_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/geometry_resample.air")
+    set(METAL_GEOMETRY_RESAMPLE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/geometry_resample.metallib"
+        CACHE INTERNAL "Metal DAG geometry resample metallib path" FORCE)
+    set(METAL_CAMERA_COLOR_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/camera_color.metal")
+    set(METAL_CAMERA_COLOR_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/camera_color.air")
+    set(METAL_CAMERA_COLOR_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/camera_color.metallib"
+        CACHE INTERNAL "Metal DAG camera color metallib path" FORCE)
+    set(METAL_PRIMARY_GRADE_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/primary_grade.metal")
+    set(METAL_PRIMARY_GRADE_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/primary_grade.air")
+    set(METAL_PRIMARY_GRADE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/primary_grade.metallib"
+        CACHE INTERNAL "Metal DAG primary grade metallib path" FORCE)
+    set(METAL_LOCAL_TONE_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/local_tone.metal")
+    set(METAL_LOCAL_TONE_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/local_tone.air")
+    set(METAL_LOCAL_TONE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/local_tone.metallib"
+        CACHE INTERNAL "Metal DAG local tone metallib path" FORCE)
+    set(METAL_MASK_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/mask.metal")
+    set(METAL_MASK_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/mask.air")
+    set(METAL_MASK_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/mask.metallib"
+        CACHE INTERNAL "Metal DAG mask metallib path" FORCE)
+    set(METAL_DISPLAY_TO_AP1_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/display_to_ap1.metal")
+    set(METAL_DISPLAY_TO_AP1_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/display_to_ap1.air")
+    set(METAL_DISPLAY_TO_AP1_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/display_to_ap1.metallib"
+        CACHE INTERNAL "Metal DAG DisplayToAp1 metallib path" FORCE)
+    set(METAL_DRT_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt.metal")
+    set(METAL_DRT_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/drt.air")
+    set(METAL_DRT_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/drt.metallib"
+        CACHE INTERNAL "Metal DAG DRT metallib path" FORCE)
+    set(METAL_FILM_PRINT_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/film_print.metal")
+    set(METAL_FILM_PRINT_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/film_print.air")
+    set(METAL_FILM_GRAIN_POST_SRC
+        "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/film_grain_post.metal")
+    set(METAL_FILM_GRAIN_POST_AIR
+        "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/film_grain_post.air")
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -130,7 +149,7 @@ if(ALCEDO_METAL_ENABLED)
              link_comment)
         set(options)
         set(oneValueArgs)
-        set(multiValueArgs DEPENDS)
+        set(multiValueArgs DEPENDS COMPILE_FLAGS LINK_AIR)
         cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
         get_filename_component(_air_dir "${air_file}" DIRECTORY)
@@ -144,6 +163,7 @@ if(ALCEDO_METAL_ENABLED)
                     ${ALCEDO_METAL_COMMON_COMPILE_FLAGS}
                     ${ALCEDO_METAL_PLATFORM_COMPILE_FLAGS}
                     ${ALCEDO_METAL_CONFIG_COMPILE_FLAGS}
+                    ${ARG_COMPILE_FLAGS}
                     -fmodules-cache-path="${ALCEDO_METAL_MODULE_CACHE_DIR}"
                     -MF "${_depfile}"
                     -c "${source_file}"
@@ -157,13 +177,20 @@ if(ALCEDO_METAL_ENABLED)
         )
         add_custom_command(
             OUTPUT "${metallib_file}"
-            COMMAND ${ALCEDO_METALLIB_EXECUTABLE} "${air_file}" -o "${metallib_file}"
-            DEPENDS "${air_file}"
+            COMMAND ${ALCEDO_METALLIB_EXECUTABLE} "${air_file}" ${ARG_LINK_AIR} -o "${metallib_file}"
+            DEPENDS "${air_file}" ${ARG_LINK_AIR}
             COMMENT "${link_comment}"
             VERBATIM
         )
         add_custom_target(${shader_target} DEPENDS "${metallib_file}")
+
+        # Every metallib this function builds ships in the bundle. Registering here keeps the
+        # runtime list from missing a library that a pass loads.
+        set_property(GLOBAL APPEND PROPERTY ALCEDO_METAL_RUNTIME_LIB_FILES "${metallib_file}")
+        set_property(GLOBAL APPEND PROPERTY ALCEDO_METAL_SHADER_TARGETS "${shader_target}")
     endfunction()
+    set_property(GLOBAL PROPERTY ALCEDO_METAL_RUNTIME_LIB_FILES "")
+    set_property(GLOBAL PROPERTY ALCEDO_METAL_SHADER_TARGETS "")
 
     alcedo_add_metal_library(
         MetalUtilsShaders
@@ -184,22 +211,12 @@ if(ALCEDO_METAL_ENABLED)
     )
 
     alcedo_add_metal_library(
-        LensCalibOpMetalShaders
+        LensCalibrationMetalShaders
         "${METAL_LENS_CALIB_SRC}"
         "${METAL_LENS_CALIB_AIR}"
         "${METAL_LENS_CALIB_METALLIB}"
         "Compiling Metal lens calibration shader"
         "Linking Metal lens calibration library"
-    )
-
-    alcedo_add_metal_library(
-        EditPipelineMetalShaders
-        "${METAL_FUSED_PIPELINE_SRC}"
-        "${METAL_FUSED_PIPELINE_AIR}"
-        "${METAL_FUSED_PIPELINE_METALLIB}"
-        "Compiling Metal fused pipeline shader"
-        "Linking Metal fused pipeline library"
-        DEPENDS ${METAL_FUSED_PIPELINE_DEPS}
     )
 
     alcedo_add_metal_library(
@@ -266,6 +283,165 @@ if(ALCEDO_METAL_ENABLED)
         "Linking Metal DemosaicNet IO library"
     )
 
+    alcedo_add_metal_library(
+        GpuDagGeometryResampleShaders
+        "${METAL_GEOMETRY_RESAMPLE_SRC}"
+        "${METAL_GEOMETRY_RESAMPLE_AIR}"
+        "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+        "Compiling Metal DAG geometry resample shader"
+        "Linking Metal DAG geometry resample library"
+    )
+
+    alcedo_add_metal_library(
+        GpuDagCameraColorShaders
+        "${METAL_CAMERA_COLOR_SRC}"
+        "${METAL_CAMERA_COLOR_AIR}"
+        "${METAL_CAMERA_COLOR_METALLIB}"
+        "Compiling Metal DAG camera color shader"
+        "Linking Metal DAG camera color library"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/dng_profile_gpu_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
+    )
+
+    alcedo_add_metal_library(
+        GpuDagPrimaryGradeShaders
+        "${METAL_PRIMARY_GRADE_SRC}"
+        "${METAL_PRIMARY_GRADE_AIR}"
+        "${METAL_PRIMARY_GRADE_METALLIB}"
+        "Compiling Metal DAG primary grade shader"
+        "Linking Metal DAG primary grade library"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+                "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/oklab_math.h"
+    )
+
+    alcedo_add_metal_library(
+        GpuDagLocalToneShaders
+        "${METAL_LOCAL_TONE_SRC}"
+        "${METAL_LOCAL_TONE_AIR}"
+        "${METAL_LOCAL_TONE_METALLIB}"
+        "Compiling Metal DAG local tone shader"
+        "Linking Metal DAG local tone library"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+    )
+
+    alcedo_add_metal_library(
+        GpuDagMaskShaders
+        "${METAL_MASK_SRC}"
+        "${METAL_MASK_AIR}"
+        "${METAL_MASK_METALLIB}"
+        "Compiling Metal DAG mask shader"
+        "Linking Metal DAG mask library"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+                "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/oklab_math.h"
+    )
+
+    # The film print has its own AIR file with no fast math, as its CUDA and OpenCL programs have.
+    # The DRT metallib links it, so the DRT passes read one library.
+    get_filename_component(_film_print_air_dir "${METAL_FILM_PRINT_AIR}" DIRECTORY)
+    add_custom_command(
+        OUTPUT "${METAL_FILM_PRINT_AIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_film_print_air_dir}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_METAL_MODULE_CACHE_DIR}"
+        COMMAND ${ALCEDO_METAL_EXECUTABLE}
+                ${ALCEDO_METAL_COMMON_COMPILE_FLAGS}
+                ${ALCEDO_METAL_PLATFORM_COMPILE_FLAGS}
+                ${ALCEDO_METAL_CONFIG_COMPILE_FLAGS}
+                -ffast-math
+                -fmodules-cache-path="${ALCEDO_METAL_MODULE_CACHE_DIR}"
+                -MF "${METAL_FILM_PRINT_AIR}.d"
+                -c "${METAL_FILM_PRINT_SRC}"
+                -o "${METAL_FILM_PRINT_AIR}"
+        DEPENDS "${METAL_FILM_PRINT_SRC}"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_print_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_field.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_tile.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_negative.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
+                "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+        DEPFILE "${METAL_FILM_PRINT_AIR}.d"
+        BYPRODUCTS "${METAL_FILM_PRINT_AIR}.d"
+        COMMENT "Compiling Metal DAG film print shader"
+        VERBATIM
+        COMMAND_EXPAND_LISTS
+    )
+
+    # The DRT/Post Film Grain has its own AIR file for the power exp2(y log2 x) of
+    # CE_METAL_POW_EXP2_LOG2 (color_encoding_math.h); the other DRT shaders keep precise::pow. The
+    # DRT metallib links it.
+    get_filename_component(_film_grain_post_air_dir "${METAL_FILM_GRAIN_POST_AIR}" DIRECTORY)
+    add_custom_command(
+        OUTPUT "${METAL_FILM_GRAIN_POST_AIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_film_grain_post_air_dir}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_METAL_MODULE_CACHE_DIR}"
+        COMMAND ${ALCEDO_METAL_EXECUTABLE}
+                ${ALCEDO_METAL_COMMON_COMPILE_FLAGS}
+                ${ALCEDO_METAL_PLATFORM_COMPILE_FLAGS}
+                ${ALCEDO_METAL_CONFIG_COMPILE_FLAGS}
+                -DCE_METAL_POW_EXP2_LOG2
+                -fmodules-cache-path="${ALCEDO_METAL_MODULE_CACHE_DIR}"
+                -MF "${METAL_FILM_GRAIN_POST_AIR}.d"
+                -c "${METAL_FILM_GRAIN_POST_SRC}"
+                -o "${METAL_FILM_GRAIN_POST_AIR}"
+        DEPENDS "${METAL_FILM_GRAIN_POST_SRC}"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_field.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_tile.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_post.h"
+                "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+        DEPFILE "${METAL_FILM_GRAIN_POST_AIR}.d"
+        BYPRODUCTS "${METAL_FILM_GRAIN_POST_AIR}.d"
+        COMMENT "Compiling Metal DAG DRT/Post Film Grain shader"
+        VERBATIM
+        COMMAND_EXPAND_LISTS
+    )
+
+    alcedo_add_metal_library(
+        GpuDagDrtShaders
+        "${METAL_DRT_SRC}"
+        "${METAL_DRT_AIR}"
+        "${METAL_DRT_METALLIB}"
+        "Compiling Metal DAG DRT shader"
+        "Linking Metal DAG DRT library"
+        DEPENDS
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_aces.metal"
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_opendrt.metal"
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_neighbor.metal"
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/film_print_scan.metal"
+            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_print_math.h"
+            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_field.h"
+            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_tile.h"
+            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_negative.h"
+            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
+            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/profile_tone_gpu_math.h"
+            "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+        LINK_AIR "${METAL_FILM_PRINT_AIR}" "${METAL_FILM_GRAIN_POST_AIR}"
+    )
+
+    # The ACES 2.0 inverse is checked against OpenColorIO within 1e-3; fast math is off.
+    alcedo_add_metal_library(
+        GpuDagDisplayToAp1Shaders
+        "${METAL_DISPLAY_TO_AP1_SRC}"
+        "${METAL_DISPLAY_TO_AP1_AIR}"
+        "${METAL_DISPLAY_TO_AP1_METALLIB}"
+        "Compiling Metal DAG DisplayToAp1 shader"
+        "Linking Metal DAG DisplayToAp1 library"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces2_reference_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/display_to_ap1_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/raster_linearize_math.h"
+        COMPILE_FLAGS -fno-fast-math
+    )
+
+    add_custom_target(GpuDagMetalShaders DEPENDS
+        "${METAL_DISPLAY_TO_AP1_METALLIB}"
+        "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+        "${METAL_CAMERA_COLOR_METALLIB}"
+        "${METAL_PRIMARY_GRADE_METALLIB}"
+        "${METAL_LOCAL_TONE_METALLIB}"
+        "${METAL_MASK_METALLIB}"
+        "${METAL_DRT_METALLIB}"
+    )
+
     add_custom_target(RawProcessorOpMetalShaders DEPENDS
         "${METAL_TO_LINEAR_REF_METALLIB}"
         "${METAL_DEBAYER_RCD_METALLIB}"
@@ -274,21 +450,13 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_CVT_REF_SPACE_METALLIB}"
         "${METAL_DEMOSAICNET_IO_METALLIB}"
     )
-    set(ALCEDO_METAL_RUNTIME_LIBS
-        "${METAL_UTILS_METALLIB}"
-        "${METAL_GEOMETRY_UTILS_METALLIB}"
-        "${METAL_LENS_CALIB_METALLIB}"
-        "${METAL_FUSED_PIPELINE_METALLIB}"
-        "${METAL_SCOPE_ANALYZER_METALLIB}"
-        "${METAL_TO_LINEAR_REF_METALLIB}"
-        "${METAL_DEBAYER_RCD_METALLIB}"
-        "${METAL_HIGHLIGHT_RECONSTRUCT_METALLIB}"
-        "${METAL_XTRANS_INTERPOLATE_METALLIB}"
-        "${METAL_CVT_REF_SPACE_METALLIB}"
-        "${METAL_DEMOSAICNET_IO_METALLIB}"
-    )
+    get_property(ALCEDO_METAL_RUNTIME_LIBS GLOBAL PROPERTY ALCEDO_METAL_RUNTIME_LIB_FILES)
     set(ALCEDO_METAL_RUNTIME_LIBS "${ALCEDO_METAL_RUNTIME_LIBS}" CACHE INTERNAL
         "Metal shader libraries required at runtime." FORCE
+    )
+    get_property(ALCEDO_METAL_SHADER_TARGETS GLOBAL PROPERTY ALCEDO_METAL_SHADER_TARGETS)
+    set(ALCEDO_METAL_SHADER_TARGETS "${ALCEDO_METAL_SHADER_TARGETS}" CACHE INTERNAL
+        "Targets that build the Metal runtime libraries." FORCE
     )
 
     # Source paths are relative to ALCEDO_SRC_ROOT (this file lives under metal/).
@@ -341,11 +509,10 @@ if(ALCEDO_METAL_ENABLED)
         "-framework MetalPerformanceShadersGraph"
     )
 
-    # Tile IO orchestration + product RAW Neural entry (hard-fail).
+    # Tile IO orchestration for the Metal Neural Engine develop path.
     def_library(MetalDemosaicNetEntry
         SOURCES
             "${ALCEDO_SRC_ROOT}/decoders/processor/nn/metal_demosaicnet_tiled.mm"
-            "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_demosaicnet.cpp"
         PUBLIC_DEPS
             MetalDemosaicNet
             MetalImage

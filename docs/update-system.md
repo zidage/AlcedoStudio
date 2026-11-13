@@ -84,6 +84,9 @@ beta feed. Override `ALCEDO_UPDATE_BASE_URL` for local staging.
 
 ## Package
 
+The package scripts require the film print resources. Set `ALCEDO_FILM_PRINT_RESOURCE_DIR` before
+these commands; see "Packaging" in `build_from_source.md`.
+
 ```powershell
 # Windows (sets ALCEDO_UPDATE_ALLOW_INSTALL=ON, stable feed)
 powershell -ExecutionPolicy Bypass -File scripts\package_windows.ps1
@@ -92,8 +95,15 @@ powershell -ExecutionPolicy Bypass -File scripts\package_windows.ps1
 ./scripts/package_macos.sh
 ```
 
-Use the NSIS `.exe` for Windows updates. Use the CPack `.zip` for macOS updates.
-Keep the DMG for manual / website download.
+Use the NSIS `.exe` for Windows updates. Use the `.zip` for macOS updates. Keep
+the DMG for manual / website download.
+
+On macOS, `cmake --install` deploys and signs the `.app` once. CPack packages that
+verified bundle into the DMG, and a CPack post-build script archives the same
+bundle into the ZIP with `ditto`, which keeps the extended attributes that hold
+code signatures. The package script then extracts the ZIP the way the in-app
+updater does, mounts the DMG, and verifies both bundles. Code signing
+(`--codesign-identity`) belongs to the install step, before these checks.
 
 Pass `-Channel beta` (Windows) or `--channel beta` (macOS) only when you are
 testing the updater. The matching VS Code tasks already pass those flags.
@@ -137,7 +147,8 @@ Markdown headings/fences, URLs, files larger than 16 KiB, and missing final
 newlines are rejected. Do not put download links in these files. The GitHub
 archive job appends official update URLs when it composes the GitHub body.
 
-The root `CHANGELOG.md` only points to this tracked directory.
+The repository root has no `CHANGELOG.md`. This directory is the only source of
+release notes.
 
 The skill runs this evidence command internally:
 
@@ -184,7 +195,11 @@ This script:
 2. Records `git rev-parse HEAD` as `commit`. A dirty worktree is refused.
 3. Finds the package in the fixed output directory: Windows uses the NSIS
    `build/release/package/*.exe`; macOS uses
-   `build/macos-release/package/*.zip` plus its `.dmg`.
+   `build/macos-release/package/*.zip` plus its `.dmg`. The package script
+   records the commit it packaged in `<package>.commit`. The script refuses the
+   package when that record is missing, when the worktree had uncommitted
+   changes at package time, or when the record is not the `commit` from step 2.
+   After you check out another commit, package again before you publish.
 4. Writes a **single-platform** `update-manifest.json` (schema 1) that embeds
    the approved notes, this platform's build, and the packaged commit.
 5. Signs with `alcedo_update_signer` and verifies the signature and package
@@ -242,15 +257,25 @@ uploaded a stable pair, this workflow must fail.
 1. Merge the last feature work to `main`.
 2. Generate and approve the version notes. Commit them as the last commit of
    that version.
-3. On each package machine, check out that merge commit on `main`. Run the
+3. Release the agent skill in
+   [alcedo-skills](https://github.com/zidage/alcedo-skills). Its
+   `skills/alcedo/references/` is the alcedo-cli documentation. This
+   repository does not pin a commit of it. In a local checkout of
+   alcedo-skills, check the reference against the release build (configure
+   with `-DALCEDO_SKILLS_DIR=<checkout>` and run `AutomationReferenceDocs`),
+   then run `scripts/set_version.py <version>`, commit, and push a tag `v<version>`
+   (and `main`, when that commit is its head). Do this for every release, also
+   when the automation commands did not change, so that the skill version names
+   the app version that it was checked with.
+4. On each package machine, check out that merge commit on `main`. Run the
    **Release** package task (stable).
-4. Upload that platform with `publish_update.py`. That platform is now live.
-5. After both live stable manifests show the same version, run
+5. Upload that platform with `publish_update.py`. That platform is now live.
+6. After both live stable manifests show the same version, run
    **Archive stable update to GitHub** by hand. Each packaged commit must exist
    on `origin/main`; the two platforms do not need the same SHA.
 
-Until step 4 happens for a platform, nothing user-facing changes. Running the
-archive workflow does not perform step 4.
+Until step 5 happens for a platform, nothing user-facing changes. Running the
+archive workflow does not perform step 5.
 
 ## Packaged end-to-end install test
 

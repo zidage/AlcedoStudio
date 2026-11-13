@@ -13,6 +13,7 @@
 #include <optional>
 #include <vector>
 
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/frame_presentation_lease.hpp"
@@ -82,6 +83,10 @@ class DirectPresentQueue final {
     SlotNative            native{};
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata  preview_metadata{};
+    /// ResolveRenderGeometry result of the frame (FrameCompletionSubmission::geometry). Set by
+    /// NotifyReady; empty for a frame without geometry. Valid while the slot is Ready or
+    /// RendererReading.
+    ResolvedRenderGeometry geometry{};
     std::uint64_t         session_epoch  = 0;
     std::uint64_t         image_identity = 0;
     std::uint64_t         sequence       = 0;
@@ -105,6 +110,7 @@ class DirectPresentQueue final {
     std::size_t   producer_writing_count      = 0;
     std::size_t   ready_count                 = 0;
     bool          consumer_available          = true;
+    bool          presentation_suspended      = false;
   };
 
   struct PrepareResult {
@@ -127,13 +133,14 @@ class DirectPresentQueue final {
   void               FailSizeRequest(const SizeRequest& request);
   [[nodiscard]] auto DrainSizeRequests() -> std::vector<SizeRequest>;
 
-  // Producer wait for an explicit create/fail/invalidate/shutdown result.
+  // Producer wait for an explicit create/fail/invalidate/suspend/shutdown result.
   // Never uses a timer as a correctness mechanism.
   [[nodiscard]] auto WaitForWritableSlot(const SizeRequest& request) -> std::optional<int>;
 
   // Worker-thread producers: wait briefly for synchronize() to enable the
   // consumer. The timeout prevents a hidden/unloaded viewport from retaining a
   // pipeline worker indefinitely. GUI-thread callers must not use this.
+  // Returns false at once while presentation is suspended.
   [[nodiscard]] auto WaitUntilConsumerAvailable(std::chrono::milliseconds timeout) -> bool;
 
   // Render thread publishes a fully created native into a selected slot.
@@ -144,15 +151,21 @@ class DirectPresentQueue final {
   // old surface lock that spans map→write→unmap).
   [[nodiscard]] auto BeginWrite(int slot_index) -> std::optional<SlotSnapshot>;
   void               EndWrite(int slot_index);
-  void               NotifyReady(int slot_index, FramePresentationMode mode,
-                                 const FramePreviewMetadata& metadata);
+  /// Hand a written slot to the render thread. @p geometry is the ResolveRenderGeometry result of
+  /// the frame; the viewport maps coverage to the photo with it (SM8.6).
+  void NotifyReady(int slot_index, FramePresentationMode mode, const FramePreviewMetadata& metadata,
+                   const ResolvedRenderGeometry& geometry = {});
   void               AbandonWrite(int slot_index);
 
   // Render-thread consumption. Newest compatible ready frame wins per layer;
   // older undisplayed ready frames for that layer are superseded and recycled.
   [[nodiscard]] auto ConsumeNewestReady(FrameRole layer, std::uint64_t session_epoch,
                                         std::uint64_t image_identity) -> std::optional<ReadyFrame>;
-  // After QRhi no longer samples the slot (layer replaced or renderer teardown).
+  // Marks a RendererReading slot Available. The render thread must finish GPU
+  // sampling first: OpenCL acquires the same GL texture on the next write, and
+  // destroying the QRhi wrapper is not a GPU wait. CUDA/D3D11 serialize in the
+  // graphics/compute runtime; OpenCL needs an explicit glFinish (see
+  // FinishOpenGlBeforeOpenClSharedTextureReuse).
   void               CompleteRendererRead(int slot_index);
 
   // Diagnostic: every composed primary frame increments composed_frame_count
@@ -161,6 +174,11 @@ class DirectPresentQueue final {
                                        std::uint64_t image_identity);
 
   void               SetConsumerAvailable(bool available);
+  // The viewport is minimized or hidden. Unlike a consumer that is not
+  // synchronized yet, a suspended consumer does not come back on its own, so
+  // producers fail at once instead of waiting with the render lock held.
+  void               SetPresentationSuspended(bool suspended);
+  [[nodiscard]] auto PresentationSuspended() const -> bool;
   void InvalidateSessionEpoch(std::uint64_t session_epoch, std::uint64_t image_identity = 0);
   void InvalidateTargetGeneration();
   void Shutdown();
@@ -176,6 +194,9 @@ class DirectPresentQueue final {
   [[nodiscard]] auto SlotAt(int index) const -> std::optional<SlotSnapshot>;
   [[nodiscard]] auto HasWritableSlot(int width, int height, std::uint64_t session_epoch,
                                      std::uint64_t image_identity) const -> bool;
+  /// True when a Ready slot is waiting, or a size request still needs a
+  /// render-thread turn to create the native resource.
+  [[nodiscard]] auto HasReadyFrame() const -> bool;
 
  private:
   struct Slot {
@@ -185,6 +206,7 @@ class DirectPresentQueue final {
     SlotNative            native{};
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata  preview_metadata{};
+    ResolvedRenderGeometry geometry{};
     std::uint64_t         session_epoch  = 0;
     std::uint64_t         image_identity = 0;
     std::uint64_t         sequence       = 0;
@@ -206,6 +228,7 @@ class DirectPresentQueue final {
   // a visible exposed window publishes consumer availability.
   bool                         consumer_available_          = false;
   bool                         shutdown_                    = false;
+  bool                         presentation_suspended_      = false;
   std::uint64_t                target_generation_           = 0;
   std::uint64_t                session_epoch_               = 0;
   std::uint64_t                image_identity_              = 0;

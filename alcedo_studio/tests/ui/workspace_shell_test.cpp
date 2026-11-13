@@ -10,6 +10,9 @@
 #include <QColor>
 #include <QEasingCurve>
 #include <QPoint>
+#include <QQmlContext>
+#include <QQmlEngine>
+#include <QQmlProperty>
 #include <QQuickItem>
 #include <QSettings>
 #include <QTest>
@@ -19,6 +22,8 @@
 
 #include <chrono>
 
+#include "app/editor_pending_input.hpp"
+#include "app/editor_session_types.hpp"
 #include "ui/main_qml_test_fixture.hpp"
 
 #ifdef HAVE_CUDA
@@ -38,7 +43,7 @@
 
 #include "app/editor_render_intent.hpp"
 #include "support/harness_completing_pipeline_scheduler_port.hpp"
-#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
@@ -161,7 +166,7 @@ void SeedLibraryThumbnails(ApplicationModuleHost& host, int count, int content_h
     // Empty data URL: the grid renders placeholder cards (no decode attempt) so
     // the async QQuickImage decode-failure warning never fires. Routing, scroll,
     // and filter tests do not depend on thumbnail pixels.
-    item.thumb_data_url = QString();
+    item.thumb_url      = QString();
     items.push_back(item);
   }
   host.library()->view_state().all_images_  = items;
@@ -744,7 +749,7 @@ TEST_F(WorkspaceShellTests, LibraryGridPinsSurviveEditorSwitchDuringZoom) {
   auto* grid = loaded->window->findChild<QObject*>(QStringLiteral("libraryThumbnailGridView"));
   ASSERT_NE(grid, nullptr);
 
-  // Keep the explicit pin outside the four seeded delegate keys so the test
+  // Keep the explicit pin outside the four populated delegate keys so the test
   // measures the deferred release itself instead of combining two references.
   constexpr uint kElementId = 9000;
   constexpr uint kImageId   = 9000;
@@ -845,11 +850,11 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   if (raw_paths.empty()) {
     GTEST_SKIP() << "RAW fixture om1.dng is required for an interactive viewport session";
   }
-  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
-  ASSERT_TRUE(seeded.has_value());
-  ASSERT_EQ(seeded->images_.size(), 2u);
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, raw_paths);
+  ASSERT_TRUE(populated.has_value());
+  ASSERT_EQ(populated->images_.size(), 2u);
 
-  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  auto loaded = LoadMainWindowWithPackedProject(populated->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ASSERT_TRUE(InstallTestFrameProducer(loaded->host));
@@ -859,8 +864,8 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   ASSERT_NE(session, nullptr);
   ASSERT_NE(router, nullptr);
 
-  const auto image_a = seeded->images_.at(0);
-  const auto image_b = seeded->images_.at(1);
+  const auto image_a = populated->images_.at(0);
+  const auto image_b = populated->images_.at(1);
   router->OpenEditor(static_cast<uint>(image_a.file_id_), static_cast<uint>(image_a.image_id_));
   ASSERT_TRUE(WaitForInteractiveImage(loaded->host, session, static_cast<uint>(image_a.file_id_),
                                       static_cast<uint>(image_a.image_id_)));
@@ -903,12 +908,15 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   EXPECT_GT(viewport_a->sessionEpoch(), gen_b);
   EXPECT_EQ(viewport_a->imageIdentity(), image_a.image_id_);
 
-  // Leaving the editor workspace hides the retained viewport. Its sink remains
-  // bound because route changes no longer destroy or close the editor session.
+  // Leaving the editor workspace hides the retained viewport. PersistCurrentImage
+  // materializes the last edit without closing the session, so the album
+  // thumbnail can update while re-entry stays immediate.
   router->OpenLibrary();
   ProcessEvents(60);
   EXPECT_TRUE(session->presentation_viewport_bound());
   EXPECT_NE(session->presentation_frame_sink(), nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      session->session_state() != alcedo::EditorSessionState::Saving, 10000);
 
   // This test intentionally retains the session across the route change. End
   // it explicitly so fixture teardown does not have to join a quality render.
@@ -1092,13 +1100,12 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   EXPECT_EQ(viewport->adjustmentFrameRequestCount(), wakeups_before_drag + 3);
   EXPECT_TRUE(viewport->interactivePresentLoopActive())
       << "unsettled adjustment must arm vsync-sampled consume";
-  const auto interactive_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-  while (viewport->presentedFrameCount() <= composed_before_drag &&
-         std::chrono::steady_clock::now() < interactive_deadline) {
-    ProcessEvents(20);
-  }
-  EXPECT_GT(viewport->presentedFrameCount(), composed_before_drag)
-      << "Interactive adjustment did not compose until pointer release";
+  const auto pending = loaded->host.editor_session_service()->PeekPendingInput();
+  const auto* exposure = alcedo::FindPendingField(pending, "exposure");
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_EQ(alcedo::PendingScalarValue(*exposure), 0.30f);
+  EXPECT_EQ(composed_before_drag, viewport->presentedFrameCount())
+      << "queued input must not apply or render until the owner consumes it";
 
   // A→B→A: late frame from the first A session must not replace the current A.
   const auto gen_a1 = viewport->sessionEpoch();
@@ -1125,15 +1132,15 @@ TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
   if (raw_paths.empty()) {
     GTEST_SKIP() << "RAW fixture om1.dng is required for viewport input";
   }
-  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
-  ASSERT_TRUE(seeded.has_value());
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, raw_paths);
+  ASSERT_TRUE(populated.has_value());
 
-  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  auto loaded = LoadMainWindowWithPackedProject(populated->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ASSERT_TRUE(InstallTestFrameProducer(loaded->host));
 
-  const auto image = seeded->images_.front();
+  const auto image = populated->images_.front();
   loaded->host.workspace_router()->OpenEditor(static_cast<uint>(image.file_id_),
                                               static_cast<uint>(image.image_id_));
   ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
@@ -1149,7 +1156,8 @@ TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
   EXPECT_TRUE(viewport_item->isVisible());
 
   // Seed non-zero image geometry so pan/zoom math is defined.
-  interaction->setImageSize(4000, 3000);
+  interaction->setDisplayedMaskGeometry(
+      alcedo::MaskEditGeometry::MakeIdentityPhotographGeometry(alcedo::Extent2D{4000, 3000}));
   interaction->setRenderReferenceSize(4000, 3000);
   interaction->setViewportMetrics(viewport_item->width(), viewport_item->height(), 1.0);
   interaction->applyViewTransformForTest(2.0f, 0.0f, 0.0f);
@@ -1442,7 +1450,7 @@ TEST_F(WorkspaceShellTests, WorkspaceRouteRoundTripPreservesLastEditedTarget) {
   auto loaded = LoadMainWindow();
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
-  // Seed the library model so editorImageStillExists(lastEl) resolves in-view.
+  // Seed the library model so the list check finds lastEl among the loaded rows.
   SeedLibraryThumbnails(loaded->host, 8);
   ProcessEvents(80);
 
@@ -1487,12 +1495,12 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
   if (raw_paths.empty()) {
     GTEST_SKIP() << "RAW fixture om1.dng is required for deleting an interactive image";
   }
-  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
-  ASSERT_TRUE(seeded.has_value());
-  const auto file_id  = static_cast<uint>(seeded->file_id_);
-  const auto image_id = static_cast<uint>(seeded->image_id_);
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, raw_paths);
+  ASSERT_TRUE(populated.has_value());
+  const auto file_id  = static_cast<uint>(populated->file_id_);
+  const auto image_id = static_cast<uint>(populated->image_id_);
 
-  auto       loaded   = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  auto       loaded   = LoadMainWindowWithPackedProject(populated->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ASSERT_TRUE(InstallTestFrameProducer(loaded->host));
@@ -1503,7 +1511,7 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
   ASSERT_NE(router, nullptr);
   ASSERT_NE(session, nullptr);
 
-  // Edit the seeded image; Open records it as the last-edited image.
+  // Edit the populated image; Open records it as the last-edited image.
   router->OpenEditor(file_id, image_id);
   ASSERT_TRUE(WaitForInteractiveImage(loaded->host, session, file_id, image_id));
   ASSERT_EQ(router->workspace(), QStringLiteral("editor"));
@@ -1524,7 +1532,11 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
       loaded->window->findChild<QObject*>(QStringLiteral("imageActionsController"));
   ASSERT_NE(image_actions, nullptr);
   ASSERT_TRUE(QMetaObject::invokeMethod(image_actions, "runDeleteTargets"));
-  ProcessEvents(500);
+  // The delete runs on a worker; wait until the reloaded view no longer shows the image.
+  for (int attempt = 0; attempt < 200 && loaded->host.library()->ShownCount() > 0; ++attempt) {
+    ProcessEvents(50);
+  }
+  ProcessEvents(200);
 
   // Editor stays selected, drops to the empty state, and forgets the image.
   EXPECT_EQ(router->workspace(), QStringLiteral("editor"));
@@ -1666,12 +1678,12 @@ TEST_F(WorkspaceShellTests, LibraryScrollPositionSurvivesEditorRoundTrip) {
 
 TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
   ASSERT_TRUE(QCoreApplication::instance());
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
-  ASSERT_TRUE(seeded.has_value());
-  const auto file_id  = static_cast<uint>(seeded->file_id_);
-  const auto image_id = static_cast<uint>(seeded->image_id_);
+  const auto populated = CreatePopulatedPackedProject(temp_dir_);
+  ASSERT_TRUE(populated.has_value());
+  const auto file_id  = static_cast<uint>(populated->file_id_);
+  const auto image_id = static_cast<uint>(populated->image_id_);
 
-  auto       loaded   = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  auto       loaded   = LoadMainWindowWithPackedProject(populated->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ProcessEvents(80);
@@ -1718,11 +1730,11 @@ TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
 
 TEST_F(WorkspaceShellTests, EditorCollectionChangeOpensFirstImageWhenCurrentMissing) {
   ASSERT_TRUE(QCoreApplication::instance());
-  const auto seeded = CreateSeededPackedProject(temp_dir_, {}, 2);
-  ASSERT_TRUE(seeded.has_value());
-  ASSERT_EQ(seeded->images_.size(), 2u);
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, {}, 2);
+  ASSERT_TRUE(populated.has_value());
+  ASSERT_EQ(populated->images_.size(), 2u);
 
-  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  auto loaded = LoadMainWindowWithPackedProject(populated->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ProcessEvents(80);
@@ -1734,8 +1746,8 @@ TEST_F(WorkspaceShellTests, EditorCollectionChangeOpensFirstImageWhenCurrentMiss
       FindFolderId(loaded->host.folders()->Folders(), QStringLiteral("AlbumOnlySecond"));
   ASSERT_NE(album_id, 0u);
 
-  const auto first  = seeded->images_[0];
-  const auto second = seeded->images_[1];
+  const auto   first  = populated->images_[0];
+  const auto   second = populated->images_[1];
   QVariantList targets;
   targets.push_back(QVariantMap{{QStringLiteral("elementId"), static_cast<uint>(second.file_id_)},
                                 {QStringLiteral("imageId"), static_cast<uint>(second.image_id_)}});
@@ -1751,8 +1763,7 @@ TEST_F(WorkspaceShellTests, EditorCollectionChangeOpensFirstImageWhenCurrentMiss
   loaded->host.folders()->SelectFolder(album_id);
   ProcessEvents(400);
   EXPECT_EQ(loaded->host.library()->ShownCount(), 1);
-  EXPECT_EQ(loaded->host.library()->IndexOfElementInCurrentView(static_cast<uint>(first.file_id_)),
-            -1);
+  EXPECT_EQ(loaded->host.library()->model().rowByElementId(static_cast<uint>(first.file_id_)), -1);
   EXPECT_EQ(loaded->host.editor_session()->last_element_id(), static_cast<uint>(second.file_id_));
   EXPECT_EQ(loaded->host.workspace_router()->element_id(), static_cast<uint>(second.file_id_));
 
@@ -1767,11 +1778,11 @@ TEST_F(WorkspaceShellTests, EditorCollectionChangeOpensFirstImageWhenCurrentMiss
 
 TEST_F(WorkspaceShellTests, EditorCollectionChangeRevealsCurrentImageWhenStillPresent) {
   ASSERT_TRUE(QCoreApplication::instance());
-  const auto seeded = CreateSeededPackedProject(temp_dir_, {}, 2);
-  ASSERT_TRUE(seeded.has_value());
-  ASSERT_EQ(seeded->images_.size(), 2u);
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, {}, 2);
+  ASSERT_TRUE(populated.has_value());
+  ASSERT_EQ(populated->images_.size(), 2u);
 
-  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  auto loaded = LoadMainWindowWithPackedProject(populated->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ProcessEvents(80);
@@ -1782,8 +1793,8 @@ TEST_F(WorkspaceShellTests, EditorCollectionChangeRevealsCurrentImageWhenStillPr
   const uint album_id = FindFolderId(loaded->host.folders()->Folders(), QStringLiteral("AlbumBoth"));
   ASSERT_NE(album_id, 0u);
 
-  const auto first  = seeded->images_[0];
-  const auto second = seeded->images_[1];
+  const auto   first  = populated->images_[0];
+  const auto   second = populated->images_[1];
   QVariantList targets;
   targets.push_back(QVariantMap{{QStringLiteral("elementId"), static_cast<uint>(first.file_id_)},
                                 {QStringLiteral("imageId"), static_cast<uint>(first.image_id_)}});
@@ -1801,7 +1812,7 @@ TEST_F(WorkspaceShellTests, EditorCollectionChangeRevealsCurrentImageWhenStillPr
   ProcessEvents(400);
   EXPECT_EQ(loaded->host.library()->ShownCount(), 2);
   const int row =
-      loaded->host.library()->IndexOfElementInCurrentView(static_cast<uint>(second.file_id_));
+      loaded->host.library()->model().rowByElementId(static_cast<uint>(second.file_id_));
   EXPECT_GE(row, 0);
   EXPECT_EQ(loaded->host.editor_session()->last_element_id(), static_cast<uint>(second.file_id_));
   EXPECT_EQ(loaded->host.workspace_router()->element_id(), static_cast<uint>(second.file_id_));
@@ -1834,7 +1845,7 @@ TEST_F(WorkspaceShellTests, EditorDesktopOrderIsHistoryCenterAdjustments) {
   loaded->window->resize(1400, 900);
   ProcessEvents(40);
 
-  auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
+  auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceRail"));
   auto* center = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
   auto* right  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
   auto* scope  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorScopeSlot"));
@@ -1860,23 +1871,23 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   if (raw_paths.empty()) {
     GTEST_SKIP() << "RAW fixture om1.dng is required for the history rail";
   }
-  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
-  ASSERT_TRUE(seeded.has_value());
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, raw_paths);
+  ASSERT_TRUE(populated.has_value());
 
-  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  auto loaded = LoadMainWindowWithPackedProject(populated->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ASSERT_TRUE(InstallTestFrameProducer(loaded->host));
 
   auto* session = loaded->host.editor_session();
   ASSERT_NE(session, nullptr);
-  const auto image = seeded->images_.front();
+  const auto image = populated->images_.front();
   loaded->host.workspace_router()->OpenEditor(static_cast<uint>(image.file_id_),
                                               static_cast<uint>(image.image_id_));
   ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
                                       static_cast<uint>(image.file_id_),
                                       static_cast<uint>(image.image_id_)));
-  EXPECT_TRUE(session->history_panel_page().isEmpty());
+  EXPECT_TRUE(session->editor_tool_panel_page().isEmpty());
 
   auto* history_btn =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRailButton"));
@@ -1888,9 +1899,9 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   // Open History.
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
   ProcessEvents(60);
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("history"));
   auto* panel =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsPanel"));
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolPanel"));
   ASSERT_NE(panel, nullptr);
   EXPECT_TRUE(panel->isVisible());
   auto* history_body =
@@ -1902,7 +1913,7 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   // (Loader loads only the active page), not merely hidden.
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(versions_btn));
   ProcessEvents(60);
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("versions"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("versions"));
   auto* versions_body =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsPageBody"));
   ASSERT_NE(versions_body, nullptr);
@@ -1913,19 +1924,19 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   // Selecting the active action again collapses the panel; the rail remains.
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(versions_btn));
   ProcessEvents(60);
-  EXPECT_TRUE(session->history_panel_page().isEmpty());
+  EXPECT_TRUE(session->editor_tool_panel_page().isEmpty());
   // Closed rail: panel shell may be non-visible / zero-width; no page bodies.
   EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsPageBody")),
             nullptr);
   EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryPageBody")),
             nullptr);
-  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail")), nullptr);
+  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolRail")), nullptr);
 
   // Re-open History, then round-trip Library and confirm in-memory page survives
   // the editor Loader teardown/recreate.
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
   ProcessEvents(60);
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("history"));
   loaded->host.workspace_router()->OpenLibrary();
   ProcessEvents(40);
   loaded->host.workspace_router()->OpenEditor(static_cast<uint>(image.file_id_),
@@ -1933,14 +1944,86 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
                                       static_cast<uint>(image.file_id_),
                                       static_cast<uint>(image.image_id_)));
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("history"));
   auto* panel_after =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsPanel"));
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolPanel"));
   ASSERT_NE(panel_after, nullptr);
   EXPECT_TRUE(panel_after->isVisible());
 
   EXPECT_TRUE(loaded->qml_warnings.empty())
       << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, NodesPageKeepsViewerAtLeast360LogicalPixelsAt960x640) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+  loaded->window->resize(960, 640);
+  ProcessEvents(40);
+
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  session->set_editor_tool_panel_page(QStringLiteral("nodes"));
+  ProcessEvents(60);
+
+  auto* workspace  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspace"));
+  auto* center_col = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorCenterColumn"));
+  auto* nodes_body = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesPageBody"));
+  ASSERT_NE(workspace, nullptr);
+  ASSERT_NE(center_col, nullptr);
+  ASSERT_NE(nodes_body, nullptr);
+  EXPECT_EQ(workspace->property("minimumViewportWidth").toInt(), 360);
+  EXPECT_GE(center_col->width(), 360.0 - 1.0);
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("nodes"));
+}
+
+TEST_F(WorkspaceShellTests, MaskGroupsPageRoutesFromRailAndKeepsViewerAtLeast360) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+  loaded->window->resize(960, 640);
+  ProcessEvents(40);
+
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  auto* rail_button =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupsRailButton"));
+  ASSERT_NE(rail_button, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(rail_button));
+  ProcessEvents(60);
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("maskgroups"));
+
+  auto* workspace  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspace"));
+  auto* center_col =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorCenterColumn"));
+  auto* groups_body =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupsPageBody"));
+  ASSERT_NE(workspace, nullptr);
+  ASSERT_NE(center_col, nullptr);
+  ASSERT_NE(groups_body, nullptr);
+  EXPECT_TRUE(groups_body->isVisible());
+  EXPECT_EQ(workspace->property("minimumViewportWidth").toInt(), 360);
+  EXPECT_GE(center_col->width(), 360.0 - 1.0);
+  // The Nodes body stays unloaded while the shared controller feeds Mask Groups.
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesPageBody")),
+            nullptr);
+
+  // Selecting the active rail action again folds the panel and unloads the body.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(rail_button));
+  ProcessEvents(60);
+  EXPECT_TRUE(session->editor_tool_panel_page().isEmpty());
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupsPageBody")),
+            nullptr);
 }
 
 TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) {
@@ -1958,17 +2041,17 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
   if (raw_paths.empty()) {
     GTEST_SKIP() << "RAW fixture om1.dng is required for adjustment panel navigation";
   }
-  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
-  ASSERT_TRUE(seeded.has_value());
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, raw_paths);
+  ASSERT_TRUE(populated.has_value());
 
-  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  auto loaded = LoadMainWindowWithPackedProject(populated->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ASSERT_TRUE(InstallTestFrameProducer(loaded->host));
 
   auto* session = loaded->host.editor_session();
   ASSERT_NE(session, nullptr);
-  const auto image = seeded->images_.front();
+  const auto image = populated->images_.front();
   loaded->host.workspace_router()->OpenEditor(static_cast<uint>(image.file_id_),
                                               static_cast<uint>(image.image_id_));
   ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
@@ -1976,8 +2059,8 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
                                       static_cast<uint>(image.image_id_)));
   EXPECT_EQ(session->active_adjustment_panel(), QStringLiteral("tone"));
 
-  // Order matches EditorAdjustmentStack navbar + StackLayout indices:
-  // tone=0, look=1, lut=2, display=3, geometry=4, raw=5.
+  // Page-0 entries of the EditorAdjustmentStack navbar (Mask lives on the hidden
+  // page and only scrolls in during mask editing).
   const QStringList panels = {QStringLiteral("tone"),     QStringLiteral("look"),
                               QStringLiteral("lut"),      QStringLiteral("display"),
                               QStringLiteral("geometry"), QStringLiteral("raw")};
@@ -2038,7 +2121,7 @@ TEST_F(WorkspaceShellTests, NarrowWindowKeepsSidePanelOrderAndMinViewport) {
   loaded->window->resize(900, 700);
   ProcessEvents(60);
 
-  auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
+  auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceRail"));
   auto* center     = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
   auto* center_col = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorCenterColumn"));
   auto* right     = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
@@ -2062,7 +2145,7 @@ TEST_F(WorkspaceShellTests, NarrowWindowKeepsSidePanelOrderAndMinViewport) {
   ASSERT_NE(history_btn, nullptr);
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
   ProcessEvents(60);
-  EXPECT_EQ(loaded->host.editor_session()->history_panel_page(), QStringLiteral("history"));
+  EXPECT_EQ(loaded->host.editor_session()->editor_tool_panel_page(), QStringLiteral("history"));
   EXPECT_LT(SceneX(left), SceneX(center));
   EXPECT_LT(SceneX(center), SceneX(right));
 
@@ -2122,7 +2205,7 @@ TEST_F(WorkspaceShellTests, EditorCardSurfacesResolveThroughSharedCardFamily) {
   EXPECT_EQ(expected_surface, alcedo::ui::AppTheme::Instance().cardSurfaceColor());
   EXPECT_EQ(expected_border, alcedo::ui::AppTheme::Instance().cardBorderColor());
 
-  auto* rail      = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail"));
+  auto* rail      = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolRail"));
   auto* stack     = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
   auto* filmstrip = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstrip"));
   auto* viewport  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
@@ -2165,7 +2248,7 @@ TEST_F(WorkspaceShellTests, EditorCardSurfacesResolveThroughSharedCardFamily) {
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
   ProcessEvents(40);
   auto* panel =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsPanel"));
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolPanel"));
   ASSERT_NE(panel, nullptr);
   EXPECT_TRUE(panel->isVisible());
 }
@@ -2182,12 +2265,15 @@ TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNa
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRailButton"));
   auto* versions_btn =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsRailButton"));
+  auto* nodes_btn =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesRailButton"));
   auto* tone_nav =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentNav_tone"));
   auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
   auto* editor_nav  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
   ASSERT_NE(history_btn, nullptr);
   ASSERT_NE(versions_btn, nullptr);
+  ASSERT_NE(nodes_btn, nullptr);
   ASSERT_NE(tone_nav, nullptr);
   ASSERT_NE(library_nav, nullptr);
   ASSERT_NE(editor_nav, nullptr);
@@ -2197,6 +2283,8 @@ TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNa
   EXPECT_NEAR(history_btn->height(), 40.0, 0.5);
   EXPECT_NEAR(versions_btn->width(), 40.0, 0.5);
   EXPECT_NEAR(versions_btn->height(), 40.0, 0.5);
+  EXPECT_NEAR(nodes_btn->width(), 40.0, 0.5);
+  EXPECT_NEAR(nodes_btn->height(), 40.0, 0.5);
 
   // Rails and dense adjustment navigation share compact icon geometry.
   EXPECT_EQ(history_btn->property("opticalSize").toInt(),
@@ -2212,6 +2300,7 @@ TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNa
   // Accessible names / tooltips present on structural actions.
   EXPECT_FALSE(history_btn->property("actionName").toString().isEmpty());
   EXPECT_FALSE(versions_btn->property("actionName").toString().isEmpty());
+  EXPECT_FALSE(nodes_btn->property("actionName").toString().isEmpty());
   EXPECT_FALSE(tone_nav->property("actionName").toString().isEmpty());
   EXPECT_FALSE(library_nav->property("actionName").toString().isEmpty());
   EXPECT_FALSE(editor_nav->property("actionName").toString().isEmpty());
@@ -2232,7 +2321,7 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   loaded->host.workspace_router()->OpenEditor(0, 0);
   ProcessEvents(80);
 
-  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
+  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceRail"));
   auto* session = loaded->host.editor_session();
   ASSERT_NE(rail, nullptr);
   ASSERT_NE(session, nullptr);
@@ -2244,7 +2333,7 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   ASSERT_GT(panel_width, 0);
 
   // Start collapsed.
-  session->set_history_panel_page(QString());
+  session->set_editor_tool_panel_page(QString());
   ProcessEvents(20);
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));
   ProcessEvents(10);
@@ -2264,11 +2353,11 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   EXPECT_NEAR(rail->property("totalWidth").toReal(), mid_w, 1.5);
 
   // Open session page and complete the fold.
-  session->set_history_panel_page(QStringLiteral("history"));
+  session->set_editor_tool_panel_page(QStringLiteral("history"));
   ProcessEvents(10);
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents(10);
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("history"));
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 1.0, 0.001);
   EXPECT_NEAR(rail->width(), full_w, 1.5);
 
@@ -2276,9 +2365,9 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   // Layout width follows the driven progress (viewport grows with the fold).
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.5))));
   ProcessEvents(10);
-  session->set_history_panel_page(QString());
+  session->set_editor_tool_panel_page(QString());
   ProcessEvents(10);
-  EXPECT_TRUE(session->history_panel_page().isEmpty());
+  EXPECT_TRUE(session->editor_tool_panel_page().isEmpty());
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.5, 0.001);
   EXPECT_NEAR(rail->width(), mid_w, 1.5);
 
@@ -2290,14 +2379,14 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   // Release driver and re-open with reduced motion → terminal bounds.
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "endFoldDrive"));
   ProcessEvents(10);
-  session->set_history_panel_page(QStringLiteral("versions"));
+  session->set_editor_tool_panel_page(QStringLiteral("versions"));
   ProcessEvents(40);
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("versions"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("versions"));
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 1.0, 0.001);
   EXPECT_NEAR(rail->width(), full_w, 1.5);
 
   // Rail identity preserved.
-  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail")), nullptr);
+  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolRail")), nullptr);
 }
 
 TEST_F(WorkspaceShellTests, FilmstripFoldDriverPinsIntermediateAndTerminalGeometry) {
@@ -2708,7 +2797,7 @@ TEST_F(WorkspaceShellTests, DisabledAdjustmentStackUsesOpaqueSurfaceNotParentOpa
   EXPECT_EQ(shell_color, alcedo::ui::AppTheme::Instance().cardSurfaceColor())
       << "Right panel shell must stay on the shared card surface when disabled";
 
-  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail"));
+  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolRail"));
   ASSERT_NE(rail, nullptr);
   const QColor rail_color = rail->property("color").value<QColor>();
   EXPECT_EQ(rail_color.alpha(), 255);
@@ -2733,7 +2822,8 @@ TEST_F(WorkspaceShellTests, HistoryRailButtonsAreSquareWithSquareVisibleChrome) 
   loaded->host.workspace_router()->OpenEditor(0, 0);
   ProcessEvents(80);
 
-  for (const char* name : {"editorHistoryRailButton", "editorVersionsRailButton"}) {
+  for (const char* name :
+       {"editorHistoryRailButton", "editorVersionsRailButton", "editorNodesRailButton"}) {
     auto* btn = loaded->window->findChild<QQuickItem*>(QString::fromUtf8(name));
     ASSERT_NE(btn, nullptr) << name;
     EXPECT_NEAR(btn->width(), btn->height(), 0.5) << name << " hit target not square";
@@ -2752,6 +2842,48 @@ TEST_F(WorkspaceShellTests, HistoryRailButtonsAreSquareWithSquareVisibleChrome) 
 
   EXPECT_TRUE(loaded->qml_warnings.empty())
       << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, NodesPageEmptyChromeExposesAccessibleNamesAndTabStops) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  session->set_editor_tool_panel_page(QStringLiteral("nodes"));
+  ProcessEvents(60);
+
+  auto* empty = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesEmptyState"));
+  auto* add   = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesAddButton"));
+  auto* view  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesGraphView"));
+  auto* rail  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesRailButton"));
+  ASSERT_NE(empty, nullptr);
+  ASSERT_NE(add, nullptr);
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(rail, nullptr);
+  EXPECT_TRUE(empty->isVisible());
+  EXPECT_EQ(empty->property("text").toString(), QStringLiteral("Select an image to edit nodes"));
+  const auto empty_name = QQmlProperty(empty, QStringLiteral("Accessible.name"), qmlContext(empty))
+                              .read()
+                              .toString();
+  if (!empty_name.isEmpty()) {
+    EXPECT_EQ(empty_name, QStringLiteral("Select an image to edit nodes"));
+  }
+  EXPECT_FALSE(add->isEnabled());
+  EXPECT_TRUE(add->activeFocusOnTab());
+  EXPECT_EQ(add->property("actionName").toString(), QStringLiteral("Add Color Grade"));
+  EXPECT_FALSE(view->isVisible());
+  EXPECT_FALSE(view->activeFocusOnTab());
+  EXPECT_FALSE(rail->property("actionName").toString().isEmpty());
+  EXPECT_TRUE(rail->activeFocusOnTab());
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesApplyButton")),
+            nullptr);
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesCancelButton")),
+            nullptr);
 }
 
 }  // namespace

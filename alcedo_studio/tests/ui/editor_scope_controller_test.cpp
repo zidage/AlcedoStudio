@@ -396,6 +396,29 @@ TEST(EditorScopeControllerTest, VisualInactivityStopsPollingWithoutReleasingAnal
   EXPECT_EQ(analyzer->release_count, 0);
 }
 
+// The session closes an image with SetImageIdentity(0, 0) and Shutdown(). The
+// panel stays shown, so polling resumes at the next image without a new write
+// of visualActive.
+TEST(EditorScopeControllerTest, ClosedImageKeepsThePanelValueAndTheNextImageResumesPolling) {
+  auto                  analyzer = std::make_shared<RecordingScopeAnalyzer>();
+  EditorScopeController controller(analyzer);
+  controller.SetImageIdentity(42, 3);
+  controller.set_visual_active(true);
+
+  auto* timer = controller.findChild<QTimer*>();
+  ASSERT_NE(timer, nullptr);
+  ASSERT_TRUE(timer->isActive());
+
+  controller.SetImageIdentity(0, 0);
+  controller.Shutdown();
+  EXPECT_TRUE(controller.visual_active());
+  EXPECT_FALSE(timer->isActive());
+
+  controller.SetImageIdentity(43, 4);
+  EXPECT_TRUE(controller.visual_active());
+  EXPECT_TRUE(timer->isActive());
+}
+
 TEST(EditorScopeControllerTest, UnifiedScopeSubmissionIsDeferredUntilPolling) {
   auto                  analyzer = std::make_shared<DeferredRecordingScopeAnalyzer>();
   EditorScopeController controller(analyzer);
@@ -485,6 +508,10 @@ class EditorScopeControllerTestPeer {
     return controller_.publishSnapshot(snapshot, image_identity, session_epoch,
                                        request_revision);
   }
+
+  void Poll() { controller_.pollSnapshot(); }
+
+  auto ScopePool() -> QThreadPool& { return controller_.scope_pool_; }
 
  private:
   EditorScopeController& controller_;
@@ -694,6 +721,53 @@ TEST(EditorScopeControllerTest, ScopeWorkerDrainsBeforeSessionRelease) {
   QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
   EXPECT_TRUE(analyzer->submitted_done());
   EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count(), 35);
+}
+
+// A refresh task can wait in the queue of the scope pool while the previous
+// task still finishes. Shutdown drops that queued task before it resets the
+// in-flight flag; the refreshes of the next image must still run.
+TEST(EditorScopeControllerTest, RefreshDroppedByShutdownDoesNotBlockTheNextImage) {
+  auto                          analyzer = std::make_shared<DeferredRecordingScopeAnalyzer>();
+  EditorScopeController         controller(analyzer);
+  EditorScopeControllerTestPeer peer(controller);
+  controller.SetImageIdentity(42, 3);
+  controller.set_visual_active(true);
+
+  auto* tap = dynamic_cast<FinalDisplayFrameTapSink*>(controller.frame_sink());
+  ASSERT_NE(tap, nullptr);
+  const auto submit_frame = [tap](std::uint64_t image_identity, std::uint64_t session_epoch) {
+    FramePreviewMetadata metadata;
+    metadata.preview_generation = 30;
+    metadata.image_identity     = image_identity;
+    metadata.session_epoch      = session_epoch;
+    tap->BindFrameSubmission({metadata, FramePresentationMode::FullFrame});
+    tap->SubmitFinalDisplayFrame(MakeFrame());
+  };
+  submit_frame(42, 3);
+
+  // Occupy the single pool thread so the refresh task waits in the queue.
+  std::atomic_bool release{false};
+  peer.ScopePool().start([&release] {
+    while (!release.load()) {
+      QThread::msleep(1);
+    }
+  });
+  peer.Poll();
+  std::thread releaser([&release] {
+    QThread::msleep(40);
+    release.store(true);
+  });
+  controller.SetImageIdentity(0, 0);
+  controller.Shutdown();
+  releaser.join();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  ASSERT_EQ(analyzer->submitted_count.load(), 0);
+
+  controller.SetImageIdentity(43, 4);
+  submit_frame(43, 4);
+  peer.Poll();
+  peer.ScopePool().waitForDone();
+  EXPECT_EQ(analyzer->submitted_count.load(), 1);
 }
 
 }  // namespace alcedo::ui::test

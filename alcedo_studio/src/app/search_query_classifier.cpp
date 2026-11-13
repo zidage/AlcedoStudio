@@ -175,7 +175,7 @@ std::size_t EstimatePromptTokens(const std::wstring& query) {
         word_len = 0;
       }
       ++tokens;  // one CJK character ~ one token
-    } else if (std::isspace(ch) != 0) {
+    } else if (std::iswspace(ch) != 0) {
       if (word_len > 0) {
         ++tokens;
         word_len = 0;

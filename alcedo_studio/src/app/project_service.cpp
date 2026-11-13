@@ -15,7 +15,6 @@
 #include <cmath>
 #include <fstream>
 #include <functional>
-#include <iostream>
 #include <json.hpp>
 #include <optional>
 #include <random>
@@ -24,7 +23,9 @@
 #include "app/model_asset_catalog.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_package_service.hpp"
+#include "app/semantic_query_embedding_cache.hpp"
 #include "sidecar_client/dto/semantic_embedding.hpp"
+#include "storage/store/semantic/semantic_vector_search.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 #include "utils/string/convert.hpp"
 #include "uuid.h"
@@ -34,16 +35,9 @@ namespace {
 
 using namespace std::chrono_literals;
 
-constexpr auto kSemanticModelDirectoryKey      = "semantic/modelDirectory";
-constexpr auto kSemanticEndpointPresetKey      = "semantic/modelEndpointPreset";
-constexpr auto kSemanticCustomEndpointKey      = "semantic/customModelEndpoint";
 constexpr auto kAiSidecarRuntimeStartupTimeout = 60s;
 constexpr auto kJinaClipProfileId              = "jina-clip-v2-int8-multilingual";
 constexpr auto kSiglip2ProfileId               = "siglip2-b32-256-multilingual";
-
-auto           DefaultSemanticModelDirectory() -> QString {
-  return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("model"));
-}
 
 auto QStringToPath(const QString& value) -> std::filesystem::path {
 #ifdef _WIN32
@@ -51,34 +45,6 @@ auto QStringToPath(const QString& value) -> std::filesystem::path {
 #else
   return std::filesystem::path(value.toStdString());
 #endif
-}
-
-auto NormalizedEndpointPreset(QString preset) -> QString {
-  preset = preset.trimmed().toLower();
-  if (preset == QLatin1String("huggingface") || preset == QLatin1String("sufy") ||
-      preset == QLatin1String("custom")) {
-    return preset;
-  }
-  return QStringLiteral("mirror");
-}
-
-auto EffectiveSemanticModelEndpoint() -> QString {
-  QSettings     settings;
-  const QString preset = NormalizedEndpointPreset(
-      settings.value(QLatin1String(kSemanticEndpointPresetKey), QStringLiteral("mirror"))
-          .toString());
-  const QString custom_endpoint =
-      settings.value(QLatin1String(kSemanticCustomEndpointKey), QString{}).toString().trimmed();
-  if (preset == QLatin1String("huggingface")) {
-    return QStringLiteral("https://huggingface.co");
-  }
-  if (preset == QLatin1String("sufy")) {
-    return QStringLiteral("https://hf-cdn.sufy.com");
-  }
-  if (preset == QLatin1String("custom") && !custom_endpoint.isEmpty()) {
-    return custom_endpoint;
-  }
-  return QStringLiteral("https://hf-mirror.com");
 }
 
 auto SemanticModelKeyFromInfo(const AiSidecarRuntimeModelInfo& info) -> std::string {
@@ -112,10 +78,7 @@ auto EmbeddingTimeoutForModel(const SemanticModelRecord& model) -> std::chrono::
 }
 
 auto RuntimeOptionsForSemanticModel(const SemanticModelRecord& model) -> AiSidecarRuntimeOptions {
-  QSettings     settings;
-  const QString base_dir =
-      settings.value(QLatin1String(kSemanticModelDirectoryKey), DefaultSemanticModelDirectory())
-          .toString();
+  const QString base_dir   = ConfiguredSemanticModelDirectory();
   const auto    profile_id = ProfileIdForModel(model);
   const QString root =
       profile_id.empty() ? base_dir : QDir(base_dir).filePath(QString::fromStdString(profile_id));
@@ -158,63 +121,101 @@ auto ValidateSearchEmbedding(const SemanticEmbeddingResult& result, const std::s
   return std::nullopt;
 }
 
-auto MakeSemanticSearchRequestId(sl_element_id_t folder_id, const std::wstring& query)
+auto MakeSemanticTextRequestId(const std::string& model_key, const std::string& text)
     -> std::string {
-  const auto hash = std::hash<std::wstring>{}(query);
-  return "semantic-search-" + std::to_string(folder_id) + "-" + std::to_string(hash);
+  const auto hash = std::hash<std::string>{}(model_key + '\n' + text);
+  return "semantic-text-" + std::to_string(hash);
 }
 
+/**
+ * Embeds natural-language query text for the active model of the project. Each text is
+ * embedded once per model: the vectors stay in a SemanticQueryEmbeddingCache, so a repeated
+ * query and the neutral text take no sidecar lease. A cache miss takes the sidecar lease only
+ * while it starts the runtime (when needed) and embeds the text.
+ */
 class ProjectSemanticSearchProvider final : public SemanticSearchProvider {
  public:
   ProjectSemanticSearchProvider(
-      std::shared_ptr<Storage>                           storage_service,
+      std::shared_ptr<Storage>                                  storage_service,
       std::function<std::shared_ptr<AiSidecarRuntimeService>()> runtime_factory)
-      : storage_(std::move(storage_service)),
-        runtime_factory_(std::move(runtime_factory)) {}
+      : storage_(std::move(storage_service)), runtime_factory_(std::move(runtime_factory)) {}
 
-  [[nodiscard]] auto Search(sl_element_id_t folder_id, const std::wstring& query, size_t offset,
-                            size_t limit) const -> std::vector<FuzzySearchMatch> override {
-    diag::TraceScope trace(diag::semanticLog(), QStringLiteral("semantic.search.provider"),
-                           QStringLiteral("folder_id=%1 query_chars=%2 offset=%3 limit=%4")
-                               .arg(static_cast<qulonglong>(folder_id))
-                               .arg(static_cast<qulonglong>(query.size()))
-                               .arg(static_cast<qulonglong>(offset))
-                               .arg(static_cast<qulonglong>(limit)));
-    if (query.empty() || limit == 0) {
-      return {};
+  [[nodiscard]] auto EmbedQuery(const std::wstring& query) -> SemanticQueryEmbedding override {
+    diag::TraceScope trace(diag::semanticLog(), QStringLiteral("semantic.search.embed_query"),
+                           QStringLiteral("query_chars=%1").arg(static_cast<qulonglong>(query.size())));
+    if (query.empty()) {
+      throw std::runtime_error("Semantic search query is empty.");
     }
+    const auto             active_model = ActiveModel();
+    const auto query_text   = conv::ToBytes(query);
+    const auto neutral_text = std::string(SemanticVectorSearch::kNeutralText);
+    SemanticQueryEmbedding embedding{.model_key_ = active_model->model_key_,
+                                     .dimension_ = active_model->embedding_dim_};
+    embedding.query_ = cache_.GetOrEmbed(active_model->model_key_, query_text, [&] {
+      return EncodeText(*active_model, query_text);
+    });
+    embedding.neutral_ = cache_.GetOrEmbed(active_model->model_key_, neutral_text, [&] {
+      return EncodeText(*active_model, neutral_text);
+    });
+    return embedding;
+  }
+
+  void Prewarm() override {
+    diag::TraceScope trace(diag::semanticLog(), QStringLiteral("semantic.search.prewarm"), {});
+    const auto       active_model = ActiveModel();
+    const auto       neutral_text = std::string(SemanticVectorSearch::kNeutralText);
+    (void)cache_.GetOrEmbed(active_model->model_key_, neutral_text,
+                            [&] { return EncodeText(*active_model, neutral_text); });
+  }
+
+  [[nodiscard]] auto IsPrewarmed() -> bool override {
+    if (!storage_) {
+      return false;
+    }
+    const auto active_model = storage_->GetSemanticModelRegistry().ActiveModel(nullptr);
+    return active_model.has_value() &&
+           cache_.Contains(active_model->model_key_,
+                           std::string(SemanticVectorSearch::kNeutralText));
+  }
+
+ private:
+  /// The active semantic model of the project. @throws std::runtime_error when there is none.
+  [[nodiscard]] auto ActiveModel() const -> std::optional<SemanticModelRecord> {
     if (!storage_) {
       throw std::runtime_error("Semantic storage service is unavailable.");
     }
-
-    auto&       semantic = storage_->GetSemanticStore();
     std::string error;
-    const auto  active_model = semantic.ActiveModel(&error);
+    auto        active_model = storage_->GetSemanticModelRegistry().ActiveModel(&error);
     if (!active_model.has_value()) {
       throw std::runtime_error(error.empty() ? "No active semantic model is registered." : error);
     }
+    return active_model;
+  }
 
+  /// Starts the runtime when needed, checks that it serves @p model, and embeds @p text.
+  /// @throws std::runtime_error on a start failure, a model mismatch, or an invalid vector.
+  [[nodiscard]] auto EncodeText(const SemanticModelRecord& model, const std::string& text) const
+      -> std::vector<float> {
     auto runtime = runtime_factory_ ? runtime_factory_() : nullptr;
     if (!runtime) {
       throw std::runtime_error("Semantic runtime service is unavailable.");
     }
 
-    const auto runtime_options = RuntimeOptionsForSemanticModel(*active_model);
+    const auto runtime_options = RuntimeOptionsForSemanticModel(model);
     auto       sidecar_lease   = runtime->AcquireLease();
     if (!sidecar_lease) {
       throw std::runtime_error("Semantic runtime service is unavailable.");
     }
-    auto runtime_status = runtime->Status();
-    if (runtime_status.state != AiSidecarRuntimeState::kReady ||
-        !runtime_status.model_info.has_value()) {
-      if (!runtime->StartAndWait(runtime_options)) {
-        runtime_status = runtime->Status();
-        throw std::runtime_error(runtime_status.message.empty()
-                                     ? "Semantic runtime failed to start."
-                                     : runtime_status.message);
-      }
-      runtime_status = runtime->Status();
+    // The interactive start runs the boot on the owner (UI) thread and keeps its event loop
+    // running, so a cold start from the query worker does not freeze the UI. A running process
+    // of the same model returns at once; one of another model restarts when no other operation
+    // holds a lease.
+    if (!runtime->StartAndWaitInteractive(runtime_options)) {
+      const auto failed_status = runtime->Status();
+      throw std::runtime_error(failed_status.message.empty() ? "Semantic runtime failed to start."
+                                                             : failed_status.message);
     }
+    const auto runtime_status = runtime->Status();
     if (runtime_status.state != AiSidecarRuntimeState::kReady ||
         !runtime_status.model_info.has_value()) {
       throw std::runtime_error(runtime_status.message.empty()
@@ -223,56 +224,37 @@ class ProjectSemanticSearchProvider final : public SemanticSearchProvider {
     }
 
     const auto& info = *runtime_status.model_info;
-    if (SemanticModelKeyFromInfo(info) != active_model->model_key_) {
+    if (SemanticModelKeyFromInfo(info) != model.model_key_) {
       throw std::runtime_error("Semantic runtime model does not match the active project model.");
     }
-    if (static_cast<int>(info.embedding_dimension) != active_model->embedding_dim_) {
+    if (static_cast<int>(info.embedding_dimension) != model.embedding_dim_) {
       throw std::runtime_error("Semantic runtime embedding dimension does not match storage.");
     }
-    if (static_cast<int>(info.image_size) != active_model->image_size_) {
+    if (static_cast<int>(info.image_size) != model.image_size_) {
       throw std::runtime_error("Semantic runtime image size does not match storage.");
     }
 
-    const auto request_id = MakeSemanticSearchRequestId(folder_id, query);
-    const auto text       = conv::ToBytes(query);
+    const auto request_id = MakeSemanticTextRequestId(model.model_key_, text);
     qCInfo(diag::semanticLog).noquote()
         << QStringLiteral("semantic.search.embedding.request request_id=%1 model_key=%2")
-               .arg(QString::fromStdString(request_id),
-                    QString::fromStdString(active_model->model_key_));
+               .arg(QString::fromStdString(request_id), QString::fromStdString(model.model_key_));
     const auto client_session = runtime->ClientSession();
     if (!client_session) {
       throw std::runtime_error("Semantic runtime client session is unavailable.");
     }
-    const auto embedding = client_session->semantic().EmbedText(
-        request_id, text, EmbeddingTimeoutForModel(*active_model));
+    auto embedding = client_session->semantic().EmbedText(request_id, text,
+                                                          EmbeddingTimeoutForModel(model));
     if (const auto validation =
-            ValidateSearchEmbedding(embedding, request_id, active_model->embedding_dim_);
+            ValidateSearchEmbedding(embedding, request_id, model.embedding_dim_);
         validation.has_value()) {
       throw std::runtime_error(*validation);
     }
-
-    const auto ranked = semantic.SearchImageEmbeddings(folder_id, active_model->model_key_,
-                                                       embedding.embedding, offset, limit, &error);
-    if (!error.empty()) {
-      throw std::runtime_error(error);
-    }
-
-    std::vector<FuzzySearchMatch> out;
-    out.reserve(ranked.size());
-    for (const auto& row : ranked) {
-      out.push_back(FuzzySearchMatch{
-          .file_id_ = row.file_id_, .image_id_ = row.image_id_, .file_name_ = row.file_name_});
-    }
-    qCInfo(diag::semanticLog).noquote()
-        << QStringLiteral("semantic.search.provider.result request_id=%1 count=%2")
-               .arg(QString::fromStdString(request_id))
-               .arg(static_cast<qulonglong>(out.size()));
-    return out;
+    return std::move(embedding.embedding);
   }
 
- private:
-  std::shared_ptr<Storage>                           storage_;
+  std::shared_ptr<Storage>                                  storage_;
   std::function<std::shared_ptr<AiSidecarRuntimeService>()> runtime_factory_;
+  SemanticQueryEmbeddingCache                               cache_;
 };
 
 auto ParseSemVer(std::string_view version, std::array<int, 3>* out) -> bool {
@@ -324,6 +306,17 @@ auto GenerateProjectUUID() -> std::string {
   return uuids::to_string(uuid_gen());
 }
 
+auto ReadAiSidecarIdleStopSeconds() -> int {
+  QSettings settings;
+  bool      ok    = false;
+  const int value = settings
+                        .value(QLatin1String(ProjectService::kAiSidecarIdleStopSecondsKey),
+                               ProjectService::kDefaultAiSidecarIdleStopSeconds)
+                        .toInt(&ok);
+  return ProjectService::NormalizedAiSidecarIdleStopSeconds(
+      ok ? value : ProjectService::kDefaultAiSidecarIdleStopSeconds);
+}
+
 auto MakeAiSidecarRuntimeService() -> std::shared_ptr<AiSidecarRuntimeService> {
   return std::shared_ptr<AiSidecarRuntimeService>(
       new AiSidecarRuntimeService(), [](AiSidecarRuntimeService* runtime) {
@@ -340,84 +333,24 @@ auto MakeAiSidecarRuntimeService() -> std::shared_ptr<AiSidecarRuntimeService> {
       });
 }
 
-// Collects lightweight diagnostic summary of the project database:
-// per-table row counts and min/max primary key ranges. This is NOT
-// a strong integrity check — mismatches produce a warning, not a
-// load failure. Use data_fingerprint (L3) for semantic verification.
+// Diagnostic summary of the project database: per-table row counts and min/max key ranges
+// (StorageMaintenance::ReadDataSummary). This is NOT a strong integrity check: a mismatch
+// produces a warning, not a load failure. Use data_fingerprint (L3) for semantic verification.
 auto ComputeProjectDataSummary(Storage& storage_service) -> nlohmann::json {
-  auto guard       = storage_service.GetDatabase().GetConnectionGuard();
-  auto db_lock     = guard.Lock();
-
-  auto query_int64 = [&](const std::string& sql) -> std::optional<int64_t> {
-    duckdb_result result;
-    if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
-      duckdb_destroy_result(&result);
-      return std::nullopt;
-    }
-    std::optional<int64_t> value;
-    if (duckdb_row_count(&result) > 0 && duckdb_column_count(&result) > 0) {
-      if (!duckdb_value_is_null(&result, 0, 0)) {
-        value = duckdb_value_int64(&result, 0, 0);
-      }
-    }
-    duckdb_destroy_result(&result);
-    return value;
-  };
-
-  struct TableInfo {
-    const char* name;
-    const char* pk_column;  // nullptr if no meaningful single numeric PK
-  };
-  static constexpr TableInfo kTables[] = {
-      {"Sleeve", "id"},
-      {"Image", "id"},
-      {"SleeveRoot", "id"},
-      {"Element", "id"},
-      {"FolderContent", nullptr},
-      {"FileImage", "file_id"},
-      {"ComboFolder", "combo_id"},
-      {"Filter", "combo_id"},
-      {"EditHistory", "file_id"},
-      {"VersionRef", "version_id"},
-      {"EditCommit", "commit_hash"},
-      {"ImageEditState", "element_id"},
-      {"PipelineParam", "file_id"},
-      {"SemanticModel", nullptr},
-      {"SemanticImageEmbedding", "file_id"},
-      {"SemanticImageEmbedding768", "file_id"},
-      {"SemanticImageLabel", "file_id"},
-      {"SemanticLabelQuery", nullptr},
-      {"SemanticLabelPrototype", nullptr},
-      {"SemanticLabelPrototype768", nullptr},
-  };
-
-  nlohmann::json summary;
-  summary["version"]    = 1;
   nlohmann::json tables = nlohmann::json::object();
-
-  for (const auto& table : kTables) {
+  for (const auto& table : storage_service.Maintenance().ReadDataSummary()) {
     nlohmann::json entry;
-
-    auto           count = query_int64(std::string("SELECT COUNT(*) FROM \"") + table.name + "\"");
-    if (!count.has_value()) continue;
-    entry["rows"] = *count;
-
-    if (table.pk_column != nullptr) {
-      const std::string pk_str(table.pk_column);
-      auto              min_val =
-          query_int64(std::string("SELECT MIN(\"") + pk_str + "\") FROM \"" + table.name + "\"");
-      auto max_val =
-          query_int64(std::string("SELECT MAX(\"") + pk_str + "\") FROM \"" + table.name + "\"");
-      if (min_val.has_value() && max_val.has_value()) {
-        entry["min_id"] = *min_val;
-        entry["max_id"] = *max_val;
-      }
+    entry["rows"] = table.rows;
+    if (table.min_key.has_value() && table.max_key.has_value()) {
+      entry["min_id"] = *table.min_key;
+      entry["max_id"] = *table.max_key;
     }
-
-    tables[table.name] = entry;
+    tables[table.table] = entry;
   }
 
-  summary["tables"] = tables;
+  nlohmann::json summary;
+  summary["version"] = 1;
+  summary["tables"]  = tables;
   return summary;
 }
 
@@ -461,8 +394,7 @@ ProjectService::ProjectService(const std::filesystem::path& db_path,
   create_new_project();
 }
 
-ProjectService::~ProjectService() {
-  package_service_.reset();
+void ProjectService::StopAiSidecarRuntime() {
   std::shared_ptr<AiSidecarRuntimeService> runtime;
   {
     std::lock_guard lock(ai_sidecar_runtime_mutex_);
@@ -472,6 +404,11 @@ ProjectService::~ProjectService() {
     runtime->StopForProjectClose();
     runtime.reset();
   }
+}
+
+ProjectService::~ProjectService() {
+  package_service_.reset();
+  StopAiSidecarRuntime();
   browse_service_.reset();
   filter_service_.reset();
   pool_service_.reset();
@@ -484,6 +421,7 @@ void ProjectService::SaveProject(const std::filesystem::path& meta_path) {
     throw std::runtime_error("SleeveService is not initialized");
   }
 
+  std::lock_guard lock(save_project_mutex_);
   meta_path_ = meta_path;
 
   nlohmann::json metadata;
@@ -589,37 +527,56 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
 
   storage_ = std::make_shared<Storage>(db_path_);
 
-  // Best-effort: load the DuckDB vss extension when the project DB already has
-  // HNSW indexes (semantic embedding tables). Without this, every semantic-
-  // generation embedding persist fails with "unknown index type 'HNSW'" on a
-  // normal project open — snapshot import already loads vss, but LoadProject did
-  // not, so the semantic task reported "0 generated, 24 failed" while the
-  // concurrent LLM image-analysis task succeeded (and got blamed for it). Non-
-  // fatal: a missing vss extension only breaks semantic embedding writes, not
-  // image analysis / editing / browsing.
-  {
-    auto guard   = storage_->GetDatabase().GetConnectionGuard();
-    auto db_lock = guard.Lock();
-    QString vss_error;
-    if (!project_pack::EnsureVssExtensionForExistingHnswIndexes(guard.conn_, &vss_error)) {
-      qCWarning(diag::semanticLog).noquote()
-          << QStringLiteral("project.open.vss_extension_load_failed error=%1")
-                 .arg(vss_error);
-    }
+  // Older projects have HNSW indexes on the semantic embedding tables. Search no
+  // longer uses them, and while one exists every embedding write needs the vss
+  // extension. Drop them; when that fails, the project does not open.
+  try {
+    storage_->Maintenance().DropHnswIndexesOfOlderProject();
+  } catch (const std::exception& e) {
+    throw std::runtime_error(std::string("Unable to drop the HNSW index of an older project: ") +
+                             e.what());
   }
 
   if (expected_summary.has_value()) {
     try {
       nlohmann::json actual_summary = ComputeProjectDataSummary(*storage_);
       if (actual_summary != *expected_summary) {
-        std::cerr << "[Alcedo] Project data summary differs from saved metadata. "
-                     "This may indicate data changes since the project was saved.\n";
+        qCWarning(diag::projectLog).noquote()
+            << "Project data summary differs from saved metadata. This may indicate data "
+               "changes since the project was saved.";
       }
     } catch (const std::exception& e) {
-      std::cerr << "[Alcedo] Unable to compute project data summary for comparison: " << e.what()
-                << "\n";
+      qCWarning(diag::projectLog).noquote()
+          << "Unable to compute project data summary for comparison:" << e.what();
     } catch (...) {
-      std::cerr << "[Alcedo] Unable to compute project data summary for comparison.\n";
+      qCWarning(diag::projectLog) << "Unable to compute project data summary for comparison.";
+    }
+  }
+
+  // Best-effort cleanup of Image rows that no library file references (left by imports
+  // before failed entries were removed from the image pool). SyncImports is the fix; this
+  // only clears rows already on disk. A failure leaves the rows and does not stop the load.
+  try {
+    storage_->GetImageStore().RemoveImagesWithoutFileBinding();
+  } catch (const std::exception& e) {
+    qCWarning(diag::projectLog).noquote()
+        << "Unable to remove Image rows without a library file:" << e.what();
+  }
+
+  // Label assignment stores canonical label keys. Projects from older versions can hold the
+  // label text of the model's prompt language (for example 沙漠); rewrite it once here so
+  // groups, statistics, and filters compare keys. Best-effort: on failure the rows stay as
+  // they are, the project still opens, and the next open tries again.
+  {
+    std::string label_error;
+    const auto  rewritten = storage_->GetSemanticLabelStore().CanonicalizeImageLabels(&label_error);
+    if (!rewritten.has_value()) {
+      qCWarning(diag::semanticLog).noquote()
+          << QStringLiteral("project.open.label_canonicalize_failed error=%1")
+                 .arg(QString::fromStdString(label_error));
+    } else if (*rewritten > 0) {
+      qCInfo(diag::semanticLog).noquote()
+          << QStringLiteral("project.open.label_canonicalized texts=%1").arg(*rewritten);
     }
   }
 
@@ -651,7 +608,29 @@ auto ProjectService::GetAiSidecarRuntimeService() const
   std::lock_guard lock(ai_sidecar_runtime_mutex_);
   if (!ai_sidecar_runtime_service_) {
     ai_sidecar_runtime_service_ = MakeAiSidecarRuntimeService();
+    ai_sidecar_runtime_service_->SetIdleStopDelay(
+        std::chrono::seconds(ReadAiSidecarIdleStopSeconds()));
   }
   return ai_sidecar_runtime_service_;
 }
+
+auto ProjectService::NormalizedAiSidecarIdleStopSeconds(int seconds) -> int {
+  switch (seconds) {
+    case 0:
+    case 30:
+    case 60:
+    case 300:
+    case 900:
+    case -1:
+      return seconds;
+    default:
+      return kDefaultAiSidecarIdleStopSeconds;
+  }
+}
+
+void ProjectService::SetAiSidecarIdleStopSeconds(int seconds) {
+  GetAiSidecarRuntimeService()->SetIdleStopDelay(
+      std::chrono::seconds(NormalizedAiSidecarIdleStopSeconds(seconds)));
+}
+
 };  // namespace alcedo

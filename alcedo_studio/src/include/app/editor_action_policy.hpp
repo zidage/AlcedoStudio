@@ -33,15 +33,14 @@ enum class EditorAction : std::uint8_t {
   RenameVersion,
   RemoveVersion,
   ApplyPaste,
-  BeginMerge,
-  CompleteMerge,
-  CancelMerge,
   RetrySave,
   DiscardAndContinue,
   CancelPendingNavigation,
   CloseEditor,
   Shutdown,
   RequestViewChange,
+  /// Open the editor comparison of two states of the open image.
+  OpenComparison,
   Count,
 };
 
@@ -65,9 +64,13 @@ enum class EditorOperationLeaseKind : std::uint8_t {
   ImageSwitch,
   SaveCheckpoint,
   PasteMaterialization,
-  MergeMaterialization,
-  MergePreview,
   FailureRecovery,
+  /// An open editor comparison: blocks every image write, history movement, Version write,
+  /// Paste, and view change until the comparison closes.
+  Comparison,
+  /// An open AI Mask edit session: blocks every document write, history movement, Version write,
+  /// Paste, and comparison until the session commits or cancels. View changes stay available.
+  AiMaskEdit,
 };
 
 /// Queue-owned lease describing which actions an accepted operation blocks.
@@ -78,7 +81,6 @@ struct EditorOperationLease {
   image_id_t               target_image_id   = 0;
   ImageLoadRequestId       image_load_request{};
   EditorSaveTaskId         save_task{};
-  MergePreviewId           merge_preview{};
   std::vector<EditorAction> blocked_actions;
   std::string               blocking_reason;
 };
@@ -92,17 +94,22 @@ struct EditorActionInputs {
   bool               can_redo      = false;
   bool               has_unmaterialized_changes = false;
   bool               package_available          = false;
-  bool               merge_preview_active       = false;
-  MergePreviewId     active_merge_preview{};
   bool               background_blocks_select_image = false;
   bool               background_blocks_paste        = false;
-  bool               background_blocks_merge        = false;
   bool               background_blocks_checkout     = false;
   bool               background_blocks_workspace    = false;
   bool               can_replace_unstarted_selection = false;
   bool               recovery_allows_retry           = false;
   bool               recovery_allows_discard_continue = false;
   bool               recovery_allows_cancel          = false;
+  /// The current working document encodes HDR output (ST 2084 or HLG).
+  bool               current_output_is_hdr           = false;
+  /// Mask drawing or editing owns the editor input.
+  bool               mask_input_open                 = false;
+  /// A slider, curve, or other field input sequence of the open image is not committed yet: the
+  /// pending input queue holds a write for the image, or the working document holds a preview
+  /// value. The working document is then in the edit state, so no history move may run on it.
+  bool               input_sequence_open              = false;
 };
 
 /// Minimal queue-owned execution context visible to the evaluator. Not a

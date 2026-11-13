@@ -11,6 +11,7 @@
 #include <QScreen>
 #include <QThread>
 #include <QVector2D>
+#include <algorithm>
 #include <cmath>
 #include <mutex>
 
@@ -27,11 +28,17 @@ namespace alcedo::editor_rhi {
 
 EditorViewportItem::EditorViewportItem(QQuickItem* parent)
     : QQuickRhiItem(parent),
-      present_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())) {
+      present_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())),
+      coverage_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())),
+      detail_coverage_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())) {
   setColorBufferFormat(QQuickRhiItem::TextureFormat::RGBA32F);
   setMirrorVertically(false);
   setAlphaBlending(false);
-  frame_sink_ = std::make_unique<DirectFrameSink>(this);
+  frame_sink_    = std::make_shared<DirectFrameSink>(this);
+  coverage_sink_ = std::make_shared<ViewportMaskCoverageSink>(this, coverage_queue_);
+  detail_coverage_sink_ = std::make_shared<ViewportMaskCoverageSink>(
+      this, detail_coverage_queue_, LeaseFrameLayer::DetailMaskCoverage);
+  consume_arm_ = std::make_shared<std::atomic<EditorViewportRenderer*>>(nullptr);
   connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow* window) {
     attachWindow(window);
     if (window && isVisible() && window->visibility() != QWindow::Hidden &&
@@ -63,12 +70,16 @@ EditorViewportItem::EditorViewportItem(QQuickItem* parent)
   // runs on the scene-graph thread. This prevents a producer from waiting on a
   // window that is exposed but has not created this item's renderer yet.
   present_queue_->SetConsumerAvailable(false);
+  coverage_queue_->SetConsumerAvailable(false);
+  detail_coverage_queue_->SetConsumerAvailable(false);
 }
 
 EditorViewportItem::~EditorViewportItem() {
   stopInteractivePresentLoop();
   detachWindow();
   present_queue_->Shutdown();
+  coverage_queue_->Shutdown();
+  detail_coverage_queue_->Shutdown();
   setStatusText(QStringLiteral("viewport shutting down"));
 }
 
@@ -158,7 +169,19 @@ void EditorViewportItem::setImageIdentity(qulonglong identity) {
   if (previous == identity) {
     return;
   }
+  presented_mask_geometry_   = {};
+  presented_mask_request_id_ = 0;
   emit ImageIdentityChanged();
+}
+
+void EditorViewportItem::NotePresentedMaskGeometry(const ResolvedRenderGeometry& geometry,
+                                                   qulonglong                    request_id) {
+  if (request_id != 0 && request_id <= presented_mask_request_id_) {
+    return;
+  }
+  presented_mask_geometry_   = geometry;
+  presented_mask_request_id_ = request_id;
+  emit PresentedMaskGeometryChanged();
 }
 
 void EditorViewportItem::setSessionEpoch(qulonglong epoch) {
@@ -167,6 +190,11 @@ void EditorViewportItem::setSessionEpoch(qulonglong epoch) {
     return;
   }
   present_queue_->InvalidateSessionEpoch(epoch, imageIdentity());
+  // Coverage belongs to one image session: its frames end with the session.
+  coverage_queue_->InvalidateSessionEpoch(epoch, imageIdentity());
+  coverage_sink_->ClearPendingMetalCoverage();
+  detail_coverage_queue_->InvalidateSessionEpoch(epoch, imageIdentity());
+  detail_coverage_sink_->ClearPendingMetalCoverage();
   stopInteractivePresentLoop();
   emit SessionEpochChanged();
   notifyDiagnosticsChanged();
@@ -178,6 +206,10 @@ void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   const auto next = session_epoch_.load(std::memory_order_acquire) + 1;
   session_epoch_.store(next, std::memory_order_release);
   present_queue_->InvalidateSessionEpoch(next, imageIdentity);
+  coverage_queue_->InvalidateSessionEpoch(next, imageIdentity);
+  coverage_sink_->ClearPendingMetalCoverage();
+  detail_coverage_queue_->InvalidateSessionEpoch(next, imageIdentity);
+  detail_coverage_sink_->ClearPendingMetalCoverage();
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
     frame_sink_->ClearPendingHostFrames();
@@ -224,11 +256,75 @@ auto EditorViewportItem::frameSink() -> DirectFrameSink* { return frame_sink_.ge
 
 void EditorViewportItem::requestRendererInvalidation() {
   present_queue_->InvalidateTargetGeneration();
+  coverage_queue_->InvalidateTargetGeneration();
+  detail_coverage_queue_->InvalidateTargetGeneration();
   requestPresentUpdate();
+}
+
+void EditorViewportItem::clearMaskCoverage() {
+  coverage_sink_->ClearCoverage();
+  detail_coverage_sink_->ClearCoverage();
+}
+
+void EditorViewportItem::reportLostMaskCoverage() {
+  // Take both records: each loss is reported once.
+  const bool base_lost   = coverage_sink_->TakeDisplayLost();
+  const bool detail_lost = detail_coverage_sink_->TakeDisplayLost();
+  if (!base_lost && !detail_lost) {
+    return;
+  }
+  QMetaObject::invokeMethod(this, [this] { emit MaskCoverageDisplayLost(); }, Qt::QueuedConnection);
+}
+
+auto EditorViewportItem::maskCoverageColor() const -> QColor {
+  return QColor::fromRgbF(mask_coverage_style_.red, mask_coverage_style_.green,
+                          mask_coverage_style_.blue);
+}
+
+void EditorViewportItem::setMaskCoverageVisible(bool visible) {
+  if (mask_coverage_style_.visible == visible) {
+    return;
+  }
+  mask_coverage_style_.visible = visible;
+  emit MaskCoverageStyleChanged();
+  update();
+}
+
+void EditorViewportItem::setMaskCoverageColor(const QColor& color) {
+  const auto rgb   = color.toRgb();
+  const auto red   = static_cast<float>(rgb.redF());
+  const auto green = static_cast<float>(rgb.greenF());
+  const auto blue  = static_cast<float>(rgb.blueF());
+  if (mask_coverage_style_.red == red && mask_coverage_style_.green == green &&
+      mask_coverage_style_.blue == blue) {
+    return;
+  }
+  mask_coverage_style_.red   = red;
+  mask_coverage_style_.green = green;
+  mask_coverage_style_.blue  = blue;
+  emit MaskCoverageStyleChanged();
+  update();
+}
+
+void EditorViewportItem::setMaskCoverageOpacity(qreal opacity) {
+  if (!std::isfinite(opacity)) {
+    return;
+  }
+  const auto clamped = static_cast<float>(std::clamp(opacity, 0.0, 1.0));
+  if (mask_coverage_style_.opacity == clamped) {
+    return;
+  }
+  mask_coverage_style_.opacity = clamped;
+  emit MaskCoverageStyleChanged();
+  update();
 }
 
 void EditorViewportItem::cancelPendingFrames() {
   present_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
+  coverage_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
+  coverage_sink_->ClearPendingMetalCoverage();
+  detail_coverage_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
+  detail_coverage_sink_->ClearPendingMetalCoverage();
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
     frame_sink_->ClearPendingHostFrames();
@@ -239,13 +335,30 @@ void EditorViewportItem::cancelPendingFrames() {
 void EditorViewportItem::suspendPresentation() {
   stopInteractivePresentLoop();
   presentation_requested_.store(false, std::memory_order_release);
+  // Suspend before dropping the consumer so a producer woken by the consumer
+  // change sees the suspension and fails at once.
+  present_queue_->SetPresentationSuspended(true);
   present_queue_->SetConsumerAvailable(false);
+  coverage_queue_->SetPresentationSuspended(true);
+  coverage_queue_->SetConsumerAvailable(false);
+  detail_coverage_queue_->SetPresentationSuspended(true);
+  detail_coverage_queue_->SetConsumerAvailable(false);
   notifyDiagnosticsChanged();
+  if (!presentation_suspended_.exchange(true, std::memory_order_acq_rel)) {
+    emit PresentationSuspendedChanged();
+  }
 }
 
 void EditorViewportItem::resumePresentation() {
   presentation_requested_.store(true, std::memory_order_release);
+  // Producers wait for the next synchronize() again, as at startup.
+  present_queue_->SetPresentationSuspended(false);
+  coverage_queue_->SetPresentationSuspended(false);
+  detail_coverage_queue_->SetPresentationSuspended(false);
   requestPresentUpdate();
+  if (presentation_suspended_.exchange(false, std::memory_order_acq_rel)) {
+    emit PresentationSuspendedChanged();
+  }
 }
 
 void EditorViewportItem::requestPresentUpdate() { requestPresentUpdateOnGuiThread(); }
@@ -276,6 +389,9 @@ void EditorViewportItem::continueInteractivePresentLoop() {
   if (!presentation_requested_.load(std::memory_order_acquire)) {
     return;
   }
+  if (present_queue_ == nullptr || !present_queue_->HasReadyFrame()) {
+    return;
+  }
   requestPresentUpdateOnGuiThread();
   interactive_present_loop_tick_count_.fetch_add(1, std::memory_order_acq_rel);
 }
@@ -296,14 +412,10 @@ void EditorViewportItem::refreshPresentationAvailability() {
 void EditorViewportItem::requestPresentUpdateOnGuiThread() {
   // Worker threads must not call QQuickItem::update() directly.
   auto request = [this] {
-    // QQuickItem already coalesces update requests. A separate sticky flag
-    // can remain set while the item is hidden and suppress the first update
-    // after exposure, stranding a producer waiting for its native target.
+    // QQuickItem already coalesces update requests and schedules the window
+    // frame. Do not also call QWindow::requestUpdate(): that path waits for
+    // vsync and can add a full display period after a Ready frame arrives.
     update();
-    if (QQuickWindow* w = window()) {
-      w->requestUpdate();
-    }
-    // Stamp every Ready frame waiting on this GUI wake (P0 present split).
     diag::NoteRenderE2eGuiUpdate();
   };
   if (thread() == QThread::currentThread()) {
@@ -320,7 +432,10 @@ auto EditorViewportItem::createRenderer() -> QQuickRhiItemRenderer* {
           "[EditorPresent] creating QQuickRhiItem renderer image=%llu epoch=%llu",
           static_cast<unsigned long long>(imageIdentity()),
           static_cast<unsigned long long>(sessionEpoch()));
-  return new EditorViewportRenderer();
+  auto* renderer = new EditorViewportRenderer();
+  renderer->SetConsumeArmSlot(consume_arm_);
+  consume_arm_->store(renderer, std::memory_order_release);
+  return renderer;
 }
 
 void EditorViewportItem::attachWindow(QQuickWindow* window) {
@@ -353,7 +468,12 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
   // resources; the queue operation itself is thread-safe.
   scene_graph_invalidated_connection_ = connect(
       attached_window_, &QQuickWindow::sceneGraphInvalidated, this,
-      [queue = present_queue_] { queue->SetConsumerAvailable(false); }, Qt::DirectConnection);
+      [queue = present_queue_, coverage = coverage_queue_, detail = detail_coverage_queue_] {
+        queue->SetConsumerAvailable(false);
+        coverage->SetConsumerAvailable(false);
+        detail->SetConsumerAvailable(false);
+      },
+      Qt::DirectConnection);
   scene_graph_initialized_connection_ = connect(
       attached_window_, &QQuickWindow::sceneGraphInitialized, this,
       [this] {
@@ -361,12 +481,46 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
         applyDisplayConfig();
       },
       Qt::QueuedConnection);
+  // Arm prompt Ready-frame consumption at a render-thread presentation
+  // opportunity. This connection is registered while no QQuickRhiItemNode
+  // exists yet, so it runs before the node's own beforeRendering→render
+  // slot: when a Ready frame waits, update() arms the node's pending flag
+  // and the same render pass consumes it — no GUI update() or scene-graph
+  // synchronization required. Captures shared state only, so an emission
+  // racing item destruction touches no item members.
+  before_rendering_connection_ = connect(
+      attached_window_, &QQuickWindow::beforeRendering, this,
+      [queue = present_queue_, sink = frame_sink_, coverage_queue = coverage_queue_,
+       coverage_sink = coverage_sink_, detail_queue = detail_coverage_queue_,
+       detail_sink = detail_coverage_sink_, arm = consume_arm_] {
+        const bool ready =
+            (queue && queue->HasReadyFrame()) || (sink && sink->HasPendingImportedFrame()) ||
+            (coverage_queue && coverage_queue->HasReadyFrame()) ||
+            (coverage_sink && (coverage_sink->HasPendingMetalCoverage() ||
+                               coverage_sink->HasPendingHostCoverage())) ||
+            (detail_queue && detail_queue->HasReadyFrame()) ||
+            (detail_sink &&
+             (detail_sink->HasPendingMetalCoverage() || detail_sink->HasPendingHostCoverage()));
+        if (!ready) {
+          return;
+        }
+        if (auto* renderer = arm->load(std::memory_order_acquire)) {
+          renderer->ArmForPresent();
+        }
+      },
+      Qt::DirectConnection);
   // afterRendering runs on the render thread (threaded loop). Queue the
   // continue onto the GUI thread so QQuickItem::update() stays thread-safe.
   // Present can wait for vsync while that queued request is processed.
   after_rendering_connection_ = connect(
       attached_window_, &QQuickWindow::afterRendering, this,
       [this] { continueInteractivePresentLoop(); }, Qt::QueuedConnection);
+  frame_swapped_connection_ = connect(
+      attached_window_, &QQuickWindow::frameSwapped, this,
+      [] { diag::NoteRenderE2eFrameSwapped(); }, Qt::DirectConnection);
+  after_frame_end_connection_ = connect(
+      attached_window_, &QQuickWindow::afterFrameEnd, this, [] { diag::NoteRenderE2eFrameEnd(); },
+      Qt::DirectConnection);
   if (interactive_present_loop_.load(std::memory_order_acquire)) {
     requestPresentUpdate();
   }
@@ -381,12 +535,18 @@ void EditorViewportItem::detachWindow(bool reset_display) {
   QObject::disconnect(window_screen_connection_);
   QObject::disconnect(scene_graph_invalidated_connection_);
   QObject::disconnect(scene_graph_initialized_connection_);
+  QObject::disconnect(before_rendering_connection_);
   QObject::disconnect(after_rendering_connection_);
+  QObject::disconnect(frame_swapped_connection_);
+  QObject::disconnect(after_frame_end_connection_);
   window_visibility_connection_       = {};
   window_screen_connection_           = {};
   scene_graph_invalidated_connection_ = {};
   scene_graph_initialized_connection_ = {};
+  before_rendering_connection_        = {};
   after_rendering_connection_         = {};
+  frame_swapped_connection_           = {};
+  after_frame_end_connection_         = {};
   attached_window_                    = nullptr;
 }
 

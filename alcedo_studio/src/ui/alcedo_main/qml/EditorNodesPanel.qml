@@ -1,0 +1,752 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+import QuickQanava 2.0 as Qan
+import Alcedo.Main 1.0
+
+// Nodes page: header plus a navigable QuickQanava canvas. Product selection
+// lives on EditorNodeController. Positions, zoom, view, and Mask drawers live
+// on EditorNodeLayoutStore. Product changes route through EditorNodeController.
+Item {
+    id: root
+    objectName: "editorNodesPageBody"
+
+    property var theme: null
+    property var editorSession: null
+    property var nodeController: null
+    property var nodeLayoutStore: null
+
+    readonly property var maskCreation: root.editorSession ? root.editorSession.maskCreation : null
+    readonly property var aiMaskTool: typeof appModules !== "undefined" && appModules
+                                      ? appModules.aiMaskTool : null
+
+    property bool renameVisible: false
+    property string renameNodeId: ""
+    property string renameOriginalName: ""
+
+    readonly property color colText: theme ? theme.colText : appTheme.textColor
+    readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
+    readonly property color colCardSurface: theme ? theme.colCardSurface : appTheme.cardSurfaceColor
+    readonly property color colCardBorder: theme ? theme.colCardBorder : appTheme.cardBorderColor
+    readonly property string layoutIdentityKey: {
+        if (!root.nodeController) {
+            return ""
+        }
+        return String(root.nodeController.elementId) + ":"
+                + String(root.nodeController.imageId) + ":"
+                + String(root.nodeController.versionId)
+    }
+    readonly property string sessionStateName: root.editorSession
+            ? String(root.editorSession.sessionState || "")
+            : ""
+    readonly property bool graphReady: root.nodeController && root.nodeController.hasSnapshot
+    readonly property bool graphLoading: !root.graphReady
+            && (root.sessionStateName === "Loading"
+                || root.sessionStateName === "Acquiring"
+                || root.sessionStateName === "Switching")
+    readonly property bool noImage: !root.graphReady && !root.graphLoading
+    readonly property bool pendingCommand: root.nodeController
+            && root.nodeController.commandActive
+    readonly property bool keyboardConnectActive: qanAdapter
+            && qanAdapter.keyboardConnectActive
+
+    function addColorGrade() {
+        if (!root.graphReady || !root.nodeController || !root.nodeController.canAddColorGrade) {
+            return
+        }
+        root.nodeController.addCleanColorGrade()
+    }
+
+    function beginRename() {
+        if (!root.nodeController
+                || !root.nodeController.canRenameSelectedColorGrade) {
+            return
+        }
+        root.renameNodeId = root.nodeController.selectedNodeId
+        root.renameOriginalName = root.nodeController.selectedNodeName
+        renameField.text = root.renameOriginalName
+        root.renameVisible = true
+        Qt.callLater(function () {
+            if (root.renameVisible) {
+                renameField.forceActiveFocus()
+                renameField.selectAll()
+            }
+        })
+    }
+
+    function cancelRename() {
+        root.renameVisible = false
+        root.renameNodeId = ""
+        root.renameOriginalName = ""
+        renameField.text = ""
+        graphView.forceActiveFocus()
+    }
+
+    function commitRename() {
+        if (!root.renameVisible || !root.nodeController) {
+            return
+        }
+        const name = renameField.text.trim()
+        if (name.length === 0) {
+            return
+        }
+        if (name === root.renameOriginalName) {
+            cancelRename()
+            return
+        }
+        if (root.nodeController.renameColorGrade(root.renameNodeId, name)) {
+            cancelRename()
+        }
+    }
+
+    function deleteSelectedNodes() {
+        if (!root.nodeController
+                || !root.nodeController.canDeleteSelectedNodes) {
+            return
+        }
+        if (root.renameVisible) {
+            cancelRename()
+        }
+        root.nodeController.deleteSelectedNodes()
+        graphView.forceActiveFocus()
+    }
+
+    function captureView() {
+        if (!graphView || !root.nodeLayoutStore) {
+            return
+        }
+        root.nodeLayoutStore.zoom = graphView.zoom
+        if (graphView.containerItem) {
+            root.nodeLayoutStore.viewPosition = Qt.point(graphView.containerItem.x,
+                                                         graphView.containerItem.y)
+        }
+    }
+
+    function restoreGraphView() {
+        if (!graphView || !root.nodeLayoutStore) {
+            return
+        }
+        graphView.zoom = root.nodeLayoutStore.zoom
+        if (graphView.containerItem) {
+            graphView.containerItem.x = root.nodeLayoutStore.viewPosition.x
+            graphView.containerItem.y = root.nodeLayoutStore.viewPosition.y
+        }
+    }
+
+    function attachAdapter() {
+        if (!root.nodeController || !qanAdapter) {
+            return
+        }
+        root.nodeController.graphAdapter = qanAdapter
+        if (root.maskCreation)
+            qanAdapter.selectedMaskId = String(root.maskCreation.selectedMaskId || "")
+    }
+
+    function selectDrawerOwner(nodeId) {
+        if (!root.nodeController || String(nodeId).length === 0) {
+            return false
+        }
+
+        // The row's MouseArea owns this click, so Qan.NodeItem does not receive
+        // it and cannot select the Color Grade for us. Select the owning Grade
+        // first because mask authoring is intentionally scoped to that node.
+        root.nodeController.selectNode(nodeId)
+        return String(root.nodeController.selectedNodeId || "") === String(nodeId)
+    }
+
+    function selectMaskFromDrawer(nodeId, maskId) {
+        if (qanAdapter) {
+            qanAdapter.logMaskRow("selectMaskFromDrawer", String(nodeId || ""),
+                                  String(maskId || ""), false)
+        }
+        if (!root.maskCreation || String(maskId).length === 0) {
+            if (qanAdapter) {
+                qanAdapter.logMaskRow("selectMaskFromDrawer-abort",
+                                      String(nodeId || ""), String(maskId || ""),
+                                      false)
+            }
+            return
+        }
+        root.selectDrawerOwner(nodeId)
+        root.maskCreation.selectMask(nodeId, maskId)
+        // An AI Mask row only selects the Mask; "Edit AI Mask" opens its edit (#564).
+    }
+
+    function removeMaskFromDrawer(nodeId, maskId) {
+        if (qanAdapter) {
+            qanAdapter.logMaskRow("removeMaskFromDrawer", String(nodeId || ""),
+                                  String(maskId || ""), false)
+        }
+        if (!root.maskCreation || String(maskId).length === 0) {
+            if (qanAdapter) {
+                qanAdapter.logMaskRow("removeMaskFromDrawer-abort",
+                                      String(nodeId || ""), String(maskId || ""),
+                                      false)
+            }
+            return
+        }
+        root.selectDrawerOwner(nodeId)
+        root.maskCreation.removeMask(nodeId, maskId)
+    }
+
+    // NodeItem owns the press for the whole card. Left presses on a Mask row
+    // select the mask; other left presses replace the selection, or toggle one
+    // node while the nodes.extendSelection modifier (Shift) is held. A right
+    // press only maintains the selection so the context menu can open on it:
+    // it collapses onto an unselected node and leaves a selected member in
+    // place, which keeps a multi-selection alive for Delete.
+    function handleGraphNodePress(node, position, rightButton) {
+        if (!root.nodeController || !qanAdapter || !node) {
+            if (qanAdapter) {
+                qanAdapter.logMaskRow("graph-press-missing", "", "", rightButton)
+            }
+            return false
+        }
+        const id = qanAdapter.liveNodeId(node)
+        if (id.length === 0) {
+            return false
+        }
+        if (rightButton) {
+            if (!root.nodeController.isNodeSelected(id)) {
+                root.nodeController.selectNode(id)
+            }
+            return false
+        }
+        if (node.item && position !== undefined && position !== null) {
+            const maskId = String(qanAdapter.maskIdAtItemPosition(
+                                      node.item, position.x, position.y) || "")
+            const onDelete = qanAdapter.maskDeleteContainsItemPosition(
+                    node.item, position.x, position.y)
+            qanAdapter.logMaskRow(onDelete ? "graph-press-delete" : "graph-press",
+                                  id, maskId, rightButton)
+            if (maskId.length > 0) {
+                if (onDelete) {
+                    root.removeMaskFromDrawer(id, maskId)
+                } else {
+                    root.selectMaskFromDrawer(id, maskId)
+                }
+                return true
+            }
+        } else {
+            qanAdapter.logMaskRow("graph-press-no-pos", id, "", rightButton)
+        }
+        const extend = ShortcutRegistry.modifierMatches(
+                "nodes.extendSelection", ShortcutRegistry.currentKeyboardModifiers())
+        if (extend) {
+            root.nodeController.toggleNodeSelection(id)
+        } else {
+            root.nodeController.selectNode(id)
+        }
+        return false
+    }
+
+    function detachAdapter() {
+        if (root.nodeController) {
+            root.nodeController.graphAdapter = null
+        }
+    }
+
+    function fitGraph() {
+        if (!graphView || !root.graphReady) {
+            return
+        }
+        graphView.fitContentInView()
+        captureView()
+    }
+
+    function startKeyboardConnect() {
+        if (!root.graphReady || !root.nodeController || !qanAdapter) {
+            return
+        }
+        if (root.renameVisible) {
+            return
+        }
+        qanAdapter.beginKeyboardConnect(root.nodeController.selectedNodeId)
+    }
+
+    function completeKeyboardConnect() {
+        if (!root.keyboardConnectActive || !root.nodeController || !qanAdapter) {
+            return
+        }
+        const source = qanAdapter.keyboardConnectSourceId
+        const destination = root.nodeController.selectedNodeId
+        qanAdapter.cancelKeyboardConnect()
+        if (source.length > 0 && destination.length > 0) {
+            root.nodeController.requestConnect(source, destination)
+        }
+        graphView.forceActiveFocus()
+    }
+
+    function cancelConnectorOrRename() {
+        if (root.renameVisible) {
+            root.cancelRename()
+            return
+        }
+        if (qanAdapter && qanAdapter.keyboardConnectActive) {
+            qanAdapter.cancelKeyboardConnect()
+        } else if (qanAdapter) {
+            qanAdapter.hideConnectorPreview()
+        }
+        graphView.forceActiveFocus()
+    }
+
+    // Graph-scoped product keys. Command ids live on ShortcutRegistry.
+    // Masks header Enter/Space stay on EditorNodeMaskDrawer. Add Enter/Space
+    // stay on IconActionButton. Tab order is KeyNavigation on Add and GraphView.
+    // dispatchGraphKey takes plain ints so tests can invoke it directly;
+    // handleGraphKey only adapts the key event and marks it accepted.
+    function dispatchGraphKey(key, modifiers) {
+        if (!root.nodeController || !root.graphReady) {
+            return false
+        }
+        const extending = !root.keyboardConnectActive
+                && ShortcutRegistry.modifierMatches(
+                       "nodes.extendSelection", modifiers)
+        let id = ShortcutRegistry.commandIdForKey("editor.nodes", key, modifiers)
+        if (id.length === 0 && extending) {
+            const commandModifiers = modifiers
+                    & ~ShortcutRegistry.modifierBitsForCommand("nodes.extendSelection")
+            id = ShortcutRegistry.commandIdForKey("editor.nodes", key,
+                                                  commandModifiers)
+        }
+        if (id === "nodes.addColorGrade") {
+            root.addColorGrade()
+        } else if (id === "nodes.fitGraph") {
+            root.fitGraph()
+        } else if (id === "nodes.renameColorGrade") {
+            root.beginRename()
+        } else if (id === "nodes.deleteSelection") {
+            if (root.renameVisible) {
+                return false
+            }
+            // Leave the event unaccepted while transient Mask editing owns
+            // Delete; EditorWorkspace's scoped Shortcut handles it exactly once.
+            if (root.maskCreation && root.maskCreation.maskControlsActive) {
+                return false
+            }
+            root.deleteSelectedNodes()
+        } else if (id === "nodes.beginConnect") {
+            root.startKeyboardConnect()
+        } else if (id === "nodes.completeConnect") {
+            if (!root.keyboardConnectActive) {
+                return false
+            }
+            root.completeKeyboardConnect()
+        } else if (id === "nodes.selectPrevious") {
+            if (extending) {
+                root.nodeController.extendNodeSelectionByStep(-1)
+            } else {
+                root.nodeController.selectPreviousBackboneNode()
+            }
+        } else if (id === "nodes.selectNext") {
+            if (extending) {
+                root.nodeController.extendNodeSelectionByStep(1)
+            } else {
+                root.nodeController.selectNextBackboneNode()
+            }
+        } else if (id === "nodes.selectDevelop") {
+            root.nodeController.selectDevelop()
+        } else if (id === "nodes.selectDrt") {
+            root.nodeController.selectDrt()
+        } else if (id === "nodes.cancel") {
+            root.cancelConnectorOrRename()
+        } else {
+            return false
+        }
+        return true
+    }
+
+    function handleGraphKey(event) {
+        if (root.dispatchGraphKey(event.key, event.modifiers)) {
+            event.accepted = true
+        }
+    }
+
+    onLayoutIdentityKeyChanged: restoreGraphView()
+
+    Connections {
+        target: root.nodeController
+        function onSelectionChanged() {
+            if (root.renameVisible
+                    && root.renameNodeId !== root.nodeController.selectedNodeId) {
+                root.cancelRename()
+            }
+        }
+        function onSnapshotChanged() {
+            root.restoreGraphView()
+        }
+    }
+
+    Connections {
+        target: qanAdapter
+        function onNodeDrawerOpenChanged(nodeId, open) {
+            if (root.nodeLayoutStore) {
+                root.nodeLayoutStore.setDrawerOpen(nodeId, open)
+            }
+        }
+        function onGraphChanged() {
+            root.attachAdapter()
+        }
+        function onMaskRowSelected(nodeId, maskId) {
+            root.selectMaskFromDrawer(nodeId, maskId)
+        }
+        function onMaskRowDeleteRequested(nodeId, maskId) {
+            root.removeMaskFromDrawer(nodeId, maskId)
+        }
+    }
+
+    Connections {
+        target: root.maskCreation
+        function onMaskCreationChanged() {
+            if (qanAdapter)
+                qanAdapter.selectedMaskId = root.maskCreation
+                        ? String(root.maskCreation.selectedMaskId || "")
+                        : ""
+        }
+    }
+
+    Component.onCompleted: {
+        attachAdapter()
+        restoreGraphView()
+        if (graphView.originCross) {
+            graphView.originCross.visible = false
+        }
+        graphView.vScrollBar.policy = ScrollBar.AlwaysOff
+        graphView.hScrollBar.policy = ScrollBar.AlwaysOff
+    }
+
+    Component.onDestruction: {
+        captureView()
+        detachAdapter()
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: appTheme.spaceLg
+        spacing: appTheme.spaceMd
+
+        RowLayout {
+            objectName: "editorNodesPanelHeader"
+            Layout.fillWidth: true
+            spacing: appTheme.spaceSm
+
+            Label {
+                objectName: "editorNodesPanelTitle"
+                Layout.fillWidth: true
+                text: qsTr("Nodes")
+                color: root.colText
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeSection
+                font.weight: appTheme.fontWeightHeading
+                wrapMode: Text.WordWrap
+                Accessible.role: Accessible.StaticText
+                Accessible.name: qsTr("Nodes")
+            }
+
+            IconActionButton {
+                id: addButton
+                objectName: "editorNodesAddButton"
+                compact: true
+                enabled: root.graphReady && root.nodeController
+                         && root.nodeController.canAddColorGrade
+                iconSrc: "qrc:/panel_icons/plus.svg"
+                iconColorDefault: root.colMuted
+                iconColorMuted: root.colMuted
+                fillIdle: root.colCardSurface
+                fillHover: appTheme.buttonHoveredFillColor
+                fillPressed: appTheme.buttonPressedFillColor
+                fillSelected: appTheme.buttonSelectedFillColor
+                focusRingColor: root.colText
+                actionName: qsTr("Add Color Grade")
+                toolTipText: ShortcutRegistry.decorateTooltip(qsTr("Add Color Grade"),
+                                                             "nodes.addColorGrade")
+                KeyNavigation.tab: graphView
+                onClicked: root.addColorGrade()
+            }
+        }
+
+        RowLayout {
+            objectName: "editorNodeRenameRow"
+            Layout.fillWidth: true
+            Layout.preferredHeight: root.renameVisible ? appTheme.iconButtonHitSizeCompact : 0
+            spacing: appTheme.spaceSm
+            visible: root.renameVisible
+
+            TextField {
+                id: renameField
+                objectName: "editorNodeRenameField"
+                Layout.fillWidth: true
+                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+                enabled: root.renameVisible && root.nodeController
+                         && !root.nodeController.commandActive
+                color: root.colText
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeBody
+                placeholderText: qsTr("Color Grade name")
+                selectByMouse: true
+                leftPadding: appTheme.spaceSm
+                rightPadding: appTheme.spaceSm
+                Accessible.name: qsTr("Rename Color Grade")
+                background: Rectangle {
+                    radius: appTheme.controlRadiusSmall
+                    color: appTheme.bgBaseColor
+                    border.width: 1
+                    border.color: renameField.activeFocus ? root.colText : root.colCardBorder
+                }
+                onAccepted: root.commitRename()
+                Keys.onEscapePressed: function (event) {
+                    root.cancelRename()
+                    event.accepted = true
+                }
+            }
+
+            IconActionButton {
+                objectName: "editorNodeRenameAcceptButton"
+                compact: true
+                enabled: root.renameVisible && root.nodeController
+                         && !root.nodeController.commandActive
+                         && renameField.text.trim().length > 0
+                iconSrc: "qrc:/panel_icons/edit.svg"
+                iconColorDefault: root.colText
+                iconColorMuted: root.colMuted
+                fillIdle: root.colCardSurface
+                fillHover: appTheme.buttonHoveredFillColor
+                fillPressed: appTheme.buttonPressedFillColor
+                fillSelected: appTheme.buttonSelectedFillColor
+                focusRingColor: root.colText
+                actionName: qsTr("Accept Rename")
+                onClicked: root.commitRename()
+            }
+        }
+
+        Label {
+            objectName: "editorNodesPendingCommand"
+            Layout.fillWidth: true
+            visible: root.pendingCommand
+            text: qsTr("Updating node graph")
+            color: root.colMuted
+            wrapMode: Text.WordWrap
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+            Accessible.role: Accessible.StaticText
+            Accessible.name: qsTr("Updating node graph")
+        }
+
+        Label {
+            objectName: "editorNodesEditingGuidance"
+            Layout.fillWidth: true
+            visible: (root.nodeController && root.nodeController.incompleteDraft)
+                     || root.keyboardConnectActive
+            text: {
+                if (root.keyboardConnectActive) {
+                    return qsTr("Select a destination node and press Enter")
+                }
+                return root.nodeController ? root.nodeController.incompleteDraftInstruction : ""
+            }
+            color: root.colMuted
+            wrapMode: Text.WordWrap
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+
+        Label {
+            objectName: "editorNodesCommandError"
+            Layout.fillWidth: true
+            visible: root.nodeController && root.nodeController.lastError.length > 0
+            text: root.nodeController ? root.nodeController.lastError : ""
+            color: appTheme.dangerColor
+            wrapMode: Text.WordWrap
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+
+        Rectangle {
+            id: canvasHost
+            objectName: "editorNodesCanvasHost"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            radius: appTheme.controlRadiusSmall
+            color: appTheme.graphCanvasColor
+            border.width: 1
+            border.color: root.colCardBorder
+            clip: true
+
+            Label {
+                objectName: "editorNodesEmptyState"
+                anchors.fill: parent
+                anchors.margins: appTheme.spaceLg
+                visible: root.noImage
+                text: qsTr("Select an image to edit nodes")
+                color: root.colMuted
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeBody
+                Accessible.role: Accessible.StaticText
+                Accessible.name: qsTr("Select an image to edit nodes")
+            }
+
+            Label {
+                objectName: "editorNodesLoadingState"
+                anchors.fill: parent
+                anchors.margins: appTheme.spaceLg
+                visible: root.graphLoading
+                text: qsTr("Loading node graph")
+                color: root.colMuted
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeBody
+                Accessible.role: Accessible.StaticText
+                Accessible.name: qsTr("Loading node graph")
+            }
+
+            Qan.GraphView {
+                id: graphView
+                objectName: "editorNodesGraphView"
+                anchors.fill: parent
+                anchors.margins: 1
+                navigable: true
+                selectionRectEnabled: false
+                // Uniform canvas, no grid: assigning null swaps in QuickQanava's
+                // empty default grid (Navigable::setGrid), so nothing is painted
+                // behind the nodes.
+                grid: null
+                visible: root.graphReady
+                enabled: root.graphReady
+                focus: root.graphReady
+                activeFocusOnTab: root.graphReady
+                Accessible.role: Accessible.Canvas
+                Accessible.name: root.keyboardConnectActive
+                                 ? qsTr("Nodes graph, connecting")
+                                 : qsTr("Nodes graph")
+                Accessible.description: root.pendingCommand
+                                        ? qsTr("Updating node graph")
+                                        : ""
+                Accessible.ignored: !root.graphReady
+                KeyNavigation.backtab: addButton
+                Keys.priority: Keys.BeforeItem
+
+                graph: Qan.Graph {
+                    id: graphTopology
+                    objectName: "editorNodesQanGraph"
+                    // Product selection is owned by EditorNodeController and
+                    // projected through AlcedoQanGraph; pointer input never
+                    // mutates Qan selection itself.
+                    multipleSelectionEnabled: true
+                    selectionPolicy: Qan.Graph.NoSelection
+                    connectorEnabled: true
+                    connectorCreateDefaultEdge: false
+                    connectorEdgeColor: appTheme.graphCandidateEdgeColor
+                    connectorColor: appTheme.graphPortBorderColor
+                }
+
+                Keys.onPressed: function (event) {
+                    root.handleGraphKey(event)
+                }
+
+                onNavigated: root.captureView()
+                onNodeClicked: function (node, pos) {
+                    if (qanAdapter) {
+                        qanAdapter.logMaskRow("graphView-nodeClicked",
+                                              node ? qanAdapter.liveNodeId(node) : "",
+                                              "", false)
+                    }
+                    root.handleGraphNodePress(node, pos, false)
+                }
+                onNodeRightClicked: function (node, pos) {
+                    if (qanAdapter) {
+                        qanAdapter.logMaskRow("graphView-nodeRightClicked",
+                                              node ? qanAdapter.liveNodeId(node) : "",
+                                              "", true)
+                    }
+                    // Right presses never route to a Mask row; they only
+                    // maintain the selection the menu will act on.
+                    root.handleGraphNodePress(node, pos, true)
+                    if (!root.nodeController || !qanAdapter || !node || !node.item) {
+                        return
+                    }
+                    const id = qanAdapter.liveNodeId(node)
+                    if (id.length === 0) {
+                        return
+                    }
+                    const menuPosition = node.item.mapToItem(canvasHost, pos.x, pos.y)
+                    nodeMenu.openAt(menuPosition.x, menuPosition.y)
+                }
+                onRightClicked: function () {
+                    canvasMenu.popup()
+                }
+            }
+
+            Connections {
+                target: graphView.graph
+                enabled: graphView.graph !== null
+                function onNodeMoved(node) {
+                    if (!root.nodeLayoutStore || !qanAdapter || !node || !node.item) {
+                        return
+                    }
+                    const id = qanAdapter.liveNodeId(node)
+                    if (id.length > 0) {
+                        root.nodeLayoutStore.setNodePosition(id, node.item.x, node.item.y)
+                    }
+                }
+            }
+
+            AlcedoQanGraph {
+                id: qanAdapter
+                objectName: "editorNodesQanAdapter"
+                graph: graphView.graph
+                colorGradeDelegateUrl: Qt.resolvedUrl("EditorNodeDelegate.qml")
+                endpointDelegateUrl: Qt.resolvedUrl("EditorEndpointNodeDelegate.qml")
+                portDelegateUrl: Qt.resolvedUrl("EditorNodePortDelegate.qml")
+                portDockDelegateUrl: Qt.resolvedUrl("EditorNodePortDock.qml")
+                edgeDelegateUrl: Qt.resolvedUrl("EditorNodeEdgeDelegate.qml")
+            }
+
+            AppContextMenu {
+                id: canvasMenu
+                objectName: "editorNodesCanvasMenu"
+
+                AppMenuItem {
+                    objectName: "editorNodesFitMenuItem"
+                    text: qsTr("Fit")
+                    Accessible.name: qsTr("Fit")
+                    onTriggered: root.fitGraph()
+                }
+            }
+
+            AppContextMenu {
+                id: nodeMenu
+                objectName: "editorNodesNodeMenu"
+
+                AppMenuItem {
+                    objectName: "editorNodesRenameMenuItem"
+                    text: qsTr("Rename Color Grade")
+                    Accessible.name: qsTr("Rename Color Grade")
+                    // Rename stays single-node: a multi-selection disables it
+                    // through canRenameSelectedColorGrade.
+                    enabled: root.nodeController
+                             ? root.nodeController.canRenameSelectedColorGrade : false
+                    onTriggered: root.beginRename()
+                }
+
+                AppMenuItem {
+                    objectName: "editorNodesDeleteMenuItem"
+                    text: root.nodeController && root.nodeController.selectedNodeCount > 1
+                          ? qsTr("Delete Selected Nodes") : qsTr("Delete Color Grade")
+                    Accessible.name: text
+                    enabled: root.nodeController
+                             ? root.nodeController.canDeleteSelectedNodes : false
+                    onTriggered: root.deleteSelectedNodes()
+                }
+            }
+        }
+    }
+}

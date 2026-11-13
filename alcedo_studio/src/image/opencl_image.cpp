@@ -58,6 +58,23 @@ auto OpenClImage::operator=(OpenClImage&& other) noexcept -> OpenClImage& {
   return *this;
 }
 
+auto OpenClImage::Wrap(cl_mem buffer, int width, int height, int type) -> OpenClImage {
+  if (buffer == nullptr) {
+    throw std::invalid_argument("OpenClImage::Wrap: buffer must not be null.");
+  }
+  if (width <= 0 || height <= 0) {
+    throw std::invalid_argument("OpenClImage::Wrap: image dimensions must be positive.");
+  }
+  CheckOpenCl(clRetainMemObject(buffer), "clRetainMemObject");
+  OpenClImage image;
+  image.buffer_    = buffer;
+  image.width_     = width;
+  image.height_    = height;
+  image.type_      = type;
+  image.row_bytes_ = static_cast<size_t>(width) * CV_ELEM_SIZE(type);
+  return image;
+}
+
 auto OpenClImage::Buffer() const -> cl_mem { return buffer_; }
 
 auto OpenClImage::Width() const -> int { return width_; }

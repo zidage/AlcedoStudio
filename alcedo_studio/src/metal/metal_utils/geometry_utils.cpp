@@ -62,6 +62,7 @@ enum class GeometryKernel : uint32_t {
   Area,
   WarpAffineLinear,
   WarpRectilinear,
+  WarpRectilinearTex,
 };
 
 constexpr uint32_t kRowAlignmentBytes = 256;
@@ -123,6 +124,13 @@ auto KernelNameFor(GeometryKernel kernel, PixelFormat format) -> const char* {
       switch (format) {
         case PixelFormat::RGBA32FLOAT:
           return "warp_rectilinear_rgba32f";
+        default:
+          return nullptr;
+      }
+    case GeometryKernel::WarpRectilinearTex:
+      switch (format) {
+        case PixelFormat::RGBA32FLOAT:
+          return "warp_rectilinear_tex_rgba32f";
         default:
           return nullptr;
       }
@@ -319,6 +327,25 @@ void DispatchWarpAffine(const MetalImage& src, MetalImage& dst, const cv::Mat& m
   command_buffer->waitUntilCompleted();
 }
 
+auto MakeWarpRectilinearParams(const dng::WarpRectilinear& warp, uint32_t width, uint32_t height)
+    -> WarpRectilinearParams {
+  WarpRectilinearParams params{
+      .coefficient_set_count = warp.coefficient_set_count,
+      .width                 = width,
+      .height                = height,
+      .src_stride            = width,
+      .dst_stride            = width,
+      .center_x              = static_cast<float>(warp.center_x),
+      .center_y              = static_cast<float>(warp.center_y),
+  };
+  for (size_t set = 0; set < warp.coefficient_sets.size(); ++set) {
+    for (size_t term = 0; term < warp.coefficient_sets[set].size(); ++term) {
+      params.coefficient_sets[set][term] = static_cast<float>(warp.coefficient_sets[set][term]);
+    }
+  }
+  return params;
+}
+
 void DispatchWarpRectilinear(const MetalImage& src, MetalImage& dst,
                              const dng::WarpRectilinear& warp) {
   const auto src_row_bytes = RowBytesFor(src.Width(), src.Format());
@@ -425,6 +452,33 @@ void WarpAffineLinearTexture(const MetalImage& src, MetalImage& dst, const cv::M
   dst.Create(static_cast<uint32_t>(out_size.width), static_cast<uint32_t>(out_size.height),
              src.Format(), true, true, HasRenderTargetUsage(src));
   DispatchWarpAffine(src, dst, matrix, border_value);
+}
+
+void EncodeWarpRectilinearTexture(void* command_buffer, void* src_texture, void* dst_texture,
+                                  const dng::WarpRectilinear& warp) {
+  auto* buffer = static_cast<MTL::CommandBuffer*>(command_buffer);
+  auto* src    = static_cast<MTL::Texture*>(src_texture);
+  auto* dst    = static_cast<MTL::Texture*>(dst_texture);
+  if (buffer == nullptr || src == nullptr || dst == nullptr) {
+    throw std::runtime_error("Metal geometry utils: encode warp requires command buffer and textures.");
+  }
+  if (src->width() != dst->width() || src->height() != dst->height()) {
+    throw std::runtime_error("Metal geometry utils: warp source and destination sizes must match.");
+  }
+  const auto params = MakeWarpRectilinearParams(warp, static_cast<uint32_t>(src->width()),
+                                                static_cast<uint32_t>(src->height()));
+  auto       pipeline = GetGeometryPipelineState(GeometryKernel::WarpRectilinearTex,
+                                                 PixelFormat::RGBA32FLOAT);
+  auto       compute  = NS::RetainPtr(buffer->computeCommandEncoder());
+  if (!compute) {
+    throw std::runtime_error("Metal geometry utils: failed to create compute encoder.");
+  }
+  compute->setComputePipelineState(pipeline.get());
+  compute->setTexture(src, 0);
+  compute->setTexture(dst, 1);
+  compute->setBytes(&params, sizeof(params), 0);
+  DispatchThreads(compute.get(), pipeline.get(), params.width, params.height);
+  compute->endEncoding();
 }
 
 void WarpRectilinearTexture(const MetalImage& src, MetalImage& dst,

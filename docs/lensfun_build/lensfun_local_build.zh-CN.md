@@ -2,7 +2,7 @@
 
 Alcedo Studio 现在会直接从上游子模块构建 Lensfun，源码位置在：
 
-- `alcedo/src/third_party/lensfun`
+- `alcedo_studio/src/third_party/lensfun`
 
 现在不需要再单独配置或安装 Lensfun。顶层构建会在当前 CMake 构建目录下自动驱动一个独立的 Lensfun out-of-source 构建：
 
@@ -13,7 +13,7 @@ Alcedo Studio 现在会直接从上游子模块构建 Lensfun，源码位置在�
 1. 初始化子模块：
 
 ```powershell
-git submodule update --init --recursive alcedo/src/third_party/lensfun
+git submodule update --init alcedo_studio/src/third_party/lensfun
 ```
 
 2. 确保 Windows 下的 GLib2 依赖可用。
@@ -27,6 +27,8 @@ git submodule update --init --recursive alcedo/src/third_party/lensfun
 ```powershell
 .\vcpkg\vcpkg.exe install glib:x64-windows
 ```
+
+不要安装 vcpkg 的 `lensfun` 端口。Alcedo 从 `alcedo_studio/src/third_party/lensfun` 构建 Lensfun。`vcpkg-overlays/lensfun` 会阻止该端口再安装一份互相冲突的 `lensfun.dll`。
 
 如果你想改用非 vcpkg 的 GLib2 包，请在配置 Alcedo Studio 时显式传入 `ALCEDO_LENSFUN_GLIB2_BASE_DIR`。
 

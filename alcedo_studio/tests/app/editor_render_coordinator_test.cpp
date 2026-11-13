@@ -3,6 +3,10 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/editor_render_coordinator.hpp"
+#include "support/editor_parameter_write_test.hpp"
+
+#include "support/latch_blocked_pipeline_scheduler_port.hpp"
+#include "support/manual_monotonic_clock.hpp"
 
 #include <gtest/gtest.h>
 
@@ -33,9 +37,6 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
     return ++next_job_;
   }
   void Cancel(std::uint64_t job_id) override { cancelled_.push_back(job_id); }
-  void WaitForSessionIdle(std::uint64_t session_epoch) override {
-    waited_sessions_.push_back(session_epoch);
-  }
   void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
                           PresentationSinkId presentation_sink_id = 0) override {
     bind_calls_.push_back({epoch, element_id, image_id, presentation_sink_id});
@@ -51,7 +52,6 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
 
   std::vector<EditorRenderRequest>     scheduled_;
   std::vector<std::uint64_t>           cancelled_;
-  std::vector<std::uint64_t>           waited_sessions_;
   std::vector<BindCall>                bind_calls_;
   EditorPipelineScheduleCompletion     last_completion_;
   int                                  clear_count_ = 0;
@@ -102,6 +102,19 @@ TEST_F(EditorRenderCoordinatorTest, AcceptsIntentAndSchedulesThroughSingleOwner)
   ASSERT_EQ(scheduler_->scheduled_.size(), 1u);
   EXPECT_EQ(scheduler_->scheduled_.front().request_id, accepted.request_id);
   EXPECT_TRUE(coordinator_->has_inflight());
+}
+
+TEST_F(EditorRenderCoordinatorTest, ResourceChangedSchedulesQualityRenderInsteadOfReuse) {
+  // A changed LUT resource alters content without a document edit (plan L4).
+  EXPECT_EQ(DefaultQualityForReason(EditorRenderReason::ResourceChanged),
+            EditorRenderQuality::Quality);
+  EXPECT_FALSE(ReasonReusesCurrentFrame(EditorRenderReason::ResourceChanged));
+  EXPECT_TRUE(ScopeUpdateAllowedForReason(EditorRenderReason::ResourceChanged));
+  const auto accepted = coordinator_->Submit(
+      MakeViewIntent(EditorRenderReason::ResourceChanged, EditorRenderQuality::Quality));
+  EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
+  ASSERT_EQ(scheduler_->scheduled_.size(), 1u);
+  EXPECT_EQ(scheduler_->scheduled_.front().request_id, accepted.request_id);
 }
 
 TEST_F(EditorRenderCoordinatorTest, RejectsStaleImageLoadRequest) {
@@ -205,41 +218,6 @@ TEST_F(EditorRenderCoordinatorTest, CancelSessionReportsIdleImmediatelyWhenSessi
     idle_reported = true;
   });
   EXPECT_TRUE(idle_reported);
-}
-
-TEST_F(EditorRenderCoordinatorTest, CancelSessionAndWaitJoinsTheMatchingSchedulerWork) {
-  coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
-
-  coordinator_->CancelSessionAndWait(1);
-
-  ASSERT_EQ(scheduler_->cancelled_.size(), 1u);
-  ASSERT_EQ(scheduler_->waited_sessions_.size(), 1u);
-  EXPECT_EQ(scheduler_->waited_sessions_.front(), 1u);
-  coordinator_->NotifySchedulerCompleted(coordinator_->last_scheduled_request_id(), false,
-                                         "cancelled");
-  EXPECT_FALSE(coordinator_->has_inflight());
-}
-
-TEST_F(EditorRenderCoordinatorTest, WaitForSessionIdleDropsPendingButDoesNotCancelInflight) {
-  // Interactive is in-flight; Quality sits pending. History queues behind the
-  // current frame: pending is superseded, inflight is not cancelled.
-  coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
-  coordinator_->Submit(MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::High));
-  EXPECT_TRUE(coordinator_->has_inflight());
-  EXPECT_EQ(coordinator_->pending_count(), 1u);
-  const auto inflight_id = coordinator_->last_scheduled_request_id();
-
-  coordinator_->WaitForSessionIdle(1);
-
-  EXPECT_TRUE(scheduler_->cancelled_.empty());
-  ASSERT_FALSE(scheduler_->waited_sessions_.empty());
-  EXPECT_EQ(scheduler_->waited_sessions_.front(), 1u);
-  EXPECT_TRUE(coordinator_->has_inflight());
-  EXPECT_EQ(coordinator_->pending_count(), 0u);
-
-  coordinator_->NotifySchedulerCompleted(inflight_id, true);
-  EXPECT_FALSE(coordinator_->has_inflight());
-  EXPECT_EQ(coordinator_->pending_count(), 0u);
 }
 
 TEST_F(EditorRenderCoordinatorTest, CancellationTokenPreventsSchedule) {
@@ -491,21 +469,25 @@ TEST_F(EditorRenderCoordinatorTest,
 TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) {
   EditorRenderIntent intent =
       MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
-  intent.adjustment.fingerprint = "tone:v1";
-  intent.adjustment.params_json = R"({"exposure":0.5})";
-  intent.adjustment.patches.push_back(EditorAdjustmentPatch{"exposure", R"({"v":0.5})", false});
+  intent.operation_id          = 77;
+  intent.geometry_overlay_only = true;
+  intent.requested_width       = 640;
+  intent.requested_height      = 480;
 
   const auto accepted = coordinator_->Submit(intent);
   EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_EQ(accepted.intent.frame_role, FrameRole::QualityBase);
-  EXPECT_EQ(accepted.intent.adjustment.fingerprint, "tone:v1");
-  ASSERT_EQ(accepted.intent.adjustment.patches.size(), 1u);
-  EXPECT_EQ(accepted.intent.adjustment.patches[0].field_key, "exposure");
-  EXPECT_EQ(accepted.intent.adjustment.params_json, R"({"exposure":0.5})");
+  EXPECT_EQ(accepted.intent.operation_id, 77u);
+  EXPECT_TRUE(accepted.intent.geometry_overlay_only);
+  EXPECT_EQ(accepted.intent.requested_width, 640);
+  EXPECT_EQ(accepted.intent.requested_height, 480);
 
   ASSERT_FALSE(scheduler_->scheduled_.empty());
   const auto& scheduled_intent = scheduler_->scheduled_.front().intent;
-  EXPECT_EQ(scheduled_intent.adjustment, accepted.intent.adjustment);
+  EXPECT_EQ(scheduled_intent.operation_id, accepted.intent.operation_id);
+  EXPECT_EQ(scheduled_intent.geometry_overlay_only, accepted.intent.geometry_overlay_only);
+  EXPECT_EQ(scheduled_intent.requested_width, accepted.intent.requested_width);
+  EXPECT_EQ(scheduled_intent.requested_height, accepted.intent.requested_height);
   EXPECT_EQ(scheduled_intent.frame_role, accepted.intent.frame_role);
 }
 
@@ -538,24 +520,6 @@ TEST_F(EditorRenderCoordinatorTest, IsTheOnlySchedulerCallerThroughSubmitPort) {
 
 // ---------------------------------------------------------------------------
 // Phase 5D per-reason coordinator decisions (D2 reuse-vs-render, A1).
-
-TEST(EditorRenderIntentPolicyTest, ViewDependentReasonsDoNotReplayAdjustmentSnapshot) {
-  // Operator params are applied incrementally on content change. Detail ROI /
-  // scope ROI / pure view transforms must not re-ApplyEditorAdjustmentSnapshot
-  // (that path thrash-invalidates Image Loading / RAW_DECODE).
-  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ZoomPan));
-  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::Resize));
-  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::DetailRefresh));
-  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ScopeRefresh));
-
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::InitialFrame));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::InteractiveAdjustment));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::SettledAdjustment));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::UndoRedo));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ImageSwitch));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::Retry));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::CropRotate));
-}
 
 TEST_F(EditorRenderCoordinatorTest, ZoomPanIntentIsReusedWithoutScheduling) {
   // A pure zoom/pan transform reuses the current full frame; the renderer
@@ -813,6 +777,38 @@ TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndReadyF
     EXPECT_EQ(diag.pending_count, 0u);
     EXPECT_GE(diag.cancelled_count, 1u);
   }
+}
+
+TEST_F(EditorRenderCoordinatorTest,
+       BlockedRendererKeepsOneInflightUntilCompletionLatchReleases) {
+  auto latch = std::make_shared<test::LatchBlockedPipelineSchedulerPort>();
+  coordinator_->SetPipelineSchedulerPort(latch);
+  test::ManualMonotonicClock clock;
+
+  const auto first = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  EXPECT_EQ(first.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_TRUE(latch->running());
+  EXPECT_EQ(latch->scheduled().size(), 1u);
+
+  const auto second = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High));
+  EXPECT_EQ(second.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_EQ(coordinator_->pending_count(), 1u);
+  EXPECT_EQ(latch->scheduled().size(), 1u);
+  EXPECT_EQ(latch->rejected_while_running(), 0);
+
+  clock.advance_ns(16'000'000);
+  EXPECT_TRUE(latch->running());
+  EXPECT_EQ(latch->scheduled().size(), 1u);
+
+  latch->Complete(true, "first");
+  EXPECT_EQ(latch->scheduled().size(), 2u);
+  EXPECT_TRUE(latch->running());
+  latch->Complete(true, "second");
+  EXPECT_FALSE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
 }
 
 }  // namespace

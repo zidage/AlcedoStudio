@@ -42,9 +42,11 @@ class DeviceBuffer {
   DeviceBuffer(const DeviceBuffer&)            = delete;
   DeviceBuffer& operator=(const DeviceBuffer&) = delete;
 
-  DeviceBuffer(DeviceBuffer&& other) noexcept : ptr_(other.ptr_), count_(other.count_) {
+  DeviceBuffer(DeviceBuffer&& other) noexcept
+      : ptr_(other.ptr_), count_(other.count_), owns_(other.owns_) {
     other.ptr_   = nullptr;
     other.count_ = 0;
+    other.owns_  = true;
   }
 
   auto operator=(DeviceBuffer&& other) noexcept -> DeviceBuffer& {
@@ -52,10 +54,21 @@ class DeviceBuffer {
       Reset();
       ptr_         = other.ptr_;
       count_       = other.count_;
+      owns_        = other.owns_;
       other.ptr_   = nullptr;
       other.count_ = 0;
+      other.owns_  = true;
     }
     return *this;
+  }
+
+  /** @brief Non-owning view. Destructor does not cudaFree. */
+  static auto Wrap(T* ptr, std::size_t count) -> DeviceBuffer {
+    DeviceBuffer buffer;
+    buffer.ptr_   = ptr;
+    buffer.count_ = count;
+    buffer.owns_  = false;
+    return buffer;
   }
 
   ~DeviceBuffer() { Reset(); }
@@ -144,11 +157,12 @@ class DeviceBuffer {
 
   // Release device memory early (also called from destructor).
   void Reset() noexcept {
-    if (ptr_ != nullptr) {
+    if (owns_ && ptr_ != nullptr) {
       ::cudaFree(ptr_);
-      ptr_ = nullptr;
     }
+    ptr_   = nullptr;
     count_ = 0;
+    owns_  = true;
   }
 
  private:
@@ -162,6 +176,7 @@ class DeviceBuffer {
 
   T*          ptr_   = nullptr;
   std::size_t count_ = 0;
+  bool        owns_  = true;
 };
 
 // f32 is the only activation/weight dtype for the demosaicnet milestone.

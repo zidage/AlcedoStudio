@@ -7,13 +7,17 @@
 #include <algorithm>
 #include <cstdint>
 #include <cwctype>
-#include <format>
 #include <memory>
+#include <mutex>
 #include <optional>
-#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
-#include "storage/store/semantic/semantic_label_config.hpp"
-#include "utils/string/convert.hpp"
+#include "app/search_query_parser.hpp"
+#include "storage/query/filter_compiler.hpp"
 
 namespace alcedo {
 namespace {
@@ -33,500 +37,37 @@ auto TrimCopy(std::wstring value) -> std::wstring {
   return std::wstring(first, last);
 }
 
-auto WStringToUtf8(const std::wstring& value) -> std::optional<std::string> {
-  try {
-    return conv::ToBytes(value);
-  } catch (...) {
-    return std::nullopt;
-  }
+/// A LibrarySearch filter node of @p request and @p capabilities.
+auto LibrarySearchNode(LibrarySearchRequest request, SearchCapabilities capabilities)
+    -> FilterNode {
+  FilterNode node{FilterNode::Type::LibrarySearch, FilterOp::AND, {}, std::nullopt};
+  node.library_search_ = LibrarySearchCondition{.request      = std::move(request),
+                                                .capabilities = std::move(capabilities)};
+  return node;
 }
 
-// Fuzzy-search clauses are composed from duckorm expr fragments.
-// Fixed DuckDB function shapes (contains / json_extract / REPLACE / BM25) stay
-// behind expr::raw; every user text value goes through expr::param (prepared binds).
-
-auto LitW(const std::wstring& value) -> duckorm::SqlFragment {
-  return duckorm::expr::param(conv::ToBytes(value));
-}
-
-/// `(contains(COALESCE(field, ''), token) OR
-///   contains(LOWER(COALESCE(field, '')), LOWER(token)))`
-auto ContainsClause(duckorm::SqlFragment field, const std::wstring& token)
-    -> duckorm::SqlFragment {
-  namespace expr = duckorm::expr;
-
-  auto coalesced = expr::raw("COALESCE(");
-  coalesced.append(std::move(field));
-  coalesced.append(expr::raw(", '')"));
-  const auto needle = LitW(token);
-
-  auto lower_value = expr::raw("LOWER(");
-  lower_value.append(coalesced);
-  lower_value.append(expr::raw(")"));
-  auto lower_needle = expr::raw("LOWER(");
-  lower_needle.append(needle);
-  lower_needle.append(expr::raw(")"));
-
-  auto plain = expr::raw("contains(");
-  plain.append(coalesced);
-  plain.append(expr::raw(", "));
-  plain.append(needle);
-  plain.append(expr::raw(")"));
-
-  auto folded = expr::raw("contains(");
-  folded.append(std::move(lower_value));
-  folded.append(expr::raw(", "));
-  folded.append(std::move(lower_needle));
-  folded.append(expr::raw(")"));
-
-  return expr::or_({std::move(plain), std::move(folded)});
-}
-
-auto StripSearchSeparators(std::wstring value) -> std::wstring {
-  std::wstring out;
-  out.reserve(value.size());
-  for (const auto ch : value) {
-    switch (ch) {
-      case L' ':
-      case L'\t':
-      case L'\n':
-      case L'\r':
-      case L'_':
-      case L'-':
-      case L'.':
-      case L'/':
-      case L'\\':
-      case L':':
-      case L';':
-      case L',':
-      case L'\'':
-      case L'"':
-      case L'(':
-      case L')':
-      case L'[':
-      case L']':
-      case L'{':
-      case L'}':
-      case L'%':
-      case L'*':
-      case L'?':
-      case L'!':
-      case L'@':
-      case L'#':
-      case L'$':
-      case L'&':
-      case L'+':
-      case L'=':
-      case L'|':
-      case L'`':
-      case L'~':
-        break;
-      default:
-        out.push_back(static_cast<wchar_t>(std::towlower(ch)));
-        break;
-    }
+auto ToStatsBuckets(const std::vector<StorageStatsBucket>& buckets) -> std::vector<StatsBucket> {
+  std::vector<StatsBucket> out;
+  out.reserve(buckets.size());
+  for (const auto& bucket : buckets) {
+    out.push_back({bucket.label_, bucket.count_});
   }
   return out;
 }
 
-auto FoldSqlSearchSeparators(duckorm::SqlFragment expression) -> duckorm::SqlFragment {
-  namespace expr = duckorm::expr;
-
-  static constexpr std::wstring_view kSeparators[] = {
-      L" ", L"\t", L"\n", L"\r", L"_", L"-", L".", L"/", L"\\", L":", L";",
-      L",", L"'",  L"\"", L"(",  L")", L"[", L"]", L"{", L"}",  L"%", L"*",
-      L"?", L"!",  L"@",  L"#",  L"$", L"&", L"+", L"=", L"|",  L"`", L"~",
-  };
-
-  auto folded = expr::raw("LOWER(COALESCE(");
-  folded.append(std::move(expression));
-  folded.append(expr::raw(", ''))"));
-  for (const auto separator : kSeparators) {
-    auto replaced = expr::raw("REPLACE(");
-    replaced.append(folded);
-    replaced.append(expr::raw(", "));
-    replaced.append(LitW(std::wstring(separator)));
-    replaced.append(expr::raw(", '')"));
-    folded = std::move(replaced);
-  }
-  return folded;
-}
-
-auto SemanticLabelExpr(const std::string& active_model_key) -> duckorm::SqlFragment {
-  namespace expr = duckorm::expr;
-
-  if (active_model_key.empty()) {
-    return expr::lit("");
-  }
-  auto alias_case = expr::raw("CASE");
-  for (const auto& label : DefaultSemanticPhotographyLabelDefinitions()) {
-    const auto canonical = conv::FromBytes(label.canonical_label);
-    const auto en        = conv::FromBytes(label.english_label);
-    const auto zh        = conv::FromBytes(label.chinese_label);
-    const auto aliases = expr::lit(conv::ToBytes(canonical + L" " + en + L" " + zh));
-    for (const auto& variant : {canonical, en, zh}) {
-      auto when = expr::raw(" WHEN LOWER(sl.label) = LOWER(");
-      when.append(expr::lit(conv::ToBytes(variant)));
-      when.append(expr::raw(") THEN "));
-      when.append(aliases);
-      alias_case.append(std::move(when));
-    }
-  }
-  alias_case.append(expr::raw(" ELSE sl.label END"));
-
-  auto subquery = expr::raw("(SELECT string_agg(");
-  subquery.append(std::move(alias_case));
-  subquery.append(expr::raw(
-      ", ' ') FROM SemanticImageLabel sl WHERE sl.file_id = e.id AND sl.model_key = "));
-  subquery.append(expr::lit(active_model_key));
-  subquery.append(expr::raw(")"));
-  return subquery;
-}
-
-// Phase 5f: active AI image understanding (caption + tags + scene) participates in
-// full-text search; the remote LLM rating does NOT (it is a subjective 1..5 score
-// exposed for sort/filter only). This is a correlated subquery against the outer
-// `Element e` row (e.id is the file id / inode the AI rows bind to). tags_json is a JSON
-// array string (e.g. ["sahara","dunes"]); it is concatenated raw and the search
-// separator-folding (FoldSqlSearchSeparators) strips the JSON syntax characters so the
-// tag words become searchable. string_agg over zero rows is NULL, so COALESCE turns a
-// file with no AI understanding into an empty document contribution. Only
-// active-for-search rows participate, so a failed/partial remote call that was never
-// persisted (or a deactivated row) cannot surface in search.
-// Phase 5f's AI understanding is split so the search-settings drawer can scope to
-// "AI description" (caption + scene — the descriptive prose) independently of
-// "AI tags" (the tags_json array). Each is a correlated subquery against the
-// outer `Element e` row (e.id is the file id / inode the AI rows bind to).
-// string_agg over zero active rows is NULL, so COALESCE at the call site turns
-// a file with no AI understanding into an empty contribution. Only
-// active-for-search rows participate, so a failed/partial remote call that was
-// never persisted (or a deactivated row) cannot surface in search.
-auto AiCaptionExpr() -> duckorm::SqlFragment {
-  return duckorm::expr::raw(
-      "(SELECT string_agg(u.caption || ' ' || u.scene, ' ') "
-      "FROM AiImageUnderstanding u WHERE u.file_id = e.id AND u.active = TRUE)");
-}
-auto AiTagsExpr() -> duckorm::SqlFragment {
-  return duckorm::expr::raw(
-      "(SELECT string_agg(u.tags_json, ' ') "
-      "FROM AiImageUnderstanding u WHERE u.file_id = e.id AND u.active = TRUE)");
-}
-
-// Concatenates the enabled field groups into one search document. The folded
-// separator-match path and the whole-query LIKE both run against this. When no
-// field is enabled the result is the empty string; callers guard mask == 0
-// before reaching here so the empty-document case never reaches SQL.
-auto SearchDocumentExpr(const std::string& active_model_key, SearchFieldMask mask)
-    -> duckorm::SqlFragment {
-  namespace expr = duckorm::expr;
-
-  std::vector<duckorm::SqlFragment> parts;
-  if (mask & SearchField::Filename) {
-    parts.push_back(expr::raw("COALESCE(e.element_name, '')"));
-    parts.push_back(expr::raw("COALESCE(i.file_name, '')"));
-    parts.push_back(expr::raw("COALESCE(i.image_path, '')"));
-  }
-  if (mask & SearchField::Exif) {
-    parts.push_back(expr::raw("COALESCE(json_extract_string(i.metadata, '$.Make'), '')"));
-    parts.push_back(expr::raw("COALESCE(json_extract_string(i.metadata, '$.Model'), '')"));
-    parts.push_back(expr::raw("COALESCE(json_extract_string(i.metadata, '$.Lens'), '')"));
-    parts.push_back(expr::raw("COALESCE(json_extract_string(i.metadata, '$.LensMake'), '')"));
-    parts.push_back(expr::raw("COALESCE(json_extract_string(i.metadata, '$.DateTimeString'), '')"));
-    parts.push_back(expr::raw("COALESCE(CAST(i.metadata AS VARCHAR), '')"));
-  }
-  if (mask & SearchField::AiDescription) {
-    auto part = expr::raw("COALESCE(");
-    part.append(AiCaptionExpr());
-    part.append(expr::raw(", '')"));
-    parts.push_back(std::move(part));
-  }
-  if (mask & SearchField::AiTags) {
-    auto semantic_part = expr::raw("COALESCE(");
-    semantic_part.append(SemanticLabelExpr(active_model_key));
-    semantic_part.append(expr::raw(", '')"));
-    parts.push_back(std::move(semantic_part));
-
-    auto ai_tags_part = expr::raw("COALESCE(");
-    ai_tags_part.append(AiTagsExpr());
-    ai_tags_part.append(expr::raw(", '')"));
-    parts.push_back(std::move(ai_tags_part));
-  }
-  if (parts.empty()) {
-    return expr::lit("");
-  }
-
-  auto concat = expr::raw("CONCAT_WS(' ', ");
-  for (size_t i = 0; i < parts.size(); ++i) {
-    if (i > 0) {
-      concat.append(expr::raw(", "));
-    }
-    concat.append(parts[i]);
-  }
-  concat.append(expr::raw(")"));
-  return concat;
-}
-
-auto FoldedDocumentClause(const std::wstring& token, const std::string& active_model_key,
-                           SearchFieldMask mask) -> std::optional<duckorm::SqlFragment> {
-  namespace expr = duckorm::expr;
-
-  if (mask == 0) {
-    return std::nullopt;
-  }
-  if (token.find(L'%') != std::wstring::npos || token.find(L'*') != std::wstring::npos ||
-      token.find(L'?') != std::wstring::npos || token.find(L'\'') != std::wstring::npos ||
-      token.find(L'"') != std::wstring::npos) {
-    return std::nullopt;
-  }
-
-  const auto folded_token = StripSearchSeparators(token);
-  if (folded_token.size() < 2 || folded_token.size() < token.size() / 2) {
-    return std::nullopt;
-  }
-
-  const auto folded_doc = FoldSqlSearchSeparators(SearchDocumentExpr(active_model_key, mask));
-  const auto pattern =
-      expr::lit("%" + expr::escape_like_pattern(conv::ToBytes(folded_token)) + "%");
-  return expr::like_escape(folded_doc, pattern);
-}
-
-auto SplitTokens(const std::wstring& query) -> std::vector<std::wstring> {
-  std::wistringstream       stream(query);
-  std::vector<std::wstring> tokens;
-  std::wstring              token;
-  while (stream >> token) {
-    token = TrimCopy(token);
-    if (!token.empty()) {
-      tokens.push_back(std::move(token));
-    }
-  }
-  return tokens;
-}
-
-auto DigitsOnly(const std::wstring& value) -> std::wstring {
-  std::wstring digits;
-  for (const auto ch : value) {
-    if (std::iswdigit(ch) != 0) {
-      digits.push_back(ch);
-    }
-  }
-  return digits;
-}
-
-auto SafeToInt(const std::wstring& value) -> std::optional<int> {
-  if (value.empty() || value.size() > 9) {
-    return std::nullopt;
-  }
-  try {
-    return std::stoi(value);
-  } catch (...) {
-    return std::nullopt;
-  }
-}
-
-auto DigitGroups(const std::wstring& value) -> std::vector<int> {
-  std::vector<int> groups;
-  std::wstring     current;
-  for (const auto ch : value) {
-    if (std::iswdigit(ch) != 0) {
-      if (current.size() < 9) {
-        current.push_back(ch);
-      }
-      continue;
-    }
-    if (!current.empty()) {
-      if (const auto parsed = SafeToInt(current); parsed.has_value()) {
-        groups.push_back(*parsed);
-      }
-      current.clear();
-    }
-  }
-  if (!current.empty()) {
-    if (const auto parsed = SafeToInt(current); parsed.has_value()) {
-      groups.push_back(*parsed);
-    }
-  }
-  return groups;
-}
-
-auto IsValidMonth(int month) -> bool { return month >= 1 && month <= 12; }
-
-auto IsValidDay(int day) -> bool { return day >= 1 && day <= 31; }
-
-auto DateLiteral(int year, int month, int day) -> std::wstring {
-  return std::format(L"{:04}-{:02}-{:02}", year, month, day);
-}
-
-auto NextMonthStart(int year, int month) -> std::wstring {
-  if (month >= 12) {
-    return DateLiteral(year + 1, 1, 1);
-  }
-  return DateLiteral(year, month + 1, 1);
-}
-
-auto DateColumn() -> duckorm::SqlFragment {
-  return duckorm::expr::raw(
-      "TRY_CAST(json_extract_string(i.metadata, '$.DateTimeString') AS DATE)");
-}
-
-auto DateValue(int year, int month, int day) -> duckorm::SqlFragment {
-  return duckorm::expr::raw(
-      "DATE " + duckorm::expr::lit(conv::ToBytes(DateLiteral(year, month, day))).sql_);
-}
-
-auto DateMatchClauses(const std::wstring& token) -> std::vector<duckorm::SqlFragment> {
-  namespace expr = duckorm::expr;
-
-  std::vector<duckorm::SqlFragment> clauses;
-  const auto                        digits = DigitsOnly(token);
-  const auto                        groups = DigitGroups(token);
-  const auto                        col    = DateColumn();
-
-  auto add_exact = [&](int year, int month, int day) {
-    if (year >= 1000 && IsValidMonth(month) && IsValidDay(day)) {
-      clauses.push_back(expr::eq(col, DateValue(year, month, day)));
-    }
-  };
-  auto add_month = [&](int year, int month) {
-    if (year >= 1000 && IsValidMonth(month)) {
-      clauses.push_back(expr::and_(
-          {expr::ge(col, DateValue(year, month, 1)),
-           expr::lt(col, DateValue(year, month + 1, 1))}));
-    }
-  };
-  auto add_year = [&](int year) {
-    if (year >= 1000) {
-      clauses.push_back(expr::and_(
-          {expr::ge(col, DateValue(year, 1, 1)), expr::lt(col, DateValue(year + 1, 1, 1))}));
-    }
-  };
-
-  if (digits.size() == 8) {
-    const auto year  = SafeToInt(digits.substr(0, 4));
-    const auto month = SafeToInt(digits.substr(4, 2));
-    const auto day   = SafeToInt(digits.substr(6, 2));
-    if (year.has_value() && month.has_value() && day.has_value()) {
-      add_exact(*year, *month, *day);
-    }
-  } else if (digits.size() == 6) {
-    const auto yy    = SafeToInt(digits.substr(0, 2));
-    const auto month = SafeToInt(digits.substr(2, 2));
-    const auto day   = SafeToInt(digits.substr(4, 2));
-    if (yy.has_value() && month.has_value() && day.has_value()) {
-      add_exact(*yy >= 70 ? 1900 + *yy : 2000 + *yy, *month, *day);
-    }
-  } else if (digits.size() == 4 && token.size() == 4) {
-    if (const auto year = SafeToInt(digits); year.has_value()) {
-      add_year(*year);
-    }
-  }
-
-  if (groups.size() >= 3) {
-    add_exact(groups[0], groups[1], groups[2]);
-  } else if (groups.size() == 2) {
-    add_month(groups[0], groups[1]);
-  } else if (groups.size() == 1 && digits.size() == 4 && groups[0] >= 1000) {
-    add_year(groups[0]);
-  }
-
-  clauses.push_back(ContainsClause(
-      expr::raw("json_extract_string(i.metadata, '$.DateTimeString')"), token));
-  return clauses;
-}
-
-auto TokenSearchClause(const std::wstring& token, const std::string& active_model_key,
-                       SearchFieldMask mask) -> duckorm::SqlFragment {
-  namespace expr = duckorm::expr;
-
-  std::vector<std::wstring> search_terms{token};
-  if (const auto token_u8 = WStringToUtf8(token); token_u8.has_value()) {
-    if (const auto canonical = CanonicalSemanticLabel(*token_u8); canonical.has_value()) {
-      const auto canonical_w = conv::FromBytes(*canonical);
-      if (std::ranges::find(search_terms, canonical_w) == search_terms.end()) {
-        search_terms.push_back(canonical_w);
-      }
-      for (const auto& alias : SemanticLabelAliases(*canonical)) {
-        const auto alias_w = conv::FromBytes(alias);
-        if (std::ranges::find(search_terms, alias_w) == search_terms.end()) {
-          search_terms.push_back(alias_w);
-        }
-      }
-    }
-  }
-
-  std::vector<duckorm::SqlFragment> clauses;
-  if (mask & SearchField::Filename) {
-    clauses.push_back(ContainsClause(expr::raw("e.element_name"), token));
-    clauses.push_back(ContainsClause(expr::raw("i.file_name"), token));
-    clauses.push_back(ContainsClause(expr::raw("i.image_path"), token));
-  }
-  if (mask & SearchField::Exif) {
-    clauses.push_back(ContainsClause(expr::raw("json_extract_string(i.metadata, '$.Make')"), token));
-    clauses.push_back(
-        ContainsClause(expr::raw("json_extract_string(i.metadata, '$.Model')"), token));
-    clauses.push_back(
-        ContainsClause(expr::raw("json_extract_string(i.metadata, '$.Lens')"), token));
-    clauses.push_back(
-        ContainsClause(expr::raw("json_extract_string(i.metadata, '$.LensMake')"), token));
-    clauses.push_back(ContainsClause(expr::raw("CAST(i.metadata AS VARCHAR)"), token));
-    clauses.push_back(
-        ContainsClause(expr::raw("CAST(json_extract(i.metadata, '$.ISO') AS VARCHAR)"), token));
-    clauses.push_back(
-        ContainsClause(expr::raw("CAST(json_extract(i.metadata, '$.FocalLength') AS VARCHAR)"),
-                       token));
-    clauses.push_back(
-        ContainsClause(expr::raw("CAST(json_extract(i.metadata, '$.Aperture') AS VARCHAR)"),
-                       token));
-    auto date_clauses = DateMatchClauses(token);
-    clauses.insert(clauses.end(), std::make_move_iterator(date_clauses.begin()),
-                   std::make_move_iterator(date_clauses.end()));
-  }
-  if (mask & SearchField::AiDescription) {
-    clauses.push_back(ContainsClause(AiCaptionExpr(), token));
-  }
-  if (mask & SearchField::AiTags) {
-    clauses.push_back(ContainsClause(AiTagsExpr(), token));
-    if (!active_model_key.empty()) {
-      for (const auto& term : search_terms) {
-        clauses.push_back(ContainsClause(SemanticLabelExpr(active_model_key), term));
-      }
-    }
-  }
-
-  if (auto folded_clause = FoldedDocumentClause(token, active_model_key, mask);
-      folded_clause.has_value()) {
-    clauses.push_back(std::move(*folded_clause));
-  }
-
-  return expr::or_(clauses);
-}
-
-auto SearchDocumentClause(const std::wstring& query, const std::string& active_model_key,
-                          SearchFieldMask mask) -> duckorm::SqlFragment {
-  namespace expr = duckorm::expr;
-
-  std::vector<duckorm::SqlFragment> clauses;
-  if (mask != 0) {
-    clauses.push_back(ContainsClause(SearchDocumentExpr(active_model_key, mask), query));
-  }
-  if (auto folded_clause = FoldedDocumentClause(query, active_model_key, mask);
-      folded_clause.has_value()) {
-    clauses.push_back(std::move(*folded_clause));
-  }
-  if (clauses.empty()) {
-    return expr::raw("1=0");
-  }
-  return expr::or_(clauses);
-}
-
-auto AiUnderstandingFtsClause(const std::wstring& query) -> duckorm::SqlFragment {
-  auto fragment = duckorm::expr::raw("(fts_main_AiImageFtsDocument.match_bm25(e.id, ");
-  fragment.append(LitW(query));
-  fragment.append(duckorm::expr::raw(") IS NOT NULL)"));
-  return fragment;
-}
-
 }  // namespace
+
+auto ToAlbumStatsView(const FolderStatsView& stats) -> AlbumStatsView {
+  return {.total_photo_count_ = stats.total_photo_count_,
+          .date_stats_        = ToStatsBuckets(stats.date_stats_),
+          .camera_stats_      = ToStatsBuckets(stats.camera_stats_),
+          .lens_stats_        = ToStatsBuckets(stats.lens_stats_),
+          .label_stats_       = ToStatsBuckets(stats.label_stats_),
+          .rating_stats_      = ToStatsBuckets(stats.rating_stats_),
+          .import_date_stats_ = ToStatsBuckets(stats.import_date_stats_),
+          .color_label_counts_ = stats.color_label_counts_,
+          .delete_mark_count_  = stats.delete_mark_count_};
+}
 
 auto SleeveFilterService::CreateFilterCombo(const FilterNode& root) -> filter_id_t {
   filter_id_t new_id = filter_id_generator_.GenerateID();
@@ -578,107 +119,70 @@ auto SleeveFilterService::ApplyFilterOn(filter_id_t filter_id, sl_element_id_t p
 auto SleeveFilterService::BuildFolderStats(sl_element_id_t                  parent_id,
                                            const std::optional<FilterNode>& extra_filter) const
     -> AlbumStatsView {
-  const auto extra_predicate = CompileFilterPredicate(extra_filter);
+  NotifyQueryThreadObserver("BuildFolderStats");
+  return ToAlbumStatsView(storage_->GetElementStore().BuildFolderStats(
+      parent_id, CompileFilterPredicate(extra_filter),
+      storage_->GetSemanticModelRegistry().ActiveModelKey()));
+}
 
-  const auto active_model_key = storage_->GetSemanticStore().ActiveModelKey();
-  const auto storage_stats    = storage_->GetElementStore().BuildFolderStats(
-      parent_id, extra_predicate, active_model_key);
-
-  AlbumStatsView out;
-  out.total_photo_count_ = storage_stats.total_photo_count_;
-
-  out.date_stats_.reserve(storage_stats.date_stats_.size());
-  for (const auto& bucket : storage_stats.date_stats_) {
-    out.date_stats_.push_back({bucket.label_, bucket.count_});
+auto SleeveFilterService::ListSearchResultPageWithStats(sl_element_id_t                  parent_id,
+                                                        const std::optional<FilterNode>& filter,
+                                                        size_t offset, size_t limit) const
+    -> SearchResultPageAndStats {
+  NotifyQueryThreadObserver("ListSearchResultPageWithStats");
+  if (!storage_) {
+    return {};
   }
-
-  out.camera_stats_.reserve(storage_stats.camera_stats_.size());
-  for (const auto& bucket : storage_stats.camera_stats_) {
-    out.camera_stats_.push_back({bucket.label_, bucket.count_});
-  }
-
-  out.lens_stats_.reserve(storage_stats.lens_stats_.size());
-  for (const auto& bucket : storage_stats.lens_stats_) {
-    out.lens_stats_.push_back({bucket.label_, bucket.count_});
-  }
-
-  out.label_stats_.reserve(storage_stats.label_stats_.size());
-  for (const auto& bucket : storage_stats.label_stats_) {
-    out.label_stats_.push_back({bucket.label_, bucket.count_});
-  }
-
-  out.rating_stats_.reserve(storage_stats.rating_stats_.size());
-  for (const auto& bucket : storage_stats.rating_stats_) {
-    out.rating_stats_.push_back({bucket.label_, bucket.count_});
-  }
-
-  return out;
+  auto result = storage_->GetElementStore().ListSearchResultPageWithStats(
+      parent_id, offset, limit, CompileFilterPredicate(filter),
+      storage_->GetSemanticModelRegistry().ActiveModelKey());
+  return {.page_ = std::move(result.page_), .stats_ = ToAlbumStatsView(result.stats_)};
 }
 
 auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,
                                                 SearchFieldMask      mask) const
     -> std::optional<FilterNode> {
+  NotifyQueryThreadObserver("BuildFuzzySearchWhere");
   const auto trimmed = TrimCopy(query);
   if (trimmed.empty()) {
     return std::nullopt;
   }
   if (mask == 0) {
-    // No field selected → nothing can match. Distinct from nullopt (which would
-    // mean "no filter", i.e. match everything).
-    return FilterNode{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt, L"FALSE"};
+    // No field selected: nothing can match. Distinct from nullopt (which would mean "no
+    // filter", i.e. match everything). The predicate of a request without fields is FALSE.
+    return LibrarySearchNode(LibrarySearchRequest{.query_text = trimmed, .terms = {}, .fields = 0},
+                             {});
   }
 
-  auto tokens = SplitTokens(trimmed);
-  if (tokens.empty()) {
+  auto terms = SearchQueryParser::Parse(trimmed);
+  if (terms.empty()) {
     return std::nullopt;
   }
 
-  const auto active_model_key =
-      storage_ ? storage_->GetSemanticStore().ActiveModelKey()
-                       : std::string{};
-  const bool has_ai_fts =
-      storage_ && storage_->GetAiStore().HasUnderstandingFtsIndex();
-
-  std::vector<duckorm::SqlFragment> token_clauses;
-  token_clauses.reserve(tokens.size());
-  for (const auto& token : tokens) {
-    token_clauses.push_back(TokenSearchClause(token, active_model_key, mask));
+  // Both values are held in memory by their stores, so building the node runs no SQL.
+  SearchCapabilities capabilities;
+  if (storage_) {
+    capabilities.semantic_model_key = storage_->GetSemanticModelRegistry().ActiveModelKey();
+    capabilities.has_ai_fts_index   = storage_->GetAiStore().HasUnderstandingFtsIndex();
   }
-
-  auto where = duckorm::expr::and_(token_clauses);
-  if (tokens.size() > 1) {
-    where = duckorm::expr::or_(
-        {std::move(where), SearchDocumentClause(trimmed, active_model_key, mask)});
-  }
-  // The AI FTS index body is caption + tags_json + scene concatenated; a BM25
-  // hit cannot be attributed to one sub-field, so only run it when both AI
-  // field groups are enabled. A single-bit AI scope falls back to the
-  // per-field LIKE clauses built above (AiCaptionExpr / AiTagsExpr).
-  const bool ai_fts_applicable =
-      has_ai_fts && (mask & SearchField::AiDescription) && (mask & SearchField::AiTags);
-  if (ai_fts_applicable) {
-    where = duckorm::expr::or_({std::move(where), AiUnderstandingFtsClause(trimmed)});
-  }
-  // The node owns compiler output (SQL + binds). Prefer typed nodes; this bridge
-  // keeps factory/search fragments ready for prepared album scope queries.
-  FilterNode node{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt,
-                  conv::FromBytes(where.sql_)};
-  node.raw_binds_ = std::move(where.binds_);
-  return node;
+  return LibrarySearchNode(
+      LibrarySearchRequest{.query_text = trimmed, .terms = std::move(terms), .fields = mask},
+      std::move(capabilities));
 }
 
 auto SleeveFilterService::BuildExactFileWhere(sl_element_id_t file_id) const -> FilterNode {
-  const auto fragment = duckorm::expr::eq(
-      duckorm::expr::col("e.id"), duckorm::expr::param(static_cast<int64_t>(file_id)));
-  FilterNode node{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt,
-                  conv::FromBytes(fragment.sql_)};
-  node.raw_binds_ = fragment.binds_;
-  return node;
+  return FilterNode{FilterNode::Type::Condition,
+                    FilterOp::AND,
+                    {},
+                    FieldCondition{.field_ = FilterField::FileId,
+                                   .op_    = CompareOp::EQUALS,
+                                   .value_ = static_cast<int64_t>(file_id)}};
 }
 
 auto SleeveFilterService::SearchFolder(sl_element_id_t parent_id, const std::wstring& query,
                                        size_t offset, size_t limit, SearchFieldMask mask) const
     -> std::vector<FuzzySearchMatch> {
+  NotifyQueryThreadObserver("SearchFolder");
   std::vector<FuzzySearchMatch> out;
   if (!storage_) {
     return out;
@@ -710,18 +214,109 @@ auto SleeveFilterService::HasSemanticSearchProvider() const -> bool {
   return semantic_search_provider_ != nullptr;
 }
 
+auto SleeveFilterService::EmbedSemanticQuery(const std::wstring& query) const
+    -> SemanticQueryEmbedding {
+  if (!semantic_search_provider_) {
+    throw std::runtime_error("No semantic search provider is available.");
+  }
+  const auto text = TrimCopy(query);
+  if (text.empty()) {
+    throw std::runtime_error("Semantic search query is empty.");
+  }
+  return semantic_search_provider_->EmbedQuery(text);
+}
+
+auto SleeveFilterService::IsSemanticSearchPrewarmed() const -> bool {
+  return semantic_search_provider_ && semantic_search_provider_->IsPrewarmed();
+}
+
+void SleeveFilterService::PrewarmSemanticSearch() const {
+  if (semantic_search_provider_) {
+    semantic_search_provider_->Prewarm();
+  }
+}
+
 auto SleeveFilterService::SearchFolderSemantic(sl_element_id_t parent_id, const std::wstring& query,
                                                size_t offset, size_t limit) const
-    -> std::vector<FuzzySearchMatch> {
-  if (!semantic_search_provider_) {
+    -> SemanticRankedPage {
+  NotifyQueryThreadObserver("SearchFolderSemantic");
+  if (!semantic_search_provider_ || !storage_ || TrimCopy(query).empty()) {
     return {};
   }
-  return semantic_search_provider_->Search(parent_id, query, offset, limit);
+  const auto  embedding = EmbedSemanticQuery(query);
+  std::string error;
+  auto        page =
+      storage_->GetSemanticVectorSearch().SearchImageEmbeddings(parent_id, embedding, offset,
+                                                                limit, &error);
+  if (!error.empty()) {
+    throw std::runtime_error(error);
+  }
+  return page;
+}
+
+auto SleeveFilterService::SearchFolderPage(sl_element_id_t parent_id, const std::wstring& query,
+                                           size_t offset, size_t limit, SearchFieldMask mask) const
+    -> SearchResultPage {
+  NotifyQueryThreadObserver("SearchFolderPage");
+  if (!storage_) {
+    return {};
+  }
+  const auto filter_node = BuildFuzzySearchWhere(query, mask);
+  if (!filter_node.has_value()) {
+    return {};
+  }
+  return ListSearchResultPage(parent_id, filter_node, offset, limit);
+}
+
+auto SleeveFilterService::ListSearchResultPage(sl_element_id_t                  parent_id,
+                                               const std::optional<FilterNode>& filter,
+                                               size_t offset, size_t limit) const
+    -> SearchResultPage {
+  NotifyQueryThreadObserver("ListSearchResultPage");
+  if (!storage_) {
+    return {};
+  }
+  return storage_->GetElementStore().ListSearchResultPage(parent_id, offset, limit,
+                                                          CompileFilterPredicate(filter));
+}
+
+auto SleeveFilterService::SearchFolderSemanticRows(sl_element_id_t     parent_id,
+                                                   const std::wstring& query, size_t offset,
+                                                   size_t limit) const -> SearchResultPage {
+  NotifyQueryThreadObserver("SearchFolderSemanticRows");
+  if (!storage_) {
+    return {};
+  }
+  const auto                   ranked = SearchFolderSemantic(parent_id, query, offset, limit);
+  std::vector<sl_element_id_t> file_ids;
+  file_ids.reserve(ranked.rows_.size());
+  for (const auto& row : ranked.rows_) {
+    file_ids.push_back(row.file_id_);
+  }
+  return SearchResultPage{.total_ = ranked.total_,
+                          .rows_  = storage_->GetElementStore().ListSearchResultRows(file_ids)};
+}
+
+void SleeveFilterService::SetQueryThreadObserver(QueryThreadObserver observer) {
+  std::lock_guard lock(query_thread_observer_mutex_);
+  query_thread_observer_ = std::move(observer);
+}
+
+void SleeveFilterService::NotifyQueryThreadObserver(std::string_view operation) const {
+  QueryThreadObserver observer;
+  {
+    std::lock_guard lock(query_thread_observer_mutex_);
+    observer = query_thread_observer_;
+  }
+  if (observer) {
+    observer(operation);
+  }
 }
 
 auto SleeveFilterService::CountSearchResults(sl_element_id_t     parent_id,
                                              const std::wstring& query,
                                              SearchFieldMask      mask) const -> size_t {
+  NotifyQueryThreadObserver("CountSearchResults");
   if (!storage_) {
     return 0;
   }

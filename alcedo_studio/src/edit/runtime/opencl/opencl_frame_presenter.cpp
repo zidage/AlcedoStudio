@@ -1,0 +1,191 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#ifdef HAVE_OPENCL
+
+#include "edit/runtime/opencl/opencl_frame_presenter.hpp"
+
+#include <cstdint>
+#include <memory>
+#include <opencv2/core.hpp>
+#include <span>
+#include <stdexcept>
+#include <string>
+
+#include "edit/scope/detail/scope_opencl_shared.hpp"
+#include "edit/scope/scope_analyzer.hpp"
+#include "opencl/opencl_check.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
+
+namespace alcedo {
+
+void FramePresenter<OpenClBackend>::Present(BasicRenderDevice<OpenClBackend>& device,
+                                            const GraphValueId& output_id, IFrameSink& sink,
+                                            const FrameCompletionSubmission& submission,
+                                            const ViewerDisplayConfig&       display_config) {
+  auto* lease = device.Workspace().Images().Find(output_id);
+  if (lease == nullptr || lease->Empty()) {
+    throw std::runtime_error("OpenClRenderer: DRT output is missing");
+  }
+  auto& texture = lease->Texture();
+  if (texture.Native() == nullptr || texture.Format() != TextureFormat::Rgba32f) {
+    throw std::runtime_error("OpenClRenderer: DRT output is not an RGBA32F image");
+  }
+
+  const int width  = static_cast<int>(texture.Width());
+  const int height = static_cast<int>(texture.Height());
+  diag::PreviewPerformance::NoteSinkSubmit(submission.metadata.presentation_request_id);
+  sink.BindFrameSubmission(submission);
+  sink.EnsureSize(width, height);
+
+  bool resource_mapped = false;
+  try {
+    const auto mapping = sink.MapResourceForWrite(FrameMemoryDomain::OpenClDevice);
+    resource_mapped    = true;
+    if (!mapping && mapping.presentation_suspended) {
+      throw std::runtime_error(std::string(kPresentationSuspendedMessage) +
+                               "OpenClRenderer: the viewport is minimized or hidden");
+    }
+    if (mapping && mapping.memory_domain == FrameMemoryDomain::HostVisible &&
+        mapping.target_type == FrameWriteTargetType::LinearBuffer &&
+        mapping.pixel_format == FramePixelFormat::RGBA32F && mapping.data != nullptr &&
+        mapping.row_bytes == static_cast<std::size_t>(width) * sizeof(float) * 4) {
+      device.Workspace().Device().DownloadTexture2D(
+          texture, {reinterpret_cast<std::byte*>(mapping.data), mapping.row_bytes * height},
+          device.CommandContext());
+    } else {
+      if (!mapping || mapping.pixel_format != FramePixelFormat::RGBA32F ||
+          mapping.memory_domain != FrameMemoryDomain::OpenClDevice ||
+          mapping.target_type != FrameWriteTargetType::OpenClImage || mapping.data == nullptr) {
+        throw std::runtime_error(
+            "OpenClRenderer: sink did not provide an RGBA32F presentation target");
+      }
+      auto*             destination = reinterpret_cast<cl_mem>(mapping.data);
+      const std::size_t origin[3]   = {0, 0, 0};
+      const std::size_t region[3]   = {texture.Width(), texture.Height(), 1};
+      cl_event          copy_event  = nullptr;
+      CheckOpenCl(clEnqueueCopyImage(device.Workspace().Device().NativeQueue(), texture.Native(),
+                                     destination, origin, origin, region, 0, nullptr, &copy_event),
+                  "OpenClRenderer: clEnqueueCopyImage(present)");
+      device.Workspace().Device().TrackKernelEvent(device.CommandContext(), copy_event);
+    }
+    sink.UnmapResource();
+    resource_mapped = false;
+    device.Workspace().Device().FinalizePresentation(device.CommandContext());
+
+    const auto final_event = device.CommandContext().FinalEvent();
+    if (final_event == nullptr) {
+      throw std::runtime_error("OpenClRenderer: presentation completion event is missing");
+    }
+    CheckOpenCl(clRetainEvent(final_event), "OpenClRenderer: clRetainEvent(present)");
+
+    auto image           = std::make_shared<scope::opencl_detail::OpenClImageResource>();
+    image->image         = texture.Native();
+    image->width         = width;
+    image->height        = height;
+    image->format        = FramePixelFormat::RGBA32F;
+    image->native_object = reinterpret_cast<std::uintptr_t>(image->image);
+    CheckOpenCl(clRetainMemObject(image->image), "OpenClRenderer: clRetainMemObject(scope image)");
+    image->owns_memory = true;
+
+    auto ready         = std::make_shared<scope::opencl_detail::OpenClEventSignalResource>();
+    ready->event       = final_event;
+    SharedGpuImageHandle image_handle;
+    image_handle.backend       = GpuBackend::OpenCL;
+    image_handle.resource      = std::shared_ptr<void>(image, image.get());
+    image_handle.width         = width;
+    image_handle.height        = height;
+    image_handle.format        = FramePixelFormat::RGBA32F;
+    image_handle.resource_type = FrameWriteTargetType::OpenClImage;
+
+    sink.SubmitFinalDisplayFrame(FinalDisplayFrameView{
+        image_handle, width, height, FramePixelFormat::RGBA32F, display_config,
+        AnalysisDomain::DisplayEncoded,
+        GpuSignalHandle{GpuBackend::OpenCL, std::shared_ptr<void>(ready, ready.get())}, 0, 0, 0,
+        submission.metadata.presentation_request_id});
+    sink.NotifyFrameReady(submission);
+  } catch (...) {
+    if (resource_mapped) {
+      try {
+        sink.UnmapResource();
+      } catch (...) {
+      }
+    }
+    throw;
+  }
+}
+
+auto FramePresenter<OpenClBackend>::PresentMaskCoverage(
+    BasicRenderDevice<OpenClBackend>&               device,
+    const MaskCoverageDisplayTarget<OpenClBackend>& target,
+    const MaskCoveragePresentation& presentation, IMaskCoverageSink& sink)
+    -> MaskCoveragePublication {
+  const auto& texture = target.texture;
+  const auto  mapping =
+      sink.MapCoverageTarget(presentation, static_cast<int>(texture.Width()),
+                             static_cast<int>(texture.Height()), FrameMemoryDomain::OpenClDevice);
+  if (!mapping) {
+    if (mapping.image_changed) {
+      return MaskCoveragePublication::DiscardedForImageChange;
+    }
+    if (mapping.presentation_suspended) {
+      throw std::runtime_error(std::string(kPresentationSuspendedMessage) +
+                               "Mask coverage display: the viewport is minimized or hidden");
+    }
+    throw std::runtime_error("Mask coverage display: the coverage channel has no writable target");
+  }
+  try {
+    if (mapping.memory_domain == FrameMemoryDomain::HostVisible &&
+        mapping.target_type == FrameWriteTargetType::LinearBuffer &&
+        mapping.pixel_format == FramePixelFormat::RGBA32F && mapping.data != nullptr &&
+        mapping.row_bytes == static_cast<std::size_t>(texture.Width()) * sizeof(float) * 4) {
+      device.Workspace().Device().DownloadTexture2D(
+          texture,
+          {reinterpret_cast<std::byte*>(mapping.data), mapping.row_bytes * texture.Height()},
+          device.CommandContext());
+      sink.UnmapCoverageTarget();
+      device.Workspace().Device().FinalizePresentation(device.CommandContext());
+      return sink.PublishCoverage();
+    }
+    if (mapping.pixel_format != FramePixelFormat::RGBA32F ||
+        mapping.target_type != FrameWriteTargetType::OpenClImage ||
+        mapping.memory_domain != FrameMemoryDomain::OpenClDevice || mapping.data == nullptr) {
+      throw std::runtime_error("Mask coverage display: the target is not an OpenCL RGBA32F image");
+    }
+    const std::size_t origin[3]  = {0, 0, 0};
+    const std::size_t region[3]  = {texture.Width(), texture.Height(), 1};
+    cl_event          copy_event = nullptr;
+    CheckOpenCl(clEnqueueCopyImage(device.Workspace().Device().NativeQueue(), texture.Native(),
+                                   reinterpret_cast<cl_mem>(mapping.data), origin, origin, region,
+                                   0, nullptr, &copy_event),
+                "Mask coverage display: clEnqueueCopyImage(coverage)");
+    device.Workspace().Device().TrackKernelEvent(device.CommandContext(), copy_event);
+    // The sink releases the shared image to OpenGL and waits for the queue.
+    sink.UnmapCoverageTarget();
+    device.Workspace().Device().FinalizePresentation(device.CommandContext());
+  } catch (...) {
+    sink.AbandonCoverageTarget();
+    throw;
+  }
+  return sink.PublishCoverage();
+}
+
+auto FramePresenter<OpenClBackend>::Download(BasicRenderDevice<OpenClBackend>& device,
+                                             const GraphValueId&               output_id)
+    -> std::shared_ptr<ImageBuffer> {
+  auto* lease = device.Workspace().Images().Find(output_id);
+  if (lease == nullptr || lease->Empty()) {
+    throw std::runtime_error("OpenClRenderer: cannot download a missing DRT output");
+  }
+  auto&   texture = lease->Texture();
+  cv::Mat pixels(static_cast<int>(texture.Height()), static_cast<int>(texture.Width()), CV_32FC4);
+  auto    bytes = std::span<std::byte>{reinterpret_cast<std::byte*>(pixels.data),
+                                       pixels.total() * pixels.elemSize()};
+  device.Workspace().Device().DownloadTexture2D(texture, bytes, device.CommandContext());
+  return std::make_shared<ImageBuffer>(std::move(pixels));
+}
+
+}  // namespace alcedo
+
+#endif  // HAVE_OPENCL

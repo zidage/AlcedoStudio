@@ -16,7 +16,6 @@ Item {
     property bool automationMode: false
     property var imageActionsController: null
     property var selectionState: null
-    property var exportQueueState: null
     property Item blurSource: null
 
     property alias importDialog: importDialogObj
@@ -26,19 +25,27 @@ Item {
     property alias adjustmentTransferActions: adjustmentTransferActionsObj
     property alias imageContextMenu: imageContextMenuObj
     property alias nikonHeRecoveryDialog: nikonHeRecoveryDialogObj
-    property alias advancedContentAnalysisDialog: advancedContentAnalysisDialogObj
     property alias semanticGenerationDialog: semanticGenerationDialogObj
     property alias deleteConfirmDialog: deleteConfirmDialogObj
     property alias editorCloseConfirmDialog: editorCloseConfirmDialogObj
     property alias welcomeDialog: welcomeDialogObj
+    property alias welcomePreviewAdapter: welcomePreviewAdapterObj
     property alias globalSearchDialog: globalSearchDialogObj
     property alias backgroundTasksDialog: backgroundTasksDialogObj
+
+    // Every extension of the import categories, read from C++
+    // (ImportExportHandler::SupportedImportPatterns). The dialog filter ignores case on
+    // Windows and macOS.
+    readonly property string supportedImagePatterns: appModules.importExport.supportedImportPatterns
 
     FileDialog {
         id: importDialogObj
         title: qsTr("Select Images")
         fileMode: FileDialog.OpenFiles
-        nameFilters: [qsTr("All Files (*)")]
+        nameFilters: [
+            qsTr("Supported images (%1)").arg(root.supportedImagePatterns),
+            qsTr("All Files (*)")
+        ]
         onAccepted: {
             const files = []
             for (let i = 0; i < selectedFiles.length; ++i) {
@@ -48,18 +55,27 @@ Item {
         }
     }
 
+    // LUT browser Import (LUT library plan L6A): the library copies the files into its
+    // user folder and reports conflicts or failures through lutLibrary.lastError.
+    FileDialog {
+        id: lutImportDialogObj
+        title: qsTr("Import LUTs")
+        fileMode: FileDialog.OpenFiles
+        nameFilters: [qsTr("CUBE LUTs (*.cube *.CUBE)"), qsTr("All Files (*)")]
+        onAccepted: {
+            const files = []
+            for (let i = 0; i < selectedFiles.length; ++i) {
+                files.push(selectedFiles[i].toString())
+            }
+            if (appModules.lutLibrary)
+                appModules.lutLibrary.importFiles(files)
+        }
+    }
+
     FolderDialog {
         id: importFolderDialogObj
         title: qsTr("Select Folder to Import")
-        onAccepted: {
-            const folderUrl = selectedFolder.toString()
-            const files = appModules.importExport.CollectFolderFiles(folderUrl)
-            if (!files || files.length === 0) {
-                host.showSnackbar(qsTr("No files found in the selected folder."))
-                return
-            }
-            folderImportConfirmDialogObj.openWith(folderUrl, files)
-        }
+        onAccepted: folderImportConfirmDialogObj.openWith(selectedFolder.toString())
     }
 
     FolderImportConfirmDialog {
@@ -68,9 +84,23 @@ Item {
         theme: host
         host: root.host
         blurSource: root.blurSource
-        onConfirmed: function(filePaths) {
-            appModules.importExport.StartImport(filePaths)
+        onConfirmed: {
+            if (dropTargetFolderId >= 0)
+                appModules.importExport.StartFolderImportToFolderAsUser(dropTargetFolderId)
+            else
+                appModules.importExport.StartFolderImportAsUser()
         }
+    }
+
+    // Library file drop (issue #757): files only import at once, as Import Images does; a drop
+    // that holds a folder opens the folder dialog with every dropped item as a scan source.
+    function importDroppedUrls(urls, folderId, collectionName) {
+        if (!urls || urls.length === 0)
+            return
+        if (appModules.importExport.DropHoldsFolder(urls))
+            folderImportConfirmDialogObj.openWithSources(urls, folderId, collectionName)
+        else
+            appModules.importExport.StartImportToFolder(urls, folderId)
     }
 
     SettingDialog {
@@ -104,11 +134,9 @@ Item {
         id: adjustmentTransferDialogObj
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
-        onCopyAccepted: function(selectedKeys, versionId) {
-            const result = appModules.adjustmentTransfer.CopyVersion(
-                Number(host.pendingAdjustmentSource.elementId),
-                versionId,
-                selectedKeys)
+        dialogModel: appModules.adjustmentTransfer.dialogModel
+        onCopyAccepted: {
+            const result = appModules.adjustmentTransfer.CommitCopy()
             if (result && result.message) {
                 host.showSnackbar(result.message)
             }
@@ -117,9 +145,19 @@ Item {
             adjustmentTransferActionsObj.applyPaste(strategy)
             host.pendingAdjustmentPasteTargets = []
         }
-        onPasteDiscarded: {
-            appModules.adjustmentTransfer.Discard()
+        onPasteCanceled: {
             host.pendingAdjustmentPasteTargets = []
+        }
+    }
+
+    // Library targets paste on a worker thread; the background task bar shows
+    // the running Paste and this reports its result.
+    Connections {
+        target: appModules.adjustmentTransfer
+        function onPasteFinished(result) {
+            if (result && result.message) {
+                host.showSnackbar(String(result.message))
+            }
         }
     }
 
@@ -136,7 +174,7 @@ Item {
 
     // The editor filmstrip shares this menu; Discard appears only when the
     // menu was opened from the filmstrip on the image currently loaded in the
-    // editor, and stays gated by the session's discard eligibility.
+    // editor, and requires the session's discard eligibility.
     function filmstripDiscardActions() {
         if (root.imageActionsController.menuOrigin !== "editor-filmstrip") {
             return []
@@ -159,6 +197,9 @@ Item {
         id: imageContextMenuObj
         ratingEnabled: Number(host.pendingRatingTarget.imageId) > 0
         currentRating: Math.max(0, Math.min(5, Number(host.pendingRatingTarget.rating || 0)))
+        collectionRows: appModules.folders.folders ? appModules.folders.folders : []
+        currentCollectionId: Number(appModules.folders.currentFolderId)
+        addToEnabled: host.pendingDeleteTargets.length > 0
         actions: root.filmstripDiscardActions().concat([
             {
                 id: "copy-adjustments",
@@ -174,13 +215,13 @@ Item {
             {
                 id: "delete",
                 label: Number(appModules.folders.currentFolderId) === 0 ? qsTr("Delete") : qsTr("Remove from Album"),
-                // Phase 2: blocked while the selected images are in an active
-                // analysis set (DeleteImages lock). The reason is exposed on the
-                // policy controller as pendingDeleteReason.
+                // Blocked while a running task holds a DeleteImages lock on the
+                // selected images. The reason is exposed on the policy controller
+                // as pendingDeleteReason.
                 enabled: host.pendingDeleteTargets.length > 0
                           && appModules.interactionPolicy.canDeletePendingTargets
             }
-        ]).concat(root.imageActionsController.albumTargetActions())
+        ])
         onRatingRequested: function(rating) {
             imageContextMenuObj.close()
             root.imageActionsController.requestSetImageRating(rating)
@@ -204,11 +245,15 @@ Item {
             }
             if (actionId === "delete") {
                 root.imageActionsController.requestDeleteConfirmation()
-                return
             }
-            if (String(actionId).indexOf("add-to-album:") === 0) {
-                root.imageActionsController.runAddTargetsToAlbum(Number(String(actionId).split(":")[1]))
-            }
+        }
+        onExportQueueRequested: {
+            imageContextMenuObj.close()
+            root.imageActionsController.addTargetsToExportQueue()
+        }
+        onCollectionRequested: function(folderId) {
+            imageContextMenuObj.close()
+            root.imageActionsController.runAddTargetsToAlbum(folderId)
         }
     }
 
@@ -232,30 +277,11 @@ Item {
         onExitRequested: appModules.nikonHeRecovery.ExitNikonHeRecovery()
     }
 
-    AdvancedContentAnalysisDialog {
-        id: advancedContentAnalysisDialogObj
-        objectName: "advancedContentAnalysisDialog"
-        parent: Overlay.overlay
-        blurSource: root.blurSource
-        imageController: appModules.images
-        analysisController: appModules.imageAnalysis
-        profileController: appModules.aiProviderProfiles
-        interactionPolicy: appModules.interactionPolicy
-        backendInteractive: host.backendInteractive
-        onMessageRequested: function(message) {
-            host.showSnackbar(message)
-        }
-    }
-
     BackgroundTasksDialog {
         id: backgroundTasksDialogObj
         controller: appModules.backgroundTasks
         blurSource: root.blurSource
         cornerRadius: root.host ? root.host.windowCornerRadius : 0
-        onTaskDetailsRequested: function(task) {
-            if (task && task.kind === "imageAnalysis")
-                advancedContentAnalysisDialogObj.openTaskDetails(task)
-        }
     }
 
     SemanticGenerationDialog {
@@ -270,7 +296,7 @@ Item {
         skipped: host.semanticGeneration.skipped
         failed: host.semanticGeneration.failed
         canceled: host.semanticGeneration.canceled
-        statusText: host.semanticGeneration.statusText
+        remainingSeconds: host.semanticGeneration.remainingSeconds
         onStartRequested: function(rememberChoice) {
             if (rememberChoice) {
                 host.semanticGeneration.SetImportPreference("always")
@@ -303,68 +329,60 @@ Item {
         onCancelled: root.host.cancelEditorCloseConfirm()
     }
 
+    // Overview data of the previewed project for the welcome surface.
+    WelcomeProjectPreviewAdapter {
+        id: welcomePreviewAdapterObj
+        active: welcomeDialogObj.visible
+        thumbnailMaxEdge: host.libraryThumbnailMaxEdge
+    }
+
     WelcomeDialog {
         id: welcomeDialogObj
         objectName: "welcomeDialog"
         z: 30
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
+        adapter: welcomePreviewAdapterObj
         recentProjects: appModules.project.recentProjects
         languageOptions: host.languageOptions
         currentLanguageIndex: host.languageIndexForCode(languageManager.currentLanguageCode)
         acceleratorWarning: appModules.project.acceleratorWarning
         serviceMessage: appModules.project.serviceMessage
         updateService: appModules.updates
-        headlineFontFamily: host.headlineFontFamily
-        primaryAccent: host.colButtonPrimary
-        secondaryAccent: host.colAccentSecondary
-        textColor: host.colText
-        mutedTextColor: host.colTextMuted
-        panelColor: host.colBgPanel
-        panelBorderColor: host.withAlpha(host.colText, 0.08)
-        overlayColor: host.colOverlay
-        baseColor: host.colBgCanvas
-        onLoadRequested: {
-            host.beginProjectLaunch(function() {
-                return appModules.project.PromptAndLoadProject()
-            })
+        // A row previews that project under the welcome surface; the upper
+        // area shows the skeleton until the load completes.
+        onPreviewRequested: function(projectPath) {
+            appModules.projectLaunch.PreviewProject(projectPath)
         }
-        onCreateRequested: function(projectName, storageLocation) {
-            host.beginProjectLaunch(function() {
-                return appModules.project.CreateProjectInFolderNamed(storageLocation, projectName)
-            })
+        onContinueRequested: host.continueWelcomeProject()
+        onOpenRequested: appModules.projectLaunch.BeginPromptOpen()
+        onCreateRequested: function(storageLocation, projectName) {
+            appModules.projectLaunch.BeginCreateAsUser(storageLocation, projectName)
         }
         onExitRequested: Qt.quit()
         onLanguageRequested: function(languageCode) {
             languageManager.setLanguage(languageCode)
         }
         onAcceleratorWarningAcknowledged: appModules.project.AcknowledgeAcceleratorWarning()
-        onRecentProjectRequested: function(projectPath) {
-            host.beginProjectLaunch(function() {
-                return appModules.project.LoadProject(projectPath)
-            })
-        }
-        onClosed: host.startPendingProjectLaunch()
+        onClosed: appModules.projectLaunch.StartPendingLaunch()
     }
 
-    GlobalSearchDialog {
+    SearchPalette {
         id: globalSearchDialogObj
         objectName: "globalSearchDialog"
         searchController: appModules.search
         interactionPolicyController: appModules.interactionPolicy
-        theme: host
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
     }
 
     // True while any modal dialog/menu is open — used by Main's Select-All
-    // shortcut gate (formerly selectionShortcutBlocked).
+    // shortcut admission check (formerly selectionShortcutBlocked).
     function anyDialogOpened() {
         return settingsDialogObj.opened
                || adjustmentTransferDialogObj.opened
                || nikonHeRecoveryDialogObj.opened
                || semanticGenerationDialogObj.opened
-               || advancedContentAnalysisDialogObj.opened
                || backgroundTasksDialogObj.opened
                || deleteConfirmDialogObj.opened
                || folderImportConfirmDialogObj.opened
@@ -381,16 +399,30 @@ Item {
         settingsDialogObj.open()
     }
 
-    function openAdvancedAnalysisDialog() {
-        const targets = root.selectionState.currentSelectedItems()
-        advancedContentAnalysisDialogObj.openWithTargets(targets)
-        if (targets.length <= 0) {
-            host.showSnackbar(qsTr("Select at least one image to analyze."))
-        }
+    function openUpdateSettings() {
+        openSettingsDialog(settingsDialogObj.updatesCategory)
+    }
+
+    function openLutSettings() {
+        openSettingsDialog(settingsDialogObj.lutCategory)
+    }
+
+    function openAiModelSettings() {
+        openSettingsDialog(settingsDialogObj.aiModelsCategory)
+    }
+
+    // Settings > Language / Theme, scrolled to Library > Color Labels.
+    function openColorLabelSettings() {
+        settingsDialogObj.revealColorLabelsOnOpen = true
+        openSettingsDialog(settingsDialogObj.colorLabelsCategory)
     }
 
     function openBackgroundTasksDialog() {
         backgroundTasksDialogObj.open()
+    }
+
+    function openLutImportDialog() {
+        lutImportDialogObj.open()
     }
 
 }

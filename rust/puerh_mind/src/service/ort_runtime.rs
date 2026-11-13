@@ -122,56 +122,69 @@ fn execution_providers_for_device_request(
     device_request: DeviceRequest,
 ) -> Result<Vec<ep::ExecutionProviderDispatch>> {
     match device_request {
-        DeviceRequest::Auto => {
-            if cfg!(target_os = "windows") {
-                Ok(vec![
-                    ep::DirectML::default().build(),
-                    ep::CPU::default().build(),
-                ])
-            } else if cfg!(target_os = "macos") {
-                Ok(vec![
-                    ep::CoreML::default()
-                        .with_compute_units(ep::coreml::ComputeUnits::All)
-                        .build(),
-                    ep::CPU::default().build(),
-                ])
-            } else {
-                Ok(vec![ep::CPU::default().build()])
-            }
-        }
+        DeviceRequest::Auto => Ok(platform_auto_execution_providers()),
         DeviceRequest::Cpu => Ok(vec![ep::CPU::default().build()]),
-        DeviceRequest::DirectMl(device_id) => {
-            if !cfg!(target_os = "windows") {
-                bail!(
-                    "ALCEDO_MIND_DEVICE requests DirectML, but DirectML is only supported on Windows for the ORT backend"
-                );
-            }
-
-            let directml = match device_id {
-                Some(ordinal) => ep::DirectML::default().with_device_id(ordinal).build(),
-                None => ep::DirectML::default().build(),
-            };
-
-            Ok(vec![directml, ep::CPU::default().build()])
-        }
-        DeviceRequest::CoreMl(mode) => {
-            if !cfg!(target_os = "macos") {
-                bail!(
-                    "device requests Core ML, but Core ML is only supported on macOS for the ORT backend"
-                );
-            }
-
-            let units = match mode {
-                CoreMlMode::All => ep::coreml::ComputeUnits::All,
-                CoreMlMode::CpuAndGpu => ep::coreml::ComputeUnits::CPUAndGPU,
-                CoreMlMode::CpuOnly => ep::coreml::ComputeUnits::CPUOnly,
-            };
-            Ok(vec![
-                ep::CoreML::default().with_compute_units(units).build(),
-                ep::CPU::default().build(),
-            ])
-        }
+        DeviceRequest::DirectMl(device_id) => directml_execution_providers(device_id),
+        DeviceRequest::CoreMl(mode) => coreml_execution_providers(mode),
     }
+}
+
+#[cfg(windows)]
+fn platform_auto_execution_providers() -> Vec<ep::ExecutionProviderDispatch> {
+    vec![ep::DirectML::default().build(), ep::CPU::default().build()]
+}
+
+#[cfg(target_os = "macos")]
+fn platform_auto_execution_providers() -> Vec<ep::ExecutionProviderDispatch> {
+    vec![
+        ep::CoreML::default()
+            .with_compute_units(ep::coreml::ComputeUnits::All)
+            .build(),
+        ep::CPU::default().build(),
+    ]
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn platform_auto_execution_providers() -> Vec<ep::ExecutionProviderDispatch> {
+    vec![ep::CPU::default().build()]
+}
+
+#[cfg(windows)]
+fn directml_execution_providers(
+    device_id: Option<i32>,
+) -> Result<Vec<ep::ExecutionProviderDispatch>> {
+    let directml = match device_id {
+        Some(ordinal) => ep::DirectML::default().with_device_id(ordinal).build(),
+        None => ep::DirectML::default().build(),
+    };
+    Ok(vec![directml, ep::CPU::default().build()])
+}
+
+#[cfg(not(windows))]
+fn directml_execution_providers(
+    _device_id: Option<i32>,
+) -> Result<Vec<ep::ExecutionProviderDispatch>> {
+    bail!(
+        "ALCEDO_MIND_DEVICE requests DirectML, but DirectML is only supported on Windows for the ORT backend"
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn coreml_execution_providers(mode: CoreMlMode) -> Result<Vec<ep::ExecutionProviderDispatch>> {
+    let units = match mode {
+        CoreMlMode::All => ep::coreml::ComputeUnits::All,
+        CoreMlMode::CpuAndGpu => ep::coreml::ComputeUnits::CPUAndGPU,
+        CoreMlMode::CpuOnly => ep::coreml::ComputeUnits::CPUOnly,
+    };
+    Ok(vec![
+        ep::CoreML::default().with_compute_units(units).build(),
+        ep::CPU::default().build(),
+    ])
+}
+
+#[cfg(not(target_os = "macos"))]
+fn coreml_execution_providers(_mode: CoreMlMode) -> Result<Vec<ep::ExecutionProviderDispatch>> {
+    bail!("device requests Core ML, but Core ML is only supported on macOS for the ORT backend")
 }
 
 pub(crate) fn load_session(path: &Path, device_request: DeviceRequest) -> Result<Session> {

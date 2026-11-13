@@ -3,18 +3,16 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
-// Right-side editor tools: histogram/waveform scope slot, adjustment navbar,
-// and stacked panel bodies for Tone / Look / LUT / Display Transform / Geometry /
-// RAW Decode.
+// Right-side editor tools: histogram/waveform scope slot, selected-node
+// name/EXIF header, a stable adjustment navbar, and stacked panel bodies.
+// The navbar does not hide pages when the selected node changes. Color Grade,
+// Develop, and geometry writes still require the owning node. Post Processing
+// (Diffusion, Clarity, Sharpen, Film Grain, Halation) always writes the document DRT node.
 //
-// Phase 4D: every surface, button fill, and disabled state uses opaque named
-// theme colors (alpha 255). No parent-shell opacity, withAlpha(…), Qt.rgba(…,
-// alpha), or "transparent" surface fills remain.
-//
-// Surface family: the outer shell always uses the shared card surface so the
-// right column matches History/Versions, the viewport placeholder, and the
-// filmstrip. Disabled state mutes text/icons and disables controls — it does
-// not recolor the shell to a second panel tone.
+// Surfaces use opaque named theme colors. The outer shell always uses the
+// shared card surface so the right column matches History/Versions, the
+// viewport placeholder, and the filmstrip. Disabled state mutes text/icons
+// and disables controls — it does not recolor the shell to a second panel tone.
 //
 // Snapshot loading: stack fans out on AdjustmentSnapshotChanged / session bind.
 // Child panels still bootstrap once on construction so first-frame projection
@@ -26,37 +24,67 @@ Item {
     property var theme: null
     property var editorSession: null
     property var interaction: null
+    property var nodeController: null
+    // EditorComparisonController; its Compare page is in the nav only while a comparison is open.
+    property var comparison: null
+    // The application host (Main.qml): panels open dialogs through it.
+    property var host: null
     property bool controlsEnabled: true
 
     // ── Opaque semantic colors (no alpha derivations) ─────────────────────
-    // Card surface family (DESIGN.md): same as Library cards and left rail.
     readonly property color colCardSurface: theme ? theme.colCardSurface : "#161719"
     readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
     readonly property color colText: theme ? theme.colText : "#F5F1EA"
     readonly property color colMuted: theme ? theme.colTextMuted : "#AAA59D"
     readonly property color colAccent: theme ? theme.colAccentPrimary : appTheme.accentColor
-    // Sunken inset for scope + nav track (interactive well, not a second card).
     readonly property color colBase: theme ? theme.colBgBase : "#161719"
     readonly property int panelRadius: theme ? theme.panelRadius : 12
     readonly property int controlRadius: theme ? theme.controlRadius : 10
 
-    // Bound to editorSession so selection survives Loader teardown.
+    readonly property var maskCreation: editorSession ? editorSession.maskCreation : null
+    readonly property var aiMaskTool: typeof appModules !== "undefined" && appModules
+                                      ? appModules.aiMaskTool
+                                      : null
+    readonly property bool maskPanelAvailable: root.maskCreation
+                                               && root.maskCreation.maskControlsActive
     readonly property string activePanel: editorSession
                                           ? String(editorSession.activeAdjustmentPanel || "tone")
                                           : "tone"
+    readonly property bool comparisonActive: !!(root.comparison && root.comparison.active)
 
-    // Final sizing contract — editor side-panel tokens (DESIGN.md). The
-    // preferred width matches the History/Versions expanded panel so the two
-    // side columns read as one family.
+    // Pipeline order on page 0. Mask sits on page 1 of the nav and scrolls into
+    // the track only while mask editing owns the panel (activeAdjustmentPanel is
+    // "masks"); finishing the edit scrolls page 0 back. Compare sits on page 2 the
+    // same way, only while a comparison is open.
+    readonly property var navItems: [
+        { key: "raw", icon: "qrc:/panel_icons/aperture.svg",
+          label: qsTr("RAW Decode"), itemObjectName: "editorAdjustmentNav_raw" },
+        { key: "geometry", icon: "qrc:/panel_icons/crop.svg",
+          label: qsTr("Geometry"), itemObjectName: "editorAdjustmentNav_geometry" },
+        { key: "tone", icon: "qrc:/panel_icons/adjustments.svg",
+          label: qsTr("Tone"), itemObjectName: "editorAdjustmentNav_tone" },
+        { key: "look", icon: "qrc:/panel_icons/palette.svg",
+          label: qsTr("Look"), itemObjectName: "editorAdjustmentNav_look" },
+        { key: "lut", icon: "qrc:/panel_icons/box.svg",
+          label: qsTr("LUT"), itemObjectName: "editorAdjustmentNav_lut" },
+        { key: "display", icon: "qrc:/panel_icons/polaroid.svg",
+          label: qsTr("Display Transform"),
+          itemObjectName: "editorAdjustmentNav_display" },
+        { key: "post", icon: "qrc:/panel_icons/sparkle.svg",
+          label: qsTr("Post Processing"), itemObjectName: "editorAdjustmentNav_post" },
+        { key: "masks", icon: "qrc:/panel_icons/mask.svg",
+          label: qsTr("Mask"), itemObjectName: "editorAdjustmentNav_masks",
+          enabled: root.maskPanelAvailable, page: 1 },
+        { key: "compare", icon: "qrc:/panel_icons/compare.svg",
+          label: qsTr("Compare"), itemObjectName: "editorAdjustmentNav_compare",
+          enabled: root.comparisonActive, page: 2 }
+    ]
+
     readonly property int preferredPanelWidth: appTheme.editorSidePanelWidth
     readonly property int minimumPanelWidth: appTheme.editorSidePanelWidthMin
     readonly property int maximumPanelWidth: appTheme.editorSidePanelWidthMax
     property bool expanded: true
 
-    // Filmstrip-style fold: logical expanded flips immediately; layout width
-    // and opacity track stackExpandProgress so the viewport reflows with the
-    // panel. Layout min/max stay loose during the fold so they cannot snap
-    // the width to 0 or to the expanded floor mid-animation.
     property real stackExpandProgress: 1
     property bool foldManualDrive: false
     property bool _motionArmed: false
@@ -98,24 +126,8 @@ Item {
         }
     }
 
-    // Counts successful fan-outs for tests/diagnostics. Content equality is
-    // gated by the controller: AdjustmentSnapshotChanged only fires when the
-    // cached map actually changes (interactive submit suppresses the emit).
-    // Do not JSON.stringify the full snapshot for idempotency — that freezes
-    // the GUI on large maps (curve/HLS/ODT/crop) every settled commit.
     property int lastAppliedRevision: -1
 
-    // LUT catalog model shared between EditorLookPanel and LUTPanel.
-    EditorLutCatalogModel {
-        id: lutModel
-        objectName: "adjustmentStackLutModel"
-        submitter: root.editorSession
-    }
-
-    /// Load panel values from the editor session adjustment snapshot.
-    /// Fan-out only: each panel extracts its owned field keys. Panel loaders are
-    /// idempotent (equal values no-op), so a second apply from a panel bootstrap
-    /// path is cheap.
     function loadFromSnapshot(snapshot) {
         if (!editorSession)
             return
@@ -130,14 +142,16 @@ Item {
             lutPanel.loadFromSnapshot(snapshot)
         if (typeof displayPanel.loadFromSnapshot === "function")
             displayPanel.loadFromSnapshot(snapshot)
+        if (typeof postPanel.loadFromSnapshot === "function")
+            postPanel.loadFromSnapshot(snapshot)
         if (typeof geometryPanel.loadFromSnapshot === "function")
             geometryPanel.loadFromSnapshot(snapshot)
         if (typeof rawPanel.loadFromSnapshot === "function")
             rawPanel.loadFromSnapshot(snapshot)
+        if (typeof masksPanel.loadFromSnapshot === "function")
+            masksPanel.loadFromSnapshot(snapshot)
     }
 
-    /// Defer until child panels finish construction (createWithInitialProperties
-    /// can assign editorSession before StackLayout children exist).
     function scheduleLoadFromSession() {
         if (!root.editorSession)
             return
@@ -148,21 +162,27 @@ Item {
     }
 
     function selectPanel(panel) {
-        if (!editorSession) {
+        if (!editorSession)
             return
-        }
-        // GeometryPanel commits from onPanelActiveChanged after the controller
-        // queues the overlay-off refresh. Its final Quality frame therefore owns
-        // the newest request id and cannot be masked by that refresh.
+        if (panel === "masks" && !root.maskPanelAvailable)
+            return
+        if (panel === "compare" && !root.comparisonActive)
+            return
         editorSession.activeAdjustmentPanel = panel
     }
 
-    /// Enter / Return while Geometry is active: commit draft crop and return to Tone.
-    function confirmGeometryAndReturnToTone() {
+    function confirmMaskEditAndReturn() {
+        if (!root.maskCreation || !root.maskCreation.maskControlsActive)
+            return false
+        root.maskCreation.finishBody()
+        return true
+    }
+
+    function returnFromGeometryToTone() {
         if (root.activePanel !== "geometry")
             return false
-        if (typeof geometryPanel.confirmAndReturnToTone === "function") {
-            geometryPanel.confirmAndReturnToTone()
+        if (typeof geometryPanel.returnToTone === "function") {
+            geometryPanel.returnToTone()
             return true
         }
         return false
@@ -173,8 +193,11 @@ Item {
         case "look": return qsTr("Look")
         case "lut": return qsTr("LUT")
         case "display": return qsTr("Display Transform")
+        case "post": return qsTr("Post Processing")
         case "geometry": return qsTr("Geometry")
         case "raw": return qsTr("RAW Decode")
+        case "masks": return qsTr("Mask")
+        case "compare": return qsTr("Compare")
         default: return qsTr("Tone")
         }
     }
@@ -183,20 +206,14 @@ Item {
         if (!root.controlsEnabled) {
             return qsTr("Select an image to enable adjustments")
         }
-        // Product empty state — no developer/placeholder phrasing.
         return qsTr("No adjustments yet")
     }
 
     Rectangle {
         id: panelShell
         objectName: "editorRightPanelSlot"
-        width: root.preferredPanelWidth
-        height: parent.height
-        anchors.right: parent.right
+        anchors.fill: parent
         radius: root.panelRadius
-        // Always the shared card surface — matches left rail, viewport, filmstrip.
-        // Disabled is expressed through control enablement and muted copy, not a
-        // second shell fill that breaks the editor card family.
         color: root.colCardSurface
         border.width: 1
         border.color: root.colCardBorder
@@ -207,7 +224,6 @@ Item {
             anchors.margins: appTheme.spaceMd
             spacing: appTheme.spaceMd
 
-            // Histogram / waveform placement stays with the right-side tools.
             EditorScopePanel {
                 id: scopeSlot
                 objectName: "editorScopeSlot"
@@ -219,123 +235,190 @@ Item {
                 controlsEnabled: root.controlsEnabled
             }
 
+            EditorAdjustmentHeader {
+                id: adjustmentHeader
+                Layout.fillWidth: true
+                theme: root.theme
+                nodeName: root.nodeController
+                          ? String(root.nodeController.selectedNodeName || "")
+                          : ""
+                focalText: root.editorSession
+                            ? String(root.editorSession.exifFocalText || "\u2014")
+                            : "\u2014"
+                apertureText: root.editorSession
+                              ? String(root.editorSession.exifApertureText || "\u2014")
+                              : "\u2014"
+                shutterText: root.editorSession
+                              ? String(root.editorSession.exifShutterText || "\u2014")
+                              : "\u2014"
+                isoText: root.editorSession
+                         ? String(root.editorSession.exifIsoText || "\u2014")
+                         : "\u2014"
+                maskCreation: root.editorSession ? root.editorSession.maskCreation : null
+                aiMaskTool: root.aiMaskTool
+                selectedNodeKind: root.nodeController
+                                  ? String(root.nodeController.selectedNodeKind || "")
+                                  : ""
+                selectedNodeLocked: root.nodeController
+                                    ? root.nodeController.selectedNodeDeletionProtected === true
+                                    : false
+                nodeController: root.nodeController
+                editorBehavior: typeof appModules !== "undefined" && appModules
+                                ? appModules.editorBehavior
+                                : null
+                controlsEnabled: root.controlsEnabled
+            }
+
             SlidingIconNav {
                 id: adjustmentNav
                 objectName: "editorAdjustmentNav"
                 Layout.fillWidth: true
                 currentKey: root.activePanel
-                controlsEnabled: root.controlsEnabled
+                // Image adjustments are disabled while comparing; the nav still reaches the
+                // Compare page and shows the other pages read-only.
+                controlsEnabled: root.controlsEnabled || root.comparisonActive
                 trackColor: root.colBase
                 trackBorderColor: root.colCardBorder
                 idleIconColor: root.colMuted
                 thumbObjectName: "editorAdjustmentNavThumb"
-                items: [
-                    { key: "tone", icon: "qrc:/panel_icons/adjustments.svg",
-                      label: qsTr("Tone"), itemObjectName: "editorAdjustmentNav_tone" },
-                    { key: "look", icon: "qrc:/panel_icons/palette.svg",
-                      label: qsTr("Look"), itemObjectName: "editorAdjustmentNav_look" },
-                    { key: "lut", icon: "qrc:/panel_icons/box.svg",
-                      label: qsTr("LUT"), itemObjectName: "editorAdjustmentNav_lut" },
-                    { key: "display", icon: "qrc:/panel_icons/color-filter.svg",
-                      label: qsTr("Display Transform"),
-                      itemObjectName: "editorAdjustmentNav_display" },
-                    { key: "geometry", icon: "qrc:/panel_icons/crop.svg",
-                      label: qsTr("Geometry"),
-                      itemObjectName: "editorAdjustmentNav_geometry" },
-                    { key: "raw", icon: "qrc:/panel_icons/aperture.svg",
-                      label: qsTr("RAW Decode"), itemObjectName: "editorAdjustmentNav_raw" }
-                ]
+                items: root.navItems
                 onActivated: key => root.selectPanel(key)
             }
 
-            // Stacked panel bodies. Explicit children keep StackLayout indices
-            // stable while each panel owns its snapshot fields.
-            StackLayout {
-                id: panelStack
-                objectName: "editorAdjustmentPanelStack"
+            Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: {
-                    switch (root.activePanel) {
-                    case "look": return 1
-                    case "lut": return 2
-                    case "display": return 3
-                    case "geometry": return 4
-                    case "raw": return 5
-                    default: return 0
+
+                StackLayout {
+                    id: panelStack
+                    objectName: "editorAdjustmentPanelStack"
+                    anchors.fill: parent
+                    // The AI Mask edit shows its panel in the lower part of the Mask page (#564).
+                    currentIndex: {
+                        if (root.aiMaskTool && root.aiMaskTool.active)
+                            return 7
+                        switch (root.activePanel) {
+                        case "look": return 1
+                        case "lut": return 2
+                        case "display": return 3
+                        case "post": return 4
+                        case "geometry": return 5
+                        case "raw": return 6
+                        case "masks": return 7
+                        case "compare": return 8
+                        default: return 0
+                        }
                     }
-                }
 
-                EditorTonePanel {
-                    id: tonePanel
-                    objectName: "editorAdjustmentPanel_tone"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    controlsEnabled: root.controlsEnabled
-                }
+                    EditorTonePanel {
+                        id: tonePanel
+                        objectName: "editorAdjustmentPanel_tone"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        controlsEnabled: root.controlsEnabled
+                    }
 
-                EditorLookPanel {
-                    id: lookPanel
-                    objectName: "editorAdjustmentPanel_look"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    controlsEnabled: root.controlsEnabled
-                    lutModel: lutModel
-                }
+                    EditorLookPanel {
+                        id: lookPanel
+                        objectName: "editorAdjustmentPanel_look"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        controlsEnabled: root.controlsEnabled
+                    }
 
-                LUTPanel {
-                    id: lutPanel
-                    objectName: "editorAdjustmentPanel_lut"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    lutModel: lutModel
-                    controlsEnabled: root.controlsEnabled
-                }
+                    // Strength and association only; choosing a LUT is the Editor rail's
+                    // LUT browser page (LUT library plan L6A).
+                    EditorLutControlPanel {
+                        id: lutPanel
+                        objectName: "editorAdjustmentPanel_lut"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        controlsEnabled: root.controlsEnabled
+                    }
 
-                EditorDisplayTransformPanel {
-                    id: displayPanel
-                    objectName: "editorAdjustmentPanel_display"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    controlsEnabled: root.controlsEnabled
-                }
+                    EditorDisplayTransformPanel {
+                        id: displayPanel
+                        objectName: "editorAdjustmentPanel_display"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        editorBehavior: typeof appModules !== "undefined" && appModules
+                                        ? appModules.editorBehavior
+                                        : null
+                        controlsEnabled: root.controlsEnabled
+                    }
 
-                EditorGeometryPanel {
-                    id: geometryPanel
-                    objectName: "editorAdjustmentPanel_geometry"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    interaction: root.interaction
-                    controlsEnabled: root.controlsEnabled
-                    panelActive: root.activePanel === "geometry"
-                }
+                    EditorPostProcessPanel {
+                        id: postPanel
+                        objectName: "editorAdjustmentPanel_post"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        controlsEnabled: root.controlsEnabled
+                    }
 
-                EditorRawDecodePanel {
-                    id: rawPanel
-                    objectName: "editorAdjustmentPanel_raw"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    controlsEnabled: root.controlsEnabled
+                    EditorGeometryPanel {
+                        id: geometryPanel
+                        objectName: "editorAdjustmentPanel_geometry"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        interaction: root.interaction
+                        controlsEnabled: root.controlsEnabled
+                        panelActive: root.activePanel === "geometry"
+                    }
+
+                    EditorRawDecodePanel {
+                        id: rawPanel
+                        objectName: "editorAdjustmentPanel_raw"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        controlsEnabled: root.controlsEnabled
+                    }
+
+                    EditorMasksContextPanel {
+                        id: masksPanel
+                        objectName: "editorAdjustmentPanel_masks"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        nodeController: root.nodeController
+                        maskCreation: root.maskCreation
+                        aiMaskTool: root.aiMaskTool
+                        host: root.host
+                        controlsEnabled: root.controlsEnabled && root.maskPanelAvailable
+                    }
+
+                    // Compare controls follow the comparison, not image-edit availability.
+                    EditorComparisonPanel {
+                        id: comparePanel
+                        objectName: "editorAdjustmentPanel_compare"
+                        sourceOptions: root.comparison ? root.comparison.sourceOptions : []
+                        aSourceValue: root.comparison ? root.comparison.aSourceValue : ""
+                        bSourceValue: root.comparison ? root.comparison.bSourceValue : ""
+                        displayMode: root.comparison ? root.comparison.displayMode : "divider"
+                        orientation: root.comparison ? root.comparison.orientation : "horizontal"
+                        status: root.comparison ? root.comparison.status : "idle"
+                        errorText: root.comparison ? root.comparison.errorText : ""
+                        onASourceRequested: value => root.comparison.selectASource(value)
+                        onBSourceRequested: value => root.comparison.selectBSource(value)
+                        onDisplayModeRequested: value => root.comparison.setDisplayMode(value)
+                        onOrientationRequested: value => root.comparison.setOrientation(value)
+                        onSwapRequested: root.comparison.swap()
+                        onRetryRequested: root.comparison.retry()
+                        onCloseRequested: root.comparison.close()
+                    }
                 }
             }
         }
     }
 
-    // Settled / undo / image-switch publish. Interactive submitPatch suppresses
-    // the emit so pointer moves do not re-enter this fan-out.
     Connections {
         target: root.editorSession
         function onAdjustmentSnapshotChanged() {
             root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
         }
     }
-    // Session rebind: reset apply counter and project after children are ready.
     onEditorSessionChanged: {
         root.lastAppliedRevision = -1
         root.scheduleLoadFromSession()
     }
-    // createWithInitialProperties / first frame: session may already be set
-    // without a change signal.
     Component.onCompleted: {
         stackExpandProgress = expanded ? 1 : 0
         _motionArmed = true

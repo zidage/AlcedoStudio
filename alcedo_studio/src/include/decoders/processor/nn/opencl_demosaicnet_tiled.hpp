@@ -16,20 +16,31 @@ namespace alcedo {
 
 // Device-side product execution for the fixed OpenCL student modules.
 //
-// The input is an already phase-aligned and CFA-period-trimmed HWC3 linear
-// mosaic. Each job is packed with reflect-101 addressing and signed gamma
-// directly into the network's first persistent NHWC4 activation, then
-// assembled directly into aligned_rgb_hwc.
+// Product CUDA alignment: pack each student tile from the original mono CFA
+// (reflect-101 in the aligned lattice). Tests may still pass a dense HWC3
+// frame via input_aligned_hwc. Tile activations stay tile-sized; RGB is
+// assembled into output_aligned_hwc as 3-channel HWC (RAW processor) or
+// 4-channel RGBA (DAG SensorDevelop).
 // All commands are queued on one in-order queue; this class intentionally does
 // not wait, finish, or read back inside (or after) its tile loop. Keep this
 // executor and the activation slots alive until the owner performs the final
 // queue wait at the Neural-stage boundary.
 struct OpenClDemosaicNetTiledDispatch {
-  cl_mem           input_aligned_hwc  = nullptr;
-  cl_mem           output_aligned_hwc = nullptr;
-  int              aligned_width      = 0;
-  int              aligned_height     = 0;
-  cl_command_queue queue              = nullptr;
+  cl_mem           input_aligned_hwc     = nullptr;
+  cl_mem           input_mono_cfa       = nullptr;
+  int              src_width             = 0;
+  int              src_height           = 0;
+  int              crop_x               = 0;
+  int              crop_y               = 0;
+  int              mono_offset_floats   = 0;
+  cl_mem           output_aligned_hwc   = nullptr;
+  int              output_offset_floats = 0;
+  int              output_channels      = 3;
+  int              aligned_width         = 0;
+  int              aligned_height      = 0;
+  cl_mem           rgb_fc                = nullptr;
+  int              period                = 0;
+  cl_command_queue queue                 = nullptr;
 };
 
 struct OpenClDemosaicNetTiledResult {

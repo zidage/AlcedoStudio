@@ -7,9 +7,15 @@
 #include <QDebug>
 #include <QMetaObject>
 #include <QThread>
+#include <algorithm>
 #include <chrono>
 #include <utility>
 
+#ifdef HAVE_OPENCL
+#include "opencl/opencl_context.hpp"
+#endif
+
+#include "edit/scope/scope_analyzer.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
@@ -21,8 +27,10 @@ using alcedo::diag::editorPresentLog;
 namespace alcedo::editor_rhi {
 namespace {
 
-auto IsRenderReferenceFrame(FramePresentationMode presentation_mode, FrameRole role) -> bool {
-  return presentation_mode != FramePresentationMode::RoiFrame && role != FrameRole::DetailPatch;
+auto SuspendedMapping() -> FrameWriteMapping {
+  FrameWriteMapping mapping{};
+  mapping.presentation_suspended = true;
+  return mapping;
 }
 
 }  // namespace
@@ -32,6 +40,7 @@ DirectFrameSink::DirectFrameSink(EditorViewportItem* item) : item_(item) {}
 DirectFrameSink::~DirectFrameSink() {
   ClearMappedSlot();
   ClearPendingImportedFrames();
+  ClearPendingHostFrames();
 }
 
 auto DirectFrameSink::LayerIndexForRole(FrameRole role) -> std::size_t {
@@ -53,11 +62,22 @@ auto DirectFrameSink::IsMetalPresentPath() const -> bool {
   return item_->present_queue()->backend() == EditorBackend::Metal;
 }
 
+auto DirectFrameSink::UsesHostPresentation() const -> bool {
+#if defined(__linux__) && defined(HAVE_OPENCL)
+  const auto backend =
+      item_ && item_->present_queue() ? item_->present_queue()->backend() : ActiveEditorBackend();
+  return backend == EditorBackend::OpenCl && !OpenClContext::Instance().GLSharingEnabled();
+#else
+  return false;
+#endif
+}
+
 void DirectFrameSink::ClearMappedSlot() {
   std::lock_guard lock(mutex_);
   if (has_mapped_slot_ && item_ && item_->present_queue()) {
     item_->present_queue()->AbandonWrite(mapped_slot_index_);
   }
+  mapped_host_.reset();
   has_mapped_slot_         = false;
   unmapped_pending_submit_ = false;
   mapped_slot_index_       = -1;
@@ -96,6 +116,11 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
   auto*      queue          = item_->present_queue().get();
   const auto session_epoch  = item_->sessionEpoch();
   const auto image_identity = item_->imageIdentity();
+  // A minimized or hidden viewport services no target request; do not queue
+  // one or wait for it.
+  if (queue->PresentationSuspended()) {
+    return std::nullopt;
+  }
 
   auto       prepare        = queue->PrepareWrite(width, height, session_epoch, image_identity);
 
@@ -140,6 +165,12 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
             static_cast<unsigned long long>(session_epoch));
     constexpr auto kSceneGraphStartupTimeout = std::chrono::seconds(5);
     if (!queue->WaitUntilConsumerAvailable(kSceneGraphStartupTimeout)) {
+      if (queue->PresentationSuspended()) {
+        qCDebug(editorPresentLog,
+                "[EditorPresent] presentation suspended while waiting for the consumer %dx%d",
+                width, height);
+        return std::nullopt;
+      }
       qCWarning(editorPresentLog,
                 "[EditorPresent] native target handshake timed out %dx%d waiting for the "
                 "scene-graph consumer",
@@ -154,6 +185,12 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
           static_cast<unsigned long long>(session_epoch));
   auto slot = queue->WaitForWritableSlot(request);
   if (!slot.has_value()) {
+    if (queue->PresentationSuspended()) {
+      qCDebug(editorPresentLog,
+              "[EditorPresent] presentation suspended during native target handshake %dx%d",
+              width, height);
+      return std::nullopt;
+    }
     qCWarning(editorPresentLog, "[EditorPresent] native target handshake failed %dx%d", width,
               height);
     return std::nullopt;
@@ -201,10 +238,11 @@ void DirectFrameSink::EnsureSize(int width, int height) {
     // snaps / ROI thrash when a real frame arrives. Publish render-reference
     // geometry from SubmitMetalFrame with the real texture size instead.
     emit_target_size = geometry_changed && is_render_reference && !metal_present;
-    // CUDA/OpenCL always track the requested write size. On Metal, only track
-    // full-frame requests so Detail/Roi sizes cannot poison later change
-    // detection (actual ref size is set when the MTLTexture is submitted).
-    if (!metal_present || is_render_reference) {
+    // CUDA/OpenCL track the requested write size here. Metal must wait for
+    // SubmitMetalFrame: updating width_/height_ before the actual MTLTexture arrives makes that
+    // submission look unchanged and suppresses the render-reference notification needed by
+    // zoom, pan, and ROI routing.
+    if (!metal_present) {
       width_  = width;
       height_ = height;
     }
@@ -228,7 +266,7 @@ void DirectFrameSink::EnsureSize(int width, int height) {
 
   // Metal presents by importing the pipeline's own MTLTexture (SubmitMetalFrame).
   // Shared-slot allocation is CUDA/OpenCL only — skip the failed handshake.
-  if (metal_present) {
+  if (metal_present || UsesHostPresentation()) {
     std::lock_guard lock(mutex_);
     prepared_slot_index_ = -1;
     return;
@@ -243,6 +281,42 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) ->
   if (!item_ || !item_->present_queue()) {
     qCWarning(editorPresentLog, "[EditorPresent] MapResourceForWrite: no item/present_queue");
     return {};
+  }
+  auto* queue = item_->present_queue().get();
+  // The window is minimized or hidden. The frame is refused without waiting so
+  // the render lock is released at once; the owner renders again on resume.
+  if (queue->PresentationSuspended()) {
+    std::lock_guard lock(mutex_);
+    prepared_slot_index_ = -1;
+    qCDebug(editorPresentLog, "[EditorPresent] MapResourceForWrite: presentation suspended");
+    return SuspendedMapping();
+  }
+
+  if (UsesHostPresentation() && preferred_domain == FrameMemoryDomain::OpenClDevice) {
+    std::lock_guard lock(mutex_);
+    if (mapped_host_.has_value() || width_ <= 0 || height_ <= 0) {
+      return {};
+    }
+    auto pixels = std::make_shared<std::vector<float>>(static_cast<std::size_t>(width_) *
+                                                       static_cast<std::size_t>(height_) * 4);
+    ViewerFrame frame;
+    frame.width     = width_;
+    frame.height    = height_;
+    frame.row_bytes = static_cast<std::size_t>(width_) * sizeof(float) * 4;
+    frame.pixels    = std::shared_ptr<const void>(pixels, pixels->data());
+    if (bound_submission_valid_) {
+      frame.presentation_mode = bound_submission_.mode;
+      frame.preview_metadata  = bound_submission_.metadata;
+      frame.geometry          = bound_submission_.geometry;
+    }
+    FrameWriteMapping mapping;
+    mapping.data             = pixels->data();
+    mapping.row_bytes        = frame.row_bytes;
+    mapping.memory_domain    = FrameMemoryDomain::HostVisible;
+    mapping.target_type      = FrameWriteTargetType::LinearBuffer;
+    mapped_host_             = std::move(frame);
+    unmapped_pending_submit_ = false;
+    return mapping;
   }
 
   int width      = 0;
@@ -265,6 +339,9 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) ->
   if (slot_index < 0) {
     auto reserved = ReserveWritableSlot(width, height);
     if (!reserved.has_value()) {
+      if (queue->PresentationSuspended()) {
+        return SuspendedMapping();
+      }
       qCWarning(editorPresentLog,
                 "[EditorPresent] MapResourceForWrite: no writable slot %dx%d domain=%d "
                 "active_backend=%s queue_backend=%s",
@@ -275,18 +352,27 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) ->
     slot_index = *reserved;
   }
 
-  auto begun = item_->present_queue()->BeginWrite(slot_index);
+  auto begun = queue->BeginWrite(slot_index);
   if (!begun.has_value() || !begun->native.valid()) {
+    if (queue->PresentationSuspended()) {
+      return SuspendedMapping();
+    }
     auto reserved = ReserveWritableSlot(width, height);
     if (!reserved.has_value()) {
+      if (queue->PresentationSuspended()) {
+        return SuspendedMapping();
+      }
       qCWarning(editorPresentLog,
                 "[EditorPresent] MapResourceForWrite: BeginWrite/reserve failed slot=%d %dx%d",
                 slot_index, width, height);
       return {};
     }
     slot_index = *reserved;
-    begun      = item_->present_queue()->BeginWrite(slot_index);
+    begun      = queue->BeginWrite(slot_index);
     if (!begun.has_value() || !begun->native.valid()) {
+      if (queue->PresentationSuspended()) {
+        return SuspendedMapping();
+      }
       qCWarning(editorPresentLog,
                 "[EditorPresent] MapResourceForWrite: BeginWrite failed after reserve slot=%d",
                 slot_index);
@@ -366,6 +452,10 @@ void DirectFrameSink::UnmapResource() {
   int slot_index = -1;
   {
     std::lock_guard lock(mutex_);
+    if (mapped_host_.has_value()) {
+      unmapped_pending_submit_ = true;
+      return;
+    }
     if (!has_mapped_slot_ || !item_ || !item_->present_queue()) {
       return;
     }
@@ -407,11 +497,54 @@ void DirectFrameSink::BindFrameSubmission(const FrameCompletionSubmission& submi
 }
 
 void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submission) {
+  std::optional<ViewerFrame> host_frame;
+  {
+    std::lock_guard lock(mutex_);
+    if (mapped_host_.has_value() && unmapped_pending_submit_) {
+      host_frame = std::move(mapped_host_);
+      mapped_host_.reset();
+      unmapped_pending_submit_ = false;
+    }
+  }
+  if (host_frame) {
+    if (host_frame->preview_metadata.session_epoch != item_->sessionEpoch() ||
+        host_frame->preview_metadata.image_identity != item_->imageIdentity()) {
+      diag::NoteRenderE2eTerminal(submission.metadata.presentation_request_id, "stale-host-image");
+      return;
+    }
+    SubmitHostFrame(*host_frame);
+  }
   int                   slot_index = -1;
   FramePresentationMode mode       = submission.mode;
   FramePreviewMetadata  metadata   = submission.metadata;
   {
+    // Publish the presented frame's resolved geometry before the slot check so
+    // zero-copy paths (Metal SubmitMetalFrame) and accepted full frames both
+    // refresh the viewer's Mask mapping reference. RoiFrame/DetailPatch
+    // submissions render a subrect of the same reference space and must not
+    // replace it. Stale request ids never publish.
+    const bool publish_geometry =
+        IsRenderReferenceFrame(mode, metadata.frame_role) &&
+        !submission.geometry.full_reference_extent.Empty() &&
+        !submission.geometry.render_extent.Empty();
     std::lock_guard lock(mutex_);
+    if (publish_geometry &&
+        AcceptSubmissionRequestId(metadata.presentation_request_id) && item_) {
+      const auto connection =
+          (item_->thread() == QThread::currentThread()) ? Qt::DirectConnection
+                                                       : Qt::QueuedConnection;
+      const auto geometry   = submission.geometry;
+      const auto request_id = metadata.presentation_request_id;
+      QMetaObject::invokeMethod(
+          item_,
+          [item = item_, geometry, request_id] {
+            item->NotePresentedMaskGeometry(geometry, request_id);
+          },
+          connection);
+    }
+    if (UsesHostPresentation()) {
+      return;
+    }
     if (!has_mapped_slot_ || !unmapped_pending_submit_) {
       if (metadata.frame_role == FrameRole::DetailPatch) {
         qCDebug(editorPresentLog) << "[ROI_TRACE][sink-drop] request="
@@ -460,7 +593,7 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
                               << metadata.source_roi_norm.y << ',' << metadata.source_roi_norm.width
                               << ',' << metadata.source_roi_norm.height;
   }
-  item_->present_queue()->NotifyReady(slot_index, mode, metadata);
+  item_->present_queue()->NotifyReady(slot_index, mode, metadata, submission.geometry);
   diag::NoteRenderE2eProducerReady(metadata.presentation_request_id);
   qCDebug(editorPresentLog,
           "[EditorPresent] submitted frame request=%llu image=%llu epoch=%llu slot=%d",
@@ -473,39 +606,24 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
 
 void DirectFrameSink::SubmitHostFrame(const ViewerFrame& frame) {
 #if defined(__linux__)
-  if (!frame || !item_) {
+  if (!frame || !item_ || !UsesHostPresentation()) {
     qCWarning(editorPresentLog, "[EditorPresent] SubmitHostFrame rejected: invalid frame or item");
     return;
   }
 
-  ViewerFrame stamped = frame;
-  std::uint64_t request_id = stamped.preview_metadata.presentation_request_id;
+  const auto request_id = frame.preview_metadata.presentation_request_id;
   {
     std::lock_guard lock(mutex_);
-    // The OpenCL readback path historically supplied only pixels and display
-    // config. Reuse the in-flight submission stamp so host fallback obeys the
-    // same session/role/request ordering as zero-copy frames.
-    if (request_id == 0 && bound_submission_valid_) {
-      stamped.presentation_mode = bound_submission_.mode;
-      stamped.preview_metadata = bound_submission_.metadata;
-      request_id = stamped.preview_metadata.presentation_request_id;
-    }
-    if (stamped.preview_metadata.session_epoch == 0) {
-      stamped.preview_metadata.session_epoch = item_->sessionEpoch();
-    }
-    if (stamped.preview_metadata.image_identity == 0) {
-      stamped.preview_metadata.image_identity = item_->imageIdentity();
-    }
     if (!AcceptSubmissionRequestId(request_id)) {
       diag::NoteRenderE2eTerminal(request_id, "stale-host-request");
       return;
     }
-    const auto layer = LayerIndexForRole(stamped.preview_metadata.frame_role);
+    const auto layer = LayerIndexForRole(frame.preview_metadata.frame_role);
     if (pending_host_[layer].has_value()) {
       const auto superseded = pending_host_[layer]->preview_metadata.presentation_request_id;
       diag::NoteRenderE2eTerminal(superseded, "superseded-host-frame");
     }
-    pending_host_[layer] = std::move(stamped);
+    pending_host_[layer] = frame;
     ++submitted_frame_count_;
   }
 
@@ -519,9 +637,7 @@ void DirectFrameSink::SubmitHostFrame(const ViewerFrame& frame) {
   item_->requestPresentUpdate();
   diag::NoteRenderE2ePresentWake(request_id);
 #else
-  // CPU host-upload presentation is a Linux bring-up path. Preserve the
-  // existing Windows/macOS direct-GPU behavior when a producer falls back to
-  // this optional callback.
+  // Host submission is used by the Linux OpenCL presentation path.
   (void)frame;
 #endif
 }
@@ -566,6 +682,9 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
     }
     request_id        = imported.preview_metadata.presentation_request_id;
     imported.sequence = ++imported_sequence_;
+    if (bound_submission_valid_) {
+      imported.geometry = bound_submission_.geometry;
+    }
     const auto layer  = LayerIndexForRole(imported.preview_metadata.frame_role);
     if (pending_imported_[layer].has_value()) {
       const auto superseded = pending_imported_[layer]->preview_metadata.presentation_request_id;
@@ -594,11 +713,16 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
 
   diag::NoteRenderE2eProducerReady(request_id);
   qCDebug(editorPresentLog,
-          "[EditorPresent] queued Metal import request=%llu image=%llu epoch=%llu size=%dx%d "
-          "handle=%llu (zero-copy)",
+          "[EditorPresent] queued Metal import request=%llu image=%llu epoch=%llu role=%d mode=%d "
+          "size=%dx%d roi=%.6f,%.6f,%.6f,%.6f handle=%llu (zero-copy)",
           static_cast<unsigned long long>(request_id),
           static_cast<unsigned long long>(item_->imageIdentity()),
-          static_cast<unsigned long long>(item_->sessionEpoch()), frame.width, frame.height,
+          static_cast<unsigned long long>(item_->sessionEpoch()),
+          static_cast<int>(frame.preview_metadata.frame_role),
+          static_cast<int>(frame.presentation_mode), frame.width, frame.height,
+          frame.preview_metadata.source_roi_norm.x, frame.preview_metadata.source_roi_norm.y,
+          frame.preview_metadata.source_roi_norm.width,
+          frame.preview_metadata.source_roi_norm.height,
           static_cast<unsigned long long>(frame.texture_handle));
 
   if (emit_render_reference) {
@@ -615,8 +739,12 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
 }
 #endif
 
-void DirectFrameSink::SubmitFinalDisplayFrame(const FinalDisplayFrameView&) {
-  // Scope taps remain responsible for analyzer paths; presentation is direct GPU only.
+void DirectFrameSink::SubmitFinalDisplayFrame(const FinalDisplayFrameView& frame) {
+  // Scope taps keep the GPU image; the host upload carries its display encoding.
+  std::lock_guard lock(mutex_);
+  if (mapped_host_) {
+    mapped_host_->display_config = frame.display_config;
+  }
 }
 
 auto DirectFrameSink::DrainPendingImportedFrames(std::uint64_t session_epoch,
@@ -655,7 +783,7 @@ void DirectFrameSink::ClearPendingImportedFrames() {
 auto DirectFrameSink::DrainPendingHostFrames(std::uint64_t session_epoch,
                                              std::uint64_t image_identity)
     -> std::vector<ViewerFrame> {
-  std::lock_guard      lock(mutex_);
+  std::lock_guard          lock(mutex_);
   std::vector<ViewerFrame> out;
   out.reserve(pending_host_.size());
   for (auto& slot : pending_host_) {
@@ -684,6 +812,14 @@ void DirectFrameSink::ClearPendingHostFrames() {
   for (auto& slot : pending_host_) {
     slot.reset();
   }
+}
+
+auto DirectFrameSink::HasPendingImportedFrame() const -> bool {
+  std::lock_guard lock(mutex_);
+  return std::any_of(pending_imported_.begin(), pending_imported_.end(),
+                     [](const auto& slot) { return slot.has_value(); }) ||
+         std::any_of(pending_host_.begin(), pending_host_.end(),
+                     [](const auto& slot) { return slot.has_value(); });
 }
 
 auto DirectFrameSink::GetWidth() const -> int {
@@ -717,7 +853,7 @@ auto DirectFrameSink::HasWritableTargetForNextFrame() const -> bool {
   }
   // Metal does not pre-allocate shared write targets; a submit is always possible
   // once geometry is known and the consumer is live.
-  if (IsMetalPresentPath()) {
+  if (IsMetalPresentPath() || UsesHostPresentation()) {
     std::lock_guard lock(mutex_);
     return width_ > 0 && height_ > 0;
   }

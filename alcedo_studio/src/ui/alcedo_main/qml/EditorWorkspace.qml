@@ -15,6 +15,9 @@ Item {
     property var editorSession: appModules.editorSession
     property var interactionPolicy: appModules.interactionPolicy
     property Item blurSource: null
+    // True while the workspace width follows the collections sidebar fold (WorkspaceHost). The
+    // viewport keeps its size and scales the presented frame, and renders once at the final size.
+    property bool geometryAnimating: false
 
     readonly property color colPanel: theme ? theme.colGlassPanel : "#1C1C1D"
     readonly property color colStroke: theme ? theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
@@ -47,6 +50,33 @@ Item {
                                                      && editorSession
                                                      && editorSession.actions
                                                      && editorSession.actions.canEdit)
+    // False while an automation agent holds control: the adjustment controls and the mask
+    // commands are disabled, and the viewport keeps pan and zoom.
+    readonly property bool userCanChangeState: !interactionPolicy
+                                               || interactionPolicy.canChangeStateAsUser
+    readonly property bool editorEditControlsEnabled: editorControlsEnabled && userCanChangeState
+    // View navigation and the viewport pointer. The AI Mask edit lease blocks document edits
+    // (canEdit is false), but its prompts and pan/zoom stay available (SM9 section 1).
+    readonly property bool viewportInputEnabled: editorControlsEnabled
+                                                 || !!(root.hasImage && aiMaskTool
+                                                       && aiMaskTool.active)
+    readonly property var maskCreation: editorSession ? editorSession.maskCreation : null
+    // The AI Mask tool takes the left button for its Point, Box, or Path prompt tool while its
+    // edit is open; the middle button and the wheel keep pan and zoom.
+    readonly property var aiMaskTool: appModules ? appModules.aiMaskTool : null
+    readonly property bool aiMaskToolActive: !!(aiMaskTool && aiMaskTool.active)
+    readonly property bool aiMaskOwnsLeftButton: !!(aiMaskTool && aiMaskTool.ownsLeftButton)
+    readonly property bool maskOwnsLeftButton: !!(maskCreation && maskCreation.ownsLeftButton)
+                                               || aiMaskOwnsLeftButton
+    property var comparison: appModules.editorComparison
+    readonly property bool comparisonActive: !!(comparison && comparison.active)
+
+    function bindMaskOverlay() {
+        if (maskCreation && editorOverlayItem)
+            maskCreation.bindOverlayItem(editorOverlayItem)
+    }
+
+    onMaskCreationChanged: bindMaskOverlay()
     readonly property var renderDiagnostics: editorSession ? editorSession.renderDiagnostics : ({})
     readonly property string inflightRenderReason: renderDiagnostics.inflightReason || ""
     readonly property bool adjustmentRenderBusy: editorSession
@@ -76,7 +106,7 @@ Item {
         spacing: appTheme.spaceMd
 
         // ── Main editor body ────────────────────────────────────────────
-        // Desktop order (non-negotiable): History/Versions left, viewport
+        // Desktop order (non-negotiable): tool rail left, viewport
         // center, scopes + adjustment stack right.
         RowLayout {
             id: editorDesktopRow
@@ -85,8 +115,8 @@ Item {
             Layout.fillHeight: true
             spacing: appTheme.spaceMd
 
-            // Left: editor tool rail (+ expandable History / Versions panel).
-            // objectName is set inside the component (editorHistoryVersionsRail).
+            // Left: editor tool rail (+ expandable History / Versions / Nodes panel).
+            // objectName is set inside the component (editorWorkspaceRail).
             EditorWorkspaceRail {
                 id: historyVersionsRail
                 Layout.fillHeight: true
@@ -97,6 +127,12 @@ Item {
                 adjustmentTransfer: appModules.adjustmentTransfer
                 recoveryPending: root.recoveryPending
                 blurSource: root.blurSource
+                // The LUT browser page is wide; it never takes the viewport below its minimum.
+                // Uses the stack's preferred width, not its laid-out width, so the two
+                // side columns cannot resize each other in a loop.
+                maximumPanelWidth: editorDesktopRow.width - historyVersionsRail.railWidth
+                                   - historyVersionsRail.panelGap - root.minimumViewportWidth
+                                   - adjustmentStack.stackWidth - editorDesktopRow.spacing * 2
             }
 
             // Center column: viewport + filmstrip
@@ -162,17 +198,23 @@ Item {
                     EditorInteractionController {
                         id: editorInteraction
                         objectName: "editorInteractionController"
-                        interactionEnabled: root.editorControlsEnabled
+                        interactionEnabled: root.viewportInputEnabled
                     }
 
                     EditorViewportItem {
                         id: editorViewportItem
                         objectName: "editorViewportItem"
-                        anchors.fill: parent
+                        anchors.centerIn: parent
+                        width: viewportSlot.stageWidth
+                        height: viewportSlot.stageHeight
+                        scale: viewportSlot.stageScale
                         visible: root.hasImage
                         // imageIdentity is the durable DB id; sessionEpoch is stamped
                         // from EditorSessionController::SyncViewportIdentity on the GUI thread.
                         imageIdentity: root.focusedImageId
+                        // Mask coverage composite style (presentation only, no photo render).
+                        maskCoverageColor: appTheme.maskCoverageTintColor
+                        maskCoverageOpacity: appTheme.maskCoverageTintOpacity
                         Accessible.role: Accessible.Canvas
                         Accessible.name: qsTr("Image viewport")
 
@@ -181,8 +223,14 @@ Item {
                             if (root.editorSession) {
                                 root.editorSession.bindInteractionController(editorInteraction)
                             }
+                            if (root.aiMaskTool) {
+                                root.aiMaskTool.bindInteractionItem(editorInteraction)
+                            }
                         }
                         Component.onDestruction: {
+                            if (root.aiMaskTool) {
+                                root.aiMaskTool.bindInteractionItem(null)
+                            }
                             if (root.editorSession) {
                                 root.editorSession.bindInteractionController(null)
                                 root.editorSession.unbindPresentationViewport()
@@ -199,28 +247,39 @@ Item {
                         // frame re-clamps pan/zoom and was causing FIT snaps after
                         // detail/quality handoff. Image switches clear ref via
                         // resetPresentationStateForNewImage before the first frame.
+                        // The source size comes from the presented frame's geometry
+                        // (EditorInteractionController::setDisplayedMaskGeometry), never
+                        // from a frame size.
                         onTargetSizeRequested: function (w, h) {
-                            if (w > 0 && h > 0) {
-                                // The crop operator snapshot normally provides source size.
-                                // Keep the first full frame as a fallback for legacy pipelines.
-                                if (editorInteraction.imageWidth <= 0
-                                        || editorInteraction.imageHeight <= 0) {
-                                    editorInteraction.setImageSize(w, h)
-                                }
+                            if (w > 0 && h > 0)
                                 editorInteraction.setRenderReferenceSize(w, h)
-                            }
                         }
                     }
 
                     EditorOverlayItem {
                         id: editorOverlayItem
                         objectName: "editorOverlayItem"
-                        anchors.fill: parent
+                        anchors.centerIn: parent
+                        width: viewportSlot.stageWidth
+                        height: viewportSlot.stageHeight
+                        scale: viewportSlot.stageScale
                         visible: root.hasImage
                         interaction: editorInteraction
+                        maskOverlayControlColor: appTheme.maskOverlayControlColor
+                        maskOverlayControlOutlineColor: appTheme.maskOverlayControlOutlineColor
+                        maskOverlayInactiveColor: appTheme.maskOverlayInactiveColor
+                        maskOverlayHandleRadius: appTheme.maskOverlayHandleRadius
+                        maskOverlayHandleOutlineWidth: appTheme.maskOverlayHandleOutlineWidth
+                        maskOverlayStrokeWidth: appTheme.maskOverlayStrokeWidth
+                        maskOverlayAntialiasWidth: appTheme.maskOverlayAntialiasWidth
+                        maskOverlayGuideOuterWidth: appTheme.maskOverlayGuideOuterWidth
+                        maskOverlayGuideInnerWidth: appTheme.maskOverlayGuideInnerWidth
+                        maskOverlayGripOuterWidth: appTheme.maskOverlayGripOuterWidth
+                        maskOverlayGripInnerWidth: appTheme.maskOverlayGripInnerWidth
                         // Overlay must sit above the photograph and receive no
                         // exclusive mouse grab — handlers below own input.
                         z: 2
+                        Component.onCompleted: root.bindMaskOverlay()
                     }
 
                     // Spinner / status remain ordinary QML (not baked into the RHI pass).
@@ -297,6 +356,37 @@ Item {
                     // source-image pixel per screen pixel), derived from the full
                     // image and viewport — independent of the 2K preview cap. At
                     // fit (zoom field 1.0) the readout shows "FIT" instead of a %.
+                    // AI Mask input (QSG): the markers of the open prompt group, the stroke or
+                    // box that the left button draws, the outline of the selected people, and
+                    // the cursor of the selected prompt tool. Released input runs the model.
+                    AiMaskInputOverlayItem {
+                        id: aiMaskInputOverlay
+                        objectName: "editorAiMaskInputOverlay"
+                        anchors.centerIn: parent
+                        width: viewportSlot.stageWidth
+                        height: viewportSlot.stageHeight
+                        scale: viewportSlot.stageScale
+                        visible: root.hasImage && root.aiMaskToolActive
+                        interaction: editorInteraction
+                        promptSteps: root.aiMaskTool ? root.aiMaskTool.promptSteps : []
+                        liveInput: root.aiMaskTool ? root.aiMaskTool.liveInput : ({})
+                        personBoxes: root.aiMaskTool ? root.aiMaskTool.selectedPersonBoxes : []
+                        highlightedPersonBox: root.aiMaskTool
+                                              ? root.aiMaskTool.highlightedPersonBox
+                                              : Qt.rect(0, 0, 0, 0)
+                        cursorVisible: root.aiMaskOwnsLeftButton && viewportHover.hovered
+                        cursorKind: root.aiMaskTool ? root.aiMaskTool.promptTool : ""
+                        cursorPosition: viewportHover.point.position
+                        cursorAdd: !(root.aiMaskTool && root.aiMaskTool.subtract)
+                        cursorBusy: !!(root.aiMaskTool && root.aiMaskTool.busy)
+                        addColor: appTheme.aiMaskInputAddColor
+                        subtractColor: appTheme.aiMaskInputSubtractColor
+                        lineColor: appTheme.maskOverlayControlColor
+                        outlineColor: appTheme.maskOverlayControlOutlineColor
+                        inactiveColor: appTheme.maskOverlayInactiveColor
+                        z: 4
+                    }
+
                     Label {
                         objectName: "editorZoomReadout"
                         anchors.right: parent.right
@@ -316,15 +406,23 @@ Item {
                     // not own crop math or view transform state.
                     HoverHandler {
                         id: viewportHover
-                        enabled: root.editorControlsEnabled
+                        enabled: root.viewportInputEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
                         // HoverHandler owns the platform cursor (Item has no cursorShape).
-                        cursorShape: editorInteraction.hasCustomCursor
-                                     ? editorInteraction.cursorShape
-                                     : Qt.ArrowCursor
+                        // BitmapCursor marks the Crop rotate handle: EditorOverlayItem
+                        // shows that bitmap cursor, so it is not applied here.
+                        // The AI Mask tool draws its own cursor in aiMaskInputOverlay.
+                        cursorShape: root.aiMaskOwnsLeftButton
+                                     ? Qt.BlankCursor
+                                     : (editorInteraction.hasCustomCursor
+                                        && editorInteraction.cursorShape !== Qt.BitmapCursor
+                                        ? editorInteraction.cursorShape
+                                        : Qt.ArrowCursor)
                         onPointChanged: {
                             if (viewportHover.hovered) {
                                 editorInteraction.handleHoverMove(point.position.x, point.position.y)
+                                if (root.maskCreation)
+                                    root.maskCreation.handleHover(point.position.x, point.position.y)
                             }
                         }
                     }
@@ -332,28 +430,129 @@ Item {
                     // PointHandler records the true press position (no drag-distance
                     // threshold). DragHandler would only activate after the system
                     // drag distance, which lost crop-corner hit tests and click-zoom.
+                    // Mask left-button drawing stays on this handler: a second
+                    // DragHandler must not also write samples. Double-tap is
+                    // disabled while Mask owns the left button so its grab cannot
+                    // end the stream on the first press.
                     PointHandler {
                         id: viewportPointer
-                        enabled: root.editorControlsEnabled
+                        objectName: "editorViewportPointer"
+                        enabled: root.viewportInputEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         property int _activeButton: Qt.LeftButton
                         property bool _pressed: false
+                        property bool _maskStream: false
+                        property bool _aiMaskStream: false
+                        property bool _canceled: false
+                        property real _lastX: 0
+                        property real _lastY: 0
+                        property bool _haveLastItemPos: false
+
+                        function rememberItemPos(x, y) {
+                            _lastX = x
+                            _lastY = y
+                            _haveLastItemPos = true
+                        }
+
+                        function finishX() {
+                            if (_haveLastItemPos && Math.abs(point.position.x) < 1e-6
+                                    && Math.abs(point.position.y) < 1e-6)
+                                return _lastX
+                            return point.position.x
+                        }
+
+                        function finishY() {
+                            if (_haveLastItemPos && Math.abs(point.position.x) < 1e-6
+                                    && Math.abs(point.position.y) < 1e-6)
+                                return _lastY
+                            return point.position.y
+                        }
+
+                        function beginMaskOrPan() {
+                            _activeButton = (point.pressedButtons & Qt.MiddleButton)
+                                    ? Qt.MiddleButton : Qt.LeftButton
+                            rememberItemPos(point.position.x, point.position.y)
+                            _aiMaskStream = false
+                            if (_activeButton === Qt.LeftButton
+                                    && root.aiMaskOwnsLeftButton
+                                    && root.aiMaskTool.handlePress(
+                                           point.position.x, point.position.y, _activeButton)) {
+                                _aiMaskStream = true
+                                _maskStream = false
+                            } else if (_activeButton === Qt.LeftButton
+                                    && root.maskOwnsLeftButton
+                                    && root.maskCreation
+                                    && root.maskCreation.handlePress(
+                                           point.position.x, point.position.y, _activeButton)) {
+                                _maskStream = true
+                            } else {
+                                _maskStream = false
+                                editorInteraction.handlePress(
+                                            point.position.x, point.position.y, _activeButton)
+                            }
+                        }
+
+                        function finishMaskOrPan() {
+                            var x = finishX()
+                            var y = finishY()
+                            if (_aiMaskStream && root.aiMaskTool) {
+                                if (_canceled)
+                                    root.aiMaskTool.cancelPointer()
+                                else
+                                    root.aiMaskTool.handleRelease(x, y, _activeButton)
+                            } else if (_canceled && _maskStream && root.maskCreation
+                                    && typeof root.maskCreation.cancelOpenPointerInput === "function") {
+                                root.maskCreation.cancelOpenPointerInput()
+                            } else if (_maskStream && root.maskCreation) {
+                                root.maskCreation.handleRelease(x, y, _activeButton)
+                            } else {
+                                editorInteraction.handleRelease(x, y, _activeButton)
+                            }
+                            _pressed = false
+                            _maskStream = false
+                            _aiMaskStream = false
+                            _canceled = false
+                            _haveLastItemPos = false
+                        }
+
+                        onCanceled: {
+                            _canceled = true
+                        }
                         onActiveChanged: {
                             if (active) {
                                 _pressed = true
-                                _activeButton = (point.pressedButtons & Qt.MiddleButton)
-                                        ? Qt.MiddleButton : Qt.LeftButton
-                                editorInteraction.handlePress(
-                                            point.position.x, point.position.y, _activeButton)
+                                _canceled = false
+                                beginMaskOrPan()
                             } else if (_pressed) {
-                                editorInteraction.handleRelease(
-                                            point.position.x, point.position.y, _activeButton)
-                                _pressed = false
+                                finishMaskOrPan()
                             }
                         }
                         onPointChanged: {
-                            if (active) {
+                            if (!active) {
+                                return
+                            }
+                            // pointChanged can run before activeChanged; start the
+                            // Mask stream here so the first move is not sent to pan.
+                            if (!_pressed) {
+                                _pressed = true
+                                _canceled = false
+                                beginMaskOrPan()
+                            }
+                            if (point.pressedButtons !== 0) {
+                                rememberItemPos(point.position.x, point.position.y)
+                            }
+                            if (_aiMaskStream && root.aiMaskTool) {
+                                root.aiMaskTool.handleMove(
+                                            _haveLastItemPos ? _lastX : point.position.x,
+                                            _haveLastItemPos ? _lastY : point.position.y,
+                                            point.pressedButtons)
+                            } else if (_maskStream && root.maskCreation) {
+                                root.maskCreation.handleMove(
+                                            _haveLastItemPos ? _lastX : point.position.x,
+                                            _haveLastItemPos ? _lastY : point.position.y,
+                                            point.pressedButtons)
+                            } else {
                                 editorInteraction.handleMove(
                                             point.position.x, point.position.y,
                                             point.pressedButtons)
@@ -380,10 +579,37 @@ Item {
                     // a plain drag still pans.
                     DragHandler {
                         id: viewportPanDrag
-                        enabled: root.editorControlsEnabled
+                        enabled: root.viewportInputEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
-                        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                        acceptedButtons: root.maskOwnsLeftButton
+                                         ? Qt.MiddleButton
+                                         : (Qt.LeftButton | Qt.MiddleButton)
                         target: null
+                        property bool _forwardingDrag: false
+                        property int _activeButton: Qt.LeftButton
+                        onActiveChanged: {
+                            if (active) {
+                                _forwardingDrag = true
+                                _activeButton = (centroid.pressedButtons & Qt.MiddleButton)
+                                        ? Qt.MiddleButton : Qt.LeftButton
+                                // DragHandler can take the exclusive grab before PointHandler
+                                // forwards its press. Start a complete controller sequence from
+                                // the original press position so pan never depends on handler
+                                // activation order.
+                                editorInteraction.handlePress(
+                                            centroid.pressPosition.x,
+                                            centroid.pressPosition.y,
+                                            _activeButton)
+                                editorInteraction.handleMove(
+                                            centroid.position.x, centroid.position.y,
+                                            centroid.pressedButtons)
+                            } else if (_forwardingDrag) {
+                                editorInteraction.handleRelease(
+                                            centroid.position.x, centroid.position.y,
+                                            _activeButton)
+                                _forwardingDrag = false
+                            }
+                        }
                         onTranslationChanged: {
                             if (active) {
                                 editorInteraction.handleMove(
@@ -395,7 +621,7 @@ Item {
 
                     WheelHandler {
                         id: viewportWheel
-                        enabled: root.editorControlsEnabled
+                        enabled: root.viewportInputEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                         onActiveChanged: {
                             if (active) {
@@ -418,7 +644,7 @@ Item {
 
                     PinchHandler {
                         id: viewportPinch
-                        enabled: root.editorControlsEnabled
+                        enabled: root.viewportInputEnabled
                         target: null
                         // Absolute mapping from pinch start. PinchHandler.scale is
                         // cumulative for the active pinch and resets to 1.0 when a
@@ -467,16 +693,79 @@ Item {
                     // of being held as a would-be double-tap. A clean double-click
                     // (two clicks without a drag) still fires onDoubleTapped and
                     // toggles the zoom; only drags are excluded, which is what
-                    // separates pan from double-click-zoom.
+                    // separates pan from double-click-zoom. Mask left-button
+                    // drawing disables this handler so it cannot take the grab
+                    // on the first press of a stroke.
                     TapHandler {
                         id: viewportDoubleTap
-                        enabled: root.editorControlsEnabled
+                        objectName: "editorViewportDoubleTap"
+                        enabled: root.viewportInputEnabled && !root.maskOwnsLeftButton
                         acceptedButtons: Qt.LeftButton
                         gesturePolicy: TapHandler.DragThreshold
                         onDoubleTapped: function (eventPoint) {
                             editorInteraction.handleDoubleTap(
                                         eventPoint.position.x, eventPoint.position.y)
                         }
+                    }
+
+                    // Viewport action row: opens unadjusted vs. current. Hidden while comparing; the
+                    // Compare panel then owns the comparison controls.
+                    Item {
+                        id: viewportCompareAction
+                        objectName: "editorViewportCompareAction"
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.margins: appTheme.spaceSm
+                        width: viewportCompareButton.implicitWidth
+                        height: viewportCompareButton.implicitHeight
+                        visible: root.hasImage && !root.comparisonActive
+                        z: 6
+
+                        DialogActionButton {
+                            id: viewportCompareButton
+                            objectName: "editorViewportCompareButton"
+                            anchors.fill: parent
+                            buttonHeight: appTheme.iconButtonHitSizeCompact
+                            buttonWidth: contentItem.implicitWidth + 2 * appTheme.spaceMd
+                            font.pixelSize: appTheme.fontSizeBody
+                            text: qsTr("Compare")
+                            enabled: !!(root.comparison && root.comparison.canOpen)
+                            Accessible.name: qsTr("Compare before and after")
+                            Accessible.description: compareReason.reason
+                            onClicked: root.comparison.openBeforeAfter()
+                        }
+
+                        // A disabled button gets no hover; the wrapper shows why entry is off.
+                        HoverHandler {
+                            id: compareReason
+                            readonly property string reason: root.comparison
+                                                             ? String(root.comparison.openUnavailableReason || "")
+                                                             : ""
+                        }
+                        ToolTip.visible: compareReason.hovered && !viewportCompareButton.enabled
+                                         && compareReason.reason.length > 0
+                        ToolTip.text: compareReason.reason
+                    }
+
+                    // Opaque comparison surface. The viewport item stays alive, bound, and
+                    // visible underneath so normal frames keep completing.
+                    EditorComparisonView {
+                        id: comparisonView
+                        objectName: "editorComparisonOverlay"
+                        anchors.fill: parent
+                        visible: root.comparisonActive
+                        z: 20
+                        pair: root.comparison && root.comparison.pair ? root.comparison.pair : null
+                        status: root.comparison ? root.comparison.status : "idle"
+                        errorText: root.comparison ? root.comparison.errorText : ""
+                        displayMode: root.comparison ? root.comparison.displayMode : "divider"
+                        orientation: root.comparison ? root.comparison.orientation : "horizontal"
+                        dividerPosition: root.comparison ? root.comparison.dividerPosition : 0.5
+                        swapped: root.comparison ? root.comparison.swapped : false
+                        aLabel: root.comparison ? root.comparison.aLabel : ""
+                        bLabel: root.comparison ? root.comparison.bLabel : ""
+                        onDividerPositionRequested: position => root.comparison.setDividerPosition(position)
+                        onImageLoadFailed: message => root.comparison.reportImageLoadFailed(message)
                     }
 
                     // Invisible focus/input owner for keyboard shortcuts (Phase 6G).
@@ -490,7 +779,7 @@ Item {
                         z: 5
 
                         Keys.onPressed: function (event) {
-                            if (!root.editorControlsEnabled) {
+                            if (!root.viewportInputEnabled) {
                                 return
                             }
                             if (event.key === Qt.Key_0 || event.key === Qt.Key_Home) {
@@ -501,9 +790,9 @@ Item {
                                 editorInteraction.zoomToActualPixels()
                                 event.accepted = true
                             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                                // Geometry confirm: bake draft crop and return to Tone.
-                                if (typeof adjustmentStack.confirmGeometryAndReturnToTone === "function"
-                                        && adjustmentStack.confirmGeometryAndReturnToTone()) {
+                                // Geometry: Enter leaves the panel for Tone.
+                                if (typeof adjustmentStack.returnFromGeometryToTone === "function"
+                                        && adjustmentStack.returnFromGeometryToTone()) {
                                     event.accepted = true
                                 }
                             }
@@ -537,30 +826,77 @@ Item {
                         }
                     }
 
-                    function syncViewportMetrics() {
-                        // setViewportMetrics emits viewStateChanged → single push.
-                        editorInteraction.setViewportMetrics(
-                                    viewportSlot.width, viewportSlot.height,
-                                    currentDevicePixelRatio())
-                        if (root.editorSession) {
-                            var dpr = currentDevicePixelRatio()
-                            root.editorSession.updatePresentationTargetSize(
-                                        Math.max(1, Math.round(viewportSlot.width * dpr)),
-                                        Math.max(1, Math.round(viewportSlot.height * dpr)))
+                    // The size of the viewport, its overlays, and the interaction metrics. While
+                    // the collections sidebar folds, it keeps the size from the start of the fold
+                    // (issue 751): the viewport keeps its presented frame and render size, and
+                    // nothing re-samples or renders on each frame. stageScale fits the presented
+                    // photo to the moving slot. When the fold ends, the stage takes the slot size
+                    // once, and the viewport renders once at that size.
+                    property size heldStageSize: Qt.size(0, 0)
+                    readonly property bool stageHeld: root.geometryAnimating
+                                                      && heldStageSize.width > 0
+                    readonly property real stageWidth: stageHeld ? heldStageSize.width : width
+                    readonly property real stageHeight: stageHeld ? heldStageSize.height : height
+                    readonly property real stageScale: stageHeld
+                                                       ? fittedPhotoWidth(width, height)
+                                                         / fittedPhotoWidth(stageWidth, stageHeight)
+                                                       : 1
+
+                    // Width of the photo fitted in a box of @p boxWidth x @p boxHeight.
+                    function fittedPhotoWidth(boxWidth, boxHeight) {
+                        const referenceWidth = editorInteraction.renderReferenceWidth
+                        const referenceHeight = editorInteraction.renderReferenceHeight
+                        const aspect = referenceWidth > 0 && referenceHeight > 0
+                                ? referenceWidth / referenceHeight
+                                : boxWidth / Math.max(1, boxHeight)
+                        return Math.max(1, Math.min(boxWidth, boxHeight * aspect))
+                    }
+
+                    Connections {
+                        target: root
+                        function onGeometryAnimatingChanged() {
+                            viewportSlot.heldStageSize = root.geometryAnimating
+                                    ? Qt.size(viewportSlot.width, viewportSlot.height)
+                                    : Qt.size(0, 0)
                         }
+                    }
+
+                    // Calls of EditorSessionController::updatePresentationTargetSize; read by
+                    // tests.
+                    property int presentationSizeUpdateCount: 0
+                    // The stage size and pixel ratio of the last sync. A hold that starts or ends
+                    // notifies the stage size without a new value.
+                    property var syncedMetrics: null
+
+                    function syncViewportMetrics() {
+                        const dpr = currentDevicePixelRatio()
+                        if (syncedMetrics && syncedMetrics.width === stageWidth
+                                && syncedMetrics.height === stageHeight
+                                && syncedMetrics.dpr === dpr) {
+                            return
+                        }
+                        syncedMetrics = { width: stageWidth, height: stageHeight, dpr: dpr }
+                        // The render size first: setViewportMetrics reports a Resize that
+                        // starts a render, and that render reads the render size.
+                        if (root.editorSession) {
+                            presentationSizeUpdateCount += 1
+                            root.editorSession.updatePresentationTargetSize(
+                                        Math.max(1, Math.round(stageWidth * dpr)),
+                                        Math.max(1, Math.round(stageHeight * dpr)))
+                        }
+                        // setViewportMetrics emits viewStateChanged → single push.
+                        editorInteraction.setViewportMetrics(stageWidth, stageHeight, dpr)
                     }
 
                     function resetAndSyncForImageSession() {
                         ensurePresentationBinding()
                         if (!root.hasImage) {
                             editorInteraction.resetPresentationStateForNewImage()
-                            editorInteraction.setImageSize(0, 0)
                             editorInteraction.setRenderReferenceSize(0, 0)
                             return
                         }
                         // Drop previous image crop/ROI/mode before applying new geometry.
                         editorInteraction.resetPresentationStateForNewImage()
-                        editorInteraction.setImageSize(0, 0)
                     }
 
                     function pushViewToViewport() {
@@ -642,8 +978,8 @@ Item {
                         syncViewportMetrics()
                         ensurePresentationBinding()
                     }
-                    onWidthChanged: syncViewportMetrics()
-                    onHeightChanged: syncViewportMetrics()
+                    onStageWidthChanged: syncViewportMetrics()
+                    onStageHeightChanged: syncViewportMetrics()
                 }
 
                 EditorFilmstrip {
@@ -654,7 +990,6 @@ Item {
                     host: root.host
                     editorSession: root.editorSession
                     interactionPolicy: root.interactionPolicy
-                    selectedImagesById: root.host ? root.host.selectedImagesById : ({})
                     onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
                         if (root.host && root.host.selectionState) {
                             root.host.selectionState.setImageSelected(
@@ -681,7 +1016,10 @@ Item {
                 theme: root.theme
                 editorSession: root.editorSession
                 interaction: editorInteraction
-                controlsEnabled: root.editorControlsEnabled
+                nodeController: historyVersionsRail.nodeController
+                comparison: root.comparison
+                host: root.host
+                controlsEnabled: root.editorEditControlsEnabled
                 expanded: !root.host || root.host.editorAdjustmentStackExpanded !== false
             }
         }
@@ -693,16 +1031,60 @@ Item {
         }
     }
 
-    // Geometry confirm (legacy Enter / numpad Enter). Lives on the workspace so
-    // it still works when focus is on the right panel rather than the viewport.
+    // Mask editing commands live at workspace scope so the viewport, Nodes
+    // graph, and right-side controls all produce the same outcome. The
+    // editor.maskEdit scope is active only while maskControlsActive holds, so
+    // these stay inert (and never shadow Nodes/editor-local keys) once the
+    // transient Mask mode finishes.
+    readonly property bool maskEditScopeActive: !!(root.maskCreation
+                                                 && root.maskCreation.maskControlsActive)
+
+    RegisteredShortcut {
+        objectName: "maskFinishEditShortcut"
+        commandId: "mask.finishEdit"
+        activeScope: root.maskEditScopeActive ? "editor.maskEdit" : ""
+        commandEnabled: root.editorEditControlsEnabled
+        onActivated: root.maskCreation.finishBody()
+    }
+
+    RegisteredShortcut {
+        objectName: "maskDeleteSelectionShortcut"
+        commandId: "mask.deleteSelection"
+        activeScope: root.maskEditScopeActive ? "editor.maskEdit" : ""
+        commandEnabled: root.editorEditControlsEnabled
+        onActivated: root.maskCreation.deleteActiveMask()
+    }
+
+    RegisteredShortcut {
+        objectName: "maskConfirmEditShortcut"
+        commandId: "mask.confirmEdit"
+        activeScope: root.maskEditScopeActive ? "editor.maskEdit" : ""
+        commandEnabled: root.editorEditControlsEnabled
+        onActivated: {
+            if (typeof adjustmentStack.confirmMaskEditAndReturn === "function")
+                adjustmentStack.confirmMaskEditAndReturn()
+        }
+    }
+
+    // Escape closes the comparison from anywhere in the editor. A focused text field keeps its
+    // own Escape (RegisteredShortcut.suppressWhileEditing).
+    RegisteredShortcut {
+        objectName: "comparisonCloseShortcut"
+        commandId: "comparison.close"
+        activeScope: root.comparisonActive ? "editor.comparison" : ""
+        onActivated: root.comparison.close()
+    }
+
+    // Geometry: Enter / numpad Enter leaves the panel for Tone. Lives on the
+    // workspace so it still works when focus is on the right panel.
     Shortcut {
         sequences: [ "Return", "Enter" ]
-        enabled: root.editorControlsEnabled
+        enabled: root.editorEditControlsEnabled
                  && root.editorSession
                  && String(root.editorSession.activeAdjustmentPanel || "") === "geometry"
         onActivated: {
-            if (typeof adjustmentStack.confirmGeometryAndReturnToTone === "function")
-                adjustmentStack.confirmGeometryAndReturnToTone()
+            if (typeof adjustmentStack.returnFromGeometryToTone === "function")
+                adjustmentStack.returnFromGeometryToTone()
         }
     }
 }

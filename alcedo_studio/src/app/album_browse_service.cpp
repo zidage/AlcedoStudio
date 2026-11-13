@@ -5,8 +5,13 @@
 #include "app/album_browse_service.hpp"
 
 #include <algorithm>
+#include <mutex>
+#include <stdexcept>
+#include <string_view>
 #include <unordered_set>
+#include <utility>
 
+#include "storage/query/filter_compiler.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -35,6 +40,11 @@ auto BuildFileView(const std::filesystem::path&       parent_path,
   return out;
 }
 
+auto IsRootFolderPath(const std::filesystem::path& path) -> bool {
+  const auto normalized = path.lexically_normal();
+  return normalized.empty() || !normalized.has_relative_path();
+}
+
 }  // namespace
 
 auto AlbumBrowseService::ListFolders(const std::filesystem::path& folder_path) const
@@ -48,9 +58,6 @@ auto AlbumBrowseService::ListFolders(const std::filesystem::path& folder_path) c
     const auto entries = sleeve_service_->ListFolderEntries(folder_path);
     folders.reserve(entries.size());
     for (const auto& entry : entries) {
-      std::cout << "[LOG] AlbumBrowseService: Found file/folder "
-                << conv::ToBytes(entry->element_name_) << " in " << folder_path.string()
-                << " with size " << entries.size() << std::endl;
       if (!entry || entry->type_ != ElementType::FOLDER || entry->sync_flag_ == SyncFlag::DELETED) {
         continue;
       }
@@ -101,9 +108,10 @@ auto AlbumBrowseService::ListFilesInFolderById(sl_element_id_t folder_id) const
   return ListFilesInFolderById(folder_id, 0, 0);
 }
 
-auto AlbumBrowseService::ListFilesInFolderById(
-    sl_element_id_t folder_id, size_t offset, size_t limit,
-    const std::optional<duckorm::SqlFragment>& extra_filter) const -> std::vector<AlbumFileView> {
+auto AlbumBrowseService::ListFilesInFolderById(sl_element_id_t folder_id, size_t offset,
+                                               size_t                           limit,
+                                               const std::optional<FilterNode>& filter) const
+    -> std::vector<AlbumFileView> {
   std::vector<AlbumFileView> files;
   if (!sleeve_service_) {
     return files;
@@ -112,7 +120,8 @@ auto AlbumBrowseService::ListFilesInFolderById(
   try {
     const auto  storage = sleeve_service_->GetStorage();
     const auto& ctrl    = storage->GetElementStore();
-    const auto  entries = ctrl.ListFilesInFolderPage(folder_id, offset, limit, extra_filter);
+    const auto  entries =
+        ctrl.ListFilesInFolderPage(folder_id, offset, limit, CompileFilterPredicate(filter));
     files.reserve(entries.size());
     for (const auto& entry : entries) {
       if (entry.file_id_ == 0 || entry.image_id_ == 0) {
@@ -135,8 +144,8 @@ auto AlbumBrowseService::ListFilesInFolderById(
   return files;
 }
 
-auto AlbumBrowseService::CountFilesInFolderById(
-    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter) const
+auto AlbumBrowseService::CountFilesInFolderById(sl_element_id_t                  folder_id,
+                                                const std::optional<FilterNode>& filter) const
     -> size_t {
   if (!sleeve_service_) {
     return 0;
@@ -145,10 +154,87 @@ auto AlbumBrowseService::CountFilesInFolderById(
   try {
     const auto  storage = sleeve_service_->GetStorage();
     const auto& ctrl    = storage->GetElementStore();
-    return ctrl.CountFilesInFolder(folder_id, extra_filter);
+    return ctrl.CountFilesInFolder(folder_id, CompileFilterPredicate(filter));
   } catch (...) {
     return 0;
   }
+}
+
+auto AlbumBrowseService::ReadProjectOverview() const -> ProjectOverviewCounts {
+  if (!sleeve_service_) {
+    throw std::runtime_error("Project overview read requires a sleeve service.");
+  }
+  return sleeve_service_->GetStorage()->GetElementStore().ReadProjectOverview();
+}
+
+void AlbumBrowseService::SetQueryThreadObserver(QueryThreadObserver observer) {
+  std::lock_guard lock(query_thread_observer_mutex_);
+  query_thread_observer_ = std::move(observer);
+}
+
+auto AlbumBrowseService::ElementStoreForRead(std::string_view operation) const -> ElementStore& {
+  QueryThreadObserver observer;
+  {
+    std::lock_guard lock(query_thread_observer_mutex_);
+    observer = query_thread_observer_;
+  }
+  if (observer) {
+    observer(operation);
+  }
+  if (!sleeve_service_) {
+    throw std::runtime_error("Album query requires an open project.");
+  }
+  const auto storage = sleeve_service_->GetStorage();
+  if (!storage) {
+    throw std::runtime_error("Album query requires project storage.");
+  }
+  return storage->GetElementStore();
+}
+
+auto AlbumBrowseService::ReadAlbumQuery(
+    sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+    const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
+    const AlbumQueryRead&                        read,
+    const std::optional<SemanticQueryEmbedding>& semantic_relevance) const -> AlbumQueryResult {
+  auto& store = ElementStoreForRead("ReadAlbumQuery");
+  return store.ReadAlbumQuery(folder_id, CompileFilterPredicate(filter), options,
+                              active_semantic_model_key, read, semantic_relevance);
+}
+
+auto AlbumBrowseService::ReadAlbumFilePosition(
+    sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+    const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
+    sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
+    const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
+    -> std::optional<AlbumFilePosition> {
+  auto& store = ElementStoreForRead("ReadAlbumFilePosition");
+  return store.ReadAlbumFilePosition(folder_id, CompileFilterPredicate(filter), options,
+                                     active_semantic_model_key, file_id, preferred_group,
+                                     semantic_relevance);
+}
+
+auto AlbumBrowseService::ReadAlbumFileIds(
+    sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+    const AlbumQueryOptions& options, const std::string& active_semantic_model_key, int64_t begin,
+    int64_t end, const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
+    -> std::vector<sl_element_id_t> {
+  auto& store = ElementStoreForRead("ReadAlbumFileIds");
+  return store.ReadAlbumFileIds(folder_id, CompileFilterPredicate(filter), options,
+                                active_semantic_model_key, begin, end, semantic_relevance);
+}
+
+auto AlbumBrowseService::ReadAlbumFileRows(std::span<const sl_element_id_t> file_ids) const
+    -> std::vector<SearchResultRow> {
+  auto& store = ElementStoreForRead("ReadAlbumFileRows");
+  return store.ListSearchResultRows(file_ids);
+}
+
+auto AlbumBrowseService::ReadFolderImageCounts() const -> FolderImageCounts {
+  return ElementStoreForRead("ReadFolderImageCounts").ReadFolderImageCounts();
+}
+
+auto AlbumBrowseService::ReadLastEditedFile() const -> std::optional<LastEditedFile> {
+  return ElementStoreForRead("ReadLastEditedFile").ReadLastEditedFile();
 }
 
 auto AlbumBrowseService::CreateFolder(const std::filesystem::path& parent_folder_path,
@@ -178,6 +264,91 @@ bool AlbumBrowseService::DeleteFolder(const std::filesystem::path& folder_path) 
   } catch (...) {
     return false;
   }
+}
+
+auto AlbumBrowseService::RenameFolder(const std::filesystem::path& folder_path,
+                                      const file_name_t& new_name) -> AlbumFolderEditResult {
+  AlbumFolderEditResult out;
+  if (!sleeve_service_) {
+    return out;
+  }
+  if (IsRootFolderPath(folder_path) || new_name.empty()) {
+    out.status_ = AlbumFolderEditStatus::InvalidTarget;
+    return out;
+  }
+
+  const auto parent_path = folder_path.lexically_normal().parent_path();
+  try {
+    std::shared_ptr<SleeveFolder> parent;
+    std::shared_ptr<SleeveFolder> folder;
+    try {
+      parent = sleeve_service_->ResolveFolder(parent_path);
+      folder = sleeve_service_->ResolveFolder(folder_path);
+    } catch (...) {
+      out.status_ = AlbumFolderEditStatus::InvalidTarget;
+      return out;
+    }
+    if (const auto existing = parent->GetElementIdByName(new_name);
+        existing.has_value() && existing.value() != folder->element_id_) {
+      out.status_ = AlbumFolderEditStatus::NameTaken;
+      return out;
+    }
+    if (!sleeve_service_->RenameFolder(folder_path, new_name).success_) {
+      return out;
+    }
+  } catch (...) {
+    return out;
+  }
+
+  out.status_      = AlbumFolderEditStatus::Done;
+  out.folder_path_ = parent_path / new_name;
+  return out;
+}
+
+auto AlbumBrowseService::MoveFolder(const std::filesystem::path& folder_path,
+                                    const std::filesystem::path& new_parent_path)
+    -> AlbumFolderEditResult {
+  AlbumFolderEditResult out;
+  if (!sleeve_service_) {
+    return out;
+  }
+  const auto source      = folder_path.lexically_normal();
+  const auto destination = IsRootFolderPath(new_parent_path)
+                               ? std::filesystem::path{L"/"}.lexically_normal()
+                               : new_parent_path.lexically_normal();
+  const auto source_end =
+      std::mismatch(source.begin(), source.end(), destination.begin(), destination.end()).first;
+  if (IsRootFolderPath(folder_path) || source_end == source.end()) {
+    out.status_ = AlbumFolderEditStatus::InvalidTarget;
+    return out;
+  }
+
+  try {
+    std::shared_ptr<SleeveFolder> folder;
+    std::shared_ptr<SleeveFolder> dest;
+    try {
+      folder = sleeve_service_->ResolveFolder(source);
+      dest   = sleeve_service_->ResolveFolder(destination);
+    } catch (...) {
+      out.status_ = AlbumFolderEditStatus::InvalidTarget;
+      return out;
+    }
+    if (source.parent_path() != destination) {
+      if (dest->Contains(folder->element_name_)) {
+        out.status_ = AlbumFolderEditStatus::NameTaken;
+        return out;
+      }
+      if (!sleeve_service_->MoveFolder(source, destination).success_) {
+        return out;
+      }
+    }
+    out.folder_path_ = destination / folder->element_name_;
+  } catch (...) {
+    return out;
+  }
+
+  out.status_ = AlbumFolderEditStatus::Done;
+  return out;
 }
 
 auto AlbumBrowseService::DeleteFiles(const std::vector<std::filesystem::path>& file_paths)

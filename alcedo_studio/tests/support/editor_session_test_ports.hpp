@@ -12,11 +12,14 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "app/editor_session_ports.hpp"
+#include "app/editor_working_document.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "type/hash_type.hpp"
 
 namespace alcedo::test {
@@ -29,31 +32,15 @@ inline auto MakeOpaqueSaveCapture() -> std::shared_ptr<const EditorMiniGitSaveCa
           [](const EditorMiniGitSaveCapture*) {}};
 }
 
-/// Fake pipeline port that records acquire/release counts and optional failures.
+/// Fake pipeline port. When @p working_document is set, CurrentPreview returns its last published
+/// preview for every element, as the production port returns the preview of the held lease.
 class FakeEditorPipelinePort final : public IEditorPipelinePort {
  public:
-  bool fail_acquire  = false;
-  int  acquire_count = 0;
-  int  release_count = 0;
-  std::vector<sl_element_id_t> acquired_ids;
-  std::vector<sl_element_id_t> released_ids;
+  std::shared_ptr<EditorWorkingDocument> working_document;
 
-  auto Acquire(sl_element_id_t element_id, std::string* error)
-      -> EditorPipelineGuardHandle override {
-    ++acquire_count;
-    acquired_ids.push_back(element_id);
-    if (fail_acquire) {
-      if (error != nullptr) {
-        *error = "pipeline acquire failed";
-      }
-      return {};
-    }
-    return EditorPipelineGuardHandle{element_id, true};
-  }
-
-  void Release(const EditorPipelineGuardHandle& guard) override {
-    ++release_count;
-    released_ids.push_back(guard.element_id);
+  [[nodiscard]] auto                     CurrentPreview(sl_element_id_t /*element_id*/) const
+      -> std::shared_ptr<const PipelineGraphSnapshot> override {
+    return working_document ? working_document->CurrentPreview() : nullptr;
   }
 };
 
@@ -64,14 +51,21 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   bool fail_acquire   = false;
   bool fail_commit    = false;
   bool fail_undo      = false;
-  bool fail_snapshot  = false;
+  /// When set, ReadHistorySnapshot reports an undoable history, so the action policy admits Undo.
+  bool                                            report_undoable_history  = false;
   bool fail_capture   = false;
   int  acquire_count  = 0;
   int  release_count  = 0;
+  /// Releases that dropped the unmaterialized journal; each also counts in release_count.
+  int  discarding_release_count = 0;
   int  capture_count  = 0;
   int  commit_count   = 0;
+  int  restore_preview_count = 0;
+  bool restore_changes_live  = false;
+  bool fail_restore_preview  = false;
   int  undo_count     = 0;
   int  redo_count     = 0;
+  int  discard_count  = 0;
   int  checkpoint_capture_count = 0;
   int  checkout_count           = 0;
   bool fail_checkout            = false;
@@ -85,10 +79,35 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   commit_hash_t last_branch_commit{};
   version_ref_id_t active_version_id{};
   version_ref_id_t last_commit_version{};
-  EditorRenderAdjustmentSnapshot current_snapshot{};
   EditorAdjustmentPatch          last_captured_patch{};
   EditorAdjustmentPatch          last_committed_patch{};
+  bool                           fail_node_command  = false;
+  int                            rename_grade_count = 0;
+  int                            edit_node_graph_count  = 0;
+  int                            insert_grade_top_count = 0;
+  int                            remove_grade_count     = 0;
+  NodeId                         last_insert_new_id;
+  NodeId                         last_expected_predecessor;
+  NodeGraphTopologyChange        last_topology_change{};
+  NodeId                         last_node_id;
+  std::string                    last_grade_name;
+  int                            set_panel_projection_node_count = 0;
+  NodeId                         last_panel_projection_node;
+  std::uint64_t                  last_panel_projection_generation = 0;
+  std::optional<EditorRenderReason> last_render_reason = EditorRenderReason::UndoRedo;
   std::shared_ptr<const EditorMiniGitSaveCapture> next_capture = MakeOpaqueSaveCapture();
+
+  auto ReadHistorySnapshot(const EditorHistoryGuardHandle& /*guard*/,
+                           EditorHistorySnapshot* snapshot, std::string* error) -> bool override {
+    if (!report_undoable_history) {
+      return IEditorHistoryPort::ReadHistorySnapshot({}, snapshot, error);
+    }
+    if (snapshot != nullptr) {
+      *snapshot          = {};
+      snapshot->can_undo = true;
+    }
+    return true;
+  }
 
   auto Acquire(sl_element_id_t element_id, std::string* error)
       -> EditorHistoryGuardHandle override {
@@ -103,6 +122,10 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   }
 
   void Release(const EditorHistoryGuardHandle&) override { ++release_count; }
+  void ReleaseDiscardingUnmaterialized(const EditorHistoryGuardHandle&) override {
+    ++release_count;
+    ++discarding_release_count;
+  }
 
   auto CaptureAdjustmentBeforePreview(const EditorHistoryGuardHandle&,
                                       const EditorAdjustmentPatch& patch, std::string*)
@@ -110,6 +133,15 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
     ++capture_count;
     last_captured_patch = patch;
     return true;
+  }
+
+  auto RestoreUnsettledPreview(const EditorHistoryGuardHandle&, bool* live_changed, std::string*)
+      -> bool override {
+    ++restore_preview_count;
+    if (live_changed != nullptr) {
+      *live_changed = restore_changes_live;
+    }
+    return !fail_restore_preview;
   }
 
   auto CommitAdjustment(const EditorHistoryGuardHandle&, const EditorAdjustmentPatch& patch,
@@ -123,6 +155,70 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
       }
       return false;
     }
+    return true;
+  }
+
+  auto RenameColorGrade(const EditorHistoryGuardHandle&, const NodeId& node_id,
+                        std::string display_name, std::string* error) -> bool override {
+    ++rename_grade_count;
+    last_node_id       = node_id;
+    last_grade_name    = std::move(display_name);
+    last_render_reason = std::nullopt;
+    if (fail_node_command) {
+      if (error != nullptr) *error = "mini-Git journal append failed";
+      return false;
+    }
+    return true;
+  }
+
+  auto EditNodeGraph(const EditorHistoryGuardHandle&, NodeGraphTopologyChange change,
+                     std::string* error) -> bool override {
+    ++edit_node_graph_count;
+    last_topology_change = std::move(change);
+    last_render_reason   = EditorRenderReason::GraphTopologyChanged;
+    if (fail_node_command) {
+      if (error != nullptr) *error = "mini-Git journal append failed";
+      return false;
+    }
+    return true;
+  }
+
+  auto InsertColorGradeAtTop(const EditorHistoryGuardHandle&, const NodeId& new_id,
+                             const NodeId& expected_predecessor_id, std::string* error)
+      -> bool override {
+    ++insert_grade_top_count;
+    last_insert_new_id        = new_id;
+    last_expected_predecessor = expected_predecessor_id;
+    last_render_reason      = EditorRenderReason::GraphTopologyChanged;
+    if (fail_node_command) {
+      if (error != nullptr) *error = "mini-Git journal append failed";
+      return false;
+    }
+    return true;
+  }
+
+  auto RemoveColorGradeAndBridge(const EditorHistoryGuardHandle&, const NodeId& node_id,
+                                 std::string* error) -> bool override {
+    ++remove_grade_count;
+    last_node_id       = node_id;
+    last_render_reason = EditorRenderReason::GraphTopologyChanged;
+    if (fail_node_command) {
+      if (error != nullptr) *error = "mini-Git journal append failed";
+      return false;
+    }
+    return true;
+  }
+
+  [[nodiscard]] auto LastPublishedRenderReason() const
+      -> std::optional<EditorRenderReason> override {
+    return last_render_reason;
+  }
+
+  auto SetPanelProjectionNode(const EditorHistoryGuardHandle&, const NodeId& node_id,
+                              std::uint64_t session_generation, std::string*) -> bool override {
+    ++set_panel_projection_node_count;
+    last_panel_projection_node       = node_id;
+    last_panel_projection_generation = session_generation;
     return true;
   }
 
@@ -142,18 +238,9 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
     return true;
   }
 
-  auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle&,
-                              EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
+  auto DiscardUnmaterializedChanges(const EditorHistoryGuardHandle&, std::string*)
       -> bool override {
-    if (fail_snapshot) {
-      if (error != nullptr) {
-        *error = "snapshot read failed";
-      }
-      return false;
-    }
-    if (snapshot != nullptr) {
-      *snapshot = current_snapshot;
-    }
+    ++discard_count;
     return true;
   }
 
@@ -241,71 +328,8 @@ class FakeEditorTaskPort final : public IEditorTaskPort {
   }
 };
 
-/// Fake journal writer port with optional async commit and barrier failures.
-class FakeEditorJournalPort : public IEditorJournalPort {
- public:
-  bool                        fail_barrier      = false;
-  bool                        fail_commit_start = false;
-  bool                        async_commit      = false;
-  bool                        finalize_succeeds = true;
-  int                         barrier_count     = 0;
-  int                         discard_count     = 0;
-  EditorJournalCommitCallback pending_commit;
-
-  auto FinalizeEdit(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
-    if (!finalize_succeeds) {
-      if (error != nullptr) {
-        *error = "finalize failed";
-      }
-      return false;
-    }
-    return true;
-  }
-
-  auto AppendBarrier(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
-    ++barrier_count;
-    if (fail_barrier) {
-      if (error != nullptr) {
-        *error = "journal barrier failed";
-      }
-      return false;
-    }
-    return true;
-  }
-
-  auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
-                          EditorJournalCommitCallback callback) -> bool override {
-    if (fail_commit_start) {
-      return false;
-    }
-    if (!async_commit) {
-      return IEditorJournalPort::CommitJournalAsync(element_id, session_generation,
-                                                    std::move(callback));
-    }
-    pending_commit = std::move(callback);
-    return true;
-  }
-
-  /// Completes a pending async journal commit. Durable true maps to a successful
-  /// journal durability barrier that later materialization may truncate.
-  void CompleteCommit(bool durable, std::string error = {}) {
-    auto callback = std::move(pending_commit);
-    if (!callback) {
-      return;
-    }
-    callback(EditorJournalCommitOutcome{true, durable, !durable, durable ? 2u : 0u,
-                                        durable ? 1u : 0u, std::move(error)});
-  }
-
-  auto DiscardUnflushed(sl_element_id_t, std::string*) -> bool override {
-    ++discard_count;
-    return true;
-  }
-
-};
-
 /// Fake checkpoint store with optional async materialization and start failure.
-class FakeEditorCheckpointStore final : public IEditorCheckpointStore {
+class FakeEditorCheckpointStore : public IEditorCheckpointStore {
  public:
   bool                      async_materialize      = false;
   bool                      fail_materialize_start = false;
@@ -389,11 +413,11 @@ class FakeEditorRenderSubmitPort final : public IEditorRenderSubmitPort {
  public:
   int cancel_count = 0;
   int submit_count = 0;
+  EditorRenderReason last_reason = EditorRenderReason::InitialFrame;
   bool defer_idle_completion = false;
   SessionIdleCallback pending_idle_completion;
   std::uint64_t pending_idle_epoch = 0;
 
-  void CancelSessionAndWait(std::uint64_t) override { ++cancel_count; }
   void CancelSession(std::uint64_t) override { ++cancel_count; }
   void CancelSession(std::uint64_t epoch, SessionIdleCallback on_idle) override {
     ++cancel_count;
@@ -412,8 +436,9 @@ class FakeEditorRenderSubmitPort final : public IEditorRenderSubmitPort {
       callback(pending_idle_epoch);
     }
   }
-  auto Submit(const EditorRenderIntent&) -> EditorRenderResult override {
+  auto Submit(const EditorRenderIntent& intent) -> EditorRenderResult override {
     ++submit_count;
+    last_reason = intent.reason;
     EditorRenderResult result;
     result.kind       = EditorRenderResultKind::RequestAccepted;
     result.request_id = static_cast<std::uint64_t>(submit_count);

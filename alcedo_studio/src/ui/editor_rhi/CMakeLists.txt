@@ -25,7 +25,7 @@ endif()
 
 def_library(EditorRhiContracts
     SOURCES ${EDITOR_RHI_CONTRACT_SRCS}
-    PUBLIC_DEPS Qt6::Core
+    PUBLIC_DEPS Qt6::Core AlcedoLog
 )
 if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(EditorRhiContracts PUBLIC HAVE_CUDA)
@@ -42,23 +42,36 @@ set(EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
     "${ALCEDO_EDITOR_RHI_ROOT}/lease_target_adapters.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/direct_present_queue.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/direct_frame_sink.cpp"
+    "${ALCEDO_EDITOR_RHI_ROOT}/viewport_mask_coverage_sink.cpp"
+    "${ALCEDO_EDITOR_RHI_ROOT}/viewport_mask_coverage_layer.cpp"
+    "${ALCEDO_EDITOR_RHI_ROOT}/viewport_composite_pass.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/editor_viewport_item.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/editor_viewport_renderer.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/editor_interaction_controller.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/editor_overlay_item.cpp"
+    "${ALCEDO_EDITOR_RHI_ROOT}/ai_mask_input_overlay_item.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/direct_present_queue.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/direct_frame_sink.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/viewport_mask_coverage_sink.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/viewport_mask_coverage_layer.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/viewport_composite_pass.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/mask_coverage_sink.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/lease_target_adapters.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/viewer/viewer_view_state.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_viewport_item.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_viewport_renderer.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_interaction_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_overlay_item.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/ai_mask_input_overlay_item.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/color_manager.hpp"
 )
 if(APPLE)
     list(APPEND EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
         "${ALCEDO_SRC_ROOT}/ui/edit_viewer/color_manager.mm"
+    )
+    set_source_files_properties(
+        "${ALCEDO_EDITOR_RHI_ROOT}/editor_startup.cpp"
+        PROPERTIES LANGUAGE OBJCXX
     )
     set_source_files_properties(
         "${ALCEDO_SRC_ROOT}/ui/edit_viewer/color_manager.mm"
@@ -103,12 +116,17 @@ if(ALCEDO_OPENCL_ENABLED AND ALCEDO_OPENGL_GLX_ENABLED)
 endif()
 if(ALCEDO_METAL_ENABLED)
     target_compile_definitions(EditorRhiViewport PUBLIC HAVE_METAL)
+    target_link_libraries(EditorRhiViewport PUBLIC MetalContext alcedo::metal_cpp)
 endif()
 if(APPLE)
     target_link_libraries(EditorRhiViewport PRIVATE
         "-framework AppKit"
         "-framework QuartzCore"
         "-framework CoreGraphics"
+        "-framework Metal"
+        # color_manager.mm tags the layer with the export ICC profile when CoreGraphics has no
+        # named color space with the display encoding's curve.
+        ExportIccProfileResolver
     )
 endif()
 if(WIN32)
@@ -147,6 +165,10 @@ def_library(EditorRhiHarnessLib
 )
 if(APPLE)
     set_source_files_properties(
+        "${ALCEDO_EDITOR_RHI_ROOT}/editor_startup.cpp"
+        PROPERTIES LANGUAGE OBJCXX
+    )
+    set_source_files_properties(
         "${ALCEDO_EDITOR_RHI_ROOT}/harness_viewport_renderer.cpp"
         PROPERTIES LANGUAGE OBJCXX
     )
@@ -169,6 +191,7 @@ if(ALCEDO_OPENCL_ENABLED AND ALCEDO_OPENGL_GLX_ENABLED)
 endif()
 if(ALCEDO_METAL_ENABLED)
     target_compile_definitions(EditorRhiHarnessLib PUBLIC HAVE_METAL)
+    target_link_libraries(EditorRhiHarnessLib PUBLIC MetalContext alcedo::metal_cpp)
 endif()
 if(WIN32)
     target_link_libraries(EditorRhiHarnessLib PRIVATE d3d11 dxgi opengl32)

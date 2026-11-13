@@ -17,8 +17,9 @@ use tokenizers::Tokenizer;
 use tracing::info;
 use zip::ZipArchive;
 
-use crate::config::SemanticConfig;
+use crate::config::{EncoderResidencyConfig, SemanticConfig};
 use crate::service::embedding::{EmbeddingEngine, EngineModelInfo};
+use crate::service::encoder_residency::{EncoderResidency, EncoderStatus, IdleUnload};
 use crate::service::model_adapters::{EngineProfileAdapter, ImageResizeMode};
 use crate::service::model_assets::{
     AssetRole, ModelProfileSpec, find_profile, profile_asset_path, validate_model_profile,
@@ -53,13 +54,31 @@ pub struct CoreMlClipEngine {
     provider: String,
     model_root: PathBuf,
     tokenizer: Tokenizer,
-    text_model: CoreMlModel,
-    image_model: CoreMlModel,
+    // Each model loads on its first request and unloads after its idle time.
+    text_model: EncoderResidency<CoreMlModel>,
+    image_model: EncoderResidency<CoreMlModel>,
     adapter: EngineProfileAdapter,
 }
 
 impl CoreMlClipEngine {
+    /// An engine with the default encoder residency (text model on the CPU for 300 s, image
+    /// model on `config.device` for 60 s).
     pub fn new(config: &SemanticConfig) -> Result<Self> {
+        Self::with_residency(config, &EncoderResidencyConfig::default())
+    }
+
+    /// Validates the profile and both device values, unpacks the compiled models, and
+    /// prepares their loaders. No model loads here: each loads on its first request.
+    pub fn with_residency(
+        config: &SemanticConfig,
+        residency: &EncoderResidencyConfig,
+    ) -> Result<Self> {
+        let text_device = residency.text_device.clone();
+        let vision_device = residency.vision_device_or(&config.device).to_string();
+        let (_, text_provider) = model_configuration_for_device(&text_device)?;
+        let (_, provider) = model_configuration_for_device(&vision_device)?;
+        let text_idle_unload = IdleUnload::from_seconds(residency.text_idle_unload_seconds)?;
+        let vision_idle_unload = IdleUnload::from_seconds(residency.vision_idle_unload_seconds)?;
         let manifest = validate_model_profile(&config.model_id, &config.model_root)?;
         if manifest.revision != config.revision {
             bail!(
@@ -110,17 +129,25 @@ impl CoreMlClipEngine {
 
         let tokenizer = Tokenizer::from_file(&tokenizer_json)
             .map_err(|e| anyhow::anyhow!("failed to load tokenizer: {e}"))?;
-        let (configuration, provider) = model_configuration_for_device(&config.device)?;
 
         info!(
-            "loading native CoreML clip profile {} from {} on {}",
+            "prepared native CoreML clip profile {} from {}; the text model loads on {} and the image model on {} at first use",
             profile.profile_id,
             model_root.display(),
+            text_provider,
             provider
         );
 
-        let image_model = load_compiled_model(&image_package, &configuration)?;
-        let text_model = load_compiled_model(&text_package, &configuration)?;
+        let image_model =
+            EncoderResidency::new("image", provider.clone(), vision_idle_unload, move || {
+                let (configuration, _) = model_configuration_for_device(&vision_device)?;
+                load_compiled_model(&image_package, &configuration)
+            });
+        let text_model =
+            EncoderResidency::new("text", text_provider, text_idle_unload, move || {
+                let (configuration, _) = model_configuration_for_device(&text_device)?;
+                load_compiled_model(&text_package, &configuration)
+            });
 
         Ok(Self {
             profile_id: manifest.profile_id,
@@ -182,14 +209,15 @@ impl CoreMlClipEngine {
             providers.push(self.build_text_inputs(text)?);
         }
         let batch = BatchProvider::from_feature_providers(providers);
-        let outputs = self
-            .text_model
-            .inner
-            .lock()
-            .map_err(|err| anyhow::anyhow!("text CoreML model lock poisoned: {err}"))?
-            .predict_batch(&batch)
-            .map_err(|e| anyhow::anyhow!("failed to run text CoreML batch model: {e}"))?;
-        self.extract_batch_embeddings(&outputs, texts.len(), "text")
+        self.text_model.with_session(|model| {
+            let outputs = model
+                .inner
+                .lock()
+                .map_err(|err| anyhow::anyhow!("text CoreML model lock poisoned: {err}"))?
+                .predict_batch(&batch)
+                .map_err(|e| anyhow::anyhow!("failed to run text CoreML batch model: {e}"))?;
+            self.extract_batch_embeddings(&outputs, texts.len(), "text")
+        })
     }
 
     fn build_text_inputs(&self, text: &str) -> Result<FeatureProvider> {
@@ -220,12 +248,19 @@ impl CoreMlClipEngine {
             bail!("image batch must not be empty");
         }
 
-        rgbs.iter()
-            .map(|rgb| self.forward_single_image_embedding(rgb))
-            .collect()
+        // The whole batch runs on one loaded model and counts as one use.
+        self.image_model.with_session(|model| {
+            rgbs.iter()
+                .map(|rgb| self.forward_single_image_embedding(model, rgb))
+                .collect()
+        })
     }
 
-    fn forward_single_image_embedding(&self, rgb: &RgbImage) -> Result<Vec<f32>> {
+    fn forward_single_image_embedding(
+        &self,
+        model: &CoreMlModel,
+        rgb: &RgbImage,
+    ) -> Result<Vec<f32>> {
         let bgra = self.prepare_bgra_image(rgb)?;
         let pixel_buffer = self.make_owned_bgra_pixel_buffer(&bgra)?;
 
@@ -234,8 +269,7 @@ impl CoreMlClipEngine {
             .try_insert_cv_pixel_buffer(IMAGE_INPUT_NAME, &pixel_buffer)
             .map_err(|e| anyhow::anyhow!("failed to build CoreML image inputs: {e}"))?;
 
-        let outputs = self
-            .image_model
+        let outputs = model
             .inner
             .lock()
             .map_err(|err| anyhow::anyhow!("image CoreML model lock poisoned: {err}"))?
@@ -422,6 +456,15 @@ impl EmbeddingEngine for CoreMlClipEngine {
 
     fn default_image_model_name(&self) -> &str {
         &self.model_id
+    }
+
+    fn unload_idle_encoders(&self) {
+        self.text_model.unload_if_idle();
+        self.image_model.unload_if_idle();
+    }
+
+    fn encoder_status(&self) -> Vec<EncoderStatus> {
+        vec![self.text_model.status(), self.image_model.status()]
     }
 
     fn model_info(&self) -> EngineModelInfo {

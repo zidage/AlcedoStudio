@@ -26,13 +26,6 @@ Item {
     readonly property color colBase: appTheme.bgBaseColor
     readonly property color colHover: appTheme.hoverColor
 
-    // Operator-shaped params builders (Phase 6A default is {"value": v}).
-    function numericParams(key, v) {
-        var o = {}
-        o[key] = v
-        return JSON.stringify(o)
-    }
-
     function wireEnabled() {
         const on = root.controlsEnabled
         exposureModel.enabled = on
@@ -46,7 +39,7 @@ Item {
 
     onControlsEnabledChanged: wireEnabled()
     Component.onCompleted: {
-        // Clean baseline defaults match pipeline_defaults / ToneAdjustmentState.
+        // Neutral values from EditorParameterCatalog (the models read their range from it).
         exposureModel.value = exposureModel.defaultValue
         contrastModel.value = contrastModel.defaultValue
         highlightsModel.value = highlightsModel.defaultValue
@@ -66,35 +59,9 @@ Item {
     /// produces no commit, render request, timer restart, or focus change.
     function loadFromSnapshot(snapshot) {
         if (snapshot === undefined || snapshot === null) return
-        loadModelFromSnapshot(exposureModel, "exposure", snapshot)
-        loadModelFromSnapshot(contrastModel, "contrast", snapshot)
-        loadModelFromSnapshot(highlightsModel, "highlights", snapshot)
-        loadModelFromSnapshot(shadowsModel, "shadows", snapshot)
-        loadModelFromSnapshot(whitesModel, "white", snapshot)
-        loadModelFromSnapshot(blacksModel, "black", snapshot)
+        for (var i = 0; i < root.toneModels.length; ++i)
+            root.toneModels[i].loadFromSnapshot(snapshot)
         loadCurveFromSnapshot(curveModel, "curve", snapshot)
-    }
-
-    /// Set a numeric model value from a snapshot entry. The snapshot stores
-    /// operator-shaped params as a QVariantMap, e.g. {"exposure": 1.5}.
-    /// The key inside the params map matches the fieldKey.
-    function loadModelFromSnapshot(model, fieldKey, snapshot) {
-        if (!model || !fieldKey || !snapshot) return
-        // In-flight pointer drag owns the value; snapshot echo must not fight it
-        // (multi-slider handoff / settled publish while another slider is live).
-        if (model.dragActive) return
-        const entry = snapshot[fieldKey]
-        if (entry === undefined) return
-        // entry is a QVariantMap like {"exposure": 1.5}
-        const val = entry[fieldKey]
-        if (val === undefined) return
-        const num = Number(val)
-        if (isNaN(num)) return
-        // Plain setter — no submit, no render request.
-        // Only assign if the value actually differs to avoid noise.
-        if (Math.abs(model.value - num) > (model.step * 0.1)) {
-            model.value = num
-        }
     }
 
     /// Load curve control points from the snapshot.
@@ -135,78 +102,42 @@ Item {
         objectName: "toneExposureModel"
         fieldKey: "exposure"
         label: qsTr("Exposure")
-        minimum: -10
-        maximum: 10
-        defaultValue: 1.5
-        step: 0.01
-        precision: 2
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("exposure", v) }
     }
     EditorAdjustmentValueModel {
         id: contrastModel
         objectName: "toneContrastModel"
         fieldKey: "contrast"
         label: qsTr("Contrast")
-        minimum: -100
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("contrast", v) }
     }
     EditorAdjustmentValueModel {
         id: highlightsModel
         objectName: "toneHighlightsModel"
         fieldKey: "highlights"
         label: qsTr("Highlights")
-        minimum: -100
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("highlights", v) }
     }
     EditorAdjustmentValueModel {
         id: shadowsModel
         objectName: "toneShadowsModel"
         fieldKey: "shadows"
         label: qsTr("Shadows")
-        minimum: -100
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("shadows", v) }
     }
     EditorAdjustmentValueModel {
         id: whitesModel
         objectName: "toneWhitesModel"
         fieldKey: "white"
         label: qsTr("Whites")
-        minimum: -100
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("white", v) }
     }
     EditorAdjustmentValueModel {
         id: blacksModel
         objectName: "toneBlacksModel"
         fieldKey: "black"
         label: qsTr("Blacks")
-        minimum: -100
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("black", v) }
     }
     EditorToneCurveModel {
         id: curveModel

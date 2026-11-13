@@ -2,10 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
+import Alcedo.Main 1.0
 
 // Bottom filmstrip dock for EditorWorkspace.
-// Phase 7C: the editor filmstrip reuses the library thumbnail model while
-// keeping its own horizontal selection and focus surface.
+// Phase 7C: the editor filmstrip reuses the library thumbnail model and the
+// shared Library selection. A tile has two independent states: editing (the
+// image that the editor shows) and selected (the image is in the Library
+// selection). Opening an image from the strip also makes it the selection.
 // Motion / surface tokens: DESIGN.md.
 Item {
     id: root
@@ -14,12 +17,13 @@ Item {
     property var theme: null
     property var host: null
     property var editorSession: null
-    // InteractionPolicyController is the authoritative save-checkpoint gate.
+    // InteractionPolicyController is the authoritative save-checkpoint admission rule.
     property var interactionPolicy: null
-    property var selectedImagesById: ({})
+    // The library selection (LibrarySelection). A delegate asks it for its own photo.
+    readonly property var selection: appModules.library.selection
     property bool collapsed: editorSession ? editorSession.filmstripCollapsed : false
     // Minimum scale = current default dock proportion; live max = 50% of window.
-    readonly property real minExpandedHeight: 128
+    readonly property real minExpandedHeight: 168
     readonly property real hostWindowHeight: {
         const win = Window.window
         return win && win.height > 0 ? Number(win.height) : 0
@@ -75,7 +79,8 @@ Item {
                                                         : "")
     property bool hasImage: editorSession ? editorSession.hasImage : false
 
-    readonly property real handleHeight: 28
+    readonly property real handleHeight: Math.max(28, handleRow.implicitHeight
+                                                  + appTheme.spaceXs)
     // dockExpandProgress drives the downward fold (0 collapsed -> 1 expanded).
     // collapsed flips immediately (persisted session state); only the visual
     // height animates so the handle stays stationary and state assertions hold.
@@ -273,8 +278,8 @@ Item {
     }
 
     function isImageSelected(elementId) {
-        return Object.prototype.hasOwnProperty.call(
-            selectedImagesById || ({}), keyForElement(elementId))
+        // Reading revision makes a binding that calls this read again after each change.
+        return selection.revision >= 0 && selection.IsSelected(Number(elementId))
     }
 
     function selectionItemForIndex(index) {
@@ -347,7 +352,7 @@ Item {
         }
         const rangeItems = root.selectionItemsForRange(anchor, index)
         if (additive) {
-            root.replaceSelection(Object.values(selectedImagesById || ({})).concat(rangeItems))
+            root.selection.AddItems(rangeItems)
         } else {
             root.replaceSelection(rangeItems)
         }
@@ -392,21 +397,12 @@ Item {
         if (!selectionEnabled) {
             return
         }
+        // The same backend Select All as the library (every photo of the query).
         if (host && host.selectAllCurrentAlbum) {
             host.selectAllCurrentAlbum()
-            return
+        } else {
+            appModules.library.SelectAllInCurrentView()
         }
-        const total = thumbnailModel
-                ? Number(thumbnailModel.totalCount || totalCount) : 0
-        if (total <= 0) {
-            root.replaceSelection([])
-            selectionAnchorIndex = -1
-            return
-        }
-        if (libraryModule && libraryModule.LoadThumbnailsThroughIndex) {
-            libraryModule.LoadThumbnailsThroughIndex(total - 1)
-        }
-        root.replaceSelection(root.selectionItemsForRange(0, total - 1))
         selectionAnchorIndex = 0
     }
 
@@ -432,6 +428,13 @@ Item {
         }
         const nextIndex = Math.max(0, Math.min(totalCount - 1, focusIndex + delta))
         root.handleIndexSelection(nextIndex, modifiers || 0, false)
+    }
+
+    function activateAdjacentImage(delta) {
+        // Left/Right open the adjacent image and move the selection with it, so
+        // the editing tile is also the only selected tile. Out-of-range indices
+        // are inert.
+        root.handleIndexSelection(focusIndex + delta, Qt.NoModifier, true)
     }
 
     function activateFocused() {
@@ -530,18 +533,6 @@ Item {
         ignoreUnknownSignals: true
         function onFilmstripScrollRequestIdChanged() {
             root.applyFilmstripScrollTarget()
-        }
-    }
-
-    Connections {
-        target: root.workspaceRouter
-        ignoreUnknownSignals: true
-        function onRouteChanged() {
-            if (root.workspaceRouter
-                    && String(root.workspaceRouter.workspace || "") === "editor") {
-                root.rebindThumbnailModel()
-                root.revealCurrentImageInStrip()
-            }
         }
     }
 
@@ -678,7 +669,7 @@ Item {
         // Persistent focusable handle — remains keyboard- and pointer-accessible
         // when the dock is collapsed so the released height returns to the viewport.
         // When expanded, vertical drag on this row resizes the dock; click still
-        // toggles collapse (drag threshold separates the two gestures).
+        // toggles collapse (drag threshold separates the click from the drag).
         Item {
             id: collapseHandle
             objectName: "editorFilmstripHandle"
@@ -720,6 +711,7 @@ Item {
             }
 
             RowLayout {
+                id: handleRow
                 anchors.fill: parent
                 anchors.leftMargin: appTheme.spaceMd
                 anchors.rightMargin: appTheme.spaceMd
@@ -770,7 +762,7 @@ Item {
                     color: root.colText
                     font.pixelSize: appTheme.fontSizeBody
                     font.weight: appTheme.fontWeightStrong
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
 
                 Label {
@@ -781,7 +773,7 @@ Item {
                     text: root.selectionDisabledReason
                     color: root.colMuted
                     font.pixelSize: appTheme.fontSizeCaption
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
             }
 
@@ -909,15 +901,22 @@ Item {
                 }
 
                 Keys.onPressed: function(event) {
-                    if (event.key === Qt.Key_A
-                            && (event.modifiers & Qt.ControlModifier)) {
+                    const commandId = ShortcutRegistry.commandIdForKey(
+                        "editor.filmstrip", event.key, event.modifiers)
+                    if (commandId === "filmstrip.selectAll") {
                         root.selectAllImages()
                         event.accepted = true
-                    } else if (event.key === Qt.Key_Left) {
-                        root.moveFocus(-1, event.modifiers)
+                    } else if (commandId === "filmstrip.previousImage") {
+                        root.activateAdjacentImage(-1)
                         event.accepted = true
-                    } else if (event.key === Qt.Key_Right) {
-                        root.moveFocus(1, event.modifiers)
+                    } else if (commandId === "filmstrip.nextImage") {
+                        root.activateAdjacentImage(1)
+                        event.accepted = true
+                    } else if ((event.key === Qt.Key_Left || event.key === Qt.Key_Right)
+                               && event.modifiers !== Qt.NoModifier) {
+                        // Shift/Ctrl arrows keep the pre-registry range move;
+                        // only the unmodified keys are registered commands.
+                        root.moveFocus(event.key === Qt.Key_Left ? -1 : 1, event.modifiers)
                         event.accepted = true
                     } else if (event.key === Qt.Key_Home) {
                         root.handleIndexSelection(0, event.modifiers, false)
@@ -941,6 +940,10 @@ Item {
                     required property int elementId
                     required property int imageId
                     required property string fileName
+                    required property int rating
+                    required property bool isEdited
+                    required property var editedAt
+                    required property string editVersionName
                     required property string thumbUrl
                     required property bool thumbLoading
                     required property bool thumbMissingSource
@@ -954,10 +957,10 @@ Item {
                     property int pinnedImageId: 0
                     property int pinnedMaxEdge: 0
 
-                    readonly property bool isCurrentImage: Number(elementId) === root.selectedElementId
+                    readonly property bool isEditing: Number(elementId) === root.selectedElementId
                     readonly property bool isLibrarySelected: root.isImageSelected(elementId)
-                    readonly property bool isSelected: isCurrentImage || isLibrarySelected
-                    property int displayRating: 0
+                    // The rating role updates with every dataChanged of the model.
+                    readonly property int displayRating: Math.max(0, Math.min(5, Number(rating)))
                     readonly property bool hasFocusFrame: root.focusIndex === index
                                                                && filmstripListView.activeFocus
                     readonly property bool thumbnailReady: liveThumbUrl.length > 0
@@ -970,18 +973,25 @@ Item {
                                                                    : qsTr("Source file was moved or deleted")
 
                     height: ListView.view ? ListView.view.height : 1
-                    readonly property real fileNameLabelHeight: appTheme.lineHeightCaption
-                    readonly property real thumbnailAreaHeight: Math.max(
-                        1, height - fileNameLabelHeight - appTheme.spaceXs * 2)
-                    width: Math.max(appTheme.spaceXl * 7, thumbnailAreaHeight * 1.55)
+                    // The card fits a 3:2 photo slot to the height left above its
+                    // one-line file name caption.
+                    width: Math.max(appTheme.spaceXl * 7, thumbnailCard.implicitWidth)
                     Accessible.role: Accessible.ListItem
                     Accessible.name: fileName.length > 0 ? fileName
                                                          : qsTr("Image %1").arg(index + 1)
-                    Accessible.description: (isCurrentImage
-                                             ? qsTr("Current image")
-                                             : (isLibrarySelected ? qsTr("Selected image")
-                                                                   : qsTr("Open image")))
-                                            + qsTr(" | Rating %1/5").arg(displayRating)
+                    Accessible.description: {
+                        const parts = [isEditing
+                                       ? qsTr("Current image")
+                                       : (isLibrarySelected ? qsTr("Selected image")
+                                                            : qsTr("Open image")),
+                                       displayRating > 0
+                                       ? qsTr("%n star(s)", "", displayRating)
+                                       : qsTr("Unrated")]
+                        if (isEdited) {
+                            parts.push(qsTr("Edited"))
+                        }
+                        return parts.join(", ")
+                    }
 
                     function releasePinnedThumbnail() {
                         if (pinnedElementId !== 0 && pinnedImageId !== 0 && root.libraryModule) {
@@ -991,13 +1001,6 @@ Item {
                         pinnedElementId = 0
                         pinnedImageId = 0
                         pinnedMaxEdge = 0
-                    }
-
-                    function refreshRating() {
-                        const row = root.thumbnailModel && root.thumbnailModel.getItemAt
-                                ? root.thumbnailModel.getItemAt(index) : null
-                        const value = row && row.rating !== undefined ? Number(row.rating) : 0
-                        displayRating = value > 0 ? Math.min(5, Math.round(value)) : 0
                     }
 
                     function bindThumbnailLifetime() {
@@ -1027,18 +1030,9 @@ Item {
                     onThumbLoadingChanged: liveThumbLoading = thumbLoading
                     onThumbMissingSourceChanged: liveThumbMissingSource = thumbMissingSource
                     onThumbErrorTextChanged: liveThumbErrorText = thumbErrorText
-                    Component.onCompleted: {
-                        bindThumbnailLifetime()
-                        refreshRating()
-                    }
-                    onElementIdChanged: {
-                        bindThumbnailLifetime()
-                        refreshRating()
-                    }
-                    onImageIdChanged: {
-                        bindThumbnailLifetime()
-                        refreshRating()
-                    }
+                    Component.onCompleted: bindThumbnailLifetime()
+                    onElementIdChanged: bindThumbnailLifetime()
+                    onImageIdChanged: bindThumbnailLifetime()
                     Component.onDestruction: releaseThumbnailBinding()
 
                     EditorFilmstripThumbnailCard {
@@ -1051,12 +1045,16 @@ Item {
                         thumbnailReady: thumbnailDelegate.thumbnailReady
                         thumbnailProblemState: thumbnailDelegate.thumbnailProblemState
                         thumbnailProblemText: thumbnailDelegate.thumbnailProblemText
-                        selected: thumbnailDelegate.isSelected
+                        editing: thumbnailDelegate.isEditing
+                        selected: thumbnailDelegate.isLibrarySelected
                         hovered: thumbnailMouse.containsMouse
                         hasFocusFrame: thumbnailDelegate.hasFocusFrame
                         saving: root.saving
                         renderBusy: root.renderBusy
                         displayRating: thumbnailDelegate.displayRating
+                        edited: thumbnailDelegate.isEdited
+                        editedAt: thumbnailDelegate.editedAt
+                        editVersionName: thumbnailDelegate.editVersionName
                         thumbnailMaxEdge: root.filmstripThumbnailMaxEdge
                     }
 
@@ -1093,19 +1091,6 @@ Item {
                                 thumbnailDelegate.liveThumbErrorText = errorText || ""
                             }
                         }
-                    }
-
-                    Connections {
-                        target: root.thumbnailModel
-                        ignoreUnknownSignals: true
-                        function onDataChanged(topLeft, bottomRight) {
-                            if (!topLeft || !bottomRight
-                                    || (topLeft.row <= thumbnailDelegate.index
-                                        && thumbnailDelegate.index <= bottomRight.row)) {
-                                thumbnailDelegate.refreshRating()
-                            }
-                        }
-                        function onModelReset() { thumbnailDelegate.refreshRating() }
                     }
                 }
             }

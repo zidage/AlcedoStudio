@@ -16,6 +16,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  storage-boundary:
+    name: Storage boundary check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test the boundary check
+        run: python3 -m unittest scripts/tests/check_storage_boundary_test.py
+
+      # Code outside alcedo_studio/src/storage reaches the database only through Storage
+      # (storage_query_boundary_plan.md, Phase S6).
+      - name: Check the storage boundary
+        run: python3 scripts/check_storage_boundary.py
+
+      - name: Test the console output check
+        run: python3 -m unittest scripts/tests/check_console_output_test.py
+
+      # Production code logs through ALCEDO_LOG_* or a qC* category; stdout and stderr have no
+      # console in the Windows release build (issue #822).
+      - name: Check console output
+        run: python3 scripts/check_console_output.py
+
   macos-arm-metal:
     name: macOS arm64 Metal
     runs-on: macos-15
@@ -37,9 +61,50 @@ jobs:
       - name: Install dependencies
         run: |
           brew update
+          # The runner image ships openssl@1.1 linked at /opt/homebrew/bin/openssl.
+          # openimageio/grpc pull in an openssl@3 upgrade whose `brew link` collides
+          # with that symlink, which makes `brew install` exit 1 right after the
+          # opencolorio caveats. `brew unlink openssl@1.1` removes nothing because
+          # the image's symlinks go through opt/openssl@1.1 instead of the Cellar,
+          # so delete them directly from the link directories (opt/ stays intact).
+          brew_prefix="$(brew --prefix)"
+          for dir in bin etc include lib share; do
+            if [ -d "${brew_prefix}/${dir}" ]; then
+              find "${brew_prefix}/${dir}" -type l -lname '*openssl@1.1*' -print -delete
+            fi
+          done
           # grpc + protobuf: required by the semantic search proto codegen under
           # PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF=ON (see alcedo_studio/src/third_party/CMakeLists.txt).
-          brew install cmake ninja qt opencv opencolorio duckdb exiv2 glib little-cms2 highway openimageio pkg-config xxhash eigen libomp grpc protobuf
+          brew install cmake ninja qt opencv opencolorio exiv2 glib little-cms2 highway openimageio pkg-config xxhash eigen libomp grpc protobuf
+
+      - name: Install DuckDB
+        # Pinned official release instead of Homebrew duckdb. Homebrew duckdb 2.0.0 reports its
+        # commit hash as the version, so `INSTALL vss` requests extensions under that hash (HTTP
+        # 404). The release build reports v1.5.6, and the extension repository has v1.5.6 builds.
+        env:
+          DUCKDB_VERSION: v1.5.6
+          LIBDUCKDB_SHA256: e0bc007d9b0094c0970ac1847a8601d10aad07cbd2910ce586ec810f77b638d6
+          DUCKDB_CLI_SHA256: 80a80c68736bd7dea53e8b02447e9759db0c8596ea156476ba396c44f54c5810
+        run: |
+          set -euo pipefail
+          duckdb_dir="${RUNNER_TEMP}/duckdb-${DUCKDB_VERSION}"
+          mkdir -p "${duckdb_dir}"
+          release_url="https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/libduckdb.zip" "${release_url}/libduckdb-osx-universal.zip"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/duckdb_cli.zip" "${release_url}/duckdb_cli-osx-universal.zip"
+          echo "${LIBDUCKDB_SHA256}  ${RUNNER_TEMP}/libduckdb.zip" | shasum -a 256 -c -
+          echo "${DUCKDB_CLI_SHA256}  ${RUNNER_TEMP}/duckdb_cli.zip" | shasum -a 256 -c -
+          unzip -q -o "${RUNNER_TEMP}/libduckdb.zip" -d "${duckdb_dir}"
+          unzip -q -o "${RUNNER_TEMP}/duckdb_cli.zip" -d "${duckdb_dir}"
+          # The release dylib has the install name @rpath/libduckdb.dylib. Give it its absolute
+          # path, as the Homebrew dylib has, so the build-tree executables find it without an
+          # rpath entry. The change invalidates the signature, so sign it again (ad hoc).
+          install_name_tool -id "${duckdb_dir}/libduckdb.dylib" "${duckdb_dir}/libduckdb.dylib"
+          codesign --force --sign - "${duckdb_dir}/libduckdb.dylib"
+          "${duckdb_dir}/duckdb" --version
+          echo "${duckdb_dir}" >> "$GITHUB_PATH"
+          echo "ALCEDO_DUCKDB_INC=${duckdb_dir}" >> "$GITHUB_ENV"
+          echo "ALCEDO_DUCKDB_LIB=${duckdb_dir}/libduckdb.dylib" >> "$GITHUB_ENV"
 
       - name: Pre-install DuckDB extensions
         # Semantic search and image-description FTS need DuckDB extensions. Fresh
@@ -68,23 +133,105 @@ jobs:
           echo "ALCEDO_DUCKDB_VSS_EXTENSION=${vss_path}" >> "$GITHUB_ENV"
           echo "ALCEDO_DUCKDB_FTS_EXTENSION=${fts_path}" >> "$GITHUB_ENV"
 
+      - name: Download film print resources
+        # The film print resources are not in Git. build_product_resources.py of alcedo-film-lab
+        # makes them; a release of that repository holds the files of one schema and lab commit.
+        # With ALCEDO_FILM_PRINT_RESOURCE_DIR the build copies them to config/film_print next to
+        # alcedo_main and the film print test executables, so the film print tests render.
+        # A new resource schema needs a new release and new hashes here.
+        env:
+          FILM_PRINT_RESOURCES_TAG: product-resources-s11-d98712f
+          FILM_PRINT_RESOURCES_SHA256: |
+            c6f7f5de64e23f2176ae6640a3f9aed898653d2f432c907420766543e7f8612d  manifest.json
+            1edff3a9fdc4603adbaf4eea2361b5e1900396fb843e1bdb781e1337b7257a81  film_stock_bundle.bin
+            3cb09cc05843e808bba6b9288343425558297cc37a66d097e3cdacc92e0e6bc8  film_print_setup.bin
+            f364a60c8581f14abc72259dfa24109a1ae40d94ed2bc805979660dfb1533071  film_reflectance_table.bin
+        run: |
+          set -euo pipefail
+          resource_dir="${RUNNER_TEMP}/film_print"
+          mkdir -p "${resource_dir}"
+          release_url="https://github.com/zidage/alcedo-film-lab/releases/download/${FILM_PRINT_RESOURCES_TAG}"
+          for file in manifest.json film_stock_bundle.bin film_print_setup.bin film_reflectance_table.bin; do
+            curl -fsSL --retry 3 -o "${resource_dir}/${file}" "${release_url}/${file}"
+          done
+          (cd "${resource_dir}" && printf '%s' "${FILM_PRINT_RESOURCES_SHA256}" | shasum -a 256 -c -)
+          echo "ALCEDO_FILM_PRINT_RESOURCE_DIR=${resource_dir}" >> "$GITHUB_ENV"
+
       - name: Configure
         run: |
           cmake --preset macos_arm_metal_ci \
+            -DDUCKDB_INC="${ALCEDO_DUCKDB_INC}" \
+            -DDUCKDB_LIB="${ALCEDO_DUCKDB_LIB}" \
             -DALCEDO_DUCKDB_VSS_EXTENSION="${ALCEDO_DUCKDB_VSS_EXTENSION}" \
-            -DALCEDO_DUCKDB_FTS_EXTENSION="${ALCEDO_DUCKDB_FTS_EXTENSION}"
+            -DALCEDO_DUCKDB_FTS_EXTENSION="${ALCEDO_DUCKDB_FTS_EXTENSION}" \
+            -DALCEDO_FILM_PRINT_RESOURCE_DIR="${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
 
       - name: Build CI targets
         run: cmake --build --preset macos_arm_metal_ci --parallel 4
 
+      - name: Record test start time
+        # Crash reports written after this file are the reports of the test step.
+        run: touch "${RUNNER_TEMP}/alcedo-test-start"
+
       - name: Test
         run: ctest --preset macos_arm_metal_ci --output-on-failure
 
-      - name: Run scheduled editor WAL fuzz seeds
-        if: github.event_name == 'schedule'
+      # Storage concurrent access (#809) with ThreadSanitizer on the first-party code. The tree
+      # builds only the test target and its libraries. The steps do not use the CI build tree,
+      # so they run when an earlier build or test step fails.
+      - name: Configure the ThreadSanitizer build
+        if: ${{ !cancelled() }}
+        run: |
+          cmake --preset macos_debug_tsan \
+            -DDUCKDB_INC="${ALCEDO_DUCKDB_INC}" \
+            -DDUCKDB_LIB="${ALCEDO_DUCKDB_LIB}" \
+            -DALCEDO_DUCKDB_VSS_EXTENSION="${ALCEDO_DUCKDB_VSS_EXTENSION}" \
+            -DALCEDO_DUCKDB_FTS_EXTENSION="${ALCEDO_DUCKDB_FTS_EXTENSION}" \
+            -DALCEDO_FILM_PRINT_RESOURCE_DIR="${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+
+      - name: Build the storage concurrency test with ThreadSanitizer
+        if: ${{ !cancelled() }}
+        run: cmake --build build/macos-debug-tsan --target LibraryConcurrentAccessTest --parallel 4
+
+      - name: Run the storage concurrency test with ThreadSanitizer
+        if: ${{ !cancelled() }}
+        # A data race report makes the process exit with a failure code.
         env:
-          ALCEDO_EDITOR_JOURNAL_FUZZ_SEED_BASE: ${{ github.run_id }}
-        run: >-
-          build/macos-arm-metal-ci/alcedo_studio/tests/EditorJournalFuzzFrameworkTest
-          --gtest_also_run_disabled_tests
-          --gtest_filter=EditorJournalFuzzFrameworkTest.DISABLED_FreshBoundedSeedsRecoverCurrentWal
+          TSAN_OPTIONS: second_deadlock_stack=1
+        run: build/macos-debug-tsan/alcedo_studio/tests/app/LibraryConcurrentAccessTest
+
+      - name: Upload automation failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-failures
+          path: build/macos-arm-metal-ci/automation-failures/
+          if-no-files-found: ignore
+
+      - name: Collect native crash reports
+        # CTest reports only "SegFault". ReportCrash writes the native stack of every crashed test
+        # process to DiagnosticReports, so a failed run keeps the reports written during the test
+        # step.
+        if: failure()
+        run: |
+          set -euo pipefail
+          # ReportCrash writes a report a few seconds after the process ends.
+          sleep 10
+          dest="build/macos-arm-metal-ci/native-crash-reports"
+          mkdir -p "${dest}"
+          for dir in "${HOME}/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports; do
+            if [ -d "${dir}" ]; then
+              find "${dir}" -maxdepth 2 -type f \( -name '*.ips' -o -name '*.crash' \) \
+                -newer "${RUNNER_TEMP}/alcedo-test-start" -exec cp -p {} "${dest}/" \; \
+                || echo "Cannot read every crash report under ${dir}"
+            fi
+          done
+          ls -l "${dest}"
+
+      - name: Upload native crash reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-crash-reports
+          path: build/macos-arm-metal-ci/native-crash-reports/
+          if-no-files-found: ignore

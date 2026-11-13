@@ -6,16 +6,15 @@
 
 #include <QJsonObject>
 #include <QPointF>
+#include <QQuickItem>
+#include <QQuickWindow>
 #include <QString>
 #include <Qt>
 #include <optional>
 
-class QQuickItem;
-class QQuickWindow;
+#include "probe_item_tree.hpp"
 
 namespace alcedo::ui {
-
-class ProbeItemTree;
 
 /// Real-path mouse/key injection and window screenshot capture for the probe.
 ///
@@ -29,6 +28,9 @@ class ProbeInputInjector final {
   ProbeInputInjector(ProbeItemTree* tree, QQuickWindow* window);
 
   [[nodiscard]] auto HandleClick(const QJsonObject& request, ClickKind kind) -> QJsonObject;
+  /// Delivers one press/move/release at scene coordinates without pumping events.
+  /// An external input clock must send subsequent requests and the final release.
+  [[nodiscard]] auto HandlePointer(const QJsonObject& request) -> QJsonObject;
   [[nodiscard]] auto HandleKey(const QJsonObject& request) -> QJsonObject;
   [[nodiscard]] auto HandleTypeText(const QJsonObject& request) -> QJsonObject;
   [[nodiscard]] auto HandleDrag(const QJsonObject& request) -> QJsonObject;

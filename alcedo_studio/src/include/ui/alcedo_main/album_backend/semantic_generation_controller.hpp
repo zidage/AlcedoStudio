@@ -7,12 +7,18 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <chrono>
+#include <cstddef>
+#include <deque>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "app/ai_provider_profile.hpp"
+#include "app/model_asset_catalog.hpp"
 #include "app/semantic_generation_service.hpp"
+#include "sleeve/storage.hpp"
+#include "storage/store/semantic/semantic_label_config.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -27,8 +33,8 @@ class IUiStatusSink;
 // Drives semantic (AI content) label generation and model activation. Owns the
 // generation pipeline state (progress, prompt, album summary) and the
 // active-model surface. Model download / install / settings live in
-// ModelDownloadController; this controller consumes the install state only to
-// activate a model and to derive the `selectedModelActive` badge.
+// ModelDownloadController; this controller reads the install state to activate an
+// installed model for the open project (activation per project, AI Models plan A3).
 class SemanticGenerationController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool promptVisible READ PromptVisible NOTIFY StateChanged)
@@ -40,6 +46,7 @@ class SemanticGenerationController final : public QObject {
   Q_PROPERTY(int failed READ Failed NOTIFY StateChanged)
   Q_PROPERTY(int canceled READ Canceled NOTIFY StateChanged)
   Q_PROPERTY(QString statusText READ StatusText NOTIFY StateChanged)
+  Q_PROPERTY(int remainingSeconds READ RemainingSeconds NOTIFY StateChanged)
   Q_PROPERTY(int albumTotalCount READ AlbumTotalCount NOTIFY StateChanged)
   Q_PROPERTY(int albumLabeledCount READ AlbumLabeledCount NOTIFY StateChanged)
   Q_PROPERTY(int albumUnlabeledCount READ AlbumUnlabeledCount NOTIFY StateChanged)
@@ -49,13 +56,16 @@ class SemanticGenerationController final : public QObject {
   Q_PROPERTY(QString activeModelDisplayName READ ActiveModelDisplayName NOTIFY StateChanged)
   Q_PROPERTY(QString activeModelKey READ ActiveModelKeyQString NOTIFY StateChanged)
   Q_PROPERTY(bool modelActivationRunning READ ModelActivationRunning NOTIFY StateChanged)
-  Q_PROPERTY(bool selectedModelActive READ SelectedModelActive NOTIFY StateChanged)
+  /// Profile that activateModel() is activating; empty when no activation runs.
+  Q_PROPERTY(QString activatingModelProfileId READ ActivatingModelProfileId NOTIFY StateChanged)
+  /// "Keep AI model loaded" in seconds: 0, 60, 300, 900, or -1 (while the project is open).
+  Q_PROPERTY(int sidecarIdleStopSeconds READ SidecarIdleStopSeconds WRITE SetSidecarIdleStopSeconds
+                 NOTIFY StateChanged)
 
  public:
   SemanticGenerationController(ProjectModule* project, LibraryModule* library,
                                ModelDownloadController* model_download,
                                BackgroundTaskController* background_tasks, IUiStatusSink* status,
-                               alcedo::AiProviderProfileController* ai_profiles,
                                QObject* parent = nullptr);
 
   void BindCollaborators(NikonHeRecoveryController* nikon);
@@ -77,13 +87,29 @@ class SemanticGenerationController final : public QObject {
   QString            ActiveModelProfileId() const;
   QString            ActiveModelDisplayName() const;
   QString            ActiveModelKeyQString() const;
+  /// Background task of the running generation; empty before it is registered and after the
+  /// generation finished.
+  QString            BackgroundTaskId() const { return background_task_id_; }
+  /// Estimated seconds until the running generation finishes, or -1 while no estimate exists.
+  int                RemainingSeconds() const { return remaining_seconds_; }
   bool               ModelActivationRunning() const { return model_activation_running_; }
-  bool               SelectedModelActive() const { return selected_model_active_; }
+  QString            ActivatingModelProfileId() const { return activating_profile_id_; }
+  int                SidecarIdleStopSeconds() const;
+  /// Writes the setting and applies it at once to the sidecar process of the open project
+  /// (ProjectService::SetAiSidecarIdleStopSeconds). The text encoder idle time follows at the
+  /// next sidecar start.
+  void               SetSidecarIdleStopSeconds(int seconds);
 
   Q_INVOKABLE void   StartPendingGeneration(bool forceRegenerate = false);
   Q_INVOKABLE void   SkipPendingGeneration(bool rememberChoice = false);
   Q_INVOKABLE void   SetImportPreference(const QString& preference);
-  Q_INVOKABLE void   ActivateSelectedModel();
+  /// Activates the installed model @p profileId for the open project: registers it, computes
+  /// the label prototypes when they are not cached (sidecar), and sets the project's active
+  /// model key. Returns false, with the reason in the error of the model's row in
+  /// ModelDownloadController, without an open project, for a model that is not installed or
+  /// already active, and while generation or another activation runs.
+  bool               ActivateModel(const QString& profileId);
+  Q_INVOKABLE bool   activateModel(const QString& profileId) { return ActivateModel(profileId); }
   Q_INVOKABLE void   CancelGeneration();
   Q_INVOKABLE void   RefreshAlbumSummary();
   Q_INVOKABLE void   StartAlbumGeneration(bool forceRegenerate = false);
@@ -95,8 +121,8 @@ class SemanticGenerationController final : public QObject {
   [[nodiscard]] auto RuntimeOptionsForCurrentSidecarSnapshot(bool requireModelInfo) const
       -> AiSidecarRuntimeOptions;
   [[nodiscard]] auto LabelDisplayText(sl_element_id_t elementId) const -> QString;
-  // Full post-open / post-purge refresh: fresh on-disk install state, a
-  // recomputed selectedModelActive badge, album counts, and an unconditional
+  // Full post-open / post-purge refresh: fresh on-disk install state, album
+  // counts, and an unconditional
   // StateChanged so live DB bindings (activeModelName/activeModelKey) refresh
   // even when the counts are unchanged. Called on project open and after a
   // save-time purge.
@@ -114,6 +140,9 @@ class SemanticGenerationController final : public QObject {
   void StartGenerationForItems(std::vector<SemanticGenerationItem> items, bool forceRegenerate);
   void ContinueGenerationForItems(bool forceRegenerate);
   void UpdateProgress(const SemanticGenerationProgress& progress);
+  // The time estimate of the running job, from the rate of finished images in the last minute.
+  void UpdateRemainingTimeEstimate(const SemanticGenerationProgress& progress);
+  void ResetRemainingTimeEstimate();
   void Finish(std::vector<SemanticGenerationItemResult> results);
   void ClearPrompt();
   void ResetCounters();
@@ -128,19 +157,14 @@ class SemanticGenerationController final : public QObject {
   // 5 owns the shutdown wait) and return its id. No-op (returns empty) when no
   // registry is reachable. Publishes locks for sidecar snapshot settings so the
   // policy blocks model/provider/download changes during activation.
-  auto RegisterActivationTask() -> QString;
-  // Recomputes selected_model_active_ from the download controller's install
-  // state and the project's active-model record. Does not emit StateChanged;
-  // callers emit.
-  void RecomputeSelectedModelActive();
-  // Recomputes the selectedModelActive badge, then - if the selected model is
-  // installed, not already active, and already has label prototypes cached ("warm") -
-  // flips the project's active model to it so routing and label caching switch
-  // instantly without pressing Activate. No-op for cold models (the user must
-  // Activate to generate the cache). Idempotent and guarded; safe to call from the
-  // selection signal and from RefreshSemanticState (project open).
-  void TryAutoActivateSelectedModel();
-  [[nodiscard]] auto RuntimeOptionsForProfile(const QString& profileId, bool profileRoot) const
+  auto RegisterActivationTask(const QString& profileId) -> QString;
+  // Fails an activation request of @p profileId: the reason goes to the model's row.
+  bool RejectActivation(const QString& profileId, const i18n::LocalizedText& reason);
+  // After the files of @p profileId are removed: when it is the open project's active model,
+  // the project has no active model afterwards (its rows stay until the save purge).
+  void OnModelRemoved(const QString& profileId);
+  // Sidecar options for an installed catalog profile.
+  [[nodiscard]] auto RuntimeOptionsForProfile(const ModelProfileSpec& profile) const
       -> AiSidecarRuntimeOptions;
 
   ProjectModule*                            project_          = nullptr;
@@ -148,7 +172,6 @@ class SemanticGenerationController final : public QObject {
   ModelDownloadController*                  model_download_   = nullptr;
   BackgroundTaskController*                 background_tasks_ = nullptr;
   IUiStatusSink*                            status_           = nullptr;
-  alcedo::AiProviderProfileController*      ai_profiles_      = nullptr;
   NikonHeRecoveryController*                nikon_            = nullptr;
   std::vector<SemanticGenerationItem>    pending_items_{};
   std::shared_ptr<SemanticGenerationJob> job_{};
@@ -159,11 +182,11 @@ class SemanticGenerationController final : public QObject {
   // generation task id so the two task lifecycles never collide). Empty when no
   // activation task is registered.
   QString                                model_activation_task_id_;
+  QString                                activating_profile_id_;
   i18n::LocalizedText                    status_text_{};
   i18n::LocalizedText                    album_summary_text_{};
   std::string                            model_key_{};
   bool                                   model_activation_running_ = false;
-  bool                                   selected_model_active_    = false;
   bool                                   prompt_pending_           = false;
   bool                                   running_                  = false;
   // True when the user pressed Cancel during the interactive sidecar boot
@@ -178,6 +201,19 @@ class SemanticGenerationController final : public QObject {
   int                                    album_total_count_        = 0;
   int                                    album_labeled_count_      = 0;
   int                                    album_unlabeled_count_    = 0;
+  int                                       remaining_seconds_        = -1;
+  // (time, finished images) at progress updates of the last minute, oldest first.
+  std::deque<std::pair<std::chrono::steady_clock::time_point, size_t>> rate_samples_;
 };
+
+/// Semantic label display language of the current UI language setting.
+auto CurrentUiSemanticLabelLanguage() -> SemanticLabelLanguage;
+
+/// Display text of the semantic labels stored for @p file_id under @p model_key: the stored top
+/// labels joined by ", ", or empty when there is no label. Reads only @p storage, so the library
+/// query worker calls it for the rows it reads.
+auto ReadSemanticLabelDisplayText(Storage& storage, sl_element_id_t file_id,
+                                  const std::string& model_key, SemanticLabelLanguage language)
+    -> QString;
 
 }  // namespace alcedo::ui

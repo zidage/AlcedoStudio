@@ -24,7 +24,7 @@ class BaseMapper : public Mapper<BaseMapper, sleeve_id_t, BaseMapperParams, slee
  private:
   static constexpr uint32_t                                         field_count_      = 1;
   static constexpr const char*                                      table_name_       = "Sleeve";
-  static constexpr const char*                                      prime_key_clause_ = "id={}";
+  static constexpr const char*                                      primary_key_column_ = "id";
 
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_ = {
       FIELD(BaseMapperParams, id, UINT32)};
@@ -51,7 +51,7 @@ class RootMapper : public Mapper<RootMapper, sl_element_id_t, RootMapperParams, 
  private:
   static constexpr uint32_t                                         field_count_      = 1;
   static constexpr const char*                                      table_name_       = "SleeveRoot";
-  static constexpr const char*                                      prime_key_clause_ = "id={}";
+  static constexpr const char*                                      primary_key_column_ = "id";
 
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_ = {
       FIELD(RootMapperParams, id_, UINT32)};

@@ -5,17 +5,16 @@
 #include "app/ai_sidecar_runtime_service.hpp"
 
 #include <QCoreApplication>
-#include <QDir>
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QMetaObject>
 #include <QPointer>
 #include <QProcessEnvironment>
-#include <QStandardPaths>
 #include <QStringList>
 #include <QTcpServer>
 #include <QThread>
 #include <chrono>
+#include <optional>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -48,28 +47,46 @@ auto TailAppend(std::string* target, const QByteArray& bytes) -> void {
   }
 }
 
+/// Appends @p bytes to @p partial_line and calls @p write_line for each complete line, without its
+/// newline. The bytes after the last newline stay in @p partial_line.
+template <typename WriteLine>
+auto ForEachCompleteLine(QByteArray* partial_line, const QByteArray& bytes, WriteLine&& write_line)
+    -> void {
+  partial_line->append(bytes);
+  qsizetype start = 0;
+  for (qsizetype end = partial_line->indexOf('\n'); end >= 0;
+       end           = partial_line->indexOf('\n', start)) {
+    write_line(QByteArrayView(*partial_line).sliced(start, end - start));
+    start = end + 1;
+  }
+  partial_line->remove(0, start);
+}
+
+/// One application log warning for one stderr line of the sidecar (panic output, native library
+/// output).
+auto WriteStderrLine(QByteArrayView line) -> void {
+  const QByteArrayView text = line.trimmed();
+  if (!text.isEmpty()) {
+    qCWarning(diag::semanticLog).noquote()
+        << QStringLiteral("semantic.runtime.stderr ") + QString::fromUtf8(text);
+  }
+}
+
 auto BuildEndpoint(const std::string& host, uint16_t port) -> std::string {
   return host + ":" + std::to_string(port);
 }
 
-auto FsPathFromQString(const QString& value) -> std::filesystem::path {
-#ifdef _WIN32
-  return std::filesystem::path(value.toStdWString());
-#else
-  return std::filesystem::path(value.toStdString());
-#endif
-}
-
-auto DefaultProviderConfigDir() -> std::filesystem::path {
-  QString root = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-  if (root.isEmpty()) {
-    root = QDir::homePath() + QStringLiteral("/.alcedo_studio");
-  }
-  return FsPathFromQString(root) / "ai_provider_configs";
-}
-
 auto DefaultRuntimeBinary() -> std::filesystem::path;
 auto DefaultRuntimeModelRoot() -> std::filesystem::path;
+
+/// @p path in a form where `C:/a/b` and `C:\a\b\` compare equal.
+auto ComparablePath(const std::filesystem::path& path) -> std::filesystem::path {
+  auto normal = path.lexically_normal();
+  if (normal.has_filename() || normal.empty()) {
+    return normal;
+  }
+  return normal.parent_path();
+}
 
 auto NormalizeRuntimeOptions(AiSidecarRuntimeOptions options) -> AiSidecarRuntimeOptions {
   if (options.runtime_binary.empty()) {
@@ -77,9 +94,6 @@ auto NormalizeRuntimeOptions(AiSidecarRuntimeOptions options) -> AiSidecarRuntim
   }
   if (options.model_root.empty()) {
     options.model_root = DefaultRuntimeModelRoot();
-  }
-  if (options.provider_config_dir.empty()) {
-    options.provider_config_dir = DefaultProviderConfigDir();
   }
   return options;
 }
@@ -216,6 +230,56 @@ auto AddWindowsUserProxyEnvironment(QProcessEnvironment env) -> QProcessEnvironm
 }
 #endif
 
+/// Result of one readiness poll: Ping, then GetModelInfo when Ping succeeds and the start
+/// requires the semantic model information.
+struct ReadinessProbe {
+  bool                      ping_ok_       = false;
+  bool                      model_info_ok_ = false;
+  std::string               ping_error_;
+  AiSidecarRuntimeModelInfo model_info_;
+  std::string               model_info_error_;
+};
+
+/// GetModelInfo makes the sidecar prepare the CLIP model profile (about 2 s), so a start that
+/// does not need the semantic model (AI Mask) does not ask for it.
+auto RunReadinessProbe(const std::shared_ptr<sidecar_client::Client>& client,
+                       std::chrono::milliseconds ping_timeout, bool require_model_info)
+    -> ReadinessProbe {
+  ReadinessProbe probe;
+  probe.ping_ok_ = client->semantic().Ping(ping_timeout, &probe.ping_error_);
+  if (probe.ping_ok_ && require_model_info) {
+    probe.model_info_ok_ = client->semantic().GetModelInfo(
+        std::chrono::milliseconds(500), &probe.model_info_, &probe.model_info_error_);
+  }
+  return probe;
+}
+
+/// Runs the event loop of the current thread for @p duration.
+void PumpEventsFor(std::chrono::milliseconds duration) {
+  QEventLoop loop;
+  QTimer::singleShot(duration, &loop, &QEventLoop::quit);
+  loop.exec();
+}
+
+/// Runs the readiness probe on a helper thread while the event loop of the current thread runs,
+/// so the blocking gRPC calls (up to ping_timeout + 500 ms while the process boots or loads the
+/// model) do not stop the UI. The helper holds its own reference to @p client.
+auto RunProbeWhilePumpingEvents(std::shared_ptr<sidecar_client::Client> client,
+                                std::chrono::milliseconds ping_timeout, bool require_model_info)
+    -> ReadinessProbe {
+  ReadinessProbe probe;
+  QEventLoop     loop;
+  std::thread    helper(
+      [&probe, &loop, client = std::move(client), ping_timeout, require_model_info]() {
+        probe = RunReadinessProbe(client, ping_timeout, require_model_info);
+        // Queued: the quit runs inside loop.exec(), even when the probe ends before exec starts.
+        QMetaObject::invokeMethod(&loop, &QEventLoop::quit, Qt::QueuedConnection);
+      });
+  loop.exec();
+  helper.join();
+  return probe;
+}
+
 }  // namespace
 
 auto ToString(AiSidecarRuntimeState state) -> const char* {
@@ -281,6 +345,20 @@ AiSidecarRuntimeService::AiSidecarRuntimeService(AiSidecarClientFactory client_f
                 process_.errorString().toStdString());
     }
   });
+  connect(&process_, &QProcess::finished, this, [this]() {
+    if (idle_stop_pending_) {
+      FinishIdleStop();
+    }
+  });
+
+  idle_stop_timer_.setSingleShot(true);
+  connect(&idle_stop_timer_, &QTimer::timeout, this, [this]() {
+    if (active_leases_ == 0 && IsRunning()) {
+      BeginIdleStop();
+    }
+  });
+  idle_stop_kill_timer_.setSingleShot(true);
+  connect(&idle_stop_kill_timer_, &QTimer::timeout, this, [this]() { OnIdleStopKillTimeout(); });
 }
 
 AiSidecarRuntimeService::~AiSidecarRuntimeService() { StopForProjectClose(); }
@@ -318,6 +396,26 @@ void AiSidecarRuntimeService::RequestCancelStart() { cancel_start_requested_.sto
 
 auto AiSidecarRuntimeService::StartAndWaitBody(const AiSidecarRuntimeOptions& options,
                                                bool interactive) -> bool {
+  // An idle stop has sent the terminate request; the process will not serve this start.
+  if (idle_stop_pending_ && !CompleteIdleStopBeforeStart()) {
+    return false;
+  }
+  if (IsRunning()) {
+    const auto requested_options = NormalizeRuntimeOptions(options);
+    // The process stays running between operations, so it can hold an older model. Restart it
+    // when no other operation holds a lease; with other leases the running process is reused
+    // and the caller reports a model mismatch.
+    if (active_leases_ <= 1 && ModelIdentityDiffers(requested_options)) {
+      qCInfo(diag::semanticLog).noquote()
+          << QStringLiteral("semantic.runtime.restart pid=%1 reason=model model_id=%2")
+                 .arg(status_.process_id)
+                 .arg(QString::fromStdString(requested_options.model_id));
+      Stop();
+      if (IsRunning()) {
+        return false;
+      }
+    }
+  }
   if (IsRunning()) {
     const auto requested_options = NormalizeRuntimeOptions(options);
     if (requested_options.require_model_info && !status_.model_info.has_value()) {
@@ -342,6 +440,9 @@ auto AiSidecarRuntimeService::StartAndWaitBody(const AiSidecarRuntimeOptions& op
   client_.reset();
   status_.stdout_tail.clear();
   status_.stderr_tail.clear();
+  stdout_partial_line_.clear();
+  stderr_partial_line_.clear();
+  stdout_line_level_ = SidecarLogLevel::kInfo;
   status_.model_info.reset();
   status_.remote_status.reset();
 
@@ -412,6 +513,7 @@ auto AiSidecarRuntimeService::AcquireLease() -> std::shared_ptr<void> {
   }
 
   ++active_leases_;
+  idle_stop_timer_.stop();
   QPointer<AiSidecarRuntimeService> self(this);
   return std::shared_ptr<void>(new int(0), [self](int* token) {
     delete token;
@@ -426,6 +528,12 @@ void AiSidecarRuntimeService::Stop() {
     QMetaObject::invokeMethod(this, [this]() { Stop(); }, Qt::BlockingQueuedConnection);
     return;
   }
+
+  // The blocking stop below replaces an idle stop that has not finished.
+  idle_stop_timer_.stop();
+  idle_stop_kill_timer_.stop();
+  idle_stop_pending_   = false;
+  idle_stop_kill_sent_ = false;
 
   if (!IsRunning()) {
     client_.reset();
@@ -474,9 +582,110 @@ void AiSidecarRuntimeService::ReleaseLease() {
   if (active_leases_ > 0) {
     --active_leases_;
   }
-  if (active_leases_ == 0 && IsRunning()) {
-    Stop();
+  if (active_leases_ != 0 || idle_stop_pending_ || !IsRunning()) {
+    return;
   }
+  if (idle_stop_delay_.count() == 0) {
+    Stop();
+  } else if (idle_stop_delay_.count() > 0) {
+    idle_stop_timer_.start(idle_stop_delay_);
+  }
+}
+
+void AiSidecarRuntimeService::SetIdleStopDelay(std::chrono::milliseconds delay) {
+  if (QThread::currentThread() != thread()) {
+    QMetaObject::invokeMethod(
+        this, [this, delay]() { SetIdleStopDelay(delay); }, Qt::BlockingQueuedConnection);
+    return;
+  }
+  idle_stop_delay_ = delay;
+  qCInfo(diag::semanticLog).noquote() << QStringLiteral("semantic.runtime.idle_stop_delay ms=%1")
+                                             .arg(static_cast<qlonglong>(delay.count()));
+  if (active_leases_ != 0 || idle_stop_pending_ || !IsRunning()) {
+    return;
+  }
+  if (delay.count() == 0) {
+    idle_stop_timer_.stop();
+    BeginIdleStop();
+  } else if (delay.count() > 0) {
+    idle_stop_timer_.start(delay);
+  } else {
+    idle_stop_timer_.stop();
+  }
+}
+
+void AiSidecarRuntimeService::BeginIdleStop() {
+  if (idle_stop_pending_ || !IsRunning()) {
+    return;
+  }
+  SetStatus(AiSidecarRuntimeState::kStopping, AiSidecarRuntimeIssue::kNone,
+            "Stopping idle semantic runtime");
+  qCInfo(diag::semanticLog).noquote()
+      << QStringLiteral("semantic.runtime.idle_stop pid=%1 endpoint=%2")
+             .arg(status_.process_id)
+             .arg(QString::fromStdString(endpoint_));
+  idle_stop_pending_   = true;
+  idle_stop_kill_sent_ = false;
+  process_.terminate();
+  idle_stop_kill_timer_.start(options_.graceful_stop_timeout);
+}
+
+void AiSidecarRuntimeService::OnIdleStopKillTimeout() {
+  if (!idle_stop_pending_) {
+    return;
+  }
+  if (process_.state() == QProcess::NotRunning) {
+    FinishIdleStop();
+    return;
+  }
+  if (!idle_stop_kill_sent_) {
+    idle_stop_kill_sent_ = true;
+    process_.kill();
+    idle_stop_kill_timer_.start(options_.kill_timeout);
+    return;
+  }
+  idle_stop_pending_   = false;
+  idle_stop_kill_sent_ = false;
+  SetStatus(AiSidecarRuntimeState::kFailed, AiSidecarRuntimeIssue::kStopTimedOut,
+            "Semantic runtime did not exit after kill request");
+}
+
+void AiSidecarRuntimeService::FinishIdleStop() {
+  idle_stop_kill_timer_.stop();
+  idle_stop_pending_   = false;
+  idle_stop_kill_sent_ = false;
+  ReadRemainingProcessOutput();
+  ReleaseChildTreeCleanup();
+  client_.reset();
+  status_.process_id = 0;
+  SetStatus(AiSidecarRuntimeState::kStopped, AiSidecarRuntimeIssue::kNone,
+            "Semantic runtime is stopped");
+}
+
+auto AiSidecarRuntimeService::CompleteIdleStopBeforeStart() -> bool {
+  idle_stop_kill_timer_.stop();
+  if (process_.state() != QProcess::NotRunning) {
+    process_.kill();
+    process_.waitForFinished(static_cast<int>(options_.kill_timeout.count()));
+  }
+  if (process_.state() != QProcess::NotRunning) {
+    idle_stop_pending_   = false;
+    idle_stop_kill_sent_ = false;
+    SetStatus(AiSidecarRuntimeState::kFailed, AiSidecarRuntimeIssue::kStopTimedOut,
+              "Semantic runtime did not exit after kill request");
+    return false;
+  }
+  // waitForFinished emits finished(), whose handler may already have finished the stop.
+  if (idle_stop_pending_) {
+    FinishIdleStop();
+  }
+  return true;
+}
+
+auto AiSidecarRuntimeService::ModelIdentityDiffers(const AiSidecarRuntimeOptions& requested) const
+    -> bool {
+  return requested.model_id != options_.model_id || requested.revision != options_.revision ||
+         ComparablePath(requested.model_root) != ComparablePath(options_.model_root);
 }
 
 auto AiSidecarRuntimeService::Status() -> AiSidecarRuntimeStatusSnapshot {
@@ -491,7 +700,7 @@ auto AiSidecarRuntimeService::Status() -> AiSidecarRuntimeStatusSnapshot {
   if (status_.state == AiSidecarRuntimeState::kReady && client_) {
     AiSidecarRuntimeRemoteStatus remote;
     std::string                  error;
-    if (client_->runtime().GetRuntimeStatus(std::chrono::milliseconds(250), &remote, &error)) {
+    if (client_->semantic().GetRuntimeStatus(std::chrono::milliseconds(250), &remote, &error)) {
       status_.remote_status = remote;
     }
   }
@@ -533,20 +742,71 @@ void AiSidecarRuntimeService::SetStatus(AiSidecarRuntimeState state, AiSidecarRu
 
 void AiSidecarRuntimeService::AppendStdout(const QByteArray& bytes) {
   TailAppend(&status_.stdout_tail, bytes);
-  const QString text = QString::fromUtf8(bytes).trimmed();
-  if (!text.isEmpty()) {
-    qCInfo(diag::semanticLog).noquote()
-        << QStringLiteral("semantic.runtime.stdout %1").arg(text.left(1000));
+  ForEachCompleteLine(&stdout_partial_line_, bytes,
+                      [this](QByteArrayView line) { WriteStdoutLine(line); });
+}
+
+auto AiSidecarRuntimeService::TracingLineLevel(QByteArrayView line)
+    -> std::optional<SidecarLogLevel> {
+  // The level is right-aligned to five characters, so one or two spaces follow the timestamp.
+  const auto is_space  = [](char c) { return c == ' ' || c == '\t'; };
+  qsizetype  pos       = 0;
+  const auto next_word = [&]() -> QByteArrayView {
+    while (pos < line.size() && is_space(line[pos])) {
+      ++pos;
+    }
+    const qsizetype begin = pos;
+    while (pos < line.size() && !is_space(line[pos])) {
+      ++pos;
+    }
+    return line.sliced(begin, pos - begin);
+  };
+  next_word();  // The timestamp.
+  const QByteArrayView level = next_word();
+  if (level == "ERROR") return SidecarLogLevel::kError;
+  if (level == "WARN") return SidecarLogLevel::kWarn;
+  if (level == "INFO") return SidecarLogLevel::kInfo;
+  if (level == "DEBUG") return SidecarLogLevel::kDebug;
+  if (level == "TRACE") return SidecarLogLevel::kTrace;
+  return std::nullopt;
+}
+
+void AiSidecarRuntimeService::WriteStdoutLine(QByteArrayView line) {
+  const QByteArrayView text = line.trimmed();
+  if (text.isEmpty()) {
+    return;
+  }
+  if (const auto level = TracingLineLevel(text)) {
+    stdout_line_level_ = *level;
+  }
+  switch (stdout_line_level_) {
+    case SidecarLogLevel::kWarn:
+      qCWarning(diag::semanticLog).noquote()
+          << QStringLiteral("semantic.runtime.stdout ") + QString::fromUtf8(text);
+      return;
+    case SidecarLogLevel::kError:
+      qCCritical(diag::semanticLog).noquote()
+          << QStringLiteral("semantic.runtime.stdout ") + QString::fromUtf8(text);
+      return;
+    case SidecarLogLevel::kTrace:
+    case SidecarLogLevel::kDebug:
+    case SidecarLogLevel::kInfo:
+      return;
   }
 }
 
 void AiSidecarRuntimeService::AppendStderr(const QByteArray& bytes) {
   TailAppend(&status_.stderr_tail, bytes);
-  const QString text = QString::fromUtf8(bytes).trimmed();
-  if (!text.isEmpty()) {
-    qCWarning(diag::semanticLog).noquote()
-        << QStringLiteral("semantic.runtime.stderr %1").arg(text.left(1000));
-  }
+  ForEachCompleteLine(&stderr_partial_line_, bytes, WriteStderrLine);
+}
+
+void AiSidecarRuntimeService::ReadRemainingProcessOutput() {
+  AppendStdout(process_.readAllStandardOutput());
+  AppendStderr(process_.readAllStandardError());
+  WriteStdoutLine(stdout_partial_line_);
+  stdout_partial_line_.clear();
+  WriteStderrLine(stderr_partial_line_);
+  stderr_partial_line_.clear();
 }
 
 void AiSidecarRuntimeService::RefreshProcessExit() {
@@ -554,6 +814,10 @@ void AiSidecarRuntimeService::RefreshProcessExit() {
     process_.waitForFinished(0);
   }
   if (process_.state() != QProcess::NotRunning) {
+    return;
+  }
+  if (idle_stop_pending_) {
+    FinishIdleStop();
     return;
   }
   if (status_.state != AiSidecarRuntimeState::kReady &&
@@ -564,8 +828,7 @@ void AiSidecarRuntimeService::RefreshProcessExit() {
 
   ReleaseChildTreeCleanup();
   client_.reset();
-  AppendStdout(process_.readAllStandardOutput());
-  AppendStderr(process_.readAllStandardError());
+  ReadRemainingProcessOutput();
   status_.process_id = 0;
   const bool crashed = process_.exitStatus() == QProcess::CrashExit || process_.exitCode() != 0;
   std::ostringstream message;
@@ -583,7 +846,9 @@ auto AiSidecarRuntimeService::BuildArguments() const -> QStringList {
   if (!options_.model_root.empty()) {
     args << "--model-root" << QString::fromStdString(options_.model_root.string());
   }
-  args << "--model-id" << QString::fromStdString(options_.model_id);
+  if (!options_.model_id.empty()) {
+    args << "--model-id" << QString::fromStdString(options_.model_id);
+  }
   if (!options_.revision.empty()) {
     args << "--revision" << QString::fromStdString(options_.revision);
   }
@@ -591,13 +856,26 @@ auto AiSidecarRuntimeService::BuildArguments() const -> QStringList {
     args << "--hf-endpoint" << QString::fromStdString(options_.hf_endpoint);
   }
   args << "--device" << QString::fromStdString(options_.device);
+  args << "--text-device" << QString::fromStdString(options_.text_device);
+  if (!options_.vision_device.empty()) {
+    args << "--vision-device" << QString::fromStdString(options_.vision_device);
+  }
+  // The idle stop delay is in milliseconds; a negative delay keeps the text encoder loaded.
+  const auto text_idle_unload = options_.text_idle_unload.value_or(
+      idle_stop_delay_.count() < 0
+          ? std::chrono::seconds(-1)
+          : std::chrono::duration_cast<std::chrono::seconds>(idle_stop_delay_));
+  args << "--text-idle-unload-seconds" << QString::number(text_idle_unload.count());
+  args << "--vision-idle-unload-seconds" << QString::number(options_.vision_idle_unload.count());
   args << (options_.allow_download ? "--allow-download" : "--no-download");
   args << "--batch-cap" << QString::number(options_.batch_cap);
   args << "--batch-wait-ms" << QString::number(options_.batch_wait_ms);
   args << "--max-message-bytes" << QString::number(options_.max_message_bytes);
-  if (!options_.provider_config_dir.empty()) {
-    args << "--provider-config-dir"
-         << QString::fromStdString(options_.provider_config_dir.string());
+  // The sidecar log of this session, next to the application log. Without an open application
+  // log the sidecar writes to stderr only.
+  const QString log_file = diag::CompanionLogFilePath(QStringLiteral("mind"));
+  if (!log_file.isEmpty()) {
+    args << "--log-file" << log_file;
   }
   for (const auto& arg : options_.extra_arguments) {
     args << QString::fromStdString(arg);
@@ -620,15 +898,38 @@ auto AiSidecarRuntimeService::WaitForReadiness(bool terminate_on_timeout, bool i
   const auto  deadline = std::chrono::steady_clock::now() + options_.startup_timeout;
   std::string last_error;
   while (std::chrono::steady_clock::now() < deadline) {
-    process_.waitForReadyRead(static_cast<int>(options_.health_poll_interval.count()));
+    if (interactive) {
+      // The event loop runs during the poll interval, so the process pipes drain through
+      // their notifiers and the UI keeps painting.
+      PumpEventsFor(options_.health_poll_interval);
+    } else {
+      process_.waitForReadyRead(static_cast<int>(options_.health_poll_interval.count()));
+    }
     RefreshProcessExit();
     if (status_.state == AiSidecarRuntimeState::kFailed) {
       return false;
     }
-    if (client_ && client_->runtime().Ping(options_.health_poll_interval, &last_error)) {
-      AiSidecarRuntimeModelInfo info;
-      std::string               info_error;
-      if (client_->semantic().GetModelInfo(std::chrono::milliseconds(500), &info, &info_error)) {
+    if (interactive && process_.state() == QProcess::NotRunning) {
+      // A Stop() ran from the event loop above.
+      return false;
+    }
+    ReadinessProbe probe;
+    if (client_) {
+      probe = interactive ? RunProbeWhilePumpingEvents(client_, options_.health_poll_interval,
+                                                       options_.require_model_info)
+                          : RunReadinessProbe(client_, options_.health_poll_interval,
+                                              options_.require_model_info);
+      if (interactive && process_.state() == QProcess::NotRunning) {
+        return false;
+      }
+      if (!probe.ping_ok_) {
+        last_error = probe.ping_error_;
+      }
+    }
+    if (probe.ping_ok_) {
+      const auto& info       = probe.model_info_;
+      const auto& info_error = probe.model_info_error_;
+      if (probe.model_info_ok_) {
         status_.model_info = info;
         SetStatus(AiSidecarRuntimeState::kReady, AiSidecarRuntimeIssue::kNone,
                   "Semantic runtime is ready");
@@ -668,13 +969,6 @@ auto AiSidecarRuntimeService::WaitForReadiness(bool terminate_on_timeout, bool i
                   "Semantic runtime start was cancelled");
         return false;
       }
-      // Pump the UI event loop between polls so the app stays responsive during
-      // a cold boot. Socket notifiers are excluded so the QProcess's own pipe
-      // readers don't race with this thread's blocking waitForReadyRead path
-      // (the readiness poll drains stdout/stderr itself via RefreshProcessExit).
-      // The 16ms budget is roughly one frame — enough to clear paints, timers,
-      // and a queued user input event each iteration without stalling the poll.
-      QCoreApplication::processEvents(QEventLoop::ExcludeSocketNotifiers, 16);
     } else {
       std::this_thread::sleep_for(options_.health_poll_interval);
     }

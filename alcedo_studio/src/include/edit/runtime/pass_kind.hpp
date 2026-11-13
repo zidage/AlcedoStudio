@@ -1,0 +1,79 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <cstdint>
+
+namespace alcedo {
+
+/**
+ * @brief Backend work items produced by GraphCompiler. Not serialized.
+ *
+ * CUDA full-frame Develop order is Linearize, optional CFA clamp, Demosaic,
+ * then HighlightRecover on RGB. That matches ProcessCudaFullFrame, not the CPU
+ * Linearize → HLR → Debayer path.
+ */
+enum class GpuPassKind : std::uint8_t {
+  UploadRaw         = 0,
+  UploadRgb         = 1,
+  Linearize         = 2,
+  CfaClamp          = 3,
+  Demosaic          = 4,
+  HighlightRecover  = 5,
+  InverseCamMulPack = 6,
+  Lens              = 7,
+  GeometryResample  = 8,
+  CameraToAp1       = 9,
+  MaskEvaluate      = 10,
+  PrimaryColorGrade = 12,
+  Drt               = 13,
+  MaskUnion         = 14,
+  /// Decodes the last ACEScc scene value to linear AP1 before the DRT. Applies the diffusion
+  /// filter when its strength is not 0. Present in every plan; DRT reads linear AP1 only.
+  DiffusionFilter   = 15,
+  /// Raster input: ACES 2.0 inverse (display-referred) or matrix (scene-linear) to ACEScc AP1.
+  /// Takes the slot of CameraToAp1 and writes develop_output.
+  DisplayToAp1      = 16,
+};
+
+[[nodiscard]] inline auto GpuPassKindName(GpuPassKind kind) -> const char* {
+  switch (kind) {
+    case GpuPassKind::UploadRaw:
+      return "UploadRaw";
+    case GpuPassKind::UploadRgb:
+      return "UploadRgb";
+    case GpuPassKind::Linearize:
+      return "Linearize";
+    case GpuPassKind::CfaClamp:
+      return "CfaClamp";
+    case GpuPassKind::Demosaic:
+      return "Demosaic";
+    case GpuPassKind::HighlightRecover:
+      return "HighlightRecover";
+    case GpuPassKind::InverseCamMulPack:
+      return "InverseCamMulPack";
+    case GpuPassKind::Lens:
+      return "Lens";
+    case GpuPassKind::GeometryResample:
+      return "GeometryResample";
+    case GpuPassKind::CameraToAp1:
+      return "CameraToAp1";
+    case GpuPassKind::MaskEvaluate:
+      return "MaskEvaluate";
+    case GpuPassKind::PrimaryColorGrade:
+      return "PrimaryColorGrade";
+    case GpuPassKind::Drt:
+      return "Drt";
+    case GpuPassKind::MaskUnion:
+      return "MaskUnion";
+    case GpuPassKind::DiffusionFilter:
+      return "DiffusionFilter";
+    case GpuPassKind::DisplayToAp1:
+      return "DisplayToAp1";
+  }
+  return "Unknown";
+}
+
+}  // namespace alcedo

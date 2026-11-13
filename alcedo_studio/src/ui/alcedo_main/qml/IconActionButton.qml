@@ -40,6 +40,7 @@ Item {
     // remaining keyboard reachable through activeFocusOnTab.
     property bool focusOnPointerPress: true
     property string actionName: ""
+    property string toolTipText: actionName
     property url iconSrc: ""
     // Optional palette overrides when the parent shell uses a local theme mirror.
     property color iconColorDefault: appTheme.iconColor
@@ -53,7 +54,8 @@ Item {
     property color fillHover: appTheme.buttonHoveredFillColor
     property color fillPressed: appTheme.buttonPressedFillColor
     property color fillSelected: appTheme.buttonSelectedFillColor
-    property color focusRingColor: appTheme.accentColor
+    // Keyboard focus without selection: a quiet neutral ring (DESIGN.md), never the accent.
+    property color focusRingColor: appTheme.textMutedColor
 
     readonly property int hitSize: compact
                                    ? appTheme.iconButtonHitSizeCompact
@@ -224,7 +226,7 @@ Item {
         onClicked: control.clicked()
     }
 
-    ToolTip.visible: (hover.hovered || pressArea.containsMouse) && control.actionName.length > 0
-    ToolTip.text: control.actionName
+    ToolTip.visible: (hover.hovered || pressArea.containsMouse) && control.toolTipText.length > 0
+    ToolTip.text: control.toolTipText
     ToolTip.delay: 400
 }

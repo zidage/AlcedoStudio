@@ -2,22 +2,19 @@ import QtQuick
 import QtQml
 
 // Centralized shell signal routing extracted from Main.qml: language reload,
-// image-analysis completion, project open/close, folder switch, library
-// thumbnail refresh, and import/export session transitions. The import/export
-// session bookkeeping (importSessionObserved / exportSessionObserved /
-// lastObservedExportCompleted) lives here. `host` is Main; the controllers,
-// state objects, and dialogs are passed in as properties.
+// project open/close, folder switch, and
+// import/export session transitions. The import session bookkeeping
+// (importSessionObserved) lives here. The export queue (appModules.exportQueue)
+// clears itself on a project change and removes the finished entries itself. `host` is Main; the controllers, state objects, and
+// dialogs are passed in as properties.
 Item {
     id: root
     property var host: null
     property var imageActionsController: null
     property var selectionState: null
-    property var exportQueueState: null
     property var deleteConfirmDialog: null
 
     property bool importSessionObserved: false
-    property bool exportSessionObserved: false
-    property int lastObservedExportCompleted: 0
 
     Connections {
         target: languageManager
@@ -29,31 +26,14 @@ Item {
     }
 
     Connections {
-        target: appModules.imageAnalysis
-        ignoreUnknownSignals: true
-        function onStateChanged() {
-            if (!appModules.imageAnalysis.running
-                    && root.imageActionsController
-                    && root.imageActionsController.analysisResultTouchesFocusedImage()) {
-                root.imageActionsController.refreshFocusedImageInspection()
-            }
-        }
-    }
-
-    Connections {
         target: appModules.project
         ignoreUnknownSignals: true
         function onProjectChanged() {
             if (root.host) {
-                root.host.projectLaunchPending = false
-                root.host.welcomeDismissedForLaunch = false
                 root.host.updateWelcomeDialogVisibility()
             }
             if (root.selectionState) {
                 root.selectionState.clearSelectedImages()
-            }
-            if (root.exportQueueState) {
-                root.exportQueueState.clearQueue()
             }
             if (root.host) {
                 root.host.pendingDeleteTargets = []
@@ -67,20 +47,18 @@ Item {
                 root.host.showSnackbar(appModules.project.serviceMessage)
             }
         }
-        function onServiceStateChanged() {
+        // The welcome visibility rule reads projectEntered and the launch state
+        // (ProjectLaunchController), not serviceReady or projectLoading.
+        function onProjectEnteredChanged() {
             if (root.host) {
                 root.host.updateWelcomeDialogVisibility()
             }
         }
-        function onProjectLoadStateChanged() {
-            if (root.host) {
-                root.host.projectLaunchPending = false
-            }
-            if (!appModules.project.projectLoading && root.host) {
-                root.host.welcomeDismissedForLaunch = false
-            }
-            if (root.host) {
-                root.host.updateWelcomeDialogVisibility()
+        // acceleratorPreparing NOTIFY AcceleratorPreparationStateChanged. A handler for that
+        // signal itself does not run (upper-case name).
+        function onAcceleratorPreparingChanged() {
+            if (root.host && !appModules.project.acceleratorPreparing) {
+                root.host.requestStartupPreview()
             }
         }
     }
@@ -112,37 +90,10 @@ Item {
         }
     }
 
-    Connections {
-        target: appModules.stats
-        ignoreUnknownSignals: true
-        function onStatsFilterChanged() {
-            if (root.imageActionsController
-                    && root.imageActionsController.requestEditorLibraryListSync) {
-                root.imageActionsController.requestEditorLibraryListSync()
-            }
-        }
-    }
-
-    Connections {
-        target: appModules.search
-        ignoreUnknownSignals: true
-        function onSearchStateChanged() {
-            if (root.imageActionsController
-                    && root.imageActionsController.requestEditorLibraryListSync) {
-                root.imageActionsController.requestEditorLibraryListSync()
-            }
-        }
-    }
-
-    Connections {
-        target: appModules.library
-        ignoreUnknownSignals: true
-        function onThumbnailsChanged() {
-            if (root.exportQueueState && root.exportQueueState.exportQueueCount > 0) {
-                root.exportQueueState.refreshExportPreview()
-            }
-        }
-    }
+    // Stats filter and search changes reach the editor through the accepted
+    // library result (ImageActionsController, LibraryModule.queryUpdating).
+    // StatsFilterChanged and SearchStateChanged start with an upper-case
+    // letter, so a QML handler for them does not run.
 
     Connections {
         target: appModules.importExport
@@ -160,27 +111,9 @@ Item {
                 root.host.showSnackbar(qsTr("Imported %1 image(s).").arg(appModules.importExport.importCompleted))
             }
         }
-        function onExportStateChanged() {
-            if (appModules.importExport.exportInFlight) {
-                root.exportSessionObserved = true
-                if (appModules.importExport.exportCompleted > root.lastObservedExportCompleted) {
-                    if (root.exportQueueState) {
-                        root.exportQueueState.pruneCompleted(appModules.importExport.exportItemStatuses)
-                    }
-                    root.lastObservedExportCompleted = appModules.importExport.exportCompleted
-                }
-                return
-            }
-            if (root.exportQueueState) {
-                root.exportQueueState.pruneCompleted(appModules.importExport.exportItemStatuses)
-            }
-            root.lastObservedExportCompleted = 0
-            if (!root.exportSessionObserved) {
-                return
-            }
-            root.exportSessionObserved = false
+        function onExportFinished(succeeded, failed, skipped) {
             if (root.host) {
-                root.host.showSnackbar(qsTr("Exported %1 image(s).").arg(appModules.importExport.exportSucceeded))
+                root.host.showSnackbar(qsTr("Exported %1 image(s).").arg(succeeded))
             }
         }
     }

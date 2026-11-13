@@ -12,12 +12,13 @@ Item {
 
     property var theme: null
     property var editorSession: null
+    // Enables the plot mode switch only. The scopes show data, so they also
+    // run while an agent holds control and the edit controls are disabled.
     property bool controlsEnabled: true
     readonly property var scopeController: editorSession ? editorSession.scopeController : null
     readonly property bool visualActive: root.visible
                                          && !!root.editorSession
                                          && !!root.editorSession.hasImage
-                                         && root.controlsEnabled
     readonly property bool hasSnapshot: root.scopeController
                                         ? root.scopeController.hasSnapshot
                                         : false
@@ -39,6 +40,7 @@ Item {
     readonly property color colHistogramBlue: theme
                                                 ? theme.colScopeHistogramBlue
                                                 : appTheme.scopeHistogramBlueColor
+    readonly property color colMarker: theme ? theme.colScopeMarker : appTheme.scopeMarkerColor
 
     implicitHeight: appTheme.editorScopeHeight
     Layout.fillWidth: true
@@ -103,34 +105,20 @@ Item {
             color: root.colBase
             clip: true
 
-            Rectangle {
-                objectName: "editorScopePlotTopRule"
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                height: 1
-                color: root.colPlotBorder
-                Accessible.ignored: true
-            }
-
-            Rectangle {
-                objectName: "editorScopePlotBottomRule"
-                anchors.bottom: parent.bottom
-                anchors.left: parent.left
-                anchors.right: parent.right
-                height: 1
-                color: root.colPlotBorder
-                Accessible.ignored: true
-            }
-
+            // The plot item paints a square opaque surface. Its margin keeps
+            // the corners inside the rounded well; plotPadding adds the rest
+            // of the inset, so the plot sits spaceSm inside the well.
             EditorScopeItem {
                 id: scopePlot
                 objectName: "editorScopePlot"
                 anchors.fill: parent
+                anchors.margins: appTheme.spaceXs
+                plotPadding: appTheme.spaceSm - appTheme.spaceXs
                 controller: root.scopeController
                 backgroundColor: root.colBase
                 gridColor: root.colGrid
                 borderColor: root.colPlotBorder
+                markerColor: root.colMarker
                 histogramRedColor: root.colHistogramRed
                 histogramGreenColor: root.colHistogramGreen
                 histogramBlueColor: root.colHistogramBlue

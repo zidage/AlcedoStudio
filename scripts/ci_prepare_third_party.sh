@@ -36,10 +36,12 @@ download_file() {
   curl -fsSL "${url}" -o "${dest}"
 }
 
-clone_if_missing \
-  "alcedo_studio/src/third_party/lensfun" \
-  "CMakeLists.txt" \
-  "https://github.com/lensfun/lensfun.git"
+# Pin is the superproject gitlink. The build compiles the library from this checkout. The
+# packaged database is the copy of its data/db in alcedo_studio/src/config/lens_calib.
+if [[ ! -e "alcedo_studio/src/third_party/lensfun/CMakeLists.txt" ]]; then
+  git submodule sync -- "alcedo_studio/src/third_party/lensfun"
+  git submodule update --init --depth 1 "alcedo_studio/src/third_party/lensfun"
+fi
 
 if [[ ! -e "alcedo_studio/src/third_party/libultrahdr/third_party/image_io/includes/image_io/base/data_segment_data_source.h" ]]; then
   git submodule sync -- "alcedo_studio/src/third_party/libultrahdr"
@@ -49,6 +51,14 @@ fi
 if [[ ! -e "alcedo_studio/src/third_party/libraw/libraw/libraw.h" ]]; then
   git submodule sync -- "alcedo_studio/src/third_party/libraw"
   git submodule update --init --recursive --depth 1 "alcedo_studio/src/third_party/libraw"
+fi
+
+# Pin is the superproject gitlink (tag 2.50). Do not clone HEAD and do not
+# --recursive: this checkout has no nested submodules.
+if [[ ! -e "alcedo_studio/src/third_party/QuickQanava/src/CMakeLists.txt" ]] \
+  || [[ ! -e "alcedo_studio/src/third_party/QuickQanava/licence.txt" ]]; then
+  git submodule sync -- "alcedo_studio/src/third_party/QuickQanava"
+  git submodule update --init --depth 1 "alcedo_studio/src/third_party/QuickQanava"
 fi
 
 # The CI preset forces PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF=ON, so gRPC and protobuf

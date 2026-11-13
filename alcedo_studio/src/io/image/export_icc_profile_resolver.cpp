@@ -85,6 +85,8 @@ auto ResolveConfigProfileFileName(const ExportColorProfileConfig& config) -> std
           return "rec709_bt1886.icc";
         case EOTF::GAMMA_2_2:
           return "rec709_gamma22.icc";
+        case EOTF::SRGB_PIECEWISE:
+          return "srgb_piecewise.icc";
         default:
           return {};
       }
@@ -94,6 +96,8 @@ auto ResolveConfigProfileFileName(const ExportColorProfileConfig& config) -> std
           return "p3_d65_gamma22.icc";
         case EOTF::ST2084:
           return "p3_d65_pq.icc";
+        case EOTF::SRGB_PIECEWISE:
+          return "upstream_displayp3_compat_v4.icc";
         default:
           return {};
       }
@@ -120,10 +124,19 @@ auto ResolveConfigProfileFileName(const ExportColorProfileConfig& config) -> std
 auto ResolveConfigSearchRoots() -> std::vector<std::filesystem::path> {
   std::vector<std::filesystem::path> roots;
 
+  // A packaged ICC directory next to the executable is authoritative: a profile missing from it
+  // must not be silently read from the build machine's source checkout.
   const auto exe_dir = GetExecutableDir();
   if (!exe_dir.empty()) {
-    roots.emplace_back(exe_dir / "config" / "icc");
-    roots.emplace_back(exe_dir / "icc");
+    for (const auto& packaged_root : {exe_dir / "config" / "icc", exe_dir / "icc"}) {
+      std::error_code ec;
+      if (std::filesystem::is_directory(packaged_root, ec) && !ec) {
+        roots.emplace_back(packaged_root);
+      }
+    }
+    if (!roots.empty()) {
+      return roots;
+    }
   }
 
 #ifdef CONFIG_PATH
@@ -154,6 +167,12 @@ auto ResolveLinearAppleColorSpace(ColorUtils::ColorSpace encoding_space) -> CFSt
   }
 }
 
+// A CoreGraphics named color space is used only when its primaries, white point and transfer curve
+// equal the encoding of the exported pixels. CoreGraphics has no named color space for a pure power
+// curve on Rec.709 or P3-D65 primaries (kCGColorSpaceITUR_709 carries the BT.709 camera curve and
+// kCGColorSpaceDisplayP3 the sRGB curve), none with the P3-D60 white point, and
+// kCGColorSpaceGenericXYZ is a linear XYZ profile. Those encodings return nullptr and use the
+// bundled profile.
 auto ResolveAppleColorSpace(const ExportColorProfileConfig& config) -> CFStringRef {
   if (config.encoding_eotf == ColorUtils::EOTF::LINEAR) {
     return ResolveLinearAppleColorSpace(config.encoding_space);
@@ -166,9 +185,8 @@ auto ResolveAppleColorSpace(const ExportColorProfileConfig& config) -> CFStringR
           return kCGColorSpaceITUR_709_PQ;
         case ColorUtils::EOTF::HLG:
           return kCGColorSpaceITUR_709_HLG;
-        case ColorUtils::EOTF::BT1886:
-        case ColorUtils::EOTF::GAMMA_2_2:
-          return kCGColorSpaceITUR_709;
+        case ColorUtils::EOTF::SRGB_PIECEWISE:
+          return kCGColorSpaceSRGB;
         default:
           return nullptr;
       }
@@ -178,14 +196,11 @@ auto ResolveAppleColorSpace(const ExportColorProfileConfig& config) -> CFStringR
           return kCGColorSpaceDisplayP3_PQ;
         case ColorUtils::EOTF::HLG:
           return kCGColorSpaceDisplayP3_HLG;
-        case ColorUtils::EOTF::GAMMA_2_2:
+        case ColorUtils::EOTF::SRGB_PIECEWISE:
           return kCGColorSpaceDisplayP3;
         default:
           return nullptr;
       }
-    case ColorUtils::ColorSpace::P3_D60:
-      return config.encoding_eotf == ColorUtils::EOTF::GAMMA_2_6 ? kCGColorSpaceDisplayP3
-                                                                  : nullptr;
     case ColorUtils::ColorSpace::P3_DCI:
       return config.encoding_eotf == ColorUtils::EOTF::GAMMA_2_6 ? kCGColorSpaceDCIP3 : nullptr;
     case ColorUtils::ColorSpace::REC2020:
@@ -197,9 +212,6 @@ auto ResolveAppleColorSpace(const ExportColorProfileConfig& config) -> CFStringR
         default:
           return nullptr;
       }
-    case ColorUtils::ColorSpace::XYZ:
-      return config.encoding_eotf == ColorUtils::EOTF::GAMMA_2_6 ? kCGColorSpaceGenericXYZ
-                                                                  : nullptr;
     default:
       return nullptr;
   }

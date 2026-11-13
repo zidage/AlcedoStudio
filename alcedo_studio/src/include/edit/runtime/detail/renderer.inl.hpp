@@ -1,0 +1,353 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <utility>
+
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/runtime/develop_demosaic.hpp"
+#include "edit/runtime/drt_display.hpp"
+#include "edit/runtime/frame_presenter.hpp"
+#include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/mask_coverage_probe_record.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
+#include "edit/runtime/renderer.hpp"
+#include "edit/runtime/result_persistence.hpp"
+#include "gpu/transient_allocation_policy.hpp"
+#include "image/image_buffer.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
+#include "utils/logging/log.hpp"
+
+namespace alcedo {
+namespace detail {
+
+/// ROI geometry of one GPU DAG render, at Debug level in alcedo.render.roi. Release builds compile
+/// it out; Debug builds write it when QT_LOGGING_RULES enables alcedo.render.roi.debug.
+template <class Backend>
+void TraceGpuDagGeometry(const ExecutionPlan& plan, const RenderRequest& request,
+                         const FrameCompletionSubmission& submission) {
+  const auto& view     = request.view.visible_rect_in_edit_space;
+  const auto& geometry = plan.geometry;
+  ALCEDO_LOG_DEBUG(RenderRoi)
+      << "gpu-dag-geometry backend=" << Backend::kName
+      << " request=" << submission.metadata.presentation_request_id
+      << " role=" << static_cast<int>(submission.metadata.frame_role)
+      << " mode=" << static_cast<int>(submission.mode)
+      << " decoded=" << geometry.decoded_extent.width << "x" << geometry.decoded_extent.height
+      << " full_ref=" << geometry.full_reference_extent.width << "x"
+      << geometry.full_reference_extent.height << " edit=" << geometry.edit_extent.width << "x"
+      << geometry.edit_extent.height << " roi=" << view.x << "," << view.y << "," << view.w << ","
+      << view.h << " native_roi=" << static_cast<float>(geometry.edit_extent.width) * view.w << "x"
+      << static_cast<float>(geometry.edit_extent.height) * view.h
+      << " viewport_target=" << request.view.viewport_extent.width << "x"
+      << request.view.viewport_extent.height << " max_edge=" << request.resolution.max_edge
+      << " render=" << geometry.render_extent.width << "x" << geometry.render_extent.height
+      << " filter=" << static_cast<int>(geometry.filter) << " viewer_nearest_expand="
+      << (!view.IsFullFrame() &&
+                  (request.view.viewport_extent.width > geometry.render_extent.width ||
+                   request.view.viewport_extent.height > geometry.render_extent.height)
+              ? 1
+              : 0)
+      << " required_decoded=" << geometry.required_decoded_region.x << ","
+      << geometry.required_decoded_region.y << "," << geometry.required_decoded_region.width << ","
+      << geometry.required_decoded_region.height;
+}
+
+}  // namespace detail
+
+template <class Backend>
+auto Renderer<Backend>::Render(const PipelineGraphSnapshot&        snapshot,
+                               const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
+                               const RenderRequest& request, IFrameSink* sink,
+                               const FrameCompletionSubmission& submission,
+                               bool require_host_output,
+                               const std::optional<ExportColorProfileConfig>& output_color)
+    -> std::shared_ptr<ImageBuffer> {
+  PipelineApplyRequest apply;
+  apply.geometry            = request;
+  apply.decode_res          = decode_res;
+  apply.role                = role_;
+  apply.require_host_output = require_host_output;
+  apply.sink                = sink;
+  apply.submission          = submission;
+  apply.output_color        = output_color;
+  return Render(snapshot, input, apply);
+}
+
+template <class Backend>
+auto Renderer<Backend>::Render(const PipelineGraphSnapshot&        snapshot,
+                               const std::shared_ptr<ImageBuffer>& input,
+                               const PipelineApplyRequest&         request)
+    -> std::shared_ptr<ImageBuffer> {
+  return RenderImage(snapshot, input, request).pixels;
+}
+
+template <class Backend>
+auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot,
+                                    const std::shared_ptr<ImageBuffer>& input,
+                                    const PipelineApplyRequest& request) -> RenderedPipelineImage {
+  if (request.role != role_) {
+    throw std::invalid_argument("Renderer: request role does not match the renderer role");
+  }
+  const bool interactive = role_ == ExecutorRole::Interactive;
+  if (request.prepared_input) {
+    if (interactive) {
+      throw std::invalid_argument("Renderer: an interactive render takes encoded bytes only");
+    }
+    // PNG, TIFF and OpenEXR decode at full size at every decode resolution, and
+    // GeometryResample scales them on the device; only scaled decodes must match the request.
+    const auto& prepared_input   = *request.prepared_input;
+    const bool  full_size_raster = prepared_input.input_kind == RawInputKind::RasterRgb &&
+                                  prepared_input.downsample_passes == 0;
+    if (!full_size_raster &&
+        prepared_input.downsample_passes != DecodeResToDownsamplePasses(request.decode_res)) {
+      throw std::invalid_argument("Renderer: prepared input does not match the decode resolution");
+    }
+  } else if (!input || !input->buffer_valid_) {
+    throw std::runtime_error("Renderer: product path requires encoded image bytes");
+  }
+  if (request.mask_coverage_probe.has_value()) {
+    if (!interactive || request.sink == nullptr || request.mask_coverage_sink == nullptr) {
+      throw std::invalid_argument(
+          "Renderer: a Mask coverage probe needs an interactive render with a frame sink and a "
+          "coverage sink");
+    }
+  }
+  if (interactive) {
+    const auto key = RenderBindingKey::Of(snapshot);
+    if (binding_.has_value() && *binding_ != key) {
+      ReleaseBinding();
+    }
+    binding_ = key;
+  }
+  const PipelineDocument& document = snapshot.Document();
+
+  // Encoded bytes; empty when the request carries a prepared input.
+  std::span<const std::byte> encoded_bytes;
+  if (input && input->buffer_valid_) {
+    auto& encoded = input->GetBuffer();
+    encoded_bytes = std::span<const std::byte>{reinterpret_cast<const std::byte*>(encoded.data()),
+                                               encoded.size()};
+  }
+  EnsureDevice();
+
+  std::optional<PreparedSourceCache::Lease> prepared_lease;
+  std::shared_ptr<const PreparedRawInput>   batch_prepared;
+  ExecutionPlan                             plan;
+  RenderDevice* const                       render_device = device_.get();
+  struct BoundPreviewRequest {
+    explicit BoundPreviewRequest(std::uint64_t request_id) {
+      diag::PreviewPerformance::BindCurrentRequest(request_id);
+    }
+    ~BoundPreviewRequest() { diag::PreviewPerformance::ClearCurrentRequest(); }
+  };
+  BoundPreviewRequest bound_request(request.submission.metadata.presentation_request_id);
+  if (interactive) {
+    prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
+    plan = plan_cache_.GetOrCompile(document, prepared_lease->Get().CompileSource());
+  } else {
+    batch_prepared = request.prepared_input
+                         ? request.prepared_input
+                         : std::make_shared<const PreparedRawInput>(
+                               unpack_(encoded_bytes, request.decode_res));
+    diag::PreviewCpuInterval compile(diag::PreviewCpuStage::PlanCompile);
+    plan = GraphCompiler::CompileStatic(document, batch_prepared->CompileSource(),
+                                        Backend::kCapabilityVersion);
+  }
+  GraphCompiler::BindFrameGeometry(plan, document, request.geometry);
+  plan.output_color_override = request.output_color;
+  if (diag::PreviewPerformanceEnabled()) {
+    diag::PreviewPerformance::NoteRenderExtent(plan.geometry.render_extent.width,
+                                               plan.geometry.render_extent.height);
+  }
+  detail::TraceGpuDagGeometry<Backend>(plan, request.geometry, request.submission);
+  const auto& prepared = interactive ? prepared_lease->Get() : *batch_prepared;
+  const auto  persistence =
+      interactive ? ResultPersistenceScopeForRole(request.submission.metadata.frame_role)
+                  : ResultPersistenceScope::AllCurrentResults;
+  if (diag::PreviewPerformanceEnabled()) {
+    diag::PreviewDevelopDecodeParams develop;
+    switch (request.decode_res) {
+      case DecodeRes::HALF:
+        develop.decode_res = diag::PreviewDecodeRes::Half;
+        break;
+      case DecodeRes::QUARTER:
+        develop.decode_res = diag::PreviewDecodeRes::Quarter;
+        break;
+      case DecodeRes::EIGHTH:
+        develop.decode_res = diag::PreviewDecodeRes::Eighth;
+        break;
+      case DecodeRes::FULL:
+      default:
+        develop.decode_res = diag::PreviewDecodeRes::Full;
+        break;
+    }
+    switch (prepared.CompileSource().kind) {
+      case DevelopInputKind::XTransCfa:
+        develop.cfa = diag::PreviewCfaKind::XTrans;
+        break;
+      case DevelopInputKind::DirectRgb:
+      case DevelopInputKind::Raster:
+        develop.cfa        = diag::PreviewCfaKind::DirectRgb;
+        develop.upload_rgb = true;
+        develop.layout     = diag::PreviewDevelopLayout::UploadRgb;
+        break;
+      case DevelopInputKind::BayerCfa:
+      default:
+        develop.cfa = diag::PreviewCfaKind::Bayer;
+        break;
+    }
+    const auto* develop_node = document.Develop();
+    const auto  method       = develop_node == nullptr
+                                   ? RawDemosaicMethod::Legacy
+                                   : ResolveDevelopDemosaicMethod(develop_node->Params().Params(),
+                                                                  prepared.CompileSource());
+    develop.demosaic         = method == RawDemosaicMethod::NeuralEngine
+                                   ? diag::PreviewDemosaicMethod::NeuralEngine
+                                   : diag::PreviewDemosaicMethod::Legacy;
+    develop.highlights_reconstruct =
+        develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
+    develop.downsample_passes = prepared.downsample_passes;
+    develop.host_width        = prepared.host_extent.width;
+    develop.host_height       = prepared.host_extent.height;
+    develop.develop_width     = plan.source.develop_output_extent.width;
+    develop.develop_height    = plan.source.develop_output_extent.height;
+    develop.full_ref_width    = plan.source.full_reference_extent.width;
+    develop.full_ref_height   = plan.source.full_reference_extent.height;
+    diag::PreviewPerformance::NoteDevelopDecode(develop);
+  }
+  const auto release_batch_resources = [&]() {
+    if (interactive) {
+      return;
+    }
+    render_device->Workspace().Images().DiscardUnpublished();
+    render_device->WaitIdle();
+    render_device->Workspace().ReleaseSessionResources();
+    render_device->ReleaseNeuralDemosaicWorkspace();
+  };
+  // A batch task is one binding: it releases every result resource after a failure too.
+  // The release must not replace the render error, so a release error is not reported.
+  const auto release_batch_resources_after_failure = [&]() noexcept {
+    try {
+      release_batch_resources();
+    } catch (...) {
+    }
+  };
+
+  std::optional<MaskCoverageProbeRecord<Backend>> probe;
+  if (request.mask_coverage_probe.has_value()) {
+    probe.emplace(MaskCoverageProbeRecord<Backend>{*request.mask_coverage_probe});
+  }
+  GraphValueId output_id;
+  try {
+    diag::PreviewCpuInterval encode(diag::PreviewCpuStage::Encode);
+    output_id = render_device->Execute(plan, prepared, document, false,
+                                       interactive ? TransientAllocationPolicy::SessionPacked
+                                                   : TransientAllocationPolicy::ExactRelease,
+                                       persistence, probe.has_value() ? &*probe : nullptr);
+  } catch (...) {
+    // PlanExecutor has already cancelled the render and reported the error.
+    release_batch_resources_after_failure();
+    throw;
+  }
+  if (diag::PreviewPerformanceEnabled()) {
+    diag::PreviewPerformance::NoteResourceSnapshot(
+        render_device->Workspace().CaptureResourceSnapshot());
+  }
+
+  ViewerDisplayConfig display_config{};
+  if (request.output_color.has_value()) {
+    display_config.encoding_space = request.output_color->encoding_space;
+    display_config.encoding_eotf  = request.output_color->encoding_eotf;
+    display_config.peak_luminance = request.output_color->peak_luminance;
+  } else if (const auto* drt = document.Drt()) {
+    display_config = ViewerDisplayConfigFromDrt(drt->Params().Params());
+  }
+
+  const auto finish_successful_session = [&]() {
+    if (!interactive) {
+      release_batch_resources();
+      return;
+    }
+    render_device->PublishResults();
+    render_device->Workspace().ResultInvalidation().CompleteMatchingImages(
+        render_device->Workspace().Images());
+    if (persistence != ResultPersistenceScope::SensorDevelopOnly) {
+      return;
+    }
+    render_device->WaitIdle();
+    if (request.sink == nullptr) {
+      render_device->Workspace().Images().DiscardUnpublished();
+    } else {
+      render_device->Workspace().Images().ReleaseUnpublishedExcept(output_id);
+    }
+  };
+
+  // The probed coverage follows its photo frame: same identity, same geometry.
+  const auto publish_probe = [&]() -> MaskCoverageProbeOutcome {
+    if (!probe.has_value()) {
+      return MaskCoverageProbeOutcome::NotRequested;
+    }
+    const auto& metadata = request.submission.metadata;
+    return PublishMaskCoverageProbe<Backend>(
+        *render_device, *probe,
+        MaskCoveragePresentation{
+            MaskCoverageFrameIdentity{metadata.presentation_request_id, metadata.session_epoch,
+                                      metadata.image_identity},
+            plan.geometry},
+        *request.mask_coverage_sink);
+  };
+
+  try {
+    if (request.sink != nullptr) {
+      // Attach the exact resolved geometry so viewer-side Mask mapping uses the
+      // frame being presented instead of a separately derived document mapping.
+      FrameCompletionSubmission presented = request.submission;
+      presented.geometry                  = plan.geometry;
+      FramePresenter<Backend>::Present(*render_device, output_id, *request.sink, presented,
+                                       display_config);
+      if (IsRenderReferenceFrame(presented.mode, presented.metadata.frame_role)) {
+        presented_frame_geometry_ = plan.geometry;
+      }
+    }
+    if (request.require_host_output) {
+      auto host = FramePresenter<Backend>::Download(*render_device, output_id);
+      finish_successful_session();
+      const auto coverage = publish_probe();
+      return {.pixels        = std::move(host),
+              .geometry      = plan.geometry,
+              .display       = display_config,
+              .mask_coverage = coverage};
+    }
+    finish_successful_session();
+    const auto coverage = publish_probe();
+    return {.pixels        = std::make_shared<ImageBuffer>(),
+            .geometry      = plan.geometry,
+            .display       = display_config,
+            .mask_coverage = coverage};
+  } catch (const std::exception& ex) {
+    try {
+      if (render_device->Workspace().IsRendering()) {
+        render_device->CancelRender();
+      } else {
+        render_device->WaitIdle();
+      }
+      render_device->Workspace().Images().DiscardUnpublished();
+    } catch (...) {
+      // Preserve the original presentation/download error. The device destructor or
+      // session teardown still owns the last-resort wait and resource release.
+    }
+    release_batch_resources_after_failure();
+    render_device->ReportError(ex.what());
+    throw;
+  }
+}
+
+}  // namespace alcedo

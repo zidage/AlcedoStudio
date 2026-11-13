@@ -1,0 +1,147 @@
+{
+  "schema": 1,
+  "kind": "alcedo-ai-model-set-definition",
+  "id": "alcedo-ai-mask",
+  "name": "AI Mask",
+  "model_set_version": 1,
+  "revision": "r1",
+  "notice": "ai_mask_model_set_v1_NOTICE.txt",
+  "licenses": [
+    {
+      "name": "Apache-2.0",
+      "file": "licenses/SAM2-Apache-2.0.txt",
+      "source": "../../third_party_licenses/SAM2-LICENSE.txt",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "name": "MIT",
+      "file": "licenses/S3OD-MIT.txt",
+      "source": "../../third_party_licenses/S3OD-LICENSE.txt",
+      "sha256": "bcb7a447f69786d759db6f89845c2ecc7f525d0095916790769c6b67f22e518d"
+    },
+    {
+      "name": "DINOv3 License",
+      "file": "licenses/DINOv3-License.md",
+      "source": "../../third_party_licenses/DINOv3-LICENSE.md",
+      "sha256": "25d122eb8f5b880fd23c736fb6ea8018ee45c12237e00b8a86d14c653904999e"
+    },
+    {
+      "name": "GPL-3.0",
+      "file": "licenses/GPL-3.0.txt",
+      "source": "../../LICENSE",
+      "end_before": "Additional permission under GNU GPL version 3 section 7"
+    }
+  ],
+  "models": [
+    {
+      "role": "point_encoder",
+      "licenses": ["Apache-2.0"],
+      "files": {"windows-x86_64": "point_encoder.onnx", "macos-arm64": "point_encoder.mlmodelc"}
+    },
+    {
+      "role": "point_decoder",
+      "licenses": ["Apache-2.0"],
+      "files": {"windows-x86_64": "point_decoder.onnx", "macos-arm64": "point_decoder.mlmodelc"}
+    },
+    {
+      "role": "people_sky_head",
+      "licenses": ["GPL-3.0"],
+      "files": {"windows-x86_64": "people_sky_head.onnx", "macos-arm64": "people_sky_head.mlmodelc"}
+    },
+    {
+      "role": "people_sky_head_thresholds",
+      "licenses": ["GPL-3.0"],
+      "files": {"windows-x86_64": "people_sky_head.json", "macos-arm64": "people_sky_head.json"}
+    },
+    {
+      "role": "subject_masks",
+      "licenses": ["MIT", "DINOv3 License"],
+      "files": {"windows-x86_64": "subject_masks.onnx", "macos-arm64": "s3od.mlmodelc"}
+    },
+    {
+      "role": "sky_head",
+      "licenses": ["GPL-3.0"],
+      "files": {"windows-x86_64": "sky_head.onnx", "macos-arm64": "sky_head.mlmodelc"}
+    }
+  ],
+  "platforms": {
+    "windows-x86_64": [
+      {"path": "people_sky_head.json", "size": 2916,
+       "sha256": "43981e9ed1336ee97bcd3b7a7f07318523a56d43a24631c981d29d27c4fb2486"},
+      {"path": "people_sky_head.onnx", "size": 1119131,
+       "sha256": "e02f2a1eaace94e0efe2b3c8db0a0391be210b477a95e49063e80758f12abf35"},
+      {"path": "point_decoder.onnx", "size": 21188206,
+       "sha256": "6f9a0ef2c217a0abccc8b0c01e631c42c6a78a2038a7944cc7fcb4f536439278"},
+      {"path": "point_encoder.onnx", "size": 109381695,
+       "sha256": "17a554b420d3c51a109567f784ff3792b354c78dc8c2c09c585403329b412d61"},
+      {"path": "sky_head.onnx", "size": 5821904,
+       "sha256": "a6c555e7dfdbb236d6fa11569b546eab0da9f3945f6462872de0866f675a4788"},
+      {"path": "subject_masks.onnx", "size": 219301899,
+       "sha256": "0f070b8641676d68faaafc0b70816be1458fcc976d8d6d119e67038527cbc288"}
+    ],
+    "macos-arm64": [
+      {"path": "people_sky_head.json", "size": 2916,
+       "sha256": "43981e9ed1336ee97bcd3b7a7f07318523a56d43a24631c981d29d27c4fb2486"},
+      {"path": "people_sky_head.mlmodelc", "size": 1138418,
+       "directory_sha256": "d1f6710ad74c7c5b65acd60ade62df05d91bddbd4a79ae6801af7ced1e77fbca",
+       "files": [
+         {"path": "analytics/coremldata.bin", "size": 243,
+          "sha256": "dbbbc1b5abf1eab2c73977b3d8d5ee1d64a3c838e8da93bfeb49aee76dc4067a"},
+         {"path": "coremldata.bin", "size": 502,
+          "sha256": "fb4dfb005b5cb7f6adaed2ae80b32ba227f81e62377a3401bcc52956d354da78"},
+         {"path": "model.mil", "size": 28105,
+          "sha256": "c15191a463e49a57c2db03e195adc8a54708bc232505e4b795ffd4e07872a913"},
+         {"path": "weights/weight.bin", "size": 1109568,
+          "sha256": "98e247afac32326b511f705bf1ed477c4dbe6437f5475c318393da8256b67152"}
+       ]},
+      {"path": "point_decoder.mlmodelc", "size": 21098274,
+       "directory_sha256": "bb9606a8fd3c3c64b59bbbd5abcccdc890c7aacd4526fec4f3264f2e3934e6fb",
+       "files": [
+         {"path": "analytics/coremldata.bin", "size": 243,
+          "sha256": "b4d5225907ffe9c4cb8cffc26f3c3a50df341d7bd3f1e8931fac4aa29a050f86"},
+         {"path": "coremldata.bin", "size": 670,
+          "sha256": "7cf7fb43de23ff496d0d1c0cfed2894fbd4292043b56ee0fa73b1a476557a213"},
+         {"path": "model.mil", "size": 105105,
+          "sha256": "b7e4b5bfaa1b05b548353b44ff1bbeef29f7c516919120be96591dcf1fcbde1d"},
+         {"path": "weights/weight.bin", "size": 20992256,
+          "sha256": "5b3ac6d2044a348f7edcb1618257fede763cdab0a88ca12f3c8184513a6d75ce"}
+       ]},
+      {"path": "point_encoder.mlmodelc", "size": 134260018,
+       "directory_sha256": "5667da19bbcc16d02fd3649f34640dc2e9ccc28400da685e4cd5ec7be4eb81e4",
+       "files": [
+         {"path": "analytics/coremldata.bin", "size": 243,
+          "sha256": "42e5b80a663f2f32c7d5cfcaceeb7759aff2ad845ebefd730940fbef38734bbd"},
+         {"path": "coremldata.bin", "size": 459,
+          "sha256": "969986733bb51d3fa4d2f014e95afea9fa5051353550613bed170140cbeb791a"},
+         {"path": "model.mil", "size": 149940,
+          "sha256": "fe2c611fba36be72063820e029eab23a62e9461b2a36478e5ac2e9ab88b85c50"},
+         {"path": "weights/weight.bin", "size": 134109376,
+          "sha256": "6a2faae19ab3e05dcd57ff8fd4abbe7212741801ef90d1ccb9f66101687daf90"}
+       ]},
+      {"path": "s3od.mlmodelc", "size": 271166829,
+       "directory_sha256": "57eb52ca08695eda05dc879222d2ca8adbe92aed603e688bb5411e03e2270c89",
+       "files": [
+         {"path": "analytics/coremldata.bin", "size": 243,
+          "sha256": "9dd81987264f249f1c778f2b0c678529bd65f18cd73d97d966f21f1bff45a6a2"},
+         {"path": "coremldata.bin", "size": 408,
+          "sha256": "72c5487c36a003bc94460f8ca6355905f7b73626684f189103c9abc4daac2f86"},
+         {"path": "model.mil", "size": 267426,
+          "sha256": "bb0b3035544b68ee3affa96d22e64a03f69c2b5000b77138693a202f42a0d786"},
+         {"path": "weights/weight.bin", "size": 270898752,
+          "sha256": "8e41e0b16292b241f36ad9dd123121197740f55152e4e043829ae0ea4cdb4a42"}
+       ]},
+      {"path": "sky_head.mlmodelc", "size": 5860515,
+       "directory_sha256": "f15ed22c46edeb5f7863c861717f95d30a52b3e089fde7f99b98733e56f888b9",
+       "files": [
+         {"path": "analytics/coremldata.bin", "size": 243,
+          "sha256": "4210155847f31c77d14713eae4d364d958ca487aefa0faafb730f702f82c055b"},
+         {"path": "coremldata.bin", "size": 488,
+          "sha256": "4218b9fded6fd104e2cf0757fe0c3609a296c134799a5a548aef384232f444af"},
+         {"path": "model.mil", "size": 103944,
+          "sha256": "8a09045be0114277df36032400cc055571a0b84da004ec2aba2c5beb7485bce0"},
+         {"path": "weights/weight.bin", "size": 5755840,
+          "sha256": "d15e41f754acff09d43395d5010f53c2a15e4a9c72990c155c6cc8b42557da4d"}
+       ]}
+    ]
+  }
+}

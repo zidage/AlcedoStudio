@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <unordered_set>
 
+#include "edit/graph/pipeline_document.hpp"
+#include "utils/logging/log.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -49,28 +51,25 @@ void LogSyncElement(const char* bucket, const std::shared_ptr<SleeveElement>& el
   if (!element) {
     return;
   }
-  std::cout << "[LOG] SleeveServiceImpl: " << bucket << " " << ElementTypeLabel(element->type_)
-            << " id=" << element->element_id_ << " name=" << conv::ToBytes(element->element_name_)
-            << std::endl;
+  ALCEDO_LOG_DEBUG(Library) << "SleeveServiceImpl: " << bucket << " "
+                            << ElementTypeLabel(element->type_) << " id=" << element->element_id_
+                            << " name=" << conv::ToBytes(element->element_name_);
 }
 
 void ClonePipelineForDuplicate(Storage& storage_service, sl_element_id_t source_file_id,
                                sl_element_id_t duplicate_file_id) {
-  auto source_pipeline = storage_service.GetLivePipeline(source_file_id);
-  if (!source_pipeline) {
-    source_pipeline = storage_service.GetElementStore().GetPipelineByElementId(source_file_id);
-  }
-  if (!source_pipeline) {
+  const auto source_document =
+      storage_service.GetElementStore().GetPipelineJsonByElementId(source_file_id);
+  if (!source_document.has_value()) {
     return;
   }
 
-  auto duplicate_pipeline = std::make_shared<CPUPipelineExecutor>();
-  duplicate_pipeline->SetBoundFile(duplicate_file_id);
-  duplicate_pipeline->ImportPipelineParams(source_pipeline->ExportPipelineParams());
-  duplicate_pipeline->SetExecutionStages();
-  storage_service.GetElementStore().UpdatePipelineByElementId(duplicate_file_id,
-                                                                   duplicate_pipeline);
-  storage_service.RememberLivePipeline(duplicate_file_id, duplicate_pipeline);
+  const auto document = PipelineDocument::FromJson(*source_document);
+  if (!document.Graph().Validate().empty() || !document.Graph().ValidateImageBackbone().empty()) {
+    throw std::runtime_error("SleeveService: cannot duplicate an invalid pipeline document");
+  }
+  storage_service.GetElementStore().UpdatePipelineJsonByElementId(duplicate_file_id,
+                                                                    document.ToJson());
 }
 
 }  // namespace
@@ -120,10 +119,6 @@ auto SleeveServiceImpl::Sync() -> SyncResult {
     // TODO: This should be done periodically instead of every sync.
     for (auto& element : garbage_elements) {
       LogSyncElement("Deleted", element);
-      if (element && element->type_ == ElementType::FILE) {
-        storage_->ForgetLiveEditHistory(element->element_id_);
-        storage_->ForgetLivePipeline(element->element_id_);
-      }
     }
     element_ctrl.RemoveElements(garbage_elements);
     result.elements_synced_ += static_cast<uint32_t>(garbage_elements.size());
@@ -294,5 +289,18 @@ auto SleeveServiceImpl::DeletePath(const std::filesystem::path& target_path) -> 
 
 auto SleeveServiceImpl::DeleteElement(sl_element_id_t target_id) -> SyncResult {
   return Write<void>([target_id](FileSystem& fs) { fs.Delete(target_id); });
+}
+
+auto SleeveServiceImpl::RenameFolder(const std::filesystem::path& folder_path,
+                                     const file_name_t& new_name) -> SyncResult {
+  return Write<void>(
+      [folder_path, new_name](FileSystem& fs) { fs.RenameFolder(folder_path, new_name); });
+}
+
+auto SleeveServiceImpl::MoveFolder(const std::filesystem::path& folder_path,
+                                   const std::filesystem::path& new_parent_path) -> SyncResult {
+  return Write<void>([folder_path, new_parent_path](FileSystem& fs) {
+    fs.MoveFolder(folder_path, new_parent_path);
+  });
 }
 };  // namespace alcedo

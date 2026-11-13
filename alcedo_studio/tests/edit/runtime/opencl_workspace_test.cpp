@@ -1,0 +1,1033 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <future>
+#include <initializer_list>
+#include <iterator>
+#include <memory>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <vector>
+
+#include "edit/graph/graph_ids.hpp"
+#include "edit/mask/mask_asset.hpp"
+#include "edit/runtime/result_representation.hpp"
+#include "edit/runtime/runtime_revision.hpp"
+#include "edit/runtime/texture_format.hpp"
+#include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/executor_role.hpp"
+#include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_neural_session_workspace.hpp"
+#include "edit/runtime/pass_kind.hpp"
+#include "edit/runtime/render_backend.hpp"
+#include "gpu/transient_buffer_arena.hpp"
+#include "opencl/opencl_api_counters.hpp"
+#include "opencl/opencl_backend_program_registry.hpp"
+#include "opencl/opencl_context.hpp"
+#include "opencl/opencl_kernel_cache.hpp"
+#include "opencl/opencl_program_library.hpp"
+#include "opencl_workspace_test_support.hpp"
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+namespace alcedo {
+namespace {
+
+using opencl_workspace_test::BindSharpen;
+using opencl_workspace_test::ExposureFieldBindings;
+using opencl_workspace_test::HasOpenClDevice;
+using opencl_workspace_test::OpenClWorkspaceFixture;
+using opencl_workspace_test::UploadPackedModel;
+using opencl_workspace_test::WritePackedOwnerBytes;
+
+auto FileContainsForbiddenToken(const std::filesystem::path& path,
+                                std::initializer_list<const char*> tokens) -> std::string {
+  std::ifstream input(path);
+  std::string   line;
+  int           line_number = 0;
+  while (std::getline(input, line)) {
+    ++line_number;
+    for (const char* token : tokens) {
+      if (line.find(token) != std::string::npos) {
+        return path.filename().string() + ":" + std::to_string(line_number) + " " + token;
+      }
+    }
+  }
+  return {};
+}
+
+auto TestExecutableDir() -> std::filesystem::path {
+#if defined(_WIN32)
+  std::wstring buffer(MAX_PATH, L'\0');
+  while (true) {
+    const DWORD copied =
+        GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (copied == 0) {
+      return {};
+    }
+    if (copied < buffer.size()) {
+      buffer.resize(copied);
+      return std::filesystem::path(buffer).parent_path();
+    }
+    buffer.resize(buffer.size() * 2);
+  }
+#else
+  return std::filesystem::current_path();
+#endif
+}
+
+auto UniqueSuffix() -> std::string {
+  static int sequence = 0;
+  return std::to_string(++sequence);
+}
+
+auto HoldOpenClQueue(OpenClBackend& backend) {
+  const auto release_hold = [](cl_event event) {
+    (void)clSetUserEventStatus(event, CL_COMPLETE);
+    clReleaseEvent(event);
+  };
+  cl_int                                                                   error = CL_SUCCESS;
+  std::unique_ptr<std::remove_pointer_t<cl_event>, decltype(release_hold)> hold(
+      clCreateUserEvent(backend.NativeContext(), &error), release_hold);
+  if (error != CL_SUCCESS || !hold) {
+    throw std::runtime_error("Cannot create the OpenCL queue's test dependency");
+  }
+  cl_event dependency = hold.get();
+  if (clEnqueueBarrierWithWaitList(backend.NativeQueue(), 1, &dependency, nullptr) != CL_SUCCESS) {
+    throw std::runtime_error("Cannot enqueue the OpenCL queue's test dependency");
+  }
+  return hold;
+}
+
+TEST(GpuDagOpenClWorkspace, RendererTemplateInstantiatesOpenClWithoutCudaOrMetalHeaders) {
+  const char* files[] = {"renderer.hpp",      "plan_executor.hpp", "pass_encoder.hpp",
+                         "basic_render_device.hpp", "frame_presenter.hpp", "render_backend.hpp",
+                         "render_device_type.hpp"};
+  const std::filesystem::path root{ALCEDO_RUNTIME_HEADER_ROOT};
+  for (const char* name : files) {
+    const auto hit = FileContainsForbiddenToken(
+        root / name, {"cuda_runtime", "cuda.h", "Metal/", "metal.h", "CL/cl.h", "OpenCL/"});
+    EXPECT_TRUE(hit.empty()) << hit;
+  }
+
+  const auto opencl_backend_path =
+      std::filesystem::path{ALCEDO_RUNTIME_HEADER_ROOT} / "opencl" / "opencl_backend.hpp";
+  std::ifstream input(opencl_backend_path);
+  ASSERT_TRUE(input);
+  std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  EXPECT_EQ(text.find("cuda_runtime"), std::string::npos);
+  EXPECT_EQ(text.find("cuda.h"), std::string::npos);
+  EXPECT_EQ(text.find("Metal/"), std::string::npos);
+  EXPECT_EQ(text.find("metal.h"), std::string::npos);
+
+  static_assert(RenderBackend<OpenClBackend>);
+  static_assert(std::is_same_v<OpenClRenderer, Renderer<OpenClBackend>>);
+  static_assert(sizeof(OpenClRenderer) > 0);
+  EXPECT_EQ(kOpenClDagBackendCapabilityVersion, OpenClBackend::kCapabilityVersion);
+
+  if (!HasOpenClDevice()) {
+    GTEST_SKIP() << "No OpenCL device available.";
+  }
+  for (const auto role : {ExecutorRole::Interactive, ExecutorRole::Batch}) {
+    OpenClRenderer renderer(role);
+    EXPECT_EQ(renderer.Role(), role);
+    EXPECT_EQ(renderer.PlanCache().BackendCapabilityVersion(), kOpenClDagBackendCapabilityVersion);
+    EXPECT_EQ(renderer.Resources().published_result_count, 0U);
+    EXPECT_FALSE(renderer.Binding().has_value());
+  }
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClMaxSlabBytesUsesDeviceReportedMaxMemAllocSize) {
+  auto& ctx = OpenClContext::Instance();
+  ASSERT_TRUE(ctx.IsInitialized());
+  const auto reported = static_cast<std::size_t>(ctx.Capabilities().max_single_allocation_bytes);
+  ASSERT_GT(reported, 0U);
+
+  OpenClRenderDevice device;
+  const auto         slab = device.Workspace().Device().MaxSlabBytes();
+  EXPECT_GT(slab, 0U);
+  EXPECT_LE(slab, reported);
+  if (reported >= 256) {
+    EXPECT_EQ(slab % 256, 0U);
+    EXPECT_GE(slab, reported - 255);
+  }
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClNeuralTileWorkspaceIsOwnedByTheRenderBackend) {
+  OpenClRenderDevice first;
+  OpenClRenderDevice second;
+  auto*              a = &first.Workspace().Device().NeuralDemosaicWorkspace();
+  auto*              b = &second.Workspace().Device().NeuralDemosaicWorkspace();
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  EXPECT_NE(a, b);
+  first.ReleaseNeuralDemosaicWorkspace();
+  EXPECT_EQ(&second.Workspace().Device().NeuralDemosaicWorkspace(), b);
+  EXPECT_NE(&first.Workspace().Device().NeuralDemosaicWorkspace(), b);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClBackendUsesThePreparedProcessContextAndProductQueue) {
+  auto& ctx = OpenClContext::Instance();
+  ASSERT_TRUE(ctx.IsInitialized());
+  const auto device  = ctx.Device();
+  const auto context = ctx.Context();
+  const auto queue   = ctx.ProductQueue();
+  ASSERT_NE(device, nullptr);
+  ASSERT_NE(context, nullptr);
+  ASSERT_NE(queue, nullptr);
+
+  OpenClRenderDevice first;
+  EXPECT_EQ(first.Workspace().Device().NativeDevice(), device);
+  EXPECT_EQ(first.Workspace().Device().NativeContext(), context);
+  EXPECT_EQ(first.Workspace().Device().NativeQueue(), queue);
+  EXPECT_EQ(ctx.ProductQueue(), queue);
+
+  OpenClRenderDevice second;
+  EXPECT_EQ(second.Workspace().Device().NativeDevice(), device);
+  EXPECT_EQ(second.Workspace().Device().NativeContext(), context);
+  EXPECT_EQ(second.Workspace().Device().NativeQueue(), queue);
+  EXPECT_EQ(ctx.ProductQueue(), queue);
+  EXPECT_GT(first.Workspace().Device().WorkingSetBudgetBytes(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClParameterArenaWritePackedSlotUploadsBoundSlotOnce) {
+  OpenClRenderDevice device;
+  ParameterSlotKey   key{NodeId{"grade.primary"}, AdjustmentInstanceId{"sharpen"}};
+  SharpenModel       model;
+  BindSharpen(device.Workspace().Parameters(), key);
+  ASSERT_TRUE(UploadPackedModel(device, key, model));
+
+  model.SetAmount(12.0f);
+
+  auto& backend = device.Workspace().Device();
+  backend.ResetCounters();
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
+  device.Workspace().Parameters().UploadDirty(device.CommandContext());
+  device.WaitIdle();
+
+  ASSERT_EQ(backend.LastHostToDeviceRanges().size(), 1U);
+  EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, sizeof(SharpenPayload));
+  EXPECT_EQ(backend.HostToDeviceBytes(), sizeof(SharpenPayload));
+
+  backend.ResetCounters();
+  device.Workspace().Parameters().UploadDirty(device.CommandContext());
+  EXPECT_EQ(backend.HostToDeviceBytes(), 0U);
+  EXPECT_EQ(backend.HostToDeviceCopyCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClTransientArenaRewindsWithoutAllocatingAnotherBuffer) {
+  OpenClRenderDevice device;
+  auto&              transients = device.Workspace().TransientBuffers();
+  transients.Reserve(4096);
+  device.Workspace().Device().ResetCounters();
+
+  void* first = transients.Allocate(512);
+  ASSERT_NE(first, nullptr);
+  const auto capacity = transients.capacity_bytes();
+  transients.Reset();
+  EXPECT_EQ(transients.used_bytes(), 0U);
+  EXPECT_EQ(transients.capacity_bytes(), capacity);
+  void* second = transients.Allocate(512);
+  EXPECT_EQ(second, first);
+  EXPECT_EQ(device.Workspace().Device().MallocCount(), 0U);
+  EXPECT_EQ(device.Workspace().Device().FreeCount(), 0U);
+  EXPECT_EQ(device.Workspace().Device().BufferCreateCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClTransientReserveAboveMaxSlabUsesSeparateDeviceBuffers) {
+  OpenClRenderDevice device;
+  auto&              backend    = device.Workspace().Device();
+  auto&              transients = device.Workspace().TransientBuffers();
+  constexpr std::size_t kSlab   = 1 << 20;
+  constexpr std::size_t kChunk  = 700 << 10;
+  backend.SetMaxSlabBytes(kSlab);
+  backend.ResetCounters();
+  transients.Reserve(3 << 20);
+  EXPECT_EQ(transients.capacity_bytes(), 0U);
+  EXPECT_EQ(backend.BufferCreateCount(), 0U);
+
+  void* first  = transients.Allocate(kChunk);
+  void* second = transients.Allocate(kChunk);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_GE(backend.BufferCreateCount(), 2U);
+  const auto a = backend.ResolveDeviceMemory(first, kChunk);
+  const auto b = backend.ResolveDeviceMemory(second, kChunk);
+  EXPECT_NE(a.first, b.first);
+
+  std::vector<std::byte> ones(kChunk, std::byte{0x5A});
+  std::vector<std::byte> twos(kChunk, std::byte{0xA5});
+  backend.UploadDeviceMemory(first, ones, device.CommandContext());
+  backend.UploadDeviceMemory(second, twos, device.CommandContext());
+  device.WaitIdle();
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClTransientAllocateAppendsASlabWhenTheReservedTailIsTooShort) {
+  OpenClRenderDevice device;
+  auto&              backend    = device.Workspace().Device();
+  auto&              transients = device.Workspace().TransientBuffers();
+  constexpr std::size_t kSlab   = 1 << 20;
+  constexpr std::size_t kLarge  = 700 << 10;
+  backend.SetMaxSlabBytes(kSlab);
+  transients.Reserve(kSlab + (256 << 10));
+  void* first  = transients.Allocate(kLarge);
+  void* second = transients.Allocate(kLarge);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  const auto a = backend.ResolveDeviceMemory(first, kLarge);
+  const auto b = backend.ResolveDeviceMemory(second, kLarge);
+  EXPECT_NE(a.first, b.first);
+  EXPECT_GE(transients.capacity_bytes(), kLarge + kLarge);
+}
+
+TEST(TransientBufferArena, ReserveFreesUnusedSlabsBeforeAllocatingReplacements) {
+  struct RecordingBackend {
+    struct Slab {
+      RecordingBackend*          owner = nullptr;
+      std::size_t               bytes  = 0;
+      std::unique_ptr<std::byte[]> storage;
+
+      Slab() = default;
+      Slab(RecordingBackend* owner_ptr, std::size_t n)
+          : owner(owner_ptr), bytes(n), storage(std::make_unique<std::byte[]>(n)) {}
+      Slab(const Slab&)                    = delete;
+      auto operator=(const Slab&) -> Slab& = delete;
+      Slab(Slab&& other) noexcept { *this = std::move(other); }
+      auto operator=(Slab&& other) noexcept -> Slab& {
+        Reset();
+        owner        = other.owner;
+        bytes        = other.bytes;
+        storage      = std::move(other.storage);
+        other.owner  = nullptr;
+        other.bytes  = 0;
+        return *this;
+      }
+      ~Slab() { Reset(); }
+
+      void Reset() noexcept {
+        if (owner != nullptr && storage) {
+          owner->events.push_back("free");
+        }
+        owner = nullptr;
+        storage.reset();
+        bytes = 0;
+      }
+
+      [[nodiscard]] auto DevicePointer() const -> void* { return storage.get(); }
+      [[nodiscard]] auto Bytes() const -> std::size_t { return bytes; }
+    };
+
+    std::vector<std::string> events;
+
+    auto CreateSlab(std::size_t n) -> Slab {
+      events.push_back("create");
+      return Slab(this, n);
+    }
+  };
+
+  RecordingBackend backend;
+  TransientBufferArena<RecordingBackend> arena(backend);
+  arena.Reserve(256);
+  ASSERT_EQ(backend.events, (std::vector<std::string>{"create"}));
+  arena.Reserve(1024);
+  ASSERT_EQ(backend.events, (std::vector<std::string>{"create", "free", "create"}));
+}
+
+TEST(TransientBufferArena, UnalignedFirstAllocationAppendsAnotherSlabWithoutLooping) {
+  struct AppendRecordingBackend {
+    struct Slab {
+      std::unique_ptr<std::byte[]> storage;
+      std::size_t                  bytes = 0;
+
+      Slab() = default;
+      explicit Slab(std::size_t n) : storage(std::make_unique<std::byte[]>(n)), bytes(n) {}
+      Slab(const Slab&)                    = delete;
+      auto operator=(const Slab&) -> Slab& = delete;
+      Slab(Slab&&) noexcept                = default;
+      auto operator=(Slab&&) noexcept -> Slab& = default;
+
+      [[nodiscard]] auto DevicePointer() const -> void* { return storage.get(); }
+      [[nodiscard]] auto Bytes() const -> std::size_t { return bytes; }
+    };
+
+    std::vector<std::size_t> create_sizes;
+    std::size_t               max_slab_bytes = 512;
+
+    auto CreateSlab(std::size_t bytes) -> Slab {
+      create_sizes.push_back(bytes);
+      return Slab(bytes);
+    }
+    [[nodiscard]] auto MaxSlabBytes() const -> std::size_t { return max_slab_bytes; }
+  };
+
+  AppendRecordingBackend                       backend;
+  TransientBufferArena<AppendRecordingBackend> arena(backend);
+
+  void* first  = arena.Allocate(257, 256);
+  void* second = arena.Allocate(512, 256);
+
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_NE(first, second);
+  EXPECT_EQ(backend.create_sizes, (std::vector<std::size_t>{512, 512}));
+  EXPECT_EQ(arena.capacity_bytes(), 1024U);
+  EXPECT_EQ(arena.used_bytes(), 257U + 512U);
+  EXPECT_EQ(arena.slab_count(), 2U);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClSynchronizeRecordedWorkFlushesTheProductQueueBeforeWait) {
+  OpenClRenderDevice device;
+  device.BeginRender();
+  const auto flushes = device.Workspace().Device().FlushCount();
+  const auto waits   = device.Workspace().Device().WaitCount();
+  device.Workspace().Device().SynchronizeRecordedWork(device.CommandContext());
+  EXPECT_GT(device.Workspace().Device().FlushCount(), flushes);
+  EXPECT_GT(device.Workspace().Device().WaitCount(), waits);
+  device.CancelRender();
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClCreateBufferRejectsSizeAboveMaxSlabWithoutInvalidBufferSize) {
+  OpenClRenderDevice device;
+  auto&              backend = device.Workspace().Device();
+  backend.SetMaxSlabBytes(4096);
+  try {
+    (void)backend.CreateBuffer(4097);
+    FAIL() << "CreateBuffer should reject sizes above MaxSlabBytes";
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    EXPECT_NE(message.find("exceeds device max allocation"), std::string::npos);
+    EXPECT_EQ(message.find("OpenCL error -61"), std::string::npos);
+  }
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolReusesMatchingImages) {
+  OpenClRenderDevice device;
+  auto&              textures = device.Workspace().Textures();
+
+  device.BeginRender();
+  auto first = textures.Acquire({32, 16, TextureFormat::Rgba32f});
+  ASSERT_FALSE(first.Empty());
+  const auto             resource_id = first.Texture().ResourceId();
+  const auto             width       = first.Texture().Width();
+  std::vector<std::byte> pixels(static_cast<std::size_t>(32) * 16 * 16, std::byte{0x3F});
+  device.Workspace().Device().UploadTexture2D(first.Texture(), pixels, device.CommandContext());
+  device.EndRender();
+  first.Release();
+  device.WaitIdle();
+  device.Workspace().Device().ResetCounters();
+
+  device.BeginRender();
+  auto second = textures.Acquire({32, 16, TextureFormat::Rgba32f});
+  EXPECT_EQ(second.Texture().ResourceId(), resource_id);
+  EXPECT_EQ(second.Texture().Width(), width);
+  device.EndRender();
+  device.WaitIdle();
+  EXPECT_EQ(device.Workspace().Device().TextureCreateCount(), 0U);
+  EXPECT_EQ(device.Workspace().Device().MallocCount(), 0U);
+  EXPECT_EQ(device.Workspace().Device().FreeCount(), 0U);
+
+  device.BeginRender();
+  auto               r32 = textures.Acquire({8, 8, TextureFormat::R32f});
+  std::vector<float> r32_host(64, 2.5f);
+  auto               r32_bytes = std::as_bytes(std::span<const float>(r32_host));
+  device.Workspace().Device().UploadTexture2D(r32.Texture(), r32_bytes, device.CommandContext());
+  std::vector<float> r32_back(64, 0.0f);
+  device.EndRender();
+  device.WaitIdle();
+  device.Workspace().Device().DownloadTexture2D(
+      r32.Texture(), std::as_writable_bytes(std::span<float>(r32_back)), device.CommandContext());
+  EXPECT_FLOAT_EQ(r32_back[0], 2.5f);
+  EXPECT_FLOAT_EQ(r32_back[63], 2.5f);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolDoesNotReleaseBusySubmissionImages) {
+  OpenClRenderDevice      device;
+  auto&                   textures = device.Workspace().Textures();
+  constexpr std::uint32_t kSize    = 64;
+
+  device.BeginRender();
+  auto       lease_a  = textures.Acquire({kSize, kSize, TextureFormat::R8});
+  const auto handle_a = lease_a.Handle();
+  auto       lease_b  = textures.Acquire({kSize, kSize, TextureFormat::R8});
+  EXPECT_TRUE(textures.Contains(handle_a));
+  device.EndRender();
+
+  lease_a.Release();
+  lease_b.Release();
+  textures.ReleaseUnleased();
+  EXPECT_TRUE(textures.Contains(handle_a));
+
+  device.BeginRender();
+  textures.ReleaseUnleased();
+  EXPECT_FALSE(textures.Contains(handle_a));
+  device.EndRender();
+  device.WaitIdle();
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClPlanWarmUpBuildsOnlyRequiredProgramsAndKernels) {
+  RegisterOpenClBackendPrograms();
+  const bool grade_before =
+      OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::GpuDag::kPrimaryGradeProgramName);
+  const bool tone_before =
+      OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::GpuDag::kLocalToneProgramName);
+  const bool mask_before =
+      OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::GpuDag::kMaskProgramName);
+  const bool drt_before =
+      OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::GpuDag::kDrtProgramName);
+  const bool camera_kernel_before = OpenClKernelCache::Instance().IsCached(
+      OpenCL::GpuDag::kGeometryCameraProgramName, OpenCL::GpuDag::kCameraColorKernelName);
+  const bool drt_kernel_before = OpenClKernelCache::Instance().IsCached(
+      OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kDrtKernelName);
+
+  ExecutionPlan plan;
+  plan.passes.push_back(GpuPassDesc{GpuPassKind::GeometryResample});
+
+  OpenClRenderDevice device;
+  device.Workspace().Device().WarmUpPlan(plan);
+
+  EXPECT_TRUE(OpenClProgramLibrary::Instance().IsProgramBuilt(
+      OpenCL::GpuDag::kGeometryCameraProgramName));
+  EXPECT_TRUE(OpenClKernelCache::Instance().IsCached(OpenCL::GpuDag::kGeometryCameraProgramName,
+                                                     OpenCL::GpuDag::kGeometryResampleKernelName));
+  EXPECT_EQ(OpenClKernelCache::Instance().IsCached(OpenCL::GpuDag::kGeometryCameraProgramName,
+                                                   OpenCL::GpuDag::kCameraColorKernelName),
+            camera_kernel_before);
+  EXPECT_EQ(OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::GpuDag::kPrimaryGradeProgramName),
+            grade_before);
+  EXPECT_EQ(OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::GpuDag::kLocalToneProgramName),
+            tone_before);
+  EXPECT_EQ(OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::GpuDag::kMaskProgramName),
+            mask_before);
+  EXPECT_EQ(OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::GpuDag::kDrtProgramName),
+            drt_before);
+  EXPECT_EQ(OpenClKernelCache::Instance().IsCached(OpenCL::GpuDag::kDrtProgramName,
+                                                   OpenCL::GpuDag::kDrtKernelName),
+            drt_kernel_before);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClSecondEmptyRenderCreatesNoBufferImageProgramOrKernel) {
+  OpenClApiCounterScope     counter_scope(true);
+  OpenClRenderDevice        device;
+  auto&                     workspace = device.Workspace();
+  ExecutionPlan             plan;
+  plan.passes.push_back(GpuPassDesc{GpuPassKind::GeometryResample});
+  workspace.Device().WarmUpPlan(plan);
+  workspace.Device().ResetCounters();
+  workspace.Device().WarmUpPlan(plan);
+  EXPECT_TRUE(OpenClKernelCache::Instance().IsCached(OpenCL::GpuDag::kGeometryCameraProgramName,
+                                                     OpenCL::GpuDag::kGeometryResampleKernelName));
+  EXPECT_EQ(workspace.Device().KernelCreateCount(), 0U);
+  EXPECT_GE(workspace.Device().KernelHitCount(), 1U);
+
+  workspace.Parameters().Reserve(256);
+  workspace.TransientBuffers().Reserve(1 << 20);
+
+  device.BeginRender();
+  {
+    auto texture = workspace.Textures().Acquire({64, 64, TextureFormat::R8});
+    ASSERT_NE(workspace.TransientBuffers().Allocate(2048), nullptr);
+    auto buffer = workspace.Device().CreateBuffer(64);
+    workspace.Values().Store({NodeId{"grade.primary"}, PortId{"commands"}}, std::move(buffer));
+    device.EndRender();
+  }
+  device.WaitIdle();
+  workspace.Device().ResetCounters();
+  ResetOpenClApiCounters();
+  const auto before = SnapshotOpenClApiCounters();
+
+  device.BeginRender();
+  {
+    auto texture = workspace.Textures().Acquire({64, 64, TextureFormat::R8});
+    ASSERT_NE(workspace.TransientBuffers().Allocate(2048), nullptr);
+    device.EndRender();
+  }
+  device.WaitIdle();
+
+  const auto delta = DeltaOpenClApiCounters(before, SnapshotOpenClApiCounters());
+  EXPECT_EQ(workspace.Device().BufferCreateCount(), 0U);
+  EXPECT_EQ(workspace.Device().TextureCreateCount(), 0U);
+  EXPECT_EQ(workspace.Device().KernelCreateCount(), 0U);
+  EXPECT_EQ(workspace.Device().ProgramBuildCount(), 0U);
+  EXPECT_EQ(workspace.Device().MallocCount(), 0U);
+  EXPECT_EQ(workspace.Device().FreeCount(), 0U);
+  EXPECT_EQ(workspace.Device().HostToDeviceBytes(), 0U);
+  EXPECT_EQ(delta.create_buffer, 0U);
+  EXPECT_EQ(delta.create_image, 0U);
+  EXPECT_EQ(delta.create_kernel, 0U);
+  EXPECT_EQ(delta.program_builds, 0U);
+  EXPECT_EQ(delta.release_mem_object, 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClFailedUploadKeepsParametersQueuedAndPublishesNoResult) {
+  OpenClRenderDevice device;
+  ParameterSlotKey   key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
+  ExposureModel      model;
+  const auto         fields = ExposureFieldBindings();
+  device.Workspace().Parameters().BindSlot(key, 4, fields);
+  ASSERT_TRUE(UploadPackedModel(device, key, model));
+
+  model.SetValue(0.75f);
+  device.Workspace().Device().FailNextUpload();
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
+  EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
+               std::runtime_error);
+  EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
+
+  const GraphValueId    id{NodeId{"develop"}, PortId{"sensor_linear"}};
+  constexpr RuntimeRevision content = 41;
+  device.BeginRender();
+  (void)device.Workspace().AcquireImageForWrite(id, {8, 8, TextureFormat::Rgba32f});
+  device.Workspace().Images().RecordUnpublished(
+      id, content, MakeExtentRepresentation({8, 8}, TextureFormat::Rgba32f),
+      device.CommandContext().SubmissionId());
+  device.Workspace().Device().FailNextUpload();
+  std::vector<std::byte> pixels(8 * 8 * 16, std::byte{1});
+  EXPECT_THROW(
+      device.Workspace().Device().UploadTexture2D(device.Workspace().Images().Find(id)->Texture(),
+                                                  pixels, device.CommandContext()),
+      std::runtime_error);
+  device.CancelRender();
+  device.WaitIdle();
+  EXPECT_FALSE(device.Workspace().Images().FindValidResult(
+      id, content, MakeExtentRepresentation({8, 8}, TextureFormat::Rgba32f),
+      device.Workspace().Device().CompletedSubmission()));
+  EXPECT_EQ(device.Workspace().Images().PublishedCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClProgramManifestCanLoadFromInstalledResourceLayout) {
+  RegisterOpenClBackendPrograms();
+  const auto manifests = OpenClBackendProgramRegistry::Instance().RegisteredManifestNames();
+  EXPECT_NE(std::find(manifests.begin(), manifests.end(), OpenCL::GpuDag::kManifestName),
+            manifests.end());
+
+  const auto source_root = std::filesystem::path{ALCEDO_OPENCL_SHADER_SOURCE_ROOT};
+  const auto file_name   = std::string("o0_install_probe_") + UniqueSuffix() + ".cl";
+  const auto missing_source =
+      source_root / "edit" / "runtime" / "opencl" / "shader" / file_name;
+  ASSERT_FALSE(std::filesystem::exists(missing_source)) << missing_source.string();
+
+  const auto installed =
+      TestExecutableDir() / "opencl" / "edit" / "runtime" / "opencl" / "shader" / file_name;
+  std::filesystem::create_directories(installed.parent_path());
+  // Only an installed shader root has the inventory, and only such a root is authoritative.
+  const auto inventory      = TestExecutableDir() / "opencl" / "runtime-assets.sha256";
+  const bool owns_inventory = !std::filesystem::exists(inventory);
+  if (owns_inventory) std::ofstream(inventory) << "\n";
+  {
+    std::ofstream source(installed, std::ios::binary);
+    ASSERT_TRUE(source.is_open());
+    source << "__kernel void o0_install_probe(__global float* out) { out[get_global_id(0)] = 1.0f; }";
+  }
+
+  const auto program_name = std::string("opencl_dag_install_probe_") + UniqueSuffix();
+  OpenClProgramLibrary::Instance().RegisterProgram(OpenClProgramDescriptor{
+      .name                = program_name,
+      .source_paths        = {missing_source},
+      .build_options       = "-cl-std=CL1.2",
+      .required_at_startup = false,
+  });
+  EXPECT_NO_THROW((void)OpenClProgramLibrary::Instance().GetProgram(program_name));
+  EXPECT_TRUE(OpenClProgramLibrary::Instance().IsProgramBuilt(program_name));
+  std::filesystem::remove(installed);
+  if (owns_inventory) std::filesystem::remove(inventory);
+  // An empty packaged root is still authoritative. Do not leave the layout
+  // created by this test beside a later test that must read build-tree sources.
+  for (auto directory = installed.parent_path(); directory != TestExecutableDir();
+       directory = directory.parent_path()) {
+    if (!std::filesystem::is_empty(directory)) {
+      break;
+    }
+    std::filesystem::remove(directory);
+  }
+}
+
+TEST_F(OpenClWorkspaceFixture, InstalledOpenClPackageBuildsEveryGpuDagProgram) {
+  // Run after `cmake --install` with ALCEDO_INSTALLED_OPENCL_BIN_DIR set to the installed
+  // directory that holds `opencl/` (for example build/install/bin). Every built-in program (gpu_dag,
+  // RAW, geometry, scope, DemosaicNet) is built again from the installed copies only, so a source
+  // file that the install rules miss fails here with the program name and the missing path. The
+  // list comes from the library rather than a fixed set so that a new program cannot be skipped.
+  const char* installed_bin = std::getenv("ALCEDO_INSTALLED_OPENCL_BIN_DIR");
+  if (installed_bin == nullptr || *installed_bin == '\0') {
+    GTEST_SKIP() << "ALCEDO_INSTALLED_OPENCL_BIN_DIR is not set";
+  }
+  const auto installed_root = std::filesystem::path(installed_bin) / "opencl";
+  ASSERT_TRUE(std::filesystem::is_directory(installed_root)) << installed_root.string();
+
+  RegisterOpenClBackendPrograms();
+  const auto source_root =
+      std::filesystem::path{ALCEDO_OPENCL_SHADER_SOURCE_ROOT}.lexically_normal();
+  auto& library = OpenClProgramLibrary::Instance();
+  // Probe programs from other tests in this process register paths outside the source tree or
+  // files that do not exist there; built-in programs always load existing source-tree files.
+  const auto is_builtin_program = [&](const std::vector<std::filesystem::path>& source_paths) {
+    return !source_paths.empty() &&
+           std::all_of(source_paths.begin(), source_paths.end(), [&](const auto& path) {
+             const auto rel = path.lexically_normal().lexically_relative(source_root);
+             return !rel.empty() && *rel.begin() != ".." && std::filesystem::is_regular_file(path);
+           });
+  };
+  std::vector<std::string> program_names;
+  for (const auto& name : library.RegisteredProgramNames()) {
+    if (is_builtin_program(library.RegisteredSourcePaths(name))) {
+      program_names.push_back(name);
+    }
+  }
+  ASSERT_NE(std::find(program_names.begin(), program_names.end(),
+                      OpenCL::GpuDag::kDisplayToAp1ProgramName),
+            program_names.end());
+
+  for (const auto& program_name : program_names) {
+    SCOPED_TRACE(program_name);
+    const auto source_paths = library.RegisteredSourcePaths(program_name);
+    ASSERT_FALSE(source_paths.empty());
+    std::vector<std::filesystem::path> installed_paths;
+    for (const auto& source_path : source_paths) {
+      const auto rel = source_path.lexically_normal().lexically_relative(source_root);
+      ASSERT_FALSE(rel.empty() || *rel.begin() == "..") << source_path.string();
+      const auto installed = installed_root / rel;
+      ASSERT_TRUE(std::filesystem::is_regular_file(installed))
+          << "installed package misses " << installed.string();
+      installed_paths.push_back(installed);
+    }
+    const auto installed_program = std::string("installed_") + program_name + "_" + UniqueSuffix();
+    library.RegisterProgram(OpenClProgramDescriptor{
+        .name                = installed_program,
+        .source_paths        = installed_paths,
+        .build_options       = library.RegisteredBuildOptions(program_name),
+        .required_at_startup = false,
+    });
+    EXPECT_NO_THROW((void)library.GetProgram(installed_program));
+    EXPECT_TRUE(library.IsProgramBuilt(installed_program));
+  }
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClCommandContextReleasesEveryRetainedEvent) {
+  OpenClApiCounterScope counter_scope(true);
+  ResetOpenClApiCounters();
+  OpenClRenderDevice device;
+  device.Workspace().Parameters().Reserve(64);
+
+  std::vector<std::byte> bytes(16, std::byte{2});
+  device.BeginRender();
+  auto buffer = device.Workspace().Device().CreateBuffer(64);
+  device.Workspace().Device().UploadBufferRange(buffer, 0, bytes, device.CommandContext());
+  EXPECT_GT(device.CommandContext().TrackedEventCount(), 0U);
+  device.EndRender();
+  device.WaitIdle();
+
+  const auto after = SnapshotOpenClApiCounters();
+  EXPECT_GT(after.create_event, 0U);
+  EXPECT_EQ(after.create_event, after.release_event);
+  EXPECT_EQ(device.Workspace().Device().EventCreateCount(),
+            device.Workspace().Device().EventReleaseCount());
+  EXPECT_EQ(device.CommandContext().TrackedEventCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, NonblockingHostUploadsKeepBytesAfterCallerReusesStorage) {
+  OpenClRenderDevice device;
+  auto&              backend = device.Workspace().Device();
+  backend.UseDedicatedQueue();
+  auto& commands  = device.CommandContext();
+  auto  buffer    = backend.CreateBuffer(128);
+  auto  rgba      = backend.CreateTexture2D(2, 4, TextureFormat::Rgba32f);
+  auto  mask      = backend.CreateTexture2D(16, 16, TextureFormat::R8);
+  auto* transient = device.Workspace().TransientBuffers().Allocate(128);
+
+  auto  hold      = HoldOpenClQueue(backend);
+
+  {
+    std::vector<std::byte> source(128, std::byte{0x25});
+    backend.UploadBufferRange(buffer, 0, source, commands);
+    backend.UploadDeviceMemory(transient, source, commands);
+    backend.UploadTexture2D(rgba, source, commands);
+    backend.UploadR8TextureRect(mask, RectI{4, 3, 8, 8},
+                                std::span<const std::byte>(source).first(64), commands);
+    // The event keeps every write queued while the caller overwrites and destroys its array.
+    std::fill(source.begin(), source.end(), std::byte{0x6B});
+  }
+
+  EXPECT_EQ(commands.RetainedUploadByteCount(), 448U);
+
+  ASSERT_EQ(clSetUserEventStatus(hold.get(), CL_COMPLETE), CL_SUCCESS);
+  clReleaseEvent(hold.release());
+  std::vector<std::byte> readback(128);
+  backend.DownloadBufferRange(buffer, 0, readback, commands);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+  const auto resolved = backend.ResolveDeviceMemory(transient, 128);
+  ASSERT_EQ(clEnqueueReadBuffer(backend.NativeQueue(), resolved.first, CL_TRUE, resolved.second,
+                                readback.size(), readback.data(), 0, nullptr, nullptr),
+            CL_SUCCESS);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+  backend.DownloadTexture2D(rgba, readback, commands);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+  const std::size_t origin[3] = {4, 3, 0};
+  const std::size_t region[3] = {8, 8, 1};
+  readback.resize(64);
+  ASSERT_EQ(clEnqueueReadImage(backend.NativeQueue(), mask.Native(), CL_TRUE, origin, region, 0, 0,
+                               readback.data(), 0, nullptr, nullptr),
+            CL_SUCCESS);
+  EXPECT_EQ(readback, std::vector<std::byte>(64, std::byte{0x25}));
+  device.WaitIdle();
+  EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, SubmitAndPresentationKeepUploadStorageUntilRenderWait) {
+  OpenClBackend backend;
+  backend.UseDedicatedQueue();
+  auto buffer = backend.CreateBuffer(128);
+  for (const bool present : {false, true}) {
+    SCOPED_TRACE(present ? "presentation" : "submission");
+    OpenClCommandContext commands;
+    commands.SetSubmissionId(backend.NextSubmissionId());
+    auto hold = HoldOpenClQueue(backend);
+    {
+      const std::vector<std::byte> source(128, std::byte{0x25});
+      backend.UploadBufferRange(buffer, 0, source, commands);
+    }
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 128U);
+    ASSERT_EQ(clSetUserEventStatus(hold.get(), CL_COMPLETE), CL_SUCCESS);
+    clReleaseEvent(hold.release());
+    ASSERT_EQ(clFinish(backend.NativeQueue()), CL_SUCCESS);
+    if (present) {
+      backend.FinalizePresentation(commands);
+    } else {
+      backend.Submit(commands);
+    }
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 128U);
+    backend.Wait(commands);
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
+  }
+}
+
+TEST_F(OpenClWorkspaceFixture, SharedPixelUploadsKeepOwnerAliveWithoutCopyingImage) {
+  OpenClRenderDevice device;
+  auto&              backend = device.Workspace().Device();
+  backend.UseDedicatedQueue();
+  auto*                          destination = device.Workspace().TransientBuffers().Allocate(128);
+  auto&                          commands    = device.CommandContext();
+  auto                           hold        = HoldOpenClQueue(backend);
+  std::weak_ptr<const std::byte> owner;
+  {
+    HostImagePlane pixels;
+    pixels.extent       = {8, 1};
+    pixels.stride_bytes = 128;
+    pixels.format       = HostPixelFormat::F32Rgba;
+    auto storage =
+        std::shared_ptr<std::byte>(new std::byte[128], std::default_delete<std::byte[]>{});
+    std::fill_n(storage.get(), 128, std::byte{0x25});
+    pixels.bytes = storage;
+    owner        = pixels.bytes;
+    backend.UploadDeviceMemory(destination, pixels, commands);
+  }
+  EXPECT_FALSE(owner.expired());
+  EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
+  EXPECT_EQ(commands.RetainedUploadOwnerCount(), 1U);
+  OpenClCommandContext moved(std::move(commands));
+  commands = std::move(moved);
+  EXPECT_FALSE(owner.expired());
+  EXPECT_EQ(commands.RetainedUploadOwnerCount(), 1U);
+  ASSERT_EQ(clSetUserEventStatus(hold.get(), CL_COMPLETE), CL_SUCCESS);
+  clReleaseEvent(hold.release());
+  const auto             resolved = backend.ResolveDeviceMemory(destination, 128);
+  std::vector<std::byte> readback(128);
+  ASSERT_EQ(clEnqueueReadBuffer(backend.NativeQueue(), resolved.first, CL_TRUE, resolved.second,
+                                readback.size(), readback.data(), 0, nullptr, nullptr),
+            CL_SUCCESS);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+  device.WaitIdle();
+  EXPECT_TRUE(owner.expired());
+  EXPECT_EQ(commands.RetainedUploadOwnerCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture,
+       RepeatedParameterUploadsPreserveEveryQueuedVersionAcrossRenderWaits) {
+  OpenClBackend backend;
+  backend.UseDedicatedQueue();
+  auto                 buffer = backend.CreateBuffer(512);
+  OpenClCommandContext commands;
+  for (unsigned frame = 0; frame < 3; ++frame) {
+    SCOPED_TRACE(frame);
+    auto                   hold = HoldOpenClQueue(backend);
+    std::vector<std::byte> source(128);
+    for (unsigned write = 0; write < 4; ++write) {
+      std::fill(source.begin(), source.end(),
+                std::byte{static_cast<unsigned char>(frame * 4 + write)});
+      backend.UploadBufferRange(buffer, write * 128, source, commands);
+    }
+    std::fill(source.begin(), source.end(), std::byte{0xFF});
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 512U);
+    ASSERT_EQ(clSetUserEventStatus(hold.get(), CL_COMPLETE), CL_SUCCESS);
+    clReleaseEvent(hold.release());
+    backend.Wait(commands);
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
+    std::vector<std::byte> readback(512);
+    backend.DownloadBufferRange(buffer, 0, readback, commands);
+    for (unsigned write = 0; write < 4; ++write) {
+      EXPECT_TRUE(std::all_of(readback.begin() + write * 128, readback.begin() + (write + 1) * 128,
+                              [frame, write](std::byte value) {
+                                return value ==
+                                       std::byte{static_cast<unsigned char>(frame * 4 + write)};
+                              }));
+    }
+  }
+}
+
+TEST_F(OpenClWorkspaceFixture, MovingCommandContextsKeepsQueuedUploadBytesAlive) {
+  OpenClBackend backend;
+  backend.UseDedicatedQueue();
+  auto                 buffer = backend.CreateBuffer(128);
+  OpenClCommandContext original;
+  auto                 hold = HoldOpenClQueue(backend);
+  {
+    std::vector<std::byte> source(128, std::byte{0x25});
+    backend.UploadBufferRange(buffer, 0, source, original);
+    std::fill(source.begin(), source.end(), std::byte{0x6B});
+  }
+  OpenClCommandContext moved(std::move(original));
+  OpenClCommandContext assigned;
+  assigned = std::move(moved);
+  ASSERT_EQ(clSetUserEventStatus(hold.get(), CL_COMPLETE), CL_SUCCESS);
+  clReleaseEvent(hold.release());
+  std::vector<std::byte> readback(128);
+  backend.DownloadBufferRange(buffer, 0, readback, assigned);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+  backend.Wait(assigned);
+  EXPECT_EQ(assigned.TrackedEventCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, DestroyingUnsubmittedContextWaitsForQueuedUpload) {
+  OpenClBackend backend;
+  backend.UseDedicatedQueue();
+  auto buffer   = backend.CreateBuffer(128);
+  auto commands = std::make_unique<OpenClCommandContext>();
+  auto hold     = HoldOpenClQueue(backend);
+  {
+    std::vector<std::byte> source(128, std::byte{0x25});
+    backend.UploadBufferRange(buffer, 0, source, *commands);
+  }
+  std::promise<void> cleanup_started;
+  auto               started = cleanup_started.get_future();
+  auto               cleanup =
+      std::async(std::launch::async, [commands = std::move(commands), &cleanup_started]() mutable {
+        cleanup_started.set_value();
+        commands.reset();
+      });
+  started.wait();
+  const bool returned_before_upload =
+      cleanup.wait_for(std::chrono::milliseconds(30)) == std::future_status::ready;
+  const auto completion_error = clSetUserEventStatus(hold.get(), CL_COMPLETE);
+  clReleaseEvent(hold.release());
+  cleanup.get();
+  ASSERT_EQ(completion_error, CL_SUCCESS);
+  EXPECT_FALSE(returned_before_upload);
+  std::vector<std::byte> readback(128);
+  ASSERT_EQ(clEnqueueReadBuffer(backend.NativeQueue(), buffer.Native(), CL_TRUE, 0, readback.size(),
+                                readback.data(), 0, nullptr, nullptr),
+            CL_SUCCESS);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+}
+
+TEST_F(OpenClWorkspaceFixture, ParameterUploadFailureKeepsPackedBytesQueuedUntilRetry) {
+  OpenClRenderDevice device;
+  ParameterSlotKey   key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
+  ExposureModel      model;
+  const auto         fields = ExposureFieldBindings();
+  device.Workspace().Parameters().BindSlot(key, 4, fields);
+  ASSERT_TRUE(UploadPackedModel(device, key, model));
+
+  model.SetValue(0.75f);
+  device.Workspace().Device().FailNextUpload();
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
+  EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
+  EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
+               std::runtime_error);
+  EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
+
+  EXPECT_EQ(device.Workspace().Parameters().AppliedRevision(key), model.Revision());
+
+  device.Workspace().Parameters().UploadDirty(device.CommandContext());
+  device.WaitIdle();
+  EXPECT_FALSE(device.Workspace().Parameters().HasPendingUpload());
+
+  float     gpu_value = 0.0f;
+  std::byte storage[4];
+  device.Workspace().Parameters().Download(device.Workspace().Parameters().Binding(key).offset,
+                                           std::span<std::byte>(storage, 4),
+                                           device.CommandContext());
+  std::memcpy(&gpu_value, storage, sizeof(gpu_value));
+  EXPECT_FLOAT_EQ(gpu_value, 0.75f);
+}
+
+TEST_F(OpenClWorkspaceFixture, SinkFailurePublishesNoNewResults) {
+  OpenClRenderDevice device;
+  auto&              workspace = device.Workspace();
+  const GraphValueId id{NodeId{"develop"}, PortId{"sensor_linear"}};
+  constexpr RuntimeRevision first  = 81;
+  constexpr RuntimeRevision second = 82;
+  constexpr std::uint32_t kWidth  = 8;
+  constexpr std::uint32_t kHeight = 8;
+  const auto              repr = MakeExtentRepresentation({kWidth, kHeight}, TextureFormat::Rgba32f);
+  device.BeginRender();
+  (void)workspace.AcquireImageForWrite(id, {kWidth, kHeight, TextureFormat::Rgba32f});
+  workspace.Images().RecordUnpublished(id, first, repr, device.CommandContext().SubmissionId());
+  device.EndRender();
+  device.PublishResults();
+  device.WaitIdle();
+  ASSERT_TRUE(workspace.Images().FindValidResult(id, first, repr,
+                                                 workspace.Device().CompletedSubmission()));
+
+  device.BeginRender();
+  (void)workspace.AcquireImageForWrite(id, {kWidth, kHeight, TextureFormat::Rgba32f});
+  workspace.Images().RecordUnpublished(id, second, repr, device.CommandContext().SubmissionId());
+  device.CancelRender();
+  device.WaitIdle();
+  EXPECT_TRUE(workspace.Images().FindValidResult(id, first, repr,
+                                                 workspace.Device().CompletedSubmission()));
+  EXPECT_FALSE(workspace.Images().FindValidResult(id, second, repr,
+                                                  workspace.Device().CompletedSubmission()));
+  EXPECT_EQ(workspace.Images().UnpublishedCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, RepeatedNodeRemovalReclaimsUnusedResources) {
+  OpenClRenderDevice device;
+  const auto         fields = ExposureFieldBindings();
+  device.Workspace().AlignParameterLayout(1);
+  device.Workspace().Parameters().BindSlot({NodeId{"grade.a"}, AdjustmentInstanceId{"exposure"}}, 4,
+                                           fields);
+  device.Workspace().Parameters().BindSlot({NodeId{"grade.b"}, AdjustmentInstanceId{"exposure"}}, 4,
+                                           fields);
+  device.Workspace().Parameters().BindSlot({NodeId{"grade.c"}, AdjustmentInstanceId{"exposure"}}, 4,
+                                           fields);
+  const auto used_three = device.Workspace().Parameters().used_bytes();
+  EXPECT_EQ(device.Workspace().Parameters().SlotCount(), 3U);
+  EXPECT_GT(used_three, 0U);
+
+  device.WaitIdle();
+  device.Workspace().AlignParameterLayout(2);
+  EXPECT_EQ(device.Workspace().Parameters().SlotCount(), 0U);
+  EXPECT_EQ(device.Workspace().Parameters().used_bytes(), 0U);
+  EXPECT_EQ(device.Workspace().ParameterLayoutHash(), 2U);
+
+  device.Workspace().Parameters().BindSlot({NodeId{"grade.a"}, AdjustmentInstanceId{"exposure"}}, 4,
+                                           fields);
+  EXPECT_EQ(device.Workspace().Parameters().SlotCount(), 1U);
+  EXPECT_LT(device.Workspace().Parameters().used_bytes(), used_three);
+}
+
+}  // namespace
+}  // namespace alcedo

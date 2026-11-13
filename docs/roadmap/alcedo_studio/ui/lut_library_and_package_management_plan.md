@@ -1,0 +1,2229 @@
+# LUT Library and Package Management Plan
+
+Date: 2026-09-29  
+Status: L1, L2, and L3 complete (2026-09-29); L4 complete on Windows CUDA/OpenCL, Metal pixel tests written but not run (2026-09-29); L5 complete (2026-09-29; old panel model removal moves with L6A); L6 split into L6A (LUT browser) and L6B (LUT Settings and payload-free installers) on 2026-09-29; L6A implemented with automated evidence on Windows, manual visual checks pending (2026-09-29); L6B implemented on Windows with automated and live-feed evidence, feed published to R2, manual and macOS checks pending (2026-09-30)  
+Source revision: `dc73591020ef917fed089db7e4f454839d82051f`  
+Primary area: Alcedo Studio UI and application services  
+Parent: Standalone feature plan, indexed by the [roadmap index](../../README.md)  
+Issues: [#213](https://github.com/zidage/AlcedoStudio/issues/213) and
+[#215](https://github.com/zidage/AlcedoStudio/issues/215)
+
+This document defines seven implementation phases (L6 is split into L6A and L6B). No phase is implemented by this plan.
+Section 6.5 records the L6A browser design and the L6B Settings page design. Live LUT image previews are outside this release.
+
+## 1. Product decisions
+
+### 1.1 Confirmed requirements
+
+1. Store the LUT library outside the application installation.
+2. Use `~/.alcedo/luts` by default on both Windows and macOS.
+   Resolve `~` from the current user's home directory. Do not store the literal tilde.
+3. Let the user choose and migrate the library root. The selected root also holds downloaded packages.
+4. Discover `.cube` files recursively. Preserve nested user folders and relative paths.
+5. Give one application service responsibility for discovery, the local inventory, and package operations.
+6. Persist the inventory in the library root. Refresh it when the user requests a refresh.
+7. Read browser entries through the inventory. A missing referenced file requests an inventory refresh.
+8. Mark Alcedo-authored files with a structured JSON comment in the CUBE header.
+9. Keep Alcedo-authored LUTs distinguishable from user LUTs. Let user tools supply the same classification fields.
+10. Support `general` and `film_simulation` categories. Film filters include source and film brand.
+11. Derive one print-presence filter from print metadata: All, With print, or No print.
+    Combine print film and photographic paper under With print. Do not add separate type or stock-model filters.
+12. Each classification filter has an All choice. General LUTs have no film-specific choices other than All.
+13. Combine active filters by intersection. A filter changes the candidate set; it does not change a LUT.
+14. Support libraries with thousands of files. Use bounded work and virtualized views.
+15. Distribute two independent 7z packages: `spectral_film_lut` and `spektrafilm_lut`.
+16. Publish packages and a signed manifest on Cloudflare R2. The LUT manifest has no expiration field or age limit.
+17. Check the LUT manifest when Settings opens. Do not check it automatically at application startup.
+18. Compare each package's file count and content summary with the local inventory.
+19. Show a separate download, update, or repair result for each package. Download only after a user action.
+20. Existing photos use the newest installed version of their selected official LUT.
+21. A missing LUT does not stop rendering. Skip only that LUT operation and show the missing association.
+22. Keep the reference when a file is missing. Do not erase the selected LUT from the project.
+23. Replace the current browser with a separate LUT workspace, reached from the left application navigation.
+24. Follow the currently selected Color Grade node. Show the node identity and name.
+25. Without an open photo or a valid selected Color Grade, allow browsing and prohibit application.
+26. Retain a small LUT adjustment surface in the Editor for strength and an action that opens the LUT workspace.
+27. Add LUT strength as a distinct parameter. Do not change the entire Color Grade's mix amount.
+28. Present strength as 0-100%, with a default of 100%.
+29. Automatically restore the selected LUT at its configured strength when its missing file becomes available again.
+30. A locally edited official LUT remains official while its metadata still declares it as official.
+    The package update replaces it. Do not preserve an automatic user copy or ask how to resolve the edit.
+
+The answers in this conversation confirm the shared home-directory default, migration, automatic use
+of newer official content, and selection of the current Color Grade as the application target.
+They also confirm the combined print-presence filter, the strength range, automatic resource restoration,
+and replacement of locally edited files that retain their official metadata.
+
+### 1.2 Scope boundaries
+
+- Do not distribute LUT payloads inside the `.app`, Windows installer, or software-update archive.
+- Do not automatically download either package on first launch.
+- Do not add current-image LUT thumbnails, a preview worker, or temporary history commits.
+- Do not retain old package versions to preserve old photo appearances. The user chose current package content.
+- Do not change RAW decoding, rendering quality, or backend selection.
+- Do not change film simulation mathematics in either generator.
+- Do not infer missing film or print metadata from an ambiguous filename.
+- Do not add a second editable pipeline, a second history owner, or a second persistent catalog owner.
+
+Issue #213 also requires a real folder-open action and a visible failure result.
+Issue #215 originally suggests a collapsible filesystem tree. This request defines metadata-based
+classification instead. Recursive discovery and custom roots are required. Exact tree presentation
+remains part of the blank visual design; do not claim that its original tree checklist is complete.
+
+### 1.3 Decisions made during L1 (2026-09-29)
+
+These user decisions refine sections 4.2, 4.3, and 6.3. Later phases apply them.
+
+1. The local inventory is updated only by a user-requested rescan, never at startup or when the
+   LUT panel opens. The panel reads the persisted file. It is `<root>/lut-inventory.json`,
+   distinct from the signed `package-inventory.json` inside each archive.
+2. The scan computes SHA-256 only for files that declare `origin: alcedo`. User LUTs are not hashed.
+   Equal file names found by the recursive scan need no special handling.
+3. Each entry's name is its file stem. The render pipeline refers to the file path; paths are
+   unique, so equal names are separate entries. L4 must reconcile this with the reference forms
+   in section 4.2 before changing the model.
+4. Official LUTs form one built-in group without further category browsing. Their file names are
+   canonical (`<film.id>[__<print.id>][__<variant>].cube`), so a `<film.id>` prefix finds every
+   print option of a film. The browser shows only the film name; the print is an option of it.
+5. Header parsing and official-file hashing run on a bounded worker set, not one thread.
+
+### 1.4 Decisions made for L6A (2026-09-29)
+
+These user decisions refine requirements 23-26 and sections 6.4 and 6.5. L6A and L6B apply them.
+
+1. L6 is split. **L6A** delivers the LUT browser and the small Editor LUT control.
+   **L6B** delivers LUT Settings (root selection and migration, package check, download, repair,
+   cancel, and retry) and removes LUT payloads from the installers. Payload removal stays with L6B
+   because the Settings download replaces the bundled files.
+2. The LUT browser is a **left-rail page of the Editor**, like History and Versions, not a
+   separate application route. It shares the Editor space, so the viewport stays visible and shows
+   the result of an applied LUT at once. This replaces the "separate LUT workspace" wording of
+   requirement 23; the browser is still one retained surface over one library model.
+3. The browser has **no target column**. A compact target indicator names the Color Grade that
+   receives a LUT, or the reason none can receive it.
+4. The browser has two cards. The **filter card** follows the Album inspector (uppercase section
+   titles and count bars). The **result card** shows the filtered LUTs as a grid of tiles with the
+   user-supplied Tabler `cube` icon as the image placeholder (no LUT image previews).
+5. Tile names are shown in full (wrapped, never elided). An official film simulation is titled
+   by film brand and stock (`Kodak Vision3 250D`); its print is not part of the title and is shown
+   as a separate line.
+6. Choosing a tile applies it to the target as one settled edit, so the Editor viewport shows it.
+   The design goal is the product's: a clear hierarchy, one obvious purpose per part, and a short
+   learning curve.
+
+### 1.5 Decisions made for L6B (2026-09-30)
+
+The user asked to complete L6B, publish once to R2 with the AWS CLI, and test the related parts in
+the real environment. No separate Settings design was supplied, so L6B composes the page from the
+existing Settings pages and records it in section 6.5.
+
+1. Settings gets a `LUTs` category (index 8, `lut-cube.svg`); About moves to index 9. The dialog
+   exposes `updatesCategory`, `lutCategory`, and `aboutCategory` so callers stop using literals.
+2. The signed feed check runs on each Settings opening transition (`SettingDialog.onVisibleChanged`),
+   not when the LUT page is shown, so the package list is current when the user reaches it.
+3. A chosen folder is checked by the library owner (`CheckRootChoice`) and confirmed inline before
+   Use folder or Move library starts. A running move can be canceled until its staging copy is
+   moved into place.
+4. The feed gains an optional package `name` (display text), written by `prepare_lut_packages.py`
+   from the packages' `source.name`.
+5. The first published packages are the spectral_film_lut negative set (`negative-lmt
+   --alcedo-package`, 44 LUTs) and the spektrafilm print-chain set (`bake_alcedo_set.sh` without
+   options, 36 LUTs), both 65^3, revision `2026.09.30`. They replace the removed installer payload.
+6. `ALCEDO_LUT_PACKAGE_FEED_URL` defaults to the deployed `https://static.aoraw.org/luts/v1/manifest.json`.
+
+### 1.6 Related work
+
+| Plan | Relationship |
+| --- | --- |
+| [QML workspace plan](qml_editor_rhi_unified_workspace_plan.md) | Replace its old LUT browser placement. Keep the existing session and retained workspace lifetimes. |
+| [Node-aware adjustment plan](../edit/node_mask_editor/phase_nm6_node_aware_adjustments_plan.md) | Reuse explicit node and adjustment targets, typed writes, and settled history changes. |
+| [Background task plan](background_tasks_ui_state_plan.md) | Reuse current task reporting and download admission. The old plan is context, not current implementation evidence. |
+| [Shortcut registry plan](configurable_keyboard_shortcut_registry_plan.md) | Preserve scoped LUT navigation and native text input in search. |
+
+Read `AGENTS.md` and the applicable skills again before implementation. Required project skills include
+`alcedo-qml-ui`, `alcedo-msvc-cmake`, and `opencl-program-registry` for the affected work.
+Use the Qt QML and CMake guidance when writing those files. The user's blank visual-design requirement
+takes precedence over visual examples in an older plan or skill.
+
+## 2. Current source audit
+
+The following facts come from source inspection. They are not build or test results.
+External generator files were inspected at their supplied paths. Their Git revisions were unavailable
+because Git rejected repository ownership. No external repository was changed.
+
+| Area | Existing owner and evidence | Current behavior and required change |
+| --- | --- | --- |
+| Discovery | [lut_catalog.cpp](../../../../alcedo_studio/src/ui/alcedo_main/editor_support/modules/lut_catalog.cpp) | Uses a nonrecursive directory iterator. Resolves application `LUTs`, then `CONFIG_PATH/LUTs`. Move discovery out of the UI module. |
+| Identity | Same catalog, `FindEntryIndexForPath` | Tries a filename match after an exact path misses. This can select the wrong file after recursive discovery. Remove this matching rule. |
+| Catalog state | Same catalog, `CachedCatalogState`, `CloneCatalogWithSelection` | Uses a process cache and copies its catalog to add current selection. Replace this with one owner and a separate selection projection. |
+| QML data | [editor_lut_catalog_model.cpp](../../../../alcedo_studio/src/ui/alcedo_main/album_backend/editor_lut_catalog_model.cpp) | Copies entries into QVariant maps. Search uses case-insensitive substring checks. Favorites store absolute paths. |
+| Current panel | [LUTPanel.qml](../../../../alcedo_studio/src/ui/alcedo_main/qml/LUTPanel.qml) | Owns another JavaScript list, filtering, and sorting. Constructs the folder URL in QML. Replace browser behavior and retain only the small editor adjustment role. |
+| Model | [lmt_model.hpp](../../../../alcedo_studio/src/include/edit/operators/models/lmt_model.hpp), [implementation](../../../../alcedo_studio/src/edit/operators/models/lmt_model.cpp) | Persists only `cube_path`. There is no LUT strength or stable official identity. |
+| Typed edits | [editor_parameter_write.hpp](../../../../alcedo_studio/src/include/app/editor_parameter_write.hpp), [write owner](../../../../alcedo_studio/src/app/editor_parameter_write.cpp) | `EditorLutWrite` contains only a path. Extend the focused write and native model operation. |
+| Panel reads | [editor_panel_projection.cpp](../../../../alcedo_studio/src/app/editor_panel_projection.cpp) | Reads the exact Color Grade and adjustment instance. Extend this projection, rather than reading live models from QML. |
+| Runtime | [grade_lut.cpp](../../../../alcedo_studio/src/edit/runtime/grade_lut.cpp) | Parses the path and throws on load failure. Caches up to 16 packed cubes by path, size, and write time. Add explicit missing-file behavior and content-aware resolution. |
+| GPU parameters | [adjustment_runtime.cpp](../../../../alcedo_studio/src/edit/runtime/adjustment_runtime.cpp) | Encodes LUT activity as zero or one. Encode strength and effective resource availability. |
+| GPU execution | [CUDA](../../../../alcedo_studio/src/edit/runtime/cuda/cuda_primary_grade_pass.cu), [Metal shader](../../../../alcedo_studio/src/edit/runtime/metal/shader/primary_grade.metal), [OpenCL shader](../../../../alcedo_studio/src/edit/runtime/opencl/shader/primary_grade.cl) | The LMT replaces the current color with a sampled LUT color. Implement the same blend in all three paths. |
+| Download transport | [download_service.hpp](../../../../alcedo_studio/src/include/app/download_service.hpp), [model download](../../../../alcedo_studio/src/app/model_download_service.cpp) | `DownloadService` already serializes jobs and accepts expected size and SHA-256. Model download performs its own post-download work. |
+| Signatures | [update_manifest.cpp](../../../../alcedo_studio/src/app/update_manifest.cpp), [signer](../../../../alcedo_studio/src/app/update_signer_main.cpp) | Uses detached Ed25519 signatures over exact bytes. Software update parsing requires `expiresAt` and platform artifacts. Reuse signature verification, not that schema. |
+| Publication | [publish_update.py](../../../../scripts/update/publish_update.py), [update documentation](../../../update-system.md) | Existing R2 tooling uploads immutable artifacts and manifests. Add LUT publication without changing application release rules. |
+| Composition | [application_module_host.hpp](../../../../alcedo_studio/src/include/ui/alcedo_main/album_backend/application_module_host.hpp) | Owns the shared download service, updater, editor session, and UI modules. Add the library service here. |
+| Navigation | [workspace_router.cpp](../../../../alcedo_studio/src/ui/alcedo_main/album_backend/workspace_router.cpp), [WorkspaceHost.qml](../../../../alcedo_studio/src/ui/alcedo_main/qml/WorkspaceHost.qml) | Routes Library and Editor. Opening Library clears route image IDs. A LUT route must retain the editor target explicitly. |
+| Settings | [SettingDialog.qml](../../../../alcedo_studio/src/ui/alcedo_main/qml/SettingDialog.qml) | Hosts separate settings categories. Add LUT settings and one check on each opening transition. |
+| Distribution | [root CMake](../../../../CMakeLists.txt) | `alcedo_collect_packaged_luts` collects Agfa, Fuji, and Kodak cubes. Both platform install rules copy them. Remove this payload installation. |
+| Tests | [catalog tests](../../../../alcedo_studio/tests/ui/lut_catalog_test.cpp), [cache tests](../../../../alcedo_studio/tests/edit/runtime/grade_lut_cache_test.cpp) | Catalog tests encode filename matching. Cache tests encode throwing on a missing file. Replace those expectations deliberately. |
+
+The catalog test source exists, but this audit did not find its registration by filename in the
+current test CMake files. Do not claim it runs without checking discovery. `grade_lut_cache_test.cpp`
+is compiled into `GpuDagRawInputTest`; its suite is `GradeLutCacheTest`.
+
+### 2.1 Generator integration sites
+
+| Repository | Existing files and facts | Required work |
+| --- | --- | --- |
+| `D:/Projects/spectral_film_lut` | `src/spectral_film_lut/generate_acescc_lmt.py` calls `colour.io.write_LUT`. `film_data.py` has `manufacturer`. The ACEScc entry accepts an optional print film. | Write metadata from actual film objects and export options. Use one structured comment. Cover the ACEScc export entry and its CLI callers. |
+| `D:/Projects/spektrafilm_lut` | `src/spektrafilm_lut_creator/aces_lmt.py::write_cube` already writes comments. `scripts/aces_lmt/bake.py` and `bake_print_drt.py` select negative and print paths. `formats/cube.py` supports `header_lines`. | Supply metadata at the export caller where actual film and print choices are known. Reuse the writer's comment facility. |
+
+The spektrafilm print export states that its inverse DRT assumes ACES 2.0 SDR, 100 nit, Rec.709,
+and gamma 2.2. Preserve that information in metadata and its existing attribution comments.
+This feature must not silently change the display transform or promise compatibility with every DRT.
+
+## 3. Official-file update policy
+
+Editing the contents of an official package file is not an expected customization workflow.
+If its metadata still declares an official LUT, continue to classify it as official content.
+A changed file hash indicates differing package content. It does not convert the file into a user LUT.
+
+When the user starts that package's update or repair, replace the edited official file with verified package content.
+Do not create a user copy, retain the local edits, or add a per-file overwrite confirmation.
+Existing photos keep their official LUT reference and use the newly installed content.
+Signature and archive validation remain mandatory before activation.
+
+Use the explicit `origin` declaration for classification. Editing numeric rows, a description, or a display name
+does not change an `origin: alcedo` file into user content. A user variant must explicitly declare `origin: user`.
+Never infer user ownership from a hash mismatch.
+
+All product questions raised during this planning task are resolved. Panel visual design remains intentionally blank.
+
+The public R2 prefix is a deployment value. A proposed prefix is `luts/v1` under the current asset host.
+Do not claim that prefix is deployed. A release operator supplies the actual feed URL before publication.
+This planning task does not upload packages or access signing secrets.
+
+## 4. Data specification
+
+### 4.1 CUBE comment schema
+
+Use one UTF-8 comment line before the numeric table:
+
+```text
+# ALCEDO_LUT {"schema":1,"id":"spectral_film_lut:kodak-5207:negative","origin":"alcedo","category":"film_simulation","source":{"id":"spectral_film_lut","name":"Spectral Film LUT"},"film":{"id":"kodak-5207","name":"Vision3 250D","brand":"Kodak"},"input_space":"ACEScc","output_space":"ACEScc"}
+```
+
+The line is a schema example. It is not an approved initial package inventory.
+
+| Field | Meaning and validation |
+| --- | --- |
+| `schema` | Integer schema version. Reject unsupported versions with a visible metadata error. |
+| `id` | Stable generator-namespaced LUT identifier. Different intended looks need different IDs. Rebuilding the same look preserves its ID. |
+| `origin` | `alcedo` or `user`. This is the author's declaration, not signature verification. |
+| `category` | `general` or `film_simulation`. Missing metadata means a normal user LUT in `general`. |
+| `source` | Generator ID and display name. Any producer can define its own source ID. |
+| `film` | Film ID, display name, and brand. Required for a classified film simulation. Brand comes from source data. |
+| `print` | Optional object with `id`, `name`, `brand`, and `kind`. `kind` is `film` or `paper` for descriptive metadata only. Either kind matches With print. Absence means No print. |
+| `variant` | Optional stable name for an intended calibration or look variant. It contributes to the producer's stable ID. |
+| `input_space`, `output_space` | Declared encoding. Official packages use the current ACEScc LMT interface. Do not infer or perform a conversion. |
+| `description`, `aliases` | Optional display description and search names. Bound their sizes before indexing. |
+| `display_requirement` | Optional statement of a required DRT/display configuration. Preserve actual exporter constraints. |
+
+Use a header limit of 64 KiB and a metadata line limit of 16 KiB. Limit string lengths and alias counts.
+Stop metadata inspection at the first numeric row. Do not load LUT pixel tables to populate the catalog.
+Reject duplicate structured comments and invalid required fields. Keep the file visible with its error.
+Unknown optional fields are ignored within schema 1. Unannotated valid CUBE files remain supported.
+Do not reinterpret malformed Alcedo metadata as a valid general LUT.
+
+Keep catalog visibility separate from runtime support. The current grade runtime requires a 3D cube.
+Show unsupported 1D-only files with a clear reason and disable their application. Do not imply that
+this catalog feature adds a 1D processing path. Validate full numeric data when loading for rendering.
+
+A generator may declare `origin: alcedo` only in its explicit Alcedo package export mode.
+Normal exports and user-authored tools use `origin: user`. Existing attribution and license comments remain.
+The origin declaration controls classification. Signature verification authenticates replacement package bytes.
+Changes to numeric LUT data do not alter the declaration or protect an official package file from replacement.
+
+### 4.2 File identities and ownership
+
+Use these reference forms in the LMT model:
+
+- Official: package ID and stable LUT ID. Resolve to the package's current installed content.
+- User: a library entry ID assigned by the inventory, plus its root-relative locator.
+- Legacy: the old `cube_path`, retained until its identity can be resolved without ambiguity.
+
+Store only the applicable reference form. Do not store a second writable copy of the catalog row in the model.
+Keep the last known name as a small presentation value for a missing association.
+Metadata IDs are not file hashes. Two different bytes can be revisions of the same official LUT.
+Two user files with the same declared metadata ID remain distinct entries with distinct entry IDs.
+
+Track `declared_origin` separately from `managed_package_id` and verified installation status.
+A loose file with an Alcedo comment is recognizable as declared Alcedo content, but is not package-owned.
+Only a file listed by a verified installed package can be replaced by that package's update.
+For such a file, content edits with retained official metadata do not remove package ownership.
+Keep its differing hash in the package summary and replace it during the requested update or repair.
+Do not create a conflict state that requires a per-file user decision.
+
+A valid `origin: user` declaration creates user content rather than an edited official revision.
+If that file still occupies an old package content directory, relocate it through the library owner before cleanup.
+Preserve its bytes and index it as a user entry. Do not automatically retarget existing official photo references to it.
+This reclassification does not create a user copy of a file that still declares `origin: alcedo`.
+
+For legacy projects, resolve an existing exact path first. For prior library roots, use an explicit
+old-root-to-new-root mapping and the same relative path. Map old bundled official files only with
+verified content records supplied by the release tooling. Do not identify them by basename alone.
+An unresolved legacy reference stays visible and missing. A user selection can replace it through history.
+Loading, scanning, and package updates do not create history commits or rewrite old commits.
+
+### 4.3 Root contents and the local inventory
+
+Proposed storage layout:
+
+```text
+<root>/
+  catalog.json
+  user/                         # Files imported by the application
+  <existing user subfolders>/   # Recursively discovered loose files
+  packages/
+    spectral_film_lut/
+      installed.json
+      content/<inventory-hash>/...
+    spektrafilm_lut/
+      installed.json
+      content/<inventory-hash>/...
+  .downloads/                   # Service-owned partial archives and extraction work
+```
+
+`catalog.json` is the persisted form of the service's inventory. It stores schema, entry ID,
+relative location, metadata, size, SHA-256, availability, and package summaries. It also stores
+root-migration aliases and favorites by entry identity. Do not retain absolute-path favorites as the new format.
+
+`installed.json` is a small package activation receipt. It records the active content directory and
+the verified manifest descriptor. It does not contain a second copy of all inventory rows.
+The receipt lets the service rebuild a damaged catalog without guessing which extracted directory is active.
+Store the verified package inventory and signature evidence with that content directory for offline repair.
+
+Scan loose files and only active package content. Exclude `.downloads`, inactive package content,
+receipts, and internal metadata. Match the `.cube` extension case-insensitively.
+Do not follow directory links or junctions in release one. Report skipped links and unreadable subtrees.
+Never publish a partial scan as a complete package integrity result.
+
+For each explicit refresh, stream file bytes for SHA-256 in the worker. Parse only bounded headers.
+This is necessary to detect a content change that preserves file size and write time.
+Do not read full files again during search, row selection, scrolling, or remote summary comparison.
+Show refresh progress. Publish the refreshed inventory only after its persistence succeeds.
+A failed refresh keeps the previous inventory available and marks its verification as incomplete.
+
+At startup, load the local inventory without network access. Rebuild a missing or invalid inventory
+from local files and verified installation receipts. A catalog lookup checks the resolved file before use.
+On absence, report Missing, request one refresh, and avoid a retry loop for the same unresolved reference.
+A later manual refresh or successful package operation can resolve it again.
+
+### 4.4 Package manifest and hashes
+
+Use a distinct signed LUT schema:
+
+```json
+{
+  "schema": 1,
+  "kind": "alcedo-lut-packages",
+  "sequence": 1,
+  "packages": [
+    {
+      "id": "spectral_film_lut",
+      "revision": "release-label",
+      "file_count": 42,
+      "inventory_sha256": "64 lowercase hexadecimal characters",
+      "unpacked_bytes": 123456,
+      "artifact": {
+        "url": "https://static.aoraw.org/luts/v1/packages/example.7z",
+        "size": 12345,
+        "sha256": "64 lowercase hexadecimal characters"
+      }
+    }
+  ]
+}
+```
+
+Values above are illustrative. They are not production URLs, counts, or hashes.
+No expiration field is required, synthesized, or enforced. HTTP cache policy does not expire the signature.
+Reuse the current Ed25519 public key and exact-byte detached signing mechanism.
+Give the LUT feed its own trusted sequence setting. A protocol sequence is not an application race counter.
+An older trusted sequence is rejected. The software-update feed keeps its current expiration rule.
+
+Define two different SHA-256 values:
+
+1. `artifact.sha256` covers the exact 7z bytes. `DownloadService` checks it and the archive size.
+2. `inventory_sha256` covers the canonical ordered LUT records. It compares installed content across packaging changes.
+
+For each record, encode `id NUL relative-path NUL decimal-byte-size NUL lowercase-sha256 LF`.
+Use UTF-8 for the ID and path. Reject NUL and line breaks in both. Normalize separators to `/`.
+Sort by relative-path UTF-8 bytes, then ID bytes. Hash the concatenation. Use the same fixture in Python and C++.
+Reject duplicate package IDs, duplicate LUT IDs within a package, and platform-colliding paths.
+The archive's `package-inventory.json` lists those records. Signed archive bytes authenticate the inventory;
+the signed descriptor also fixes its expected count and canonical digest.
+
+Licenses and attribution files are included in an explicit auxiliary-file list with size and hashes.
+They are authenticated and verified but do not increase `file_count`, which counts LUTs only.
+User files never contribute to an official package digest. Compare each package independently.
+An absent optional package shows Not installed. An installed package with differing bytes shows Update available
+or Repair required. Do not repeatedly ask users to install a package they did not select.
+
+Entering Settings compares the remote descriptor with the last verified local summary immediately.
+Label that comparison with its local verification state. Start a local refresh when verification is incomplete
+or a known file change exists. An old summary alone is not proof of current on-disk integrity.
+
+### 4.5 Package extraction and activation
+
+Use an in-process `LibArchive::LibArchive` dependency with 7z/LZMA support on Windows and macOS.
+Package the required library through the existing platform dependency flow. Do not require users to install a CLI.
+The [libarchive format documentation](https://github.com/libarchive/libarchive/wiki/LibarchiveFormats)
+lists 7-Zip support. Verify the exact codecs produced by the publishing tool in both packaged applications.
+Do not switch archive formats after an extraction failure.
+
+Download into service-owned partial storage. Validate archive size and SHA-256 before extraction.
+Extract into a new directory on the destination volume. Accept only listed regular files and directories.
+Reject absolute paths, `..`, links, devices, duplicate destinations, and paths that escape the destination.
+Enforce the signed byte count and file count while streaming. Verify every extracted file and the summary.
+Do not extract into live package content or user folders.
+
+Write a verified content directory, then atomically replace that package's activation receipt.
+This receipt replacement is the persistent commit point. Update the inventory through its owner next.
+If catalog publication fails after the receipt changes, report Installed; inventory refresh required.
+Rebuild from the receipt on restart. Never report an old receipt as active after the new one committed.
+Before the commit point, all failures keep the old active package. Retain other packages and user files.
+Replace locally edited official entries under section 3 without a preservation copy or overwrite prompt.
+Keep old content only until active resource readers release it and explicitly reclassified user entries are relocated.
+This temporary lifetime is not a user-selectable package version history.
+
+If a newer package removes a stable LUT ID, keep the photo's association and report Missing.
+Do not substitute another look or retain an old version as an unrequested compatibility path.
+
+User-requested cancel may stop download, hashing, or extraction before activation. Activation completes as one
+operation once started. Closing Settings does not silently cancel a download. Application shutdown uses
+the existing service shutdown path and does not leave an active receipt pointing at partial content.
+
+### 4.6 Directory migration
+
+Provide two explicit operations: use an existing library root, and migrate the current library to a new root.
+Validate the destination and show the operation before starting it. Do not silently merge conflicting libraries.
+An existing root may contain user files; index them without renaming or overwriting them.
+
+For migration, enumerate the current library, copy to a staging directory at the destination, and verify bytes.
+Preserve relative user paths, entry IDs, favorites, package receipts, and active content.
+Reject a destination inside the source, a source inside the destination, conflicting files, and unavailable space.
+Use bounded streaming. Cross-volume migration must not assume that directory rename is atomic.
+Persist the new root only after the destination is complete. Preserve the source on any earlier failure.
+If the process stops after the root switch, the destination remains usable and source cleanup can resume.
+Delete only source files verified as copied and unchanged. Leave independently changed source files and report them.
+
+Block conflicting library mutations while a migration commits. Rendering may use already packed immutable cubes.
+A resource resolution must retain access until packing completes; it must not observe half-moved content.
+Root changes do not rewrite every photo. Resolve official IDs and user relative locators through the new root.
+Do not automatically search the application bundle when the selected root becomes unavailable.
+
+## 5. Owners, APIs, and execution
+
+### 5.1 Responsibility map
+
+| Owner | Mutable state | Input and result | Lifetime and error surface |
+| --- | --- | --- | --- |
+| Proposed `LutLibraryService` in `app/` | Root choice, canonical inventory, package status, ongoing library operation | Focused scan, import, migration, and package requests; row reads and change notices | Application lifetime, owned by `ApplicationModuleHost`. Explicit result/error signals. |
+| Proposed library worker owned by that service | Newly discovered records and pending filesystem operation | Filesystem inputs and download completions; finished operation results | One serial operation owner. Disk and hashing work runs outside the GUI thread. |
+| Existing `DownloadService` | Transfer process and current request | Verified download request; progress and completion | Existing application lifetime. It can reject a busy request without starting another daemon. |
+| Proposed `LutLibraryModel` | Row indices, query, order, and focused browser entry | Scoped service reads and filter changes | UI lifetime retained across workspace changes. No copied QVariant catalog or QML array. |
+| Existing `EditorSessionService` and command service | Current target and accepted parameter changes | Explicit `EditorParameterTarget` plus LUT selection or strength | Existing session lifetime. Revalidate target at mutation and use existing history ordering. |
+| Existing `LmtModel` | Reference and strength | Focused selection or strength changes | Document lifetime. No file I/O in its setters or JSON parser. |
+| Proposed resolver interface in `edit/runtime/` | No separate catalog | Minimal reference; resolved location, content identity, or typed absence/error | Injected resource access. Runtime code must not depend on QML or the application service. |
+| Existing packed LUT cache | Immutable GPU upload data | Resolved resource content; packed cube | Bounded to the existing cache policy. Remove dependence on path/mtime alone after verified content changes. |
+
+Use the application service to implement the runtime resolver port. Inject the port through pipeline
+construction for the Editor, thumbnails, export, and other existing render consumers.
+The resolver reads the same catalog through synchronized owner APIs. Do not copy the entire catalog into each pipeline.
+Return minimal resource values. A scoped resource read keeps the selected files valid while the caller packs them.
+Release the read before GPU work; `PackedGradeLut` already owns the required immutable upload bytes.
+
+The scan creates new records from the filesystem; it does not clone the old catalog for editing.
+The owner retains the published inventory until the replacement is complete. The new records exist only for
+validation and atomic publication. Document this purpose and lifetime at their creation site.
+The JSON file is serialized persistence for those same records, not another independently writable model.
+Model indices and cached normalized search keys are derived data, not editable metadata copies.
+
+### 5.2 Proposed owner operations
+
+Names below are proposed interfaces, not existing APIs.
+
+| Operation | Input | Result and validation |
+| --- | --- | --- |
+| `RefreshInventory()` | No copied inventory | Async result; publish a complete inventory or keep the prior one with diagnostics. |
+| `ReadEntry(entry_id, visitor)` | Entry ID and scoped const visitor | No retained mutable reference. A deleted entry returns a typed missing result. |
+| `ImportFiles(paths)` | Selected source paths | Validate, copy into `user/`, then publish entries. Report conflicts; never overwrite silently. |
+| `UseRoot(path)` | Existing root | Validate and load/index before persisting the selected root. |
+| `MigrateRoot(path)` | Destination root | Return progress and a committed-root result, or the precise failure with the prior root active. |
+| `CheckPackages()` | Settings-open action or explicit retry | Fetch and verify the feed; compare per-package summaries. No implicit download. |
+| `InstallPackage(package_id)` | Verified descriptor ID | Download, extract, validate, activate, and refresh through the same owner. |
+| `CancelOperation()` | Current user-cancelable operation | Reuse the active download request ID where needed; do not create a new task framework. |
+| `ResolveLut(reference)` | Minimal model reference | Scoped location and content hash, Missing, Invalid, or I/O error. No filename substitution. |
+| `OpenRootDirectory()` | Active root | Use a native local-file URL; report dispatch failure to the caller. |
+| `SetLutSelection(reference)` | Explicit target and selection | One typed model mutation and one settled history edit. Preserve independent strength. |
+| `SetLutStrength(amount)` | Explicit target and finite amount | Validate the approved range; preview and settle through the existing adjustment path. |
+
+The folder-open adapter calls `QDesktopServices::openUrl(QUrl::fromLocalFile(path))`.
+Check the returned result and expose failure. Qt's
+[desktop-services documentation](https://doc.qt.io/qt-6/qdesktopservices.html) explains the dispatch behavior.
+A successful dispatch is not proof that Finder displayed a window; verify that manually on macOS.
+
+### 5.3 Publication and concurrency rules
+
+Serialize refresh, import, root migration, and package activation through the library owner.
+Keep GUI row reads short. Never hold the inventory lock during disk I/O, hashing, or extraction.
+Complete persistence before announcing successful changes. Emit minimal affected IDs and status changes.
+Coalesce repeated refresh requests while one refresh is active. Do not add per-row epochs or request counters.
+
+Use existing editor command ordering when a user changes selection, strength, or active node.
+Capture the full target before submitting the edit. A later selection change cannot redirect that edit.
+Do not invent another session identity protocol for this feature.
+
+Existing production boundaries already include GUI edits, the editor render worker, and separate thumbnail
+or export work. Before adding any new consistency mechanism, record the actual modified call chain,
+the two conflicting operations, and a test that executes the incorrect order. A speculative overlap
+does not justify a counter, cancellation scheme, or duplicated state. Package activation receipts and
+schema versions describe persistent external data and serve separate purposes.
+
+## 6. Runtime and browser behavior
+
+### 6.1 Resource failure and restoration
+
+Differentiate resource absence from an unreadable file or invalid CUBE data.
+The user authorizes continuing without the LUT only when the file is missing.
+Malformed cube data, permission failures, signature failures, and unsupported formats retain explicit errors.
+Do not catch every error and return an identity transform.
+
+For Missing, preserve the LMT reference and configured strength. Set effective LUT application to zero
+for that render. Continue the remaining operations in the same node and all other nodes.
+Carry a node-specific diagnostic to the panel through the existing render/session completion path.
+Apply the same missing-resource semantics to Editor, thumbnail, and export consumers.
+Do not write a synthetic disabled state or create a history commit because a disk file disappeared.
+
+On a verified package change, invalidate dependent runtime results through the current invalidation owner.
+Include resolved LUT content identity in the affected resource dependency. A result cache must not return
+old pixels merely because the model's stable official ID stayed unchanged. Exercise a warm cache in tests.
+Resolution must also inspect availability when a resource dependency is considered reusable.
+Metadata refresh alone is insufficient if a cached image skips the LUT loader.
+
+On the next inventory refresh or resource availability check, resolve the same missing association again.
+If the file is available and valid, automatically restore its LUT effect at the configured strength.
+Invalidate affected render results and refresh the displayed missing status. Do not require a separate enable action
+or create a history commit. Invalid or unreadable returned files keep their explicit error behavior.
+Preserve explicit user removal of a LUT; a returned file must never re-enable an association that the user cleared.
+
+### 6.2 Strength
+
+Store a finite float in `[0, 1]` and present `0-100%`. The default is 1, displayed as 100%.
+Use 1 for legacy files with no strength field. Keep strength when a user selects another LUT.
+At zero, retain the selection and skip sampling. At one, match the previous complete LUT result.
+At an intermediate value `a`, compute `c + a * (L(c) - c)` at the existing LMT operation location.
+Both operands use that operation's ACEScc working encoding. Preserve alpha and the current interpolation rule.
+This parameter does not mix the complete Color Grade or its masks.
+
+Use a focused model operation for reference changes and another for strength changes.
+History serialization, WAL replay, project reopening, and adjustment transfer must preserve both fields.
+Readers accept the old `cube_path` representation. Writers emit the new tagged reference and strength.
+Do not create an incompatible top-level project format solely to add these optional model fields.
+Validate unknown reference forms before mutating the live model.
+
+### 6.3 Filter and search model
+
+The result set is the intersection of category, source, brand, optional print presence, favorites,
+and the text query. All removes that one predicate. Do not turn a choice into a physical folder move.
+Use source metadata to populate choices. `spectral_film_lut` and `spektrafilm_lut` are initial values,
+not an enumeration of all permitted sources.
+
+When category is General, clear film-specific predicates to All. For film simulations, offer the
+print dimension when candidate metadata supplies it. Its choices are All, With print, and No print.
+A valid `print` object matches With print, whether it describes print film or photographic paper.
+Absence of `print` matches No print. All removes the predicate and includes both sets.
+Do not add a print-type or print-stock-model selection level. Print names remain descriptive and searchable metadata.
+Recompute facet counts from the intersection of other predicates.
+Keep an explicit zero-result state instead of silently changing a valid user's filter.
+Clear a dependent choice only when its dimension no longer applies, such as switching to General.
+
+Search names, aliases, source, brand, stock, print name, and relative path. Normalize Unicode for search,
+case-fold, and tokenize punctuation. Preserve the original strings for display and filesystem access.
+All query tokens must match some indexed field. Rank exact matches, token prefixes, substrings,
+and bounded edit-distance matches in that order. Use the entry ID as the final stable tie-breaker.
+Do not apply fuzzy matching to resource identity or automatic relinking.
+
+Build normalized keys once per changed entry. Bound query length to 256 characters and 16 tokens.
+Allow one edit for tokens of length 4-7 and two for longer tokens. Short tokens require exact or prefix matches.
+Use existing aliases for alternate names; do not invent automatic translation or romanization.
+Debounce typing by 100 ms. Keep expensive ranking off the GUI thread if the measured budget requires it.
+Reuse the library's serial work and pending-query replacement; do not add a generic search scheduler.
+
+Use a `QAbstractListModel` or an index-based proxy over service-owned entries. Request row data as needed.
+Keep instantiated QML rows proportional to visible rows. Selecting a row updates selection roles only.
+Preserve scroll position on selection and favorite changes. Filtering may change result order deliberately.
+Keep the current applied LUT visible in the target summary even when it is excluded by the active filters.
+
+### 6.4 Target and workspace behavior
+
+Opening the LUT workspace preserves the open image, session, primary selected node, and adjustment instance.
+Do not call `OpenLibrary()` as an intermediate navigation action because it clears route image IDs.
+Read the existing target projection. A primary selected Color Grade in a multi-selection remains the single target.
+Never apply a LUT to every selected node implicitly.
+
+Show the target node name, its image context, and the current associated LUT through independent model roles.
+When no valid target exists, browsing, search, refresh, and Settings still work. Applying or clearing a LUT is disabled.
+When the target changes, load its selection and strength without submitting an edit.
+The Editor shortcut opens the same library model and target. It must not create another catalog instance.
+
+The three workspace routes must share one definition of the current image. Audit direct checks for
+`workspace == editor` in the shell, shortcuts, filmstrip, and target adapters. A hidden editor surface
+does not mean that its image or document target is closed.
+
+Revisit hidden editor presentation handling. Applying a LUT from its workspace must not wait forever for a
+hidden `EditorViewportItem` acknowledgement. Use the existing session's hidden-workspace behavior and request
+the current frame when Editor becomes visible again. Verify this through the scheduler/service tests.
+
+L6A amendment (section 1.4): the browser is an Editor left-rail page, so opening it changes only
+`EditorSessionController::editorToolPanelPage`. It does not change the route, the image, the node
+selection, or viewport visibility. The hidden-viewport case above does not arise from the browser,
+and no route or shortcut audit is required for it.
+
+### 6.5 Panel visual design
+
+**L6A LUT browser (approved 2026-09-29, section 1.4).** Tokens and states follow
+`alcedo_studio/src/ui/alcedo_main/DESIGN.md`; this section records the composition.
+
+- **Placement.** Editor left rail button `LUTs` (existing `box.svg`) opens page `luts`. The page is
+  wider than History/Versions (`editorLutBrowserPanelWidth`) and never takes the viewport below
+  its minimum width. The rail panel shell is transparent for this page; the page paints two cards.
+- **Filter card** (`editorLutBrowserFilterWidth`): uppercase section titles, one count bar per
+  choice (Album inspector `StatsCard` bars). Sections: Category, Source, Brand, Print (With print /
+  No print), and a Favorites row. The chosen row has a 1 px outline over its count bar (no fill).
+  Choosing the selected bar again returns that dimension to All.
+  Brand and Print hide when the category is General or no candidate declares a print.
+  A Clear action appears when any predicate is active.
+- **Result card.** Top row: search field (native text input), sort menu, Import, Refresh, and
+  Open folder actions. Below it the target indicator: `Applies to` and the node name, and the
+  current LUT and its print on separate lines; without a target, the reason in muted text. The
+  indicator has no remove button.
+  Then the tile grid, and a footer with the result count.
+- **Tiles.** Cube icon placeholder, full wrapped title, optional print line, and a favorite star.
+  The applied tile has a 1 px outline (`graphSelectionOutlineColor`/`Width`) and no fill; hover
+  and keyboard focus use the quiet hover well. Invalid or 1D entries are muted and show their
+  status line. No pills, badges, or status dots. (Revised 2026-09-29 at the user's request: an
+  outline, not a filled well.)
+- **Input.** Click applies to the target (or only focuses when there is none); clicking the
+  applied tile again removes the LUT. Arrow keys move focus by one tile or one row and apply the
+  new tile; at a grid edge they do nothing. Enter or Space toggles the focused tile, Ctrl+F
+  focuses search.
+- **States.** Loading (library busy), empty library (Import and Open folder actions), zero
+  results (Clear filters action), error (`dangerColor` line with the service error), and a
+  rejected application (the controller's reason under the indicator).
+- **Editor LUT control** (right adjustment stack, `lut` page): current LUT name, print line,
+  Missing state, the 0-100 % strength slider, `Browse LUTs` (opens the rail page), and Remove.
+
+**L6B Settings page (composed 2026-09-30, section 1.5).** `LutSettingsPanel.qml` in the Settings
+dialog's `LUTs` category; the full token list is in `docs/VI/README.md`.
+
+- **LUT library section.** Folder label column, the root path (data font), the LUT count with the
+  verification state, and four compact actions: Open folder, Refresh, Use another folder, Move
+  library. A chosen folder opens an inline confirmation card (path, what the operation does, or
+  the reason it cannot start). A running operation shows its name and an indeterminate bar; a move
+  adds Cancel. Errors use `dangerColor`; files kept after a move are listed.
+- **Official LUT packages section.** The check state line and `Check again`, then one bordered row
+  per package: name, status, `%n LUTs · size download · revision`, a progress bar while
+  downloading, the row error, one action (Download, Update, Repair, or Retry) and Cancel for the
+  running row. A build without a feed shows that downloads are unavailable.
+- **Browser link.** The browser's empty-library state adds `Download official LUTs`, which opens
+  this page.
+
+## 7. File and module map
+
+All paths below are repository-relative unless a drive is specified. Listed new files are proposed.
+
+| Phase | Current files that change | Proposed files or targets |
+| --- | --- | --- |
+| L1 | Both external export paths in section 2.1; `src/app/update_manifest.cpp`; `src/app/CMakeLists.txt` | `src/include/utils/lut/lut_metadata.hpp`; `src/utils/lut/lut_metadata.cpp`; `src/app/lut_package_manifest.cpp` and matching header; shared detached-signature helper; `scripts/luts/prepare_lut_packages.py`; `scripts/luts/publish_lut_packages.py`; schema fixtures and documentation |
+| L2 | `src/ui/alcedo_main/editor_support/modules/lut_catalog.cpp` and its header; applicable app/test CMake | `src/app/lut_library_service.cpp`, `src/app/lut_library_inventory.cpp`, `src/app/lut_library_migration.cpp`, matching headers; `LutLibraryServiceTest` |
+| L3 | `src/app/CMakeLists.txt`; root dependency setup; existing download/signature integration | `src/app/lut_package_install.cpp`; `src/app/lut_package_service.cpp`; matching headers; `LutPackageServiceTest`; `LutPackageManifestTest`; platform dependency instructions |
+| L4 | `src/edit/operators/models/lmt_model.cpp` and header; `src/app/editor_parameter_write*`; `src/app/editor_pipeline_command_service.cpp`; `src/app/editor_panel_projection.cpp`; pipeline construction; `src/edit/runtime/grade_lut.cpp`; `src/edit/runtime/adjustment_runtime.cpp`; three grade backends and shaders | `src/include/edit/runtime/lut_resource_resolver.hpp`; focused reference serialization helpers if needed; changes to existing model, history, transfer, cache, and GPU tests |
+| L5 | `src/ui/alcedo_main/album_backend/editor_lut_catalog_model.cpp` and header; panel presentation; session and application composition | `src/ui/alcedo_main/album_backend/lut_library_model.cpp`, `lut_library_controller.cpp`, `editor_lut_adjustment_model.cpp` and matching headers; `LutLibraryModelTest` |
+| L6A | `src/ui/alcedo_main/qml/LUTPanel.qml` (removed), `EditorAdjustmentStack.qml`, `EditorWorkspaceRail.qml`, `EditorWorkspace.qml`; `editor_lut_catalog_model.*` and `editor_support/modules/lut_catalog.*` (removed); `editor_session_controller.cpp`; `lut_library_controller.*`; `utils/lut/lut_metadata.cpp`; AppTheme; UI CMake and resources; translations; `DESIGN.md` and `docs/VI` | `EditorLutBrowserPanel.qml`, `EditorLutFilterCard.qml`, `EditorLutResultCard.qml`, `EditorLutControlPanel.qml`; `panel_icons/lut-cube.svg`; `EditorLutBrowserPanelQmlTest` replacing `EditorLutPanelQmlTest` |
+| L6B | `SettingDialog.qml`, `AppDialogs.qml`, `Main.qml`, `EditorLutResultCard.qml`; `lut_library_service.*`, `lut_package_service.*`, `lut_package_manifest.*`, `application_module_host.*`; root CMake package rules; `prepare_lut_packages.py`; translations, VI and package docs | `LutSettingsPanel.qml`; `LutSettingsQmlTest`; `LutPackageLiveFeedTest`; `scripts/luts/inspect_application_payloads.py` and its tests |
+
+The `src/` prefix in this table means `alcedo_studio/src/`. Matching headers live under its `include/` tree.
+New class headers include defining headers. Do not copy existing forward declarations without an allowed reason.
+When touching a file, rename prohibited project terms and their callers within that scope.
+Count the resulting maintenance changes in the phase estimate. Keep unrelated edits separate.
+
+## 8. Phase summary
+
+| Phase | Deliverable | Depends on | Expected changed lines | Size boundary and status |
+| --- | --- | --- | ---: | --- |
+| L1 | Metadata, exporter annotations, package schema, signing and publication tools | Confirmed data specification | 1300-1850 | Complete 2026-09-29; actual size exceeded the estimate (see its record). |
+| L2 | Service-owned recursive inventory, user import, root selection and migration | L1 metadata | 1450-1950 | Complete 2026-09-29; actual size exceeded the estimate (see its record). |
+| L3 | Independent signed package checking, 7z installation, repair and cancellation | L1, L2 | 1500-1950 | Complete 2026-09-29; actual size exceeded the estimate (see its record). Settings QML stays in L6. |
+| L4 | Stable runtime references, missing-file behavior and LUT strength on all backends | L1, L2 | 1500-1950 | Complete on Windows 2026-09-29; Metal not run; actual size exceeded the estimate (see its record). |
+| L5 | Indexed classification, fuzzy search, favorites and exact-node application | L2, L4 | 1200-1750 | Complete 2026-09-29; no visual layout work; actual size exceeded the estimate (see its record). |
+| L6A | Editor left-rail LUT browser, target indicator, small Editor control, removal of the old panel and catalog | L1-L5; section 6.5 design | 1500-1950 | Implemented 2026-09-29; manual visual checks pending (see its record). |
+| L6B | LUT Settings (root, migration, package actions) and payload-free installers | L1-L5, L6A; Settings design input | 900-1400 | Implemented 2026-09-30 on Windows; feed published; manual, macOS, and installer checks partly pending (see its record). |
+
+Estimates include production code, tests, build files, resources, and documentation across repositories.
+Generated LUT tables and temporary evidence are excluded. These estimates are not implementation evidence.
+Count removed lines too. In particular, the existing `LUTPanel.qml` is about 1000 lines; L6A must
+include its removal in the estimate. Its range assumes compact views backed by the completed L5 models.
+Recount before each phase and after visual design is supplied. Split a phase before implementation
+if its upper estimate can exceed 2000 lines. Do not compress tests or omit a backend to meet the limit.
+Section 6.5 records the L6A and L6B compositions.
+
+## 9. Detailed implementation phases
+
+### L1. Metadata and signed package publication
+
+**Objective and deliverables.** Produce the interoperable comment schema, two annotated export paths,
+a package inventory format, deterministic summaries, and offline signing/publication tooling.
+
+**Inputs and modules.** Use section 4 and the L1 file map. Inspect each external repository's own
+instructions before editing it. Preserve unrelated work. Confirm the two export entry points again.
+
+**Data rules.** Preserve generator attribution. Stable IDs describe intended looks, not output filenames.
+The signed feed has no expiration. Keep private keys outside the repositories and reuse the existing signer.
+
+**Implementation steps.**
+
+1. Add the bounded CUBE metadata reader and schema fixtures shared with generator tests.
+2. Add explicit Alcedo package mode to both exporters. Pass film and print metadata from their actual owners.
+3. Add byte-preserving tests that compare numeric LUT rows before and after comment insertion.
+4. Generate `package-inventory.json`, auxiliary-file hashes, count, and deterministic digest.
+5. Build one 7z per source with a documented codec and safe relative paths.
+6. Extract exact-byte signature verification into a narrow helper. Keep update-specific parsing unchanged.
+7. Add a separate LUT manifest validator and preparation/publishing scripts with a local-only mode.
+8. Upload immutable packages before feed metadata. Publish matching signature and manifest bytes last.
+   A transient mismatched pair must fail verification and offer retry; it must never be accepted unsigned.
+
+**Success chain.** Export options -> structured comments -> inventory -> 7z and digest -> exact-byte
+manifest signing -> immutable R2 upload -> verified public feed pair.
+
+**Failure and restore chain.** Invalid metadata, duplicate identity, archive error, or failed upload ->
+stop publication -> keep the previous live feed -> report the failing package and step.
+
+**Tests and assertions.**
+
+- `CubeCommentPreservesNumericLutRows`: inserting metadata changes no numeric row.
+- `MetadataClassifiesUserFilmWithPrint`: a third-party source receives the same classification fields.
+- `MetadataRejectsDuplicateAndOversizedComments`: invalid comments produce explicit errors.
+- `PythonAndCppInventoryDigestsMatch`: shared records produce identical SHA-256 bytes despite input order.
+- `LutManifestAcceptsOldSignedFeedWithoutExpiry`: a valid old publication remains valid without an expiry.
+- `LutManifestRejectsBadSignatureAndDuplicatePackage`: invalid trust or identity cannot produce a descriptor.
+- Run existing `UpdateManifestTest` to prove software-update expiration behavior is unchanged.
+
+**Build and run.** Follow section 10. Configure and build proposed `LutMetadataTest` and
+`LutPackageManifestTest`, plus existing `UpdateManifestTest` and `alcedo_update_signer`.
+Run `ctest -R "^(LutMetadataTest|LutPackageManifestTest|UpdateManifestTest)\."` in the selected tree.
+Run proposed Python tooling tests with `python -m unittest discover -s scripts/luts/tests`.
+In the external repositories, run their existing metadata/export tests and newly registered focused cases.
+Record the actual project runner and command before reporting success; do not run full LUT generation tests by accident.
+
+**Exit criteria.**
+
+- [x] Both exporters produce schema-valid metadata without pixel changes.
+- [x] The two packages validate independently from local files.
+- [x] The existing software-update parser retains its timestamp checks.
+- [x] The local publication plan names all output keys without uploading them.
+
+**Expected diff.** 1300-1850 lines. **Completion record:** see below.
+
+##### Phase L1 completion record (2026-09-29)
+
+**Status:** complete. Metadata schema and readers (C++ and Python), both exporters annotated,
+package inventory and digest, 7z packaging, shared detached-signature check, LUT feed verifier,
+preparation and publication scripts. At the user's request, L1 also adds the parallel local
+library scan and the persisted `lut-inventory.json` format (section 1.3). The owning service,
+refresh trigger, and root handling remain in L2.
+
+**Source revisions and branches.**
+
+| Repository | Base | Branch | State |
+| --- | --- | --- | --- |
+| `pu-erh_lab` | `dc7359102` | `feature/lut-metadata-package-publication` | Uncommitted working tree |
+| `D:/Projects/spectral_film_lut` | branch HEAD | `feature/acescc-lmt-inversion` | Uncommitted, on top of the user's pending edits |
+| `D:/Projects/spektrafilm_lut` | branch HEAD | `aces-adx-lmt` | Uncommitted, on top of the user's pending edits |
+
+**Implemented modules.**
+
+| Module | Responsibility |
+| --- | --- |
+| `utils/lut/lut_metadata.{hpp,cpp}` (`LutMetadata` library) | Bounded header reader (64 KiB header, 16 KiB metadata line, stops at the first numeric row), schema-1 validation, typed errors, display name and print option, canonical stem |
+| `utils/lut/lut_inventory_digest.{hpp,cpp}` | Canonical inventory digest, safe relative paths, streamed file SHA-256, `package-inventory.json` parsing with count, byte, and digest cross-checks |
+| `utils/lut/lut_library_scan.{hpp,cpp}` | Serial recursive enumeration (no links or junctions, `.downloads` excluded); header parsing and official-only hashing on up to 8 `std::jthread` workers with an atomic work index; `lut-inventory.json` serialization; atomic write through `QSaveFile`; validated read |
+| `app/detached_signature.{hpp,cpp}` | Exact-byte Ed25519 check, now used by `VerifyUpdateManifest` (messages unchanged) and the LUT feed |
+| `app/lut_package_manifest.{hpp,cpp}` | `VerifyLutPackageManifest`: signature, `alcedo-lut-packages` schema, trusted sequence, duplicate package IDs, digests, sizes, HTTPS `.7z` URLs on the feed host; no timestamps |
+| `scripts/luts/*.py` | Python reference reader and writer, parallel package inventory, 7z (LZMA2 preset 9, `py7zr`), prepare (validate, archive, re-extract and verify, manifest, sign with `alcedo_update_signer`, verify with `cryptography`), publish (plan by default, `--upload` for R2) |
+| spectral_film_lut `alcedo_metadata.py`, `generate_acescc_lmt.py`, `cli.py` | Metadata from loaded film objects (brand from `manufacturer`; print kind from `medium`: cine is film, photo is paper); `--alcedo-package` on `acescc-lmt` and `negative-lmt`; `negative-lmt` always uses variant `negative-scan`, so it cannot share an ID with a negative-only `acescc-lmt` export |
+| spektrafilm_lut `alcedo_metadata.py`, `aces_lmt.py::write_cube`, `bake.py`, `bake_print_drt.py`, `bake_alcedo_set.sh` | Metadata from profile `info` (name, brand, `support` film or paper); variants from calibration options; print-chain `display_requirement` keeps the ACES 2.0 SDR 100 nit Rec.709 gamma 2.2 statement; `bake_alcedo_set.sh` passes `--alcedo-package` |
+| `docs/lut-package-system.md` | Schema, digest, archive, feed, and publication reference |
+
+**Primary success call chain:**
+
+```text
+exporter --alcedo-package (film and print objects)
+  -> build_lut_metadata -> "# ALCEDO_LUT {...}" as line 1, numeric rows byte-identical
+  -> prepare_lut_packages.py --package ID=DIR (each package independent)
+  -> build_package_inventory: read_cube_header_file + canonical ID/file-name checks + SHA-256 (thread pool)
+  -> package-inventory.json + inventory digest -> py7zr archive -> re-extract and verify every file
+  -> manifest.json (no expiry) -> alcedo_update_signer sign -> Ed25519 verification of exact bytes
+  -> publish_lut_packages.py: re-verify -> plan (default) | --upload: archives, archived signature
+     and manifest, live manifest.json.sig, live manifest.json last
+client (L3): VerifyLutPackageManifest -> VerifyDetachedSignature -> package descriptors
+library refresh (L2 caller): ScanLutLibrary -> workers: ReadLutHeaderFile, HashLutFile (origin alcedo only)
+  -> LutLibraryInventory (sorted, deterministic) -> WriteLutLibraryInventoryFile (QSaveFile commit)
+panel read (L5): ReadLutLibraryInventoryFile -> entries; DisplayName() = film name, PrintOptionName() = print
+```
+
+**Primary failure call chain:**
+
+```text
+invalid, duplicate, or oversized metadata; non-canonical official name; user origin in a package;
+unexpected file; colliding path; archive mismatch
+  -> LutMetadataError / LutInventoryError for that package
+  -> prepare exits 1 before writing manifest.json -> previous live feed unchanged
+tampered manifest or wrong key -> signature check fails -> publish refuses; missing .sig -> publish refuses
+C++ reader: malformed metadata -> typed LutHeaderError; entry stays visible; never a general LUT
+C++ feed: bad signature, duplicate package, older sequence, or foreign URL -> error, no descriptor
+unreadable directory or official file during a scan -> diagnostic; Complete() == false
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `CubeCommentPreservesNumericLutRows` | `scripts/luts/tests` (LF and CRLF); `test_cube_comment_preserves_numeric_lut_rows` in both exporter repositories | PASS |
+| `MetadataClassifiesUserFilmWithPrint` | `LutMetadataTest`, `scripts/luts/tests` | PASS |
+| `MetadataRejectsDuplicateAndOversizedComments` | `LutMetadataTest`, `scripts/luts/tests` | PASS |
+| `PythonAndCppInventoryDigestsMatch` | `LutMetadataTest`, `scripts/luts/tests` (shared `inventory_digest_records.json`, three input orders) | PASS |
+| `PythonPackageInventoryParsesInCpp` / `CppFixtureMatchesPythonPackageInventory` | `LutMetadataTest`, `scripts/luts/tests` | PASS |
+| `LutManifestAcceptsOldSignedFeedWithoutExpiry` | `LutPackageManifestTest` | PASS |
+| `LutManifestRejectsBadSignatureAndDuplicatePackage` | `LutPackageManifestTest` | PASS |
+| Existing `UpdateManifestTest` (13 cases, including `RejectsExpiredSignedManifest`) | `UpdateManifestTest` | PASS |
+| Official film shows film name with print option; unannotated, 1D, and malformed cases | `LutMetadataTest` | PASS |
+| Scan hashes only official LUTs; equal names stay separate; `.downloads` excluded; Unicode path and `.CUBE` | `LutMetadataTest.ScanHashesOnlyOfficialLutsAndKeepsEqualNamesSeparate` | PASS |
+| 8-worker scan equals 1-worker scan (96 files) | `LutMetadataTest.ParallelScanMatchesSingleWorkerScan` | PASS |
+| Persisted inventory reads back without rescanning; damaged file rejected | `LutMetadataTest` | PASS |
+| Two packages validate independently; changed archive bytes fail; invalid package stops publication | `scripts/luts/tests` | PASS |
+| Signed feed verifies; plan lists the live manifest last; mismatched pair and unsigned feed refused | `scripts/luts/tests` (real `alcedo_update_signer`, temporary key) | PASS |
+| Real size-3 exports: spektrafilm 3 LUTs (2383 print, slide) and spectral 2 LUTs -> `prepare_lut_packages.py` | manual command | exit 0, both packages validated |
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutMetadataTest LutPackageManifestTest UpdateManifestTest UpdateService alcedo_update_signer --parallel 4
+ctest --test-dir build/debug -R "^(LutMetadataTest|LutPackageManifestTest|UpdateManifestTest)\." --output-on-failure
+python -m unittest discover -s scripts/luts/tests
+# spectral_film_lut
+uv run --frozen --no-sync --with pytest -- python -m pytest tests/test_alcedo_metadata.py tests/test_acescc_lmt.py -q
+# spektrafilm_lut
+.venv/Scripts/python.exe -m pytest tests/lut_creator/test_alcedo_metadata.py -q
+.venv/Scripts/python.exe -m pytest tests/lut_creator/test_aces_lmt.py tests/lut_creator/test_cube_format.py -q -m unit
+```
+
+Suite totals: ctest 34/34 (LutMetadataTest 16, LutPackageManifestTest 5, UpdateManifestTest 13);
+`scripts/luts/tests` 15/15; spectral_film_lut 19/19; spektrafilm_lut 13/13 new and 5/5 existing unit tests.
+The full suite was not run (repository rule). No macOS build or run.
+
+**Checklist / exit condition:** all four L1 exit criteria are checked above.
+
+**LOC note:** `pu-erh_lab` +3597/-18 across 28 files: production C++ about 1600 lines, C++ tests and
+fixtures about 600, Python tooling and tests about 1180, documentation 185. The external repositories
+add about 1100 lines including tests. This exceeds the 1850-line estimate. The local scan and
+`lut-inventory.json` format requested for L1 account for about 580 lines with tests, and each language
+carries its own schema checks. The largest file is `lut_metadata.cpp` (398 lines).
+
+**Remaining gaps:**
+
+- Nothing is committed in any repository. The external changes sit on top of the user's own uncommitted edits.
+- The client-side LUT feed sequence setting, download, and extraction belong to L3. `lut-inventory.json` has
+  no owning service, refresh trigger, or root selection until L2.
+- In normal (user) mode, `negative-lmt` and a negative-only `acescc-lmt` export still write the same file
+  name; their IDs differ. Package-mode names differ.
+- The Git for Windows OpenSSL on this machine lacks `pkeyutl -rawin`, so the existing
+  `scripts/update/verify_release_manifest.py` cannot verify signatures here. The LUT scripts use
+  `cryptography`; the update script is unchanged.
+- No real R2 upload, production key, or macOS run was performed. The `luts/v1` prefix is not deployed.
+
+### L2. Recursive inventory and root migration
+
+**Objective and deliverables.** Replace UI-owned discovery with one persistent application service.
+Support recursive files, imports, custom roots, migration, and correct folder opening.
+
+**Inputs and modules.** L1 metadata reader and L2 file map. The default is the current user's home
+directory on both platforms. Existing arbitrary user subfolders remain valid inputs.
+
+**Data rules.** One inventory owner. No basename identity matching. No root change until destination
+validation succeeds. An incomplete scan cannot assert package equality.
+
+**Implementation steps.**
+
+1. Add service construction, shutdown, root persistence, and typed operation errors.
+2. Load or rebuild `catalog.json`. Add recursive enumeration with skipped-subtree diagnostics.
+3. Stream file hashes outside the GUI thread. Publish owner records and serialized inventory atomically.
+4. Add import and root-selection operations. Validate all conflicts before changing files or preferences.
+5. Implement staged root migration, byte verification, commit, and bounded source cleanup.
+6. Convert existing favorites through exact paths or verified legacy identity records.
+7. Add native folder URL creation and visible dispatch errors. Remove the QML URL concatenation path.
+8. Retire the static catalog cache and copied selection catalog once callers use service APIs.
+
+**Success chain.** Refresh/import/root action -> service worker -> validated inventory persistence ->
+owner publication -> model row notices -> browser reads the new entries.
+
+**Failure and restore chain.** Unreadable subtree, disk full, collision, or stopped migration -> explicit
+diagnostic -> retain the previous committed root and inventory -> retry through the same owner.
+After a committed root switch, recover from the destination and finish only safe source cleanup.
+
+**Tests and assertions.**
+
+- `RecursiveScanFindsUnicodeAndUppercaseCubeFiles`: include nested Chinese names, spaces, and `.CUBE`.
+- `EqualBasenamesRemainSeparateEntries`: no selection jumps across folders.
+- `HeaderClaimDoesNotGrantPackageOwnership`: loose annotated files cannot be overwritten by package repair.
+- `RefreshDetectsChangedBytesWithUnchangedStamp`: SHA-256 changes when size and write time do not.
+- `MigrationPreservesEntryIdsAndFavorites`: root changes preserve selections without project rewrites.
+- `MigrationFailureKeepsPreviousRoot`: inject copy, inventory-write, and preference-write failures.
+- `MigrationDoesNotDeleteChangedSourceFile`: an external change after copying survives source cleanup.
+- `OpenRootUsesEncodedLocalFileUrl`: assert the URL for spaces, `#`, `%`, and non-ASCII names.
+- `FolderOpenFailureIsVisible`: a rejected OS dispatch surfaces a user-facing error.
+
+**Build and run.** Configure/build proposed `LutLibraryServiceTest`. Run
+`ctest -R "^LutLibraryServiceTest\."` in the selected tree. Use temporary roots under the test working
+directory. Inspect real Finder/Explorer opening manually with an installed build in L6.
+
+**Exit criteria.**
+
+- [x] Recursive inventory persists and rebuilds with exact identities.
+- [x] Migration survives injected failures on both sides of the root commit point.
+- [x] Missing file lookups request refresh without repeated retries.
+- [x] Import and migration preserve unrelated user files.
+
+**Expected diff.** 1450-1950 lines. **Completion record:** see below.
+
+##### Phase L2 completion record (2026-09-29)
+
+**Status:** complete. `LutLibraryService` is the single owner of the LUT library root, the published
+inventory, favorites, and the one running library operation. It loads the persisted inventory at start,
+rebuilds a missing or damaged one, rescans on request, imports files, switches roots, migrates roots with
+staged copy and verified source cleanup, and opens the root through a native local-file URL.
+The editor LUT list now reads the service. The static catalog cache, the application `LUTs` folder
+lookup, basename matching, the `5207.cube` default, and the QML `"file:///" + path` URL are removed.
+
+**Source revisions and branches.**
+
+| Repository | Base | Branch | State |
+| --- | --- | --- | --- |
+| `pu-erh_lab` | `9c623d12d` (L1 commit on `feature/lut-metadata-package-publication`) | `feature/lut-library-inventory-migration` | Uncommitted working tree |
+
+**Implemented modules.**
+
+| Module | Responsibility |
+| --- | --- |
+| `app/lut_library_inventory.{hpp,cpp}` | Root layout names; `lut-library.json` user state (favorites, previous roots); package receipt reader; `ScanLutLibraryRoot` (loose files plus each receipt's active content directory, package ownership tag); path lookup; changed-path diff |
+| `app/lut_library_migration.{hpp,cpp}` | Destination checks (inside/outside, empty, leftover staging, free space); staged copy with SHA-256 verification; state and cleanup-record writes; staging rename; post-commit source cleanup that deletes only unchanged files and resumes from `lut-migration-cleanup.json`; replaceable file-operation steps for failure tests |
+| `app/lut_library_service.{hpp,cpp}` | Owner `QObject`: `LutLibraryPreferences` (QSettings `lut/libraryRoot`), default root `~/.alcedo/luts`, one `std::jthread` operation at a time, owner-thread publication after persistence, refresh coalescing, one refresh per unresolved lookup, favorites, legacy favorite conversion, folder URL dispatch with a visible error |
+| `utils/lut/lut_library_scan.{hpp,cpp}` (L1 module, extended) | `managed_package_id`, `modified_time`, exact-path exclusions and additional scan directories, `kInvalidPackageReceipt`, `ClassifyLutLibraryFile` for imports |
+| `ui/.../modules/lut_catalog.{hpp,cpp}` | Projection of service entries into editor rows; exact path identity only; 1D-only files shown and not selectable |
+| `ui/.../editor_lut_catalog_model.{hpp,cpp}`, `EditorAdjustmentStack.qml`, `LUTPanel.qml` | `library` property bound to `appModules.lutLibrary`; favorites through the service; `openDirectory()` replaces URL concatenation |
+| `ApplicationModuleHost` | Constructs and starts the service; `lutLibrary` property; shutdown joins the worker |
+
+Decisions made during L2:
+
+1. Entry identity is the root-relative `/` path (decision 1.3 item 3). Root migration preserves relative
+   paths, so entry IDs and favorites stay linked. L4 still reconciles this with the reference forms in section 4.2.
+2. Favorites and previous roots are stored in a separate small `<root>/lut-library.json`, not inside
+   `lut-inventory.json` as section 4.3 proposes. A favorite change then writes a small file on the owner thread,
+   and a rescan never rewrites user choices. The service owns both files.
+3. A migration destination must be absent or empty. An existing library with files is opened with `UseRoot`;
+   the service does not merge two libraries.
+4. Import copies into `<root>/user/` with the source file name. Any conflict rejects the whole request before a copy.
+
+**Primary success call chain:**
+
+```text
+ApplicationModuleHost ctor -> LutLibraryService::Start
+  -> worker: ReadLutLibraryInventoryFile | (missing/damaged) ScanLutLibraryRoot + write_inventory
+  -> ReadLutLibraryUserStateFile -> owner thread: PublishInventory -> InventoryChanged
+  -> ConvertLegacyFavorites (exact paths under the root) -> ResumeSourceCleanup (if a record exists)
+LUTPanel refresh button -> EditorLutCatalogModel::refresh(true) -> RefreshInventory
+  -> worker: ScanLutLibraryRoot (ReadLutPackageReceipts, ScanLutLibrary workers) -> write_inventory
+  -> owner thread: PublishInventory(changed paths) -> model refresh(false) -> BuildCatalog -> rows
+ImportFiles -> worker: validate every source and target -> copy_file -> ClassifyLutLibraryFile
+  -> replacement inventory -> write_inventory -> owner thread: PublishInventory
+MigrateRoot -> worker: PrepareLutLibraryMigration (enumerate, validate, copy + verify SHA-256,
+  write inventory/state/cleanup record, rename staging) -> owner thread: SaveRoot (commit point)
+  -> root_ = destination, RootChanged, FavoritesChanged -> ResumeSourceCleanup
+  -> worker: CleanLutLibraryMigrationSource (delete unchanged sources, remove record)
+LUTPanel open-folder button -> EditorLutCatalogModel::openDirectory -> OpenRootDirectory
+  -> QUrl::fromLocalFile -> QDesktopServices::openUrl
+```
+
+**Primary failure call chain:**
+
+```text
+copy, verification, inventory-write, or state-write failure before the commit
+  -> staging directory removed -> previous root and inventory stay published -> kIoError + lastError
+preference write fails after the prepared rename -> DiscardPreparedLutLibraryMigration -> kPreferenceError
+process stop or delete failure after the commit -> cleanup record stays in the new root
+  -> next Start/UseRoot resumes cleanup; changed source files are kept and reported
+refresh write failure -> previous inventory kept -> kPersistenceError
+unreadable subtree or invalid receipt -> diagnostic -> inventory_complete() == false (no package equality claim)
+lookup of a missing or unlisted path -> one refresh per path; no retry until a user refresh
+import conflict -> nothing copied -> kConflict; inventory-write failure -> copied files removed
+OS rejects the folder URL, or the root is missing -> false, lastError names the folder,
+  model statusText and openFolderFailed show it
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RecursiveScanFindsUnicodeAndUppercaseCubeFiles` | `LutLibraryServiceTest` | PASS |
+| `EqualBasenamesRemainSeparateEntries` | `LutLibraryServiceTest`; model level `LutCatalogListsLibraryEntriesWithoutBasenameMatching` in `EditorLookModelTest` | PASS |
+| `HeaderClaimDoesNotGrantPackageOwnership` (active vs inactive content, invalid receipt) | `LutLibraryServiceTest` | PASS |
+| `RefreshDetectsChangedBytesWithUnchangedStamp` (plus refresh coalescing) | `LutLibraryServiceTest` | PASS |
+| `MigrationPreservesEntryIdsAndFavorites` (Unicode destination, restart from the new root) | `LutLibraryServiceTest` | PASS |
+| `MigrationFailureKeepsPreviousRoot` (copy, inventory-write, and preference-write failures; destination inside source; non-empty destination; retry) | `LutLibraryServiceTest` | PASS |
+| After the commit point: `SourceCleanupResumesAfterStopFollowingRootSwitch` | `LutLibraryServiceTest` | PASS |
+| `MigrationDoesNotDeleteChangedSourceFile` | `LutLibraryServiceTest` | PASS |
+| `OpenRootUsesEncodedLocalFileUrl` (space, `#`, `%`, Chinese) | `LutLibraryServiceTest` | PASS |
+| `FolderOpenFailureIsVisible` (service) and `LutOpenDirectoryFailureIsShownInStatusText` (model) | `LutLibraryServiceTest`, `EditorLookModelTest` | PASS |
+| Persist and rebuild: `PersistedInventoryLoadsWithoutRescanAndDamagedFileIsRebuilt` | `LutLibraryServiceTest` | PASS |
+| Missing lookup: `MissingFileLookupRequestsOneRefreshWithoutRetries` | `LutLibraryServiceTest` | PASS |
+| Import: `ImportRejectsConflictsBeforeCopyingAndKeepsUserFiles` | `LutLibraryServiceTest` | PASS |
+| Root selection: `UseRootIndexesExistingLibraryAndFailuresKeepCurrentRoot` | `LutLibraryServiceTest` | PASS |
+| Favorite conversion: `LegacyFavoritesConvertThroughExactPaths`; model `LutFavoriteToggleStoresEntryInLibrary` | `LutLibraryServiceTest`, `EditorLookModelTest` | PASS |
+| Host exposes `lutLibrary` with its concrete type; reverse-order destruction | `ApplicationModuleHostLifecycleTest`, `ApplicationModuleHostShutdownTest` | PASS |
+| Guard check: disabling the one-refresh-per-path guard and the unchanged-source hash check each failed exactly the matching test (`MissingFileLookupRequestsOneRefreshWithoutRetries`, `MigrationDoesNotDeleteChangedSourceFile`); code restored | `LutLibraryServiceTest` | 2 expected failures, then PASS |
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutLibraryServiceTest LutMetadataTest LutPackageManifestTest EditorLookModelTest EditorLutPanelQmlTest ApplicationModuleHostLifecycleTest ApplicationModuleHostShutdownTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/build/debug/vcpkg_installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(LutLibraryServiceTest|LutMetadataTest|LutPackageManifestTest|EditorLookModelTest|EditorLutPanelQmlTest|ApplicationModuleHostLifecycleTest|ApplicationModuleHostShutdownTest)\." --output-on-failure
+```
+
+Suite totals: 86/86 (LutLibraryServiceTest 15, LutMetadataTest 16, LutPackageManifestTest 5,
+EditorLookModelTest 32, EditorLutPanelQmlTest 14, ApplicationModuleHost lifecycle and shutdown 4).
+Build exit code 0, including `alcedo_main`. The full suite was not run (repository rule). No macOS build or run.
+
+**Checklist / exit condition:** all four L2 exit criteria are checked above.
+
+**LOC note:** +2554/-538 across 24 files, above the 1450-1950 estimate. Production C++ is about 1650 lines
+(service 790, migration 470, inventory 350), tests about 690, and the rest is CMake, QML, and the removed
+unregistered `tests/ui/lut_catalog_test.cpp` (143 lines, which encoded basename matching). The largest file
+is `lut_library_service.cpp` (552 lines); no file approaches 1000 lines.
+
+**Remaining gaps:**
+
+- Interim behavior: the editor list shows only the library root (`~/.alcedo/luts` by default). LUTs bundled in
+  the application `LUTs` folder are no longer listed; existing projects still render them by absolute path.
+  Package installation (L3) and root selection UI (L6) make content available again.
+- Root selection, migration, and import have service and QML-invokable APIs but no Settings UI (L6).
+- `ScanLutLibrary` has no stop check, so shutdown waits for a running scan to finish.
+- Service and new catalog messages are English; translations were not added (lupdate is not run casually).
+- A stop between the staging rename and the preference commit leaves a complete copy at the destination.
+  A later migration to that folder is rejected as non-empty; the user can open it with `UseRoot`.
+- Real Explorer/Finder opening is a manual L6 check. No 10,000-entry measurement (L5 budget).
+- The editor model still copies rows into a `QVariantList`; L5 replaces it.
+
+### L3. Independent package checking and installation
+
+**Objective and deliverables.** Check, download, update, and repair either official package through
+the shared download service. Keep the other package and all user-owned entries intact.
+
+**Inputs and modules.** L1 feed, L2 library operations, and the confirmed replacement policy in section 3.
+Use the L3 file map, existing `DownloadService`, and existing task reporting.
+
+**Data rules.** No startup network check. No expiry. No automatic package download. No activation
+before signature, archive, inventory, and individual extracted files pass verification.
+Local edits with retained official metadata remain replaceable package content.
+
+**Implementation steps.**
+
+1. Fetch the feed and detached signature with bounded sizes and the current HTTPS/host restrictions.
+2. Compare descriptors independently. Distinguish Not installed, Current, Update available, Repair required,
+   Checking, Downloading, Verifying, Installing, and Error.
+3. Reuse `DownloadRequest` and its size/hash checks. Surface transport busy without creating another daemon.
+4. Add the packaged libarchive dependency and a streaming 7z reader with validated output paths.
+5. Verify extracted data. Keep edited entries with official metadata in the package replacement set.
+   Relocate explicitly reclassified user entries before old content cleanup. Do not preserve copies of edited official files.
+6. Activate one package, refresh the inventory, and publish changed resource IDs to render consumers.
+7. Connect progress, cancel, retry, shutdown, and interrupted-install cleanup to existing lifecycle owners.
+8. Test unchanged remote comparisons without downloading archives or rehashing files during comparison.
+
+**Success chain.** Settings opens -> `CheckPackages` -> signature validation -> local summary comparison ->
+user selects one package -> `DownloadService` -> verified extraction -> receipt commit -> inventory publication.
+
+**Failure and restore chain.** Network/signature/hash/extraction/space/cancel failure before commit ->
+leave active receipt unchanged -> clean only owned partial output -> display error and retry.
+After receipt commit, a catalog error triggers local rebuild and an explicit incomplete-refresh status.
+
+**Tests and assertions.**
+
+- `SettingsCheckDoesNotStartDownload`: check and install remain separate actions.
+- `StartupDoesNotRequestLutFeed`: constructing application modules makes no LUT network request.
+- `UpdateOnePackageKeepsOtherPackageAndUserFiles`: verify contents and identities before and after.
+- `ArchiveHashMismatchKeepsInstalledPackage`: no extracted bytes become active.
+- `ArchiveTraversalAndLinksAreRejected`: files cannot escape staging or replace existing files.
+- `InterruptedActivationRecoversCommittedReceipt`: test interruption before and after receipt replacement.
+- `CancelBeforeActivationKeepsInstalledPackage`: no receipt changes after a canceled preparation.
+- `EditedOfficialLutIsReplacedWithoutPromptOrUserCopy`: change numeric rows without changing metadata;
+  update the package; assert the new official bytes, unchanged official identity, and no preserved user entry.
+- `OfficialHashMismatchDoesNotChangeOwnership`: refresh an edited official file and verify it remains package-owned.
+- `UserDeclaredVariantSurvivesPackageReplacement`: change the origin explicitly to user; preserve those bytes as a user entry
+  while the official photo reference continues to resolve to the newly installed official LUT.
+- `ApplicationAndLutDownloadsShareAdmission`: a second request reports busy and does not start another transfer.
+
+**Build and run.** Build proposed `LutPackageServiceTest` and `LutPackageManifestTest`, plus existing
+`DownloadServiceTest` and `UpdateManifestTest`. Run
+`ctest -R "^(LutPackageServiceTest|LutPackageManifestTest|DownloadServiceTest|UpdateManifestTest)\."`.
+Use local test data and the existing fake transport pattern. Run a real signed package install on both
+platforms in L6. Do not require private keys or the live R2 account for automated tests.
+
+**Exit criteria.**
+
+- [x] Each package reports and changes independently.
+- [x] Every pre-commit failure preserves current content.
+- [x] Cancel and application shutdown leave a recoverable library.
+- [x] Package checking never runs from application startup.
+- [x] Edited files with retained official metadata are replaced without an extra prompt or preserved user copy.
+
+**Expected diff.** 1500-1950 lines. **Completion record:** see below.
+
+##### Phase L3 completion record (2026-09-29)
+
+**Status:** complete. `LutPackageService` fetches and verifies the signed feed only on request,
+compares each package with the published inventory, and downloads one package through the shared
+`DownloadService` admission. Extraction, verification, and activation run as a new
+`LutLibraryService` operation (`kInstallPackage`), so the single library owner serializes them with
+refresh, import, and root changes. libarchive (7z/LZMA2) is linked in process; a real
+`py7zr` archive from `prepare_lut_packages.py` extracts with it.
+
+**Source revisions and branches.**
+
+| Repository | Base | Branch | State |
+| --- | --- | --- | --- |
+| `pu-erh_lab` | `bfee8b339` (L2 commit on `feature/lut-library-inventory-migration`) | `feature/lut-package-install` | Uncommitted working tree |
+
+**Implemented modules.**
+
+| Module | Responsibility |
+| --- | --- |
+| `app/lut_package_install.{hpp,cpp}` (in `LutLibraryService` library, links `LibArchive::LibArchive`) | `ExtractLutPackageArchive`: streaming 7z read, safe-path, link, special-file, duplicate, byte-budget, and file-count checks, per-file SHA-256, inventory and descriptor cross-check. `InstallLutPackageArchive`: archive size/SHA-256 check -> retire interrupted content -> extract into `packages/<id>/content/<inventory_sha256>[-n]` -> feed evidence -> receipt replacement (commit point) -> retire old content. `RetireInactiveLutPackageContent`: moves `origin: user` files to `user/<id>/`, removes other inactive content, skips packages with unreadable receipts |
+| `app/lut_package_service.{hpp,cpp}` (new `LutPackageService` library) | Feed fetch (HTTPS, feed host only, 256 KiB / 1 KiB limits), `VerifyLutPackageManifest` with the LUT trusted sequence (`lut/packages/highestTrustedSequence`), `CompareLutPackage` (inventory-only comparison), per-package status (Not installed, Current, Update available, Repair required, Checking, Downloading, Verifying, Installing, Error), progress, cancel, retry, shutdown; `PackageArchiveDownloader` port with `DownloadServicePackageArchiveDownloader`; `packages` QML property for L6 |
+| `app/lut_library_inventory.{hpp,cpp}` | Receipt descriptor fields (revision, count, digest, unpacked bytes, artifact, feed sequence), `WriteLutPackageReceiptFile` (`QSaveFile`), `IsLutPackageId`, `LutInventoryMatchesPackageReceipts` |
+| `app/lut_library_service.{hpp,cpp}` | `InstallPackage`, `CancelOperation`, `PackageReceipts()`, `PackageInstallStageChanged`, `OperationResult::committed_package_id`; load and root selection retire inactive content and rebuild an inventory that disagrees with the receipts |
+| `app/lut_library_migration.{hpp,cpp}` | `write_package_receipt` step in `LutLibraryFileOperations` (failure injection) |
+| `ApplicationModuleHost` | Constructs `LutPackageService` without a network request; `lutPackages` property; shutdown cancels the download before the library worker stops |
+| Root and app CMake | `find_package(LibArchive 3.6 REQUIRED)`; Homebrew `libarchive` prefix hints; `ALCEDO_LUT_PACKAGE_FEED_URL` cache value (empty disables packages) |
+| `docs/lut-package-system.md` section 6, `docs/build_from_source.md` | Client check/installation rules; `vcpkg install "libarchive[lzma]:x64-windows"` and `brew install libarchive` |
+
+Decisions made during L3:
+
+1. The package service owns only feed and per-package action state. All file changes in the root run
+   through `LutLibraryService` operations (plan 5.1 single owner).
+2. Each installation extracts into a new content directory, including a repair of the same revision.
+   Official entries therefore change their root-relative path on every installation; their metadata ID
+   and package ownership stay the same. L4 must resolve official references by package and LUT ID.
+3. One package action runs at a time for the whole service. The other package stays checkable and
+   installable after it finishes.
+4. The feed URL is a build setting and is empty by default, so this build reports packages as disabled
+   until a release operator supplies the deployed URL (section 3).
+5. A canceled installation keeps its verified archive in `.downloads` so a retry skips or resumes the
+   transfer; success and failure remove it.
+
+**Primary success call chain:**
+
+```text
+Settings open (L6) / explicit retry -> LutPackageService::CheckPackages
+  -> fetch manifest.json + manifest.json.sig (feed host, bounded) -> VerifyLutPackageManifest
+     (Ed25519, trusted LUT sequence, no expiry) -> SaveTrustedSequence
+  -> CompareLutPackage per descriptor (receipt digest + inventory records -> ComputeLutInventoryDigest,
+     no file reads) -> Not installed | Current | Update available | Repair required
+  -> incomplete inventory -> LutLibraryService::RefreshInventory -> InventoryChanged -> recompute
+user action -> LutPackageService::InstallPackage(id)
+  -> PackageArchiveDownloader::Start -> DownloadService (shared admission, size + SHA-256)
+  -> finished -> LutLibraryService::InstallPackage (kInstallPackage on the library worker)
+     -> InstallLutPackageArchive: archive hash -> RetireInactiveLutPackageContent
+        -> ExtractLutPackageArchive (libarchive stream, path/link/limit checks, per-file SHA-256,
+           package-inventory.json vs descriptor) -> feed evidence -> write_package_receipt (commit)
+        -> retire previous content (relocate origin:user files to user/<id>/)
+     -> ScanLutLibraryRoot + write_inventory -> owner thread: PublishInventory(inventory, receipts)
+  -> OperationFinished -> archive removed -> RecomputeComparisons -> Current
+```
+
+**Primary failure call chain:**
+
+```text
+feed network error, bad signature, or older sequence -> FailCheck -> lastError, previous package list kept
+transfer busy (application/model download) -> DownloadService::Start false -> package Error "Another download"
+download canceled -> package error "canceled"; receipt and content unchanged
+archive size/SHA-256 mismatch, unsafe path, link, duplicate, limit, inventory or file mismatch,
+evidence or receipt write failure, stop requested before commit
+  -> new content directory removed -> previous receipt and content stay active -> kIoError / kCanceled
+  -> package Error with message; retry through InstallPackage
+inventory write failure after the receipt commit -> kPersistenceError, committed_package_id set,
+  "installed; an inventory refresh is required" -> next Start: LutInventoryMatchesPackageReceipts false
+  -> rescan and rewrite -> Current
+process stop before the commit -> inactive content directory -> next Start retires it
+shutdown -> LutPackageService::Shutdown cancels the transfer -> LutLibraryService::Shutdown requests stop
+  -> pre-commit stop point removes new content; a committed installation completes
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `SettingsCheckDoesNotStartDownload` (two feed requests, zero transfers, both Not installed) | `LutPackageServiceTest` | PASS |
+| `StartupDoesNotRequestLutFeed` (service level: zero feed requests; host level: `lutPackages` neither checking nor checked after construction) | `LutPackageServiceTest`, `ApplicationModuleHostLifecycleTest` | PASS |
+| `UpdateOnePackageKeepsOtherPackageAndUserFiles` (bytes, receipts, IDs, user files, old content retired) | `LutPackageServiceTest` | PASS |
+| `ArchiveHashMismatchKeepsInstalledPackage` | `LutPackageServiceTest` | PASS |
+| `ArchiveTraversalAndLinksAreRejected` (`..`, nested `..`, absolute, drive, backslash, symbolic link, case-colliding duplicate, unlisted file, existing destination; each case is a valid package plus one bad entry and asserts the specific reason) | `LutPackageServiceTest` | PASS |
+| `InterruptedActivationRecoversCommittedReceipt` (receipt-write failure before commit; stopped leftover directory; inventory-write failure after commit; restart rebuild) | `LutPackageServiceTest` | PASS |
+| `CancelBeforeActivationKeepsInstalledPackage` (cancel during download; stop requested before commit; retry succeeds) | `LutPackageServiceTest` | PASS |
+| `EditedOfficialLutIsReplacedWithoutPromptOrUserCopy` | `LutPackageServiceTest` | PASS |
+| `OfficialHashMismatchDoesNotChangeOwnership` | `LutPackageServiceTest` | PASS |
+| `UserDeclaredVariantSurvivesPackageReplacement` | `LutPackageServiceTest` | PASS |
+| `ApplicationAndLutDownloadsShareAdmission` (real `DownloadService` with the fake aria2 process) | `LutPackageServiceTest` | PASS |
+| Step 8, unchanged comparison without downloading or rehashing: `UnchangedRemoteComparisonReadsInventoryWithoutHashing` | `LutPackageServiceTest` | PASS |
+| Publishing-tool codec: `PublishingToolArchiveExtractsWithBundledLibarchive` (checked-in `spectral_film_lut_py7zr_package.7z`, py7zr LZMA2 preset 9) | `LutPackageServiceTest` | PASS |
+| Tampered feed: `TamperedFeedSignatureKeepsPreviousStatusAndReportsError` | `LutPackageServiceTest` | PASS |
+| Existing `LutPackageManifestTest`, `UpdateManifestTest`, `DownloadServiceTest`, `LutLibraryServiceTest`, `LutMetadataTest`, `EditorLookModelTest`, `EditorLutPanelQmlTest`, host lifecycle and shutdown | respective targets | PASS |
+| Guard check: disabling the archive hash check, the link/special-file check, the `origin: user` relocation, and the receipt/inventory agreement check failed exactly `ArchiveHashMismatchKeepsInstalledPackage`, `ArchiveTraversalAndLinksAreRejected`, `UserDeclaredVariantSurvivesPackageReplacement`, and `InterruptedActivationRecoversCommittedReceipt`; code restored | `LutPackageServiceTest` | 4 expected failures, then PASS |
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutPackageServiceTest LutLibraryServiceTest LutMetadataTest LutPackageManifestTest DownloadServiceTest UpdateManifestTest EditorLookModelTest EditorLutPanelQmlTest ApplicationModuleHostLifecycleTest ApplicationModuleHostShutdownTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(LutPackageServiceTest|LutLibraryServiceTest|LutMetadataTest|LutPackageManifestTest|DownloadServiceTest|UpdateManifestTest|EditorLookModelTest|EditorLutPanelQmlTest|ApplicationModuleHostLifecycleTest|ApplicationModuleHostShutdownTest)\." --output-on-failure
+```
+
+Suite totals: 115/115 (LutPackageServiceTest 14, LutLibraryServiceTest 15, LutMetadataTest 16,
+LutPackageManifestTest 5, DownloadServiceTest 2, UpdateManifestTest 13, EditorLookModelTest 32,
+EditorLutPanelQmlTest 14, ApplicationModuleHost lifecycle and shutdown 4). Configure, build (including
+`alcedo_main`), and ctest exit codes 0. The vcpkg runtime directory on this machine is
+`vcpkg/installed/x64-windows/debug/bin`, not `build/debug/vcpkg_installed`. The full suite was not run
+(repository rule). No macOS build or run.
+
+**Checklist / exit condition:** all five L3 exit criteria are checked above. Application shutdown is
+verified through the same stop-before-commit path as cancellation, restart recovery after a committed
+receipt, and the existing host shutdown test; no test stops the host during a running extraction.
+
+**LOC note (grill-code-review):** about +2840/-53 lines: new production C++ about 1370 (install 485 +
+125 header, package service 530 + 234 header), changes to existing production and CMake about 390,
+tests about 1000 (`lut_package_service_test.cpp` 988 lines), documentation about 70, and a 930-byte
+binary fixture. This exceeds the 1500-1950 estimate mainly through tests. The test file is close to
+1000 lines; split its archive-validation cases into their own file before adding L4 cases to it.
+The largest production file is `lut_library_service.cpp` (583 lines).
+
+**Remaining gaps:**
+
+- Nothing is committed. No Settings UI, progress bar, or background-task popover entry exists; L6 binds
+  the `lutPackages` properties. Status and error texts are English and untranslated.
+- `ALCEDO_LUT_PACKAGE_FEED_URL` is empty by default, so product builds report packages as disabled until
+  the deployed URL is configured. No real R2 feed, production key, or live download was used.
+- Windows packaged-application deployment of `archive.dll` and its codec DLLs relies on the existing
+  `GET_RUNTIME_DEPENDENCIES` install step and was not inspected. macOS Homebrew `libarchive` linkage and
+  bundle deployment are untested (L6 packaged-artifact checks).
+- Step 6 publishes the changed entry paths through `InventoryChanged`; there is no render-side consumer yet.
+  L4 adds resource resolution and invalidation, and must keep retired content alive while readers use it
+  (it is removed immediately after the commit today).
+- Favorites of official entries are stored by root-relative path, which changes on each installation (decision 2).
+  L4/L5 must move official favorites and references to package and LUT IDs.
+- The streaming byte-budget and file-count limits are implemented but not exercised by a test.
+- `ScanLutLibrary` still has no stop check (L2 gap), so shutdown waits for a post-commit rescan.
+
+### L4. Stable references, missing resources, and strength
+
+**Objective and deliverables.** Make LUT resources survive root migration and official updates.
+Continue rendering when a referenced LUT is missing. Apply strength consistently on every supported backend.
+
+**Inputs and modules.** L1 identities, L2 resolution, the confirmed strength/restoration behavior, and the L4 file map.
+Use existing typed parameter changes, history, resource packing, and invalidation owners.
+
+**Data rules.** Missing is a typed result, not a catch-all error. Keep user intent separate from effective
+availability. Legacy path-only projects load with the approved default strength.
+
+**Implementation steps.**
+
+1. Extend `LmtPayload`, focused setters, dirty fields, and serialization. Validate before mutation.
+2. Extend typed write parsing, history replay, panel projection, commit descriptions, and adjustment transfer.
+3. Add the runtime resolver port and inject it into every existing pipeline construction path.
+4. Resolve official IDs to active package content and legacy references only through proven mappings.
+5. Return Missing without loading an invalid replacement. Publish node-specific diagnostics through session results.
+6. Connect resource changes and availability to runtime invalidation before cached image reuse.
+7. Pack strength into shared grade parameters. Implement the blend at the LMT operation in CUDA, Metal, and OpenCL.
+8. Automatically restore a returned valid resource at its configured strength. Invalidate affected results without rewriting user history.
+
+**Success chain.** Explicit node edit -> typed owner mutation -> history commit -> runtime reference
+resolution -> packed resource -> GPU blend -> published frame and current association.
+
+**Failure and restore chain.** Resource Missing -> effective LUT disabled -> remaining pipeline renders ->
+missing node association shown -> refresh/package repair detects valid resource -> automatic effect restoration at configured strength.
+Invalid or unreadable data -> explicit existing render failure -> no substitution or automatic backend switch.
+
+**Tests and assertions.**
+
+- `LegacyLutPathLoadsWithFullStrength`: old serialized input remains readable.
+- `LutReferenceAndStrengthRoundTripThroughHistory`: save, reopen, Undo, Redo, and transfer preserve intent.
+- `MissingLutKeepsOtherGradeAdjustments`: output matches the same graph without that LUT, including other nodes.
+- `InvalidCubeRemainsAnError`: corrupted content does not silently become an identity transform.
+- `OfficialUpdateChangesPixelsWithWarmResultCache`: the same stable ID uses new installed bytes.
+- `RootMigrationPreservesRenderedLutSelection`: changing the root keeps the exact intended LUT.
+- `LutStrengthZeroHalfAndOneMatchExpectedPixels`: use a small nonidentity cube and independent arithmetic;
+  check all three backends with absolute channel tolerance `1e-5` for bounded fixture values.
+- `LutStrengthDoesNotScaleOtherAdjustments`: independent exposure and masks remain unchanged.
+- `MissingLutDoesNotMutateHistory`: no new commit or loss of configured strength.
+- `ReturnedLutRestoresConfiguredStrengthWithoutHistoryEdit`: remove and restore the same resource;
+  verify the configured strength, restored pixels, cleared missing status, and unchanged history.
+- `ReturnedFileDoesNotRestoreClearedLut`: explicitly clear the association while its file is missing;
+  restoring the file does not select or apply it again.
+- `ReturnedLutAtZeroStrengthRemainsVisuallyInactive`: availability returns without changing the user's zero strength.
+
+**Build and run.** Build existing `GpuDagRawInputTest`, `EditorPipelineCommandServiceTest`, and
+`EditorLookModelTest`. Run the discovered LUT/model/history cases, plus their direct caller tests.
+Build/run `GpuDagCudaPrimaryGradeTest` and `GpuDagOpenClGradeTest` on Windows, and
+`GpuDagMetalGradeTest` on macOS. Add the new cases to these targets where their fixtures fit.
+Use `ctest -N -R "(GradeLutCacheTest|LutReference|LutStrength|EditorPipelineCommandServiceTest|EditorLookModelTest)"`
+to confirm discovery before execution. GPU tests run with `-j 1`.
+
+**Exit criteria.**
+
+- [x] Missing LUTs skip only the authorized operation in all render consumers.
+- [ ] Strength passes independent pixel assertions on CUDA, OpenCL, and Metal. (CUDA and OpenCL pass; the Metal cases are written but not built or run.)
+- [x] Warm cached results update after package replacement and file loss.
+- [x] A returned valid resource automatically restores its configured effect without an enable action or history edit.
+- [x] Reopen, migration, Undo/Redo, and transfer preserve the intended reference and strength.
+
+**Expected diff.** 1500-1950 lines. **Completion record:** see below.
+
+##### Phase L4 completion record (2026-09-29)
+
+**Status:** complete on Windows (CUDA and OpenCL); partial for the exit criterion that includes Metal.
+The LMT Model stores a tagged LUT reference (official package and LUT ID, library path, or legacy
+file path), a last known name, and a strength in [0, 1]. A render-side `LutResourceResolver` port,
+implemented by the LUT library, resolves references on render threads. Resolved content identity
+drives result invalidation, a missing file skips only the LUT operation, and all three kernels blend
+`c + a * (L(c) - c)` at the LMT position. A library publication or root change re-renders the open image.
+
+**Source revisions and branches.**
+
+| Repository | Base | Branch | State |
+| --- | --- | --- | --- |
+| `pu-erh_lab` | `14abaca3d` (L3 commit on `feature/lut-package-install`) | `feature/lut-stable-references-strength` | Uncommitted working tree |
+
+**Implemented modules.**
+
+| Module | Responsibility |
+| --- | --- |
+| `edit/operators/models/lut_reference.{hpp,cpp}` (EditGraph) | `LutReference` variant (none, `OfficialLutReference`, `LibraryLutReference`, `FileLutReference`); validation; tagged JSON for official and library forms |
+| `edit/operators/models/lmt_model.{hpp,cpp}` | Payload reference, display name, strength; `SetReference`, `SetStrength`, `ApplyUpdate` (validate all parts, one mutation, separate dirty fields); JSON that keeps legacy `{"cube_path": ...}` byte-identical |
+| `edit/runtime/lut_resource_resolver.{hpp,cpp}` (new `EditLutResources` library) | Port interface, `LutResourceResolution::ContentIdentity`, `FileLutResourceResolver` default (exact file paths only) |
+| `edit/runtime/grade_lut.{hpp,cpp}` | `TryPackGradeLut(grade, resolver)` packs inside `ReadResource`; memo keyed by path, stamp, and inventory SHA-256; Missing and zero strength bind no LUT; `GradeLutResourceIdentity` |
+| `edit/runtime/runtime_invalidation.{hpp,cpp}` | Per-Grade last resolved LUT identity; a change invalidates from the LLF source without a Model revision |
+| `basic_render_workspace.hpp`, `renderer.hpp`, `pipeline_executor.{hpp,cpp}`, `batch_executor_pool.hpp`, `pipeline_service.hpp` | Resolver injected at executor construction and handed to every renderer's workspace; `PipelineMgmtService` carries it to editor, thumbnail, and export executors |
+| `adjustment_runtime.cpp`, CUDA/OpenCL/Metal primary grade kernels | `values[0]` is the strength; the kernels skip at 0 or with an empty LUT, return `L(c)` at 1, and blend otherwise |
+| `app/lut_library_publication.{hpp,cpp}` | Single owner of root, published inventory, receipts, and user state behind a state lock; render-thread `Resolve`/`ReadResource`; content lock for file removal; Missing observer |
+| `app/lut_library_service.{hpp,cpp}` | Holds the publication; `Resources()`, `ReferenceForPath`; one refresh per missing reference; new `kRetirePackageContent` operation after installation publication; migration cleanup deletions under the content lock |
+| `app/lut_package_install.{hpp,cpp}` | Post-commit retirement removed from the installation; leftover removal under the content lock |
+| Typed writes, projection, transfer display | `EditorLutWrite` is `LmtUpdate`; the JSON boundary parses complete state (missing strength is 100%); panel value carries reference, name, strength |
+| `EditorRenderReason::ResourceChanged`, `EditorSessionController::NotifyLutResourcesChanged`, host wiring | Library `InventoryChanged` requests one Quality render without an edit; `ProjectModule` hands the library resolver to every project |
+| `EditorLutCatalogModel`, `lut_catalog`, `LUTPanel.qml` | Row selection submits an official or library reference without strength; `loadSelection` resolves the panel reference; a missing reference shows its last known name |
+
+Decisions made during L4:
+
+1. **Byte-stable legacy form.** `TryDecodeRootState` recomputes a stored root ID from re-serialized
+   document JSON. The writer therefore keeps `{"cube_path": ...}` for file references and the default
+   state, and adds `reference`, `name`, and `strength` only when present. The plan's "writers emit the
+   new tagged reference" applies to official and library references; a legacy path stays a file reference.
+2. **Library reference identity** is the root-relative path (L2 decision 1). Official files are selected
+   by package ID and metadata ID, so an installation that changes the content directory keeps the reference.
+3. **Availability in the bound LUT, not in parameters.** Grade parameter slots upload by Model revision, so
+   availability is expressed by binding an empty LUT (edge 0). `values[0]` carries only the strength.
+4. **Retirement after publication.** A render could otherwise resolve the old content directory from the
+   still-published inventory after it was deleted. The executable interleaving is a render worker in
+   `TryPackGradeLut` against the library worker's retirement. The fix is ordering (publish, then retire)
+   plus a content lock held by `ReadResource` and taken by every removal. Its test is
+   `RetiredPackageContentWaitsForActiveResourceRead`. No version, epoch, or token was added.
+5. **Missing status in the panel** is resolved by the LUT list model through the library, not carried in
+   render completions. Both read the same owner.
+6. **Terminology.** Touching `application_module_host.cpp` required renaming the image-analysis
+   in-flight limit type to `ImageAnalysisConcurrencyLimit`, with its identifiers, in 10 image-analysis
+   files. The touched live provider test file was renamed to `image_analysis_live_provider_test.cpp`
+   (target `ImageAnalysisLiveProviderTest`), and its references in `ai_sidecar_backend_plan.md` were
+   updated. This mechanical rename is kept separate from the L4 logic.
+
+**Primary success call chain:**
+
+```text
+LUT list row -> EditorLutCatalogModel::selectPath -> LutLibraryService::ReferenceForPath
+  -> EditorLutWrite{reference, name} (no strength) -> submitNow -> ApplyEditorParameterWrite
+  -> LmtModel::ApplyUpdate (validate, one mutation) -> settled history commit (full Model JSON)
+Render (editor, thumbnail, export executor; resolver from PipelineMgmtService)
+  -> BasicRenderWorkspace::PrepareResultValidity -> RuntimeInvalidationState::CollectAndPropagate
+     -> GradeLutResourceIdentity -> LutLibraryPublication::Resolve (state lock: candidates; stat outside)
+     -> identity changed -> InvalidateFrom(LLF source) -> Grade, display re-execute
+  -> GradeExecutor::Execute -> Ops::LoadLut -> TryPackGradeLut -> ReadResource (content lock)
+     -> PackResolvedCube (memo: path, stamp, SHA-256) -> backend AcquireLut
+  -> kernel: c + strength * (L(c) - c) -> published frame
+Package installation commit -> PublishInventory -> InventoryChanged
+  -> EditorSessionController::NotifyLutResourcesChanged -> RequestViewChange(ResourceChanged)
+  -> Quality render resolves the same official ID to the new content
+  -> kRetirePackageContent (content lock) removes the replaced directory
+```
+
+**Primary failure call chain:**
+
+```text
+file missing -> Resolve returns kMissing (reference, name, strength unchanged)
+  -> identity change invalidates the Grade -> empty LUT bound -> LMT skipped, other operations render
+  -> Missing observer -> one RefreshInventory per reference (no retry loop)
+file returns -> refresh or availability check -> identity change -> effect restored at the configured
+  strength; no history edit; a cleared reference stays cleared
+invalid or unreadable CUBE -> ParseCubeFile fails -> std::runtime_error -> render fails with the path
+  (no identity substitute, no backend switch)
+invalid write (NaN, out-of-range strength, unsafe library path, unknown kind) -> std::invalid_argument
+  before mutation -> write rejected, Model revision unchanged
+render reading old package content during retirement -> removal waits on the content lock
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `LegacyLutPathLoadsWithFullStrength` (and byte-identical re-serialization; default form) | `GpuDagModelGraphTest` (`LutReferenceModel`) | PASS |
+| `LutReferenceAndStrengthRoundTripThroughHistory` (Undo/Redo forward/inverse, replay from root, reopen with equal root ID, transfer through Model JSON) | `PipelineHistoryApplierTest` | PASS |
+| `MissingLutKeepsOtherGradeAdjustments` (two Grades, equal to the graph without a LUT) | `GpuDagCudaPrimaryGradeTest`, `GpuDagOpenClGradeTest` | PASS |
+| `InvalidCubeRemainsAnError` | CUDA and OpenCL targets; `GpuDagRawInputTest` (`GradeLutCacheTest`) | PASS |
+| `OfficialUpdateChangesPixelsWithWarmResultCache` (new directory; same path, size, and write time with a new digest; unchanged resource reuses the cached display) | CUDA and OpenCL targets | PASS |
+| `RootMigrationPreservesRenderedLutSelection` (library and legacy absolute references after migration and source cleanup) | `LutLibraryServiceTest` (`LutResourceResolutionTest`) | PASS |
+| `LutStrengthZeroHalfAndOneMatchExpectedPixels` (affine cube, independent arithmetic, tolerance `1e-5`) | CUDA and OpenCL targets | PASS |
+| `LutStrengthDoesNotScaleOtherAdjustments` (exposure before, Grade mix after) | CUDA and OpenCL targets | PASS |
+| `MissingLutDoesNotMutateHistory` (document JSON, Model revision, strength, and path unchanged by a render) | asserted inside `MissingLutKeepsOtherGradeAdjustments` | PASS |
+| `ReturnedLutRestoresConfiguredStrengthWithoutHistoryEdit` | CUDA and OpenCL targets | PASS |
+| `ReturnedFileDoesNotRestoreClearedLut` | CUDA and OpenCL targets | PASS |
+| `ReturnedLutAtZeroStrengthRemainsVisuallyInactive` | CUDA and OpenCL targets | PASS |
+| Metal versions of the eight GPU cases (`metal_lut_resource_test.cpp`) | `GpuDagMetalGradeTest` | NOT RUN (no macOS host) |
+| Model rules: `SelectionKeepsStrengthAndStrengthKeepsSelection`, `InvalidLutUpdateIsRejectedWithoutMutation`, `OfficialAndLibraryReferencesRoundTripThroughDocumentJson` | `GpuDagModelGraphTest` | PASS |
+| Invalidation: `LutResourceChangeInvalidatesGradeWithoutModelRevision` | `GpuDagRawInputTest` | PASS |
+| LUT memo: `MissingCubeFileIsSkippedAndReturnedFileIsPacked`, `ZeroStrengthSkipsCubeLoading`, `ChangedDigestReparsesCubeWithUnchangedStamp`, `ResourceIdentityFollowsAvailabilityAndClearedReference`; strength packing in `GpuDagAdjustmentRuntime` | `GpuDagRawInputTest` | PASS |
+| Resolution: `OfficialReferenceResolvesToActivePackageContent`, `OfficialUpdateResolvesSameIdToNewContent`, `MissingReferenceRequestsOneRefreshWithoutRetries`, `RetiredPackageContentWaitsForActiveResourceRead`, `ResolverOutlivesTheLibraryService` | `LutLibraryServiceTest` | PASS |
+| Typed writes: `LutSelectionAndStrengthWritesChangeOnlyTheirOwnField`; `InvalidLutStrengthPatchLeavesDocumentUnchanged` | `EditorPipelineCommandServiceTest`, `PipelineHistoryApplierTest` | PASS |
+| UI owner: `LutSelectPathSubmitsSelectionAndKeepsStrength`, `LutSelectionOfPackageFileSubmitsOfficialReference`, `LutLoadSelectionResolvesReferencesWithoutSubmitting` | `EditorLookModelTest` | PASS |
+| `ResourceChangedSchedulesQualityRenderInsteadOfReuse`; host injects the library resolver into `ProjectModule` | `EditorRenderCoordinatorTest`, `ApplicationModuleHostLifecycleTest` | PASS |
+| Guard check: disabling the LUT identity invalidation failed `LutResourceChangeInvalidatesGradeWithoutModelRevision`, `OfficialUpdateChangesPixelsWithWarmResultCache`, and `ReturnedLutRestoresConfiguredStrengthWithoutHistoryEdit`; removing the content lock around retirement failed `RetiredPackageContentWaitsForActiveResourceRead`; code restored and rerun | respective targets | 4 expected failures, then 15/15 PASS |
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(GpuDagModelGraphTest|GpuDagRawInputTest|PipelineHistoryApplierTest|EditorPipelineCommandServiceTest|EditorPanelProjectionTest|EditorPendingInputTest|EditorRenderCoordinatorTest|LutLibraryServiceTest|LutPackageServiceTest|LutMetadataTest|LutPackageManifestTest|DownloadServiceTest|UpdateManifestTest|AdjustmentTransferCatalogTest|GraphImageCacheRetentionTest|EditorLookModelTest|EditorLutPanelQmlTest|EditorAdjustmentSnapshotQmlTest|ApplicationModuleHostLifecycleTest|ApplicationModuleHostShutdownTest|ImageAnalysisServiceTest|ImageAnalysisControllerTest|ImageAnalysisLiveProviderTest|EditorSessionRenderSchedulerPortTest|AdjustmentTransferServiceTest)\." -j 4
+ctest --test-dir build/debug -R "^(GpuDagCudaPrimaryGradeTest|GpuDagOpenClGradeTest|GpuDagCudaDrtProductTest|GpuDagOpenClDrtProductTest|GpuDagCudaMaskTest)\." -j 1
+```
+
+Suite totals: the full debug build (all targets, including `alcedo_main`) exited 0. App, UI, and
+caller suites: 594 discovered, 586 passed, 3 skipped (credential-dependent live image-analysis
+tests), 5 failed. The 5 failures are `EditorSessionRenderSchedulerPortTest` cases
+(`ProductionPipelinePathSchedulesInstalledContextWithoutAdapterBind`,
+`ViewDrivenReasonsDisableScopeFrameReplacement`, `ScopeRefreshMarksFrameAsRequestedScopeInput`,
+`SessionDoesNotStampPreviewGenerationFromIntent`, `InstalledContextAllowsScheduleWithoutImagePoolService`).
+The same 5 fail on the clean L3 commit `14abaca3d` (stash, rebuild, rerun). GPU suites: 262 passed,
+1 skipped (opt-in `InteractiveDagBaselinesDumpCurrentExecutionGpuTimes`). The full suite was not run
+(repository rule). No macOS build or run.
+
+**Checklist / exit condition:** four of five exit criteria are checked. The strength criterion lacks
+Metal evidence. The render-consumer criterion rests on one resolver that every executor receives
+from `PipelineMgmtService`, on the plan-level GPU tests, and on the host injection test. No thumbnail or
+export end-to-end LUT render test was added.
+
+**LOC note (grill-code-review):** about +3280/-440 lines for L4 across production, tests, and CMake
+(tests about +2390/-225, including the extracted `lut_library_test_support.hpp` and the shared GPU
+`lut_resource_runtime_test_support.hpp`). The image-analysis terminology rename adds about 150 changed
+lines. This exceeds the 1500-1950 estimate mainly through tests and the resolver ownership split.
+The largest touched production file is `lut_library_service.cpp` (about 730 lines); no file approaches 1000.
+
+**Remaining gaps:**
+
+- Metal: the shader blend and `metal_lut_resource_test.cpp` are written but not compiled or run.
+- Thumbnail disk caches are keyed by committed history, so a package update or a returned file does not
+  refresh stored library thumbnails. The editor re-renders on `InventoryChanged`; export renders fresh.
+- The Editor strength control, the missing-association presentation beyond the list's missing row, and
+  the hidden-editor behavior belong to L5/L6. There is no QML strength slider yet.
+- Official favorites are still stored by root-relative path (L3 gap); L5 moves them to references.
+- Legacy bundled official files are not mapped; no verified release records exist. They stay Missing
+  when their exact path is gone.
+- `ai_sidecar_backend_plan.md` still contains other prohibited terms; only the renamed file and target
+  references were updated.
+- `EditorSessionRenderSchedulerPortTest` has 5 failures that predate this phase.
+
+### L5. Browser queries and target binding
+
+**Objective and deliverables.** Supply the new browser with classification, fuzzy search, favorites,
+and one explicit Color Grade target without loading every row into QML arrays.
+
+**Inputs and modules.** L2 inventory, L4 typed edits, the confirmed print-presence filter, and the L5 file map.
+Read node selection through the current controller and panel target APIs.
+
+**Data rules.** The service owns entries; models own indices and query state. Browsing does not change
+the document. An edit uses the captured target and is validated again by the session owner.
+
+**Implementation steps.**
+
+1. Add indexed row access and filter predicates from metadata. Use All, With print, and No print for the print dimension.
+2. Add normalized field keys and deterministic token ranking with the bounds in section 6.3.
+3. Persist favorites by entry identity. Preserve selection and scroll state across query updates.
+4. Separate the current node's applied LUT summary from the currently focused browser result.
+5. Add a controller that reads the session's image, node, adjustment, and editability state.
+6. Route application through existing typed submit operations. Never resolve to PrimaryGrade implicitly.
+7. Keep a small editor adjustment model for strength and missing-state display. Remove copied catalog ownership
+   from `EditorLutCatalogModel` after its callers move to the new model.
+8. Measure the query and row access budgets with 1,000 and 10,000 entries before choosing more complex indexing.
+
+**Success chain.** Query/filter change -> indexed intersection/ranking -> changed model indices -> visible
+rows -> user applies result -> exact target write -> history -> load-only current association update.
+
+**Failure and restore chain.** No target, missing adjustment, invalid entry, or deleted node -> reject edit ->
+keep browser and document unchanged -> publish an actionable reason. Zero matches show an empty result set.
+
+**Tests and assertions.**
+
+- `FiltersUseIntersectionAndAllRemovesOnePredicate`: compare exact entry IDs for every combination.
+- `PrintPresenceCombinesPrintFilmAndPaper`: With print includes both kinds; No print excludes both;
+  All includes both sets. Brand and source filters still intersect these results.
+- `ThirdPartyPrintMetadataAddsPresenceFilter`: a new source receives the same three choices without source-specific code.
+- `GeneralCategoryClearsFilmPredicates`: general entries remain reachable with no film metadata.
+- `FuzzySearchRanksExactNameBeforeTypo`: deterministic ordering, Unicode names, aliases, and bounded typo matches.
+- `TenThousandEntriesKeepVisibleRowsBounded`: increasing the catalog size does not increase instantiated rows beyond the visible range and its fixed buffer.
+- `SelectionChangeDoesNotResetRows`: selecting a LUT does not emit a model reset.
+- `ApplyLutChangesOnlyCapturedColorGrade`: multi-node fixtures keep unrelated models byte-equivalent.
+- `NonGradeSelectionAllowsBrowseButRejectsApply`: RAW, Output, Mask, no-photo, and no-node states are covered.
+- `TargetProjectionReloadDoesNotSubmitHistory`: changing nodes and reopening the workspace are read-only.
+
+**Build and run.** Build proposed `LutLibraryModelTest`, existing `EditorLookModelTest`, and existing
+`EditorPipelineCommandServiceTest`. Run
+`ctest -R "^(LutLibraryModelTest|EditorLookModelTest|EditorPipelineCommandServiceTest)\."`.
+Record query p50/p95, GUI-thread time, and process memory for both library sizes in a Release build.
+
+**Exit criteria.**
+
+- [x] Filter semantics match the approved metadata dimensions.
+- [x] Search ranking is deterministic and bounded.
+- [x] Applying an entry changes only the explicit target.
+- [x] Selection does not rebuild the catalog or move the scroll position.
+
+**Expected diff.** 1200-1750 lines. **Completion record:** see below.
+
+##### Phase L5 completion record (2026-09-29)
+
+**Status:** complete, with one step deferred by its own condition. The browser has an indexed
+list model over the library, metadata filters with All/With print/No print, bounded
+Unicode-aware ranking, favorites stored by entry identity, and a separate controller. That
+controller binds the browser to exactly one Color Grade, and a small Editor strength model uses
+the same target. The old `EditorLutCatalogModel` still backs the current `LUTPanel.qml`. Step 7
+removes its copied catalog only "after its callers move to the new model"; that caller is the
+L6 panel, which waits for the visual design.
+
+**Source revisions and branches.**
+
+| Repository | Base | Branch | State |
+| --- | --- | --- | --- |
+| `pu-erh_lab` | `b6a50ddca` (L4 commit on `feature/lut-stable-references-strength`) | `feature/lut-browser-queries-target-binding` | Uncommitted working tree |
+
+**Implemented modules.**
+
+| Module | Responsibility |
+| --- | --- |
+| `album_backend/lut_library_query.{hpp,cpp}` | `LutSearchKeys` (derived keys: NFKC + case fold, name/alias tokens, field tokens for source, brands, stock, print, path; facet values); `ParseLutSearchQuery` (256 characters, 16 tokens); `RankLutSearchKeys` (whole name, then weakest token match exact < prefix < substring < edit, then match sum, then name before other fields); short tokens exact/prefix only, one edit for 4-7 characters, two for 8+; `LutEditDistanceMemo` per ranking pass; `LutKeysPassFilter` |
+| `album_backend/lut_library_model.{hpp,cpp}` | `LutLibraryModel` (`QAbstractListModel`): row indices over service entries; row values read through `LutLibraryService::ReadEntry` at `data()` time; keys rebuilt only for entries in `InventoryChanged`; category/source/brand/print/favorites predicates; choices with counts from the other predicates and the query; General clears brand and print; 100 ms typing delay; name/modified order without a query; focus, applied entry, and favorite changes emit `dataChanged` only |
+| `album_backend/lut_library_controller.{hpp,cpp}` | `LutLibraryController`: `LutTargetSource` port (session adapter in production); target states `ready`, `noImage`, `noNode`, `notColorGrade`, `maskSelected`, `noLutAdjustment`, `notEditable`; association (entry ID, last known name, strength, Missing through the library resolver) read without submitting; `applyEntry`/`clearAssociation` capture the target from the current document and submit one settled reference write without strength |
+| `album_backend/editor_lut_adjustment_model.{hpp,cpp}` | `EditorLutAdjustmentModel`: 0-100 % strength on the existing value-model input rules, strength-only `lut` writes, association name / Missing / "No LUT" status from the controller, no load during a pointer drag |
+| `editor_adjustment_models.{hpp,cpp}` | `EditorAdjustmentValueModel::valueWrite` extension point (existing scalar/Sharpen writes moved into it) |
+| `editor_session_controller.{hpp,cpp}` | `SubmitTargetedWrite` (captured target, owner revalidates at apply), `selected_node_id`, `NodeSelectionChanged`; `submitWrite` shares one enqueue path |
+| `app/lut_library_inventory`, `lut_library_publication`, `lut_library_service` | Favorites are entry IDs (`official:<package>/<lut id>` or `library:<path>`, `LutLibraryPublication::EntryIdOf`); `lut-library.json` writes `favorite_entries`, reads the earlier `favorites` paths and converts them after load and `UseRoot`; `ReadEntryById` |
+| `ApplicationModuleHost` | One `lutBrowser` and one `lutTarget`, bound to `lutLibrary` and `editorSession`; the target's association marks the browser's applied row; destroyed before the session |
+| QML registration | `LutLibraryModel`, `LutLibraryController`, `EditorLutAdjustmentModel` in `Alcedo.Main` |
+
+Decisions made during L5:
+
+1. **Entry identity.** A package-owned official LUT is identified by package ID and metadata ID,
+   and every other entry by its root-relative path. These are the texts `DescribeLutReference`
+   already produces for the reference that selects the entry. A favorite therefore survives a
+   package update that changes the content directory. It also survives root migration.
+2. **Captured target through an explicit port.** The controller reads the image, published
+   document, primary node, mask selection, and editability through `LutTargetSource`. A write
+   goes through `EditorSessionController::SubmitTargetedWrite`. The pending input keeps that
+   target, and `ApplyEditorParameterWrite` validates it again. A deleted node or LMT instance
+   rejects the write. Nothing resolves to PrimaryGrade.
+3. **Strength through the existing adjustment path.** The Editor control submits
+   strength-only `lut` writes through the existing submitter. That submitter resolves the same
+   primary selected node that the controller shows.
+4. **Ranking stays on the GUI thread.** Release measurements (below) are about 8x under the
+   budget, so no worker or larger index was added. The only added structure is the per-pass
+   edit-distance memo. It reduced the debug 10,000-entry p95 from 335 ms to 171 ms.
+5. **Choice lists.** Source and brand choices list every value the library declares, with
+   counts that may be zero. A chosen value stays listed. No filter changes silently.
+
+**Primary success call chain:**
+
+```text
+typing -> LutLibraryModel::setQueryText -> 100 ms timer -> applyQueryNow -> rerank
+  (RankLutSearchKeys per LutSearchKeys, LutEditDistanceMemo) -> refilter (LutKeysPassFilter,
+  order by rank then entry ID) -> model reset -> ListView instantiates visible delegates
+  -> data() -> LutLibraryService::ReadEntry (scoped read)
+filter choice -> setCategory/setSource/setBrand/setPrint/setFavoritesOnly -> refilter
+  -> rebuildChoices (counts without the dimension's own predicate)
+row focus -> focusEntry -> dataChanged(FocusedRole) for two rows (no reset, no document change)
+apply -> LutLibraryController::applyEntry(entry ID) -> ReadEntryById (valid 3D entry)
+  -> ReadTarget (image, published document, primary node, no mask, Color Grade, LMT instance,
+     editable) -> EditorLutWrite{reference, name} -> LutTargetSource::SubmitLutWrite
+  -> EditorSessionController::SubmitTargetedWrite -> EnqueueAdjustmentInput (captured target)
+  -> session owner ApplyEditorParameterWrite -> settled history commit
+  -> AdjustmentSnapshotChanged -> LutLibraryController::reload (load-only)
+  -> associationChanged -> LutLibraryModel::setAppliedEntryId, EditorLutAdjustmentModel value
+strength drag -> EditorLutAdjustmentModel (valueWrite: LmtUpdate{strength}) -> submitWrite
+  -> selected Color Grade -> interactive previews and one settled commit
+```
+
+**Primary failure call chain:**
+
+```text
+no photo / no or deleted node / Develop (RAW) / DRT (Output) / mask selected / no LMT instance
+  / not editable -> ReadTarget state != ready -> applyEntry/clearAssociation return false
+  -> applyRejected(targetMessage), lastError; no submit; browsing and search keep working
+invalid or 1D-only entry, entry no longer listed -> rejected before a write with the reason
+node deleted after capture -> ApplyEditorParameterWrite fails -> document unchanged
+selection changes after capture -> queued write still targets the captured node
+missing file -> association keeps reference, name, and strength; associationMissing,
+  "Missing: <name>"; a later inventory publication restores it
+zero matches -> count 0; the chosen filters and query stay as set
+favorite write failure -> favoriteFailed(message); favorites unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `FiltersUseIntersectionAndAllRemovesOnePredicate` (360 combinations compared with independent entry facts; facet counts) | `LutLibraryModelTest` | PASS |
+| `PrintPresenceCombinesPrintFilmAndPaper` (brand and source still intersect) | `LutLibraryModelTest` | PASS |
+| `ThirdPartyPrintMetadataAddsPresenceFilter` (new source; no-print library) | `LutLibraryModelTest` | PASS |
+| `GeneralCategoryClearsFilmPredicates` (zero-result choice kept) | `LutLibraryModelTest` | PASS |
+| `FuzzySearchRanksExactNameBeforeTypo` (tier order, full-width and umlaut folding, aliases, typo, entry-ID ties, short tokens, bounds) | `LutLibraryModelTest` | PASS |
+| `TenThousandEntriesKeepVisibleRowsBounded` (same delegate count at 1,000 and 10,000; measurements) | `LutLibraryModelTest` (debug and Release) | PASS |
+| `SelectionChangeDoesNotResetRows` (focus, applied, favorite: `dataChanged` only; unfavorite under the favorites filter removes one row) | `LutLibraryModelTest` | PASS |
+| `QueryAppliesAfterTypingDelay` | `LutLibraryModelTest` | PASS |
+| `ApplyLutChangesOnlyCapturedColorGrade` (three grades; selection moves before apply; other nodes and other adjustments byte-equal; strength kept; deleted node rejects; invalid entries rejected; clear keeps strength) | `LutLibraryModelTest` (`LutLibraryControllerTest`) | PASS |
+| `NonGradeSelectionAllowsBrowseButRejectsApply` (no photo, no node, deleted node, RAW, Output, Mask, not editable) | `LutLibraryModelTest` | PASS |
+| `TargetProjectionReloadDoesNotSubmitHistory` (node changes, rebinding, second controller: no submits, document JSON unchanged) | `LutLibraryModelTest` | PASS |
+| `MissingAssociationKeepsReferenceNameAndStrength`, `StrengthControlWritesOnlyStrength` | `LutLibraryModelTest` | PASS |
+| `LutTargetFollowsSelectionAndQueuesTheCapturedGrade` (real `EditorSessionController` + `EditorNodeController`; pending field target and write) | `EditorNodeSelectionLayoutTest` | PASS |
+| `OfficialFavoriteFollowsItsPackageAcrossContentDirectories` (stored path favorites convert; malformed ID rejected) | `LutLibraryServiceTest` | PASS |
+| Host exposes `lutBrowser`/`lutTarget`, binds library and session, destroys them before the session | `ApplicationModuleHostLifecycleTest` | PASS |
+| Existing callers: `EditorPipelineCommandServiceTest`, `EditorLookModelTest`, `EditorLutPanelQmlTest`, `EditorSerialInputBoundaryTest`, `LutPackageServiceTest`, `ApplicationModuleHostShutdownTest` | respective targets | PASS |
+
+Measurements (`TenThousandEntriesKeepVisibleRowsBounded`; synthetic persisted inventories, no
+CUBE file reads; one Windows development machine; each query timing includes ranking, filtering,
+sorting, choice counts, and the model reset on the GUI thread):
+
+| Build | Entries | Index build | Query p50 | Query p95 | Focus change | Working-set increase |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Release | 1,000 | 11-13 ms | 0.5 ms | 0.9 ms | 0.001 ms | 1-2 MiB |
+| Release | 10,000 | 113-115 ms | 5-7 ms | 12-14 ms | 0.001 ms | 22 MiB |
+| Debug | 10,000 | 1.2 s | 109 ms | 171 ms | 0.007 ms | 36 MiB |
+
+The Release values meet the section 10.1 targets: 100 ms query p95, 16 ms GUI selection, and
+64 MiB. The Release build asserts the query and focus targets (`NDEBUG`). The index build runs
+once when the library is bound, and then only for changed entries.
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutLibraryModelTest LutLibraryServiceTest LutPackageServiceTest EditorLookModelTest EditorLutPanelQmlTest EditorSerialInputBoundaryTest EditorNodeSelectionLayoutTest ApplicationModuleHostLifecycleTest ApplicationModuleHostShutdownTest EditorPipelineCommandServiceTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/build/debug/vcpkg_installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(LutLibraryModelTest|LutLibraryServiceTest|LutPackageServiceTest|EditorLookModelTest|EditorLutPanelQmlTest|EditorSerialInputBoundaryTest|EditorNodeSelectionLayoutTest|ApplicationModuleHostLifecycleTest|ApplicationModuleHostShutdownTest|EditorPipelineCommandServiceTest)\." -j 4 --output-on-failure
+# Release measurement (the release tree was configured with tests on, then switched back off)
+cmd /c scripts\msvc_env.cmd --preset win_release -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake" -DALCEDO_BUILD_TESTS=ON
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target LutLibraryModelTest --parallel 4
+build/release/alcedo_studio/tests/ui/LutLibraryModelTest_runtime/LutLibraryModelTest.exe
+```
+
+Suite totals: 216 discovered in the ten targets, 215 passed, 1 failed (below); build of the ten targets plus `alcedo_main` exited 0. Release `LutLibraryModelTest` 13/13.
+`EditorNodeSelectionLayoutTest.EditorNodeController.GeometryWriteRejectedWhenColorGradeIsSelected`
+fails before and after this phase. It also fails on the clean L4 commit `b6a50ddca` (stash,
+rebuild, rerun). The full suite was not run (repository rule). No macOS build or run.
+
+**Checklist / exit condition:**
+
+- [x] Filter semantics match the approved metadata dimensions.
+- [x] Search ranking is deterministic and bounded.
+- [x] Applying an entry changes only the explicit target.
+- [x] Selection does not rebuild the catalog or move the scroll position (no reset, move, or
+  layout change on focus, applied-entry, or favorite changes; scroll position itself is a view
+  property checked in L6).
+
+Implementation steps 1-6 and 8 are done. For step 7, the small Editor model exists. The
+`EditorLutCatalogModel` removal waits for its only caller, `LUTPanel.qml`, to move to the new
+models in L6.
+
+**LOC note (grill-code-review):** about +3380/-100 lines. Production is about +2140 (new files
+about 1900), and tests are about +1240, including the shared
+`lut_library_model_test_support.hpp`. This exceeds the 1200-1750 estimate. The main causes are the
+360-combination filter test, the measurement harness, and entry-ID favorites in the service. The
+largest new file is `lut_library_model.cpp` (about 600 lines). `lut_library_service.cpp` is about
+750 lines. `editor_session_controller.cpp` was already about 1850 lines and grew by about 40.
+
+**Remaining gaps:**
+
+- `EditorLutCatalogModel`, `lut_catalog`, and `LUTPanel.qml` still hold the old copied row list
+  and JavaScript filtering. They are removed when L6 moves the panel to `lutBrowser`, `lutTarget`,
+  and `EditorLutAdjustmentModel`. Until then, two browser models exist, but only one catalog owner
+  exists (the service).
+- No QML surface uses the new models yet (L6). Scroll-position preservation in a real view, keyboard
+  input, and the hidden-editor behavior are L6 checks.
+- The measurements use synthetic inventories on one development machine. The section 10.1 large
+  CUBE refresh and 10,000 real files belong to the L6 manual checks.
+- New user-visible strings (target reasons, choice labels, status) are English; translations are
+  not updated (lupdate is not run casually).
+- `GeometryWriteRejectedWhenColorGradeIsSelected` fails on the clean L4 commit and was not changed.
+
+### L6A. LUT browser in the Editor
+
+**Objective and deliverables.** Replace the old LUT panel with the section 6.5 browser: an Editor
+left-rail page with a filter card and a tile grid over the L5 model, a target indicator, and a
+small Editor LUT control. Remove the copied catalog (`EditorLutCatalogModel`, `lut_catalog`) and
+`LUTPanel.qml`.
+
+**Inputs and modules.** L5 `LutLibraryModel`, `LutLibraryController`, and
+`EditorLutAdjustmentModel` (`appModules.lutBrowser`, `appModules.lutTarget`); section 1.4 decisions;
+section 6.5 design; the L6A file map.
+
+**Data rules.** The rail page is Editor UI state (`editorToolPanelPage`); opening it never submits
+and never changes the image, node selection, or route. The browser owns no entry copies: tiles read
+model roles. A tile application is one settled edit through `LutLibraryController::applyEntry`.
+Official titles come from one metadata function so the browser, the indicator, and the stored LMT
+display name agree.
+
+**Implementation steps.**
+
+1. Add the `luts` Editor tool page and its rail button. Keep image, node, and target unchanged
+   across page changes.
+2. Add the browser page (filter card, result card, tiles) on the shared `lutBrowser` and
+   `lutTarget`. Expose loading, empty, zero-result, invalid, missing, and error states.
+3. Title official film simulations by brand and stock; show the print as a separate line in tiles,
+   the indicator, and the Editor control.
+4. Replace the `lut` adjustment page with the small control: association, print, Missing, strength,
+   Browse LUTs, and Remove.
+5. Remove `LUTPanel.qml`, `EditorLutCatalogModel`, and `lut_catalog` with their registrations and
+   tests; replace their QML test with a browser loading test.
+6. Register QML, the cube icon, AppTheme tokens, DESIGN.md/VI entries, and zh_CN translations.
+   Keep search as native text input and add scoped keyboard browsing.
+
+**Success chain.** Rail `LUTs` -> browser page -> filter/search -> tile -> exact target
+application -> viewport shows the result -> Editor control adjusts strength.
+
+**Failure and restore chain.** No or invalid target -> indicator reason, tile click only focuses,
+browsing preserved. Invalid entry or rejected write -> reason shown, document unchanged. Missing
+file -> Missing state in the indicator and Editor control; reference and strength kept.
+Empty library -> Import and Open folder actions; nothing is applied automatically.
+
+**Tests and evidence.**
+
+- `LutPagePreservesImageAndNode`: session owner test; switching to and from `luts` keeps the image,
+  the primary node, and the LUT target, and submits nothing.
+- `EditorLutControlReloadDoesNotCommit`: owner test; target reloads, node changes, and a missing
+  file restore strength and Missing state without submits.
+- `OfficialFilmTitleCombinesBrandAndStockWithoutPrint`: metadata test for the title rule.
+- `AssociationShowsPrintAsSeparateLine`: controller test for the print line of the association.
+- `EditorLutBrowserPanelQmlTest`: loads the browser and control from source with the real model and
+  controller; asserts no QML warnings, tile count equals the filtered count, full titles are not
+  elided, a filter bar changes the model predicate, and a tile activation reaches `applyEntry`.
+- Manual Windows: browse, filter, search, apply to different grades, strength, missing and
+  restored files, Import, Refresh, Open folder, both themes, narrow window, keyboard-only use.
+
+**Build and run.** Build `alcedo_main` and the focused targets that hold these tests
+(`LutLibraryModelTest`, `EditorNodeSelectionLayoutTest`, the LUT metadata test target,
+`EditorAdjustmentHeaderQmlTest`, `EditorLutBrowserPanelQmlTest`). Do not rely on
+`WorkspaceShellTest` for input delivery.
+
+**Exit criteria.**
+
+- [x] The browser page opens from the Editor rail and keeps image, node, and target.
+- [x] Filters, search, and tiles work over the shared model; titles are complete and exclude print.
+- [x] A tile applies to exactly the target; without a target, browsing works and nothing applies.
+- [x] The small Editor control loads current state without producing edits.
+- [x] The old panel, catalog model, and catalog module are removed.
+- [ ] Section 6.5 records the design; manual visual checks are recorded. (Design recorded; manual
+  checks not yet performed.)
+
+**Expected diff.** 1500-1950 lines including the removal of `LUTPanel.qml` (about 1000 lines).
+
+##### Phase L6A completion record (2026-09-29)
+
+**Status:** partial. Implementation and automated evidence are complete on Windows (debug).
+The manual visual, keyboard, and theme checks of section 6.5 and `docs/VI/README.md` have not
+been performed, so the last exit criterion stays open. No macOS build or run.
+
+**Source revision and branch.** `pu-erh_lab`, base `716ba5500` (L5), branch
+`feature/lut-browser-editor-panel`, uncommitted working tree.
+
+**Implemented modules.**
+
+| Module | Change |
+| --- | --- |
+| `qml/EditorLutBrowserPanel.qml` (new) | Rail page `luts`: filter card and result card over `appModules.lutBrowser`, `lutTarget`, `lutLibrary` |
+| `qml/EditorLutFilterCard.qml` (new) | Category, Source, Brand, Print facet rows with counts; choosing the selected row returns to All; Brand/Print hidden for General or when no candidate declares a print; Favorites only; Clear |
+| `qml/EditorLutResultCard.qml` (new) | Search (native `TextInput`), sort popup, Import/Refresh/Open folder, target indicator (node, LUT, print line, Missing, rejection reason; no remove button), tile grid in rows of `columns` (row height = tallest tile, full wrapped titles), loading/empty/zero-result states, count footer, registry-driven keyboard browsing |
+| `qml/EditorLutControlPanel.qml` (new) | Adjustment page `lut`: LUT name, print, Missing, strength slider (`EditorLutAdjustmentModel`), Browse LUTs, Remove |
+| `EditorWorkspaceRail.qml`, `EditorWorkspace.qml` | `LUTs` rail button and page; page width is `editorLutBrowserPanelWidth` capped by the space left after the viewport minimum; transparent shell for the two-card page |
+| `EditorAdjustmentStack.qml`, `EditorLookPanel.qml` | Old catalog model and `LUTPanel` replaced by the control |
+| `AppDialogs.qml`, `Main.qml` | `openLutImportDialog()` file dialog calling `lutLibrary.importFiles` |
+| `EditorSessionController::NormalizeToolPanelPage` | Accepts `luts` |
+| `LutDisplayName` (`utils/lut/lut_metadata`) | Official film title = brand + stock (brand not repeated); the print stays `LutPrintOptionName` |
+| `LutLibraryController` | `associationPrintName` (read from the listed entry; not persisted) |
+| Shortcut registry | `editor.lut`: Left/Right previous/next (were Up/Down); new `lut.selectAbove`/`lut.selectBelow` on Up/Down |
+| AppTheme, `DESIGN.md`, `docs/VI/README.md` | `editorLutBrowserPanelWidth` 640, `editorLutBrowserFilterWidth` 208, `editorLutTileMinWidth` 128, `editorLutTileIconSize` 36; LUT browser VI entries |
+| Resources | `panel_icons/lut-cube.svg` (user-supplied Tabler `cube`, stroke 1.5) |
+| Removed | `LUTPanel.qml`, `EditorLutCatalogModel`, `editor_support/modules/lut_catalog`, `EditorLutPanelQmlTest`, the catalog cases of `EditorLookModelTest` (their package-reference case moved to `LutLibraryControllerTest`) |
+| Tests support | `tests/ui/lut_target_test_support.hpp` (document-backed target source shared by the controller and QML tests); `TemporaryLutLibrary` root-preparation hook |
+| Translations | zh_CN entries for the new QML contexts, the rail, the import dialog, and the L5 target/choice strings (manual edit; lupdate not run); `LUTPanel` context removed |
+
+Decisions made during L6A, beyond section 1.4:
+
+1. A tile click, or an arrow key in the grid, applies to the target at once (one settled edit),
+   as selection did in the old panel. Choosing the applied tile again removes the LUT (one
+   clearing edit that keeps the strength); the browser has no separate remove button. An arrow
+   key at a grid edge does nothing. Without a target a click only moves focus.
+2. Tiles read model roles by row (`LutLibraryModel::data`) with a revision counter bumped on
+   model signals, so each row can take its tallest tile's height. No entry copies are kept.
+3. The filter rows follow the Album inspector layout but stay monochrome. Selection on tiles,
+   filter rows, and the sort menu is a 1 px outline with no fill (user revision, 2026-09-29).
+
+**Primary success call chain:**
+
+```text
+Editor rail "LUTs" -> editorSession.editorToolPanelPage = "luts" (UI state only)
+  -> EditorWorkspaceRail loads EditorLutBrowserPanel (lutBrowser, lutTarget, lutLibrary)
+facet row / search -> LutLibraryModel.setCategory|setSource|setBrand|setPrint|setQueryText
+  -> refilter / rerank -> modelReset -> result card rowCount -> visible tile rows
+  -> tile roles via LutLibraryModel::data -> LutLibraryService::ReadEntry
+tile click / arrow key -> EditorLutResultCard.activateEntry -> LutLibraryModel.focusEntry
+  -> (applied tile: LutLibraryController::clearAssociation) LutLibraryController::applyEntry
+  -> ReadTarget -> EditorLutWrite{reference, name}
+  -> EditorSessionController::SubmitTargetedWrite -> settled history commit
+  -> visible viewport renders the LUT -> AdjustmentSnapshotChanged -> controller reload
+  -> associationChanged -> applied tile outline, indicator name + print line, Editor control
+Editor control strength drag -> EditorLutAdjustmentModel -> strength-only lut writes
+Editor control "Browse LUTs" -> editorToolPanelPage = "luts"
+```
+
+**Primary failure call chain:**
+
+```text
+no photo / RAW or DRT / mask / not editable -> targetState != ready -> indicator shows
+  targetMessage; tile click focuses only; nothing submitted; browsing continues
+invalid or 1D entry -> muted tile with status line; applyEntry rejects -> lastError in red
+missing file -> association kept; indicator and control show the Missing line; restored on refresh
+empty library -> "No LUTs in the library" with Import and Open folder; nothing applied
+zero results -> "No LUTs match" with Clear search and filters
+Open folder / import failure -> lutLibrary.lastError shown under the grid
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `LutPagePreservesImageAndNode` | `EditorNodeSelectionLayoutTest` | PASS |
+| `EditorSessionToolPanelPage.AcceptsOnlyEmptyHistoryVersionsNodesAndLuts` | `EditorNodeSelectionLayoutTest` | PASS |
+| `EditorLutControlReloadDoesNotCommit` | `LutLibraryModelTest` (`LutLibraryControllerTest`) | PASS |
+| `AssociationShowsPrintAsSeparateLine` | `LutLibraryModelTest` (`LutLibraryControllerTest`) | PASS |
+| `ApplyingAPackageEntrySubmitsItsOfficialReference` (moved from the removed catalog tests) | `LutLibraryModelTest` | PASS |
+| `OfficialFilmTitleCombinesBrandAndStockWithoutPrint` | `LutMetadataTest` | PASS |
+| `BrowserLoadsFilterCardAndOneTilePerResultWithoutWarnings` | `EditorLutBrowserPanelQmlTest` | PASS |
+| `TileTitlesAreCompleteAndExcludeThePrint` (multi-line, not truncated) | `EditorLutBrowserPanelQmlTest` | PASS |
+| `FacetRowSelectsItsChoiceAndSecondChoiceReturnsToAll` | `EditorLutBrowserPanelQmlTest` | PASS |
+| `TileActivationTogglesTheTargetLutOnlyWhenATargetExists` (apply; outline on the applied tile; re-click clears; edge key is a no-op; no target only focuses) | `EditorLutBrowserPanelQmlTest` | PASS |
+| `LutControlLoadsWithoutSubmitAndOpensTheBrowserPage` | `EditorAdjustmentHeaderQmlTest` | PASS |
+| `QmlLoadFromTypedProjectionDoesNotSubmit` (updated) | `EditorAdjustmentSnapshotQmlTest` | PASS |
+| `RegisteredDefaultsResolveOnlyInsideTheirDeclaredScopes` (grid keys) | `ShortcutRegistryTest` | PASS |
+| `HiddenEditorDoesNotBlockLutApplication` | not applicable: the browser shares the visible Editor (section 1.4) | not written |
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutMetadataTest LutLibraryModelTest EditorNodeSelectionLayoutTest ShortcutRegistryTest EditorAdjustmentSnapshotQmlTest EditorAdjustmentHeaderQmlTest EditorLookModelTest EditorLutBrowserPanelQmlTest MainQmlWorkflowTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/build/debug/vcpkg_installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(LutMetadataTest|LutLibraryModelTest|EditorNodeSelectionLayoutTest|ShortcutRegistryTest|EditorAdjustmentSnapshotQmlTest|EditorAdjustmentHeaderQmlTest|EditorLookModelTest|EditorLutBrowserPanelQmlTest|MainQmlWorkflowTest)\." -j 4 --output-on-failure
+```
+
+Suite totals: build exit 0 (including `alcedo_main`); 190 discovered, 188 passed, 2 failed.
+`EditorNodeController.GeometryWriteRejectedWhenColorGradeIsSelected` also fails on the clean L4
+commit (L5 record). `MainQmlWorkflowTests.ProductionWindowLoadsAndRoutesCoreWorkspaceActions`
+fails only its no-warning assertion, on the `AppDialogs.qml` `Connections { onPasteFinished }`
+block for `adjustmentTransfer`, which this phase did not change (only its line number moved); it
+was not re-run on clean HEAD. The full suite and `WorkspaceShellTest` were not run (repository
+rule). No macOS build, no Release build, no manual run of the application.
+
+**Checklist / exit condition:** implementation steps 1-6 done; five of six exit criteria met; the
+manual visual checks remain.
+
+**LOC note (grill-code-review):** +2772/-3039 over 47 files (QML +1395/-1045, tests +680/-1142,
+zh_CN +349). Excluding translations and removed code, the new work is about 2400 lines, above the
+1500-1950 estimate, mainly the result card and the rewritten tests. The largest new file is
+`EditorLutResultCard.qml` (about 800 lines: toolbar, indicator, tile grid, states, and the tile
+component); moving the tile component into its own file is a possible follow-up.
+
+**Remaining gaps:**
+
+- Manual Windows checks (both themes, DPR 1.0/1.5, narrow window, keyboard-only, long names,
+  Missing file, Import, Open folder with Unicode/spaces) are not done.
+- `en.ts` was not updated (English falls back to source text); lupdate was not run.
+- The browser's empty state offers Import and Open folder only; the link to LUT Settings is L6B.
+- L6B (Settings page, remote check on Settings open, payload-free installers) is not started.
+
+### L6B. LUT Settings and payload-free installers
+
+**Objective and deliverables.** Integrate LUT Settings and ship both platforms without LUT payloads
+in the application.
+
+**Inputs and modules.** L1-L5, L6A, and the L6B file map. Obtain the Settings page design from the
+user before writing its visual composition.
+
+**Data rules.** One Settings-open transition starts one remote check. No check at startup or when
+the browser opens.
+
+**Implementation steps.**
+
+1. Add root selection/migration, Open folder, Refresh, two independent package actions, progress,
+   cancel, and retry to LUT Settings. Trigger the remote check from Settings opening.
+2. Link the browser's empty state to the LUT Settings page.
+3. Register QML, resources, and translations. Apply existing Basic style and AppTheme rules.
+4. Remove `alcedo_collect_packaged_luts`, `alcedo_install_packaged_luts`, and their two install call sites.
+   Inspect all broad config/resource copies so another install rule cannot reintroduce cube payloads.
+5. Preserve existing installed user data across application update and uninstall. Do not delete the home library.
+6. Inspect real Windows and macOS artifacts, then verify the signed package workflow from a clean user library.
+
+**Success chain.** Settings open -> one feed check -> package install -> current resource
+invalidation -> the browser lists the package -> correct rendered result.
+
+**Failure and restore chain.** Failed folder opening -> visible error. Failed package download ->
+existing library remains usable. Application update -> home library survives.
+
+**Tests and evidence.**
+
+- `SettingsOpenChecksOnceAndStartupDoesNotCheck`: lifecycle tests count feed requests.
+- `PackagedApplicationContainsNoLutPayloads`: inspect `.app`, Windows install tree, and update archives for cubes.
+- `ApplicationUpdatePreservesHomeLutLibrary`: compare inventory and user bytes across a real update.
+- Manual Windows/macOS: open folder with Unicode/spaces; download either package; cancel/retry; migrate roots;
+  search a 10,000-entry library; reopen a project.
+
+**Build and run.** Build `alcedo_main` and the focused Settings/service tests. Use the standard
+release packaging scripts and inspect their install trees. Record package inspection results
+separately from compilation.
+
+**Exit criteria.**
+
+- [ ] Both real platform packages contain no LUT payloads and can install either signed LUT package.
+  (Windows install tree and NSIS installer contain no LUTs; the published packages install through
+  the production client components. macOS was not built, and the packaged application's own UI
+  install was not run.)
+- [ ] Settings trigger, folder opening, migration, cancellation, and error reporting pass manual checks.
+  (Automated QML and owner tests pass; manual checks not performed.)
+- [ ] The Settings design and its manual evidence are recorded in section 6.5. (Design recorded;
+  manual evidence not yet.)
+
+**Expected diff.** 900-1400 lines. **Completion record:** see below.
+
+##### Phase L6B completion record (2026-09-30)
+
+**Status:** partial. Settings > LUTs, the per-opening feed check, the folder and package actions,
+the browser link, and payload-free Windows installers are implemented and pass automated tests.
+The signed feed is published to R2 and the live feed passes robustness tests with the production
+client components. Manual visual checks, macOS, and an installed-application update run remain.
+
+**Source revision and branch.** `pu-erh_lab`, base `bc306d543` (L6A), branch
+`feature/lut-settings-panel`, uncommitted working tree. The external generators were run as they
+are on disk (their L1 changes are still uncommitted there); no external repository was changed.
+
+**Implemented modules.**
+
+| Module | Change |
+| --- | --- |
+| `qml/LutSettingsPanel.qml` (new) | Library section (root path, count and verification, Open folder, Refresh, Use another folder, Move library, inline confirmation, running operation with Cancel for a move, errors, kept files) and Official LUT packages section (check state, Check again, one row per package with status, details, progress, error, one action, Cancel) |
+| `SettingDialog.qml` | `LUTs` category (index 8; About is 9); `updatesCategory`/`lutCategory`/`aboutCategory`; one `lutPackages.checkPackages()` per opening transition |
+| `AppDialogs.qml`, `Main.qml` | `openUpdateSettings()` and `openLutSettings()` through the named category indices |
+| `EditorLutResultCard.qml` | Empty-library `Download official LUTs` action and text that names Settings |
+| `LutLibraryService` | `entryCount`, `operation`, `cancelable`, `keptSourcePaths` properties; `CheckRootChoice`/`checkRootChoice` (reuses `ValidateLutLibraryMigrationDestination`); `CancelOperation` also stops a migration before its staging copy is moved into place; `useRoot`/`migrateRoot`/`importFiles` accept folder URLs |
+| `LutPackageService` | `LutPackageAction` and `LutPackageActionFor`; package rows add `name`, `installedFileCount`, `action`, `busy`, `cancelable` |
+| `LutPackageDescriptor` / manifest parser | Optional `name` (1-128 characters, no control characters) |
+| `ApplicationModuleHost` | `LutServiceFactories` construction options for the two LUT services (tests; production uses the defaults) |
+| Root `CMakeLists.txt` | `alcedo_collect_packaged_luts` and `alcedo_install_packaged_luts` removed; both install sites call `alcedo_remove_installed_lut_payloads` (removes a stale `LUTs` folder); `ALCEDO_LUT_PACKAGE_FEED_URL` defaults to the deployed feed |
+| `scripts/luts/prepare_lut_packages.py` | Writes the feed `name` from the packages' `source.name`; rejects different names in one package |
+| `scripts/luts/inspect_application_payloads.py` (new) | Lists install trees, `.zip`/`.7z` archives, and installers (7-Zip); exit 1 on any `.cube`, 2 on an unreadable artifact |
+| Tests | `LutSettingsQmlTest` (new target), `LutPackageLiveFeedTest` (new target, skipped unless its environment is set), new cases in `LutLibraryServiceTest`, `LutPackageServiceTest`, `LutPackageManifestTest`, `EditorLutBrowserPanelQmlTest`, `scripts/luts/tests`; About index updated in `ShortcutSettingsQmlTest` and `MainQmlWorkflowTest` |
+| Documentation and translations | `docs/lut-package-system.md` section 7 and feed `name`; `docs/VI/README.md` LUT Settings entries; zh_CN strings (manual edit; lupdate not run; `en.ts` not updated) |
+
+**Primary success call chain:**
+
+```text
+Settings opens -> SettingDialog.onVisibleChanged -> LutPackageService::CheckPackages (once)
+  -> FetchSmallFile(manifest.json, manifest.json.sig) over HTTPS on the feed host
+  -> VerifyLutPackageManifest (Ed25519 update key, trusted sequence, optional name)
+  -> CompareLutPackage per package (published inventory only) -> package rows (action per status)
+LUTs page row "Download" -> LutPackageService::InstallPackage(id)
+  -> DownloadServicePackageArchiveDownloader -> DownloadService (aria2c, size + SHA-256)
+  -> LutLibraryService::InstallPackage -> InstallLutPackageArchive (libarchive 7z, verify, receipt commit)
+  -> rescan -> PublishInventory -> InventoryChanged -> editor LUT resources invalidated,
+     LutLibraryModel rows, LutPackageService::RecomputeComparisons -> row "Installed and current"
+"Move library…" -> FolderDialog -> reviewFolder -> LutLibraryService::checkRootChoice (reason or path)
+  -> confirm -> migrateRoot -> PrepareLutLibraryMigration (worker) -> SaveRoot commit -> RootChanged
+  -> ResumeSourceCleanup -> keptSourcePaths
+Browser empty state "Download official LUTs" -> host.openLutSettings -> SettingDialog (lutCategory)
+```
+
+**Primary failure call chain:**
+
+```text
+feed unreachable / bad signature / older sequence -> FailCheck -> lastError shown in dangerColor,
+  rows keep their previous state; "Check again" retries
+download canceled -> DownloadService cancel -> row error + "Retry"; no receipt, library unchanged
+shared transfer busy (application or model download) -> row error "Another download is running"
+edited official file -> refresh -> Repair required -> "Repair" reinstalls verified bytes, no user copy
+folder open rejected -> LutLibraryService::lastError shown under the library actions
+chosen folder invalid (current root, inside the library, not empty, missing) -> confirmation card
+  shows the reason; no operation starts
+move canceled before the staging rename -> kCanceled, current root active, staging removed
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `SettingsOpenChecksOnceAndStartupDoesNotCheck` (0 requests after host construction and dialog load; 1 per opening; none per page change) | `LutSettingsQmlTest` | PASS |
+| `PackageRowsStartOnlyTheChosenDownloadAndOfferCancelAndRetry` | `LutSettingsQmlTest` | PASS |
+| `FolderOpenFailureAndFolderChoiceAreVisibleBeforeAnyChange` (open failure visible; rejected choice; confirmed move) | `LutSettingsQmlTest` | PASS |
+| `EmptyLibraryLinksToLutSettings` | `EditorLutBrowserPanelQmlTest` | PASS |
+| `SettingsRowsFollowDownloadCancelAndRetry`, `FeedPackageNameIsShownInsteadOfTheId`, `LutPackageActionTest.EachStatusOffersOneSettingsAction` | `LutPackageServiceTest` | PASS |
+| `CanceledMigrationKeepsCurrentRootAndRemovesStaging`, `RootChoiceCheckNamesTheReasonBeforeStarting` | `LutLibraryServiceTest` | PASS |
+| `OptionalPackageNameIsReadAndValidated` | `LutPackageManifestTest` | PASS |
+| `PackagedApplicationContainsNoLutPayloads` (script: clean tree, nested `.CUBE`, `.zip`/`.7z`, unreadable artifact) | `scripts/luts/tests/test_application_payloads.py` | PASS |
+| Feed name written from `source.name` | `scripts/luts/tests/test_lut_packages.py` | PASS |
+| `LiveFeedInstallsEachPackageIndependentlyAndRechecksCurrent` (both Not installed; each installs to Current in turn; 44 and 36 official entries; recheck without download) | `LutPackageLiveFeedTest` (live R2) | PASS |
+| `LiveDownloadCancelKeepsLibraryAndRetryInstalls` (76 MB archive canceled during transfer; no receipt; retry Current) | `LutPackageLiveFeedTest` (live R2) | PASS |
+| `LiveRepairReplacesAnEditedOfficialFile` (Repair required; repair restores bytes; no user copy) | `LutPackageLiveFeedTest` (live R2) | PASS |
+| `LiveFeedRejectsForeignKeyAndOlderSequenceWithoutChanges` (exact signature and sequence errors) | `LutPackageLiveFeedTest` (live R2) | PASS |
+| Windows install tree: stale `bin/LUTs` removed; 684 entries, no `.cube`; `plugins/tls` present | `cmake --install build/release` + inspection script | PASS |
+| Windows NSIS installer `AlcedoStudio-0.3.0-Windows-AMD64.exe`: 376 entries, no `.cube` | CPack NSIS + inspection script (7-Zip listing) | PASS |
+| Previous install tree (2026-09-26), for comparison | inspection script | 41 `.cube` payloads (expected before L6B) |
+| `ApplicationUpdatePreservesHomeLutLibrary` | inspection only: the NSIS script deletes only `$INSTDIR` files, shortcuts, and `Software\Alcedo Studio` keys; QSettings uses `HKCU\Software\Alcedo\Alcedo`; the library is `~/.alcedo/luts` | not run as a real update |
+
+Publication (AWS CLI 2.36.20 through `publish_lut_packages.py --upload`): feed sequence
+`20260930054001`, revision `2026.09.30`; `spectral_film_lut` 44 LUTs, inventory `1ebf0fbb…ee8c`,
+archive 13,280,058 bytes; `spektrafilm_lut` 36 LUTs, inventory `93b28d2f…70d6`, archive
+76,157,493 bytes. Every object was verified after upload. `https://static.aoraw.org/luts/v1/manifest.json`
+and its `.sig` return HTTP 200 with bytes identical to the signed files.
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutPackageManifestTest LutLibraryServiceTest LutPackageServiceTest LutSettingsQmlTest LutPackageLiveFeedTest EditorLutBrowserPanelQmlTest ShortcutSettingsQmlTest MainQmlWorkflowTest LutLibraryModelTest LutMetadataTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/build/debug/vcpkg_installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(LutPackageManifestTest|LutLibraryServiceTest|LutPackageServiceTest|LutSettingsQmlTest|EditorLutBrowserPanelQmlTest|ShortcutSettingsQmlTest|MainQmlWorkflowTest|LutLibraryModelTest|LutMetadataTest)\." -j 4 --output-on-failure
+$env:ALCEDO_LUT_LIVE_FEED_URL = "https://static.aoraw.org/luts/v1/manifest.json"
+$env:ALCEDO_ARIA2C_BINARY = "D:/Projects/pu-erh_lab/build/debug/alcedo_studio/src/aria2c.exe"
+$env:QT_PLUGIN_PATH = "D:/misc/Qt/6.9.3/msvc2022_64/plugins"
+ctest --test-dir build/debug -R "^LutPackageLiveFeedTest\." -j 1 --output-on-failure
+python -m unittest discover -s scripts/luts/tests
+# spectral_film_lut: venv/Scripts/python.exe -m spectral_film_lut negative-lmt --output-dir <dir> --alcedo-package --workers 4
+# spektrafilm_lut:   PYTHON=.venv/Scripts/python.exe bash scripts/aces_lmt/bake_alcedo_set.sh <dir>
+python scripts/luts/prepare_lut_packages.py --package spectral_film_lut=<dir> --package spektrafilm_lut=<dir> --revision 2026.09.30 --output-dir <feed> --private-key D:/secure/alcedo-update-private.seed
+python scripts/luts/publish_lut_packages.py --output-dir <feed> --upload
+cmd /c scripts\msvc_env.cmd --preset win_release -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake" -DALCEDO_LUT_PACKAGE_FEED_URL="https://static.aoraw.org/luts/v1/manifest.json"
+cmd /c scripts\msvc_env.cmd --build --preset win_release --parallel 4
+cmd /c scripts\msvc_env.cmd --install build/release --prefix <absolute temporary prefix>
+cpack --config build/release/CPackConfig.cmake -G NSIS -B <temporary directory>
+python scripts/luts/inspect_application_payloads.py <install prefix> <installer .exe>
+```
+
+Suite totals: focused ctest 106/107 (1 failure, below); live 4/4; `scripts/luts/tests` 19/19.
+`MainQmlWorkflowTests.ProductionWindowLoadsAndRoutesCoreWorkspaceActions` fails only its
+no-warning assertion on the `AppDialogs.qml` `Connections { onPasteFinished }` block for
+`adjustmentTransfer`; that block and the C++ `PasteFinished` signal both come from `0580db1e4`
+(2026-09-27), before this branch (also listed in the L6A record). The full suite,
+`WorkspaceShellTest`, macOS, and a manual application run were not run.
+
+**Findings from the real environment.**
+
+1. **Long paths break package classification on Windows.** With a library root of about 150
+   characters, the spektrafilm package installed but stayed Repair required: two content paths
+   were 291 characters. Extraction uses `QFile` (long paths work), but the header reader
+   (`lut_metadata.cpp`) and the hasher (`lut_inventory_digest.cpp`) use `std::ifstream`, and the
+   executables have no `longPathAware` manifest, so those files lost their official
+   classification (this machine has `LongPathsEnabled=1`). The same limit applies to the other
+   `std::filesystem` sites of the library, migration, and runtime loader. Package content adds
+   about 160 characters to the root (`packages/<id>/content/<64 hex>/<file>`), so roots longer
+   than about 100 characters are affected; the default `~/.alcedo/luts` is not. Not fixed in L6B:
+   the fix spans the L2/L4 readers (long-path-capable opens, or an application manifest plus a
+   root length check in `CheckRootChoice`). The live tests use a default-depth root.
+2. **Debug test runtimes have no TLS backend.** `*_runtime/` folders copy the Qt DLLs without
+   `plugins/tls`, so HTTPS fails with "TLS initialization failed" unless `QT_PLUGIN_PATH` names
+   the Qt plugins. The installed application ships `plugins/tls` (verified above).
+3. **Generator output needed one header fix.** The spectral negative export writes `TITLE` with
+   the absolute output path; the published files carry the file stem instead (numeric rows and
+   metadata unchanged). The generator itself still writes the path.
+4. The spektrafilm set's still-film runs without `--print` write the same file names as the
+   `--print kodak_portra_endura` runs, so the set has 36 LUTs, not 38.
+
+**Checklist / exit condition:** implementation steps 1-5 done; step 6 done on Windows only. None of
+the three exit criteria is fully met (see the notes under them).
+
+**LOC note (grill-code-review):** +2501/-69 over 33 files, including 295 lines of zh_CN
+translations and the 307-line live test. Without translations the change is about 2200 lines,
+above the 900-1400 estimate, mainly the Settings page (588 lines), its QML test (455), and the live
+test. The largest new file is `LutSettingsPanel.qml`; its package row is an inline component.
+
+**Remaining gaps:**
+
+- Manual Windows checks of the Settings page (both themes, a long Unicode root, the folder
+  dialogs, a real move with Cancel) and of Open folder with Unicode and spaces.
+- macOS: build, `.app` and update-archive inspection, and package installation.
+- A real application update over an installed build with a populated home library.
+- The long-path defect (finding 1). Existing build directories keep an empty cached
+  `ALCEDO_LUT_PACKAGE_FEED_URL`; the release tree was reconfigured with the URL.
+- `en.ts` not updated; lupdate not run. Nothing is committed.
+
+## 10. Build and evidence requirements
+
+This planning task runs no build or product tests. The following commands are implementation instructions.
+Proposed test targets become valid only after their phase adds CMake registration.
+
+```powershell
+Set-Location D:/Projects/pu-erh_lab
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+$env:PATH = "D:/Projects/pu-erh_lab/build/debug/vcpkg_installed/x64-windows/debug/bin;" + $env:PATH
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutLibraryServiceTest --parallel 4
+ctest --test-dir build/debug -N -R "^LutLibraryServiceTest\."
+ctest --test-dir build/debug -R "^LutLibraryServiceTest\." --output-on-failure
+```
+
+Substitute the phase's named targets and explicit test expression. Inspect discovered tests before running them.
+`GpuDagRawInputTest` includes multiple suites; use the discovered case names rather than assuming a binary prefix.
+Check platform conditions in the test CMake files before naming a GPU target.
+
+```bash
+cmake --preset macos_debug -DALCEDO_BUILD_TESTS=ON
+cmake --build --preset macos_debug --target LutLibraryServiceTest GpuDagMetalGradeTest
+ctest --test-dir build/macos-debug -N -R '(LutLibraryServiceTest|GpuDagMetalGradeTest)'
+ctest --test-dir build/macos-debug -R '(LutLibraryServiceTest|GpuDagMetalGradeTest)' -j 1 --output-on-failure
+```
+
+Use `win_release` and `macos_release` for performance and installed-product checks. Use the existing
+`scripts/package_windows.ps1` and `scripts/package_macos.sh` workflows for artifact verification.
+Allow at least 10-20 minutes for a Windows build, with 20 minutes as the initial CUDA allowance.
+Poll a healthy build without restarting it. Run one build at a time in each existing preset directory.
+Never run tests while linking or copying their DLLs. Refresh stale test-runtime DLLs before diagnosing old behavior.
+
+Run only focused suites and their direct callers. Do not run the full test suite without an explicit user request.
+Use C++ owner/service tests for UI behavior. Report unavailable synthetic input coverage honestly.
+Verify Metal on a macOS host; a Windows result cannot establish Metal correctness.
+Put logs and generated test data in `build/tmp/lut-library/<phase>/`. Record durable conclusions in the
+completion record, then remove only that phase's temporary files when finished.
+
+### 10.1 Scale and resource evidence
+
+These are initial engineering acceptance targets, not measured results:
+
+- On a documented Release test machine, 10,000 metadata entries use at most 64 MiB of added catalog/query memory.
+- Visible browsing allocates no decoded LUT tables. Packed rendering uses the existing bounded LUT cache.
+- A query completes within 100 ms at p95 after the 100 ms typing delay on that machine.
+- GUI-thread query publication and selection stay below 16 ms at p95.
+- Enumeration, hashing, archive download, and extraction do not run on the GUI thread.
+- Record real file sizes and storage type. Large CUBE refresh time is bounded by streamed file I/O, not an invented constant.
+- Include a large-file dataset and 10,000 small valid files. Tiny fixtures alone do not measure hashing or memory behavior.
+
+If a target fails, identify the measured owner operation and fix it. Do not reduce image quality or truncate
+the visible library. Revisit an estimate before introducing a larger index or worker design.
+
+### 10.2 Cross-phase acceptance matrix
+
+| Behavior | Observable result | Main phase |
+| --- | --- | --- |
+| Fresh install, no network | Empty local library; rendering without a chosen LUT works; no startup feed request | L2, L6A, L6B |
+| Nested user folders | Every regular CUBE appears once with its full relative location | L2 |
+| Duplicate basenames and metadata IDs | Distinct user entries; no automatic cross-file selection | L2, L5 |
+| Signed old feed without expiry | Accepted when its sequence is trusted | L1, L3 |
+| New package A, absent B | A updates independently; B remains optional | L3 |
+| User edits an official LUT but retains official metadata | Requested update or repair replaces it; no user copy or extra confirmation | L3 |
+| User explicitly changes origin to user | Preserve it as a user entry; official photo references still follow the official package | L2, L3 |
+| Tampered archive or invalid extraction path | Active content remains unchanged; explicit error | L3 |
+| Root move across volumes | All verified entries and favorites remain linked; earlier failures keep old root | L2, L4 |
+| Official content update | Existing photos resolve the same ID to new content; warm render caches refresh | L4 |
+| Missing LUT | Remaining graph renders; association is visible; history stays unchanged | L4 |
+| Missing LUT returns | Valid resource automatically resumes at configured strength; cleared associations remain cleared | L4 |
+| Invalid LUT | Precise error, no unauthorized identity substitution | L4 |
+| Strength boundaries and invalid numbers | 0/0.5/1 produce expected pixels; NaN and out-of-range writes are rejected atomically | L4 |
+| Undo/Redo, checkout, transfer, reopen | Exact reference and strength return without browser-generated commits | L4, L5 |
+| New generator with print metadata | All / With print / No print work; print film and paper share With print | L1, L5 |
+| No valid Color Grade | Search and browse work; apply is unavailable | L5, L6A |
+| LUT browser in the Editor | Browsing keeps image and target; an applied LUT shows in the visible viewport | L6A |
+| Packaged application and update | No LUT payloads inside; external library remains available | L6B |
+
+## 11. Risks and implementation stop conditions
+
+- Stable IDs require an explicit mapping from intended export variants. Stop package publication on duplicate IDs.
+- An aggregate digest cannot detect unscanned disk edits. Report its verification age and refresh when required.
+- Whole-file hashes can be expensive for large libraries. Stream them in the worker and expose progress.
+- A missing-file check only inside the LUT loader can be skipped by warm image caches. Test resource invalidation before reuse.
+- Do not infer a standard 7z CLI on macOS or Windows. Test the bundled library against the published codec.
+- A root migration or package install is not atomic because its final rename exists. Test the actual persistent commit point.
+- The print export's display assumptions are real. Preserve and expose them; do not alter DRT selection as a hidden side effect.
+- Existing source files may use CRLF. If a file needs changes, follow the repository's separate LF-conversion commit rule.
+- Keep official classification when only content bytes change. Do not reopen the confirmed replacement policy in section 3.
+- Ask for visual design before implementing visual composition. Section 6.5 records the approved L6A design and the L6B Settings design composed from the existing Settings pages (section 1.5).
+- Split a phase if the expected diff can exceed 2000 lines, including terminology cleanup and tests.
+- Do not add a consistency protocol without the required production interleaving and executable test.
+- If current sources no longer match this audit, update affected owners and call chains before implementation.
+
+## 12. Completion records
+
+L1-L6B are recorded under their phases. Copy this record into the relevant phase after implementation:
+
+```text
+Phase / date / status:
+Source revision and branch in each changed repository:
+Actual changed modules and changed-line count:
+Implemented behavior:
+Explicitly unimplemented items:
+Primary success call chain:
+Primary failure and restore call chain:
+Build and test commands with exit codes:
+Discovered / passed / failed / skipped counts:
+Windows CUDA / Windows OpenCL / macOS Metal evidence:
+Manual product and visual verification:
+Performance and resource measurements:
+Package inventory and signature verification:
+Durable evidence location:
+Remaining defects or unavailable platforms:
+```
+
+Planning validation must remain separate from these completion records. Source inspection, link checks,
+and terminology checks do not prove rendering, package extraction, migration, or UI behavior.

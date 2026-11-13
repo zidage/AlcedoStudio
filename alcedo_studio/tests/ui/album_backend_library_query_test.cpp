@@ -1,0 +1,1257 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+// One library query path for Inspector filters, search, sort, groups, and pages
+// (album_sort_group_and_import_time_plan.md, Phase 2). Every case loads a persisted multi-photo
+// project into the real ApplicationModuleHost; worker timing is held through the production
+// query observer of AlbumBrowseService.
+
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QElapsedTimer>
+#include <QSignalSpy>
+#include <QThread>
+#include <QTimeZone>
+#include <QVariantList>
+#include <QVariantMap>
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <ctime>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#include "app/album_browse_service.hpp"
+#include "app/pipeline_service.hpp"
+#include "app/project_service.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/history/commit_graph.hpp"
+#include "edit/history/edit_commit.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "json.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/folder_controller.hpp"
+#include "ui/alcedo_main/album_backend/image_controller.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/search_controller.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "../support/storage_test_access.hpp"
+
+namespace alcedo::ui::test {
+namespace {
+
+using LibraryQueryTests = ApplicationModuleHostTestFixture;
+
+auto Utc(int year, unsigned month, unsigned day, int hour = 0) -> std::time_t {
+  using namespace std::chrono;
+  return static_cast<std::time_t>(
+      (sys_days{std::chrono::year{year} / month / day} + hours{hour}).time_since_epoch().count());
+}
+
+auto WaitUntil(const std::function<bool()>& predicate, int timeoutMs = 15000) -> bool {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (predicate()) {
+      return true;
+    }
+    ProcessEvents(10);
+  }
+  return predicate();
+}
+
+/// Six photos: three cameras, equal ratings, one unknown capture date, distinct import days.
+auto SixPhotoSpecs() -> std::vector<LibraryPhotoSpec> {
+  return {
+      {.model_      = "Canon R5",
+       .date_time_  = "2026-06-07 09:00:00",
+       .rating_     = 3,
+       .added_time_ = Utc(2026, 9, 1, 10)},
+      {.model_      = "Canon R5",
+       .date_time_  = "2026-06-07 18:00:00",
+       .rating_     = 5,
+       .added_time_ = Utc(2026, 9, 1, 11)},
+      {.model_      = "Nikon Z8",
+       .date_time_  = "2026-06-06 10:00:00",
+       .rating_     = 3,
+       .added_time_ = Utc(2026, 9, 2, 10)},
+      {.model_      = "Nikon Z8",
+       .date_time_  = "2026-06-06 11:00:00",
+       .rating_     = 1,
+       .added_time_ = Utc(2026, 9, 2, 11)},
+      {.model_      = "Sony A7",
+       .date_time_  = "2026-06-05 12:00:00",
+       .rating_     = 5,
+       .added_time_ = Utc(2026, 8, 30, 10)},
+      {.model_ = "Sony A7", .date_time_ = "", .rating_ = 0, .added_time_ = Utc(2026, 8, 30, 11)},
+  };
+}
+
+/// Holds the query worker inside AlbumBrowseService's observer, on the real worker thread.
+class WorkerHold {
+ public:
+  explicit WorkerHold(std::shared_ptr<AlbumBrowseService> browse)
+      : browse_(std::move(browse)), ui_thread_(QCoreApplication::instance()->thread()) {
+    browse_->SetQueryThreadObserver([this](std::string_view operation) {
+      std::unique_lock lock(mutex_);
+      operations_.emplace_back(operation);
+      if (QThread::currentThread() == ui_thread_) {
+        ui_thread_operations_.emplace_back(operation);
+      }
+      if (hold_next_) {
+        hold_next_ = false;
+        held_      = true;
+        changed_.notify_all();
+        changed_.wait(lock, [this]() { return !held_; });
+      }
+    });
+  }
+  ~WorkerHold() {
+    Release();
+    browse_->SetQueryThreadObserver({});
+  }
+  WorkerHold(const WorkerHold&)            = delete;
+  WorkerHold& operator=(const WorkerHold&) = delete;
+
+  void        ArmNext() {
+    std::lock_guard lock(mutex_);
+    hold_next_ = true;
+  }
+  /// Process events until the worker waits in the observer.
+  auto WaitHeld() -> bool {
+    return WaitUntil([this]() {
+      std::lock_guard lock(mutex_);
+      return held_;
+    });
+  }
+  void Release() {
+    {
+      std::lock_guard lock(mutex_);
+      held_ = false;
+    }
+    changed_.notify_all();
+  }
+  auto Operations() -> std::vector<std::string> {
+    std::lock_guard lock(mutex_);
+    return operations_;
+  }
+  auto UiThreadOperations() -> std::vector<std::string> {
+    std::lock_guard lock(mutex_);
+    return ui_thread_operations_;
+  }
+
+ private:
+  std::shared_ptr<AlbumBrowseService> browse_;
+  QThread*                            ui_thread_ = nullptr;
+  std::mutex                          mutex_;
+  std::condition_variable             changed_;
+  bool                                hold_next_ = false;
+  bool                                held_      = false;
+  std::vector<std::string>            operations_;
+  std::vector<std::string>            ui_thread_operations_;
+};
+
+class LoadedLibrary {
+ public:
+  auto Load(const std::filesystem::path& temp_dir, ApplicationModuleHost& backend,
+            const std::vector<LibraryPhotoSpec>& specs, std::size_t count = 0,
+            const ProjectHistoryWriter& write_history = {}) -> bool {
+    const auto packed = CreatePopulatedPackedProject(temp_dir, {}, count, specs, write_history);
+    if (!packed.has_value() || !LoadPackedProject(backend, packed->packed_path_)) {
+      return false;
+    }
+    for (const auto& key : packed->images_) {
+      ids_.push_back(key.file_id_);
+      image_ids_.push_back(key.image_id_);
+    }
+    browse_ = backend.project()->handler().project()->GetAlbumBrowseService();
+    return browse_ != nullptr && WaitForLibraryQuery(backend);
+  }
+  auto ids() const -> const std::vector<sl_element_id_t>& { return ids_; }
+  auto image_ids() const -> const std::vector<image_id_t>& { return image_ids_; }
+  auto browse() const -> const std::shared_ptr<AlbumBrowseService>& { return browse_; }
+
+ private:
+  std::vector<sl_element_id_t>        ids_;
+  std::vector<image_id_t>             image_ids_;
+  std::shared_ptr<AlbumBrowseService> browse_;
+};
+
+auto ModelIds(LibraryModule& library) -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> ids;
+  for (const auto& item : library.model().items()) {
+    ids.push_back(item.element_id);
+  }
+  return ids;
+}
+
+auto Settle(ApplicationModuleHost& backend) -> bool { return WaitForLibraryQuery(backend); }
+
+/// Persist one exposure edit of @p file_id as the head of its active Version, as a Paste to a
+/// library image writes it. The commit clock makes it the newest commit of the project.
+void PersistExposureEdit(PipelineMgmtService& pipelines, sl_element_id_t file_id) {
+  auto           base    = pipelines.LoadHistorySnapshot(file_id);
+  const auto     current = pipelines.AcquireCommittedSnapshot(file_id);
+  nlohmann::json before =
+      current->Document().PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure())->ToJson();
+  nlohmann::json after = before;
+  after["exposure_ev"] = before.at("exposure_ev").get<float>() + 1.0f;
+
+  PipelineEditBatch  batch;
+  SetParameterChange change;
+  change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
+  change.target.node_id                = NodeId{"grade.primary"};
+  change.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
+  change.target.field_key              = "exposure";
+  change.before_value                  = std::move(before);
+  change.after_value                   = std::move(after);
+  change.before_enabled                = true;
+  change.after_enabled                 = true;
+  batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
+  batch.presentation_key               = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+
+  CommitGraph graph  = *base.graph_;
+  auto        commit = EditCommit::MakePipelineEdit(graph.GetRootId(),
+                                                    graph.GetActiveVersionRef().head_commit_hash, batch);
+  const auto  head   = commit.GetCommitHash();
+  ASSERT_TRUE(graph.InsertCommit(std::move(commit)));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), head);
+  ASSERT_NE(pipelines.PersistHistory(base, graph), nullptr);
+}
+
+/// Photos 4 and then 2 of SixPhotoSpecs are edited, so photo 2 is the last edited photo.
+void EditPhotosFourThenTwo(PipelineMgmtService&                           pipelines,
+                           const std::vector<PopulatedProject::ImageKey>& images) {
+  PersistExposureEdit(pipelines, images[4].file_id_);
+  PersistExposureEdit(pipelines, images[2].file_id_);
+}
+
+}  // namespace
+
+TEST_F(LibraryQueryTests, SortActionsReplaceDirectionOrClearExplicitSort) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*       module = backend.library();
+  const auto& id     = library.ids();
+
+  module->ToggleInspectorSort(QStringLiteral("rating"), true);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(module->SortFieldName(), QStringLiteral("rating"));
+  EXPECT_TRUE(module->SortDescending());
+  EXPECT_EQ(ModelIds(*module),
+            (std::vector<sl_element_id_t>{id[1], id[4], id[0], id[2], id[3], id[5]}));
+
+  // The opposite action on the same field reverses the order.
+  module->ToggleInspectorSort(QStringLiteral("rating"), false);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_FALSE(module->SortDescending());
+  EXPECT_EQ(ModelIds(*module),
+            (std::vector<sl_element_id_t>{id[5], id[3], id[0], id[2], id[1], id[4]}));
+
+  // The active action again clears the explicit sort: File ID order, no active arrow.
+  module->ToggleInspectorSort(QStringLiteral("rating"), false);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_TRUE(module->SortFieldName().isEmpty());
+  EXPECT_EQ(ModelIds(*module), id);
+
+  // Another field replaces the previous sort.
+  module->ToggleInspectorSort(QStringLiteral("rating"), true);
+  module->ToggleInspectorSort(QStringLiteral("import"), false);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(module->SortFieldName(), QStringLiteral("import"));
+  EXPECT_EQ(ModelIds(*module),
+            (std::vector<sl_element_id_t>{id[4], id[5], id[0], id[1], id[2], id[3]}));
+
+  // An unknown field reports an error and changes nothing.
+  module->ToggleInspectorSort(QStringLiteral("aperture"), true);
+  EXPECT_FALSE(module->QueryError().isEmpty());
+  EXPECT_EQ(module->SortFieldName(), QStringLiteral("import"));
+}
+
+// Issue #589: a rating change keeps the loaded photo rows (no model reset, so the views keep
+// their delegates and scroll position) and reads only the statistics again, when the shown
+// photos do not read the rating. With the rating sort the order reads the rating, so the
+// library refreshes.
+TEST_F(LibraryQueryTests, RatingChangeReadsOnlyStatisticsUnlessThePresentationReadsTheRating) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*       module = backend.library();
+  const auto& id     = library.ids();
+  const auto& images = library.image_ids();
+
+  const auto five_star_count = [&]() {
+    for (const auto& row : backend.stats()->rating_stats()) {
+      const auto bucket = row.toMap();
+      if (bucket.value(QStringLiteral("label")).toString() == QStringLiteral("5")) {
+        return bucket.value(QStringLiteral("count")).toInt();
+      }
+    }
+    return 0;
+  };
+  ASSERT_EQ(five_star_count(), 2);
+
+  QSignalSpy resets(&module->model(), &QAbstractItemModel::modelReset);
+  const auto rated = backend.images()->SetImageRating(id[0], images[0], 5);
+  ASSERT_TRUE(rated.value(QStringLiteral("success")).toBool());
+  EXPECT_FALSE(module->QueryUpdating());
+  ASSERT_TRUE(WaitUntil([&]() { return five_star_count() == 3; }));
+  ProcessEvents(200);
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(ModelIds(*module), id);
+  EXPECT_EQ(module->model().items()[0].rating, 5);
+
+  // The rating sort reads the rating: the library refreshes and shows the new order.
+  module->ToggleInspectorSort(QStringLiteral("rating"), true);
+  ASSERT_TRUE(Settle(backend));
+  resets.clear();
+  ASSERT_TRUE(backend.images()
+                  ->SetImageRating(id[5], images[5], 5)
+                  .value(QStringLiteral("success"))
+                  .toBool());
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_GT(resets.count(), 0);
+  EXPECT_EQ(ModelIds(*module),
+            (std::vector<sl_element_id_t>{id[0], id[1], id[4], id[5], id[2], id[3]}));
+}
+
+// The Library shows its loading grid only for a refresh that replaces the shown result
+// (queryReplacing); an in-place refresh reports only queryUpdating. A replacing request in the
+// same turn as an in-place one makes the combined refresh replacing and notifies.
+TEST_F(LibraryQueryTests, QueryReplacingReportsOnlyReplacingRefreshes) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+  EXPECT_FALSE(module->QueryReplacing());
+
+  backend.stats()->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Nikon Z8"));
+  EXPECT_TRUE(module->QueryUpdating());
+  EXPECT_TRUE(module->QueryReplacing());
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_FALSE(module->QueryUpdating());
+  EXPECT_FALSE(module->QueryReplacing());
+
+  QSignalSpy state_changes(module, &LibraryModule::QueryStateChanged);
+  module->RequestLibraryContentRefresh();
+  EXPECT_TRUE(module->QueryUpdating());
+  EXPECT_FALSE(module->QueryReplacing());
+  EXPECT_EQ(state_changes.count(), 1);
+
+  module->RequestLibraryRefresh();
+  EXPECT_TRUE(module->QueryReplacing());
+  EXPECT_EQ(state_changes.count(), 2);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_FALSE(module->QueryUpdating());
+  EXPECT_FALSE(module->QueryReplacing());
+  EXPECT_EQ(module->TotalCount(), 2);
+}
+
+TEST_F(LibraryQueryTests, SelectingNewGroupReplacesPreviousGroupWithoutChangingFilters) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+  auto* stats  = backend.stats();
+
+  stats->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Nikon Z8"));
+  module->SetInspectorGrouping(QStringLiteral("date"), true);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(module->GroupFieldName(), QStringLiteral("date"));
+  EXPECT_EQ(module->section_model().GroupCount(), 1);
+
+  module->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(module->GroupFieldName(), QStringLiteral("camera"));
+  EXPECT_EQ(stats->StatsFilterCamera(), QStringLiteral("Nikon Z8"));
+  EXPECT_EQ(module->TotalCount(), 2);
+  ASSERT_EQ(module->section_model().GroupCount(), 1);
+  EXPECT_EQ(std::get<std::string>(module->section_model().groups().front().key_), "Nikon Z8");
+
+  // Unchecking another field changes nothing; unchecking the current one returns to flat.
+  module->SetInspectorGrouping(QStringLiteral("date"), false);
+  EXPECT_FALSE(module->QueryUpdating());
+  module->SetInspectorGrouping(QStringLiteral("camera"), false);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_FALSE(module->Grouped());
+  EXPECT_EQ(module->section_model().GroupCount(), 0);
+  EXPECT_EQ(stats->StatsFilterCamera(), QStringLiteral("Nikon Z8"));
+  EXPECT_EQ(module->TotalCount(), 2);
+}
+
+TEST_F(LibraryQueryTests, GroupingSortedFieldPreservesSortAndFilters) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*       module = backend.library();
+  const auto& id     = library.ids();
+
+  backend.stats()->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Canon R5"));
+  module->ToggleInspectorSort(QStringLiteral("rating"), true);
+  ASSERT_TRUE(Settle(backend));
+  module->SetInspectorGrouping(QStringLiteral("rating"), true);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(module->GroupFieldName(), QStringLiteral("rating"));
+  EXPECT_EQ(module->SortFieldName(), QStringLiteral("rating"));
+  EXPECT_TRUE(module->SortDescending());
+  EXPECT_EQ(backend.stats()->StatsFilterCamera(), QStringLiteral("Canon R5"));
+  EXPECT_EQ(ModelIds(*module), (std::vector<sl_element_id_t>{id[1], id[0]}));
+}
+
+TEST_F(LibraryQueryTests, PendingSortAndGroupChangesApplyTogether) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*      module = backend.library();
+  QSignalSpy presentation(module, &LibraryModule::PresentationChanged);
+
+  // Three changes in one turn: one accepted result carries all of them.
+  module->ToggleInspectorSort(QStringLiteral("import"), true);
+  module->SetInspectorGrouping(QStringLiteral("camera"), true);
+  backend.stats()->ToggleStatsFilter(QStringLiteral("rating"), QStringLiteral("5"));
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(presentation.count(), 1);
+  EXPECT_EQ(module->SortFieldName(), QStringLiteral("import"));
+  EXPECT_TRUE(module->SortDescending());
+  EXPECT_EQ(module->GroupFieldName(), QStringLiteral("camera"));
+  EXPECT_EQ(module->TotalCount(), 2);
+  EXPECT_EQ(module->section_model().GroupCount(), 2);
+}
+
+TEST_F(LibraryQueryTests, PendingGroupChangePreservesSameFieldPendingSort) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*      module = backend.library();
+  WorkerHold hold(library.browse());
+
+  // The sort is on the worker when the group request arrives; both stay requested.
+  hold.ArmNext();
+  module->ToggleInspectorSort(QStringLiteral("date"), false);
+  ASSERT_TRUE(hold.WaitHeld());
+  module->SetInspectorGrouping(QStringLiteral("date"), true);
+  ProcessEvents(50);
+  hold.Release();
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(module->SortFieldName(), QStringLiteral("date"));
+  EXPECT_FALSE(module->SortDescending());
+  EXPECT_EQ(module->GroupFieldName(), QStringLiteral("date"));
+}
+
+TEST_F(LibraryQueryTests, EarlierReadCannotReplaceLaterSortSelection) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*                module = backend.library();
+  const auto&          id     = library.ids();
+  WorkerHold           hold(library.browse());
+  std::vector<QString> published_sorts;
+  QObject::connect(module, &LibraryModule::PresentationChanged, module,
+                   [&]() { published_sorts.push_back(module->SortFieldName()); });
+
+  hold.ArmNext();
+  module->ToggleInspectorSort(QStringLiteral("rating"), true);  // read A, held on the worker
+  ASSERT_TRUE(hold.WaitHeld());
+  module->ToggleInspectorSort(QStringLiteral("camera"), false);  // read B replaces A
+  ProcessEvents(50);
+  hold.Release();  // A finishes and posts; the UI rejects it
+  ASSERT_TRUE(Settle(backend));
+  ProcessEvents(200);
+
+  EXPECT_EQ(published_sorts, (std::vector<QString>{QStringLiteral("camera")}));
+  EXPECT_EQ(module->SortFieldName(), QStringLiteral("camera"));
+  EXPECT_EQ(ModelIds(*module),
+            (std::vector<sl_element_id_t>{id[0], id[1], id[2], id[3], id[4], id[5]}));
+}
+
+TEST_F(LibraryQueryTests, SearchApplyKeepsInspectorFiltersAndPresentationOptions) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+  auto* stats  = backend.stats();
+  auto* search = backend.search();
+
+  stats->ToggleStatsFilter(QStringLiteral("rating"), QStringLiteral("3"));
+  module->ToggleInspectorSort(QStringLiteral("import"), true);
+  module->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_EQ(module->TotalCount(), 2);
+
+  // album-delete-0 and album-delete-2 have rating 3; the search narrows to album-delete-2.
+  search->ApplyFuzzySearch(QStringLiteral("album-delete-2"));
+  EXPECT_FALSE(search->HasActiveSearchFilter());  // pending until the refresh is accepted
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_TRUE(search->HasActiveSearchFilter());
+  EXPECT_EQ(stats->StatsFilterRating(), QStringLiteral("3"));
+  EXPECT_EQ(module->SortFieldName(), QStringLiteral("import"));
+  EXPECT_EQ(module->GroupFieldName(), QStringLiteral("camera"));
+  EXPECT_EQ(module->TotalCount(), 1);
+  EXPECT_EQ(ModelIds(*module), (std::vector<sl_element_id_t>{library.ids()[2]}));
+
+  // Clearing the search removes only the search term.
+  search->ClearFuzzySearch();
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_FALSE(search->HasActiveSearchFilter());
+  EXPECT_EQ(stats->StatsFilterRating(), QStringLiteral("3"));
+  EXPECT_EQ(module->TotalCount(), 2);
+  EXPECT_EQ(module->GroupFieldName(), QStringLiteral("camera"));
+}
+
+TEST_F(LibraryQueryTests, GroupingPreservesSearchAndInspectorPredicates) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+
+  backend.stats()->ToggleStatsFilter(QStringLiteral("rating"), QStringLiteral("5"));
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  ASSERT_TRUE(Settle(backend));
+  const auto flat = ModelIds(*module);
+  ASSERT_EQ(flat.size(), 2u);
+  for (const auto* field : {"date", "import", "camera", "lens", "rating", "label"}) {
+    module->SetInspectorGrouping(QString::fromLatin1(field), true);
+    ASSERT_TRUE(Settle(backend));
+    auto grouped = ModelIds(*module);
+    EXPECT_EQ(std::set<sl_element_id_t>(grouped.begin(), grouped.end()),
+              std::set<sl_element_id_t>(flat.begin(), flat.end()))
+        << field;
+    EXPECT_EQ(module->section_model().UniqueFileCount(), 2) << field;
+  }
+}
+
+TEST_F(LibraryQueryTests, ReopenDisplaysPersistedImportDate) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  const auto& model = backend.library()->model();
+  const auto  specs = SixPhotoSpecs();
+  ASSERT_EQ(model.items().size(), specs.size());
+  for (size_t index = 0; index < specs.size(); ++index) {
+    const auto expected = QDateTime::fromSecsSinceEpoch(*specs[index].added_time_, QTimeZone::utc())
+                              .toLocalTime()
+                              .date();
+    EXPECT_EQ(model.items()[index].import_date, expected) << index;
+    EXPECT_NE(model.items()[index].import_date, QDate::currentDate()) << index;
+    EXPECT_EQ(model.data(model.index(static_cast<int>(index)), AlbumThumbnailModel::ImportDate)
+                  .toString(),
+              expected.toString(QStringLiteral("yyyy-MM-dd")));
+  }
+}
+
+TEST_F(LibraryQueryTests, EqualSortKeysKeepDeterministicFocusPosition) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+  module->ToggleInspectorSort(QStringLiteral("rating"), true);
+  module->SetInspectorGrouping(QStringLiteral("date"), true);
+  ASSERT_TRUE(Settle(backend));
+
+  QSignalSpy positions(module, &LibraryModule::FocusPositionReady);
+  const auto order = ModelIds(*module);
+  for (size_t index = 0; index < order.size(); ++index) {
+    module->RequestFocusPosition(static_cast<uint>(order[index]));
+    ASSERT_TRUE(WaitUntil([&]() { return positions.count() == 1; }));
+    const auto args = positions.takeFirst();
+    EXPECT_EQ(args.at(0).toUInt(), static_cast<uint>(order[index]));
+    EXPECT_EQ(args.at(1).toLongLong(), static_cast<qint64>(index));
+    EXPECT_EQ(args.at(2).toInt(),
+              module->section_model().RowForOccurrence(static_cast<qint64>(index)));
+  }
+  // A file outside the filtered result reports no position.
+  backend.stats()->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Canon R5"));
+  module->RequestFocusPosition(static_cast<uint>(library.ids()[4]));
+  ASSERT_TRUE(WaitUntil([&]() { return positions.count() == 1; }));
+  EXPECT_EQ(positions.takeFirst().at(1).toLongLong(), -1);
+}
+
+// Opening a project makes its last edited photo the pending reveal and the editor's last image;
+// the reveal reads the photo's position in the accepted order once and then ends.
+TEST_F(LibraryQueryTests, ProjectOpenRevealsTheLastEditedPhoto) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs(), 0, EditPhotosFourThenTwo));
+  auto*      module = backend.library();
+  const auto target = static_cast<uint>(library.ids()[2]);
+  ASSERT_TRUE(WaitUntil([&]() { return module->PendingRevealFileId() == target; }));
+  EXPECT_EQ(backend.editor_session()->last_element_id(), target);
+  EXPECT_EQ(backend.editor_session()->last_image_id(), static_cast<uint>(library.image_ids()[2]));
+
+  QSignalSpy positions(module, &LibraryModule::FocusPositionReady);
+  module->RequestPendingReveal();
+  ASSERT_TRUE(WaitUntil([&]() { return positions.count() == 1; }));
+  const auto args = positions.takeFirst();
+  EXPECT_EQ(args.at(0).toUInt(), target);
+  EXPECT_EQ(args.at(1).toLongLong(), 2);  // the default order is by file id
+  EXPECT_EQ(module->PendingRevealFileId(), 0u);
+  module->RequestPendingReveal();
+  ProcessEvents(100);
+  EXPECT_EQ(positions.count(), 0);
+
+  // The edit-time sort and edit-day groups read the same edits.
+  module->ToggleInspectorSort(QStringLiteral("edited"), true);
+  ASSERT_TRUE(Settle(backend));
+  const auto sorted = ModelIds(*module);
+  ASSERT_EQ(sorted.size(), 6u);
+  EXPECT_EQ(sorted[0], library.ids()[2]);
+  EXPECT_EQ(sorted[1], library.ids()[4]);
+  module->SetInspectorGrouping(QStringLiteral("edited"), true);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(module->GroupFieldName(), QStringLiteral("edited"));
+  EXPECT_EQ(module->section_model().GroupCount(), 2);  // today's edit day and the unedited group
+}
+
+// A pending reveal outside the current folder selects the root folder once and finds the photo
+// there; a project without edits has no pending reveal.
+TEST_F(LibraryQueryTests, RevealSelectsTheRootFolderWhenTheCurrentFolderLacksThePhoto) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs(), 0, EditPhotosFourThenTwo));
+  auto*      module  = backend.library();
+  auto*      folders = backend.folders();
+  const auto target  = static_cast<uint>(library.ids()[2]);
+  ASSERT_TRUE(WaitUntil([&]() { return module->PendingRevealFileId() == target; }));
+
+  folders->CreateFolder(QStringLiteral("Empty"));
+  uint empty_folder = 0;
+  for (const auto& entry : folders->Folders()) {
+    const auto map = entry.toMap();
+    if (map.value(QStringLiteral("folderId")).toUInt() != 0) {
+      empty_folder = map.value(QStringLiteral("folderId")).toUInt();
+    }
+  }
+  ASSERT_NE(empty_folder, 0u);
+  folders->SelectFolder(empty_folder);
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_EQ(folders->CurrentFolderId(), empty_folder);
+  EXPECT_TRUE(ModelIds(*module).empty());
+
+  QSignalSpy positions(module, &LibraryModule::FocusPositionReady);
+  module->RequestPendingReveal();
+  ASSERT_TRUE(WaitUntil([&]() { return positions.count() == 1; }));
+  const auto args = positions.takeFirst();
+  EXPECT_EQ(args.at(0).toUInt(), target);
+  EXPECT_EQ(args.at(1).toLongLong(), 2);
+  EXPECT_EQ(folders->CurrentFolderId(), 0u);
+  EXPECT_EQ(module->PendingRevealFileId(), 0u);
+  EXPECT_EQ(ModelIds(*module).size(), 6u);
+}
+
+TEST_F(LibraryQueryTests, ProjectWithoutEditsHasNoPendingReveal) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  ProcessEvents(200);
+  EXPECT_EQ(backend.library()->PendingRevealFileId(), 0u);
+  EXPECT_EQ(backend.editor_session()->last_element_id(), 0u);
+}
+
+// An edit written while the library is hidden (the editor is open) does not reorder the photos
+// under the user; the edit-ordered library refreshes when it is shown again. While the library
+// is shown, an edit refreshes it at once.
+TEST_F(LibraryQueryTests, EditOrderRefreshWaitsUntilTheLibraryIsShown) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs(), 0, EditPhotosFourThenTwo));
+  auto* module = backend.library();
+  module->ToggleInspectorSort(QStringLiteral("edited"), true);
+  ASSERT_TRUE(Settle(backend));
+  const auto before = ModelIds(*module);
+  ASSERT_EQ(before.front(), library.ids()[2]);
+  auto& pipelines = *backend.project()->handler().pipeline_service();
+
+  PersistExposureEdit(pipelines, library.ids()[0]);
+  module->NoteEditHistoryChanged(true);
+  ProcessEvents(100);
+  EXPECT_FALSE(module->QueryUpdating());
+  EXPECT_EQ(ModelIds(*module), before);
+
+  module->RefreshStaleEditOrder();
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(ModelIds(*module).front(), library.ids()[0]);
+  // The refresh applied the stale edit; showing the library again reads nothing.
+  module->RefreshStaleEditOrder();
+  EXPECT_FALSE(module->QueryUpdating());
+
+  PersistExposureEdit(pipelines, library.ids()[5]);
+  module->NoteEditHistoryChanged(false);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(ModelIds(*module).front(), library.ids()[5]);
+}
+
+TEST_F(LibraryQueryTests, OrderedFileIdsAreUniqueAndFollowTheAcceptedOrder) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+  module->ToggleInspectorSort(QStringLiteral("rating"), true);
+  module->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(Settle(backend));
+
+  // Select All takes every unique file once.
+  module->SelectAllInCurrentView();
+  ASSERT_TRUE(WaitUntil([&]() { return module->selection()->SelectedCount() == 6; }));
+  auto shown = ModelIds(*module);
+  std::sort(shown.begin(), shown.end());
+  EXPECT_EQ(module->selection()->SelectedElementIds(), shown);
+
+  QSignalSpy ids(module, &LibraryModule::OrderedFileIdsReady);
+  // Shift selection over a collapsed group skips its photos.
+  module->section_model().SetGroupCollapsed(1, true);  // Nikon Z8
+  const auto request =
+      module->RequestOrderedFileIds(module->section_model().VisibleOccurrenceRanges(0, 5));
+  ASSERT_TRUE(WaitUntil([&]() { return ids.count() == 1; }));
+  const auto args = ids.takeFirst();
+  EXPECT_EQ(args.at(0).toULongLong(), request);
+  std::vector<sl_element_id_t> visible;
+  for (const auto& value : args.at(1).toList()) {
+    visible.push_back(value.toMap().value("elementId").toUInt());
+  }
+  const auto& id = library.ids();
+  EXPECT_EQ(visible, (std::vector<sl_element_id_t>{id[1], id[0], id[4], id[5]}));
+}
+
+TEST_F(LibraryQueryTests, SelectAllSelectsEveryPhotoOfTheQueryBeyondTheLoadedPages) {
+  // More photos than one library page (1,000 rows).
+  constexpr int         kPhotoCount = 1050;
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, {}, kPhotoCount));
+  auto* module = backend.library();
+  ASSERT_EQ(module->TotalCount(), kPhotoCount);
+  auto all_ids = library.ids();
+  std::sort(all_ids.begin(), all_ids.end());
+
+  // Library shortcut (Ctrl+A) in the flat grid: only the first page is loaded.
+  ASSERT_LT(module->ShownCount(), kPhotoCount);
+  module->SelectAllInCurrentView();
+  ASSERT_TRUE(WaitUntil([&]() { return module->selection()->SelectedCount() == kPhotoCount; }));
+  EXPECT_EQ(module->selection()->SelectedElementIds(), all_ids);
+  EXPECT_LT(module->ShownCount(), kPhotoCount);
+  EXPECT_EQ(module->selection()->SelectedItems().size(), kPhotoCount);
+
+  // Section view (Ctrl+A in the grouped view) uses the same backend operation: it selects every
+  // photo, also while the view keeps only the pages near its viewport.
+  module->selection()->Clear();
+  module->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_LT(module->ShownCount(), kPhotoCount);
+  module->SelectAllInCurrentView();
+  ASSERT_TRUE(WaitUntil([&]() { return module->selection()->SelectedCount() == kPhotoCount; }));
+  EXPECT_EQ(module->selection()->SelectedElementIds(), all_ids);
+}
+
+TEST_F(LibraryQueryTests, SelectAllDuringRefreshSelectsTheRefreshedResult) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+
+  // A camera filter is pending when Ctrl+A arrives: the selection takes the filtered result.
+  backend.stats()->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Sony A7"));
+  module->SelectAllInCurrentView();
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_TRUE(WaitUntil([&]() { return module->selection()->SelectedCount() > 0; }));
+  ProcessEvents(100);
+  const auto& id = library.ids();
+  EXPECT_EQ(module->selection()->SelectedElementIds(),
+            (std::vector<sl_element_id_t>{std::min(id[4], id[5]), std::max(id[4], id[5])}));
+}
+
+TEST_F(LibraryQueryTests, LastVisibleOccurrenceReleasesThumbnailPin) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*      module   = backend.library();
+  const auto file_id  = static_cast<uint>(library.ids()[0]);
+  const auto image_id = static_cast<uint>(module->FindAlbumItem(file_id)->image_id);
+
+  module->SetInspectorGrouping(QStringLiteral("label"), true);
+  ASSERT_TRUE(Settle(backend));
+  // Two visible occurrences of one photo (two label groups) share one pin.
+  module->SetOccurrenceThumbnailVisible(QStringLiteral("portrait"), false, file_id, image_id, true,
+                                        256);
+  module->SetOccurrenceThumbnailVisible(QStringLiteral("landscape"), false, file_id, image_id, true,
+                                        256);
+  EXPECT_TRUE(module->thumbs().IsThumbnailPinned(file_id));
+  EXPECT_EQ(module->thumbs().VisibleOccurrenceCount(file_id), 2u);
+  module->SetOccurrenceThumbnailVisible(QStringLiteral("portrait"), false, file_id, image_id, false,
+                                        256);
+  EXPECT_TRUE(module->thumbs().IsThumbnailPinned(file_id));
+  module->SetOccurrenceThumbnailVisible(QStringLiteral("landscape"), false, file_id, image_id,
+                                        false, 256);
+  EXPECT_FALSE(module->thumbs().IsThumbnailPinned(file_id));
+  EXPECT_EQ(module->thumbs().VisibleOccurrenceCount(file_id), 0u);
+}
+
+TEST_F(LibraryQueryTests, RepeatedOccurrenceVisibilityIsIdempotent) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*      module   = backend.library();
+  const auto file_id  = static_cast<uint>(library.ids()[1]);
+  const auto image_id = static_cast<uint>(module->FindAlbumItem(file_id)->image_id);
+
+  for (int repeat = 0; repeat < 3; ++repeat) {
+    module->SetOccurrenceThumbnailVisible(QString(), true, file_id, image_id, true, 256);
+  }
+  module->SetOccurrenceThumbnailVisible(QStringLiteral("other"), false, file_id, image_id, true,
+                                        256);
+  EXPECT_EQ(module->thumbs().VisibleOccurrenceCount(file_id), 2u);
+  // One release per occurrence: repeated true did not add a pin that leaks.
+  module->SetOccurrenceThumbnailVisible(QString(), true, file_id, image_id, false, 256);
+  module->SetOccurrenceThumbnailVisible(QString(), true, file_id, image_id, false, 256);
+  EXPECT_TRUE(module->thumbs().IsThumbnailPinned(file_id));
+  module->SetOccurrenceThumbnailVisible(QStringLiteral("other"), false, file_id, image_id, false,
+                                        256);
+  EXPECT_FALSE(module->thumbs().IsThumbnailPinned(file_id));
+}
+
+TEST_F(LibraryQueryTests, LabelGroupOccurrencesShareThePhotoRowAndRatingUpdates) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+  module->SetInspectorGrouping(QStringLiteral("label"), true);
+  ASSERT_TRUE(Settle(backend));
+  // Without a semantic model every photo is in the unlabelled group, once.
+  ASSERT_EQ(module->section_model().GroupCount(), 1);
+  EXPECT_EQ(module->section_model().OccurrenceTotal(), 6);
+  EXPECT_EQ(module->model().count(), 6);
+
+  // A rating change goes through its owner and shows on the photo row.
+  const auto file_id  = static_cast<uint>(library.ids()[3]);
+  const auto image_id = static_cast<uint>(module->FindAlbumItem(file_id)->image_id);
+  backend.images()->SetImageRating(file_id, image_id, 4);
+  ASSERT_TRUE(Settle(backend));
+  const auto row = module->model().rowByElementId(file_id);
+  ASSERT_GE(row, 0);
+  EXPECT_EQ(module->model().items()[static_cast<size_t>(row)].rating, 4);
+}
+
+TEST_F(LibraryQueryTests, AlbumQuerySqlRunsOnWorkerThread) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*      module = backend.library();
+  WorkerHold observer(library.browse());
+
+  module->ToggleInspectorSort(QStringLiteral("rating"), true);
+  ASSERT_TRUE(Settle(backend));
+  module->SetInspectorGrouping(QStringLiteral("import"), true);
+  ASSERT_TRUE(Settle(backend));
+  backend.stats()->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Sony A7"));
+  ASSERT_TRUE(Settle(backend));
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  ASSERT_TRUE(Settle(backend));
+  QSignalSpy positions(module, &LibraryModule::FocusPositionReady);
+  module->RequestFocusPosition(static_cast<uint>(library.ids()[4]));
+  ASSERT_TRUE(WaitUntil([&]() { return positions.count() == 1; }));
+  module->SelectAllInCurrentView();
+  ASSERT_TRUE(WaitUntil([&]() { return module->selection()->SelectedCount() > 0; }));
+
+  EXPECT_GE(observer.Operations().size(), 6u);
+  EXPECT_TRUE(observer.UiThreadOperations().empty());
+}
+
+// Issue 747: the editor list check of a photo outside the loaded pages reads the position on the
+// query worker. While another thread holds the project database lock (a save, an import, or a
+// page read in progress), the request returns at once on the UI thread; the answer arrives when
+// the lock is free. 130 photos and a search, so a page holds 120 rows.
+TEST_F(LibraryQueryTests, EditorListPositionDoesNotWaitForDatabaseLockOnUiThread) {
+  ApplicationModuleHost         backend;
+  LoadedLibrary                 library;
+  std::vector<LibraryPhotoSpec> specs(130);
+  for (size_t index = 0; index < 10; ++index) {
+    specs[index].rating_ = 5;
+  }
+  ASSERT_TRUE(library.Load(temp_dir_, backend, specs));
+  auto* module = backend.library();
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_EQ(module->ShownCount(), 120);
+  const auto target = static_cast<uint>(library.ids()[125]);
+  ASSERT_LT(module->model().rowByElementId(target), 0);
+  WorkerHold observer(library.browse());
+
+  // A helper thread holds the database lock. It releases the lock after 30 s at the latest, so
+  // a read on the UI thread fails the test instead of hanging it.
+  auto&      database =
+      StorageTestAccess::GetDatabase(*backend.project()->handler().project()->GetStorage());
+  std::mutex hold_mutex;
+  std::condition_variable hold_changed;
+  bool                    held    = false;
+  bool                    release = false;
+  std::thread             holder([&]() {
+    auto             guard   = database.GetConnectionGuard();
+    auto             db_lock = guard.Lock();
+    std::unique_lock lock(hold_mutex);
+    held = true;
+    hold_changed.notify_all();
+    hold_changed.wait_for(lock, std::chrono::seconds(30), [&]() { return release; });
+  });
+  const auto              release_holder = [&]() {
+    {
+      std::lock_guard lock(hold_mutex);
+      release = true;
+    }
+    hold_changed.notify_all();
+    if (holder.joinable()) {
+      holder.join();
+    }
+  };
+  const std::unique_ptr<void, std::function<void(void*)>> join_holder(
+      &holder, [&](void*) { release_holder(); });
+  {
+    std::unique_lock lock(hold_mutex);
+    ASSERT_TRUE(hold_changed.wait_for(lock, std::chrono::seconds(10), [&]() { return held; }));
+  }
+
+  QSignalSpy    answers(module, &LibraryModule::editorListPositionReady);
+  QElapsedTimer timer;
+  timer.start();
+  const qulonglong request_id = module->RequestEditorListPosition(target);
+  const qint64     request_ms = timer.elapsed();
+  EXPECT_GT(request_id, 0u);
+  EXPECT_LT(request_ms, 1000);
+  ProcessEvents(200);
+  EXPECT_EQ(answers.count(), 0);  // the worker waits for the lock, the UI thread does not
+
+  release_holder();
+  ASSERT_TRUE(WaitUntil([&]() { return answers.count() == 1; }));
+  const auto args = answers.takeFirst();
+  EXPECT_EQ(args.at(0).toULongLong(), request_id);
+  EXPECT_EQ(args.at(1).toUInt(), target);
+  EXPECT_EQ(args.at(2).toLongLong(), 125);
+  // The check alone loads no page.
+  EXPECT_LT(module->model().rowByElementId(target), 0);
+
+  // A rating filter that the photo does not match: the list does not hold it.
+  backend.stats()->ToggleStatsFilter(QStringLiteral("rating"), QStringLiteral("5"));
+  ASSERT_TRUE(Settle(backend));
+  module->RequestEditorListPosition(target);
+  ASSERT_TRUE(WaitUntil([&]() { return answers.count() == 1; }));
+  EXPECT_EQ(answers.takeFirst().at(2).toLongLong(), -1);
+  EXPECT_TRUE(observer.UiThreadOperations().empty());
+}
+
+// A newer editor list request replaces an older one: only the newest request is answered.
+TEST_F(LibraryQueryTests, NewerEditorListRequestReplacesOlderOne) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*      module = backend.library();
+  WorkerHold hold(library.browse());
+  hold.ArmNext();
+
+  QSignalSpy       answers(module, &LibraryModule::editorListPositionReady);
+  const qulonglong first = module->RequestEditorListPosition(static_cast<uint>(library.ids()[1]));
+  ASSERT_TRUE(hold.WaitHeld());
+  const qulonglong second = module->RequestEditorListPosition(static_cast<uint>(library.ids()[3]));
+  hold.Release();
+  ASSERT_TRUE(WaitUntil([&]() { return answers.count() >= 1; }));
+  ProcessEvents(100);
+  ASSERT_EQ(answers.count(), 1);
+  const auto args = answers.takeFirst();
+  EXPECT_NE(first, second);
+  EXPECT_EQ(args.at(0).toULongLong(), second);
+  EXPECT_EQ(args.at(2).toLongLong(), 3);
+}
+
+TEST_F(LibraryQueryTests, QueryFailureKeepsAcceptedContentAndRetryRepeatsTheRequest) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*      module = backend.library();
+  const auto before = ModelIds(*module);
+
+  // Remove the Image table under the query so the real read fails on the worker.
+  {
+    auto guard =
+        StorageTestAccess::GetDatabase(*backend.project()->handler().project()->GetStorage())
+            .GetConnectionGuard();
+    auto          lock = guard.Lock();
+    duckdb_result result;
+    ASSERT_EQ(duckdb_query(guard.conn_, "ALTER TABLE Image RENAME TO ImageHidden", &result),
+              DuckDBSuccess);
+    duckdb_destroy_result(&result);
+  }
+  module->ToggleInspectorSort(QStringLiteral("rating"), true);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_FALSE(module->QueryError().isEmpty());
+  EXPECT_TRUE(module->SortFieldName().isEmpty());  // the accepted options stay
+  EXPECT_EQ(ModelIds(*module), before);            // the accepted content stays
+
+  {
+    auto guard =
+        StorageTestAccess::GetDatabase(*backend.project()->handler().project()->GetStorage())
+            .GetConnectionGuard();
+    auto          lock = guard.Lock();
+    duckdb_result result;
+    ASSERT_EQ(duckdb_query(guard.conn_, "ALTER TABLE ImageHidden RENAME TO Image", &result),
+              DuckDBSuccess);
+    duckdb_destroy_result(&result);
+  }
+  module->RetryLibraryQuery();
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_TRUE(module->QueryError().isEmpty());
+  EXPECT_EQ(module->SortFieldName(), QStringLiteral("rating"));
+  EXPECT_TRUE(module->SortDescending());
+}
+
+// Pages: 130 photos and a search, so a page holds 120 rows.
+TEST_F(LibraryQueryTests, QueuedPageCannotAppendAfterFilterRefresh) {
+  ApplicationModuleHost        backend;
+  LoadedLibrary                library;
+  std::vector<LibraryPhotoSpec> specs(130);
+  for (size_t index = 0; index < specs.size(); ++index) {
+    specs[index].rating_ = index % 2 == 0 ? 5 : 1;
+  }
+  ASSERT_TRUE(library.Load(temp_dir_, backend, specs));
+  auto* module = backend.library();
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_EQ(module->ShownCount(), 120);
+  ASSERT_TRUE(module->HasMoreThumbnails());
+
+  WorkerHold hold(library.browse());
+  hold.ArmNext();
+  ASSERT_TRUE(module->LoadMoreThumbnails());  // page read, held on the worker
+  ASSERT_TRUE(hold.WaitHeld());
+  backend.stats()->ToggleStatsFilter(QStringLiteral("rating"), QStringLiteral("1"));
+  ProcessEvents(50);  // the refresh is submitted while the page is held
+  hold.Release();
+  ASSERT_TRUE(Settle(backend));
+  ProcessEvents(200);
+
+  EXPECT_EQ(module->TotalCount(), 65);
+  EXPECT_EQ(module->ShownCount(), 65);
+  for (const auto& item : module->model().items()) {
+    EXPECT_EQ(item.rating, 1);
+  }
+}
+
+TEST_F(LibraryQueryTests, DistantSectionReadKeepsMetadataPagesBounded) {
+  ApplicationModuleHost        backend;
+  LoadedLibrary                library;
+  std::vector<LibraryPhotoSpec> specs(600);
+  for (size_t index = 0; index < specs.size(); ++index) {
+    specs[index].model_ = index < 500 ? "Canon R5" : "Camera " + std::to_string(index % 20);
+  }
+  ASSERT_TRUE(library.Load(temp_dir_, backend, specs));
+  auto* module = backend.library();
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  module->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(Settle(backend));
+  auto& sections = module->section_model();
+  sections.SetColumnCount(6);
+  ASSERT_EQ(sections.OccurrenceTotal(), 600);
+
+  size_t max_pages = 0;
+  int    max_rows  = 0;
+  for (const qint64 occurrence : {590, 250, 480, 10, 599, 300}) {
+    const int row = sections.RowForOccurrence(occurrence);
+    module->RequestSectionRows(row, row + 2);
+    ASSERT_TRUE(WaitUntil([&]() { return sections.FileIdAt(occurrence) != 0; })) << occurrence;
+    max_pages = std::max(max_pages, sections.LoadedPageCount());
+    max_rows  = std::max(max_rows, module->model().count());
+    RecordProperty("loaded_pages_after_" + std::to_string(occurrence),
+                   std::to_string(sections.LoadedPageCount()));
+  }
+  // Pages of 120 occurrences, at most 3 kept: never all 600 photos.
+  EXPECT_LE(max_pages, 3u);
+  EXPECT_LE(max_rows, 360);
+  std::cout << "[library query] max loaded pages " << max_pages << ", max photo rows " << max_rows
+            << "\n";
+}
+
+// Issue #609: an import or a delete changes the shown result in place. 400 photos and a search,
+// so a page holds 120 occurrences; the view has read the pages near occurrence 380, so the
+// first page is evicted and the retained pages are [120, 240), [240, 360), and [360, 400).
+namespace {
+
+auto FourHundredPhotosOnOneImportDay() -> std::vector<LibraryPhotoSpec> {
+  std::vector<LibraryPhotoSpec> specs(400);
+  for (size_t index = 0; index < specs.size(); ++index) {
+    specs[index].added_time_ = Utc(2026, 9, 1, 10);
+  }
+  return specs;
+}
+
+auto ReadPagesNearTheEnd(ApplicationModuleHost& backend) -> bool {
+  auto* module   = backend.library();
+  auto& sections = module->section_model();
+  sections.SetColumnCount(6);
+  for (const qint64 occurrence : {130, 250, 380}) {
+    const int row = sections.RowForOccurrence(occurrence);
+    module->RequestSectionRows(row, row);
+    if (!WaitUntil([&]() { return sections.FileIdAt(occurrence) != 0; })) {
+      return false;
+    }
+  }
+  return sections.LoadedPageStarts() == std::vector<int64_t>{120, 240, 360};
+}
+
+}  // namespace
+
+// A delete of ten photos in the evicted first page: the rows change in place, the retained
+// pages move back by ten without a page read, and the photo at the anchor stays loaded.
+TEST_F(LibraryQueryTests, DeleteInAnUnloadedPageKeepsTheAnchorPhotoAndMovesRetainedPages) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, FourHundredPhotosOnOneImportDay()));
+  auto* module = backend.library();
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  module->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(Settle(backend));
+  auto& sections = module->section_model();
+  ASSERT_TRUE(ReadPagesNearTheEnd(backend)) << sections.LoadedPageStarts().size();
+  const auto anchor = sections.FileIdAt(380);
+  ASSERT_NE(anchor, 0u);
+
+  QSignalSpy section_resets(&sections, &QAbstractItemModel::modelReset);
+  QSignalSpy section_removed(&sections, &QAbstractItemModel::rowsRemoved);
+  QSignalSpy photo_resets(&module->model(), &QAbstractItemModel::modelReset);
+  QSignalSpy about(module, &LibraryModule::LibraryChangeAboutToApply);
+  QSignalSpy applied(module, &LibraryModule::LibraryChangeApplied);
+  std::vector<std::pair<sl_element_id_t, image_id_t>> targets;
+  for (size_t index = 0; index < 10; ++index) {
+    targets.emplace_back(library.ids()[index], library.image_ids()[index]);
+  }
+  ASSERT_TRUE(DeleteAndWait(backend, targets));
+
+  EXPECT_EQ(about.count(), 1);
+  EXPECT_EQ(applied.count(), 1);
+  EXPECT_EQ(section_resets.count(), 0);
+  EXPECT_EQ(photo_resets.count(), 0);
+  // 400 photos at 6 columns: 67 photo rows; 390 photos: 65.
+  EXPECT_GE(section_removed.count(), 1);
+  EXPECT_EQ(sections.rowCount(), 1 + 65);
+  EXPECT_EQ(sections.OccurrenceTotal(), 390);
+  EXPECT_EQ(module->TotalCount(), 390);
+  EXPECT_EQ(sections.LoadedPageStarts(), (std::vector<int64_t>{110, 230, 350}));
+  EXPECT_EQ(sections.FileIdAt(370), anchor);
+  EXPECT_EQ(sections.LoadedOccurrenceOf(anchor, 0), 370);
+  for (const auto& [element_id, image_id] : targets) {
+    EXPECT_LT(module->model().rowByElementId(element_id), 0) << element_id;
+  }
+}
+
+// An import of three photos creates the newest import day at the top, before every loaded
+// page: the group rows are inserted, the retained pages move forward by three without a page
+// read, and the imported photos are read when a view shows them.
+TEST_F(LibraryQueryTests, ImportBeforeTheLoadedPagesKeepsTheAnchorPhotoAndInsertsItsGroup) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, FourHundredPhotosOnOneImportDay()));
+  auto* module = backend.library();
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  module->SetInspectorGrouping(QStringLiteral("import"), true);
+  ASSERT_TRUE(Settle(backend));
+  auto& sections = module->section_model();
+  ASSERT_EQ(sections.GroupCount(), 1);
+  ASSERT_TRUE(ReadPagesNearTheEnd(backend));
+  const auto anchor = sections.FileIdAt(380);
+  ASSERT_NE(anchor, 0u);
+
+  QSignalSpy section_resets(&sections, &QAbstractItemModel::modelReset);
+  QSignalSpy section_inserted(&sections, &QAbstractItemModel::rowsInserted);
+  QSignalSpy photo_resets(&module->model(), &QAbstractItemModel::modelReset);
+  const auto photos = WritePngPhotos(temp_dir_ / "import_source", "album-delete-import-", 3);
+  ASSERT_EQ(photos.size(), 3u);
+  ASSERT_TRUE(ImportAndWait(backend, photos));
+
+  EXPECT_EQ(section_resets.count(), 0);
+  EXPECT_EQ(photo_resets.count(), 0);
+  ASSERT_GE(section_inserted.count(), 1);
+  EXPECT_EQ(section_inserted.at(0).at(1).toInt(), 0);  // the new group is the first rows
+  ASSERT_EQ(sections.GroupCount(), 2);
+  EXPECT_EQ(sections.groups().front().photo_count_, 3);
+  EXPECT_EQ(sections.OccurrenceTotal(), 403);
+  EXPECT_EQ(sections.LoadedPageStarts(), (std::vector<int64_t>{123, 243, 363}));
+  EXPECT_EQ(sections.FileIdAt(383), anchor);
+  EXPECT_EQ(sections.FirstUnloadedOccurrence(0, 3), 0);
+
+  // A view that shows the new group reads it into the gap before the moved pages.
+  module->RequestSectionRows(0, 1);
+  ASSERT_TRUE(WaitUntil([&]() { return sections.FileIdAt(0) != 0; }));
+  EXPECT_EQ(sections.FirstUnloadedOccurrence(0, 3), -1);
+  EXPECT_EQ(std::count(library.ids().begin(), library.ids().end(), sections.FileIdAt(0)), 0);
+  EXPECT_LE(sections.LoadedPageCount(), 3u);
+}
+
+// Flat mode: a delete removes the rows of the loaded prefix in place, and an import at the end
+// of the order of a complete prefix reads and inserts the new rows; no model reset.
+TEST_F(LibraryQueryTests, FlatDeleteAndImportChangeTheLoadedRowsInPlace) {
+  ApplicationModuleHost         backend;
+  LoadedLibrary                 library;
+  std::vector<LibraryPhotoSpec> specs(130);
+  ASSERT_TRUE(library.Load(temp_dir_, backend, specs));
+  auto* module = backend.library();
+  ASSERT_EQ(module->ShownCount(), 130);
+  const auto anchor = library.ids()[60];
+
+  QSignalSpy resets(&module->model(), &QAbstractItemModel::modelReset);
+  QSignalSpy removed(&module->model(), &QAbstractItemModel::rowsRemoved);
+  QSignalSpy inserted(&module->model(), &QAbstractItemModel::rowsInserted);
+  ASSERT_TRUE(DeleteAndWait(backend, {{library.ids()[3], library.image_ids()[3]},
+                                      {library.ids()[4], library.image_ids()[4]},
+                                      {library.ids()[90], library.image_ids()[90]}}));
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(removed.count(), 2);  // two contiguous runs
+  EXPECT_EQ(module->ShownCount(), 127);
+  EXPECT_EQ(module->TotalCount(), 127);
+  EXPECT_EQ(module->model().rowByElementId(anchor), 58);
+
+  const auto photos = WritePngPhotos(temp_dir_ / "import_source", "flat-import-", 2);
+  ASSERT_EQ(photos.size(), 2u);
+  ASSERT_TRUE(ImportAndWait(backend, photos));
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(inserted.count(), 1);
+  EXPECT_EQ(module->ShownCount(), 129);
+  EXPECT_EQ(module->TotalCount(), 129);
+  EXPECT_EQ(module->model().rowByElementId(anchor), 58);
+  EXPECT_EQ(module->model().items().back().file_name.left(12), QStringLiteral("flat-import-"));
+}
+
+// A content refresh that supersedes the read of a filter refresh still replaces the result: the
+// superseded read carried the filter change, which the accepted result does not have.
+TEST_F(LibraryQueryTests, ContentRefreshAfterAnUnpublishedFilterRefreshReplacesTheResult) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+  ASSERT_EQ(module->ShownCount(), 6);
+
+  QSignalSpy resets(&module->model(), &QAbstractItemModel::modelReset);
+  QSignalSpy applied(module, &LibraryModule::LibraryChangeApplied);
+  WorkerHold hold(library.browse());
+  hold.ArmNext();
+  backend.stats()->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Canon R5"));
+  ASSERT_TRUE(hold.WaitHeld());
+  module->RequestLibraryContentRefresh();
+  ProcessEvents(50);  // the content refresh is submitted while the filter read is held
+  hold.Release();
+  ASSERT_TRUE(Settle(backend));
+
+  EXPECT_EQ(module->ShownCount(), 2);
+  EXPECT_EQ(module->TotalCount(), 2);
+  EXPECT_EQ(resets.count(), 1);
+  EXPECT_EQ(applied.count(), 0);
+}
+
+}  // namespace alcedo::ui::test

@@ -1,8 +1,10 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
+import "FileDrop.js" as FileDrop
 
 // Extracted library/album surface. Layout and behavior match the former Main.qml body.
 Item {
@@ -44,6 +46,21 @@ Item {
         return colButtonSecondary
     }
 
+    // Neutral filled action (Load Project, Export): the Main shell owns its colours.
+    function filledActionFill(enabled, hovered, pressed) {
+        if (theme && theme.filledActionFill) {
+            return theme.filledActionFill(enabled, hovered, pressed)
+        }
+        return enabled ? appTheme.editorListSelectedFillColor : appTheme.bgBaseColor
+    }
+
+    function filledActionInk(enabled) {
+        if (theme && theme.filledActionInk) {
+            return theme.filledActionInk(enabled)
+        }
+        return enabled ? appTheme.editorListSelectedInkColor : appTheme.textMutedColor
+    }
+
     // Inspector / browser view state is owned by the Main shell (host) so values
     // survive Loader teardown when entering the editor workspace. Snapshot on
     // create; write through on change (avoid live bindings that fight Slider).
@@ -62,10 +79,72 @@ Item {
         - contentRowSpacingTotal
         - 5)
     readonly property int defaultGridZoomLevel: 4
+    // Thumbnail tier of the grid view; 0 when the grid view is not loaded.
+    readonly property int thumbnailMaxEdge: contentViewLoader.item
+                                            && contentViewLoader.item.desiredMaxEdge !== undefined
+                                            ? contentViewLoader.item.desiredMaxEdge : 0
     property int gridZoomLevel: defaultGridZoomLevel
+    // True while the workspace width follows the collections sidebar fold (WorkspaceHost).
+    property bool geometryAnimating: false
     property bool _viewStateReady: false
     property real libraryGridRevealOpacity: 1
     property real libraryGridRevealShift: 0
+
+    // Library loading (DESIGN.md "Library loading"). A refresh that replaces the shown result
+    // (a collection switch, a filter, the search) shows the staggered grid loader after
+    // libraryLoadingRevealDelayMs, so a fast read draws no frame of it. In-place refreshes
+    // (a rating write, an import into the shown collection) keep the grid as it is.
+    readonly property bool libraryQueryReplacing: appModules.library.queryReplacing
+                                                  && appModules.library.queryError.length === 0
+    readonly property int libraryLoadingRevealDelayMs: 150
+    property bool libraryLoadingShown: false
+    // Opacity of the previous result: it dims while a replacing read runs over it.
+    property real libraryStaleViewOpacity: libraryLoadingShown && contentViewLoader.active
+                                           ? 0.3 : 1
+    Behavior on libraryStaleViewOpacity {
+        NumberAnimation {
+            duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldOpenMs
+            easing.type: appTheme.motionEasing
+        }
+    }
+    readonly property var libraryZoomColumns: [2, 3, 4, 5, 6, 8, 11, 14]
+
+    onLibraryQueryReplacingChanged: {
+        if (libraryQueryReplacing) {
+            libraryLoadingRevealTimer.restart()
+        } else {
+            libraryLoadingRevealTimer.stop()
+            libraryLoadingShown = false
+        }
+    }
+
+    Timer {
+        id: libraryLoadingRevealTimer
+        interval: root.libraryLoadingRevealDelayMs
+        onTriggered: root.libraryLoadingShown = root.libraryQueryReplacing
+    }
+
+    // Card geometry of the classic photo grid at the current zoom level and @p viewWidth; the
+    // same formula as ThumbnailGridView.metricsForZoomLevel, so the placeholder tiles stand
+    // where the photo cards appear.
+    function libraryLoadingGridMetrics(viewWidth) {
+        const level = Math.max(0, Math.min(libraryZoomColumns.length - 1, gridZoomLevel))
+        const visualCols = libraryZoomColumns[level]
+        const inset = visualCols >= 11 ? 4 : (visualCols >= 8 ? 6 : 8)
+        const gap = visualCols >= 11 ? 4 : (visualCols >= 8 ? 6 : 12)
+        const textHeight = visualCols >= 14 ? 0 : (visualCols >= 8 ? 18 : 50)
+        const cellW = Math.max(72, Math.floor(viewWidth / visualCols))
+        const cellH = Math.max(64, Math.round((cellW - inset * 2) * 2 / 3
+                                              + textHeight + inset * 2 + gap))
+        const cols = Math.max(1, Math.floor(viewWidth / cellW))
+        return {
+            cols: cols,
+            width: cols * cellW - gap,
+            gap: gap,
+            aspect: (cellW - gap) / Math.max(1, cellH - gap),
+            radius: visualCols >= 11 ? 6 : appTheme.panelRadius
+        }
+    }
 
     function prepareLibraryGridReveal() {
         libraryGridRevealAnim.stop()
@@ -130,11 +209,31 @@ Item {
 
     function restoreScrollPosition() {
         const view = contentViewLoader.item
-        if (!view || !host || !view.restoreContentY) {
+        if (!view || !host) {
             return
         }
-        view.restoreContentY(root.hostContentY())
+        if (view.restoreScrollAnchor) {
+            // The grouped view reads the anchor once; it carries its group field, so groups of
+            // another field start at the top.
+            view.restoreScrollAnchor(host.librarySectionScrollAnchor)
+            host.librarySectionScrollAnchor = null
+        } else if (view.restoreContentY) {
+            view.restoreContentY(root.hostContentY())
+        } else {
+            return
+        }
         Qt.callLater(root.revealRequestedImage)
+        Qt.callLater(root.revealPendingFile)
+    }
+
+    // The last edited photo of a newly opened project, requested while this workspace is
+    // shown: the library finds its position on the query worker (selecting the root folder
+    // when the current folder lacks it), loads its page, and the view that shows that result
+    // scrolls to it (focusPositionReady).
+    function revealPendingFile() {
+        if (appModules.library.pendingRevealFileId > 0) {
+            appModules.library.RequestPendingReveal()
+        }
     }
 
     function revealRequestedImage() {
@@ -206,6 +305,13 @@ Item {
     }
 
     Connections {
+        target: appModules.library
+        function onPendingRevealChanged() {
+            Qt.callLater(root.revealPendingFile)
+        }
+    }
+
+    Connections {
         target: appModules.library.thumbnailModel
         ignoreUnknownSignals: true
         function onCountChanged() {
@@ -216,7 +322,13 @@ Item {
         }
     }
 
-    Component.onCompleted: root.applyHostViewState()
+    Component.onCompleted: {
+        root.applyHostViewState()
+        Qt.callLater(root.revealPendingFile)
+        if (root.libraryQueryReplacing) {
+            libraryLoadingRevealTimer.restart()
+        }
+    }
     Component.onDestruction: root.persistViewState()
 
 RowLayout {
@@ -256,9 +368,11 @@ RowLayout {
                 Item { Layout.fillWidth: true }
 
                 // ── Zoom slider ──
+                // Left end: the most photos (the smallest thumbnails, zoom level 7); right end:
+                // the largest photos (zoom level 0). The slider runs in the same direction.
                 Item {
-                    Layout.preferredWidth: 180
-                    Layout.preferredHeight: 36
+                    Layout.preferredWidth: 236
+                    Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
 
                     TapHandler {
                         acceptedButtons: Qt.LeftButton
@@ -269,25 +383,22 @@ RowLayout {
                         anchors.fill: parent
                         spacing: 8
 
-                        Label {
-                            text: "-"
-                            color: root.colTextMuted
-                            font.family: root.dataFontFamily
-                            font.pixelSize: 18
-                            font.weight: 600
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.gridZoomLevel = Math.min(7, root.gridZoomLevel + 1)
-                            }
+                        IconActionButton {
+                            objectName: "libraryZoomSmallerButton"
+                            compact: true
+                            fillIdle: "transparent"
+                            iconSrc: "qrc:/panel_icons/thumbnail-zoom-smallest.svg"
+                            actionName: qsTr("Show more photos")
+                            enabled: root.gridZoomLevel < 7
+                            onClicked: root.gridZoomLevel = Math.min(7, root.gridZoomLevel + 1)
                         }
 
                         Slider {
                             id: zoomSlider
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignVCenter
-                            from: 0
-                            to: 7
+                            from: 7
+                            to: 0
                             stepSize: 1
                             value: root.gridZoomLevel
                             onValueChanged: root.gridZoomLevel = Math.round(value)
@@ -303,7 +414,7 @@ RowLayout {
                                 Rectangle {
                                     width: zoomSlider.visualPosition * parent.width
                                     height: parent.height
-                                    color: root.colAccentPrimary
+                                    color: appTheme.textColor
                                     radius: 2
                                 }
                             }
@@ -313,23 +424,18 @@ RowLayout {
                                 implicitWidth: 14
                                 implicitHeight: 14
                                 radius: 7
-                                color: root.colAccentPrimary
-                                border.width: 1
-                                border.color: root.colAccentSecondary
+                                color: appTheme.textColor
                             }
                         }
 
-                        Label {
-                            text: "+"
-                            color: root.colText
-                            font.family: root.dataFontFamily
-                            font.pixelSize: 18
-                            font.weight: 600
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.gridZoomLevel = Math.max(0, root.gridZoomLevel - 1)
-                            }
+                        IconActionButton {
+                            objectName: "libraryZoomLargerButton"
+                            compact: true
+                            fillIdle: "transparent"
+                            iconSrc: "qrc:/panel_icons/thumbnail-zoom-largest.svg"
+                            actionName: qsTr("Show larger photos")
+                            enabled: root.gridZoomLevel > 0
+                            onClicked: root.gridZoomLevel = Math.max(0, root.gridZoomLevel - 1)
                         }
                     }
                 }
@@ -341,13 +447,52 @@ RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
+                // Query failure: the last accepted view stays visible and the row offers
+                // Retry. A running read shows the loading grid instead (libraryLoadingShown).
+                RowLayout {
+                    id: libraryQueryStateRow
+                    objectName: "libraryQueryStateRow"
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    z: 2
+                    visible: appModules.library.queryError.length > 0
+                    spacing: appTheme.spaceSm
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Library query failed: %1").arg(appModules.library.queryError)
+                        color: appTheme.dangerColor
+                        font.family: appTheme.uiFontFamily
+                        font.pixelSize: appTheme.fontSizeCaption
+                        wrapMode: Text.Wrap
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: text
+                    }
+
+                    DialogActionButton {
+                        id: libraryQueryRetryButton
+                        objectName: "libraryQueryRetryButton"
+                        visible: appModules.library.queryError.length > 0
+                        buttonWidth: 96
+                        buttonHeight: appTheme.iconButtonHitSizeCompact
+                        text: qsTr("Retry")
+                        Accessible.name: qsTr("Retry the library query")
+                        onClicked: appModules.library.RetryLibraryQuery()
+                    }
+                }
+
                 Loader {
                     id: contentViewLoader
                     objectName: "libraryContentViewLoader"
                     anchors.fill: parent
-                    active: appModules.library.shownCount > 0
-                    sourceComponent: gridComp
-                    opacity: root.libraryGridRevealOpacity
+                    anchors.topMargin: libraryQueryStateRow.visible
+                                       ? libraryQueryStateRow.implicitHeight + appTheme.spaceXs : 0
+                    active: appModules.library.grouped
+                            ? appModules.library.sectionModel.groupCount > 0
+                            : appModules.library.shownCount > 0
+                    sourceComponent: appModules.library.grouped ? sectionComp : gridComp
+                    opacity: root.libraryGridRevealOpacity * root.libraryStaleViewOpacity
                     transform: Translate { y: root.libraryGridRevealShift }
                     onLoaded: {
                         if (host && host.projectLoadingOverlayVisible) {
@@ -356,6 +501,140 @@ RowLayout {
                             root.playLibraryGridReveal()
                         }
                         Qt.callLater(root.restoreScrollPosition)
+                    }
+                }
+
+                // Drop of local files and folders onto the grid: import into the current
+                // collection, the same as the Import buttons (issue #757).
+                DropArea {
+                    id: gridFileDropArea
+                    objectName: "libraryGridFileDropArea"
+                    anchors.fill: parent
+                    keys: ["text/uri-list"]
+
+                    readonly property int targetFolderId: Number(appModules.folders.currentFolderId)
+                    property var urls: []
+
+                    // The action is always Copy: import reads the files in place, and a Move
+                    // answer lets the file manager delete them.
+                    onEntered: function(drag) {
+                        urls = host && host.fileDropImportAllowed ? FileDrop.localFileUrls(drag) : []
+                        if (urls.length > 0) {
+                            drag.accept(Qt.CopyAction)
+                        } else {
+                            drag.accepted = false
+                        }
+                    }
+                    onExited: urls = []
+                    onDropped: function(drop) {
+                        const dropped = urls.length > 0 ? urls : FileDrop.localFileUrls(drop)
+                        urls = []
+                        if (!host || !host.fileDropImportAllowed || dropped.length === 0) {
+                            drop.accepted = false
+                            return
+                        }
+                        drop.accept(Qt.CopyAction)
+                        host.importDroppedUrls(dropped, targetFolderId)
+                    }
+                }
+
+                // Drop overlay: a hairline frame on a dimmed grid with the target collection.
+                Rectangle {
+                    objectName: "libraryGridFileDropOverlay"
+                    anchors.fill: parent
+                    z: 5
+                    visible: gridFileDropArea.containsDrag && gridFileDropArea.urls.length > 0
+                    radius: appTheme.controlRadiusSmall
+                    color: Qt.rgba(root.colBgDeep.r, root.colBgDeep.g, root.colBgDeep.b, 0.78)
+                    border.width: 1
+                    border.color: appTheme.textMutedColor
+
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        width: Math.min(parent.width - appTheme.spaceXl * 2, 420)
+                        spacing: appTheme.spaceSm
+
+                        IconImage {
+                            Layout.alignment: Qt.AlignHCenter
+                            Layout.preferredWidth: 28
+                            Layout.preferredHeight: 28
+                            source: "qrc:/panel_icons/import.svg"
+                            sourceSize: Qt.size(28, 28)
+                            color: root.colText
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
+                            elide: Text.ElideMiddle
+                            text: qsTr("Import to %1")
+                                  .arg(host ? host.collectionDisplayName(gridFileDropArea.targetFolderId) : "")
+                            color: root.colText
+                            font.family: root.headlineFontFamily
+                            font.pixelSize: appTheme.fontSizeSection
+                            font.weight: appTheme.fontWeightHeading
+                        }
+                    }
+                }
+
+                // Loading, no result shown (a collection switch): placeholder cards at the
+                // grid's column count and card proportion, in place of the empty state.
+                Item {
+                    id: libraryLoadingGrid
+                    objectName: "libraryLoadingGrid"
+                    anchors.fill: parent
+                    anchors.topMargin: contentViewLoader.anchors.topMargin
+                    z: 1
+                    clip: true
+                    visible: root.libraryLoadingShown && !contentViewLoader.active
+
+                    readonly property var metrics: root.libraryLoadingGridMetrics(width)
+
+                    StaggeredGridLoader {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: libraryLoadingGrid.metrics.width
+                        running: libraryLoadingGrid.visible
+                        columns: libraryLoadingGrid.metrics.cols
+                        rows: 0
+                        spacing: libraryLoadingGrid.metrics.gap
+                        tileAspect: libraryLoadingGrid.metrics.aspect
+                        tileRadius: libraryLoadingGrid.metrics.radius
+                        cycleMs: 1600
+                        waveStrength: 0.1
+                        accessibleName: qsTr("Updating")
+                    }
+                }
+
+                // Loading over the previous result (a filter or search change): the dimmed
+                // grid stays and a compact staggered grid stands at its centre.
+                Rectangle {
+                    id: libraryLoadingMark
+                    objectName: "libraryLoadingMark"
+                    anchors.centerIn: parent
+                    z: 3
+                    width: 72
+                    height: 72
+                    radius: appTheme.panelRadius
+                    color: root.colBgPanel
+                    border.width: 1
+                    border.color: root.colGlassStroke
+                    visible: opacity > 0
+                    opacity: root.libraryLoadingShown && contentViewLoader.active ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: appTheme.reduceMotion ? 0 : appTheme.motionFadeMs
+                            easing.type: appTheme.motionEasing
+                        }
+                    }
+
+                    StaggeredGridMark {
+                        anchors.centerIn: parent
+                        width: 36
+                        height: 36
+                        running: root.libraryLoadingShown
+                        accessibleName: qsTr("Updating")
                     }
                 }
 
@@ -378,20 +657,38 @@ RowLayout {
                 }
 
                 Column {
+                    readonly property bool hasLibraryFilter:
+                        appModules.search.activeSearchQuery.length > 0
+                        || appModules.stats.statsFilterDate.length > 0
+                        || appModules.stats.statsFilterImportDate.length > 0
+                        || appModules.stats.statsFilterCamera.length > 0
+                        || appModules.stats.statsFilterLens.length > 0
+                        || appModules.stats.statsFilterLabel.length > 0
+                        || appModules.stats.statsFilterRating.length > 0
+                    readonly property bool noMatchingPhotos: appModules.project.serviceReady
+                                                             && hasLibraryFilter
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
+                    anchors.topMargin: contentViewLoader.anchors.topMargin
+                    // A replacing read decides whether the scope is empty; until it publishes,
+                    // the loading grid (after its delay) stands here.
                     visible: appModules.library.shownCount === 0
+                             && appModules.library.queryError.length === 0
+                             && !root.libraryQueryReplacing
                     spacing: 8
                     Label {
-                        text: appModules.project.serviceReady ? qsTr("No Photos Yet") : qsTr("Open or Create a Project")
+                        text: parent.noMatchingPhotos ? qsTr("No Matching Photos")
+                              : appModules.project.serviceReady ? qsTr("No Photos Yet") : qsTr("Open or Create a Project")
                         font.family: root.headlineFontFamily
                         color: root.colText
                         font.pixelSize: 22
                         font.weight: 700
                     }
                     Label {
-                        text: appModules.project.serviceReady
+                        text: parent.noMatchingPhotos
+                              ? qsTr("Change the filters or the search to show photos.")
+                              : appModules.project.serviceReady
                               ? qsTr("Import your images for RAW adjustments.")
                               : qsTr("Use File > Load Project or File > Create Project to choose .alcd files.")
                         color: root.colTextMuted
@@ -400,12 +697,31 @@ RowLayout {
                     Button {
                         id: emptyStateLoadButton
                         visible: !appModules.project.serviceReady
+                        enabled: appModules.interactionPolicy.canChangeStateAsUser
                         text: qsTr("Load Project")
-                        Material.background: root.colButtonPrimary
-                        Material.foreground: root.colText
-                        onClicked: host.beginProjectLaunch(function() {
-                            return appModules.project.PromptAndLoadProject()
-                        })
+                        hoverEnabled: true
+                        leftPadding: appTheme.spaceLg
+                        rightPadding: appTheme.spaceLg
+                        background: Rectangle {
+                            implicitWidth: 100
+                            implicitHeight: 40
+                            radius: root.controlRadius
+                            color: root.filledActionFill(emptyStateLoadButton.enabled,
+                                                         emptyStateLoadButton.hovered,
+                                                         emptyStateLoadButton.down)
+                            Behavior on color {
+                                enabled: !appTheme.reduceMotion
+                                ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
+                            }
+                        }
+                        contentItem: Label {
+                            text: emptyStateLoadButton.text
+                            color: root.filledActionInk(emptyStateLoadButton.enabled)
+                            font: emptyStateLoadButton.font
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        onClicked: appModules.projectLaunch.BeginPromptOpen()
                     }
                 }
             }
@@ -425,25 +741,29 @@ RowLayout {
                                : 0
         Behavior on Layout.preferredWidth { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
-        ColumnLayout {
+        // One panel: the Inspector pages, then the marks card and the button row at the bottom.
+        // The marks card and the buttons have the inset of the Album section cards (the 10 px
+        // page margin plus spaceMd), so every card of the panel has one width.
+        Rectangle {
             anchors.fill: parent
-            spacing: 10
+            radius: root.panelRadius
+            color: root.colBgPanel
+            border.width: 0
+            clip: true
 
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: root.panelRadius
-                color: root.colBgPanel
-                border.width: 0
-                clip: true
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
 
                 InspectorPanel {
                     id: inspectorPanel
-                    anchors.fill: parent
-                    anchors.margins: 10
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.topMargin: 10
+                    Layout.leftMargin: 10
+                    Layout.rightMargin: 10
                     focusedImage: host.focusedImageInspection
                     interactionPolicy: appModules.interactionPolicy
-                    exportQueueState: host.exportQueueState
                     selectionState: host.selectionState
                     selectedCount: host.selectedCount
                     onRatingRequested: function(rating) {
@@ -458,96 +778,40 @@ RowLayout {
                     onContextMenuRequested: function(item, sceneX, sceneY) {
                         host.openImageContextMenu(item, sceneX, sceneY)
                     }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 52
-                spacing: 10
-
-                Button {
-                    id: addSelectedBtn
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 52
-                    text: qsTr("Add to Queue") + " (" + host.selectedCount + ")"
-                    enabled: host.backendInteractive && host.selectedCount > 0
-                    icon.source: "qrc:/panel_icons/queue-add.svg"
-                    icon.width: 16
-                    icon.height: 16
-                    icon.color: root.colText
-                    display: AbstractButton.TextBesideIcon
-                    background: Rectangle {
-                        radius: root.controlRadius
-                        color: root.secondaryButtonFill(
-                            addSelectedBtn.enabled,
-                            addSelectedBtn.hovered,
-                            addSelectedBtn.down)
-                        border.width: 1
-                        border.color: root.colButtonSecondaryBorder
-                    }
-                    Material.foreground: root.colText
-                    scale: addSelectedBtn.hovered && enabled ? 1.03 : 1.0
-                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
-                    onClicked: {
-                        host.exportQueueState.addTargets(host.selectionState.currentSelectedItems())
-                        host.selectionState.clearSelectedImages()
-                    }
+                    onColorLabelSettingsRequested: host.openColorLabelSettings()
                 }
 
-                Button {
-                    id: exportQueueBtn
+                ColumnLayout {
+                    objectName: "libraryInspectorFooter"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 52
-                    visible: inspectorPanel.exportPageActive
-                    text: appModules.importExport.exportInFlight
-                          ? qsTr("Exporting...")
-                          : host.exportQueueCount === 1
-                            ? qsTr("Export 1 File")
-                            : qsTr("Export %1 Files").arg(host.exportQueueCount)
-                    enabled: host.backendInteractive
-                             && !appModules.importExport.exportInFlight
-                             && host.exportQueueCount > 0
-                             && inspectorPanel.exportSettingsValid
-                    icon.source: "qrc:/panel_icons/export.svg"
-                    icon.width: 16
-                    icon.height: 16
-                    icon.color: root.colText
-                    display: AbstractButton.TextBesideIcon
-                    background: Canvas {
-                        opacity: exportQueueBtn.enabled ? 1.0 : 0.5
-                        property color gradStart: root.colAccentPrimary
-                        property color gradEnd: root.colAccentSecondary
-                        onGradStartChanged: requestPaint()
-                        onGradEndChanged: requestPaint()
-                        onWidthChanged: requestPaint()
-                        onHeightChanged: requestPaint()
-                        onPaint: {
-                            var ctx = getContext("2d")
-                            ctx.clearRect(0, 0, width, height)
-                            var r = 8
-                            ctx.beginPath()
-                            ctx.moveTo(r, 0)
-                            ctx.lineTo(width - r, 0)
-                            ctx.quadraticCurveTo(width, 0, width, r)
-                            ctx.lineTo(width, height - r)
-                            ctx.quadraticCurveTo(width, height, width - r, height)
-                            ctx.lineTo(r, height)
-                            ctx.quadraticCurveTo(0, height, 0, height - r)
-                            ctx.lineTo(0, r)
-                            ctx.quadraticCurveTo(0, 0, r, 0)
-                            ctx.closePath()
-                            var grad = ctx.createLinearGradient(0, height, width, 0)
-                            grad.addColorStop(0.0, Qt.rgba(gradStart.r, gradStart.g, gradStart.b, 1.0))
-                            grad.addColorStop(1.0, Qt.rgba(gradEnd.r, gradEnd.g, gradEnd.b, 1.0))
-                            ctx.fillStyle = grad
-                            ctx.fill()
-                        }
+                    Layout.topMargin: appTheme.spaceSm
+                    Layout.leftMargin: 10 + appTheme.spaceMd
+                    Layout.rightMargin: 10 + appTheme.spaceMd
+                    Layout.bottomMargin: 10 + appTheme.spaceMd
+                    spacing: appTheme.spaceSm
+
+                    // Rating, color labels, and Delete mark of the selection (#772).
+                    LibraryMarksControl {
+                        Layout.fillWidth: true
+                        visible: !inspectorPanel.exportPageActive
+                        selectionState: host.selectionState
+                        selectedCount: host.selectedCount
+                        backendInteractive: host.backendInteractive
+                        theme: root
+                        onMessageRequested: function(message) { host.showSnackbar(message) }
+                        onRatingApplied: host.refreshFocusedImageInspection()
                     }
-                    Material.foreground: root.colText
-                    scale: exportQueueBtn.hovered && enabled ? 1.03 : 1.0
-                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
-                    onClicked: inspectorPanel.startExport()
+
+                    LibraryInspectorActions {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: buttonHeight
+                        inspectorPanel: inspectorPanel
+                        selectionState: host.selectionState
+                        selectedCount: host.selectedCount
+                        backendInteractive: host.backendInteractive
+                        exportQueueCount: host.exportQueueCount
+                        theme: root
+                    }
                 }
             }
         }
@@ -559,7 +823,7 @@ RowLayout {
             anchors.bottom: parent.bottom
             width: root.inspectorVisible && root.inspectorAdaptiveMaxWidth > 0 ? 5 : 0
             x: -Math.round(width / 2)
-            color: dragArea.containsMouse || dragArea.drag.active ? root.colAccentPrimary : "transparent"
+            color: dragArea.containsMouse || dragArea.drag.active ? appTheme.textMutedColor : "transparent"
             visible: width > 0
             z: 10
             Behavior on width { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
@@ -596,11 +860,52 @@ RowLayout {
 
 
     Component {
+        id: sectionComp
+        AlbumSectionView {
+            objectName: "libraryAlbumSectionView"
+            zoomLevel: root.gridZoomLevel
+            // Leaving the library (or the grouped view) keeps the photo at the top of the view.
+            Component.onDestruction: {
+                if (host) {
+                    host.librarySectionScrollAnchor = scrollAnchor()
+                }
+            }
+            exportQueueById: host.exportQueueById
+            onZoomChanged: function(level) { root.gridZoomLevel = level }
+            onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
+                host.selectionState.setImageSelected(elementId, imageId, fileName, isHdr, selected)
+            }
+            onReplaceSelection: function(items) {
+                host.selectionState.replaceSelectedImages(items)
+                if (items && items.length > 0) {
+                    const index = appModules.library.thumbnailModel.rowByElementId(
+                        Number(items[0].elementId))
+                    root.focusLibraryItem(items[0], index)
+                } else {
+                    host.setFocusedImage(null)
+                }
+            }
+            onImageFocused: function(item, index) {
+                root.focusLibraryItem(item, index)
+            }
+            onContextMenuRequested: function(item, sceneX, sceneY) {
+                host.openImageContextMenu(item, sceneX, sceneY)
+            }
+            onRatingRequested: function(item, rating) {
+                host.requestSetCardImageRating(item, rating)
+            }
+        }
+    }
+
+    Component {
         id: gridComp
         ThumbnailGridView {
             objectName: "libraryThumbnailGridView"
             zoomLevel: root.gridZoomLevel
+            // Ctrl+wheel: the grid asks for the level, so the zoomLevel binding stays.
+            onZoomLevelRequested: function(level) { root.gridZoomLevel = level }
             zoomAdjusting: zoomSlider.pressed
+            geometryAnimating: root.geometryAnimating
             onZoomLevelChanged: root.gridZoomLevel = zoomLevel
             onContentYChanged: {
                 if (host) {
@@ -611,7 +916,6 @@ RowLayout {
                     }
                 }
             }
-            selectedImagesById: host.selectedImagesById
             exportQueueById: host.exportQueueById
             onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
                 host.selectionState.setImageSelected(elementId, imageId, fileName, isHdr, selected)
@@ -631,6 +935,9 @@ RowLayout {
             }
             onContextMenuRequested: function(item, sceneX, sceneY) {
                 host.openImageContextMenu(item, sceneX, sceneY)
+            }
+            onRatingRequested: function(item, rating) {
+                host.requestSetCardImageRating(item, rating)
             }
         }
     }

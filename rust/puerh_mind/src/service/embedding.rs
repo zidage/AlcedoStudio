@@ -1,6 +1,8 @@
 use anyhow::Result;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use crate::service::encoder_residency::EncoderStatus;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EngineModelInfo {
     pub profile_id: String,
     pub model_id: String,
@@ -17,6 +19,12 @@ pub struct EngineModelInfo {
 }
 
 pub trait EmbeddingEngine: Send + Sync {
+    /// False while the engine has not prepared its model profile yet. Such an engine
+    /// (`LazySemanticEngine`) prepares it in `is_ready`, `unavailable_reason`, and the embed
+    /// methods; the other methods return without preparing it.
+    fn is_prepared(&self) -> bool {
+        true
+    }
     fn is_ready(&self) -> bool {
         true
     }
@@ -34,6 +42,13 @@ pub trait EmbeddingEngine: Send + Sync {
     fn default_text_model_name(&self) -> &str;
     fn default_image_model_name(&self) -> &str;
     fn model_info(&self) -> EngineModelInfo;
+    /// Drops each loaded encoder that is idle for longer than its idle time. Called every
+    /// 5 seconds by the server; blocks while an encoder runs a request.
+    fn unload_idle_encoders(&self) {}
+    /// Residency of each encoder; empty for engines without lazily loaded encoders.
+    fn encoder_status(&self) -> Vec<EncoderStatus> {
+        Vec::new()
+    }
 }
 
 #[allow(dead_code)]
@@ -42,12 +57,29 @@ pub struct UnavailableEmbeddingEngine {
     reason: String,
 }
 
+/// `EngineModelInfo::provider` and reason of the engine of a process started without
+/// `--model-id`.
+pub const NO_SEMANTIC_MODEL_PROVIDER: &str = "no model";
+pub const NO_SEMANTIC_MODEL_REASON: &str =
+    "no semantic model is active for the open project; activate a model in Settings";
+
 impl UnavailableEmbeddingEngine {
     pub fn new(model_info: EngineModelInfo, reason: impl Into<String>) -> Self {
         Self {
             model_info,
             reason: reason.into(),
         }
+    }
+
+    /// The engine of a process started without `--model-id`.
+    pub fn no_model() -> Self {
+        Self::new(
+            EngineModelInfo {
+                provider: NO_SEMANTIC_MODEL_PROVIDER.to_string(),
+                ..EngineModelInfo::default()
+            },
+            NO_SEMANTIC_MODEL_REASON,
+        )
     }
 }
 

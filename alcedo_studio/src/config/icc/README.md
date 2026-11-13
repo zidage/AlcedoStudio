@@ -2,10 +2,13 @@
 
 This directory contains the ICC profiles bundled for export-time embedding on platforms that do not provide the needed profiles natively.
 
+On macOS, export uses a CoreGraphics named color space only when its primaries, white point and transfer curve equal the encoding of the exported pixels. CoreGraphics has no named color space for a pure power curve on Rec.709 or P3-D65 primaries (`kCGColorSpaceITUR_709` carries the BT.709 camera curve, and `kCGColorSpaceSRGB` and `kCGColorSpaceDisplayP3` the sRGB curve), so macOS embeds the bundled `rec709_gamma22.icc`, `rec709_bt1886.icc`, `p3_d65_gamma22.icc`, `p3_d60_gamma26.icc` and `xyz_gamma26.icc` like the other platforms. The macOS editor preview tags its Metal layer with the same profile, so the preview and an exported file decode the pixels with the same curve.
+
 ## Runtime-mapped profiles
 
 - `rec709_bt1886.icc`: generated with LittleCMS 2 as the Alcedo Studio Rec.709 / BT.1886 export profile approximation.
 - `rec709_gamma22.icc`: generated with LittleCMS 2.
+- `srgb_piecewise.icc`: Rec.709 primaries with the IEC 61966-2-1 piecewise sRGB curve (ICC parametric type 3), written by `alcedo_studio/tests/resources/raster/generate_raster_fixtures.py`. Used for the `srgb_piecewise` display EOTF.
 - `p3_d65_gamma22.icc`: generated with LittleCMS 2.
 - `p3_d65_pq.icc`: generated with LittleCMS 2.
 - `p3_d60_gamma26.icc`: generated with LittleCMS 2.

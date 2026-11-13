@@ -1,0 +1,522 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <memory>
+#include <span>
+#include <stdexcept>
+
+#include "edit/geometry/types.hpp"
+#include "edit/mask/ai_mask_recipe.hpp"
+#include "edit/mask/mask_model.hpp"
+#include "edit/runtime/ai_mask_coverage_work.hpp"
+#include "edit/runtime/graph_image_cache.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
+#include "edit/runtime/mask_asset_reader.hpp"
+#include "edit/runtime/mask_coverage_display.hpp"
+#include "edit/runtime/mask_coverage_texture_cache.hpp"
+#include "edit/runtime/node_result_cache.hpp"
+#include "edit/runtime/parameter_arena.hpp"
+#include "edit/runtime/result_persistence.hpp"
+#include "edit/runtime/result_representation.hpp"
+#include "edit/runtime/runtime_invalidation.hpp"
+#include "edit/runtime/runtime_revision.hpp"
+#include "edit/runtime/scene_work_image_pair.hpp"
+#include "edit/runtime/texture_pool.hpp"
+#include "gpu/gpu_device_memory.hpp"
+#include "gpu/transient_buffer_arena.hpp"
+#include "utils/diagnostics/preview_performance_record.hpp"
+
+namespace alcedo {
+
+/**
+ * @brief Per-device GPU workspace: parameters, transients, textures, node values.
+ *
+ * Owned by a render device, not by PipelineDocument or ExecutionPlan. Grows
+ * only when no GPU submission is in flight. One in-flight frame.
+ *
+ * @tparam Backend Resource factory. CUDA is first; other GPU APIs follow.
+ */
+template <class Backend>
+class BasicRenderWorkspace {
+ public:
+  using Buffer         = typename Backend::Buffer;
+  using Texture2D      = typename Backend::Texture2D;
+  using CommandContext = typename Backend::CommandContext;
+
+  BasicRenderWorkspace()
+      : parameters_(backend_), transients_(backend_), textures_(backend_) {}
+
+  BasicRenderWorkspace(const BasicRenderWorkspace&)                                  = delete;
+  auto               operator=(const BasicRenderWorkspace&) -> BasicRenderWorkspace& = delete;
+
+  [[nodiscard]] auto Device() -> Backend& { return backend_; }
+  [[nodiscard]] auto Device() const -> const Backend& { return backend_; }
+
+  [[nodiscard]] auto Parameters() -> ParameterArena<Backend>& { return parameters_; }
+  [[nodiscard]] auto Parameters() const -> const ParameterArena<Backend>& { return parameters_; }
+  [[nodiscard]] auto TransientBuffers() -> TransientBufferArena<Backend>& { return transients_; }
+  [[nodiscard]] auto TransientBuffers() const -> const TransientBufferArena<Backend>& {
+    return transients_;
+  }
+  [[nodiscard]] auto Textures() -> TexturePool<Backend>& { return textures_; }
+  [[nodiscard]] auto Textures() const -> const TexturePool<Backend>& { return textures_; }
+  [[nodiscard]] auto Values() -> NodeResultCache<Backend>& { return values_; }
+  [[nodiscard]] auto Images() -> GraphImageCache<Backend>& { return images_; }
+  [[nodiscard]] auto Images() const -> const GraphImageCache<Backend>& { return images_; }
+  [[nodiscard]] auto SceneWork() -> SceneWorkImagePair<Backend>& { return scene_work_; }
+  [[nodiscard]] auto SceneWork() const -> const SceneWorkImagePair<Backend>& { return scene_work_; }
+  [[nodiscard]] auto ResultInvalidation() -> RuntimeInvalidationState& { return invalidation_; }
+  [[nodiscard]] auto ResultInvalidation() const -> const RuntimeInvalidationState& {
+    return invalidation_;
+  }
+
+  /**
+   * @brief LUT resolver that Color Grade LMT packing and result validity use.
+   *
+   * Injected once by the owning Renderer from its executor's construction; defaults to
+   * the file-path-only DefaultLutResourceResolver. A null argument restores the default.
+   * @pre Not rendering.
+   */
+  void SetLutResources(std::shared_ptr<const LutResourceResolver> resources) {
+    if (rendering_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::SetLutResources: cannot change while rendering");
+    }
+    lut_resources_ = resources ? std::move(resources) : DefaultLutResourceResolver();
+  }
+  [[nodiscard]] auto LutResources() const -> const LutResourceResolver& { return *lut_resources_; }
+
+  /**
+   * @brief Reader that the AI Mask pass uses for stored R8 assets.
+   *
+   * Injected once by the owning Renderer from its executor's construction; defaults to
+   * DefaultMaskAssetReader, which fails each read. A null argument restores the default.
+   * @pre Not rendering.
+   */
+  void               SetMaskAssets(std::shared_ptr<const MaskAssetReader> reader) {
+    if (rendering_ || coverage_work_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::SetMaskAssets: cannot change while rendering");
+    }
+    mask_assets_ = reader ? std::move(reader) : DefaultMaskAssetReader();
+  }
+  [[nodiscard]] auto MaskAssets() const -> const MaskAssetReader& { return *mask_assets_; }
+
+  /// Device coverage textures of AI Masks (SM6 R6, SM8.1, SM8.2). Cleared by
+  /// ReleaseSessionResources.
+  [[nodiscard]] auto MaskCoverage() const -> const MaskCoverageTextureCache<Backend>& {
+    return mask_coverage_;
+  }
+
+  /**
+   * @brief Coverage of the committed AI Mask @p source after its Feather and Expand, read through
+   *        @ref MaskAssets. See MaskCoverageTextureCache::AcquireStored.
+   *
+   * @pre A render (@ref BeginRender) or coverage-only work (@ref BeginCoverageWork) is open; the
+   *      GPU use of the texture belongs to its submission.
+   * @throws std::runtime_error without an open submission, or from the acquisition.
+   */
+  auto AcquireAiMaskCoverage(const AiSegmentationMaskSource& source,
+                             CommandContext& command_context) -> MaskCoverageRead<Backend> {
+    if (!rendering_ && !coverage_work_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::AcquireAiMaskCoverage: no render or coverage work is open");
+    }
+    return mask_coverage_.AcquireStored(source, *mask_assets_, backend_, command_context);
+  }
+
+  /**
+   * @brief Coverage of the AI Mask candidate @p pixels after @p edge. See
+   *        MaskCoverageTextureCache::AcquireCandidate.
+   *
+   * The candidate is presentation input (SM8 C4 and C10): coverage-only work and the display
+   * write of a range probe of the candidate (#604) acquire it; no photo pass reads it.
+   *
+   * @pre A render (@ref BeginRender) or coverage-only work (@ref BeginCoverageWork) is open.
+   * @throws std::runtime_error without an open submission, or from the acquisition. A failure
+   *         keeps the current candidate entries and every photo result.
+   */
+  auto AcquireAiMaskCandidateCoverage(const AiMaskCoveragePixels& pixels, Extent2D analysis_extent,
+                                      const AiMaskEdgeAdjustment& edge,
+                                      CommandContext&             command_context)
+      -> MaskCoverageRead<Backend> {
+    if (!rendering_ && !coverage_work_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::AcquireAiMaskCandidateCoverage: no render or coverage work is "
+          "open");
+    }
+    return mask_coverage_.AcquireCandidate(pixels, analysis_extent, edge, backend_,
+                                           command_context);
+  }
+
+  /// RGBA32F coverage display targets (SM8.5). Cleared by ReleaseSessionResources.
+  [[nodiscard]] auto MaskCoverageDisplay() const -> const MaskCoverageDisplayTargets<Backend>& {
+    return coverage_display_;
+  }
+
+  /**
+   * @brief An RGBA32F coverage display target of @p extent for the open coverage work or render.
+   *        See MaskCoverageDisplayTargets::Acquire.
+   *
+   * Coverage display is presentation output, never a photo result: coverage-only work writes AI
+   * Mask coverage into it, and a render with a MaskCoverageProbe writes the probed Mask R8.
+   *
+   * @pre Coverage-only work (@ref BeginCoverageWork) or a render (@ref BeginRender) is open.
+   * @throws std::runtime_error without an open submission, or when the allocation fails.
+   */
+  auto AcquireMaskCoverageDisplayTarget(Extent2D extent, CommandContext& command_context)
+      -> MaskCoverageDisplayTarget<Backend>& {
+    if (!coverage_work_ && !rendering_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::AcquireMaskCoverageDisplayTarget: no render or coverage work is "
+          "open");
+    }
+    return coverage_display_.Acquire(extent, backend_, command_context.SubmissionId());
+  }
+
+  /**
+   * @brief Persistence used by the current @ref BeginRender until End/Cancel.
+   *
+   * QualityBase sets @ref ResultPersistenceScope::SensorDevelopOnly so Geometry
+   * and downstream writes stay unpublished. Interactive keeps every current result.
+   */
+  void SetResultPersistence(ResultPersistenceScope scope, GraphValueId sensor_linear) {
+    persistence_scope_ = scope;
+    persist_sensor_    = std::move(sensor_linear);
+  }
+  [[nodiscard]] auto ResultPersistence() const -> ResultPersistenceScope {
+    return persistence_scope_;
+  }
+  [[nodiscard]] auto PersistSensorLinear() const -> const GraphValueId& { return persist_sensor_; }
+  [[nodiscard]] auto PersistsResult(const GraphValueId& id) const -> bool {
+    return PersistsGraphValue(persistence_scope_, id, persist_sensor_);
+  }
+
+  /**
+   * @brief Collect dependency revisions once for the current @ref BeginRender.
+   *
+   * PlanExecutor and standalone grade encodes share this so a frame cannot assign
+   * two change versions. The document is read only; changes are found by revision.
+   */
+  void PrepareResultValidity(const ExecutionPlan& plan, const PipelineDocument& document,
+                             const PreparedRawInput& input) {
+    if (validity_prepared_) {
+      return;
+    }
+    invalidation_.CollectAndPropagate(plan, document, input, *lut_resources_);
+    // BeginRender waited for the previous submission. Retire invalid results
+    // even when sensor Develop is a cache hit; matching allocations remain reusable.
+    DropUnusablePublishedImages();
+    textures_.ReleaseUnleasedUnusedSizes();
+    validity_prepared_ = true;
+  }
+  /**
+   * @brief Drop stale published GPU images, then destroy unleased idle textures.
+   *
+   * Call after GPU last-use of the previous submission, before a Develop rewrite
+   * allocates new scratch. Results whose required revision still matches stay so
+   * ordinary downstream edits can skip Develop. Extra TexturePool leases, such as
+   * a still-displayed frame, keep those textures alive.
+   */
+  void ReleaseStalePublishedImagesAndIdleTextures() {
+    DropUnusablePublishedImages();
+    textures_.ReleaseUnleased();
+    develop_rewrite_in_render_ = true;
+  }
+
+  /**
+   * @brief Destroy idle textures left by a successful Develop rewrite once the GPU is idle.
+   *
+   * A Develop rewrite keeps the last-good sensor, develop, and display results
+   * published until its own results publish, so a failed render still has them.
+   * The replaced full-frame textures return to the pool only at that publish and
+   * would otherwise stay allocated until a later Develop rewrite. BeginRender and
+   * the device WaitIdle call this after the previous submission completed.
+   * Renders without a Develop rewrite keep idle textures for reuse. No-op while
+   * rendering, because this-frame scratch is not yet marked submitted.
+   */
+  void ReleaseTexturesReplacedByDevelopRewrite() {
+    if (rendering_ || !develop_rewrite_published_) {
+      return;
+    }
+    textures_.ReleaseUnleased();
+    develop_rewrite_published_ = false;
+  }
+
+  /** @brief Allocate an unpublished write texture for @p id. See GraphImageCache. */
+  auto AcquireImageForWrite(const GraphValueId& id, const TextureRequest& request)
+      -> ResourceLease<Backend>& {
+    return images_.AcquireTextureForWrite(textures_, id, request);
+  }
+
+  /**
+   * @brief Confirm the two scene-work members match @p extent.
+   *
+   * Call at BeginRender after the previous submission has completed. Same extent
+   * keeps the native allocations. Pixel contents stay unpublished and invalid.
+   */
+  void EnsureSceneWorkImages(ImageExtent extent) { scene_work_.Ensure(backend_, extent); }
+
+  /**
+   * @brief Aggregated pool and device totals for one request. Does not print.
+   */
+  [[nodiscard]] auto CaptureResourceSnapshot() const -> diag::PreviewResourceSnapshot {
+    diag::PreviewResourceSnapshot snapshot;
+    snapshot.texture_used_bytes       = textures_.UsedBytes();
+    snapshot.texture_leased_bytes     = textures_.LeasedBytes();
+    snapshot.texture_unleased_bytes   = textures_.UsedBytes() - textures_.LeasedBytes();
+    snapshot.texture_entry_count      = textures_.EntryCount();
+    snapshot.texture_allocation_count = textures_.AllocationCount();
+    snapshot.texture_peak_used_bytes  = textures_.PeakUsedBytes();
+    snapshot.transient_used_bytes     = transients_.used_bytes();
+    snapshot.transient_capacity_bytes = transients_.capacity_bytes();
+    snapshot.published_image_count      = images_.PublishedCount();
+    snapshot.write_image_count          = images_.UnpublishedCount();
+    snapshot.value_bytes                = values_.UsedBytes();
+    snapshot.value_count                = values_.Size();
+    snapshot.scene_work_member_count    = scene_work_.MemberCount();
+    snapshot.scene_work_used_bytes      = scene_work_.CurrentBytes();
+    snapshot.scene_work_peak_used_bytes = scene_work_.PeakBytes();
+    snapshot.scene_work_allocation_count = scene_work_.AllocationCount();
+    GpuDeviceMemorySnapshot device_memory{};
+    if constexpr (requires(const Backend& backend) { backend.QueryDeviceMemory(); }) {
+      device_memory = backend_.QueryDeviceMemory();
+    }
+    snapshot.device_memory_valid = device_memory.valid;
+    if (device_memory.valid) {
+      snapshot.device_free_bytes  = device_memory.free_bytes;
+      snapshot.device_total_bytes = device_memory.total_bytes;
+      snapshot.device_used_bytes =
+          device_memory.total_bytes > device_memory.free_bytes
+              ? device_memory.total_bytes - device_memory.free_bytes
+              : 0;
+    }
+    return snapshot;
+  }
+
+  void DumpGpuPools(const char* reason) const { (void)reason; }
+
+  /**
+   * @brief Share @p source's current texture as an unpublished write of @p dest.
+   *
+   * Does not copy pixels and does not add a TexturePool allocation.
+   */
+  auto AliasImageFrom(const GraphValueId& dest, const GraphValueId& source)
+      -> ResourceLease<Backend>& {
+    return images_.AliasTextureFrom(textures_, dest, source);
+  }
+
+  /**
+   * @brief Return an unpublished image to the pool after its last encoded reader.
+   *
+   * Further reuse must be on the same ordered GPU queue. This drops a lease, not
+   * native memory; the pool keeps this-frame entries alive until GPU completion.
+   * Published results are never released by this operation.
+   */
+  void ReleaseConsumedImage(const GraphValueId& id) { images_.ReleaseWrite(id); }
+
+  [[nodiscard]] auto IsRendering() const -> bool { return rendering_; }
+  [[nodiscard]] auto IsCoverageWorkOpen() const -> bool { return coverage_work_; }
+
+  /**
+   * @brief Wait the previous submission, drop leftover unpublished writes, start a new id.
+   * @throws std::runtime_error if called re-entrantly or while coverage-only work is open.
+   */
+  void BeginRender(CommandContext& command_context) {
+    if (rendering_) {
+      throw std::runtime_error("BasicRenderWorkspace::BeginRender: already rendering");
+    }
+    if (coverage_work_) {
+      throw std::runtime_error("BasicRenderWorkspace::BeginRender: coverage work is open");
+    }
+    backend_.Wait(command_context);
+    mask_coverage_.ReleaseIdle(backend_);
+    images_.DiscardUnpublished();
+    ReleaseTexturesReplacedByDevelopRewrite();
+    develop_rewrite_in_render_ = false;
+    transients_.Reset();
+    textures_.BeginFrame();
+    command_context.SetSubmissionId(backend_.NextSubmissionId());
+    open_submission_   = command_context.SubmissionId();
+    rendering_         = true;
+    validity_prepared_ = false;
+    persistence_scope_ = ResultPersistenceScope::AllCurrentResults;
+    persist_sensor_    = {};
+  }
+
+  /**
+   * @brief Record completion of the current command buffer. Does not wait.
+   */
+  void EndRender(CommandContext& command_context) {
+    if (!rendering_) {
+      throw std::runtime_error("BasicRenderWorkspace::EndRender: not rendering");
+    }
+    textures_.ReleaseUnused();
+    textures_.MarkSubmitted(command_context.SubmissionId());
+    backend_.Submit(command_context);
+    rendering_ = false;
+  }
+
+  /**
+   * @brief Publish recorded writes allowed by the current result persistence.
+   *
+   * QualityBase publishes only `develop:sensor_linear` and the prescan of Negative Scan
+   * (@ref kFilmScanPrescanPort). Other recorded writes
+   * stay until @ref DiscardUnpublished after present/download. Interactive
+   * publishes every recorded write and drops leftover slots.
+   */
+  void PublishImageResults(std::uint64_t submission_id) {
+    images_.PublishSuccessfulSubmission(submission_id, persistence_scope_, persist_sensor_);
+    if (develop_rewrite_in_render_) {
+      develop_rewrite_published_ = true;
+    }
+  }
+
+  /**
+   * @brief Leave a failed encode without submitting. Unpublished writes and the coverage writes
+   *        of the encode are discarded.
+   */
+  void CancelRender() {
+    images_.DiscardUnpublished();
+    mask_coverage_.DiscardWritesOf(open_submission_);
+    rendering_ = false;
+  }
+
+  /**
+   * @brief Start coverage-only GPU work (SM8 C4) on the device submission path.
+   *
+   * Waits for the previous submission, destroys idle replaced coverage textures, and starts a new
+   * submission id. Unlike @ref BeginRender, it does not change photo results, unpublished writes,
+   * parameters, transients, scene work, or the texture pool, and it compiles and executes no
+   * photo DAG. Only the AI Mask coverage acquisitions record work until @ref EndCoverageWork or
+   * @ref CancelCoverageWork.
+   *
+   * @throws std::runtime_error while a render or other coverage work is open.
+   */
+  void BeginCoverageWork(CommandContext& command_context) {
+    if (rendering_ || coverage_work_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::BeginCoverageWork: a render or coverage work is open");
+    }
+    backend_.Wait(command_context);
+    mask_coverage_.ReleaseIdle(backend_);
+    command_context.SetSubmissionId(backend_.NextSubmissionId());
+    open_submission_ = command_context.SubmissionId();
+    coverage_work_   = true;
+  }
+
+  /** @brief Submit the recorded coverage work. Does not wait. */
+  void EndCoverageWork(CommandContext& command_context) {
+    if (!coverage_work_) {
+      throw std::runtime_error("BasicRenderWorkspace::EndCoverageWork: no coverage work is open");
+    }
+    backend_.Submit(command_context);
+    coverage_work_ = false;
+  }
+
+  /**
+   * @brief Leave failed coverage work without submitting. Its coverage writes (uploads and edge
+   *        work) are discarded; earlier coverage reads and every photo result stay valid.
+   */
+  void CancelCoverageWork() {
+    if (!coverage_work_) {
+      return;
+    }
+    mask_coverage_.DiscardWritesOf(open_submission_);
+    coverage_work_ = false;
+  }
+
+  /**
+   * @brief Drop published GPU results, textures, transients, and parameter slots.
+   *
+   * @pre Not rendering. Caller WaitIdle first so no texture is still busy.
+   */
+  void ReleaseSessionResources() {
+    if (rendering_ || coverage_work_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::ReleaseSessionResources: cannot release while rendering");
+    }
+    images_.Clear();
+    values_.Clear();
+    mask_coverage_.Clear();
+    coverage_display_.Clear();
+    invalidation_.Clear();
+    validity_prepared_ = false;
+    scene_work_.Release();
+    textures_.ReleaseUnleased();
+    transients_.ReleaseDeviceMemory();
+    parameters_.Clear();
+    parameter_layout_hash_ = 0;
+  }
+
+  /**
+   * @brief Drop parameter slots when compiled topology identity changes.
+   *
+   * Call after GPU idle (BeginRender waits). Encoders rebind slots from full DTOs.
+   * Same @p topology_hash is a no-op so offsets stay stable across parameter edits.
+   */
+  void AlignParameterLayout(std::uint64_t topology_hash) {
+    if (parameter_layout_hash_ == topology_hash) {
+      return;
+    }
+    parameters_.Clear();
+    parameter_layout_hash_ = topology_hash;
+  }
+
+  /** @brief Topology hash of the last @ref AlignParameterLayout, or 0 before the first align. */
+  [[nodiscard]] auto ParameterLayoutHash() const -> std::uint64_t { return parameter_layout_hash_; }
+
+ private:
+  /**
+   * @brief Drop published images this Interactive frame cannot display.
+   *
+   * Interactive drops results whose representation identity no longer matches
+   * (crop, viewport, decode). A newer required revision alone does not drop
+   * last-good Mix, Union, or Grade: a failed encode must keep the prior published
+   * result until a successful publish replaces it. QualityBase keeps published
+   * Interactive results even when this frame's extent differs.
+   */
+  void DropUnusablePublishedImages() {
+    images_.DropStalePublished([this](const GraphValueId& id, RuntimeRevision revision,
+                                      const ResultRepresentation& published) {
+      (void)revision;
+      if (persistence_scope_ == ResultPersistenceScope::SensorDevelopOnly) {
+        return true;
+      }
+      const auto needed = invalidation_.MakeImageRepresentation(
+          id, published.extent, published.format, published.source_detail);
+      return RepresentationSatisfies(published, needed);
+    });
+  }
+
+  Backend                       backend_{};
+  ParameterArena<Backend>       parameters_;
+  TransientBufferArena<Backend> transients_;
+  TexturePool<Backend>          textures_;
+  NodeResultCache<Backend>       values_{};
+  GraphImageCache<Backend>       images_{};
+  SceneWorkImagePair<Backend>    scene_work_{};
+  RuntimeInvalidationState       invalidation_{};
+  std::shared_ptr<const LutResourceResolver> lut_resources_ = DefaultLutResourceResolver();
+  std::shared_ptr<const MaskAssetReader>     mask_assets_   = DefaultMaskAssetReader();
+  MaskCoverageTextureCache<Backend>          mask_coverage_{};
+  MaskCoverageDisplayTargets<Backend>        coverage_display_{};
+  GraphValueId                   persist_sensor_{};
+  std::uint64_t                  parameter_layout_hash_ = 0;
+  ResultPersistenceScope         persistence_scope_     = ResultPersistenceScope::AllCurrentResults;
+  /// Submission id of the open render or coverage work.
+  std::uint64_t                  open_submission_       = 0;
+  bool                           rendering_             = false;
+  bool                           coverage_work_         = false;
+  bool                           validity_prepared_     = false;
+  bool                           develop_rewrite_in_render_ = false;
+  bool                           develop_rewrite_published_ = false;
+};
+
+}  // namespace alcedo

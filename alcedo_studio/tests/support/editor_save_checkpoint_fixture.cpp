@@ -12,7 +12,6 @@ namespace alcedo::test {
 
 void EditorSaveCheckpointFixture::SetUp() {
   tasks_            = std::make_shared<FakeEditorTaskPort>();
-  journal_          = std::make_shared<FakeEditorJournalPort>();
   checkpoint_store_ = std::make_shared<FakeEditorCheckpointStore>();
   thumbnails_       = std::make_shared<FakeEditorThumbnailPort>();
   history_          = std::make_shared<FakeEditorHistoryPort>();
@@ -20,7 +19,6 @@ void EditorSaveCheckpointFixture::SetUp() {
   command_executor_ = std::make_shared<EditorSessionManualCommandExecutor>();
 
   EditorSaveCheckpointService::Dependencies deps;
-  deps.journal           = journal_;
   deps.checkpoint_store  = checkpoint_store_;
   deps.thumbnails        = thumbnails_;
   deps.tasks             = tasks_;
@@ -45,7 +43,6 @@ void EditorSaveCheckpointFixture::TearDown() {
   history_.reset();
   thumbnails_.reset();
   checkpoint_store_.reset();
-  journal_.reset();
   tasks_.reset();
 }
 
@@ -68,8 +65,6 @@ auto EditorSaveCheckpointFixture::StartCheckpoint(sl_element_id_t         elemen
                                                   SaveCheckpointCompletion completion)
     -> CheckpointTicket {
   tasks_->fail_begin                   = fail_task_start;
-  journal_->async_commit               = true;
-  journal_->fail_commit_start          = fail_journal_commit;
   checkpoint_store_->async_materialize = true;
   // Materialization failure is applied by CompleteDatabaseWrite; start failure is
   // an explicit switch on checkpoint_store_->fail_materialize_start.
@@ -90,17 +85,6 @@ auto EditorSaveCheckpointFixture::StartCheckpoint(sl_element_id_t         elemen
   auto ticket = service_->Start(std::move(request), std::move(completion));
   DrainCompletions();
   return ticket;
-}
-
-void EditorSaveCheckpointFixture::CompleteJournalTruncate(bool durable, std::string error) {
-  if (fail_journal_commit) {
-    durable = false;
-    if (error.empty()) {
-      error = "journal commit failed";
-    }
-  }
-  journal_->CompleteCommit(durable, std::move(error));
-  DrainCompletions();
 }
 
 void EditorSaveCheckpointFixture::CompleteDatabaseWrite(bool materialized, std::string error) {

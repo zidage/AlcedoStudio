@@ -4,136 +4,251 @@
 
 #pragma once
 
-#include <functional>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <span>
 #include <string>
-#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-#include "app/image_pool_service.hpp"
+#include "app/committed_snapshot_cache.hpp"
+#include "app/pipeline_root_state.hpp"
+#include "app/project_mask_asset_reader.hpp"
 #include "decoders/processor/raw_color_context.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
-#include "edit/pipeline/pipeline.hpp"
+#include "edit/mask/mask_asset.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
-#include "json.hpp"
-#include "renderer/pipeline_scheduler.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
+#include "edit/runtime/mask_asset_reader.hpp"
 #include "sleeve/storage.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
-#include "utils/cache/lru_cache.hpp"
 
 namespace alcedo {
 
-/// Live editor handle: one pipeline executor (parameter table + run state) plus a
-/// pointer to the image's CommitGraph.
-///
-/// Binding identity model (see commit_types.hpp and the single-live-pipeline roadmap
-/// "Final locked identity model"):
-/// - pipeline_ is only the parameter table / executor. It does not own HEAD.
-/// - commit_graph_ is the sole owner of Version tips (working head).
-/// - working_head_commit_hash() / transaction_chain_hash() are convenience reads of
-///   the active Version tip and its first-parent chain fold. They are not independent
-///   caches; never write a parallel head field onto this guard.
-/// - On commit (including merge), history advances head once and folds chain hash once.
-///   Applying that commit to the table may call SetOperator many times; those calls are
-///   not separate chain-hash steps.
-/// - Serialized checkpoint identity is (head, chain, params). Load compares that label
-///   to the history tip; match skips first-parent replay.
-struct PipelineGuard {
-  std::shared_ptr<CPUPipelineExecutor> pipeline_;
-  sl_element_id_t                      id_;
-  bool                                 dirty_     = false;
-  /// Cache pin only: LoadPipeline / SavePipeline refcount so LRU eviction and
-  /// "unpinned → re-init stages" do not drop a live editor/export guard.
-  /// Live-pipeline *mutation* ownership is CPUPipelineExecutor::render_lock_
-  /// (held for the full render task including present); pin_count_ is not that.
-  bool                                 pinned_    = false;
-  size_t                               pin_count_ = 0;
-
-  /// Immutable root id for this image's edit graph (history identity, not a tip).
-  root_id_t                            root_id_{};
-  bool                                 serialized_state_needs_writeback_ = false;
-
-  /// Sole live CommitGraph for this element. Active Version head is the only logical
-  /// working head. Advances: MoveWorkingHead / SetActiveVersionId / PublishPrepared*.
-  std::shared_ptr<CommitGraph>         commit_graph_;
-
-  /// Active Version tip on commit_graph_ (history-owned). Empty graph → nullopt.
-  [[nodiscard]] auto working_head_commit_hash() const -> head_commit_hash_t {
-    if (!commit_graph_) {
-      return std::nullopt;
-    }
-    return commit_graph_->GetActiveVersionRef().head_commit_hash;
-  }
-
-  /// First-parent chain fold for the active tip. Same algorithm history uses when
-  /// recording commits; used as the checkpoint label next to exported params.
-  [[nodiscard]] auto transaction_chain_hash() const -> transaction_chain_hash_t {
-    if (!commit_graph_) {
-      return {};
-    }
-    return commit_graph_->ChainHashForHead(working_head_commit_hash());
-  }
+/**
+ * @brief Materialized history of one image, read from storage for a history user other than the
+ *        editor (the Copy source and the Paste targets in the library).
+ *
+ * Why a copy: the Copy dialog reads the graph after the call returns while other writers may
+ * change storage, and a Paste target edits its own graph and persists it only when the whole
+ * paste succeeded. Captured: the CommitGraph at its materialized state and the decoded immutable
+ * root with the image DNG profile bound. Both are immutable; a Paste copies graph_ into a private
+ * CommitGraph before it edits. Released with the last reference; nothing is written back except
+ * through @ref PipelineMgmtService::PersistHistory, which checks graph_ against storage first.
+ */
+/**
+ * @brief Rows of the history root of one newly imported image and its element pipeline JSON.
+ *
+ * Produced by PipelineMgmtService::EncodeImageRoot without the database lock so import workers
+ * encode in parallel; PipelineMgmtService::WriteImageRoots writes many of them in one
+ * transaction. The image has no stored root yet, so this value duplicates no stored state.
+ */
+struct EncodedImageRoot {
+  EncodedRootPipeline root;
+  /// PipelineDocument::ToJson of the bound document, kept for older application versions.
+  std::string         element_pipeline_json;
 };
 
-// Phase 3: a read-only clone of a pipeline's params captured into an independent
-// executor, used for background analysis rendering. The snapshot never pins the
-// live PipelineGuard, never writes storage, and never clears the live guard's
-// dirty state. Rendering on `executor_` does not affect the live pipeline.
-struct PipelineSnapshot {
-  sl_element_id_t                      element_id_ = 0;
-  image_id_t                           image_id_   = 0;
-  nlohmann::json                       pipeline_params_;
-  std::shared_ptr<CPUPipelineExecutor> executor_;
+struct ImageHistorySnapshot {
+  std::shared_ptr<const CommitGraph>     graph_;
+  std::shared_ptr<const LoadedRootState> root_;
 };
 
+/**
+ * @brief History of one image that the editor session takes over with its lease.
+ *
+ * Returned by @ref PipelineMgmtService::AcquireEditorLease. Not a copy of shared state: the
+ * session becomes the only owner of the image's history and working document until it releases
+ * the lease, and no other module loads or changes them in that time.
+ * - graph_: the materialized CommitGraph; the session appends its commits to it.
+ * - root_: the decoded immutable root with the image DNG profile bound; the start of every replay.
+ * - document_: the document of the active Version head, from the matching checkpoint or from a
+ *   replay of the root; the session's working document.
+ */
+struct EditorHistoryLease {
+  CommitGraph                            graph_;
+  std::shared_ptr<const LoadedRootState> root_;
+  std::shared_ptr<PipelineDocument>      document_;
+};
+
+/**
+ * @brief Owner of the edit documents and histories of the images in a project.
+ *
+ * Loads, replays, and persists histories and documents; hands out immutable committed snapshots
+ * and receives the ones the editor publishes; keeps the single-writer lease of the image open in
+ * the editor; creates history roots; deletes and collects history. Holds no executor and no GPU
+ * state: renderers own their executors and receive snapshots from this service.
+ *
+ * Internal state: the committed snapshot cache (CPU values only) and the editor lease table.
+ */
 class PipelineMgmtService final {
  private:
-  std::shared_ptr<Storage>                                     storage_;
+  std::shared_ptr<Storage>            storage_;
 
-  LRUCache<sl_element_id_t, sl_element_id_t>                          pipeline_cache_;
+  /// Guards editor_leases_ and editor_pipeline_history_rebuild_count_.
+  std::mutex                          lock_;
 
-  std::unordered_map<sl_element_id_t, std::shared_ptr<PipelineGuard>> loaded_pipelines_;
+  /// Fixed for the life of the service; a backend change constructs a new service with the
+  /// project. Owners read it when they construct their executors.
+  const AcceleratorBackendPreference  accelerator_preference_;
 
-  std::mutex                                                          lock_;
+  /// Resolver for Color Grade LUT references, fixed for the life of the service. Owners pass it
+  /// to the executors they construct, like the accelerator preference.
+  const std::shared_ptr<const LutResourceResolver> lut_resources_;
 
-  static constexpr size_t                                             default_cache_capacity_ = 16;
+  /// Reader of the Mask assets of this project, fixed for the life of the service. ReadMaskAsset
+  /// and the executors of this project read through it.
+  const std::shared_ptr<const MaskAssetReader>     mask_assets_;
 
-  AcceleratorBackendPreference accelerator_preference_ = AcceleratorBackendPreference::Auto;
+  std::uint64_t                       editor_pipeline_history_rebuild_count_ = 0;
 
-  std::uint64_t editor_pipeline_history_rebuild_count_ = 0;
+  CommittedSnapshotCache              committed_snapshots_;
 
-  void                         HandleEviction(sl_element_id_t evicted_id);
+  /// Images whose history the editor session holds (AcquireEditorLease .. ReleaseEditorLease).
+  /// The single-writer lease table, guarded by lock_. It carries no executor and no document.
+  std::unordered_set<sl_element_id_t> editor_leases_;
+
+  /// True while the editor session holds the lease of @p id.
+  [[nodiscard]] auto                  EditorHoldsImage(sl_element_id_t id) -> bool;
+
+  /// Write the document of @p snapshot as the element pipeline JSON, kept for older versions of
+  /// the application (plan decision 3). The history in storage stays the source of truth.
+  void WriteElementPipelineJson(const PipelineGraphSnapshot& snapshot);
 
  public:
   PipelineMgmtService() = delete;
-  explicit PipelineMgmtService(std::shared_ptr<Storage> storage_service)
+  /**
+   * @param storage_service Project storage; shared with the other project services.
+   * @param accelerator_preference Backend that the executors of this project use.
+   * @param lut_resources LUT resolver that the executors of this project use (the application
+   *        LUT library); null selects the file-path-only DefaultLutResourceResolver.
+   */
+  explicit PipelineMgmtService(
+      std::shared_ptr<Storage>     storage_service,
+      AcceleratorBackendPreference accelerator_preference      = AcceleratorBackendPreference::Auto,
+      std::shared_ptr<const LutResourceResolver> lut_resources = nullptr)
       : storage_(storage_service),
-        pipeline_cache_(default_cache_capacity_),
-        loaded_pipelines_() {}
+        accelerator_preference_(accelerator_preference),
+        lut_resources_(lut_resources ? std::move(lut_resources) : DefaultLutResourceResolver()),
+        mask_assets_(std::make_shared<const ProjectMaskAssetReader>(storage_service)),
+        committed_snapshots_(storage_service) {}
 
-  void               SavePipeline(std::shared_ptr<PipelineGuard> pipeline);
+  /**
+   * @brief Committed pipeline graph snapshot of @p id, for renders that must not see
+   *        uncommitted editor values (thumbnails, analysis, export).
+   *
+   * For the image the editor holds, returns the snapshot the editor published last
+   * (@ref PublishCommitted); when it has published none yet, the stored state. For every other
+   * image, builds the snapshot from the materialized history in storage, or reuses the cached one
+   * while its head and chain still equal the stored labels. Never takes a render lock and never
+   * reads the element pipeline JSON.
+   *
+   * Thread: any thread; storage reads run on the calling thread, so call it off the UI thread.
+   * @throws std::runtime_error when the image has no history root or its history cannot be built.
+   */
+  [[nodiscard]] auto AcquireCommittedSnapshot(sl_element_id_t id)
+      -> std::shared_ptr<const PipelineGraphSnapshot>;
 
-  /// Persist the current editor graph and serialized pipeline state while the
-  /// caller keeps its editor guard pinned. `expected_materialized_state` is
-  /// the state observed before the in-memory history mutation and prevents a
-  /// concurrent writer from being overwritten.
-  auto PersistEditorHistoryState(const std::shared_ptr<PipelineGuard>& pipeline,
-                                 const ImageEditState&                 expected_materialized_state,
-                                 std::string* error = nullptr) -> bool;
+  /**
+   * @brief Publish the editor's snapshot of a committed state of the image it holds.
+   *
+   * Called by the editor history after each change of its committed state. Later
+   * @ref AcquireCommittedSnapshot calls for that image return it until the next publication or
+   * until the editor releases the image.
+   * @throws std::invalid_argument when @p snapshot is null or not committed.
+   */
+  void               PublishCommitted(std::shared_ptr<const PipelineGraphSnapshot> snapshot);
 
-  auto               LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+  /**
+   * @brief Read the materialized history and the immutable root of @p id from storage.
+   *
+   * For history users other than the editor: the Copy source and the Paste targets in the
+   * library. Constructs no executor and changes no state.
+   *
+   * Thread: any thread; storage reads run on the calling thread.
+   * @throws std::runtime_error when the editor session holds @p id (its history may have commits
+   *         that storage does not have yet; read it through the session), when the image has no
+   *         history root, or when the stored history or root cannot be decoded or disagrees with
+   *         the active Version.
+   */
+  [[nodiscard]] auto LoadHistorySnapshot(sl_element_id_t id) -> ImageHistorySnapshot;
 
-  /// Load editor params for `id` using history tip as authority.
-  /// If checkpoint (params + head/chain label) matches active Version tip, import params
-  /// (skip first-parent replay). Otherwise rebuild from root + first-parent chain and mark
-  /// write-back. Thumbnail/export must use LoadPipeline (no editor history validation).
-  auto               LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+  /**
+   * @brief Persist @p graph, an edited copy of @p base, as the history of its image in one
+   *        storage transaction, and publish its committed snapshot.
+   *
+   * Replays the document of the active Version of @p graph from the root of @p base, then writes
+   * the new commits, the Version refs, the image edit state, and the checkpoint of that document
+   * together. The returned snapshot is also stored in the committed snapshot cache, so the next
+   * thumbnail or export of the image renders it without a replay. Constructs no executor. The
+   * element pipeline JSON is not written.
+   *
+   * Thread: any thread; storage writes run on the calling thread.
+   * @pre @p base came from @ref LoadHistorySnapshot for the same image as @p graph.
+   * @throws std::runtime_error when the editor session holds the image, when @p graph belongs to
+   *         another image or root, when replay fails, or when the stored history no longer equals
+   *         the materialized state of @p base (another writer changed it). Storage is unchanged
+   *         on every failure.
+   */
+  auto               PersistHistory(const ImageHistorySnapshot& base, const CommitGraph& graph)
+      -> std::shared_ptr<const PipelineGraphSnapshot>;
 
-  /// Test/instrumentation counter: increments each time LoadEditorPipeline rebuilds from
-  /// first-parent history instead of importing the serialized checkpoint.
+  /// Test/instrumentation: committed snapshots built from storage since construction.
+  [[nodiscard]] auto CommittedSnapshotStorageLoadCount() const -> std::size_t {
+    return committed_snapshots_.StorageLoadCount();
+  }
+
+  /**
+   * @brief Take the single-writer lease of @p id for the editor session and read its history.
+   *
+   * Reads the materialized history and the immutable root, then builds the document of the
+   * active Version head: from the stored checkpoint when its root, head, and chain labels equal
+   * the history tip, otherwise by replay from the root. While the lease is held, thumbnails,
+   * analysis, and export read the snapshots the editor publishes (@ref PublishCommitted), and
+   * @ref LoadHistorySnapshot and @ref PersistHistory refuse the image. Constructs no executor.
+   *
+   * Thread: any thread; storage reads run on the calling thread.
+   * @throws std::runtime_error when the lease is already held, when the image has no history root
+   *         (every imported image has one), or when its history or root cannot be decoded or
+   *         replayed. The lease is not taken on failure.
+   */
+  [[nodiscard]] auto AcquireEditorLease(sl_element_id_t id) -> EditorHistoryLease;
+
+  /**
+   * @brief End the editor lease of @p id.
+   *
+   * The last committed snapshot the editor published becomes an ordinary cache entry that is
+   * checked against storage. The document of the materialized history state is written as the
+   * element pipeline JSON: commits that only the editor journal recorded (a Close with Discard)
+   * never reach it. No effect when the lease is not held.
+   */
+  void               ReleaseEditorLease(sl_element_id_t id);
+
+  /**
+   * @brief Persist the editor's @p graph and the checkpoint of @p document in one transaction.
+   *
+   * @p document must be the document of the active Version head of @p graph; the checkpoint is
+   * labelled with that head and its chain. Writes only when storage still holds
+   * @p expected_materialized_state, so a concurrent writer is never overwritten. On success the
+   * materialized state of @p graph is advanced to what was written.
+   *
+   * Thread: the editor session owner thread (the only writer of @p graph).
+   * @return false with @p error set when the lease is not held, the graph belongs to another
+   *         image, the stored state changed, or the write failed. Storage and @p graph are
+   *         unchanged on failure.
+   */
+  auto PersistEditorHistory(CommitGraph& graph, const ImageEditState& expected_materialized_state,
+                            const PipelineDocument& document, std::string* error = nullptr) -> bool;
+
+  /// Test/instrumentation counter: increments each time AcquireEditorLease rebuilds the document
+  /// from first-parent history instead of importing the serialized checkpoint.
   [[nodiscard]] auto EditorPipelineHistoryRebuildCount() const -> std::uint64_t {
     return editor_pipeline_history_rebuild_count_;
   }
@@ -141,78 +256,96 @@ class PipelineMgmtService final {
     editor_pipeline_history_rebuild_count_ = 0;
   }
 
-  /// Persist the current metadata-resolved pipeline as the immutable root for a newly imported
-  /// image. Calling this again for an image that already has a root verifies and loads that root;
-  /// it never replaces the stored root state.
-  void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
-                                         const RawRuntimeColorContext*         raw_color_context = nullptr);
+  /**
+   * @brief Create the immutable history root of a newly imported image from @p document.
+   *
+   * Binds the camera profile onto the caller's private document: the source DNG profile, then
+   * the RAW color context, or the Rec.709 working-space profile when @p raw_color_context is null
+   * (non-RAW RGB files). Then writes the root state, the default Version, and the image edit state
+   * in one storage transaction, and writes the document as the element pipeline JSON (kept for
+   * older versions of the application). Constructs no executor.
+   *
+   * @throws std::runtime_error when the document is not a valid product graph or the image
+   *         already has a root (the stored root is never replaced). The element pipeline JSON is
+   *         written only after the root.
+   */
+  void               InitializeImageRoot(sl_element_id_t id, PipelineDocument document,
+                                         const RawRuntimeColorContext* raw_color_context);
 
-  /// Switch the live editor parameter table to another Version on the same image.
-  ///
-  /// Preconditions: `pipeline` is a loaded editor guard with a commit graph. The caller has already
-  /// completed a save checkpoint so the working journal is empty for this image.
-  ///
-  /// Behavior: sets the active Version on the CommitGraph (history-owned head moves here), then
-  /// rebuilds the executor params from the immutable root plus the first-parent chain under the
-  /// render lock (or imports a matching checkpoint if present). On any failure the prior Version
-  /// remains active and the prior pipeline is restored — never publishes a partially reconstructed
-  /// pipeline. Does not invent a second head on the guard.
-  ///
-  /// @return true when the Version tip and pipeline params both match the checked-out head.
-  auto CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
-                       const version_ref_id_t& version_id, std::string* error = nullptr) -> bool;
+  /**
+   * @brief Bind and validate @p document like InitializeImageRoot and encode its rows; writes
+   *        nothing. Safe to call from several threads at once.
+   * @throws std::runtime_error when the document is not a valid product graph.
+   */
+  auto               EncodeImageRoot(sl_element_id_t id, PipelineDocument document,
+                                     const RawRuntimeColorContext* raw_color_context) const -> EncodedImageRoot;
 
-  /// Rebuild the executor params from the immutable root and the first-parent chain of the
-  /// currently active Version tip. Used when the checkpoint label does not match history.
-  auto RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
-                                   std::string* error = nullptr) -> bool;
+  /**
+   * @brief Write the roots, default Versions, image edit states and element pipeline JSON of
+   *        @p roots in one storage transaction.
+   * @throws std::runtime_error when any image already has a root or a write fails; then nothing
+   *         of @p roots is written.
+   */
+  void               WriteImageRoots(std::vector<EncodedImageRoot> roots);
 
-  /// Clean project-exit garbage collection: mark from every Version head through both parents and
-  /// delete unreachable EditCommit rows. Must run only after the final successful save; abnormal
-  /// shutdown must not call this.
+  /// Clean project-exit garbage collection: mark from every Version head through first-parent
+  /// reachability and delete unreachable EditCommit rows. Must run only after the final
+  /// successful save; abnormal shutdown must not call this.
   /// @return number of deleted commit rows.
-  auto CollectUnreachableEditCommits() -> std::size_t;
+  auto               CollectUnreachableEditCommits() -> std::size_t;
+
+  /**
+   * @brief Store the R8 asset of an AI Segmentation Mask in the project database.
+   *
+   * Takes the database connection lock for the call. The insert commits its own transaction, so
+   * a later history publish never refers to a missing row. A stored key is not written again.
+   *
+   * @throws std::runtime_error when the asset is invalid, its key does not match its pixels, or
+   *         the write fails; then no row changes.
+   */
+  void               PutMaskAsset(const MaskAsset& asset);
+
+  /**
+   * @brief Read and verify the R8 asset of @p key.
+   * @throws std::runtime_error "Mask asset <key> is missing from the project" or "Mask asset
+   *         <key> is corrupt: <reason>".
+   */
+  [[nodiscard]] auto ReadMaskAsset(const MaskAssetKey& key) -> MaskAsset;
+
+  /**
+   * @brief Clean-close cleanup: delete every Mask asset that no stored history refers to.
+   *
+   * Marks the asset keys of every EditCommit payload, ImageEditState and PipelineRoot pipeline
+   * state, and every record of each `*.mini-git.wal` journal in @p journal_directory, then deletes
+   * the other rows in one transaction. Mark and delete hold one database connection lock. Run it
+   * after CollectUnreachableEditCommits, so the assets of deleted commits are also deleted.
+   *
+   * @param journal_directory Editor journal directory; a missing directory has no journals.
+   * @return Number of deleted asset rows.
+   * @throws std::runtime_error when a query, a journal read, or the delete fails; then no row is
+   *         deleted.
+   */
+  auto CollectUnreferencedMaskAssets(const std::filesystem::path& journal_directory) -> std::size_t;
 
   void               DeletePipeline(sl_element_id_t id);
   void               DeletePipelines(std::span<const sl_element_id_t> ids);
 
-  void               SetAcceleratorBackendPreference(AcceleratorBackendPreference preference);
+  /// Mask asset reader for the executors of this project; never null.
+  [[nodiscard]] auto MaskAssets() const -> const std::shared_ptr<const MaskAssetReader>& {
+    return mask_assets_;
+  }
+
+  /// LUT resolver for the executors of this project; never null.
+  [[nodiscard]] auto LutResources() const -> const std::shared_ptr<const LutResourceResolver>& {
+    return lut_resources_;
+  }
   [[nodiscard]] auto GetAcceleratorBackendPreference() const -> AcceleratorBackendPreference {
     return accelerator_preference_;
   }
 
+  /// Write the element pipeline JSON of every image the editor holds and published, from its
+  /// materialized history state.
   void Sync();
-
-  /// Persist only the requested live pipeline. This avoids saving unrelated dirty editor state.
-  void SyncPipeline(sl_element_id_t id);
-
-  // Phase 3: capture a read-only snapshot of the current pipeline state without
-  // pinning the live guard, forcing it to disk, or touching dirty state. The
-  // returned executor is an independent clone; rendering on it does not affect the
-  // live pipeline. May briefly block on the live executor's render lock
-  // (serializes with an in-flight editor render on the same executor). Returns
-  // nullptr and writes *error on failure.
-  auto LoadPipelineSnapshot(sl_element_id_t id, image_id_t image_id, std::string* error)
-      -> std::shared_ptr<PipelineSnapshot>;
-
-  // Release the snapshot executor's intermediate buffers (mirrors SavePipeline's
-  // last-pin cleanup). Safe to call from the snapshot's task callback; the
-  // shared_ptr then drops naturally. Not a storage write. No-op if null.
-  void ReleasePipelineSnapshot(std::shared_ptr<PipelineSnapshot> snapshot);
 };
-
-/// Checkpoint label: which history tip the serialized params claim to match.
-/// Not a pipeline-owned head — only a tag stored next to the parameter table blob.
-struct PipelineCheckpointIdentity {
-  head_commit_hash_t       head  = std::nullopt;
-  transaction_chain_hash_t chain{};
-};
-
-/// True when the checkpoint label on `state` matches the history tip after WAL attach.
-/// Match ⇒ safe to import params without first-parent SetOperator replay.
-[[nodiscard]] auto CheckpointMatchesLogicalHead(const ImageEditState& state,
-                                                head_commit_hash_t logical_head,
-                                                const transaction_chain_hash_t& logical_chain)
-    -> bool;
 
 }  // namespace alcedo

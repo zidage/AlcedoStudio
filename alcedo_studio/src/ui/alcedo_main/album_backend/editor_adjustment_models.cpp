@@ -7,24 +7,78 @@
 #include <QtQml/qqml.h>
 
 #include <QJSValue>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <json.hpp>
 
+#include "app/editor_parameter_catalog.hpp"
+#include "app/editor_parameter_write.hpp"
+#include "ui/alcedo_main/album_backend/editor_camera_profile_list_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_geometry_math.hpp"
+#include "ui/alcedo_main/album_backend/editor_grade_white_balance_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
-#include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_lut_adjustment_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_lut_encoding_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_parameter_catalog_adapter.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
+#include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
+#include "ui/alcedo_main/album_backend/lut_library_model.hpp"
+#include "ui/alcedo_main/album_backend/lut_preview_controller.hpp"
 
 namespace alcedo::ui {
+
+namespace {
+
+/// nlohmann JSON form of a QML value: numbers, booleans, strings, objects, and arrays.
+auto ToNlohmannJson(const QJsonValue& value) -> nlohmann::json {
+  if (value.isBool()) {
+    return value.toBool();
+  }
+  if (value.isDouble()) {
+    return value.toDouble();
+  }
+  if (value.isString()) {
+    return value.toString().toStdString();
+  }
+  if (value.isObject()) {
+    nlohmann::json object = nlohmann::json::object();
+    const QJsonObject source = value.toObject();
+    for (auto it = source.begin(); it != source.end(); ++it) {
+      object[it.key().toStdString()] = ToNlohmannJson(it.value());
+    }
+    return object;
+  }
+  if (value.isArray()) {
+    nlohmann::json array = nlohmann::json::array();
+    for (const QJsonValue& item : value.toArray()) {
+      array.push_back(ToNlohmannJson(item));
+    }
+    return array;
+  }
+  return nullptr;
+}
+
+auto CatalogScalarEntry(const QString& field_key) -> const alcedo::EditorParameterCatalogEntry* {
+  const auto* entry = alcedo::EditorParameterCatalog::Find(field_key.toStdString());
+  if (entry == nullptr || entry->kind != alcedo::EditorParameterValueKind::Scalar) {
+    return nullptr;
+  }
+  return entry;
+}
+
+}  // namespace
 
 // ── EditorAdjustmentModelBase ───────────────────────────────────────────────
 
@@ -98,11 +152,34 @@ auto EditorAdjustmentModelBase::resolveParams(const QJSValue& arg, const QString
   return defaultJson;
 }
 
-auto EditorAdjustmentModelBase::submitNow(const QString& paramsJson, bool settled) -> bool {
+auto EditorAdjustmentModelBase::submitNow(alcedo::EditorParameterWrite write, bool settled)
+    -> bool {
   if (submitter_ == nullptr || !submitter_->canEdit()) {
     return false;
   }
-  return submitter_->submitPatch(fieldKey_, paramsJson, settled);
+  if (!submitter_->submitWrite(fieldKey_, std::move(write), settled)) return false;
+  if (settled) {
+    onSettledWriteAccepted();
+    emit settledWriteAccepted();
+  }
+  return true;
+}
+
+auto EditorAdjustmentModelBase::submitJsonBoundary(const QString& paramsJson, bool settled)
+    -> bool {
+  nlohmann::json parsed;
+  try {
+    parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                  : nlohmann::json::parse(paramsJson.toStdString());
+  } catch (const std::exception&) {
+    return false;
+  }
+  std::string error;
+  auto        write = alcedo::ParseEditorParameterWrite(fieldKey_.toStdString(), parsed, &error);
+  if (!write.has_value()) {
+    return false;
+  }
+  return submitNow(std::move(*write), settled);
 }
 
 // ── EditorAdjustmentValueModel ───────────────────────────────────────────────
@@ -113,6 +190,8 @@ EditorAdjustmentValueModel::EditorAdjustmentValueModel(QObject* parent)
   debounceTimer_->setSingleShot(true);
   debounceTimer_->setInterval(debounceIntervalMs_);
   connect(debounceTimer_, &QTimer::timeout, this, &EditorAdjustmentValueModel::onDebounceTimeout);
+  connect(this, &EditorAdjustmentModelBase::fieldKeyChanged, this,
+          &EditorAdjustmentValueModel::applyCatalogEntry);
 }
 
 void EditorAdjustmentValueModel::setValue(double v) { applyValue(v); }
@@ -131,7 +210,7 @@ void EditorAdjustmentValueModel::setMinimum(double v) {
   }
   minimum_ = v;
   emit minimumChanged();
-  applyValue(value_);
+  applyCompleteRange();
 }
 
 void EditorAdjustmentValueModel::setMaximum(double v) {
@@ -140,7 +219,7 @@ void EditorAdjustmentValueModel::setMaximum(double v) {
   }
   maximum_ = v;
   emit maximumChanged();
-  applyValue(value_);
+  applyCompleteRange();
 }
 
 void EditorAdjustmentValueModel::setStep(double v) {
@@ -254,11 +333,57 @@ void EditorAdjustmentValueModel::setDebounceIntervalMs(int ms) {
   debounceTimer_->setInterval(ms);
 }
 
+void EditorAdjustmentValueModel::loadFromSnapshot(const QVariantMap& snapshot) {
+  if (dragActive_) {
+    return;
+  }
+  const auto* entry = CatalogScalarEntry(fieldKey());
+  const auto  found = snapshot.constFind(fieldKey());
+  if (entry == nullptr || found == snapshot.constEnd()) {
+    return;
+  }
+  const auto ui_value = alcedo::EditorParameterCatalog::ToUiValue(
+      entry->field, ToNlohmannJson(QJsonValue::fromVariant(found.value())), nullptr);
+  if (!ui_value.has_value()) {
+    return;
+  }
+  const double value = ui_value->get<double>();
+  if (std::abs(value_ - value) > step_ * 0.1) {
+    setValue(value);
+  }
+}
+
+void EditorAdjustmentValueModel::applyCatalogEntry() {
+  const auto* entry = CatalogScalarEntry(fieldKey());
+  if (entry == nullptr) {
+    return;
+  }
+  // Keep minimum <= maximum at each step: applyValue clamps between them.
+  if (entry->range.minimum > maximum_) {
+    setMaximum(entry->range.maximum);
+    setMinimum(entry->range.minimum);
+  } else {
+    setMinimum(entry->range.minimum);
+    setMaximum(entry->range.maximum);
+  }
+  setDefaultValue(entry->range.default_value);
+  setStep(entry->range.step);
+  setPrecision(entry->range.decimals);
+}
+
 auto EditorAdjustmentValueModel::clamp(double v) const -> double {
   if (!std::isfinite(v)) {
     return value_;
   }
   return std::clamp(v, minimum_, maximum_);
+}
+
+void EditorAdjustmentValueModel::applyCompleteRange() {
+  // QML bindings set the bounds in any order: [100, 1000] can arrive as minimum 100 while the
+  // maximum is still the construction value 1. The value is clamped when the range is complete.
+  if (minimum_ <= maximum_) {
+    applyValue(value_);
+  }
 }
 
 auto EditorAdjustmentValueModel::applyValue(double v) -> bool {
@@ -277,12 +402,30 @@ auto EditorAdjustmentValueModel::applyValue(double v) -> bool {
   return true;
 }
 
+auto EditorAdjustmentValueModel::valueWrite(double v) const -> alcedo::EditorParameterWrite {
+  const auto*  entry = CatalogScalarEntry(fieldKey());
+  const double model = entry != nullptr ? alcedo::EditorParameterCatalog::ScalarUiToModel(*entry, v)
+                                        : v;
+  if (fieldKey() == QLatin1String("sharpen")) {
+    return alcedo::SharpenUpdate{static_cast<float>(model), std::nullopt, std::nullopt};
+  }
+  return alcedo::EditorScalarWrite{static_cast<float>(model)};
+}
+
 void EditorAdjustmentValueModel::submitInteractive(double v) {
-  submitNow(resolveParams(QJSValue(v), numericParamsJson(v)), false);
+  if (paramsBuilder().isCallable()) {
+    submitJsonBoundary(resolveParams(QJSValue(v), numericParamsJson(v)), false);
+    return;
+  }
+  submitNow(valueWrite(v), false);
 }
 
 void EditorAdjustmentValueModel::submitSettled(double v) {
-  submitNow(resolveParams(QJSValue(v), numericParamsJson(v)), true);
+  if (paramsBuilder().isCallable()) {
+    submitJsonBoundary(resolveParams(QJSValue(v), numericParamsJson(v)), true);
+    return;
+  }
+  submitNow(valueWrite(v), true);
 }
 
 void EditorAdjustmentValueModel::onDebounceTimeout() {
@@ -342,8 +485,21 @@ void EditorAdjustmentEnumModel::selectIndex(int i) {
   }
   currentIndex_ = i;
   emit currentIndexChanged();
-  submitNow(resolveParams(QJSValue(currentValue()), enumParamsJson(currentIndex_, currentValue())),
-            true);
+  submitSelection();
+}
+
+auto EditorAdjustmentEnumModel::submitSelection() -> bool {
+  if (paramsBuilder().isCallable()) {
+    return submitJsonBoundary(
+        resolveParams(QJSValue(currentValue()), enumParamsJson(currentIndex_, currentValue())),
+        true);
+  }
+  return submitNow(selectionWrite(currentValue()), true);
+}
+
+auto EditorAdjustmentEnumModel::selectionWrite(const QString& value) const
+    -> alcedo::EditorParameterWrite {
+  return alcedo::EditorEnumWrite{value.toStdString()};
 }
 
 void EditorAdjustmentEnumModel::reset() {
@@ -353,8 +509,7 @@ void EditorAdjustmentEnumModel::reset() {
   }
   currentIndex_ = defaultIndex_;
   emit currentIndexChanged();
-  submitNow(resolveParams(QJSValue(currentValue()), enumParamsJson(currentIndex_, currentValue())),
-            true);
+  submitSelection();
 }
 
 // ── EditorAdjustmentToggleModel ──────────────────────────────────────────────
@@ -384,7 +539,11 @@ void EditorAdjustmentToggleModel::commitValue(bool v) {
   }
   value_ = v;
   emit valueChanged();
-  submitNow(resolveParams(QJSValue(v), toggleParamsJson(v)), true);
+  if (paramsBuilder().isCallable()) {
+    submitJsonBoundary(resolveParams(QJSValue(v), toggleParamsJson(v)), true);
+    return;
+  }
+  submitNow(alcedo::EditorToggleWrite{v}, true);
 }
 
 void EditorAdjustmentToggleModel::toggle() { commitValue(!value_); }
@@ -400,12 +559,21 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorToneCurveModel>("Alcedo.Main", 1, 0, "EditorToneCurveModel");
   qmlRegisterType<EditorToneCurveItem>("Alcedo.Main", 1, 0, "EditorToneCurveItem");
   qmlRegisterType<EditorColorTempModel>("Alcedo.Main", 1, 0, "EditorColorTempModel");
+  qmlRegisterType<EditorGradeWhiteBalanceModel>("Alcedo.Main", 1, 0,
+                                                "EditorGradeWhiteBalanceModel");
   qmlRegisterType<EditorHlsModel>("Alcedo.Main", 1, 0, "EditorHlsModel");
   qmlRegisterType<EditorCdlTrackballModel>("Alcedo.Main", 1, 0, "EditorCdlTrackballModel");
   qmlRegisterType<EditorCdlTrackballItem>("Alcedo.Main", 1, 0, "EditorCdlTrackballItem");
-  qmlRegisterType<EditorLutCatalogModel>("Alcedo.Main", 1, 0, "EditorLutCatalogModel");
+  qmlRegisterType<EditorLutAdjustmentModel>("Alcedo.Main", 1, 0, "EditorLutAdjustmentModel");
+  qmlRegisterType<EditorLutEncodingModel>("Alcedo.Main", 1, 0, "EditorLutEncodingModel");
+  qmlRegisterType<LutLibraryModel>("Alcedo.Main", 1, 0, "LutLibraryModel");
+  qmlRegisterType<LutLibraryController>("Alcedo.Main", 1, 0, "LutLibraryController");
+  qmlRegisterType<LutPreviewController>("Alcedo.Main", 1, 0, "LutPreviewController");
   qmlRegisterType<EditorGeometryMath>("Alcedo.Main", 1, 0, "EditorGeometryMath");
+  qmlRegisterType<EditorParameterCatalogAdapter>("Alcedo.Main", 1, 0, "EditorParameterCatalog");
   qmlRegisterType<EditorLensCatalogModel>("Alcedo.Main", 1, 0, "EditorLensCatalogModel");
+  qmlRegisterType<EditorCameraProfileListModel>("Alcedo.Main", 1, 0,
+                                                "EditorCameraProfileListModel");
   EditorScopeItem::RegisterQmlType();
 }
 

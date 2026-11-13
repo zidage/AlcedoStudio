@@ -111,6 +111,7 @@ class EditorHlsModel : public EditorAdjustmentModelBase {
   void                 finishDrag();
   void                 submitInteractive();
   void                 submitSettled();
+  [[nodiscard]] auto   currentHlsWrite() const -> alcedo::HlsUpdate;
   [[nodiscard]] auto   buildParamsJson() const -> QString;
 
   int                  activeHueIndex_ = 0;

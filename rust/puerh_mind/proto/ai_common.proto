@@ -4,14 +4,14 @@ package alcedo.ai;
 
 // Shared AI sidecar control surface.
 //
-// This file holds only the control plane: request/response headers, the status
-// and error enums, and the capability *descriptor*. It deliberately defines no
-// service and no universal Invoke(task_name, json) RPC. Each task keeps its own
-// typed request/response proto and carries these headers inline for uniform
-// correlation, timeout, cancellation, and credential handling.
+// This file holds only the control plane: request/response headers and the status
+// and error enums. It deliberately defines no service and no universal
+// Invoke(task_name, json) RPC. Each task keeps its own typed request/response
+// proto and carries these headers inline for uniform correlation and timeout
+// handling.
 //
 // See docs/roadmap/alcedo_studio/ai/ai_sidecar_phase0_requirements.md (section 1) for the frozen
-// field-by-field contract. Well-known types are intentionally not imported; the
+// field-by-field specification. Well-known types are intentionally not imported; the
 // Rust build (tonic_prost_build defaults) and the C++ generator both compile
 // only the `proto/` path with no WKT include, so timeouts are int64 scalars.
 
@@ -53,35 +53,21 @@ enum AiErrorCode {
   AI_ERROR_PAYLOAD_DECODE        = 10;
   AI_ERROR_CANCELLED_BY_CLIENT   = 11;
   AI_ERROR_INTERNAL              = 12;
-}
-
-enum AiInputKind {
-  AI_INPUT_UNSPECIFIED     = 0;
-  AI_INPUT_TEXT            = 1;
-  AI_INPUT_IMAGE           = 2;  // full-res bytes
-  AI_INPUT_THUMBNAIL       = 3;  // host-rendered thumbnail
-  AI_INPUT_PREVIEW         = 4;  // host-rendered preview
-  AI_INPUT_METADATA        = 5;
-  AI_INPUT_PIPELINE_PARAMS = 6;
-}
-
-enum AiOutputKind {
-  AI_OUTPUT_UNSPECIFIED = 0;
-  AI_OUTPUT_EMBEDDING   = 1;
-  AI_OUTPUT_CAPTION     = 2;
-  AI_OUTPUT_TAGS        = 3;
-  AI_OUTPUT_SCORE       = 4;
-  AI_OUTPUT_RECIPE      = 5;  // future edit-assistant
+  AI_ERROR_INVALID_INPUT         = 13;  // a request field fails validation
+  AI_ERROR_SESSION_NOT_FOUND     = 14;  // the named sidecar session does not exist
+  AI_ERROR_IMAGE_NOT_CACHED      = 15;  // a start request without pixels names an uncached image
 }
 
 message AiRequestHeader {
+  // Field 6 was credential_ref, the credential handle of Advanced Content Analysis (removed, #710).
+  reserved 6;
+  reserved "credential_ref";
+
   string request_id      = 1;  // per-call correlation; echoed in response
   string task_id         = 2;  // stable task type id, e.g. "semantic.embed_text"
   int64  timeout_ms      = 3;  // relative deadline from receipt; 0 = server default
   AiPriority priority    = 4;  // defaults to NORMAL when UNSPECIFIED
   string trace_id        = 5;  // optional cross-cutting trace; empty allowed
-  string credential_ref  = 6;  // opaque handle from the Rust credential vault;
-                               //   empty = no credential (local task)
   repeated string client_capabilities = 7;  // tokens the client understands,
                                //   e.g. "cancel-by-request_id"
 }
@@ -95,16 +81,4 @@ message AiResponseHeader {
   string provider          = 6;  // provider_id that actually served
   string model_id          = 7;  // model_id that actually served
   int64  elapsed_ms        = 8;
-}
-
-message AiCapability {
-  string task_id                = 1;
-  string provider_id            = 2;  // "local", "mock", "openai", ...
-  string model_id               = 3;
-  repeated AiInputKind input_kinds  = 4;
-  repeated AiOutputKind output_kinds = 5;
-  bool supports_batch           = 6;
-  bool supports_cancel          = 7;
-  bool requires_credential      = 8;
-  int64 max_payload_bytes       = 9;
 }

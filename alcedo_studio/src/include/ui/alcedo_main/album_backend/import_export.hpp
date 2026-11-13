@@ -5,17 +5,25 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
 #include <QStringList>
+#include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
+#include <atomic>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "app/export_service.hpp"
 #include "app/import_service.hpp"
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
+#include "ui/alcedo_main/album_backend/folder_import_scan_model.hpp"
+#include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
@@ -24,20 +32,54 @@ namespace alcedo::ui {
 class FolderController;
 class LibraryModule;
 class NikonHeRecoveryController;
-class ProjectDbWriteBarrier;
 class ProjectModule;
 class SemanticGenerationController;
 class StatsEngine;
 class IUiStatusSink;
 
+/**
+ * @brief Return path of the GPU resources another renderer releases so an export can use them.
+ *
+ * `release_before_export` runs on the GUI thread after the export queue is built and before the
+ * export renders. It calls its completion once, on any thread, with the real error when the
+ * release failed. `resume_after_export` runs on the GUI thread once when that export ends:
+ * completed, every image failed, or the release failed.
+ */
+struct ExportGpuResourceRelease {
+  using ReleaseCompletion = std::function<void(bool success, std::string error)>;
+  std::function<void(ReleaseCompletion)> release_before_export;
+  std::function<void()>                  resume_after_export;
+};
+
 /// Handles file import and image export workflows.
 class ImportExportHandler final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString defaultExportFolder READ DefaultExportFolder CONSTANT)
+  /// Every import extension as space-separated `*.ext` patterns, for the file dialog filter.
+  Q_PROPERTY(QString supportedImportPatterns READ SupportedImportPatterns CONSTANT)
+  Q_PROPERTY(FolderImportScanModel* folderScan READ FolderScan CONSTANT)
   Q_PROPERTY(bool importRunning READ ImportRunning NOTIFY ImportStateChanged)
+  /// "preparing" while the import service registers the files, "reading" while metadata is read,
+  /// "finalizing" while the result is written to the project; empty when no import runs.
+  Q_PROPERTY(QString importPhase READ ImportPhase NOTIFY ImportStateChanged)
   Q_PROPERTY(int importTotal READ ImportTotal NOTIFY ImportStateChanged)
+  Q_PROPERTY(int importPrepared READ ImportPrepared NOTIFY ImportStateChanged)
   Q_PROPERTY(int importCompleted READ ImportCompleted NOTIFY ImportStateChanged)
   Q_PROPERTY(int importFailed READ ImportFailed NOTIFY ImportStateChanged)
+  /// Subset of importFailed: files that are not a supported RAW or raster image.
+  Q_PROPERTY(int importUnsupported READ ImportUnsupported NOTIFY ImportStateChanged)
+  /// Subset of importFailed: supported files whose type was not selected for the import.
+  Q_PROPERTY(int importExcluded READ ImportExcluded NOTIFY ImportStateChanged)
+  /// True from CancelImport until the import ends: files already being read finish and the
+  /// photos imported so far are saved, while queued files are skipped.
+  Q_PROPERTY(bool importCanceling READ ImportCanceling NOTIFY ImportStateChanged)
+  /// Subset of importFailed: files left unread because the import was canceled.
+  Q_PROPERTY(int importCanceled READ ImportCanceled NOTIFY ImportStateChanged)
+  /// Subsets of importTotal, importCompleted and importFailed: files with a RAW extension. The
+  /// import dialog draws one ring for these files and one for the other files.
+  Q_PROPERTY(int importRawTotal READ ImportRawTotal NOTIFY ImportStateChanged)
+  Q_PROPERTY(int importRawCompleted READ ImportRawCompleted NOTIFY ImportStateChanged)
+  Q_PROPERTY(int importRawFailed READ ImportRawFailed NOTIFY ImportStateChanged)
   Q_PROPERTY(QString importStatus READ ImportStatus NOTIFY ImportStateChanged)
   Q_PROPERTY(bool exportInFlight READ ExportInFlight NOTIFY ExportStateChanged)
   Q_PROPERTY(QString exportStatus READ ExportStatus NOTIFY ExportStateChanged)
@@ -51,14 +93,37 @@ class ImportExportHandler final : public QObject {
 
  public:
   ImportExportHandler(ProjectModule* project, LibraryModule* library, FolderController* folders,
-                      IUiStatusSink* status, ProjectDbWriteBarrier* barrier,
-                      QObject* parent = nullptr);
+                      IUiStatusSink* status, QObject* parent = nullptr);
+  ~ImportExportHandler() override;
 
   void                    BindCollaborators(StatsEngine* stats, NikonHeRecoveryController* nikon,
                                             SemanticGenerationController* semantic);
 
+  /// The policy whose agent control refuses the user imports (StartImport, StartImportToFolder,
+  /// StartFolderImportAsUser, StartFolderImportToFolderAsUser). Null refuses nothing.
+  void                    SetInteractionPolicy(InteractionPolicyController* interaction_policy);
+  /// The editor GPU resources each export releases before it renders. Empty releases nothing.
+  void                    SetExportGpuResourceRelease(ExportGpuResourceRelease release);
+
+  /// The user import of the Import Images dialog into the current folder: the regular files of
+  /// @p fileUrlsOrPaths, every import category allowed. Refused while an automation agent holds
+  /// control.
   Q_INVOKABLE void        StartImport(const QStringList& fileUrlsOrPaths);
-  Q_INVOKABLE QStringList CollectFolderFiles(const QString& folderUrlOrPath);
+  /// The files-only Library drop (issue #757): StartImport into the folder row @p folderUiId
+  /// (0 = the root collection) instead of the current folder.
+  Q_INVOKABLE void        StartImportToFolder(const QStringList& fileUrlsOrPaths, int folderUiId);
+  /// True when at least one entry of a drop is a folder; such a drop opens the folder import
+  /// dialog (folderScan.StartSources) instead of StartImportToFolder.
+  Q_INVOKABLE bool        DropHoldsFolder(const QStringList& fileUrlsOrPaths) const;
+  /// Import the files of the finished folder scan (folderScan) into the current folder. Shared
+  /// operation of the UI and the automation commands.
+  Q_INVOKABLE void        StartFolderImport();
+  /// The user folder import of the folder import dialog: StartFolderImport, refused while an
+  /// automation agent holds control.
+  Q_INVOKABLE void        StartFolderImportAsUser();
+  /// The confirm action of a Library drop that holds a folder: StartFolderImportAsUser into the
+  /// folder row @p folderUiId (0 = the root collection).
+  Q_INVOKABLE void        StartFolderImportToFolderAsUser(int folderUiId);
   Q_INVOKABLE void        CancelImport();
   Q_INVOKABLE void        StartExport(const QString& outputDirUrlOrPath);
   Q_INVOKABLE void        StartExportWithOptions(const QString& outputDirUrlOrPath,
@@ -83,17 +148,27 @@ class ImportExportHandler final : public QObject {
       const QVariantList& targetEntries);
   Q_INVOKABLE void         ResetExportState();
   Q_INVOKABLE bool         CanUseHdrExportForTargets(const QVariantList& targetEntries) const;
-  /// Remembered JPEG quality (1–100). Defaults to 95 when unset.
-  Q_INVOKABLE int          LoadExportSdrQuality() const;
-  Q_INVOKABLE void         SaveExportSdrQuality(int quality);
-  Q_INVOKABLE int          LoadExportUltraHdrQuality() const;
-  Q_INVOKABLE void         SaveExportUltraHdrQuality(int quality);
-  Q_INVOKABLE QVariantList LoadExportFileNamePresets() const;
-  Q_INVOKABLE bool         SaveExportFileNamePreset(const QString& name, const QString& pattern,
-                                                    const QString& replacedName);
-  Q_INVOKABLE bool         DeleteExportFileNamePreset(const QString& name);
+  /// Remembered export folder as a local path. Falls back to defaultExportFolder when nothing is
+  /// stored or the stored folder no longer exists.
+  Q_INVOKABLE QString      LoadExportFolder() const;
+  /// Stores the export folder (URL or local path) and returns it as a local path. Returns an empty
+  /// string and stores nothing when the input is empty.
+  Q_INVOKABLE QString      SaveExportFolder(const QString& folderUrlOrPath);
+  /// File URL of the folder for the folder dialog. Uses the remembered folder when the input is
+  /// empty or does not exist.
+  Q_INVOKABLE QUrl         ExportFolderUrl(const QString& folderUrlOrPath) const;
 
-  void StartImportPaths(const std::vector<image_path_t>& paths, bool preserveTarget = false);
+  /// `*.ext` patterns of every import category: the RAW extensions (kRawExtensions), then the
+  /// raster extensions (kRasterImportExtensions). A file dialog filter ignores case on Windows
+  /// and macOS.
+  [[nodiscard]] static auto SupportedImportNameFilters() -> QStringList;
+  [[nodiscard]] static auto SupportedImportPatterns() -> QString;
+
+  /// Import @p paths (duplicates removed). @p anyCategoryPaths are accepted in every category
+  /// whatever @p allowedCategories says (ImportOptions::any_category_paths_).
+  void StartImportPaths(const std::vector<image_path_t>& paths, bool preserveTarget = false,
+                        ImportCategoryMask allowedCategories = kAllImportCategories,
+                        ImportPathSet      anyCategoryPaths  = {});
   void FinishImport(const ImportResult& result);
   void FinishExport(const std::shared_ptr<std::vector<ExportResult>>& results, int skippedCount);
   void AddImportedEntries(const ImportLogSnapshot& snapshot);
@@ -110,7 +185,17 @@ class ImportExportHandler final : public QObject {
                                       const QVariantMap& recipeOptions = QVariantMap{}) -> ExportQueueBuildResult;
 
   [[nodiscard]] bool export_inflight() const { return export_inflight_; }
+  [[nodiscard]] auto FolderScan() const -> FolderImportScanModel* { return folder_scan_; }
   [[nodiscard]] bool ImportRunning() const { return import_running_; }
+  [[nodiscard]] auto ImportPhase() const -> QString;
+  [[nodiscard]] int  ImportPrepared() const { return import_prepared_; }
+  [[nodiscard]] int  ImportUnsupported() const { return import_unsupported_; }
+  [[nodiscard]] int  ImportExcluded() const { return import_excluded_; }
+  [[nodiscard]] bool ImportCanceling() const { return import_canceling_; }
+  [[nodiscard]] int  ImportCanceled() const { return import_canceled_; }
+  [[nodiscard]] int  ImportRawTotal() const { return import_raw_total_; }
+  [[nodiscard]] int  ImportRawCompleted() const { return import_raw_completed_; }
+  [[nodiscard]] int  ImportRawFailed() const { return import_raw_failed_; }
   [[nodiscard]] bool import_running() const { return import_running_; }
   [[nodiscard]] int  ImportTotal() const { return import_total_; }
   [[nodiscard]] int  import_total() const { return import_total_; }
@@ -169,26 +254,84 @@ class ImportExportHandler final : public QObject {
   void importStateChanged();
   void ExportStateChanged();
   void exportStateChanged();
+  /// Emitted once when an export run ends (exportInFlight becomes false), after the final
+  /// counts and the error summary are published. An export that does not start emits nothing.
+  void ExportFinished(int succeeded, int failed, int skipped);
+  // QML Connections maps a handler onFoo to the signal foo, so a signal that starts with an
+  // uppercase letter needs a lowercase twin for QML.
+  void exportFinished(int succeeded, int failed, int skipped);
 
  private:
-  void              StartImportResolvedPaths(std::vector<image_path_t> paths, bool preserveTarget);
+  enum class ImportPhaseState { Idle, Preparing, Reading, Finalizing };
+
+  /// Result of writing a finished import to the project on finalize_thread_.
+  struct ImportFinalizeOutcome {
+    bool    state_saved_   = true;
+    bool    package_saved_ = true;
+    QString package_error_{};
+  };
+
+  void              StartImportResolvedPaths(std::vector<image_path_t> paths, bool preserveTarget,
+                                             ImportCategoryMask allowedCategories,
+                                             ImportPathSet      anyCategoryPaths = {});
+  /// The regular files of @p fileUrlsOrPaths in input order, duplicates removed: the file filter
+  /// of StartImport and StartImportToFolder.
+  [[nodiscard]] static auto RegularFilePaths(const QStringList& fileUrlsOrPaths)
+      -> std::vector<image_path_t>;
+  /// Set import_target_folder_id_ and import_target_folder_path_ to the folder row
+  /// @p folderUiId. Returns false (with a status message) when no folder row has that id.
+  [[nodiscard]] bool SetImportTargetFromFolderRow(int folderUiId);
+  /// True when the user may start an import now; otherwise reports the agent refusal.
+  [[nodiscard]] bool UserImportAllowed();
+  /// Publish the live counters of current_import_job_ (read through ImportJob::progress_).
+  void              ApplyImportProgress();
+  void              CompleteImport(const ImportResult& result,
+                                   const std::shared_ptr<const ImportLogSnapshot>& snapshot,
+                                   const ImportFinalizeOutcome&                    outcome);
+  void              JoinFinalizeThread();
   void              ResetExportProgressState(const i18n::LocalizedText& status);
   void              SetExportFailureState(const i18n::LocalizedText& message);
+  /// Render the queued export tasks; the editor GPU resources are released at this point.
+  void              RenderQueuedExport(int skippedCount);
+  /// End an export whose GPU resource release failed: every queued image fails with @p error.
+  void              FailExportBeforeRender(int queuedCount, int skippedCount,
+                                           const std::string& error);
 
   ProjectModule*    project_              = nullptr;
   LibraryModule*    library_              = nullptr;
   FolderController* folders_              = nullptr;
   IUiStatusSink*    status_               = nullptr;
-  ProjectDbWriteBarrier*        barrier_  = nullptr;
+  InteractionPolicyController* interaction_policy_ = nullptr;
+  ExportGpuResourceRelease      export_gpu_resource_release_;
+  /// The running export released the editor GPU resources; FinishExport returns them.
+  bool                          export_gpu_resources_released_ = false;
   StatsEngine*                  stats_    = nullptr;
   NikonHeRecoveryController*    nikon_    = nullptr;
   SemanticGenerationController* semantic_ = nullptr;
 
+  FolderImportScanModel*        folder_scan_ = nullptr;
   std::shared_ptr<ImportJob>    current_import_job_{};
-  bool                          import_running_   = false;
-  int                           import_total_     = 0;
-  int                           import_completed_ = 0;
-  int                           import_failed_    = 0;
+  /// True while a queued ApplyImportProgress has not run yet. Worker progress reports queue at
+  /// most one UI update; that update reads the latest counters, so a folder import that rejects
+  /// thousands of files does not flood the event loop with one queued call per file.
+  std::shared_ptr<std::atomic<bool>> import_progress_queued_ =
+      std::make_shared<std::atomic<bool>>(false);
+  /// Writes a finished import to the project (SyncImports, storage sync, save and package) off
+  /// the UI thread. Joined before the next finalize and in the destructor.
+  std::thread                   finalize_thread_{};
+  bool                          import_running_     = false;
+  ImportPhaseState              import_phase_       = ImportPhaseState::Idle;
+  int                           import_total_       = 0;
+  int                           import_prepared_    = 0;
+  int                           import_completed_   = 0;
+  int                           import_failed_      = 0;
+  int                           import_unsupported_ = 0;
+  int                           import_excluded_    = 0;
+  int                           import_canceled_    = 0;
+  int                           import_raw_total_     = 0;
+  int                           import_raw_completed_ = 0;
+  int                           import_raw_failed_    = 0;
+  bool                          import_canceling_   = false;
   i18n::LocalizedText           import_status_text_{};
   bool                          export_inflight_ = false;
   QString                       default_export_folder_{};

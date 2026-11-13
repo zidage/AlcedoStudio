@@ -5,16 +5,28 @@
 #include "app/export_service.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <system_error>
+#include <utility>
 
 #if defined(_WIN32)
 #include <Windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
 #endif
 
+#include "edit/runtime/drt_display.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
@@ -22,14 +34,10 @@
 #include "sleeve/sleeve_filesystem.hpp"
 #include "type/type.hpp"
 
+#include "app/pipeline_service.hpp"
+
 namespace alcedo {
 namespace {
-
-auto ResolveExportColorProfileConfig(const OperatorParams& params) -> ExportColorProfileConfig {
-  return ExportColorProfileConfig{params.to_output_params_.encoding_space_,
-                                  params.to_output_params_.eotf_,
-                                  params.to_output_params_.peak_luminance_};
-}
 
 auto HasExportMetadata(const ExifDisplayMetaData& metadata) -> bool {
   return !metadata.make_.empty() || !metadata.model_.empty() || !metadata.lens_.empty() ||
@@ -68,46 +76,118 @@ auto TemporaryExportPath(const std::filesystem::path& final_path, image_id_t ima
   return final_path.parent_path() / name;
 }
 
+}  // namespace
+
 void CommitExportFile(const std::filesystem::path& temporary_path,
                       const std::filesystem::path& final_path,
                       ExportCollisionPolicy        collision_policy) {
-  std::error_code exists_error;
-  const bool      final_exists = std::filesystem::exists(final_path, exists_error);
-  if (exists_error) {
-    throw std::runtime_error("ExportService: cannot inspect output path: " +
-                             exists_error.message());
-  }
-  if (final_exists && collision_policy == ExportCollisionPolicy::FAIL) {
-    throw std::runtime_error("ExportService: output file already exists");
-  }
-
+  constexpr const char* kAlreadyExists = "ExportService: output file already exists";
 #if defined(_WIN32)
+  // Without MOVEFILE_REPLACE_EXISTING the move fails when final_path exists, in one step.
   DWORD flags = MOVEFILE_WRITE_THROUGH;
   if (collision_policy == ExportCollisionPolicy::REPLACE) flags |= MOVEFILE_REPLACE_EXISTING;
   if (!MoveFileExW(temporary_path.c_str(), final_path.c_str(), flags)) {
-    throw std::system_error(static_cast<int>(GetLastError()), std::system_category(),
+    const DWORD error = GetLastError();
+    if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) {
+      throw std::runtime_error(kAlreadyExists);
+    }
+    throw std::system_error(static_cast<int>(error), std::system_category(),
                             "ExportService: cannot commit output file");
   }
 #else
-  std::error_code rename_error;
-  std::filesystem::rename(temporary_path, final_path, rename_error);
-  if (rename_error) {
-    throw std::runtime_error("ExportService: cannot commit output file: " + rename_error.message());
+  if (collision_policy == ExportCollisionPolicy::REPLACE) {
+    std::error_code rename_error;
+    std::filesystem::rename(temporary_path, final_path, rename_error);
+    if (rename_error) {
+      throw std::runtime_error("ExportService: cannot commit output file: " +
+                               rename_error.message());
+    }
+    return;
+  }
+
+  // FAIL: the kernel refuses the rename when final_path exists, so a file created by another
+  // process after any earlier check is never replaced. std::filesystem::rename replaces silently.
+#if defined(__APPLE__)
+  const int commit_result =
+      renameatx_np(AT_FDCWD, temporary_path.c_str(), AT_FDCWD, final_path.c_str(), RENAME_EXCL);
+#elif defined(__linux__) && defined(RENAME_NOREPLACE)
+  const int commit_result =
+      renameat2(AT_FDCWD, temporary_path.c_str(), AT_FDCWD, final_path.c_str(), RENAME_NOREPLACE);
+#else
+  // link() fails with EEXIST when final_path exists; the temporary name is removed afterwards.
+  const int commit_result = link(temporary_path.c_str(), final_path.c_str());
+  if (commit_result == 0 && unlink(temporary_path.c_str()) != 0) {
+    throw std::runtime_error(std::string("ExportService: cannot remove temporary output file: ") +
+                             std::strerror(errno));
+  }
+#endif
+  if (commit_result != 0) {
+    const int error = errno;
+    if (error == EEXIST) throw std::runtime_error(kAlreadyExists);
+    throw std::runtime_error(std::string("ExportService: cannot commit output file: ") +
+                             std::strerror(error));
   }
 #endif
 }
 
-}  // namespace
+ExportService::ExportService(std::shared_ptr<SleeveServiceImpl>   sleeve_service,
+                             std::shared_ptr<ImagePoolService>    image_pool_service,
+                             std::shared_ptr<PipelineMgmtService> pipeline_service)
+    : sleeve_service_(std::move(sleeve_service)),
+      image_pool_service_(std::move(image_pool_service)),
+      pipeline_service_(std::move(pipeline_service)),
+      executors_(kExportExecutorCount,
+                 pipeline_service_ ? pipeline_service_->GetAcceleratorBackendPreference()
+                                   : AcceleratorBackendPreference::Auto,
+                 pipeline_service_ ? pipeline_service_->LutResources() : nullptr,
+                 pipeline_service_ ? pipeline_service_->MaskAssets() : nullptr),
+      render_scheduler_(executors_.Size()) {}
 
-auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult {
+void ExportService::EnqueueExportTask(const ExportTask& task) {
+  if (!task.recipe_.has_value()) {
+    throw std::runtime_error("ExportService: export recipe must be complete before scheduling");
+  }
+  if (!pipeline_service_) {
+    throw std::runtime_error("ExportService: pipeline service is unavailable");
+  }
+  auto         snapshot = pipeline_service_->AcquireCommittedSnapshot(task.sleeve_id_);
+  QueuedExport queued{.task_ = task, .snapshot_ = snapshot};
+  auto&        recipe = *queued.task_.recipe_;
+  if (!recipe.output_color_.has_value()) {
+    const auto* drt = snapshot->Document().Drt();
+    if (drt == nullptr) {
+      throw std::runtime_error("ExportService: committed document of element " +
+                               std::to_string(task.sleeve_id_) + " has no DRT node");
+    }
+    recipe.output_color_ = ExportColorProfileFromDrt(drt->Params().Params());
+  }
+  RequireResolvedExportOutputColor(recipe);
+  std::lock_guard<std::mutex> lock(queue_mutex_);
+  export_queue_.push_back(std::move(queued));
+}
+
+auto ExportService::RunExportRenderTask(const QueuedExport& queued) -> ExportResult {
+  const auto&  task = queued.task_;
   ExportResult result;
-  ExportRecipe recipe     = task.recipe_.value_or(ExportRecipe::FromLegacyOptions(task.options_));
+  if (!task.recipe_.has_value()) {
+    result.message_      = "ExportService: export recipe is required";
+    result.failed_stage_ = "prepare-recipe";
+    return result;
+  }
+  ExportRecipe recipe = *task.recipe_;
+  try {
+    RequireResolvedExportOutputColor(recipe);
+  } catch (const std::exception& error) {
+    result.message_      = error.what();
+    result.failed_stage_ = "prepare-recipe";
+    return result;
+  }
   auto         final_path = recipe.codec_.export_path_;
   std::filesystem::path temporary_path;
   result.output_path_ = final_path;
   std::error_code cleanup_error;
 
-  std::string     stage = "prepare-name";
+  std::string stage = "prepare-name";
   try {
     if (final_path.empty() || final_path.filename().empty()) {
       throw std::runtime_error("ExportService: output path must contain a file name");
@@ -128,13 +208,6 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     temporary_path = TemporaryExportPath(final_path, task.image_id_);
     std::filesystem::remove(temporary_path, cleanup_error);
 
-    stage               = "load-pipeline";
-    // Get the pipeline executor from sleeve service
-    auto pipeline_guard = pipeline_service_->LoadPipeline(task.sleeve_id_);
-    if (!pipeline_guard || !pipeline_guard->pipeline_) {
-      throw std::runtime_error("[ERROR] ExportService: Failed to load pipeline for sleeve id " +
-                               std::to_string(task.sleeve_id_));
-    }
     stage           = "load-source";
     // Get the image from image pool service
     auto source_img = image_pool_service_->Read<std::shared_ptr<Image>>(
@@ -152,51 +225,52 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     // To avoid reading too many images into memory at once, we let the pipeline load the image
     // So we create a dummy Image object with only the path set
     render_task.input_desc_           = std::make_shared<Image>(img_src_path, ImageType::DEFAULT);
-    render_task.pipeline_executor_    = pipeline_guard->pipeline_;
+    render_task.snapshot_             = queued.snapshot_;
+    // The render takes this service's executor for the whole task and returns it when the task
+    // ends on any path.
+    auto executor_index                     = std::make_shared<std::optional<std::size_t>>();
+    render_task.prepare_                    = [this, executor_index](PipelineTask& prepared) {
+      auto [index, executor]      = executors_.Take();
+      *executor_index             = index;
+      prepared.pipeline_executor_ = std::move(executor);
+      return true;
+    };
+    render_task.on_complete_ = [this, executor_index](bool, std::string) {
+      if (executor_index->has_value()) {
+        executors_.Return(**executor_index);
+      }
+    };
     render_task.options_.is_blocking_ = true;
     render_task.options_.is_callback_ = false;
-
-    // Inject pre-extracted raw metadata from the real Image into the pipeline
-    // so downstream operators resolve eagerly.
-    try {
-      if (source_img->HasRawColorContext()) {
-        pipeline_guard->pipeline_->InjectRawMetadata(source_img->GetRawColorContext());
-      }
-    } catch (...) {
-      // Non-fatal: metadata injection is best-effort.
-    }
 
     // Use full res export, even though the task requires resizing,
     // to benefit from the super sampling
     render_task.options_.render_desc_.render_type_ = RenderType::FULL_RES_EXPORT;
+    render_task.options_.export_output_color_      = recipe.output_color_;
     // Set export options in the pipeline executor
     auto render_promise = std::make_shared<std::promise<std::shared_ptr<ImageBuffer>>>();
     render_task.result_ = render_promise;
     auto render_future  = render_promise->get_future();
     // Schedule the render task
-    pipeline_scheduler_->ScheduleTask(std::move(render_task));
+    render_scheduler_.ScheduleTask(std::move(render_task));
 
     std::shared_ptr<ImageBuffer> rendered_image;
     try {
       // Wait for the render to complete
       rendered_image = render_future.get();
     } catch (...) {
-      pipeline_service_->SavePipeline(pipeline_guard);
       throw;
     }
 
     stage = "prepare-output";
-    // Save pipeline back to storage
-    const auto export_profile =
-        ResolveExportColorProfileConfig(pipeline_guard->pipeline_->GetGlobalParams());
-    const auto effective_profile = recipe.icc_ == ExportIccPolicy::OMIT
+    const auto  effective_profile = recipe.icc_ == ExportIccPolicy::OMIT
                                        ? std::optional<ExportColorProfileConfig>{}
-                                       : export_profile;
-    const bool wrote_ultra_hdr   = ImageWriter::ShouldWriteUltraHdr(recipe.codec_, export_profile);
-    pipeline_service_->SavePipeline(pipeline_guard);
+                                       : recipe.output_color_;
+    const bool  wrote_ultra_hdr =
+        ImageWriter::ShouldWriteUltraHdr(recipe.codec_, recipe.output_color_);
     stage                      = "encode";
     recipe.codec_.export_path_ = temporary_path;
-    ImageWriter::WriteImageToPath(img_src_path, rendered_image, recipe, export_profile,
+    ImageWriter::WriteImageToPath(img_src_path, rendered_image, recipe, recipe.output_color_,
                                   export_metadata);
 
     stage = "verify";
@@ -240,8 +314,8 @@ void ExportService::ExportAll(
 void ExportService::ExportAll(
     std::function<void(const ExportProgress&)>                      progress_callback,
     std::function<void(std::shared_ptr<std::vector<ExportResult>>)> callback) {
-  auto                    results = std::make_shared<std::vector<ExportResult>>();
-  std::vector<ExportTask> tasks;
+  auto                      results = std::make_shared<std::vector<ExportResult>>();
+  std::vector<QueuedExport> tasks;
 
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -267,10 +341,11 @@ void ExportService::ExportAll(
   auto succeeded = std::make_shared<std::atomic_size_t>(0);
   auto failed    = std::make_shared<std::atomic_size_t>(0);
   for (size_t task_index = 0; task_index < tasks.size(); ++task_index) {
-    const auto task = tasks[task_index];
+    auto queued = std::move(tasks[task_index]);
     // Export in thread pool
-    export_thread_pool_.Submit([this, task, results, progress_callback, callback, completed,
-                                succeeded, failed, queue_size, task_index]() {
+    export_thread_pool_.Submit([this, queued = std::move(queued), results, progress_callback,
+                                callback, completed, succeeded, failed, queue_size, task_index]() {
+      const auto& task = queued.task_;
       if (progress_callback) {
         try {
           progress_callback(ExportProgress{
@@ -289,7 +364,7 @@ void ExportService::ExportAll(
       ExportResult result;
       // Do export, this call will block until done
       try {
-        result = RunExportRenderTask(task);
+        result = RunExportRenderTask(queued);
       } catch (const std::exception& e) {
         result.success_ = false;
         result.message_ = e.what();

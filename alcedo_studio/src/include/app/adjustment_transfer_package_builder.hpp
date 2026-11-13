@@ -1,0 +1,88 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <string>
+#include <vector>
+
+#include "app/adjustment_transfer_types.hpp"
+#include "edit/graph/graph_ids.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/mask/mask_id.hpp"
+
+namespace alcedo {
+
+/**
+ * @brief Builds sparse v6 transfer packages from one source document.
+ *
+ * Validates stable selection identities against the replayed source document,
+ * preserves source backbone order, copies only selected values, and copies all
+ * Masks or no Masks for each selected Color Grade. AI Masks are never copied: an AI Mask
+ * describes the content of its own image (SM5 D18). Never changes source state.
+ */
+class AdjustmentTransferPackageBuilder {
+ public:
+  AdjustmentTransferPackageBuilder() = delete;
+
+  /**
+   * @brief Build one validated v7 package.
+   *
+   * Every selected @ref AdjustmentTransferNodeSelection::node_id must be the
+   * source Develop endpoint, a Color Grade on the source image backbone, or the
+   * source DRT/Post endpoint. Develop items carry only owned field keys; the
+   * Geometry item carries the complete document geometry.
+   * Every @ref AdjustmentTransferItemKind::Adjustment item must name an
+   * @ref AdjustmentInstanceId owned by that node. Package Color Grade order is
+   * the source backbone order, not the selection order. A selected Masks item copies every
+   * Mask of the Grade except the AI Masks; when the Grade has only AI Masks, its entry has no
+   * Mask set. @ref ListAiMasksExcludedFromTransfer names the skipped Masks.
+   *
+   * @param document Replayed or live source document. Read-only.
+   * @param selection Stable node and item identities to transfer.
+   * @return Validated package with a computed fingerprint.
+   * @throws std::runtime_error on an empty selection, an unknown or duplicated
+   *         node, an item the node does not own, a duplicated item, or a
+   *         selection that produces no transferable content.
+   */
+  [[nodiscard]] static auto Build(const PipelineDocument&            document,
+                                  const AdjustmentTransferSelection& selection)
+      -> AdjustmentTransferPackage;
+};
+
+/// One AI Mask that a transfer package does not copy.
+struct AiMaskTransferExclusion {
+  NodeId      node_id;
+  MaskId      mask_id;
+  std::string display_name;
+
+  friend auto operator==(const AiMaskTransferExclusion&, const AiMaskTransferExclusion&)
+      -> bool = default;
+};
+
+/**
+ * @brief AI Masks that @ref AdjustmentTransferPackageBuilder::Build skips for @p selection.
+ *
+ * Lists, in source backbone and Mask order, the AI Masks of each Color Grade whose Masks item is
+ * in @p selection. Unknown nodes and Grades without a Masks item add nothing; Build reports
+ * selection errors. Reads @p document only.
+ */
+[[nodiscard]] auto ListAiMasksExcludedFromTransfer(const PipelineDocument&            document,
+                                                   const AdjustmentTransferSelection& selection)
+    -> std::vector<AiMaskTransferExclusion>;
+
+/**
+ * @brief Selection containing every transferable item of @p document.
+ *
+ * Lists the Develop endpoint with RAW Decode, White Balance, Lens Correction,
+ * and Geometry, then each backbone Color Grade with node fields, every adjustment, and a
+ * `Masks` item when the Grade owns at least one Mask, then the DRT/Post
+ * endpoint with Display Transform and every post adjustment. Order follows the
+ * document, so building from this selection captures the complete transferable
+ * state. @p source_version_id is left empty; callers attach UI provenance.
+ */
+[[nodiscard]] auto SelectAllTransferableItems(const PipelineDocument& document)
+    -> AdjustmentTransferSelection;
+
+}  // namespace alcedo

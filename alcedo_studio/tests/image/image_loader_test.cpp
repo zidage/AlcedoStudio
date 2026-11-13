@@ -15,7 +15,6 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <memory>
-#include <opencv2/highgui.hpp>
 #include <vector>
 
 TEST(ImageLoaderTest, BatchLoad) {

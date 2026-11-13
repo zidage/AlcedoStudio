@@ -11,6 +11,8 @@
 #include <optional>
 #include <string>
 
+#include "app/sleeve_filter_service.hpp"
+#include "image/color_label.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 
@@ -37,6 +39,15 @@ class StatsEngine final : public QObject {
   Q_PROPERTY(QString statsFilterLabel READ StatsFilterLabel NOTIFY StatsFilterChanged)
   Q_PROPERTY(QVariantList ratingStats READ RatingStats NOTIFY StatsChanged)
   Q_PROPERTY(QString statsFilterRating READ StatsFilterRating NOTIFY StatsFilterChanged)
+  Q_PROPERTY(QVariantList importDateStats READ ImportDateStats NOTIFY StatsChanged)
+  Q_PROPERTY(QString statsFilterImportDate READ StatsFilterImportDate NOTIFY StatsFilterChanged)
+  /// Photos of the match set with each color label code: kColorLabelCount ints, index = code.
+  Q_PROPERTY(QVariantList colorLabelCounts READ ColorLabelCounts NOTIFY StatsChanged)
+  /// Photos of the match set with the Delete mark.
+  Q_PROPERTY(int deleteMarkCount READ DeleteMarkCount NOTIFY StatsChanged)
+  /// Code of the color label filter, or -1 without one.
+  Q_PROPERTY(int statsFilterColorLabel READ StatsFilterColorLabel NOTIFY StatsFilterChanged)
+  Q_PROPERTY(bool statsFilterDeleteMark READ StatsFilterDeleteMark NOTIFY StatsFilterChanged)
 
  public:
   StatsEngine(ProjectModule* project, LibraryModule* library, FolderController* folders,
@@ -44,14 +55,21 @@ class StatsEngine final : public QObject {
 
   void BindCollaborators(SearchController* search, SemanticGenerationController* semantic);
 
-  /// Rebuild the thumbnail grid for the current folder, applying active stats filters.
+  /// Request one library refresh: the grid, the groups, and these statistics are replaced
+  /// together by the accepted result of LibraryModule's query worker.
   void RebuildThumbnailView();
   bool LoadMoreThumbnailView();
-
-  /// Execute GROUP BY aggregate queries and update stats properties.
+  /// Same request as RebuildThumbnailView: statistics come from the one library query.
   void RefreshStats();
+  /// Replace the stats properties with @p stats (queried on the library worker). Emits
+  /// StatsChanged only when @p emit_changed; LibraryModule emits after it installed every
+  /// owner of the same result. Runs no SQL. UI thread only.
+  void ApplyFolderStats(const AlbumStatsView& stats, bool emit_changed = true);
+  /// Remove every statistic (no project or no folder) and emit StatsChanged.
+  void ClearStats();
+  /// Active semantic model key read once for one library request.
+  [[nodiscard]] auto ActiveSemanticModelKey() const -> std::string;
 
-  [[nodiscard]] auto FormatPhotoInfo(int shown, int total) const -> QString;
   [[nodiscard]] auto MakeThumbMap(const AlbumItem& image, int index) const -> QVariantMap;
   [[nodiscard]] auto BuildSearchRecommendations(int limit) const -> QVariantList;
 
@@ -60,12 +78,20 @@ class StatsEngine final : public QObject {
   [[nodiscard]] auto LensStats() const -> QVariantList { return lens_stats_; }
   [[nodiscard]] auto LabelStats() const -> QVariantList { return label_stats_; }
   [[nodiscard]] auto RatingStats() const -> QVariantList { return rating_stats_; }
+  [[nodiscard]] auto ImportDateStats() const -> QVariantList { return import_date_stats_; }
+  [[nodiscard]] auto StatsFilterImportDate() const -> QString { return filter_import_date_; }
   [[nodiscard]] int  TotalPhotoCount() const { return total_photo_count_; }
   [[nodiscard]] auto StatsFilterDate() const -> QString { return filter_date_; }
   [[nodiscard]] auto StatsFilterCamera() const -> QString { return filter_camera_; }
   [[nodiscard]] auto StatsFilterLens() const -> QString { return filter_lens_; }
   [[nodiscard]] auto StatsFilterLabel() const -> QString { return filter_label_; }
   [[nodiscard]] auto StatsFilterRating() const -> QString { return filter_rating_; }
+  [[nodiscard]] auto ColorLabelCounts() const -> QVariantList { return color_label_counts_; }
+  [[nodiscard]] int  DeleteMarkCount() const { return delete_mark_count_; }
+  [[nodiscard]] int  StatsFilterColorLabel() const {
+    return filter_color_label_.has_value() ? static_cast<int>(*filter_color_label_) : -1;
+  }
+  [[nodiscard]] bool StatsFilterDeleteMark() const { return filter_delete_mark_; }
 
   [[nodiscard]] auto date_stats() const -> const QVariantList& { return date_stats_; }
   [[nodiscard]] auto camera_stats() const -> const QVariantList& { return camera_stats_; }
@@ -79,6 +105,9 @@ class StatsEngine final : public QObject {
   [[nodiscard]] const QString& filter_label() const { return filter_label_; }
   [[nodiscard]] const QString& filter_rating() const { return filter_rating_; }
 
+  /// Toggle the filter of @p category ("date", "import", "camera", "lens", "label", "rating",
+  /// "colorLabel", "deleted") to @p label. For "colorLabel" the label is the code ("0" to "6");
+  /// "deleted" ignores the label.
   Q_INVOKABLE void ToggleStatsFilter(const QString& category, const QString& label);
   Q_INVOKABLE void ClearStatsFilter();
 
@@ -109,6 +138,9 @@ class StatsEngine final : public QObject {
   QVariantList lens_stats_{};
   QVariantList label_stats_{};
   QVariantList rating_stats_{};
+  QVariantList                  import_date_stats_{};
+  QVariantList                  color_label_counts_{};
+  int                           delete_mark_count_ = 0;
   int          total_photo_count_ = 0;
 
   QString filter_date_{};
@@ -116,6 +148,9 @@ class StatsEngine final : public QObject {
   QString filter_lens_{};
   QString filter_label_{};
   QString filter_rating_{};
+  QString                       filter_import_date_{};
+  std::optional<ColorLabel>     filter_color_label_{};
+  bool                          filter_delete_mark_ = false;
 };
 
 }  // namespace alcedo::ui

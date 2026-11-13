@@ -350,3 +350,45 @@ kernel void warp_rectilinear_rgba32f(device const float4* src [[buffer(0)]],
   const float4 b_px  = BilinearSampleWarp(src, params, blue.x, blue.y);
   dst[gid.y * params.dst_stride + gid.x] = float4(r_px.x, g_px.y, b_px.z, g_px.w);
 }
+
+static inline auto ReadTextureOrZero(texture2d<float, access::read> src, int width, int height,
+                                     int x, int y) -> float4 {
+  if (x < 0 || y < 0 || x >= width || y >= height) {
+    return float4(0.0f);
+  }
+  return src.read(uint2(static_cast<uint>(x), static_cast<uint>(y)));
+}
+
+static inline auto BilinearSampleTextureWarp(texture2d<float, access::read> src, int width,
+                                             int height, float sx, float sy) -> float4 {
+  const int   x0  = static_cast<int>(floor(sx));
+  const int   y0  = static_cast<int>(floor(sy));
+  const float fx  = sx - static_cast<float>(x0);
+  const float fy  = sy - static_cast<float>(y0);
+  const float w00 = (1.0f - fx) * (1.0f - fy);
+  const float w10 = fx * (1.0f - fy);
+  const float w01 = (1.0f - fx) * fy;
+  const float w11 = fx * fy;
+  return ReadTextureOrZero(src, width, height, x0, y0) * w00 +
+         ReadTextureOrZero(src, width, height, x0 + 1, y0) * w10 +
+         ReadTextureOrZero(src, width, height, x0, y0 + 1) * w01 +
+         ReadTextureOrZero(src, width, height, x0 + 1, y0 + 1) * w11;
+}
+
+kernel void warp_rectilinear_tex_rgba32f(texture2d<float, access::read> src [[texture(0)]],
+                                         texture2d<float, access::write> dst [[texture(1)]],
+                                         constant WarpRectilinearParams& params [[buffer(0)]],
+                                         uint2 gid [[thread_position_in_grid]]) {
+  if (gid.x >= params.width || gid.y >= params.height) {
+    return;
+  }
+  const int    width = static_cast<int>(params.width);
+  const int    height = static_cast<int>(params.height);
+  const float2 red    = WarpRectilinearSourceCoord(gid.x, gid.y, 0u, params);
+  const float2 green  = WarpRectilinearSourceCoord(gid.x, gid.y, 1u, params);
+  const float2 blue   = WarpRectilinearSourceCoord(gid.x, gid.y, 2u, params);
+  const float4 r_px   = BilinearSampleTextureWarp(src, width, height, red.x, red.y);
+  const float4 g_px   = BilinearSampleTextureWarp(src, width, height, green.x, green.y);
+  const float4 b_px   = BilinearSampleTextureWarp(src, width, height, blue.x, blue.y);
+  dst.write(float4(r_px.x, g_px.y, b_px.z, g_px.w), gid);
+}

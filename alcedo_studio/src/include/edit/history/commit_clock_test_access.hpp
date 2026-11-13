@@ -20,18 +20,11 @@ struct CommitClockAccess {
 };
 
 struct EditCommitAccess {
-  static auto MakeEditAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
-                                  std::uint64_t created_at_ns, OrdinaryEditPayload payload)
+  static auto MakePipelineEditAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
+                                          std::uint64_t created_at_ns, PipelineEditBatch payload)
       -> EditCommit {
-    return EditCommit::MakeEditAtTimestamp(root_id, std::move(first_parent), created_at_ns,
-                                           std::move(payload));
-  }
-
-  static auto MakeMergeAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
-                                   commit_hash_t second_parent, std::uint64_t created_at_ns,
-                                   MergeEditPayload payload) -> EditCommit {
-    return EditCommit::MakeMergeAtTimestamp(root_id, std::move(first_parent), second_parent,
-                                            created_at_ns, std::move(payload));
+    return EditCommit::MakePipelineEditAtTimestamp(root_id, std::move(first_parent), created_at_ns,
+                                                   std::move(payload));
   }
 };
 

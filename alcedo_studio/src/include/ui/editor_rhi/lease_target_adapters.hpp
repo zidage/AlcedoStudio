@@ -119,4 +119,10 @@ class UnsupportedLeaseTargetAdapter final : public ILeaseTargetAdapter {
 [[nodiscard]] auto ProducerReleaseWritable(const WritableTargetLease& lease) -> bool;
 [[nodiscard]] auto ProducerWaitWritableComplete(const WritableTargetLease& lease) -> bool;
 
+// OpenCL/GL sharing: every GL command that samples or deletes a shared texture
+// must complete before the next clEnqueueAcquireGLObjects. Call on the render
+// thread with the QRhi OpenGL context current, before CompleteRendererRead or
+// glDeleteTextures. No-op when no OpenGL context is current (worker thread).
+void FinishOpenGlBeforeOpenClSharedTextureReuse();
+
 }  // namespace alcedo::editor_rhi

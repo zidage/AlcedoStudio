@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -23,7 +24,7 @@ class EditorViewportItem;
 //
 // CUDA / OpenCL: EnsureSize → MapResourceForWrite → GPU write → UnmapResource →
 // NotifyFrameReady against the fixed three-slot DirectPresentQueue.
-// CPU and OpenCL readback: SubmitHostFrame queues a shared host-memory frame for
+// OpenCL readback: SubmitHostFrame queues a shared host-memory frame for
 // QRhi texture upload on the scene-graph thread.
 //
 // Metal: zero-copy SubmitMetalFrame. The pipeline retains an MTLTexture* on the
@@ -41,6 +42,8 @@ class DirectFrameSink final : public alcedo::IFrameSink {
     int native_layout = 0;
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata preview_metadata{};
+    // ResolveRenderGeometry result of the frame, from the bound FrameCompletionSubmission.
+    ResolvedRenderGeometry geometry{};
     std::shared_ptr<const void> owner{};
     std::uint64_t session_epoch = 0;
     std::uint64_t image_identity = 0;
@@ -79,13 +82,17 @@ class DirectFrameSink final : public alcedo::IFrameSink {
       -> std::vector<ImportedGpuFrame>;
   // Drain newest host frames for the active image session. The renderer uploads
   // these RGBA32F frames to a QRhi texture on the scene-graph thread. This is
-  // the CPU presentation path and the OpenCL readback fallback.
+  // the OpenCL readback presentation path.
   [[nodiscard]] auto DrainPendingHostFrames(std::uint64_t session_epoch,
                                             std::uint64_t image_identity)
       -> std::vector<ViewerFrame>;
   // Drop all pending imports (image switch / renderer teardown).
   void ClearPendingImportedFrames();
-  void ClearPendingHostFrames();
+  void               ClearPendingHostFrames();
+  /// True while a GPU import or host upload waits for render-thread consume.
+  /// Cheap check for the presentation-opportunity arm; stale entries are still
+  /// reported and are discarded on drain.
+  [[nodiscard]] auto HasPendingImportedFrame() const -> bool;
   [[nodiscard]] auto HasWritableTargetForNextFrame() const -> bool;
   [[nodiscard]] auto submitted_frame_count() const -> std::uint64_t;
   [[nodiscard]] auto latest_accepted_request_id() const -> std::uint64_t;
@@ -96,6 +103,7 @@ class DirectFrameSink final : public alcedo::IFrameSink {
   [[nodiscard]] auto MakeSizeRequestLocked() const -> DirectPresentQueue::SizeRequest;
   auto ReserveWritableSlot(int width, int height) -> std::optional<int>;
   [[nodiscard]] auto IsMetalPresentPath() const -> bool;
+  [[nodiscard]] auto        UsesHostPresentation() const -> bool;
   static auto LayerIndexForRole(FrameRole role) -> std::size_t;
   [[nodiscard]] auto AcceptSubmissionRequestId(std::uint64_t request_id) -> bool;
 
@@ -116,7 +124,8 @@ class DirectFrameSink final : public alcedo::IFrameSink {
   std::array<std::optional<ImportedGpuFrame>, 3> pending_imported_{};
   // Latest pending host upload per FrameRole. The shared pixel owner keeps the
   // worker-produced copy alive until QRhi has copied it into its upload batch.
-  std::array<std::optional<ViewerFrame>, 3> pending_host_{};
+  std::array<std::optional<ViewerFrame>, 3>      pending_host_{};
+  std::optional<ViewerFrame>                     mapped_host_;
   std::uint64_t imported_sequence_ = 0;
   ViewerViewState view_state_{};
   std::uint64_t submitted_frame_count_ = 0;

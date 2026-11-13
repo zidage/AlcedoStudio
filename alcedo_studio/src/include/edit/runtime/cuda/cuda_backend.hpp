@@ -1,0 +1,369 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <cuda_runtime.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <vector>
+
+#include "edit/geometry/types.hpp"
+#include "edit/runtime/ai_mask_coverage_work.hpp"
+#include "edit/runtime/byte_range.hpp"
+#include "edit/runtime/content_key.hpp"
+#include "edit/runtime/cuda/cuda_gpu_timestamp_pool.hpp"
+#include "edit/runtime/texture_format.hpp"
+#include "gpu/gpu_device_memory.hpp"
+
+namespace alcedo {
+
+struct CudaLutBinding {
+  const void*   device_pointer = nullptr;
+  std::uint64_t resource_id    = 0;
+  std::uint32_t edge_size      = 0;
+};
+
+/**
+ * @brief CUDA stream plus a recorded completion event for one in-flight submission.
+ *
+ * Owns the stream and event. Not thread-safe.
+ */
+class CudaCommandContext {
+ public:
+  CudaCommandContext();
+  ~CudaCommandContext();
+
+  CudaCommandContext(const CudaCommandContext&)                    = delete;
+  auto operator=(const CudaCommandContext&) -> CudaCommandContext& = delete;
+  CudaCommandContext(CudaCommandContext&& other) noexcept;
+  auto               operator=(CudaCommandContext&& other) noexcept -> CudaCommandContext&;
+
+  [[nodiscard]] auto Stream() const -> cudaStream_t { return stream_; }
+  [[nodiscard]] auto Event() const -> cudaEvent_t { return event_; }
+  [[nodiscard]] auto SubmissionId() const -> std::uint64_t { return submission_id_; }
+  void               SetSubmissionId(std::uint64_t id) { submission_id_ = id; }
+
+ private:
+  void          Destroy() noexcept;
+
+  cudaStream_t  stream_        = nullptr;
+  cudaEvent_t   event_         = nullptr;
+  std::uint64_t submission_id_ = 0;
+};
+
+/**
+ * @brief CUDA resource factory and allocation/H2D counters for the DAG workspace.
+ *
+ * All cudaMalloc / cudaFree for this device go through CreateBuffer / CreateTexture2D
+ * and Buffer/Texture2D destructors. Not thread-safe. One in-flight submission.
+ */
+class CudaBackend {
+ public:
+  static constexpr std::uint32_t kCapabilityVersion = 1;
+  static constexpr const char*   kName              = "CUDA";
+
+  /** @brief Exclusive-stage transient cap from device memory, floored at 256 MiB. */
+  [[nodiscard]] auto MaxTransientBytes() const -> std::size_t;
+
+  class Buffer {
+   public:
+    Buffer() = default;
+    Buffer(CudaBackend* owner, void* ptr, std::size_t bytes, std::uint64_t id);
+    ~Buffer();
+
+    Buffer(const Buffer&)                    = delete;
+    auto operator=(const Buffer&) -> Buffer& = delete;
+    Buffer(Buffer&& other) noexcept;
+    auto               operator=(Buffer&& other) noexcept -> Buffer&;
+
+    [[nodiscard]] auto DevicePointer() const -> void* { return ptr_; }
+    [[nodiscard]] auto Bytes() const -> std::size_t { return bytes_; }
+    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
+    [[nodiscard]] auto Empty() const -> bool { return ptr_ == nullptr; }
+
+    void               Reset() noexcept;
+
+   private:
+    CudaBackend*  owner_       = nullptr;
+    void*         ptr_         = nullptr;
+    std::size_t   bytes_       = 0;
+    std::uint64_t resource_id_ = 0;
+  };
+
+  class Texture2D {
+   public:
+    Texture2D() = default;
+    Texture2D(CudaBackend* owner, void* ptr, std::size_t bytes, std::uint32_t width,
+              std::uint32_t height, TextureFormat format, std::uint64_t id);
+    ~Texture2D();
+
+    Texture2D(const Texture2D&)                    = delete;
+    auto operator=(const Texture2D&) -> Texture2D& = delete;
+    Texture2D(Texture2D&& other) noexcept;
+    auto               operator=(Texture2D&& other) noexcept -> Texture2D&;
+
+    [[nodiscard]] auto DevicePointer() const -> void* { return ptr_; }
+    [[nodiscard]] auto Bytes() const -> std::size_t { return bytes_; }
+    [[nodiscard]] auto Width() const -> std::uint32_t { return width_; }
+    [[nodiscard]] auto Height() const -> std::uint32_t { return height_; }
+    [[nodiscard]] auto Format() const -> TextureFormat { return format_; }
+    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
+
+    void               Reset() noexcept;
+
+   private:
+    CudaBackend*  owner_       = nullptr;
+    void*         ptr_         = nullptr;
+    std::size_t   bytes_       = 0;
+    std::uint32_t width_       = 0;
+    std::uint32_t height_      = 0;
+    TextureFormat format_      = TextureFormat::R8;
+    std::uint64_t resource_id_ = 0;
+  };
+
+  using Slab                                                       = Buffer;
+  using CommandContext                                             = CudaCommandContext;
+  using SceneWorkImage                                             = Texture2D;
+
+  CudaBackend()                                                    = default;
+  ~CudaBackend()                                                   = default;
+
+  CudaBackend(const CudaBackend&)                                  = delete;
+  auto               operator=(const CudaBackend&) -> CudaBackend& = delete;
+
+  [[nodiscard]] auto CreateBuffer(std::size_t bytes) -> Buffer;
+  [[nodiscard]] auto CreateSlab(std::size_t bytes) -> Buffer { return CreateBuffer(bytes); }
+  [[nodiscard]] auto CreateTexture2D(std::uint32_t width, std::uint32_t height,
+                                     TextureFormat format) -> Texture2D;
+  /**
+   * @brief Allocate one RGBA32F scene-work member as a linear CUDA texture.
+   *
+   * Same storage as @ref CreateTexture2D. Owned by SceneWorkImagePair, not
+   * GraphImageCache or TexturePool.
+   */
+  [[nodiscard]] auto CreateSceneWorkImage(std::uint32_t width, std::uint32_t height)
+      -> SceneWorkImage {
+    return CreateTexture2D(width, height, TextureFormat::Rgba32f);
+  }
+
+  void UploadBufferRange(Buffer& buffer, std::uint32_t offset, std::span<const std::byte> bytes,
+                         CommandContext& command_context);
+  void DownloadBufferRange(const Buffer& buffer, std::uint32_t offset, std::span<std::byte> out,
+                           CommandContext& command_context) const;
+
+  /**
+   * @brief Copy tightly packed host rows into a linear Texture2D. @p bytes size must equal
+   *        texture.Bytes().
+   */
+  void UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
+                       CommandContext& command_context);
+  /**
+   * @brief Device-to-device copy of matching RGBA32F textures for identity geometry/camera.
+   */
+  void CopyTexture2D(const Texture2D& src, Texture2D& dst, CommandContext& command_context);
+  /** @brief Upload a tightly packed R8 rectangle into an R8 texture. */
+  void UploadR8TextureRect(Texture2D& texture, RectI rectangle, std::span<const std::byte> bytes,
+                           CommandContext& command_context);
+  void DownloadTexture2D(const Texture2D& texture, std::span<std::byte> out,
+                         CommandContext& command_context) const;
+
+  /**
+   * @brief Record the Feather and Expand passes of @p dispatch on the stream (SM8.2): the
+   *        morphology steps and the two Feather passes of @ref AiMaskEdgeDispatch, from
+   *        `textures.source` to `textures.output`. Defined in cuda_ai_mask_coverage.cu.
+   *
+   * Does not wait. The caller keeps every texture alive until the submission completes.
+   *
+   * @throws std::runtime_error when a required texture is missing or has the wrong size or
+   *         format, or when a kernel launch fails. Recorded passes then write only the output and
+   *         work textures, which the caller discards.
+   */
+  void RecordAiMaskEdge(const AiMaskEdgeDispatch&            dispatch,
+                        const AiMaskEdgeTextures<Texture2D>& textures,
+                        CommandContext&                      command_context);
+
+  /**
+   * @brief Host-to-device copy into an arbitrary device pointer (transient CFA, etc.).
+   */
+  void UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
+                          CommandContext& command_context);
+
+  void Submit(CommandContext& command_context);
+  void Wait(CommandContext& command_context);
+  /**
+   * @brief Block until kernels already recorded on this stream have finished.
+   *
+   * Used to free Develop scratch before Geometry runs. Does not submit or change
+   * in-flight submission state.
+   */
+  void SynchronizeRecordedWork(CommandContext& command_context);
+
+  /**
+   * @brief Record a CUDA timing start event for the current preview pass or sub-stage.
+   *
+   * No host wait. No-op when preview timing is Off or no pass is open.
+   */
+  void BeginGpuWorkSample(CommandContext& command_context);
+  /** @brief Record the matching CUDA timing stop event. No host wait. */
+  void EndGpuWorkSample(CommandContext& command_context);
+  /**
+   * @brief Publish elapsed GPU times for timestamp pairs whose stop events have completed.
+   *
+   * Does not wait. Call after Wait or a present stream sync.
+   */
+  void ResolveGpuTimestamps();
+  /** @brief Recycle timestamp slots without publishing durations. */
+  void DiscardGpuTimestamps();
+
+  [[nodiscard]] auto GpuTimestampInFlightCount() const -> std::size_t {
+    return gpu_timestamps_.InFlightCount();
+  }
+  [[nodiscard]] auto GpuTimestampSlotCount() const -> std::size_t {
+    return gpu_timestamps_.SlotCount();
+  }
+  [[nodiscard]] auto HostWaitCount() const -> std::uint64_t { return host_wait_count_; }
+
+  [[nodiscard]] auto AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
+                                std::uint32_t edge, CommandContext& command_context)
+      -> CudaLutBinding;
+  /**
+   * @brief Device copy of a read-only table with a content key, in the storage and byte limit of
+   *        the LUT cache. The binding has an edge size of 0.
+   *
+   * @p key and @p bytes must not be empty. Uploads only when the device does not hold @p key.
+   * @throws std::runtime_error when the allocation or the upload fails. Nothing is kept then.
+   */
+  [[nodiscard]] auto AcquireKeyedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                        CommandContext& command_context) -> CudaLutBinding;
+  [[nodiscard]] auto DummyLut() -> CudaLutBinding;
+  void               SetLutByteBudget(std::size_t bytes);
+
+  [[nodiscard]] auto HasInFlightSubmission() const -> bool { return in_flight_submission_ != 0; }
+  [[nodiscard]] auto CompletedSubmission() const -> std::uint64_t { return completed_submission_; }
+  [[nodiscard]] auto IsResourceBusy(std::uint64_t submitted_on) const -> bool {
+    return submitted_on != 0 && submitted_on > completed_submission_;
+  }
+  [[nodiscard]] auto NextSubmissionId() -> std::uint64_t { return ++next_submission_; }
+
+  void               NoteFree(std::size_t bytes) noexcept {
+    ++free_count_;
+    live_bytes_ -= bytes;
+    --live_allocations_;
+  }
+
+  void               ResetCounters();
+  void               FailNextUpload();
+  /**
+   * @brief Test hook: let @p uploads_to_pass more upload calls run, then fail the next one
+   *        with std::runtime_error. @ref FailNextUpload is `FailUploadAfter(0)`.
+   */
+  void FailUploadAfter(std::uint32_t uploads_to_pass) { uploads_before_failure_ = uploads_to_pass; }
+  /**
+   * @brief Test hook: let @p allocations_to_pass more CreateTexture2D calls run, then fail the
+   *        next one with std::runtime_error.
+   */
+  void FailTextureAllocationAfter(std::uint32_t allocations_to_pass) {
+    allocations_before_failure_ = allocations_to_pass;
+  }
+  void               NoteHostToDeviceBegin() { last_h2d_ranges_.clear(); }
+
+  [[nodiscard]] auto MallocCount() const -> std::uint64_t { return malloc_count_; }
+  [[nodiscard]] auto FreeCount() const -> std::uint64_t { return free_count_; }
+  [[nodiscard]] auto HostToDeviceCopyCount() const -> std::uint64_t { return h2d_copy_count_; }
+  /// Host downloads (DownloadTexture2D, DownloadBufferRange) since construction or the last
+  /// counter reset.
+  [[nodiscard]] auto DeviceToHostCopyCount() const -> std::uint64_t { return d2h_copy_count_; }
+  [[nodiscard]] auto HostToDeviceBytes() const -> std::uint64_t { return h2d_bytes_; }
+  [[nodiscard]] auto LastHostToDeviceRanges() const -> const std::vector<ByteRange>& {
+    return last_h2d_ranges_;
+  }
+  [[nodiscard]] auto LastTextureRectangles() const -> const std::vector<RectI>& {
+    return last_texture_rectangles_;
+  }
+  [[nodiscard]] auto LutUploadBytes() const -> std::uint64_t { return lut_upload_bytes_; }
+  [[nodiscard]] auto LastLutResourceId() const -> std::uint64_t { return last_lut_resource_id_; }
+
+  [[nodiscard]] auto QueryDeviceMemory() const -> GpuDeviceMemorySnapshot;
+  /// Device memory of the live buffers and textures of this backend.
+  [[nodiscard]] auto AllocationTotals() const -> GpuBackendAllocationTotals {
+    return {.live_bytes = live_bytes_, .live_allocations = live_allocations_};
+  }
+
+ private:
+  /// True when the armed test failure is due on this call; disarms it then.
+  [[nodiscard]] static auto ConsumeInjectedFailure(std::optional<std::uint32_t>& calls_to_pass)
+      -> bool {
+    if (!calls_to_pass.has_value()) {
+      return false;
+    }
+    if (*calls_to_pass == 0) {
+      calls_to_pass.reset();
+      return true;
+    }
+    --*calls_to_pass;
+    return false;
+  }
+  [[nodiscard]] auto ConsumeInjectedUploadFailure() -> bool {
+    return ConsumeInjectedFailure(uploads_before_failure_);
+  }
+
+  friend class Buffer;
+  friend class Texture2D;
+
+  void NoteMalloc(std::size_t bytes) noexcept {
+    ++malloc_count_;
+    live_bytes_ += bytes;
+    ++live_allocations_;
+  }
+  /// cudaMalloc of @p bytes. A failure writes the gpu.alloc.failed line, then throws. The first
+  /// allocation of this backend writes gpu.alloc.first.
+  [[nodiscard]] auto     AllocateDevice(std::size_t bytes, const char* operation) -> void*;
+  /// The cached device buffer of @p key and @p edge, after an upload when the device has none.
+  [[nodiscard]] auto     AcquireCachedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                             std::uint32_t edge, CommandContext& command_context)
+      -> CudaLutBinding;
+
+  std::uint64_t          malloc_count_         = 0;
+  // Not cleared by ResetCounters: they describe the device memory, not a measurement window.
+  std::size_t                  live_bytes_              = 0;
+  std::uint64_t                live_allocations_        = 0;
+  bool                         first_allocation_logged_ = false;
+  std::uint64_t          free_count_           = 0;
+  std::uint64_t          h2d_copy_count_       = 0;
+  mutable std::uint64_t        d2h_copy_count_       = 0;
+  std::uint64_t          h2d_bytes_            = 0;
+  std::uint64_t          next_resource_id_     = 1;
+  std::uint64_t          next_submission_      = 0;
+  std::uint64_t          in_flight_submission_ = 0;
+  std::uint64_t          completed_submission_ = 0;
+  std::optional<std::uint32_t> uploads_before_failure_;
+  std::optional<std::uint32_t> allocations_before_failure_;
+  std::vector<ByteRange> last_h2d_ranges_;
+  std::vector<RectI>     last_texture_rectangles_;
+  std::uint64_t          lut_upload_bytes_     = 0;
+  std::uint64_t          last_lut_resource_id_ = 0;
+  std::size_t            lut_byte_budget_      = 64ull << 20;
+  std::size_t            lut_cache_bytes_      = 0;
+  std::uint64_t          lut_lru_clock_        = 0;
+  struct LutCacheEntry {
+    ContentKey    key;
+    Buffer        buffer;
+    std::uint32_t edge_size            = 0;
+    std::size_t   bytes                = 0;
+    std::uint64_t lru_tick             = 0;
+    std::uint64_t last_used_submission = 0;
+  };
+  std::vector<LutCacheEntry> lut_cache_;
+  Buffer                     dummy_lut_;
+  CudaGpuTimestampPool       gpu_timestamps_;
+  std::uint64_t              host_wait_count_ = 0;
+};
+
+inline constexpr std::uint32_t kCudaDagBackendCapabilityVersion = CudaBackend::kCapabilityVersion;
+
+}  // namespace alcedo

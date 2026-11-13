@@ -85,10 +85,8 @@ TEST_F(EditorSaveCheckpointCaptureTest, CaptureContainsElementVersionRootHeadHas
   EXPECT_EQ(capture.journal_records.front().kind, MiniGitJournalRecordKind::kEditCommit);
   EXPECT_EQ(capture.journal_records.back().kind, MiniGitJournalRecordKind::kEditCommit);
   ASSERT_TRUE(capture.materialization.image_state.serialized_pipeline_state.has_value());
-  EXPECT_FLOAT_EQ(capture.materialization.image_state.serialized_pipeline_state
-                      ->at("pipeline_params")
-                      .at("exposure")
-                      .get<float>(),
+  EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(
+                      *capture.materialization.image_state.serialized_pipeline_state),
                   0.9f);
 }
 
@@ -278,25 +276,27 @@ TEST_F(EditorSaveCheckpointCaptureTest, EmptyJournalWithClaimedSequenceRangeStar
   EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 0u);
 }
 
-TEST_F(EditorSaveCheckpointCaptureTest, NonContiguousJournalSequencesStartNoMaterialization) {
+/// Journal sequences are identities, not counts: a revoked tail record leaves a
+/// hole that is never reused. A hole must not block save; the capture's
+/// materialization is still the authority and the WAL is cleared afterwards.
+TEST_F(EditorSaveCheckpointCaptureTest, JournalSequenceHoleStillMaterializesAndClearsJournal) {
   ASSERT_TRUE(
       project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementA, 0.0f, 0.3f));
   ASSERT_TRUE(
       project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementA, 0.3f, 0.7f));
   auto capture = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 0.7f);
   ASSERT_EQ(capture.journal_records.size(), 2u);
-  // Keep bounds aligned with front/back while inserting a hole so validation
-  // fails on contiguity, not on range identity.
+  // Keep bounds aligned with front/back while inserting a hole.
   capture.journal_records.back().sequence = capture.journal_records.front().sequence + 2;
   capture.last_journal_sequence           = capture.journal_records.back().sequence;
 
   std::string error;
   const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
-  EXPECT_FALSE(result.accepted);
-  EXPECT_FALSE(result.materialized);
-  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 0u);
-  EXPECT_EQ(
-      project_.ReadJournalRecords(test::EditorMiniGitProjectFixture::kElementA, &error).size(), 2u)
+  EXPECT_TRUE(result.accepted) << error << " / " << result.error;
+  EXPECT_TRUE(result.materialized);
+  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 2u);
+  EXPECT_TRUE(
+      project_.ReadJournalRecords(test::EditorMiniGitProjectFixture::kElementA, &error).empty())
       << error;
 }
 

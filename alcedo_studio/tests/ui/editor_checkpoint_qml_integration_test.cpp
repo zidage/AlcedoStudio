@@ -3,7 +3,8 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file editor_checkpoint_qml_integration_test.cpp
-/// @brief Phase 6C-5 Phase 6B: proves that the five QML entry surfaces are blocked
+/// @brief Phase 6C-5 Phase 6B: proves that the four QML entry surfaces are blocked
+///        during an editor save and recover after the task finishes.
 ///        during an editor save and recover after the task finishes.
 ///
 /// Each guarded QML entrypoint is exercised through its real component properties
@@ -37,7 +38,7 @@ void SpinEventLoop(int ms) {
   loop.exec();
 }
 
-/// Register an EditorSave task holding the five checkpoint locks and return its
+/// Register an EditorSave task holding the four checkpoint locks and return its
 /// id. Mirrors EditorSessionTaskPort::BeginTask but operates directly on the
 /// shared controller so the test observes the exact production lock set.
 auto RegisterEditorSaveTask(BackgroundTaskController& registry,
@@ -55,7 +56,6 @@ auto RegisterEditorSaveTask(BackgroundTaskController& registry,
       {InteractionCapability::SwitchWorkspace, 0, reason},
       {InteractionCapability::CheckoutVersion, 0, reason},
       {InteractionCapability::PasteAdjustments, 0, reason},
-      {InteractionCapability::MergeAdjustments, 0, reason},
   };
   return registry.RegisterTask(snap);
 }
@@ -77,7 +77,7 @@ auto HasProperty(QObject* obj, const char* name) -> bool {
 }
 
 TEST_F(EditorCheckpointQmlIntegrationTest,
-       FiveQmlEntrySurfacesBlockedDuringSaveAndRecoverAfterFinish) {
+       FourQmlEntrySurfacesBlockedDuringSaveAndRecoverAfterFinish) {
   auto loaded = LoadMainWindow(true);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr) << "Main.qml window failed to load";
@@ -102,12 +102,10 @@ TEST_F(EditorCheckpointQmlIntegrationTest,
   const bool can_switch_before = policy->CanSwitchWorkspace();
   const bool can_checkout_before = policy->CanCheckoutVersion();
   const bool can_paste_before = policy->CanPasteAdjustments();
-  const bool can_merge_before = policy->CanMergeAdjustments();
   EXPECT_TRUE(can_select_before) << "SelectEditorImage blocked before save task";
   EXPECT_TRUE(can_switch_before) << "SwitchWorkspace blocked before save task";
   EXPECT_TRUE(can_checkout_before) << "CheckoutVersion blocked before save task";
   EXPECT_TRUE(can_paste_before) << "PasteAdjustments blocked before save task";
-  EXPECT_TRUE(can_merge_before) << "MergeAdjustments blocked before save task";
 
   // ── QML component property checks before save ──
   // Filmstrip
@@ -138,22 +136,20 @@ TEST_F(EditorCheckpointQmlIntegrationTest,
         << "Paste blocked before save";
   }
 
-  // ── Start an editor-save task with the five checkpoint locks ──
+  // ── Start an editor-save task with the four checkpoint locks ──
   const QString task_id = RegisterEditorSaveTask(*tasks);
   EXPECT_FALSE(task_id.isEmpty());
   SpinEventLoop(100);
 
-  // ── C++ policy: all five checkpoint capabilities are blocked with reason ──
+  // ── C++ policy: all four checkpoint capabilities are blocked with reason ──
   EXPECT_FALSE(policy->CanSelectEditorImage());
   EXPECT_FALSE(policy->CanSwitchWorkspace());
   EXPECT_FALSE(policy->CanCheckoutVersion());
   EXPECT_FALSE(policy->CanPasteAdjustments());
-  EXPECT_FALSE(policy->CanMergeAdjustments());
   EXPECT_FALSE(policy->SelectEditorImageReason().isEmpty());
   EXPECT_FALSE(policy->SwitchWorkspaceReason().isEmpty());
   EXPECT_FALSE(policy->CheckoutVersionReason().isEmpty());
   EXPECT_FALSE(policy->PasteAdjustmentsReason().isEmpty());
-  EXPECT_FALSE(policy->MergeAdjustmentsReason().isEmpty());
 
   // Non-checkpoint capabilities remain available.
   EXPECT_TRUE(policy->CanChangeSemanticModel());
@@ -191,27 +187,22 @@ TEST_F(EditorCheckpointQmlIntegrationTest,
         << "History rail itself disabled when only checkout is locked";
   }
 
-  // Adjustment transfer actions: paste/merge is blocked with reason.
+  // Adjustment transfer actions: paste is blocked with reason.
   if (points.transfer_actions) {
     EXPECT_FALSE(ReadBool(points.transfer_actions, "pasteEnabled"))
         << "Paste still enabled during save";
-    if (HasProperty(points.transfer_actions, "mergeEnabled")) {
-      EXPECT_FALSE(ReadBool(points.transfer_actions, "mergeEnabled"))
-          << "Merge still enabled during save";
-    }
-    // Version checkout UI belongs to 6C-6; paste/merge are checked here.
+    EXPECT_FALSE(HasProperty(points.transfer_actions, "mergeEnabled"));
   }
 
   // ── Finish the save task ──
   tasks->FinishTask(task_id, BackgroundTaskState::Succeeded);
   SpinEventLoop(100);
 
-  // ── All five checkpoint capabilities recover ──
+  // ── All four checkpoint capabilities recover ──
   EXPECT_TRUE(policy->CanSelectEditorImage());
   EXPECT_TRUE(policy->CanSwitchWorkspace());
   EXPECT_TRUE(policy->CanCheckoutVersion());
   EXPECT_TRUE(policy->CanPasteAdjustments());
-  EXPECT_TRUE(policy->CanMergeAdjustments());
 
   // ── QML entry surfaces recover ──
   if (points.filmstrip) {
@@ -263,7 +254,6 @@ TEST_F(EditorCheckpointQmlIntegrationTest,
   EXPECT_TRUE(policy->CanSwitchWorkspace());
   EXPECT_TRUE(policy->CanCheckoutVersion());
   EXPECT_TRUE(policy->CanPasteAdjustments());
-  EXPECT_TRUE(policy->CanMergeAdjustments());
 
   // QML surfaces recover.
   if (points.filmstrip) {

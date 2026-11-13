@@ -7,7 +7,7 @@
 #include <QString>
 #include <QVariantMap>
 
-#include "edit/pipeline/default_pipeline_params.hpp"
+#include "app/editor_adjustment_context.hpp"
 
 namespace alcedo::ui {
 
@@ -22,8 +22,7 @@ EditorLensCatalogModel::EditorLensCatalogModel(QObject* parent) : QObject(parent
 
   status_text_ = brands_.isEmpty() ? tr("Lens catalog is unavailable")
                                    : tr("%1 lens brands available").arg(brands_.size());
-  default_params_json_ =
-      QString::fromStdString(pipeline_defaults::MakeDefaultLensCalibParams().dump());
+  default_params_json_ = QString::fromStdString(MakeDefaultLensCalibrationWriteJson().dump());
 }
 
 QVariantList EditorLensCatalogModel::modelsForBrand(const QString& brand) const {

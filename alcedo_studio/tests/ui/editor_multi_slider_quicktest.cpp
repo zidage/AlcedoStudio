@@ -6,11 +6,12 @@
 // session path (not a UI-only fake).
 //
 // Drag sat → immediately drag vib → models call EditorSessionController::submitPatch
-// → backend Patch/Commit → real EditorSessionHistoryPort Capture/Commit against a
-// live CPUPipelineExecutor. A concurrent "render" worker holds GetRenderLock and
-// BlockingQueued to the GUI (present handshake shape). If Capture/Commit block on
-// that lock while the worker waits for the GUI, the handoff freezes — the hang
-// users report when switching sliders quickly during a busy render.
+// → backend Patch/Commit → real EditorSessionHistoryPort Capture/Commit against the
+// editor's working document. A concurrent "render" worker holds the preview snapshot
+// of its frame and BlockingQueued to the GUI (present handshake shape). If
+// Capture/Commit waited for that frame while the worker waits for the GUI, the
+// handoff would freeze — the hang users reported when switching sliders quickly
+// during a busy render.
 //
 // Build (win_release):
 //   cmd /c scripts\msvc_env.cmd --build --preset win_release --parallel 4 --target
@@ -47,9 +48,10 @@
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
 #include "app/pipeline_service.hpp"
-#include "edit/history/commit_graph.hpp"
-#include "edit/operators/operator_registeration.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "support/editor_lease_test_support.hpp"
+#include "support/editor_parameter_target_test.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
@@ -64,31 +66,18 @@ auto SrcQmlDir() -> QString {
       (std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml").string());
 }
 
-auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
-  auto guard       = std::make_shared<alcedo::PipelineGuard>();
-  guard->id_       = element_id;
-  guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
-  guard->commit_graph_ =
-      std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
-  guard->root_id_ = guard->commit_graph_->GetRootId();
-  return guard;
-}
-
-/// Production-shaped session backend: real Mini-Git history + pipeline guard.
-/// Patch/Commit call history Capture/Commit (GUI-thread, same as service).
-/// After each patch, a render worker holds GetRenderLock and may BlockingQueued
-/// to the GUI — the cross-thread shape of Apply + present.
+/// Production-shaped session backend: real Mini-Git history + in-memory editor lease.
+/// submitPatch enqueues typed input without writing the working document. Patch/Commit
+/// remain available for owner consume tests that call them directly.
 class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
  public:
   explicit ProductionSessionBackend(QObject* gui_anchor) : gui_anchor_(gui_anchor) {
-    RegisterAllOperators();
     const auto stamp =
         std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
     journal_path_ = std::filesystem::temp_directory_path() / ("qml_multi_slider_" + stamp + ".wal");
-    guard_        = MakeGuard(42);
     pipeline_port_ = std::make_shared<EditorSessionPipelinePort>();
-    pipeline_port_->SetServices(
-        EditorSessionPipelineMappers{{}, [g = guard_](sl_element_id_t) { return g; }});
+    pipeline_port_->SetServices(EditorSessionPipelineMappers{
+        {}, [](sl_element_id_t id) { return alcedo::test::MakeInMemoryEditorLease(id); }});
     history_.SetServices(
         EditorSessionHistoryPort::Services{[this](sl_element_id_t) { return journal_path_; }});
     history_.SetPipelinePort(pipeline_port_);
@@ -122,17 +111,6 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
   auto active() const -> bool override { return true; }
   auto has_image() const -> bool override { return true; }
   auto last_error() const -> std::string override { return last_error_; }
-  auto adjustment_snapshot() const -> alcedo::EditorRenderAdjustmentSnapshot override {
-    alcedo::EditorRenderAdjustmentSnapshot snap;
-    std::string                            error;
-    if (handle_.valid) {
-      // ReadAdjustmentSnapshot is non-const on the port; snapshot is still
-      // logically const for the backend API.
-      const_cast<EditorSessionHistoryPort&>(history_).ReadAdjustmentSnapshot(handle_, &snap,
-                                                                             &error);
-    }
-    return snap;
-  }
   auto render_busy() const -> bool override { return render_busy_.load(); }
 
   void SetPresentationSinkId(alcedo::PresentationSinkId) override {}
@@ -170,14 +148,54 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
     return ApplyPatch(std::move(patch), /*settled=*/true);
   }
 
+  auto EnqueueAdjustmentInput(alcedo::EditorAdjustmentPatch patch)
+      -> alcedo::EditorSessionResult override {
+    const auto admitted = pending_input_.AdmitFieldChange(identity_, patch);
+    alcedo::EditorSessionResult result;
+    result.state    = state_;
+    result.identity = identity_;
+    if (!admitted.accepted) {
+      result.kind    = alcedo::EditorSessionResultKind::Rejected;
+      result.message = admitted.error;
+      return result;
+    }
+    if (patch.settled) {
+      ++commit_count_;
+    } else {
+      ++patch_count_;
+    }
+    result.kind    = alcedo::EditorSessionResultKind::Accepted;
+    result.message = "Adjustment input queued";
+    return result;
+  }
+
+  auto EnqueuePendingInputBoundary(alcedo::EditorPendingInputBoundaryKind kind,
+                                   std::optional<alcedo::EditCommitAttribution> = std::nullopt)
+      -> alcedo::EditorSessionResult override {
+    const auto admitted = pending_input_.AdmitBoundary(identity_, kind);
+    alcedo::EditorSessionResult result;
+    result.state    = state_;
+    result.identity = identity_;
+    if (!admitted.accepted) {
+      result.kind    = alcedo::EditorSessionResultKind::Rejected;
+      result.message = admitted.error;
+      return result;
+    }
+    result.kind    = alcedo::EditorSessionResultKind::Accepted;
+    result.message = "Adjustment input boundary queued";
+    return result;
+  }
+
+  [[nodiscard]] auto PeekPendingInput() const -> alcedo::EditorPendingInputView override {
+    return pending_input_.Peek();
+  }
+
   // --- stats for QML ---
   int  patch_count() const { return patch_count_; }
   int  commit_count() const { return commit_count_; }
   int  history_fail_count() const { return history_fail_count_; }
   int  max_history_ms() const { return max_history_ms_; }
   bool history_ok() const { return handle_.valid && last_error_.empty(); }
-
-  auto pipeline_guard() const -> std::shared_ptr<alcedo::PipelineGuard> { return guard_; }
 
   void StartContendedRenderLoop() {
     StopRenderWorker();
@@ -186,17 +204,18 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
     render_busy_       = true;
     render_worker_     = std::thread([this] {
       while (!stop_render_.load()) {
-        if (!guard_ || !guard_->pipeline_) {
+        // A frame renders the preview snapshot taken at its dispatch.
+        auto frame = pipeline_port_->CurrentPreview(42);
+        if (!frame) {
           break;
         }
-        std::unique_lock<std::mutex> held(guard_->pipeline_->GetRenderLock());
-        // Simulate GPU Apply wall time while lock is held.
+        // Simulate GPU Apply wall time while the frame is in flight.
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
-        // Present handshake: worker needs GUI while still holding the lock.
+        // Present handshake: worker needs GUI while the frame is still in flight.
         if (gui_anchor_ && !stop_render_.load()) {
           QMetaObject::invokeMethod(gui_anchor_, [] {}, Qt::BlockingQueuedConnection);
         }
-        held.unlock();
+        frame.reset();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
       continuous_render_ = false;
@@ -260,6 +279,7 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
     }
 
     std::string error;
+    patch = alcedo::test::WithColorGradeTarget(std::move(patch));
     // Same order as EditorSessionEditController::HandlePatch.
     if (!history_.CaptureAdjustmentBeforePreview(handle_, patch, &error)) {
       ++history_fail_count_;
@@ -290,8 +310,8 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
             .count());
     max_history_ms_ = std::max(max_history_ms_, ms);
 
-    // One-shot render frame when no continuous worker is running: hold lock
-    // briefly then present to GUI. Tracked so destructor can join.
+    // One-shot render frame when no continuous worker is running: hold the
+    // frame briefly then present to GUI. Tracked so destructor can join.
     if (!render_busy_.load() && !continuous_render_.load()) {
       LaunchOneShotRender();
     }
@@ -323,8 +343,7 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
     oneshot_running_ = true;
     render_busy_     = true;
     oneshot_worker_  = std::thread([this] {
-      if (guard_ && guard_->pipeline_ && !stop_oneshot_.load()) {
-        std::unique_lock<std::mutex> held(guard_->pipeline_->GetRenderLock());
+      if (auto frame = pipeline_port_->CurrentPreview(42); frame && !stop_oneshot_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
         if (!stop_oneshot_.load() && gui_anchor_) {
           QMetaObject::invokeMethod(gui_anchor_, [] {}, Qt::BlockingQueuedConnection);
@@ -337,7 +356,6 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
 
   QObject*                                   gui_anchor_ = nullptr;
   std::filesystem::path                      journal_path_;
-  std::shared_ptr<alcedo::PipelineGuard>     guard_;
   std::shared_ptr<EditorSessionPipelinePort> pipeline_port_;
   EditorSessionHistoryPort                   history_;
   alcedo::EditorHistoryGuardHandle           handle_{};
@@ -345,6 +363,7 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
   alcedo::EditorSessionIdentity              identity_{};
   alcedo::ImageLoadRequestId                 image_load_request_{};
   std::string                                last_error_;
+  alcedo::EditorPendingInputQueue            pending_input_;
 
   int                                        patch_count_        = 0;
   int                                        commit_count_       = 0;
@@ -558,7 +577,7 @@ class HangProbe : public QObject {
   ///   - multi-slider handoff (finish A, immediately drag B)
   ///   - track click far from handle (must not jump after handle-only change)
   ///   - double-click reset on the handle
-  /// Optional contended GetRenderLock + BlockingQueued present shape.
+  /// Optional contended in-flight frame + BlockingQueued present shape.
   /// Returns false on event-loop death, single-op hang, or if handle drags
   /// failed to change values (simulation is inert).
   Q_INVOKABLE bool runFuzzyStress(QQuickItem* sat_slider, QQuickItem* vib_slider, int iterations,
@@ -933,6 +952,12 @@ class QuickTestSetup : public QObject {
     if (backend_) {
       backend_->StopRenderWorker();
     }
+    // The probe, the models, and the controller use the backend; delete them before the backend
+    // member is destroyed (QObject would delete these children only after it).
+    delete probe_;
+    delete sat_;
+    delete vib_;
+    delete session_;
   }
 
  public slots:

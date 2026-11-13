@@ -79,6 +79,7 @@ auto DirectPresentQueue::SnapshotLocked(int index) const -> SlotSnapshot {
   snap.native            = slot.native;
   snap.presentation_mode = slot.presentation_mode;
   snap.preview_metadata  = slot.preview_metadata;
+  snap.geometry          = slot.geometry;
   snap.session_epoch  = slot.session_epoch;
   snap.image_identity    = slot.image_identity;
   snap.sequence          = slot.sequence;
@@ -217,20 +218,22 @@ auto DirectPresentQueue::DrainSizeRequests() -> std::vector<SizeRequest> {
 
 auto DirectPresentQueue::WaitUntilConsumerAvailable(std::chrono::milliseconds timeout) -> bool {
   std::unique_lock lock(mutex_);
-  if (!wake_.wait_for(lock, timeout, [&] { return shutdown_ || consumer_available_; })) {
+  if (!wake_.wait_for(lock, timeout, [&] {
+        return shutdown_ || presentation_suspended_ || consumer_available_;
+      })) {
     return false;
   }
-  return consumer_available_ && !shutdown_;
+  return consumer_available_ && !shutdown_ && !presentation_suspended_;
 }
 
 auto DirectPresentQueue::WaitForWritableSlot(const SizeRequest& request) -> std::optional<int> {
   std::unique_lock lock(mutex_);
   // Keep waiting while the consumer is offline: the first editor frame often
-  // lands before synchronize() has flipped consumer_available. Treat suspend /
-  // shutdown as terminal, not a silent success that returns nullopt without a
-  // size request having been fulfilled.
+  // lands before synchronize() has flipped consumer_available. Suspend and
+  // shutdown are terminal: a minimized window never services the request, and
+  // waiting here would hold the render lock until the window is restored.
   wake_.wait(lock, [&] {
-    if (shutdown_) {
+    if (shutdown_ || presentation_suspended_) {
       return true;
     }
     if (!consumer_available_) {
@@ -257,7 +260,7 @@ auto DirectPresentQueue::WaitForWritableSlot(const SizeRequest& request) -> std:
     return false;
   });
 
-  if (shutdown_ || !consumer_available_) {
+  if (shutdown_ || presentation_suspended_ || !consumer_available_) {
     return std::nullopt;
   }
   if (session_epoch_ != 0 && request.session_epoch != 0 &&
@@ -342,7 +345,8 @@ void DirectPresentQueue::EndWrite(int slot_index) {
 }
 
 void DirectPresentQueue::NotifyReady(int slot_index, FramePresentationMode mode,
-                                     const FramePreviewMetadata& metadata) {
+                                     const FramePreviewMetadata&   metadata,
+                                     const ResolvedRenderGeometry& geometry) {
   std::lock_guard lock(mutex_);
   if (!IsValidSlot(slot_index)) {
     if (metadata.frame_role == FrameRole::DetailPatch) {
@@ -425,6 +429,7 @@ void DirectPresentQueue::NotifyReady(int slot_index, FramePresentationMode mode,
   slot.state             = SlotState::Ready;
   slot.presentation_mode = mode;
   slot.preview_metadata  = metadata;
+  slot.geometry          = geometry;
   slot.sequence          = ++sequence_;
   if (metadata.frame_role == FrameRole::DetailPatch) {
     qCDebug(editorPresentLog)
@@ -555,6 +560,17 @@ void DirectPresentQueue::SetConsumerAvailable(bool available) {
   }
 }
 
+void DirectPresentQueue::SetPresentationSuspended(bool suspended) {
+  std::lock_guard lock(mutex_);
+  presentation_suspended_ = suspended;
+  wake_.notify_all();
+}
+
+auto DirectPresentQueue::PresentationSuspended() const -> bool {
+  std::lock_guard lock(mutex_);
+  return presentation_suspended_;
+}
+
 void DirectPresentQueue::InvalidateTargetsLocked(bool bump_target_generation) {
   if (bump_target_generation) {
     ++target_generation_;
@@ -655,6 +671,7 @@ auto DirectPresentQueue::DiagnosticsSnapshot() const -> Diagnostics {
   diag.composed_frame_count           = composed_frame_count_;
   diag.dropped_stale_frame_count      = dropped_stale_frame_count_;
   diag.consumer_available             = consumer_available_ && !shutdown_;
+  diag.presentation_suspended         = presentation_suspended_;
   for (const auto& slot : slots_) {
     if (slot.native.valid()) {
       ++diag.live_target_count;
@@ -699,6 +716,16 @@ auto DirectPresentQueue::HasWritableSlot(int width, int height, std::uint64_t se
     }
   }
   return false;
+}
+
+auto DirectPresentQueue::HasReadyFrame() const -> bool {
+  std::lock_guard lock(mutex_);
+  for (const auto& slot : slots_) {
+    if (slot.state == SlotState::Ready) {
+      return true;
+    }
+  }
+  return !pending_requests_.empty();
 }
 
 }  // namespace alcedo::editor_rhi

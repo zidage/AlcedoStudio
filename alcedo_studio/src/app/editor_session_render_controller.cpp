@@ -31,8 +31,7 @@ void EditorSessionRenderController::SetPresentationSinkId(PresentationSinkId sin
     }
     if (pending_initial_reason_.has_value()) {
       pending_command.reason       = *pending_initial_reason_;
-    pending_command.operation_id = pending_operation_id_;
-    pending_command.adjustment   = pending_initial_adjustment_;
+      pending_command.operation_id = pending_operation_id_;
       pending_identity             = pending_session_identity_;
       pending_load_request         = pending_image_load_request_;
       has_pending                  = true;
@@ -54,8 +53,7 @@ void EditorSessionRenderController::SetPresentationSize(int width, int height) {
     presentation_height_ = std::max(0, height);
     if (pending_initial_reason_.has_value()) {
       pending_command.reason       = *pending_initial_reason_;
-    pending_command.operation_id = pending_operation_id_;
-    pending_command.adjustment   = pending_initial_adjustment_;
+      pending_command.operation_id = pending_operation_id_;
       pending_identity             = pending_session_identity_;
       pending_load_request         = pending_image_load_request_;
       has_pending                  = true;
@@ -82,18 +80,166 @@ auto EditorSessionRenderController::MakeRenderIntent(const EditorRenderCommand& 
   intent.quality               = DefaultQualityForReason(command.reason);
   intent.priority              = DefaultPriorityForReason(command.reason);
   intent.frame_role            = FrameRoleForQuality(intent.quality);
-  intent.adjustment            = command.adjustment;
   intent.geometry_overlay_only = geometry_overlay_active_.load(std::memory_order_acquire);
   intent.requested_width       = presentation_width_;
   intent.requested_height      = presentation_height_;
   intent.presentation_sink_id  = presentation_sink_id_;
   intent.cancellation          = std::make_shared<EditorRenderCancellationToken>();
+  {
+    std::scoped_lock lock(probe_source_mutex_);
+    if (probe_source_) {
+      intent.mask_coverage_probe = probe_source_();
+    }
+  }
   FillRenderIntentDefaults(intent);
   return intent;
 }
 
 void EditorSessionRenderController::SetGeometryOverlayActive(bool active) {
   geometry_overlay_active_.store(active, std::memory_order_release);
+}
+
+void EditorSessionRenderController::SetMaskCoverageProbeSource(
+    std::function<std::optional<MaskCoverageProbe>()> source) {
+  std::scoped_lock lock(probe_source_mutex_);
+  probe_source_ = std::move(source);
+}
+
+void EditorSessionRenderController::SetPresentationSuspended(
+    bool suspended, const EditorSessionIdentity& identity, ImageLoadRequestId image_load_request,
+    EditorSessionState state) {
+  SetSuspension(&EditorSessionRenderController::presentation_suspended_, suspended, identity,
+                image_load_request, state);
+}
+
+auto EditorSessionRenderController::presentation_suspended() const -> bool {
+  std::scoped_lock lock(mutex_);
+  return presentation_suspended_;
+}
+
+void EditorSessionRenderController::SetSuspendedForExport(bool suspended,
+                                                          const EditorSessionIdentity& identity,
+                                                          ImageLoadRequestId image_load_request,
+                                                          EditorSessionState state) {
+  SetSuspension(&EditorSessionRenderController::suspended_for_export_, suspended, identity,
+                image_load_request, state);
+}
+
+auto EditorSessionRenderController::suspended_for_export() const -> bool {
+  std::scoped_lock lock(mutex_);
+  return suspended_for_export_;
+}
+
+void EditorSessionRenderController::SetSuspension(bool EditorSessionRenderController::* reason,
+                                                  bool                         suspended,
+                                                  const EditorSessionIdentity& identity,
+                                                  ImageLoadRequestId           image_load_request,
+                                                  EditorSessionState           state) {
+  {
+    std::scoped_lock lock(mutex_);
+    if (this->*reason == suspended) {
+      return;
+    }
+    this->*reason = suspended;
+    if (presentation_suspended_ || suspended_for_export_) {
+      return;
+    }
+    suspended_refresh_routed_ = false;
+  }
+  RouteSuspendedRefresh(identity, image_load_request, state);
+}
+
+void EditorSessionRenderController::NoteSuspendedPresentation(
+    const EditorRenderResult& render_result, const EditorSessionIdentity& identity,
+    ImageLoadRequestId image_load_request, EditorSessionState state) {
+  const bool first_frame = MatchesActiveFirstFrame(render_result, identity, image_load_request);
+  bool       route_now   = false;
+  {
+    std::scoped_lock lock(mutex_);
+    if (suspended_image_load_request_ != image_load_request) {
+      suspended_first_frame_ = false;
+      suspended_full_frame_  = false;
+      suspended_detail_render_.reset();
+      suspended_image_load_request_ = image_load_request;
+    }
+    if (first_frame) {
+      suspended_first_frame_ = true;
+    } else if (render_result.intent.frame_role == FrameRole::DetailPatch) {
+      EditorRenderCommand command;
+      command.reason           = EditorRenderReason::DetailRefresh;
+      command.view_region      = render_result.intent.view_region;
+      suspended_detail_render_ = PendingDetailRender{command, identity, image_load_request};
+    } else {
+      suspended_full_frame_ = true;
+    }
+    // The viewport came back (or the export ended) before this refusal reached the
+    // owner: the resume found nothing to refresh, so this result routes it.
+    if (!presentation_suspended_ && !suspended_for_export_ && !suspended_refresh_routed_) {
+      route_now = true;
+    }
+  }
+  if (route_now) {
+    RouteSuspendedRefresh(identity, image_load_request, state);
+  }
+}
+
+void EditorSessionRenderController::RouteSuspendedRefresh(const EditorSessionIdentity& identity,
+                                                          ImageLoadRequestId image_load_request,
+                                                          EditorSessionState state) {
+  bool                               first_frame = false;
+  bool                               full_frame  = false;
+  std::optional<PendingDetailRender> detail;
+  EditorRenderCommand                retry;
+  {
+    std::scoped_lock lock(mutex_);
+    if (suspended_image_load_request_ != image_load_request) {
+      // Refusals of an image that is no longer open: its own open renders it.
+      suspended_first_frame_ = false;
+      suspended_full_frame_  = false;
+      suspended_detail_render_.reset();
+      return;
+    }
+    first_frame = std::exchange(suspended_first_frame_, false);
+    full_frame  = std::exchange(suspended_full_frame_, false);
+    detail      = std::exchange(suspended_detail_render_, std::nullopt);
+    if (!first_frame && !full_frame && !detail.has_value()) {
+      return;
+    }
+    suspended_refresh_routed_ = true;
+    retry.reason              = EditorRenderReason::Retry;
+    retry.operation_id        = pending_operation_id_;
+  }
+  if (identity.element_id == 0 || identity.image_id == 0 || !image_load_request.valid()) {
+    return;
+  }
+
+  if (first_frame) {
+    // The image is still loading: route its first frame again. Its Ready
+    // result enters Interactive and routes the QualityBase as usual.
+    if (state == EditorSessionState::Loading) {
+      (void)RouteInitialRender(retry, identity, image_load_request);
+    }
+    return;
+  }
+  if (state != EditorSessionState::Interactive) {
+    return;
+  }
+  if (full_frame) {
+    // Re-render the current state as a QualityBase; its Ready result routes
+    // the refused detail patch (QualityBase gates every detail refresh). A
+    // detail deferred after the refusal is newer and is kept instead.
+    if (detail.has_value()) {
+      std::scoped_lock lock(mutex_);
+      if (!pending_detail_render_.has_value()) {
+        pending_detail_render_ = std::move(detail);
+      }
+    }
+    EditorRenderCommand refresh;
+    refresh.reason = EditorRenderReason::SettledAdjustment;
+    (void)RouteInitialRender(refresh, identity, image_load_request);
+    return;
+  }
+  (void)RouteViewChange(detail->command, detail->identity, detail->image_load_request, state);
 }
 
 auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand&   command,
@@ -104,7 +250,6 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
     std::scoped_lock lock(mutex_);
     pending_initial_reason_     = command.reason;
     pending_operation_id_       = command.operation_id;
-    pending_initial_adjustment_ = command.adjustment;
     pending_session_identity_   = identity;
     pending_image_load_request_ = image_load_request;
     return 0;
@@ -142,7 +287,6 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
       first_frame_time_ms_        = -1.0;
       pending_session_identity_   = identity;
       pending_image_load_request_ = image_load_request;
-      pending_initial_adjustment_ = command.adjustment;
     }
     std::scoped_lock lock(mutex_);
     pending_initial_reason_.reset();
@@ -254,6 +398,12 @@ void EditorSessionRenderController::NotifyRenderResult(
     return;
   }
 
+  if (render_result.kind == EditorRenderResultKind::PresentationSuspended) {
+    NoteSuspendedPresentation(render_result, identity, image_load_request, state);
+    NotifyBusyIfChanged(render_result.intent.operation_id, identity, state);
+    return;
+  }
+
   if (render_result.kind == EditorRenderResultKind::Failed) {
     if (state == EditorSessionState::Loading &&
         MatchesActiveFirstFrame(render_result, identity, image_load_request)) {
@@ -313,6 +463,12 @@ void EditorSessionRenderController::NotifyRenderResult(
                           pending_detail->image_load_request, state);
   }
 
+  NotifyBusyIfChanged(render_result.intent.operation_id, identity, state);
+}
+
+void EditorSessionRenderController::NotifyBusyIfChanged(std::uint64_t                operation_id,
+                                                        const EditorSessionIdentity& identity,
+                                                        EditorSessionState           state) {
   const bool busy          = CoordinatorBusy();
   bool       should_notify = false;
   {
@@ -325,7 +481,7 @@ void EditorSessionRenderController::NotifyRenderResult(
   if (should_notify) {
     EditorRenderEvent event;
     event.kind         = EditorRenderEventKind::BusyChanged;
-    event.operation_id = render_result.intent.operation_id;
+    event.operation_id = operation_id;
     event.state        = state;
     event.identity     = identity;
     EmitEvent(std::move(event));
@@ -376,8 +532,11 @@ void EditorSessionRenderController::ResetForNewImage() {
   quality_base_ready_      = false;
   pending_detail_render_.reset();
   pending_initial_reason_.reset();
+  suspended_image_load_request_ = {};
+  suspended_first_frame_        = false;
+  suspended_full_frame_         = false;
+  suspended_detail_render_.reset();
   pending_operation_id_       = 0;
-  pending_initial_adjustment_ = {};
   pending_session_identity_   = {};
   pending_image_load_request_ = {};
   first_frame_route_time_.reset();
@@ -419,18 +578,6 @@ void EditorSessionRenderController::CancelSession(
       });
 }
 
-void EditorSessionRenderController::CancelSessionAndWait(ImageLoadRequestId image_load_request) {
-  if (deps_.render && image_load_request.valid()) {
-    deps_.render->CancelSessionAndWait(image_load_request.value);
-  }
-}
-
-void EditorSessionRenderController::WaitForSessionIdle(ImageLoadRequestId image_load_request) {
-  if (deps_.render && image_load_request.valid()) {
-    deps_.render->WaitForSessionIdle(image_load_request.value);
-  }
-}
-
 void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
     const EditorSessionIdentity& identity) {
   bool ready = false;
@@ -463,7 +610,6 @@ void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
   EditorRenderCommand qb_command;
   qb_command.operation_id = pending_operation_id_;
   qb_command.reason       = EditorRenderReason::SettledAdjustment;
-  qb_command.adjustment   = pending_initial_adjustment_;
   auto intent             = MakeRenderIntent(qb_command, identity, load_request);
   if (intent && deps_.render && PresentationTargetReady()) {
     intent->quality    = EditorRenderQuality::Quality;

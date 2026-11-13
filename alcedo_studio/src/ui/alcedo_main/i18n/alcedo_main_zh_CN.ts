@@ -4,22 +4,32 @@
 <context>
     <name>AboutPage</name>
     <message>
-        <location filename="../qml/AboutPage.qml" line="+79"/>
-        <source>New to Alcedo Studio?</source>
-        <translation>初次使用 Alcedo Studio？</translation>
+        <location filename="../qml/AboutPage.qml" line="+82"/>
+        <source>Welcome to Alcedo Studio</source>
+        <translation>欢迎使用 Alcedo Studio</translation>
     </message>
     <message>
         <location line="+10"/>
-        <source>The documentation website is the best place to learn how this software works — how to import, edit, and manage your photos, step by step. It is the tutorial for Alcedo Studio, and it is kept up to date with each release.</source>
-        <translation>文档网站是了解本软件工作原理的最佳去处——循序渐进地学习如何导入、编辑和管理你的照片。它是 Alcedo Studio 的教程，并随每个版本保持更新。</translation>
+        <source>The documentation walks you through importing, editing, and managing your photos step by step. Follow development on GitHub, and if Alcedo Studio is useful to you, consider supporting it with a donation.</source>
+        <translation>文档会一步步带你了解如何导入、编辑和管理照片。你可以在 GitHub 上关注开发进展；如果 Alcedo Studio 对你有帮助，也欢迎捐赠支持。</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+17"/>
         <source>Open documentation</source>
         <translation>打开文档</translation>
     </message>
     <message>
-        <location line="+34"/>
+        <location line="+7"/>
+        <source>Open GitHub</source>
+        <translation>打开 GitHub</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Sponsor</source>
+        <translation>捐赠支持</translation>
+    </message>
+    <message>
+        <location line="+18"/>
         <source>About</source>
         <translation>关于</translation>
     </message>
@@ -133,6 +143,154 @@
         <source>View all %1 licenses</source>
         <translation>查看全部 %1 项许可证</translation>
     </message>
+    <message>
+        <source>AI models</source>
+        <translation>AI 模型</translation>
+    </message>
+    <message>
+        <source>Alcedo Studio downloads the AI models of Settings &gt; AI Models to this computer. Each model has its own license.</source>
+        <translation>Alcedo Studio 会将“设置 &gt; AI 模型”中的 AI 模型下载到本机。每个模型都有其自身的许可证。</translation>
+    </message>
+    <message>
+        <source>AI model download statement</source>
+        <translation>AI 模型下载声明</translation>
+    </message>
+    <message>
+        <source>Licenses and training data of the AI models</source>
+        <translation>AI 模型的许可证与训练数据</translation>
+    </message>
+    <message>
+        <source>Film simulation LUTs</source>
+        <translation>胶片模拟 LUT</translation>
+    </message>
+    <message>
+        <source>Film Print spectral simulation</source>
+        <translation>胶片印片光谱模拟</translation>
+    </message>
+    <message>
+        <source>Film Print film data</source>
+        <translation>胶片印片片种数据</translation>
+    </message>
+    <message>
+        <source>AI Mask point, path, and box selection</source>
+        <translation>AI 蒙版点选、路径和框选</translation>
+    </message>
+    <message>
+        <source>AI Mask Subject matting</source>
+        <translation>AI 蒙版主体抠图</translation>
+    </message>
+    <message>
+        <source>Camera color matrices</source>
+        <translation>相机色彩矩阵</translation>
+    </message>
+    <message>
+        <source>Neural demosaicing</source>
+        <translation>神经网络去马赛克</translation>
+    </message>
+    <message>
+        <source>Inpaint-opposed highlight reconstruction</source>
+        <translation>Inpaint-opposed 高光重建</translation>
+    </message>
+    <message>
+        <source>RCD demosaicing</source>
+        <translation>RCD 去马赛克</translation>
+    </message>
+    <message>
+        <source>OpenDRT</source>
+        <translation>OpenDRT</translation>
+    </message>
+    <message>
+        <source>ACES 2.0 output transforms</source>
+        <translation>ACES 2.0 输出变换</translation>
+    </message>
+    <message>
+        <source>Film grain</source>
+        <translation>胶片颗粒</translation>
+    </message>
+    <message>
+        <source>RAW decoding</source>
+        <translation>RAW 解码</translation>
+    </message>
+    <message>
+        <source>Lens correction</source>
+        <translation>镜头校正</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>元数据</translation>
+    </message>
+    <message>
+        <source>Image IO</source>
+        <translation>图像读写</translation>
+    </message>
+    <message>
+        <source>Color management</source>
+        <translation>色彩管理</translation>
+    </message>
+    <message>
+        <source>Catalog database</source>
+        <translation>图库数据库</translation>
+    </message>
+    <message>
+        <source>UI</source>
+        <translation>界面</translation>
+    </message>
+    <message>
+        <source>Alcedo</source>
+        <translation>Alcedo</translation>
+    </message>
+    <message>
+        <source>Studio</source>
+        <translation>Studio</translation>
+    </message>
+    <message>
+        <source>Copyright</source>
+        <translation>版权</translation>
+    </message>
+    <message>
+        <source>License</source>
+        <translation>许可证</translation>
+    </message>
+    <message>
+        <source>GPL-3.0-only, with an additional permission under GPLv3 section 7 for combining and distributing the required NVIDIA CUDA components.</source>
+        <translation>基于 GPL-3.0-only 许可，并依据 GPLv3 第 7 条附加许可，允许组合与分发所需的 NVIDIA CUDA 组件。</translation>
+    </message>
+    <message>
+        <source>GitHub</source>
+        <translation>GitHub</translation>
+    </message>
+    <message>
+        <source>Docs</source>
+        <translation>文档</translation>
+    </message>
+    <message>
+        <source>Build %1</source>
+        <translation>构建 %1</translation>
+    </message>
+    <message>
+        <source>Logs</source>
+        <translation>日志</translation>
+    </message>
+    <message>
+        <source>Open Log Folder</source>
+        <translation>打开日志文件夹</translation>
+    </message>
+    <message>
+        <source>View</source>
+        <translation>查看</translation>
+    </message>
+    <message>
+        <source>View all</source>
+        <translation>查看全部</translation>
+    </message>
+    <message>
+        <source>Components</source>
+        <translation>组件</translation>
+    </message>
+    <message>
+        <source>ACES is a trademark of the Academy of Motion Picture Arts and Sciences (A.M.P.A.S.). Alcedo Studio is an independent project and is not affiliated with, certified, or endorsed by A.M.P.A.S., Academy Software Foundation, Jed Smith, or any other upstream authors mentioned above. These names are used solely to identify the respective technologies. Film stock names such as Kodak and Fujifilm are trademarks of their owners and identify the films that Film Print simulates.</source>
+        <translation>ACES 是美国电影艺术与科学学院（A.M.P.A.S.）的商标。Alcedo Studio 是独立项目，与 A.M.P.A.S.、Academy Software Foundation、Jed Smith 及上述其他上游作者均无关联，也未获其认证或认可。这些名称仅用于标识相应技术。Kodak、Fujifilm 等胶片名称是其所有者的商标，用于标识胶片印片所模拟的胶片。</translation>
+    </message>
 </context>
 <context>
     <name>AcceleratorPreparationOverlay</name>
@@ -189,7 +347,7 @@
 <context>
     <name>AdjustmentSlider</name>
     <message>
-        <location filename="../qml/AdjustmentSlider.qml" line="+266"/>
+        <location filename="../qml/AdjustmentSlider.qml" line="+267"/>
         <source>Out of range</source>
         <translation>超出范围</translation>
     </message>
@@ -207,120 +365,160 @@
 <context>
     <name>AdjustmentTransferDialog</name>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="+132"/>
+        <location filename="../qml/AdjustmentTransferDialog.qml" line="+70"/>
         <source>Other</source>
         <translation>其他</translation>
     </message>
     <message>
-        <location line="+43"/>
-        <source>Imported</source>
-        <translation>已导入</translation>
-    </message>
-    <message>
-        <location line="+6"/>
+        <location line="+64"/>
+        <location line="+4"/>
         <source>Copy Adjustments</source>
         <translation>复制调整</translation>
     </message>
     <message>
-        <location line="+0"/>
-        <location line="+6"/>
+        <location line="-4"/>
+        <location line="+4"/>
         <source>Paste Adjustments</source>
         <translation>粘贴调整</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Copy %1 Settings</source>
-        <translation>复制 %1 设置</translation>
+        <location line="+236"/>
+        <source>Items</source>
+        <translation>项目</translation>
     </message>
     <message>
-        <location line="+107"/>
+        <location line="-127"/>
         <source>Close</source>
         <translation>关闭</translation>
     </message>
     <message>
-        <location line="+177"/>
-        <source>Active · %1</source>
-        <translation>当前 · %1</translation>
-    </message>
-    <message>
-        <location line="-107"/>
-        <source>Source Versions</source>
-        <translation>源版本</translation>
-    </message>
-    <message>
-        <location line="-180"/>
-        <source>Merge Adjustments</source>
-        <translation>合并调整</translation>
-    </message>
-    <message>
-        <location line="+341"/>
-        <source>Transfer Strategy</source>
-        <translation>传输策略</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Paste</source>
-        <translation>粘贴</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Merge</source>
-        <translation>合并</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Merge resolves every conflict by using the incoming values only. Per-field conflict resolution isn&apos;t available when transferring to multiple images.</source>
-        <translation>合并时一律以传入值解决所有冲突。批量传输到多张图像时不提供逐项冲突解决。</translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Parameters to Copy</source>
-        <translation>要复制的参数</translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="+133"/>
         <source>Parameters to Paste</source>
         <translation>要粘贴的参数</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+50"/>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentTransferItemPane</name>
+    <message>
+        <location filename="../qml/AdjustmentTransferItemPane.qml" line="+19"/>
+        <source>Items</source>
+        <translation>项目</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Node</source>
+        <translation>节点</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Tone</source>
+        <translation>色调</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Look</source>
+        <translation>外观</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LUT</source>
+        <translation>LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display Transform</source>
+        <translation>显示变换</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Masks</source>
+        <translation>蒙版</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Other</source>
+        <translation>其他</translation>
+    </message>
+    <message>
+        <location line="+33"/>
         <source>Select All</source>
         <translation>全选</translation>
     </message>
     <message>
-        <location line="+29"/>
-        <source>None</source>
-        <translation>无</translation>
+        <location line="+16"/>
+        <source>Clear</source>
+        <translation>清除</translation>
     </message>
     <message>
-        <location line="+76"/>
-        <source>%1 of %2 settings selected</source>
-        <translation>已选择 %2 项设置中的 %1 项</translation>
+        <location line="+36"/>
+        <source>No transferable adjustments.</source>
+        <translation>没有可转移的调整。</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>%1 settings · %2 target images</source>
-        <translation>%1 项设置 · %2 张目标图像</translation>
+        <location line="+75"/>
+        <location line="+32"/>
+        <location line="+43"/>
+        <source>Transfer all masks in this node</source>
+        <translation>转移此节点中的所有蒙版</translation>
     </message>
     <message>
-        <location line="+55"/>
-        <source>%1 section</source>
-        <translation>%1 分区</translation>
+        <source>RAW</source>
+        <translation>RAW</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Expanded</source>
-        <translation>已展开</translation>
+        <source>Geometry</source>
+        <translation>几何</translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentTransferNodePane</name>
+    <message>
+        <location filename="../qml/AdjustmentTransferNodePane.qml" line="+18"/>
+        <source>Nodes</source>
+        <translation>节点</translation>
     </message>
     <message>
-        <location line="+0"/>
-        <source>Collapsed</source>
-        <translation>已收起</translation>
+        <location line="+43"/>
+        <source>Select All</source>
+        <translation>全选</translation>
     </message>
     <message>
-        <location line="-42"/>
-        <source>Cancel</source>
-        <translation>取消</translation>
+        <location line="+16"/>
+        <source>Clear</source>
+        <translation>清除</translation>
+    </message>
+    <message>
+        <location line="+113"/>
+        <source>Select all items in %1</source>
+        <translation>选择 %1 中的所有项目</translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentTransferVersionPane</name>
+    <message>
+        <location filename="../qml/AdjustmentTransferVersionPane.qml" line="+17"/>
+        <source>Source Versions</source>
+        <translation>源版本</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Imported</source>
+        <translation>已导入</translation>
+    </message>
+    <message>
+        <location line="+65"/>
+        <source>Active Version</source>
+        <translation>当前版本</translation>
+    </message>
+    <message>
+        <location line="+91"/>
+        <source>Active</source>
+        <translation>已激活</translation>
     </message>
 </context>
 <context>
@@ -328,355 +526,355 @@
     <message>
         <location filename="../qml/AdvancedContentAnalysisDialog.qml" line="+74"/>
         <source>No provider selected</source>
-        <translation>未选择提供商</translation>
+        <translation type="obsolete">未选择提供商</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>No model selected</source>
-        <translation>未选择模型</translation>
+        <translation type="obsolete">未选择模型</translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Chinese</source>
-        <translation>中文</translation>
+        <translation type="obsolete">中文</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>English</source>
-        <translation>English</translation>
+        <translation type="obsolete">English</translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Follow app language</source>
-        <translation>跟随应用语言</translation>
+        <translation type="obsolete">跟随应用语言</translation>
     </message>
     <message>
-        <location line="+910"/>
+        <location line="+912"/>
         <source>Move task to background</source>
-        <translation>将任务移至后台</translation>
+        <translation type="obsolete">将任务移至后台</translation>
     </message>
     <message>
-        <location line="-893"/>
+        <location line="-895"/>
         <source>评价严苛程度</source>
-        <translation>评价严苛程度</translation>
+        <translation type="obsolete">评价严苛程度</translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Rating strictness</source>
-        <translation>评价严苛程度</translation>
+        <translation type="obsolete">评价严苛程度</translation>
     </message>
     <message>
         <location line="+227"/>
         <source>Analysis</source>
-        <translation>分析</translation>
+        <translation type="obsolete">分析</translation>
     </message>
     <message>
         <location line="+2"/>
         <location line="+386"/>
         <source>Description</source>
-        <translation>描述</translation>
+        <translation type="obsolete">描述</translation>
     </message>
     <message>
         <location line="-386"/>
         <location line="+389"/>
         <source>Rating</source>
-        <translation>评分</translation>
+        <translation type="obsolete">评分</translation>
     </message>
     <message>
         <location line="-373"/>
         <source>provider status %1</source>
-        <translation>提供商状态 %1</translation>
+        <translation type="obsolete">提供商状态 %1</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>error code %1</source>
-        <translation>错误码 %1</translation>
+        <translation type="obsolete">错误码 %1</translation>
     </message>
     <message>
         <location line="+6"/>
         <source>provider %1</source>
-        <translation>提供商 %1</translation>
+        <translation type="obsolete">提供商 %1</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>model %1</source>
-        <translation>模型 %1</translation>
+        <translation type="obsolete">模型 %1</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>request %1</source>
-        <translation>请求 %1</translation>
+        <translation type="obsolete">请求 %1</translation>
     </message>
     <message>
         <location line="+2"/>
         <source>No provider error message was returned.</source>
-        <translation>提供商未返回错误信息。</translation>
+        <translation type="obsolete">提供商未返回错误信息。</translation>
     </message>
     <message>
         <location line="+17"/>
         <source>Image %1</source>
-        <translation>图像 %1</translation>
+        <translation type="obsolete">图像 %1</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>%1: %2</source>
-        <translation>%1：%2</translation>
+        <translation type="obsolete">%1：%2</translation>
     </message>
     <message>
         <location line="+21"/>
         <source>Open a project before running remote analysis.</source>
-        <translation>运行远程分析前请先打开项目。</translation>
+        <translation type="obsolete">运行远程分析前请先打开项目。</translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Select at least one image to analyze.</source>
-        <translation>请至少选择一张图像进行分析。</translation>
+        <translation type="obsolete">请至少选择一张图像进行分析。</translation>
     </message>
     <message>
         <location line="+5"/>
         <source>Choose at least one analysis task.</source>
-        <translation>请至少选择一个分析任务。</translation>
+        <translation type="obsolete">请至少选择一个分析任务。</translation>
     </message>
     <message>
         <location line="+73"/>
         <source>Canceled. Successful results already saved remain in place.</source>
-        <translation>已取消。已保存的成功结果予以保留。</translation>
+        <translation type="obsolete">已取消。已保存的成功结果予以保留。</translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Finished with %1 successful item(s) and %2 failed item(s). First failure: %3</source>
-        <translation>完成：%1 项成功，%2 项失败。首项失败：%3</translation>
+        <translation type="obsolete">完成：%1 项成功，%2 项失败。首项失败：%3</translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Finished with %1 successful item(s) and %2 failed item(s).</source>
-        <translation>完成：%1 项成功，%2 项失败。</translation>
+        <translation type="obsolete">完成：%1 项成功，%2 项失败。</translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Analysis complete. Skipped %1 existing image(s).</source>
-        <translation>分析完成。跳过 %1 张已有结果的图像。</translation>
+        <translation type="obsolete">分析完成。跳过 %1 张已有结果的图像。</translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Analysis complete.</source>
-        <translation>分析完成。</translation>
+        <translation type="obsolete">分析完成。</translation>
     </message>
     <message>
         <location line="+105"/>
         <source>Advanced Content Analysis</source>
-        <translation>高级内容分析</translation>
+        <translation type="obsolete">高级内容分析</translation>
     </message>
     <message>
         <location line="+10"/>
         <source>%1 selected image(s)</source>
-        <translation>已选择 %1 张图像</translation>
+        <translation type="obsolete">已选择 %1 张图像</translation>
     </message>
     <message>
         <location line="+72"/>
         <source>Provider</source>
-        <translation>提供商</translation>
+        <translation type="obsolete">提供商</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Model</source>
-        <translation>模型</translation>
+        <translation type="obsolete">模型</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Output language</source>
-        <translation>输出语言</translation>
+        <translation type="obsolete">输出语言</translation>
     </message>
     <message>
         <location line="+19"/>
         <source>Tasks</source>
-        <translation>任务</translation>
+        <translation type="obsolete">任务</translation>
     </message>
     <message>
         <location line="+26"/>
         <source>Rating reason</source>
-        <translation>评分理由</translation>
+        <translation type="obsolete">评分理由</translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Overwrite</source>
-        <translation>覆盖</translation>
+        <translation type="obsolete">覆盖</translation>
     </message>
     <message>
         <location line="+10"/>
         <source>Overwrite photo rating</source>
-        <translation>覆盖照片评分</translation>
+        <translation type="obsolete">覆盖照片评分</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Overwrite rating reason</source>
-        <translation>覆盖评分理由</translation>
+        <translation type="obsolete">覆盖评分理由</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Overwrite image description</source>
-        <translation>覆盖图像描述</translation>
+        <translation type="obsolete">覆盖图像描述</translation>
     </message>
     <message>
         <location line="+92"/>
         <source>Running %1</source>
-        <translation>正在运行 %1</translation>
+        <translation type="obsolete">正在运行 %1</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Finished</source>
-        <translation>已完成</translation>
+        <translation type="obsolete">已完成</translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Ready</source>
-        <translation>就绪</translation>
+        <translation type="obsolete">就绪</translation>
     </message>
     <message>
         <location line="+9"/>
         <source>%1 / %2 image(s)</source>
-        <translation>%1 / %2 张图像</translation>
+        <translation type="obsolete">%1 / %2 张图像</translation>
     </message>
     <message>
         <location line="+25"/>
         <source>Usage: %1 token(s)</source>
-        <translation>用量：%1 个 token</translation>
+        <translation type="obsolete">用量：%1 个 token</translation>
     </message>
     <message>
         <location line="+29"/>
         <source>Failure details</source>
-        <translation>失败详情</translation>
+        <translation type="obsolete">失败详情</translation>
     </message>
     <message>
         <location line="+39"/>
         <source>Results refresh the focused photo&apos;s Image inspector. Open the Image page to review and edit description, rating, and reasons.</source>
-        <translation>结果会刷新焦点照片的图像检查器。打开图像页面可查看并编辑描述、评分和理由。</translation>
+        <translation type="obsolete">结果会刷新焦点照片的图像检查器。打开图像页面可查看并编辑描述、评分和理由。</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+29"/>
         <source>Protected by interaction locks; safe to continue in the background.</source>
-        <translation>受交互锁保护，可以安全地在后台继续。</translation>
+        <translation type="obsolete">受交互锁保护，可以安全地在后台继续。</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Remote provider calls may incur cost.</source>
-        <translation>远程提供商调用可能产生费用。</translation>
+        <translation type="obsolete">远程提供商调用可能产生费用。</translation>
     </message>
     <message>
         <location line="+33"/>
         <source>Cancel</source>
-        <translation>取消</translation>
+        <translation type="obsolete">取消</translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Done</source>
-        <translation>完成</translation>
+        <translation type="obsolete">完成</translation>
     </message>
     <message>
         <location line="-18"/>
         <source>Analyze Selected</source>
-        <translation>分析所选图像</translation>
+        <translation type="obsolete">分析所选图像</translation>
     </message>
 </context>
 <context>
     <name>AiProviderSettingsPanel</name>
     <message>
-        <location filename="../qml/AiProviderSettingsPanel.qml" line="+159"/>
+        <location filename="../qml/AiProviderSettingsPanel.qml" line="+160"/>
         <source>The field value could not be saved.</source>
-        <translation>字段值无法保存。</translation>
+        <translation type="obsolete">字段值无法保存。</translation>
     </message>
     <message>
-        <location line="+96"/>
+        <location line="+120"/>
         <source>Follow app language</source>
-        <translation>跟随应用语言</translation>
+        <translation type="obsolete">跟随应用语言</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>English</source>
-        <translation>English</translation>
+        <translation type="obsolete">English</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>中文</source>
-        <translation>中文</translation>
+        <translation type="obsolete">中文</translation>
     </message>
     <message>
         <location line="+16"/>
         <source>Output language</source>
-        <translation>输出语言</translation>
+        <translation type="obsolete">输出语言</translation>
     </message>
     <message>
         <location line="+32"/>
         <source>Provider settings</source>
-        <translation>提供商设置</translation>
+        <translation type="obsolete">提供商设置</translation>
     </message>
     <message>
-        <location line="+107"/>
+        <location line="+109"/>
         <source>In use</source>
-        <translation>使用中</translation>
+        <translation type="obsolete">使用中</translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Use</source>
-        <translation>使用</translation>
+        <translation type="obsolete">使用</translation>
     </message>
     <message>
         <location line="+12"/>
         <source>Edit</source>
-        <translation>编辑</translation>
+        <translation type="obsolete">编辑</translation>
     </message>
     <message>
         <location line="+23"/>
         <source>No provider profiles</source>
-        <translation>暂无提供商配置</translation>
+        <translation type="obsolete">暂无提供商配置</translation>
     </message>
     <message>
         <location line="+9"/>
         <source>Use the + button above to create one.</source>
-        <translation>点击上方的“+”按钮创建一个。</translation>
+        <translation type="obsolete">点击上方的“+”按钮创建一个。</translation>
     </message>
     <message>
-        <location line="-135"/>
-        <location line="+169"/>
+        <location line="-137"/>
+        <location line="+171"/>
         <source>Add provider</source>
-        <translation>添加提供商</translation>
+        <translation type="obsolete">添加提供商</translation>
     </message>
     <message>
-        <location line="-421"/>
+        <location line="-447"/>
         <source>Codex login did not finish yet. Complete `codex login`, then use Codex Login again.</source>
-        <translation>Codex 登录尚未完成。请先完成 `codex login`，然后再次使用 Codex 登录。</translation>
+        <translation type="obsolete">Codex 登录尚未完成。请先完成 `codex login`，然后再次使用 Codex 登录。</translation>
     </message>
     <message>
         <location line="+26"/>
         <source>Codex OAuth is connected. Open a project to refresh models.</source>
-        <translation>Codex OAuth 已连接。打开一个项目以刷新模型。</translation>
+        <translation type="obsolete">Codex OAuth 已连接。打开一个项目以刷新模型。</translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Loading Codex models...</source>
-        <translation>正在加载 Codex 模型...</translation>
+        <translation type="obsolete">正在加载 Codex 模型...</translation>
     </message>
     <message>
         <location line="+21"/>
         <source>This build does not include Codex OAuth import. Rebuild Alcedo Studio.</source>
-        <translation>此构建不包含 Codex OAuth 导入功能。请重新构建 Alcedo Studio。</translation>
+        <translation type="obsolete">此构建不包含 Codex OAuth 导入功能。请重新构建 Alcedo Studio。</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>Checking local Codex login...</source>
-        <translation>正在检查本地 Codex 登录...</translation>
+        <translation type="obsolete">正在检查本地 Codex 登录...</translation>
     </message>
     <message>
         <location line="+9"/>
         <location line="+2"/>
         <source>Codex OAuth connected. Loading models...</source>
-        <translation>Codex OAuth 已连接。正在加载模型...</translation>
+        <translation type="obsolete">Codex OAuth 已连接。正在加载模型...</translation>
     </message>
     <message>
         <location line="+21"/>
-        <location line="+378"/>
+        <location line="+404"/>
         <source>Finish the current AI task before changing provider settings.</source>
-        <translation>完成当前 AI 任务后再更改提供商设置。</translation>
+        <translation type="obsolete">完成当前 AI 任务后再更改提供商设置。</translation>
     </message>
     <message>
         <location line="-154"/>
@@ -686,87 +884,87 @@
     <message>
         <location line="+120"/>
         <source>Choose a template to create a profile from.</source>
-        <translation>选择一个模板以创建配置。</translation>
+        <translation type="obsolete">选择一个模板以创建配置。</translation>
     </message>
     <message>
-        <location line="+95"/>
+        <location line="+97"/>
         <source>Provider</source>
-        <translation>提供商</translation>
+        <translation type="obsolete">提供商</translation>
     </message>
     <message>
         <location line="+30"/>
         <source>OpenAI OAuth</source>
-        <translation>OpenAI OAuth</translation>
+        <translation type="obsolete">OpenAI OAuth</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+11"/>
         <source>Use Codex Login</source>
-        <translation>使用 Codex 登录</translation>
+        <translation type="obsolete">使用 Codex 登录</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+8"/>
         <source>Open Login</source>
-        <translation>打开登录</translation>
+        <translation type="obsolete">打开登录</translation>
     </message>
     <message>
         <location line="+4"/>
         <source>This build does not include Codex login launch. Run `codex login` manually.</source>
-        <translation>此构建不包含 Codex 登录启动功能。请手动运行 `codex login`。</translation>
+        <translation type="obsolete">此构建不包含 Codex 登录启动功能。请手动运行 `codex login`。</translation>
     </message>
     <message>
         <location line="+9"/>
         <source>Codex login started. Complete the browser flow; models will load when login finishes.</source>
-        <translation>Codex 登录已启动。请完成浏览器流程；登录完成后将加载模型。</translation>
+        <translation type="obsolete">Codex 登录已启动。请完成浏览器流程；登录完成后将加载模型。</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+9"/>
         <source>Disconnect</source>
         <translation>断开连接</translation>
     </message>
     <message>
         <location line="+5"/>
         <source>Codex OAuth disconnected</source>
-        <translation>Codex OAuth 已断开</translation>
+        <translation type="obsolete">Codex OAuth 已断开</translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Codex OAuth connected</source>
-        <translation>Codex OAuth 已连接</translation>
+        <translation type="obsolete">Codex OAuth 已连接</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>No Codex OAuth credential imported</source>
-        <translation>未导入 Codex OAuth 凭据</translation>
+        <translation type="obsolete">未导入 Codex OAuth 凭据</translation>
     </message>
     <message>
         <location line="+15"/>
         <source>API key</source>
-        <translation>API 密钥</translation>
+        <translation type="obsolete">API 密钥</translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Paste API key</source>
-        <translation>粘贴 API 密钥</translation>
+        <translation type="obsolete">粘贴 API 密钥</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+13"/>
         <source>Save Key</source>
-        <translation>保存密钥</translation>
+        <translation type="obsolete">保存密钥</translation>
     </message>
     <message>
         <location line="+6"/>
         <source>API key saved</source>
-        <translation>API 密钥已保存</translation>
+        <translation type="obsolete">API 密钥已保存</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+6"/>
         <source>Delete Key</source>
         <translation>删除密钥</translation>
     </message>
     <message>
         <location line="+5"/>
         <source>API key deleted</source>
-        <translation>API 密钥已删除</translation>
+        <translation type="obsolete">API 密钥已删除</translation>
     </message>
     <message>
         <location line="+8"/>
@@ -781,100 +979,100 @@
     <message>
         <location line="+13"/>
         <source>Model</source>
-        <translation>模型</translation>
+        <translation type="obsolete">模型</translation>
     </message>
     <message>
         <location line="+17"/>
         <source>Search models</source>
-        <translation>搜索模型</translation>
+        <translation type="obsolete">搜索模型</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>No matching models</source>
-        <translation>未找到匹配的模型</translation>
+        <translation type="obsolete">未找到匹配的模型</translation>
     </message>
     <message>
         <location line="+22"/>
         <source>Test &amp; Refresh</source>
-        <translation>测试并刷新</translation>
+        <translation type="obsolete">测试并刷新</translation>
     </message>
     <message>
         <location line="+27"/>
         <source>Advanced</source>
-        <translation>高级</translation>
+        <translation type="obsolete">高级</translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Display name</source>
-        <translation>显示名称</translation>
+        <translation type="obsolete">显示名称</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Provider id</source>
-        <translation>提供商 ID</translation>
+        <translation type="obsolete">提供商 ID</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Driver</source>
-        <translation>驱动</translation>
+        <translation type="obsolete">驱动</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Base URL</source>
-        <translation>基础 URL</translation>
+        <translation type="obsolete">基础 URL</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Endpoint</source>
-        <translation>端点</translation>
+        <translation type="obsolete">端点</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Models endpoint</source>
-        <translation>模型端点</translation>
+        <translation type="obsolete">模型端点</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Models response data pointer</source>
-        <translation>模型响应数据指针</translation>
+        <translation type="obsolete">模型响应数据指针</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Auth type</source>
-        <translation>认证类型</translation>
+        <translation type="obsolete">认证类型</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Credential slot</source>
-        <translation>凭证槽位</translation>
+        <translation type="obsolete">凭证槽位</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Structured output</source>
-        <translation>结构化输出</translation>
+        <translation type="obsolete">结构化输出</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Timeout ms</source>
-        <translation>超时（毫秒）</translation>
+        <translation type="obsolete">超时（毫秒）</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Max image bytes</source>
-        <translation>最大图像字节数</translation>
+        <translation type="obsolete">最大图像字节数</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Recommended rendition</source>
-        <translation>推荐渲染版本</translation>
+        <translation type="obsolete">推荐渲染版本</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Duplicate</source>
+        <translation type="obsolete">复制</translation>
     </message>
     <message>
         <location line="+13"/>
-        <source>Duplicate</source>
-        <translation>复制</translation>
-    </message>
-    <message>
-        <location line="+14"/>
         <location line="+71"/>
         <source>Delete</source>
         <translation>删除</translation>
@@ -899,12 +1097,32 @@
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
+    <message>
+        <source>Advanced Content Analysis is removed from this version. The next version also removes this page. Delete your saved API keys and the Codex login now. After that, Alcedo Studio can no longer delete them for you.</source>
+        <translation>高级内容分析功能已从本版本中移除，下个版本将同时移除本页面。请及时删除已保存的 API 密钥和 Codex 登录。之后 Alcedo Studio 将无法再替您清除这些密钥。</translation>
+    </message>
+    <message>
+        <source>No saved keys</source>
+        <translation>没有已保存的密钥</translation>
+    </message>
+    <message>
+        <source>Delete All Saved Keys</source>
+        <translation>删除所有已保存的密钥</translation>
+    </message>
+    <message>
+        <source>Delete every saved API key and the Codex login? The provider profiles stay in the list.</source>
+        <translation>删除所有已保存的 API 密钥和 Codex 登录？提供商配置仍保留在列表中。</translation>
+    </message>
+    <message>
+        <source>Delete All</source>
+        <translation>全部删除</translation>
+    </message>
 </context>
 <context>
     <name>AlbumInspectorPanel</name>
     <message>
         <location filename="../qml/AlbumInspectorPanel.qml" line="+43"/>
-        <source>LIBRARY OVERVIEW</source>
+        <source>Library Overview</source>
         <translation>图库概览</translation>
     </message>
     <message>
@@ -934,17 +1152,89 @@
     </message>
     <message>
         <location line="+20"/>
-        <source>SEARCH FILTER</source>
+        <source>Search Filter</source>
         <translation>搜索筛选</translation>
     </message>
     <message>
-        <location line="+36"/>
+        <source>By Rating</source>
+        <translation>按评分</translation>
+    </message>
+    <message>
+        <location line="+38"/>
         <source>Filtered by search</source>
         <translation>按搜索筛选</translation>
+    </message>
+    <message>
+        <source>Natural language</source>
+        <translation>自然语言</translation>
+    </message>
+    <message>
+        <source>capture time</source>
+        <translation>拍摄时间</translation>
+    </message>
+    <message>
+        <source>oldest first</source>
+        <translation>最早优先</translation>
+    </message>
+    <message>
+        <source>newest first</source>
+        <translation>最新优先</translation>
+    </message>
+    <message>
+        <source>By Import Time</source>
+        <translation>按导入时间</translation>
+    </message>
+    <message>
+        <source>import time</source>
+        <translation>导入时间</translation>
+    </message>
+    <message>
+        <source>By Edit Time</source>
+        <translation>按编辑时间</translation>
+    </message>
+    <message>
+        <source>edit time</source>
+        <translation>编辑时间</translation>
+    </message>
+    <message>
+        <source>camera model</source>
+        <translation>相机型号</translation>
+    </message>
+    <message>
+        <source>labels</source>
+        <translation>标签</translation>
+    </message>
+    <message>
+        <source>rating</source>
+        <translation>评分</translation>
+    </message>
+    <message>
+        <source>lowest first</source>
+        <translation>最低优先</translation>
+    </message>
+    <message>
+        <source>highest first</source>
+        <translation>最高优先</translation>
+    </message>
+    <message>
+        <source>lens</source>
+        <translation>镜头</translation>
+    </message>
+    <message>
+        <source>By Custom Label</source>
+        <translation>按自定义标签</translation>
+    </message>
+    <message>
+        <source>Color label names</source>
+        <translation>颜色标签名称</translation>
     </message>
 </context>
 <context>
     <name>Alcedo</name>
+    <message>
+        <source>The collection is no longer in the library.</source>
+        <translation>该影集已不在图库中。</translation>
+    </message>
     <message>
         <location filename="../album_backend/image_controller.cpp" line="+51"/>
         <source>Capture</source>
@@ -1217,6 +1507,420 @@ Alcedo 将改用 %1。</translation>
         <source>Failed to save rating reason.</source>
         <translation>保存评分理由失败。</translation>
     </message>
+    <message>
+        <location line="+1"/>
+        <source>1D LUTs cannot be applied by the grade stage.</source>
+        <translation>1D LUT 无法在调色阶段应用。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>1D shaper LUTs are not supported.</source>
+        <translation>不支持带 1D 整形表（shaper）的 LUT。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Scene</source>
+        <translation>场景</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display</source>
+        <translation>显示</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>A mask is selected. Select its Color Grade node to apply a LUT.</source>
+        <translation>当前选中了蒙版。请选择它所属的调色节点来应用 LUT。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>All</source>
+        <translation>全部</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Film simulation</source>
+        <translation>胶片模拟</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Favorites</source>
+        <translation>收藏</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>User</source>
+        <translation>用户</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invalid</source>
+        <translation>无效</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LUTs apply to Color Grade nodes. Select a Color Grade node.</source>
+        <translation>LUT 只能应用到调色节点。请选择一个调色节点。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Missing: %1</source>
+        <translation>缺失：%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No LUT</source>
+        <translation>无 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No print</source>
+        <translation>无印片</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open a photo to apply a LUT.</source>
+        <translation>打开一张照片以应用 LUT。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Select a Color Grade node to apply a LUT.</source>
+        <translation>选择一个调色节点以应用 LUT。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT file is invalid: %1</source>
+        <translation>LUT 文件无效：%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT is no longer in the library. Refresh the library.</source>
+        <translation>该 LUT 已不在库中。请刷新 LUT 库。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT library is unavailable.</source>
+        <translation>LUT 库不可用。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Only a LUT from the library can remember its encodings.</source>
+        <translation>只有 LUT 库中的 LUT 才能记住输入/输出编码。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT library cannot save the remembered encodings.</source>
+        <translation>LUT 库无法保存记住的输入/输出编码。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The editor did not accept the LUT change.</source>
+        <translation>编辑器未接受此 LUT 更改。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The favorite cannot be changed.</source>
+        <translation>无法更改收藏。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The photo cannot be edited right now.</source>
+        <translation>当前无法编辑这张照片。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The selected Color Grade has no LUT adjustment.</source>
+        <translation>所选调色节点没有 LUT 调整项。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Unsupported</source>
+        <translation>不支持</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>With print</source>
+        <translation>含印片</translation>
+    </message>
+    <message>
+        <source>Unknown sort field: %1</source>
+        <translation>未知的排序字段：%1</translation>
+    </message>
+    <message>
+        <source>Unknown group field: %1</source>
+        <translation>未知的分组字段：%1</translation>
+    </message>
+    <message>
+        <source>The folder is still being scanned.</source>
+        <translation>文件夹仍在扫描中。</translation>
+    </message>
+    <message>
+        <source>Preparing %1 file(s)...</source>
+        <translation>正在准备 %1 个文件…</translation>
+    </message>
+    <message>
+        <source>Importing... %1/%2 (failed %3)</source>
+        <translation>正在导入… %1/%2（失败 %3）</translation>
+    </message>
+    <message>
+        <source>Saving %1 imported photo(s) to the library...</source>
+        <translation>正在将 %1 张导入的照片保存到图库…</translation>
+    </message>
+    <message>
+        <source>Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed</source>
+        <translation>导入完成：已导入 %1 张，未选择类型 %2 个，不受支持 %3 个，失败 %4 个</translation>
+    </message>
+    <message>
+        <source>Import canceled: %1 imported, %2 not read, %3 not selected, %4 unsupported, %5 failed</source>
+        <translation>导入已取消：已导入 %1 张，未读取 %2 个，未选择类型 %3 个，不受支持 %4 个，失败 %5 个</translation>
+    </message>
+    <message>
+        <source>Cancelling import...</source>
+        <translation>正在取消导入…</translation>
+    </message>
+    <message>
+        <source>Close the editor image before you close the project.</source>
+        <translation>关闭项目前，请先关闭编辑器中的图像。</translation>
+    </message>
+    <message>
+        <source>Project closed.</source>
+        <translation>项目已关闭。</translation>
+    </message>
+    <message>
+        <source>An agent controls the session.</source>
+        <translation>智能体正在控制会话。</translation>
+    </message>
+    <message>
+        <source>Control returned to you.</source>
+        <translation>控制权已交还给你。</translation>
+    </message>
+    <message>
+        <source>Waiting for the next command</source>
+        <translation>等待下一条命令</translation>
+    </message>
+    <message>
+        <source>You stopped the agent.</source>
+        <translation>你已停止智能体。</translation>
+    </message>
+    <message>
+        <source>Stopped. Tell the agent to continue.</source>
+        <translation>已停止。请告知智能体继续。</translation>
+    </message>
+    <message>
+        <source>The agent took control.</source>
+        <translation>智能体已接管控制。</translation>
+    </message>
+    <message>
+        <source>The agent continued.</source>
+        <translation>智能体已继续。</translation>
+    </message>
+    <message>
+        <source>The agent gave control back to you.</source>
+        <translation>智能体已将控制权交还给你。</translation>
+    </message>
+    <message>
+        <source>Images are being deleted.</source>
+        <translation>正在删除图像。</translation>
+    </message>
+    <message>
+        <source>Deleting images</source>
+        <translation>正在删除图像</translation>
+    </message>
+    <message>
+        <source>Removing images from album</source>
+        <translation>正在从相册移除图像</translation>
+    </message>
+    <message>
+        <source>Deleting %1 image(s)...</source>
+        <translation>正在删除 %1 张图像...</translation>
+    </message>
+    <message>
+        <source>Removing %1 image(s) from album...</source>
+        <translation>正在从相册移除 %1 张图像...</translation>
+    </message>
+    <message>
+        <source>%1 images</source>
+        <translation>%1 张图像</translation>
+    </message>
+    <message>
+        <source>This query uses field search.</source>
+        <translation>此查询使用字段搜索。</translation>
+    </message>
+    <message>
+        <source>Query is too long for natural language search.</source>
+        <translation>自然语言搜索的查询过长。</translation>
+    </message>
+    <message>
+        <source>Natural language search is not available for this project.</source>
+        <translation>此项目无法使用自然语言搜索。</translation>
+    </message>
+    <message>
+        <source>No semantic model is active.</source>
+        <translation>没有已激活的语义模型。</translation>
+    </message>
+    <message>
+        <source>This recent search does not exist.</source>
+        <translation>此最近搜索不存在。</translation>
+    </message>
+    <message>
+        <source>AI Masks are not copied: %1</source>
+        <translation>AI 蒙版不会被复制：%1</translation>
+    </message>
+    <message>
+        <source>Accept the download statement before you download a model.</source>
+        <translation>请先同意下载声明，再下载模型。</translation>
+    </message>
+    <message>
+        <source>Unknown semantic model profile.</source>
+        <translation>未知的语义模型配置。</translation>
+    </message>
+    <message>
+        <source>Downloading model... %1%</source>
+        <translation>正在下载模型… %1%</translation>
+    </message>
+    <message>
+        <source>%1 (%2%)</source>
+        <translation>%1（%2%）</translation>
+    </message>
+    <message>
+        <source>Model download complete.</source>
+        <translation>模型下载完成。</translation>
+    </message>
+    <message>
+        <source>Model download canceled.</source>
+        <translation>模型下载已取消。</translation>
+    </message>
+    <message>
+        <source>Model download failed.</source>
+        <translation>模型下载失败。</translation>
+    </message>
+    <message>
+        <source>Model download failed: %1</source>
+        <translation>模型下载失败：%1</translation>
+    </message>
+    <message>
+        <source>Another download is running.</source>
+        <translation>另一项下载正在运行。</translation>
+    </message>
+    <message>
+        <source>Model download queued from %1</source>
+        <translation>已从 %1 排队下载模型</translation>
+    </message>
+    <message>
+        <source>Canceling model download...</source>
+        <translation>正在取消模型下载…</translation>
+    </message>
+    <message>
+        <source>Cancel the download before you remove the model.</source>
+        <translation>请先取消下载，再移除模型。</translation>
+    </message>
+    <message>
+        <source>Model removal failed: %1</source>
+        <translation>模型移除失败：%1</translation>
+    </message>
+    <message>
+        <source>Model files removed.</source>
+        <translation>模型文件已移除。</translation>
+    </message>
+    <message>
+        <source>Another model activation is running.</source>
+        <translation>另一项模型激活正在运行。</translation>
+    </message>
+    <message>
+        <source>Finish or cancel semantic generation before activating another model.</source>
+        <translation>请先完成或取消语义标签生成，再激活其他模型。</translation>
+    </message>
+    <message>
+        <source>Open a project before activating a semantic model.</source>
+        <translation>请先打开项目，再激活语义模型。</translation>
+    </message>
+    <message>
+        <source>Install the model before activating it.</source>
+        <translation>请先安装模型，再激活。</translation>
+    </message>
+    <message>
+        <source>Cannot activate model: %1</source>
+        <translation>无法激活模型：%1</translation>
+    </message>
+    <message>
+        <source>This model is already active for this project.</source>
+        <translation>此模型已在此项目中激活。</translation>
+    </message>
+    <message>
+        <source>Semantic runtime service is unavailable.</source>
+        <translation>语义运行时服务不可用。</translation>
+    </message>
+    <message>
+        <source>Activating model and preparing labels...</source>
+        <translation>正在激活模型并准备标签…</translation>
+    </message>
+    <message>
+        <source>%1 is active for this project. Label prompts are ready.</source>
+        <translation>%1 已在此项目中激活。标签提示已就绪。</translation>
+    </message>
+    <message>
+        <source>%1 is active for this project.</source>
+        <translation>%1 已在此项目中激活。</translation>
+    </message>
+    <message>
+        <source>Semantic model activation failed.</source>
+        <translation>语义模型激活失败。</translation>
+    </message>
+    <message>
+        <source>Semantic model activation failed: %1</source>
+        <translation>语义模型激活失败：%1</translation>
+    </message>
+    <message>
+        <source>The project still uses the removed model: %1</source>
+        <translation>项目仍在使用已移除的模型：%1</translation>
+    </message>
+    <message>
+        <source>Activate an AI model in Settings before generating labels.</source>
+        <translation>请先在设置中激活 AI 模型，再生成标签。</translation>
+    </message>
+</context>
+<context>
+    <name>AgentSessionCard</name>
+    <message>
+        <source>Stopping</source>
+        <translation>正在停止</translation>
+    </message>
+    <message>
+        <source>Stopped</source>
+        <translation>已停止</translation>
+    </message>
+    <message>
+        <source>Failed</source>
+        <translation>失败</translation>
+    </message>
+    <message>
+        <source>Finished</source>
+        <translation>已完成</translation>
+    </message>
+    <message>
+        <source>Working</source>
+        <translation>正在处理</translation>
+    </message>
+    <message>
+        <source>Agent</source>
+        <translation>智能体</translation>
+    </message>
+    <message>
+        <source>Agent · %1</source>
+        <translation>智能体 · %1</translation>
+    </message>
+    <message>
+        <source>Stop the agent</source>
+        <translation>停止智能体</translation>
+    </message>
+    <message>
+        <source>Stopped. Tell the agent to continue.</source>
+        <translation>已停止。请告知智能体继续。</translation>
+    </message>
+    <message>
+        <source>Dismiss</source>
+        <translation>移除</translation>
+    </message>
 </context>
 <context>
     <name>AppDialogs</name>
@@ -1241,7 +1945,7 @@ Alcedo 将改用 %1。</translation>
         <translation>所选文件夹中未找到文件。</translation>
     </message>
     <message>
-        <location line="+95"/>
+        <location line="+93"/>
         <source>Discard</source>
         <translation type="unfinished">放弃</translation>
     </message>
@@ -1268,15 +1972,29 @@ Alcedo 将改用 %1。</translation>
     <message>
         <location line="+212"/>
         <source>Select at least one image to analyze.</source>
-        <translation>请至少选择一张图像进行分析。</translation>
+        <translation type="obsolete">请至少选择一张图像进行分析。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Import LUTs</source>
+        <translation>导入 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>CUBE LUTs (*.cube *.CUBE)</source>
+        <translation>CUBE LUT (*.cube *.CUBE)</translation>
+    </message>
+    <message>
+        <source>Supported images (%1)</source>
+        <translation>支持的图像 (%1)</translation>
     </message>
 </context>
 <context>
     <name>BackgroundTaskBar</name>
     <message>
-        <location filename="../qml/BackgroundTaskBar.qml" line="+64"/>
+        <location filename="../qml/BackgroundTaskBar.qml" line="+65"/>
         <source>AI Analysis</source>
-        <translation>AI 分析</translation>
+        <translation type="obsolete">AI 分析</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -1321,9 +2039,29 @@ Alcedo 将改用 %1。</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+102"/>
+        <location line="+103"/>
         <source>+%1</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Paste Adjustments</source>
+        <translation>粘贴调整</translation>
+    </message>
+    <message>
+        <source>No recent tasks</source>
+        <translation>暂无近期任务</translation>
+    </message>
+    <message>
+        <source>Agent</source>
+        <translation>智能体</translation>
+    </message>
+    <message>
+        <source>Delete Images</source>
+        <translation>删除图像</translation>
+    </message>
+    <message>
+        <source>Labels and Marks</source>
+        <translation>标签与标记</translation>
     </message>
 </context>
 <context>
@@ -1346,7 +2084,7 @@ Alcedo 将改用 %1。</translation>
     <message>
         <location line="+12"/>
         <source>AI Analysis</source>
-        <translation>AI 分析</translation>
+        <translation type="obsolete">AI 分析</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -1414,9 +2152,9 @@ Alcedo 将改用 %1。</translation>
         <translation>关闭</translation>
     </message>
     <message>
-        <location line="+171"/>
+        <location line="+170"/>
         <source>Details</source>
-        <translation>详细信息</translation>
+        <translation type="obsolete">详细信息</translation>
     </message>
     <message>
         <location line="+40"/>
@@ -1433,6 +2171,54 @@ Alcedo 将改用 %1。</translation>
         <source>Imports, exports, model work, and AI jobs will appear here.</source>
         <translation>导入、导出、模型与 AI 任务会显示在这里。</translation>
     </message>
+    <message>
+        <source>Paste Adjustments</source>
+        <translation>粘贴调整</translation>
+    </message>
+    <message>
+        <source>Agent</source>
+        <translation>智能体</translation>
+    </message>
+    <message>
+        <source>Delete Images</source>
+        <translation>删除图像</translation>
+    </message>
+    <message>
+        <source>Labels and Marks</source>
+        <translation>标签与标记</translation>
+    </message>
+    <message>
+        <source>Agent Sessions</source>
+        <translation>智能体会话</translation>
+    </message>
+    <message>
+        <source>Other Tasks</source>
+        <translation>其他任务</translation>
+    </message>
+</context>
+<context>
+    <name>CameraProfileFolderTile</name>
+    <message>
+        <location filename="../qml/CameraProfileFolderTile.qml" line="+34"/>
+        <source>Choose the DCP folder</source>
+        <translation>选择 DCP 文件夹</translation>
+    </message>
+    <message>
+        <source>Camera profiles</source>
+        <translation>相机配置文件</translation>
+    </message>
+    <message>
+        <source>The folder of the DCP camera profiles that the editor lists for each camera.</source>
+        <translation>存放 DCP 相机配置文件的文件夹。编辑器按相机列出其中的配置文件。</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>浏览…</translation>
+    </message>
+    <message>
+        <source>Rescan</source>
+        <translation>重新扫描</translation>
+    </message>
 </context>
 <context>
     <name>CacheSettingsPanel</name>
@@ -1448,12 +2234,12 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+6"/>
-        <location line="+97"/>
+        <location line="+99"/>
         <source>Select Thumbnail Cache Folder</source>
         <translation>选择缩略图缓存文件夹</translation>
     </message>
     <message>
-        <location line="-88"/>
+        <location line="-90"/>
         <source>Thumbnail cache</source>
         <translation>缩略图缓存</translation>
     </message>
@@ -1483,7 +2269,7 @@ Alcedo 将改用 %1。</translation>
         <translation>缓存目录</translation>
     </message>
     <message>
-        <location line="+50"/>
+        <location line="+52"/>
         <source>Limits</source>
         <translation>限制</translation>
     </message>
@@ -1505,8 +2291,8 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+16"/>
-        <source>Max entries</source>
-        <translation>最大条目数</translation>
+        <source>Max entries per project</source>
+        <translation>每个项目最大条目数</translation>
     </message>
     <message>
         <location line="+24"/>
@@ -1547,7 +2333,7 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>CollapsibleSection</name>
     <message>
-        <location filename="../qml/CollapsibleSection.qml" line="+114"/>
+        <location filename="../qml/CollapsibleSection.qml" line="+116"/>
         <source>Collapse %1</source>
         <translation>收起 %1</translation>
     </message>
@@ -1560,7 +2346,7 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>CollectionsPanel</name>
     <message>
-        <location filename="../qml/CollectionsPanel.qml" line="+20"/>
+        <location filename="../qml/CollectionsPanel.qml" line="+22"/>
         <source>Search</source>
         <translation>搜索</translation>
     </message>
@@ -1570,7 +2356,17 @@ Alcedo 将改用 %1。</translation>
         <translation>后台任务</translation>
     </message>
     <message>
-        <location line="+231"/>
+        <location line="+153"/>
+        <source>Alcedo</source>
+        <translation>Alcedo</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Studio</source>
+        <translation>Studio</translation>
+    </message>
+    <message>
+        <location line="+98"/>
         <source>LOCAL FOLDERS</source>
         <translation>本地文件夹</translation>
     </message>
@@ -1592,10 +2388,10 @@ Alcedo 将改用 %1。</translation>
     <message>
         <location line="+22"/>
         <source>Collection Name</source>
-        <translation>收藏夹名称</translation>
+        <translation>影集名称</translation>
     </message>
     <message>
-        <location line="+127"/>
+        <location line="+128"/>
         <source>No collections yet</source>
         <translation>还没有影集</translation>
     </message>
@@ -1615,24 +2411,85 @@ Alcedo 将改用 %1。</translation>
         <translation>导入图像</translation>
     </message>
     <message>
-        <location line="-591"/>
-        <source>Advanced Content Analysis</source>
-        <translation>高级内容分析</translation>
-    </message>
-    <message>
         <location line="+39"/>
         <source>全部图片</source>
         <translation>全部图片</translation>
     </message>
     <message>
-        <location line="+186"/>
-        <source>Open a project before running remote analysis.</source>
-        <translation>运行远程分析前请先打开项目。</translation>
+        <source>Collections</source>
+        <translation>影集</translation>
+    </message>
+    <message>
+        <source>Delete the collection &quot;%1&quot; and the collections inside it? The images stay in the project.</source>
+        <translation>删除影集“%1”及其中的子影集？图像会保留在项目中。</translation>
+    </message>
+    <message>
+        <source>Delete the collection &quot;%1&quot;? The images stay in the project.</source>
+        <translation>删除影集“%1”？图像会保留在项目中。</translation>
+    </message>
+    <message>
+        <source>New Collection Inside</source>
+        <translation>新建子影集</translation>
+    </message>
+    <message>
+        <source>Rename</source>
+        <translation>重命名</translation>
+    </message>
+</context>
+<context>
+    <name>DateCommitGraph</name>
+    <message>
+        <location filename="../qml/DateCommitGraph.qml" line="+54"/>
+        <source>Last year</source>
+        <translation>近一年</translation>
+    </message>
+    <message>
+        <location line="+63"/>
+        <source>Capture activity</source>
+        <translation>拍摄活跃度</translation>
+    </message>
+    <message>
+        <location line="+300"/>
+        <source>No photos on %1</source>
+        <translation>%1 没有照片</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>%1 photo on %2</source>
+        <translation>%2 有 %1 张照片</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Select one or more images for remote analysis.</source>
-        <translation>请选择一张或多张图像进行远程分析。</translation>
+        <source>%1 photos on %2</source>
+        <translation>%2 有 %1 张照片</translation>
+    </message>
+    <message>
+        <location line="+197"/>
+        <source>Less</source>
+        <translation>少</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>More</source>
+        <translation>多</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>No capture dates</source>
+        <translation>没有拍摄日期</translation>
+    </message>
+</context>
+<context>
+    <name>DateFilterSection</name>
+    <message>
+        <location filename="../qml/DateFilterSection.qml" line="+26"/>
+        <source>Calendar</source>
+        <translation>日历</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Activity</source>
+        <translation>热力图</translation>
     </message>
 </context>
 <context>
@@ -1661,58 +2518,249 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorAdjustmentHeader</name>
+    <message>
+        <location filename="../qml/EditorAdjustmentHeader.qml" line="+140"/>
+        <source>Add Radial Mask</source>
+        <translation>添加径向蒙版</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Add Gradient Mask</source>
+        <translation>添加渐变蒙版</translation>
+    </message>
+</context>
+<context>
     <name>EditorAdjustmentStack</name>
     <message>
-        <location filename="../qml/EditorAdjustmentStack.qml" line="+134"/>
-        <location line="+61"/>
+        <location filename="../qml/EditorAdjustmentStack.qml" line="+51"/>
+        <location line="+126"/>
         <source>Look</source>
         <translation>外观</translation>
     </message>
     <message>
-        <location line="-60"/>
-        <location line="+62"/>
+        <location line="-124"/>
+        <location line="+125"/>
         <source>LUT</source>
         <translation>LUT</translation>
     </message>
     <message>
-        <location line="-61"/>
-        <location line="+63"/>
+        <location line="-123"/>
+        <location line="+124"/>
         <source>Display Transform</source>
         <translation>显示变换</translation>
     </message>
     <message>
-        <location line="-62"/>
-        <location line="+65"/>
+        <location line="-121"/>
+        <location line="+122"/>
         <source>Geometry</source>
         <translation>几何</translation>
     </message>
     <message>
-        <location line="-64"/>
-        <location line="+67"/>
+        <location line="-120"/>
+        <location line="+121"/>
         <source>RAW Decode</source>
         <translation>RAW 解码</translation>
     </message>
     <message>
-        <location line="-66"/>
-        <location line="+54"/>
+        <location line="-132"/>
+        <location line="+134"/>
         <source>Tone</source>
         <translation>色调</translation>
     </message>
     <message>
-        <location line="-48"/>
+        <location line="-121"/>
+        <location line="+120"/>
+        <source>Mask</source>
+        <translation>蒙版</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Select an image to enable adjustments</source>
         <translation>选择图像以启用调整</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+2"/>
         <source>No adjustments yet</source>
         <translation>尚无调整</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Post Processing</source>
+        <translation>后期处理</translation>
+    </message>
+    <message>
+        <source>Compare</source>
+        <translation>对比</translation>
+    </message>
+</context>
+<context>
+    <name>EditorAiMaskPanel</name>
+    <message>
+        <source>The AI Mask models are not installed. Download them on the AI Models page in Settings.</source>
+        <translation>AI 蒙版模型尚未安装。请在“设置 > AI 模型”页面下载。</translation>
+    </message>
+    <message>
+        <source>The installed AI Mask models are too old for this version of Alcedo Studio. Update them on the AI Models page in Settings.</source>
+        <translation>已安装的 AI 蒙版模型版本过旧，此版本的 Alcedo Studio 无法使用。请在“设置 > AI 模型”页面更新。</translation>
+    </message>
+    <message>
+        <source>The AI Mask models need a newer version of Alcedo Studio. Update Alcedo Studio to use AI Mask.</source>
+        <translation>AI 蒙版模型需要更新版本的 Alcedo Studio。请更新 Alcedo Studio 后使用 AI 蒙版。</translation>
+    </message>
+    <message>
+        <source>The installed AI Mask models are incomplete. Repair them on the AI Models page in Settings.</source>
+        <translation>已安装的 AI 蒙版模型不完整。请在“设置 > AI 模型”页面修复。</translation>
+    </message>
+    <message>
+        <source>Open AI Models</source>
+        <translation>打开 AI 模型</translation>
+    </message>
+    <message>
+        <source>Sky: the license of the Sky model&apos;s training data is not clear. Decide yourself before commercial use; see Settings &gt; AI Models.</source>
+        <translation>天空：天空模型训练数据的许可证不明确，商业使用前请自行判断，详见“设置 &gt; AI 模型”。</translation>
+    </message>
+    <message>
+        <source> px</source>
+        <translation> 像素</translation>
+    </message>
+    <message>
+        <source>%1/%2</source>
+        <translation>%1/%2</translation>
+    </message>
+    <message>
+        <source>AI Mask</source>
+        <translation>AI 蒙版</translation>
+    </message>
+    <message>
+        <source>Add to the Mask</source>
+        <translation>添加到蒙版</translation>
+    </message>
+    <message>
+        <source>Box: drag around an object</source>
+        <translation>框选：拖动以框住对象</translation>
+    </message>
+    <message>
+        <source>Close without saving</source>
+        <translation>关闭且不保存</translation>
+    </message>
+    <message>
+        <source>Confirm</source>
+        <translation>确认</translation>
+    </message>
+    <message>
+        <source>Edit AI Mask</source>
+        <translation>编辑 AI 蒙版</translation>
+    </message>
+    <message>
+        <source>Expand</source>
+        <translation>扩展</translation>
+    </message>
+    <message>
+        <source>Feather</source>
+        <translation>羽化</translation>
+    </message>
+    <message>
+        <source>Large region</source>
+        <translation>大范围</translation>
+    </message>
+    <message>
+        <source>Loading the models</source>
+        <translation>正在加载模型</translation>
+    </message>
+    <message>
+        <source>Medium region</source>
+        <translation>中范围</translation>
+    </message>
+    <message>
+        <source>New AI Mask</source>
+        <translation>新建 AI 蒙版</translation>
+    </message>
+    <message>
+        <source>Opening the edit</source>
+        <translation>正在打开编辑</translation>
+    </message>
+    <message>
+        <source>Path: draw a line over an object</source>
+        <translation>路径：在对象上画线</translation>
+    </message>
+    <message>
+        <source>People</source>
+        <translation>人物</translation>
+    </message>
+    <message>
+        <source>Person %1</source>
+        <translation>人物 %1</translation>
+    </message>
+    <message>
+        <source>Point: click to add a point</source>
+        <translation>点选：点击添加点</translation>
+    </message>
+    <message>
+        <source>Reading the image</source>
+        <translation>正在读取图像</translation>
+    </message>
+    <message>
+        <source>Redo AI Mask step</source>
+        <translation>重做 AI 蒙版步骤</translation>
+    </message>
+    <message>
+        <source>Rendering the analysis image</source>
+        <translation>正在渲染分析图像</translation>
+    </message>
+    <message>
+        <source>Retry the Mask display</source>
+        <translation>重试显示蒙版</translation>
+    </message>
+    <message>
+        <source>Running the model</source>
+        <translation>正在运行模型</translation>
+    </message>
+    <message>
+        <source>Saving the Mask</source>
+        <translation>正在保存蒙版</translation>
+    </message>
+    <message>
+        <source>Select Background</source>
+        <translation>选择背景</translation>
+    </message>
+    <message>
+        <source>Select People</source>
+        <translation>选择人物</translation>
+    </message>
+    <message>
+        <source>Select Sky</source>
+        <translation>选择天空</translation>
+    </message>
+    <message>
+        <source>Select Subject</source>
+        <translation>选择主体</translation>
+    </message>
+    <message>
+        <source>Small region</source>
+        <translation>小范围</translation>
+    </message>
+    <message>
+        <source>Starting the AI runtime</source>
+        <translation>正在启动 AI 运行时</translation>
+    </message>
+    <message>
+        <source>Subtract from the Mask</source>
+        <translation>从蒙版中减去</translation>
+    </message>
+    <message>
+        <source>Undo AI Mask step</source>
+        <translation>撤销 AI 蒙版步骤</translation>
+    </message>
+    <message>
+        <source>Updating the Mask</source>
+        <translation>正在更新蒙版</translation>
     </message>
 </context>
 <context>
     <name>EditorCloseConfirmDialog</name>
     <message>
-        <location filename="../qml/EditorCloseConfirmDialog.qml" line="+85"/>
+        <location filename="../qml/EditorCloseConfirmDialog.qml" line="+86"/>
         <source>Unsaved Edits</source>
         <translation>未保存的编辑</translation>
     </message>
@@ -1743,7 +2791,326 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorPostProcessPanel</name>
+    <message>
+        <location filename="../qml/EditorPostProcessPanel.qml" line="+109"/>
+        <source>Clarity</source>
+        <translation>清晰度</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Sharpen</source>
+        <translation>锐化</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Film Grain</source>
+        <translation>胶片颗粒</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Halation</source>
+        <translation>光晕</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Strength</source>
+        <translation>强度</translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <source>Diffusion</source>
+        <translation>柔光</translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <location line="+9"/>
+        <source>Detail</source>
+        <translation>细节</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Texture</source>
+        <translation>纹理</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Post Processing</source>
+        <translation>后期处理</translation>
+    </message>
+    <message>
+        <source>Format</source>
+        <translation>画幅</translation>
+    </message>
+</context>
+<context>
+    <name>EditorComparisonPanel</name>
+    <message>
+        <source>A</source>
+        <translation>A</translation>
+    </message>
+    <message>
+        <source>B</source>
+        <translation>B</translation>
+    </message>
+    <message>
+        <source>Compare</source>
+        <translation>对比</translation>
+    </message>
+    <message>
+        <source>Complete images</source>
+        <translation>完整图像</translation>
+    </message>
+    <message>
+        <source>Divider</source>
+        <translation>分割线</translation>
+    </message>
+    <message>
+        <source>Left/right</source>
+        <translation>左右</translation>
+    </message>
+    <message>
+        <source>Top/bottom</source>
+        <translation>上下</translation>
+    </message>
+    <message>
+        <source>Swap A and B</source>
+        <translation>交换 A 和 B</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>Comparison is unavailable for HDR output.</source>
+        <translation>HDR 输出无法进行对比。</translation>
+    </message>
+    <message>
+        <source>Rendering comparison images</source>
+        <translation>正在渲染对比图像</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>重试</translation>
+    </message>
+    <message>
+        <source>Both images use the current demosaic, highlight reconstruction, and lens settings. Each image keeps its own white balance and adjustments. Unadjusted is the imported image with these settings.</source>
+        <translation>两张图像都使用当前的去马赛克、高光重建和镜头设置。每张图像保留各自的白平衡和调整。“未调整”是使用这些设置的导入图像。</translation>
+    </message>
+</context>
+<context>
+    <name>EditorComparisonView</name>
+    <message>
+        <source>A</source>
+        <translation>A</translation>
+    </message>
+    <message>
+        <source>B</source>
+        <translation>B</translation>
+    </message>
+    <message>
+        <source>Comparison divider</source>
+        <translation>对比分割线</translation>
+    </message>
+    <message>
+        <source>Move left or right to reveal A or B.</source>
+        <translation>向左或向右移动以显示 A 或 B。</translation>
+    </message>
+    <message>
+        <source>Move up or down to reveal A or B.</source>
+        <translation>向上或向下移动以显示 A 或 B。</translation>
+    </message>
+    <message>
+        <source>The comparison images could not be loaded.</source>
+        <translation>无法加载对比图像。</translation>
+    </message>
+    <message>
+        <source>Rendering comparison images</source>
+        <translation>正在渲染对比图像</translation>
+    </message>
+</context>
+<context>
     <name>EditorDisplayTransformPanel</name>
+    <message>
+        <source>Film Print</source>
+        <translation>胶片印片</translation>
+    </message>
+    <message>
+        <source>Film Grain</source>
+        <translation>胶片颗粒</translation>
+    </message>
+    <message>
+        <source>Film</source>
+        <translation>胶片</translation>
+    </message>
+    <message>
+        <source>Print Material</source>
+        <translation>印片材料</translation>
+    </message>
+    <message>
+        <source>Scene Light</source>
+        <translation>场景光</translation>
+    </message>
+    <message>
+        <source>Light Spread</source>
+        <translation>光扩散</translation>
+    </message>
+    <message>
+        <source>Halation</source>
+        <translation>光晕</translation>
+    </message>
+    <message>
+        <source>Enlarger Flare</source>
+        <translation>放大机眩光</translation>
+    </message>
+    <message>
+        <source>Loupe Flare</source>
+        <translation>放大镜眩光</translation>
+    </message>
+    <message>
+        <source>As Shot</source>
+        <translation>按拍摄参数</translation>
+    </message>
+    <message>
+        <source>Negative Scan</source>
+        <translation>负片扫描</translation>
+    </message>
+    <message>
+        <source>Scanner</source>
+        <translation>扫描仪</translation>
+    </message>
+    <message>
+        <source>Style</source>
+        <translation>风格</translation>
+    </message>
+    <message>
+        <source>Print Setting</source>
+        <translation>印片设置</translation>
+    </message>
+    <message>
+        <source>Auto Color</source>
+        <translation>自动色彩</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>关</translation>
+    </message>
+    <message>
+        <source>Neutral</source>
+        <translation>中性</translation>
+    </message>
+    <message>
+        <source>Warm</source>
+        <translation>暖调</translation>
+    </message>
+    <message>
+        <source>Cool</source>
+        <translation>冷调</translation>
+    </message>
+    <message>
+        <source>Auto Color Strength</source>
+        <translation>自动色彩强度</translation>
+    </message>
+    <message>
+        <source>Auto Density</source>
+        <translation>自动密度</translation>
+    </message>
+    <message>
+        <source>Scan Contrast</source>
+        <translation>扫描反差</translation>
+    </message>
+    <message>
+        <source>Scan Exposure</source>
+        <translation>扫描曝光</translation>
+    </message>
+    <message>
+        <source>Cyan</source>
+        <translation>青</translation>
+    </message>
+    <message>
+        <source>Magenta</source>
+        <translation>品红</translation>
+    </message>
+    <message>
+        <source>Yellow</source>
+        <translation>黄</translation>
+    </message>
+    <message>
+        <source>Black at Film Base</source>
+        <translation>片基黑点</translation>
+    </message>
+    <message>
+        <source>Scanner Red (nm)</source>
+        <translation>扫描仪红通道 (nm)</translation>
+    </message>
+    <message>
+        <source>Scanner Green (nm)</source>
+        <translation>扫描仪绿通道 (nm)</translation>
+    </message>
+    <message>
+        <source>Scanner Blue (nm)</source>
+        <translation>扫描仪蓝通道 (nm)</translation>
+    </message>
+    <message>
+        <source>Scanner Band Width (nm)</source>
+        <translation>扫描仪带宽 (nm)</translation>
+    </message>
+    <message>
+        <source>Scanner Light</source>
+        <translation>扫描仪光源</translation>
+    </message>
+    <message>
+        <source>Halogen</source>
+        <translation>卤素灯</translation>
+    </message>
+    <message>
+        <source>Equal Energy</source>
+        <translation>等能光</translation>
+    </message>
+    <message>
+        <source>Reference</source>
+        <translation>参考</translation>
+    </message>
+    <message>
+        <source>Daylight</source>
+        <translation>日光</translation>
+    </message>
+    <message>
+        <source>Tungsten</source>
+        <translation>钨丝灯</translation>
+    </message>
+    <message>
+        <source>Fluorescent</source>
+        <translation>荧光灯</translation>
+    </message>
+    <message>
+        <source>LED</source>
+        <translation>LED</translation>
+    </message>
+    <message>
+        <source>Sodium</source>
+        <translation>钠灯</translation>
+    </message>
+    <message>
+        <source>Street Mixed</source>
+        <translation>街道混合光</translation>
+    </message>
+    <message>
+        <source>Street Sodium</source>
+        <translation>街道钠灯</translation>
+    </message>
+    <message>
+        <source>Street LED</source>
+        <translation>街道 LED</translation>
+    </message>
+    <message>
+        <source>Interior Warm</source>
+        <translation>暖色室内</translation>
+    </message>
+    <message>
+        <source>Interior Office</source>
+        <translation>办公室内</translation>
+    </message>
     <message>
         <location filename="../qml/EditorDisplayTransformPanel.qml" line="+30"/>
         <source>BT.1886</source>
@@ -2016,13 +3383,142 @@ Original source files on disk will be kept.</source>
         <source>Color &amp; Encoding</source>
         <translation>颜色与编码</translation>
     </message>
+    <message>
+        <source>Negative</source>
+        <translation>负片</translation>
+    </message>
+    <message>
+        <source>Reversal</source>
+        <translation>反转片</translation>
+    </message>
+    <message>
+        <source>Print</source>
+        <translation>印片</translation>
+    </message>
+    <message>
+        <source>Search films</source>
+        <translation>搜索胶片</translation>
+    </message>
+    <message>
+        <source>No films match</source>
+        <translation>没有匹配的胶片</translation>
+    </message>
+    <message>
+        <source>Search print materials</source>
+        <translation>搜索印片材料</translation>
+    </message>
+    <message>
+        <source>No print materials match</source>
+        <translation>没有匹配的印片材料</translation>
+    </message>
+    <message>
+        <source>Photo</source>
+        <translation>摄影</translation>
+    </message>
+    <message>
+        <source>Cinema</source>
+        <translation>电影</translation>
+    </message>
+    <message>
+        <source>Classic Cinema</source>
+        <translation>经典电影</translation>
+    </message>
+    <message>
+        <source>Aerial</source>
+        <translation>航空</translation>
+    </message>
+    <message>
+        <source>Cinema Print</source>
+        <translation>电影拷贝</translation>
+    </message>
+    <message>
+        <source>Paper</source>
+        <translation>相纸</translation>
+    </message>
+    <message>
+        <source>Display</source>
+        <translation>展示</translation>
+    </message>
+    <message>
+        <source>Format</source>
+        <translation>画幅</translation>
+    </message>
+    <message>
+        <source>The display transform changes the scene-linear image into the image on the display. ACES 2.0 and OpenDRT map the tones and colors to an SDR or HDR display. Film Print simulates film from its spectral data: the scene exposes a film, and the film is printed on a print material, scanned (Negative Scan), or viewed on a light table (reversal film).</source>
+        <translation>显示变换把场景线性的图像变成显示器上的图像。ACES 2.0 和 OpenDRT 把色调和颜色映射到 SDR 或 HDR 显示。Film Print 用胶片的光谱数据模拟胶片：场景曝光到胶片上，胶片再印放到印片材料上、被扫描（负片扫描），或者放在看片台上观看（反转片）。</translation>
+    </message>
+    <message>
+        <source>The film that records the scene. Its spectral sensitivity, characteristic curves, dyes, sharpness, and grain come from the published data of the film. A negative film makes a print or a scan; a reversal (slide) film shows on a light table.</source>
+        <translation>记录场景的胶片。它的光谱灵敏度、特性曲线、染料、锐度和颗粒来自该胶片公开的技术数据。负片用于印放或扫描；反转片（幻灯片）在看片台上观看。</translation>
+    </message>
+    <message>
+        <source>The size of the film frame. The image fills the frame, so a smaller frame enlarges the grain, the light spread, and the halation in the image.</source>
+        <translation>胶片画幅的尺寸。图像充满画幅，所以画幅越小，图像中的颗粒、光扩散和光晕越大。</translation>
+    </message>
+    <message>
+        <source>The grain of the film, in the dyes of the negative. 100 % is the granularity in the datasheet of the film. Method Film Print turns it on at 100 %; another method sets it to 0.</source>
+        <translation>胶片的颗粒，位于负片的染料中。100 % 是该胶片技术手册中的颗粒度。选择 Film Print 方法时颗粒打开为 100 %；选择其他方法时颗粒设为 0。</translation>
+    </message>
+    <message>
+        <source>The material that makes the positive image from the negative. A paper gives a print under D50 viewing light; a cinema print stock gives a projection in a dark theater. Both give Rec. 709 SDR. Negative Scan scans and inverts the negative, and OpenDRT shows the scan in SDR or HDR.</source>
+        <translation>从负片得到正像的材料。相纸在 D50 观看光下成为照片；电影拷贝片在暗的影院中放映。两者输出 Rec. 709 SDR。负片扫描把负片扫描并反相，再由 OpenDRT 以 SDR 或 HDR 显示扫描结果。</translation>
+    </message>
+    <message>
+        <source>The light on the scene when the film is exposed. As Shot uses the color temperature of the RAW white balance. Reference uses the light that the film is balanced for. Another light gives the color cast of real film: a tungsten film turns cool in daylight, and a daylight film turns warm in tungsten light. The print timing or the scan settings set how much of the cast stays.</source>
+        <translation>胶片曝光时照在场景上的光。按拍摄参数使用 RAW 白平衡的色温。参考使用胶片平衡的光。其他光源产生真实胶片的偏色：灯光片在日光下偏冷，日光片在钨丝灯下偏暖。印片平衡或扫描设置决定保留多少偏色。</translation>
+    </message>
+    <message>
+        <source>The spread of light in the emulsion, which sets the sharpness of the film. 1 is the sharpness in the datasheet; a larger value makes the image softer.</source>
+        <translation>光在乳剂中的扩散，它决定胶片的锐度。1 是技术手册中的锐度；值越大，图像越柔和。</translation>
+    </message>
+    <message>
+        <source>Light that the film base reflects back into the red-sensitive layer. It makes a red glow around bright lights. 1 is the standard strength.</source>
+        <translation>片基把光反射回红感层。它在亮光源周围产生红色光晕。1 是标准强度。</translation>
+    </message>
+    <message>
+        <source>Stray light of the enlarger lens on the paper. It adds light where the negative is dense, so the highlights of the print turn gray.</source>
+        <translation>放大机镜头照到相纸上的杂散光。它在负片浓密的区域加光，所以照片的高光变灰。</translation>
+    </message>
+    <message>
+        <source>Stray light of the loupe on the light table. It lifts the shadows of the slide.</source>
+        <translation>看片台上放大镜的杂散光。它提亮幻灯片的暗部。</translation>
+    </message>
+    <message>
+        <source>A virtual scanner reads the negative, and one straight line in log density inverts it, so the toe, the shoulder, and the contrast of the film stay. Auto Color Off keeps the cast of the scene light and the film; the other modes remove part of the cast that a prescan of the frame measures. Scan Exposure, Scan Contrast, and Cyan, Magenta, Yellow change the inversion. Black at Film Base sets the film base to black.</source>
+        <translation>虚拟扫描仪读取负片，一条对数密度上的直线把它反相，所以胶片的趾部、肩部和反差保持不变。自动色彩关闭时保留场景光和胶片的偏色；其他模式按整帧预扫描测得的偏色去掉其中一部分。扫描曝光、扫描反差以及青、品红、黄调整反相。片基黑点把片基设为黑色。</translation>
+    </message>
+    <message>
+        <source>The bands of the virtual scanner: the center wavelengths of the red, green, and blue channels, one band width, and the scanner light. The defaults are an ideal scanner. A change builds the scanner table again.</source>
+        <translation>虚拟扫描仪的波段：红、绿、蓝通道的中心波长，一个带宽，以及扫描仪光源。默认值是一台理想扫描仪。修改后重新构建扫描仪表。</translation>
+    </message>
+    <message>
+        <source>The scan gives linear AP1 with 18 % gray at 0.18. OpenDRT shows it with these settings, which are the settings of method OpenDRT.</source>
+        <translation>扫描结果是线性 AP1，18 % 灰位于 0.18。OpenDRT 用这些设置显示它，这些设置就是 OpenDRT 方法的设置。</translation>
+    </message>
+    <message>
+        <source>The color space, the transfer function (EOTF), and the peak luminance of the output. A print and a slide give Rec. 709 SDR, so Film Print shows this section only with Negative Scan.</source>
+        <translation>输出的色域、传递函数（EOTF）和峰值亮度。照片和幻灯片输出 Rec. 709 SDR，所以 Film Print 只在负片扫描时显示这一节。</translation>
+    </message>
+</context>
+<context>
+    <name>EditorEndpointNodeDelegate</name>
+    <message>
+        <location filename="../qml/EditorEndpointNodeDelegate.qml" line="+27"/>
+        <source>Develop cannot be renamed or deleted</source>
+        <translation>Develop 不能重命名或删除</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>DRT/Post cannot be renamed or deleted</source>
+        <translation>DRT/Post 不能重命名或删除</translation>
+    </message>
 </context>
 <context>
     <name>EditorFilmstrip</name>
     <message>
-        <location filename="../qml/EditorFilmstrip.qml" line="+241"/>
+        <location filename="../qml/EditorFilmstrip.qml" line="+296"/>
         <location line="+32"/>
-        <location line="+264"/>
+        <location line="+302"/>
         <source>(unnamed)</source>
         <translation type="unfinished">（未命名）</translation>
     </message>
@@ -2052,12 +3548,12 @@ Original source files on disk will be kept.</source>
         <translation>收起胶片带</translation>
     </message>
     <message>
-        <location line="+283"/>
+        <location line="+300"/>
         <source> | Rating %1/5</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-211"/>
+        <location line="-227"/>
         <source>No images in filmstrip</source>
         <translation>胶片带中没有图像</translation>
     </message>
@@ -2067,18 +3563,18 @@ Original source files on disk will be kept.</source>
         <translation>没有图像</translation>
     </message>
     <message>
-        <location line="+108"/>
+        <location line="+124"/>
         <source>Source file was moved or deleted</source>
         <translation>源文件已被移动或删除</translation>
     </message>
     <message>
-        <location line="-193"/>
-        <location line="+202"/>
+        <location line="-209"/>
+        <location line="+218"/>
         <source>Image %1</source>
         <translation>图像 %1</translation>
     </message>
     <message>
-        <location line="-276"/>
+        <location line="-293"/>
         <source>Editing %1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2088,7 +3584,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+277"/>
+        <location line="+294"/>
         <source>Current image</source>
         <translation>当前图像</translation>
     </message>
@@ -2101,6 +3597,20 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>Open image</source>
         <translation>打开图像</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation>未评分</translation>
+    </message>
+    <message>
+        <source>Edited</source>
+        <translation>已编辑</translation>
     </message>
 </context>
 <context>
@@ -2129,12 +3639,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorGeometryPanel</name>
     <message>
-        <location filename="../qml/EditorGeometryPanel.qml" line="+71"/>
-        <source>Auto (metadata)</source>
-        <translation>自动（元数据）</translation>
-    </message>
-    <message>
-        <location line="+463"/>
+        <location filename="../qml/EditorGeometryPanel.qml" line="+409"/>
         <source>Crop X</source>
         <translation>裁剪 X</translation>
     </message>
@@ -2174,27 +3679,17 @@ Original source files on disk will be kept.</source>
         <translation>宽高比高度</translation>
     </message>
     <message>
-        <location line="+11"/>
-        <source>Enable Lens Calibration</source>
-        <translation>启用镜头校正</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Lens Brand</source>
-        <translation>镜头品牌</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Lens Model</source>
-        <translation>镜头型号</translation>
-    </message>
-    <message>
-        <location line="+172"/>
+        <location line="+160"/>
         <source>Geometry</source>
         <translation>几何</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+10"/>
+        <source>Geometry applies to the whole image.</source>
+        <translation>几何调整应用于整幅图像。</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Source aspect %1</source>
         <translation>源宽高比 %1</translation>
     </message>
@@ -2213,21 +3708,11 @@ Original source files on disk will be kept.</source>
         <source>Reset crop and rotation</source>
         <translation>重置裁剪和旋转</translation>
     </message>
-    <message>
-        <location line="+11"/>
-        <source>Lens Calibration</source>
-        <translation>镜头校正</translation>
-    </message>
-    <message>
-        <location line="+51"/>
-        <source>Reset lens calibration</source>
-        <translation>重置镜头校准</translation>
-    </message>
 </context>
 <context>
     <name>EditorHistoryTransactionEntry</name>
     <message>
-        <location filename="../qml/EditorHistoryTransactionEntry.qml" line="+65"/>
+        <location filename="../qml/EditorHistoryTransactionEntry.qml" line="+61"/>
         <source>Earlier</source>
         <translation type="unfinished">较早</translation>
     </message>
@@ -2252,61 +3737,30 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished">%1 天前</translation>
     </message>
     <message>
-        <location line="+55"/>
+        <location line="+54"/>
         <source>Commit %1</source>
         <translation type="unfinished">提交 %1</translation>
     </message>
     <message>
-        <location line="+40"/>
-        <source>Merge</source>
-        <translation type="unfinished">合并</translation>
-    </message>
-    <message>
-        <location line="+2"/>
+        <location line="+41"/>
         <source>Adjustment</source>
         <translation type="unfinished">调整</translation>
     </message>
     <message>
-        <location line="+47"/>
-        <source>2nd %1</source>
-        <translation type="unfinished">第 2 个 %1</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Resolved adjustments</source>
-        <translation type="unfinished">已解决的调整</translation>
+        <location line="+64"/>
+        <source>Agent</source>
+        <translation type="unfinished">智能体</translation>
     </message>
 </context>
 <context>
     <name>EditorHistoryTransactionsPanel</name>
     <message>
-        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+59"/>
-        <source>Adjustment transfer is unavailable</source>
-        <translation>调整传递不可用</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <location line="+28"/>
-        <source>Merge completed</source>
-        <translation>合并完成</translation>
-    </message>
-    <message>
-        <location line="-23"/>
-        <source>Merge cancelled</source>
-        <translation>合并已取消</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+53"/>
         <source>Adjustments pasted</source>
         <translation>已粘贴调整</translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Merge could not start</source>
-        <translation>无法开始合并</translation>
-    </message>
-    <message>
-        <location line="+28"/>
+        <location line="+20"/>
         <source>Edit History</source>
         <translation>编辑历史</translation>
     </message>
@@ -2322,23 +3776,20 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+27"/>
+        <location line="+1"/>
         <source>Undo edit</source>
         <translation>撤销编辑</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+17"/>
+        <location line="+1"/>
         <source>Redo edit</source>
         <translation>重做编辑</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>Paste adjustments as a new Version</source>
         <translation>将调整作为新版本粘贴</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Merge adjustments into this Version</source>
-        <translation>将调整合并到此版本</translation>
     </message>
     <message>
         <location line="+9"/>
@@ -2354,39 +3805,34 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorLookPanel</name>
     <message>
-        <location filename="../qml/EditorLookPanel.qml" line="+212"/>
+        <location filename="../qml/EditorLookPanel.qml" line="+720"/>
+        <source>White Balance</source>
+        <translation>白平衡</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>This white balance is a CAT02 chromatic adaptation in the grading color space. It assumes the image is already balanced to the ACES AP1 white point (about 6000 K), so the default is no change. It does not read the camera&apos;s data: use RAW Decode white balance to correct the capture, and this control for creative warming or cooling, including on JPEG and other non-RAW images. The same Kelvin value can look different here than on the RAW Decode page.</source>
+        <translation>此处的白平衡是在调色色彩空间中进行的 CAT02 色适应。它假设图像已平衡到 ACES AP1 白点（约 6000 K），因此默认值不改变画面。它不读取相机数据：校正拍摄白平衡请使用 RAW 解码页的白平衡，此控件用于创意性的加暖或加冷，也适用于 JPEG 等非 RAW 图像。同一色温数值在此处与 RAW 解码页上的效果可能不同。</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorLookPanel.qml" line="+186"/>
         <source>Saturation</source>
         <translation>饱和度</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Vibrance</source>
         <translation>自然饱和度</translation>
     </message>
     <message>
-        <location line="+23"/>
-        <source>Clarity</source>
-        <translation>清晰度</translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>Sharpen</source>
-        <translation>锐化</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Film Grain</source>
-        <translation>胶片颗粒</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Halation</source>
-        <translation>光晕</translation>
-    </message>
-    <message>
-        <location line="+320"/>
+        <location line="+287"/>
         <source>Master</source>
         <translation>主控</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Changes the brightness of this tonal range, in stops (EV).</source>
+        <translation>调整该影调区域的亮度，单位为档（EV）。</translation>
     </message>
     <message>
         <location line="+137"/>
@@ -2395,36 +3841,6 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+9"/>
-        <source>White Balance</source>
-        <translation>白平衡</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>As Shot</source>
-        <translation>按拍摄参数</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Custom</source>
-        <translation>自定义</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>White balance is unavailable for this image.</source>
-        <translation>此图像无法使用白平衡。</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Temperature</source>
-        <translation>色温</translation>
-    </message>
-    <message>
-        <location line="+20"/>
-        <source>Tint</source>
-        <translation>色调</translation>
-    </message>
-    <message>
-        <location line="+23"/>
         <source>Color</source>
         <translation>颜色</translation>
     </message>
@@ -2465,222 +3881,915 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+14"/>
-        <source>Gamma</source>
-        <translation>Gamma</translation>
+        <source>Shadows (Lift)</source>
+        <translation>暗部 (Lift)</translation>
     </message>
     <message>
-        <location line="+12"/>
-        <source>Lift</source>
-        <translation>Lift</translation>
+        <location line="+1"/>
+        <source>Changes mostly the color and brightness of the shadows. The effect is largest near black, and the highlights stay almost the same.</source>
+        <translation>主要调整暗部的颜色和亮度。越接近黑色影响越大，高光基本不变。</translation>
     </message>
     <message>
-        <location line="+8"/>
-        <source>Gain</source>
-        <translation>Gain</translation>
+        <location line="+1"/>
+        <source>Midtones (Gamma)</source>
+        <translation>中间调 (Gamma)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Changes mostly the midtones. The effect is largest near middle grey, and the darkest and brightest areas stay almost the same.</source>
+        <translation>主要调整中间调。影响集中在中灰附近，最暗和最亮的部分基本不变。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Highlights (Gain)</source>
+        <translation>高光 (Gain)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Changes mostly the color and brightness of the highlights. The effect is largest near white, and the shadows stay almost the same.</source>
+        <translation>主要调整亮部的颜色和亮度。越接近白色影响越大，暗部基本不变。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Offset</source>
+        <translation>整体 (Offset)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Changes the color and brightness of all tones by the same amount, as an exposure change per color channel.</source>
+        <translation>对所有影调做相同的颜色和亮度偏移，类似逐通道调整曝光。</translation>
     </message>
     <message>
         <location line="+12"/>
         <source>Reset wheels</source>
         <translation>重置色轮</translation>
     </message>
-    <message>
-        <location line="+10"/>
-        <source>Detail</source>
-        <translation>细节</translation>
-    </message>
-    <message>
-        <location line="+29"/>
-        <source>Texture</source>
-        <translation>纹理</translation>
-    </message>
 </context>
 <context>
-    <name>EditorMergeConflictCard</name>
+    <name>EditorLutBrowserPanel</name>
     <message>
-        <location filename="../qml/EditorMergeConflictCard.qml" line="+40"/>
-        <source>HSL</source>
-        <translation>HSL</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Output Transform</source>
-        <translation>输出变换</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>RAW Decode</source>
-        <translation>RAW 解码</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Color Temperature</source>
-        <translation>色温</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Crop &amp; Rotate</source>
-        <translation>裁剪与旋转</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Adjustment</source>
-        <translation>调整</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <location line="+15"/>
-        <source>No value</source>
-        <translation>无值</translation>
-    </message>
-    <message>
-        <location line="-13"/>
-        <source>On</source>
-        <translation>开启</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Off</source>
-        <translation>关闭</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Empty</source>
-        <translation>空</translation>
-    </message>
-    <message>
-        <location line="+39"/>
-        <source>RESOLVED</source>
-        <translation>已解决</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>CONFLICT</source>
-        <translation>冲突</translation>
-    </message>
-    <message>
-        <location line="+52"/>
-        <source>CURRENT (OURS)</source>
-        <translation>当前（本方）</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Keep Current</source>
-        <translation>保留当前</translation>
+        <location filename="../qml/EditorLutBrowserPanel.qml" line="+1"/>
+        <source>Search LUTs</source>
+        <translation>搜索 LUT</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Use Current value for %1</source>
-        <translation>对 %1 使用当前值</translation>
-    </message>
-    <message>
-        <location line="+44"/>
-        <source>INCOMING (THEIRS)</source>
-        <translation>传入（对方）</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Use Incoming</source>
-        <translation>使用传入</translation>
+        <source>Clear search</source>
+        <translation>清除搜索</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Use Incoming value for %1</source>
-        <translation>对 %1 使用传入值</translation>
+        <source>Sort LUTs</source>
+        <translation>排序 LUT</translation>
     </message>
     <message>
-        <location line="+43"/>
-        <source>MERGED (PREVIEW)</source>
-        <translation>已合并（预览）</translation>
+        <location line="+1"/>
+        <source>Search results are ordered by relevance.</source>
+        <translation>搜索结果按相关度排序。</translation>
     </message>
     <message>
-        <location line="+10"/>
-        <source>Pending Selection</source>
-        <translation>待选择</translation>
+        <location line="+1"/>
+        <source>Sort by</source>
+        <translation>排序方式</translation>
     </message>
     <message>
-        <location line="+21"/>
-        <source>Waiting for resolution...</source>
-        <translation>等待解决...</translation>
+        <location line="+1"/>
+        <source>Name</source>
+        <translation>名称</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Modified time</source>
+        <translation>修改时间</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Grid view</source>
+        <translation>网格视图</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>List view</source>
+        <translation>列表视图</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show all LUTs</source>
+        <translation>显示全部 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show favorites only</source>
+        <translation>仅显示收藏</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Category</source>
+        <translation>类别</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Source</source>
+        <translation>来源</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Brand</source>
+        <translation>品牌</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Print</source>
+        <translation>印片</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear filters</source>
+        <translation>清除筛选</translation>
     </message>
 </context>
 <context>
-    <name>EditorMergeDialog</name>
+    <name>EditorLutControlPanel</name>
     <message>
-        <location filename="../qml/EditorMergeDialog.qml" line="+176"/>
-        <source>Merge Conflicts</source>
-        <translation>合并冲突</translation>
+        <location filename="../qml/EditorLutControlPanel.qml" line="+1"/>
+        <source>Strength</source>
+        <translation>强度</translation>
     </message>
     <message>
-        <location line="+14"/>
-        <source>Cancel</source>
-        <translation>取消</translation>
+        <location line="+1"/>
+        <source>LUT</source>
+        <translation>LUT</translation>
     </message>
     <message>
-        <location line="+34"/>
-        <source>Complete</source>
-        <translation>完成</translation>
+        <location line="+1"/>
+        <source>No LUT applied</source>
+        <translation>未应用 LUT</translation>
     </message>
     <message>
-        <location line="+81"/>
-        <source>No merge conflicts to resolve</source>
-        <translation>没有要解决的合并冲突</translation>
+        <location line="+1"/>
+        <source>The LUT file is missing. The photo renders without it until the file returns.</source>
+        <translation>LUT 文件缺失。在文件恢复之前，照片会在不应用该 LUT 的情况下渲染。</translation>
     </message>
     <message>
-        <location line="+25"/>
-        <source>Use All Current</source>
-        <translation>全部使用当前</translation>
+        <location line="+1"/>
+        <source>Browse LUTs</source>
+        <translation>浏览 LUT</translation>
     </message>
     <message>
-        <location line="+33"/>
-        <source>Use All Incoming</source>
-        <translation>全部使用传入</translation>
+        <location line="+1"/>
+        <source>Remove</source>
+        <translation>移除</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Input</source>
+        <translation>输入</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Output</source>
+        <translation>输出</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display input: the ACES 2.0 output transform renders the image for this display before the LUT.</source>
+        <translation>显示输入：在应用 LUT 之前，ACES 2.0 输出变换会先为该显示设备渲染图像。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display output: the ACES 2.0 inverse output transform brings the LUT result back to the scene.</source>
+        <translation>显示输出：ACES 2.0 逆输出变换会将 LUT 结果还原为场景光。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remember for this LUT</source>
+        <translation>为此 LUT 记住该设置</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT library stores these encodings and applies them the next time this LUT is selected.</source>
+        <translation>LUT 库会保存这组输入/输出编码，下次选择此 LUT 时自动应用。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Search encodings</source>
+        <translation>搜索编码</translation>
     </message>
 </context>
 <context>
-    <name>EditorMergeJsonValue</name>
+    <name>EditorLutResultCard</name>
     <message>
-        <location filename="../qml/EditorMergeJsonValue.qml" line="+35"/>
-        <location line="+31"/>
-        <location line="+6"/>
-        <location line="+7"/>
-        <source>Value</source>
-        <translation>值</translation>
+        <location filename="../qml/EditorLutResultCard.qml" line="+1"/>
+        <source>Search LUTs</source>
+        <translation>搜索 LUT</translation>
     </message>
     <message>
-        <location line="-36"/>
-        <source>null</source>
-        <translation>空值</translation>
+        <location line="+1"/>
+        <source>Sort LUTs</source>
+        <translation>排序 LUT</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>On</source>
-        <translation>开启</translation>
+        <location line="+1"/>
+        <source>Search results are ordered by relevance.</source>
+        <translation>搜索结果按相关度排序。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sort by</source>
+        <translation>排序方式</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Name</source>
+        <translation>名称</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Modified time</source>
+        <translation>修改时间</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Import LUTs</source>
+        <translation>导入 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Refresh LUT library</source>
+        <translation>刷新 LUT 库</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open user LUT folder</source>
+        <translation>打开用户 LUT 文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT file is missing. The photo renders without it until the file returns.</source>
+        <translation>LUT 文件缺失。在文件恢复之前，照片会在不应用该 LUT 的情况下渲染。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove LUT</source>
+        <translation>移除 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LUTs</source>
+        <translation>LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Loading LUT library</source>
+        <translation>正在加载 LUT 库</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No LUTs in the library</source>
+        <translation>LUT 库中还没有 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No LUTs match</source>
+        <translation>没有匹配的 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Download the official LUT packages in Settings, import .cube files, or copy them into the user LUT folder and refresh.</source>
+        <translation>在设置中下载官方 LUT 包、导入 .cube 文件，或将文件复制到用户 LUT 文件夹后刷新。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Download official LUTs</source>
+        <translation>下载官方 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Change the search or the filters to see more LUTs.</source>
+        <translation>修改搜索或筛选条件以查看更多 LUT。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear search and filters</source>
+        <translation>清除搜索和筛选</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Refreshing LUT library</source>
+        <translation>正在刷新 LUT 库</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove from favorites</source>
+        <translation>取消收藏</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Add to favorites</source>
+        <translation>加入收藏</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Put your own .cube files in the user folder of the LUT library:
+%1
+Refresh the library afterwards; they are listed under the User category. Import LUTs copies files there for you.</source>
+        <translation>请将你自己的 .cube 文件放在 LUT 库的用户文件夹中：
+%1
+放入后刷新 LUT 库，它们会列在“用户”类别下。“导入 LUT”会自动把文件复制到这里。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 applied to %2</source>
+        <translation>%1 应用于 %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose a LUT to apply to %1</source>
+        <translation>选择要应用于 %1 的 LUT</translation>
+    </message>
+</context>
+<context>
+    <name>EditorMaskGroupDelegate</name>
+    <message>
+        <location filename="../qml/EditorMaskGroupDelegate.qml" line="+88"/>
+        <source>Unlock %1 before deleting</source>
+        <translation>删除前请先解锁%1</translation>
+    </message>
+    <message>
+        <location line="+223"/>
+        <source>Mask Group</source>
+        <translation>图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>expanded</source>
+        <translation>已展开</translation>
     </message>
     <message>
         <location line="+0"/>
-        <source>Off</source>
-        <translation>关闭</translation>
+        <source>collapsed</source>
+        <translation>已折叠</translation>
     </message>
     <message>
-        <location line="+10"/>
-        <source>Empty</source>
-        <translation>空</translation>
+        <location line="+2"/>
+        <source>Mask</source>
+        <translation>蒙版</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Masks</source>
+        <translation>蒙版</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>deletion locked</source>
+        <translation>删除已锁定</translation>
     </message>
     <message>
         <location line="+3"/>
-        <source>No value</source>
-        <translation>无值</translation>
+        <source>disabled</source>
+        <translation>已禁用</translation>
     </message>
     <message>
-        <location line="+49"/>
-        <source>+%1 more fields</source>
-        <translation>另有 %1 个字段</translation>
+        <location line="+3"/>
+        <source>selected</source>
+        <translation>已选中</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Press Left to collapse</source>
+        <translation>按左方向键折叠</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Press Right to expand</source>
+        <translation>按右方向键展开</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Drag to reorder or press Ctrl+Up or Ctrl+Down</source>
+        <translation>拖拽以重新排序，或按 Ctrl+Up 或 Ctrl+Down</translation>
+    </message>
+    <message>
+        <location line="+194"/>
+        <source>Unlock %1</source>
+        <translation>解锁%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lock %1 against deletion</source>
+        <translation>锁定%1以防止删除</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Delete %1</source>
+        <translation>删除%1</translation>
+    </message>
+    <message>
+        <location line="+70"/>
+        <source>No masks</source>
+        <translation>暂无蒙版</translation>
+    </message>
+</context>
+<context>
+    <name>EditorMaskGroupMaskRow</name>
+    <message>
+        <location filename="../qml/EditorMaskGroupMaskRow.qml" line="+42"/>
+        <source>Gradient</source>
+        <translation>渐变</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Radial</source>
+        <translation>径向</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Mask</source>
+        <translation>蒙版</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+133"/>
+        <location line="+1"/>
+        <source>%1% opacity</source>
+        <translation>不透明度 %1%</translation>
+    </message>
+    <message>
+        <location line="-132"/>
+        <source>disabled</source>
+        <translation>已禁用</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>selected</source>
+        <translation>已选中</translation>
+    </message>
+    <message>
+        <location line="+129"/>
+        <source>Off</source>
+        <translation>已关闭</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Delete %1</source>
+        <translation>删除%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>inverted</source>
+        <translation>已反相</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Inverted</source>
+        <translation>已反相</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Turn off Invert for %1</source>
+        <translation>取消反相%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invert %1</source>
+        <translation>反相%1</translation>
+    </message>
+</context>
+<context>
+    <name>EditorMaskGroupsPanel</name>
+    <message>
+        <location filename="../qml/EditorMaskGroupsPanel.qml" line="+55"/>
+        <source>Open an image to edit Mask Groups</source>
+        <translation>打开图像以编辑图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Finish the node graph first</source>
+        <translation>请先完成节点图</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Updating node graph</source>
+        <translation>正在更新节点图</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>The session is not editable</source>
+        <translation>当前会话不可编辑</translation>
+    </message>
+    <message>
+        <location line="+314"/>
+        <location line="+7"/>
+        <source>Mask Groups</source>
+        <translation>图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Add Mask Group</source>
+        <translation>添加图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Locate unfinished node %1 in Nodes</source>
+        <translation>在节点图中定位未完成的节点 %1</translation>
+    </message>
+    <message>
+        <location line="+259"/>
+        <location line="+8"/>
+        <source>Select an image to edit Mask Groups</source>
+        <translation>选择图像以编辑图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+8"/>
+        <source>Loading Mask Groups</source>
+        <translation>正在加载图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+8"/>
+        <source>No Mask Groups</source>
+        <translation>暂无图层（蒙版组）</translation>
+    </message>
+</context>
+<context>
+    <name>EditorMaskRangeSection</name>
+    <message>
+        <location filename="../qml/EditorMaskRangeSection.qml" line="+32"/>
+        <source>Luminance Range</source>
+        <translation>明度范围</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Mask luminance range</source>
+        <translation>蒙版明度范围</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Hue Range</source>
+        <translation>色相范围</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Mask hue range</source>
+        <translation>蒙版色相范围</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Show selection</source>
+        <translation>显示选区</translation>
+    </message>
+    <message>
+        <source>Softness</source>
+        <translation>柔和度</translation>
+    </message>
+    <message>
+        <source>Saturation Threshold</source>
+        <translation>饱和度门槛</translation>
+    </message>
+    <message>
+        <source>Luminance low</source>
+        <translation>明度下限</translation>
+    </message>
+    <message>
+        <source>Luminance high</source>
+        <translation>明度上限</translation>
+    </message>
+    <message>
+        <source>Hue start</source>
+        <translation>色相起点</translation>
+    </message>
+    <message>
+        <source>Hue end</source>
+        <translation>色相终点</translation>
+    </message>
+</context>
+<context>
+    <name>EditorMasksContextPanel</name>
+    <message>
+        <source>Edit AI Mask</source>
+        <translation>编辑 AI 蒙版</translation>
+    </message>
+    <message>
+        <source>Luminance/Hue Range</source>
+        <translation>明度/色相范围</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorMasksContextPanel.qml" line="+79"/>
+        <source>Mask</source>
+        <translation>蒙版</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Draw on the photograph to create the Mask.</source>
+        <translation>在照片上绘制以创建蒙版。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Select a Mask in the Node drawer or choose a Mask tool.</source>
+        <translation>在节点抽屉中选择一个蒙版，或选择一个蒙版工具。</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Name</source>
+        <translation>名称</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Mask name</source>
+        <translation>蒙版名称</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Enabled</source>
+        <translation>已启用</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Invert</source>
+        <translation>反相</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Opacity</source>
+        <translation>不透明度</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask opacity</source>
+        <translation>蒙版不透明度</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <location line="+100"/>
+        <location line="+28"/>
+        <location line="+56"/>
+        <location line="+28"/>
+        <location line="+27"/>
+        <source>%1 percent</source>
+        <translation>%1%</translation>
+    </message>
+    <message>
+        <location line="-232"/>
+        <source>Position</source>
+        <translation>位置</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Mask position. Arrow keys move; Shift steps faster.</source>
+        <translation>蒙版位置。方向键移动；按住 Shift 步进更快。</translation>
+    </message>
+    <message>
+        <location line="+53"/>
+        <source>Arrow keys move · Shift ×10</source>
+        <translation>方向键移动 · Shift ×10</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Horizontal radius</source>
+        <translation>水平半径</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask horizontal radius</source>
+        <translation>蒙版水平半径</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Vertical radius</source>
+        <translation>垂直半径</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask vertical radius</source>
+        <translation>蒙版垂直半径</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Rotation</source>
+        <translation>旋转</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask rotation</source>
+        <translation>蒙版旋转</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>%1 degrees</source>
+        <translation>%1°</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Inner feather</source>
+        <translation>内羽化</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask inner feather</source>
+        <translation>蒙版内羽化</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Outer feather</source>
+        <translation>外羽化</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask outer feather</source>
+        <translation>蒙版外羽化</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Transition width</source>
+        <translation>过渡宽度</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask transition width</source>
+        <translation>蒙版过渡宽度</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Confirm</source>
+        <translation>确认</translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodeDelegate</name>
+    <message>
+        <location filename="../qml/EditorNodeDelegate.qml" line="+41"/>
+        <source>Locked against deletion</source>
+        <translation>已锁定，防止删除</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Masks expanded</source>
+        <translation>蒙版已展开</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Masks collapsed</source>
+        <translation>蒙版已折叠</translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodeMaskDrawer</name>
+    <message>
+        <location filename="../qml/EditorNodeMaskDrawer.qml" line="+114"/>
+        <source>Collapse Masks</source>
+        <translation>折叠蒙版</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Expand Masks</source>
+        <translation>展开蒙版</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+44"/>
+        <source>Masks</source>
+        <translation>蒙版</translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodeMaskTypeRow</name>
+    <message>
+        <location filename="../qml/EditorNodeMaskTypeRow.qml" line="+21"/>
+        <source>Gradient</source>
+        <translation>渐变</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Radial</source>
+        <translation>径向</translation>
+    </message>
+    <message>
+        <location line="+95"/>
+        <source>Delete %1</source>
+        <translation>删除%1</translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodePortDelegate</name>
+    <message>
+        <location filename="../qml/EditorNodePortDelegate.qml" line="+19"/>
+        <source>Output</source>
+        <translation>输出</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Input</source>
+        <translation>输入</translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodesPanel</name>
+    <message>
+        <location filename="../qml/EditorNodesPanel.qml" line="+434"/>
+        <location line="+7"/>
+        <source>Nodes</source>
+        <translation>节点</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <location line="+1"/>
+        <source>Add Color Grade</source>
+        <translation>添加色彩分级</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Color Grade name</source>
+        <translation>色彩分级名称</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+241"/>
+        <location line="+1"/>
+        <source>Rename Color Grade</source>
+        <translation>重命名色彩分级</translation>
+    </message>
+    <message>
+        <location line="-214"/>
+        <source>Accept Rename</source>
+        <translation>接受重命名</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <location line="+6"/>
+        <location line="+98"/>
+        <source>Updating node graph</source>
+        <translation>正在更新节点图</translation>
+    </message>
+    <message>
+        <location line="-88"/>
+        <source>Select a destination node and press Enter</source>
+        <translation>选择目标节点并按 Enter</translation>
+    </message>
+    <message>
+        <location line="+41"/>
+        <location line="+8"/>
+        <source>Select an image to edit nodes</source>
+        <translation>选择图像以编辑节点</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+8"/>
+        <source>Loading node graph</source>
+        <translation>正在加载节点图</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Nodes graph, connecting</source>
+        <translation>节点图，正在连接</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Nodes graph</source>
+        <translation>节点图</translation>
+    </message>
+    <message>
+        <location line="+90"/>
+        <location line="+1"/>
+        <source>Fit</source>
+        <translation>适合</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Delete Selected Nodes</source>
+        <translation>删除所选节点</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Delete Color Grade</source>
+        <translation>删除色彩分级</translation>
+    </message>
+</context>
+<context>
+    <name>EditorCameraProfileSection</name>
+    <message>
+        <location filename="../qml/EditorCameraProfileSection.qml" line="+59"/>
+        <source>Camera Profile</source>
+        <translation>相机配置文件</translation>
+    </message>
+    <message>
+        <source>Set a DCP folder in Settings &gt; LUTs and Color Management.</source>
+        <translation>在“设置 &gt; LUT 和色彩管理”中设置 DCP 文件夹。</translation>
+    </message>
+    <message>
+        <source>The DCP folder has no profile of this camera.</source>
+        <translation>DCP 文件夹中没有这台相机的配置文件。</translation>
+    </message>
+    <message>
+        <source>Tone Curve</source>
+        <translation>色调曲线</translation>
     </message>
 </context>
 <context>
     <name>EditorRawDecodePanel</name>
     <message>
-        <location filename="../qml/EditorRawDecodePanel.qml" line="+22"/>
+        <location filename="../qml/EditorRawDecodePanel.qml" line="+35"/>
         <source>Legacy</source>
         <translation>旧版</translation>
     </message>
@@ -2695,13 +4804,14 @@ Original source files on disk will be kept.</source>
         <translation>默认</translation>
     </message>
     <message>
-        <location line="+89"/>
-        <location line="+10"/>
+        <location line="+321"/>
+        <location line="+107"/>
         <source>RAW Decode</source>
         <translation>RAW 解码</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+22"/>
+        <location line="+33"/>
         <source>Method</source>
         <translation>方法</translation>
     </message>
@@ -2709,6 +4819,130 @@ Original source files on disk will be kept.</source>
         <location line="+12"/>
         <source>Enable Highlight Reconstruction</source>
         <translation>启用高光重建</translation>
+    </message>
+    <message>
+        <location line="-403"/>
+        <source>Auto (metadata)</source>
+        <translation>自动（元数据）</translation>
+    </message>
+    <message>
+        <location line="+248"/>
+        <source>Lens Calibration</source>
+        <translation>镜头校正</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Auto-detect lens</source>
+        <translation>自动识别镜头</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Manual selection required</source>
+        <translation>需手动选择</translation>
+    </message>
+    <message>
+        <location line="+45"/>
+        <source>Reset lens calibration</source>
+        <translation>重置镜头校准</translation>
+    </message>
+    <message>
+        <location line="+90"/>
+        <source>Enable Lens Calibration</source>
+        <translation>启用镜头校正</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Lens Brand</source>
+        <translation>镜头品牌</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Lens Model</source>
+        <translation>镜头型号</translation>
+    </message>
+    <message>
+        <source>Input</source>
+        <translation>输入</translation>
+    </message>
+    <message>
+        <source>Input Color</source>
+        <translation>输入色彩</translation>
+    </message>
+    <message>
+        <source>Input Profile</source>
+        <translation>输入配置文件</translation>
+    </message>
+    <message>
+        <source>Auto (from file)</source>
+        <translation>自动（来自文件）</translation>
+    </message>
+    <message>
+        <source>sRGB</source>
+        <translation>sRGB</translation>
+    </message>
+    <message>
+        <source>Display P3</source>
+        <translation>Display P3</translation>
+    </message>
+    <message>
+        <source>Adobe RGB</source>
+        <translation>Adobe RGB</translation>
+    </message>
+    <message>
+        <source>Rec.2020</source>
+        <translation>Rec.2020</translation>
+    </message>
+    <message>
+        <source>ProPhoto</source>
+        <translation>ProPhoto</translation>
+    </message>
+    <message>
+        <source>Linear Rec.709</source>
+        <translation>线性 Rec.709</translation>
+    </message>
+    <message>
+        <source>embedded ICC</source>
+        <translation>内嵌 ICC</translation>
+    </message>
+    <message>
+        <source>embedded ICC, converted on import</source>
+        <translation>内嵌 ICC，导入时转换</translation>
+    </message>
+    <message>
+        <source>PNG cICP</source>
+        <translation>PNG cICP</translation>
+    </message>
+    <message>
+        <source>PNG sRGB chunk</source>
+        <translation>PNG sRGB 块</translation>
+    </message>
+    <message>
+        <source>PNG gamma and chromaticities</source>
+        <translation>PNG 伽马与色度</translation>
+    </message>
+    <message>
+        <source>EXR chromaticities</source>
+        <translation>EXR 色度</translation>
+    </message>
+    <message>
+        <source>EXR ACES container</source>
+        <translation>EXR ACES 容器</translation>
+    </message>
+    <message>
+        <source>EXIF Adobe RGB tag</source>
+        <translation>EXIF Adobe RGB 标记</translation>
+    </message>
+    <message>
+        <source>no profile, assumed</source>
+        <translation>无配置文件，按默认</translation>
+    </message>
+    <message>
+        <source>Scene linear</source>
+        <translation>场景线性</translation>
+    </message>
+    <message>
+        <source>Display referred</source>
+        <translation>显示参考</translation>
     </message>
 </context>
 <context>
@@ -2765,37 +4999,37 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorTonePanel</name>
     <message>
-        <location filename="../qml/EditorTonePanel.qml" line="+137"/>
+        <location filename="../qml/EditorTonePanel.qml" line="+130"/>
         <source>Exposure</source>
         <translation>曝光</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Contrast</source>
         <translation>对比度</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Highlights</source>
         <translation>高光</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Shadows</source>
         <translation>阴影</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Whites</source>
         <translation>白色色阶</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Blacks</source>
         <translation>黑色色阶</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <location line="+148"/>
         <source>Tone Curve</source>
         <translation>色调曲线</translation>
@@ -2815,12 +5049,13 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorVersionsPanel</name>
     <message>
-        <location filename="../qml/EditorVersionsPanel.qml" line="+114"/>
+        <location filename="../qml/EditorVersionsPanel.qml" line="+132"/>
+        <location line="+176"/>
         <source>Version %1</source>
         <translation>版本 %1</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="-138"/>
         <source>Version operation failed</source>
         <translation>版本操作失败</translation>
     </message>
@@ -2830,7 +5065,7 @@ Original source files on disk will be kept.</source>
         <translation>当前版本没有可用于创建分支的提交</translation>
     </message>
     <message>
-        <location line="+106"/>
+        <location line="+118"/>
         <source>Versions</source>
         <translation>版本</translation>
     </message>
@@ -2841,18 +5076,19 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+16"/>
+        <location line="+2"/>
         <source>Fork new version from root</source>
         <translation>从根节点创建新版本</translation>
     </message>
     <message>
         <location line="+25"/>
         <location line="+28"/>
-        <location line="+207"/>
+        <location line="+209"/>
         <source>Rename Version</source>
         <translation>重命名版本</translation>
     </message>
     <message>
-        <location line="-234"/>
+        <location line="-236"/>
         <location line="+29"/>
         <source>Branch from current</source>
         <translation>从当前版本创建分支</translation>
@@ -2885,12 +5121,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+24"/>
-        <location line="+169"/>
+        <location line="+171"/>
         <source>Version checkout is unavailable</source>
         <translation>无法进行版本检出</translation>
     </message>
     <message>
-        <location line="-104"/>
+        <location line="-105"/>
         <source>Active Version</source>
         <translation>当前版本</translation>
     </message>
@@ -2900,14 +5136,14 @@ Original source files on disk will be kept.</source>
         <translation>已命名版本</translation>
     </message>
     <message>
-        <location line="+40"/>
+        <location line="+41"/>
         <source>Commit %1</source>
         <translation>提交 %1</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Commit image root</source>
-        <translation>提交图像根节点</translation>
+        <source>Image root</source>
+        <translation>图像根节点</translation>
     </message>
     <message>
         <location line="+47"/>
@@ -2919,11 +5155,68 @@ Original source files on disk will be kept.</source>
         <source>No versions yet</source>
         <translation>尚无版本</translation>
     </message>
+    <message>
+        <source>Paste adjustments as a new Version</source>
+        <translation>将调整作为新版本粘贴</translation>
+    </message>
+    <message>
+        <source>Paste failed</source>
+        <translation>粘贴失败</translation>
+    </message>
+    <message>
+        <source>Compare</source>
+        <translation>对比</translation>
+    </message>
+    <message>
+        <source>Compare Versions</source>
+        <translation>对比版本</translation>
+    </message>
+</context>
+<context>
+    <name>EditorWhiteBalanceSection</name>
+    <message>
+        <location filename="../qml/EditorWhiteBalanceSection.qml" line="+45"/>
+        <source>White Balance</source>
+        <translation>白平衡</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>As Shot</source>
+        <translation>按拍摄参数</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Custom</source>
+        <translation>自定义</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>White balance is unavailable for this image.</source>
+        <translation>此图像无法使用白平衡。</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>RAW white balance sets the scene illuminant from the camera&apos;s own color data before the image enters the grading color space. As Shot uses the camera&apos;s recorded white balance. The Look page white balance is a separate creative adjustment applied after this one.</source>
+        <translation>RAW 白平衡在图像进入调色色彩空间之前，依据相机自身的色彩数据设定场景光源。“按拍摄参数”使用相机记录的白平衡。“外观”页的白平衡是在此之后应用的另一项创意调整。</translation>
+    </message>
+</context>
+<context>
+    <name>EditorWhiteBalanceSliders</name>
+    <message>
+        <location filename="../qml/EditorWhiteBalanceSliders.qml" line="+34"/>
+        <source>Temperature</source>
+        <translation>色温</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Tint</source>
+        <translation>色调</translation>
+    </message>
 </context>
 <context>
     <name>EditorWorkspace</name>
     <message>
-        <location filename="../qml/EditorWorkspace.qml" line="+124"/>
+        <location filename="../qml/EditorWorkspace.qml" line="+133"/>
         <source>Editor viewport</source>
         <translation>编辑器视口</translation>
     </message>
@@ -2950,7 +5243,7 @@ Original source files on disk will be kept.</source>
         <translation>从图库打开图像，或让此工作区保持就绪以接收搜索结果。</translation>
     </message>
     <message>
-        <location line="+77"/>
+        <location line="+89"/>
         <source>Preparing image viewport</source>
         <translation>正在准备图像视口</translation>
     </message>
@@ -2969,11 +5262,19 @@ Original source files on disk will be kept.</source>
         <source>FIT</source>
         <translation>适合</translation>
     </message>
+    <message>
+        <source>Compare</source>
+        <translation>对比</translation>
+    </message>
+    <message>
+        <source>Compare before and after</source>
+        <translation>对比前后</translation>
+    </message>
 </context>
 <context>
     <name>EditorWorkspaceNavigation</name>
     <message>
-        <location filename="../qml/EditorWorkspaceNavigation.qml" line="+142"/>
+        <location filename="../qml/EditorWorkspaceNavigation.qml" line="+148"/>
         <source>Library</source>
         <translation>图库</translation>
     </message>
@@ -2986,34 +5287,94 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorWorkspaceRail</name>
     <message>
-        <location filename="../qml/EditorWorkspaceRail.qml" line="+37"/>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+38"/>
         <source>Resolve the editor save first</source>
-        <translation type="unfinished">请先处理编辑器保存</translation>
+        <translation>请先处理编辑器保存</translation>
     </message>
     <message>
-        <location line="+164"/>
+        <location line="+195"/>
         <source>Hide Edit History</source>
-        <translation type="unfinished">隐藏编辑历史</translation>
+        <translation>隐藏编辑历史</translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Show Edit History</source>
-        <translation type="unfinished">显示编辑历史</translation>
+        <translation>显示编辑历史</translation>
     </message>
     <message>
         <location line="+20"/>
         <source>Hide Versions</source>
-        <translation type="unfinished">隐藏版本</translation>
+        <translation>隐藏版本</translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Show Versions</source>
-        <translation type="unfinished">显示版本</translation>
+        <translation>显示版本</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Hide Nodes</source>
+        <translation>隐藏节点</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Show Nodes</source>
+        <translation>显示节点</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Hide Mask Groups</source>
+        <translation>隐藏图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Show Mask Groups</source>
+        <translation>显示图层（蒙版组）</translation>
     </message>
     <message>
         <location line="+16"/>
         <source>Background Tasks</source>
         <translation>后台任务</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>History</source>
+        <translation>历史</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Versions</source>
+        <translation>版本</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Nodes</source>
+        <translation>节点</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Mask Groups</source>
+        <translation>图层</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Tasks</source>
+        <translation>后台任务</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LUTs</source>
+        <translation>LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Hide LUT Browser</source>
+        <translation>隐藏 LUT 浏览器</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show LUT Browser</source>
+        <translation>显示 LUT 浏览器</translation>
     </message>
 </context>
 <context>
@@ -3308,6 +5669,26 @@ Original source files on disk will be kept.</source>
         <source>Export Progress</source>
         <translation>导出进度</translation>
     </message>
+    <message>
+        <source>Preset</source>
+        <translation>预设</translation>
+    </message>
+    <message>
+        <source>EXIF metadata</source>
+        <translation>EXIF 元数据</translation>
+    </message>
+    <message>
+        <source>ICC profile</source>
+        <translation>ICC 配置文件</translation>
+    </message>
+    <message>
+        <source>GPS location in EXIF</source>
+        <translation>EXIF 中的 GPS 位置</translation>
+    </message>
+    <message>
+        <source>Max edge (px)</source>
+        <translation>最长边（像素）</translation>
+    </message>
 </context>
 <context>
     <name>ExportNamingEditor</name>
@@ -3455,16 +5836,78 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
-    <name>ExportQueueState</name>
+    <name>ExportPresetPicker</name>
     <message>
-        <location filename="../qml/ExportQueueState.qml" line="+29"/>
-        <location line="+98"/>
-        <source>(unnamed)</source>
-        <translation>（未命名）</translation>
+        <source>Custom</source>
+        <translation>自定义</translation>
+    </message>
+    <message>
+        <source>Standard</source>
+        <translation>标准</translation>
+    </message>
+    <message>
+        <source>Web</source>
+        <translation>网页</translation>
+    </message>
+    <message>
+        <source>Social Media</source>
+        <translation>社交媒体</translation>
+    </message>
+    <message>
+        <source>Email</source>
+        <translation>电子邮件</translation>
+    </message>
+    <message>
+        <source>Maximum Quality JPEG</source>
+        <translation>最高质量 JPEG</translation>
+    </message>
+    <message>
+        <source>16-bit TIFF</source>
+        <translation>16 位 TIFF</translation>
+    </message>
+    <message>
+        <source>EXR Archive</source>
+        <translation>EXR 存档</translation>
+    </message>
+    <message>
+        <source>Preset name</source>
+        <translation>预设名称</translation>
+    </message>
+    <message>
+        <source>Enter a valid preset name.</source>
+        <translation>请输入有效的预设名称。</translation>
+    </message>
+    <message>
+        <source>Save export preset</source>
+        <translation>保存导出预设</translation>
+    </message>
+    <message>
+        <source>Save as preset</source>
+        <translation>存储为预设</translation>
+    </message>
+    <message>
+        <source>Delete export preset</source>
+        <translation>删除导出预设</translation>
     </message>
 </context>
 <context>
     <name>FolderImportConfirmDialog</name>
+    <message>
+        <source>The dropped items could not be read.</source>
+        <translation>无法读取拖入的项目。</translation>
+    </message>
+    <message>
+        <source>No files found in the dropped items.</source>
+        <translation>拖入的项目中没有文件。</translation>
+    </message>
+    <message>
+        <source>Import to %1</source>
+        <translation>导入到 %1</translation>
+    </message>
+    <message>
+        <source>%1 dropped file(s) are imported with every type.</source>
+        <translation>拖入的 %1 个文件不按类型筛选，全部导入。</translation>
+    </message>
     <message>
         <location filename="../qml/FolderImportConfirmDialog.qml" line="+84"/>
         <source>Import From Folder</source>
@@ -3485,165 +5928,67 @@ Original source files on disk will be kept.</source>
         <source>Import %1 File(s)</source>
         <translation>导入 %1 个文件</translation>
     </message>
-</context>
-<context>
-    <name>GlobalSearchDialog</name>
     <message>
-        <location filename="../qml/GlobalSearchDialog.qml" line="+928"/>
-        <source>Suggestion</source>
-        <translation>建议</translation>
+        <source>The folder could not be read.</source>
+        <translation>无法读取该文件夹。</translation>
     </message>
     <message>
-        <location line="-228"/>
-        <source>Search settings ▾</source>
-        <translation>搜索设置 ▾</translation>
+        <source>Scanning folder... %1 file(s) found</source>
+        <translation>正在扫描文件夹… 已找到 %1 个文件</translation>
     </message>
     <message>
-        <location line="-468"/>
-        <source>%1 matches</source>
-        <translation>%1 个匹配项</translation>
+        <source>No files found in this folder.</source>
+        <translation>此文件夹中没有文件。</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>0 of %1 matches</source>
-        <translation>0/%1 个匹配项</translation>
+        <source>%1 file(s) found</source>
+        <translation>找到 %1 个文件</translation>
     </message>
     <message>
-        <location line="+4"/>
-        <source>%1-%2 of %3 matches</source>
-        <translation>匹配项 %1-%2，共 %3 项</translation>
+        <source>Files of other types are skipped.</source>
+        <translation>其他类型的文件会被跳过。</translation>
     </message>
     <message>
-        <location line="+427"/>
-        <source>Search photos, cameras, lenses, dates...</source>
-        <translation>搜索照片、相机、镜头、日期...</translation>
+        <source>Scanning...</source>
+        <translation>正在扫描…</translation>
     </message>
     <message>
-        <location line="+66"/>
-        <source>Search settings — choose which fields the search scans, or enable natural-language search</source>
-        <translation>搜索设置 — 选择搜索扫描的字段，或启用自然语言搜索</translation>
+        <source>File types</source>
+        <translation>文件类型</translation>
     </message>
     <message>
-        <location line="+5"/>
-        <source>Search</source>
-        <translation>搜索</translation>
+        <source>RAW</source>
+        <translation>RAW</translation>
     </message>
     <message>
-        <location line="+64"/>
-        <source>Search conditions</source>
-        <translation>搜索条件</translation>
+        <source>JPEG</source>
+        <translation>JPEG</translation>
     </message>
     <message>
-        <location line="+19"/>
-        <source>Filename</source>
-        <translation>文件名</translation>
+        <source>TIFF</source>
+        <translation>TIFF</translation>
     </message>
     <message>
-        <location line="+15"/>
-        <source>EXIF info</source>
-        <translation>EXIF 信息</translation>
+        <source>PNG</source>
+        <translation>PNG</translation>
     </message>
     <message>
-        <location line="+15"/>
-        <source>AI description</source>
-        <translation>AI 描述文本</translation>
+        <source>OpenEXR</source>
+        <translation>OpenEXR</translation>
     </message>
     <message>
-        <location line="+15"/>
-        <source>AI tags</source>
-        <translation>AI 标签</translation>
+        <source>Other</source>
+        <translation>其他</translation>
     </message>
     <message>
-        <location line="+21"/>
-        <source>Natural language search</source>
-        <translation>自然语言搜索</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Natural language search — use the CLIP model to search by meaning (Enter or Search button to run). Mutually exclusive with the field filters above.</source>
-        <translation>自然语言搜索 — 通过 CLIP 模型按语义搜索（按回车或点击搜索按钮运行）。与上方字段筛选互斥。</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Results</source>
-        <translation>结果</translation>
-    </message>
-    <message>
-        <location line="+29"/>
-        <source>Active: %1</source>
-        <translation>当前：%1</translation>
-    </message>
-    <message>
-        <location line="+39"/>
-        <source>No recent suggestions</source>
-        <translation>没有最近的建议</translation>
-    </message>
-    <message>
-        <location line="+55"/>
-        <source>Load previous</source>
-        <translation>加载上一项</translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>(unnamed)</source>
-        <translation>（未命名）</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>%1  |  %2</source>
-        <translation>%1  |  %2</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Rating %1/5</source>
-        <translation>评分 %1/5</translation>
-    </message>
-    <message>
-        <location line="+34"/>
-        <source>No matches</source>
-        <translation>无匹配项</translation>
-    </message>
-    <message>
-        <location line="+33"/>
-        <source>Load more</source>
-        <translation>加载更多</translation>
-    </message>
-    <message>
-        <location line="+48"/>
-        <source>Source file is unavailable</source>
-        <translation>源文件不可用</translation>
-    </message>
-    <message>
-        <location line="+140"/>
-        <source>Preview image failed to load</source>
-        <translation>预览图像加载失败</translation>
-    </message>
-    <message>
-        <location line="+80"/>
-        <source>%1  -  %2</source>
-        <translation>%1  -  %2</translation>
-    </message>
-    <message>
-        <location line="-985"/>
-        <source>Query is too long for natural language search</source>
-        <translation>自然语言搜索的查询过长</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Natural language search is not available yet</source>
-        <translation>自然语言搜索暂不可用</translation>
-    </message>
-    <message>
-        <location line="-157"/>
-        <location line="+159"/>
-        <source>Press Enter or click Search for natural language search</source>
-        <translation>按回车或点击搜索按钮以执行自然语言搜索</translation>
+        <source>%1 (%2)</source>
+        <translation>%1 (%2)</translation>
     </message>
 </context>
 <context>
     <name>ImageActionsController</name>
     <message>
-        <location filename="../qml/ImageActionsController.qml" line="+61"/>
+        <location filename="../qml/ImageActionsController.qml" line="+62"/>
         <location line="+18"/>
         <location line="+88"/>
         <location line="+58"/>
@@ -3694,6 +6039,30 @@ Original source files on disk will be kept.</source>
         <source>Unrated</source>
         <translation>未评分</translation>
     </message>
+    <message>
+        <source>Add to</source>
+        <translation>添加到</translation>
+    </message>
+    <message>
+        <source>Export Queue</source>
+        <translation>导出队列</translation>
+    </message>
+    <message>
+        <source>Filter collections</source>
+        <translation>筛选影集</translation>
+    </message>
+    <message>
+        <source>全部图片</source>
+        <translation>全部图片</translation>
+    </message>
+    <message>
+        <source>No collections yet</source>
+        <translation>还没有影集</translation>
+    </message>
+    <message>
+        <source>No matching collections</source>
+        <translation>没有匹配的影集</translation>
+    </message>
 </context>
 <context>
     <name>ImageInspectorPanel</name>
@@ -3739,7 +6108,7 @@ Original source files on disk will be kept.</source>
         <translation>未评分</translation>
     </message>
     <message>
-        <location line="+162"/>
+        <location line="+163"/>
         <source>Image actions</source>
         <translation>图像操作</translation>
     </message>
@@ -3806,6 +6175,50 @@ Original source files on disk will be kept.</source>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
+    <message>
+        <source>Saving to the library...</source>
+        <translation>正在保存到图库…</translation>
+    </message>
+    <message>
+        <source>Preparing files... %1 of %2</source>
+        <translation>正在准备文件… %1 / %2</translation>
+    </message>
+    <message>
+        <source>Reading photos... %1 of %2 files checked</source>
+        <translation>正在读取照片… 已检查 %1 / %2 个文件</translation>
+    </message>
+    <message>
+        <source>photos imported</source>
+        <translation>张照片已导入</translation>
+    </message>
+    <message>
+        <source>%1 file(s) skipped because they are not supported images</source>
+        <translation>已跳过 %1 个不受支持的文件</translation>
+    </message>
+    <message>
+        <source>%1 file(s) skipped because their type is not selected</source>
+        <translation>已跳过 %1 个未选择类型的文件</translation>
+    </message>
+    <message>
+        <source>Cancel import</source>
+        <translation>取消导入</translation>
+    </message>
+    <message>
+        <source>Canceling Import</source>
+        <translation>正在取消导入</translation>
+    </message>
+    <message>
+        <source>Saving Photos</source>
+        <translation>正在保存照片</translation>
+    </message>
+    <message>
+        <source>RAW photos: %1 of %2 imported</source>
+        <translation>RAW 照片：已导入 %1 / %2</translation>
+    </message>
+    <message>
+        <source>Other photos: %1 of %2 imported</source>
+        <translation>其他照片：已导入 %1 / %2</translation>
+    </message>
 </context>
 <context>
     <name>InspectorPanel</name>
@@ -3828,82 +6241,82 @@ Original source files on disk will be kept.</source>
 <context>
     <name>InspectorToggleButton</name>
     <message>
-        <location filename="../qml/InspectorToggleButton.qml" line="+29"/>
+        <location filename="../qml/InspectorToggleButton.qml" line="+26"/>
+        <source>Hide editor panels</source>
+        <translation>隐藏编辑器面板</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show editor panels</source>
+        <translation>显示编辑器面板</translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Collapse Inspector</source>
         <translation>收起检查器</translation>
     </message>
     <message>
-        <location line="+0"/>
+        <location line="+1"/>
         <source>Expand Inspector</source>
         <translation>展开检查器</translation>
     </message>
 </context>
 <context>
-    <name>LUTPanel</name>
+    <name>KeyboardSettingsPanel</name>
     <message>
-        <location filename="../qml/LUTPanel.qml" line="+114"/>
-        <source>No LUTs found</source>
-        <translation>未找到 LUT</translation>
+        <location filename="../qml/KeyboardSettingsPanel.qml" line="+56"/>
+        <source>Select a shortcut field, then type the new input. Enter or Escape saves, Tab cancels, plain Delete clears the binding.</source>
+        <translation>选中一个快捷键输入框，然后按下新的按键。Enter 或 Escape 保存，Tab 取消，单独按 Delete 清除绑定。</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>1 LUT found</source>
-        <translation>找到 1 个 LUT</translation>
+        <location line="+113"/>
+        <source>Presses and releases a single modifier key</source>
+        <translation>按下并松开单个修饰键</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Clear shortcut for %1</source>
+        <translation>清除 %1 的快捷键</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source> LUTs found</source>
-        <translation> 个 LUT</translation>
+        <source>Clear shortcut</source>
+        <translation>清除快捷键</translation>
     </message>
     <message>
-        <location line="+305"/>
-        <source>LUT</source>
-        <translation>LUT</translation>
+        <location line="+10"/>
+        <source>Restore Default</source>
+        <translation>恢复默认</translation>
     </message>
     <message>
-        <location line="+63"/>
-        <source>Filter LUTs</source>
-        <translation>筛选 LUT</translation>
+        <location line="+6"/>
+        <source>Restore default shortcut for %1</source>
+        <translation>恢复 %1 的默认快捷键</translation>
     </message>
     <message>
-        <location line="+36"/>
-        <source>Sort options</source>
-        <translation>排序选项</translation>
+        <location line="+1"/>
+        <source>Restores %1</source>
+        <translation>恢复为 %1</translation>
     </message>
     <message>
         <location line="+26"/>
-        <source>Sort by</source>
-        <translation>排序方式</translation>
+        <source>Restore default: %1</source>
+        <translation>恢复默认：%1</translation>
     </message>
     <message>
-        <location line="+9"/>
-        <source>Name</source>
-        <translation>名称</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Modified time</source>
-        <translation>修改时间</translation>
-    </message>
-    <message>
-        <location line="+65"/>
-        <source>Show all LUTs</source>
-        <translation>显示所有 LUT</translation>
+        <location line="+10"/>
+        <source>Press and release Shift, Ctrl, Alt, or Meta to choose it.</source>
+        <translation>按下并松开 Shift、Ctrl、Alt 或 Meta 以选择该键。</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Show favorites only</source>
-        <translation>仅显示收藏项</translation>
+        <source>Type the new shortcut keys.</source>
+        <translation>按下新的快捷键。</translation>
     </message>
     <message>
-        <location line="+17"/>
-        <source>Refresh LUT catalog</source>
-        <translation>刷新 LUT 目录</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Open LUT folder</source>
-        <translation>打开 LUT 文件夹</translation>
+        <location line="+22"/>
+        <source>Conflicting scope: %1</source>
+        <translation>冲突作用域：%1</translation>
     </message>
 </context>
 <context>
@@ -3925,14 +6338,81 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>LensCatalogPicker</name>
+    <message>
+        <location filename="../qml/LensCatalogPicker.qml" line="+81"/>
+        <source>Lens</source>
+        <translation>镜头</translation>
+    </message>
+    <message>
+        <location line="+301"/>
+        <source>Select lens</source>
+        <translation>选择镜头</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Auto</source>
+        <translation>自动</translation>
+    </message>
+    <message>
+        <location line="+106"/>
+        <source>Brand</source>
+        <translation>品牌</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <location line="+122"/>
+        <source>All brands</source>
+        <translation>所有品牌</translation>
+    </message>
+    <message>
+        <location line="-48"/>
+        <source>Search brands</source>
+        <translation>搜索品牌</translation>
+    </message>
+    <message>
+        <location line="+177"/>
+        <source>Search lenses</source>
+        <translation>搜索镜头</translation>
+    </message>
+    <message>
+        <location line="+144"/>
+        <source>No lenses match</source>
+        <translation>无匹配镜头</translation>
+    </message>
+</context>
+<context>
+    <name>LibraryInspectorActions</name>
+    <message>
+        <source>Add to Export Queue (%1)</source>
+        <translation>加入到导出队列 (%1)</translation>
+    </message>
+    <message>
+        <source>Exporting...</source>
+        <translation>正在导出...</translation>
+    </message>
+    <message>
+        <source>Export 1 File</source>
+        <translation>导出 1 个文件</translation>
+    </message>
+    <message>
+        <source>Export %1 Files</source>
+        <translation>导出 %1 个文件</translation>
+    </message>
+</context>
+<context>
     <name>LibraryWorkspace</name>
     <message>
-        <location filename="../qml/LibraryWorkspace.qml" line="+250"/>
+        <source>Import to %1</source>
+        <translation>导入到 %1</translation>
+    </message>
+    <message>
+        <location filename="../qml/LibraryWorkspace.qml" line="+255"/>
         <source>Browser</source>
         <translation>浏览</translation>
     </message>
     <message>
-        <location line="+105"/>
+        <location line="+132"/>
         <source>No Photos Yet</source>
         <translation>暂无照片</translation>
     </message>
@@ -3957,35 +6437,479 @@ Original source files on disk will be kept.</source>
         <translation>加载项目</translation>
     </message>
     <message>
-        <location line="+70"/>
-        <source>Add to Queue</source>
-        <translation>加入队列</translation>
+        <source>Library query failed: %1</source>
+        <translation>图库查询失败：%1</translation>
     </message>
     <message>
-        <location line="+31"/>
-        <source>Exporting...</source>
-        <translation>正在导出...</translation>
+        <source>Updating</source>
+        <translation>正在更新</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Export 1 File</source>
-        <translation>导出 1 个文件</translation>
+        <source>Retry</source>
+        <translation>重试</translation>
+    </message>
+    <message>
+        <source>Retry the library query</source>
+        <translation>重试图库查询</translation>
+    </message>
+    <message>
+        <source>No Matching Photos</source>
+        <translation>没有匹配的照片</translation>
+    </message>
+    <message>
+        <source>Change the filters or the search to show photos.</source>
+        <translation>更改筛选条件或搜索以显示照片。</translation>
+    </message>
+    <message>
+        <source>Show more photos</source>
+        <translation>显示更多照片</translation>
+    </message>
+    <message>
+        <source>Show larger photos</source>
+        <translation>显示更大的照片</translation>
+    </message>
+</context>
+<context>
+    <name>LockedNodeMaskPromptDialog</name>
+    <message>
+        <source>Add Mask to a Locked Node?</source>
+        <translation>在锁定节点上添加蒙版？</translation>
+    </message>
+    <message>
+        <source>The default adjustment node applies Alcedo&apos;s default adjustments, so it is locked. A Mask drawn on it also limits those default adjustments to the masked area, which differs from traditional editing software.
+
+Create a new layer above it and draw the Mask there?</source>
+        <translation>默认调整节点会应用 Alcedo 的一些默认调整，因此该节点默认处于锁定状态。在该节点上绘制的蒙版也会把这些默认调整限制在蒙版区域内，这与传统软件逻辑不同。
+
+是否在其上方新建一个图层，并在新图层上绘制蒙版？</translation>
+    </message>
+    <message>
+        <source>Don&apos;t ask again</source>
+        <translation>下次不再提示</translation>
+    </message>
+    <message>
+        <source>You can change this later in Settings &gt; Default Behavior.</source>
+        <translation>之后可以在“设置 &gt; 默认行为”中更改此选项。</translation>
+    </message>
+    <message>
+        <source>New Layer, Then Draw</source>
+        <translation>新建图层后绘制</translation>
+    </message>
+    <message>
+        <source>Draw on Current Node</source>
+        <translation>在当前节点上绘制</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+</context>
+<context>
+    <name>LutSettingsPanel</name>
+    <message>
+        <location filename="../qml/LutSettingsPanel.qml" line="+1"/>
+        <source>Another LUT library operation is running. Try again when it finishes.</source>
+        <translation>另一项 LUT 库操作正在运行。请在其完成后重试。</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Export %1 Files</source>
-        <translation>导出 %1 个文件</translation>
+        <source>Loading the LUT library…</source>
+        <translation>正在加载 LUT 库…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Refreshing the LUT inventory…</source>
+        <translation>正在刷新 LUT 清单…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Importing LUTs…</source>
+        <translation>正在导入 LUT…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Indexing the LUT folder…</source>
+        <translation>正在索引 LUT 文件夹…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Moving the LUT library…</source>
+        <translation>正在移动 LUT 库…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Removing copied files from the previous folder…</source>
+        <translation>正在从原文件夹删除已复制的文件…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Installing a LUT package…</source>
+        <translation>正在安装 LUT 包…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Removing replaced package files…</source>
+        <translation>正在删除被替换的包文件…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Not installed</source>
+        <translation>未安装</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Installed and current</source>
+        <translation>已安装，为最新版本</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Update available</source>
+        <translation>有可用更新</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Repair required: installed files differ from the package</source>
+        <translation>需要修复：已安装的文件与包不一致</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Checking…</source>
+        <translation>正在检查…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Downloading… %1%</source>
+        <translation>正在下载… %1%</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Verifying…</source>
+        <translation>正在校验…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Installing…</source>
+        <translation>正在安装…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Not completed</source>
+        <translation>未完成</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Download</source>
+        <translation>下载</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Update</source>
+        <translation>更新</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Repair</source>
+        <translation>修复</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Retry</source>
+        <translation>重试</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 GB</source>
+        <translation>%1 GB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 MB</source>
+        <translation>%1 MB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 KB</source>
+        <translation>%1 KB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 download</source>
+        <translation>下载 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>installed %1, available %2</source>
+        <translation>已安装 %1，可用 %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>revision %1</source>
+        <translation>版本 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose a new folder for the LUT library</source>
+        <translation>为 LUT 库选择新文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose an existing LUT folder</source>
+        <translation>选择现有的 LUT 文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LUT library</source>
+        <translation>LUT 库</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Folder</source>
+        <translation>文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open folder</source>
+        <translation>打开文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Refresh</source>
+        <translation>刷新</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use another folder…</source>
+        <translation>使用其他文件夹…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Move library…</source>
+        <translation>移动 LUT 库…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Move the LUT library to this folder?</source>
+        <translation>将 LUT 库移动到此文件夹？</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use this folder as the LUT library?</source>
+        <translation>将此文件夹用作 LUT 库？</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Every file is copied and verified first. The current folder stays in use until the copy is complete; then the copied files are removed from it.</source>
+        <translation>所有文件会先复制并校验。复制完成前仍使用当前文件夹；完成后从中删除已复制的文件。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUTs in this folder are indexed. The current folder and its files are not changed.</source>
+        <translation>将索引此文件夹中的 LUT。当前文件夹及其文件不会改变。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Move library</source>
+        <translation>移动 LUT 库</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use folder</source>
+        <translation>使用此文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Official LUT Packages</source>
+        <translation>官方 LUT 包</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Official LUT package downloads are not available in this build.</source>
+        <translation>此版本不提供官方 LUT 包下载。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Checking the signed package list…</source>
+        <translation>正在检查已签名的包列表…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The package check failed: %1</source>
+        <translation>包检查失败：%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Package list checked. Downloads start only when you choose one.</source>
+        <translation>包列表已检查。只有在你选择某个包后才会开始下载。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The package list has not been checked.</source>
+        <translation>尚未检查包列表。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Check again</source>
+        <translation>重新检查</translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n LUT(s)</source>
+        <translation>
+            <numerusform>%n 个 LUT</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n LUT(s) in the inventory</source>
+        <translation>
+            <numerusform>清单中有 %n 个 LUT</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n LUT(s) in the inventory · verification incomplete, refresh to verify</source>
+        <translation>
+            <numerusform>清单中有 %n 个 LUT · 校验未完成，请刷新以校验</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n file(s) changed after copying and stayed in the previous folder: %1</source>
+        <translation>
+            <numerusform>%n 个文件在复制后被修改，已保留在原文件夹中：%1</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The folder that holds every LUT available for color grading.</source>
+        <translation>存放所有可用于调色的 LUT 的文件夹。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Change folder…</source>
+        <translation>更换文件夹…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose a folder for the LUT library</source>
+        <translation>为 LUT 库选择文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The folder is empty, so the library moves into it. Every file is copied and verified first. The current folder stays in use until the copy is complete; then the copied files are removed from it.</source>
+        <translation>该文件夹为空，LUT 库将移动到这里。所有文件会先复制并校验；复制完成前继续使用当前文件夹，之后会从当前文件夹删除已复制的文件。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Total</source>
+        <translation>总计</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Categories</source>
+        <translation>分类构成</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Film simulation</source>
+        <translation>胶片模拟</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Custom</source>
+        <translation>用户自定义</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 → %2</source>
+        <translation>%1 → %2</translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>The folder already holds files, so its LUTs become the library. The %n LUT(s) in the current folder are not moved and stay where they are.</source>
+        <translation>
+            <numerusform>该文件夹中已有文件，其中的 LUT 将成为 LUT 库。当前文件夹中的 %n 个 LUT 不会被移动，仍保留在原处。</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open in Finder</source>
+        <translation>在访达中打开</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open in File Explorer</source>
+        <translation>在文件资源管理器中打开</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Based on %1</source>
+        <translation>基于 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>View the original project on GitHub</source>
+        <translation>在 GitHub 上查看原项目</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Removing a LUT package…</source>
+        <translation>正在移除 LUT 包…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Removing…</source>
+        <translation>正在移除…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Installed</source>
+        <translation>已安装</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove this package?</source>
+        <translation>要删除这个 LUT 包吗？</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>After removal, photos that use LUTs from this package lose that look.</source>
+        <translation>删除后，应用该包内 LUT 的照片将失去对应的效果。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove package</source>
+        <translation>移除 LUT 包</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Keep</source>
+        <translation>保留</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove</source>
+        <translation>移除</translation>
     </message>
 </context>
 <context>
     <name>Main</name>
     <message>
-        <location filename="../qml/Main.qml" line="+22"/>
+        <source>All Photos</source>
+        <translation>全部图片</translation>
+    </message>
+    <message>
+        <location filename="../qml/Main.qml" line="+48"/>
         <source>Alcedo Studio</source>
         <translation>Alcedo Studio</translation>
     </message>
     <message>
-        <location line="+225"/>
+        <location line="+292"/>
         <source>Could not save edits. Resolve the save error, then quit again.</source>
         <translation>无法保存编辑。请先解决保存错误，然后再退出。</translation>
     </message>
@@ -4013,7 +6937,7 @@ Original source files on disk will be kept.</source>
         <translation>Adobe DNG Converter 可执行文件</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+32"/>
         <source>No converter selected</source>
         <translation>尚未选择转换器</translation>
     </message>
@@ -4048,7 +6972,7 @@ Original source files on disk will be kept.</source>
         <translation>目录</translation>
     </message>
     <message>
-        <location line="+91"/>
+        <location line="+93"/>
         <source>%1 / %2 converted files reimported, %3 failed</source>
         <translation>已重新导入 %1 / %2 个已转换文件，失败 %3 个</translation>
     </message>
@@ -4069,7 +6993,7 @@ Original source files on disk will be kept.</source>
         <translation>选择转换器并继续</translation>
     </message>
     <message>
-        <location line="-295"/>
+        <location line="-297"/>
         <source>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</source>
         <translation>未在 /Applications/Adobe DNG Converter.app 安装 Adobe DNG Converter。</translation>
     </message>
@@ -4077,7 +7001,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>ProjectLoadingOverlay</name>
     <message>
-        <location filename="../qml/ProjectLoadingOverlay.qml" line="+35"/>
+        <location filename="../qml/ProjectLoadingOverlay.qml" line="+80"/>
         <source>Loading Project</source>
         <translation>正在加载项目</translation>
     </message>
@@ -4090,7 +7014,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>QObject</name>
     <message>
-        <location filename="../album_backend/thumbnail_manager.cpp" line="+155"/>
+        <location filename="../album_backend/thumbnail_manager.cpp" line="+153"/>
         <location line="+106"/>
         <source>Source file was moved or deleted: %1</source>
         <translation>源文件已被移动或删除：%1</translation>
@@ -4141,9 +7065,144 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>SavedAiKeysReminder</name>
+    <message>
+        <source>Alcedo Studio still holds AI keys that you saved for Advanced Content Analysis, which this version removes. Delete them in Settings &gt; Saved AI Keys.</source>
+        <translation>Alcedo Studio 仍保存着您为高级内容分析保存的 AI 密钥，本版本已移除该功能。请在“设置 &gt; 已保存的 AI 密钥”中删除。</translation>
+    </message>
+</context>
+<context>
     <name>SearchComboBox</name>
     <message>
         <location filename="../qml/util/SearchComboBox.qml" line="+14"/>
+        <source>Search</source>
+        <translation>搜索</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No matches</source>
+        <translation>无匹配项</translation>
+    </message>
+</context>
+<context>
+    <name>SearchPalette</name>
+    <message>
+        <source>Search photos, cameras, lenses, dates</source>
+        <translation>搜索照片、相机、镜头、日期</translation>
+    </message>
+    <message>
+        <source>Search photos</source>
+        <translation>搜索照片</translation>
+    </message>
+    <message>
+        <source>Natural language</source>
+        <translation>自然语言</translation>
+    </message>
+    <message>
+        <source>Search settings</source>
+        <translation>搜索设置</translation>
+    </message>
+    <message>
+        <source>Esc</source>
+        <translation>Esc</translation>
+    </message>
+    <message>
+        <source>Close search</source>
+        <translation>关闭搜索</translation>
+    </message>
+    <message>
+        <source>Type to search photos</source>
+        <translation>输入内容以搜索照片</translation>
+    </message>
+    <message>
+        <source>Recent searches</source>
+        <translation>最近搜索</translation>
+    </message>
+    <message>
+        <source>Commands</source>
+        <translation>命令</translation>
+    </message>
+    <message>
+        <source>Search photos by meaning for &quot;%1&quot;</source>
+        <translation>按语义搜索“%1”的照片</translation>
+    </message>
+    <message>
+        <source>Search photos for &quot;%1&quot;</source>
+        <translation>搜索“%1”的照片</translation>
+    </message>
+    <message>
+        <source>Enter</source>
+        <translation>Enter</translation>
+    </message>
+    <message>
+        <source>Filters</source>
+        <translation>筛选</translation>
+    </message>
+    <message>
+        <source>Photos</source>
+        <translation>照片</translation>
+    </message>
+    <message>
+        <source>View all</source>
+        <translation>查看全部</translation>
+    </message>
+    <message>
+        <source>Press Enter to search by meaning.</source>
+        <translation>按回车按语义搜索。</translation>
+    </message>
+    <message>
+        <source>No matching photos in this folder</source>
+        <translation>此文件夹中没有匹配的照片</translation>
+    </message>
+    <message>
+        <source>Search in</source>
+        <translation>搜索范围</translation>
+    </message>
+    <message>
+        <source>File name</source>
+        <translation>文件名</translation>
+    </message>
+    <message>
+        <source>EXIF info</source>
+        <translation>EXIF 信息</translation>
+    </message>
+    <message>
+        <source>AI description</source>
+        <translation>AI 描述文本</translation>
+    </message>
+    <message>
+        <source>AI tags</source>
+        <translation>AI 标签</translation>
+    </message>
+    <message>
+        <source>Natural language search</source>
+        <translation>自然语言搜索</translation>
+    </message>
+    <message>
+        <source>Search by meaning with the semantic model. Press Enter to run it.</source>
+        <translation>使用语义模型按含义搜索。按回车运行。</translation>
+    </message>
+    <message>
+        <source>Search</source>
+        <translation>搜索</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>Source file is unavailable</source>
+        <translation>源文件不可用</translation>
+    </message>
+    <message>
+        <source>Preview image failed to load</source>
+        <translation>预览图像加载失败</translation>
+    </message>
+</context>
+<context>
+    <name>SearchableAdjustmentCombo</name>
+    <message>
+        <location filename="../qml/SearchableAdjustmentCombo.qml" line="+36"/>
         <source>Search</source>
         <translation>搜索</translation>
     </message>
@@ -4226,9 +7285,61 @@ Original source files on disk will be kept.</source>
         <source>Move task to background</source>
         <translation>将任务移至后台</translation>
     </message>
+    <message>
+        <source>Generating AI labels</source>
+        <translation>正在生成 AI 标签</translation>
+    </message>
+    <message>
+        <source>Generate AI labels for the new photos?</source>
+        <translation>为新照片生成 AI 标签？</translation>
+    </message>
+    <message>
+        <source>photos need labels</source>
+        <translation>张照片需要标签</translation>
+    </message>
+    <message>
+        <source>Remember my choice</source>
+        <translation>记住我的选择</translation>
+    </message>
 </context>
 <context>
     <name>SemanticGenerationSettingsPanel</name>
+    <message>
+        <source>Unload after use</source>
+        <translation>用后卸载</translation>
+    </message>
+    <message>
+        <source>30 seconds</source>
+        <translation>30 秒</translation>
+    </message>
+    <message>
+        <source>1 minute</source>
+        <translation>1 分钟</translation>
+    </message>
+    <message>
+        <source>5 minutes</source>
+        <translation>5 分钟</translation>
+    </message>
+    <message>
+        <source>15 minutes</source>
+        <translation>15 分钟</translation>
+    </message>
+    <message>
+        <source>While the project is open</source>
+        <translation>项目打开期间</translation>
+    </message>
+    <message>
+        <source>Memory</source>
+        <translation>内存</translation>
+    </message>
+    <message>
+        <source>Keep AI model loaded</source>
+        <translation>保持 AI 模型加载</translation>
+    </message>
+    <message>
+        <source>The text model&apos;s unload time applies to the sidecar the next time it starts.</source>
+        <translation>文本模型的卸载时间在 AI 服务下次启动时生效。</translation>
+    </message>
     <message>
         <location filename="../qml/SemanticGenerationSettingsPanel.qml" line="+40"/>
         <source>No active model</source>
@@ -4281,12 +7392,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+16"/>
-        <location line="+258"/>
+        <location line="+260"/>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
     <message>
-        <location line="-258"/>
+        <location line="-260"/>
         <source>Generate</source>
         <translation>生成</translation>
     </message>
@@ -4312,12 +7423,12 @@ Original source files on disk will be kept.</source>
         <translation>下载目录</translation>
     </message>
     <message>
-        <location line="+71"/>
+        <location line="+73"/>
         <source>Source</source>
         <translation>来源</translation>
     </message>
     <message>
-        <location line="-352"/>
+        <location line="-354"/>
         <source>HF Mirror</source>
         <translation>HF 镜像</translation>
     </message>
@@ -4337,7 +7448,7 @@ Original source files on disk will be kept.</source>
         <translation>自定义</translation>
     </message>
     <message>
-        <location line="+374"/>
+        <location line="+376"/>
         <source>https://example.com</source>
         <translation>https://example.com</translation>
     </message>
@@ -4372,7 +7483,7 @@ Original source files on disk will be kept.</source>
         <translation>是否生成标签</translation>
     </message>
     <message>
-        <location line="-443"/>
+        <location line="-445"/>
         <source>Always</source>
         <translation>总是生成</translation>
     </message>
@@ -4387,7 +7498,7 @@ Original source files on disk will be kept.</source>
         <translation>总是跳过</translation>
     </message>
     <message>
-        <location line="+537"/>
+        <location line="+540"/>
         <source>Activating…</source>
         <translation>激活中…</translation>
     </message>
@@ -4421,11 +7532,68 @@ Original source files on disk will be kept.</source>
         <source>↓ %1</source>
         <translation>↓ %1</translation>
     </message>
+    <message>
+        <source>Active model of this project</source>
+        <translation>此项目的激活模型</translation>
+    </message>
+    <message>
+        <source>Open AI Models</source>
+        <translation>打开 AI 模型</translation>
+    </message>
+    <message>
+        <source>AI labels</source>
+        <translation>AI 标签</translation>
+    </message>
+    <message>
+        <source>Labeling</source>
+        <translation>正在标注</translation>
+    </message>
+    <message>
+        <source>photos</source>
+        <translation>张照片</translation>
+    </message>
+    <message>
+        <source>Regenerate all</source>
+        <translation>全部重新生成</translation>
+    </message>
+    <message>
+        <source>Photos</source>
+        <translation>照片</translation>
+    </message>
+    <message>
+        <source>No open project</source>
+        <translation>未打开项目</translation>
+    </message>
+    <message>
+        <source>No model</source>
+        <translation>无模型</translation>
+    </message>
+    <message>
+        <source>Manage</source>
+        <translation>管理</translation>
+    </message>
+    <message>
+        <source>Keep the model loaded</source>
+        <translation>保持模型加载</translation>
+    </message>
+    <message>
+        <source>Labels for imported photos</source>
+        <translation>导入照片的标签</translation>
+    </message>
 </context>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+160"/>
+        <source>Color Labels</source>
+        <translation>颜色标签</translation>
+    </message>
+    <message>
+        <location filename="../qml/SettingDialog.qml" line="+1"/>
+        <source>LUTs and Color Management</source>
+        <translation>LUT 和色彩管理</translation>
+    </message>
+    <message>
+        <location filename="../qml/SettingDialog.qml" line="+164"/>
         <source>Settings applied</source>
         <translation>设置已应用</translation>
     </message>
@@ -4435,26 +7603,32 @@ Original source files on disk will be kept.</source>
         <translation>设置</translation>
     </message>
     <message>
-        <location line="-185"/>
-        <location line="+199"/>
-        <location line="+166"/>
+        <location line="-188"/>
+        <location line="+209"/>
+        <location line="+178"/>
         <source>Language</source>
         <translation>语言</translation>
     </message>
     <message>
-        <location line="-362"/>
-        <location line="+197"/>
+        <location line="-384"/>
+        <location line="+207"/>
         <source>Theme and color</source>
         <translation>主题与颜色</translation>
     </message>
     <message>
-        <location line="-194"/>
-        <location line="+195"/>
+        <location line="-204"/>
+        <location line="+205"/>
         <source>Cache</source>
         <translation>缓存</translation>
     </message>
     <message>
-        <location line="-176"/>
+        <location line="-190"/>
+        <location line="+195"/>
+        <source>Keyboard</source>
+        <translation>键盘</translation>
+    </message>
+    <message>
+        <location line="-188"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4488,12 +7662,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 这个设置界面的灵感来自 ccswitch，使用方式也类似。</translation>
     </message>
     <message>
-        <location line="+227"/>
+        <location line="+242"/>
         <source>Update available</source>
         <translation>有可用更新</translation>
     </message>
     <message>
-        <location line="+99"/>
+        <location line="+103"/>
         <source>Application language</source>
         <translation>应用语言</translation>
     </message>
@@ -4508,42 +7682,42 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>主题</translation>
     </message>
     <message>
-        <location line="+235"/>
+        <location line="+263"/>
         <source>Done</source>
         <translation>完成</translation>
     </message>
     <message>
-        <location line="-624"/>
-        <location line="+186"/>
+        <location line="-671"/>
+        <location line="+194"/>
         <source>About</source>
         <translation>关于</translation>
     </message>
     <message>
-        <location line="-197"/>
-        <location line="+193"/>
+        <location line="-208"/>
+        <location line="+203"/>
         <source>Local Content Recognition</source>
         <translation>本地内容识别</translation>
     </message>
     <message>
-        <location line="-190"/>
-        <location line="+191"/>
+        <location line="-200"/>
+        <location line="+201"/>
         <source>Advanced Content Analysis</source>
-        <translation>高级内容分析</translation>
+        <translation type="obsolete">高级内容分析</translation>
     </message>
     <message>
-        <location line="-188"/>
-        <location line="+189"/>
+        <location line="-198"/>
+        <location line="+199"/>
         <source>Acceleration</source>
         <translation>加速</translation>
     </message>
     <message>
-        <location line="-186"/>
-        <location line="+187"/>
+        <location line="-196"/>
+        <location line="+197"/>
         <source>Updates</source>
         <translation>更新</translation>
     </message>
     <message>
-        <location line="+322"/>
+        <location line="+339"/>
         <source>Image processing backend</source>
         <translation>图像处理后端</translation>
     </message>
@@ -4557,11 +7731,55 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Restart Alcedo yourself to apply this backend change.</source>
         <translation>请自行重启 Alcedo，以使此后端更改生效。</translation>
     </message>
+    <message>
+        <source>Language / Theme</source>
+        <translation>语言/主题</translation>
+    </message>
+    <message>
+        <source>Default Behavior</source>
+        <translation>默认行为</translation>
+    </message>
+    <message>
+        <source>Masks</source>
+        <translation>蒙版</translation>
+    </message>
+    <message>
+        <source>Adding a Mask on a locked node</source>
+        <translation>在锁定节点上添加蒙版</translation>
+    </message>
+    <message>
+        <source>Ask every time</source>
+        <translation>每次询问</translation>
+    </message>
+    <message>
+        <source>Create a new layer, then draw</source>
+        <translation>新建图层后绘制</translation>
+    </message>
+    <message>
+        <source>Draw on the current node</source>
+        <translation>在当前节点上绘制</translation>
+    </message>
+    <message>
+        <source>The default adjustment node applies Alcedo&apos;s default adjustments, so it is locked. A Mask drawn on it also limits those defaults to the masked area. Layers you add yourself are not locked and are never affected by this setting.</source>
+        <translation>默认调整节点会应用 Alcedo 的一些默认调整，因此该节点默认处于锁定状态。在该节点上绘制的蒙版也会把这些默认调整限制在蒙版区域内。你自行添加的图层不会被锁定，也不受此设置影响。</translation>
+    </message>
+    <message>
+        <source>AI Models</source>
+        <translation>AI 模型</translation>
+    </message>
+    <message>
+        <source>Saved AI Keys</source>
+        <translation>已保存的 AI 密钥</translation>
+    </message>
+    <message>
+        <source>The AI model runs on this computer, and no photo is uploaded. The labeling speed depends on the CPU, the GPU, and the disk.</source>
+        <translation>AI 模型在本机运行，照片不会上传。标注速度取决于 CPU、GPU 和磁盘。</translation>
+    </message>
 </context>
 <context>
     <name>ShellSignals</name>
     <message>
-        <location filename="../qml/ShellSignals.qml" line="+136"/>
+        <location filename="../qml/ShellSignals.qml" line="+160"/>
         <source>Imported %1 image(s).</source>
         <translation>已导入 %1 张图像。</translation>
     </message>
@@ -4572,17 +7790,64 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
-    <name>StarRatingFilter</name>
+    <name>ShortcutCaptureField</name>
     <message>
-        <location filename="../qml/StarRatingFilter.qml" line="+59"/>
-        <source>BY RATING</source>
-        <translation>按评分</translation>
+        <location filename="../qml/ShortcutCaptureField.qml" line="+82"/>
+        <source>Unassigned</source>
+        <translation>未分配</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Press and release a modifier</source>
+        <translation>按下并松开一个修饰键</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Press shortcut</source>
+        <translation>按下快捷键</translation>
+    </message>
+    <message>
+        <location line="+104"/>
+        <source>%1 shortcut</source>
+        <translation>%1 快捷键</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Shortcut</source>
+        <translation>快捷键</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Recording. Press and release Shift, Ctrl, Alt, or Meta to choose it. Enter or Escape saves, Tab cancels, plain Delete clears the binding.</source>
+        <translation>正在录制。按下并松开 Shift、Ctrl、Alt 或 Meta 以选择该键。Enter 或 Escape 保存，Tab 取消，单独按 Delete 清除绑定。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Recording. Type the new keys. Enter or Escape saves, Tab cancels, plain Delete clears the binding.</source>
+        <translation>正在录制。按下新的按键。Enter 或 Escape 保存，Tab 取消，单独按 Delete 清除绑定。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Current shortcut: %1. Press Enter or click to record a new shortcut.</source>
+        <translation>当前快捷键：%1。按 Enter 或点击以录制新快捷键。</translation>
+    </message>
+</context>
+<context>
+    <name>StaggeredGridMark</name>
+    <message>
+        <location filename="../qml/StaggeredGridMark.qml" line="+25"/>
+        <source>Loading</source>
+        <translation>正在加载</translation>
     </message>
 </context>
 <context>
     <name>StatsCard</name>
     <message>
-        <location filename="../qml/StatsCard.qml" line="+355"/>
+        <source>Search</source>
+        <translation>搜索</translation>
+    </message>
+    <message>
+        <location filename="../qml/StatsCard.qml" line="+358"/>
         <source> more</source>
         <translation> 更多</translation>
     </message>
@@ -4592,7 +7857,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>收起</translation>
     </message>
     <message>
-        <location line="+274"/>
+        <location line="+275"/>
         <source>Show less ▲</source>
         <translation>收起 ▲</translation>
     </message>
@@ -4602,9 +7867,9 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>显示全部 %1 项 ▼</translation>
     </message>
     <message>
-        <location line="-387"/>
+        <location line="-388"/>
         <location line="+122"/>
-        <location line="+87"/>
+        <location line="+88"/>
         <location line="+163"/>
         <source>No data available</source>
         <translation>没有可用数据</translation>
@@ -4636,7 +7901,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThumbnailGridView</name>
     <message>
-        <location filename="../qml/ThumbnailGridView.qml" line="+82"/>
+        <location filename="../qml/ThumbnailGridView.qml" line="+83"/>
         <source>Black &amp; White</source>
         <translation>黑白</translation>
     </message>
@@ -4646,7 +7911,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>美食与饮品</translation>
     </message>
     <message>
-        <location line="+617"/>
+        <location line="+618"/>
         <location line="+24"/>
         <source>(unnamed)</source>
         <translation>（未命名）</translation>
@@ -4671,21 +7936,39 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Source file was moved or deleted</source>
         <translation>源文件已被移动或删除</translation>
     </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation>未评分</translation>
+    </message>
+    <message>
+        <source>Edited</source>
+        <translation>已编辑</translation>
+    </message>
+    <message>
+        <source>%1 | %2</source>
+        <translation>%1 | %2</translation>
+    </message>
 </context>
 <context>
     <name>TopToolbar</name>
     <message>
-        <location filename="../qml/TopToolbar.qml" line="+42"/>
-        <source>Alcedo</source>
-        <translation>Alcedo</translation>
+        <location filename="../qml/TopToolbar.qml" line="+63"/>
+        <source>Hide collections sidebar</source>
+        <translation>隐藏影集侧边栏</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Studio</source>
-        <translation>Studio</translation>
+        <location line="+1"/>
+        <source>Show collections sidebar</source>
+        <translation>显示影集侧边栏</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+24"/>
         <source>File</source>
         <translation>文件</translation>
     </message>
@@ -4713,7 +7996,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+12"/>
         <location line="+7"/>
         <source>Update available</source>
-        <translation type="unfinished">有可用更新</translation>
+        <translation>有可用更新</translation>
     </message>
 </context>
 <context>
@@ -4905,38 +8188,208 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>WelcomeCoverMosaic</name>
+    <message>
+        <location filename="../qml/WelcomeCoverMosaic.qml" line="82"/>
+        <source>Project cover</source>
+        <translation>项目封面</translation>
+    </message>
+</context>
+<context>
     <name>WelcomeDialog</name>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="+168"/>
+        <location filename="../qml/WelcomeDialog.qml" line="163"/>
+        <source>CUDA unavailable</source>
+        <translation>CUDA 不可用</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="315"/>
+        <source>Welcome</source>
+        <translation>欢迎</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="338"/>
+        <source>Alcedo Studio</source>
+        <translation>Alcedo Studio</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="341"/>
+        <source>Alcedo</source>
+        <translation>Alcedo</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="357"/>
+        <source>Studio</source>
+        <translation>Studio</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="369"/>
+        <source>Each project is one .alcd file that holds the photo references, the edit history and the versions.</source>
+        <translation>每个项目是一个 .alcd 文件，照片引用、编辑记录和版本都在里面。</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="391"/>
+        <source>Open Project…</source>
+        <translation>打开项目…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="402"/>
+        <location line="+103"/>
+        <source>New Project…</source>
+        <translation>新建项目…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="472"/>
+        <source>Create your first project</source>
+        <translation>新建第一个项目</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="483"/>
+        <source>Choose a folder for the project file, then import your photos. Alcedo does not move or change the original photos.</source>
+        <translation>选一个文件夹存放项目文件，然后导入照片。Alcedo 不会移动或改写原始照片。</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="515"/>
+        <source>Open Existing Project…</source>
+        <translation>打开已有项目…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="573"/>
+        <source>Interface language</source>
+        <translation>界面语言</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="669"/>
+        <source>Quit</source>
+        <translation>退出</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeNewProjectForm</name>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="16"/>
+        <location line="+13"/>
+        <source>Untitled Project</source>
+        <translation>未命名项目</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="40"/>
+        <location line="+110"/>
+        <source>Select Project Storage Location</source>
+        <translation>选择项目存储位置</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="52"/>
+        <source>Back</source>
+        <translation>返回</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="62"/>
+        <source>New Project</source>
+        <translation>新建项目</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="73"/>
+        <source>Configure your workspace settings.</source>
+        <translation>配置你的工作区设置。</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="94"/>
+        <location line="+22"/>
+        <source>Project Name</source>
+        <translation>项目名称</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="133"/>
+        <source>Storage Location</source>
+        <translation>存储位置</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="143"/>
+        <source>Select a parent folder...</source>
+        <translation>选择父文件夹...</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="174"/>
+        <source>Create Project</source>
+        <translation>创建项目</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeProjectOverview</name>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="36"/>
+        <source>Continue your last project</source>
+        <translation>继续上次的项目</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="129"/>
+        <source>Photos</source>
+        <translation>照片</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="138"/>
+        <source>Edited</source>
+        <translation>已编辑</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="147"/>
+        <source>Capture dates</source>
+        <translation>拍摄日期</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="164"/>
+        <source>Continue Editing</source>
+        <translation>继续编辑</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeProjectPreviewAdapter</name>
+    <message>
+        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="96"/>
+        <source>No capture dates</source>
+        <translation>无拍摄日期</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="102"/>
+        <location line="+1"/>
+        <source>%1 to %2</source>
+        <translation>%1 至 %2</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeRecentProjectList</name>
+    <message>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="25"/>
         <source>Opened recently</source>
         <translation>最近打开</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="30"/>
         <source>Opened just now</source>
         <translation>刚刚打开</translation>
     </message>
     <message numerus="yes">
-        <location line="+3"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="33"/>
         <source>Opened %n minute(s) ago</source>
         <translation>
             <numerusform>%n 分钟前打开</numerusform>
         </translation>
     </message>
     <message numerus="yes">
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="38"/>
         <source>Opened %n hour(s) ago</source>
         <translation>
             <numerusform>%n 小时前打开</numerusform>
         </translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="43"/>
         <source>Opened yesterday</source>
         <translation>昨天打开</translation>
     </message>
     <message numerus="yes">
-        <location line="+3"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="46"/>
         <location line="+5"/>
         <source>Opened %n day(s) ago</source>
         <translation>
@@ -4944,107 +8397,25 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         </translation>
     </message>
     <message>
-        <location line="-2"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="49"/>
         <source>Opened last week</source>
         <translation>上周打开</translation>
     </message>
     <message>
-        <location line="-147"/>
-        <location line="+17"/>
-        <source>Untitled Project</source>
-        <translation>未命名项目</translation>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="56"/>
+        <source>Other recent projects</source>
+        <translation>其他最近项目</translation>
     </message>
     <message>
-        <location line="+14"/>
-        <source>Select Project Storage Location</source>
-        <translation>选择项目存储位置</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>CUDA unavailable</source>
-        <translation>CUDA 不可用</translation>
-    </message>
-    <message>
-        <location line="+209"/>
-        <source>Alcedo</source>
-        <translation>Alcedo</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Studio</source>
-        <translation>Studio</translation>
-    </message>
-    <message>
-        <location line="+17"/>
-        <source>Load Project</source>
-        <translation>加载项目</translation>
-    </message>
-    <message>
-        <location line="+66"/>
-        <location line="+518"/>
-        <source>Create Project</source>
-        <translation>创建项目</translation>
-    </message>
-    <message>
-        <location line="-415"/>
-        <source>Exit Application</source>
-        <translation>退出应用</translation>
-    </message>
-    <message>
-        <location line="+48"/>
-        <source>Recent Projects</source>
-        <translation>最近项目</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Collapse</source>
-        <translation>收起</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>View All</source>
-        <translation>查看全部</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>No recent projects yet</source>
-        <translation>暂无最近项目</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Projects you open or create here will appear in this list.</source>
-        <translation>你在这里打开或创建的项目会显示在此列表中。</translation>
-    </message>
-    <message>
-        <location line="+142"/>
-        <source>New Project</source>
-        <translation>新建项目</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Configure your workspace settings.</source>
-        <translation>配置你的工作区设置。</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Project Name</source>
-        <translation>项目名称</translation>
-    </message>
-    <message>
-        <location line="+35"/>
-        <source>Storage Location</source>
-        <translation>存储位置</translation>
-    </message>
-    <message>
-        <location line="+26"/>
-        <source>Select a parent folder...</source>
-        <translation>选择父文件夹...</translation>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="75"/>
+        <source>No other recent projects</source>
+        <translation>没有其他最近项目</translation>
     </message>
 </context>
 <context>
     <name>alcedo::UpdateService</name>
     <message>
-        <location filename="../../../app/update_service.cpp" line="+66"/>
+        <location filename="../../../app/update_service.cpp" line="+67"/>
         <source>%1 (build %2)</source>
         <translation>%1（构建 %2）</translation>
     </message>
@@ -5187,16 +8558,31 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
-    <name>alcedo::ui::AppTheme</name>
+    <name>alcedo::ui::EditorCameraProfileListModel</name>
     <message>
-        <location filename="../app_theme.cpp" line="+1171"/>
-        <source>Alcedo</source>
-        <translation>Alcedo</translation>
+        <location filename="../album_backend/editor_camera_profile_list_model.cpp" line="+155"/>
+        <source>Embedded</source>
+        <translation>内嵌</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Classic</source>
-        <translation>经典</translation>
+        <location line="+0"/>
+        <source>Built-in</source>
+        <translation>内置</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::EditorComparisonController</name>
+    <message>
+        <source>Unadjusted</source>
+        <translation>未调整</translation>
+    </message>
+    <message>
+        <source>Current working state</source>
+        <translation>当前工作状态</translation>
+    </message>
+    <message>
+        <source>%1 (working state)</source>
+        <translation>%1（工作状态）</translation>
     </message>
 </context>
 <context>
@@ -5213,9 +8599,145 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>alcedo::ui::EditorNodeController</name>
+    <message>
+        <location filename="../album_backend/editor_node_controller.cpp" line="+461"/>
+        <source>Connect Color Grades into one Develop to DRT path.</source>
+        <translation>将色彩分级连接成一条 Develop 到 DRT 的路径。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The graph snapshot has no nodes</source>
+        <translation>节点图快照中没有节点</translation>
+    </message>
+    <message>
+        <location line="+74"/>
+        <source>The graph adapter is missing</source>
+        <translation>缺少节点图适配器</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+9"/>
+        <source>The node graph has no snapshot</source>
+        <translation>节点图没有快照</translation>
+    </message>
+    <message>
+        <location line="+207"/>
+        <location line="+670"/>
+        <location line="+125"/>
+        <source>No editor session is bound</source>
+        <translation>未绑定编辑器会话</translation>
+    </message>
+    <message>
+        <location line="-684"/>
+        <source>No node supports the selected adjustment panel</source>
+        <translation>没有节点支持所选调整面板</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <location line="+27"/>
+        <location line="+531"/>
+        <source>That node is not in the current graph</source>
+        <translation>该节点不在当前节点图中</translation>
+    </message>
+    <message>
+        <location line="-435"/>
+        <source>Another node command is active</source>
+        <translation>另一个节点命令正在执行</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+110"/>
+        <location line="+45"/>
+        <location line="+231"/>
+        <location line="+170"/>
+        <source>No editable node graph is available</source>
+        <translation>没有可编辑的节点图</translation>
+    </message>
+    <message>
+        <location line="-552"/>
+        <source>The node graph is not editable in the current session state</source>
+        <translation>当前会话状态下节点图不可编辑</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Finish the node graph before renaming</source>
+        <translation>请先完成节点图，再重命名</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Only a Color Grade can be renamed</source>
+        <translation>只能重命名色彩分级</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Color Grade name cannot be empty</source>
+        <translation>色彩分级名称不能为空</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Finish the node graph before changing deletion protection</source>
+        <translation>请先完成节点图，再更改删除保护</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Only a Color Grade has editable deletion protection</source>
+        <translation>只有色彩分级具有可编辑的删除保护</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <location line="+44"/>
+        <source>Only a Color Grade can be deleted</source>
+        <translation>只能删除色彩分级</translation>
+    </message>
+    <message>
+        <location line="-7"/>
+        <source>No node is selected</source>
+        <translation>未选择节点</translation>
+    </message>
+    <message>
+        <location line="+136"/>
+        <location line="+29"/>
+        <location line="+39"/>
+        <source>Finish the node graph before changing Mask Groups</source>
+        <translation>请先完成节点图，再更改图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="-62"/>
+        <location line="+73"/>
+        <source>The node graph has no editable Mask Groups</source>
+        <translation>节点图中没有可编辑的图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="-45"/>
+        <source>Only a Color Grade Mask Group can be removed</source>
+        <translation>只能移除色彩分级图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Only a Color Grade Mask Group can be moved</source>
+        <translation>只能移动色彩分级图层（蒙版组）</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>That Mask Group is not in the committed node graph</source>
+        <translation>该图层（蒙版组）不在已提交的节点图中</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>The Mask Group move did not produce a valid node graph</source>
+        <translation>移动图层（蒙版组）后未生成有效的节点图</translation>
+    </message>
+    <message>
+        <location line="+115"/>
+        <source>Connections must go from an output port to an input port</source>
+        <translation>连接必须从输出端口指向输入端口</translation>
+    </message>
+</context>
+<context>
     <name>alcedo::ui::ProjectModule</name>
     <message>
-        <location filename="../album_backend/project_module.cpp" line="+390"/>
+        <location filename="../album_backend/project_module.cpp" line="+377"/>
         <source>Select Project Package</source>
         <translation>选择项目包</translation>
     </message>
@@ -5225,7 +8747,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>打包项目 (*.alcd);;所有文件 (*)</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+10"/>
         <source>Select Parent Folder for New Project</source>
         <translation>为新项目选择父文件夹</translation>
     </message>
@@ -5238,6 +8760,770 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+0"/>
         <source>Project name</source>
         <translation>项目名称</translation>
+    </message>
+</context>
+<context>
+    <name>InspectorFieldActions</name>
+    <message>
+        <source>Ascending</source>
+        <translation>升序</translation>
+    </message>
+    <message>
+        <source>Descending</source>
+        <translation>降序</translation>
+    </message>
+    <message>
+        <source>Sort photos by %1: %2.</source>
+        <translation>按%1排序照片：%2。</translation>
+    </message>
+    <message>
+        <source>Inside each day, the full time orders the photos.</source>
+        <translation>每天内按完整时间排列照片。</translation>
+    </message>
+    <message>
+        <source>Equal values inside a day keep the newest time first.</source>
+        <translation>同一天内的相同值按最新时间优先。</translation>
+    </message>
+    <message>
+        <source>Equal values follow file ID order.</source>
+        <translation>相同值按文件 ID 顺序排列。</translation>
+    </message>
+    <message>
+        <source>Text sorts by character code, not by language rules.</source>
+        <translation>文本按字符编码排序，不按语言规则。</translation>
+    </message>
+    <message>
+        <source>Unedited photos come last.</source>
+        <translation>未编辑的照片排在最后。</translation>
+    </message>
+    <message>
+        <source>Select it again to clear the sort.</source>
+        <translation>再次选择可清除排序。</translation>
+    </message>
+    <message>
+        <source>Sort by %1, %2</source>
+        <translation>按%1排序，%2</translation>
+    </message>
+    <message>
+        <source>Group</source>
+        <translation>分组</translation>
+    </message>
+    <message>
+        <source>Group photos by %1</source>
+        <translation>按%1分组照片</translation>
+    </message>
+    <message>
+        <source>Stop grouping photos by %1.</source>
+        <translation>停止按%1分组照片。</translation>
+    </message>
+</context>
+<context>
+    <name>AlbumSectionView</name>
+    <message>
+        <source>Grouped photos</source>
+        <translation>分组照片</translation>
+    </message>
+    <message>
+        <source>(unnamed)</source>
+        <translation>（未命名）</translation>
+    </message>
+    <message>
+        <source>Unlabelled</source>
+        <translation>未标注</translation>
+    </message>
+    <message>
+        <source>Unedited</source>
+        <translation>未编辑</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>未知</translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation>未评分</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Loading photo</source>
+        <translation>正在载入照片</translation>
+    </message>
+    <message>
+        <source>Expand all</source>
+        <translation>全部展开</translation>
+    </message>
+    <message>
+        <source>Expand all groups</source>
+        <translation>展开所有分组</translation>
+    </message>
+    <message>
+        <source>Collapse all</source>
+        <translation>全部折叠</translation>
+    </message>
+    <message>
+        <source>Collapse all groups</source>
+        <translation>折叠所有分组</translation>
+    </message>
+    <message>
+        <source>Expand %1</source>
+        <translation>展开%1</translation>
+    </message>
+    <message>
+        <source>Collapse %1</source>
+        <translation>折叠%1</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n photo(s)</source>
+        <translation>
+            <numerusform>%n 张照片</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Edited</source>
+        <translation>已编辑</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ApplicationCloseCoordinator</name>
+    <message>
+        <source>Another close is in progress.</source>
+        <translation>另一个关闭操作正在进行。</translation>
+    </message>
+    <message>
+        <source>No project is loaded yet.</source>
+        <translation>尚未加载项目。</translation>
+    </message>
+    <message>
+        <source>The editor image cannot be saved.</source>
+        <translation>无法保存编辑器中的图像。</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::LibrarySelection</name>
+    <message>
+        <source>(unnamed)</source>
+        <translation>（未命名）</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ExportQueue</name>
+    <message>
+        <source>(unnamed)</source>
+        <translation>（未命名）</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::LibraryMutationOperations</name>
+    <message>
+        <source>(unnamed)</source>
+        <translation>（未命名）</translation>
+    </message>
+    <message>
+        <source>No valid image was selected.</source>
+        <translation>未选择有效的图像。</translation>
+    </message>
+    <message>
+        <source>Rating must be between 0 and 5.</source>
+        <translation>评分必须介于 0 到 5 之间。</translation>
+    </message>
+</context>
+<context>
+    <name>PackageCard</name>
+    <message>
+        <source>Open the license</source>
+        <translation>打开许可证</translation>
+    </message>
+    <message>
+        <source>Keep</source>
+        <translation>保留</translation>
+    </message>
+    <message>
+        <source>Remove</source>
+        <translation>移除</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+</context>
+<context>
+    <name>AiModelDownloadStatementDialog</name>
+    <message>
+        <source>Before you download</source>
+        <translation>下载前请阅读</translation>
+    </message>
+    <message>
+        <source>The AI models on this page are not part of the Alcedo Studio installer. Alcedo Studio downloads them to this computer from third-party sites or from the Alcedo download server. Each model has its own license. The license names are on the model cards, and the AI Mask package contains the full license texts. You decide whether the models and their output can be used for your purpose, including commercial use.</source>
+        <translation>本页的 AI 模型不包含在 Alcedo Studio 安装包中，由 Alcedo Studio 从第三方网站或 Alcedo 下载服务器下载到本机。每个模型都受其自身许可证约束，许可证名称见各模型卡片，AI Mask 模型包内附有许可证全文。模型及其输出能否用于您的用途（包括商业用途），请您自行判断。</translation>
+    </message>
+    <message>
+        <source>AI Mask</source>
+        <translation>AI Mask</translation>
+    </message>
+    <message>
+        <source>The Sky model and the people and sky locator are trained by Alcedo Studio. The Sky model is trained on the MaSS13K dataset (%1), which does not state a clear license. For commercial use of the Sky model or its output, contact the authors of the dataset. Alcedo Studio does not guarantee that the models it trains can be used for commercial work. The Subject model (S3OD) is trained on generated images and on labels from other datasets; see the NOTICE file of the package.</source>
+        <translation>天空模型与人物/天空定位模型由 Alcedo Studio 训练。天空模型使用 MaSS13K 数据集（%1）训练，该数据集未明确声明许可证。如需将天空模型或其输出用于商业用途，请联系数据集作者。Alcedo Studio 不保证其训练的模型可用于商业活动。主体模型（S3OD）使用生成图像和来自其他数据集的标签训练，详见模型包内的 NOTICE 文件。</translation>
+    </message>
+    <message>
+        <source>Select &quot;Accept and Download&quot; to confirm that you have read this statement.</source>
+        <translation>点击“同意并下载”即表示您已阅读本声明。</translation>
+    </message>
+    <message>
+        <source>Accept and Download</source>
+        <translation>同意并下载</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+</context>
+<context>
+    <name>AiModelsSettingsPanel</name>
+    <message>
+        <source>%1 GB</source>
+        <translation>%1 GB</translation>
+    </message>
+    <message>
+        <source>%1 MB</source>
+        <translation>%1 MB</translation>
+    </message>
+    <message>
+        <source>%1 KB</source>
+        <translation>%1 KB</translation>
+    </message>
+    <message>
+        <source>Selects the subject, people, sky, and the objects that you click, box, or draw over.</source>
+        <translation>选择主体、人物、天空，以及你点击、框选或涂抹经过的对象。</translation>
+    </message>
+    <message>
+        <source>Open the AI Mask model project on GitHub</source>
+        <translation>在 GitHub 上打开 AI 蒙版模型项目</translation>
+    </message>
+    <message>
+        <source>v%1 %2</source>
+        <translation>v%1 %2</translation>
+    </message>
+    <message>
+        <source>%1 → %2</source>
+        <translation>%1 → %2</translation>
+    </message>
+    <message>
+        <source>Not installed</source>
+        <translation>未安装</translation>
+    </message>
+    <message>
+        <source>Installed and current</source>
+        <translation>已安装，为最新版本</translation>
+    </message>
+    <message>
+        <source>Update available</source>
+        <translation>有可用更新</translation>
+    </message>
+    <message>
+        <source>Update required: this version of Alcedo Studio does not support the installed models</source>
+        <translation>需要更新：当前版本的 Alcedo Studio 不支持已安装的模型</translation>
+    </message>
+    <message>
+        <source>The available models need a newer version of Alcedo Studio</source>
+        <translation>可用的模型需要更新版本的 Alcedo Studio</translation>
+    </message>
+    <message>
+        <source>Repair required: installed files differ from the package</source>
+        <translation>需要修复：已安装的文件与包不一致</translation>
+    </message>
+    <message>
+        <source>Downloading… %1%</source>
+        <translation>正在下载… %1%</translation>
+    </message>
+    <message>
+        <source>Verifying…</source>
+        <translation>正在校验…</translation>
+    </message>
+    <message>
+        <source>Installing…</source>
+        <translation>正在安装…</translation>
+    </message>
+    <message>
+        <source>Removing…</source>
+        <translation>正在移除…</translation>
+    </message>
+    <message>
+        <source>Not completed</source>
+        <translation>未完成</translation>
+    </message>
+    <message>
+        <source>Download</source>
+        <translation>下载</translation>
+    </message>
+    <message>
+        <source>Update</source>
+        <translation>更新</translation>
+    </message>
+    <message>
+        <source>Repair</source>
+        <translation>修复</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>重试</translation>
+    </message>
+    <message>
+        <source>Fast image-text model from Apple, trained with multi-modal reinforced training.</source>
+        <translation>Apple 推出的快速图文模型，采用多模态强化训练。</translation>
+    </message>
+    <message>
+        <source>Multilingual embedding model for text and images from Jina AI, for 89 languages.</source>
+        <translation>Jina AI 推出的多语言图文嵌入模型，支持 89 种语言。</translation>
+    </message>
+    <message>
+        <source>Multilingual vision-language encoder from Google that improves on SigLIP.</source>
+        <translation>Google 推出的多语言视觉-语言编码器，在 SigLIP 基础上改进。</translation>
+    </message>
+    <message>
+        <source>Open the model project on GitHub</source>
+        <translation>在 GitHub 上打开模型项目</translation>
+    </message>
+    <message>
+        <source>ONNX Runtime</source>
+        <translation>ONNX Runtime</translation>
+    </message>
+    <message>
+        <source>Core ML</source>
+        <translation>Core ML</translation>
+    </message>
+    <message>
+        <source>Choose a folder for the AI models</source>
+        <translation>选择 AI 模型文件夹</translation>
+    </message>
+    <message>
+        <source>HF Mirror</source>
+        <translation>HF 镜像</translation>
+    </message>
+    <message>
+        <source>Hugging Face</source>
+        <translation>Hugging Face</translation>
+    </message>
+    <message>
+        <source>Sufy CDN</source>
+        <translation>Sufy CDN</translation>
+    </message>
+    <message>
+        <source>Custom</source>
+        <translation>自定义</translation>
+    </message>
+    <message>
+        <source>Model folder</source>
+        <translation>模型文件夹</translation>
+    </message>
+    <message>
+        <source>The folder that holds the AI Mask models and the content recognition models. Changing it does not move the installed models.</source>
+        <translation>存放 AI 蒙版模型和内容识别模型的文件夹。更换文件夹不会移动已安装的模型。</translation>
+    </message>
+    <message>
+        <source>Change folder…</source>
+        <translation>更换文件夹…</translation>
+    </message>
+    <message>
+        <source>Open in Finder</source>
+        <translation>在访达中打开</translation>
+    </message>
+    <message>
+        <source>Open in File Explorer</source>
+        <translation>在文件资源管理器中打开</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>打开文件夹</translation>
+    </message>
+    <message>
+        <source>Read the installed models again</source>
+        <translation>重新读取已安装的模型</translation>
+    </message>
+    <message>
+        <source>AI Mask</source>
+        <translation>AI 蒙版</translation>
+    </message>
+    <message>
+        <source>The AI model check failed: %1</source>
+        <translation>AI 模型检查失败：%1</translation>
+    </message>
+    <message>
+        <source>AI Mask model downloads are not available in this build.</source>
+        <translation>此版本不提供 AI 蒙版模型下载。</translation>
+    </message>
+    <message>
+        <source>Check again</source>
+        <translation>重新检查</translation>
+    </message>
+    <message>
+        <source>Remove the AI Mask models</source>
+        <translation>移除 AI 蒙版模型</translation>
+    </message>
+    <message>
+        <source>Remove the AI Mask models?</source>
+        <translation>要移除 AI 蒙版模型吗？</translation>
+    </message>
+    <message>
+        <source>Without the models, the AI Mask tool cannot make AI Masks until you download them again.</source>
+        <translation>移除后，在重新下载模型之前，AI 蒙版工具无法创建 AI 蒙版。</translation>
+    </message>
+    <message>
+        <source>Content Recognition (CLIP)</source>
+        <translation>内容识别（CLIP）</translation>
+    </message>
+    <message>
+        <source>Activate a model to use it in the open project.</source>
+        <translation>激活模型后即可在当前项目中使用。</translation>
+    </message>
+    <message>
+        <source>Open a project to activate a model. Each project has its own active model.</source>
+        <translation>打开项目后才能激活模型。每个项目都有各自的激活模型。</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>下载源</translation>
+    </message>
+    <message>
+        <source>https://example.com</source>
+        <translation>https://example.com</translation>
+    </message>
+    <message>
+        <source>Activating…</source>
+        <translation>激活中…</translation>
+    </message>
+    <message>
+        <source>Canceling…</source>
+        <translation>正在取消…</translation>
+    </message>
+    <message>
+        <source>Active in this project</source>
+        <translation>已在此项目中激活</translation>
+    </message>
+    <message>
+        <source>Installed</source>
+        <translation>已安装</translation>
+    </message>
+    <message>
+        <source>Preparing the model…</source>
+        <translation>正在准备模型…</translation>
+    </message>
+    <message>
+        <source>Open a project to activate this model.</source>
+        <translation>打开项目后才能激活此模型。</translation>
+    </message>
+    <message>
+        <source>Activate</source>
+        <translation>激活</translation>
+    </message>
+    <message>
+        <source>Remove model</source>
+        <translation>移除模型</translation>
+    </message>
+    <message>
+        <source>Remove this model?</source>
+        <translation>要移除此模型吗？</translation>
+    </message>
+    <message>
+        <source>It is the active model of this project. After removal, the project has no active model.</source>
+        <translation>这是此项目的激活模型。移除后，此项目将没有激活模型。</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::AiModelPackageService</name>
+    <message>
+        <source>AI Mask</source>
+        <translation>AI 蒙版</translation>
+    </message>
+    <message>
+        <source>The AI model server URL is not allowed.</source>
+        <translation>不允许使用该 AI 模型服务器地址。</translation>
+    </message>
+    <message>
+        <source>The AI model server response is too large.</source>
+        <translation>AI 模型服务器的响应过大。</translation>
+    </message>
+    <message>
+        <source>The AI model server returned HTTP %1.</source>
+        <translation>AI 模型服务器返回了 HTTP %1。</translation>
+    </message>
+    <message>
+        <source>The AI model server redirected to an untrusted host.</source>
+        <translation>AI 模型服务器重定向到了不受信任的主机。</translation>
+    </message>
+    <message>
+        <source>Another AI model action is running.</source>
+        <translation>另一项 AI 模型操作正在运行。</translation>
+    </message>
+    <message>
+        <source>Another download is running. Try again after it finishes.</source>
+        <translation>另一项下载正在运行。请在其完成后重试。</translation>
+    </message>
+    <message>
+        <source>The installation was canceled.</source>
+        <translation>安装已取消。</translation>
+    </message>
+    <message>
+        <source>The download was canceled.</source>
+        <translation>下载已取消。</translation>
+    </message>
+</context>
+<context>
+    <name>ThumbnailStarRating</name>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation>未评分</translation>
+    </message>
+</context>
+<context>
+    <name>ThumbnailDeleteMark</name>
+    <message>
+        <source>Marked for deletion</source>
+        <translation>已标记删除</translation>
+    </message>
+</context>
+<context>
+    <name>ThumbnailEditMark</name>
+    <message>
+        <source>Edited</source>
+        <translation>已编辑</translation>
+    </message>
+    <message>
+        <source>Edited just now</source>
+        <translation>刚刚编辑</translation>
+    </message>
+    <message numerus="yes">
+        <source>Edited %n minute(s) ago</source>
+        <translation>
+            <numerusform>%n 分钟前编辑</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Edited %n hour(s) ago</source>
+        <translation>
+            <numerusform>%n 小时前编辑</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Edited yesterday</source>
+        <translation>昨天编辑</translation>
+    </message>
+    <message>
+        <source>Edited %1</source>
+        <translation>编辑于 %1</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::EditorAiMaskTool</name>
+    <message>
+        <source>Drag a box around the object.</source>
+        <translation>请拖动以框住对象。</translation>
+    </message>
+    <message>
+        <source>Open an image in the editor first.</source>
+        <translation>请先在编辑器中打开图像。</translation>
+    </message>
+    <message>
+        <source>Select a Color Grade node first.</source>
+        <translation>请先选择色彩分级节点。</translation>
+    </message>
+    <message>
+        <source>Select an AI Mask in the Mask list first.</source>
+        <translation>请先在蒙版列表中选择 AI 蒙版。</translation>
+    </message>
+    <message>
+        <source>The box is outside the photo.</source>
+        <translation>选框位于照片之外。</translation>
+    </message>
+    <message>
+        <source>The click is outside the photo.</source>
+        <translation>点击位置位于照片之外。</translation>
+    </message>
+    <message>
+        <source>The path is outside the photo.</source>
+        <translation>路径位于照片之外。</translation>
+    </message>
+    <message>
+        <source>Wait until the current model request returns.</source>
+        <translation>请等待当前模型请求完成。</translation>
+    </message>
+    <message>
+        <source>The AI sidecar runtime is not available. Open a project first.</source>
+        <translation>AI 辅助进程运行时不可用。请先打开项目。</translation>
+    </message>
+    <message>
+        <source>The AI sidecar lease is not available.</source>
+        <translation>无法获取 AI 辅助进程的使用权。</translation>
+    </message>
+    <message>
+        <source>The editor session is not available.</source>
+        <translation>编辑器会话不可用。</translation>
+    </message>
+    <message>
+        <source>The viewport is not bound to the AI Mask tool.</source>
+        <translation>视口未绑定到 AI 蒙版工具。</translation>
+    </message>
+    <message>
+        <source>The AI Mask analysis image failed: %1</source>
+        <translation>AI 蒙版分析图像生成失败：%1</translation>
+    </message>
+    <message>
+        <source>The AI Mask edit did not open: %1</source>
+        <translation>无法打开 AI 蒙版编辑：%1</translation>
+    </message>
+    <message>
+        <source>The AI Mask model status could not be read: %1</source>
+        <translation>无法读取 AI 蒙版模型状态：%1</translation>
+    </message>
+    <message>
+        <source>The AI Mask models could not be loaded from %1: %2</source>
+        <translation>无法从 %1 加载 AI 蒙版模型：%2</translation>
+    </message>
+    <message>
+        <source>The AI Mask session did not start: %1</source>
+        <translation>AI 蒙版会话未能启动：%1</translation>
+    </message>
+    <message>
+        <source>The AI Mask was not committed: %1</source>
+        <translation>AI 蒙版未能保存：%1</translation>
+    </message>
+    <message>
+        <source>The AI sidecar did not start: %1</source>
+        <translation>AI 辅助进程未能启动：%1</translation>
+    </message>
+    <message>
+        <source>The segmentation session did not start: %1</source>
+        <translation>分割会话未能启动：%1</translation>
+    </message>
+    <message>
+        <source>Unknown AI Mask task: %1</source>
+        <translation>未知的 AI 蒙版任务：%1</translation>
+    </message>
+    <message>
+        <source>The AI Mask session is closed.</source>
+        <translation>AI 蒙版会话已关闭。</translation>
+    </message>
+</context>
+<context>
+    <name>FilmStockPicker</name>
+    <message>
+        <source>All</source>
+        <translation>全部</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::LibraryViewPreferences</name>
+    <message>
+        <source>Red</source>
+        <translation>红色</translation>
+    </message>
+    <message>
+        <source>Orange</source>
+        <translation>橙色</translation>
+    </message>
+    <message>
+        <source>Yellow</source>
+        <translation>黄色</translation>
+    </message>
+    <message>
+        <source>Green</source>
+        <translation>绿色</translation>
+    </message>
+    <message>
+        <source>Blue</source>
+        <translation>蓝色</translation>
+    </message>
+    <message>
+        <source>Purple</source>
+        <translation>紫色</translation>
+    </message>
+    <message>
+        <source>Gray</source>
+        <translation>灰色</translation>
+    </message>
+</context>
+<context>
+    <name>ColorLabelNamesEditor</name>
+    <message>
+        <source>Reset %1</source>
+        <translation>重置 %1</translation>
+    </message>
+</context>
+<context>
+    <name>ColorLabelFilterChips</name>
+    <message>
+        <source>Deleted</source>
+        <translation>待删除</translation>
+    </message>
+</context>
+<context>
+    <name>LibraryMarksControl</name>
+    <message>
+        <source>Rating</source>
+        <translation>评分</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Mixed</source>
+        <translation>混合</translation>
+    </message>
+    <message>
+        <source>Label</source>
+        <translation>标签</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>Marked</source>
+        <translation>已标记</translation>
+    </message>
+    <message>
+        <source>Mark</source>
+        <translation>标记</translation>
+    </message>
+</context>
+<context>
+    <name>DataFormat</name>
+    <message>
+        <source>Estimating the remaining time</source>
+        <translation>正在估算剩余时间</translation>
+    </message>
+    <message>
+        <source>Less than a minute remaining</source>
+        <translation>剩余不到 1 分钟</translation>
+    </message>
+    <message>
+        <source>About %1 min remaining</source>
+        <translation>剩余约 %1 分钟</translation>
+    </message>
+    <message>
+        <source>About %1 h remaining</source>
+        <translation>剩余约 %1 小时</translation>
+    </message>
+    <message>
+        <source>About %1 h %2 min remaining</source>
+        <translation>剩余约 %1 小时 %2 分钟</translation>
     </message>
 </context>
 </TS>

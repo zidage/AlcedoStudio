@@ -3,6 +3,21 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
+// Geometry panel: crop and rotation of the whole image.
+//
+// The output is the crop frame: an axis-aligned rectangle through which the
+// source is seen rotated about the frame center. No frame corner may leave the
+// source, so the frame shrinks when a rotation needs it
+// (EditorParameterCatalog::ConstrainCrop, the same constraint the overlay and
+// the render apply). The ranges, the aspect presets, and the parameter object
+// come from EditorParameterCatalog.
+//
+// Edits follow the path every adjustment uses: slider drags submit interactive
+// patches and a settled patch on release; keyboard and field edits submit
+// through the model's debounce; overlay drags submit interactive patches while
+// moving and one settled patch on release. Each settled patch is one history
+// commit. While the panel is open the viewport shows the whole source with the
+// document rotation, locked to fit.
 Item {
     id: root
     objectName: "editorAdjustmentPanel_geometry"
@@ -13,16 +28,8 @@ Item {
     property bool controlsEnabled: true
     property bool panelActive: false
     property bool restoring: false
-    property bool syncingToInteraction: false
     property bool overlayInputActive: false
-    // Geometry draft dirty: crop/rotate edits while the panel is open stay on the
-    // overlay until confirm (panel leave or Enter). Pipeline submit is deferred.
-    property bool draftDirty: false
     property var aspectEntries: []
-    property var lensBrandEntries: []
-    property var lensModelEntries: []
-    property int sourceImageWidth: 0
-    property int sourceImageHeight: 0
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -31,14 +38,14 @@ Item {
     readonly property color colCardBorder: theme ? theme.colCardBorder : appTheme.cardBorderColor
     readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
     readonly property bool canUseGeometry: root.controlsEnabled && root.interaction !== null
-    readonly property double imageAspect: {
-        if (root.sourceImageWidth > 0 && root.sourceImageHeight > 0)
-            return root.sourceImageWidth / root.sourceImageHeight
-        if (!root.interaction)
-            return 1.0
-        const value = Number(root.interaction.metricAspect)
-        return isFinite(value) && value > 0.0001 ? value : 1.0
-    }
+    // Uncropped source size of the presented frame. Zero until a frame arrives.
+    readonly property int sourceImageWidth: root.interaction ? root.interaction.sourceImageWidth : 0
+    readonly property int sourceImageHeight: root.interaction ? root.interaction.sourceImageHeight : 0
+    readonly property bool hasSourceSize: root.sourceImageWidth > 0 && root.sourceImageHeight > 0
+    readonly property double imageAspect: root.hasSourceSize
+                                          ? root.sourceImageWidth / root.sourceImageHeight : 1.0
+    readonly property var cropDefaults: parameterCatalog.uiDefault("crop_rotate")
+    readonly property var cropSpecs: root.buildCropSpecs()
     readonly property bool inputActive: root.overlayInputActive
                                       || cropXModel.dragActive
                                       || cropYModel.dragActive
@@ -48,272 +55,133 @@ Item {
                                       || aspectWidthModel.dragActive
                                       || aspectHeightModel.dragActive
 
-    EditorGeometryMath {
-        id: geometryMath
-        objectName: "geometryMath"
+    EditorParameterCatalog {
+        id: parameterCatalog
+        objectName: "geometryParameterCatalog"
     }
 
-    EditorLensCatalogModel {
-        id: lensCatalog
-        objectName: "geometryLensCatalog"
+    /// Catalog property specs of the crop field by name: ui_min, ui_max, ui_step, ui_decimals.
+    function buildCropSpecs() {
+        var result = {}
+        const properties = parameterCatalog.entry("crop_rotate").properties || []
+        for (var i = 0; i < properties.length; ++i)
+            result[String(properties[i].name)] = properties[i]
+        return result
     }
 
     function buildAspectEntries() {
         var result = []
-        const presets = geometryMath.aspectPresets
-        for (var i = 0; i < presets.length; ++i) {
+        const presets = parameterCatalog.options("crop_rotate", "aspect_preset")
+        for (var i = 0; i < presets.length; ++i)
             result.push({ value: String(presets[i].value), label: qsTr(String(presets[i].label)) })
-        }
         return result
     }
 
-    function buildLensEntries(values) {
-        var result = [{ value: "", label: qsTr("Auto (metadata)") }]
-        for (var i = 0; i < values.length; ++i) {
-            result.push({ value: String(values[i].value), label: String(values[i].label) })
+    function indexOfAspect(value) {
+        for (var i = 0; i < aspectModel.entries.length; ++i) {
+            if (String(aspectModel.entries[i].value) === String(value))
+                return i
         }
-        return result
+        return -1
     }
 
-    function buildLensModelEntries(values) {
-        var result = []
-        for (var i = 0; i < values.length; ++i) {
-            result.push({ value: String(values[i].value), label: String(values[i].label) })
+    /// The whole crop state of the models in catalog UI units.
+    function cropState() {
+        return {
+            x: Number(cropXModel.value),
+            y: Number(cropYModel.value),
+            width: Number(cropWidthModel.value),
+            height: Number(cropHeightModel.value),
+            angle_degrees: Number(rotationModel.value),
+            aspect_preset: String(aspectModel.currentValue),
+            aspect_width: Number(aspectWidthModel.value),
+            aspect_height: Number(aspectHeightModel.value)
         }
-        return result
     }
 
-    function setEnumValue(model, value, fallbackIndex) {
-        if (!model)
-            return
-        var index = fallbackIndex === undefined ? 0 : fallbackIndex
-        for (var i = 0; i < model.entries.length; ++i) {
-            if (String(model.entries[i].value) === String(value)) {
-                index = i
-                break
-            }
-        }
-        model.currentIndex = index
+    /// Crop width / height in source pixels for a locked aspect, oriented to
+    /// the source (16:9 becomes 9:16 for a portrait photograph). Undefined when
+    /// the aspect is not locked.
+    function lockedAspectRatio() {
+        return parameterCatalog.cropLockedAspectRatio(root.cropState(), root.sourceImageWidth,
+                                                      root.sourceImageHeight)
     }
 
-    function refreshLensBrandEntries() {
-        root.lensBrandEntries = root.buildLensEntries(lensCatalog.brands)
-        lensBrandModel.entries = root.lensBrandEntries
-    }
-
-    function refreshLensModelEntries(brand, requestedModel) {
-        const catalogValues = lensCatalog.modelsForBrand(brand)
-        var entries = brand && brand.length > 0
-                      ? root.buildLensModelEntries(catalogValues)
-                      : root.buildLensEntries([])
-        if (requestedModel && requestedModel.length > 0) {
-            var found = false
-            for (var i = 0; i < entries.length; ++i) {
-                if (entries[i].value === requestedModel) {
-                    found = true
-                    break
-                }
-            }
-            if (!found)
-                entries.push({ value: requestedModel, label: requestedModel })
-        }
-        root.lensModelEntries = entries
-        lensModelModel.entries = entries
-        root.setEnumValue(lensModelModel, requestedModel, 0)
-    }
-
-    function currentAspectRatio() {
-        if (aspectModel.currentValue === "free")
-            return 1.0
-        if (aspectModel.currentValue === "custom")
-            return geometryMath.aspectRatio(aspectWidthModel.value, aspectHeightModel.value)
-        const ratio = geometryMath.presetRatio(aspectModel.currentValue)
-        if (ratio.length < 2)
-            return 1.0
-
-        let value = Number(ratio[0]) / Math.max(Number(ratio[1]), 0.0001)
-        // Fixed presets describe an unoriented frame shape. Match that shape to
-        // the source image so 16:9 becomes 9:16 for a portrait photograph.
-        const sourcePortrait = root.imageAspect < 1.0
-        const presetPortrait = value < 1.0
-        if (Math.abs(value - 1.0) > 0.0001 && sourcePortrait !== presetPortrait)
-            value = 1.0 / Math.max(value, 0.0001)
-        return value
-    }
-
-    function hasLockedAspect() {
-        return geometryMath.hasLockedAspect(aspectModel.currentValue,
-                                            aspectWidthModel.value,
-                                            aspectHeightModel.value)
-    }
-
-    function clampRect(x, y, width, height) {
-        const rect = geometryMath.clampCropRect(Number(x), Number(y), Number(width), Number(height))
-        return { x: Number(rect[0]), y: Number(rect[1]),
-                 w: Number(rect[2]), h: Number(rect[3]) }
+    function rectFromModels() {
+        return Qt.rect(cropXModel.value, cropYModel.value, cropWidthModel.value, cropHeightModel.value)
     }
 
     function setRectModels(rect) {
-        if (!rect)
-            return
-        const wasSyncing = root.syncingToInteraction
-        root.syncingToInteraction = true
+        const wasRestoring = root.restoring
+        root.restoring = true
         cropXModel.value = Number(rect.x)
         cropYModel.value = Number(rect.y)
-        cropWidthModel.value = Number(rect.width !== undefined ? rect.width : rect.w)
-        cropHeightModel.value = Number(rect.height !== undefined ? rect.height : rect.h)
-        root.syncingToInteraction = wasSyncing
+        cropWidthModel.value = Number(rect.width)
+        cropHeightModel.value = Number(rect.height)
+        root.restoring = wasRestoring
     }
 
-    function syncToInteraction() {
-        if (!root.panelActive || !root.canUseGeometry || root.restoring)
+    /// Write a constrained crop state to the models without a submit.
+    function setStateModels(state) {
+        const wasRestoring = root.restoring
+        root.restoring = true
+        root.setRectModels(Qt.rect(state.x, state.y, state.width, state.height))
+        aspectWidthModel.value = Number(state.aspect_width)
+        aspectHeightModel.value = Number(state.aspect_height)
+        const presetIndex = root.indexOfAspect(state.aspect_preset)
+        if (presetIndex >= 0)
+            aspectModel.currentIndex = presetIndex
+        root.restoring = wasRestoring
+    }
+
+    function syncOverlay() {
+        if (!root.interaction)
             return
-        const rect = root.clampRect(cropXModel.value, cropYModel.value,
-                                    cropWidthModel.value, cropHeightModel.value)
-        const locked = root.hasLockedAspect()
-        const ratio = locked ? root.currentAspectRatio() : 1.0
-        const wasSyncing = root.syncingToInteraction
-        root.syncingToInteraction = true
-        // Panel-owned overlay sync must not emit viewChangeReported: the session
-        // controller already requests the source-frame preview when Geometry is
-        // selected. Duplicate CropRotate routes race the CUDA resize path.
-        const canSuppressRouting = root.interaction
-                && typeof root.interaction.setViewChangeRoutingEnabled === "function"
-        if (canSuppressRouting)
-            root.interaction.setViewChangeRoutingEnabled(false)
-        try {
-            root.interaction.setCropAspectLock(locked, ratio)
-            root.interaction.setCropRotationDegrees(rotationModel.value)
-            root.interaction.setCropRectNormalized(Qt.rect(rect.x, rect.y, rect.w, rect.h))
-            const applied = root.interaction.cropRectNormalized
-            if (applied)
-                root.setRectModels(applied)
-        } finally {
-            if (canSuppressRouting)
-                root.interaction.setViewChangeRoutingEnabled(true)
-            root.syncingToInteraction = wasSyncing
-        }
+        const ratio = root.lockedAspectRatio()
+        const locked = ratio !== undefined
+        root.interaction.setCropAspectLock(locked, locked ? ratio : 1.0)
+        root.interaction.setCropRotationDegrees(rotationModel.value)
+        root.interaction.setCropRectNormalized(root.rectFromModels())
     }
 
-    function markDraftDirty() {
-        if (!root.restoring && !root.syncingToInteraction)
-            root.draftDirty = true
+    /// Apply the catalog crop constraint after the change @p driver (position,
+    /// width, height, rotation, aspect_preset, aspect_size), then show the
+    /// result on the overlay. A fixed preset sets the aspect size to its ratio;
+    /// an aspect size edit selects the custom preset.
+    function applyConstraints(driver) {
+        const state = parameterCatalog.constrainCrop(root.cropState(), driver,
+                                                     root.sourceImageWidth,
+                                                     root.sourceImageHeight)
+        if (state.x !== undefined)
+            root.setStateModels(state)
+        root.wireEnabled()
+        root.syncOverlay()
     }
 
-    function submitCrop(settled) {
+    function buildCropParams() {
+        return parameterCatalog.modelParamsJson("crop_rotate", root.cropState())
+    }
+
+    /// paramsBuilder for the models: constrain, then send the whole geometry.
+    function paramsAfter(driver) {
+        root.applyConstraints(driver)
+        return root.buildCropParams()
+    }
+
+    function submitGeometry(settled) {
         if (!root.editorSession || typeof root.editorSession.submitPatch !== "function")
             return false
         return root.editorSession.submitPatch("crop_rotate", root.buildCropParams(), settled)
     }
 
-    /// Commit the in-panel crop/rotate draft into the pipeline once. Safe to call
-    /// repeatedly: a clean draft is a no-op. When leaving Geometry this runs from
-    /// onPanelActiveChanged, after the overlay-off refresh has received its lower
-    /// request id, so the final Quality frame cannot be hidden by a stale frame.
-    function confirmPendingCrop() {
-        if (!root.draftDirty)
-            return false
-        const ok = root.submitCrop(true)
-        if (ok)
-            root.draftDirty = false
-        return ok
-    }
-
-    /// Enter / numpad Enter: apply draft crop and return to Tone (legacy shortcut).
-    function confirmAndReturnToTone() {
+    /// Enter / numpad Enter in the viewport: leave Geometry for Tone.
+    function returnToTone() {
         if (root.editorSession)
             root.editorSession.activeAdjustmentPanel = "tone"
     }
 
-    function buildCropParams() {
-        const rect = root.clampRect(cropXModel.value, cropYModel.value,
-                                    cropWidthModel.value, cropHeightModel.value)
-        const locked = root.hasLockedAspect()
-        // No UI toggle: crop applies whenever the draft rect is not full-frame.
-        const hasCrop = Math.abs(rect.x) > 0.0001 || Math.abs(rect.y) > 0.0001
-                        || Math.abs(rect.w - 1.0) > 0.0001
-                        || Math.abs(rect.h - 1.0) > 0.0001
-        const payload = {
-            crop_rotate: {
-                enabled: Math.abs(rotationModel.value) > 0.0001 || hasCrop || locked,
-                angle_degrees: Number(rotationModel.value),
-                enable_crop: hasCrop,
-                crop_rect: { x: rect.x, y: rect.y, w: rect.w, h: rect.h },
-                // expand_to_fit is ignored under rotated-crop-frame semantics;
-                // keep the pipeline default without exposing a control.
-                expand_to_fit: true,
-                aspect_ratio_preset: String(aspectModel.currentValue),
-                aspect_ratio: {
-                    width: Number(aspectWidthModel.value),
-                    height: Number(aspectHeightModel.value)
-                },
-                source_size: {
-                    width: root.sourceImageWidth,
-                    height: root.sourceImageHeight
-                }
-            }
-        }
-        return JSON.stringify(payload)
-    }
-
-    function buildLensParams() {
-        var payload = {}
-        try {
-            payload = JSON.parse(lensCatalog.defaultParamsJson)
-        } catch (error) {
-            payload = { lens_calib: {} }
-        }
-        if (!payload.lens_calib)
-            payload.lens_calib = {}
-        const brand = String(lensBrandModel.currentValue)
-        payload.lens_calib.enabled = Boolean(lensEnabledModel.value)
-        payload.lens_calib.lens_maker = brand
-        payload.lens_calib.lens_model = brand.length > 0 ? String(lensModelModel.currentValue) : ""
-        return JSON.stringify(payload)
-    }
-
-    function submitLens(settled) {
-        if (!root.editorSession || typeof root.editorSession.submitPatch !== "function")
-            return false
-        return root.editorSession.submitPatch("lens_calib", root.buildLensParams(), settled)
-    }
-
-    function applyAspectSelection() {
-        const wasSyncing = root.syncingToInteraction
-        root.syncingToInteraction = true
-        if (aspectModel.currentValue !== "custom") {
-            const ratio = geometryMath.presetRatio(aspectModel.currentValue)
-            if (ratio.length >= 2) {
-                aspectWidthModel.value = Number(ratio[0])
-                aspectHeightModel.value = Number(ratio[1])
-            } else {
-                aspectWidthModel.value = 1.0
-                aspectHeightModel.value = 1.0
-            }
-        }
-        if (root.hasLockedAspect()) {
-            const rect = geometryMath.maxAspectCropRect(root.imageAspect,
-                                                        root.currentAspectRatio())
-            root.setRectModels({ x: rect[0], y: rect[1], w: rect[2], h: rect[3] })
-        }
-        root.syncingToInteraction = wasSyncing
-        root.syncToInteraction()
-    }
-
-    function resizeLockedRect(useWidthDriver) {
-        if (!root.hasLockedAspect()) {
-            root.syncToInteraction()
-            return
-        }
-        const rect = geometryMath.resizeAspectCropRect(
-                    cropXModel.value, cropYModel.value, cropWidthModel.value,
-                    cropHeightModel.value, root.imageAspect, root.currentAspectRatio(),
-                    useWidthDriver)
-        root.setRectModels({ x: rect[0], y: rect[1], w: rect[2], h: rect[3] })
-        root.syncToInteraction()
-    }
-
-    function resetCropModels() {
+    function resetModelsToDefaults() {
+        root.restoring = true
         cropXModel.value = cropXModel.defaultValue
         cropYModel.value = cropYModel.defaultValue
         cropWidthModel.value = cropWidthModel.defaultValue
@@ -322,151 +190,62 @@ Item {
         aspectModel.currentIndex = aspectModel.defaultIndex
         aspectWidthModel.value = aspectWidthModel.defaultValue
         aspectHeightModel.value = aspectHeightModel.defaultValue
+        root.restoring = false
     }
 
-    function resetLensModels() {
-        lensEnabledModel.value = lensEnabledModel.defaultValue
-        root.setEnumValue(lensBrandModel, "", 0)
-        root.refreshLensModelEntries("", "")
-    }
-
+    /// Reset button: one settled edit back to a full-frame, unrotated, free crop.
     function resetGeometry() {
-        root.restoring = true
-        root.resetCropModels()
-        root.restoring = false
-        root.syncToInteraction()
-        // Reset stays draft-only (legacy MarkGeometryEditDirty). Enter / leave
-        // commits the full-frame crop when the user confirms.
-        root.draftDirty = true
-    }
-
-    function resetLens() {
-        root.restoring = true
-        root.resetLensModels()
-        root.restoring = false
-        root.submitLens(true)
-    }
-
-    function restoreDefaults() {
-        root.restoring = true
-        root.resetCropModels()
-        root.resetLensModels()
-        root.restoring = false
+        root.resetModelsToDefaults()
+        root.wireEnabled()
+        root.syncOverlay()
+        root.submitGeometry(true)
     }
 
     function loadCropSnapshot(snapshot) {
         const raw = snapshot ? snapshot["crop_rotate"] : undefined
         const entry = raw && raw["crop_rotate"] !== undefined ? raw["crop_rotate"] : raw
-        root.restoring = true
         if (!entry) {
-            root.sourceImageWidth = 0
-            root.sourceImageHeight = 0
-            root.resetCropModels()
-            root.restoring = false
+            root.resetModelsToDefaults()
             return
         }
-
         const rect = entry["crop_rect"] || {}
-        const sourceSize = entry["source_size"] || {}
-        const sourceWidth = Number(sourceSize["width"] !== undefined ? sourceSize["width"] : 0)
-        const sourceHeight = Number(sourceSize["height"] !== undefined ? sourceSize["height"] : 0)
-        root.sourceImageWidth = isFinite(sourceWidth) && sourceWidth > 0 ? Math.round(sourceWidth) : 0
-        root.sourceImageHeight = isFinite(sourceHeight) && sourceHeight > 0 ? Math.round(sourceHeight) : 0
-        if (root.interaction && root.sourceImageWidth > 0 && root.sourceImageHeight > 0
-                && typeof root.interaction.setImageSize === "function") {
-            root.interaction.setImageSize(root.sourceImageWidth, root.sourceImageHeight)
-        }
+        const aspect = entry["aspect_ratio"] || {}
+        root.restoring = true
         cropXModel.value = Number(rect["x"] !== undefined ? rect["x"] : 0.0)
         cropYModel.value = Number(rect["y"] !== undefined ? rect["y"] : 0.0)
         cropWidthModel.value = Number(rect["w"] !== undefined ? rect["w"] : 1.0)
         cropHeightModel.value = Number(rect["h"] !== undefined ? rect["h"] : 1.0)
-        rotationModel.value = Number(entry["angle_degrees"] !== undefined
-                                     ? entry["angle_degrees"] : 0.0)
-
-        const aspect = entry["aspect_ratio"] || {}
+        rotationModel.value = Number(entry["angle_degrees"] !== undefined ? entry["angle_degrees"] : 0.0)
         aspectWidthModel.value = Number(aspect["width"] !== undefined ? aspect["width"] : 1.0)
         aspectHeightModel.value = Number(aspect["height"] !== undefined ? aspect["height"] : 1.0)
-        var preset = entry["aspect_ratio_preset"] !== undefined
-                     ? String(entry["aspect_ratio_preset"]) : "free"
-        var presetIndex = 0
-        for (var i = 0; i < aspectModel.entries.length; ++i) {
-            if (String(aspectModel.entries[i].value) === preset) {
-                presetIndex = i
-                break
-            }
-        }
-        aspectModel.currentIndex = presetIndex
-        if (aspectModel.currentValue !== "free" && aspectModel.currentValue !== "custom") {
-            const fixedRatio = geometryMath.presetRatio(aspectModel.currentValue)
-            if (fixedRatio.length >= 2) {
-                aspectWidthModel.value = Number(fixedRatio[0])
-                aspectHeightModel.value = Number(fixedRatio[1])
-            }
-        }
-        root.restoring = false
-    }
-
-    function loadLensSnapshot(snapshot) {
-        const raw = snapshot ? snapshot["lens_calib"] : undefined
-        const entry = raw && raw["lens_calib"] !== undefined ? raw["lens_calib"] : raw
-        root.restoring = true
-        if (!entry) {
-            root.resetLensModels()
-            root.restoring = false
-            return
-        }
-        lensEnabledModel.value = entry["enabled"] !== undefined
-                                 ? Boolean(entry["enabled"]) : lensEnabledModel.defaultValue
-        const brand = entry["lens_maker"] !== undefined ? String(entry["lens_maker"]) : ""
-        const model = entry["lens_model"] !== undefined ? String(entry["lens_model"]) : ""
-        if (brand.length > 0) {
-            var brandKnown = false
-            for (var brandIndex = 0; brandIndex < lensBrandModel.entries.length; ++brandIndex) {
-                if (String(lensBrandModel.entries[brandIndex].value) === brand) {
-                    brandKnown = true
-                    break
-                }
-            }
-            if (!brandKnown) {
-                var entries = lensBrandModel.entries.slice(0)
-                entries.push({ value: brand, label: brand })
-                root.lensBrandEntries = entries
-                lensBrandModel.entries = entries
-            }
-        }
-        root.setEnumValue(lensBrandModel, brand, 0)
-        root.refreshLensModelEntries(brand, model)
+        const presetIndex = root.indexOfAspect(entry["aspect_ratio_preset"] !== undefined
+                                               ? entry["aspect_ratio_preset"] : "free")
+        aspectModel.currentIndex = presetIndex >= 0 ? presetIndex : aspectModel.defaultIndex
         root.restoring = false
     }
 
     function loadFromSnapshot(snapshot) {
         if (snapshot === undefined || snapshot === null)
             return
+        // An input sequence owns the models until its settled patch echoes back.
         if (root.inputActive)
             return
-        // Read-only projection of crop/lens entries — do not deep-clone the full
-        // adjustment map (settled tone/look echo used to JSON.stringify the whole
-        // snapshot on every fan-out). Nested loaders only read their field keys.
         if (!root.aspectEntries.length) {
             root.aspectEntries = root.buildAspectEntries()
             aspectModel.entries = root.aspectEntries
         }
-        if (!root.lensBrandEntries.length)
-            root.refreshLensBrandEntries()
         root.loadCropSnapshot(snapshot)
-        root.loadLensSnapshot(snapshot)
-        root.draftDirty = false
+        root.wireEnabled()
         if (root.panelActive)
-            root.syncToInteraction()
+            root.syncOverlay()
     }
 
     function enterGeometryTool() {
         if (!root.panelActive || !root.canUseGeometry)
             return
-        root.draftDirty = false
         root.interaction.setCropToolEnabled(true)
         root.interaction.setCropOverlayVisible(true)
-        root.syncToInteraction()
+        root.syncOverlay()
     }
 
     function leaveGeometryTool() {
@@ -475,15 +254,6 @@ Item {
         root.interaction.setCropToolEnabled(false)
         root.interaction.setCropOverlayVisible(false)
         root.overlayInputActive = false
-    }
-
-    function syncFromOverlayRect(rect) {
-        const wasSyncing = root.syncingToInteraction
-        root.syncingToInteraction = true
-        root.setRectModels(rect)
-        if (root.interaction)
-            rotationModel.value = Number(root.interaction.cropRotationDegrees)
-        root.syncingToInteraction = wasSyncing
     }
 
     function wireEnabled() {
@@ -496,10 +266,6 @@ Item {
         aspectModel.enabled = enabled
         aspectWidthModel.enabled = enabled && aspectModel.currentValue === "custom"
         aspectHeightModel.enabled = enabled && aspectModel.currentValue === "custom"
-        lensEnabledModel.enabled = enabled
-        lensBrandModel.enabled = enabled
-        lensModelModel.enabled = enabled && lensBrandModel.currentValue.length > 0
-                                 && lensModelModel.entries.length > 0
     }
 
     onControlsEnabledChanged: {
@@ -510,78 +276,83 @@ Item {
             root.leaveGeometryTool()
     }
     onPanelActiveChanged: {
-        if (root.panelActive) {
+        if (root.panelActive)
             root.enterGeometryTool()
-        } else {
-            // The session has already disabled geometry_overlay_only and queued
-            // its lower-id refresh. Commit now so the final crop owns the newest id.
-            root.confirmPendingCrop()
+        else
             root.leaveGeometryTool()
-        }
     }
     onInteractionChanged: root.enterGeometryTool()
     onEditorSessionChanged: {
         root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
     }
 
-    // Crop/rotate models intentionally have no submitter: while Geometry is
-    // active they only drive the draft overlay. confirmPendingCrop() owns the
-    // single settled pipeline submit on leave or Enter.
     EditorAdjustmentValueModel {
         id: cropXModel
         objectName: "geometryCropXModel"
         fieldKey: "crop_rotate"
         label: qsTr("Crop X")
-        minimum: 0
-        maximum: 1
-        defaultValue: 0
-        step: 0.001
-        precision: 3
+        // With a rotation the unrotated rectangle of the frame may start left of
+        // the source; the rotated-source constraint decides the valid range.
+        minimum: root.cropSpecs.x.ui_min
+        maximum: root.cropSpecs.x.ui_max
+        defaultValue: root.cropDefaults.x
+        step: root.cropSpecs.x.ui_step
+        precision: root.cropSpecs.x.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: function () { return root.paramsAfter("position") }
     }
     EditorAdjustmentValueModel {
         id: cropYModel
         objectName: "geometryCropYModel"
         fieldKey: "crop_rotate"
         label: qsTr("Crop Y")
-        minimum: 0
-        maximum: 1
-        defaultValue: 0
-        step: 0.001
-        precision: 3
+        minimum: root.cropSpecs.y.ui_min
+        maximum: root.cropSpecs.y.ui_max
+        defaultValue: root.cropDefaults.y
+        step: root.cropSpecs.y.ui_step
+        precision: root.cropSpecs.y.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: function () { return root.paramsAfter("position") }
     }
     EditorAdjustmentValueModel {
         id: cropWidthModel
         objectName: "geometryCropWidthModel"
         fieldKey: "crop_rotate"
         label: qsTr("Crop Width")
-        minimum: 0.0001
-        maximum: 1
-        defaultValue: 1
-        step: 0.001
-        precision: 3
+        minimum: root.cropSpecs.width.ui_min
+        maximum: root.cropSpecs.width.ui_max
+        defaultValue: root.cropDefaults.width
+        step: root.cropSpecs.width.ui_step
+        precision: root.cropSpecs.width.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: function () { return root.paramsAfter("width") }
     }
     EditorAdjustmentValueModel {
         id: cropHeightModel
         objectName: "geometryCropHeightModel"
         fieldKey: "crop_rotate"
         label: qsTr("Crop Height")
-        minimum: 0.0001
-        maximum: 1
-        defaultValue: 1
-        step: 0.001
-        precision: 3
+        minimum: root.cropSpecs.height.ui_min
+        maximum: root.cropSpecs.height.ui_max
+        defaultValue: root.cropDefaults.height
+        step: root.cropSpecs.height.ui_step
+        precision: root.cropSpecs.height.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: function () { return root.paramsAfter("height") }
     }
     EditorAdjustmentValueModel {
         id: rotationModel
         objectName: "geometryRotationModel"
         fieldKey: "crop_rotate"
         label: qsTr("Rotation")
-        minimum: -180
-        maximum: 180
-        defaultValue: 0
-        step: 0.1
-        precision: 1
+        minimum: root.cropSpecs.angle_degrees.ui_min
+        maximum: root.cropSpecs.angle_degrees.ui_max
+        defaultValue: root.cropDefaults.angle_degrees
+        step: root.cropSpecs.angle_degrees.ui_step
+        precision: root.cropSpecs.angle_degrees.ui_decimals
         suffix: "°"
+        submitter: root.editorSession
+        paramsBuilder: function () { return root.paramsAfter("rotation") }
     }
     EditorAdjustmentEnumModel {
         id: aspectModel
@@ -590,174 +361,56 @@ Item {
         label: qsTr("Aspect Ratio")
         entries: root.aspectEntries
         defaultIndex: 0
+        submitter: root.editorSession
+        paramsBuilder: function () { return root.paramsAfter("aspect_preset") }
     }
     EditorAdjustmentValueModel {
         id: aspectWidthModel
         objectName: "geometryAspectWidthModel"
         fieldKey: "crop_rotate"
         label: qsTr("Aspect Width")
-        minimum: 0.0001
-        maximum: 100
-        defaultValue: 1
-        step: 0.01
-        precision: 2
+        minimum: root.cropSpecs.aspect_width.ui_min
+        maximum: root.cropSpecs.aspect_width.ui_max
+        defaultValue: root.cropDefaults.aspect_width
+        step: root.cropSpecs.aspect_width.ui_step
+        precision: root.cropSpecs.aspect_width.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: function () { return root.paramsAfter("aspect_size") }
     }
     EditorAdjustmentValueModel {
         id: aspectHeightModel
         objectName: "geometryAspectHeightModel"
         fieldKey: "crop_rotate"
         label: qsTr("Aspect Height")
-        minimum: 0.0001
-        maximum: 100
-        defaultValue: 1
-        step: 0.01
-        precision: 2
-    }
-    EditorAdjustmentToggleModel {
-        id: lensEnabledModel
-        objectName: "geometryLensEnabledModel"
-        fieldKey: "lens_calib"
-        label: qsTr("Enable Lens Calibration")
-        defaultValue: false
-        value: false
+        minimum: root.cropSpecs.aspect_height.ui_min
+        maximum: root.cropSpecs.aspect_height.ui_max
+        defaultValue: root.cropDefaults.aspect_height
+        step: root.cropSpecs.aspect_height.ui_step
+        precision: root.cropSpecs.aspect_height.ui_decimals
         submitter: root.editorSession
-        paramsBuilder: function (value) { return root.buildLensParams() }
-    }
-    EditorAdjustmentEnumModel {
-        id: lensBrandModel
-        objectName: "geometryLensBrandModel"
-        fieldKey: "lens_calib"
-        label: qsTr("Lens Brand")
-        entries: root.lensBrandEntries
-        submitter: root.editorSession
-        paramsBuilder: function (value) { return root.buildLensParams() }
-    }
-    EditorAdjustmentEnumModel {
-        id: lensModelModel
-        objectName: "geometryLensModelModel"
-        fieldKey: "lens_calib"
-        label: qsTr("Lens Model")
-        entries: root.lensModelEntries
-        submitter: root.editorSession
-        paramsBuilder: function (value) { return root.buildLensParams() }
-    }
-
-    Connections {
-        target: cropXModel
-        function onValueChanged() {
-            if (!root.restoring && !root.syncingToInteraction) {
-                root.markDraftDirty()
-                root.syncToInteraction()
-            }
-        }
-    }
-    Connections {
-        target: cropYModel
-        function onValueChanged() {
-            if (!root.restoring && !root.syncingToInteraction) {
-                root.markDraftDirty()
-                root.syncToInteraction()
-            }
-        }
-    }
-    Connections {
-        target: cropWidthModel
-        function onValueChanged() {
-            if (!root.restoring && !root.syncingToInteraction) {
-                root.markDraftDirty()
-                root.resizeLockedRect(true)
-            }
-        }
-    }
-    Connections {
-        target: cropHeightModel
-        function onValueChanged() {
-            if (!root.restoring && !root.syncingToInteraction) {
-                root.markDraftDirty()
-                root.resizeLockedRect(false)
-            }
-        }
-    }
-    Connections {
-        target: rotationModel
-        function onValueChanged() {
-            if (!root.restoring && !root.syncingToInteraction) {
-                root.markDraftDirty()
-                root.syncToInteraction()
-            }
-        }
-    }
-    Connections {
-        target: aspectModel
-        function onCurrentIndexChanged() {
-            root.wireEnabled()
-            if (!root.restoring && !root.syncingToInteraction) {
-                root.markDraftDirty()
-                root.applyAspectSelection()
-            }
-        }
-    }
-    Connections {
-        target: aspectWidthModel
-        function onValueChanged() {
-            if (!root.restoring && !root.syncingToInteraction) {
-                root.markDraftDirty()
-                root.setEnumValue(aspectModel, "custom", 1)
-                root.resizeLockedRect(true)
-            }
-        }
-    }
-    Connections {
-        target: aspectHeightModel
-        function onValueChanged() {
-            if (!root.restoring && !root.syncingToInteraction) {
-                root.markDraftDirty()
-                root.setEnumValue(aspectModel, "custom", 1)
-                root.resizeLockedRect(false)
-            }
-        }
-    }
-    Connections {
-        target: lensEnabledModel
-        function onValueChanged() {
-            root.wireEnabled()
-        }
-    }
-    Connections {
-        target: lensBrandModel
-        function onCurrentIndexChanged() {
-            const requested = root.restoring ? lensModelModel.currentValue : ""
-            root.refreshLensModelEntries(lensBrandModel.currentValue, requested)
-            root.wireEnabled()
-        }
+        paramsBuilder: function () { return root.paramsAfter("aspect_size") }
     }
 
     Connections {
         target: root.interaction
-        function onCropRectCommitted(rect, isFinal) {
-            if (!root.panelActive || root.syncingToInteraction || root.restoring)
-                return
-            // Overlay drag is pure UI: update draft models + dirty bit only.
-            // Pipeline bake waits for confirmPendingCrop (leave / Enter).
-            root.overlayInputActive = !isFinal
-            root.syncFromOverlayRect(rect)
-            root.draftDirty = true
-            if (isFinal)
-                root.overlayInputActive = false
-        }
-        function onCropRotationCommitted(degrees, isFinal) {
-            if (!root.panelActive || root.syncingToInteraction || root.restoring)
+        ignoreUnknownSignals: true
+        // Overlay drag: interactive patches while moving, one settled patch on release.
+        function onCropFrameEdited(rect, degrees, isFinal) {
+            if (!root.panelActive || root.restoring)
                 return
             root.overlayInputActive = !isFinal
-            const wasSyncing = root.syncingToInteraction
-            root.syncingToInteraction = true
+            root.setRectModels(rect)
+            const wasRestoring = root.restoring
+            root.restoring = true
             rotationModel.value = Number(degrees)
-            if (root.interaction.cropRectNormalized)
-                root.setRectModels(root.interaction.cropRectNormalized)
-            root.syncingToInteraction = wasSyncing
-            root.draftDirty = true
-            if (isFinal)
-                root.overlayInputActive = false
+            root.restoring = wasRestoring
+            root.submitGeometry(isFinal)
+        }
+        function onImageGeometryChanged() {
+            // The source size arrived with a presented frame; redraw the frame
+            // and its aspect lock against it.
+            if (root.panelActive)
+                root.syncOverlay()
         }
     }
 
@@ -815,19 +468,25 @@ Item {
             }
 
             Label {
+                objectName: "editorGeometryWholeImageScope"
                 Layout.fillWidth: true
-                text: qsTr("Source aspect %1").arg(root.imageAspect.toFixed(3))
+                wrapMode: Text.WordWrap
+                text: qsTr("Geometry applies to the whole image.")
                 color: root.colMuted
                 font.pixelSize: appTheme.fontSizeCaption
-                elide: Text.ElideRight
             }
 
             Label {
+                objectName: "editorGeometrySourceAspect"
                 Layout.fillWidth: true
-                text: qsTr("Press Enter or switch panels to apply. Reset returns to a full-frame, unrotated crop.")
+                text: root.hasSourceSize
+                      ? qsTr("Source %1 × %2 (aspect %3)").arg(root.sourceImageWidth)
+                                                         .arg(root.sourceImageHeight)
+                                                         .arg(root.imageAspect.toFixed(3))
+                      : qsTr("Source size is available after the image is shown.")
                 color: root.colMuted
                 font.pixelSize: appTheme.fontSizeCaption
-                wrapMode: Text.WordWrap
+                wrapMode: Text.Wrap
             }
 
             CollapsibleSection {
@@ -919,68 +578,6 @@ Item {
                 }
             }
 
-            CollapsibleSection {
-                id: lensSection
-                objectName: "editorAdjustmentGroupShell_geometry_lens"
-                Layout.fillWidth: true
-                title: qsTr("Lens Calibration")
-                expanded: true
-                controlsEnabled: root.controlsEnabled
-                surfaceColor: root.colCardSurface
-                disabledSurfaceColor: root.colCardSurface
-                borderColor: root.colCardBorder
-                textColor: root.colText
-                mutedColor: root.colMuted
-                hoverColor: root.colHover
-                accentColor: root.colAccent
-                bodyContentHeight: lensControls.implicitHeight + appTheme.spaceSm
-
-                ColumnLayout {
-                    id: lensControls
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: appTheme.spaceXs
-                    spacing: appTheme.spaceSm
-
-                    AdjustmentToggle {
-                        objectName: "geometryLensEnabledToggle"
-                        Layout.fillWidth: true
-                        model: lensEnabledModel
-                    }
-                    AdjustmentCombo {
-                        objectName: "geometryLensBrandCombo"
-                        Layout.fillWidth: true
-                        model: lensBrandModel
-                    }
-                    AdjustmentCombo {
-                        objectName: "geometryLensModelCombo"
-                        Layout.fillWidth: true
-                        model: lensModelModel
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: lensCatalog.statusText
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
-                        wrapMode: Text.WordWrap
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: appTheme.spaceSm
-                        Item { Layout.fillWidth: true }
-                        IconActionButton {
-                            objectName: "geometryLensResetButton"
-                            compact: true
-                            enabled: root.controlsEnabled
-                            iconSrc: "qrc:/panel_icons/reset.svg"
-                            actionName: qsTr("Reset lens calibration")
-                            onClicked: root.resetLens()
-                        }
-                    }
-                }
-            }
-
             Item { Layout.fillHeight: true }
         }
 
@@ -990,9 +587,7 @@ Item {
     Component.onCompleted: {
         root.aspectEntries = root.buildAspectEntries()
         aspectModel.entries = root.aspectEntries
-        root.refreshLensBrandEntries()
-        root.refreshLensModelEntries("", "")
-        root.restoreDefaults()
+        root.resetModelsToDefaults()
         root.wireEnabled()
         root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
         root.enterGeometryTool()

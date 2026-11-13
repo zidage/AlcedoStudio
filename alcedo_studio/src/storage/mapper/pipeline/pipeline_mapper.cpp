@@ -4,9 +4,10 @@
 
 #include "storage/mapper/pipeline/pipeline_mapper.hpp"
 
-#include <format>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace alcedo {
@@ -25,44 +26,18 @@ auto PipelineMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> Pipel
   return {*file_id, std::move(*param_json)};
 }
 
-auto PipelineMapper::ToParams(const std::shared_ptr<CPUPipelineExecutor> source)
-    -> PipelineMapperParams {
-  PipelineMapperParams param;
-  param.file_id    = source->GetBoundFile();
-  param.param_json = std::make_unique<std::string>(source->ExportPipelineParams().dump());
-  return param;
+auto PipelineMapper::GetPipelineJsonByFileId(sl_element_id_t file_id)
+    -> std::optional<nlohmann::json> {
+  // PipelineParam.file_id is the primary key, so GetById reads at most one row.
+  auto row = GetById(file_id);
+  if (!row.has_value() || !row->param_json) return std::nullopt;
+  return nlohmann::json::parse(*row->param_json);
 }
 
-auto PipelineMapper::FromParams(PipelineMapperParams&& param)
-    -> std::shared_ptr<CPUPipelineExecutor> {
-  auto pipeline = std::make_shared<CPUPipelineExecutor>();
-  pipeline->SetBoundFile(param.file_id);
-  if (param.param_json) {
-    pipeline->ImportPipelineParams(nlohmann::json::parse(std::move(*param.param_json)));
-    pipeline->SetExecutionStages();
-  }
-  return pipeline;
+void PipelineMapper::UpdatePipelineJsonByFileId(sl_element_id_t       file_id,
+                                                const nlohmann::json& document) {
+  PipelineMapperParams params{file_id, std::make_unique<std::string>(document.dump())};
+  UpdateParams(file_id, params);
 }
 
-auto PipelineMapper::GetPipelineParamByFileId(const sl_element_id_t file_id)
-    -> std::shared_ptr<CPUPipelineExecutor> {
-  auto result = GetByPredicate(std::format(PipelineMapper::PrimeKeyClause(), file_id));
-  if (result.size() > 1) {
-    throw std::runtime_error(
-        "[ERROR] PipelineMapper: Broken image database. Multiple pipeline params found for "
-        "file_id " +
-        std::to_string(file_id));
-  }
-
-  if (result.empty()) {
-    return nullptr;
-  }
-
-  return result.front();
-}
-
-void PipelineMapper::UpdatePipelineParamByFileId(
-    const sl_element_id_t file_id, const std::shared_ptr<CPUPipelineExecutor> pipeline) {
-  Update(pipeline, file_id);
-}
 }  // namespace alcedo

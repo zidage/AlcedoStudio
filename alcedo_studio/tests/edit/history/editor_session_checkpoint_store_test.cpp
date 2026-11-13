@@ -8,40 +8,51 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "edit/operators/operator_registeration.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
+#include "../../support/storage_test_access.hpp"
 
 namespace alcedo::ui {
 namespace {
 
-auto MakeExposurePayload(float before, float after) -> alcedo::OrdinaryEditPayload {
-  alcedo::OrdinaryEditPayload payload;
-  payload.operator_type  = alcedo::OperatorType::EXPOSURE;
-  payload.stage_name     = alcedo::PipelineStageName::Basic_Adjustment;
-  payload.field_name     = "$operator_params";
-  payload.before_value   = nlohmann::json{{"exposure", before}};
-  payload.after_value    = nlohmann::json{{"exposure", after}};
-  payload.before_enabled = true;
-  payload.after_enabled  = true;
-  return payload;
+auto MakeExposureBatch(float before, float after) -> alcedo::PipelineEditBatch {
+  alcedo::PipelineEditBatch batch;
+  alcedo::SetParameterChange change;
+  change.target.owner_kind             = alcedo::PipelineParameterOwnerKind::ColorGrade;
+  change.target.node_id                = alcedo::NodeId{"grade.primary"};
+  change.target.adjustment_instance_id = alcedo::AdjustmentInstanceId{"grade.primary.exposure"};
+  change.target.field_key              = "exposure";
+  change.before_value                  = nlohmann::json{{"exposure_ev", before}};
+  change.after_value                   = nlohmann::json{{"exposure_ev", after}};
+  change.before_enabled                = true;
+  change.after_enabled                 = true;
+  batch.operation_kind                 = alcedo::PipelineEditOperationKind::SetParameter;
+  batch.presentation_key               = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+  return batch;
 }
 
 class EditorSessionCheckpointStoreTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    RegisterAllOperators();
     const auto stamp =
         std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
     const auto temp = std::filesystem::temp_directory_path();
@@ -50,7 +61,7 @@ class EditorSessionCheckpointStoreTest : public ::testing::Test {
     journal_path_   = temp / ("session_checkpoint_" + stamp + ".mini-git.wal");
     project_        = std::make_unique<alcedo::ProjectService>(db_path_, meta_path_);
     storage_        = project_->GetStorage();
-    auto                       guard = storage_->GetDatabase().GetConnectionGuard();
+    auto guard      = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
     auto                       lock  = guard.Lock();
     alcedo::CommitGraphStore graph_service(guard.conn_);
     graph_ = std::make_shared<alcedo::CommitGraph>(
@@ -79,14 +90,21 @@ class EditorSessionCheckpointStoreTest : public ::testing::Test {
   auto CaptureEdit() -> alcedo::EditorMiniGitSaveCapture {
     auto                          journal = std::make_shared<alcedo::MiniGitJournal>(journal_path_);
     alcedo::MiniGitWorkingHistory history(graph_, journal);
-    if (!history.AppendEdit(MakeExposurePayload(0.0f, 1.25f)).committed) {
+    if (!history.AppendEdit(MakeExposureBatch(0.0f, 1.25f)).committed) {
       throw std::runtime_error("failed to append test capture");
     }
     const auto snapshot      = journal->Snapshot();
     const auto logical_head  = graph_->GetActiveVersionRef().head_commit_hash;
     const auto logical_chain = graph_->ChainHashForHead(logical_head);
+    auto document = alcedo::CreateDefaultPipelineDocument();
+    auto* exposure = dynamic_cast<alcedo::ExposureModel*>(
+        document.PrimaryGrade()->FindAdjustmentByType(alcedo::type_ids::Exposure()));
+    if (exposure == nullptr) {
+      throw std::runtime_error("default document missing exposure");
+    }
+    exposure->SetValue(1.25f);
     const auto serialized    = alcedo::MakeEditorSerializedPipelineState(
-        graph_->GetRootId(), logical_head, logical_chain, nlohmann::json{{"exposure", 1.25f}});
+        graph_->GetRootId(), logical_head, logical_chain, document);
     alcedo::EditorMiniGitSaveCapture capture;
     capture.journal_records        = snapshot.records;
     capture.journal_path           = journal_path_;
@@ -124,7 +142,7 @@ TEST_F(EditorSessionCheckpointStoreTest, MaterializePersistsCaptureBeforeTruncat
   alcedo::MiniGitJournal reopened(journal_path_);
   ASSERT_TRUE(reopened.Load(&error)) << error;
   EXPECT_TRUE(reopened.records().empty());
-  auto                       guard = storage_->GetDatabase().GetConnectionGuard();
+  auto                       guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto                       lock  = guard.Lock();
   alcedo::CommitGraphStore graph_service(guard.conn_);
   const auto                 stored = graph_service.LoadGraph(element_id_);
@@ -153,7 +171,7 @@ TEST_F(EditorSessionCheckpointStoreTest, ProductionCaptureValueReachesCheckpoint
   EXPECT_EQ(*owned->last_journal_sequence, last);
   EXPECT_EQ(owned.use_count(), 1);
 
-  auto                       guard = storage_->GetDatabase().GetConnectionGuard();
+  auto                       guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto                       lock  = guard.Lock();
   alcedo::CommitGraphStore graph_service(guard.conn_);
   const auto                 stored = graph_service.LoadGraph(element_id_);
@@ -237,7 +255,7 @@ TEST_F(EditorSessionCheckpointStoreTest, MiniGitCheckpointDoesNotInvokeLegacyMat
   // Mini-Git durable state: one content-addressed commit, active Version head,
   // and truncated journal. Legacy transaction-array materialization does not
   // write CommitGraph commit objects.
-  auto                       guard = storage_->GetDatabase().GetConnectionGuard();
+  auto                       guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto                       lock  = guard.Lock();
   alcedo::CommitGraphStore graph_service(guard.conn_);
   const auto                 stored = graph_service.LoadGraph(element_id_);
@@ -249,6 +267,40 @@ TEST_F(EditorSessionCheckpointStoreTest, MiniGitCheckpointDoesNotInvokeLegacyMat
   alcedo::MiniGitJournal reopened(journal_path_);
   ASSERT_TRUE(reopened.Load(&error)) << error;
   EXPECT_TRUE(reopened.records().empty());
+}
+
+/// G10.4: a save writes only the Mini-Git journal. With the production journal layout
+/// (`<project>/editor-journal/image-<id>.mini-git.wal`), no legacy `image-<id>.wal` file is
+/// created and the Mini-Git journal is the only file in the directory after the save.
+TEST_F(EditorSessionCheckpointStoreTest, SaveDoesNotOpenLegacyImageJournal) {
+  const auto journal_dir = db_path_.parent_path() / (db_path_.stem().string() + "-editor-journal");
+  std::error_code ec;
+  std::filesystem::create_directories(journal_dir, ec);
+  ASSERT_FALSE(ec) << ec.message();
+  const auto element_name = std::to_string(static_cast<std::uint64_t>(element_id_));
+  journal_path_           = journal_dir / ("image-" + element_name + ".mini-git.wal");
+  const auto legacy_path  = journal_dir / ("image-" + element_name + ".wal");
+
+  const auto  capture = CaptureEdit();
+  std::string error;
+  const auto  result = store_->Materialize(
+      std::make_shared<const alcedo::EditorMiniGitSaveCapture>(capture), &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+  ASSERT_TRUE(result.materialized);
+
+  EXPECT_FALSE(std::filesystem::exists(legacy_path));
+  std::vector<std::filesystem::path> files;
+  for (const auto& entry : std::filesystem::directory_iterator(journal_dir)) {
+    files.push_back(entry.path().filename());
+  }
+  ASSERT_EQ(files.size(), 1u);
+  EXPECT_EQ(files.front(), journal_path_.filename());
+
+  alcedo::MiniGitJournal reopened(journal_path_);
+  ASSERT_TRUE(reopened.Load(&error)) << error;
+  EXPECT_TRUE(reopened.records().empty());
+
+  std::filesystem::remove_all(journal_dir, ec);
 }
 
 /// Phase 4A: capture failure / rejected materialize writes nothing and keeps journal bytes.
@@ -271,7 +323,7 @@ TEST_F(EditorSessionCheckpointStoreTest, CaptureFailureWritesNothingAndLeavesJou
   EXPECT_EQ(remaining.records().size(), preserved_size);
   EXPECT_EQ(remaining.records().back().sequence, preserved_last);
 
-  auto                       guard = storage_->GetDatabase().GetConnectionGuard();
+  auto                       guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto                       lock  = guard.Lock();
   alcedo::CommitGraphStore graph_service(guard.conn_);
   const auto                 stored = graph_service.LoadGraph(element_id_);

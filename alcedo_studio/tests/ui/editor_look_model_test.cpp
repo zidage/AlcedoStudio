@@ -2,9 +2,10 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Phase 6D unit tests for Look typed models: white balance, HSL, CDL trackball,
-// and LUT catalog. Asserts operator-shaped params JSON, interactive + one
-// settled commit per completed drag, load-only setters, and canEdit gating.
+// Phase 6D unit tests for Look typed models: white balance, HSL, and CDL trackball
+// (LUT selection is covered by LutLibraryModelTest since LUT library plan L6A).
+// Asserts operator-shaped params JSON, interactive + one
+// settled commit per completed drag, load-only setters, and the canEdit check.
 // No QML / GPU.
 
 #include <gtest/gtest.h>
@@ -12,62 +13,30 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSignalSpy>
 #include <QString>
 #include <QVariantList>
 #include <algorithm>
 #include <memory>
+#include <string>
+#include <variant>
 #include <vector>
 
-#include "edit/operators/color/HLS_op.hpp"
-#include "edit/operators/color/vibrance_op.hpp"
+#include "app/editor_panel_projection.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "json.hpp"
+#include "support/recording_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_grade_white_balance_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
-#include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
 #include "ui/alcedo_main/editor_support/modules/color_temp.hpp"
 #include "ui/alcedo_main/editor_support/modules/hls.hpp"
 
 namespace alcedo::ui::test {
 namespace {
-
-class RecordingSubmitter : public QObject, public IEditorAdjustmentSubmitter {
- public:
-  struct Call {
-    QString fieldKey;
-    QString params;
-    bool    settled;
-  };
-  std::vector<Call> calls;
-  bool              canEditState = true;
-
-  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
-    if (!canEditState) {
-      return false;
-    }
-    calls.push_back({fieldKey, paramsJson, settled});
-    return true;
-  }
-  auto canEdit() const -> bool override { return canEditState; }
-
-  auto settledCount() const -> int {
-    return static_cast<int>(
-        std::count_if(calls.begin(), calls.end(), [](const Call& c) { return c.settled; }));
-  }
-  auto interactiveCount() const -> int {
-    return static_cast<int>(
-        std::count_if(calls.begin(), calls.end(), [](const Call& c) { return !c.settled; }));
-  }
-  auto lastSettledParams() const -> QString {
-    for (auto it = calls.rbegin(); it != calls.rend(); ++it) {
-      if (it->settled) {
-        return it->params;
-      }
-    }
-    return {};
-  }
-};
 
 auto ParseObject(const QString& params) -> QJsonObject {
   return QJsonDocument::fromJson(params.toUtf8()).object();
@@ -112,11 +81,16 @@ TEST(EditorLookModelTest, ColorTempCctDragPromotesToCustomAndSettlesOnce) {
   EXPECT_GE(sub.interactiveCount(), 1);
   EXPECT_EQ(sub.settledCount(), 1);
 
-  const auto ct =
-      ParseObject(sub.lastSettledParams()).value(QStringLiteral("color_temp")).toObject();
-  EXPECT_EQ(ct.value(QStringLiteral("mode")).toString(), QStringLiteral("custom"));
-  EXPECT_NEAR(ct.value(QStringLiteral("custom_cct")).toDouble(), 6400.0, 1e-3);
-  EXPECT_NEAR(ct.value(QStringLiteral("as_shot_cct")).toDouble(), 5600.0, 1e-3);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  const auto* update =
+      std::get_if<alcedo::DevelopColorTemperatureUpdate>(sub.lastSettledWrite());
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->wb_mode.has_value());
+  EXPECT_EQ(*update->wb_mode, "custom");
+  ASSERT_TRUE(update->custom_cct.has_value());
+  EXPECT_NEAR(*update->custom_cct, 6400.0, 1e-3);
+  ASSERT_TRUE(update->as_shot_cct.has_value());
+  EXPECT_NEAR(*update->as_shot_cct, 5600.0, 1e-3);
 }
 
 TEST(EditorLookModelTest, ColorTempLoadFromOperatorParamsUsesGetParamsKeys) {
@@ -195,6 +169,114 @@ TEST(EditorLookModelTest, ColorTempCanEditFalseDropsSubmits) {
   EXPECT_TRUE(sub.calls.empty());
 }
 
+// ── Grade white balance (CAT02) ─────────────────────────────────────────────
+
+TEST(EditorLookModelTest, GradeWhiteBalanceDefaultsToAp1WhiteWithoutSubmitting) {
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+  EXPECT_EQ(model.fieldKey(), QStringLiteral("grade_white_balance"));
+  EXPECT_NEAR(model.temperature(), alcedo::kCat02DefaultTemperature, 1e-3);
+  EXPECT_NEAR(model.tint(), alcedo::kCat02DefaultTint, 1e-3);
+  EXPECT_EQ(model.temperatureSliderPos(), color_temp::kSliderUiMid);
+  EXPECT_TRUE(sub.calls.empty());
+}
+
+TEST(EditorLookModelTest, GradeWhiteBalanceTemperatureDragSubmitsCat02UpdateAndSettlesOnce) {
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+
+  model.beginTemperatureDrag();
+  model.updateTemperatureSliderDrag(color_temp::CctToSliderPos(5000.0f));
+  model.updateTemperatureSliderDrag(color_temp::CctToSliderPos(4500.0f));
+  model.finishTemperatureDrag();
+
+  EXPECT_GE(sub.interactiveCount(), 1);
+  EXPECT_EQ(sub.settledCount(), 1);
+  ASSERT_NE(sub.lastSettled(), nullptr);
+  EXPECT_EQ(sub.lastSettled()->fieldKey, QStringLiteral("grade_white_balance"));
+  const auto* update = std::get_if<alcedo::Cat02WhiteBalanceUpdate>(sub.lastSettledWrite());
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->temperature.has_value());
+  EXPECT_NEAR(*update->temperature, model.temperature(), 1e-3);
+  EXPECT_NEAR(*update->temperature, 4500.0, 25.0);
+  ASSERT_TRUE(update->tint.has_value());
+  EXPECT_NEAR(*update->tint, alcedo::kCat02DefaultTint, 1e-3);
+  EXPECT_FALSE(update->enabled.has_value());
+}
+
+TEST(EditorLookModelTest, GradeWhiteBalanceEmptyClickDoesNotSettle) {
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+  model.beginTintDrag();
+  model.finishTintDrag();
+  EXPECT_TRUE(sub.calls.empty());
+}
+
+TEST(EditorLookModelTest, GradeWhiteBalanceResetRestoresAp1WhitePerSlider) {
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+  model.setTemperature(3500.0);
+  model.setTint(40.0);
+
+  model.resetTemperature();
+  EXPECT_NEAR(model.temperature(), alcedo::kCat02DefaultTemperature, 1e-3);
+  EXPECT_NEAR(model.tint(), 40.0, 1e-3);
+  EXPECT_EQ(sub.settledCount(), 1);
+
+  model.resetTint();
+  EXPECT_NEAR(model.tint(), alcedo::kCat02DefaultTint, 1e-3);
+  EXPECT_EQ(sub.settledCount(), 2);
+
+  // Already at default: no extra history commit.
+  model.resetTint();
+  EXPECT_EQ(sub.settledCount(), 2);
+}
+
+TEST(EditorLookModelTest, GradeWhiteBalanceLoadsProjectionWithoutSubmitting) {
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+  QVariantMap inner;
+  inner.insert(QStringLiteral("temperature"), 5200.0);
+  inner.insert(QStringLiteral("tint"), -6.0);
+  QVariantMap snapshot;
+  snapshot.insert(QStringLiteral("grade_white_balance"), inner);
+
+  model.loadFromSnapshot(snapshot);
+  EXPECT_NEAR(model.temperature(), 5200.0, 1e-3);
+  EXPECT_NEAR(model.tint(), -6.0, 1e-3);
+  EXPECT_TRUE(sub.calls.empty());
+}
+
+TEST(EditorLookModelTest, GradeWhiteBalanceLoadsStoredValuesFromPanelSnapshotOnSourceSwitch) {
+  auto  document = alcedo::CreateDefaultPipelineDocument();
+  auto* cat02    = dynamic_cast<alcedo::Cat02WhiteBalanceModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(alcedo::type_ids::Cat02WhiteBalance()));
+  ASSERT_NE(cat02, nullptr);
+  cat02->ApplyUpdate(alcedo::Cat02WhiteBalanceUpdate{std::nullopt, 4100.0f, -22.0f});
+
+  alcedo::EditorPanelProjection projection;
+  std::string                   error;
+  ASSERT_TRUE(alcedo::ProjectCurrentPanelFields(document, 1, &projection, &error)) << error;
+  const auto snapshot = PanelProjectionToVariantMap(projection);
+
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+  model.setTemperature(7300.0);
+  model.setTint(35.0);
+
+  // The editor passes the whole adjustment snapshot when the image, layer, or mask changes.
+  model.loadFromSnapshot(snapshot);
+  EXPECT_NEAR(model.temperature(), 4100.0, 1e-3);
+  EXPECT_NEAR(model.tint(), -22.0, 1e-3);
+  EXPECT_TRUE(sub.calls.empty());
+}
+
 // ── HSL ─────────────────────────────────────────────────────────────────────
 
 TEST(EditorLookModelTest, HlsDefaultParamsMatchOperatorShape) {
@@ -256,11 +338,11 @@ TEST(EditorLookModelTest, HlsDragSubmitsInteractiveThenOneSettled) {
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_EQ(sub.calls.back().fieldKey, QStringLiteral("hls"));
 
-  const auto hls = ParseObject(sub.lastSettledParams()).value(QStringLiteral("HLS")).toObject();
-  const auto adj = hls.value(QStringLiteral("hls_adj")).toArray();
-  ASSERT_EQ(adj.size(), 3);
-  // UI 30 -> operator 30/1000
-  EXPECT_NEAR(adj.at(1).toDouble(), 30.0 / hls::kAdjUiToParamScale, 1e-6);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  const auto* update = std::get_if<alcedo::HlsUpdate>(sub.lastSettledWrite());
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->hls_adj.has_value());
+  EXPECT_NEAR(update->hls_adj->l, 30.0f / hls::kAdjUiToParamScale, 1e-6);
 }
 
 // ── CDL trackball ───────────────────────────────────────────────────────────
@@ -273,7 +355,8 @@ TEST(EditorLookModelTest, CdlDefaultParamsMatchOperatorShape) {
   const auto root = ParseObject(model.paramsJson());
   ASSERT_TRUE(root.contains(QStringLiteral("color_wheel")));
   const auto cw = root.value(QStringLiteral("color_wheel")).toObject();
-  for (const char* key : {"lift", "gamma", "gain"}) {
+  EXPECT_EQ(cw.value(QStringLiteral("version")).toInt(), 2);
+  for (const char* key : {"lift", "gamma", "gain", "offset"}) {
     ASSERT_TRUE(cw.contains(QString::fromUtf8(key))) << key;
     const auto wheel = cw.value(QString::fromUtf8(key)).toObject();
     EXPECT_TRUE(wheel.contains(QStringLiteral("disc")));
@@ -298,28 +381,46 @@ TEST(EditorLookModelTest, CdlDiscDragInteractiveThenOneSettled) {
   EXPECT_NEAR(model.liftX(), 0.4, 1e-3);
   EXPECT_NEAR(model.liftY(), 0.2, 1e-3);
 
-  const auto lift = ParseObject(sub.lastSettledParams())
-                        .value(QStringLiteral("color_wheel"))
-                        .toObject()
-                        .value(QStringLiteral("lift"))
-                        .toObject();
-  const auto disc = lift.value(QStringLiteral("disc")).toObject();
-  EXPECT_NEAR(disc.value(QStringLiteral("x")).toDouble(), 0.4, 1e-3);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  const auto* update = std::get_if<alcedo::ColorWheelUpdate>(sub.lastSettledWrite());
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->lift.has_value());
+  ASSERT_TRUE(update->lift->disc.has_value());
+  EXPECT_NEAR(update->lift->disc->x, 0.4, 1e-3);
+  // A drag writes only its own wheel.
+  EXPECT_FALSE(update->gamma.has_value());
+  EXPECT_FALSE(update->gain.has_value());
+  EXPECT_FALSE(update->offset.has_value());
 }
 
-TEST(EditorLookModelTest, CdlGammaMasterUiIsInverted) {
+TEST(EditorLookModelTest, CdlMasterDragStoresStopsWithoutSignChange) {
   RecordingSubmitter      sub;
   EditorCdlTrackballModel model;
   model.setSubmitter(&sub);
 
   model.beginMasterDrag(QStringLiteral("gamma"));
-  // Positive UI drag should store negative gamma master (legacy invert).
-  model.updateMasterDragUi(QStringLiteral("gamma"), 400);
+  model.updateMasterDrag(QStringLiteral("gamma"), 0.5);
   model.finishMasterDrag();
 
-  EXPECT_LT(model.gammaMaster(), 0.0);
-  EXPECT_EQ(model.gammaMasterUi(), 400);
+  EXPECT_DOUBLE_EQ(model.gammaMaster(), 0.5);
   EXPECT_EQ(sub.settledCount(), 1);
+  const auto* update = std::get_if<alcedo::ColorWheelUpdate>(sub.lastSettledWrite());
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->gamma.has_value());
+  ASSERT_TRUE(update->gamma->luminance_offset.has_value());
+  EXPECT_FLOAT_EQ(*update->gamma->luminance_offset, 0.5f);
+}
+
+TEST(EditorLookModelTest, CdlMasterDragClampsToTheMasterRange) {
+  RecordingSubmitter      sub;
+  EditorCdlTrackballModel model;
+  model.setSubmitter(&sub);
+
+  model.beginMasterDrag(QStringLiteral("offset"));
+  model.updateMasterDrag(QStringLiteral("offset"), -5.0);
+  model.finishMasterDrag();
+
+  EXPECT_DOUBLE_EQ(model.offsetMaster(), -2.0);
 }
 
 TEST(EditorLookModelTest, CdlResetWheelSettlesOnce) {
@@ -347,162 +448,6 @@ TEST(EditorLookModelTest, CdlLoadOnlyDoesNotSubmit) {
   EXPECT_NEAR(model.liftX(), 0.1, 1e-6);
 }
 
-// ── LUT catalog ─────────────────────────────────────────────────────────────
-
-TEST(EditorLookModelTest, LutSelectPathCommitsOcioLmtShape) {
-  RecordingSubmitter    sub;
-  EditorLutCatalogModel model;
-  model.setSubmitter(&sub);
-
-  model.selectPath(QStringLiteral("D:/fake/look.cube"));
-  EXPECT_EQ(sub.settledCount(), 1);
-  const auto root = ParseObject(sub.lastSettledParams());
-  EXPECT_EQ(root.value(QStringLiteral("ocio_lmt")).toString(), QStringLiteral("D:/fake/look.cube"));
-}
-
-TEST(EditorLookModelTest, LutSetSelectedPathIsLoadOnly) {
-  RecordingSubmitter    sub;
-  EditorLutCatalogModel model;
-  model.setSubmitter(&sub);
-  model.setSelectedPath(QStringLiteral("D:/fake/load_only.cube"));
-  EXPECT_TRUE(sub.calls.empty());
-  EXPECT_EQ(model.selectedPath(), QStringLiteral("D:/fake/load_only.cube"));
-}
-
-TEST(EditorLookModelTest, LutClearSelectionCommitsEmptyPath) {
-  RecordingSubmitter    sub;
-  EditorLutCatalogModel model;
-  model.setSubmitter(&sub);
-  model.setSelectedPath(QStringLiteral("D:/fake/a.cube"));
-  model.clearSelection();
-  EXPECT_EQ(sub.settledCount(), 1);
-  EXPECT_TRUE(model.selectedPath().isEmpty());
-}
-
-TEST(EditorLookModelTest, LutSelectPathDoesNotEmitEntriesChanged) {
-  // Selection must not rebuild the catalog entry list. Emitting entriesChanged
-  // on every click forces QML ListViews to reset contentY and pin the selected
-  // row to the bottom of the viewport.
-  EditorLutCatalogModel model;
-  QSignalSpy            entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
-  QSignalSpy            selected_spy(&model, &EditorLutCatalogModel::selectedPathChanged);
-  ASSERT_TRUE(entries_spy.isValid());
-  ASSERT_TRUE(selected_spy.isValid());
-
-  model.selectPath(QStringLiteral("D:/fake/look.cube"));
-  EXPECT_EQ(selected_spy.count(), 1);
-  EXPECT_EQ(entries_spy.count(), 0);
-  EXPECT_EQ(model.selectedPath(), QStringLiteral("D:/fake/look.cube"));
-
-  // Second select of a different path still must not rebuild entries.
-  model.selectPath(QStringLiteral("D:/fake/other.cube"));
-  EXPECT_EQ(selected_spy.count(), 2);
-  EXPECT_EQ(entries_spy.count(), 0);
-}
-
-TEST(EditorLookModelTest, LutSetSelectedPathDoesNotEmitEntriesChanged) {
-  EditorLutCatalogModel model;
-  QSignalSpy            entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
-  model.setSelectedPath(QStringLiteral("D:/fake/load_only.cube"));
-  EXPECT_EQ(entries_spy.count(), 0);
-  EXPECT_EQ(model.selectedPath(), QStringLiteral("D:/fake/load_only.cube"));
-}
-
-TEST(EditorLookModelTest, LutFavoriteToggleRoundTripsInMemory) {
-  EditorLutCatalogModel model;
-  const QString         path = QStringLiteral("D:/fake/favorite.cube");
-  EXPECT_FALSE(model.isFavoritePath(path));
-  EXPECT_FALSE(model.isFavoritePath(QString()));
-  EXPECT_FALSE(model.isFavoritePath(QStringLiteral("   ")));
-
-  QSignalSpy fav_spy(&model, &EditorLutCatalogModel::favoritePathsChanged);
-  ASSERT_TRUE(fav_spy.isValid());
-
-  model.toggleFavoritePath(path);
-  EXPECT_EQ(fav_spy.count(), 1);
-  EXPECT_TRUE(model.isFavoritePath(path));
-  EXPECT_TRUE(model.favoritePaths().contains(path));
-
-  model.toggleFavoritePath(path);
-  EXPECT_EQ(fav_spy.count(), 2);
-  EXPECT_FALSE(model.isFavoritePath(path));
-  EXPECT_FALSE(model.favoritePaths().contains(path));
-}
-
-TEST(EditorLookModelTest, LutFilterRebuildsEntriesAndEmitsEntriesChanged) {
-  EditorLutCatalogModel model;
-  QSignalSpy            entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
-  model.setFilterText(QStringLiteral("no-match-zzzz"));
-  EXPECT_GE(entries_spy.count(), 1);
-  // Filter is applied; selection is independent of the filtered view size.
-  model.selectPath(QStringLiteral("D:/fake/still_select.cube"));
-  const int after_filter = entries_spy.count();
-  model.selectPath(QStringLiteral("D:/fake/still_select_2.cube"));
-  EXPECT_EQ(entries_spy.count(), after_filter);
-}
-
-// ── Vibrance operator round-trip ───────────────────────────────────────────
-
-TEST(EditorLookModelTest, VibranceSetGetParamsPreservesUiValue) {
-  // Simulate user setting vibrance to 75 on the [-100, 100] UI range:
-  // the submit path sends {"vibrance": 75}. Pipeline stores via SetParams
-  // (divides by 100 → internal 0.75). GetParams must scale back to 75.
-  const float        kUiValue = 75.0f;
-  alcedo::VibranceOp op;
-  op.SetParams({{"vibrance", kUiValue}});
-
-  const auto params = op.GetParams();
-  ASSERT_TRUE(params.contains("vibrance"));
-  // Bug: GetParams returns 0.75 without the * 100.0f scale-back.
-  EXPECT_NEAR(params["vibrance"].get<float>(), kUiValue, 1e-4f);
-}
-
-// ── HLS operator round-trip ────────────────────────────────────────────────
-
-TEST(EditorLookModelTest, HlsOperatorSetGetParamsPreservesUiValues) {
-  // Round-trip HLS params through the operator: set via SetParams with the
-  // same JSON shape the model submits, then read back via GetParams.
-  // Operator stores L/S internally at 1/kAdjUiToParamScale; GetParams must
-  // return them unchanged. The QML panel multiplies by 1000 on load.
-
-  const auto    params = nlohmann::json::parse(R"({
-    "HLS": {
-      "hue_bins": [0, 45, 90, 135, 180, 225, 270, 315],
-      "hls_adj_table": [
-        [0, 0, 0], [0, 0.02, 0], [0, 0, 0], [0, 0, 0],
-        [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]
-      ],
-      "h_range_table": [30, 30, 30, 30, 30, 30, 30, 30],
-      "target_hls": [45, 0.5, 1.0],
-      "hls_adj": [0, 0.02, 0],
-      "h_range": 30,
-      "l_range": 0.1,
-      "s_range": 0.1
-    }
-  })");
-
-  alcedo::HLSOp op;
-  op.SetParams(params);
-
-  const auto rt = op.GetParams();
-  ASSERT_TRUE(rt.contains("HLS"));
-  const auto& hls = rt["HLS"];
-
-  // The table at index 1 should have lightness=0.02 (20/1000 for UI 20)
-  ASSERT_TRUE(hls.contains("hls_adj_table"));
-  ASSERT_TRUE(hls["hls_adj_table"].is_array());
-  ASSERT_GE(hls["hls_adj_table"].size(), 2);
-  const auto& row = hls["hls_adj_table"][1];
-  ASSERT_TRUE(row.is_array());
-  ASSERT_GE(row.size(), 3);
-  EXPECT_NEAR(row[1].get<double>(), 0.02, 1e-6);
-  EXPECT_NEAR(row[2].get<double>(), 0.0, 1e-6);
-
-  // target_hls should match
-  ASSERT_TRUE(hls.contains("target_hls"));
-  EXPECT_NEAR(hls["target_hls"][0].get<double>(), 45.0, 1e-6);
-}
-
 TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
   // Simulate user editing: select hue swatch 2, set lightness to 45 via drag,
   // then recreate the model from the submitted params (as happens on reopen).
@@ -521,21 +466,16 @@ TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
   model.finishLightnessDrag();
   EXPECT_NEAR(model.lightness(), 45.0, 1e-6);
 
-  // Get the submitted params and re-parse as an operator would
+  // Get the submitted params as the panel reload reads them.
   ASSERT_FALSE(sub.calls.empty());
-  const auto settled = sub.lastSettledParams();
+  const auto settled = model.paramsJson();
   ASSERT_FALSE(settled.isEmpty());
 
   const auto json = nlohmann::json::parse(settled.toStdString());
   ASSERT_TRUE(json.contains("HLS"));
 
-  // Round-trip through HLSOp as the pipeline does
-  alcedo::HLSOp op;
-  op.SetParams(json);
-  const auto  rt     = op.GetParams();
-
-  // Build UI tables from the operator output (as QML loadHlsFromSnapshot does)
-  const auto& rt_hls = rt["HLS"];
+  // Build UI tables from the submitted params (as QML loadHlsFromSnapshot does)
+  const auto& rt_hls = json["HLS"];
   ASSERT_TRUE(rt_hls.contains("hls_adj_table"));
   ASSERT_TRUE(rt_hls.contains("h_range_table"));
 
@@ -543,7 +483,7 @@ TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
   for (const auto& row : rt_hls["hls_adj_table"]) {
     QVariantList r;
     r.append(QVariant(row[0].get<double>()));
-    // Operator stores at 1/kAdjUiToParamScale; multiply back for UI
+    // Params store L/S at 1/kAdjUiToParamScale; multiply back for UI
     r.append(QVariant(row[1].get<double>() * hls::kAdjUiToParamScale));
     r.append(QVariant(row[2].get<double>() * hls::kAdjUiToParamScale));
     ui_table.append(QVariant::fromValue(r));
@@ -579,8 +519,7 @@ TEST(EditorLookModelTest, HlsSnapshotRebuildPreservesUiValues) {
   // the operator param JSON; BuildSnapshotMap converts to QVariantMap; QML
   // loadFromSnapshot parses it into model tables.
 
-  // Step 1: Create an EditorRenderAdjustmentSnapshot patch as
-  // InitializeCommittedSnapshotFromPipeline / UpsertCommittedSnapshot would.
+  // Step 1: Build the HLS field JSON that the panel snapshot map carries.
   // HLS operator returns {"HLS": {hls_adj_table: [[h, L/1000, C/1000], ...]}}
   const std::string hls_patch_json = R"({
     "HLS": {

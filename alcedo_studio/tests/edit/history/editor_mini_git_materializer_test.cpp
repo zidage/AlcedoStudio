@@ -7,10 +7,16 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <fstream>
+#include <stdexcept>
+#include <string>
+
+#include <json.hpp>
 
 #include "edit/history/mini_git_working_history.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/editor_mini_git_project_fixture.hpp"
+#include "../../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -48,10 +54,7 @@ TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHe
     EXPECT_EQ(stored->ChainHashForHead(prior_head), prior_chain);
     EXPECT_EQ(stored->CommitCount(), 0u);
     ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-    EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                        .serialized_pipeline_state->at("pipeline_params")
-                        .at("exposure")
-                        .get<float>(),
+    EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state),
                     0.0f);
   }
 
@@ -64,10 +67,7 @@ TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHe
     EXPECT_EQ(stored->ChainHashForHead(prior_head), prior_chain);
     EXPECT_EQ(stored->CommitCount(), 0u);
     ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-    EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                        .serialized_pipeline_state->at("pipeline_params")
-                        .at("exposure")
-                        .get<float>(),
+    EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state),
                     0.0f);
   }
 }
@@ -106,10 +106,7 @@ TEST_F(EditorMiniGitMaterializerTest,
     EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, captured_head);
     EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, captured_chain);
     ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-    EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                        .serialized_pipeline_state->at("pipeline_params")
-                        .at("exposure")
-                        .get<float>(),
+    EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state),
                     captured_exposure);
   }
 
@@ -122,12 +119,105 @@ TEST_F(EditorMiniGitMaterializerTest,
     EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, captured_head);
     EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, captured_chain);
     ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-    EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                        .serialized_pipeline_state->at("pipeline_params")
-                        .at("exposure")
-                        .get<float>(),
+    EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state),
                     captured_exposure);
   }
+}
+
+/// Regression: an undo whose document apply fails is abandoned and its WAL tail
+/// record revoked. The journal never reuses that sequence, so the next edit leaves
+/// a gap. Save must still materialize the capture instead of rejecting it as
+/// non-contiguous, and the saved head must survive a reopen.
+TEST_F(EditorMiniGitMaterializerTest, RevokedUndoSequenceGapStillMaterializesAndReopens) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.25f));
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 1.25f, 2.0f));
+
+  auto&       history         = project_.working_history(element_id);
+  const auto  prior_selection = history.WorkingSelection();
+  const auto  prepared        = history.PrepareUndo();
+  ASSERT_TRUE(prepared.ready);
+  ASSERT_TRUE(history.PublishPreparedHeadMove(prepared).moved);
+  std::string error;
+  ASSERT_TRUE(history.AbandonPublishedHeadMove(prepared, prior_selection, &error)) << error;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 2.0f, 2.5f));
+
+  auto capture = project_.CaptureWorkingState(element_id, 2.5f);
+  ASSERT_EQ(capture.journal_records.size(), 3u);
+  EXPECT_EQ(capture.journal_records[0].sequence, 1u);
+  EXPECT_EQ(capture.journal_records[1].sequence, 2u);
+  EXPECT_EQ(capture.journal_records[2].sequence, 4u);
+  const auto captured_head = capture.working_head;
+
+  const auto result = project_.MaterializeUnderSaveLock(capture, &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+  ASSERT_TRUE(result.materialized);
+  EXPECT_TRUE(project_.ReadJournalRecords(element_id, &error).empty()) << error;
+
+  project_.CloseAndReopenProject();
+  auto stored = project_.LoadStoredGraph(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->CommitCount(), 3u);
+  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, captured_head);
+  ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
+  EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(
+                      *stored->GetImageEditState().serialized_pipeline_state),
+                  2.5f);
+}
+
+/// A capture whose records are out of order is still rejected before any write.
+TEST_F(EditorMiniGitMaterializerTest, OutOfOrderJournalCaptureIsRejectedBeforeWrite) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.25f));
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 1.25f, 2.0f));
+  auto capture = project_.CaptureWorkingState(element_id, 2.0f);
+  ASSERT_EQ(capture.journal_records.size(), 2u);
+  capture.journal_records[1].sequence = capture.journal_records[0].sequence;
+  capture.last_journal_sequence       = capture.journal_records[1].sequence;
+
+  std::string error;
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
+  EXPECT_FALSE(result.accepted);
+  EXPECT_NE(error.find("strictly increasing"), std::string::npos) << error;
+  EXPECT_EQ(project_.CountStoredCommits(element_id), 0u);
+}
+
+/// G10.4: a saved current-version project reopens through the metadata version check with the same
+/// Version head, chain hash, and commit count, and the reopened working graph resumes at
+/// that head. The format cut changes no commit or chain identity.
+TEST_F(EditorMiniGitMaterializerTest, CurrentProjectReopensWithSameHeadAndChain) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 0.5f));
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.5f, 1.5f));
+  const auto capture = project_.CaptureWorkingState(element_id, 1.5f);
+
+  std::string error;
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+  ASSERT_TRUE(result.materialized);
+  project_.project().SaveProject(project_.meta_path());
+
+  {
+    std::ifstream  in(project_.meta_path());
+    ASSERT_TRUE(in.is_open());
+    nlohmann::json metadata;
+    in >> metadata;
+    EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.11.0");
+  }
+
+  project_.CloseAndReopenProject();
+  auto stored = project_.LoadStoredGraph(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->CommitCount(), 2u);
+  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, capture.working_head);
+  EXPECT_EQ(stored->ChainHashForHead(capture.working_head), capture.transaction_chain_hash);
+  EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash,
+            capture.transaction_chain_hash);
+
+  const auto reopened = project_.graph(element_id);
+  ASSERT_NE(reopened, nullptr);
+  EXPECT_EQ(reopened->GetActiveVersionRef().head_commit_hash, capture.working_head);
+  EXPECT_EQ(reopened->ChainHashForHead(capture.working_head), capture.transaction_chain_hash);
 }
 
 TEST_F(EditorMiniGitMaterializerTest, FailureBeforeDuckDBCommitLeavesPriorHeadUnchanged) {
@@ -167,6 +257,37 @@ TEST_F(EditorMiniGitMaterializerTest, CrashAfterDuckDBBeforeTruncateDoesNotRepla
   ASSERT_TRUE(recovered.accepted) << error << " / " << recovered.error;
   EXPECT_FALSE(recovered.head_moved);
 
+  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 1u);
+  const auto records =
+      project_.ReadJournalRecords(test::EditorMiniGitProjectFixture::kElementA, &error);
+  EXPECT_TRUE(records.empty()) << error;
+}
+
+TEST_F(EditorMiniGitMaterializerTest, CoveredWalAfterDatabaseCommitDoesNotDuplicateHistory) {
+  ASSERT_TRUE(project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementA, 0.0f, 0.75f));
+  auto        capture = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 0.75f);
+
+  std::string error;
+  ASSERT_TRUE(project_.MaterializeUnderSaveLock(capture, &error).accepted) << error;
+
+  {
+    MiniGitJournal leftover(
+        project_.journal_path(test::EditorMiniGitProjectFixture::kElementA));
+    for (const auto& record : capture.journal_records) {
+      ASSERT_TRUE(leftover.Append(record, &error)) << error;
+    }
+  }
+
+  const auto recovered = project_.materializer().RecoverAndMaterialize(
+      test::EditorMiniGitProjectFixture::kElementA,
+      project_.journal_path(test::EditorMiniGitProjectFixture::kElementA), &error);
+  ASSERT_TRUE(recovered.accepted) << error << " / " << recovered.error;
+  EXPECT_FALSE(recovered.head_moved);
+  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 1u);
+
+  project_.CloseAndReopenProject();
+  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 1u);
+  project_.CloseAndReopenProject();
   EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 1u);
   const auto records =
       project_.ReadJournalRecords(test::EditorMiniGitProjectFixture::kElementA, &error);
@@ -269,11 +390,7 @@ TEST_F(EditorMiniGitMaterializerTest,
   EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, final_head);
   EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, final_chain);
   ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-  EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                      .serialized_pipeline_state->at("pipeline_params")
-                      .at("exposure")
-                      .get<float>(),
-                  2.0f);
+  EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state), 2.0f);
 }
 
 /// Repeated exposure edits with identical before/after values must produce
@@ -517,10 +634,7 @@ TEST_F(EditorMiniGitMaterializerTest,
   EXPECT_EQ(stored_a->GetActiveVersionRef().head_commit_hash, head_a);
   EXPECT_EQ(stored_a->GetImageEditState().materialized_transaction_chain_hash, chain_a);
   ASSERT_TRUE(stored_a->GetImageEditState().serialized_pipeline_state.has_value());
-  EXPECT_FLOAT_EQ(stored_a->GetImageEditState()
-                      .serialized_pipeline_state->at("pipeline_params")
-                      .at("exposure")
-                      .get<float>(),
+  EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored_a->GetImageEditState().serialized_pipeline_state),
                   1.5f);
 
   // B remains independent.
@@ -563,7 +677,7 @@ TEST_F(EditorMiniGitMaterializerTest,
     EXPECT_EQ(unreachable.front(), *abandoned_head);
   }
 
-  auto               db_guard = project_.storage()->GetDatabase().GetConnectionGuard();
+  auto db_guard = StorageTestAccess::GetDatabase(*project_.storage()).GetConnectionGuard();
   auto               db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   EXPECT_EQ(graph_service.DeleteUnreachableCommits(element_id), 1u);

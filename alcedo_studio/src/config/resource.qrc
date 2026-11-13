@@ -11,22 +11,49 @@
     <file>fonts/main_Manrope.ttf</file>
     <file>panel_icons/language.svg</file>
     <file>panel_icons/adjustments.svg</file>
+    <file>panel_icons/zero-config.svg</file>
     <file>panel_icons/histogram.svg</file>
     <file>panel_icons/waveform.svg</file>
     <file>panel_icons/palette.svg</file>
+    <file>panel_icons/sparkle.svg</file>
     <file>panel_icons/versions.svg</file>
+    <file>panel_icons/compare.svg</file>
+    <file>panel_icons/nodes.svg</file>
+    <file>panel_icons/pipeline.svg</file>
+    <file>mask_icons/gradient.svg</file>
+    <file>mask_icons/radial.svg</file>
+    <file>mask_icons/gradient-add.svg</file>
+    <file>mask_icons/radial-add.svg</file>
+    <file>mask_icons/ai-subject.svg</file>
+    <file>mask_icons/ai-background.svg</file>
+    <file>mask_icons/ai-sky.svg</file>
+    <file>mask_icons/ai-people.svg</file>
+    <file>mask_icons/ai-point.svg</file>
+    <file>mask_icons/ai-box.svg</file>
+    <file>mask_icons/ai-path.svg</file>
+    <file>mask_icons/ai-level-1.svg</file>
+    <file>mask_icons/ai-level-2.svg</file>
+    <file>mask_icons/ai-level-3.svg</file>
+    <file>panel_icons/pencil-ai.svg</file>
+    <file>panel_icons/box-multiple.svg</file>
+    <file>panel_icons/minus.svg</file>
     <file>panel_icons/clock-play.svg</file>
     <file>panel_icons/reset.svg</file>
+    <file>panel_icons/info.svg</file>
     <file>panel_icons/color-filter.svg</file>
     <file>panel_icons/crop.svg</file>
     <file>panel_icons/aperture.svg</file>
     <file>panel_icons/camera.svg</file>
     <file>panel_icons/calendar.svg</file>
+    <file>panel_icons/sort-ascending.svg</file>
+    <file>panel_icons/sort-descending.svg</file>
+    <file>panel_icons/category-plus.svg</file>
     <file>panel_icons/star.svg</file>
     <file>panel_icons/sparkles.svg</file>
     <file>panel_icons/git-branch.svg</file>
     <file>panel_icons/branch-current.svg</file>
     <file>panel_icons/fork-root.svg</file>
+    <file>panel_icons/clipboard.svg</file>
     <file>panel_icons/import.svg</file>
     <file>panel_icons/export.svg</file>
     <file>panel_icons/folder-open.svg</file>
@@ -35,6 +62,8 @@
     <file>panel_icons/inspector-collapse.svg</file>
     <file>panel_icons/inspector-expand.svg</file>
     <file>panel_icons/layout-grid.svg</file>
+    <file>panel_icons/thumbnail-zoom-largest.svg</file>
+    <file>panel_icons/thumbnail-zoom-smallest.svg</file>
     <file>panel_icons/layout-sidebar.svg</file>
     <file>panel_icons/layout-sidebar-inactive.svg</file>
     <file>panel_icons/layout-sidebar-right.svg</file>
@@ -52,14 +81,30 @@
     <file>panel_icons/plus.svg</file>
     <file>panel_icons/play.svg</file>
     <file>panel_icons/stop.svg</file>
+    <file>panel_icons/archive.svg</file>
     <file>panel_icons/trash.svg</file>
+    <file>panel_icons/mask-invert.svg</file>
     <file>panel_icons/retry.svg</file>
+    <file>panel_icons/github.svg</file>
+    <file>panel_icons/heart.svg</file>
+    <file>panel_icons/book.svg</file>
+    <file>panel_icons/transfer-out.svg</file>
     <file>panel_icons/to_bg.svg</file>
     <file>panel_icons/collections-folder.svg</file>
     <file>panel_icons/box.svg</file>
+    <file>panel_icons/lut-cube.svg</file>
+    <file>panel_icons/view-grid.svg</file>
+    <file>panel_icons/view-list.svg</file>
+    <file>panel_icons/masks.svg</file>
+    <file>panel_icons/mask.svg</file>
+    <file>panel_icons/polaroid.svg</file>
+    <file>panel_icons/detail.svg</file>
     <file>panel_icons/cpu.svg</file>
     <file>panel_icons/update.svg</file>
+    <file>panel_icons/keyboard.svg</file>
     <file>panel_icons/close.svg</file>
+    <file>panel_icons/lock.svg</file>
+    <file>panel_icons/lock-open.svg</file>
     <file>history_icons/aperture.svg</file>
     <file>history_icons/arrow-right-left.svg</file>
     <file>history_icons/chart-spline.svg</file>

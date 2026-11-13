@@ -20,12 +20,11 @@ TEST(EditorSessionTaskPortTest, RegistersEditorSaveLocksAndFinishesTask) {
   ASSERT_EQ(tasks.RunningCount(), 1);
 
   const auto locks = tasks.ActiveLocks();
-  ASSERT_EQ(locks.size(), 5u);
+  ASSERT_EQ(locks.size(), 4u);
   EXPECT_EQ(locks[0].lock_.capability_, InteractionCapability::SelectEditorImage);
   EXPECT_EQ(locks[1].lock_.capability_, InteractionCapability::SwitchWorkspace);
   EXPECT_EQ(locks[2].lock_.capability_, InteractionCapability::CheckoutVersion);
   EXPECT_EQ(locks[3].lock_.capability_, InteractionCapability::PasteAdjustments);
-  EXPECT_EQ(locks[4].lock_.capability_, InteractionCapability::MergeAdjustments);
 
   port.EndTask(task_id, true, "checkpoint finished");
   EXPECT_EQ(tasks.RunningCount(), 0);

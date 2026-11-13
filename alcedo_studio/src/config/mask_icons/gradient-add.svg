@@ -1,0 +1,25 @@
+<!--
+  Source: Tabler Icons (https://tabler.io/icons/icon/wash-dry)
+  License: MIT
+  Derived from wash-dry (gradient.svg); the corner opening and plus follow the
+  construction of Tabler's "*-plus" icons (for example photo-plus).
+  Add Linear Gradient Mask action icon. User-approved 2 px stroke exception
+  (DESIGN.md). The open corner leaves room for the plus sign in the
+  bottom-right so the action reads as "add a Gradient Mask", distinct from the
+  gradient.svg type icon.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="white"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M12.5 21h-6.5a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v6.5" />
+  <path d="M16 19h6" />
+  <path d="M19 16v6" />
+</svg>

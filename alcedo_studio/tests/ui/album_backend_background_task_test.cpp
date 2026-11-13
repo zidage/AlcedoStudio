@@ -16,7 +16,7 @@ namespace {
 
 using ApplicationModuleHostBackgroundTaskTests = ApplicationModuleHostTestFixture;
 
-auto MakeSnapshot(BackgroundTaskKind kind = BackgroundTaskKind::ImageAnalysis)
+auto MakeSnapshot(BackgroundTaskKind kind = BackgroundTaskKind::SemanticGeneration)
     -> BackgroundTaskSnapshot {
   BackgroundTaskSnapshot s;
   s.kind_            = kind;
@@ -181,6 +181,91 @@ TEST_F(ApplicationModuleHostBackgroundTaskTests, PruneFinished_KeepsAtMostCap) {
   }
   EXPECT_LE(controller.Tasks().size(), 8);
   EXPECT_EQ(controller.RunningCount(), 0);
+}
+
+TEST_F(ApplicationModuleHostBackgroundTaskTests, PinnedFinishedTaskIsNotPrunedAndStaysPrimary) {
+  BackgroundTaskController controller;
+  BackgroundTaskSnapshot   agent = MakeSnapshot(BackgroundTaskKind::AgentControl);
+  agent.pinned_                  = true;
+  const QString pinned           = controller.RegisterTask(agent);
+  controller.FinishTask(pinned, BackgroundTaskState::Canceled);
+  for (int i = 0; i < 12; ++i) {
+    controller.FinishTask(controller.RegisterTask(MakeSnapshot(BackgroundTaskKind::EditorSave)),
+                          BackgroundTaskState::Succeeded);
+  }
+  // Eight short tasks plus the pinned task.
+  EXPECT_EQ(controller.Tasks().size(), 9);
+  EXPECT_EQ(controller.PrimaryTask().value("id").toString(), pinned);
+  EXPECT_TRUE(controller.PrimaryTask().value("pinned").toBool());
+
+  // Another task that runs is shown while it runs.
+  const QString active = controller.RegisterTask(MakeSnapshot());
+  EXPECT_EQ(controller.PrimaryTask().value("id").toString(), active);
+  controller.FinishTask(active, BackgroundTaskState::Succeeded);
+  EXPECT_EQ(controller.PrimaryTask().value("id").toString(), pinned);
+}
+
+TEST_F(ApplicationModuleHostBackgroundTaskTests, ActivePinnedTaskIsPrimaryBeforeOlderActiveTask) {
+  BackgroundTaskController controller;
+  const QString            older = controller.RegisterTask(MakeSnapshot());
+  BackgroundTaskSnapshot   agent = MakeSnapshot(BackgroundTaskKind::AgentControl);
+  agent.pinned_                  = true;
+  const QString pinned           = controller.RegisterTask(agent);
+  EXPECT_EQ(controller.PrimaryTask().value("id").toString(), pinned);
+  controller.FinishTask(pinned, BackgroundTaskState::Succeeded);
+  EXPECT_EQ(controller.PrimaryTask().value("id").toString(), older);
+}
+
+TEST_F(ApplicationModuleHostBackgroundTaskTests, DismissTask_RemovesOnlyFinishedTasks) {
+  BackgroundTaskController controller;
+  QSignalSpy               spy(&controller, &BackgroundTaskController::TasksChanged);
+  const QString            id = controller.RegisterTask(MakeSnapshot());
+  EXPECT_FALSE(controller.DismissTask(id));
+  EXPECT_FALSE(controller.DismissTask(QStringLiteral("nonexistent")));
+  controller.FinishTask(id, BackgroundTaskState::Failed);
+  const int emitted = spy.count();
+  EXPECT_TRUE(controller.DismissTask(id));
+  EXPECT_EQ(spy.count(), emitted + 1);
+  EXPECT_TRUE(controller.Tasks().isEmpty());
+}
+
+TEST_F(ApplicationModuleHostBackgroundTaskTests, ResumeTask_RunsFinishedTaskAgainWithNewCallback) {
+  BackgroundTaskController controller;
+  int                      first_cancels  = 0;
+  int                      second_cancels = 0;
+  const QString            id = controller.RegisterTask(MakeSnapshot(), [&] { ++first_cancels; });
+  EXPECT_FALSE(controller.ResumeTask(id, QStringLiteral("again")));
+  ASSERT_TRUE(controller.CancelTask(id));
+  controller.FinishTask(id, BackgroundTaskState::Canceled);
+
+  ASSERT_TRUE(controller.ResumeTask(id, QStringLiteral("again"), [&] { ++second_cancels; }));
+  EXPECT_EQ(controller.PrimaryTask().value("state").toString(), QStringLiteral("running"));
+  EXPECT_EQ(controller.PrimaryTask().value("detail").toString(), QStringLiteral("again"));
+  EXPECT_EQ(controller.RunningCount(), 1);
+  ASSERT_TRUE(controller.CancelTask(id));
+  EXPECT_EQ(first_cancels, 1);
+  EXPECT_EQ(second_cancels, 1);
+}
+
+TEST_F(ApplicationModuleHostBackgroundTaskTests, TaskActivityKeepsNewestEntriesInOrder) {
+  BackgroundTaskController controller;
+  const QString            id = controller.RegisterTask(MakeSnapshot());
+  EXPECT_EQ(controller.AppendTaskActivity(QStringLiteral("nonexistent"), QStringLiteral("x"),
+                                          QString(), BackgroundTaskActivityState::Running),
+            0u);
+  quint64   last  = 0;
+  const int total = static_cast<int>(BackgroundTaskController::kMaxTaskActivityEntries) + 5;
+  for (int i = 0; i < total; ++i) {
+    last = controller.AppendTaskActivity(id, QStringLiteral("step %1").arg(i), QString(),
+                                         BackgroundTaskActivityState::Running);
+  }
+  controller.FinishTaskActivity(id, last, BackgroundTaskActivityState::Failed);
+  const QVariantList activity = controller.PrimaryTask().value("activity").toList();
+  ASSERT_EQ(activity.size(), static_cast<int>(BackgroundTaskController::kMaxTaskActivityEntries));
+  EXPECT_EQ(activity.front().toMap().value("text").toString(), QStringLiteral("step 5"));
+  EXPECT_EQ(activity.back().toMap().value("text").toString(),
+            QStringLiteral("step %1").arg(total - 1));
+  EXPECT_EQ(activity.back().toMap().value("state").toString(), QStringLiteral("failed"));
 }
 
 TEST_F(ApplicationModuleHostBackgroundTaskTests, EmptyController_HasNoPrimary) {

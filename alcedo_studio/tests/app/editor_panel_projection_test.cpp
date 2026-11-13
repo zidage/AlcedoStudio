@@ -1,0 +1,699 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#include "app/editor_panel_projection.hpp"
+
+#include <gtest/gtest.h>
+
+#include <array>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <variant>
+
+#include "../edit/graph/imported_camera_profile_fixtures.hpp"
+#include "../edit/graph/test_camera_profile.hpp"
+#include "app/editor_parameter_write.hpp"
+#include "app/editor_pipeline_command_service.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/curve_model.hpp"
+#include "edit/operators/models/dirty_field_mask.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
+#include "edit/operators/models/lmt_model.hpp"
+#include "edit/operators/models/operator_param_dto.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/operators/models/sharpen_model.hpp"
+#include "image/dcp_camera_profile.hpp"
+#include "image/dng_color_profile.hpp"
+#include "image/dng_tone_curve.hpp"
+#include "image/raster_color_description.hpp"
+#include "json.hpp"
+#include "support/editor_parameter_target_test.hpp"
+
+namespace alcedo {
+namespace {
+
+class SerializationCountingModel : public IOperatorModel {
+ public:
+  mutable int json_reads = 0;
+  mutable int dto_reads  = 0;
+  int         loads      = 0;
+
+  auto Type() const -> OperatorTypeId override { return value_.Type(); }
+  auto IsDefault() const -> bool override { return value_.IsDefault(); }
+  auto        Revision() const -> ParameterRevision override { return value_.Revision(); }
+  auto        FieldsRevision(DirtyFieldMask fields) const -> ParameterRevision override {
+    return value_.FieldsRevision(fields);
+  }
+  void CopyRevisionsFrom(const IOperatorModel& source) override {
+    const auto* typed = dynamic_cast<const SerializationCountingModel*>(&source);
+    value_.CopyRevisionsFrom(typed != nullptr ? typed->value_ : source);
+  }
+  auto Clone() const -> std::unique_ptr<IOperatorModel> override {
+    return std::make_unique<SerializationCountingModel>(*this);
+  }
+  auto MakeFullDto() const -> OperatorParamDto override {
+    ++dto_reads;
+    return value_.MakeFullDto();
+  }
+  auto ToJson() const -> nlohmann::json override {
+    ++json_reads;
+    return value_.ToJson();
+  }
+  void LoadJson(const nlohmann::json& json) override {
+    ++loads;
+    value_.LoadJson(json);
+  }
+  void SetValue(float value) { value_.SetValue(value); }
+  [[nodiscard]] auto value() const -> float { return value_.Value(); }
+
+ private:
+  ExposureModel value_;
+};
+
+auto FindField(const EditorPanelProjection& projection, std::string_view key)
+    -> const EditorPanelFieldPresentation* {
+  for (const auto& field : projection.fields) {
+    if (field.field_key == key) {
+      return &field;
+    }
+  }
+  return nullptr;
+}
+
+auto ScalarOf(const EditorPanelProjection& projection, std::string_view key) -> std::optional<float> {
+  const auto* field = FindField(projection, key);
+  if (field == nullptr) {
+    return std::nullopt;
+  }
+  const auto* scalar = std::get_if<EditorPanelScalarValue>(&field->value);
+  if (scalar == nullptr) {
+    return std::nullopt;
+  }
+  return scalar->value;
+}
+
+auto NestedOf(const EditorPanelProjection& projection, std::string_view key)
+    -> const EditorPanelNestedScalarValue* {
+  const auto* field = FindField(projection, key);
+  if (field == nullptr) {
+    return nullptr;
+  }
+  return std::get_if<EditorPanelNestedScalarValue>(&field->value);
+}
+
+auto ReadDebugGain(const PipelineDocument& document, const EditorParameterTarget& target,
+                   EditorPanelFieldPresentation* out, std::string* error) -> bool {
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(target.node_id));
+  if (grade == nullptr) {
+    if (error != nullptr) {
+      *error = "Color Grade node is missing";
+    }
+    return false;
+  }
+  const auto* typed =
+      dynamic_cast<const ExposureModel*>(grade->FindAdjustment(target.adjustment_instance_id));
+  if (typed == nullptr) {
+    if (error != nullptr) {
+      *error = "debug_gain requires an Exposure Model";
+    }
+    return false;
+  }
+  out->field_key = target.field_key;
+  out->source    = target;
+  out->value     = EditorPanelScalarValue{"gain", typed->Value()};
+  return true;
+}
+
+void SetOwnedScalars(PipelineDocument& document) {
+  dynamic_cast<ExposureModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()))
+      ->SetValue(2.25f);
+  dynamic_cast<ContrastModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Contrast()))
+      ->SetValue(18.0f);
+  dynamic_cast<SaturationModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()))
+      ->SetValue(1.8f);
+  dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()))
+      ->SetPoints({{0.0f, 0.0f}, {0.4f, 0.55f}, {1.0f, 1.0f}});
+  dynamic_cast<LmtModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()))
+      ->SetCubePath("D:/luts/look.cube");
+  dynamic_cast<Cat02WhiteBalanceModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Cat02WhiteBalance()))
+      ->ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, 5200.0f, 12.0f});
+  dynamic_cast<ClarityModel*>(document.Drt()->FindAdjustmentByType(type_ids::Clarity()))
+      ->SetValue(7.0f);
+  dynamic_cast<FilmGrainModel*>(document.Drt()->FindAdjustmentByType(type_ids::FilmGrain()))
+      ->SetValue(0.4f);
+  dynamic_cast<SharpenModel*>(document.Drt()->FindAdjustmentByType(type_ids::Sharpen()))
+      ->SetAmount(0.35f);
+
+  DevelopRawDecodeUpdate raw;
+  raw.demosaic_method       = std::string{"dht"};
+  raw.highlights_reconstruct = false;
+  document.Develop()->Params().ApplyRawDecodeUpdate(raw);
+
+  DrtParameterUpdate odt;
+  odt.encoding_space = DrtColorSpace::Rec2020;
+  odt.encoding_eotf  = DrtEotf::St2084;
+  odt.peak_luminance = 1600.0f;
+  document.Drt()->Params().ApplyUpdate(odt);
+
+  ImageGeometryUpdate geometry;
+  geometry.crop_rect        = NormalizedRect{0.1f, 0.2f, 0.5f, 0.6f};
+  geometry.rotation_degrees = 3.5f;
+  document.Geometry().ApplyUpdate(geometry);
+
+  DevelopLensCalibrationUpdate lens;
+  lens.lens_enabled = true;
+  lens.lens_maker   = "Zeiss";
+  lens.lens_model   = "Touit 1.8/32";
+  document.Develop()->Params().ApplyLensCalibrationUpdate(lens);
+}
+
+}  // namespace
+
+TEST(EditorPanelProjectionTest, FilmPrintMethodProjectsItsOwnName) {
+  auto               document = CreateDefaultPipelineDocument();
+  DrtParameterUpdate update;
+  update.method = DrtMethod::FilmPrint;
+  document.Drt()->Params().ApplyUpdate(update);
+
+  EditorPanelProjection projection;
+  std::string           error;
+  ASSERT_TRUE(ProjectCurrentPanelFields(document, 1, &projection, &error)) << error;
+  const auto* odt = FindField(projection, "odt");
+  ASSERT_NE(odt, nullptr);
+  const auto* odt_value = std::get_if<EditorPanelOdtValue>(&odt->value);
+  ASSERT_NE(odt_value, nullptr);
+  EXPECT_EQ(odt_value->method, "film_print");
+}
+
+TEST(EditorPanelProjectionTest, FilmPrintFieldsProjectFromTheModel) {
+  auto               document = CreateDefaultPipelineDocument();
+  DrtParameterUpdate update;
+  update.method              = DrtMethod::FilmPrint;
+  update.film_negative       = "kodak_portra_400";
+  update.film_print_material = "fuji_ca_maxima";
+  update.film_scene_light    = "tungsten";
+  update.film_light_spread   = 0.5f;
+  update.film_halation       = 3.0f;
+  update.film_enlarger_flare = 0.05f;
+  document.Drt()->Params().ApplyUpdate(update);
+
+  EditorPanelProjection projection;
+  std::string           error;
+  ASSERT_TRUE(ProjectCurrentPanelFields(document, 1, &projection, &error)) << error;
+  const auto* odt = FindField(projection, "odt");
+  ASSERT_NE(odt, nullptr);
+  const auto* odt_value = std::get_if<EditorPanelOdtValue>(&odt->value);
+  ASSERT_NE(odt_value, nullptr);
+  EXPECT_EQ(odt_value->film_print.negative, "kodak_portra_400");
+  EXPECT_EQ(odt_value->film_print.print_material, "fuji_ca_maxima");
+  EXPECT_EQ(odt_value->film_print.scene_light, "tungsten");
+  EXPECT_FLOAT_EQ(odt_value->film_print.light_spread, 0.5f);
+  EXPECT_FLOAT_EQ(odt_value->film_print.halation, 3.0f);
+  EXPECT_FLOAT_EQ(odt_value->film_print.enlarger_flare, 0.05f);
+}
+
+TEST(EditorPanelProjectionTest, AsShotIsAvailableOnlyForARawWhiteBalanceThatResolves) {
+  const auto available = [](const PipelineDocument& document) {
+    EditorPanelProjection projection;
+    std::string           error;
+    EXPECT_TRUE(ProjectCurrentPanelFields(document, 1, &projection, &error)) << error;
+    const auto* odt = FindField(projection, "odt");
+    EXPECT_NE(odt, nullptr);
+    const auto* value = odt ? std::get_if<EditorPanelOdtValue>(&odt->value) : nullptr;
+    EXPECT_NE(value, nullptr);
+    return value != nullptr && value->film_as_shot_available;
+  };
+  // The default document has no camera matrices, so its as-shot temperature is not solved.
+  auto document = CreateDefaultPipelineDocument();
+  EXPECT_FALSE(available(document));
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  EXPECT_TRUE(available(document));
+  // A raster input has no RAW white balance (issue 672).
+  auto payload  = document.Develop()->Params().Params();
+  payload.input = DevelopRasterInput{};
+  document.Develop()->Params().ReplaceParams(std::move(payload));
+  EXPECT_FALSE(available(document));
+}
+
+TEST(EditorPanelProjectionTest, ProjectsToneLookLutRawOdtAndGeometryFromExplicitInstances) {
+  auto document = CreateDefaultPipelineDocument();
+  SetOwnedScalars(document);
+
+  EditorPanelProjection projection;
+  std::string           error;
+  ASSERT_TRUE(ProjectCurrentPanelFields(document, 41, &projection, &error)) << error;
+  EXPECT_EQ(projection.session_generation, 41u);
+  EXPECT_EQ(projection.fields.size(), EditorPanelAdapterTable::Production().Adapters().size());
+
+  EXPECT_FLOAT_EQ(*ScalarOf(projection, "exposure"), 2.25f);
+  EXPECT_FLOAT_EQ(*ScalarOf(projection, "contrast"), 18.0f);
+  EXPECT_FLOAT_EQ(*ScalarOf(projection, "saturation"), 1.8f);
+  const auto* grade_white_balance = FindField(projection, "grade_white_balance");
+  ASSERT_NE(grade_white_balance, nullptr);
+  const auto* white_balance =
+      std::get_if<EditorPanelGradeWhiteBalanceValue>(&grade_white_balance->value);
+  ASSERT_NE(white_balance, nullptr);
+  EXPECT_FLOAT_EQ(white_balance->temperature, 5200.0f);
+  EXPECT_FLOAT_EQ(white_balance->tint, 12.0f);
+  EXPECT_FLOAT_EQ(*ScalarOf(projection, "clarity"), 7.0f);
+
+  const auto* exposure = FindField(projection, "exposure");
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_EQ(exposure->source.adjustment_instance_id.Value(), "grade.primary.exposure");
+  EXPECT_EQ(exposure->source.node_id.Value(), "grade.primary");
+
+  const auto* lut = FindField(projection, "lut");
+  ASSERT_NE(lut, nullptr);
+  EXPECT_EQ(lut->source.adjustment_instance_id.Value(), "grade.primary.lmt");
+  const auto* lut_value = std::get_if<EditorPanelLutValue>(&lut->value);
+  ASSERT_NE(lut_value, nullptr);
+  EXPECT_EQ(lut_value->reference, LutReference{FileLutReference{"D:/luts/look.cube"}});
+  EXPECT_FLOAT_EQ(lut_value->strength, 1.0f);
+
+  const auto* curve = FindField(projection, "curve");
+  ASSERT_NE(curve, nullptr);
+  const auto* curve_value = std::get_if<EditorPanelCurveValue>(&curve->value);
+  ASSERT_NE(curve_value, nullptr);
+  ASSERT_EQ(curve_value->points.size(), 3u);
+  EXPECT_FLOAT_EQ(curve_value->points[1].x, 0.4f);
+  EXPECT_FLOAT_EQ(curve_value->points[1].y, 0.55f);
+
+  const auto* grain = NestedOf(projection, "film_grain");
+  ASSERT_NE(grain, nullptr);
+  EXPECT_EQ(grain->object_key, "film_grain");
+  EXPECT_EQ(grain->value_key, "strength");
+  EXPECT_FLOAT_EQ(grain->value, 0.4f);
+
+  const auto* sharpen = NestedOf(projection, "sharpen");
+  ASSERT_NE(sharpen, nullptr);
+  EXPECT_EQ(sharpen->value_key, "offset");
+  EXPECT_FLOAT_EQ(sharpen->value, 0.35f);
+
+  const auto* raw = FindField(projection, "raw_decode");
+  ASSERT_NE(raw, nullptr);
+  const auto* raw_value = std::get_if<EditorPanelRawDecodeValue>(&raw->value);
+  ASSERT_NE(raw_value, nullptr);
+  EXPECT_EQ(raw_value->method, "dht");
+  EXPECT_FALSE(raw_value->highlights_reconstruct);
+
+  const auto* odt = FindField(projection, "odt");
+  ASSERT_NE(odt, nullptr);
+  const auto* odt_value = std::get_if<EditorPanelOdtValue>(&odt->value);
+  ASSERT_NE(odt_value, nullptr);
+  EXPECT_EQ(odt_value->encoding_space, "rec2020");
+  EXPECT_EQ(odt_value->encoding_eotf, "st2084");
+  EXPECT_FLOAT_EQ(odt_value->peak_luminance, 1600.0f);
+
+  const auto* geometry = FindField(projection, "crop_rotate");
+  ASSERT_NE(geometry, nullptr);
+  const auto* geometry_value = std::get_if<EditorPanelGeometryValue>(&geometry->value);
+  ASSERT_NE(geometry_value, nullptr);
+  EXPECT_FLOAT_EQ(geometry_value->crop_rect.x, 0.1f);
+  EXPECT_FLOAT_EQ(geometry_value->rotation_degrees, 3.5f);
+
+  const auto* lens = FindField(projection, "lens_calib");
+  ASSERT_NE(lens, nullptr);
+  const auto* lens_value = std::get_if<EditorPanelLensValue>(&lens->value);
+  ASSERT_NE(lens_value, nullptr);
+  EXPECT_TRUE(lens_value->enabled);
+  EXPECT_EQ(lens_value->lens_maker, "Zeiss");
+  EXPECT_EQ(lens_value->lens_model, "Touit 1.8/32");
+  const auto  adapters     = EditorPanelAdapterTable::Production();
+  const auto* lens_adapter = adapters.Find("lens_calib");
+  ASSERT_NE(lens_adapter, nullptr);
+  EXPECT_EQ(lens_adapter->panel_id, "raw");
+}
+
+TEST(EditorPanelProjectionTest, ReadsNamedInstanceNotFirstOperatorOfType) {
+  auto document = CreateDefaultPipelineDocument();
+  auto* primary = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(primary, nullptr);
+  primary->SetValue(1.25f);
+
+  auto second = std::make_unique<ExposureModel>();
+  second->SetValue(4.5f);
+  document.InsertAdjustment(NodeId{"grade.primary"}, document.PrimaryGrade()->AdjustmentCount(),
+                            AdjustmentInstanceId{"grade.primary.exposure.b"}, std::move(second));
+
+  auto first_by_type = CompleteCurrentPanelParameterTarget(document, "exposure", nullptr);
+  ASSERT_TRUE(first_by_type.has_value());
+  EXPECT_EQ(first_by_type->adjustment_instance_id.Value(), "grade.primary.exposure");
+
+  auto named = test::ColorGradeFieldTarget("exposure");
+  named.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure.b"};
+
+  EditorPanelFieldPresentation field;
+  std::string                  error;
+  ASSERT_TRUE(ReadEditorPanelField(document, named, &field, &error)) << error;
+  const auto* scalar = std::get_if<EditorPanelScalarValue>(&field.value);
+  ASSERT_NE(scalar, nullptr);
+  EXPECT_FLOAT_EQ(scalar->value, 4.5f);
+  EXPECT_EQ(field.source.adjustment_instance_id.Value(), "grade.primary.exposure.b");
+
+  EditorPanelFieldPresentation current;
+  ASSERT_TRUE(ReadEditorPanelField(document, *first_by_type, &current, &error)) << error;
+  const auto* current_scalar = std::get_if<EditorPanelScalarValue>(&current.value);
+  ASSERT_NE(current_scalar, nullptr);
+  EXPECT_FLOAT_EQ(current_scalar->value, 1.25f);
+}
+
+TEST(EditorPanelProjectionTest, MissingNodeOrInstanceFailsBeforeAnyPanelValue) {
+  auto document = CreateDefaultPipelineDocument();
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(2.0f);
+
+  EditorPanelProjection sentinel;
+  sentinel.session_generation = 99;
+  EditorPanelFieldPresentation leftover;
+  leftover.field_key = "leftover";
+  leftover.value     = EditorPanelScalarValue{"leftover", 7.0f};
+  sentinel.fields.push_back(leftover);
+
+  auto missing_node = test::ColorGradeFieldTarget("exposure");
+  missing_node.node_id = NodeId{"grade.absent"};
+  auto missing_instance = test::ColorGradeFieldTarget("exposure");
+  missing_instance.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.missing"};
+  const auto good = test::ColorGradeFieldTarget("exposure");
+
+  std::string error;
+  EXPECT_FALSE(ProjectEditorPanelFields(document, std::array{good, missing_node}, 1, &sentinel,
+                                        &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_EQ(sentinel.session_generation, 99u);
+  ASSERT_EQ(sentinel.fields.size(), 1u);
+  EXPECT_EQ(sentinel.fields.front().field_key, "leftover");
+
+  error.clear();
+  EXPECT_FALSE(ProjectEditorPanelFields(document, std::array{good, missing_instance}, 1, &sentinel,
+                                        &error));
+  EXPECT_EQ(sentinel.session_generation, 99u);
+  EXPECT_EQ(sentinel.fields.front().field_key, "leftover");
+}
+
+TEST(EditorPanelProjectionTest, PanelProjectionDoesNotCallModelJsonOrFullDto) {
+  auto document = CreateDefaultPipelineDocument();
+  auto counted  = std::make_unique<SerializationCountingModel>();
+  counted->SetValue(3.0f);
+  auto* observed = counted.get();
+  document.InsertAdjustment(NodeId{"grade.primary"}, document.PrimaryGrade()->AdjustmentCount(),
+                            AdjustmentInstanceId{"counted"}, std::move(counted));
+
+  auto counted_target                   = test::ColorGradeFieldTarget("exposure");
+  counted_target.adjustment_instance_id = AdjustmentInstanceId{"counted"};
+
+  EditorPanelFieldPresentation field;
+  std::string                  error;
+  EXPECT_FALSE(ReadEditorPanelField(document, counted_target, &field, &error));
+  EXPECT_EQ(observed->json_reads, 0);
+  EXPECT_EQ(observed->dto_reads, 0);
+  EXPECT_EQ(observed->loads, 0);
+
+  EditorPanelProjection projection;
+  ASSERT_TRUE(ProjectCurrentPanelFields(document, 2, &projection, &error)) << error;
+  EXPECT_FLOAT_EQ(*ScalarOf(projection, "exposure"), kDefaultPipelineExposureEv);
+  EXPECT_EQ(observed->json_reads, 0);
+  EXPECT_EQ(observed->dto_reads, 0);
+
+  nlohmann::json json;
+  ASSERT_TRUE(ReadEditorParameterJson(document, counted_target, &json, &error)) << error;
+  EXPECT_EQ(observed->json_reads, 1);
+  EXPECT_EQ(observed->dto_reads, 0);
+
+  const auto reads_after_json_read = observed->json_reads;
+  const auto persisted             = CanonicalPipelineDocumentJson(document);
+  EXPECT_FALSE(persisted.empty());
+  EXPECT_GT(observed->json_reads, reads_after_json_read);
+}
+
+TEST(EditorPanelProjectionTest, AdditionalPanelAdapterDoesNotChangeParameterWriteParser) {
+  auto document = CreateDefaultPipelineDocument();
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(1.75f);
+
+  auto table = EditorPanelAdapterTable::Production();
+  table.Add({"debug_gain", "tone", &ReadDebugGain});
+
+  auto target = test::ColorGradeFieldTarget("exposure");
+  target.field_key = "debug_gain";
+
+  EditorPanelProjection projection;
+  std::string           error;
+  ASSERT_TRUE(ProjectEditorPanelFields(document, std::array{target}, 3, table, &projection, &error))
+      << error;
+  ASSERT_EQ(projection.fields.size(), 1u);
+  EXPECT_EQ(projection.fields.front().field_key, "debug_gain");
+  const auto* scalar = std::get_if<EditorPanelScalarValue>(&projection.fields.front().value);
+  ASSERT_NE(scalar, nullptr);
+  EXPECT_FLOAT_EQ(scalar->value, 1.75f);
+
+  std::string parse_error;
+  EXPECT_FALSE(ParseEditorParameterWrite("debug_gain", nlohmann::json{{"gain", 1.0}}, &parse_error)
+                   .has_value());
+  EXPECT_FALSE(parse_error.empty());
+  parse_error.clear();
+  EXPECT_TRUE(ParseEditorParameterWrite("exposure", nlohmann::json{{"exposure", 0.5}}, &parse_error)
+                  .has_value())
+      << parse_error;
+}
+
+TEST(EditorPanelProjectionTest, ParseApplyProjectsLensCatalogIdentityOntoRawPanel) {
+  auto document = CreateDefaultPipelineDocument();
+  const nlohmann::json params = {
+      {"lens_calib",
+       {{"enabled", true}, {"lens_maker", "Zeiss"}, {"lens_model", "Touit 1.8/32"}}}};
+  std::string error;
+  auto        write = ParseEditorParameterWrite("lens_calib", params, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  auto target = CompleteCurrentPanelParameterTarget(document, "lens_calib", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  ASSERT_TRUE(ApplyEditorParameterWrite(document, *target, *write, &error)) << error;
+
+  EditorPanelProjection projection;
+  ASSERT_TRUE(ProjectCurrentPanelFields(document, 7, &projection, &error)) << error;
+  const auto* lens = FindField(projection, "lens_calib");
+  ASSERT_NE(lens, nullptr);
+  const auto* lens_value = std::get_if<EditorPanelLensValue>(&lens->value);
+  ASSERT_NE(lens_value, nullptr);
+  EXPECT_TRUE(lens_value->enabled);
+  EXPECT_EQ(lens_value->lens_maker, "Zeiss");
+  EXPECT_EQ(lens_value->lens_model, "Touit 1.8/32");
+  const auto  adapters = EditorPanelAdapterTable::Production();
+  const auto* adapter  = adapters.Find("lens_calib");
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_EQ(adapter->panel_id, "raw");
+}
+
+TEST(EditorPanelProjectionTest, InputProfileProjectsRasterDescriptionAndRawDocumentsAreNotRaster) {
+  RasterColorDescription source_color;
+  source_color.primaries_xy_        = color::GamutPrimariesXy(color::ColorGamutId::P3D65);
+  source_color.origin_              = RasterColorOrigin::IccMatrixShaper;
+  source_color.profile_description_ = "Display P3";
+  source_color.icc_sha256_          = std::string(64, 'a');
+  auto raster                       = CreateDefaultRasterPipelineDocument(source_color);
+  raster.Develop()->Params().ApplyInputProfileUpdate(DevelopInputProfileUpdate{"adobe_rgb"});
+
+  EditorPanelProjection projection;
+  std::string           error;
+  ASSERT_TRUE(ProjectCurrentPanelFields(raster, 3, &projection, &error)) << error;
+  const auto* field = FindField(projection, "input_profile");
+  ASSERT_NE(field, nullptr);
+  const auto* value = std::get_if<EditorPanelInputProfileValue>(&field->value);
+  ASSERT_NE(value, nullptr);
+  EXPECT_TRUE(value->raster);
+  EXPECT_EQ(value->profile_override, "adobe_rgb");
+  EXPECT_EQ(value->profile_description, "Display P3");
+  EXPECT_EQ(value->origin, "icc_matrix_shaper");
+  EXPECT_EQ(value->referral, "display_referred");
+
+  auto raw = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(ProjectCurrentPanelFields(raw, 4, &projection, &error)) << error;
+  const auto* raw_field = FindField(projection, "input_profile");
+  ASSERT_NE(raw_field, nullptr);
+  const auto* raw_value = std::get_if<EditorPanelInputProfileValue>(&raw_field->value);
+  ASSERT_NE(raw_value, nullptr);
+  EXPECT_FALSE(raw_value->raster);
+
+  const auto  adapters = EditorPanelAdapterTable::Production();
+  const auto* adapter  = adapters.Find("input_profile");
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_EQ(adapter->panel_id, "raw");
+}
+
+// DCP plan C5: the Camera Profile combo names its default entry "Embedded" when the import
+// profile is the embedded profile of a DNG file, and "Built-in" otherwise.
+TEST(EditorPanelProjectionTest, CameraProfileFileProjectsWhetherTheDefaultIsAnEmbeddedProfile) {
+  auto project = [](const PipelineDocument& document) {
+    EditorPanelProjection projection;
+    std::string           error;
+    EXPECT_TRUE(ProjectCurrentPanelFields(document, 5, &projection, &error)) << error;
+    const auto* field = FindField(projection, "camera_profile_file");
+    EXPECT_NE(field, nullptr);
+    const auto* value =
+        field ? std::get_if<EditorPanelCameraProfileFileValue>(&field->value) : nullptr;
+    EXPECT_NE(value, nullptr);
+    return value ? *value : EditorPanelCameraProfileFileValue{};
+  };
+
+  auto raw = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(raw);
+  const auto built_in = project(raw);
+  EXPECT_FALSE(built_in.raster);
+  EXPECT_FALSE(built_in.embedded_default);
+  EXPECT_FALSE(built_in.selected);
+
+  auto dng = CreateDefaultPipelineDocument();
+  for (const auto& fixture : gpu_dag_test::MakeImportedCameraProfileFixtures()) {
+    if (fixture.name_ == "dng") {
+      gpu_dag_test::ApplyImportedCameraProfile(dng, fixture.context_);
+    }
+  }
+  const auto embedded = project(dng);
+  EXPECT_FALSE(embedded.raster);
+  EXPECT_TRUE(embedded.embedded_default);
+  EXPECT_FALSE(embedded.selected);
+}
+
+// T3 (dcp_profile_tone_curve_study.md, section 6.4): the Tone Curve switch is shown for a bound
+// profile with a ProfileToneCurve, and reads the stored profile_tone value.
+TEST(EditorPanelProjectionTest, CameraProfileFileProjectsTheToneCurveAndItsSwitch) {
+  const auto make_profile = [](bool with_curve) {
+    DcpCameraProfile profile;
+    profile.unique_camera_model = "Test Camera Z1";
+    profile.profile_name        = with_curve ? "Camera Tone" : "Camera Flat";
+    profile.color_matrix_1      = {0.92, -0.31, -0.06, -0.44, 1.21, 0.19, -0.08, 0.27, 0.68};
+    profile.color_matrix_2      = {0.81, -0.22, -0.09, -0.41, 1.17, 0.27, -0.06, 0.18, 0.59};
+    profile.color_matrix_1_cct  = 2856.0;
+    profile.color_matrix_2_cct  = 6504.0;
+    profile.tables              = MakeDngColorProfile(DngColorProfile{});
+    if (with_curve) {
+      profile.profile_tone_curve = MakeDngToneCurve({{0.0f, 0.0f}, {0.18f, 0.44f}, {1.0f, 1.0f}});
+    }
+    return MakeDcpCameraProfile(std::move(profile));
+  };
+  const auto project = [](const PipelineDocument& document) {
+    EditorPanelProjection projection;
+    std::string           error;
+    EXPECT_TRUE(ProjectCurrentPanelFields(document, 6, &projection, &error)) << error;
+    const auto* field = FindField(projection, "camera_profile_file");
+    const auto* value =
+        field ? std::get_if<EditorPanelCameraProfileFileValue>(&field->value) : nullptr;
+    EXPECT_NE(value, nullptr);
+    return value ? *value : EditorPanelCameraProfileFileValue{};
+  };
+  const auto select = [](PipelineDocument& document, DcpCameraProfilePtr profile,
+                         bool profile_tone) {
+    DevelopCameraProfileFileUpdate update;
+    update.profile      = std::move(profile);
+    update.profile_tone = profile_tone;
+    document.Develop()->Params().ApplyCameraProfileFileUpdate(std::move(update));
+  };
+
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  const auto none = project(document);
+  EXPECT_FALSE(none.has_tone_curve);
+  EXPECT_FALSE(none.profile_tone);
+
+  select(document, make_profile(true), true);
+  const auto on = project(document);
+  EXPECT_TRUE(on.selected);
+  EXPECT_TRUE(on.has_tone_curve);
+  EXPECT_TRUE(on.profile_tone);
+
+  select(document, make_profile(true), false);
+  const auto off = project(document);
+  EXPECT_TRUE(off.has_tone_curve);
+  EXPECT_FALSE(off.profile_tone);
+
+  select(document, make_profile(false), true);
+  const auto flat = project(document);
+  EXPECT_TRUE(flat.selected);
+  EXPECT_FALSE(flat.has_tone_curve);
+  EXPECT_TRUE(flat.profile_tone);
+}
+
+// L4: the `lut` field write carries the stored encodings, so replaying an LMT Model JSON (undo,
+// redo, adjustment transfer) restores them, and the panel projection reads them back.
+TEST(EditorPanelProjectionTest, LutWriteParsesEncodingKeysAndProjectionReadsThem) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  const auto  lut_target = CompleteCurrentPanelParameterTarget(document, "lut", &error);
+  ASSERT_TRUE(lut_target.has_value()) << error;
+  const auto&          target = *lut_target;
+
+  const nlohmann::json stored = {{"cube_path", "D:/luts/slog3_to_709.cube"},
+                                 {"strength", 0.5},
+                                 {"input_encoding", "sony_slog3_sgamut3cine"},
+                                 {"output_encoding", "rec709_bt1886"}};
+  const auto           write  = ParseEditorParameterWrite("lut", stored, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  const auto* lut_write = std::get_if<EditorLutWrite>(&*write);
+  ASSERT_NE(lut_write, nullptr);
+  EXPECT_EQ(lut_write->input_encoding, std::optional<std::string>{"sony_slog3_sgamut3cine"});
+  EXPECT_EQ(lut_write->output_encoding, std::optional<std::string>{"rec709_bt1886"});
+  ASSERT_TRUE(ApplyEditorParameterWrite(document, target, *write, &error)) << error;
+
+  EditorPanelFieldPresentation field;
+  ASSERT_TRUE(ReadEditorPanelField(document, target, &field, &error)) << error;
+  const auto* value = std::get_if<EditorPanelLutValue>(&field.value);
+  ASSERT_NE(value, nullptr);
+  EXPECT_EQ(value->reference, LutReference{FileLutReference{"D:/luts/slog3_to_709.cube"}});
+  EXPECT_FLOAT_EQ(value->strength, 0.5f);
+  EXPECT_EQ(value->input_encoding, "sony_slog3_sgamut3cine");
+  EXPECT_EQ(value->output_encoding, "rec709_bt1886");
+
+  // The Model JSON the history stores for this state replays to the same state.
+  nlohmann::json model_json;
+  ASSERT_TRUE(ReadEditorParameterJson(document, target, &model_json, &error)) << error;
+  auto replayed = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(ApplyEditorParameterPatch(replayed, target, model_json, &error)) << error;
+  nlohmann::json replayed_json;
+  ASSERT_TRUE(ReadEditorParameterJson(replayed, target, &replayed_json, &error)) << error;
+  EXPECT_EQ(replayed_json, model_json);
+
+  // A complete state without the keys is ACEScc to ACEScc.
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, target, {{"cube_path", ""}}, &error)) << error;
+  ASSERT_TRUE(ReadEditorPanelField(document, target, &field, &error)) << error;
+  value = std::get_if<EditorPanelLutValue>(&field.value);
+  ASSERT_NE(value, nullptr);
+  EXPECT_EQ(value->input_encoding, "acescc");
+  EXPECT_EQ(value->output_encoding, "acescc");
+}
+
+TEST(EditorPanelProjectionTest, LutWriteWithUnknownEncodingIsRejectedWithoutChange) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  const auto  lut_target = CompleteCurrentPanelParameterTarget(document, "lut", &error);
+  ASSERT_TRUE(lut_target.has_value()) << error;
+  const auto&    target = *lut_target;
+  nlohmann::json before;
+  ASSERT_TRUE(ReadEditorParameterJson(document, target, &before, &error)) << error;
+
+  EXPECT_FALSE(ParseEditorParameterWrite(
+                   "lut", {{"cube_path", ""}, {"output_encoding", "rec709_unknown"}}, &error)
+                   .has_value());
+  EXPECT_NE(error.find("rec709_unknown"), std::string::npos) << error;
+  EXPECT_FALSE(ApplyEditorParameterPatch(document, target,
+                                         {{"cube_path", ""}, {"input_encoding", "slog9"}}, &error));
+  nlohmann::json after;
+  ASSERT_TRUE(ReadEditorParameterJson(document, target, &after, &error)) << error;
+  EXPECT_EQ(after, before);
+}
+
+}  // namespace alcedo

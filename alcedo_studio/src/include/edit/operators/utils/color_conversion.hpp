@@ -5,7 +5,7 @@
 #pragma once
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
-#include <opencv2/opencv.hpp>
+#include <opencv2/imgproc.hpp>
 
 namespace alcedo {
 inline static void GPUCvtColor(cv::Mat& src, cv::Mat& dst, int code) {

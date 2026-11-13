@@ -2,20 +2,39 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "image/metadata_extractor.hpp"
+
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdlib>
+#include <ctime>
+#include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
-#include "edit/operators/basic/color_temp_op.hpp"
+#include "edit/graph/develop_color_transform.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "image/dng_camera_matrix.hpp"
 #include "image/image.hpp"
-#include "image/metadata_extractor.hpp"
+#include "image/lens_identity_resolver.hpp"
+#include "image/raster_color_description.hpp"
+#include "support/non_raw_import_files.hpp"
 #include "utils/import/import_error_code.hpp"
 
 namespace alcedo {
 namespace {
+
+auto RasterFixturePath(const char* name) -> std::filesystem::path {
+  return std::filesystem::path(ALCEDO_RASTER_FIXTURE_DIR) / name;
+}
 
 auto BadDngSamplePath() -> std::filesystem::path {
   return std::filesystem::path(TEST_IMG_PATH) / "raw" / "bad_dng" / "bad_color_dng.dng";
@@ -30,11 +49,117 @@ auto SonyCctRegressionSamplePath() -> std::filesystem::path {
   return std::filesystem::path(TEST_IMG_PATH) / "raw" / "cct_test" / "_DSC8085.ARW";
 }
 
+auto SonyA7CiiConvertedDngPath() -> std::filesystem::path {
+  return std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "sony" / "a7cii" /
+         "ycbcr_compressed" / "DSC04739_dng.dng";
+}
+
+/// Sets the process time zone for the lifetime of the object and restores the previous one.
+/// LibRaw converts EXIF capture dates with the C runtime local time zone, so a fixed offset away
+/// from UTC makes a UTC conversion of the capture time visible in any test environment.
+class ScopedTimeZone {
+ public:
+  explicit ScopedTimeZone(const char* posix_time_zone) {
+    if (const char* previous = std::getenv("TZ"); previous != nullptr) {
+      previous_time_zone_ = previous;
+    }
+    Set(posix_time_zone);
+  }
+  ~ScopedTimeZone() { Set(previous_time_zone_ ? previous_time_zone_->c_str() : nullptr); }
+  ScopedTimeZone(const ScopedTimeZone&)                    = delete;
+  auto operator=(const ScopedTimeZone&) -> ScopedTimeZone& = delete;
+
+ private:
+  static void Set(const char* posix_time_zone) {
+#if defined(_WIN32)
+    _putenv_s("TZ", posix_time_zone ? posix_time_zone : "");
+    _tzset();
+#else
+    if (posix_time_zone) {
+      setenv("TZ", posix_time_zone, 1);
+    } else {
+      unsetenv("TZ");
+    }
+    tzset();
+#endif
+  }
+
+  std::optional<std::string> previous_time_zone_;
+};
+
+/// EXIF `DateTimeOriginal` of the file as `YYYY-MM-DD HH:MM:SS`, read with Exiv2.
+auto ReadExifDateTimeOriginal(const std::filesystem::path& path) -> std::string {
+  auto exif_image = MetadataExtractor::ExtractEXIF(path);
+  if (!exif_image) {
+    return {};
+  }
+  const auto& exif_data = exif_image->exifData();
+  const auto  it        = exif_data.findKey(Exiv2::ExifKey("Exif.Photo.DateTimeOriginal"));
+  if (it == exif_data.end()) {
+    return {};
+  }
+  std::string date_time = it->toString();
+  if (date_time.size() >= 10) {
+    date_time[4] = '-';
+    date_time[7] = '-';
+  }
+  return date_time;
+}
+
+/// Bind the imported camera profile to a Develop payload in as-shot mode and resolve its
+/// camera transform, as import and the GPU DAG Develop pass do.
+auto ResolveAsShotDevelopTransform(const RawRuntimeColorContext& ctx) -> ColorTransformResult {
+  DevelopPayload develop;
+  BindDevelopCameraProfile(develop, ctx);
+  develop.wb_mode = "as_shot";
+  return ResolveDevelopColorTransform(develop);
+}
+
 void ExpectMatrixNear(const double* actual, const double (&expected)[9], const double epsilon) {
   ASSERT_NE(actual, nullptr);
   for (int i = 0; i < 9; ++i) {
     EXPECT_NEAR(actual[i], expected[i], epsilon) << "matrix index " << i;
   }
+}
+
+TEST(MetadataExtractorTest, NikonCfaWithoutColorMatrixImportsRawMetadata) {
+  const auto path = RasterFixturePath("nikon_cfa_without_color_matrix.tif");
+  EXPECT_FALSE(MetadataExtractor::ClassifyRasterFile(path).has_value());
+  Image image(1, path, ImageType::NEF);
+  ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(path, image));
+  EXPECT_EQ(image.image_type_, ImageType::NEF);
+  ASSERT_TRUE(image.HasRawColorContext());
+  EXPECT_FALSE(image.HasRasterColorDescription());
+  EXPECT_EQ(image.GetRawColorContext().camera_make_, "Nikon");
+  EXPECT_EQ(image.GetRawColorContext().camera_model_, "Alcedo CFA fixture");
+  const auto display = image.ExifDisplayToJson();
+  EXPECT_EQ(display.value("ImageWidth", 0u), 32u);
+  EXPECT_EQ(display.value("ImageHeight", 0u), 24u);
+}
+
+TEST(MetadataExtractorTest, AnalogBalanceAndCameraCalibrationComposeInDngSpecOrder) {
+  double color_matrix[9] = {2.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 4.0};
+  const double analog_balance[3]              = {2.0, 1.0, 0.5};
+  const double camera_calibration[9]          = {1.5, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0};
+  ApplyAnalogBalanceAndCameraCalibration(color_matrix, analog_balance, camera_calibration);
+  static constexpr double kExpected[9] = {6.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 4.0};
+  ExpectMatrixNear(color_matrix, kExpected, 1e-12);
+}
+
+TEST(MetadataExtractorTest, InvalidAnalogBalanceLeavesColorMatrixUnscaled) {
+  double color_matrix[9] = {2.0, 0.1, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 4.0};
+  const double analog_balance[3]     = {2.0, 0.0, 0.5};
+  const double camera_calibration[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+  ApplyAnalogBalanceAndCameraCalibration(color_matrix, analog_balance, camera_calibration);
+  static constexpr double kExpected[9] = {2.0, 0.1, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 4.0};
+  ExpectMatrixNear(color_matrix, kExpected, 1e-12);
+}
+
+TEST(MetadataExtractorTest, CameraCalibrationSignaturesMustMatchToApply) {
+  EXPECT_TRUE(CameraCalibrationSignaturesMatch("com.adobe", "com.adobe"));
+  EXPECT_TRUE(CameraCalibrationSignaturesMatch("", ""));
+  EXPECT_FALSE(CameraCalibrationSignaturesMatch("com.adobe", ""));
+  EXPECT_FALSE(CameraCalibrationSignaturesMatch("", "com.adobe"));
 }
 
 TEST(MetadataExtractorTest, DngImportUsesEmbeddedColorMatrices) {
@@ -121,7 +246,8 @@ TEST(MetadataExtractorTest, RawColorContextSurvivesExifJsonRoundTrip) {
   }
 }
 
-TEST(MetadataExtractorTest, ColorTempOpSupportsDngWithoutCamXyzWhenDngMetadataIsPresent) {
+TEST(MetadataExtractorTest,
+     AsShotDevelopTransformSupportsDngWithoutCamXyzWhenDngMetadataIsPresent) {
   const auto sample_path = BadDngSamplePath();
   if (!std::filesystem::exists(sample_path)) {
     GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
@@ -131,27 +257,18 @@ TEST(MetadataExtractorTest, ColorTempOpSupportsDngWithoutCamXyzWhenDngMetadataIs
   ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(sample_path, image));
   ASSERT_TRUE(image.HasRawColorContext());
 
-  OperatorParams params;
-  params.color_temp_enabled_ = true;
-  params.PopulateRawMetadata(image.GetRawColorContext());
-
-  for (float& value : params.raw_cam_xyz_) {
+  RawRuntimeColorContext ctx = image.GetRawColorContext();
+  for (float& value : ctx.cam_xyz_) {
     value = 0.0f;
   }
 
-  const nlohmann::json color_temp_params = {
-      {"color_temp", {{"mode", "as_shot"}, {"cct", 6500.0}, {"tint", 0.0}}}};
-  ColorTempOp op(color_temp_params);
-  ASSERT_NO_THROW(op.SetGlobalParams(params));
-
-  EXPECT_TRUE(params.color_temp_matrices_valid_);
-  EXPECT_GT(params.color_temp_resolved_xy_[0], 0.0f);
-  EXPECT_GT(params.color_temp_resolved_xy_[1], 0.0f);
-  EXPECT_GE(params.color_temp_resolved_cct_, 2000.0f);
-  EXPECT_LE(params.color_temp_resolved_cct_, 15000.0f);
+  const auto result = ResolveAsShotDevelopTransform(ctx);
+  ASSERT_TRUE(result.ok) << ColorTransformErrorMessage(result.error);
+  EXPECT_GE(result.transform.resolved_cct, 2000.0f);
+  EXPECT_LE(result.transform.resolved_cct, 15000.0f);
 }
 
-TEST(MetadataExtractorTest, ColorTempOpUsesForwardMatrixForBadColorDngAsShot) {
+TEST(MetadataExtractorTest, AsShotDevelopTransformUsesForwardMatrixForBadColorDng) {
   const auto sample_path = BadDngSamplePath();
   if (!std::filesystem::exists(sample_path)) {
     GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
@@ -161,35 +278,31 @@ TEST(MetadataExtractorTest, ColorTempOpUsesForwardMatrixForBadColorDngAsShot) {
   ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(sample_path, image));
   ASSERT_TRUE(image.HasRawColorContext());
 
-  OperatorParams params;
-  params.color_temp_enabled_ = true;
-  params.PopulateRawMetadata(image.GetRawColorContext());
+  const auto& ctx    = image.GetRawColorContext();
+  const auto  result = ResolveAsShotDevelopTransform(ctx);
+  ASSERT_TRUE(result.ok) << ColorTransformErrorMessage(result.error);
+  const auto& cam_to_xyz_d50 = result.transform.camera_to_xyz_d50;
+  EXPECT_GT(result.transform.resolved_cct, 4000.0f);
+  EXPECT_LT(result.transform.resolved_cct, 6000.0f);
+  EXPECT_GT(std::abs(cam_to_xyz_d50[1]), 0.01f);
+  EXPECT_GT(std::abs(cam_to_xyz_d50[3]), 0.1f);
+  EXPECT_GT(std::abs(cam_to_xyz_d50[7]), 0.1f);
 
-  const nlohmann::json color_temp_params = {
-      {"color_temp", {{"mode", "as_shot"}, {"cct", 6500.0}, {"tint", 0.0}}}};
-  ColorTempOp op(color_temp_params);
-  ASSERT_NO_THROW(op.SetGlobalParams(params));
-
-  EXPECT_TRUE(params.color_temp_matrices_valid_);
-  EXPECT_GT(params.color_temp_resolved_cct_, 4000.0f);
-  EXPECT_LT(params.color_temp_resolved_cct_, 6000.0f);
-  EXPECT_GT(std::abs(params.color_temp_cam_to_xyz_d50_[1]), 0.01f);
-  EXPECT_GT(std::abs(params.color_temp_cam_to_xyz_d50_[3]), 0.1f);
-  EXPECT_GT(std::abs(params.color_temp_cam_to_xyz_d50_[7]), 0.1f);
-
-  static constexpr float kExpectedCameraToXyzD50[9] = {
-      2.6879040f, 0.0538000f, 0.1229680f,
-      1.0163880f, 0.8399000f, -0.2334720f,
-      0.0430920f, -0.4061000f, 1.8512081f,
-  };
-
-  for (int i = 0; i < 9; ++i) {
-    EXPECT_NEAR(params.color_temp_cam_to_xyz_d50_[i], kExpectedCameraToXyzD50[i], 1e-3f)
-        << "matrix index " << i;
+  const double d50[3] = {.34567 / .35850, 1.0, (1 - .34567 - .35850) / .35850};
+  const double maximum =
+      std::max({ctx.as_shot_neutral_[0], ctx.as_shot_neutral_[1], ctx.as_shot_neutral_[2]});
+  for (int r = 0; r < 3; ++r) {
+    double neutral = 0;
+    for (int c = 0; c < 3; ++c)
+      neutral +=
+          cam_to_xyz_d50[static_cast<std::size_t>(r * 3 + c)] * ctx.as_shot_neutral_[c] / maximum;
+    EXPECT_NEAR(neutral, d50[r], 2e-4);
   }
 }
 
-TEST(MetadataExtractorTest, EmbeddedDngProfileTablesDisableForwardMatrixFallback) {
+// Hasselblad X2D HueSatMap tables are authored for ColorMatrix + CAT. Adobe Standard
+// DNGs also embed those tables but still require ForwardMatrix; only Hasselblad drops FM.
+TEST(MetadataExtractorTest, EmbeddedDngProfileTablesPreserveHasselbladForwardMatrix) {
   const auto sample_path = HasselbladX2dSamplePath();
   if (!std::filesystem::exists(sample_path)) {
     GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
@@ -201,27 +314,28 @@ TEST(MetadataExtractorTest, EmbeddedDngProfileTablesDisableForwardMatrixFallback
 
   const auto& ctx = image.GetRawColorContext();
   EXPECT_TRUE(ctx.color_matrices_valid_);
-  EXPECT_FALSE(ctx.forward_matrices_valid_);
+  EXPECT_TRUE(ctx.forward_matrices_valid_);
+  ASSERT_TRUE(ctx.dng_profile_);
+  EXPECT_FALSE(ctx.dng_profile_->hue_sat_map_1.entries.empty());
   EXPECT_TRUE(ctx.calibration_illuminants_valid_);
   EXPECT_EQ(ctx.camera_make_, "Hasselblad");
   EXPECT_EQ(ctx.camera_model_, "X2D 100C-100c");
 
-  OperatorParams params;
-  params.color_temp_enabled_ = true;
-  params.PopulateRawMetadata(ctx);
-
-  const nlohmann::json color_temp_params = {
-      {"color_temp", {{"mode", "as_shot"}, {"cct", 6500.0}, {"tint", 0.0}}}};
-  ColorTempOp op(color_temp_params);
-  ASSERT_NO_THROW(op.SetGlobalParams(params));
-
-  EXPECT_TRUE(params.color_temp_matrices_valid_);
-  EXPECT_GT(params.color_temp_resolved_cct_, 4900.0f);
-  EXPECT_LT(params.color_temp_resolved_cct_, 5050.0f);
-  EXPECT_GT(params.color_temp_cam_to_xyz_d50_[0], 1.5f);
-  EXPECT_LT(params.color_temp_cam_to_xyz_d50_[2], 0.05f);
-  EXPECT_LT(params.color_temp_cam_to_xyz_d50_[5], -0.2f);
-  EXPECT_LT(params.color_temp_cam_to_xyz_d50_[7], -0.1f);
+  const auto result = ResolveAsShotDevelopTransform(ctx);
+  ASSERT_TRUE(result.ok) << ColorTransformErrorMessage(result.error);
+  const auto& cam_to_xyz_d50 = result.transform.camera_to_xyz_d50;
+  EXPECT_GT(result.transform.resolved_cct, 4900.0f);
+  EXPECT_LT(result.transform.resolved_cct, 5050.0f);
+  const double d50[3] = {.34567 / .35850, 1.0, (1 - .34567 - .35850) / .35850};
+  const double maximum =
+      std::max({ctx.as_shot_neutral_[0], ctx.as_shot_neutral_[1], ctx.as_shot_neutral_[2]});
+  for (int r = 0; r < 3; ++r) {
+    double neutral = 0;
+    for (int c = 0; c < 3; ++c)
+      neutral +=
+          cam_to_xyz_d50[static_cast<std::size_t>(r * 3 + c)] * ctx.as_shot_neutral_[c] / maximum;
+    EXPECT_NEAR(neutral, d50[r], 2e-4);
+  }
 }
 
 TEST(MetadataExtractorTest, SonyArwMakerNoteAsShotNeutralResolvesStableCct) {
@@ -244,20 +358,150 @@ TEST(MetadataExtractorTest, SonyArwMakerNoteAsShotNeutralResolvesStableCct) {
   EXPECT_DOUBLE_EQ(ctx.as_shot_neutral_[1], 1.0);
   EXPECT_NEAR(ctx.as_shot_neutral_[2], 1024.0 / 2004.0, 1e-6);
 
-  OperatorParams params;
-  params.color_temp_enabled_ = true;
-  params.PopulateRawMetadata(ctx);
+  const auto result = ResolveAsShotDevelopTransform(ctx);
+  ASSERT_TRUE(result.ok) << ColorTransformErrorMessage(result.error);
+  EXPECT_GT(result.transform.resolved_cct, 3900.0f);
+  EXPECT_LT(result.transform.resolved_cct, 4050.0f);
+  EXPECT_GT(result.transform.resolved_tint, -20.0f);
+  EXPECT_LT(result.transform.resolved_tint, 0.0f);
+}
 
-  const nlohmann::json color_temp_params = {
-      {"color_temp", {{"mode", "as_shot"}, {"cct", 6500.0}, {"tint", 0.0}}}};
-  ColorTempOp op(color_temp_params);
-  ASSERT_NO_THROW(op.SetGlobalParams(params));
+// Issue #381: a photo taken at 16:02 on a camera clock showed 07:02 after import in UTC+9.
+// The capture time of a RAW file is the camera clock time in EXIF, whatever the time zone of
+// the importing machine.
+TEST(MetadataExtractorTest, RawCaptureTimeIsExifCameraClockTimeOutsideUtc) {
+  const auto sample_path = SonyCctRegressionSamplePath();
+  if (!std::filesystem::exists(sample_path)) {
+    GTEST_SKIP() << "Sample ARW not found: " << sample_path.string();
+  }
+  const std::string expected = ReadExifDateTimeOriginal(sample_path);
+  ASSERT_EQ(expected.size(), 19u) << "sample has no EXIF DateTimeOriginal";
 
-  EXPECT_TRUE(params.color_temp_matrices_valid_);
-  EXPECT_GT(params.color_temp_resolved_cct_, 3900.0f);
-  EXPECT_LT(params.color_temp_resolved_cct_, 4050.0f);
-  EXPECT_GT(params.color_temp_resolved_tint_, -20.0f);
-  EXPECT_LT(params.color_temp_resolved_tint_, 0.0f);
+  const ScopedTimeZone utc_plus_nine("JST-9");
+  Image                image(9, sample_path, ImageType::ARW);
+  ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(sample_path, image));
+  EXPECT_EQ(image.exif_display_.date_time_str_, expected);
+}
+
+TEST(MetadataExtractorTest, DngCaptureTimeIsExifCameraClockTimeOutsideUtc) {
+  const auto sample_path = HasselbladX2dSamplePath();
+  if (!std::filesystem::exists(sample_path)) {
+    GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
+  }
+  const std::string expected = ReadExifDateTimeOriginal(sample_path);
+  ASSERT_EQ(expected.size(), 19u) << "sample has no EXIF DateTimeOriginal";
+
+  const ScopedTimeZone utc_minus_five("EST5");
+  Image                image(10, sample_path, ImageType::DNG);
+  ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(sample_path, image));
+  EXPECT_EQ(image.exif_display_.date_time_str_, expected);
+}
+
+// A camera without a daylight saving setting keeps standard time all year, so it can record a
+// time in the hour that is skipped when daylight saving time starts. 2024-03-10 02:30 does not
+// exist in US Central Time; a conversion through time_t moves it to 01:30 or 03:30.
+TEST(MetadataExtractorTest, RawCaptureTimeInSkippedDaylightSavingHourKeepsCameraClockTime) {
+  const auto sample_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "nikon" /
+                           "d7000" / "Nikon-D7000-raw-00012.nef";
+  if (!std::filesystem::exists(sample_path)) {
+    GTEST_SKIP() << "Sample NEF not found: " << sample_path.string();
+  }
+  constexpr std::string_view kSampleDateTime  = "2013:11:24 17:29:48";
+  constexpr std::string_view kSkippedDateTime = "2024:03:10 02:30:00";
+
+  std::string                bytes;
+  {
+    std::ifstream in(sample_path, std::ios::binary);
+    ASSERT_TRUE(in.is_open());
+    bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  int replaced = 0;
+  for (auto pos = bytes.find(kSampleDateTime); pos != std::string::npos;
+       pos      = bytes.find(kSampleDateTime, pos + kSampleDateTime.size())) {
+    bytes.replace(pos, kSampleDateTime.size(), kSkippedDateTime);
+    ++replaced;
+  }
+  ASSERT_GT(replaced, 0) << "sample date text not found";
+
+  const auto dir = std::filesystem::temp_directory_path() / "alcedo_metadata_dst_capture_time";
+  std::filesystem::create_directories(dir);
+  const auto path = dir / "skipped_hour.nef";
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(out.is_open());
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  }
+
+#if defined(_WIN32)
+  // The Windows C runtime applies the US daylight saving rules to a TZ value with a DST name.
+  const ScopedTimeZone us_central("CST6CDT");
+#else
+  const ScopedTimeZone us_central("CST6CDT,M3.2.0,M11.1.0");
+#endif
+  // The time zone must skip 02:30 on this date, or the test does not reach the case it checks.
+  std::tm skipped{};
+  skipped.tm_year           = 2024 - 1900;
+  skipped.tm_mon            = 2;
+  skipped.tm_mday           = 10;
+  skipped.tm_hour           = 2;
+  skipped.tm_min            = 30;
+  skipped.tm_isdst          = -1;
+  const time_t skipped_time = std::mktime(&skipped);
+  ASSERT_NE(skipped_time, static_cast<time_t>(-1));
+  ASSERT_NE(skipped.tm_hour, 2) << "time zone does not skip 02:00-03:00 on 2024-03-10";
+
+  Image image(11, path, ImageType::NEF);
+  ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(path, image));
+  EXPECT_EQ(image.exif_display_.date_time_str_, "2024-03-10 02:30:00");
+
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+}
+
+TEST(MetadataExtractorTest, SonyAdobeDngPreservesTaggedMatrixAndSeparateAnalogBalance) {
+  const auto sample_path = SonyA7CiiConvertedDngPath();
+  if (!std::filesystem::exists(sample_path)) {
+    GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
+  }
+
+  Image image(8, sample_path, ImageType::DNG);
+  ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(sample_path, image));
+  ASSERT_TRUE(image.HasRawColorContext());
+
+  const auto& ctx = image.GetRawColorContext();
+  ASSERT_TRUE(ctx.color_matrices_valid_);
+  ASSERT_TRUE(ctx.forward_matrices_valid_);
+  ASSERT_TRUE(ctx.as_shot_neutral_valid_);
+  EXPECT_NEAR(ctx.as_shot_neutral_[0], 1.0, 0.01);
+  EXPECT_NEAR(ctx.as_shot_neutral_[1], 1.0, 0.01);
+  EXPECT_NEAR(ctx.as_shot_neutral_[2], 1.0, 0.01);
+
+  static constexpr double kUnbakedCm1[9] = {
+      0.8784, -0.4791, 0.1177, -0.3468, 1.0693, 0.3213, 0.0009, 0.0507, 0.7395,
+  };
+  static constexpr double kAdobeFm1[9] = {
+      0.4743, 0.3796, 0.1104, 0.2023, 0.7673, 0.0304, 0.0553, 0.0008, 0.769,
+  };
+  static constexpr double kAdobeFm2[9] = {
+      0.5465, 0.2614, 0.1563, 0.3232, 0.6292, 0.0475, 0.1339, 0.0025, 0.6887,
+  };
+  ExpectMatrixNear(ctx.forward_matrix_1_, kAdobeFm1, 1e-3);
+  ExpectMatrixNear(ctx.forward_matrix_2_, kAdobeFm2, 1e-3);
+
+  const double analog_balance[3]     = {2.411133, 1.0, 1.62793};
+  const double camera_calibration[9] = {1.0008, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.9523};
+  ExpectMatrixNear(ctx.color_matrix_1_, kUnbakedCm1, 1e-6);
+  ASSERT_TRUE(ctx.dng_profile_);
+  for (int i = 0; i < 3; ++i)
+    EXPECT_NEAR(ctx.dng_profile_->analog_balance[i], analog_balance[i], 1e-5);
+  for (int i = 0; i < 9; ++i)
+    EXPECT_NEAR(ctx.dng_profile_->camera_calibration_1[i], camera_calibration[i], 1e-5);
+  const auto result = ResolveAsShotDevelopTransform(ctx);
+  ASSERT_TRUE(result.ok) << ColorTransformErrorMessage(result.error);
+  EXPECT_GT(result.transform.resolved_cct, 4800.0f);
+  EXPECT_LT(result.transform.resolved_cct, 6200.0f);
+  EXPECT_GT(result.transform.resolved_tint, -40.0f);
+  EXPECT_LT(result.transform.resolved_tint, 40.0f);
 }
 
 TEST(MetadataExtractorTest, XmpSidecarIsRejectedAsUnsupportedImportFormat) {
@@ -301,6 +545,192 @@ TEST(MetadataExtractorTest, XmpSidecarIsRejectedAsUnsupportedImportFormat) {
 
   std::error_code ec;
   std::filesystem::remove_all(dir, ec);
+}
+
+// Import decides RAW or raster from the content (raster_image_input_plan.md, section 8):
+// rasters import whatever their extension says, with a color description and no RAW context.
+TEST(MetadataExtractorTest, RasterFilesImportByContentWhateverTheExtension) {
+  const auto dir = std::filesystem::temp_directory_path() / "alcedo_metadata_raster_import";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  struct RasterCase {
+    std::string file_name_;
+    std::string encoded_as_;
+    ImageType   type_;
+  };
+  const std::vector<RasterCase> cases = {{"photo.jpg", ".jpg", ImageType::JPEG},
+                                         {"scan.tif", ".tif", ImageType::TIFF},
+                                         {"graphic.png", ".png", ImageType::PNG},
+                                         {"renamed_jpeg.nef", ".jpg", ImageType::JPEG},
+                                         {"renamed_tiff.dng", ".tif", ImageType::TIFF}};
+  for (const auto& raster : cases) {
+    const auto path = dir / raster.file_name_;
+    test_support::WriteRgbRaster(path, raster.encoded_as_);
+    Image image(7, path, ImageType::DEFAULT);
+    ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(path, image)) << raster.file_name_;
+    EXPECT_EQ(image.image_type_, raster.type_) << raster.file_name_;
+    EXPECT_FALSE(image.HasRawColorContext()) << raster.file_name_;
+    ASSERT_TRUE(image.HasRasterColorDescription()) << raster.file_name_;
+    // The writer carries no color tag, except that some PNG writers (libpng on macOS) add an
+    // sRGB chunk. Both resolve to sRGB.
+    const auto& description = image.GetRasterColorDescription();
+    EXPECT_TRUE(description.origin_ == RasterColorOrigin::DefaultSrgb ||
+                description.origin_ == RasterColorOrigin::PngSrgbChunk)
+        << raster.file_name_;
+    EXPECT_EQ(description.primaries_xy_, color::GamutPrimariesXy(color::ColorGamutId::Rec709))
+        << raster.file_name_;
+    EXPECT_EQ(description.transfer_[0].kind_, RasterTransferKind::SrgbPiecewise)
+        << raster.file_name_;
+    const auto display = image.ExifDisplayToJson();
+    EXPECT_EQ(display.value("ImageWidth", 0u), 32u) << raster.file_name_;
+    EXPECT_EQ(display.value("ImageHeight", 0u), 24u) << raster.file_name_;
+  }
+
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+}
+
+// The vcpkg Exiv2 build has no XMP toolkit, so the rating comes from EXIF for RAW and raster
+// files alike.
+TEST(MetadataExtractorTest, RasterJpegKeepsIccDescriptionAndReadsRatingFromExif) {
+  const auto dir = std::filesystem::temp_directory_path() / "alcedo_metadata_raster_rating";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto path = dir / "display_p3.jpg";
+  std::filesystem::copy_file(RasterFixturePath("display_p3_icc_8bit.jpg"), path);
+  {
+    auto exiv = Exiv2::ImageFactory::open(path.string());
+    exiv->readMetadata();
+    exiv->exifData()["Exif.Image.Rating"] = static_cast<uint16_t>(4);
+    exiv->writeMetadata();
+  }
+
+  Image image(8, path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(path, image);
+  EXPECT_EQ(image.image_type_, ImageType::JPEG);
+  ASSERT_TRUE(image.HasRasterColorDescription());
+  EXPECT_EQ(image.GetRasterColorDescription().origin_, RasterColorOrigin::IccMatrixShaper);
+  EXPECT_NEAR(image.GetRasterColorDescription().primaries_xy_[0],
+              color::GamutPrimariesXy(color::ColorGamutId::P3D65)[0], 2e-3f);
+  EXPECT_EQ(image.ExifDisplayToJson().value("Rating", 0), 4);
+  EXPECT_FALSE(image.ExifDisplayToJson().value("IsHDR", false));
+
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+}
+
+TEST(MetadataExtractorTest, ExrIsSceneLinearAndHdr) {
+  const auto path = RasterFixturePath("chromaticities_p3_half.exr");
+  Image      image(9, path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(path, image);
+  EXPECT_EQ(image.image_type_, ImageType::EXR);
+  ASSERT_TRUE(image.HasRasterColorDescription());
+  EXPECT_EQ(image.GetRasterColorDescription().referral_, RasterReferral::SceneLinear);
+  EXPECT_TRUE(image.ExifDisplayToJson().value("IsHDR", false));
+}
+
+TEST(MetadataExtractorTest, PqPngIsHdrAndSrgbPngIsNot) {
+  const auto pq_path = RasterFixturePath("cicp_rec2020_pq_16bit.png");
+  Image      pq(10, pq_path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(pq_path, pq);
+  EXPECT_TRUE(pq.ExifDisplayToJson().value("IsHDR", false));
+
+  const auto srgb_path = RasterFixturePath("srgb_chunk.png");
+  Image      srgb(11, srgb_path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(srgb_path, srgb);
+  EXPECT_EQ(srgb.image_type_, ImageType::PNG);
+  EXPECT_FALSE(srgb.ExifDisplayToJson().value("IsHDR", false));
+}
+
+TEST(MetadataExtractorTest, OrientationSixSwapsDisplayDimensions) {
+  const auto path = RasterFixturePath("srgb_orientation6_8bit.jpg");
+  Image      image(12, path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(path, image);
+  const auto display = image.ExifDisplayToJson();
+  EXPECT_LT(display.value("ImageWidth", 0u), display.value("ImageHeight", 0u))
+      << "the fixture is stored landscape and displays portrait";
+}
+
+TEST(MetadataExtractorTest, CmykJpegIsUnsupportedFormat) {
+  const auto path = RasterFixturePath("cmyk_icc.jpg");
+  Image      image(13, path, ImageType::DEFAULT);
+  try {
+    MetadataExtractor::ExtractEXIF_ToImage(path, image);
+    FAIL() << "Expected MetadataExtractionError for a CMYK JPEG";
+  } catch (const MetadataExtractionError& e) {
+    EXPECT_EQ(e.code(), ImportErrorCode::UNSUPPORTED_FORMAT);
+  }
+  EXPECT_FALSE(image.HasRasterColorDescription());
+}
+
+// Section 7.4: rows written before this change, and RAW rows written after it, carry no raster
+// key. The key round-trips for raster rows and is not part of the display JSON.
+TEST(MetadataExtractorTest, ImageRowsWithoutRasterKeyLoadAsRaw) {
+  Image image(14, std::filesystem::path("legacy.ARW"), ImageType::DEFAULT);
+  image.JsonToExif(R"({"Make":"Sony","Model":"ILCE-7CM2","ImageWidth":7008,"ImageHeight":4672})");
+  EXPECT_FALSE(image.HasRasterColorDescription());
+  EXPECT_EQ(image.image_type_, ImageType::DEFAULT);
+}
+
+TEST(MetadataExtractorTest, RasterKeyIsOmittedFromRawImageMetadataJson) {
+  Image raw(15, std::filesystem::path("camera.ARW"), ImageType::DEFAULT);
+  raw.SetRawColorContext(RawRuntimeColorContext{});
+  const auto raw_json = nlohmann::json::parse(raw.ExifToJson());
+  EXPECT_FALSE(raw_json.contains("RasterColorDescription"));
+
+  const auto path = RasterFixturePath("display_p3_icc_8bit.jpg");
+  Image      raster(16, path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(path, raster);
+  const auto raster_json = nlohmann::json::parse(raster.ExifToJson());
+  ASSERT_TRUE(raster_json.contains("RasterColorDescription"));
+  EXPECT_FALSE(raster_json.contains("RawRuntimeColorContext"));
+  EXPECT_FALSE(raster.ExifDisplayToJson().contains("RasterColorDescription"));
+
+  Image reloaded(16, path, ImageType::JPEG);
+  reloaded.JsonToExif(raster.ExifToJson());
+  ASSERT_TRUE(reloaded.HasRasterColorDescription());
+  EXPECT_EQ(RasterColorDescriptionToJson(reloaded.GetRasterColorDescription()),
+            RasterColorDescriptionToJson(raster.GetRasterColorDescription()));
+  EXPECT_FALSE(reloaded.ExifDisplayToJson().contains("RasterColorDescription"));
+}
+
+// Issue #714: Panasonic writes the lens name only to its maker note (Exif.Panasonic.LensType),
+// not to Exif.Photo.LensModel.
+TEST(MetadataExtractorTest, ExifLensSourcesPreferPanasonicLensTypeOverPhotoLensModel) {
+  Exiv2::ExifData panasonic;
+  panasonic["Exif.Panasonic.LensType"] = std::string("LEICA DG 12-60/F2.8-4.0");
+  panasonic["Exif.Photo.LensModel"]    = std::string("Other lens name");
+  panasonic["Exif.Photo.LensMake"]     = std::string("Panasonic");
+  const LensIdentity from_maker_note   = LensIdentityResolver::FromExif(panasonic);
+  EXPECT_EQ(from_maker_note.model, "LEICA DG 12-60/F2.8-4.0");
+  EXPECT_EQ(from_maker_note.make, "Panasonic");
+
+  Exiv2::ExifData standard;
+  standard["Exif.Photo.LensModel"] = std::string("FE 20-70mm F4 G");
+  const LensIdentity from_standard = LensIdentityResolver::FromExif(standard);
+  EXPECT_EQ(from_standard.model, "FE 20-70mm F4 G");
+  EXPECT_TRUE(from_standard.make.empty());
+
+  EXPECT_TRUE(LensIdentityResolver::FromExif(Exiv2::ExifData{}).model.empty());
+}
+
+// Issue #714: LibRaw reads no lens name from a DC-G9 RW2. The name is only in the Panasonic maker
+// note of the JPEG that the RW2 embeds (JpgFromRaw), and import must store it.
+TEST(MetadataExtractorTest, Rw2ImportReadsLensNameFromEmbeddedJpegMakerNote) {
+  const auto sample_path =
+      std::filesystem::path(TEST_IMG_PATH) / "raw" / "bad_lens" / "P1832629.RW2";
+  if (!std::filesystem::exists(sample_path)) {
+    GTEST_SKIP() << "Sample RW2 not found: " << sample_path.string();
+  }
+  Image image(17, sample_path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(sample_path, image);
+  ASSERT_TRUE(image.HasRawColorContext());
+  const auto& ctx = image.GetRawColorContext();
+  EXPECT_EQ(ctx.camera_model_, "DC-G9");
+  EXPECT_EQ(ctx.lens_model_, "LEICA DG 12-60/F2.8-4.0");
+  EXPECT_TRUE(ctx.lens_metadata_valid_);
+  EXPECT_EQ(image.ExifDisplayToJson().value("Lens", std::string{}), "LEICA DG 12-60/F2.8-4.0");
 }
 
 }  // namespace

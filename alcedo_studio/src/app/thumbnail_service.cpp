@@ -6,24 +6,30 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <format>
-#include <iterator>
 #include <memory>
 #include <mutex>
+#include <opencv2/imgproc.hpp>
 #include <optional>
+#include <span>
 #include <stdexcept>
+#include <string>
+#include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
-#include "app/history_mgmt_service.hpp"
+#include "app/batch_executor_pool.hpp"
 #include "app/pipeline_service.hpp"
-#include "app/render_service.hpp"
 #include "app/thumbnail_disk_cache_service.hpp"
-#include "storage/store/edit_history/commit_graph_store.hpp"
 #include "concurrency/thread_pool.hpp"
-#include "json.hpp"
+#include "edit/input/raster_input_loader.hpp"
+#include "edit/input/raw_input_loader.hpp"
+#include "io/image/image_loader.hpp"
+#include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
 
 namespace alcedo {
@@ -49,6 +55,17 @@ constexpr DecodeRes ResolutionToDecodeRes(ThumbnailResolution res) {
   return DecodeRes::QUARTER;
 }
 
+/// Disk cache schema. 3: entries are keyed by the committed snapshot's head and chain.
+constexpr uint32_t kDiskCacheSchemaVersion = 3;
+
+/// RAW decode workers. Decode is CPU work, so it runs here and not on the render executors.
+/// Each decode holds the encoded file and LibRaw's full-size CFA (about 75 MB for 20 MP), so the
+/// count stays small.
+auto ThumbnailDecodeWorkerCount() -> std::size_t {
+  const std::size_t cores = std::max(1U, std::thread::hardware_concurrency());
+  return std::clamp<std::size_t>(cores / 2, 2, 6);
+}
+
 void DispatchThumbnailResultCallback(const ThumbnailResultCallback& callback,
                                      const CallbackDispatcher&      dispatcher,
                                      ThumbnailRequestResult         result) {
@@ -64,11 +81,6 @@ void DispatchThumbnailResultCallback(const ThumbnailResultCallback& callback,
     }
   } catch (...) {
   }
-}
-
-auto IsRenderableThumbnailResult(const ImageBuffer& result_buffer) -> bool {
-  return result_buffer.buffer_valid_ || result_buffer.cpu_data_valid_ ||
-         result_buffer.gpu_data_valid_;
 }
 
 auto ConvertThumbnailMatToRgba8(const cv::Mat& src) -> cv::Mat {
@@ -123,20 +135,12 @@ auto MakeDisplayCacheThumbnailBuffer(ImageBuffer& source) -> std::unique_ptr<Ima
   return std::make_unique<ImageBuffer>(std::move(rgba8));
 }
 
-auto ReadColorTempOperatorParams(const std::shared_ptr<PipelineGuard>& pipeline)
-    -> std::optional<nlohmann::json> {
-  if (!pipeline || !pipeline->pipeline_) {
-    return std::nullopt;
-  }
-
-  auto& to_ws_stage      = pipeline->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-  auto  color_temp_entry = to_ws_stage.GetOperator(OperatorType::COLOR_TEMP);
-  if (!color_temp_entry.has_value() || !color_temp_entry.value() ||
-      !color_temp_entry.value()->op_) {
-    return std::nullopt;
-  }
-
-  return color_temp_entry.value()->op_->GetParams();
+/// Disk cache label of a committed snapshot: its head (or "root" before the first commit) and
+/// its transaction chain, which folds the root identity and every first-parent commit.
+auto CommittedHistoryLabel(const PipelineGraphSnapshot& snapshot) -> std::string {
+  const auto& head = snapshot.Head();
+  return (head.has_value() ? head->ToString() : std::string{"root"}) + ":" +
+         snapshot.Chain().ToString();
 }
 
 constexpr ThumbnailResolution kAllThumbnailResolutions[] = {
@@ -145,6 +149,57 @@ constexpr ThumbnailResolution kAllThumbnailResolutions[] = {
     ThumbnailResolution::k1024,
     ThumbnailResolution::k2048,
 };
+
+/**
+ * @brief One thumbnail request between lookup and delivery.
+ *
+ * Exactly one of @ref DeliverPixels and @ref Fail takes effect; later calls do nothing.
+ */
+struct RenditionRequest {
+  sl_element_id_t           element_id = 0;
+  image_id_t                image_id   = 0;
+  ThumbnailResolution       resolution = ThumbnailResolution::k1024;
+  std::function<bool()>     canceled;
+  /// Takes the RGBA8 display buffer. Returns the guard that now owns it, or null when the
+  /// requester no longer wants it; only an owned buffer is written to the disk cache.
+  std::function<std::shared_ptr<ThumbnailGuard>(std::unique_ptr<ImageBuffer>)> on_pixels;
+  std::function<void(ThumbnailRequestStatus, std::string)>                     on_failure;
+  std::atomic<bool>                                                            finished{false};
+
+  [[nodiscard]] auto IsCanceled() const -> bool {
+    try {
+      return canceled && canceled();
+    } catch (...) {
+      return true;
+    }
+  }
+
+  auto DeliverPixels(std::unique_ptr<ImageBuffer> pixels) -> std::shared_ptr<ThumbnailGuard> {
+    if (finished.exchange(true)) {
+      return nullptr;
+    }
+    return on_pixels ? on_pixels(std::move(pixels)) : nullptr;
+  }
+
+  void Fail(ThumbnailRequestStatus status, std::string message) {
+    if (finished.exchange(true)) {
+      return;
+    }
+    if (on_failure) {
+      on_failure(status, std::move(message));
+    }
+  }
+
+  /// Fail as canceled when the requester canceled, otherwise as an error with @p message.
+  void FailCanceledOr(std::string message) {
+    if (IsCanceled()) {
+      Fail(ThumbnailRequestStatus::kCanceled, "Request was canceled.");
+    } else {
+      Fail(ThumbnailRequestStatus::kError, std::move(message));
+    }
+  }
+};
+
 }  // namespace
 
 struct ThumbnailService::State {
@@ -159,10 +214,24 @@ struct ThumbnailService::State {
   std::shared_ptr<SleeveServiceImpl>             sleeve_service_     = nullptr;
   std::shared_ptr<ImagePoolService>              image_pool_service_ = nullptr;
   std::shared_ptr<PipelineMgmtService>           pipeline_service_   = nullptr;
-  std::shared_ptr<Storage>                 storage_    = nullptr;
+  std::shared_ptr<Storage>                       storage_            = nullptr;
   std::string                                    project_uuid_;
   std::unique_ptr<ThumbnailDiskCacheService>     disk_cache_service_;
-  ThreadPool                                     disk_read_thread_pool_;
+  BatchExecutorPool                              executors_;
+  // Render workers, one per batch executor.
+  PipelineScheduler                              render_scheduler_;
+  // Snapshot acquisition and disk cache reads, off the caller's thread.
+  ThreadPool                                     lookup_thread_pool_;
+  // RAW decode of disk cache misses, ahead of the render workers.
+  ThreadPool                                     decode_thread_pool_;
+
+  // Decoded sources from the start of their decode to the end of their render. The limit keeps
+  // decode from running far ahead of the render executors and holding many sources in memory.
+  std::mutex                                     decode_slot_mutex_;
+  std::condition_variable                        decode_slot_cv_;
+  std::size_t                                    decode_slots_in_use_ = 0;
+  std::size_t                                    decode_slot_limit_   = 0;
+  bool                                           stopping_            = false;
 
   std::mutex                                     cache_lock_;
 
@@ -177,27 +246,26 @@ struct ThumbnailService::State {
   std::unordered_map<ThumbnailCacheKey, std::shared_ptr<std::atomic<uint64_t>>>
       generation_tokens_{};
 
-  // Phase 3: cancel tokens for analysis renditions. Separate from
-  // generation_tokens_ to avoid collision when the same {element, resolution}
-  // is rendered both via the live thumbnail path and the snapshot path.
-  std::unordered_map<ThumbnailCacheKey, std::shared_ptr<std::atomic<uint64_t>>> analysis_tokens_{};
-
-  // Pipeline scheduler (global/shared), must outlive tasks.
-  std::shared_ptr<PipelineScheduler> pipeline_scheduler_ = nullptr;
-
-  State(std::shared_ptr<SleeveServiceImpl>      sleeve_service,
-        std::shared_ptr<ImagePoolService>       image_pool_service,
-        std::shared_ptr<PipelineMgmtService>    pipeline_service,
-        std::shared_ptr<Storage>          storage_service, std::string project_uuid,
-        std::filesystem::path thumbnail_cache_root)
+  State(std::shared_ptr<SleeveServiceImpl>   sleeve_service,
+        std::shared_ptr<ImagePoolService>    image_pool_service,
+        std::shared_ptr<PipelineMgmtService> pipeline_service,
+        std::shared_ptr<Storage> storage_service, std::string project_uuid,
+        std::filesystem::path thumbnail_cache_root, std::size_t batch_executor_count)
       : sleeve_service_(std::move(sleeve_service)),
         image_pool_service_(std::move(image_pool_service)),
         pipeline_service_(std::move(pipeline_service)),
         storage_(std::move(storage_service)),
         project_uuid_(std::move(project_uuid)),
-        disk_read_thread_pool_(2),
+        executors_(batch_executor_count,
+                   pipeline_service_ ? pipeline_service_->GetAcceleratorBackendPreference()
+                                     : AcceleratorBackendPreference::Auto,
+                   pipeline_service_ ? pipeline_service_->LutResources() : nullptr,
+                   pipeline_service_ ? pipeline_service_->MaskAssets() : nullptr),
+        render_scheduler_(executors_.Size()),
+        lookup_thread_pool_(2),
+        decode_thread_pool_(ThumbnailDecodeWorkerCount()),
+        decode_slot_limit_(ThumbnailDecodeWorkerCount() + 2 * executors_.Size()),
         thumbnail_cache_(default_cache_size_) {
-    pipeline_scheduler_ = RenderService::GetThumbnailOrExportScheduler();
     if (storage_ && !project_uuid_.empty()) {
       if (thumbnail_cache_root.empty()) {
         disk_cache_service_ = std::make_unique<ThumbnailDiskCacheService>();
@@ -225,82 +293,268 @@ struct ThumbnailService::State {
     token->fetch_add(1);
   }
 
-  // Phase 3: analysis-rendition cancel token. Mirrors the generation-token
-  // helpers but keys off analysis_tokens_ so the two render paths never collide.
-  auto GetOrCreateAnalysisToken(const ThumbnailCacheKey& key)
-      -> std::shared_ptr<std::atomic<uint64_t>> {
-    auto it = analysis_tokens_.find(key);
-    if (it != analysis_tokens_.end() && it->second) {
-      return it->second;
-    }
-    auto token            = std::make_shared<std::atomic<uint64_t>>(0);
-    analysis_tokens_[key] = token;
-    return token;
-  }
-
-  // Acquires cache_lock_ internally; called from CancelAnalysisRendition with no
-  // lock held.
-  void IncrementAnalysisToken(const ThumbnailCacheKey& key) {
-    std::unique_lock<std::mutex> lk(cache_lock_);
-    GetOrCreateAnalysisToken(key)->fetch_add(1);
-  }
-
-  auto ReadCurrentVersionHash(sl_element_id_t id) -> std::string {
-    if (storage_) {
-      try {
-        auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-        auto               db_lock  = db_guard.Lock();
-        CommitGraphStore graph_service(db_guard.conn_);
-        const auto         graph = graph_service.LoadGraph(id);
-        if (graph.has_value()) {
-          const auto head = graph->GetActiveVersionRef().head_commit_hash;
-          return head.has_value() ? head->ToString() : graph->GetRootId().ToString();
-        }
-      } catch (...) {
-      }
-    }
-    return {};
-  }
-
-  auto BuildDiskCacheKey(sl_element_id_t id, ThumbnailResolution resolution,
-                         ThumbnailDiskCachePurpose purpose)
+  auto BuildDiskCacheKey(const PipelineGraphSnapshot& snapshot,
+                         ThumbnailResolution          resolution) const
       -> std::optional<ThumbnailDiskCacheKey> {
-    if (!disk_cache_service_ || !storage_ || project_uuid_.empty()) {
+    if (!disk_cache_service_ || project_uuid_.empty()) {
       return std::nullopt;
     }
-
     ThumbnailDiskCacheKey key;
     key.project_uuid         = project_uuid_;
-    key.element_id           = id;
+    key.element_id           = snapshot.ElementId();
     key.resolution           = resolution;
-    key.purpose              = purpose;
-    key.edit_version_hash    = ReadCurrentVersionHash(id);
-    key.cache_schema_version = 1;
-    if (key.edit_version_hash.empty()) {
-      return std::nullopt;
-    }
+    key.purpose              = ThumbnailDiskCachePurpose::kThumbnail;
+    key.edit_version_hash    = CommittedHistoryLabel(snapshot);
+    key.cache_schema_version = kDiskCacheSchemaVersion;
     return key;
   }
 
-  // The pool is declared before cache_lock_/pending_/thumbnail_cache_data_
-  // (members above), so the compiler-generated destructor destroys those first
-  // and the pool last — but ThreadPool::~ThreadPool DRAINS queued tasks, which
-  // access exactly those already-destroyed members (use-after-free). Stop the
-  // pool here, while every member is still alive, so the queued disk-read tasks
-  // are dropped and in-flight ones finish against live state. The pool's own
-  // destructor then drains an empty queue (no-op).
-  ~State() { disk_read_thread_pool_.Shutdown(); }
+  /// Queue @p request on a lookup worker.
+  static void StartRendition(const std::shared_ptr<State>&     st,
+                             std::shared_ptr<RenditionRequest> request);
+  /// Lookup stage: committed snapshot, then the disk cache, then a render.
+  static void LookUpRendition(const std::shared_ptr<State>&            st,
+                              const std::shared_ptr<RenditionRequest>& request);
+  /// Decode stage on a decode worker: read the file and decode the RAW at the tier's resolution.
+  static void DecodeRenditionSource(const std::shared_ptr<State>&                st,
+                                    const std::shared_ptr<RenditionRequest>&     request,
+                                    std::shared_ptr<const PipelineGraphSnapshot> snapshot,
+                                    std::optional<ThumbnailDiskCacheKey>         disk_key);
+  /// Render stage on a render worker and one batch executor of the pool.
+  static void ScheduleRenditionRender(const std::shared_ptr<State>&                st,
+                                      const std::shared_ptr<RenditionRequest>&     request,
+                                      std::shared_ptr<const PipelineGraphSnapshot> snapshot,
+                                      std::optional<ThumbnailDiskCacheKey>         disk_key,
+                                      std::shared_ptr<const PreparedRawInput>      source,
+                                      std::shared_ptr<void>                        decode_slot);
+
+  /// Wait for a decode slot. Returns null when the service is stopping. The slot is free again
+  /// when the last copy of the returned handle is destroyed.
+  static auto AcquireDecodeSlot(const std::shared_ptr<State>& st) -> std::shared_ptr<void> {
+    std::unique_lock lock(st->decode_slot_mutex_);
+    st->decode_slot_cv_.wait(lock, [&st] {
+      return st->stopping_ || st->decode_slots_in_use_ < st->decode_slot_limit_;
+    });
+    if (st->stopping_) {
+      return nullptr;
+    }
+    ++st->decode_slots_in_use_;
+    // Non-null so the handle tests true; the deleter only frees the slot.
+    return std::shared_ptr<void>(st.get(), [st](void*) {
+      {
+        std::lock_guard release_lock(st->decode_slot_mutex_);
+        --st->decode_slots_in_use_;
+      }
+      st->decode_slot_cv_.notify_one();
+    });
+  }
+
+  /// Stop the worker pools while every member is still alive: queued work is dropped and running
+  /// work finishes. Each queued task holds the State, so the owner calls this before it drops its
+  /// reference; otherwise the last task would destroy the pools from their own thread.
+  void        StopWorkers() {
+    {
+      std::lock_guard lock(decode_slot_mutex_);
+      stopping_ = true;
+    }
+    decode_slot_cv_.notify_all();
+    lookup_thread_pool_.Shutdown();
+    decode_thread_pool_.Shutdown();
+    render_scheduler_.Shutdown();
+  }
+
+  ~State() { StopWorkers(); }
 };
 
-ThumbnailService::ThumbnailService(std::shared_ptr<SleeveServiceImpl>      sleeve_service,
-                                   std::shared_ptr<ImagePoolService>       image_pool_service,
-                                   std::shared_ptr<PipelineMgmtService>    pipeline_service,
-                                   std::shared_ptr<Storage>          storage_service,
-                                   const std::string&                      project_uuid,
-                                   const std::filesystem::path&            thumbnail_cache_root)
+void ThumbnailService::State::StartRendition(const std::shared_ptr<State>&     st,
+                                             std::shared_ptr<RenditionRequest> request) {
+  st->lookup_thread_pool_.Submit([st, request = std::move(request)] {
+    try {
+      LookUpRendition(st, request);
+    } catch (const std::exception& e) {
+      request->Fail(ThumbnailRequestStatus::kError, e.what());
+    } catch (...) {
+      request->Fail(ThumbnailRequestStatus::kError,
+                    "[ERROR] ThumbnailService: lookup failed with an unknown error.");
+    }
+  });
+}
+
+void ThumbnailService::State::LookUpRendition(const std::shared_ptr<State>&            st,
+                                              const std::shared_ptr<RenditionRequest>& request) {
+  if (request->IsCanceled()) {
+    request->Fail(ThumbnailRequestStatus::kCanceled, "Request was canceled.");
+    return;
+  }
+
+  std::shared_ptr<const PipelineGraphSnapshot> snapshot;
+  try {
+    snapshot = st->pipeline_service_->AcquireCommittedSnapshot(request->element_id);
+  } catch (const std::exception& e) {
+    request->Fail(ThumbnailRequestStatus::kError,
+                  std::format("[ERROR] ThumbnailService: committed state of element {} is not "
+                              "available: {}",
+                              request->element_id, e.what()));
+    return;
+  }
+
+  const auto disk_key = st->BuildDiskCacheKey(*snapshot, request->resolution);
+  if (disk_key.has_value()) {
+    auto disk_buffer = st->disk_cache_service_->Read(*disk_key);
+    if (request->IsCanceled()) {
+      request->Fail(ThumbnailRequestStatus::kCanceled, "Request was canceled.");
+      return;
+    }
+    if (disk_buffer && disk_buffer->cpu_data_valid_) {
+      if (auto display = MakeDisplayCacheThumbnailBuffer(*disk_buffer)) {
+        (void)request->DeliverPixels(std::move(display));
+        return;
+      }
+    }
+  }
+
+  DecodeRenditionSource(st, request, std::move(snapshot), disk_key);
+}
+
+void ThumbnailService::State::DecodeRenditionSource(
+    const std::shared_ptr<State>& st, const std::shared_ptr<RenditionRequest>& request,
+    std::shared_ptr<const PipelineGraphSnapshot> snapshot,
+    std::optional<ThumbnailDiskCacheKey>         disk_key) {
+  st->decode_thread_pool_.Submit([st, request, snapshot = std::move(snapshot),
+                                  disk_key = std::move(disk_key)]() mutable {
+    try {
+      if (request->IsCanceled()) {
+        request->Fail(ThumbnailRequestStatus::kCanceled, "Request was canceled.");
+        return;
+      }
+      auto decode_slot = AcquireDecodeSlot(st);
+      if (!decode_slot) {
+        request->Fail(ThumbnailRequestStatus::kCanceled, "Thumbnail service is stopping.");
+        return;
+      }
+      if (request->IsCanceled()) {
+        request->Fail(ThumbnailRequestStatus::kCanceled, "Request was canceled.");
+        return;
+      }
+      auto image = st->image_pool_service_->Read<std::shared_ptr<Image>>(
+          request->image_id, [](const std::shared_ptr<Image>& img) { return img; });
+      if (!image) {
+        throw std::runtime_error(
+            std::format("[ERROR] ThumbnailService: image {} of element {} is not in the pool.",
+                        request->image_id, request->element_id));
+      }
+      std::shared_ptr<const PreparedRawInput> source;
+      {
+        const auto encoded = ByteBufferLoader::LoadByteBufferFromImage(std::move(image));
+        if (request->IsCanceled()) {
+          request->Fail(ThumbnailRequestStatus::kCanceled, "Request was canceled.");
+          return;
+        }
+        // RAW content goes to the RAW decoder and raster content to the raster decoder, which
+        // uses the scaled JPEG decode at reduced resolutions.
+        source = std::make_shared<const PreparedRawInput>(
+            LoadEncodedImage(std::as_bytes(std::span<const uint8_t>(encoded)),
+                             ResolutionToDecodeRes(request->resolution)));
+      }
+      ScheduleRenditionRender(st, request, std::move(snapshot), std::move(disk_key),
+                              std::move(source), std::move(decode_slot));
+    } catch (const std::exception& e) {
+      request->FailCanceledOr(e.what());
+    } catch (...) {
+      request->FailCanceledOr("[ERROR] ThumbnailService: decode failed with an unknown error.");
+    }
+  });
+}
+
+void ThumbnailService::State::ScheduleRenditionRender(
+    const std::shared_ptr<State>& st, const std::shared_ptr<RenditionRequest>& request,
+    std::shared_ptr<const PipelineGraphSnapshot> snapshot,
+    std::optional<ThumbnailDiskCacheKey> disk_key, std::shared_ptr<const PreparedRawInput> source,
+    std::shared_ptr<void> decode_slot) {
+  // The executor a render takes from the pool, returned when the task completes.
+  struct ExecutorLease {
+    std::optional<std::size_t> index;
+  };
+  auto         lease = std::make_shared<ExecutorLease>();
+
+  PipelineTask task;
+  task.options_.render_desc_.render_type_ = RenderType::THUMBNAIL;
+  task.options_.render_desc_.max_edge_    = ResolutionToMaxEdge(request->resolution);
+  task.options_.render_desc_.decode_res_  = ResolutionToDecodeRes(request->resolution);
+  task.options_.is_blocking_              = false;
+  task.options_.is_callback_              = true;
+  task.options_.is_seq_callback_          = false;
+  task.cancel_requested_                  = [request] { return request->IsCanceled(); };
+  task.snapshot_                          = std::move(snapshot);
+  task.prepared_input_                    = std::move(source);
+
+  task.prepare_                           = [st, lease](PipelineTask& prepared) -> bool {
+    auto [index, executor]      = st->executors_.Take();
+    lease->index                = index;
+    prepared.pipeline_executor_ = std::move(executor);
+    return true;
+  };
+
+  task.callback_ = [st, request, disk_key](ImageBuffer& result) {
+    if (request->IsCanceled()) {
+      return;
+    }
+    auto display = MakeDisplayCacheThumbnailBuffer(result);
+    if (!display) {
+      return;
+    }
+    const auto guard = request->DeliverPixels(std::move(display));
+    if (guard && guard->thumbnail_buffer_ && disk_key.has_value()) {
+      try {
+        std::shared_ptr<ImageBuffer> pixels(guard, guard->thumbnail_buffer_.get());
+        st->disk_cache_service_->EnqueueWrite(*disk_key, std::move(pixels));
+      } catch (...) {
+        // The disk cache only speeds up later requests; the pixels were already delivered.
+      }
+    }
+  };
+
+  // Runs once on every terminal path, after the render released the executor's lock. A request
+  // that delivered pixels ignores the failure below.
+  // The decode slot is free once the render ends and the task drops this handler.
+  task.on_complete_ = [st, request, lease, decode_slot = std::move(decode_slot)](
+                          bool success, std::string message) {
+    if (lease->index.has_value()) {
+      st->executors_.Return(*lease->index);
+    }
+    request->FailCanceledOr(
+        success || message.empty()
+            ? std::format("[ERROR] ThumbnailService: render of element {} produced no thumbnail "
+                          "buffer.",
+                          request->element_id)
+            : std::move(message));
+  };
+
+  try {
+    st->render_scheduler_.ScheduleTask(std::move(task));
+  } catch (const std::exception& e) {
+    request->Fail(ThumbnailRequestStatus::kError,
+                  std::format("[ERROR] ThumbnailService: failed to schedule element {}: {}",
+                              request->element_id, e.what()));
+  }
+}
+
+ThumbnailService::ThumbnailService(std::shared_ptr<SleeveServiceImpl>   sleeve_service,
+                                   std::shared_ptr<ImagePoolService>    image_pool_service,
+                                   std::shared_ptr<PipelineMgmtService> pipeline_service,
+                                   std::shared_ptr<Storage>             storage_service,
+                                   const std::string&                   project_uuid,
+                                   const std::filesystem::path&         thumbnail_cache_root,
+                                   std::size_t                          batch_executor_count)
     : state_(std::make_shared<State>(std::move(sleeve_service), std::move(image_pool_service),
                                      std::move(pipeline_service), std::move(storage_service),
-                                     project_uuid, thumbnail_cache_root)) {}
+                                     project_uuid, thumbnail_cache_root, batch_executor_count)) {}
+
+ThumbnailService::~ThumbnailService() {
+  if (state_) {
+    state_->StopWorkers();
+  }
+}
 
 void ThumbnailService::GetThumbnail(sl_element_id_t id, image_id_t image_id,
                                     ThumbnailCallback callback, bool pin_if_found,
@@ -320,7 +574,7 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
                                             CallbackDispatcher  dispatcher,
                                             ThumbnailResolution resolution) {
   auto st = state_;
-  if (!st || !st->image_pool_service_ || !st->pipeline_service_ || !st->pipeline_scheduler_) {
+  if (!st || !st->image_pool_service_ || !st->pipeline_service_) {
     throw std::runtime_error("[ERROR] ThumbnailService: Services not initialized.");
   }
 
@@ -351,26 +605,19 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
     return;
   }
 
-  const auto disk_key =
-      st->BuildDiskCacheKey(id, resolution, ThumbnailDiskCachePurpose::kThumbnail);
-
   std::shared_ptr<std::atomic<uint64_t>> gen_token;
   uint64_t                               expected_gen = 0;
   {
-    std::unique_lock lock(st->cache_lock_);
-    auto             it = st->pending_.find(cache_key);
-    if (it != st->pending_.end()) {
-      State::PendingCallback pending_cb{};
-      pending_cb.callback_   = std::move(callback);
-      pending_cb.dispatcher_ = std::move(dispatcher);
-      pending_cb.key_        = cache_key;
-      it->second.push_back(std::move(pending_cb));
-      return;
-    }
+    std::unique_lock       lock(st->cache_lock_);
     State::PendingCallback pending_cb{};
     pending_cb.callback_   = std::move(callback);
     pending_cb.dispatcher_ = std::move(dispatcher);
     pending_cb.key_        = cache_key;
+    auto it                = st->pending_.find(cache_key);
+    if (it != st->pending_.end()) {
+      it->second.push_back(std::move(pending_cb));
+      return;
+    }
     std::vector<State::PendingCallback> pending_callbacks;
     pending_callbacks.push_back(std::move(pending_cb));
     st->pending_.emplace(cache_key, std::move(pending_callbacks));
@@ -379,591 +626,75 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
     expected_gen = gen_token->load();
   }
 
-  auto schedule_pipeline_render = [st, id, image_id, cache_key, resolution, gen_token,
-                                   expected_gen]() {
-    struct ThumbnailTaskContext {
-      std::shared_ptr<PipelineGuard> pipeline{};
-      std::optional<nlohmann::json>  pre_render_color_temp_params{};
-      std::atomic<bool>              pipeline_released{false};
-    };
+  // A changed generation means CancelPending or InvalidateThumbnail already answered or dropped
+  // this request's callbacks, and a later request for the same key may be waiting.
+  const auto generation_changed = [gen_token, expected_gen] {
+    return gen_token->load() != expected_gen;
+  };
 
-    auto task_context          = std::make_shared<ThumbnailTaskContext>();
+  auto request        = std::make_shared<RenditionRequest>();
+  request->element_id = id;
+  request->image_id   = image_id;
+  request->resolution = resolution;
+  request->canceled   = generation_changed;
 
-    auto release_task_pipeline = [st, task_context]() {
-      auto pipeline = task_context->pipeline;
-      if (!pipeline || task_context->pipeline_released.exchange(true)) {
+  request->on_pixels  = [st, cache_key, generation_changed](
+                           std::unique_ptr<ImageBuffer> pixels) -> std::shared_ptr<ThumbnailGuard> {
+    std::shared_ptr<ThumbnailGuard>     published;
+    std::vector<State::PendingCallback> callbacks;
+    {
+      std::unique_lock lock(st->cache_lock_);
+      if (generation_changed()) {
+        return nullptr;
+      }
+      auto pending_it = st->pending_.find(cache_key);
+      if (pending_it == st->pending_.end()) {
+        return nullptr;
+      }
+      callbacks = std::move(pending_it->second);
+      st->pending_.erase(pending_it);
+
+      published                    = std::make_shared<ThumbnailGuard>();
+      published->thumbnail_buffer_ = std::move(pixels);
+      published->pin_count_        = static_cast<int>(std::max<size_t>(1, callbacks.size()));
+      auto evicted = st->thumbnail_cache_.RecordAccess_WithEvict(cache_key, cache_key);
+      HandleEvict(*st, evicted);
+      st->thumbnail_cache_data_[cache_key] = published;
+    }
+    for (const auto& pending_cb : callbacks) {
+      DispatchThumbnailResultCallback(
+          pending_cb.callback_, pending_cb.dispatcher_,
+          ThumbnailRequestResult{.guard   = published,
+                                 .status  = ThumbnailRequestStatus::kReady,
+                                 .message = {},
+                                 .key     = cache_key});
+    }
+    return published;
+  };
+
+  request->on_failure = [st, cache_key, generation_changed](ThumbnailRequestStatus status,
+                                                            std::string            message) {
+    std::vector<State::PendingCallback> callbacks;
+    {
+      std::unique_lock lock(st->cache_lock_);
+      if (generation_changed()) {
         return;
       }
-      try {
-        st->pipeline_service_->SavePipeline(pipeline);
-      } catch (...) {
+      auto it = st->pending_.find(cache_key);
+      if (it != st->pending_.end()) {
+        callbacks = std::move(it->second);
+        st->pending_.erase(it);
       }
-    };
-
-    auto fail_pending_request = [st, cache_key, task_context, release_task_pipeline](
-                                    const std::string&                    message,
-                                    const std::shared_ptr<PipelineGuard>& pipeline,
-                                    bool                                  throw_after) -> bool {
-      std::vector<State::PendingCallback> callbacks;
-      {
-        std::unique_lock lock(st->cache_lock_);
-        auto             it = st->pending_.find(cache_key);
-        if (it != st->pending_.end()) {
-          callbacks = std::move(it->second);
-          st->pending_.erase(it);
-        }
-        st->thumbnail_cache_.RemoveRecord(cache_key);
-        st->thumbnail_cache_data_.erase(cache_key);
-      }
-
-      if (pipeline) {
-        if (task_context->pipeline == pipeline) {
-          release_task_pipeline();
-        } else {
-          try {
-            st->pipeline_service_->SavePipeline(pipeline);
-          } catch (...) {
-          }
-        }
-      }
-
-      for (const auto& pending_cb : callbacks) {
-        DispatchThumbnailResultCallback(
-            pending_cb.callback_, pending_cb.dispatcher_,
-            ThumbnailRequestResult{.guard   = nullptr,
-                                   .status  = ThumbnailRequestStatus::kError,
-                                   .message = message,
-                                   .key     = cache_key});
-      }
-
-      if (throw_after) {
-        throw std::runtime_error(message);
-      }
-      return false;
-    };
-
-    const uint32_t  max_edge   = ResolutionToMaxEdge(resolution);
-    const DecodeRes decode_res = ResolutionToDecodeRes(resolution);
-
-    PipelineTask    thumb_task;
-    thumb_task.options_.render_desc_.render_type_ = RenderType::THUMBNAIL;
-    thumb_task.options_.render_desc_.max_edge_    = max_edge;
-    thumb_task.options_.render_desc_.decode_res_  = decode_res;
-    thumb_task.options_.is_blocking_              = false;
-    thumb_task.options_.is_callback_              = true;
-    thumb_task.options_.is_seq_callback_          = false;
-    thumb_task.cancel_requested_                  = [gen_token, expected_gen]() {
-      return gen_token && gen_token->load() != expected_gen;
-    };
-
-    thumb_task.prepare_ = [st, id, image_id, task_context,
-                           fail_pending_request](PipelineTask& task) mutable -> bool {
-      std::shared_ptr<PipelineGuard> pipeline;
-      try {
-        pipeline = st->pipeline_service_->LoadPipeline(id);
-      } catch (const std::exception& e) {
-        return fail_pending_request(
-            std::format("[ERROR] ThumbnailService: Failed to load pipeline for file ID {}: {}", id,
-                        e.what()),
-            nullptr, false);
-      } catch (...) {
-        return fail_pending_request(
-            std::format(
-                "[ERROR] ThumbnailService: Failed to load pipeline for file ID {}: unknown error.",
-                id),
-            nullptr, false);
-      }
-
-      task_context->pipeline = pipeline;
-      if (!pipeline || !pipeline->pipeline_) {
-        return fail_pending_request(
-            std::format("[ERROR] ThumbnailService: Pipeline for file ID {} not available.", id),
-            pipeline, false);
-      }
-
-      pipeline->pipeline_->SetForceCPUOutput(true);
-
-      std::shared_ptr<Image> img_result;
-      try {
-        img_result = st->image_pool_service_->Read<std::shared_ptr<Image>>(
-            image_id, [](const std::shared_ptr<Image>& img) { return img; });
-      } catch (const std::exception& e) {
-        return fail_pending_request(
-            std::format("[ERROR] ThumbnailService: Failed to load image ID {} for element {}: {}",
-                        image_id, id, e.what()),
-            pipeline, false);
-      } catch (...) {
-        return fail_pending_request(std::format("[ERROR] ThumbnailService: Failed to load image ID "
-                                                "{} for element {}: unknown error.",
-                                                image_id, id),
-                                    pipeline, false);
-      }
-
-      if (!img_result) {
-        return fail_pending_request(
-            std::format("[ERROR] ThumbnailService: Image with ID {} not found in pool.", image_id),
-            pipeline, false);
-      }
-
-      task_context->pre_render_color_temp_params = ReadColorTempOperatorParams(pipeline);
-      task.pipeline_executor_                    = pipeline->pipeline_;
-      task.input_desc_                           = std::move(img_result);
-      return true;
-    };
-
-    thumb_task.callback_ = [st, id, cache_key, task_context, release_task_pipeline, gen_token,
-                            expected_gen](ImageBuffer& result_buffer) {
-      // Strategy A: stale tasks must not touch pending_ because a newer request
-      // for the same element/resolution may already have claimed that slot.
-      if (gen_token && gen_token->load() != expected_gen) {
-        release_task_pipeline();
-        return;
-      }
-
-      std::shared_ptr<ThumbnailGuard>     guard;
-      std::vector<State::PendingCallback> callbacks;
-      std::unique_ptr<ImageBuffer>        display_buffer;
-      try {
-        if (IsRenderableThumbnailResult(result_buffer)) {
-          display_buffer = MakeDisplayCacheThumbnailBuffer(result_buffer);
-        }
-      } catch (...) {
-        display_buffer.reset();
-      }
-
-      {
-        std::unique_lock lock(st->cache_lock_);
-
-        if (gen_token && gen_token->load() != expected_gen) {
-          release_task_pipeline();
-          return;
-        }
-
-        auto       pending_it     = st->pending_.find(cache_key);
-        const bool request_active = (pending_it != st->pending_.end());
-        if (request_active) {
-          callbacks = std::move(pending_it->second);
-          st->pending_.erase(pending_it);
-        }
-
-        if (request_active && display_buffer) {
-          guard                    = std::make_shared<ThumbnailGuard>();
-          guard->thumbnail_buffer_ = std::move(display_buffer);
-          guard->pin_count_        = static_cast<int>(std::max<size_t>(1, callbacks.size()));
-
-          auto evicted = st->thumbnail_cache_.RecordAccess_WithEvict(cache_key, cache_key);
-          HandleEvict(*st, evicted);
-          st->thumbnail_cache_data_[cache_key] = guard;
-
-          // Enqueue write to disk cache asynchronously.
-          if (st->disk_cache_service_ && st->storage_) {
-            try {
-              const auto disk_key = st->BuildDiskCacheKey(id, cache_key.resolution,
-                                                          ThumbnailDiskCachePurpose::kThumbnail);
-              if (disk_key.has_value()) {
-                std::shared_ptr<ImageBuffer> disk_cache_buffer(guard,
-                                                               guard->thumbnail_buffer_.get());
-                st->disk_cache_service_->EnqueueWrite(disk_key.value(),
-                                                      std::move(disk_cache_buffer));
-              }
-            } catch (...) {
-            }
-          }
-        } else {
-          st->thumbnail_cache_.RemoveRecord(cache_key);
-          st->thumbnail_cache_data_.erase(cache_key);
-        }
-      }
-
-      // Strategy A: re-check token after pipeline work (before callbacks).
-      // If cancelled mid-render, remove only the guard inserted by this task.
-      if (gen_token && gen_token->load() != expected_gen) {
-        if (guard) {
-          std::unique_lock lock(st->cache_lock_);
-          auto             guard_it = st->thumbnail_cache_data_.find(cache_key);
-          if (guard_it != st->thumbnail_cache_data_.end() && guard_it->second == guard) {
-            st->thumbnail_cache_.RemoveRecord(cache_key);
-            st->thumbnail_cache_data_.erase(guard_it);
-          }
-        }
-        release_task_pipeline();
-        for (const auto& pending_cb : callbacks) {
-          DispatchThumbnailResultCallback(
-              pending_cb.callback_, pending_cb.dispatcher_,
-              ThumbnailRequestResult{.guard   = nullptr,
-                                     .status  = ThumbnailRequestStatus::kCanceled,
-                                     .message = "Thumbnail request was canceled.",
-                                     .key     = cache_key});
-        }
-        return;
-      }
-
-      const auto pipeline = task_context->pipeline;
-      if (pipeline) {
-        const auto post_render_color_temp_params = ReadColorTempOperatorParams(pipeline);
-        if (post_render_color_temp_params != task_context->pre_render_color_temp_params) {
-          pipeline->dirty_ = true;
-        }
-      }
-
-      release_task_pipeline();
-
-      const auto status = guard ? ThumbnailRequestStatus::kReady : ThumbnailRequestStatus::kError;
-      const std::string message =
-          guard
-              ? std::string{}
-              : std::format(
-                    "[ERROR] ThumbnailService: Render for element {} produced no thumbnail buffer.",
-                    id);
-      for (const auto& pending_cb : callbacks) {
-        DispatchThumbnailResultCallback(
-            pending_cb.callback_, pending_cb.dispatcher_,
-            ThumbnailRequestResult{
-                .guard = guard, .status = status, .message = message, .key = cache_key});
-      }
-    };
-
-    try {
-      st->pipeline_scheduler_->ScheduleTask(std::move(thumb_task));
-    } catch (const std::exception& e) {
-      fail_pending_request(
-          std::format("[ERROR] ThumbnailService: Failed to schedule thumbnail for element {}: {}",
-                      id, e.what()),
-          task_context->pipeline, true);
-    } catch (...) {
-      fail_pending_request(std::format("[ERROR] ThumbnailService: Failed to schedule thumbnail for "
-                                       "element {}: unknown error.",
-                                       id),
-                           task_context->pipeline, true);
+    }
+    for (const auto& pending_cb : callbacks) {
+      DispatchThumbnailResultCallback(
+          pending_cb.callback_, pending_cb.dispatcher_,
+          ThumbnailRequestResult{
+              .guard = nullptr, .status = status, .message = message, .key = cache_key});
     }
   };
 
-  if (disk_key.has_value() && st->disk_cache_service_) {
-    const auto disk_key_value = disk_key.value();
-    auto*      disk_cache     = st->disk_cache_service_.get();
-    st->disk_read_thread_pool_.Submit([st, id, cache_key, disk_key_value, disk_cache, gen_token,
-                                       expected_gen, schedule_pipeline_render]() {
-      if (gen_token && gen_token->load() != expected_gen) {
-        return;
-      }
-
-      auto disk_buffer = disk_cache->Read(disk_key_value);
-      if (gen_token && gen_token->load() != expected_gen) {
-        return;
-      }
-
-      if (!disk_buffer || !disk_buffer->cpu_data_valid_) {
-        schedule_pipeline_render();
-        return;
-      }
-
-      auto display_buffer = MakeDisplayCacheThumbnailBuffer(*disk_buffer);
-      if (!display_buffer) {
-        schedule_pipeline_render();
-        return;
-      }
-
-      std::shared_ptr<ThumbnailGuard>     disk_guard;
-      std::vector<State::PendingCallback> callbacks;
-      {
-        std::unique_lock lock(st->cache_lock_);
-        if (gen_token && gen_token->load() != expected_gen) {
-          return;
-        }
-        auto pending_it = st->pending_.find(cache_key);
-        if (pending_it == st->pending_.end()) {
-          return;
-        }
-        callbacks = std::move(pending_it->second);
-        st->pending_.erase(pending_it);
-
-        disk_guard                    = std::make_shared<ThumbnailGuard>();
-        disk_guard->thumbnail_buffer_ = std::move(display_buffer);
-        disk_guard->pin_count_        = static_cast<int>(std::max<size_t>(1, callbacks.size()));
-        auto evicted = st->thumbnail_cache_.RecordAccess_WithEvict(cache_key, cache_key);
-        HandleEvict(*st, evicted);
-        st->thumbnail_cache_data_[cache_key] = disk_guard;
-      }
-
-      for (const auto& pending_cb : callbacks) {
-        DispatchThumbnailResultCallback(
-            pending_cb.callback_, pending_cb.dispatcher_,
-            ThumbnailRequestResult{.guard   = disk_guard,
-                                   .status  = ThumbnailRequestStatus::kReady,
-                                   .message = {},
-                                   .key     = cache_key});
-      }
-    });
-    return;
-  }
-
-  schedule_pipeline_render();
-}
-
-void ThumbnailService::RequestAnalysisRendition(sl_element_id_t element_id, image_id_t image_id,
-                                                ThumbnailResolution     resolution,
-                                                ThumbnailResultCallback callback) {
-  auto st = state_;
-  if (!st || !st->image_pool_service_ || !st->pipeline_service_ || !st->pipeline_scheduler_) {
-    throw std::runtime_error("[ERROR] ThumbnailService: Services not initialized.");
-  }
-
-  const ThumbnailCacheKey cache_key{element_id, resolution};
-  const auto              disk_key =
-      st->BuildDiskCacheKey(element_id, resolution, ThumbnailDiskCachePurpose::kAnalysis);
-
-  std::shared_ptr<std::atomic<uint64_t>> gen_token;
-  uint64_t                               expected_gen = 0;
-  {
-    std::unique_lock<std::mutex> lk(st->cache_lock_);
-    gen_token    = st->GetOrCreateAnalysisToken(cache_key);
-    expected_gen = gen_token->load();
-  }
-
-  auto delivered = std::make_shared<std::atomic<bool>>(false);
-  auto deliver   = [callback, delivered](ThumbnailRequestResult result) {
-    if (delivered->exchange(true)) {
-      return;
-    }
-    DispatchThumbnailResultCallback(callback, nullptr, std::move(result));
-  };
-
-  auto schedule_snapshot_render = [st, element_id, image_id, resolution, cache_key, disk_key,
-                                   gen_token, expected_gen, deliver]() mutable {
-    if (gen_token && gen_token->load() != expected_gen) {
-      deliver(ThumbnailRequestResult{.guard   = nullptr,
-                                     .status  = ThumbnailRequestStatus::kCanceled,
-                                     .message = "Analysis rendition was canceled.",
-                                     .key     = cache_key});
-      return;
-    }
-
-    std::string err;
-    auto        snapshot = st->pipeline_service_->LoadPipelineSnapshot(element_id, image_id, &err);
-    if (!snapshot) {
-      deliver(ThumbnailRequestResult{.guard   = nullptr,
-                                     .status  = ThumbnailRequestStatus::kError,
-                                     .message = err,
-                                     .key     = cache_key});
-      return;
-    }
-
-    // The closure holds the only strong ref to the snapshot. No
-    // analysis_snapshots_ map is needed: the snapshot is released from one
-    // of the task callbacks and the shared_ptr then drops naturally.
-    struct AnalysisTaskContext {
-      std::shared_ptr<PipelineSnapshot> snapshot;
-      std::atomic<bool>                 released{false};
-    };
-    auto ctx              = std::make_shared<AnalysisTaskContext>();
-    ctx->snapshot         = std::move(snapshot);
-
-    auto release_snapshot = [st, ctx]() {
-      if (!ctx->snapshot || ctx->released.exchange(true)) {
-        return;
-      }
-      try {
-        st->pipeline_service_->ReleasePipelineSnapshot(ctx->snapshot);
-      } catch (...) {
-      }
-    };
-
-    auto fail = [release_snapshot, deliver, cache_key](const std::string& msg) -> bool {
-      release_snapshot();
-      deliver(ThumbnailRequestResult{.guard   = nullptr,
-                                     .status  = ThumbnailRequestStatus::kError,
-                                     .message = msg,
-                                     .key     = cache_key});
-      return false;
-    };
-
-    const uint32_t  max_edge   = ResolutionToMaxEdge(resolution);
-    const DecodeRes decode_res = ResolutionToDecodeRes(resolution);
-
-    PipelineTask    task;
-    task.options_.render_desc_.render_type_ = RenderType::THUMBNAIL;
-    task.options_.render_desc_.max_edge_    = max_edge;
-    task.options_.render_desc_.decode_res_  = decode_res;
-    task.options_.is_blocking_              = false;
-    task.options_.is_callback_              = true;
-    task.options_.is_seq_callback_          = false;
-    task.cancel_requested_                  = [gen_token, expected_gen]() {
-      return gen_token && gen_token->load() != expected_gen;
-    };
-
-    task.prepare_ = [st, element_id, image_id, ctx, cache_key, gen_token, expected_gen, deliver,
-                     fail](PipelineTask& t) mutable -> bool {
-      // Early cancel: avoid a wasted one-shot render. The scheduler will not
-      // call callback_ when prepare_ returns false, so dispatch kCanceled here.
-      if (gen_token && gen_token->load() != expected_gen) {
-        if (ctx->snapshot && !ctx->released.exchange(true)) {
-          try {
-            st->pipeline_service_->ReleasePipelineSnapshot(ctx->snapshot);
-          } catch (...) {
-          }
-        }
-        deliver(ThumbnailRequestResult{.guard   = nullptr,
-                                       .status  = ThumbnailRequestStatus::kCanceled,
-                                       .message = "Analysis rendition was canceled.",
-                                       .key     = cache_key});
-        return false;
-      }
-
-      auto exec = ctx->snapshot->executor_;
-      if (!exec) {
-        return fail("analysis rendition: snapshot executor missing");
-      }
-
-      exec->SetForceCPUOutput(true);
-
-      std::shared_ptr<Image> img_result;
-      try {
-        img_result = st->image_pool_service_->Read<std::shared_ptr<Image>>(
-            image_id, [](const std::shared_ptr<Image>& img) { return img; });
-      } catch (const std::exception& e) {
-        return fail(std::format("analysis rendition: failed to load image ID {} for element {}: {}",
-                                image_id, element_id, e.what()));
-      } catch (...) {
-        return fail(std::format(
-            "analysis rendition: failed to load image ID {} for element {}: unknown error.",
-            image_id, element_id));
-      }
-      if (!img_result) {
-        return fail(
-            std::format("analysis rendition: image with ID {} not found in pool.", image_id));
-      }
-
-      // No pre-render color-temp read / post-render dirty check: the snapshot
-      // executor is throwaway, so that live-path dirty check is meaningless.
-      t.pipeline_executor_ = exec;
-      t.input_desc_        = std::move(img_result);
-      return true;
-    };
-
-    task.callback_ = [st, element_id, cache_key, disk_key, gen_token, expected_gen,
-                      release_snapshot, deliver](ImageBuffer& result_buffer) {
-      if (gen_token && gen_token->load() != expected_gen) {
-        release_snapshot();
-        deliver(ThumbnailRequestResult{.guard   = nullptr,
-                                       .status  = ThumbnailRequestStatus::kCanceled,
-                                       .message = "Analysis rendition was canceled.",
-                                       .key     = cache_key});
-        return;
-      }
-
-      std::unique_ptr<ImageBuffer> display_buffer;
-      try {
-        if (IsRenderableThumbnailResult(result_buffer)) {
-          display_buffer = MakeDisplayCacheThumbnailBuffer(result_buffer);
-        }
-      } catch (...) {
-        display_buffer.reset();
-      }
-
-      auto guard = std::make_shared<ThumbnailGuard>();
-      if (display_buffer) {
-        guard->thumbnail_buffer_ = std::move(display_buffer);
-        guard->pin_count_        = 1;
-        if (disk_key.has_value() && st->disk_cache_service_) {
-          std::shared_ptr<ImageBuffer> disk_cache_buffer(guard, guard->thumbnail_buffer_.get());
-          st->disk_cache_service_->EnqueueWrite(disk_key.value(), std::move(disk_cache_buffer));
-        }
-      }
-
-      release_snapshot();
-
-      const bool ok     = static_cast<bool>(guard->thumbnail_buffer_);
-      const auto status = ok ? ThumbnailRequestStatus::kReady : ThumbnailRequestStatus::kError;
-      const std::string message =
-          ok ? std::string{}
-             : std::format(
-                   "analysis rendition: render for element {} produced no thumbnail buffer.",
-                   element_id);
-      deliver(ThumbnailRequestResult{
-          .guard = ok ? guard : nullptr, .status = status, .message = message, .key = cache_key});
-    };
-
-    try {
-      st->pipeline_scheduler_->ScheduleTask(std::move(task));
-    } catch (const std::exception& e) {
-      release_snapshot();
-      deliver(ThumbnailRequestResult{
-          .guard   = nullptr,
-          .status  = ThumbnailRequestStatus::kError,
-          .message = std::format("analysis rendition: failed to schedule: {}", e.what()),
-          .key     = cache_key});
-    } catch (...) {
-      release_snapshot();
-      deliver(ThumbnailRequestResult{
-          .guard   = nullptr,
-          .status  = ThumbnailRequestStatus::kError,
-          .message = "analysis rendition: failed to schedule: unknown error.",
-          .key     = cache_key});
-    }
-  };
-
-  if (disk_key.has_value() && st->disk_cache_service_) {
-    const auto disk_key_value = disk_key.value();
-    auto*      disk_cache     = st->disk_cache_service_.get();
-    st->disk_read_thread_pool_.Submit([cache_key, disk_key_value, disk_cache, gen_token,
-                                       expected_gen, deliver, schedule_snapshot_render]() mutable {
-      if (gen_token && gen_token->load() != expected_gen) {
-        deliver(ThumbnailRequestResult{.guard   = nullptr,
-                                       .status  = ThumbnailRequestStatus::kCanceled,
-                                       .message = "Analysis rendition was canceled.",
-                                       .key     = cache_key});
-        return;
-      }
-
-      auto disk_buffer = disk_cache->Read(disk_key_value);
-      if (gen_token && gen_token->load() != expected_gen) {
-        deliver(ThumbnailRequestResult{.guard   = nullptr,
-                                       .status  = ThumbnailRequestStatus::kCanceled,
-                                       .message = "Analysis rendition was canceled.",
-                                       .key     = cache_key});
-        return;
-      }
-
-      if (!disk_buffer || !disk_buffer->cpu_data_valid_) {
-        schedule_snapshot_render();
-        return;
-      }
-
-      auto display_buffer = MakeDisplayCacheThumbnailBuffer(*disk_buffer);
-      if (!display_buffer) {
-        schedule_snapshot_render();
-        return;
-      }
-
-      auto guard               = std::make_shared<ThumbnailGuard>();
-      guard->thumbnail_buffer_ = std::move(display_buffer);
-      guard->pin_count_        = 1;
-      deliver(ThumbnailRequestResult{.guard   = guard,
-                                     .status  = ThumbnailRequestStatus::kReady,
-                                     .message = {},
-                                     .key     = cache_key});
-    });
-    return;
-  }
-
-  schedule_snapshot_render();
-}
-
-void ThumbnailService::CancelAnalysisRendition(const ThumbnailCacheKey& key) {
-  auto st = state_;
-  if (!st) {
-    return;
-  }
-  st->IncrementAnalysisToken(key);
-}
-
-void ThumbnailService::ReleaseAnalysisRendition(const ThumbnailCacheKey& key) {
-  auto st = state_;
-  if (!st) {
-    return;
-  }
-  std::unique_lock<std::mutex> lk(st->cache_lock_);
-  st->analysis_tokens_.erase(key);
+  State::StartRendition(st, std::move(request));
 }
 
 void ThumbnailService::CancelPending(const ThumbnailCacheKey& key) {
@@ -1236,4 +967,5 @@ auto ThumbnailService::GetDiskCacheStats() const -> DiskCacheStats {
   }
   return s;
 }
+
 };  // namespace alcedo

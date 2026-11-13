@@ -27,6 +27,16 @@ auto ImagePoolService::CreateAndReturnPinnedEmpty() -> ImagePoolManager::PinnedI
   return pool_manager_->CreateAndReturnPinnedEmpty();
 }
 
+auto ImagePoolService::CreateAndReturnPinned(const std::function<void(Image&)>& fill)
+    -> ImagePoolManager::PinnedImageHandle {
+  std::unique_lock lock(pool_lock_);
+  auto             handle = pool_manager_->CreateAndReturnPinnedEmpty();
+  if (handle) {
+    fill(*handle.Get());
+  }
+  return handle;
+}
+
 void ImagePoolService::Remove(image_id_t image_id) {
   std::unique_lock lock(pool_lock_);
   if (!pool_manager_) {

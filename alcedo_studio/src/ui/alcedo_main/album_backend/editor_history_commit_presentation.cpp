@@ -15,7 +15,11 @@
 #include <utility>
 
 #include "app/editor_adjustment_pipeline.hpp"
-#include "edit/operators/op_base.hpp"
+#include "app/editor_history_types.hpp"
+#include "app/pipeline_document_history.hpp"
+#include "edit/graph/film_print_model.hpp"
+#include "edit/graph/image_geometry_model.hpp"
+#include "json.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -163,131 +167,122 @@ auto PrettyToken(QString raw) -> QString {
   return normalized.join(QLatin1Char(' '));
 }
 
-// Per-operator display name and glyph used by the QML history rail.
+// Per-field display name and glyph used by the QML history rail. A field key that names no
+// adjustment shows the generic "Edit" row.
 
-auto DisplayName(OperatorType op) -> QString {
-  switch (op) {
-    case OperatorType::RAW_DECODE:
-      return QStringLiteral("RAW Decode");
-    case OperatorType::RESIZE:
-      return QStringLiteral("Resize");
-    case OperatorType::CROP_ROTATE:
-      return QStringLiteral("Crop / Rotate");
-    case OperatorType::EXPOSURE:
+auto DisplayName(std::optional<EditorAdjustmentField> field) -> QString {
+  if (!field.has_value()) {
+    return QStringLiteral("Edit");
+  }
+  switch (*field) {
+    case EditorAdjustmentField::Exposure:
       return QStringLiteral("Exposure");
-    case OperatorType::CONTRAST:
+    case EditorAdjustmentField::Contrast:
       return QStringLiteral("Contrast");
-    case OperatorType::WHITE:
+    case EditorAdjustmentField::Whites:
       return QStringLiteral("Whites");
-    case OperatorType::BLACK:
+    case EditorAdjustmentField::Blacks:
       return QStringLiteral("Blacks");
-    case OperatorType::SHADOWS:
+    case EditorAdjustmentField::Shadows:
       return QStringLiteral("Shadows");
-    case OperatorType::HIGHLIGHTS:
+    case EditorAdjustmentField::Highlights:
       return QStringLiteral("Highlights");
-    case OperatorType::CURVE:
+    case EditorAdjustmentField::Curve:
       return QStringLiteral("Curve");
-    case OperatorType::HLS:
-      return QStringLiteral("HSL");
-    case OperatorType::SATURATION:
+    case EditorAdjustmentField::Saturation:
       return QStringLiteral("Saturation");
-    case OperatorType::TINT:
-      return QStringLiteral("Tint");
-    case OperatorType::VIBRANCE:
+    case EditorAdjustmentField::Vibrance:
       return QStringLiteral("Vibrance");
-    case OperatorType::CST:
-      return QStringLiteral("Color Space");
-    case OperatorType::TO_WS:
-      return QStringLiteral("To Working Space");
-    case OperatorType::TO_OUTPUT:
-      return QStringLiteral("To Output");
-    case OperatorType::LMT:
-      return QStringLiteral("LUT");
-    case OperatorType::ODT:
-      return QStringLiteral("ODT");
-    case OperatorType::CLARITY:
-      return QStringLiteral("Clarity");
-    case OperatorType::SHARPEN:
-      return QStringLiteral("Sharpen");
-    case OperatorType::COLOR_WHEEL:
+    case EditorAdjustmentField::GradeWhiteBalance:
+      return QStringLiteral("Grade White Balance");
+    case EditorAdjustmentField::Hls:
+      return QStringLiteral("HSL");
+    case EditorAdjustmentField::ColorWheel:
       return QStringLiteral("Color Wheel");
-    case OperatorType::ACES_TONE_MAPPING:
-      return QStringLiteral("ACES Tone");
-    case OperatorType::AUTO_EXPOSURE:
-      return QStringLiteral("Auto Exposure");
-    case OperatorType::LENS_CALIBRATION:
-      return QStringLiteral("Lens Profile");
-    case OperatorType::COLOR_TEMP:
-      return QStringLiteral("Color Temp");
-    case OperatorType::FILM_GRAIN:
+    case EditorAdjustmentField::Lut:
+      return QStringLiteral("LUT");
+    case EditorAdjustmentField::Clarity:
+      return QStringLiteral("Clarity");
+    case EditorAdjustmentField::Sharpen:
+      return QStringLiteral("Sharpen");
+    case EditorAdjustmentField::Drt:
+      return QStringLiteral("ODT");
+    case EditorAdjustmentField::FilmGrain:
       return QStringLiteral("Grain");
-    case OperatorType::HALATION:
+    case EditorAdjustmentField::Halation:
       return QStringLiteral("Halation");
-    case OperatorType::UNKNOWN:
-      return QStringLiteral("Edit");
+    case EditorAdjustmentField::CropRotate:
+      return QStringLiteral("Crop / Rotate");
+    case EditorAdjustmentField::RawDecode:
+      return QStringLiteral("RAW Decode");
+    case EditorAdjustmentField::LensCalibration:
+      return QStringLiteral("Lens Profile");
+    case EditorAdjustmentField::ColorTemperature:
+      return QStringLiteral("Color Temp");
+    case EditorAdjustmentField::Diffusion:
+      return QStringLiteral("Diffusion");
+    case EditorAdjustmentField::InputProfile:
+      return QStringLiteral("Input Profile");
+    case EditorAdjustmentField::FilmFormat:
+      return QStringLiteral("Film Format");
+    case EditorAdjustmentField::CameraProfileFile:
+      return QStringLiteral("Camera Profile");
   }
   return QStringLiteral("Edit");
 }
 
-auto IconResource(OperatorType op) -> QString {
-  switch (op) {
-    case OperatorType::RAW_DECODE:
-      return QStringLiteral(":/history_icons/scan-search.svg");
-    case OperatorType::RESIZE:
-      return QStringLiteral(":/history_icons/scaling.svg");
-    case OperatorType::CROP_ROTATE:
-      return QStringLiteral(":/history_icons/crop.svg");
-    case OperatorType::EXPOSURE:
+auto IconResource(std::optional<EditorAdjustmentField> field) -> QString {
+  if (!field.has_value()) {
+    return QStringLiteral(":/history_icons/sliders-horizontal.svg");
+  }
+  switch (*field) {
+    case EditorAdjustmentField::Exposure:
       return QStringLiteral(":/history_icons/sun-medium.svg");
-    case OperatorType::CONTRAST:
+    case EditorAdjustmentField::Contrast:
       return QStringLiteral(":/history_icons/contrast.svg");
-    case OperatorType::WHITE:
+    case EditorAdjustmentField::Whites:
+    case EditorAdjustmentField::Halation:
+    case EditorAdjustmentField::Diffusion:
       return QStringLiteral(":/history_icons/sun.svg");
-    case OperatorType::BLACK:
+    case EditorAdjustmentField::Blacks:
       return QStringLiteral(":/history_icons/moon.svg");
-    case OperatorType::SHADOWS:
+    case EditorAdjustmentField::Shadows:
       return QStringLiteral(":/history_icons/square-split-horizontal.svg");
-    case OperatorType::HIGHLIGHTS:
+    case EditorAdjustmentField::Highlights:
+    case EditorAdjustmentField::Vibrance:
       return QStringLiteral(":/history_icons/sparkles.svg");
-    case OperatorType::CURVE:
+    case EditorAdjustmentField::Curve:
       return QStringLiteral(":/history_icons/chart-spline.svg");
-    case OperatorType::HLS:
-      return QStringLiteral(":/history_icons/swatch-book.svg");
-    case OperatorType::SATURATION:
+    case EditorAdjustmentField::Saturation:
       return QStringLiteral(":/history_icons/droplets.svg");
-    case OperatorType::TINT:
+    case EditorAdjustmentField::GradeWhiteBalance:
       return QStringLiteral(":/history_icons/pipette.svg");
-    case OperatorType::VIBRANCE:
-      return QStringLiteral(":/history_icons/sparkles.svg");
-    case OperatorType::CST:
-      return QStringLiteral(":/history_icons/arrow-right-left.svg");
-    case OperatorType::TO_WS:
-      return QStringLiteral(":/history_icons/workflow.svg");
-    case OperatorType::TO_OUTPUT:
-      return QStringLiteral(":/history_icons/monitor-up.svg");
-    case OperatorType::LMT:
-      return QStringLiteral(":/history_icons/file-sliders.svg");
-    case OperatorType::ODT:
-      return QStringLiteral(":/history_icons/monitor.svg");
-    case OperatorType::CLARITY:
-      return QStringLiteral(":/history_icons/focus.svg");
-    case OperatorType::SHARPEN:
-    case OperatorType::FILM_GRAIN:
-      return QStringLiteral(":/history_icons/scan-line.svg");
-    case OperatorType::COLOR_WHEEL:
+    case EditorAdjustmentField::Hls:
+      return QStringLiteral(":/history_icons/swatch-book.svg");
+    case EditorAdjustmentField::ColorWheel:
       return QStringLiteral(":/history_icons/palette.svg");
-    case OperatorType::ACES_TONE_MAPPING:
-      return QStringLiteral(":/history_icons/git-commit-horizontal.svg");
-    case OperatorType::AUTO_EXPOSURE:
-      return QStringLiteral(":/history_icons/wand-sparkles.svg");
-    case OperatorType::LENS_CALIBRATION:
+    case EditorAdjustmentField::Lut:
+      return QStringLiteral(":/history_icons/file-sliders.svg");
+    case EditorAdjustmentField::Clarity:
+      return QStringLiteral(":/history_icons/focus.svg");
+    case EditorAdjustmentField::Sharpen:
+    case EditorAdjustmentField::FilmGrain:
+      return QStringLiteral(":/history_icons/scan-line.svg");
+    case EditorAdjustmentField::Drt:
+      return QStringLiteral(":/history_icons/monitor.svg");
+    case EditorAdjustmentField::CropRotate:
+      return QStringLiteral(":/history_icons/crop.svg");
+    case EditorAdjustmentField::RawDecode:
+      return QStringLiteral(":/history_icons/scan-search.svg");
+    case EditorAdjustmentField::LensCalibration:
       return QStringLiteral(":/history_icons/aperture.svg");
-    case OperatorType::COLOR_TEMP:
+    case EditorAdjustmentField::ColorTemperature:
       return QStringLiteral(":/history_icons/thermometer.svg");
-    case OperatorType::HALATION:
-      return QStringLiteral(":/history_icons/sun.svg");
-    case OperatorType::UNKNOWN:
-      return QStringLiteral(":/history_icons/sliders-horizontal.svg");
+    case EditorAdjustmentField::InputProfile:
+    case EditorAdjustmentField::CameraProfileFile:
+      return QStringLiteral(":/history_icons/swatch-book.svg");
+    case EditorAdjustmentField::FilmFormat:
+      return QStringLiteral(":/history_icons/scan-line.svg");
   }
   return QStringLiteral(":/history_icons/sliders-horizontal.svg");
 }
@@ -365,27 +360,22 @@ auto OdtTargetLabel(const nlohmann::json& params) -> QString {
   return QStringLiteral("Output");
 }
 
-auto CropAreaPercent(const nlohmann::json& params) -> std::optional<double> {
-  const auto w = JsonNumberAtPath(params, {"crop_rotate", "crop_rect", "w"});
-  const auto h = JsonNumberAtPath(params, {"crop_rotate", "crop_rect", "h"});
-  if (!w.has_value() || !h.has_value()) {
-    return std::nullopt;
-  }
-  return std::clamp(*w * *h * 100.0, 0.0, 100.0);
+// Crop / Rotate commits store ImageGeometryModel::ToJson() for the before and after values.
+auto CropAreaPercent(const ImageGeometryModel& geometry) -> double {
+  const auto crop = geometry.CropRect();
+  return std::clamp(static_cast<double>(crop.w) * crop.h * 100.0, 0.0, 100.0);
 }
 
-auto FormatCropAspect(const nlohmann::json& params) -> QString {
-  const QString preset =
-      JsonStringAtPath(params, {"crop_rotate", "aspect_ratio_preset"}).value_or(QString());
-  if (!preset.isEmpty() && preset.compare(QStringLiteral("free"), Qt::CaseInsensitive) != 0) {
-    return PrettyToken(preset);
+auto FormatCropAspect(const ImageGeometryModel& geometry) -> QString {
+  const QString preset = QString::fromStdString(geometry.AspectPreset());
+  if (preset.compare(QStringLiteral("custom"), Qt::CaseInsensitive) == 0) {
+    const auto ratio = geometry.AspectRatio();
+    return QStringLiteral("%1:%2").arg(FormatNumber(ratio.width), FormatNumber(ratio.height));
   }
-  const auto w = JsonNumberAtPath(params, {"crop_rotate", "aspect_ratio", "width"});
-  const auto h = JsonNumberAtPath(params, {"crop_rotate", "aspect_ratio", "height"});
-  if (!w.has_value() || !h.has_value() || *w <= 0.0 || *h <= 0.0) {
+  if (preset.isEmpty() || preset.compare(QStringLiteral("free"), Qt::CaseInsensitive) == 0) {
     return QStringLiteral("Free");
   }
-  return QStringLiteral("%1:%2").arg(FormatNumber(*w), FormatNumber(*h));
+  return PrettyToken(preset);
 }
 
 auto CurvePointCount(const nlohmann::json& params) -> std::optional<std::size_t> {
@@ -446,6 +436,46 @@ auto SummarizeColorTemp(const nlohmann::json& after, const nlohmann::json& befor
   }
   return {old_value.isEmpty() ? QString() : old_value, value,
           value.isEmpty() ? QStringLiteral("White balance updated") : value};
+}
+
+auto SummarizeInputProfile(const nlohmann::json& after, const nlohmann::json& before)
+    -> CommitSummary {
+  const QString value =
+      PrettyToken(JsonStringAtPath(after, {"input", "profile_override"}).value_or(QString()));
+  const QString old_value =
+      PrettyToken(JsonStringAtPath(before, {"input", "profile_override"}).value_or(QString()));
+  if (old_value.isEmpty()) {
+    return {QString(), value, value};
+  }
+  return {old_value, value, QStringLiteral("%1 → %2").arg(old_value, value)};
+}
+
+auto SummarizeFilmFormat(const nlohmann::json& after, const nlohmann::json& before)
+    -> CommitSummary {
+  const QString value     = JsonStringAtPath(after, {"film_format"}).value_or(QString());
+  const QString old_value = JsonStringAtPath(before, {"film_format"}).value_or(QString());
+  if (old_value.isEmpty()) {
+    return {QString(), value, value};
+  }
+  return {old_value, value, QStringLiteral("%1 → %2").arg(old_value, value)};
+}
+
+/// Profile name of a stored Develop JSON. Without a DCP reference the import profile applies:
+/// the embedded profile of a DNG file, or the built-in camera matrices.
+auto CameraProfileName(const nlohmann::json& develop) -> QString {
+  if (const auto name = JsonStringAtPath(develop, {"camera_profile_file", "profile_name"})) {
+    return *name;
+  }
+  const auto* embedded = JsonAtPath(develop, {"camera_profile", "dng_profile_fingerprint"});
+  return embedded != nullptr && embedded->is_string() ? QStringLiteral("Embedded")
+                                                      : QStringLiteral("Built-in");
+}
+
+auto SummarizeCameraProfileFile(const nlohmann::json& after, const nlohmann::json& before)
+    -> CommitSummary {
+  const QString value     = CameraProfileName(after);
+  const QString old_value = CameraProfileName(before);
+  return {old_value, value, QStringLiteral("%1 → %2").arg(old_value, value)};
 }
 
 auto SummarizeHls(const nlohmann::json& after, const nlohmann::json& before) -> CommitSummary {
@@ -516,33 +546,26 @@ auto SummarizeHls(const nlohmann::json& after, const nlohmann::json& before) -> 
 
 auto SummarizeColorWheel(const nlohmann::json& after, const nlohmann::json& before)
     -> CommitSummary {
-  static const std::array<std::pair<const char*, const char*>, 3> kWheels = {
-      {{"lift", "Lift"}, {"gamma", "Gamma"}, {"gain", "Gain"}}};
+  static const std::array<std::pair<const char*, const char*>, 4> kWheels = {
+      {{"lift", "Shadows"}, {"gamma", "Midtones"}, {"gain", "Highlights"}, {"offset", "Offset"}}};
+  // The panel strength is a fixed scale of the disc; the Master value is the edit to report. A
+  // value without a version is version 1 JSON, whose Master is not in stops.
+  const bool before_in_stops = JsonNumberAtPath(before, {"color_wheel", "version"}) == 2.0;
   for (const auto& [key, label] : kWheels) {
-    const auto strength     = JsonNumberAtPath(after, {"color_wheel", key, "strength"});
-    const auto old_strength = JsonNumberAtPath(before, {"color_wheel", key, "strength"});
-    if (strength.has_value() &&
-        (!old_strength.has_value() || std::fabs(*strength - *old_strength) > 1e-6)) {
-      const QString after_text = FormatNumber(*strength);
-      const QString before_text =
-          old_strength.has_value() ? FormatNumber(*old_strength) : QString();
-      return {before_text.isEmpty()
-                  ? QString()
-                  : QStringLiteral("%1 Strength %2").arg(QString::fromLatin1(label), before_text),
-              QStringLiteral("%1 Strength %2").arg(QString::fromLatin1(label), after_text),
-              QStringLiteral("%1 Strength %2 \u2192 %3")
-                  .arg(QString::fromLatin1(label), before_text, after_text)};
-    }
     const auto lum     = JsonNumberAtPath(after, {"color_wheel", key, "luminance_offset"});
-    const auto old_lum = JsonNumberAtPath(before, {"color_wheel", key, "luminance_offset"});
+    const auto old_lum = before_in_stops
+                             ? JsonNumberAtPath(before, {"color_wheel", key, "luminance_offset"})
+                             : std::nullopt;
     if (lum.has_value() && (!old_lum.has_value() || std::fabs(*lum - *old_lum) > 1e-6)) {
-      const QString after_text  = FormatSigned(*lum);
-      const QString before_text = old_lum.has_value() ? FormatSigned(*old_lum) : QString();
+      const QString after_text  = WithUnit(FormatSigned(*lum), QStringLiteral("EV"), true);
+      const QString before_text = old_lum.has_value()
+                                      ? WithUnit(FormatSigned(*old_lum), QStringLiteral("EV"), true)
+                                      : QString();
       return {before_text.isEmpty()
                   ? QString()
-                  : QStringLiteral("%1 Lum %2").arg(QString::fromLatin1(label), before_text),
-              QStringLiteral("%1 Lum %2").arg(QString::fromLatin1(label), after_text),
-              QStringLiteral("%1 Lum %2 \u2192 %3")
+                  : QStringLiteral("%1 Master %2").arg(QString::fromLatin1(label), before_text),
+              QStringLiteral("%1 Master %2").arg(QString::fromLatin1(label), after_text),
+              QStringLiteral("%1 Master %2 \u2192 %3")
                   .arg(QString::fromLatin1(label), before_text, after_text)};
     }
   }
@@ -583,7 +606,71 @@ auto SummarizeLut(const nlohmann::json& after, const nlohmann::json& before) -> 
                                 : QStringLiteral("%1 \u2192 %2").arg(before_text, after_text)};
 }
 
+/// Summary of a film print write: the method, a selection, or a slider that changed. No value when
+/// none of them changed.
+auto SummarizeFilmPrint(const nlohmann::json& after, const nlohmann::json& before)
+    -> std::optional<CommitSummary> {
+  const auto method     = JsonStringAtPath(after, {"odt", "method"});
+  const auto old_method = JsonStringAtPath(before, {"odt", "method"});
+  if (method != QStringLiteral("film_print")) {
+    return std::nullopt;
+  }
+  const auto changed = [](const QString& before_text, const QString& after_text) {
+    return CommitSummary{before_text, after_text,
+                         QStringLiteral("%1 \u2192 %2").arg(before_text, after_text)};
+  };
+  if (old_method != method) {
+    return changed(PrettyToken(old_method.value_or(QString())), QStringLiteral("Film Print"));
+  }
+  for (const char* key : {"negative", "print_material", "scene_light"}) {
+    const auto value     = JsonStringAtPath(after, {"odt", "film_print", key});
+    const auto old_value = JsonStringAtPath(before, {"odt", "film_print", key});
+    if (value.has_value() && value != old_value) {
+      return changed(PrettyToken(old_value.value_or(QString())), PrettyToken(*value));
+    }
+  }
+  for (const char* key : {"light_spread", "halation", "enlarger_flare"}) {
+    const auto value     = JsonNumberAtPath(after, {"odt", "film_print", key});
+    const auto old_value = JsonNumberAtPath(before, {"odt", "film_print", key});
+    if (value.has_value() && old_value.has_value() && std::fabs(*value - *old_value) > 1e-6) {
+      return changed(FormatNumber(*old_value), FormatNumber(*value));
+    }
+  }
+  // Negative Scan: the Model omits a key at its default, so a missing key reads as the default.
+  const alcedo::FilmNegativeScanParams scan;
+  const std::pair<const char*, QString> scan_options[] = {
+      {"auto", QString::fromStdString(scan.auto_colour)},
+      {"scanner_light", QString::fromStdString(scan.scanner_light)}};
+  for (const auto& [key, fallback] : scan_options) {
+    const auto value     = JsonStringAtPath(after, {"odt", "film_print", key}).value_or(fallback);
+    const auto old_value = JsonStringAtPath(before, {"odt", "film_print", key}).value_or(fallback);
+    if (value != old_value) {
+      return changed(PrettyToken(old_value), PrettyToken(value));
+    }
+  }
+  const std::pair<const char*, float> scan_numbers[] = {
+      {"auto_strength", scan.auto_strength},       {"auto_density", scan.auto_density},
+      {"scan_contrast", scan.contrast},            {"scan_exposure_stops", scan.exposure_stops},
+      {"cyan", scan.cyan},                         {"magenta", scan.magenta},
+      {"yellow", scan.yellow},                     {"black", scan.black},
+      {"scanner_red_nm", scan.scanner_red_nm},     {"scanner_green_nm", scan.scanner_green_nm},
+      {"scanner_blue_nm", scan.scanner_blue_nm},   {"scanner_width_nm", scan.scanner_width_nm}};
+  for (const auto& [key, fallback] : scan_numbers) {
+    const auto value =
+        JsonNumberAtPath(after, {"odt", "film_print", key}).value_or(static_cast<double>(fallback));
+    const auto old_value = JsonNumberAtPath(before, {"odt", "film_print", key})
+                               .value_or(static_cast<double>(fallback));
+    if (std::fabs(value - old_value) > 1e-6) {
+      return changed(FormatNumber(old_value), FormatNumber(value));
+    }
+  }
+  return std::nullopt;
+}
+
 auto SummarizeOdt(const nlohmann::json& after, const nlohmann::json& before) -> CommitSummary {
+  if (auto film_print = SummarizeFilmPrint(after, before); film_print.has_value()) {
+    return *film_print;
+  }
   const auto    peak       = JsonNumberAtPath(after, {"odt", "peak_luminance"});
   const auto    old_peak   = JsonNumberAtPath(before, {"odt", "peak_luminance"});
   const QString target     = OdtTargetLabel(after);
@@ -607,119 +694,215 @@ auto SummarizeOdt(const nlohmann::json& after, const nlohmann::json& before) -> 
 
 auto SummarizeCropRotate(const nlohmann::json& after, const nlohmann::json& before)
     -> CommitSummary {
-  const auto angle     = JsonNumberAtPath(after, {"crop_rotate", "angle_degrees"});
-  const auto old_angle = JsonNumberAtPath(before, {"crop_rotate", "angle_degrees"});
-  if (angle.has_value() && (!old_angle.has_value() || std::fabs(*angle - *old_angle) > 1e-6)) {
-    return SignedScalar(old_angle, angle, QStringLiteral("\u00b0"));
+  if (!after.is_object()) {
+    return {QString(), QStringLiteral("Crop"), QStringLiteral("Geometry updated")};
   }
-  const bool crop_enabled = JsonBoolAtPath(after, {"crop_rotate", "enable_crop"}).value_or(false);
-  const bool old_crop     = JsonBoolAtPath(before, {"crop_rotate", "enable_crop"}).value_or(false);
-  const auto area         = CropAreaPercent(after);
-  const auto old_area     = CropAreaPercent(before);
-  if ((crop_enabled || old_crop) && area.has_value() &&
-      (!old_area.has_value() || std::fabs(*area - *old_area) > 1e-4 || crop_enabled != old_crop)) {
-    const QString after_text = QStringLiteral("%1%").arg(FormatNumber(*area));
+  const auto after_geometry  = ImageGeometryModel::FromJson(after);
+  const auto before_geometry = before.is_object() ? std::optional<ImageGeometryModel>(
+                                                        ImageGeometryModel::FromJson(before))
+                                                  : std::nullopt;
+  const std::optional<double> angle = after_geometry.RotationDegrees();
+  const std::optional<double> old_angle =
+      before_geometry.has_value() ? std::optional<double>(before_geometry->RotationDegrees())
+                                  : std::nullopt;
+  const bool angle_changed = old_angle.has_value() ? std::fabs(*angle - *old_angle) > 1e-6
+                                                   : std::fabs(*angle) > 1e-6;
+  if (angle_changed) {
+    return SignedScalar(old_angle, angle, QStringLiteral("°"));
+  }
+  const double area = CropAreaPercent(after_geometry);
+  const auto   old_area =
+      before_geometry.has_value() ? std::optional<double>(CropAreaPercent(*before_geometry))
+                                  : std::nullopt;
+  if (!old_area.has_value() || std::fabs(area - *old_area) > 1e-4) {
+    const QString after_text = QStringLiteral("%1%").arg(FormatNumber(area));
     const QString before_text =
         old_area.has_value() ? QStringLiteral("%1%").arg(FormatNumber(*old_area)) : QString();
     return {before_text, after_text,
             before_text.isEmpty() ? QStringLiteral("Crop area %1").arg(after_text)
-                                  : QStringLiteral("%1 \u2192 %2").arg(before_text, after_text)};
+                                  : QStringLiteral("%1 → %2").arg(before_text, after_text)};
   }
-  const QString aspect     = FormatCropAspect(after);
-  const QString old_aspect = FormatCropAspect(before);
-  if (!aspect.isEmpty() && aspect != old_aspect && !old_aspect.isEmpty()) {
-    return {old_aspect, aspect, QStringLiteral("%1 \u2192 %2").arg(old_aspect, aspect)};
+  const QString aspect = FormatCropAspect(after_geometry);
+  const QString old_aspect =
+      before_geometry.has_value() ? FormatCropAspect(*before_geometry) : QString();
+  if (aspect != old_aspect && !old_aspect.isEmpty()) {
+    return {old_aspect, aspect, QStringLiteral("%1 → %2").arg(old_aspect, aspect)};
   }
   return {QString(), QStringLiteral("Crop"), QStringLiteral("Geometry updated")};
 }
 
-auto BuildSummary(OperatorType op, const nlohmann::json& after, const nlohmann::json& before)
-    -> CommitSummary {
-  switch (op) {
-    case OperatorType::EXPOSURE:
+auto BuildSummary(std::optional<EditorAdjustmentField> field, const nlohmann::json& after,
+                  const nlohmann::json& before) -> CommitSummary {
+  if (!field.has_value()) {
+    return {};
+  }
+  switch (*field) {
+    case EditorAdjustmentField::Exposure:
       return SignedScalar(JsonNumberAtPath(before, {"exposure"}),
                           JsonNumberAtPath(after, {"exposure"}));
-    case OperatorType::CONTRAST:
+    case EditorAdjustmentField::Contrast:
       return SignedScalar(JsonNumberAtPath(before, {"contrast"}),
                           JsonNumberAtPath(after, {"contrast"}));
-    case OperatorType::WHITE:
+    case EditorAdjustmentField::Whites:
       return SignedScalar(JsonNumberAtPath(before, {"white"}), JsonNumberAtPath(after, {"white"}));
-    case OperatorType::BLACK:
+    case EditorAdjustmentField::Blacks:
       return SignedScalar(JsonNumberAtPath(before, {"black"}), JsonNumberAtPath(after, {"black"}));
-    case OperatorType::SHADOWS:
+    case EditorAdjustmentField::Shadows:
       return SignedScalar(JsonNumberAtPath(before, {"shadows"}),
                           JsonNumberAtPath(after, {"shadows"}));
-    case OperatorType::HIGHLIGHTS:
+    case EditorAdjustmentField::Highlights:
       return SignedScalar(JsonNumberAtPath(before, {"highlights"}),
                           JsonNumberAtPath(after, {"highlights"}));
-    case OperatorType::SATURATION:
+    case EditorAdjustmentField::Saturation:
       return SignedScalar(JsonNumberAtPath(before, {"saturation"}),
                           JsonNumberAtPath(after, {"saturation"}));
-    case OperatorType::VIBRANCE:
+    case EditorAdjustmentField::Vibrance:
       return SignedScalar(JsonNumberAtPath(before, {"vibrance"}),
                           JsonNumberAtPath(after, {"vibrance"}));
-    case OperatorType::CLARITY:
+    case EditorAdjustmentField::Clarity:
       return SignedScalar(JsonNumberAtPath(before, {"clarity"}),
                           JsonNumberAtPath(after, {"clarity"}));
-    case OperatorType::SHARPEN:
+    case EditorAdjustmentField::Sharpen:
       return SignedScalar(JsonNumberAtPath(before, {"sharpen", "offset"}),
                           JsonNumberAtPath(after, {"sharpen", "offset"}));
-    case OperatorType::FILM_GRAIN:
+    case EditorAdjustmentField::FilmGrain:
       return SignedScalar(JsonNumberAtPath(before, {"film_grain", "strength"}),
                           JsonNumberAtPath(after, {"film_grain", "strength"}));
-    case OperatorType::HALATION:
+    case EditorAdjustmentField::Halation:
       return SignedScalar(JsonNumberAtPath(before, {"halation", "strength"}),
                           JsonNumberAtPath(after, {"halation", "strength"}));
-    case OperatorType::RAW_DECODE:
+    case EditorAdjustmentField::Diffusion:
+      return SignedScalar(JsonNumberAtPath(before, {"strength"}),
+                          JsonNumberAtPath(after, {"strength"}));
+    case EditorAdjustmentField::RawDecode:
       return SummarizeRawDecode(after, before);
-    case OperatorType::LENS_CALIBRATION:
+    case EditorAdjustmentField::LensCalibration:
       return SummarizeLens(after, before);
-    case OperatorType::COLOR_TEMP:
+    case EditorAdjustmentField::ColorTemperature:
       return SummarizeColorTemp(after, before);
-    case OperatorType::HLS:
+    case EditorAdjustmentField::InputProfile:
+      return SummarizeInputProfile(after, before);
+    case EditorAdjustmentField::FilmFormat:
+      return SummarizeFilmFormat(after, before);
+    case EditorAdjustmentField::CameraProfileFile:
+      return SummarizeCameraProfileFile(after, before);
+    case EditorAdjustmentField::Hls:
       return SummarizeHls(after, before);
-    case OperatorType::COLOR_WHEEL:
+    case EditorAdjustmentField::ColorWheel:
       return SummarizeColorWheel(after, before);
-    case OperatorType::CURVE:
+    case EditorAdjustmentField::Curve:
       return SummarizeCurve(after, before);
-    case OperatorType::LMT:
+    case EditorAdjustmentField::Lut:
       return SummarizeLut(after, before);
-    case OperatorType::ODT:
+    case EditorAdjustmentField::Drt:
       return SummarizeOdt(after, before);
-    case OperatorType::CROP_ROTATE:
+    case EditorAdjustmentField::CropRotate:
       return SummarizeCropRotate(after, before);
-    default:
+    case EditorAdjustmentField::GradeWhiteBalance:
       break;
   }
   return {};
+}
+
+auto DisplayTextFromStoredJson(const std::string& json_text, const std::string& fallback)
+    -> QString {
+  if (!json_text.empty()) {
+    try {
+      const auto parsed = nlohmann::json::parse(json_text);
+      if (parsed.is_string()) {
+        return QString::fromStdString(parsed.get<std::string>());
+      }
+      if (parsed.is_object() && parsed.contains("display_name") &&
+          parsed.at("display_name").is_string()) {
+        return QString::fromStdString(parsed.at("display_name").get<std::string>());
+      }
+    } catch (...) {
+    }
+  }
+  return QString::fromStdString(fallback);
+}
+
+auto PresentGraphOperation(const alcedo::EditorHistoryCommit& commit)
+    -> std::optional<EditorHistoryCommitPresentation> {
+  const auto add_key =
+      alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::AddColorGrade);
+  const auto rename_key =
+      alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::RenameColorGrade);
+  const auto remove_key =
+      alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::RemoveColorGrade);
+  const auto topology_key =
+      alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::EditNodeGraph);
+  if (commit.presentation_key != add_key && commit.presentation_key != rename_key &&
+      commit.presentation_key != remove_key && commit.presentation_key != topology_key) {
+    return std::nullopt;
+  }
+
+  EditorHistoryCommitPresentation out;
+  const QString name = DisplayTextFromStoredJson(commit.after_value_json, commit.node_display_name);
+  if (commit.presentation_key == add_key) {
+    out.display_name = QStringLiteral("Add Color Grade");
+    out.after_text   = name;
+    out.delta_text   = name;
+    out.icon_key     = QStringLiteral(":/history_icons/git-commit-horizontal.svg");
+    return out;
+  }
+  if (commit.presentation_key == rename_key) {
+    const QString before =
+        DisplayTextFromStoredJson(commit.before_value_json, commit.node_display_name);
+    out.display_name = QStringLiteral("Rename Color Grade");
+    out.before_text  = before;
+    out.after_text   = name.isEmpty() ? QString::fromStdString(commit.node_display_name) : name;
+    out.delta_text   = out.before_text.isEmpty()
+                           ? out.after_text
+                           : QStringLiteral("%1 \u2192 %2").arg(out.before_text, out.after_text);
+    out.icon_key     = QStringLiteral(":/history_icons/workflow.svg");
+    return out;
+  }
+  if (commit.presentation_key == topology_key) {
+    out.display_name = QStringLiteral("Edit Node Graph");
+    out.after_text   = name;
+    out.delta_text   = name;
+    out.icon_key     = QStringLiteral(":/history_icons/workflow.svg");
+    return out;
+  }
+  out.display_name = QStringLiteral("Delete Color Grade");
+  out.after_text   = name.isEmpty() ? QString::fromStdString(commit.node_display_name) : name;
+  out.delta_text   = out.after_text;
+  out.icon_key     = QStringLiteral(":/history_icons/square-split-horizontal.svg");
+  return out;
 }
 
 }  // namespace
 
 auto PresentEditorHistoryCommit(const std::string& field_key, const std::string& before_value_json,
                                 const std::string& after_value_json, bool before_enabled,
-                                bool after_enabled, EditCommitKind kind,
-                                const std::vector<std::string>& merge_field_keys)
+                                bool after_enabled)
     -> EditorHistoryCommitPresentation {
-  EditorHistoryCommitPresentation out;
-  if (kind == EditCommitKind::kMerge || field_key == "merge") {
-    out.is_merge     = true;
-    out.display_name = QStringLiteral("Merge");
-    out.icon_key     = QStringLiteral(":/history_icons/git-commit-horizontal.svg");
-    if (!merge_field_keys.empty()) {
-      out.merge_summary = QStringLiteral("Resolved %1 field%2")
-                              .arg(static_cast<int>(merge_field_keys.size()))
-                              .arg(merge_field_keys.size() == 1 ? QString() : QStringLiteral("s"));
-    } else {
-      out.merge_summary = QStringLiteral("Resolved incoming adjustments");
-    }
-    return out;
+  alcedo::EditorHistoryCommit commit;
+  commit.field_key         = field_key;
+  commit.before_value_json = before_value_json;
+  commit.after_value_json  = after_value_json;
+  commit.before_enabled    = before_enabled;
+  commit.after_enabled     = after_enabled;
+  return PresentEditorHistoryCommit(commit);
+}
+
+auto PresentEditorHistoryCommit(const alcedo::EditorHistoryCommit& commit)
+    -> EditorHistoryCommitPresentation {
+  if (const auto graph = PresentGraphOperation(commit)) {
+    return *graph;
   }
 
-  const auto         spec = alcedo::ResolveEditorAdjustmentField(field_key);
-  const OperatorType op   = spec.has_value() ? spec->operator_type : OperatorType::UNKNOWN;
-  out.display_name        = DisplayName(op);
-  out.icon_key            = IconResource(op);
+  const auto& field_key         = commit.field_key;
+  const auto& before_value_json = commit.before_value_json;
+  const auto& after_value_json  = commit.after_value_json;
+  const bool  before_enabled    = commit.before_enabled;
+  const bool  after_enabled     = commit.after_enabled;
+
+  EditorHistoryCommitPresentation out;
+  const auto field = alcedo::ResolveEditorAdjustmentField(field_key);
+  out.display_name = DisplayName(field);
+  out.icon_key     = IconResource(field);
 
   nlohmann::json after    = nlohmann::json::object();
   nlohmann::json before   = nlohmann::json::object();
@@ -737,7 +920,15 @@ auto PresentEditorHistoryCommit(const std::string& field_key, const std::string&
   }
   if (!after.is_object()) after = nlohmann::json::object();
   if (!before.is_object()) before = nlohmann::json::object();
-  const CommitSummary summary = BuildSummary(op, after, before);
+  if (field_key == "exposure") {
+    if (!after.contains("exposure") && after.contains("exposure_ev")) {
+      after["exposure"] = after.at("exposure_ev");
+    }
+    if (!before.contains("exposure") && before.contains("exposure_ev")) {
+      before["exposure"] = before.at("exposure_ev");
+    }
+  }
+  const CommitSummary summary = BuildSummary(field, after, before);
   out.before_text             = summary.before_text;
   out.after_text              = summary.after_text;
   out.delta_text              = summary.delta_text;

@@ -101,6 +101,16 @@ auto ThumbnailImageStore::Get(sl_element_id_t element_id, uint32_t max_edge) con
   return it->second.image;
 }
 
+auto ThumbnailImageStore::CurrentUrl(sl_element_id_t element_id, uint32_t max_edge) const
+    -> QString {
+  std::lock_guard lock(mutex_);
+  const auto      it = images_.find(Key{element_id, max_edge});
+  if (it == images_.end()) {
+    return {};
+  }
+  return MakeUrl(element_id, max_edge, it->second.revision);
+}
+
 auto ThumbnailImageStore::GetByProviderId(const QString& id) const -> QImage {
   sl_element_id_t element_id = 0;
   uint32_t        max_edge   = 0;

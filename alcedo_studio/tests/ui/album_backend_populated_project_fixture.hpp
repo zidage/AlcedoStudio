@@ -1,0 +1,307 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+/// @file album_backend_populated_project_fixture.hpp
+/// @brief Shared GPU-free populated-project helpers for UI tests that need a real
+///        (synthetic DNG) image in storage — e.g. exercising the real delete
+///        entry or folder-filter round-trips without RAW fixtures or GPU decode.
+///
+/// Extracted from album_backend_image_delete_test.cpp so workspace_shell_test.cpp
+/// and the delete tests share one implementation. Header-only inline functions in
+/// alcedo::ui::test; include from any UI test that links AlbumBackendLib.
+
+#pragma once
+
+#include <QColor>
+#include <QImage>
+#include <QSignalSpy>
+#include <QString>
+#include <QStringList>
+#include <QVariantList>
+#include <QVariantMap>
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <ctime>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "app/pipeline_service.hpp"
+#include "app/project_package_backend.hpp"
+#include "app/project_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "image/color_label.hpp"
+#include "image/image.hpp"
+#include "sleeve/sleeve_element/sleeve_file.hpp"
+#include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+
+namespace alcedo::ui::test {
+
+/// A packed .alcd project containing one synthetic image, plus its ids.
+struct PopulatedProject {
+  std::filesystem::path packed_path_{};
+  sl_element_id_t       file_id_  = 0;
+  image_id_t            image_id_ = 0;
+  struct ImageKey {
+    sl_element_id_t file_id_  = 0;
+    image_id_t      image_id_ = 0;
+  };
+  std::vector<ImageKey> images_{};
+};
+
+/// Pump the event loop until the import finishes (or timeout). Used by tests that
+/// drive the real import path with RAW fixtures.
+inline void WaitForImportFinished(ApplicationModuleHost& backend, int timeoutMs = 30000) {
+  QSignalSpy spy(backend.import_export(), &ImportExportHandler::ImportStateChanged);
+  const int  step    = 200;
+  int        elapsed = 0;
+  while (backend.import_export()->ImportRunning() && elapsed < timeoutMs) {
+    spy.wait(step);
+    elapsed += step;
+  }
+  ProcessEvents(600);
+}
+
+/// Locate the (single) .alcd file inside @p dir, if any.
+inline auto FindPackedProjectPath(const std::filesystem::path& dir)
+    -> std::optional<std::filesystem::path> {
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    if (entry.is_regular_file() && entry.path().extension() == ".alcd") {
+      return entry.path();
+    }
+  }
+  return std::nullopt;
+}
+
+/// Look up a folder's UI id by name from a FolderController::Folders() result list.
+inline auto FindFolderId(const QVariantList& folders, const QString& name) -> uint {
+  for (const auto& v : folders) {
+    const auto map = v.toMap();
+    if (map.value("name").toString() == name) {
+      return map.value("folderId").toUInt();
+    }
+  }
+  return 0;
+}
+
+/// Typed metadata and import time of one synthetic image (library sort and group tests).
+struct LibraryPhotoSpec {
+  std::string                model_     = "Synthetic Album Camera";
+  std::string                lens_      = "Synthetic 50mm";
+  std::string                date_time_ = "2026-05-25 10:00:00";
+  int                        rating_    = 0;
+  std::optional<std::time_t> added_time_{};  ///< Element.added_time; creation time when empty.
+  uint32_t                   width_  = 0;     ///< Oriented photo width; 0 is unknown.
+  uint32_t                   height_ = 0;     ///< Oriented photo height; 0 is unknown.
+  ColorLabelMask             color_labels_ = 0;  ///< Library color label code bits.
+  bool                       delete_mark_  = false;
+  std::wstring               file_name_;  ///< Library file name; "album-delete-<n>.dng" when empty.
+};
+
+/// Build a packed project with one synthetic DNG image (no real pixels, no GPU),
+/// or with the supplied RAW files when editor interaction is required.
+/// @p specs, when set, gives the number of synthetic images and their metadata.
+/// @p write_history, when set, runs after every image has its history root and before the
+/// project is packed (for example to persist edit commits).
+/// Returns the packed path and the image element/file + image ids on success.
+using ProjectHistoryWriter =
+    std::function<void(PipelineMgmtService&, const std::vector<PopulatedProject::ImageKey>&)>;
+inline auto CreatePopulatedPackedProject(
+    const std::filesystem::path&              tempDir,
+    const std::vector<std::filesystem::path>& sourceImagePaths = {},
+    std::size_t synthetic_image_count = 1, const std::vector<LibraryPhotoSpec>& specs = {},
+    const ProjectHistoryWriter& write_history = {}) -> std::optional<PopulatedProject> {
+  const auto db_path     = tempDir / "album_delete_project.db";
+  const auto meta_path   = tempDir / "album_delete_project.json";
+  const auto packed_path = tempDir / "album_delete_project.alcd";
+
+  auto project = std::make_shared<ProjectService>(db_path, meta_path, ProjectOpenMode::kCreateNew);
+  const std::size_t                    image_count = !specs.empty() ? specs.size()
+                                                     : sourceImagePaths.empty()
+                                                         ? std::max<std::size_t>(1, synthetic_image_count)
+                                                         : sourceImagePaths.size();
+  std::vector<PopulatedProject::ImageKey> image_keys;
+  image_keys.reserve(image_count);
+
+  for (std::size_t index = 0; index < image_count; ++index) {
+    if (!sourceImagePaths.empty() && !std::filesystem::is_regular_file(sourceImagePaths[index])) {
+      return std::nullopt;
+    }
+
+    auto image_handle = project->GetImagePoolService()->CreateAndReturnPinnedEmpty();
+    if (!image_handle) {
+      return std::nullopt;
+    }
+
+    auto image = image_handle.Get();
+    if (sourceImagePaths.empty()) {
+      image->image_path_ = tempDir / ("album-delete-" + std::to_string(index) + ".dng");
+      image->image_name_ = L"album-delete-" + std::to_wstring(index) + L".dng";
+    } else {
+      image->image_path_ = sourceImagePaths[index];
+      image->image_name_ = L"workspace-image-" + std::to_wstring(index) + L".dng";
+    }
+    image->image_type_ = ImageType::DNG;
+
+    const LibraryPhotoSpec spec = index < specs.size() ? specs[index] : LibraryPhotoSpec{};
+    if (sourceImagePaths.empty() && !spec.file_name_.empty()) {
+      image->image_path_ = tempDir / spec.file_name_;
+      image->image_name_ = spec.file_name_;
+    }
+    ExifDisplayMetaData   metadata;
+    metadata.model_         = spec.model_;
+    metadata.lens_          = spec.lens_;
+    metadata.date_time_str_ = spec.date_time_;
+    metadata.rating_        = spec.rating_;
+    metadata.width_         = spec.width_;
+    metadata.height_        = spec.height_;
+    image->SetExifDisplayMetaData(std::move(metadata));
+    image->color_labels_ = spec.color_labels_;
+    image->delete_mark_  = spec.delete_mark_;
+
+    auto file = project->GetSleeveService()->Write<std::shared_ptr<SleeveFile>>(
+        [image, &spec](FileSystem& fs) -> std::shared_ptr<SleeveFile> {
+          auto created       = fs.CreateFileInLibrary(image->image_name_);
+          created->image_id_ = image->image_id_;
+          if (spec.added_time_.has_value()) {
+            created->added_time_ = *spec.added_time_;
+          }
+          return created;
+        });
+    if (!file.second.success_ || !file.first) {
+      return std::nullopt;
+    }
+
+    image_keys.push_back(PopulatedProject::ImageKey{file.first->element_id_, image->image_id_});
+  }
+
+  const auto image_sync = project->GetImagePoolService()->SyncWithStorage();
+  if (!image_sync.failed_images_.empty()) {
+    return std::nullopt;
+  }
+  project->SaveProject(meta_path);
+  // Import gives every image its history root; these images skip import, so create the roots
+  // the same way (default document, working-space profile for the synthetic sources).
+  PipelineMgmtService pipelines(project->GetStorage());
+  for (const auto& key : image_keys) {
+    pipelines.InitializeImageRoot(key.file_id_, CreateDefaultPipelineDocument(), nullptr);
+  }
+  if (write_history) {
+    write_history(pipelines, image_keys);
+  }
+
+  std::filesystem::path snapshot_path;
+  if (!project_pack::BuildTempDbSnapshotPath(&snapshot_path, nullptr)) {
+    return std::nullopt;
+  }
+  if (!project_pack::CreateLiveDbSnapshot(project, snapshot_path, nullptr)) {
+    return std::nullopt;
+  }
+  const bool packed =
+      project_pack::WritePackedProject(packed_path, meta_path, snapshot_path, nullptr);
+  std::error_code ec;
+  std::filesystem::remove(snapshot_path, ec);
+  if (!packed) {
+    return std::nullopt;
+  }
+
+  return PopulatedProject{packed_path, image_keys.front().file_id_, image_keys.front().image_id_,
+                       std::move(image_keys)};
+}
+
+/// Pump events until the library query worker accepted the requested refresh (or timeout).
+inline auto WaitForLibraryQuery(ApplicationModuleHost& backend, int timeoutMs = 15000) -> bool {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  ProcessEvents(10);
+  while (backend.library()->QueryUpdating() && std::chrono::steady_clock::now() < deadline) {
+    ProcessEvents(10);
+  }
+  return !backend.library()->QueryUpdating();
+}
+
+/// Load a packed .alcd project into @p backend and wait for ServiceReady and the first
+/// accepted library result.
+inline auto LoadPackedProject(ApplicationModuleHost& backend,
+                              const std::filesystem::path& packedPath) -> bool {
+  QSignalSpy project_spy(backend.project(), &ProjectModule::ProjectChanged);
+  if (!backend.project()->LoadProject(PathToQString(packedPath))) {
+    return false;
+  }
+  WaitForSignal(project_spy, 15000);
+  ProcessEvents(500);
+  WaitForLibraryQuery(backend);
+  return backend.project()->ServiceReady();
+}
+
+/// Write @p count importable 48 x 32 PNG photos named `<stem><n>.png` into @p dir.
+inline auto WritePngPhotos(const std::filesystem::path& dir, const std::string& stem, int count)
+    -> std::vector<std::filesystem::path> {
+  std::filesystem::create_directories(dir);
+  std::vector<std::filesystem::path> paths;
+  for (int index = 0; index < count; ++index) {
+    QImage image(48, 32, QImage::Format_RGB32);
+    image.fill(QColor::fromHsv((index * 47) % 360, 160, 200));
+    auto path = dir / (stem + std::to_string(index) + ".png");
+    if (!image.save(PathToQString(path), "PNG")) {
+      return {};
+    }
+    paths.push_back(std::move(path));
+  }
+  return paths;
+}
+
+/// Import @p paths into the current folder and wait until the import and the library refresh
+/// that it requests have finished.
+inline auto ImportAndWait(ApplicationModuleHost&                    backend,
+                          const std::vector<std::filesystem::path>& paths, int timeout_ms = 120000)
+    -> bool {
+  auto*       import_export = backend.import_export();
+  QStringList files;
+  for (const auto& path : paths) {
+    files.push_back(PathToQString(path));
+  }
+  import_export->StartImport(files);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  ProcessEvents(50);
+  while (import_export->ImportRunning() && std::chrono::steady_clock::now() < deadline) {
+    ProcessEvents(20);
+  }
+  // The completion and the refresh are queued after the import ends.
+  ProcessEvents(200);
+  return !import_export->ImportRunning() && WaitForLibraryQuery(backend);
+}
+
+/// Delete the library photos @p targets (element id, image id) and wait until the delete and the
+/// library refresh that it requests have finished.
+inline auto DeleteAndWait(ApplicationModuleHost&                                     backend,
+                          const std::vector<std::pair<sl_element_id_t, image_id_t>>& targets,
+                          int timeout_ms = 120000) -> bool {
+  QVariantList list;
+  for (const auto& [element_id, image_id] : targets) {
+    list.push_back(QVariantMap{{"elementId", static_cast<uint>(element_id)},
+                               {"imageId", static_cast<uint>(image_id)}});
+  }
+  QSignalSpy finished(backend.library_mutations(),
+                      &LibraryMutationOperations::DeleteTargetsFinished);
+  if (!backend.library_mutations()->StartDeleteTargets(list).value("started").toBool()) {
+    return false;
+  }
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (finished.count() == 0 && std::chrono::steady_clock::now() < deadline) {
+    ProcessEvents(20);
+  }
+  ProcessEvents(50);
+  return finished.count() == 1 && WaitForLibraryQuery(backend);
+}
+
+}  // namespace alcedo::ui::test

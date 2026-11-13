@@ -5,7 +5,8 @@
 #include "sleeve/storage.hpp"
 
 #include <exception>
-#include <mutex>
+#include <memory>
+#include <unordered_map>
 
 namespace alcedo {
 NodeStorageHandler::NodeStorageHandler(
@@ -35,8 +36,22 @@ void NodeStorageHandler::EnsureChildrenLoaded(std::shared_ptr<SleeveFolder> fold
 
   try {
     auto folder_content = element_store_.GetFolderContent(folder->element_id_);
+    // Load the children that are not in memory with one query for the folder instead of
+    // one GetElementById per child. Elements already in memory keep their live state.
+    std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>> loaded_children;
+    for (auto& child : element_store_.GetFolderChildren(folder->element_id_)) {
+      if (!storage_.contains(child->element_id_)) {
+        loaded_children.emplace(child->element_id_, std::move(child));
+      }
+    }
     for (auto& content_id : folder_content) {
-      auto content = GetElement(content_id);
+      std::shared_ptr<SleeveElement> content;
+      if (auto it = loaded_children.find(content_id); it != loaded_children.end()) {
+        content              = it->second;
+        storage_[content_id] = content;
+      } else {
+        content = GetElement(content_id);
+      }
       if (!content || content->sync_flag_ == SyncFlag::DELETED) {
         continue;
       }
@@ -66,77 +81,36 @@ void NodeStorageHandler::GarbageCollect() {
 
 Storage::Storage(std::filesystem::path db_path)
     : database_(db_path),
-      element_store_(database_.GetConnectionGuard()),
+      element_store_(database_),
       image_store_(database_.GetConnectionGuard()),
-      semantic_store_(database_),
-      ai_store_(database_) {}
+      semantic_models_(database_),
+      semantic_embeddings_(database_),
+      semantic_labels_(database_),
+      semantic_vector_search_(database_),
+      ai_store_(database_),
+      maintenance_(database_) {}
+
+auto Storage::OpenSession() -> StorageSession { return StorageSession(database_); }
+
+auto Storage::Maintenance() -> StorageMaintenance& { return maintenance_; }
 
 auto Storage::GetElementStore() -> ElementStore& { return element_store_; }
 
 auto Storage::GetImageStore() -> ImageStore& { return image_store_; }
 
-auto Storage::GetSemanticStore() -> SemanticStore& {
-  return semantic_store_;
+auto Storage::GetSemanticModelRegistry() -> SemanticModelRegistry& { return semantic_models_; }
+
+auto Storage::GetSemanticEmbeddingStore() -> SemanticEmbeddingStore& {
+  return semantic_embeddings_;
+}
+
+auto Storage::GetSemanticLabelStore() -> SemanticLabelStore& { return semantic_labels_; }
+
+auto Storage::GetSemanticVectorSearch() -> SemanticVectorSearch& {
+  return semantic_vector_search_;
 }
 
 auto Storage::GetAiStore() -> AiStore& {
   return ai_store_;
-}
-
-auto Storage::GetDatabase() -> Database& { return database_; }
-
-void Storage::RememberLiveEditHistory(const sl_element_id_t               file_id,
-                                             const std::shared_ptr<EditHistory>& history) {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  if (!history) {
-    live_histories_.erase(file_id);
-    return;
-  }
-  live_histories_[file_id] = history;
-}
-
-auto Storage::GetLiveEditHistory(const sl_element_id_t file_id)
-    -> std::shared_ptr<EditHistory> {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  const auto                  it = live_histories_.find(file_id);
-  if (it == live_histories_.end()) {
-    return nullptr;
-  }
-
-  auto history = it->second.lock();
-  if (!history) {
-    live_histories_.erase(it);
-  }
-  return history;
-}
-
-void Storage::ForgetLiveEditHistory(const sl_element_id_t file_id) {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  live_histories_.erase(file_id);
-}
-
-void Storage::RememberLivePipeline(const sl_element_id_t                       file_id,
-                                          const std::shared_ptr<CPUPipelineExecutor>& pipeline) {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  if (!pipeline) {
-    live_pipelines_.erase(file_id);
-    return;
-  }
-  live_pipelines_[file_id] = pipeline;
-}
-
-auto Storage::GetLivePipeline(const sl_element_id_t file_id)
-    -> std::shared_ptr<CPUPipelineExecutor> {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  const auto                  it = live_pipelines_.find(file_id);
-  if (it == live_pipelines_.end()) {
-    return nullptr;
-  }
-  return it->second;
-}
-
-void Storage::ForgetLivePipeline(const sl_element_id_t file_id) {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  live_pipelines_.erase(file_id);
 }
 };  // namespace alcedo

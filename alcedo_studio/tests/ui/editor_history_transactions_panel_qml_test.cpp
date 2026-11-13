@@ -85,17 +85,16 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryToolbarUndoAndRedoFollowUse
   auto* recovery_notice = Find(QStringLiteral("editorHistoryRecoveryNotice"));
   ASSERT_NE(recovery_notice, nullptr);
   EXPECT_TRUE(recovery_notice->property("visible").toBool());
-  auto* merge_title = Find(QStringLiteral("editorHistoryCommitTitle"));
-  ASSERT_NE(merge_title, nullptr);
-  // Dense merge row: title is "Merge"; second parent lives on the hash line.
-  EXPECT_TRUE(merge_title->property("text").toString().contains(QStringLiteral("Merge")));
+  auto* commit_title = Find(QStringLiteral("editorHistoryCommitTitle"));
+  ASSERT_NE(commit_title, nullptr);
+  EXPECT_EQ(commit_title->property("text").toString(), QStringLiteral("Contrast"));
   auto* history_card = Find(QStringLiteral("editorHistoryCard"));
   ASSERT_NE(history_card, nullptr);
   EXPECT_EQ(history_card->property("color").value<QColor>(),
             AppTheme::Instance().cardSurfaceColor());
   EXPECT_EQ(history_card->property("selectionOutlineColor").value<QColor>(),
             AppTheme::Instance().textColor());
-  EXPECT_EQ(merge_title->property("color").value<QColor>(), AppTheme::Instance().textColor());
+  EXPECT_EQ(commit_title->property("color").value<QColor>(), AppTheme::Instance().textColor());
 
   Click(window_, undo);
   EXPECT_EQ(backend_.undo_count(), 1);
@@ -108,46 +107,14 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryToolbarUndoAndRedoFollowUse
   EXPECT_FALSE(Find(QStringLiteral("editorHistoryRedoButton"))->isEnabled());
 }
 
-TEST_F(EditorHistoryTransactionsPanelQmlTest, PasteAndMergeUseVisibleActionsAndResolveEveryField) {
+TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryPanelHasNoPasteOrMergeAction) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenHistoryPage();
 
-  Click(window_, Find(QStringLiteral("editorHistoryPasteButton")));
-  EXPECT_EQ(transfer_.paste_count(), 1);
-
-  Click(window_, Find(QStringLiteral("editorHistoryMergeButton")));
-  EXPECT_EQ(transfer_.begin_merge_count(), 1);
-  auto* dialog = window_->findChild<QObject*>(QStringLiteral("editorMergeDialog"));
-  ASSERT_NE(dialog, nullptr);
-  ASSERT_TRUE(dialog->property("visible").toBool());
-
-  auto* complete = Find(QStringLiteral("editorMergeAcceptButton"));
-  ASSERT_NE(complete, nullptr);
-  EXPECT_FALSE(complete->isEnabled());
-
-  auto* merged = Find(QStringLiteral("editorMergeResolvedValue"));
-  ASSERT_NE(merged, nullptr);
-  EXPECT_EQ(merged->property("text").toString(),
-            QStringLiteral("Waiting for resolution..."));
-
-  Click(window_, Find(QStringLiteral("editorMergeUseAllCurrentButton")));
-  EXPECT_TRUE(complete->isEnabled());
-  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("0"));
-
-  Click(window_, Find(QStringLiteral("editorMergeUseAllIncomingButton")));
-  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("1"));
-
-  Click(window_, Find(QStringLiteral("editorMergeCurrentChoiceButton")));
-  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("0"));
-
-  Click(window_, Find(QStringLiteral("editorMergeConflictChoice")));
-  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("1"));
-  ProcessEvents();
-
-  Click(window_, Find(QStringLiteral("editorMergeAcceptButton")));
-  EXPECT_EQ(transfer_.complete_merge_count(), 1);
-  EXPECT_EQ(transfer_.last_resolution_count(), 1);
-  EXPECT_EQ(transfer_.last_resolution().value(QStringLiteral("resolvedValue")).toDouble(), 1.0);
+  // Paste as a new Version lives in the Versions panel.
+  EXPECT_EQ(Find(QStringLiteral("editorHistoryPasteButton")), nullptr);
+  EXPECT_EQ(Find(QStringLiteral("editorHistoryMergeButton")), nullptr);
+  EXPECT_EQ(window_->findChild<QObject*>(QStringLiteral("editorMergeDialog")), nullptr);
 }
 
 TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryCardClickMovesToCommit) {
@@ -189,13 +156,12 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest,
        NonCurrentCardsRenderBeforeAfterValueText) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenHistoryPage();
-  // Fixture seeds merge(Current) + contrast(Applied) + exposure(Applied). Every
-  // non-current edit card must render its before/after value line, not only the
-  // head. Regression: the value label previously stayed empty for non-current
-  // cards because the JS-block text binding did not re-evaluate; it now binds
-  // directly to the authoritative delta_text the presentation helper computes.
+  // Fixture: contrast(Current) + exposure(Applied). Every non-current edit card
+  // must render its before/after value line, not only the head. Regression: the
+  // value label previously stayed empty for non-current cards because the JS-block
+  // text binding did not re-evaluate; it now binds directly to the authoritative
+  // delta_text the presentation helper computes.
   for (auto* delegate : HistoryCards()) {
-    if (delegate->property("mergeTransaction").toBool()) continue;
     if (delegate->property("currentTransaction").toBool()) continue;
     auto* value_label =
         delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryCommitValue"));
@@ -221,7 +187,6 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, EachTransactionCardShowsItsOwnComm
   for (auto* delegate : HistoryCards()) {
     const QString commit_id = delegate->property("transactionId").toString();
     if (commit_id.isEmpty()) continue;
-    if (delegate->property("mergeTransaction").toBool()) continue;
     auto* hash_label =
         delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryCommitHash"));
     ASSERT_NE(hash_label, nullptr) << "transaction card missing commit hash label";
@@ -239,6 +204,34 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, EachTransactionCardShowsItsOwnComm
     ++hashed_cards;
   }
   EXPECT_GE(hashed_cards, 1);
+}
+
+TEST_F(EditorHistoryTransactionsPanelQmlTest, AgentCommitShowsAgentChipAndNote) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  // Snapshot order: index 1 is the exposure commit, the older one.
+  backend_.SetCommitAttribution(1, "agent", "Lift the shadows");
+  OpenHistoryPage();
+  QTRY_VERIFY_WITH_TIMEOUT(HistoryCards().size() == 2, 8000);
+
+  int agent_cards = 0;
+  for (auto* delegate : HistoryCards()) {
+    auto* author_label =
+        delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryCommitAuthor"));
+    auto* note_label = delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryCommitNote"));
+    ASSERT_NE(author_label, nullptr);
+    ASSERT_NE(note_label, nullptr);
+    if (delegate->property("agentCommit").toBool()) {
+      ++agent_cards;
+      EXPECT_TRUE(author_label->isVisible());
+      EXPECT_EQ(author_label->property("text").toString(), QStringLiteral("Agent"));
+      EXPECT_TRUE(note_label->isVisible());
+      EXPECT_EQ(note_label->property("text").toString(), QStringLiteral("Lift the shadows"));
+    } else {
+      EXPECT_FALSE(author_label->isVisible());
+      EXPECT_FALSE(note_label->isVisible());
+    }
+  }
+  EXPECT_EQ(agent_cards, 1);
 }
 
 }  // namespace

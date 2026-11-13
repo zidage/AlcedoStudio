@@ -5,14 +5,32 @@
 #include "app/editor_session_service.hpp"
 
 #include <algorithm>
+#include <cassert>
+#include <exception>
+#include <iterator>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <variant>
 
+#include "app/ai_mask_analysis_image.hpp"
 #include "app/editor_action_policy.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_navigation_controller.hpp"
 #include "app/editor_session_render_controller.hpp"
+#include "app/lut_preview_image.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/history/mini_git_working_history.hpp"
+#include "edit/mask/mask_model.hpp"
+#include "edit/runtime/mask_coverage_probe.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 
@@ -27,6 +45,12 @@ class SessionQueueCompletionExecutor final : public IEditorSessionCommandExecuto
 
   void Post(std::function<void()> task) override { queue_.PostCompletion(std::move(task)); }
 
+  // The save service has no deadline path; deliver delayed work immediately
+  // through the same serialized completion drain.
+  void PostDelayed(std::function<void()> task, std::chrono::nanoseconds /*delay*/) override {
+    queue_.PostCompletion(std::move(task));
+  }
+
   [[nodiscard]] auto IsOwnerThread() const -> bool override { return queue_.IsOwnerThread(); }
 
  private:
@@ -38,15 +62,19 @@ class SessionQueueCompletionExecutor final : public IEditorSessionCommandExecuto
 EditorSessionService::EditorSessionService(Dependencies dependencies)
     : dependencies_(std::move(dependencies)),
       command_queue_(dependencies_.command_executor),
-      lifecycle_(
-          EditorSessionLifecycle::Dependencies{dependencies_.pipeline, dependencies_.history}),
+      lifecycle_(EditorSessionLifecycle::Dependencies{dependencies_.history}),
       save_service_(EditorSaveCheckpointService::Dependencies{
-          dependencies_.journal, dependencies_.checkpoint_store, dependencies_.thumbnails,
-          dependencies_.tasks, std::make_shared<SessionQueueCompletionExecutor>(command_queue_),
+          dependencies_.checkpoint_store, dependencies_.thumbnails, dependencies_.tasks,
+          std::make_shared<SessionQueueCompletionExecutor>(command_queue_),
           dependencies_.save_coordinator}),
       render_(EditorSessionRenderController::Dependencies{
           dependencies_.render,
           [this](const EditorRenderEvent& event) {
+            // BusyChanged is published after serial consume/Submit, not as a
+            // separate owner event that can run ahead of FrameReady.
+            if (event.kind == EditorRenderEventKind::BusyChanged) {
+              return;
+            }
             EditorSessionCompletion completion;
             completion.kind                 = EditorSessionCompletionKind::RenderResult;
             completion.operation.command_id = event.operation_id;
@@ -55,14 +83,29 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
             completion.message              = event.message;
             PostCompletion(std::move(completion));
           }}),
-      edit_(
-          EditorSessionEditController::Dependencies{dependencies_.history, dependencies_.journal}),
-      navigation_(lifecycle_, save_service_, render_, dependencies_.journal.get(),
-                  dependencies_.checkpoint_store.get(), dependencies_.history.get(),
-                  &navigation_state_) {
-  navigation_.SetOwnerPoster([this](std::function<void()> task) {
-    command_queue_.PostCompletion(std::move(task));
-  });
+      edit_(EditorSessionEditController::Dependencies{dependencies_.history}),
+      navigation_(lifecycle_, save_service_, render_, dependencies_.checkpoint_store.get(),
+                  dependencies_.history.get(), &navigation_state_),
+      comparison_(EditorComparisonService::Dependencies{
+          dependencies_.history.get(), dependencies_.images,
+          [this](std::function<void()> task) { PostOwnerTask(std::move(task)); }}),
+      coverage_preview_(dependencies_.mask_coverage,
+                        [this](std::function<void()> task) { PostOwnerTask(std::move(task)); }) {
+  // Session mutations must run on the command-queue owner thread, not on the
+  // thread that constructed the facade.
+  lifecycle_.SetOwnerCheck([this] { return command_queue_.IsOwnerThread(); });
+  // Every render intent carries the range probe that the preview publishes (Mask ranges D9).
+  render_.SetMaskCoverageProbeSource([this] { return coverage_preview_.State().range_probe; });
+  // Pacing deadlines are delivered by the session-owner executor itself; a
+  // GUI timer is no longer part of the serial schedule.
+  default_deadline_handler_ = [this](std::int64_t delay_ns) {
+    ScheduleDeadlineConsume(delay_ns);
+  };
+  serial_admission_.SetDeadlineHandler(default_deadline_handler_);
+  navigation_.SetOwnerPoster(
+      [this](std::function<void()> task) { command_queue_.PostCompletion(std::move(task)); });
+  navigation_.SetSealPreparer(
+      [this](std::string* error) { return SettlePendingInputForBoundary(error); });
   navigation_.SetCompletionNotifier([this](const NavigationCompletion& completion) {
     EditorSessionCompletion posted;
     posted.kind                 = EditorSessionCompletionKind::NavigationFinished;
@@ -73,12 +116,30 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
     posted.element_id           = completion.ticket.element_id;
     posted.navigation_success   = completion.success;
     posted.retained_image       = completion.retained_image;
+    posted.navigation_render_request_id = completion.render_request_id;
     posted.message              = completion.message;
     PostCompletion(std::move(posted));
   });
+  // Install the owner check after the one-time wiring calls above: those
+  // setters assert the (legacy) owner thread, which is the constructing thread
+  // at this point.
+  navigation_.SetOwnerCheck([this] { return command_queue_.IsOwnerThread(); });
 }
 
-EditorSessionService::~EditorSessionService() { save_service_.CancelAndWait(); }
+EditorSessionService::~EditorSessionService() {
+  // Join the session-owner worker before any member is torn down: queued and
+  // in-flight tasks invoke this service's members, so the worker must be dead
+  // before member destruction begins.
+  StopCommandExecutor();
+  save_service_.CancelAndWait();
+}
+
+void EditorSessionService::StopCommandExecutor() {
+  if (const auto& executor = command_queue_.executor()) {
+    executor->Shutdown();
+  }
+  command_queue_.Stop();
+}
 
 void EditorSessionService::DrainCommandQueueForTests() {
   const auto manual =
@@ -93,7 +154,7 @@ auto EditorSessionService::SubmitCommand(EditorSessionCommand command, CommandRe
   if (!reducer) {
     return {};
   }
-  if (reducing_command_) {
+  if (InOwnerReduction()) {
     return reducer(command);
   }
 
@@ -108,16 +169,22 @@ auto EditorSessionService::SubmitCommand(EditorSessionCommand command, CommandRe
         reducing_command_ = true;
         BeginPublication();
         if (const auto action = EditorActionPolicy::ActionForCommand(queued.kind)) {
-          const auto decision = EditorActionPolicy::Evaluate(
-              *action, EditorCommandContext{active_leases_}, BuildActionInputs());
+          auto inputs = BuildActionInputs();
+          // A queued Paste carries its package. The copied-package flag tells only whether the
+          // Paste action of the GUI has a package to submit; an automation Paste has its own.
+          if (queued.kind == EditorSessionCommandKind::ApplyPaste) {
+            inputs.package_available = !queued.transfer_package.Empty();
+          }
+          const auto decision =
+              EditorActionPolicy::Evaluate(*action, EditorCommandContext{active_leases_}, inputs);
           if (!decision.allowed) {
             EditorSessionResult rejected;
             rejected.kind         = EditorSessionResultKind::Rejected;
             rejected.operation_id = queued.operation.command_id;
             rejected.state        = lifecycle_.state();
             rejected.identity     = lifecycle_.identity();
-            rejected.message      = decision.reason.empty() ? "Editor command rejected by policy"
-                                                            : decision.reason;
+            rejected.message =
+                decision.reason.empty() ? "Editor command rejected by policy" : decision.reason;
             *reduced_result = Emit(std::move(rejected));
             EndPublication();
             reducing_command_     = previous_reducing;
@@ -136,10 +203,8 @@ auto EditorSessionService::SubmitCommand(EditorSessionCommand command, CommandRe
     rejected.kind         = EditorSessionResultKind::Rejected;
     rejected.operation_id = submission.operation.command_id;
     rejected.message      = "Editor session command queue is shutting down";
-    if (command_queue_.IsOwnerThread()) {
-      rejected.state    = lifecycle_.state();
-      rejected.identity = lifecycle_.identity();
-    }
+    rejected.state        = lifecycle_.state();
+    rejected.identity     = lifecycle_.identity();
     return rejected;
   }
   if (reduced_result->has_value()) {
@@ -149,6 +214,8 @@ auto EditorSessionService::SubmitCommand(EditorSessionCommand command, CommandRe
   EditorSessionResult queued_result;
   queued_result.kind         = EditorSessionResultKind::Accepted;
   queued_result.operation_id = submission.operation.command_id;
+  queued_result.state        = lifecycle_.state();
+  queued_result.identity     = lifecycle_.identity();
   queued_result.message      = "Editor session command queued";
   return queued_result;
 }
@@ -160,10 +227,16 @@ void EditorSessionService::EndPublication() {
     return;
   }
   --publication_depth_;
-  if (publication_depth_ == 0 && publication_dirty_) {
+  if (publication_depth_ != 0) {
+    return;
+  }
+  if (publication_dirty_) {
     publication_dirty_ = false;
     PublishActionAvailabilityIfChanged();
     NotifyChange();
+  } else if (HasOpenInputSequence() != published_input_sequence_open_) {
+    // A preview write opened the sequence, or a seal closed it, without a session result.
+    PublishActionAvailabilityIfChanged();
   }
 }
 
@@ -186,7 +259,8 @@ void EditorSessionService::PostCompletion(EditorSessionCompletion completion) {
             completion.navigation_success, completion.retained_image, completion.message,
             CheckpointTicket{completion.request_id, completion.operation.command_id,
                              completion.image_load_request, completion.element_id,
-                             completion.task_id}});
+                             completion.task_id},
+            completion.navigation_render_request_id});
         break;
       case EditorSessionCompletionKind::ImageStateLoaded:
         HandleImageAcquiredCompletion(completion);
@@ -203,9 +277,23 @@ void EditorSessionService::PostCompletion(EditorSessionCompletion completion) {
   });
 }
 
+void EditorSessionService::PostOwnerTask(std::function<void()> task) {
+  command_queue_.PostCompletion([this, task = std::move(task)]() {
+    const auto previous_operation = current_operation_id_;
+    const auto previous_reducing  = reducing_command_;
+    reducing_command_             = true;
+    BeginPublication();
+    task();
+    publication_dirty_ = true;
+    EndPublication();
+    reducing_command_     = previous_reducing;
+    current_operation_id_ = previous_operation;
+  });
+}
+
 void EditorSessionService::HandleRenderEvent(const EditorRenderEvent& event) {
   if (event.kind == EditorRenderEventKind::BusyChanged) {
-    NotifyChange();
+    PublishRenderProgressIfChanged();
     return;
   }
 
@@ -257,6 +345,10 @@ void EditorSessionService::HandleRenderEvent(const EditorRenderEvent& event) {
     result.identity = lifecycle_.identity();
     BumpHistoryRevision();
   }
+  if (event.kind == EditorRenderEventKind::RenderReused) {
+    EmitQuiet(std::move(result));
+    return;
+  }
   Emit(std::move(result));
 }
 
@@ -267,9 +359,13 @@ void EditorSessionService::HandleNavigationCompletion(const NavigationCompletion
   result.state        = lifecycle_.state();
   result.task_id      = completion.ticket.task_id;
   if (completion.success) {
-    result.kind = render_.first_frame_request_id() != 0 ? EditorSessionResultKind::RenderRouted
-                                                        : EditorSessionResultKind::Accepted;
-    result.render_request_id = render_.first_frame_request_id();
+    // A Version action keeps the image and routes its own frame; the first frame of the image
+    // is long presented, so a wait on it would end on any later frame or on none.
+    const auto render_request_id =
+        completion.render_request_id.value_or(render_.first_frame_request_id());
+    result.kind              = render_request_id != 0 ? EditorSessionResultKind::RenderRouted
+                                                      : EditorSessionResultKind::Accepted;
+    result.render_request_id = render_request_id;
     result.message           = completion.message;
     BumpHistoryRevision();
   } else {
@@ -326,10 +422,22 @@ void EditorSessionService::SetResultObserver(ResultObserver observer) {
 }
 
 void EditorSessionService::SetChangeNotifier(ChangeNotifier notifier) {
-  change_notifier_ = std::move(notifier);
+  IEditorSessionBackend::SetChangeNotifier(std::move(notifier));
+}
+
+void EditorSessionService::SetRenderProgressObserver(RenderProgressObserver observer) {
+  IEditorSessionBackend::SetRenderProgressObserver(std::move(observer));
 }
 
 auto EditorSessionService::Emit(EditorSessionResult result) -> EditorSessionResult {
+  if (!command_queue_.IsOwnerThread()) {
+    // Queued-input rejection paths run on the caller's thread. The result is
+    // returned synchronously while the publication side effects (result log,
+    // observers, snapshot, change notification) are reduced on the owner.
+    command_queue_.PostCompletion(
+        [this, result = std::move(result)]() mutable { (void)Emit(std::move(result)); });
+    return result;
+  }
   if (result.operation_id == 0) {
     result.operation_id = current_operation_id_;
   }
@@ -343,6 +451,18 @@ auto EditorSessionService::Emit(EditorSessionResult result) -> EditorSessionResu
   } else {
     NotifyChange();
   }
+  return result;
+}
+
+auto EditorSessionService::EmitQuiet(EditorSessionResult result) -> EditorSessionResult {
+  if (result.operation_id == 0) {
+    result.operation_id = current_operation_id_;
+  }
+  {
+    std::scoped_lock lock(results_mutex_);
+    results_.push_back(result);
+  }
+  NotifyResult(result);
   return result;
 }
 
@@ -414,7 +534,7 @@ auto EditorSessionService::FinishVersionNavigation(const NavigationOutcome& outc
 
 auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
     -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind       = EditorSessionCommandKind::OpenImage;
     command.element_id = element_id;
@@ -423,10 +543,9 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
       return Open(queued.element_id, queued.image_id);
     });
   }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
-  }
+  AbortMaskCreation();
+  (void)CloseComparisonOnOwner(false, std::nullopt);
+  EndAiMaskWorkForImageChange();
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, false);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -489,7 +608,7 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
 
 auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
     -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind       = EditorSessionCommandKind::CheckoutVersion;
     command.version_id = version_id;
@@ -497,10 +616,7 @@ auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
       return CheckoutVersion(queued.version_id);
     });
   }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
-  }
+  serial_admission_.ResetPacingAfterNonInteractiveWork();
   const auto outcome = navigation_.RequestCheckoutVersion(version_id);
   return FinishVersionNavigation(outcome);
 }
@@ -512,47 +628,59 @@ auto EditorSessionService::history_snapshot() -> EditorHistorySnapshot {
   if (!dependencies_.history->ReadHistorySnapshot(lifecycle_.history_guard(), &snapshot, &error)) {
     return {};
   }
-  if (pending_merge_preview_) {
-    const auto hidden_id = pending_merge_preview_->incoming_version_id;
-    snapshot.versions.erase(std::remove_if(snapshot.versions.begin(), snapshot.versions.end(),
-                                           [&hidden_id](const EditorHistoryVersion& version) {
-                                             return version.version_id == hidden_id;
-                                           }),
-                            snapshot.versions.end());
-  }
   return snapshot;
 }
 
-auto EditorSessionService::adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
+auto EditorSessionService::SnapshotHistorySource(
+    std::shared_ptr<const CommitGraph>*      graph,
+    std::shared_ptr<const PipelineDocument>* root_document, std::string* error) -> bool {
   if (!dependencies_.history || !lifecycle_.has_history_guard()) {
-    return {};
-  }
-  EditorRenderAdjustmentSnapshot snapshot;
-  std::string                    error;
-  auto& history = *dependencies_.history;
-  if (!const_cast<IEditorHistoryPort&>(history).ReadAdjustmentSnapshot(
-          lifecycle_.history_guard(), &snapshot, &error)) {
-    return {};
-  }
-  return snapshot;
-}
-
-auto EditorSessionService::CancelPendingMergeForNavigation(std::string* error) -> bool {
-  if (!pending_merge_preview_) return true;
-  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
-    if (error) *error = "Cannot discard the pending editor merge without a history guard";
+    if (error != nullptr) *error = "No image history is open in the editor";
     return false;
   }
-  // Live merge preview does not stage a shadow graph; clear session state only.
-  pending_merge_package_.reset();
-  pending_merge_preview_.reset();
-  active_merge_preview_id_.reset();
-  ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
-  return true;
+  return dependencies_.history->SnapshotHistorySource(lifecycle_.history_guard(), graph,
+                                                      root_document, error);
+}
+
+auto EditorSessionService::active_version_id() const -> version_ref_id_t {
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) return {};
+  std::string      error;
+  version_ref_id_t version_id;
+  if (!dependencies_.history->ReadActiveVersionId(lifecycle_.history_guard(), &version_id,
+                                                  &error)) {
+    return {};
+  }
+  return version_id;
+}
+
+auto EditorSessionService::pipeline_document() const
+    -> std::shared_ptr<const PipelineDocument> {
+  // The history publishes a preview after every write, before any change notification, so a
+  // GUI reader that reacts to a notification sees at least the document it announced.
+  if (!dependencies_.pipeline || !lifecycle_.has_image()) {
+    return nullptr;
+  }
+  const auto preview = dependencies_.pipeline->CurrentPreview(lifecycle_.identity().element_id);
+  return preview ? preview->SharedDocument() : nullptr;
+}
+
+auto EditorSessionService::panel_projection() const -> EditorPanelProjection {
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    return {};
+  }
+  EditorPanelProjection projection;
+  std::string           error;
+  auto&                 history = *dependencies_.history;
+  if (!const_cast<IEditorHistoryPort&>(history).ReadPanelProjection(lifecycle_.history_guard(),
+                                                                    &projection, &error)) {
+    return {};
+  }
+  projection.session_generation = lifecycle_.active_image_load_request().value;
+  return projection;
 }
 
 auto EditorSessionService::CreateRootVersion(std::string display_name) -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::CreateRootVersion;
     command.text = std::move(display_name);
@@ -560,16 +688,12 @@ auto EditorSessionService::CreateRootVersion(std::string display_name) -> Editor
       return CreateRootVersion(queued.text);
     });
   }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
-  }
   return FinishVersionNavigation(navigation_.RequestCreateRootVersion(std::move(display_name)));
 }
 
 auto EditorSessionService::BranchFromCommit(const commit_hash_t& commit_id,
                                             std::string display_name) -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind      = EditorSessionCommandKind::BranchVersion;
     command.commit_id = commit_id;
@@ -578,16 +702,12 @@ auto EditorSessionService::BranchFromCommit(const commit_hash_t& commit_id,
       return BranchFromCommit(queued.commit_id, queued.text);
     });
   }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
-  }
   return FinishVersionNavigation(
       navigation_.RequestBranchFromCommit(commit_id, std::move(display_name)));
 }
 
 auto EditorSessionService::RetrySave() -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::RetrySave;
     return SubmitCommand(std::move(command),
@@ -598,7 +718,7 @@ auto EditorSessionService::RetrySave() -> EditorSessionResult {
 }
 
 auto EditorSessionService::DiscardAndContinue() -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::DiscardAndContinue;
     return SubmitCommand(std::move(command),
@@ -609,7 +729,7 @@ auto EditorSessionService::DiscardAndContinue() -> EditorSessionResult {
 }
 
 auto EditorSessionService::CancelPendingNavigation() -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::CancelPendingNavigation;
     return SubmitCommand(std::move(command),
@@ -628,7 +748,7 @@ auto EditorSessionService::CancelPendingNavigation() -> EditorSessionResult {
 
 auto EditorSessionService::RenameVersion(const version_ref_id_t& version_id,
                                          std::string display_name) -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind       = EditorSessionCommandKind::RenameVersion;
     command.version_id = version_id;
@@ -651,7 +771,7 @@ auto EditorSessionService::RenameVersion(const version_ref_id_t& version_id,
 
 auto EditorSessionService::RemoveVersion(const version_ref_id_t& version_id)
     -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind       = EditorSessionCommandKind::RemoveVersion;
     command.version_id = version_id;
@@ -671,15 +791,20 @@ auto EditorSessionService::RemoveVersion(const version_ref_id_t& version_id)
 }
 
 auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& package,
-                                            std::string                      version_display_name)
+                                            std::string                      version_display_name,
+                                            std::optional<EditCommitAttribution> attribution)
     -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (attribution.has_value() && !IsStorableEditCommitAttribution(*attribution)) {
+    return Reject("Paste attribution author is not agent");
+  }
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind             = EditorSessionCommandKind::ApplyPaste;
     command.transfer_package = package;
     command.text             = std::move(version_display_name);
+    command.attribution      = std::move(attribution);
     return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-      return PasteAdjustments(queued.transfer_package, queued.text);
+      return PasteAdjustments(queued.transfer_package, queued.text, queued.attribution);
     });
   }
   if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
@@ -689,7 +814,7 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
   std::string           error;
   if (!dependencies_.history->PasteLiveRootRelativeVersion(
           lifecycle_.history_guard(), package, std::move(version_display_name), &paste_result,
-          &error)) {
+          &error, std::move(attribution))) {
     return Reject(error.empty() ? "Editor Paste failed" : std::move(error));
   }
 
@@ -703,131 +828,6 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
     ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
   }
   return started;
-}
-
-auto EditorSessionService::BeginMerge(const AdjustmentTransferPackage& package,
-                                      AdjustmentMergePreview* preview) -> EditorSessionResult {
-  if (!reducing_command_) {
-    auto                 holder = std::make_shared<AdjustmentMergePreview>();
-    EditorSessionCommand command;
-    command.kind             = EditorSessionCommandKind::BeginMerge;
-    command.transfer_package = package;
-    command.merge_preview    = holder;
-    const auto result =
-        SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-          return BeginMerge(queued.transfer_package, queued.merge_preview.get());
-        });
-    if (preview != nullptr && command_queue_.IsOwnerThread()) {
-      *preview = *holder;
-    }
-    return result;
-  }
-  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
-    return Reject("Merge requires an interactive session");
-  }
-  if (pending_merge_preview_) {
-    return Reject("A merge is already awaiting resolution");
-  }
-  if (preview == nullptr) {
-    return Reject("Merge preview storage is required");
-  }
-  AdjustmentMergePreview next_preview;
-  std::string            error;
-  if (!dependencies_.history->BeginLiveMerge(lifecycle_.history_guard(), package, &next_preview,
-                                             &error)) {
-    return Reject(error.empty() ? "Editor Merge failed to start" : std::move(error));
-  }
-  const bool has_conflicts = next_preview.has_conflicts;
-  const auto preview_id = MergePreviewId{next_merge_preview_id_.value++};
-  next_preview.preview_id = preview_id;
-  // Retain the package for CompleteLiveMerge; no shadow graph is staged.
-  pending_merge_preview_   = std::make_unique<AdjustmentMergePreview>(std::move(next_preview));
-  pending_merge_package_   = package;
-  active_merge_preview_id_ = preview_id;
-  AcquireLease(EditorOperationLeaseKind::MergePreview, current_operation_id_,
-               lifecycle_.identity().element_id, lifecycle_.identity().image_id,
-               lifecycle_.active_image_load_request(), "Merge preview is active");
-  *preview                = *pending_merge_preview_;
-  EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = lifecycle_.identity();
-  result.message  = has_conflicts ? "Merge requires field resolutions" : "Merge is ready to apply";
-  return Emit(std::move(result));
-}
-
-auto EditorSessionService::CompleteMerge(const std::vector<AdjustmentMergeResolution>& resolutions)
-    -> EditorSessionResult {
-  if (!reducing_command_) {
-    EditorSessionCommand command;
-    command.kind              = EditorSessionCommandKind::CompleteMerge;
-    command.merge_resolutions = resolutions;
-    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-      return CompleteMerge(queued.merge_resolutions);
-    });
-  }
-  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
-    return Reject("Merge completion requires an interactive session");
-  }
-  if (!pending_merge_preview_) {
-    return Reject("No merge is awaiting resolution");
-  }
-  if (!pending_merge_package_.has_value()) {
-    return Reject("Merge package is unavailable");
-  }
-  if (!active_merge_preview_id_.has_value() ||
-      pending_merge_preview_->preview_id != *active_merge_preview_id_) {
-    return Reject("Merge preview is stale");
-  }
-  std::string error;
-  AdjustmentMergeResult merge_result;
-  if (!dependencies_.history->CompleteLiveMerge(
-          lifecycle_.history_guard(), *pending_merge_package_, *pending_merge_preview_,
-          resolutions, &merge_result, &error)) {
-    return Reject(error.empty() ? "Merge could not be completed" : std::move(error));
-  }
-  ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
-  pending_merge_package_.reset();
-  pending_merge_preview_.reset();
-  active_merge_preview_id_.reset();
-
-  BumpHistoryRevision();
-  AcquireLease(EditorOperationLeaseKind::MergeMaterialization, current_operation_id_,
-               lifecycle_.identity().element_id, lifecycle_.identity().image_id,
-               lifecycle_.active_image_load_request(), "Merge publication is in progress");
-  auto started = StartHistoryCheckpoint("Adjustments merged", true);
-  if (started.kind == EditorSessionResultKind::Rejected ||
-      started.kind == EditorSessionResultKind::Failed) {
-    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
-  }
-  return started;
-}
-
-auto EditorSessionService::CancelMerge() -> EditorSessionResult {
-  if (!reducing_command_) {
-    EditorSessionCommand command;
-    command.kind = EditorSessionCommandKind::CancelMerge;
-    return SubmitCommand(std::move(command),
-                         [this](const EditorSessionCommand&) { return CancelMerge(); });
-  }
-  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
-    return Reject("No active editor merge");
-  }
-  if (!pending_merge_preview_) {
-    return Reject("No merge is awaiting resolution");
-  }
-  // BeginLiveMerge does not mutate graph/pipeline; cancel is a session-state clear only.
-  pending_merge_package_.reset();
-  pending_merge_preview_.reset();
-  active_merge_preview_id_.reset();
-  ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
-  EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = lifecycle_.identity();
-  result.message  = "Merge cancelled";
-  BumpHistoryRevision();
-  return Emit(std::move(result));
 }
 
 auto EditorSessionService::StartHistoryCheckpoint(std::string success_message, bool route_render)
@@ -850,14 +850,10 @@ auto EditorSessionService::StartHistoryCheckpointSave() -> EditorSessionResult {
   }
 
   const auto identity = lifecycle_.identity();
-  if (dependencies_.journal) {
-    std::string finalize_error;
-    if (!dependencies_.journal->FinalizeEdit(identity.element_id,
-                                             lifecycle_.active_image_load_request().value,
-                                             &finalize_error)) {
-      return Reject(finalize_error.empty() ? "Editor command could not be finalized"
-                                           : std::move(finalize_error));
-    }
+  std::string settle_error;
+  if (!SettlePendingInputForBoundary(&settle_error)) {
+    return Reject(settle_error.empty() ? "Pending edits could not be settled"
+                                       : std::move(settle_error));
   }
   auto save_lock = save_service_.TryAcquireSaveLock(identity.element_id);
   if (!save_lock.owns_lock()) {
@@ -872,10 +868,10 @@ auto EditorSessionService::StartHistoryCheckpointSave() -> EditorSessionResult {
   }
 
   SaveCheckpointRequest request;
-  request.element_id         = identity.element_id;
-  request.operation_id       = current_operation_id_;
+  request.element_id            = identity.element_id;
+  request.operation_id          = current_operation_id_;
   request.image_load_request_id = lifecycle_.active_image_load_request();
-  request.capture            = std::move(capture);
+  request.capture               = std::move(capture);
   if (request.capture->has_journal_range()) {
     request.last_journal_sequence = request.capture->last_journal_sequence;
   }
@@ -922,10 +918,10 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   // terminal outcome without re-entering a recoverable failure state.
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     pending_history_checkpoint_.reset();
+    pending_close_after_persist_ = false;
     ReleaseLeaseByCommandId(completion.operation.command_id);
     ReleaseLeasesByKind(EditorOperationLeaseKind::SaveCheckpoint);
     ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
     EditorSessionResult published;
     published.kind     = EditorSessionResultKind::Failed;
     published.state    = lifecycle_.state();
@@ -947,8 +943,8 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
 
   if (!completion.success) {
     pending_history_checkpoint_.reset();
+    pending_close_after_persist_ = false;
     ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
     lifecycle_.KeepCurrentAfterCheckpointFailure(
         completion.message.empty() ? "Editor save checkpoint failed" : completion.message);
     AcquireLease(EditorOperationLeaseKind::FailureRecovery, completion.operation.command_id,
@@ -982,8 +978,8 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
     if (!dependencies_.history->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(),
                                                                      &sync_error)) {
       pending_history_checkpoint_.reset();
+      pending_close_after_persist_ = false;
       ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-      ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
       EditorSessionResult failed;
       failed.kind     = EditorSessionResultKind::Failed;
       failed.state    = lifecycle_.state();
@@ -998,12 +994,15 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   }
 
   if (!pending_history_checkpoint_.has_value()) {
+    if (pending_close_after_persist_) {
+      pending_close_after_persist_ = false;
+      (void)Close(true);
+    }
     return;
   }
   const auto marker = std::move(*pending_history_checkpoint_);
   pending_history_checkpoint_.reset();
   ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-  ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
 
   EditorSessionResult published;
   published.identity = lifecycle_.identity();
@@ -1011,7 +1010,8 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   published.task_id  = completion.task_id;
   if (marker.route_render) {
     EditorRenderCommand command;
-    command.reason       = EditorRenderReason::InitialFrame;
+    command.reason = dependencies_.history->LastPublishedRenderReason().value_or(
+        EditorRenderReason::InitialFrame);
     command.operation_id = current_operation_id_;
     render_.RouteInitialRender(command, lifecycle_.identity(),
                                lifecycle_.active_image_load_request());
@@ -1024,11 +1024,15 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   published.identity = lifecycle_.identity();
   published.message  = marker.success_message;
   Emit(std::move(published));
+  if (pending_close_after_persist_) {
+    pending_close_after_persist_ = false;
+    (void)Close(true);
+  }
 }
 
 auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_id)
     -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind       = EditorSessionCommandKind::SelectImage;
     command.element_id = element_id;
@@ -1037,10 +1041,9 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
       return Switch(queued.element_id, queued.image_id);
     });
   }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
-  }
+  AbortMaskCreation();
+  (void)CloseComparisonOnOwner(false, std::nullopt);
+  EndAiMaskWorkForImageChange();
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, true);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -1117,7 +1120,7 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
 }
 
 auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind            = EditorSessionCommandKind::CloseEditor;
     command.persist_changes = persist_changes;
@@ -1125,9 +1128,17 @@ auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
       return Close(queued.persist_changes);
     });
   }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
+  AbortMaskCreation();
+  (void)CloseComparisonOnOwner(false, std::nullopt);
+  EndAiMaskWorkForImageChange();
+  if (persist_changes && pending_history_checkpoint_.has_value()) {
+    pending_close_after_persist_ = true;
+    EditorSessionResult waiting;
+    waiting.kind     = EditorSessionResultKind::SaveStarted;
+    waiting.state    = lifecycle_.state();
+    waiting.identity = lifecycle_.identity();
+    waiting.message  = "Waiting for in-flight persist before closing";
+    return Emit(std::move(waiting));
   }
   const auto outcome = navigation_.RequestClose(persist_changes);
   if (outcome.rejected) {
@@ -1154,8 +1165,43 @@ auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
   return Emit(std::move(result));
 }
 
+auto EditorSessionService::PersistCurrentImage() -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::PersistCurrent;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return PersistCurrentImage(); });
+  }
+  if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
+    return Reject("Cannot persist while shutting down");
+  }
+  // Both early outs publish a terminal result: a queued persist is tracked by
+  // its operation id, and a silent return would leave the caller waiting.
+  if (lifecycle_.state() == EditorSessionState::Saving ||
+      lifecycle_.state() == EditorSessionState::Switching || navigation_.has_pending_action() ||
+      save_service_.active()) {
+    // The in-flight checkpoint or navigation owns the save; this persist is
+    // satisfied by it. Callers wait on the session state for that work.
+    EditorSessionResult accepted;
+    accepted.kind     = EditorSessionResultKind::Accepted;
+    accepted.state    = lifecycle_.state();
+    accepted.identity = lifecycle_.identity();
+    accepted.message  = "Editor save checkpoint is already in progress";
+    return Emit(std::move(accepted));
+  }
+  if (!lifecycle_.has_image() || lifecycle_.state() != EditorSessionState::Interactive) {
+    EditorSessionResult accepted;
+    accepted.kind     = EditorSessionResultKind::Accepted;
+    accepted.state    = lifecycle_.state();
+    accepted.identity = lifecycle_.identity();
+    accepted.message  = "No open editor image to persist";
+    return Emit(std::move(accepted));
+  }
+  return StartHistoryCheckpoint("Editor image persisted", false);
+}
+
 auto EditorSessionService::Patch(EditorAdjustmentPatch patch) -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind  = EditorSessionCommandKind::PreviewAdjustment;
     command.patch = std::move(patch);
@@ -1188,7 +1234,7 @@ auto EditorSessionService::Patch(EditorAdjustmentPatch patch) -> EditorSessionRe
 }
 
 auto EditorSessionService::CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind  = EditorSessionCommandKind::CommitAdjustment;
     command.patch = std::move(patch);
@@ -1221,6 +1267,1013 @@ auto EditorSessionService::CommitAdjustment(EditorAdjustmentPatch patch) -> Edit
   return Emit(std::move(result));
 }
 
+auto EditorSessionService::EnqueueAdjustmentInput(EditorAdjustmentPatch patch)
+    -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive) {
+    return Reject("Queued adjustment input requires an interactive session");
+  }
+  if (!lifecycle_.has_image()) {
+    return Reject("Queued adjustment input requires an open image");
+  }
+  if (comparison_active_.load(std::memory_order_acquire)) {
+    return Reject("Close the comparison before editing");
+  }
+  if (ai_mask_edit_active_.load(std::memory_order_acquire)) {
+    return Reject("Commit or cancel the AI Mask edit before editing");
+  }
+  if (patch.attribution.has_value()) {
+    if (!patch.settled) {
+      return Reject("Only a settled adjustment can name a commit author");
+    }
+    if (!IsStorableEditCommitAttribution(*patch.attribution)) {
+      return Reject("The commit author must be agent");
+    }
+  }
+  const auto identity = lifecycle_.identity();
+  // Admission stays on the caller thread so a slider drag never waits for the owner queue. A
+  // settled write is a Release boundary; it takes an id so the commit and frame results of the
+  // later consume can be matched to it.
+  const auto boundary_operation_id = patch.settled ? command_queue_.ReserveCommandId() : 0;
+  const auto admitted =
+      pending_input_.AdmitFieldChange(identity, std::move(patch), boundary_operation_id);
+  if (!admitted.accepted) {
+    return Reject(admitted.error.empty() ? "Queued adjustment input was rejected" : admitted.error);
+  }
+  RequestPendingInputConsume();
+  EditorSessionResult result;
+  result.kind         = EditorSessionResultKind::Accepted;
+  result.state        = lifecycle_.state();
+  result.identity     = identity;
+  result.operation_id = boundary_operation_id;
+  result.message      = "Adjustment input queued";
+  return result;
+}
+
+auto EditorSessionService::EnqueuePendingInputBoundary(
+    EditorPendingInputBoundaryKind kind, std::optional<EditCommitAttribution> attribution)
+    -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive) {
+    return Reject("Queued adjustment input requires an interactive session");
+  }
+  if (!lifecycle_.has_image()) {
+    return Reject("Queued adjustment input requires an open image");
+  }
+  if (comparison_active_.load(std::memory_order_acquire)) {
+    return Reject("Close the comparison before editing");
+  }
+  if (ai_mask_edit_active_.load(std::memory_order_acquire)) {
+    return Reject("Commit or cancel the AI Mask edit before editing");
+  }
+  if (attribution.has_value() && !IsStorableEditCommitAttribution(*attribution)) {
+    return Reject("The commit author must be agent");
+  }
+  const auto identity              = lifecycle_.identity();
+  const auto boundary_operation_id = command_queue_.ReserveCommandId();
+  const auto admitted =
+      pending_input_.AdmitBoundary(identity, kind, boundary_operation_id, std::move(attribution));
+  if (!admitted.accepted) {
+    return Reject(admitted.error.empty() ? "Queued adjustment boundary was rejected"
+                                         : admitted.error);
+  }
+  RequestPendingInputConsume();
+  EditorSessionResult result;
+  result.kind         = EditorSessionResultKind::Accepted;
+  result.state        = lifecycle_.state();
+  result.identity     = identity;
+  result.operation_id = boundary_operation_id;
+  result.message      = "Adjustment input boundary queued";
+  return result;
+}
+
+namespace {
+
+[[nodiscard]] auto SameMaskPointer(const MaskPointerIdentity& a, const MaskPointerIdentity& b)
+    -> bool {
+  return a.device_id == b.device_id && a.point_id == b.point_id && a.sequence_id == b.sequence_id;
+}
+
+[[nodiscard]] auto MaskCommandIsTerminal(EditorMaskCreationCommandKind kind) -> bool {
+  return kind == EditorMaskCreationCommandKind::Finish ||
+         kind == EditorMaskCreationCommandKind::Cancel ||
+         kind == EditorMaskCreationCommandKind::FinishMode ||
+         kind == EditorMaskCreationCommandKind::CancelMode ||
+         kind == EditorMaskCreationCommandKind::RemoveMask;
+}
+
+}  // namespace
+
+auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command)
+    -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive) {
+    return Reject("Queued Mask creation requires an interactive session");
+  }
+  if (!lifecycle_.has_image()) {
+    return Reject("Queued Mask creation requires an open image");
+  }
+  // Cancel commands stay admissible: they only end a Mask mode and write nothing.
+  if (comparison_active_.load(std::memory_order_acquire) &&
+      command.kind != EditorMaskCreationCommandKind::Cancel &&
+      command.kind != EditorMaskCreationCommandKind::CancelMode) {
+    return Reject("Close the comparison before editing Masks");
+  }
+  // A range edit of the stored Mask that the AI Mask edit targets stays admissible (MR4); the
+  // owner rejects one that targets another Mask (ApplyMaskCreationCommand).
+  if (ai_mask_edit_active_.load(std::memory_order_acquire) &&
+      command.kind != EditorMaskCreationCommandKind::Cancel &&
+      command.kind != EditorMaskCreationCommandKind::CancelMode &&
+      !IsMaskRangeEditCommand(command)) {
+    return Reject("Commit or cancel the AI Mask edit before editing Masks");
+  }
+  {
+    std::scoped_lock lock(mask_command_mutex_);
+    if (command.kind == EditorMaskCreationCommandKind::CancelMode && command.mask_id.Empty()) {
+      pending_mask_commands_.erase(
+          std::remove_if(pending_mask_commands_.begin(), pending_mask_commands_.end(),
+                         [&command](const EditorMaskCreationCommand& pending) {
+                           if (pending.node_id != command.node_id) {
+                             return false;
+                           }
+                           return pending.kind == EditorMaskCreationCommandKind::BeginCreation ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginInput ||
+                                  pending.kind == EditorMaskCreationCommandKind::Append ||
+                                  pending.kind == EditorMaskCreationCommandKind::Finish ||
+                                  pending.kind == EditorMaskCreationCommandKind::Cancel ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginMaskField ||
+                                  pending.kind == EditorMaskCreationCommandKind::SetMaskField ||
+                                  pending.kind == EditorMaskCreationCommandKind::ToggleMaskInvert;
+                         }),
+          pending_mask_commands_.end());
+    }
+    if (command.kind == EditorMaskCreationCommandKind::RemoveMask && !command.mask_id.Empty()) {
+      pending_mask_commands_.erase(
+          std::remove_if(pending_mask_commands_.begin(), pending_mask_commands_.end(),
+                         [&command](const EditorMaskCreationCommand& pending) {
+                           if (pending.mask_id != command.mask_id) {
+                             return false;
+                           }
+                           return pending.kind == EditorMaskCreationCommandKind::Append ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginMove ||
+                                  pending.kind == EditorMaskCreationCommandKind::Finish ||
+                                  pending.kind == EditorMaskCreationCommandKind::FinishMode ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginInput ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginMaskField ||
+                                  pending.kind == EditorMaskCreationCommandKind::SetMaskField ||
+                                  pending.kind == EditorMaskCreationCommandKind::ToggleMaskInvert;
+                         }),
+          pending_mask_commands_.end());
+    }
+    if (command.kind == EditorMaskCreationCommandKind::Append && !pending_mask_commands_.empty()) {
+      auto& back = pending_mask_commands_.back();
+      if (back.kind == EditorMaskCreationCommandKind::Append &&
+          SameMaskPointer(back.identity, command.identity) && !back.ordered_append &&
+          !command.ordered_append) {
+        back = std::move(command);
+      } else {
+        pending_mask_commands_.push_back(std::move(command));
+      }
+    } else {
+      pending_mask_commands_.push_back(std::move(command));
+    }
+  }
+  RequestPendingInputConsume();
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Mask creation queued";
+  return result;
+}
+
+auto EditorSessionService::mask_creation_commands_pending() const -> bool {
+  std::scoped_lock lock(mask_command_mutex_);
+  return !pending_mask_commands_.empty();
+}
+
+auto EditorSessionService::PeekPendingMaskCommands() const
+    -> std::vector<EditorMaskCreationCommand> {
+  std::scoped_lock lock(mask_command_mutex_);
+  return pending_mask_commands_;
+}
+
+auto EditorSessionService::PeekPendingInput() const -> EditorPendingInputView {
+  return pending_input_.Peek();
+}
+
+void EditorSessionService::SetAdmissionDeadlineHandler(
+    std::function<void(std::int64_t delay_ns)> handler) {
+  // An empty handler restores the session-owner default so tests that clear a
+  // custom handler cannot silently disarm pacing deadlines.
+  serial_admission_.SetDeadlineHandler(handler ? std::move(handler)
+                                               : default_deadline_handler_);
+}
+
+void EditorSessionService::SetMonotonicClock(std::shared_ptr<IEditorMonotonicClock> clock) {
+  pending_input_.SetClock(clock);
+  serial_admission_.SetClock(std::move(clock));
+}
+
+void EditorSessionService::RefreshMaskCreationReadState() {
+  MaskCreationReadState read_state;
+  read_state.state               = mask_creation_.state();
+  read_state.node_id             = mask_creation_.node_id();
+  read_state.mask_id             = mask_creation_.selected_mask_id();
+  read_state.source              = mask_creation_.CurrentSource();
+  read_state.last_removed_mask_id = mask_creation_.last_removed_mask_id();
+  std::scoped_lock lock(publish_mutex_);
+  mask_read_state_ = std::move(read_state);
+}
+
+void EditorSessionService::AbortMaskCreation() {
+  {
+    std::scoped_lock lock(mask_command_mutex_);
+    pending_mask_commands_.clear();
+  }
+  if (mask_creation_.state() == EditorMaskCreationState::Inactive) {
+    mask_creation_.DetachClosedDocument();
+    RefreshMaskCreationReadState();
+    return;
+  }
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    mask_creation_.DetachClosedDocument();
+    RefreshMaskCreationReadState();
+    return;
+  }
+  std::string error;
+  const auto  guard = lifecycle_.history_guard();
+  (void)dependencies_.history->WithWorkingDocument(
+      guard,
+      [this](PipelineDocument& document, MiniGitWorkingHistory& history,
+             const IEditorHistoryPort::MaskSettle& settle, bool* input_open, std::string*) {
+        mask_creation_.Bind(document, history);
+        mask_creation_.SetSettlePublisher(settle);
+        mask_creation_.SetInteractivePreview({});
+        (void)mask_creation_.CancelCreationMode();
+        *input_open = mask_creation_.HasOpenOperation();
+        return true;
+      },
+      &error);
+  mask_creation_.DetachClosedDocument();
+  RefreshMaskCreationReadState();
+}
+
+auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationCommand& command)
+    -> EditorMaskCreationResult {
+  const auto identity = lifecycle_.identity();
+  if (ai_mask_edit_.has_value() && !ai_mask_edit_->mask_id.has_value() &&
+      (IsMaskRangeEditCommand(command) || command.kind == EditorMaskCreationCommandKind::Cancel ||
+       command.kind == EditorMaskCreationCommandKind::CancelMode)) {
+    // The new candidate of the AI Mask edit is the only range target (#604). The edit closed the
+    // Mask tool at its Open, so the controller has no operation that Cancel could end.
+    return ApplyAiMaskCandidateRangeCommand(command);
+  }
+  if (ai_mask_edit_.has_value() && command.kind != EditorMaskCreationCommandKind::Cancel &&
+      command.kind != EditorMaskCreationCommandKind::CancelMode) {
+    // During the AI Mask edit only the range edit of its stored Mask writes (MR4).
+    const bool targets_stored_mask = ai_mask_edit_->mask_id.has_value() &&
+                                     command.node_id == ai_mask_edit_->grade_id &&
+                                     command.mask_id == *ai_mask_edit_->mask_id;
+    if (!IsMaskRangeEditCommand(command) ||
+        (command.kind != EditorMaskCreationCommandKind::Finish && !targets_stored_mask)) {
+      EditorMaskCreationResult rejected;
+      rejected.error = "Commit or cancel the AI Mask edit before editing Masks";
+      return rejected;
+    }
+  }
+  if (command.kind == EditorMaskCreationCommandKind::BeginMaskField &&
+      IsMaskRangeFieldKey(command.field_key)) {
+    // A range edit targets the Mask of the command, of any kind; the selection does not change.
+    return mask_creation_.BeginMaskRangeEdit(command.node_id, command.mask_id, command.field_key);
+  }
+  switch (command.kind) {
+    case EditorMaskCreationCommandKind::BeginCreation:
+      return mask_creation_.BeginCreation(command.source_kind, command.node_id, identity);
+    case EditorMaskCreationCommandKind::SelectMask:
+      return mask_creation_.SelectMask(command.node_id, command.mask_id, identity);
+    case EditorMaskCreationCommandKind::BeginInput:
+      return mask_creation_.BeginMaskInput(command.sample, command.identity,
+                                           command.source_kind);
+    case EditorMaskCreationCommandKind::BeginMove:
+      return mask_creation_.BeginMaskMove(command.handle, command.sample, command.identity,
+                                          command.source_kind);
+    case EditorMaskCreationCommandKind::Append:
+      return mask_creation_.AppendMaskInput(command.sample, command.identity);
+    case EditorMaskCreationCommandKind::Finish:
+      return mask_creation_.FinishMaskInput();
+    case EditorMaskCreationCommandKind::Cancel:
+      return mask_creation_.CancelMaskInput();
+    case EditorMaskCreationCommandKind::FinishMode:
+      return mask_creation_.FinishCreationMode();
+    case EditorMaskCreationCommandKind::CancelMode:
+      return mask_creation_.CancelCreationMode();
+    case EditorMaskCreationCommandKind::RemoveMask:
+      return mask_creation_.RemoveMask(command.node_id, command.mask_id);
+    case EditorMaskCreationCommandKind::BeginMaskField:
+      return mask_creation_.BeginMaskFieldEdit(command.field_key);
+    case EditorMaskCreationCommandKind::SetMaskField:
+      return mask_creation_.ApplyMaskFieldValue(command.node_id, command.mask_id,
+                                              command.field_key, command.field_value);
+    case EditorMaskCreationCommandKind::ToggleMaskInvert:
+      return mask_creation_.ToggleMaskInvert(command.node_id, command.mask_id);
+  }
+  EditorMaskCreationResult rejected;
+  rejected.error = "unknown Mask creation command";
+  return rejected;
+}
+
+auto EditorSessionService::ApplyAiMaskCandidateRangeCommand(
+    const EditorMaskCreationCommand& command) -> EditorMaskCreationResult {
+  auto&                    edit = *ai_mask_edit_;
+  EditorMaskCreationResult result;
+  const auto               refuse = [&result](std::string error) {
+    result.error = std::move(error);
+    return result;
+  };
+  const auto set_range = [&edit](std::string_view field_key, const nlohmann::json& value,
+                                 std::string* error) {
+    try {
+      if (field_key == kMaskFieldLuminanceRange) {
+        edit.candidate_luminance_range = LuminanceRangeFromJson(value);
+      } else {
+        edit.candidate_color_range = ColorRangeFromJson(value);
+      }
+      return true;
+    } catch (const std::exception& range_error) {
+      *error = std::string{"The AI Mask candidate range is invalid: "} + range_error.what();
+      return false;
+    }
+  };
+  // A shown probe of the candidate takes the new ranges; its next frame shows them.
+  const auto show_ranges = [this, &edit, &result](bool settled) {
+    const auto& shown = coverage_preview_.RangeProbe();
+    if (!shown.has_value() || !shown->candidate.has_value() || coverage_preview_.CommitBlocked()) {
+      return;
+    }
+    auto probe                       = *shown;
+    probe.candidate->luminance_range = edit.candidate_luminance_range;
+    probe.candidate->color_range     = edit.candidate_color_range;
+    if (probe != *shown) {
+      coverage_preview_.ShowRangeProbe(std::move(probe));
+    }
+    (settled ? result.quality_requested : result.interactive_preview) = true;
+  };
+  const bool targets_candidate = command.node_id == edit.grade_id && command.mask_id.Empty();
+  const bool edit_open         = !edit.candidate_range_edit_key.empty();
+  switch (command.kind) {
+    case EditorMaskCreationCommandKind::BeginMaskField:
+      if (!targets_candidate) {
+        return refuse("Commit or cancel the AI Mask edit before editing Masks");
+      }
+      if (edit_open) {
+        return refuse("A range edit of the AI Mask candidate is open");
+      }
+      edit.candidate_range_edit_key = command.field_key;
+      edit.candidate_range_before   = command.field_key == kMaskFieldLuminanceRange
+                                          ? LuminanceRangeToJson(edit.candidate_luminance_range)
+                                          : ColorRangeToJson(edit.candidate_color_range);
+      result.accepted               = true;
+      return result;
+    case EditorMaskCreationCommandKind::SetMaskField: {
+      if (!targets_candidate) {
+        return refuse("Commit or cancel the AI Mask edit before editing Masks");
+      }
+      // Inside an open edit only its range; without one, one settled write (a reset).
+      if (edit_open && command.field_key != edit.candidate_range_edit_key) {
+        return refuse("A range edit of the AI Mask candidate is open");
+      }
+      std::string error;
+      if (!set_range(command.field_key, command.field_value, &error)) {
+        return refuse(std::move(error));
+      }
+      result.accepted = true;
+      show_ranges(!edit_open);
+      return result;
+    }
+    case EditorMaskCreationCommandKind::Finish:
+      result.accepted = true;
+      if (edit_open) {
+        edit.candidate_range_edit_key.clear();
+        edit.candidate_range_before = nullptr;
+        show_ranges(true);
+      }
+      return result;
+    case EditorMaskCreationCommandKind::Cancel:
+    case EditorMaskCreationCommandKind::CancelMode:
+      result.accepted = true;
+      if (edit_open) {
+        std::string error;
+        (void)set_range(edit.candidate_range_edit_key, edit.candidate_range_before, &error);
+        edit.candidate_range_edit_key.clear();
+        edit.candidate_range_before = nullptr;
+        show_ranges(true);
+      }
+      return result;
+    default:
+      return refuse("Commit or cancel the AI Mask edit before editing Masks");
+  }
+}
+
+auto EditorSessionService::RouteMaskCreationRender(bool interactive_preview, bool quality_requested,
+                                                   bool committed) -> EditorSessionResult {
+  if (!quality_requested && !interactive_preview) {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = lifecycle_.state();
+    result.identity = lifecycle_.identity();
+    result.message  = "Mask creation applied";
+    if (committed) {
+      BumpHistoryRevision();
+    }
+    return result;
+  }
+  EditorRenderCommand render_command;
+  render_command.reason       = quality_requested ? EditorRenderReason::SettledMaskEdit
+                                                  : EditorRenderReason::InteractiveAdjustment;
+  render_command.operation_id = current_operation_id_;
+  const auto request_id = render_.RouteInitialRender(render_command, lifecycle_.identity(),
+                                                     lifecycle_.active_image_load_request());
+  if (request_id == 0) {
+    serial_admission_.AbortCycle();
+  } else {
+    serial_admission_.NoteScheduledRequest(request_id);
+  }
+  if (committed) {
+    BumpHistoryRevision();
+  }
+  EditorSessionResult result;
+  result.kind              = EditorSessionResultKind::RenderRouted;
+  result.state             = lifecycle_.state();
+  result.identity          = lifecycle_.identity();
+  result.render_request_id = request_id;
+  result.message =
+      quality_requested ? "Settled Mask render routed" : "Interactive Mask render routed";
+  return result;
+}
+
+void EditorSessionService::ConsumePendingMaskCommands() {
+  std::vector<EditorMaskCreationCommand> batch;
+  {
+    std::scoped_lock lock(mask_command_mutex_);
+    batch.swap(pending_mask_commands_);
+  }
+  if (batch.empty()) {
+    return;
+  }
+  bool interactive = true;
+  for (const auto& command : batch) {
+    if (MaskCommandIsTerminal(command.kind)) {
+      interactive = false;
+      break;
+    }
+  }
+  if (!serial_admission_.TryBeginCycle(interactive)) {
+    std::scoped_lock lock(mask_command_mutex_);
+    pending_mask_commands_.insert(pending_mask_commands_.begin(),
+                                  std::make_move_iterator(batch.begin()),
+                                  std::make_move_iterator(batch.end()));
+    return;
+  }
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    serial_admission_.AbortCycle();
+    return;
+  }
+  MaskCommandBatchOutcome outcome;
+  std::string             error;
+  const bool              applied = ApplyMaskCommandsToLiveDocument(batch, false, &outcome, &error);
+  // The controller's observable state moved while bound to the live document;
+  // publish the read state before GUI readers observe the result.
+  RefreshMaskCreationReadState();
+  if (!applied) {
+    if (outcome.quality_requested || outcome.interactive_preview) {
+      // The rejected batch restored the live document; render it so the view matches.
+      const auto routed = RouteMaskCreationRender(outcome.interactive_preview,
+                                                  outcome.quality_requested, outcome.committed);
+      if (routed.kind == EditorSessionResultKind::Accepted) {
+        serial_admission_.AbortCycle();
+      }
+      (void)Emit(routed);
+    } else {
+      serial_admission_.AbortCycle();
+    }
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = lifecycle_.state();
+    result.identity = lifecycle_.identity();
+    result.message  = error.empty() ? "Mask creation consume failed" : std::move(error);
+    (void)Emit(std::move(result));
+    RequestPendingInputConsume();
+    return;
+  }
+  const auto routed = RouteMaskCreationRender(outcome.interactive_preview,
+                                              outcome.quality_requested, outcome.committed);
+  if (routed.kind == EditorSessionResultKind::Accepted) {
+    serial_admission_.AbortCycle();
+  }
+  (void)Emit(routed);
+}
+
+auto EditorSessionService::ApplyMaskCommandsToLiveDocument(
+    const std::vector<EditorMaskCreationCommand>& batch, bool finish_open_input,
+    MaskCommandBatchOutcome* outcome, std::string* error) -> bool {
+  return dependencies_.history->WithWorkingDocument(
+      lifecycle_.history_guard(),
+      [this, &batch, finish_open_input, outcome](
+          PipelineDocument& document, MiniGitWorkingHistory& history,
+          const IEditorHistoryPort::MaskSettle& settle, bool* input_open, std::string* op_error) {
+        // Report the sequence state on every return path, including a rejected command.
+        struct ReportOpenSequence {
+          EditorMaskCreationController& controller;
+          bool*                         input_open;
+          ~ReportOpenSequence() { *input_open = controller.HasOpenOperation(); }
+        } report{mask_creation_, input_open};
+        mask_creation_.Bind(document, history);
+        mask_creation_.SetSettlePublisher(settle);
+        mask_creation_.SetInteractivePreview({});
+        const auto record = [outcome](const EditorMaskCreationResult& result) {
+          outcome->interactive_preview = outcome->interactive_preview || result.interactive_preview;
+          outcome->quality_requested   = outcome->quality_requested || result.quality_requested;
+          outcome->committed           = outcome->committed || result.committed;
+        };
+        for (const auto& command : batch) {
+          auto result = ApplyMaskCreationCommand(command);
+          if (!result.accepted) {
+            if (op_error != nullptr) {
+              *op_error =
+                  result.error.empty() ? "Mask creation command was rejected" : result.error;
+            }
+            if (mask_creation_.HasOpenOperation()) {
+              // The cancel can remove a provisional Mask that the presented frame shows.
+              record(mask_creation_.CancelMaskInput());
+            }
+            return false;
+          }
+          record(result);
+          if (command.kind == EditorMaskCreationCommandKind::Finish && result.committed &&
+              !result.mask_id.Empty()) {
+            (void)mask_creation_.SelectMask(mask_creation_.node_id(), result.mask_id,
+                                             lifecycle_.identity());
+          }
+        }
+        if (finish_open_input && mask_creation_.HasOpenOperation()) {
+          auto result = mask_creation_.FinishMaskInput();
+          if (!result.accepted) {
+            if (op_error != nullptr) {
+              *op_error =
+                  result.error.empty() ? "Open Mask input could not be committed" : result.error;
+            }
+            (void)mask_creation_.CancelMaskInput();
+            return false;
+          }
+          record(result);
+        }
+        return true;
+      },
+      error);
+}
+
+void EditorSessionService::RequestPendingInputConsume() {
+  bool expected = false;
+  if (!consume_wakeup_posted_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+    return;
+  }
+  command_queue_.PostCompletion([this] {
+    consume_wakeup_posted_.store(false, std::memory_order_release);
+    ConsumePendingInputOnOwner();
+  });
+}
+
+void EditorSessionService::ConsumePendingInputOnOwner() {
+  const auto previous_reducing  = reducing_command_;
+  const auto previous_operation = current_operation_id_;
+  reducing_command_             = true;
+  BeginPublication();
+  TryConsumePendingInput();
+  EndPublication();
+  reducing_command_     = previous_reducing;
+  current_operation_id_ = previous_operation;
+}
+
+void EditorSessionService::ScheduleDeadlineConsume(std::int64_t delay_ns) {
+  // Pacing deadlines ride the same serialized completion path as consume
+  // wakeups; the session-owner executor delivers them without touching the
+  // GUI thread's timer or event loop.
+  command_queue_.PostCompletionDelayed(
+      [this] { ConsumePendingInputOnOwner(); },
+      std::chrono::nanoseconds(std::max<std::int64_t>(delay_ns, 0)));
+}
+
+void EditorSessionService::PublishRenderProgressIfChanged() {
+  const bool busy = render_.render_busy();
+  if (busy == last_published_render_busy_) {
+    return;
+  }
+  last_published_render_busy_ = busy;
+  NotifyRenderProgress();
+}
+
+void EditorSessionService::NoteExtraScheduleWait(const EditorPendingSequence& sequence,
+                                                 std::uint64_t                request_id) {
+  if (!diag::PreviewPerformanceEnabled() || request_id == 0) {
+    return;
+  }
+  std::int64_t startable_ns = sequence.latest_accepted_ns;
+  const auto   released_ns  = last_frame_finished_ns_.load(std::memory_order_acquire);
+  if (released_ns > startable_ns) {
+    startable_ns = released_ns;
+  }
+  const auto pacing_eligible_ns = serial_admission_.next_interactive_eligible_ns();
+  if (pacing_eligible_ns > startable_ns) {
+    startable_ns = pacing_eligible_ns;
+  }
+  diag::PreviewPerformance::NoteScheduleWait(request_id, startable_ns);
+}
+
+void EditorSessionService::TryConsumePendingInput() {
+  // Serial consume owns session state; a cross-thread caller is marshalled
+  // onto the session owner instead of racing the admission and live document.
+  if (!command_queue_.IsOwnerThread()) {
+    RequestPendingInputConsume();
+    return;
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return;
+  }
+  if (serial_admission_.HoldsOwnership()) {
+    return;
+  }
+  if (render_.render_diagnostics().has_inflight) {
+    serial_admission_.RequestInteractiveDeadlineIfNeeded();
+    return;
+  }
+  bool has_mask_commands = false;
+  {
+    std::scoped_lock lock(mask_command_mutex_);
+    has_mask_commands = !pending_mask_commands_.empty();
+  }
+  if (has_mask_commands) {
+    ConsumePendingMaskCommands();
+    return;
+  }
+  if (!pending_input_.HasConsumableWork()) {
+    return;
+  }
+  const auto peek = pending_input_.Peek();
+  if (peek.sequences.empty()) {
+    return;
+  }
+  const bool interactive = peek.sequences.front().seal == EditorPendingInputBoundaryKind::None;
+  if (!serial_admission_.TryBeginCycle(interactive)) {
+    return;
+  }
+  auto batch = pending_input_.TakeReadyBatch();
+  if (!batch.has_value()) {
+    serial_admission_.AbortCycle();
+    return;
+  }
+  // The results and the render of this batch belong to the boundary that sealed it, or to no
+  // command for an interactive batch; not to the command whose completion runs this consume.
+  const auto previous_operation = current_operation_id_;
+  current_operation_id_         = batch->boundary_operation_id;
+  const auto result             = ConsumeTakenSequence(*batch);
+  if (result.kind == EditorSessionResultKind::Rejected ||
+      result.kind == EditorSessionResultKind::Failed) {
+    serial_admission_.AbortCycle();
+    (void)Emit(result);
+    RequestPendingInputConsume();
+  }
+  current_operation_id_ = previous_operation;
+  PublishRenderProgressIfChanged();
+}
+
+auto EditorSessionService::SettlePendingInputForBoundary(std::string* error) -> bool {
+  return SettlePendingParameterInputForBoundary(error) && SettleMaskInputForBoundary(error);
+}
+
+auto EditorSessionService::SettleMaskInputForBoundary(std::string* error) -> bool {
+  std::vector<EditorMaskCreationCommand> batch;
+  {
+    std::scoped_lock lock(mask_command_mutex_);
+    batch.swap(pending_mask_commands_);
+  }
+  if (batch.empty() && !mask_creation_.HasOpenOperation()) {
+    return true;
+  }
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    return true;
+  }
+  MaskCommandBatchOutcome outcome;
+  std::string             settle_error;
+  const bool applied = ApplyMaskCommandsToLiveDocument(batch, true, &outcome, &settle_error);
+  RefreshMaskCreationReadState();
+  if (!applied) {
+    if (error != nullptr) {
+      *error = settle_error.empty() ? "Pending Mask input could not be committed" : settle_error;
+    }
+    return false;
+  }
+  if (outcome.committed) {
+    BumpHistoryRevision();
+  }
+  return true;
+}
+
+auto EditorSessionService::SettlePendingParameterInputForBoundary(std::string* error) -> bool {
+  if (pending_input_.empty()) {
+    return true;
+  }
+  const auto identity = lifecycle_.identity();
+  const bool can_apply =
+      lifecycle_.has_image() && lifecycle_.has_history_guard() && identity.element_id != 0;
+  // Seal the open sequence as a release so a drag in progress commits.
+  const auto view = pending_input_.Peek();
+  if (can_apply && !view.sequences.empty() &&
+      view.sequences.back().seal == EditorPendingInputBoundaryKind::None &&
+      view.sequences.back().identity.element_id == identity.element_id &&
+      view.sequences.back().identity.image_id == identity.image_id) {
+    (void)pending_input_.AdmitBoundary(identity, EditorPendingInputBoundaryKind::Release);
+  }
+  const auto guard     = lifecycle_.history_guard();
+  bool       committed = false;
+  while (auto batch = pending_input_.TakeReadyBatch()) {
+    if (!can_apply || batch->identity.element_id != identity.element_id ||
+        batch->identity.image_id != identity.image_id) {
+      continue;
+    }
+    const auto outcome = edit_.HandlePendingSequence(*batch, guard, identity);
+    if (outcome.kind == EditorEditOutcome::Kind::Rejected ||
+        outcome.kind == EditorEditOutcome::Kind::Failed) {
+      if (error != nullptr) {
+        *error = outcome.message.empty() ? "Pending edit could not be committed" : outcome.message;
+      }
+      return false;
+    }
+    committed = committed || !batch->fields.empty();
+  }
+  if (committed) {
+    BumpHistoryRevision();
+  }
+  return true;
+}
+
+auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& sequence)
+    -> EditorSessionResult {
+  const auto guard = lifecycle_.history_guard();
+  const auto ident = lifecycle_.identity();
+  // Input is admitted for one image. A batch that outlived its image (queued
+  // before a switch) must never be applied to the image that is open now.
+  if (sequence.identity.element_id != ident.element_id ||
+      sequence.identity.image_id != ident.image_id) {
+    serial_admission_.AbortCycle();
+    EditorSessionResult dropped;
+    dropped.kind     = EditorSessionResultKind::Accepted;
+    dropped.state    = lifecycle_.state();
+    dropped.identity = ident;
+    dropped.message  = "Discarded adjustment input queued for another image";
+    RequestPendingInputConsume();
+    if (sequence.boundary_operation_id != 0) {
+      return EmitQuiet(std::move(dropped));
+    }
+    return dropped;
+  }
+  const bool time_apply = diag::PreviewPerformanceEnabled();
+  const auto apply_start = time_apply ? diag::PreviewPerformance::NowNs() : 0;
+  auto       outcome     = edit_.HandlePendingSequence(sequence, guard, ident);
+  const auto apply_ns =
+      time_apply ? diag::PreviewPerformance::NowNs() - apply_start : 0;
+  if (outcome.kind == EditorEditOutcome::Kind::Rejected ||
+      outcome.kind == EditorEditOutcome::Kind::Failed) {
+    EditorSessionResult result;
+    result.kind     = outcome.kind == EditorEditOutcome::Kind::Failed
+                          ? EditorSessionResultKind::Failed
+                          : EditorSessionResultKind::Rejected;
+    result.state    = lifecycle_.state();
+    result.identity = ident;
+    result.message  = outcome.message;
+    return result;
+  }
+  const bool commit = sequence.seal == EditorPendingInputBoundaryKind::Release ||
+                      sequence.seal == EditorPendingInputBoundaryKind::NodeSwitch;
+  if (!outcome.schedule_render || outcome.kind != EditorEditOutcome::Kind::RenderRouted) {
+    serial_admission_.AbortCycle();
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = lifecycle_.state();
+    result.identity = ident;
+    result.message  = outcome.message;
+    if (commit && !sequence.fields.empty()) {
+      BumpHistoryRevision();
+      return Emit(std::move(result));
+    }
+    if (sequence.boundary_operation_id != 0) {
+      return EmitQuiet(std::move(result));
+    }
+    return result;
+  }
+  const auto route_identity           = lifecycle_.identity();
+  const auto load_request             = lifecycle_.active_image_load_request();
+  outcome.render_command.operation_id = current_operation_id_;
+  const auto request_id =
+      render_.RouteInitialRender(outcome.render_command, route_identity, load_request);
+  if (request_id == 0) {
+    serial_admission_.AbortCycle();
+  } else {
+    serial_admission_.NoteScheduledRequest(request_id);
+    diag::PreviewPerformance::NoteInputTimes(request_id, sequence.sequence_id,
+                                             sequence.first_accepted_ns,
+                                             sequence.latest_accepted_ns,
+                                             sequence.qml_first_write_ns,
+                                             sequence.qml_latest_write_ns);
+    diag::PreviewPerformance::AddCpuDuration(request_id, diag::PreviewCpuStage::Apply, apply_ns);
+    NoteExtraScheduleWait(sequence, request_id);
+  }
+  if (commit) {
+    BumpHistoryRevision();
+  }
+  EditorSessionResult result;
+  result.kind              = EditorSessionResultKind::RenderRouted;
+  result.state             = lifecycle_.state();
+  result.identity          = route_identity;
+  result.render_request_id = request_id;
+  result.message           = outcome.message;
+  if (commit) {
+    return Emit(std::move(result));
+  }
+  if (sequence.boundary_operation_id != 0) {
+    return EmitQuiet(std::move(result));
+  }
+  return result;
+}
+
+void EditorSessionService::FinishSerialFrameIfNeeded(const EditorRenderResult& render_result) {
+  switch (render_result.kind) {
+    case EditorRenderResultKind::FrameReady:
+    case EditorRenderResultKind::Failed:
+    case EditorRenderResultKind::Cancelled:
+    case EditorRenderResultKind::PresentationSuspended:
+      break;
+    default:
+      return;
+  }
+  const bool published = render_result.kind == EditorRenderResultKind::FrameReady;
+  (void)serial_admission_.CompleteIfMatches(render_result.request_id, published);
+  if (serial_admission_.HoldsOwnership()) {
+    return;
+  }
+  TryConsumePendingInput();
+}
+
+auto EditorSessionService::PublishTypedNodeHistorySuccess(std::string message)
+    -> EditorSessionResult {
+  const auto          reason = dependencies_.history->LastPublishedRenderReason();
+  EditorSessionResult result;
+  result.kind     = reason.has_value() ? EditorSessionResultKind::RenderRouted
+                                       : EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = std::move(message);
+  if (reason.has_value()) {
+    EditorRenderCommand render_command;
+    render_command.reason       = *reason;
+    render_command.operation_id = current_operation_id_;
+    render_.RouteInitialRender(render_command, result.identity,
+                               lifecycle_.active_image_load_request());
+  }
+  BumpHistoryRevision();
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::RenameColorGrade(const NodeId& node_id, std::string display_name)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind    = EditorSessionCommandKind::RenameColorGrade;
+    command.node_id = node_id;
+    command.text    = std::move(display_name);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return RenameColorGrade(queued.node_id, queued.text);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Color Grade rename requires an interactive history session");
+  }
+  std::string error;
+  if (!dependencies_.history->RenameColorGrade(lifecycle_.history_guard(), node_id,
+                                               std::move(display_name), &error)) {
+    return Reject(error.empty() ? "Color Grade rename failed" : std::move(error));
+  }
+  return PublishTypedNodeHistorySuccess("Color Grade renamed");
+}
+
+auto EditorSessionService::SetColorGradeDeletionProtected(const NodeId& node_id,
+                                                          bool deletion_protected)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind               = EditorSessionCommandKind::SetColorGradeDeletionProtected;
+    command.node_id            = node_id;
+    command.deletion_protected = deletion_protected;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return SetColorGradeDeletionProtected(queued.node_id, queued.deletion_protected);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Color Grade deletion protection requires an interactive history session");
+  }
+  std::string error;
+  bool changed = false;
+  if (!dependencies_.history->SetColorGradeDeletionProtected(
+          lifecycle_.history_guard(), node_id, deletion_protected, &error, &changed)) {
+    return Reject(error.empty() ? "Color Grade deletion protection failed" : std::move(error));
+  }
+  if (!changed) {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = lifecycle_.state();
+    result.identity = lifecycle_.identity();
+    return result;
+  }
+  return PublishTypedNodeHistorySuccess("Color Grade deletion protection updated");
+}
+
+auto EditorSessionService::EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind            = EditorSessionCommandKind::EditNodeGraph;
+    command.topology_change = std::move(change);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return EditNodeGraph(queued.topology_change);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Node graph topology edit requires an interactive history session");
+  }
+  std::string error;
+  if (!dependencies_.history->EditNodeGraph(lifecycle_.history_guard(), std::move(change),
+                                            &error)) {
+    return Reject(error.empty() ? "Node graph topology edit failed" : std::move(error));
+  }
+  return PublishTypedNodeHistorySuccess("Node graph topology updated");
+}
+
+auto EditorSessionService::InsertColorGradeAtTop(const NodeId& new_id,
+                                                 const NodeId& expected_predecessor_id)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind                    = EditorSessionCommandKind::InsertColorGradeAtTop;
+    command.node_id                 = new_id;
+    command.expected_predecessor_id = expected_predecessor_id;
+    command.element_id              = lifecycle_.identity().element_id;
+    command.image_id                = lifecycle_.identity().image_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      const auto identity = lifecycle_.identity();
+      if (queued.element_id != identity.element_id || queued.image_id != identity.image_id) {
+        return Reject("The Mask Group request is from another editor session");
+      }
+      return InsertColorGradeAtTop(queued.node_id, queued.expected_predecessor_id);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Mask Group insertion requires an interactive history session");
+  }
+  std::string error;
+  if (!dependencies_.history->InsertColorGradeAtTop(lifecycle_.history_guard(), new_id,
+                                                    expected_predecessor_id, &error)) {
+    return Reject(error.empty() ? "Mask Group insertion failed" : std::move(error));
+  }
+  return PublishTypedNodeHistorySuccess("Mask Group inserted");
+}
+
+auto EditorSessionService::RemoveColorGradeAndBridge(const NodeId& node_id) -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind       = EditorSessionCommandKind::RemoveColorGradeAndBridge;
+    command.node_id    = node_id;
+    command.element_id = lifecycle_.identity().element_id;
+    command.image_id   = lifecycle_.identity().image_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      const auto identity = lifecycle_.identity();
+      if (queued.element_id != identity.element_id || queued.image_id != identity.image_id) {
+        return Reject("The Mask Group request is from another editor session");
+      }
+      return RemoveColorGradeAndBridge(queued.node_id);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Mask Group removal requires an interactive history session");
+  }
+  std::string error;
+  if (!dependencies_.history->RemoveColorGradeAndBridge(lifecycle_.history_guard(), node_id,
+                                                        &error)) {
+    return Reject(error.empty() ? "Mask Group removal failed" : std::move(error));
+  }
+  return PublishTypedNodeHistorySuccess("Mask Group removed");
+}
+
 auto EditorSessionService::Patch(std::string patch_key) -> EditorSessionResult {
   EditorAdjustmentPatch patch;
   patch.field_key = std::move(patch_key);
@@ -1235,7 +2288,7 @@ auto EditorSessionService::CommitAdjustment(std::string patch_key) -> EditorSess
 }
 
 auto EditorSessionService::Undo() -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::Undo;
     return SubmitCommand(std::move(command),
@@ -1253,21 +2306,26 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
   if (outcome.kind == EditorEditOutcome::Kind::Failed) {
     return Reject(outcome.message);
   }
+  serial_admission_.ResetPacingAfterNonInteractiveWork();
   const auto undo_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
-  render_.RouteInitialRender(outcome.render_command, undo_identity, load_request);
+  std::uint64_t request_id            = 0;
+  if (outcome.schedule_render) {
+    request_id = render_.RouteInitialRender(outcome.render_command, undo_identity, load_request);
+  }
   EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = undo_identity;
-  result.message  = outcome.message;
+  result.kind              = EditorSessionResultKind::Accepted;
+  result.state             = lifecycle_.state();
+  result.identity          = undo_identity;
+  result.render_request_id = request_id;
+  result.message           = outcome.message;
   BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
 auto EditorSessionService::Redo() -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::Redo;
     return SubmitCommand(std::move(command),
@@ -1285,21 +2343,26 @@ auto EditorSessionService::Redo() -> EditorSessionResult {
   if (outcome.kind == EditorEditOutcome::Kind::Failed) {
     return Reject(outcome.message);
   }
+  serial_admission_.ResetPacingAfterNonInteractiveWork();
   const auto redo_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
-  render_.RouteInitialRender(outcome.render_command, redo_identity, load_request);
+  std::uint64_t request_id            = 0;
+  if (outcome.schedule_render) {
+    request_id = render_.RouteInitialRender(outcome.render_command, redo_identity, load_request);
+  }
   EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = redo_identity;
-  result.message  = outcome.message;
+  result.kind              = EditorSessionResultKind::Accepted;
+  result.state             = lifecycle_.state();
+  result.identity          = redo_identity;
+  result.render_request_id = request_id;
+  result.message           = outcome.message;
   BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
 auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id) -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind      = EditorSessionCommandKind::MoveHead;
     command.commit_id = commit_id;
@@ -1322,18 +2385,22 @@ auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id) -> E
   const auto move_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
-  render_.RouteInitialRender(outcome.render_command, move_identity, load_request);
+  std::uint64_t request_id            = 0;
+  if (outcome.schedule_render) {
+    request_id = render_.RouteInitialRender(outcome.render_command, move_identity, load_request);
+  }
   EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = move_identity;
-  result.message  = outcome.message;
+  result.kind              = EditorSessionResultKind::Accepted;
+  result.state             = lifecycle_.state();
+  result.identity          = move_identity;
+  result.render_request_id = request_id;
+  result.message           = outcome.message;
   BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
 auto EditorSessionService::Discard() -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::DiscardChanges;
     return SubmitCommand(std::move(command),
@@ -1342,10 +2409,6 @@ auto EditorSessionService::Discard() -> EditorSessionResult {
   const auto state = lifecycle_.state();
   if (state != EditorSessionState::Interactive && state != EditorSessionState::Failed) {
     return Reject("Discard requires an image with an active history session");
-  }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
   }
   const auto guard   = lifecycle_.history_guard();
   const auto ident   = lifecycle_.identity();
@@ -1382,7 +2445,7 @@ auto EditorSessionService::has_unmaterialized_changes() -> bool {
 }
 
 auto EditorSessionService::Shutdown() -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::Shutdown;
     return SubmitCommand(std::move(command),
@@ -1391,10 +2454,9 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     return Reject("Already shutting down");
   }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
-  }
+  // Cancel the comparison image job; the render port's own shutdown waits for it.
+  (void)CloseComparisonOnOwner(false, std::nullopt);
+  EndAiMaskWorkForImageChange();
   // Cancel outstanding save work. Each in-flight checkpoint publishes one
   // terminal cancellation through the posted completion path; navigation keeps
   // image A on that failure path and clears the pending action.
@@ -1414,7 +2476,7 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
 }
 
 void EditorSessionService::SetPresentationSinkId(PresentationSinkId sink_id) {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind                 = EditorSessionCommandKind::SetPresentationTarget;
     command.presentation_sink_id = sink_id;
@@ -1436,7 +2498,7 @@ void EditorSessionService::SetPresentationSinkId(PresentationSinkId sink_id) {
 }
 
 void EditorSessionService::SetPresentationSize(int width, int height) {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind                = EditorSessionCommandKind::SetPresentationSize;
     command.presentation_width  = width;
@@ -1448,17 +2510,20 @@ void EditorSessionService::SetPresentationSize(int width, int height) {
       accepted.state    = lifecycle_.state();
       accepted.identity = lifecycle_.identity();
       accepted.message  = "Presentation size updated";
-      NotifyChange();
+      // The presentation size is a render input consumed by the next render
+      // intent; no session-visible field moves, so per-frame resize bursts
+      // (panel fold, window drag) must not publish a change notification.
       return accepted;
     });
     return;
   }
   render_.SetPresentationSize(width, height);
-  NotifyChange();
+  // An enclosing command's own Emit publishes; the size itself is invisible
+  // to change observers.
 }
 
 void EditorSessionService::SetGeometryOverlayActive(bool active) {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind                    = EditorSessionCommandKind::SetGeometryOverlay;
     command.geometry_overlay_active = active;
@@ -1476,10 +2541,87 @@ void EditorSessionService::SetGeometryOverlayActive(bool active) {
   render_.SetGeometryOverlayActive(active);
 }
 
+void EditorSessionService::SetPresentationSuspended(bool suspended) {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind                   = EditorSessionCommandKind::SetPresentationSuspended;
+    command.presentation_suspended = suspended;
+    (void)SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      SetPresentationSuspended(queued.presentation_suspended);
+      EditorSessionResult accepted;
+      accepted.kind     = EditorSessionResultKind::Accepted;
+      accepted.state    = lifecycle_.state();
+      accepted.identity = lifecycle_.identity();
+      accepted.message  = queued.presentation_suspended ? "Presentation suspended"
+                                                        : "Presentation resumed";
+      // Like the presentation size, suspension moves no session-visible field.
+      return accepted;
+    });
+    return;
+  }
+  render_.SetPresentationSuspended(suspended, lifecycle_.identity(),
+                                   lifecycle_.active_image_load_request(), lifecycle_.state());
+}
+
+void EditorSessionService::SetSuspendedForExport(bool suspended) {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind                 = EditorSessionCommandKind::SetSuspendedForExport;
+    command.suspended_for_export = suspended;
+    (void)SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      SetSuspendedForExport(queued.suspended_for_export);
+      EditorSessionResult accepted;
+      accepted.kind     = EditorSessionResultKind::Accepted;
+      accepted.state    = lifecycle_.state();
+      accepted.identity = lifecycle_.identity();
+      accepted.message  = queued.suspended_for_export ? "Rendering suspended for export"
+                                                      : "Rendering resumed after export";
+      return accepted;
+    });
+    return;
+  }
+  render_.SetSuspendedForExport(suspended, lifecycle_.identity(),
+                                lifecycle_.active_image_load_request(), lifecycle_.state());
+}
+
+auto EditorSessionService::SetAdjustmentProjectionNode(const NodeId& node_id)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind    = EditorSessionCommandKind::SetAdjustmentProjectionNode;
+    command.node_id = node_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return SetAdjustmentProjectionNode(queued.node_id);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive &&
+      lifecycle_.state() != EditorSessionState::Loading) {
+    return Reject("Adjustment projection requires an open image");
+  }
+  if (!lifecycle_.has_image()) {
+    return Reject("Adjustment projection requires an open image");
+  }
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    return Reject("Adjustment history is unavailable");
+  }
+  std::string error;
+  const auto  session_generation = lifecycle_.active_image_load_request().value;
+  if (!dependencies_.history->SetPanelProjectionNode(lifecycle_.history_guard(), node_id,
+                                                     session_generation, &error)) {
+    return Reject(error.empty() ? "Selected node panel projection failed" : error);
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Selected node panel projection updated";
+  return Emit(std::move(result));
+}
+
 auto EditorSessionService::RequestViewChange(EditorRenderReason                  reason,
                                              std::optional<ViewportRenderRegion> region)
     -> EditorSessionResult {
-  if (!reducing_command_) {
+  if (!InOwnerReduction()) {
     EditorSessionCommand command;
     command.kind        = EditorSessionCommandKind::RequestViewChange;
     command.view_reason = reason;
@@ -1489,14 +2631,13 @@ auto EditorSessionService::RequestViewChange(EditorRenderReason                 
     });
   }
   EditorRenderCommand command;
-  command.operation_id = current_operation_id_;
-  command.reason       = reason;
-  command.view_region  = std::move(region);
-  const auto view_identity  = lifecycle_.identity();
-  const auto view_state     = lifecycle_.state();
-  const auto load_request   = lifecycle_.active_image_load_request();
-  const auto event =
-      render_.RouteViewChange(command, view_identity, load_request, view_state);
+  command.operation_id     = current_operation_id_;
+  command.reason           = reason;
+  command.view_region      = std::move(region);
+  const auto view_identity = lifecycle_.identity();
+  const auto view_state    = lifecycle_.state();
+  const auto load_request  = lifecycle_.active_image_load_request();
+  const auto event = render_.RouteViewChange(command, view_identity, load_request, view_state);
   EditorSessionResult result;
   result.state    = event.state;
   result.identity = event.identity;
@@ -1515,7 +2656,993 @@ auto EditorSessionService::RequestViewChange(EditorRenderReason                 
       result.message = event.message;
       break;
   }
+  if (event.kind == EditorRenderEventKind::RenderReused) {
+    // A reused frame changes no session-visible state; deliver the result
+    // without a change notification so continuous view churn (panel fold,
+    // window resize, zoom/pan) does not run a full backend refresh per frame.
+    return EmitQuiet(std::move(result));
+  }
   return Emit(std::move(result));
+}
+
+auto EditorSessionService::OpenComparison(EditorComparisonKind kind) -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind            = EditorSessionCommandKind::OpenComparison;
+    command.comparison_kind = kind;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return OpenComparison(queued.comparison_kind);
+    });
+  }
+  if (comparison_.active()) {
+    return Reject("A comparison is already open");
+  }
+  if (!dependencies_.pipeline || !lifecycle_.has_history_guard()) {
+    return Reject("Comparison requires an open image history");
+  }
+  // Earlier accepted writes are reduced already (queue order). A parameter input that is still
+  // open settles through the normal seal path, so the capture includes it; nothing is saved.
+  std::string error;
+  if (!SettlePendingParameterInputForBoundary(&error)) {
+    return Reject(error.empty() ? "Pending edits could not be settled before comparing" : error);
+  }
+  const auto identity     = lifecycle_.identity();
+  const auto load_request = lifecycle_.active_image_load_request();
+  auto       captured     = dependencies_.pipeline->CurrentPreview(identity.element_id);
+  if (!captured) {
+    return Reject("The working state of the image is not available");
+  }
+  AcquireLease(EditorOperationLeaseKind::Comparison, current_operation_id_, identity.element_id,
+               identity.image_id, load_request, "Close the comparison first");
+  comparison_active_.store(true, std::memory_order_release);
+  comparison_.Open(current_operation_id_,
+                   EditorComparisonService::ImageTarget{identity.element_id, identity.image_id,
+                                                        load_request, lifecycle_.history_guard()},
+                   std::move(captured), kind);
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = identity;
+  result.message  = "Comparison opened";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::SelectComparisonSources(EditorComparisonKind kind, EditorComparisonSource a,
+                                                   EditorComparisonSource b) -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind            = EditorSessionCommandKind::SelectComparisonSources;
+    command.comparison_kind = kind;
+    command.comparison_a    = a;
+    command.comparison_b    = b;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return SelectComparisonSources(queued.comparison_kind, queued.comparison_a,
+                                     queued.comparison_b);
+    });
+  }
+  std::string error;
+  if (!comparison_.SelectSources(kind, a, b, &error)) {
+    return Reject(std::move(error));
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Comparison sources selected";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::RetryComparison() -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::RetryComparison;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return RetryComparison(); });
+  }
+  std::string error;
+  if (!comparison_.Retry(&error)) {
+    return Reject(std::move(error));
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Comparison render started again";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::RenderPreviewImages(RenderRequest geometry, EditorPreviewImageSet images,
+                                               EditorPreviewImagesCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("Preview images require a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::RenderPreviewImages;
+    auto shared_completion =
+        std::make_shared<EditorPreviewImagesCompletion>(std::move(on_complete));
+    return SubmitCommand(std::move(command), [this, geometry, images,
+                                              shared_completion](const EditorSessionCommand&) {
+      return RenderPreviewImages(geometry, images, std::move(*shared_completion));
+    });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  const auto refuse = [&](EditorPreviewImagesStatus status, std::string message) {
+    accepted.message = message;
+    EditorPreviewImagesResult refused;
+    refused.status  = status;
+    refused.message = std::move(message);
+    on_complete(std::move(refused));
+    return accepted;
+  };
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return refuse(EditorPreviewImagesStatus::Rejected,
+                  "Preview images require an interactive session");
+  }
+  if (!dependencies_.pipeline || !dependencies_.history || !lifecycle_.has_history_guard()) {
+    return refuse(EditorPreviewImagesStatus::Rejected,
+                  "Preview images require an open image history");
+  }
+  if (!dependencies_.images) {
+    return refuse(EditorPreviewImagesStatus::Rejected, "Image rendering is not available");
+  }
+  const auto identity = lifecycle_.identity();
+  auto       current  = dependencies_.pipeline->CurrentPreview(identity.element_id);
+  if (!current) {
+    return refuse(EditorPreviewImagesStatus::Rejected,
+                  "The working state of the image is not available");
+  }
+  EditorComparisonInputPair pair;
+  std::string               error;
+  // The root image is the image as imported: the root keeps its stored Develop settings, so
+  // Lens Correction, RAW decode, and white balance of the working values never reach it.
+  if (!dependencies_.history->BuildComparisonInputs(
+          lifecycle_.history_guard(), current, EditorComparisonSource::Root(),
+          EditorComparisonSource::Current(), EditorComparisonDevelopSettings::Stored, &pair,
+          &error)) {
+    return refuse(EditorPreviewImagesStatus::Failed,
+                  error.empty() ? "The preview documents could not be prepared" : error);
+  }
+  EditorImageRenderRequest request;
+  request.element_id            = identity.element_id;
+  request.image_id              = identity.image_id;
+  request.image_load_request_id = lifecycle_.active_image_load_request();
+  const bool with_root          = images == EditorPreviewImageSet::CurrentAndRoot;
+  if (with_root) {
+    request.snapshots = {pair.a.snapshot, pair.b.snapshot};
+  } else {
+    request.snapshots = {pair.b.snapshot};
+  }
+  request.geometry       = geometry;
+  // The port calls the completion only for an accepted job; a refused job keeps it here.
+  auto shared_completion = std::make_shared<EditorPreviewImagesCompletion>(std::move(on_complete));
+  const auto job_id      = dependencies_.images->ScheduleImages(
+      std::move(request),
+      [shared_completion, with_root](EditorImageRenderResult rendered) {
+        EditorPreviewImagesResult result;
+        result.message = std::move(rendered.message);
+        if (rendered.status == EditorImageRenderStatus::Completed &&
+            rendered.images.size() == (with_root ? 2u : 1u)) {
+          result.status  = EditorPreviewImagesStatus::Completed;
+          result.current = std::move(rendered.images.back());
+          if (with_root) {
+            result.root = std::move(rendered.images.front());
+          }
+        } else if (rendered.status == EditorImageRenderStatus::Cancelled) {
+          result.status = EditorPreviewImagesStatus::Failed;
+          if (result.message.empty()) {
+            result.message = "The preview render was cancelled";
+          }
+        } else {
+          result.status = EditorPreviewImagesStatus::Failed;
+          if (result.message.empty()) {
+            result.message = "The preview render failed";
+          }
+        }
+        (*shared_completion)(std::move(result));
+      },
+      &error);
+  if (job_id == 0) {
+    on_complete = std::move(*shared_completion);
+    return refuse(EditorPreviewImagesStatus::Failed,
+                  error.empty() ? "The preview render could not be scheduled" : error);
+  }
+  accepted.message = "Preview images scheduled";
+  return accepted;
+}
+
+auto EditorSessionService::RenderAiMaskAnalysisImage(EditorAiMaskAnalysisContent    content,
+                                                     EditorAiMaskAnalysisCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("The AI Mask analysis image requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::RenderAiMaskAnalysisImage;
+    auto shared_completion =
+        std::make_shared<EditorAiMaskAnalysisCompletion>(std::move(on_complete));
+    return SubmitCommand(std::move(command),
+                         [this, content, shared_completion](const EditorSessionCommand&) {
+                           return RenderAiMaskAnalysisImage(content, std::move(*shared_completion));
+                         });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  const auto refuse = [&](EditorAiMaskAnalysisStatus status, std::string message) {
+    accepted.message = message;
+    EditorAiMaskAnalysisResult refused;
+    refused.status  = status;
+    refused.message = std::move(message);
+    on_complete(std::move(refused));
+    return accepted;
+  };
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return refuse(EditorAiMaskAnalysisStatus::Rejected,
+                  "The AI Mask analysis image requires an interactive session");
+  }
+  if (!dependencies_.pipeline || !dependencies_.history || !lifecycle_.has_history_guard()) {
+    return refuse(EditorAiMaskAnalysisStatus::Rejected,
+                  "The AI Mask analysis image requires an open image history");
+  }
+  const bool with_pixels = content == EditorAiMaskAnalysisContent::KeyAndPixels;
+  if (with_pixels && !dependencies_.images) {
+    return refuse(EditorAiMaskAnalysisStatus::Rejected, "Image rendering is not available");
+  }
+  const auto identity = lifecycle_.identity();
+  auto       current  = dependencies_.pipeline->CurrentPreview(identity.element_id);
+  if (!current) {
+    return refuse(EditorAiMaskAnalysisStatus::Rejected,
+                  "The working state of the image is not available");
+  }
+  std::shared_ptr<const PipelineGraphSnapshot> analysis;
+  std::string                                  error;
+  if (!dependencies_.history->BuildAiMaskAnalysisDocument(lifecycle_.history_guard(), current,
+                                                          &analysis, &error) ||
+      !analysis) {
+    return refuse(EditorAiMaskAnalysisStatus::Failed,
+                  error.empty() ? "The AI Mask analysis document could not be prepared" : error);
+  }
+  auto image_key =
+      MakeAiMaskAnalysisImageKey(identity.element_id, identity.image_id, analysis->Document());
+  if (!with_pixels) {
+    accepted.message = "AI Mask analysis image key ready";
+    EditorAiMaskAnalysisResult result;
+    result.status    = EditorAiMaskAnalysisStatus::Completed;
+    result.image_key = std::move(image_key);
+    on_complete(std::move(result));
+    return accepted;
+  }
+
+  EditorImageRenderRequest request;
+  request.element_id            = identity.element_id;
+  request.image_id              = identity.image_id;
+  request.image_load_request_id = lifecycle_.active_image_load_request();
+  request.snapshots             = {std::move(analysis)};
+  request.geometry              = MakeAiMaskAnalysisRenderRequest();
+  // The port calls the completion only for an accepted job; a refused job keeps it here.
+  auto shared_completion = std::make_shared<EditorAiMaskAnalysisCompletion>(std::move(on_complete));
+  const auto job_id      = dependencies_.images->ScheduleImages(
+      std::move(request),
+      [shared_completion, image_key](EditorImageRenderResult rendered) {
+        EditorAiMaskAnalysisResult result;
+        result.message = std::move(rendered.message);
+        if (rendered.status == EditorImageRenderStatus::Completed && rendered.images.size() == 1u) {
+          // The completion runs on the editor render worker; the conversion is one pass over the
+          // pixels and keeps the RGBA32F download from leaving the worker.
+          try {
+            result.image                 = ConvertAiMaskAnalysisImage(rendered.images.front());
+            result.full_reference_extent = rendered.images.front().geometry.full_reference_extent;
+            result.image_key             = image_key;
+            result.status                = EditorAiMaskAnalysisStatus::Completed;
+          } catch (const std::exception& ex) {
+            result.status  = EditorAiMaskAnalysisStatus::Failed;
+            result.message = ex.what();
+          }
+        } else {
+          result.status = EditorAiMaskAnalysisStatus::Failed;
+          if (result.message.empty()) {
+            result.message = rendered.status == EditorImageRenderStatus::Cancelled
+                                      ? "The AI Mask analysis render was cancelled"
+                                      : "The AI Mask analysis render failed";
+          }
+        }
+        (*shared_completion)(std::move(result));
+      },
+      &error);
+  if (job_id == 0) {
+    on_complete = std::move(*shared_completion);
+    return refuse(EditorAiMaskAnalysisStatus::Failed,
+                  error.empty() ? "The AI Mask analysis render could not be scheduled" : error);
+  }
+  accepted.message = "AI Mask analysis image scheduled";
+  return accepted;
+}
+
+auto EditorSessionService::RenderLutPreview(EditorLutPreviewRequest    request,
+                                            EditorLutPreviewCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("A LUT preview requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind           = EditorSessionCommandKind::RenderLutPreview;
+    auto shared_request    = std::make_shared<EditorLutPreviewRequest>(std::move(request));
+    auto shared_completion = std::make_shared<EditorLutPreviewCompletion>(std::move(on_complete));
+    return SubmitCommand(
+        std::move(command), [this, shared_request, shared_completion](const EditorSessionCommand&) {
+          return RenderLutPreview(std::move(*shared_request), std::move(*shared_completion));
+        });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  const auto refuse = [&](EditorLutPreviewStatus status, std::string message) {
+    accepted.message = message;
+    EditorLutPreviewResult refused;
+    refused.status  = status;
+    refused.message = std::move(message);
+    on_complete(std::move(refused));
+    return accepted;
+  };
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return refuse(EditorLutPreviewStatus::Rejected,
+                  "A LUT preview requires an interactive session");
+  }
+  if (!dependencies_.pipeline || !dependencies_.history || !lifecycle_.has_history_guard()) {
+    return refuse(EditorLutPreviewStatus::Rejected, "A LUT preview requires an open image history");
+  }
+  if (!dependencies_.images) {
+    return refuse(EditorLutPreviewStatus::Rejected, "Image rendering is not available");
+  }
+  const auto identity = lifecycle_.identity();
+  if (identity.image_id != request.image_id) {
+    return refuse(EditorLutPreviewStatus::Rejected, "The LUT preview belongs to another image");
+  }
+  auto current = dependencies_.pipeline->CurrentPreview(identity.element_id);
+  if (!current) {
+    return refuse(EditorLutPreviewStatus::Rejected,
+                  "The working state of the image is not available");
+  }
+  std::shared_ptr<const PipelineGraphSnapshot> preview;
+  std::string                                  error;
+  if (!dependencies_.history->BuildLutPreviewDocument(lifecycle_.history_guard(), current,
+                                                      request.write, &preview, &error) ||
+      !preview) {
+    return refuse(EditorLutPreviewStatus::Failed,
+                  error.empty() ? "The LUT preview document could not be prepared" : error);
+  }
+
+  EditorImageRenderRequest render;
+  render.element_id            = identity.element_id;
+  render.image_id              = identity.image_id;
+  render.image_load_request_id = lifecycle_.active_image_load_request();
+  render.geometry              = MakeLutPreviewRenderRequest();
+  render.output_color          = LutPreviewOutputColor(preview->Document());
+  render.snapshots             = {std::move(preview)};
+  // The port calls the completion only for an accepted job; a refused job keeps it here.
+  auto shared_completion = std::make_shared<EditorLutPreviewCompletion>(std::move(on_complete));
+  const auto job_id      = dependencies_.images->ScheduleImages(
+      std::move(render),
+      [shared_completion](EditorImageRenderResult rendered) {
+        EditorLutPreviewResult result;
+        result.message = std::move(rendered.message);
+        if (rendered.status == EditorImageRenderStatus::Completed && rendered.images.size() == 1u) {
+          result.status = EditorLutPreviewStatus::Completed;
+          result.image  = std::move(rendered.images.front());
+        } else {
+          result.status = EditorLutPreviewStatus::Failed;
+          if (result.message.empty()) {
+            result.message = rendered.status == EditorImageRenderStatus::Cancelled
+                                      ? "The LUT preview render was cancelled"
+                                      : "The LUT preview render failed";
+          }
+        }
+        (*shared_completion)(std::move(result));
+      },
+      &error);
+  if (job_id == 0) {
+    on_complete = std::move(*shared_completion);
+    return refuse(EditorLutPreviewStatus::Failed,
+                  error.empty() ? "The LUT preview render could not be scheduled" : error);
+  }
+  accepted.message = "LUT preview scheduled";
+  return accepted;
+}
+
+auto EditorSessionService::CloseComparison(bool                                refresh_current_view,
+                                           std::optional<ViewportRenderRegion> region)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind               = EditorSessionCommandKind::CloseComparison;
+    command.comparison_refresh = refresh_current_view;
+    command.view_region        = std::move(region);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return CloseComparison(queued.comparison_refresh, queued.view_region);
+    });
+  }
+  const bool          closed = CloseComparisonOnOwner(refresh_current_view, std::move(region));
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = closed ? "Comparison closed" : "No comparison is open";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::CloseComparisonOnOwner(bool refresh_current_view,
+                                                  std::optional<ViewportRenderRegion> region)
+    -> bool {
+  const bool was_open = comparison_.Close();
+  ReleaseLeasesByKind(EditorOperationLeaseKind::Comparison);
+  comparison_active_.store(false, std::memory_order_release);
+  if (!was_open) {
+    return false;
+  }
+  publication_dirty_ = true;
+  if (refresh_current_view && lifecycle_.state() == EditorSessionState::Interactive &&
+      lifecycle_.has_image()) {
+    EditorRenderCommand command;
+    command.operation_id = current_operation_id_;
+    command.reason       = EditorRenderReason::ComparisonClosed;
+    command.view_region  = std::move(region);
+    (void)render_.RouteViewChange(command, lifecycle_.identity(),
+                                  lifecycle_.active_image_load_request(), lifecycle_.state());
+  }
+  return true;
+}
+
+auto EditorSessionService::OpenAiMaskEdit(const NodeId& grade_id, std::optional<MaskId> mask_id,
+                                          EditorAiMaskEditOpenCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("The AI Mask edit requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind    = EditorSessionCommandKind::OpenAiMaskEdit;
+    command.node_id = grade_id;
+    auto shared_completion =
+        std::make_shared<EditorAiMaskEditOpenCompletion>(std::move(on_complete));
+    return SubmitCommand(
+        std::move(command), [this, mask_id, shared_completion](const EditorSessionCommand& queued) {
+          return OpenAiMaskEdit(queued.node_id, mask_id, std::move(*shared_completion));
+        });
+  }
+  const auto finish = [&](EditorSessionResultKind kind, std::string message,
+                          EditorAiMaskEditOpenResult opened) {
+    EditorSessionResult result;
+    result.kind     = kind;
+    result.state    = lifecycle_.state();
+    result.identity = lifecycle_.identity();
+    result.message  = std::move(message);
+    opened.result   = Emit(std::move(result));
+    auto returned   = opened.result;
+    on_complete(std::move(opened));
+    return returned;
+  };
+  const auto refuse = [&](EditorSessionResultKind kind, std::string message) {
+    return finish(kind, std::move(message), EditorAiMaskEditOpenResult{});
+  };
+  if (ai_mask_edit_.has_value()) {
+    return refuse(EditorSessionResultKind::Rejected, "An AI Mask edit is already open");
+  }
+  if (const auto decision = EvaluateDocumentWriteAdmission(false); !decision.allowed) {
+    return refuse(EditorSessionResultKind::Rejected, decision.reason);
+  }
+  if (!dependencies_.pipeline || !dependencies_.history || !lifecycle_.has_history_guard()) {
+    return refuse(EditorSessionResultKind::Rejected,
+                  "The AI Mask edit requires an open image history");
+  }
+  // Earlier accepted writes are reduced already (queue order). Input that is still open commits
+  // through the normal seal path, so the session starts from a settled document.
+  std::string error;
+  if (!SettlePendingInputForBoundary(&error)) {
+    return refuse(
+        EditorSessionResultKind::Rejected,
+        error.empty() ? "Pending edits could not be settled before the AI Mask edit" : error);
+  }
+  // The AI Mask edit owns the Mask input until it ends; the analytic Mask tool closes.
+  AbortMaskCreation();
+  const auto identity = lifecycle_.identity();
+  const auto working  = dependencies_.pipeline->CurrentPreview(identity.element_id);
+  if (!working) {
+    return refuse(EditorSessionResultKind::Rejected,
+                  "The working state of the image is not available");
+  }
+  const auto& document = working->Document();
+  const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(grade_id));
+  if (grade == nullptr) {
+    return refuse(EditorSessionResultKind::Rejected, "The AI Mask target is not a Color Grade");
+  }
+  const auto* develop = document.Develop();
+  if (develop == nullptr) {
+    return refuse(EditorSessionResultKind::Failed, "The working document has no Develop node");
+  }
+  EditorAiMaskEditOpenResult opened;
+  opened.geometry_fingerprint = MakeAiMaskGeometryFingerprint(develop->Params());
+  if (mask_id.has_value()) {
+    const auto* mask = grade->FindMask(*mask_id);
+    if (mask == nullptr) {
+      return refuse(EditorSessionResultKind::Rejected, "The Mask is missing");
+    }
+    const auto* stored = std::get_if<AiSegmentationMaskSource>(&mask->source);
+    if (stored == nullptr) {
+      return refuse(EditorSessionResultKind::Rejected, "The Mask is not an AI Mask");
+    }
+    if (!dependencies_.mask_assets) {
+      return refuse(EditorSessionResultKind::Rejected, "AI Mask assets are not available");
+    }
+    MaskAsset asset;
+    if (!dependencies_.mask_assets->ReadMaskAsset(stored->asset_key, &asset, &error)) {
+      return refuse(EditorSessionResultKind::Failed,
+                    error.empty() ? "The AI Mask asset could not be read" : error);
+    }
+    opened.stored_source = *stored;
+    opened.stored_asset  = std::move(asset);
+  }
+  AcquireLease(EditorOperationLeaseKind::AiMaskEdit, current_operation_id_, identity.element_id,
+               identity.image_id, lifecycle_.active_image_load_request(),
+               "Commit or cancel the AI Mask edit first");
+  ai_mask_edit_ = AiMaskEditTarget{grade_id, std::move(mask_id)};
+  ai_mask_edit_active_.store(true, std::memory_order_release);
+  // The AI Mask edit shows its candidate; the range probe of a committed Mask ends (D11).
+  coverage_preview_.HideRangeProbe(current_operation_id_);
+  return finish(EditorSessionResultKind::Accepted, "AI Mask edit opened", std::move(opened));
+}
+
+auto EditorSessionService::CommitAiMaskEdit(EditorAiMaskCommit commit) -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::CommitAiMaskEdit;
+    auto shared  = std::make_shared<EditorAiMaskCommit>(std::move(commit));
+    return SubmitCommand(std::move(command), [this, shared](const EditorSessionCommand&) {
+      return CommitAiMaskEdit(std::move(*shared));
+    });
+  }
+  if (!ai_mask_edit_.has_value()) {
+    return Reject("No AI Mask edit is open");
+  }
+  if (commit.grade_id != ai_mask_edit_->grade_id || commit.mask_id != ai_mask_edit_->mask_id) {
+    return Reject("The AI Mask commit does not match the open AI Mask edit");
+  }
+  if (const auto decision = EvaluateDocumentWriteAdmission(true); !decision.allowed) {
+    return Reject(decision.reason);
+  }
+  try {
+    ValidateAiSegmentationMaskSource(commit.source);
+  } catch (const std::exception& e) {
+    return Reject(e.what());
+  }
+  if (commit.asset.key != commit.source.asset_key ||
+      commit.asset.descriptor != commit.source.descriptor) {
+    return Reject("The AI Mask asset does not match the key and bounds of its source");
+  }
+  // Range edits queued before the Confirm (a step burst that settled at the click) belong to this
+  // commit; an open range edit of the candidate ends with its current value.
+  std::string error;
+  if (!SettleMaskInputForBoundary(&error)) {
+    return Reject(error.empty() ? "The open range edit could not be committed" : error);
+  }
+  ai_mask_edit_->candidate_range_edit_key.clear();
+  ai_mask_edit_->candidate_range_before = nullptr;
+  if (coverage_preview_.CommitBlocked()) {
+    const auto preview = coverage_preview_.State();
+    return Reject("The viewport shows a previous AI Mask result because its preview failed (" +
+                  preview.error + "); retry the preview before the commit");
+  }
+  if (!dependencies_.mask_assets) {
+    return Reject("AI Mask assets are not available");
+  }
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    return Reject("The AI Mask commit requires an open image history");
+  }
+  const auto fail = [this](std::string message) {
+    EditorSessionResult failed;
+    failed.kind     = EditorSessionResultKind::Failed;
+    failed.state    = lifecycle_.state();
+    failed.identity = lifecycle_.identity();
+    failed.message  = std::move(message);
+    return Emit(std::move(failed));
+  };
+  // M12: the asset commits its own transaction first, so no history record refers to a missing
+  // asset. A failed publish leaves an unreferenced row that the cleanup at close removes.
+  if (!dependencies_.mask_assets->PutMaskAsset(commit.asset, &error)) {
+    return fail(error.empty() ? "The AI Mask asset could not be stored" : std::move(error));
+  }
+  // A new Mask takes the ranges set during the edit of its candidate in the same commit (#604).
+  const auto&              target = *ai_mask_edit_;
+  EditorMaskCreationResult published;
+  const bool               applied = dependencies_.history->WithWorkingDocument(
+      lifecycle_.history_guard(),
+      [this, &commit, &target, &published](
+          PipelineDocument& document, MiniGitWorkingHistory& history,
+          const IEditorHistoryPort::MaskSettle& settle, bool* input_open, std::string* op_error) {
+        mask_creation_.Bind(document, history);
+        mask_creation_.SetSettlePublisher(settle);
+        mask_creation_.SetInteractivePreview({});
+        published = mask_creation_.CommitAiMaskSource(
+            commit.grade_id, commit.mask_id, commit.source, target.candidate_luminance_range,
+            target.candidate_color_range);
+        *input_open = mask_creation_.HasOpenOperation();
+        if (!published.accepted && op_error != nullptr) {
+          *op_error = published.error;
+        }
+        return published.accepted;
+      },
+      &error);
+  RefreshMaskCreationReadState();
+  if (!applied) {
+    return fail(error.empty() ? "The AI Mask could not be published" : std::move(error));
+  }
+  (void)EndAiMaskEditOnOwner();
+  {
+    // The Commit ends the candidate like Cancel: the photo is shown without coverage unless the
+    // user selected a committed Mask; a selected committed Mask shows its new state (#516).
+    const auto  mask_id = commit.mask_id.value_or(published.mask_id);
+    std::string read_error;
+    if (auto committed = ReadCommittedAiMask(commit.grade_id, mask_id, &read_error)) {
+      coverage_preview_.EndCandidateAfterCommit(CoveragePreviewTarget(), std::move(*committed),
+                                                current_operation_id_);
+    } else {
+      coverage_preview_.Clear();
+    }
+  }
+  if (!published.committed) {
+    EditorSessionResult unchanged;
+    unchanged.kind     = EditorSessionResultKind::Accepted;
+    unchanged.state    = lifecycle_.state();
+    unchanged.identity = lifecycle_.identity();
+    unchanged.message  = "The AI Mask is unchanged";
+    return Emit(std::move(unchanged));
+  }
+  return PublishTypedNodeHistorySuccess("AI Mask committed");
+}
+
+auto EditorSessionService::CancelAiMaskEdit() -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::CancelAiMaskEdit;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return CancelAiMaskEdit(); });
+  }
+  const bool ended = EndAiMaskEditOnOwner();
+  if (ended) {
+    coverage_preview_.EndCandidate(CoveragePreviewTarget(), current_operation_id_);
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = ended ? "AI Mask edit cancelled" : "No AI Mask edit is open";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::UpdateAiMaskCandidateCoverage(MaskCoverageCandidateSelection candidate,
+                                                         EditorMaskCoverageCompletion   on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("The AI Mask candidate coverage requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::UpdateAiMaskCandidateCoverage;
+    auto shared =
+        std::make_shared<std::pair<MaskCoverageCandidateSelection, EditorMaskCoverageCompletion>>(
+            std::move(candidate), std::move(on_complete));
+    return SubmitCommand(std::move(command), [this, shared](const EditorSessionCommand&) {
+      return UpdateAiMaskCandidateCoverage(std::move(shared->first), std::move(shared->second));
+    });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  const auto refuse = [&](std::string message) {
+    accepted.message = message;
+    on_complete(
+        {EditorMaskCoverageOutcome::Rejected, std::move(message), coverage_preview_.State()});
+    return accepted;
+  };
+  if (!ai_mask_edit_.has_value()) {
+    return refuse("The AI Mask candidate coverage requires an open AI Mask edit");
+  }
+  const auto& extent = candidate.analysis_extent;
+  if (!candidate.pixels || extent.Empty() ||
+      candidate.pixels->size() != static_cast<std::size_t>(extent.width) * extent.height) {
+    return refuse("The AI Mask candidate coverage does not hold one R8 value per analysis pixel");
+  }
+  // A new Mask uses the default invert and opacity; an opened Mask keeps its own unchanged fields.
+  MaskCoverageInvertOpacity mask;
+  if (ai_mask_edit_->mask_id.has_value()) {
+    std::string error;
+    const auto  committed =
+        ReadCommittedAiMask(ai_mask_edit_->grade_id, *ai_mask_edit_->mask_id, &error);
+    if (!committed.has_value()) {
+      return refuse(error);
+    }
+    mask = committed->mask;
+  }
+  coverage_preview_.UpdateCandidate(CoveragePreviewTarget(), std::move(candidate), mask,
+                                    current_operation_id_, std::move(on_complete));
+  accepted.message = "AI Mask candidate coverage requested";
+  return accepted;
+}
+
+auto EditorSessionService::SelectMaskCoveragePreview(const NodeId&                grade_id,
+                                                     std::optional<MaskId>        mask_id,
+                                                     EditorMaskCoverageCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("The coverage preview selection requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind    = EditorSessionCommandKind::SelectMaskCoveragePreview;
+    command.node_id = grade_id;
+    auto shared     = std::make_shared<EditorMaskCoverageCompletion>(std::move(on_complete));
+    return SubmitCommand(
+        std::move(command), [this, mask_id, shared](const EditorSessionCommand& queued) {
+          return SelectMaskCoveragePreview(queued.node_id, mask_id, std::move(*shared));
+        });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  const auto refuse = [&](std::string message) {
+    accepted.message = message;
+    on_complete(
+        {EditorMaskCoverageOutcome::Rejected, std::move(message), coverage_preview_.State()});
+    return accepted;
+  };
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return refuse("The coverage preview requires an interactive session");
+  }
+  if (ai_mask_edit_.has_value()) {
+    return refuse("The AI Mask edit shows its candidate; commit or cancel it first");
+  }
+  if (!mask_id.has_value()) {
+    return refuse(
+        "The coverage preview of a Grade Union is not available: the coverage-only operation "
+        "evaluates one AI Mask");
+  }
+  std::string error;
+  auto        committed = ReadCommittedAiMask(grade_id, *mask_id, &error);
+  if (!committed.has_value()) {
+    return refuse(error);
+  }
+  coverage_preview_.SelectCommitted(CoveragePreviewTarget(), std::move(*committed),
+                                    current_operation_id_, std::move(on_complete));
+  accepted.message = "Coverage preview selected";
+  return accepted;
+}
+
+auto EditorSessionService::ClearMaskCoveragePreview() -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::ClearMaskCoveragePreview;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand&) {
+      return ClearMaskCoveragePreview();
+    });
+  }
+  coverage_preview_.Clear();
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Coverage preview cleared";
+  return result;
+}
+
+auto EditorSessionService::ShowMaskRangeCoverage(const NodeId& grade_id, const MaskId& mask_id)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind    = EditorSessionCommandKind::ShowMaskRangeCoverage;
+    command.node_id = grade_id;
+    return SubmitCommand(std::move(command), [this, mask_id](const EditorSessionCommand& queued) {
+      return ShowMaskRangeCoverage(queued.node_id, mask_id);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return Reject("The Mask range coverage requires an interactive session");
+  }
+  MaskCoverageProbe probe{grade_id, mask_id, std::nullopt};
+  if (ai_mask_edit_.has_value()) {
+    // The AI Mask edit of a stored Mask can show the range coverage of that Mask over its
+    // candidate (MR4); the edit of a new Mask shows the range coverage of its candidate (#604).
+    const bool new_candidate = !ai_mask_edit_->mask_id.has_value() && mask_id.Empty();
+    if (ai_mask_edit_->grade_id != grade_id ||
+        (!new_candidate && ai_mask_edit_->mask_id != mask_id)) {
+      return Reject("The AI Mask edit shows its candidate; commit or cancel it first");
+    }
+    if (coverage_preview_.CommitBlocked()) {
+      return Reject("The AI Mask candidate failed to present; retry its preview first");
+    }
+    if (new_candidate) {
+      const auto* selection = coverage_preview_.NewestCandidate();
+      if (selection == nullptr) {
+        return Reject("The AI Mask candidate has no coverage yet");
+      }
+      probe.candidate =
+          MaskCoverageProbeCandidate{*selection, ai_mask_edit_->candidate_luminance_range,
+                                     ai_mask_edit_->candidate_color_range};
+    }
+  }
+  const auto working =
+      dependencies_.pipeline
+          ? dependencies_.pipeline->CurrentPreview(lifecycle_.identity().element_id)
+          : nullptr;
+  if (!working) {
+    return Reject("The working state of the image is not available");
+  }
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(working->Document().Graph().FindNode(grade_id));
+  if (grade == nullptr) {
+    return Reject("The Mask range coverage target is not a Color Grade");
+  }
+  if (!probe.candidate.has_value() && grade->FindMask(mask_id) == nullptr) {
+    return Reject("The Mask is missing");
+  }
+  const bool changed = coverage_preview_.RangeProbe() != probe;
+  coverage_preview_.ShowRangeProbe(probe);
+  if (changed) {
+    // One Quality render presents the coverage of the new probe; later frames carry it too.
+    EditorRenderCommand command;
+    command.operation_id = current_operation_id_;
+    command.reason       = EditorRenderReason::MaskCoverageProbeChanged;
+    (void)render_.RouteViewChange(command, lifecycle_.identity(),
+                                  lifecycle_.active_image_load_request(), lifecycle_.state());
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Mask range coverage shown";
+  return result;
+}
+
+auto EditorSessionService::HideMaskRangeCoverage() -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::HideMaskRangeCoverage;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return HideMaskRangeCoverage(); });
+  }
+  coverage_preview_.HideRangeProbe(current_operation_id_);
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Mask range coverage hidden";
+  return result;
+}
+
+auto EditorSessionService::RetryMaskCoveragePreview(EditorMaskCoverageCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("The coverage preview retry requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::RetryMaskCoveragePreview;
+    auto shared  = std::make_shared<EditorMaskCoverageCompletion>(std::move(on_complete));
+    return SubmitCommand(std::move(command), [this, shared](const EditorSessionCommand&) {
+      return RetryMaskCoveragePreview(std::move(*shared));
+    });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  if (!coverage_preview_.Retry(current_operation_id_, on_complete)) {
+    accepted.message = "The coverage preview has no failed presentation to retry";
+    on_complete({EditorMaskCoverageOutcome::Rejected, accepted.message, coverage_preview_.State()});
+    return accepted;
+  }
+  accepted.message = "Coverage preview retry requested";
+  return accepted;
+}
+
+auto EditorSessionService::PresentMaskCoverageAgain(EditorMaskCoverageCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("Presenting the coverage preview again requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::PresentMaskCoverageAgain;
+    auto shared  = std::make_shared<EditorMaskCoverageCompletion>(std::move(on_complete));
+    return SubmitCommand(std::move(command), [this, shared](const EditorSessionCommand&) {
+      return PresentMaskCoverageAgain(std::move(*shared));
+    });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  if (!coverage_preview_.PresentAgain(current_operation_id_, on_complete)) {
+    accepted.message = "The coverage preview has no presented request to present again";
+    on_complete({EditorMaskCoverageOutcome::Rejected, accepted.message, coverage_preview_.State()});
+    return accepted;
+  }
+  accepted.message = "Coverage preview presented again";
+  return accepted;
+}
+
+void EditorSessionService::EndAiMaskWorkForImageChange() {
+  (void)EndAiMaskEditOnOwner();
+  coverage_preview_.Clear();
+}
+
+auto EditorSessionService::CoveragePreviewTarget() const -> EditorMaskCoveragePreview::ImageTarget {
+  const auto identity = lifecycle_.identity();
+  return {identity.element_id, identity.image_id, lifecycle_.active_image_load_request()};
+}
+
+auto EditorSessionService::ReadCommittedAiMask(const NodeId& grade_id, const MaskId& mask_id,
+                                               std::string* error) const
+    -> std::optional<EditorMaskCoveragePreview::CommittedMask> {
+  const auto fail = [error](std::string message) {
+    *error = std::move(message);
+    return std::nullopt;
+  };
+  const auto working =
+      dependencies_.pipeline
+          ? dependencies_.pipeline->CurrentPreview(lifecycle_.identity().element_id)
+          : nullptr;
+  if (!working) {
+    return fail("The working state of the image is not available");
+  }
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(working->Document().Graph().FindNode(grade_id));
+  if (grade == nullptr) {
+    return fail("The coverage preview target is not a Color Grade");
+  }
+  const auto* mask = grade->FindMask(mask_id);
+  if (mask == nullptr) {
+    return fail("The Mask is missing");
+  }
+  const auto* source = std::get_if<AiSegmentationMaskSource>(&mask->source);
+  if (source == nullptr) {
+    return fail(
+        "The coverage preview of an analytic Mask is not available: the coverage-only operation "
+        "evaluates AI Masks");
+  }
+  return EditorMaskCoveragePreview::CommittedMask{
+      grade_id, mask_id, *source, MaskCoverageInvertOpacity{mask->invert, mask->opacity}};
+}
+
+auto EditorSessionService::EndAiMaskEditOnOwner() -> bool {
+  ReleaseLeasesByKind(EditorOperationLeaseKind::AiMaskEdit);
+  ai_mask_edit_active_.store(false, std::memory_order_release);
+  if (!ai_mask_edit_.has_value()) {
+    return false;
+  }
+  ai_mask_edit_.reset();
+  publication_dirty_ = true;
+  return true;
+}
+
+auto EditorSessionService::EvaluateDocumentWriteAdmission(bool ignore_ai_mask_edit_lease)
+    -> EditorActionDecision {
+  EditorCommandContext context{active_leases_};
+  if (ignore_ai_mask_edit_lease) {
+    std::erase_if(context.leases, [](const EditorOperationLease& lease) {
+      return lease.kind == EditorOperationLeaseKind::AiMaskEdit;
+    });
+  }
+  return EditorActionPolicy::Evaluate(EditorAction::CommitAdjustment, context, BuildActionInputs());
 }
 
 void EditorSessionService::NotifyImageAcquired(ImageLoadRequestId image_load_request, bool success,
@@ -1529,6 +3656,22 @@ void EditorSessionService::NotifyImageAcquired(ImageLoadRequestId image_load_req
 }
 
 void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_result) {
+  switch (render_result.kind) {
+    case EditorRenderResultKind::FrameReady:
+    case EditorRenderResultKind::Failed:
+    case EditorRenderResultKind::Cancelled:
+    case EditorRenderResultKind::PresentationSuspended: {
+      const auto now_ns = diag::PreviewPerformanceEnabled() ? diag::PreviewPerformance::NowNs()
+                                                            : serial_admission_.NowNs();
+      last_frame_finished_ns_.store(now_ns, std::memory_order_release);
+      break;
+    }
+    case EditorRenderResultKind::RequestAccepted:
+    case EditorRenderResultKind::RenderStarted:
+    case EditorRenderResultKind::Replaced:
+    case EditorRenderResultKind::Reused:
+      break;
+  }
   EditorSessionCompletion completion;
   completion.kind                 = EditorSessionCompletionKind::RenderResult;
   completion.operation.command_id = render_result.intent.operation_id;
@@ -1543,6 +3686,31 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
     BeginPublication();
     render_.NotifyRenderResult(completion.render_result, lifecycle_.identity(),
                                lifecycle_.active_image_load_request(), lifecycle_.state());
+    const auto kind        = completion.render_result.kind;
+    const bool frame_ready = kind == EditorRenderResultKind::FrameReady;
+    const bool deferred    = kind == EditorRenderResultKind::PresentationSuspended;
+    if ((frame_ready || deferred || kind == EditorRenderResultKind::Failed) &&
+        current_operation_id_ != 0) {
+      // A failed or deferred render ends the wait of its command like a presented frame does:
+      // a minimized window must not hold a client until it is restored.
+      EditorSessionResult frame;
+      frame.kind              = frame_ready ? EditorSessionResultKind::FramePresented
+                                : deferred  ? EditorSessionResultKind::FrameDeferred
+                                            : EditorSessionResultKind::FrameFailed;
+      frame.state             = lifecycle_.state();
+      frame.identity          = lifecycle_.identity();
+      frame.render_request_id = completion.request_id;
+      if (deferred) {
+        frame.message = "The viewport is minimized or hidden, or an export is running; the frame "
+                        "is presented when rendering resumes";
+      } else if (!frame_ready) {
+        frame.message = completion.render_result.message.empty() ? std::string("Render failed")
+                                                                 : completion.render_result.message;
+      }
+      (void)EmitQuiet(std::move(frame));
+    }
+    FinishSerialFrameIfNeeded(completion.render_result);
+    PublishRenderProgressIfChanged();
     EndPublication();
     reducing_command_     = previous_reducing;
     current_operation_id_ = previous_operation;
@@ -1550,72 +3718,127 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
 }
 
 void EditorSessionService::SetActionAvailabilityObserver(ActionAvailabilityObserver observer) {
+  std::scoped_lock lock(publish_mutex_);
   action_availability_observer_ = std::move(observer);
 }
 
 void EditorSessionService::SetCopiedPackageAvailable(bool available) {
-  package_available_ = available;
-  PublishActionAvailabilityIfChanged();
+  {
+    std::scoped_lock lock(publish_mutex_);
+    package_available_ = available;
+  }
+  // Re-evaluate on the owner thread: action inputs read navigation and lease
+  // state that only the owner may touch.
+  if (command_queue_.IsOwnerThread()) {
+    PublishActionAvailabilityIfChanged();
+  } else {
+    command_queue_.PostCompletion([this] { PublishActionAvailabilityIfChanged(); });
+  }
 }
 
 void EditorSessionService::SetBackgroundActionRestrictions(
     const EditorBackgroundActionRestrictions& restrictions) {
-  background_restrictions_ = restrictions;
-  PublishActionAvailabilityIfChanged();
+  {
+    std::scoped_lock lock(publish_mutex_);
+    background_restrictions_ = restrictions;
+  }
+  if (command_queue_.IsOwnerThread()) {
+    PublishActionAvailabilityIfChanged();
+  } else {
+    command_queue_.PostCompletion([this] { PublishActionAvailabilityIfChanged(); });
+  }
 }
 
 auto EditorSessionService::BuildActionInputs() -> EditorActionInputs {
   EditorActionInputs inputs;
-  inputs.session_state = lifecycle_.state();
-  inputs.has_image     = lifecycle_.has_image();
-  inputs.package_available = package_available_;
-  inputs.merge_preview_active = active_merge_preview_id_.has_value();
-  inputs.active_merge_preview = active_merge_preview_id_.value_or(MergePreviewId{});
-  inputs.background_blocks_select_image = background_restrictions_.blocks_select_image;
-  inputs.background_blocks_paste        = background_restrictions_.blocks_paste;
-  inputs.background_blocks_merge        = background_restrictions_.blocks_merge;
-  inputs.background_blocks_checkout     = background_restrictions_.blocks_checkout;
-  inputs.background_blocks_workspace    = background_restrictions_.blocks_workspace;
+  inputs.session_state                   = lifecycle_.state();
+  inputs.has_image                       = lifecycle_.has_image();
+  {
+    std::scoped_lock lock(publish_mutex_);
+    inputs.package_available               = package_available_;
+    inputs.background_blocks_select_image  = background_restrictions_.blocks_select_image;
+    inputs.background_blocks_paste         = background_restrictions_.blocks_paste;
+    inputs.background_blocks_checkout      = background_restrictions_.blocks_checkout;
+    inputs.background_blocks_workspace     = background_restrictions_.blocks_workspace;
+  }
   // A second selection may queue/replace while a switch save or acquire is
   // already in flight (CQ1 pending_next_target). Allow SelectImage as soon as
   // navigation owns a pending action, not only after a target was queued.
-  inputs.can_replace_unstarted_selection =
-      navigation_state_.pending_action.has_value() ||
-      navigation_state_.pending_next_target.has_value();
+  inputs.can_replace_unstarted_selection = navigation_state_.pending_action.has_value() ||
+                                           navigation_state_.pending_next_target.has_value();
+  const bool pending_recovery = navigation_.has_pending_recovery();
+  pending_recovery_published_.store(pending_recovery, std::memory_order_release);
   inputs.recovery_allows_retry =
-      navigation_.has_pending_recovery() &&
-      lifecycle_.state() == EditorSessionState::RetainedImageFailure;
+      pending_recovery && lifecycle_.state() == EditorSessionState::RetainedImageFailure;
   inputs.recovery_allows_discard_continue = inputs.recovery_allows_retry;
   inputs.recovery_allows_cancel           = inputs.recovery_allows_retry;
 
   if (dependencies_.history && lifecycle_.has_history_guard()) {
-    std::string error;
-  EditorHistorySnapshot snapshot;
+    std::string           error;
+    EditorHistorySnapshot snapshot;
     if (dependencies_.history->ReadHistorySnapshot(lifecycle_.history_guard(), &snapshot, &error)) {
       inputs.can_undo = snapshot.can_undo;
       inputs.can_redo = snapshot.can_redo;
     }
   }
   inputs.has_unmaterialized_changes = has_unmaterialized_changes();
+  if (dependencies_.pipeline && lifecycle_.has_image()) {
+    if (const auto preview =
+            dependencies_.pipeline->CurrentPreview(lifecycle_.identity().element_id)) {
+      const auto* drt              = preview->Document().Drt();
+      inputs.current_output_is_hdr = drt != nullptr && IsHdrExportEncoding(*drt);
+    }
+  }
+  const auto mask_state  = mask_creation_.state();
+  inputs.mask_input_open = mask_creation_.HasOpenOperation() || mask_creation_commands_pending() ||
+                           mask_state == EditorMaskCreationState::Creating ||
+                           mask_state == EditorMaskCreationState::Editing ||
+                           mask_state == EditorMaskCreationState::Settling;
+  inputs.input_sequence_open = HasOpenInputSequence();
   return inputs;
 }
 
-void EditorSessionService::PublishActionAvailabilityIfChanged() {
-  const auto next =
-      EditorActionPolicy::EvaluateAll(EditorCommandContext{active_leases_}, BuildActionInputs());
-  if (next == published_availability_) {
-    return;
+auto EditorSessionService::HasOpenInputSequence() const -> bool {
+  if (!lifecycle_.has_image()) {
+    return false;
   }
-  published_availability_ = next;
-  if (action_availability_observer_) {
-    action_availability_observer_(published_availability_);
+  const auto identity = lifecycle_.identity();
+  const auto queued   = pending_input_.Peek();
+  const bool queued_for_open_image =
+      std::any_of(queued.sequences.begin(), queued.sequences.end(),
+                  [&identity](const EditorPendingSequence& sequence) {
+                    return sequence.identity.element_id == identity.element_id &&
+                           sequence.identity.image_id == identity.image_id;
+                  });
+  if (queued_for_open_image) {
+    return true;
+  }
+  return dependencies_.history && lifecycle_.has_history_guard() &&
+         dependencies_.history->HasUncommittedLiveValues(lifecycle_.history_guard());
+}
+
+void EditorSessionService::PublishActionAvailabilityIfChanged() {
+  const auto inputs              = BuildActionInputs();
+  published_input_sequence_open_ = inputs.input_sequence_open;
+  const auto next = EditorActionPolicy::EvaluateAll(EditorCommandContext{active_leases_}, inputs);
+  ActionAvailabilityObserver observer;
+  {
+    std::scoped_lock lock(publish_mutex_);
+    if (next == published_availability_) {
+      return;
+    }
+    published_availability_ = next;
+    observer                = action_availability_observer_;
+  }
+  if (observer) {
+    observer(next);
   }
 }
 
 void EditorSessionService::AcquireLease(EditorOperationLeaseKind kind, std::uint64_t command_id,
                                         sl_element_id_t element_id, image_id_t image_id,
                                         ImageLoadRequestId image_load_request,
-                                        std::string blocking_reason) {
+                                        std::string        blocking_reason) {
   EditorOperationLease lease;
   lease.operation.command_id = command_id;
   lease.kind                 = kind;
@@ -1637,19 +3860,20 @@ void EditorSessionService::ReleaseLeaseByCommandId(std::uint64_t command_id) {
 }
 
 void EditorSessionService::ReleaseLeasesByKind(EditorOperationLeaseKind kind) {
-  std::erase_if(active_leases_, [kind](const EditorOperationLease& lease) {
-    return lease.kind == kind;
-  });
+  std::erase_if(active_leases_,
+                [kind](const EditorOperationLease& lease) { return lease.kind == kind; });
 }
 
-void EditorSessionService::SetPendingPresentationTarget(sl_element_id_t element_id,
-                                                      image_id_t       image_id,
-                                                      ImageLoadRequestId image_load_request) {
+void EditorSessionService::SetPendingPresentationTarget(sl_element_id_t    element_id,
+                                                        image_id_t         image_id,
+                                                        ImageLoadRequestId image_load_request) {
+  std::scoped_lock lock(publish_mutex_);
   pending_presentation_target_ =
       EditorPendingPresentationTarget{element_id, image_id, image_load_request};
 }
 
 void EditorSessionService::ClearPendingPresentationTarget() {
+  std::scoped_lock lock(publish_mutex_);
   pending_presentation_target_.reset();
 }
 

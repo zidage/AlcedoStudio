@@ -28,8 +28,30 @@ class Database {
 
   constexpr static const char*          init_table_query =
       "CREATE TABLE Sleeve (id BIGINT PRIMARY KEY);"
+      // Image search columns (file_stem ... exif_search_words) are written by ImageMapper from
+      // the Image on every insert and update; see image_search_columns.hpp. Search, stats,
+      // and the thumbnail filter read them instead of the metadata JSON.
       "CREATE TABLE Image (id BIGINT PRIMARY KEY, image_path TEXT, file_name TEXT, type INTEGER, "
-      "metadata JSON);"
+      "metadata JSON,"
+      "file_stem VARCHAR NOT NULL DEFAULT '',"
+      "file_ext VARCHAR NOT NULL DEFAULT '',"
+      "capture_at TIMESTAMP,"
+      "capture_date DATE,"
+      "camera_make VARCHAR NOT NULL DEFAULT '',"
+      "camera_model VARCHAR NOT NULL DEFAULT '',"
+      "lens VARCHAR NOT NULL DEFAULT '',"
+      "iso INTEGER,"
+      "focal_mm DOUBLE,"
+      "aperture DOUBLE,"
+      "rating INTEGER NOT NULL DEFAULT 0,"
+      "pixel_count BIGINT,"
+      "file_search_text VARCHAR NOT NULL DEFAULT '',"
+      "exif_search_text VARCHAR NOT NULL DEFAULT '',"
+      "exif_search_words VARCHAR NOT NULL DEFAULT '',"
+      // Library marks (#768): color label code bits (bit k = ColorLabel k) and the Delete mark.
+      // Last, in the order image_marks_migration_query appends them to older databases.
+      "color_labels UTINYINT NOT NULL DEFAULT 0,"
+      "delete_mark BOOLEAN NOT NULL DEFAULT FALSE);"
       "CREATE TABLE SleeveRoot (id BIGINT PRIMARY KEY);"
       "CREATE TABLE Element (id BIGINT PRIMARY KEY, type INTEGER, element_name TEXT, added_time "
       "TIMESTAMP, modified_time "
@@ -42,7 +64,6 @@ class Database {
       "CREATE TABLE FileImage (file_id BIGINT, image_id BIGINT);"
       "CREATE TABLE ComboFolder (combo_id BIGINT, folder_id BIGINT);"
       "CREATE TABLE Filter (combo_id BIGINT, type INTEGER, data JSON);"
-      "CREATE TABLE EditHistory (file_id BIGINT PRIMARY KEY, history JSON);"
       "CREATE TABLE PipelineParam(file_id BIGINT PRIMARY KEY, param_json JSON);"
       // Mini-Git commit graph: immutable commits, Version refs, and per-image edit state.
       "CREATE TABLE EditCommit ("
@@ -76,6 +97,14 @@ class Database {
       "root_id VARCHAR PRIMARY KEY,"
       "element_id BIGINT UNIQUE NOT NULL,"
       "serialized_pipeline_state JSON NOT NULL);";
+
+  // Project file 0.10.0 databases have no library mark columns (#768). ADD COLUMN appends them
+  // after exif_search_words, the order of init_table_query, and fills every row with the
+  // default. DuckDB adds no NOT NULL constraint to an existing table; ImageMapper always writes a
+  // value.
+  constexpr static const char* image_marks_migration_query =
+      "ALTER TABLE Image ADD COLUMN IF NOT EXISTS color_labels UTINYINT DEFAULT 0;"
+      "ALTER TABLE Image ADD COLUMN IF NOT EXISTS delete_mark BOOLEAN DEFAULT FALSE;";
 
   constexpr static const char* semantic_table_query =
       "CREATE TABLE IF NOT EXISTS SemanticModel ("
@@ -161,31 +190,11 @@ class Database {
       "WHERE NOT EXISTS (SELECT 1 FROM SemanticModel WHERE active = TRUE) "
       "ORDER BY created_at DESC, model_key DESC LIMIT 1);";
 
-  // Phase 5f: AI image understanding + rating annotation tables. CREATE IF NOT EXISTS
-  // so this runs migration-safely on BOTH the fresh-DB and existing-DB paths (see
-  // InitializeDB). Foreign key is file_id = the Sleeve element id / inode, the same key
-  // the CLIP embeddings bind to (not the image id). PRIMARY KEY (file_id, task_id)
-  // makes insert_or_replace enforce "at most one row per pair", hence at most one
-  // active-for-search understanding per (file_id, task_id). Every text column is NOT
-  // NULL DEFAULT '' so the duckorm select path (which would turn a NULL cell into
-  // string(nullptr) and crash) never sees a NULL text value; updated_at is excluded from
-  // inserts and re-stamped on each upsert, so it doubles as last-write time. Rating is
-  // NOT part of full-text search: it is stored here only, and the search-document
-  // builder (sleeve_filter_service) intentionally reads the understanding table alone.
-  // Editor recovery metadata for atomic history/pipeline materialization.
-  // CREATE IF NOT EXISTS so existing project databases gain the table in place.
-  constexpr static const char* editor_recovery_metadata_table_query =
-      "CREATE TABLE IF NOT EXISTS EditorRecoveryMetadata ("
-      "file_id BIGINT PRIMARY KEY,"
-      "version_id VARCHAR NOT NULL DEFAULT '',"
-      "journal_generation UBIGINT NOT NULL DEFAULT 0,"
-      "materialized_operation_sequence UBIGINT NOT NULL DEFAULT 0,"
-      "transaction_chain_hash VARCHAR NOT NULL DEFAULT '',"
-      "pipeline_parameter_hash VARCHAR NOT NULL DEFAULT '');";
-
   // Mini-Git commit-graph tables. CREATE IF NOT EXISTS keeps the existing-DB open path
   // aligned with fresh projects; incompatible older project packages are rejected by
-  // project_file_version before history is loaded.
+  // project_file_version 0.10.0 before history is loaded. Root and checkpoint JSON
+  // store full PipelineDocument JSON from EncodePipelineRootState /
+  // EncodePipelineDocumentCheckpoint, not CPU parameter tables.
   constexpr static const char* commit_graph_table_query =
       "CREATE TABLE IF NOT EXISTS EditCommit ("
       "commit_hash VARCHAR PRIMARY KEY,"
@@ -217,8 +226,49 @@ class Database {
       "CREATE TABLE IF NOT EXISTS PipelineRoot ("
       "root_id VARCHAR PRIMARY KEY,"
       "element_id BIGINT UNIQUE NOT NULL,"
-      "serialized_pipeline_state JSON NOT NULL);";
+      "serialized_pipeline_state JSON NOT NULL);"
+      // Author of an agent commit. A commit without a row belongs to the user. The commit hash
+      // does not include these values.
+      "CREATE TABLE IF NOT EXISTS EditCommitAttribution ("
+      "commit_hash VARCHAR PRIMARY KEY,"
+      "author VARCHAR NOT NULL,"
+      "note VARCHAR);";
 
+  // R8 coverage of AI Segmentation Masks: one content-addressed row per asset key (MaskAssetStore).
+  // `data` is the zlib stream of the tightly packed pixels. A row never changes after its first
+  // write; the clean-close cleanup deletes rows that no stored history refers to. CREATE IF NOT
+  // EXISTS adds the table to an existing project database without a version change.
+  constexpr static const char* mask_asset_table_query =
+      "CREATE TABLE IF NOT EXISTS MaskAsset ("
+      "asset_key VARCHAR PRIMARY KEY,"
+      "format_version INTEGER NOT NULL,"
+      "width INTEGER NOT NULL,"
+      "height INTEGER NOT NULL,"
+      "bounds_x FLOAT NOT NULL,"
+      "bounds_y FLOAT NOT NULL,"
+      "bounds_w FLOAT NOT NULL,"
+      "bounds_h FLOAT NOT NULL,"
+      "pixel_byte_count BIGINT NOT NULL,"
+      "codec VARCHAR NOT NULL,"
+      "data BLOB NOT NULL);";
+
+  // Phase 5f: AI image understanding + rating annotation tables. CREATE IF NOT EXISTS
+  // so this runs migration-safely on BOTH the fresh-DB and existing-DB paths (see
+  // InitializeDB). Foreign key is file_id = the Sleeve element id / inode, the same key
+  // the CLIP embeddings bind to (not the image id). PRIMARY KEY (file_id, task_id)
+  // makes insert_or_replace enforce "at most one row per pair", hence at most one
+  // active-for-search understanding per (file_id, task_id). Every text column is NOT
+  // NULL DEFAULT '' so the duckorm select path (which would turn a NULL cell into
+  // string(nullptr) and crash) never sees a NULL text value; updated_at is excluded from
+  // inserts and re-stamped on each upsert, so it doubles as last-write time. Rating is
+  // NOT part of full-text search: it is stored here only, and the search-document
+  // builder (sleeve_filter_service) intentionally reads the understanding table alone.
+  // caption_search_text (caption + scene) and tags_search_text (tags) are the folded search
+  // text that AiStore writes on each upsert (see utils/string/search_text.hpp).
+  // AiImageFtsDocument (the BM25 index body) and AiImageSearchText (the folded text of all
+  // active understandings of a file) hold one row per file. AiStore writes both when an
+  // understanding is upserted or removed and rebuilds them when the project opens; library
+  // search reads AiImageSearchText instead of aggregating AiImageUnderstanding per query.
   constexpr static const char* ai_annotation_table_query =
       "CREATE TABLE IF NOT EXISTS AiImageUnderstanding ("
       "file_id BIGINT NOT NULL,"
@@ -232,6 +282,8 @@ class Database {
       "scene VARCHAR NOT NULL DEFAULT '',"
       "confidence DOUBLE NOT NULL DEFAULT 0.0,"
       "active BOOLEAN NOT NULL DEFAULT TRUE,"
+      "caption_search_text VARCHAR NOT NULL DEFAULT '',"
+      "tags_search_text VARCHAR NOT NULL DEFAULT '',"
       "updated_at TIMESTAMP DEFAULT current_timestamp,"
       "PRIMARY KEY (file_id, task_id));"
       "CREATE INDEX IF NOT EXISTS idx_ai_understanding_file_active "
@@ -240,6 +292,10 @@ class Database {
       "file_id BIGINT PRIMARY KEY,"
       "body VARCHAR NOT NULL DEFAULT '',"
       "updated_at TIMESTAMP DEFAULT current_timestamp);"
+      "CREATE TABLE IF NOT EXISTS AiImageSearchText ("
+      "file_id BIGINT PRIMARY KEY,"
+      "caption_search_text VARCHAR NOT NULL DEFAULT '',"
+      "tags_search_text VARCHAR NOT NULL DEFAULT '');"
       "CREATE TABLE IF NOT EXISTS AiImageRating ("
       "file_id BIGINT NOT NULL,"
       "task_id VARCHAR NOT NULL DEFAULT '',"
@@ -257,7 +313,7 @@ class Database {
       "CREATE INDEX IF NOT EXISTS idx_ai_rating_file_active "
       "ON AiImageRating(file_id, active);";
 
-  void SeedSemanticLabelQueries(duckdb_connection conn);
+  void PopulateSemanticLabelQueries(duckdb_connection conn);
 
  public:
   explicit Database(file_path_t& db_path);

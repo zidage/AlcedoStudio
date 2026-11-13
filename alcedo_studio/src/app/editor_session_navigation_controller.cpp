@@ -17,13 +17,11 @@ namespace alcedo {
 
 EditorSessionNavigationController::EditorSessionNavigationController(
     EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
-    EditorSessionRenderController& render, IEditorJournalPort* journal,
-    IEditorCheckpointStore* checkpoint_store, IEditorHistoryPort* history,
-    EditorSessionNavigationState* state)
+    EditorSessionRenderController& render, IEditorCheckpointStore* checkpoint_store,
+    IEditorHistoryPort* history, EditorSessionNavigationState* state)
     : lifecycle_(lifecycle),
       save_service_(save_service),
       render_(render),
-      journal_(journal),
       checkpoint_store_(checkpoint_store),
       history_(history),
       state_(state != nullptr ? state : &owned_state_),
@@ -199,10 +197,6 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
 
   // Discard or no-image close: release only after the render worker confirms
   // that it no longer owns the session or presentation sink.
-  if (!persist_changes && journal_ != nullptr) {
-    std::string error;
-    journal_->DiscardUnflushed(current_identity.element_id, &error);
-  }
   PendingEditorAction pending;
   pending.kind              = PendingEditorActionKind::CloseEditor;
   pending.persist           = persist_changes;
@@ -255,6 +249,18 @@ void EditorSessionNavigationController::StartRenderIdleBarrier(
     return;
   }
   state_->pending_action->sealed_image_load_request_id = image_load_request;
+  const auto kind                                      = state_->pending_action->kind;
+  if (kind != PendingEditorActionKind::SwitchImage &&
+      kind != PendingEditorActionKind::CloseEditor) {
+    // A Version operation keeps the image: frames render immutable preview snapshots on the
+    // session's own executor, so replacing the working document never waits for a frame. Only
+    // the frames of the old Version are cancelled.
+    render_.CancelSession(image_load_request);
+    state_->pending_action->render_idle = true;
+    return;
+  }
+  // Switch and Close release the image and hand the viewport to another state; the in-flight
+  // frame may still present to the viewport sink, so the action completes after it leaves.
   render_.CancelSession(image_load_request, [this](ImageLoadRequestId completed_request) {
     auto completion = [this, completed_request] { OnRenderSessionIdle(completed_request); };
     if (owner_poster_) {
@@ -291,6 +297,14 @@ void EditorSessionNavigationController::TryCompletePendingAction() {
 void EditorSessionNavigationController::CompletePendingAction(
     PendingEditorAction pending, const SaveCheckpointResult& result) {
   AssertOwnerThread();
+  // The save completion and the render-idle callback arrive as plain owner tasks, after other
+  // commands and render results have set operation_id_. Route the continuation for the command
+  // that started this action, or its frame never reaches that command's wait.
+  if (pending.ticket.operation_id != 0) {
+    operation_id_ = pending.ticket.operation_id;
+  } else if (result.operation_id != 0) {
+    operation_id_ = result.operation_id;
+  }
 
   // Materializer truncates the durable journal by path. Drop the matching live
   // prefix while the history guard is still held so a same-session capture does
@@ -322,7 +336,8 @@ void EditorSessionNavigationController::CompletePendingAction(
     lifecycle_.CompleteCheckpoint();
     std::string checkout_error;
     if (ContinueCheckoutVersion(pending.version_id, &checkout_error)) {
-      NotifyCompletion(true, false, "Checked out Version", pending.ticket);
+      NotifyCompletion(true, false, "Checked out Version", pending.ticket,
+                       version_render_request_id_);
     } else {
       // Phase 7A repair: the save succeeded and the history port fails closed,
       // so the prior Version is still active. Transition to
@@ -337,7 +352,8 @@ void EditorSessionNavigationController::CompletePendingAction(
     lifecycle_.CompleteCheckpoint();
     std::string create_error;
     if (ContinueCreateRootVersion(std::move(pending.display_name), &create_error)) {
-      NotifyCompletion(true, false, "Created root Version", pending.ticket);
+      NotifyCompletion(true, false, "Created root Version", pending.ticket,
+                       version_render_request_id_);
     } else {
       RetainPendingFailure(pending,
                            create_error.empty() ? "Failed to create root Version" : create_error);
@@ -349,7 +365,8 @@ void EditorSessionNavigationController::CompletePendingAction(
     std::string branch_error;
     if (ContinueBranchFromCommit(pending.branch_commit, std::move(pending.display_name),
                                  &branch_error)) {
-      NotifyCompletion(true, false, "Branched from commit", pending.ticket);
+      NotifyCompletion(true, false, "Branched from commit", pending.ticket,
+                       version_render_request_id_);
     } else {
       RetainPendingFailure(pending,
                            branch_error.empty() ? "Failed to branch from commit" : branch_error);
@@ -357,7 +374,8 @@ void EditorSessionNavigationController::CompletePendingAction(
     return;
   }
 
-  lifecycle_.ReleaseAfterCheckpoint();
+  // A release without Save (Close with Discard, Discard and Continue) drops the journaled commits.
+  lifecycle_.ReleaseAfterCheckpoint(!pending.persist);
 
   if (pending.kind == PendingEditorActionKind::CloseEditor) {
     ContinueToClose(pending.persist);
@@ -406,18 +424,21 @@ void EditorSessionNavigationController::ClearPendingAction() {
 auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
                                                          bool start_background_save)
     -> CheckpointTicket {
+  seal_error_.clear();
   const auto identity = lifecycle_.identity();
+  if (persist_changes && seal_preparer_) {
+    // Queued input of this image must be history before the capture and before
+    // the render barrier: once the image is released, nothing may apply it.
+    std::string prepare_error;
+    if (!seal_preparer_(&prepare_error)) {
+      seal_error_ = prepare_error.empty() ? "Pending edits could not be settled" : prepare_error;
+      return CheckpointTicket{};
+    }
+  }
   const auto sealed_load_request = lifecycle_.active_image_load_request();
   StartRenderIdleBarrier(sealed_load_request);
 
   if (persist_changes) {
-    if (journal_ != nullptr) {
-      std::string error;
-      if (!journal_->FinalizeEdit(identity.element_id, lifecycle_.active_image_load_request().value,
-                                  &error)) {
-        return CheckpointTicket{};
-      }
-    }
     // Project-owned global save lock is taken before capture so journal prefix
     // capture, DuckDB materialize, truncate, and thumbnail invalidation share
     // one ownership interval (Phase 2A).
@@ -434,6 +455,7 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
     std::string error;
     auto        capture = history_->CaptureSaveCheckpoint(lifecycle_.history_guard(), &error);
     if (!capture || !error.empty()) {
+      seal_error_ = error.empty() ? "Save capture failed" : error;
       return CheckpointTicket{};
     }
     if (!start_background_save) {
@@ -451,11 +473,6 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
     lifecycle_.BeginCheckpoint();
     return save_service_.Start(std::move(req),
                                [this](const SaveCheckpointResult& r) { OnCheckpointFinished(r); });
-  } else if (journal_ != nullptr) {
-    std::string error;
-    if (!journal_->DiscardUnflushed(identity.element_id, &error)) {
-      return CheckpointTicket{};
-    }
   }
   return CheckpointTicket{};
 }
@@ -562,6 +579,7 @@ auto EditorSessionNavigationController::RequestCheckoutVersion(const version_ref
 
 auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_ref_id_t& version_id,
                                                                 std::string* error) -> bool {
+  version_render_request_id_ = 0;
   if (!lifecycle_.has_history_guard() || history_ == nullptr) {
     if (error) *error = "Version checkout lost the history guard after save";
     return false;
@@ -569,9 +587,13 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
 
   std::string local_error;
   if (!history_->CheckoutVersion(lifecycle_.history_guard(), version_id, &local_error)) {
-    // Phase 7A repair: do NOT call lifecycle_.Fail(). The history port fails
-    // closed, so the prior Version and pipeline remain published. The caller
-    // decides whether to keep the image Interactive or enter recovery.
+    // Phase 7A repair: do NOT call lifecycle_.Fail() unless restore of the prior
+    // Version also failed. The history port fails closed, so the prior Version
+    // and pipeline remain published. The caller decides whether to keep the
+    // image Interactive or enter recovery.
+    if (local_error.rfind("fatal editor session", 0) == 0) {
+      lifecycle_.Fail(local_error);
+    }
     if (error) *error = local_error.empty() ? "Version checkout failed" : local_error;
     return false;
   }
@@ -583,13 +605,15 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
-  command.reason       = EditorRenderReason::InitialFrame;
-  render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
+  command.reason       = EditorRenderReason::VersionDocumentChanged;
+  version_render_request_id_ = render_.RouteInitialRender(command, lifecycle_.identity(),
+                                                          lifecycle_.active_image_load_request());
   return true;
 }
 
 auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  display_name,
                                                                   std::string* error) -> bool {
+  version_render_request_id_ = 0;
   if (!lifecycle_.has_history_guard() || history_ == nullptr) {
     if (error) *error = "Root Version creation lost the history guard after save";
     return false;
@@ -599,6 +623,9 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
   std::string      local_error;
   if (!history_->CreateRootVersionAndCheckout(lifecycle_.history_guard(), std::move(display_name),
                                               &new_version_id, &local_error)) {
+    if (local_error.rfind("fatal editor session", 0) == 0) {
+      lifecycle_.Fail(local_error);
+    }
     if (error) *error = local_error.empty() ? "Failed to create root Version" : local_error;
     return false;
   }
@@ -609,14 +636,16 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
-  command.reason       = EditorRenderReason::InitialFrame;
-  render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
+  command.reason       = EditorRenderReason::VersionDocumentChanged;
+  version_render_request_id_ = render_.RouteInitialRender(command, lifecycle_.identity(),
+                                                          lifecycle_.active_image_load_request());
   return true;
 }
 
 auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_hash_t& commit_id,
                                                                  std::string          display_name,
                                                                  std::string* error) -> bool {
+  version_render_request_id_ = 0;
   if (!lifecycle_.has_history_guard() || history_ == nullptr) {
     if (error) *error = "Branch creation lost the history guard after save";
     return false;
@@ -627,6 +656,9 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
   if (!history_->BranchFromCommitAndCheckout(lifecycle_.history_guard(), commit_id,
                                              std::move(display_name), &new_version_id,
                                              &local_error)) {
+    if (local_error.rfind("fatal editor session", 0) == 0) {
+      lifecycle_.Fail(local_error);
+    }
     if (error) *error = local_error.empty() ? "Failed to branch from commit" : local_error;
     return false;
   }
@@ -637,8 +669,9 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
-  command.reason       = EditorRenderReason::InitialFrame;
-  render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
+  command.reason       = EditorRenderReason::VersionDocumentChanged;
+  version_render_request_id_ = render_.RouteInitialRender(command, lifecycle_.identity(),
+                                                          lifecycle_.active_image_load_request());
   return true;
 }
 
@@ -650,6 +683,10 @@ void EditorSessionNavigationController::SetCompletionNotifier(
 
 void EditorSessionNavigationController::RetainPendingFailure(PendingEditorAction pending,
                                                              std::string         message) {
+  if (!seal_error_.empty()) {
+    message += ": " + seal_error_;
+    seal_error_.clear();
+  }
   lifecycle_.KeepCurrentAfterCheckpointFailure(std::move(message));
   state_->pending_recovery = std::move(pending);
   NotifyCompletion(false, true, lifecycle_.last_error(), state_->pending_recovery->ticket);
@@ -657,13 +694,15 @@ void EditorSessionNavigationController::RetainPendingFailure(PendingEditorAction
 
 void EditorSessionNavigationController::NotifyCompletion(bool success, bool retained_image,
                                                          std::string             message,
-                                                         const CheckpointTicket& ticket) {
+                                                         const CheckpointTicket& ticket,
+                                                         std::optional<std::uint64_t> render_request_id) {
   if (completion_notifier_) {
     NavigationCompletion completion;
-    completion.success        = success;
-    completion.retained_image = retained_image;
-    completion.message        = std::move(message);
-    completion.ticket         = ticket;
+    completion.success           = success;
+    completion.retained_image    = retained_image;
+    completion.message           = std::move(message);
+    completion.ticket            = ticket;
+    completion.render_request_id = render_request_id;
     completion_notifier_(completion);
   }
 }
@@ -732,19 +771,6 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     return outcome;
   }
   auto recovery = *state_->pending_recovery;
-
-  // Explicitly discard unflushed journal/working changes before continuing.
-  if (journal_ != nullptr) {
-    std::string discard_error;
-    if (!journal_->DiscardUnflushed(lifecycle_.identity().element_id, &discard_error)) {
-      const auto message =
-          discard_error.empty() ? "Failed to discard pending editor changes" : discard_error;
-      RetainPendingFailure(recovery, message);
-      outcome.failed  = true;
-      outcome.message = lifecycle_.last_error();
-      return outcome;
-    }
-  }
   state_->pending_recovery.reset();
 
   // Continue the pending navigation with persist=false (no save needed).
@@ -767,7 +793,8 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     if (ContinueCheckoutVersion(recovery.version_id, &checkout_error)) {
       outcome.completed_synchronously = true;
       outcome.message                 = "Discarded and checked out Version";
-      NotifyCompletion(true, false, "Discarded and checked out Version", recovery.ticket);
+      NotifyCompletion(true, false, "Discarded and checked out Version", recovery.ticket,
+                       version_render_request_id_);
     } else {
       RetainPendingFailure(recovery, checkout_error.empty()
                                          ? "Version checkout failed after discard"
@@ -783,7 +810,8 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     if (ContinueCreateRootVersion(std::move(recovery.display_name), &create_error)) {
       outcome.completed_synchronously = true;
       outcome.message                 = "Discarded and created root Version";
-      NotifyCompletion(true, false, "Discarded and created root Version", recovery.ticket);
+      NotifyCompletion(true, false, "Discarded and created root Version", recovery.ticket,
+                       version_render_request_id_);
     } else {
       RetainPendingFailure(recovery, create_error.empty()
                                          ? "Root Version creation failed after discard"
@@ -800,7 +828,8 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
                                  &branch_error)) {
       outcome.completed_synchronously = true;
       outcome.message                 = "Discarded and branched from commit";
-      NotifyCompletion(true, false, "Discarded and branched from commit", recovery.ticket);
+      NotifyCompletion(true, false, "Discarded and branched from commit", recovery.ticket,
+                       version_render_request_id_);
     } else {
       RetainPendingFailure(
           recovery, branch_error.empty() ? "Branch creation failed after discard" : branch_error);

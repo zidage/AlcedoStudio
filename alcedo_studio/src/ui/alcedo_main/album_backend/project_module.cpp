@@ -4,6 +4,7 @@
 
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 
+#include <QDate>
 #include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
@@ -16,15 +17,19 @@
 #include <QUrl>
 #include <algorithm>
 #include <thread>
+#include <utility>
 
+#include "app/project_package_backend.hpp"
 #include "app/project_package_service.hpp"
 #ifdef HAVE_OPENCL
+#include "opencl/opencl_program_library.hpp"
 #include "opencl/opencl_runtime.hpp"
 #endif
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "utils/cuda/cuda_driver_requirements.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 
@@ -209,10 +214,7 @@ auto BuildRecentProjectEntry(const QString& normalizedPath, qint64 lastOpenedMs)
 
 }  // namespace
 
-
-
-ProjectModule::ProjectModule(QObject* parent)
-    : QObject(parent), handler_(*this) {
+ProjectModule::ProjectModule(QObject* parent) : QObject(parent), handler_(*this) {
   LoadRecentProjectsFromSettings();
   QObject::connect(&i18n::TranslationNotifier::Instance(),
                    &i18n::TranslationNotifier::LanguageChanged, this,
@@ -227,8 +229,7 @@ void ProjectModule::SetLifecycleHooks(ProjectLifecycleHooks hooks) {
   lifecycle_hooks_ = std::move(hooks);
 }
 
-void ProjectModule::SetRuntimeAcceleratorPreference(
-    const AcceleratorBackendPreference preference) {
+void ProjectModule::SetRuntimeAcceleratorPreference(const AcceleratorBackendPreference preference) {
   // The RHI backend selected by main.cpp is the process-wide source of truth.
   // QSettings is only the next-launch request and may differ when a command-line
   // override is active or when settings changed during the previous process.
@@ -248,13 +249,50 @@ void ProjectModule::SetServiceMessage(const i18n::LocalizedText& message) {
 
 void ProjectModule::NotifyProjectLoadStateChanged() { emit ProjectLoadStateChanged(); }
 
+void ProjectModule::NotifyProjectEntryStateChanged() {
+  emit ProjectEnteredChanged();
+  emit WelcomeProjectChanged();
+}
+
+void ProjectModule::HandlePreviewLoadFailed(const std::filesystem::path& projectPath,
+                                            const QString&               errorMessage) {
+  RemoveRecentProject(projectPath);
+  welcome_project_path_  = NormalizeRecentProjectPath(projectPath);
+  preview_error_message_ = errorMessage;
+  emit WelcomeProjectChanged();
+}
+
+auto ProjectModule::ProjectLoadEntryMode() const -> QString {
+  if (!handler_.project_loading()) {
+    return {};
+  }
+  return handler_.load_entry_mode() == ProjectEntryMode::kPreview ? QStringLiteral("preview")
+                                                                  : QStringLiteral("enter");
+}
+
+auto ProjectModule::ProjectOverview() const -> QVariantMap {
+  const auto& overview = handler_.project_overview();
+  if (!overview.has_value()) {
+    return {};
+  }
+  const auto to_date = [](const std::optional<std::string>& value) {
+    return value.has_value() ? QDate::fromString(QString::fromStdString(*value), Qt::ISODate)
+                             : QDate{};
+  };
+  return QVariantMap{
+      {QStringLiteral("photoCount"), static_cast<qulonglong>(overview->photo_count_)},
+      {QStringLiteral("editedPhotoCount"), static_cast<qulonglong>(overview->edited_photo_count_)},
+      {QStringLiteral("earliestCaptureDate"), to_date(overview->earliest_capture_date_)},
+      {QStringLiteral("latestCaptureDate"), to_date(overview->latest_capture_date_)},
+  };
+}
+
 void ProjectModule::SetAcceleratorPreparationState(bool                       preparing,
-                                                  const i18n::LocalizedText& status) {
+                                                   const i18n::LocalizedText& status) {
   accelerator_preparing_               = preparing;
   accelerator_preparation_status_text_ = status;
   emit AcceleratorPreparationStateChanged();
 }
-
 
 void ProjectModule::StartOpenClPreparationIfNeeded() {
   if (accelerator_prepare_started_ || accelerator_preparing_ ||
@@ -265,10 +303,17 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
   accelerator_prepare_started_ = true;
 
 #ifdef HAVE_OPENCL
+  // A driver compiler crash ends the process inside clBuildProgram, so the program name has to
+  // be on disk before the call. Flush after each line instead of waiting for the log buffer.
+  OpenClProgramLibrary::Instance().SetBuildTraceSink([](std::string_view message) {
+    qCInfo(diag::appLog).noquote() << QString::fromUtf8(message.data(),
+                                                        static_cast<qsizetype>(message.size()));
+    diag::FlushApplicationLog();
+  });
   SetAcceleratorPreparationState(true,
                                  PL_TEXT("Compiling OpenCL kernels. This happens every launch."));
   QPointer<ProjectModule> self(this);
-  std::thread([self]() {
+  opencl_preparation_thread_ = std::jthread([self]() {
     QString error_text;
     try {
       WarmUpOpenClRuntime();
@@ -300,15 +345,13 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
               PL_TEXT("OpenCL preparation failed: %1", error_text));
         },
         Qt::QueuedConnection);
-  }).detach();
+  });
 #else
   SetAcceleratorPreparationState(false, {});
 #endif
 }
 
-
 void ProjectModule::StartAcceleratorPreparation() { StartOpenClPreparationIfNeeded(); }
-
 
 void ProjectModule::InitializeAcceleratorSettings() {
   const QString stored_key = QSettings{}.value(QLatin1String(kAcceleratorBackendKey)).toString();
@@ -406,7 +449,6 @@ void ProjectModule::InitializeAcceleratorSettings() {
   QSettings{}.setValue(QLatin1String(kAcceleratorBackendKey), accelerator_backend_key_);
 }
 
-
 void ProjectModule::RebuildAcceleratorOptions() {
   QVariantList options;
 #if defined(__APPLE__)
@@ -430,7 +472,6 @@ void ProjectModule::RebuildAcceleratorOptions() {
   }
   accelerator_options_ = options;
 }
-
 
 bool ProjectModule::SetAcceleratorBackend(const QString& backendKey) {
   const auto preference = AcceleratorPreferenceFromKey(backendKey);
@@ -462,7 +503,6 @@ bool ProjectModule::SetAcceleratorBackend(const QString& backendKey) {
   return true;
 }
 
-
 void ProjectModule::AcknowledgeAcceleratorWarning() {
   if (accelerator_warning_id_.isEmpty()) {
     return;
@@ -471,13 +511,11 @@ void ProjectModule::AcknowledgeAcceleratorWarning() {
   emit AcceleratorStateChanged();
 }
 
-
 bool ProjectModule::IsAcceleratorWarningAcknowledged() const {
   return !accelerator_warning_id_.isEmpty() &&
          QSettings{}.value(QLatin1String(kAcceleratorWarningAcknowledgedKey)).toString() ==
              accelerator_warning_id_;
 }
-
 
 void ProjectModule::PersistAcceleratorWarningAcknowledgement() const {
   if (!accelerator_warning_id_.isEmpty()) {
@@ -485,7 +523,6 @@ void ProjectModule::PersistAcceleratorWarningAcknowledgement() const {
                          accelerator_warning_id_);
   }
 }
-
 
 bool ProjectModule::PromptAndLoadProject() {
   const QString start_dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
@@ -497,7 +534,6 @@ bool ProjectModule::PromptAndLoadProject() {
   }
   return LoadProject(QUrl::fromLocalFile(selected_path).toString());
 }
-
 
 bool ProjectModule::PromptAndCreateProject() {
   const QString start_dir    = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
@@ -525,7 +561,6 @@ bool ProjectModule::PromptAndCreateProject() {
   return CreateProjectInFolderNamed(QUrl::fromLocalFile(selected_dir).toString(), project_name);
 }
 
-
 bool ProjectModule::LoadProject(const QString& metaFileUrlOrPath) {
   if (handler_.project_loading()) {
     SetServiceMessageForCurrentProject(PL_TEXT("A project load is already in progress."));
@@ -538,63 +573,159 @@ bool ProjectModule::LoadProject(const QString& metaFileUrlOrPath) {
     return false;
   }
 
-  const auto      project_path = project_path_opt.value();
+  i18n::LocalizedText error;
+  bool                file_rejected = false;
+  if (StartPackedProjectLoad(*project_path_opt, ProjectEntryMode::kEnter, &error,
+                             &file_rejected)) {
+    return true;
+  }
+  if (file_rejected) {
+    RemoveRecentProject(*project_path_opt);
+  }
+  if (!error.IsEmpty()) {
+    SetServiceMessageForCurrentProject(error);
+  }
+  return false;
+}
+
+bool ProjectModule::PreviewProject(const QString& projectUrlOrPath) {
+  if (handler_.project_loading() || !ProjectSwitchBlockReason().isEmpty()) {
+    return false;
+  }
+  const auto project_path_opt = InputToPath(projectUrlOrPath);
+  if (!project_path_opt.has_value()) {
+    return false;
+  }
+
+  const QString normalized_path = NormalizeRecentProjectPath(*project_path_opt);
+  const QString previous_path   = welcome_project_path_;
+  const QString previous_error  = preview_error_message_;
+  welcome_project_path_         = normalized_path;
+  preview_error_message_.clear();
+
+  const bool already_previewed =
+      handler_.project() && !handler_.project_entered() &&
+      NormalizeRecentProjectPath(handler_.recent_project_path()) == normalized_path;
+  if (already_previewed) {
+    emit WelcomeProjectChanged();
+    return true;
+  }
+
+  i18n::LocalizedText error;
+  bool                file_rejected = false;
+  if (StartPackedProjectLoad(*project_path_opt, ProjectEntryMode::kPreview, &error,
+                             &file_rejected)) {
+    emit WelcomeProjectChanged();
+    return true;
+  }
+  if (error.IsEmpty()) {
+    // ProjectHandler refused the load; nothing started, so the welcome state stays as it was.
+    welcome_project_path_  = previous_path;
+    preview_error_message_ = previous_error;
+    return false;
+  }
+  if (file_rejected) {
+    HandlePreviewLoadFailed(*project_path_opt, error.Render());
+  } else {
+    preview_error_message_ = error.Render();
+    emit WelcomeProjectChanged();
+  }
+  return false;
+}
+
+bool ProjectModule::EnterLoadedProject() { return handler_.RequestEnterLoadedProject(); }
+
+auto ProjectModule::ProjectCloseBlockReason() const -> QString {
+  if (handler_.project_loading()) {
+    return PL_TEXT("Please wait until project loading finishes.").Render();
+  }
+  if (!handler_.project()) {
+    return PL_TEXT("No project is loaded yet.").Render();
+  }
+  return ProjectSwitchBlockReason();
+}
+
+bool ProjectModule::CloseProject(bool persist) {
+  if (const QString reason = ProjectCloseBlockReason(); !reason.isEmpty()) {
+    SetServiceMessageForCurrentProject(PL_TEXT("%1", reason));
+    return false;
+  }
+  if (lifecycle_hooks_.editor_session_busy && lifecycle_hooks_.editor_session_busy()) {
+    SetServiceMessageForCurrentProject(
+        PL_TEXT("Close the editor image before you close the project."));
+    return false;
+  }
+  // The editor has no image, so this only forgets the last edited image of this project and
+  // shows the Library.
+  FinalizeEditorSession();
+  if (persist) {
+    QString error;
+    if (!handler_.PersistProjectForClose(&error)) {
+      SetServiceMessageForCurrentProject(error.isEmpty() ? PL_TEXT("Project save failed.")
+                                                         : PL_TEXT("%1", error));
+      SetTaskState(PL_TEXT("Project save failed."), 0, false);
+      return false;
+    }
+  }
+  handler_.CloseProject();
+  welcome_project_path_.clear();
+  preview_error_message_.clear();
+  SetServiceState(false, PL_TEXT("Project closed."));
+  SetTaskState(PL_TEXT("No background tasks"), 0, false);
+  emit ProjectChanged();
+  emit projectChanged();
+  NotifyProjectEntryStateChanged();
+  return true;
+}
+
+bool ProjectModule::StartPackedProjectLoad(const std::filesystem::path& projectPath,
+                                           const ProjectEntryMode       entryMode,
+                                           i18n::LocalizedText* error, bool* fileRejected) {
   std::error_code ec;
-  if (!std::filesystem::is_regular_file(project_path, ec) || ec) {
-    RemoveRecentProject(project_path);
-    SetServiceMessageForCurrentProject(PL_TEXT("Project file was not found."));
+  if (!std::filesystem::is_regular_file(projectPath, ec) || ec) {
+    *fileRejected = true;
+    *error        = PL_TEXT("Project file was not found.");
     return false;
   }
 
   ProjectPackageService package_service;
-  if (!package_service.IsSupportedProjectFile(project_path)) {
-    RemoveRecentProject(project_path);
-    SetServiceMessageForCurrentProject(
-        PL_TEXT("Unsupported or damaged project package. Choose a valid .alcd file."));
+  if (!package_service.IsSupportedProjectFile(projectPath)) {
+    *fileRejected = true;
+    *error = PL_TEXT("Unsupported or damaged project package. Choose a valid .alcd file.");
     return false;
   }
 
-  if (package_service.IsPackedProjectPath(project_path)) {
-    const QString         project_name = QFileInfo(PathToQString(project_path)).completeBaseName();
-    std::filesystem::path workspace_dir;
-    QString               workspace_error;
-    if (!package_service.CreateProjectWorkspace(project_name, &workspace_dir, &workspace_error)) {
-      SetServiceMessageForCurrentProject(workspace_error.isEmpty()
-                                             ? PL_TEXT("Failed to prepare project temp workspace.")
-                                             : PL_TEXT("%1", workspace_error));
-      return false;
-    }
-
-    std::filesystem::path unpacked_db_path;
-    std::filesystem::path unpacked_meta_path;
-    QString               unpack_error;
-    if (!package_service.UnpackProjectToWorkspace(project_path, workspace_dir, project_name,
-                                                  &unpacked_db_path, &unpacked_meta_path,
-                                                  &unpack_error)) {
-      CleanupWorkspaceDirectory(workspace_dir);
-      SetServiceMessageForCurrentProject(unpack_error.isEmpty()
-                                             ? PL_TEXT("Failed to unpack project package.")
-                                             : PL_TEXT("%1", unpack_error));
-      return false;
-    }
-
-    return handler_.InitializeServices(unpacked_db_path, unpacked_meta_path,
-                                               ProjectOpenMode::kLoadExisting, project_path,
-                                               workspace_dir, project_path);
+  if (!package_service.IsPackedProjectPath(projectPath)) {
+    *error = PL_TEXT("Unsupported project format. Choose a .alcd file.");
+    return false;
   }
 
-  SetServiceMessageForCurrentProject(PL_TEXT("Unsupported project format. Choose a .alcd file."));
-  return false;
-}
+  const QString         project_name = QFileInfo(PathToQString(projectPath)).completeBaseName();
+  std::filesystem::path workspace_dir;
+  project_pack::ProjectWorkspaceLock workspace_lock;
+  QString                            workspace_error;
+  if (!package_service.CreateProjectWorkspace(project_name, &workspace_dir, &workspace_lock,
+                                              &workspace_error)) {
+    *error = workspace_error.isEmpty() ? PL_TEXT("Failed to prepare project temp workspace.")
+                                       : PL_TEXT("%1", workspace_error);
+    return false;
+  }
 
+  // The loader thread unpacks the package, so the UI shows the loading state meanwhile.
+  const bool started = handler_.OpenPackedProject(
+      projectPath, workspace_dir, std::move(workspace_lock), project_name, entryMode);
+  if (!started) {
+    CleanupWorkspaceDirectory(workspace_dir);
+  }
+  return started;
+}
 
 bool ProjectModule::CreateProjectInFolder(const QString& folderUrlOrPath) {
   return CreateProjectInFolderNamed(folderUrlOrPath, "album_editor_project");
 }
 
-
 bool ProjectModule::CreateProjectInFolderNamed(const QString& folderUrlOrPath,
-                                              const QString& projectName) {
+                                               const QString& projectName) {
   if (handler_.project_loading()) {
     SetServiceMessageForCurrentProject(PL_TEXT("A project load is already in progress."));
     return false;
@@ -619,9 +750,11 @@ bool ProjectModule::CreateProjectInFolderNamed(const QString& folderUrlOrPath,
     return false;
   }
 
-  std::filesystem::path workspace_dir;
-  QString               workspace_error;
-  if (!package_service.CreateProjectWorkspace(projectName, &workspace_dir, &workspace_error)) {
+  std::filesystem::path              workspace_dir;
+  project_pack::ProjectWorkspaceLock workspace_lock;
+  QString                            workspace_error;
+  if (!package_service.CreateProjectWorkspace(projectName, &workspace_dir, &workspace_lock,
+                                              &workspace_error)) {
     SetServiceMessageForCurrentProject(workspace_error.isEmpty()
                                            ? PL_TEXT("Failed to prepare project temp workspace.")
                                            : PL_TEXT("%1", workspace_error));
@@ -631,13 +764,12 @@ bool ProjectModule::CreateProjectInFolderNamed(const QString& folderUrlOrPath,
   const auto runtime_pair = package_service.BuildRuntimeProjectPair(workspace_dir, projectName);
   const bool started      = handler_.InitializeServices(
       runtime_pair.first, runtime_pair.second, ProjectOpenMode::kCreateNew, packed_path_opt.value(),
-      workspace_dir, packed_path_opt.value());
+      workspace_dir, std::move(workspace_lock), packed_path_opt.value(), ProjectEntryMode::kEnter);
   if (!started) {
     CleanupWorkspaceDirectory(workspace_dir);
   }
   return started;
 }
-
 
 bool ProjectModule::SaveProject() {
   if (handler_.project_loading()) {
@@ -679,17 +811,15 @@ bool ProjectModule::SaveProject() {
   SetServiceMessageForCurrentProject(
       handler_.package_path().empty()
           ? PL_TEXT("Project saved to %1", PathToQString(handler_.meta_path()))
-          : PL_TEXT("Project saved and packed to %1",
-                    PathToQString(handler_.package_path())));
+          : PL_TEXT("Project saved and packed to %1", PathToQString(handler_.package_path())));
   SetTaskState(handler_.package_path().empty() ? PL_TEXT("Project saved.")
-                                                       : PL_TEXT("Project saved and packed."),
+                                               : PL_TEXT("Project saved and packed."),
                100, false);
   ScheduleIdleTaskStateReset(1200);
   return true;
 }
 
 // ── Shared internal methods ─────────────────────────────────────────────────
-
 
 void ProjectModule::SetServiceState(bool ready, const i18n::LocalizedText& message) {
   if (service_ready_ == ready && service_message_text_.source_ == message.source_ &&
@@ -701,11 +831,9 @@ void ProjectModule::SetServiceState(bool ready, const i18n::LocalizedText& messa
   emit ServiceStateChanged();
 }
 
-
 void ProjectModule::SetServiceMessageForCurrentProject(const i18n::LocalizedText& message) {
   SetServiceState(handler_.project() != nullptr, message);
 }
-
 
 void ProjectModule::ScheduleIdleTaskStateReset(int delayMs) {
   QTimer::singleShot(std::max(delayMs, 0), this, [this]() {
@@ -716,15 +844,13 @@ void ProjectModule::ScheduleIdleTaskStateReset(int delayMs) {
   });
 }
 
-
 void ProjectModule::SetTaskState(const i18n::LocalizedText& status, int progress,
-                                bool cancelVisible) {
+                                 bool cancelVisible) {
   task_status_text_    = status;
   task_progress_       = std::clamp(progress, 0, 100);
   task_cancel_visible_ = cancelVisible;
   emit TaskStateChanged();
 }
-
 
 void ProjectModule::RefreshTranslations() {
   if (lifecycle_hooks_.refresh_translations) {
@@ -766,7 +892,6 @@ bool ProjectModule::ShouldKeepSemanticModelData(const QString& profileId) const 
   return !lifecycle_hooks_.should_keep_semantic_model_data ||
          lifecycle_hooks_.should_keep_semantic_model_data(profileId);
 }
-
 
 void ProjectModule::LoadRecentProjectsFromSettings() {
   const QVariantList stored_entries = QSettings{}.value(QLatin1String(kRecentProjectsKey)).toList();
@@ -821,11 +946,9 @@ void ProjectModule::LoadRecentProjectsFromSettings() {
   }
 }
 
-
 void ProjectModule::PersistRecentProjects() const {
   QSettings{}.setValue(QLatin1String(kRecentProjectsKey), recent_projects_);
 }
-
 
 void ProjectModule::RegisterRecentProject(const std::filesystem::path& projectPath) {
   const QString normalized_path = NormalizeRecentProjectPath(projectPath);
@@ -858,7 +981,6 @@ void ProjectModule::RegisterRecentProject(const std::filesystem::path& projectPa
   emit RecentProjectsChanged();
 }
 
-
 void ProjectModule::RemoveRecentProject(const std::filesystem::path& projectPath) {
   const QString normalized_path = NormalizeRecentProjectPath(projectPath);
   if (normalized_path.isEmpty()) {
@@ -883,7 +1005,6 @@ void ProjectModule::RemoveRecentProject(const std::filesystem::path& projectPath
   PersistRecentProjects();
   emit RecentProjectsChanged();
 }
-
 
 }  // namespace alcedo::ui
 

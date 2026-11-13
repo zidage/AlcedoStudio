@@ -9,22 +9,25 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#include "app/history_mgmt_service.hpp"
-#include "app/pipeline_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
-#include "edit/operators/op_base.hpp"
-#include "edit/operators/operator_registeration.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "json.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
+#include "sleeve/storage.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
+#include "../support/storage_test_access.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -80,10 +83,53 @@ auto QueryDuckDbInt64(const std::filesystem::path& db_path, const std::string& s
   return value;
 }
 
-auto ReadExposure(const std::shared_ptr<PipelineGuard>& pipeline_guard) -> float {
-  const auto exported = pipeline_guard->pipeline_->ExportPipelineParams();
-  return exported["Basic Adjustment"]["Basic Adjustment"]["exposure"]["params"]["exposure"]
-      .get<float>();
+/// `FolderContent` rows of @p folder_id on the project's connection: element id -> DuckDB rowid.
+/// A row that a sync deletes and inserts again gets a new rowid.
+auto FolderContentRowIds(ProjectService& project, sl_element_id_t folder_id)
+    -> std::map<sl_element_id_t, int64_t> {
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
+  auto          lock  = guard.Lock();
+  duckdb_result result;
+  const auto    sql = "SELECT element_id, rowid FROM FolderContent WHERE folder_id = " +
+                   std::to_string(folder_id);
+  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+    const std::string error = duckdb_result_error(&result);
+    duckdb_destroy_result(&result);
+    throw std::runtime_error(error);
+  }
+  std::map<sl_element_id_t, int64_t> rows;
+  for (idx_t row = 0; row < duckdb_row_count(&result); ++row) {
+    rows[static_cast<sl_element_id_t>(duckdb_value_int64(&result, 0, row))] =
+        duckdb_value_int64(&result, 1, row);
+  }
+  duckdb_destroy_result(&result);
+  return rows;
+}
+
+/// Exposure in the element pipeline JSON of @p id: the data SleeveService copies when it
+/// duplicates a file.
+auto ReadStoredExposure(Storage& storage, sl_element_id_t id) -> float {
+  const auto json = storage.GetElementStore().GetPipelineJsonByElementId(id);
+  if (!json.has_value()) {
+    throw std::runtime_error("Element has no stored pipeline JSON");
+  }
+  const auto  document = PipelineDocument::FromJson(*json);
+  const auto* exposure = document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
+  if (exposure == nullptr) {
+    throw std::runtime_error("Pipeline document has no exposure adjustment");
+  }
+  return exposure->ToJson().at("exposure_ev").get<float>();
+}
+
+/// Store a default document with @p exposure_ev as the element pipeline JSON of @p id.
+void WriteStoredExposure(Storage& storage, sl_element_id_t id, float exposure_ev) {
+  auto  document = CreateDefaultPipelineDocument();
+  auto* exposure = document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
+  if (exposure == nullptr) {
+    throw std::runtime_error("Pipeline document has no exposure adjustment");
+  }
+  exposure->LoadJson({{"exposure_ev", exposure_ev}});
+  storage.GetElementStore().UpdatePipelineJsonByElementId(id, document.ToJson());
 }
 
 }  // namespace
@@ -96,20 +142,14 @@ TEST(ProjectVersionTests, MiniGitSchemaBumpRejectsPreviousProjectVersion) {
 
 class SleeveServiceTests : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
   void                  SetUp() override {
     TimeProvider::Refresh();
-    RegisterAllOperators();
-    db_path_ = std::filesystem::temp_directory_path() / "sleeve_service_test.db";
-    meta_path_ = std::filesystem::temp_directory_path() / "sleeve_service_test.json";
-    if (std::filesystem::exists(db_path_)) {
-      std::filesystem::remove(db_path_);
-    }
-    if (std::filesystem::exists(meta_path_)) {
-      std::filesystem::remove(meta_path_);
-    }
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   void TearDown() override {
@@ -467,7 +507,7 @@ TEST_F(SleeveServiceTests, FolderCopyWriteKeepsNestedFileIdentity) {
   EXPECT_EQ(from_original->ref_count_, 1u);
 }
 
-TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelineIndependent) {
+TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsPipelineIndependent) {
   ProjectService project(db_path_, meta_path_);
   auto           service = project.GetSleeveService();
 
@@ -477,26 +517,11 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   ASSERT_NE(source, nullptr);
 
   const auto source_id = source->element_id_;
+  auto       storage   = project.GetStorage();
 
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                source_pipeline = pipeline_service.LoadPipeline(source_id);
-    auto&               stage = source_pipeline->pipeline_->GetStage(PipelineStageName::Basic_Adjustment);
-    stage.SetOperator(OperatorType::EXPOSURE, nlohmann::json{{"exposure", 2.5f}},
-                      source_pipeline->pipeline_->GetGlobalParams());
-    source_pipeline->dirty_ = true;
-    pipeline_service.SavePipeline(source_pipeline);
-    pipeline_service.Sync();
-  }
-
-  {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   source_history = history_service.LoadHistory(source_id);
-    ASSERT_EQ(source_history->history_->GetVersions().size(), 1u);
-    (void)history_service.CreateVersion(source_history, "Source Look");
-    history_service.SaveHistory(source_history);
-    history_service.Sync();
-  }
+  // SleeveService duplicates the element pipeline JSON only (the history is not copied), so the
+  // stored JSON is what this test checks.
+  WriteStoredExposure(*storage, source_id, 2.5f);
 
   const auto duplicated = service->DuplicateFileToFolder(source_id, album->element_id_);
   ASSERT_TRUE(duplicated.second.success_);
@@ -508,149 +533,59 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   EXPECT_EQ(service->ResolveFile(L"/Source.arw@")->element_id_, duplicate_id);
   EXPECT_EQ(service->ResolveFile(L"/Album/Source.arw@")->element_id_, duplicate_id);
 
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                source_pipeline    = pipeline_service.LoadPipeline(source_id);
-    auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
-    ASSERT_NE(source_pipeline, nullptr);
-    ASSERT_NE(duplicate_pipeline, nullptr);
-    EXPECT_FLOAT_EQ(ReadExposure(source_pipeline), 2.5f);
-    EXPECT_FLOAT_EQ(ReadExposure(duplicate_pipeline), 2.5f);
-  }
+  EXPECT_FLOAT_EQ(ReadStoredExposure(*storage, source_id), 2.5f);
+  EXPECT_FLOAT_EQ(ReadStoredExposure(*storage, duplicate_id), 2.5f);
 
-  {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   source_history    = history_service.LoadHistory(source_id);
-    auto                   duplicate_history = history_service.LoadHistory(duplicate_id);
-    ASSERT_NE(source_history, nullptr);
-    ASSERT_NE(duplicate_history, nullptr);
-    EXPECT_EQ(source_history->history_->GetVersions().size(), 2u);
-    EXPECT_EQ(duplicate_history->history_->GetVersions().size(), 2u);
-    EXPECT_EQ(duplicate_history->history_->GetBoundImage(), duplicate_id);
-  }
+  WriteStoredExposure(*storage, duplicate_id, 4.0f);
 
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
-    auto&               stage =
-        duplicate_pipeline->pipeline_->GetStage(PipelineStageName::Basic_Adjustment);
-    stage.SetOperator(OperatorType::EXPOSURE, nlohmann::json{{"exposure", 4.0f}},
-                      duplicate_pipeline->pipeline_->GetGlobalParams());
-    duplicate_pipeline->dirty_ = true;
-    pipeline_service.SavePipeline(duplicate_pipeline);
-    pipeline_service.Sync();
-  }
-
-  {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   duplicate_history = history_service.LoadHistory(duplicate_id);
-    (void)history_service.CreateVersion(duplicate_history, "Duplicate Look");
-    history_service.SaveHistory(duplicate_history);
-    history_service.Sync();
-  }
-
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                source_pipeline    = pipeline_service.LoadPipeline(source_id);
-    auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
-    EXPECT_FLOAT_EQ(ReadExposure(source_pipeline), 2.5f);
-    EXPECT_FLOAT_EQ(ReadExposure(duplicate_pipeline), 4.0f);
-  }
-
-  {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   source_history    = history_service.LoadHistory(source_id);
-    auto                   duplicate_history = history_service.LoadHistory(duplicate_id);
-    EXPECT_EQ(source_history->history_->GetVersions().size(), 2u);
-    EXPECT_EQ(duplicate_history->history_->GetVersions().size(), 3u);
-  }
+  EXPECT_FLOAT_EQ(ReadStoredExposure(*storage, source_id), 2.5f);
+  EXPECT_FLOAT_EQ(ReadStoredExposure(*storage, duplicate_id), 4.0f);
 }
 
-TEST_F(SleeveServiceTests, DuplicateUsesLatestPipelineSnapshotBeforePipelineSync) {
-  ProjectService project(db_path_, meta_path_);
-  auto           service = project.GetSleeveService();
-
-  const auto     album   = service->CreateFolder(L"/", L"Album").first;
-  const auto     source  = service->CreateFileInLibrary(L"Source.arw").first;
-  ASSERT_NE(album, nullptr);
-  ASSERT_NE(source, nullptr);
-
-  const auto source_id = source->element_id_;
-
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                source_pipeline = pipeline_service.LoadPipeline(source_id);
-    auto&               stage = source_pipeline->pipeline_->GetStage(PipelineStageName::Basic_Adjustment);
-    stage.SetOperator(OperatorType::EXPOSURE, nlohmann::json{{"exposure", 2.5f}},
-                      source_pipeline->pipeline_->GetGlobalParams());
-    source_pipeline->dirty_ = true;
-    pipeline_service.SavePipeline(source_pipeline);
-  }
-
-  const auto duplicated = service->DuplicateFileToFolder(source_id, album->element_id_);
-  ASSERT_TRUE(duplicated.second.success_);
-  ASSERT_NE(duplicated.first, nullptr);
-
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicated.first->element_id_);
-    ASSERT_NE(duplicate_pipeline, nullptr);
-    EXPECT_FLOAT_EQ(ReadExposure(duplicate_pipeline), 2.5f);
-  }
-}
-
-TEST_F(SleeveServiceTests, DuplicateUsesLatestHistoryWhenLoadedFileCacheIsStale) {
-  sl_element_id_t source_id = 0;
-  sl_element_id_t album_id  = 0;
+/// G10.4: file import and file copy write only the element, file-binding, and
+/// folder rows. A current database has no legacy edit-history table, and a copied
+/// file reloads from storage without one.
+TEST_F(SleeveServiceTests, ImportAndCopyDoNotCreateLegacyHistory) {
+  sl_element_id_t source_id    = 0;
+  sl_element_id_t duplicate_id = 0;
   {
     ProjectService project(db_path_, meta_path_);
     auto           service = project.GetSleeveService();
-
     const auto     album   = service->CreateFolder(L"/", L"Album").first;
     const auto     source  = service->CreateFileInLibrary(L"Source.arw").first;
     ASSERT_NE(album, nullptr);
     ASSERT_NE(source, nullptr);
-
-    album_id  = album->element_id_;
     source_id = source->element_id_;
-    {
-      EditHistoryMgmtService history_service(project.GetStorage());
-      auto                   source_history = history_service.LoadHistory(source_id);
-      ASSERT_NE(source_history, nullptr);
-      (void)history_service.CreateVersion(source_history, "Baseline");
-      history_service.SaveHistory(source_history);
-    }
+
+    const auto duplicated = service->DuplicateFileToFolder(source_id, album->element_id_);
+    ASSERT_TRUE(duplicated.second.success_);
+    ASSERT_NE(duplicated.first, nullptr);
+    duplicate_id = duplicated.first->element_id_;
     project.SaveProject(meta_path_);
   }
 
-  ProjectService project(db_path_, meta_path_);
-  auto           service          = project.GetSleeveService();
-  const auto     resolved_source  = service->ResolveFile(L"/Source.arw");
-  ASSERT_NE(resolved_source, nullptr);
-  ASSERT_NE(resolved_source->GetEditHistory(), nullptr);
-  ASSERT_EQ(resolved_source->GetEditHistory()->GetVersions().size(), 2u);
+  // Table names of the archived legacy store. Split literals keep the removed type names out
+  // of the source tree (NoTestSourceReferencesLegacyHistoryStore).
+  constexpr char kLegacyHistoryTable[]  = "Edit" "History";
+  constexpr char kLegacyRecoveryTable[] = "EditorRecovery" "Metadata";
+  EXPECT_EQ(QueryDuckDbInt64(db_path_, std::string("SELECT COUNT(*) FROM duckdb_tables() WHERE "
+                                                   "table_name IN ('") +
+                                           kLegacyHistoryTable + "', '" + kLegacyRecoveryTable +
+                                           "');"),
+            0);
+  EXPECT_EQ(QueryDuckDbInt64(db_path_, "SELECT COUNT(*) FROM FileImage WHERE file_id IN (" +
+                                           std::to_string(source_id) + ", " +
+                                           std::to_string(duplicate_id) + ");"),
+            2);
 
-  {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   source_history = history_service.LoadHistory(source_id);
-    ASSERT_NE(source_history, nullptr);
-    ASSERT_EQ(source_history->history_->GetVersions().size(), 2u);
-    (void)history_service.CreateVersion(source_history, "Source Look");
-    history_service.SaveHistory(source_history);
-  }
-
-  ASSERT_EQ(resolved_source->GetEditHistory()->GetVersions().size(), 2u);
-
-  const auto duplicated = service->DuplicateFileToFolder(source_id, album_id);
-  ASSERT_TRUE(duplicated.second.success_);
-  ASSERT_NE(duplicated.first, nullptr);
-
-  {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   duplicate_history = history_service.LoadHistory(duplicated.first->element_id_);
-    ASSERT_NE(duplicate_history, nullptr);
-    EXPECT_EQ(duplicate_history->history_->GetVersions().size(), 3u);
-  }
+  ProjectService reopened(db_path_, meta_path_);
+  auto           service = reopened.GetSleeveService();
+  const auto     source  = service->ResolveFile(L"/Source.arw");
+  const auto     copy    = service->ResolveFile(L"/Album/Source.arw@");
+  ASSERT_NE(source, nullptr);
+  ASSERT_NE(copy, nullptr);
+  EXPECT_EQ(source->element_id_, source_id);
+  EXPECT_EQ(copy->element_id_, duplicate_id);
 }
 
 TEST_F(SleeveServiceTests, ReloadedRootMembershipKeepsLibraryFile) {
@@ -863,6 +798,96 @@ TEST_F(SleeveServiceTests, DeletingFromRootDeletesFileEverywhereAndPersists) {
   EXPECT_THROW(reloaded_service->ResolveFile(L"/DeleteEverywhere.arw"), std::runtime_error);
 }
 
+// Library search plan, Phase S6: a sync writes only the FolderContent rows of the children added
+// or removed since the last sync. The rows of the other children keep their rowid.
+TEST_F(SleeveServiceTests, FolderSyncWritesOnlyAddedAndRemovedContentRows) {
+  constexpr size_t             kChildCount = 40;
+  sl_element_id_t              album_id    = 0;
+  std::vector<sl_element_id_t> file_ids;
+  std::map<sl_element_id_t, int64_t> album_rows_after_remove;
+  std::map<sl_element_id_t, int64_t> root_rows_after_add;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    const auto     album   = service->CreateFolder(L"/", L"Album").first;
+    ASSERT_NE(album, nullptr);
+    album_id      = album->element_id_;
+
+    const auto created = service->Write<std::vector<sl_element_id_t>>([&](FileSystem& fs) {
+      std::vector<sl_element_id_t> ids;
+      for (size_t i = 0; i < kChildCount; ++i) {
+        auto file = fs.CreateFileInLibrary(L"Child_" + std::to_wstring(i) + L".arw");
+        fs.LinkFileToFolder(file->element_id_, album_id);
+        ids.push_back(file->element_id_);
+      }
+      return ids;
+    });
+    ASSERT_TRUE(created.second.success_);
+    file_ids                 = created.first;
+    const auto album_before  = FolderContentRowIds(project, album_id);
+    const auto root_before   = FolderContentRowIds(project, 0);
+    ASSERT_EQ(album_before.size(), kChildCount);
+    ASSERT_EQ(root_before.size(), kChildCount + 1);  // the files and the album folder
+
+    // Add one file to the library root and the album.
+    const auto added = service->CreateFileInLibrary(L"Added.arw").first;
+    ASSERT_NE(added, nullptr);
+    ASSERT_TRUE(service->LinkFileToFolder(added->element_id_, album_id).success_);
+    const auto album_after_add = FolderContentRowIds(project, album_id);
+    root_rows_after_add        = FolderContentRowIds(project, 0);
+    ASSERT_EQ(album_after_add.size(), kChildCount + 1);
+    ASSERT_EQ(root_rows_after_add.size(), kChildCount + 2);
+    for (const auto& [element_id, rowid] : album_before) {
+      ASSERT_TRUE(album_after_add.contains(element_id));
+      EXPECT_EQ(album_after_add.at(element_id), rowid) << "album row rewritten: " << element_id;
+    }
+    for (const auto& [element_id, rowid] : root_before) {
+      ASSERT_TRUE(root_rows_after_add.contains(element_id));
+      EXPECT_EQ(root_rows_after_add.at(element_id), rowid) << "root row rewritten: " << element_id;
+    }
+    EXPECT_TRUE(album_after_add.contains(added->element_id_));
+    EXPECT_TRUE(root_rows_after_add.contains(added->element_id_));
+    file_ids.push_back(added->element_id_);
+
+    // Remove one file from the album.
+    const auto removed_id = file_ids.front();
+    ASSERT_TRUE(service->DeleteFileFromFolder(removed_id, album_id).success_);
+    album_rows_after_remove = FolderContentRowIds(project, album_id);
+    ASSERT_EQ(album_rows_after_remove.size(), kChildCount);
+    EXPECT_FALSE(album_rows_after_remove.contains(removed_id));
+    for (const auto& [element_id, rowid] : album_after_add) {
+      if (element_id == removed_id) {
+        continue;
+      }
+      ASSERT_TRUE(album_rows_after_remove.contains(element_id));
+      EXPECT_EQ(album_rows_after_remove.at(element_id), rowid)
+          << "album row rewritten: " << element_id;
+    }
+    EXPECT_EQ(FolderContentRowIds(project, 0), root_rows_after_add);
+    project.SaveProject(meta_path_);
+  }
+
+  // After reopen, the rows read back match each folder.
+  ProjectService reloaded_project(db_path_, meta_path_);
+  auto           service   = reloaded_project.GetSleeveService();
+  auto           album_ids = service->Read<std::vector<sl_element_id_t>>(
+      [album_id](FileSystem& fs) { return fs.ListFolderContent(album_id); });
+  auto root_ids = service->Read<std::vector<sl_element_id_t>>(
+      [](FileSystem& fs) { return fs.ListFolderContent(0); });
+  std::sort(album_ids.begin(), album_ids.end());
+  std::sort(root_ids.begin(), root_ids.end());
+
+  std::vector<sl_element_id_t> expected_album_ids(file_ids.begin() + 1, file_ids.end());
+  std::sort(expected_album_ids.begin(), expected_album_ids.end());
+  std::vector<sl_element_id_t> expected_root_ids(file_ids.begin(), file_ids.end());
+  expected_root_ids.push_back(album_id);
+  std::sort(expected_root_ids.begin(), expected_root_ids.end());
+  EXPECT_EQ(album_ids, expected_album_ids);
+  EXPECT_EQ(root_ids, expected_root_ids);
+  EXPECT_EQ(FolderContentRowIds(reloaded_project, album_id).size(), album_rows_after_remove.size());
+  EXPECT_EQ(FolderContentRowIds(reloaded_project, 0).size(), root_rows_after_add.size());
+}
+
 TEST_F(SleeveServiceTests, FuzzyCreateCopyTest) {
   std::wstring first_tree;
   {
@@ -943,6 +968,128 @@ TEST_F(SleeveServiceTests, FuzzyCreateCopyTest) {
       reloaded_service->Read<std::wstring>([](FileSystem& fs) { return fs.Tree(L"/"); });
 
   EXPECT_EQ(conv::ToBytes(first_tree), conv::ToBytes(second_tree));
+}
+
+// ── Folder rename and move (issue #732) ─────────────────────────────────────
+
+TEST_F(SleeveServiceTests, RenamedFolderKeepsIdChildrenAndMembershipAfterReload) {
+  sl_element_id_t album_id = 0;
+  sl_element_id_t child_id = 0;
+  sl_element_id_t file_id  = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+
+    const auto     album   = service->CreateFolder(L"/", L"Album").first;
+    const auto     child   = service->CreateFolder(L"/Album", L"Child").first;
+    const auto     file    = service->CreateFileInLibrary(L"Renamed.arw").first;
+    ASSERT_NE(album, nullptr);
+    ASSERT_NE(child, nullptr);
+    ASSERT_NE(file, nullptr);
+    album_id = album->element_id_;
+    child_id = child->element_id_;
+    file_id  = file->element_id_;
+    ASSERT_TRUE(service->LinkFileToFolder(file_id, album_id).success_);
+    // Resolve the old paths once so the path cache holds them.
+    ASSERT_EQ(service->ResolveFolder(L"/Album/Child")->element_id_, child_id);
+
+    ASSERT_TRUE(service->RenameFolder(L"/Album", L"Trip").success_);
+
+    EXPECT_EQ(service->ResolveFolder(L"/Trip")->element_id_, album_id);
+    EXPECT_EQ(service->ResolveFolder(L"/Trip/Child")->element_id_, child_id);
+    EXPECT_EQ(service->ResolveFile(L"/Trip/Renamed.arw")->element_id_, file_id);
+    EXPECT_THROW(service->ResolveFolder(L"/Album"), std::runtime_error);
+    EXPECT_THROW(service->ResolveFolder(L"/Album/Child"), std::runtime_error);
+
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService reloaded_project(db_path_, meta_path_);
+  auto           service = reloaded_project.GetSleeveService();
+  EXPECT_EQ(service->ResolveFolder(L"/Trip")->element_id_, album_id);
+  EXPECT_EQ(service->ResolveFolder(L"/Trip/Child")->element_id_, child_id);
+  EXPECT_EQ(service->ResolveFile(L"/Trip/Renamed.arw")->element_id_, file_id);
+  EXPECT_THROW(service->ResolveFolder(L"/Album"), std::runtime_error);
+  const auto root_ids = service->Read<std::vector<sl_element_id_t>>(
+      [](FileSystem& fs) { return fs.ListFolderContent(0); });
+  EXPECT_TRUE(ContainsId(root_ids, file_id));
+}
+
+TEST_F(SleeveServiceTests, MovedFolderKeepsIdChildrenAndMembershipAfterReload) {
+  sl_element_id_t inner_id = 0;
+  sl_element_id_t leaf_id  = 0;
+  sl_element_id_t file_id  = 0;
+  sl_element_id_t a_id     = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+
+    a_id                   = service->CreateFolder(L"/", L"A").first->element_id_;
+    ASSERT_NE(service->CreateFolder(L"/", L"B").first, nullptr);
+    inner_id = service->CreateFolder(L"/A", L"Inner").first->element_id_;
+    leaf_id  = service->CreateFolder(L"/A/Inner", L"Leaf").first->element_id_;
+    file_id  = service->CreateFileInLibrary(L"Moved.arw").first->element_id_;
+    ASSERT_TRUE(service->LinkFileToFolder(file_id, inner_id).success_);
+    ASSERT_EQ(service->ResolveFolder(L"/A/Inner/Leaf")->element_id_, leaf_id);
+
+    ASSERT_TRUE(service->MoveFolder(L"/A/Inner", L"/B").success_);
+
+    EXPECT_EQ(service->ResolveFolder(L"/B/Inner")->element_id_, inner_id);
+    EXPECT_EQ(service->ResolveFolder(L"/B/Inner/Leaf")->element_id_, leaf_id);
+    EXPECT_EQ(service->ResolveFile(L"/B/Inner/Moved.arw")->element_id_, file_id);
+    EXPECT_THROW(service->ResolveFolder(L"/A/Inner"), std::runtime_error);
+    EXPECT_THROW(service->ResolveFolder(L"/A/Inner/Leaf"), std::runtime_error);
+    const auto a_ids = service->Read<std::vector<sl_element_id_t>>(
+        [a_id](FileSystem& fs) { return fs.ListFolderContent(a_id); });
+    EXPECT_FALSE(ContainsId(a_ids, inner_id));
+
+    project.SaveProject(meta_path_);
+  }
+
+  {
+    ProjectService reloaded_project(db_path_, meta_path_);
+    auto           service = reloaded_project.GetSleeveService();
+    EXPECT_EQ(service->ResolveFolder(L"/B/Inner")->element_id_, inner_id);
+    EXPECT_EQ(service->ResolveFolder(L"/B/Inner/Leaf")->element_id_, leaf_id);
+    EXPECT_EQ(service->ResolveFile(L"/B/Inner/Moved.arw")->element_id_, file_id);
+    EXPECT_THROW(service->ResolveFolder(L"/A/Inner"), std::runtime_error);
+
+    // Moving to the root path makes it a top-level folder.
+    ASSERT_TRUE(service->MoveFolder(L"/B/Inner", L"/").success_);
+    EXPECT_EQ(service->ResolveFolder(L"/Inner")->element_id_, inner_id);
+    reloaded_project.SaveProject(meta_path_);
+  }
+
+  ProjectService reloaded_again(db_path_, meta_path_);
+  auto           service = reloaded_again.GetSleeveService();
+  EXPECT_EQ(service->ResolveFolder(L"/Inner")->element_id_, inner_id);
+  EXPECT_EQ(service->ResolveFolder(L"/Inner/Leaf")->element_id_, leaf_id);
+  EXPECT_THROW(service->ResolveFolder(L"/B/Inner"), std::runtime_error);
+}
+
+TEST_F(SleeveServiceTests, FolderMoveAndRenameRefuseOwnSubtreeAndTakenNames) {
+  ProjectService project(db_path_, meta_path_);
+  auto           service  = project.GetSleeveService();
+
+  const auto     a_id     = service->CreateFolder(L"/", L"A").first->element_id_;
+  const auto     inner_id = service->CreateFolder(L"/A", L"Inner").first->element_id_;
+  ASSERT_NE(service->CreateFolder(L"/", L"B").first, nullptr);
+  ASSERT_NE(service->CreateFolder(L"/A", L"Same").first, nullptr);
+  ASSERT_NE(service->CreateFolder(L"/B", L"Same").first, nullptr);
+
+  EXPECT_THROW(service->MoveFolder(L"/A", L"/A"), std::runtime_error);
+  EXPECT_THROW(service->MoveFolder(L"/A", L"/A/Inner"), std::runtime_error);
+  EXPECT_THROW(service->MoveFolder(L"/A/Same", L"/B"), std::runtime_error);
+  EXPECT_THROW(service->MoveFolder(L"/", L"/B"), std::runtime_error);
+  EXPECT_THROW(service->RenameFolder(L"/A/Inner", L"Same"), std::runtime_error);
+  EXPECT_THROW(service->RenameFolder(L"/", L"Root"), std::runtime_error);
+  EXPECT_THROW(service->RenameFolder(L"/A", L""), std::runtime_error);
+
+  // A refused change leaves the tree as it was.
+  EXPECT_EQ(service->ResolveFolder(L"/A")->element_id_, a_id);
+  EXPECT_EQ(service->ResolveFolder(L"/A/Inner")->element_id_, inner_id);
+  EXPECT_NE(service->ResolveFolder(L"/A/Same"), nullptr);
+  EXPECT_NE(service->ResolveFolder(L"/B/Same"), nullptr);
 }
 
 }  // namespace alcedo

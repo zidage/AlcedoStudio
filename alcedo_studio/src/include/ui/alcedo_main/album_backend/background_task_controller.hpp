@@ -9,16 +9,14 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <cstddef>
 #include <functional>
 #include <vector>
 
 namespace alcedo::ui {
 
-/// Kind of a background task surfaced to the UI. `ModelActivation`, `Import`,
-/// and `Export` are declared for completeness; Phase 1 only registers
-/// `ImageAnalysis`, `SemanticGeneration`, and `ModelDownload`.
+/// Kind of a background task surfaced to the UI.
 enum class BackgroundTaskKind {
-  ImageAnalysis,
   SemanticGeneration,
   ModelDownload,
   ModelActivation,
@@ -26,6 +24,17 @@ enum class BackgroundTaskKind {
   Export,
   /// Phase 5E: editor session seal/persist while leaving an image.
   EditorSave,
+  /// Adjustment Transfer Paste into library targets that are not open in the editor.
+  AdjustmentPaste,
+  /// Star ratings written to several library images and saved to the project.
+  RatingUpdate,
+  /// Color labels or the Delete mark written to several library images and saved (#768).
+  LibraryMarkUpdate,
+  /// Library images deleted (or removed from an album) and the project saved.
+  ImageDelete,
+  /// An automation agent (CLI or MCP) holds control of the GUI session. Canceling the task
+  /// gives control back to the user.
+  AgentControl,
 };
 
 /// Lifecycle state of a single background task record.
@@ -53,9 +62,8 @@ enum class InteractionCapability {
   EditImageDescription,
   EditImageRating,
   EditImageRatingReason,
-  RunImageAnalysis,
-  CommitImageAnalysisResults,
-  ChangeImageAnalysisProvider,
+  /// Color labels and the Delete mark of an image (#768).
+  EditImageMarks,
   ChangeSemanticModel,
   RunSemanticGeneration,
   ChangeModelDownloadSettings,
@@ -66,7 +74,10 @@ enum class InteractionCapability {
   SwitchWorkspace,
   CheckoutVersion,
   PasteAdjustments,
-  MergeAdjustments,
+  /// User-started state changes (edits, history moves, Versions, import, delete, rating,
+  /// export, project open, create, and close). Only the user-facing adapters read it, so the
+  /// agent that holds this lock keeps its own commands.
+  UserStateChange,
 };
 
 /// One interaction lock published by a running task. `element_id_ == 0` means
@@ -90,7 +101,7 @@ struct ActiveLock {
 /// registry by id.
 struct BackgroundTaskSnapshot {
   QString                      id_;
-  BackgroundTaskKind           kind_            = BackgroundTaskKind::ImageAnalysis;
+  BackgroundTaskKind           kind_            = BackgroundTaskKind::SemanticGeneration;
   BackgroundTaskState          state_           = BackgroundTaskState::Queued;
   QString                      title_;
   QString                      detail_;
@@ -100,10 +111,20 @@ struct BackgroundTaskSnapshot {
       BackgroundTaskShutdownPolicy::CancelAndWait;
   QVariantList                 affected_targets_;
   std::vector<InteractionLock> locks_;
+  /// A pinned task stays in the list after it finishes until the user dismisses it, and
+  /// finished tasks that are not pinned never push it out. The agent task is pinned.
+  bool                         pinned_ = false;
 };
 
-/// UI-facing registry of long-running background tasks (advanced image
-/// analysis, semantic generation, model download, ...). Owning controllers
+/// State of one activity entry of a task.
+enum class BackgroundTaskActivityState {
+  Running,
+  Succeeded,
+  Failed,
+};
+
+/// UI-facing registry of long-running background tasks (semantic generation,
+/// model download, export, ...). Owning controllers
 /// keep their existing service jobs and PUSH snapshots/progress into this
 /// registry; QML reads `tasks` / `primaryTask` / `runningCount` and cancels
 /// via `CancelTask`.
@@ -112,15 +133,15 @@ struct BackgroundTaskSnapshot {
 /// interaction locks are published (those land in Phase 2). The controller is
 /// a standalone QObject with no host dependency so it is unit-testable in
 /// isolation; owning controllers receive it via narrow constructor injection
-/// (`ImageAnalysisController`, `SemanticGenerationController`,
-/// `ModelDownloadController`).
+/// (`SemanticGenerationController`, `ModelDownloadController`).
 ///
 /// All register/update/finish/cancel calls happen on the UI thread
 /// (controller progress callbacks hop back via
 /// `QMetaObject::invokeMethod(..., Qt::QueuedConnection)`; QML runs on the UI
 /// thread), so no internal mutex is required. Finished tasks are retained up
-/// to a small cap so the popover can show recent results; running tasks are
-/// always retained.
+/// to a small cap so the popover can show recent results; running tasks and
+/// pinned tasks are always retained. A pinned task leaves the list only through
+/// `DismissTask`.
 class BackgroundTaskController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList tasks READ Tasks NOTIFY TasksChanged)
@@ -135,6 +156,8 @@ class BackgroundTaskController final : public QObject {
   QVariantList Tasks() const;
   QVariantMap  PrimaryTask() const;
   int          RunningCount() const;
+  /// Active tasks of every kind except @p kind.
+  int          ActiveCountExcept(BackgroundTaskKind kind) const;
   bool         HasBlockingShutdownTasks() const;
 
   // ── QML-facing actions ─────────────────────────────────────────────────
@@ -146,6 +169,10 @@ class BackgroundTaskController final : public QObject {
   // Cancel every still-cancelable task. Each task's cancel callback fires at
   // most once.
   Q_INVOKABLE void CancelAll();
+  // Remove one finished task from the list, for example a pinned agent task that
+  // the user no longer wants to see. Returns false for an unknown id or a task
+  // that has not reached a terminal state.
+  Q_INVOKABLE bool DismissTask(const QString& taskId);
 
   // ── C++ policy read (Phase 2: InteractionPolicyController consumes this) ─
   // All locks held by active (non-terminal) tasks, each paired with its task
@@ -172,15 +199,42 @@ class BackgroundTaskController final : public QObject {
   // only when non-null. No-op if the id is unknown.
   void FinishTask(const QString& id, BackgroundTaskState final_state,
                   const QString& detail = QString());
+  // Move a finished task back to Running with @p detail and a new cancel
+  // callback, so that one task covers work that continues after a stop. The
+  // task keeps its id, its place in the list, and its activity. Returns false
+  // for an unknown id or a task that has not reached a terminal state.
+  bool ResumeTask(const QString& id, const QString& detail,
+                  std::function<void()> cancel_callback = nullptr);
+  // Add an activity entry at the end of the activity of a task: @p text names
+  // the step, @p note is the reason that the caller gave (may be empty).
+  // Returns the entry id for FinishTaskActivity, or 0 for an unknown id. A task
+  // keeps its newest kMaxTaskActivityEntries entries.
+  auto AppendTaskActivity(const QString& id, const QString& text, const QString& note,
+                          BackgroundTaskActivityState state) -> quint64;
+  // Set the state of an activity entry. The task can already be finished: a
+  // step that ran when the task stopped still reports its outcome. No-op for
+  // an unknown task or entry.
+  void FinishTaskActivity(const QString& id, quint64 activity_id,
+                          BackgroundTaskActivityState state);
+
+  static constexpr std::size_t kMaxTaskActivityEntries = 200;
 
  signals:
   void TasksChanged();
 
  private:
+  struct ActivityEntry {
+    quint64                     id_ = 0;
+    QString                     text_;
+    QString                     note_;
+    BackgroundTaskActivityState state_         = BackgroundTaskActivityState::Running;
+    qint64                      started_at_ms_ = 0;
+  };
   struct TaskRecord {
-    BackgroundTaskSnapshot snapshot_;
-    std::function<void()>  cancel_callback_;
-    bool                   cancel_invoked_ = false;
+    BackgroundTaskSnapshot     snapshot_;
+    std::function<void()>      cancel_callback_;
+    bool                       cancel_invoked_ = false;
+    std::vector<ActivityEntry> activity_;
   };
 
   TaskRecord*       Find(const QString& id);
@@ -190,13 +244,15 @@ class BackgroundTaskController final : public QObject {
   static auto StateToString(BackgroundTaskState state) -> QString;
   static auto ShutdownPolicyToString(BackgroundTaskShutdownPolicy policy) -> QString;
   static auto CapabilityToString(InteractionCapability capability) -> QString;
+  static auto ActivityStateToString(BackgroundTaskActivityState state) -> QString;
   static auto IsTerminal(BackgroundTaskState state) -> bool;
   static auto IsActive(BackgroundTaskState state) -> bool;
   void PruneFinished();
   void EmitChanged();
 
   std::vector<TaskRecord> tasks_;
-  quint64                  next_id_ = 0;
+  quint64                 next_id_          = 0;
+  quint64                 next_activity_id_ = 0;
 };
 
 }  // namespace alcedo::ui

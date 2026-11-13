@@ -6,9 +6,15 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <future>
 #include <memory>
 #include <unordered_set>
 
+#include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "import_test_fixation.hpp"
 #include "type/type.hpp"
@@ -20,8 +26,9 @@ TEST_F(ImportServiceTests, InitTest) {
     auto           fs_service = project.GetSleeveService();
     auto           img_pool   = project.GetImagePoolService();
 
-    EXPECT_NO_THROW(std::unique_ptr<ImportService> import_service =
-                        std::make_unique<ImportServiceImpl>(fs_service, img_pool));
+    EXPECT_NO_THROW(
+        std::unique_ptr<ImportService> import_service = std::make_unique<ImportServiceImpl>(
+            fs_service, img_pool, std::make_shared<PipelineMgmtService>(project.GetStorage())));
   }
 }
 
@@ -30,8 +37,8 @@ TEST_F(ImportServiceTests, ImportEmptyTest) {
   auto                           fs_service       = project.GetSleeveService();
   auto                           img_pool_service = project.GetImagePoolService();
 
-  std::unique_ptr<ImportService> import_service =
-      std::make_unique<ImportServiceImpl>(fs_service, img_pool_service);
+  std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+      fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
   std::vector<image_path_t>  empty_paths;
 
@@ -64,8 +71,8 @@ TEST_F(ImportServiceTests, ImportSingleFileTest) {
   auto                           fs_service       = project.GetSleeveService();
   auto                           img_pool_service = project.GetImagePoolService();
 
-  std::unique_ptr<ImportService> import_service =
-      std::make_unique<ImportServiceImpl>(fs_service, img_pool_service);
+  std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+      fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
   std::vector<image_path_t> paths;
   paths.push_back(TEST_IMG_PATH "/raw/airplane/_DSC1704.NEF");
@@ -111,8 +118,8 @@ TEST_F(ImportServiceTests, ImportInvalidFileTest) {
   auto                           fs_service       = project.GetSleeveService();
 
   auto                           img_pool_service = project.GetImagePoolService();
-  std::unique_ptr<ImportService> import_service =
-      std::make_unique<ImportServiceImpl>(fs_service, img_pool_service);
+  std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+      fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
   std::vector<image_path_t> paths;
   paths.push_back(TEST_IMG_PATH "/raw/airplane/invalid_file.txt");
@@ -174,8 +181,8 @@ TEST_F(ImportServiceTests, ImportWithNonExistentFiles) {
   ProjectService                 project(db_path_, meta_path_);
   auto                           fs_service = project.GetSleeveService();
   auto                           img_pool_service = project.GetImagePoolService();
-  std::unique_ptr<ImportService> import_service =
-      std::make_unique<ImportServiceImpl>(fs_service, img_pool_service);
+  std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+      fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
   std::vector<image_path_t> paths;
   paths.push_back(TEST_IMG_PATH "/raw/airplane/non_existent_file.NEF");
@@ -216,8 +223,8 @@ TEST_F(ImportServiceTests, BatchReadTest) {
   ProjectService                 project(db_path_, meta_path_);
   auto                           fs_service = project.GetSleeveService();
   auto                           img_pool_service = project.GetImagePoolService();
-  std::unique_ptr<ImportService> import_service =
-      std::make_unique<ImportServiceImpl>(fs_service, img_pool_service);
+  std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+      fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
   std::vector<image_path_t> paths;
 
   image_path_t              img_dir = TEST_IMG_PATH "/raw/batch_import";
@@ -252,8 +259,8 @@ TEST_F(ImportServiceTests, BatchCancelTest) {
   ProjectService                 project(db_path_, meta_path_);
   auto                           fs_service = project.GetSleeveService();
   auto                           img_pool_service = project.GetImagePoolService();
-  std::unique_ptr<ImportService> import_service =
-      std::make_unique<ImportServiceImpl>(fs_service, img_pool_service);
+  std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+      fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
   std::vector<image_path_t> paths;
 
@@ -282,11 +289,91 @@ TEST_F(ImportServiceTests, BatchCancelTest) {
   ImportResult final_result_value = final_result_future.get();
   EXPECT_EQ(final_result_value.requested_, static_cast<uint32_t>(paths.size()));
   EXPECT_LT(final_result_value.imported_, static_cast<uint32_t>(paths.size()));
-  EXPECT_EQ(final_result_value.failed_, 0);
+  // ImportToFolder returns before its placeholder loop ends, so the cancel can stop files that
+  // were not submitted yet; those count as failed. Every requested file is accounted for.
+  EXPECT_EQ(final_result_value.imported_ + final_result_value.failed_,
+            static_cast<uint32_t>(paths.size()));
+  // Files the canceled loop did not reach count in the RAW subset too.
+  EXPECT_EQ(final_result_value.raw_imported_ + final_result_value.raw_failed_,
+            final_result_value.raw_requested_);
   std::cout << "This test may fail occasionally in Release mode due to fast imports." << std::endl;
 
   auto snapshot = import_job->import_log_->Snapshot();
   EXPECT_NO_THROW(import_service->SyncImports(snapshot, L""));
+}
+
+TEST_F(ImportServiceTests, CancelAfterAllFilesQueuedSkipsQueuedMetadataTasks) {
+  ProjectService                 project(db_path_, meta_path_);
+  auto                           fs_service       = project.GetSleeveService();
+  auto                           img_pool_service = project.GetImagePoolService();
+  std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+      fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
+
+  std::vector<image_path_t> paths;
+  image_path_t              img_dir = TEST_IMG_PATH "/raw/batch_import";
+  for (const auto& entry : std::filesystem::directory_iterator(img_dir)) {
+    paths.push_back(entry.path());
+  }
+  ASSERT_GT(paths.size(), 64u);
+  const auto                 total      = static_cast<uint32_t>(paths.size());
+
+  std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> final_result;
+  auto                       final_result_future = final_result.get_future();
+  // The placeholder loop reports once more after it has queued every file. Cancel there: this is
+  // the "reading" phase of the import dialog, where the loop no longer checks the job and only
+  // the queued metadata tasks can honor the cancel.
+  ImportJob*                 job_ptr             = import_job.get();
+  import_job->on_progress_ = [job_ptr, total](const ImportProgress& progress) {
+    if (progress.placeholders_created_.load() == total) {
+      job_ptr->canceled_.store(true);
+    }
+  };
+  import_job->on_finished_ = [&final_result](const ImportResult& result) {
+    final_result.set_value(result);
+  };
+  import_job = import_service->ImportToFolder(paths, L"", {}, import_job);
+  ASSERT_NE(import_job, nullptr);
+
+  ASSERT_EQ(final_result_future.wait_for(std::chrono::seconds(120)), std::future_status::ready);
+  const ImportResult result = final_result_future.get();
+  EXPECT_EQ(result.requested_, total);
+  // Every file was queued before the cancel, so none counts as unreached; the queued tasks that
+  // had not started skip their file. Only tasks already reading may still import.
+  EXPECT_GT(result.canceled_, 0u);
+  EXPECT_LT(result.imported_, total);
+  EXPECT_EQ(result.imported_ + result.failed_, total);
+  EXPECT_LE(result.canceled_, result.failed_);
+  // The RAW subset is counted on the same paths as the totals, including the canceled files.
+  EXPECT_LE(result.raw_imported_, result.imported_);
+  EXPECT_LE(result.raw_failed_, result.failed_);
+  EXPECT_EQ(result.raw_imported_ + result.raw_failed_, result.raw_requested_);
+
+  auto                                snapshot        = import_job->import_log_->Snapshot();
+  uint32_t                            canceled_in_log = 0;
+  std::unordered_set<sl_element_id_t> canceled_element_ids;
+  for (const auto& entry : snapshot.metadata_failed_) {
+    if (entry.error_code_ == ImportErrorCode::CANCELED) {
+      ++canceled_in_log;
+      canceled_element_ids.insert(entry.element_id_);
+    }
+  }
+  EXPECT_EQ(canceled_in_log, result.canceled_);
+  EXPECT_EQ(snapshot.metadata_ok_.size(), result.imported_);
+
+  // The placeholders of the skipped files leave the library; the imported files stay.
+  ASSERT_NO_THROW(import_service->SyncImports(snapshot, L""));
+  uint32_t files_in_root = 0;
+  for (const auto& entry : fs_service->ListFolderEntries(L"/")) {
+    ASSERT_NE(entry, nullptr);
+    if (entry->type_ != ElementType::FILE) {
+      continue;
+    }
+    ++files_in_root;
+    EXPECT_FALSE(canceled_element_ids.contains(entry->element_id_))
+        << "Canceled file " << entry->element_id_ << " is still in the library";
+  }
+  EXPECT_EQ(files_in_root, result.imported_);
 }
 
 TEST_F(ImportServiceTests, ImportWithInvalidFilesTest) {
@@ -306,8 +393,9 @@ TEST_F(ImportServiceTests, ImportWithInvalidFilesTest) {
     ProjectService                 project(db_path_, meta_path_);
     auto                           fs_service = project.GetSleeveService();
     auto image_pool_service = project.GetImagePoolService();
-    std::unique_ptr<ImportService> import_service =
-        std::make_unique<ImportServiceImpl>(fs_service, image_pool_service);
+    std::unique_ptr<ImportService> import_service     = std::make_unique<ImportServiceImpl>(
+        fs_service, image_pool_service,
+        std::make_shared<PipelineMgmtService>(project.GetStorage()));
     for (const auto& entry : std::filesystem::directory_iterator(img_dir)) {
       paths.push_back(entry.path());
     }
@@ -360,8 +448,9 @@ TEST_F(ImportServiceTests, ImportPartialSuccessWithMockRawFiles) {
     ProjectService                 project(db_path_, meta_path_);
     auto                           fs_service = project.GetSleeveService();
     auto                           image_pool_service = project.GetImagePoolService();
-    std::unique_ptr<ImportService> import_service =
-        std::make_unique<ImportServiceImpl>(fs_service, image_pool_service);
+    std::unique_ptr<ImportService> import_service     = std::make_unique<ImportServiceImpl>(
+        fs_service, image_pool_service,
+        std::make_shared<PipelineMgmtService>(project.GetStorage()));
     for (const auto& entry : std::filesystem::directory_iterator(img_dir)) {
       paths.push_back(entry.path());
     }
@@ -415,8 +504,9 @@ TEST_F(ImportServiceTests, ImportWithDirectories) {
     ProjectService                 project(db_path_, meta_path_);
     auto                           fs_service = project.GetSleeveService();
     auto                           image_pool_service = project.GetImagePoolService();
-    std::unique_ptr<ImportService> import_service =
-        std::make_unique<ImportServiceImpl>(fs_service, image_pool_service);
+    std::unique_ptr<ImportService> import_service     = std::make_unique<ImportServiceImpl>(
+        fs_service, image_pool_service,
+        std::make_shared<PipelineMgmtService>(project.GetStorage()));
     for (const auto& entry : std::filesystem::directory_iterator(img_dir)) {
       paths.push_back(entry.path());
     }
@@ -457,8 +547,8 @@ TEST_F(ImportServiceTests, ImportToNonExistentDestination) {
   ProjectService                 project(db_path_, meta_path_);
   auto                           fs_service = project.GetSleeveService();
   auto                           image_pool_service = project.GetImagePoolService();
-  std::unique_ptr<ImportService> import_service =
-      std::make_unique<ImportServiceImpl>(fs_service, image_pool_service);
+  std::unique_ptr<ImportService> import_service     = std::make_unique<ImportServiceImpl>(
+      fs_service, image_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
   std::vector<image_path_t> paths;
   paths.push_back(TEST_IMG_PATH "/raw/airplane/_DSC1704.NEF");
@@ -499,8 +589,8 @@ TEST_F(ImportServiceTests, ImportedElementNameMatchesFileName) {
   auto                           fs_service       = project.GetSleeveService();
   auto                           img_pool_service = project.GetImagePoolService();
 
-  std::unique_ptr<ImportService> import_service =
-      std::make_unique<ImportServiceImpl>(fs_service, img_pool_service);
+  std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+      fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
   // Import a single known image
   const std::filesystem::path test_image_path =
@@ -555,8 +645,8 @@ TEST_F(ImportServiceTests, ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoin
   ProjectService                 project(db_path_, meta_path_);
   auto                           fs_service       = project.GetSleeveService();
   auto                           img_pool_service = project.GetImagePoolService();
-  std::unique_ptr<ImportService> import_service =
-      std::make_unique<ImportServiceImpl>(fs_service, img_pool_service);
+  std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+      fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
   const std::wstring subfolder = L"Imports";
   const auto         created   = fs_service->CreateFolder(L"/", subfolder);

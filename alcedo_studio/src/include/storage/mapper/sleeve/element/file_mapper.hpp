@@ -29,7 +29,7 @@ class FileMapper
  private:
   static constexpr uint32_t    field_count_                                      = 2;
   static constexpr const char* table_name_                                       = "FileImage";
-  static constexpr const char* prime_key_clause_                                 = "file_id={}";
+  static constexpr const char*                                      primary_key_column_ = "file_id";
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_ = {
       FIELD(FileMapperParams, file_id, UINT32), FIELD(FileMapperParams, image_id, UINT32)};
 

@@ -1,5 +1,6 @@
 use std::env;
 use std::net::IpAddr;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct AppConfig {
@@ -8,15 +9,51 @@ pub struct AppConfig {
     pub allow_remote_bind: bool,
     pub semantic: SemanticConfig,
     pub max_message_bytes: usize,
-    pub credential_ttl_ms: u64,
-    /// Optional directory of user-provider JSON configs, loaded after the built-in
-    /// configs and allowed to add providers or override model defaults. `None`
-    /// means built-ins only. See `service::provider_config`.
-    pub provider_config_dir: Option<String>,
+    /// Devices and idle unload times of the CLIP encoders (`service::encoder_residency`).
+    pub residency: EncoderResidencyConfig,
+    /// The log file of this process (`--log-file`): the host passes the session file in its log
+    /// directory. `None` writes the log to stderr only.
+    pub log_file: Option<PathBuf>,
+}
+
+/// Where each CLIP encoder loads and how long it stays loaded after its last request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncoderResidencyConfig {
+    /// Device of the text encoder. The text encoder runs on the CPU unless this is changed.
+    pub text_device: String,
+    /// Device of the image encoder (and of a single multimodal session); `None` uses
+    /// `SemanticConfig::device`.
+    pub vision_device: Option<String>,
+    /// Idle time of the text encoder (and of a multimodal session) in seconds: -1 never
+    /// unloads, 0 unloads after each request.
+    pub text_idle_unload_seconds: i64,
+    /// Idle time of the image encoder in seconds, with the same rule.
+    pub vision_idle_unload_seconds: i64,
+}
+
+impl Default for EncoderResidencyConfig {
+    fn default() -> Self {
+        Self {
+            text_device: "cpu".to_string(),
+            vision_device: None,
+            text_idle_unload_seconds: 300,
+            vision_idle_unload_seconds: 60,
+        }
+    }
+}
+
+impl EncoderResidencyConfig {
+    /// The image encoder device: `vision_device`, or @p semantic_device when it is not set.
+    pub fn vision_device_or<'a>(&'a self, semantic_device: &'a str) -> &'a str {
+        self.vision_device.as_deref().unwrap_or(semantic_device)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct SemanticConfig {
+    /// The CLIP model profile (profile ID or model ID). Empty when the host passes no
+    /// `--model-id`: the open project has no active model, and semantic requests then return
+    /// `AI_ERROR_MODEL_NOT_READY` while segmentation runs.
     pub model_id: String,
     pub revision: String,
     pub model_root: String,
@@ -25,6 +62,13 @@ pub struct SemanticConfig {
     pub allow_download: bool,
     pub batch_cap: usize,
     pub batch_wait_ms: u64,
+}
+
+impl SemanticConfig {
+    /// True when a CLIP model profile is configured (`--model-id`).
+    pub fn has_model(&self) -> bool {
+        !self.model_id.trim().is_empty()
+    }
 }
 
 impl AppConfig {
@@ -63,12 +107,22 @@ impl AppConfig {
                 "--max-message-bytes" => {
                     config.max_message_bytes = parse_next(&mut args, "--max-message-bytes")?
                 }
-                "--credential-ttl-ms" => {
-                    config.credential_ttl_ms = parse_next(&mut args, "--credential-ttl-ms")?
+                "--text-device" => {
+                    config.residency.text_device = next_value(&mut args, "--text-device")?
                 }
-                "--provider-config-dir" => {
-                    config.provider_config_dir =
-                        Some(next_value(&mut args, "--provider-config-dir")?)
+                "--vision-device" => {
+                    config.residency.vision_device = Some(next_value(&mut args, "--vision-device")?)
+                }
+                "--text-idle-unload-seconds" => {
+                    config.residency.text_idle_unload_seconds =
+                        parse_next(&mut args, "--text-idle-unload-seconds")?
+                }
+                "--vision-idle-unload-seconds" => {
+                    config.residency.vision_idle_unload_seconds =
+                        parse_next(&mut args, "--vision-idle-unload-seconds")?
+                }
+                "--log-file" => {
+                    config.log_file = Some(PathBuf::from(next_value(&mut args, "--log-file")?))
                 }
                 "--help" | "-h" => anyhow::bail!("{}", Self::usage()),
                 other => anyhow::bail!("unknown argument {other:?}\n{}", Self::usage()),
@@ -86,7 +140,7 @@ impl AppConfig {
             allow_remote_bind: parse_bool_env("ALCEDO_MIND_ALLOW_REMOTE_BIND", false)?,
             max_message_bytes: parse_env("ALCEDO_MIND_MAX_MESSAGE_BYTES", 16 * 1024 * 1024)?,
             semantic: SemanticConfig {
-                model_id: env_value("ALCEDO_MIND_MODEL_ID", "plhery/mobileclip2-onnx:s2"),
+                model_id: env_value("ALCEDO_MIND_MODEL_ID", ""),
                 revision: env_value(
                     "ALCEDO_MIND_REVISION",
                     crate::service::model_assets::MOBILECLIP2_ONNX_REVISION,
@@ -98,10 +152,8 @@ impl AppConfig {
                 batch_cap: parse_env("ALCEDO_MIND_BATCH_CAP", 512)?,
                 batch_wait_ms: parse_env("ALCEDO_MIND_BATCH_WAIT_MS", 25)?,
             },
-            credential_ttl_ms: parse_env("ALCEDO_MIND_CREDENTIAL_TTL_MS", 3_600_000)?,
-            provider_config_dir: env::var("ALCEDO_MIND_PROVIDER_CONFIG_DIR")
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
+            residency: EncoderResidencyConfig::default(),
+            log_file: None,
         })
     }
 
@@ -122,9 +174,6 @@ impl AppConfig {
         if self.semantic.model_root.trim().is_empty() {
             anyhow::bail!("model-root must not be empty");
         }
-        if self.semantic.model_id.trim().is_empty() {
-            anyhow::bail!("model-id must not be empty");
-        }
         if self.semantic.revision.trim().is_empty() {
             anyhow::bail!("revision must not be empty");
         }
@@ -137,11 +186,42 @@ impl AppConfig {
         if self.max_message_bytes == 0 {
             anyhow::bail!("max-message-bytes must be greater than zero");
         }
+        if self
+            .log_file
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            anyhow::bail!("log-file must not be empty");
+        }
+        if self.residency.text_device.trim().is_empty() {
+            anyhow::bail!("text-device must not be empty");
+        }
+        if self
+            .residency
+            .vision_device
+            .as_deref()
+            .is_some_and(|device| device.trim().is_empty())
+        {
+            anyhow::bail!("vision-device must not be empty");
+        }
+        for (flag, seconds) in [
+            (
+                "text-idle-unload-seconds",
+                self.residency.text_idle_unload_seconds,
+            ),
+            (
+                "vision-idle-unload-seconds",
+                self.residency.vision_idle_unload_seconds,
+            ),
+        ] {
+            crate::service::encoder_residency::IdleUnload::from_seconds(seconds)
+                .map_err(|err| anyhow::anyhow!("{flag}: {err}"))?;
+        }
         Ok(())
     }
 
     fn usage() -> &'static str {
-        "usage: alcedo_mind [--host HOST] [--allow-remote-bind] [--port PORT] [--model-root PATH] [--model-id ID] [--revision REV] [--hf-endpoint URL] [--device auto|cpu|directml[:N]|coreml[:MODE]] [--no-download] [--allow-download] [--batch-cap N] [--batch-wait-ms N] [--max-message-bytes N] [--credential-ttl-ms N] [--provider-config-dir PATH]"
+        "usage: alcedo_mind [--host HOST] [--allow-remote-bind] [--port PORT] [--model-root PATH] [--model-id ID] [--revision REV] [--hf-endpoint URL] [--device auto|cpu|directml[:N]|coreml[:MODE]] [--no-download] [--allow-download] [--batch-cap N] [--batch-wait-ms N] [--max-message-bytes N] [--text-device DEVICE] [--vision-device DEVICE] [--text-idle-unload-seconds N] [--vision-idle-unload-seconds N] [--log-file PATH]"
     }
 }
 
@@ -248,6 +328,37 @@ mod tests {
     }
 
     #[test]
+    fn starts_without_model_id_and_reports_no_semantic_model() {
+        let config = AppConfig::from_args(["--model-root", "C:/models"])
+            .expect("config without --model-id should parse");
+        assert!(config.semantic.model_id.is_empty());
+        assert!(!config.semantic.has_model());
+
+        let config = AppConfig::from_args(["--model-id", "repo/model:s2"]).expect("config");
+        assert!(config.semantic.has_model());
+    }
+
+    #[test]
+    fn parses_log_file_and_leaves_it_unset_without_the_argument() {
+        let config =
+            AppConfig::from_args(["--log-file", "C:/logs/alcedo_20261111_101500_7_mind.log"])
+                .expect("config should parse");
+        assert_eq!(
+            config.log_file,
+            Some(PathBuf::from("C:/logs/alcedo_20261111_101500_7_mind.log"))
+        );
+
+        let config = AppConfig::from_args(Vec::<String>::new()).expect("config should parse");
+        assert_eq!(config.log_file, None);
+
+        let err = AppConfig::from_args(["--log-file", ""]).expect_err("empty log-file rejected");
+        assert!(
+            err.to_string().contains("log-file must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn parses_explicit_download_opt_in() {
         let config = AppConfig::from_args(["--allow-download"]).expect("config should parse");
         assert!(config.semantic.allow_download);
@@ -310,19 +421,55 @@ mod tests {
     }
 
     #[test]
-    fn parses_provider_config_dir_override() {
-        let config =
-            AppConfig::from_args(["--provider-config-dir", "C:/Users/me/alcedo/providers"])
-                .expect("config should parse");
+    fn parses_text_and_vision_device_flags() {
+        let defaults = AppConfig::from_args(["--device", "directml:1"]).expect("defaults parse");
+        assert_eq!(defaults.residency.text_device, "cpu");
         assert_eq!(
-            config.provider_config_dir.as_deref(),
-            Some("C:/Users/me/alcedo/providers")
+            defaults
+                .residency
+                .vision_device_or(&defaults.semantic.device),
+            "directml:1"
         );
-    }
+        assert_eq!(defaults.residency.text_idle_unload_seconds, 300);
+        assert_eq!(defaults.residency.vision_idle_unload_seconds, 60);
 
-    #[test]
-    fn provider_config_dir_defaults_to_none() {
-        let config = AppConfig::from_env().expect("env config should parse");
-        assert!(config.provider_config_dir.is_none());
+        let config = AppConfig::from_args([
+            "--device",
+            "directml:1",
+            "--text-device",
+            "directml:0",
+            "--vision-device",
+            "cpu",
+            "--text-idle-unload-seconds",
+            "-1",
+            "--vision-idle-unload-seconds",
+            "0",
+        ])
+        .expect("residency flags parse");
+        assert_eq!(config.residency.text_device, "directml:0");
+        assert_eq!(
+            config.residency.vision_device_or(&config.semantic.device),
+            "cpu"
+        );
+        assert_eq!(config.residency.text_idle_unload_seconds, -1);
+        assert_eq!(config.residency.vision_idle_unload_seconds, 0);
+
+        let err = AppConfig::from_args(["--text-idle-unload-seconds", "-5"])
+            .expect_err("negative idle time other than -1 rejected");
+        assert!(
+            err.to_string().contains("text-idle-unload-seconds"),
+            "{err}"
+        );
+
+        // The engine parses the device values; CUDA and Metal stay rejected for both encoders.
+        for device in ["cuda", "metal"] {
+            assert!(crate::service::ort_runtime::parse_device_request(device).is_err());
+            let config = AppConfig::from_args(["--text-device", device, "--vision-device", device])
+                .expect("device text is checked by the engine");
+            assert!(
+                crate::service::ort_runtime::parse_device_request(&config.residency.text_device)
+                    .is_err()
+            );
+        }
     }
 }

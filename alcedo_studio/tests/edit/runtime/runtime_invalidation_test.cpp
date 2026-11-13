@@ -1,0 +1,879 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#include "edit/runtime/runtime_invalidation.hpp"
+
+#include <gtest/gtest.h>
+
+#include <filesystem>
+#include <memory>
+#include <span>
+#include <vector>
+
+#include "../graph/grade_owned_mask_support.hpp"
+#include "../graph/test_camera_profile.hpp"
+#include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/input/raw_input_loader.hpp"
+#include "edit/operators/models/lmt_model.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/runtime/diffusion_filter_plan.hpp"
+#include "edit/runtime/film_print_plan.hpp"
+#include "edit/runtime/grade_lut.hpp"
+#include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/local_tone_cache_ids.hpp"
+#include "edit/runtime/result_content_key.hpp"
+#include "edit/runtime/result_persistence.hpp"
+#include "edit/runtime/texture_format.hpp"
+#include "lut_resource_runtime_test_support.hpp"
+#include "multi_grade_runtime_test_support.hpp"
+
+namespace alcedo {
+namespace {
+
+auto MakePrepared() -> PreparedRawInput {
+  return RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
+                                       gpu_dag_test::FullSensor(16, 12));
+}
+
+struct ValidityHarness {
+  PreparedRawInput           prepared = MakePrepared();
+  PipelineDocument           document = CreateDefaultPipelineDocument();
+  ExecutionPlan              plan{};
+  RuntimeInvalidationState   invalidation{};
+
+  ValidityHarness() {
+    gpu_dag_test::EnsureTestCameraProfile(document);
+    plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  }
+
+  void Recompile(const RenderRequest& request = {}) {
+    plan = GraphCompiler::Compile(document, prepared.CompileSource(), request);
+    GraphCompiler::BindFrameGeometry(plan, document, request);
+  }
+
+  void Collect() { invalidation.CollectAndPropagate(plan, document, prepared); }
+
+  void Complete() {
+    const ImageExtent sensor{plan.source.develop_output_extent.width,
+                             plan.source.develop_output_extent.height};
+    const ImageExtent geometry{plan.geometry.render_extent.width,
+                               plan.geometry.render_extent.height};
+    auto mark = [&](const GraphValueId& id, ImageExtent extent,
+                    TextureFormat format = TextureFormat::Rgba32f) {
+      invalidation.MarkCompleted(id, invalidation.MakeImageRepresentation(id, extent, format));
+    };
+    mark(plan.sensor_linear_output, sensor);
+    mark(plan.geometry_output, geometry);
+    mark(plan.develop_output, geometry);
+    for (const auto& grade : plan.grade_nodes) {
+      mark(LocalToneSourceId(grade.node_id), geometry, TextureFormat::R32f);
+      mark(LocalToneResultId(grade.node_id), geometry, TextureFormat::R32f);
+      mark(grade.scene_output, geometry);
+      if (!grade.mask_stack.has_value()) {
+        continue;
+      }
+      for (const auto& source : grade.mask_stack->sources) {
+        mark(source.effective_output, geometry, TextureFormat::R8);
+      }
+      mark(grade.mask_output, geometry, TextureFormat::R8);
+    }
+    mark(plan.display_output, geometry);
+  }
+
+  void PublishCurrent() {
+    Collect();
+    Complete();
+  }
+
+  [[nodiscard]] auto Required(const GraphValueId& id) const -> RuntimeRevision {
+    return invalidation.RequiredRevision(id);
+  }
+  [[nodiscard]] auto Completed(const GraphValueId& id) const -> RuntimeRevision {
+    return invalidation.CompletedRevision(id);
+  }
+  [[nodiscard]] auto Current(const GraphValueId& id) const -> bool {
+    return Required(id) != 0 && Required(id) == Completed(id);
+  }
+
+  [[nodiscard]] auto Primary() const -> const CompiledGradeNode& { return *plan.FirstGrade(); }
+};
+
+TEST(RuntimeInvalidation, FirstCollectAssignsRequiredRevisionsAheadOfCompleted) {
+  ValidityHarness harness;
+  harness.Collect();
+  EXPECT_GT(harness.Required(harness.plan.sensor_linear_output), 0U);
+  EXPECT_EQ(harness.Completed(harness.plan.sensor_linear_output), 0U);
+  EXPECT_GT(harness.Required(harness.plan.display_output),
+            harness.Completed(harness.plan.display_output));
+}
+
+TEST(RuntimeInvalidation, FilmPrintSliderInvalidatesTheResultsThatReadItAndKeepsTheScene) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto drt_id   = harness.plan.drt.node_id;
+  const auto halation = FilmHalationResultId(drt_id);
+  const auto flare    = FilmFlareResultId(drt_id);
+  const auto loupe    = FilmLoupeFlareResultId(drt_id);
+  EXPECT_NE(halation, flare);
+  EXPECT_NE(loupe, flare);
+  EXPECT_GT(harness.Required(halation), 0U);
+  EXPECT_GT(harness.Required(flare), 0U);
+  EXPECT_GT(harness.Required(loupe), 0U);
+
+  // Each change invalidates the display. The Halation result is the blurred exposure, so only
+  // Light spread changes it of the three sliders. The flare result reads the amounts after
+  // Halation, and the loupe flare result of a reversal film reads their display light. Each
+  // strength scales its result later.
+  const auto expect_invalidates = [&](bool halation_changes, bool flare_changes, auto&& change) {
+    const auto         halation_before = harness.Required(halation);
+    const auto         flare_before    = harness.Required(flare);
+    const auto         loupe_before    = harness.Required(loupe);
+    const auto         display_before  = harness.Required(harness.plan.display_output);
+    const auto         scatter_before  = harness.Required(DiffusionScatterId(drt_id));
+    const auto         scene_before    = harness.Required(harness.Primary().scene_output);
+    DrtParameterUpdate update;
+    change(update);
+    harness.document.Drt()->Params().ApplyUpdate(update);
+    harness.Collect();
+    if (halation_changes) {
+      EXPECT_GT(harness.Required(halation), halation_before);
+    } else {
+      EXPECT_EQ(harness.Required(halation), halation_before);
+    }
+    if (flare_changes) {
+      EXPECT_GT(harness.Required(flare), flare_before);
+      EXPECT_GT(harness.Required(loupe), loupe_before);
+    } else {
+      EXPECT_EQ(harness.Required(flare), flare_before);
+      EXPECT_EQ(harness.Required(loupe), loupe_before);
+    }
+    EXPECT_GT(harness.Required(harness.plan.display_output), display_before);
+    EXPECT_EQ(harness.Required(DiffusionScatterId(drt_id)), scatter_before);
+    EXPECT_EQ(harness.Required(harness.Primary().scene_output), scene_before);
+  };
+  expect_invalidates(false, true, [](DrtParameterUpdate& update) { update.film_halation = 2.0f; });
+  expect_invalidates(false, false,
+                     [](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.02f; });
+  expect_invalidates(true, true,
+                     [](DrtParameterUpdate& update) { update.film_light_spread = 2.0f; });
+  expect_invalidates(true, true,
+                     [](DrtParameterUpdate& update) { update.film_negative = "fuji_c200"; });
+  expect_invalidates(true, true,
+                     [](DrtParameterUpdate& update) { update.film_negative = "fuji_velvia_50"; });
+  expect_invalidates(false, true, [](DrtParameterUpdate& update) { update.film_halation = 3.0f; });
+  expect_invalidates(false, false,
+                     [](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.03f; });
+}
+
+TEST(RuntimeInvalidation, DiffusionAndSceneChangesInvalidateFilmPrintResults) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto halation = FilmHalationResultId(harness.plan.drt.node_id);
+  const auto flare    = FilmFlareResultId(harness.plan.drt.node_id);
+
+  auto       required = harness.Required(halation);
+  harness.document.Drt()->Params().ApplyDiffusionStrength(0.5f);
+  harness.Collect();
+  EXPECT_GT(harness.Required(halation), required);
+  EXPECT_EQ(harness.Required(flare), harness.Required(halation));
+  EXPECT_EQ(harness.Required(FilmLoupeFlareResultId(harness.plan.drt.node_id)),
+            harness.Required(halation));
+
+  required       = harness.Required(halation);
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(1.0f);
+  harness.Collect();
+  EXPECT_GT(harness.Required(halation), required);
+  EXPECT_EQ(harness.Required(flare), harness.Required(halation));
+}
+
+TEST(RuntimeInvalidation, ScanPrescanFollowsTheAmountsAndTheScannerAndNoRenderingSetting) {
+  // The prescan of Negative Scan (issue 664) is the scan density of the amounts after Halation: the
+  // exposure fields, Halation, and the scanner change it; a rendering setting of the scan and the
+  // Enlarger flare do not.
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto prescan = FilmScanPrescanResultId(harness.plan.drt.node_id);
+  EXPECT_TRUE(IsFilmPrintResultPort(prescan));
+  EXPECT_GT(harness.Required(prescan), 0U);
+  const auto expect_invalidates = [&](bool changes, auto&& change) {
+    const auto         before  = harness.Required(prescan);
+    const auto         display = harness.Required(harness.plan.display_output);
+    DrtParameterUpdate update;
+    change(update);
+    harness.document.Drt()->Params().ApplyUpdate(update);
+    harness.Collect();
+    if (changes) {
+      EXPECT_GT(harness.Required(prescan), before);
+    } else {
+      EXPECT_EQ(harness.Required(prescan), before);
+    }
+    EXPECT_GT(harness.Required(harness.plan.display_output), display);
+  };
+  expect_invalidates(true, [](DrtParameterUpdate& update) {
+    update.film_print_material = std::string{kFilmNegativeScanId};
+  });
+  expect_invalidates(true, [](DrtParameterUpdate& update) { update.film_halation = 2.0f; });
+  expect_invalidates(true, [](DrtParameterUpdate& update) { update.film_light_spread = 2.0f; });
+  expect_invalidates(true,
+                     [](DrtParameterUpdate& update) { update.film_scanner_red_nm = 630.0f; });
+  expect_invalidates(true, [](DrtParameterUpdate& update) {
+    update.film_scanner_light = std::string{"equal_energy"};
+  });
+  expect_invalidates(
+      false, [](DrtParameterUpdate& update) { update.film_scan_auto = std::string{"warm"}; });
+  expect_invalidates(false, [](DrtParameterUpdate& update) { update.film_scan_contrast = 1.2f; });
+  expect_invalidates(false, [](DrtParameterUpdate& update) { update.film_scan_cyan = 0.05f; });
+  expect_invalidates(false, [](DrtParameterUpdate& update) { update.film_scan_black = 0.5f; });
+  expect_invalidates(false,
+                     [](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.02f; });
+}
+
+TEST(RuntimeInvalidation, FilmPrintResultsFollowANewDrtInput) {
+  ValidityHarness harness;
+  harness.Collect();
+  const auto halation = FilmHalationResultId(harness.plan.drt.node_id);
+  const auto flare    = FilmFlareResultId(harness.plan.drt.node_id);
+  const auto required = harness.Required(halation);
+  harness.plan.grade_nodes.clear();
+  harness.Collect();
+  EXPECT_GT(harness.Required(halation), required);
+  EXPECT_EQ(harness.Required(flare), harness.Required(halation));
+  EXPECT_EQ(harness.Required(FilmLoupeFlareResultId(harness.plan.drt.node_id)),
+            harness.Required(halation));
+}
+
+TEST(RuntimeInvalidation, FilmPrintResultsUseTheCanonicalIdentityOfTheScatterImage) {
+  ValidityHarness harness;
+  harness.Collect();
+  const ImageExtent extent{16, 12};
+  const auto        scatter = harness.invalidation.MakeImageRepresentation(
+      DiffusionScatterId(harness.plan.drt.node_id), extent, TextureFormat::Rgba32f);
+  for (const auto& id :
+       {FilmHalationResultId(harness.plan.drt.node_id), FilmFlareResultId(harness.plan.drt.node_id),
+        FilmLoupeFlareResultId(harness.plan.drt.node_id),
+        FilmScanPrescanResultId(harness.plan.drt.node_id)}) {
+    EXPECT_TRUE(IsFilmPrintResultPort(id));
+    EXPECT_EQ(
+        harness.invalidation.MakeImageRepresentation(id, extent, TextureFormat::Rgba32f).identity,
+        scatter.identity);
+  }
+  EXPECT_FALSE(IsFilmPrintResultPort(harness.plan.display_output));
+}
+
+TEST(RuntimeInvalidation, CollectLeavesEveryDocumentRevisionUnchanged) {
+  ValidityHarness                harness;
+  const auto&                    document   = harness.document;
+  const auto                     develop    = document.Develop()->Params().Revision();
+  const auto                     drt        = document.Drt()->Params().Revision();
+  const auto                     mix        = document.PrimaryGrade()->MixRevision();
+  const auto                     topology   = document.TopologyRevision();
+  const auto                     serialized = document.ToJson();
+  std::vector<ParameterRevision> adjustments;
+  for (std::size_t index = 0; index < document.PrimaryGrade()->AdjustmentCount(); ++index) {
+    adjustments.push_back(document.PrimaryGrade()->AdjustmentAt(index).Revision());
+  }
+
+  harness.PublishCurrent();
+  harness.Collect();
+
+  EXPECT_EQ(document.Develop()->Params().Revision(), develop);
+  EXPECT_EQ(document.Drt()->Params().Revision(), drt);
+  EXPECT_EQ(document.PrimaryGrade()->MixRevision(), mix);
+  EXPECT_EQ(document.TopologyRevision(), topology);
+  EXPECT_EQ(document.ToJson(), serialized);
+  for (std::size_t index = 0; index < adjustments.size(); ++index) {
+    EXPECT_EQ(document.PrimaryGrade()->AdjustmentAt(index).Revision(), adjustments[index]) << index;
+  }
+}
+
+TEST(RuntimeInvalidation, FreshStateAssignsRequiredAfterAnotherStateCollectedTheSameDocument) {
+  ValidityHarness first;
+  first.PublishCurrent();
+  ASSERT_GT(first.Required(first.plan.sensor_linear_output), 0U);
+
+  RuntimeInvalidationState fresh;
+  fresh.CollectAndPropagate(first.plan, first.document, first.prepared);
+  EXPECT_GT(fresh.RequiredRevision(first.plan.sensor_linear_output), 0U);
+  EXPECT_EQ(fresh.CompletedRevision(first.plan.sensor_linear_output), 0U);
+  EXPECT_GT(fresh.RequiredRevision(first.plan.display_output), 0U);
+}
+
+TEST(RuntimeInvalidation, ParameterChangeInvalidatesEveryStateThatReadsTheDocument) {
+  // An editor session workspace and a one-shot workspace read one document. The one-shot
+  // collect must not hide the edit from the session (audit R7).
+  ValidityHarness          session;
+  RuntimeInvalidationState one_shot;
+  session.PublishCurrent();
+  one_shot.CollectAndPropagate(session.plan, session.document, session.prepared);
+  const auto scene_output = session.Primary().scene_output;
+  ASSERT_TRUE(session.Current(scene_output));
+
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      session.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(exposure->Value() + 1.5f);
+  const auto one_shot_before = one_shot.RequiredRevision(scene_output);
+  one_shot.CollectAndPropagate(session.plan, session.document, session.prepared);
+  EXPECT_GT(one_shot.RequiredRevision(scene_output), one_shot_before);
+
+  session.Collect();
+  EXPECT_FALSE(session.Current(scene_output));
+  EXPECT_GT(session.Required(scene_output), session.Completed(scene_output));
+}
+
+TEST(RuntimeInvalidation, ClonedDocumentWithEqualValuesKeepsPublishedResultsValid) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto display = harness.Required(harness.plan.display_output);
+  harness.document   = ClonePipelineDocument(harness.document);
+  harness.Collect();
+  EXPECT_EQ(harness.Required(harness.plan.display_output), display);
+  EXPECT_TRUE(harness.Current(harness.plan.display_output));
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+}
+
+TEST(RuntimeInvalidation, RestoredOlderDocumentInvalidatesChangedAdjustment) {
+  // History restore moves a pre-edit clone into the live document. Its older revision must
+  // count as a change, although it is smaller than the revision the state saw last.
+  ValidityHarness harness;
+  auto            before_edit = ClonePipelineDocument(harness.document);
+  auto*           exposure    = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(exposure->Value() + 0.5f);
+  harness.PublishCurrent();
+  const auto scene_output = harness.Primary().scene_output;
+  ASSERT_TRUE(harness.Current(scene_output));
+
+  harness.document = std::move(before_edit);
+  harness.Collect();
+  EXPECT_FALSE(harness.Current(scene_output));
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+}
+
+TEST(RuntimeInvalidation, UnchangedSetValueAndSecondCollectKeepPublishedResultsValid) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto sensor = harness.Required(harness.plan.sensor_linear_output);
+  const auto grade  = harness.Required(harness.Primary().scene_output);
+  auto* exposure    = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(exposure->Value());
+  harness.Collect();
+  EXPECT_EQ(harness.Required(harness.plan.sensor_linear_output), sensor);
+  EXPECT_EQ(harness.Required(harness.Primary().scene_output), grade);
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+  EXPECT_TRUE(harness.Current(harness.Primary().scene_output));
+}
+
+TEST(RuntimeInvalidation, PreLlfExposureInvalidatesLlfSourceResultAndDownstream) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto sensor_before = harness.Required(harness.plan.sensor_linear_output);
+  const auto source_id     = LocalToneSourceId(harness.Primary().node_id);
+  const auto result_id     = LocalToneResultId(harness.Primary().node_id);
+  auto* exposure           = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(exposure->Value() + 0.25f);
+  harness.Collect();
+  EXPECT_EQ(harness.Required(harness.plan.sensor_linear_output), sensor_before);
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  EXPECT_GT(harness.Required(result_id), harness.Completed(result_id));
+  EXPECT_GT(harness.Required(harness.Primary().scene_output),
+            harness.Completed(harness.Primary().scene_output));
+  EXPECT_GT(harness.Required(harness.plan.display_output),
+            harness.Completed(harness.plan.display_output));
+}
+
+TEST(RuntimeInvalidation, LlfSliderKeepsSourceAndInvalidatesResult) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto source_id = LocalToneSourceId(harness.Primary().node_id);
+  const auto result_id = LocalToneResultId(harness.Primary().node_id);
+  auto* shadows        = dynamic_cast<ShadowsModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(40.0f);
+  harness.Collect();
+  EXPECT_TRUE(harness.Current(source_id));
+  EXPECT_GT(harness.Required(result_id), harness.Completed(result_id));
+  EXPECT_GT(harness.Required(harness.Primary().scene_output),
+            harness.Completed(harness.Primary().scene_output));
+}
+
+TEST(RuntimeInvalidation, ColorEditInvalidatesLlfSourceResultAndMixKeepsThem) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto source_id = LocalToneSourceId(harness.Primary().node_id);
+  const auto result_id = LocalToneResultId(harness.Primary().node_id);
+  auto* saturation     = dynamic_cast<SaturationModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(saturation, nullptr);
+  saturation->SetValue(1.1f);
+  harness.Collect();
+  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  EXPECT_GT(harness.Required(result_id), harness.Completed(result_id));
+  EXPECT_GT(harness.Required(harness.Primary().scene_output),
+            harness.Completed(harness.Primary().scene_output));
+
+  harness.PublishCurrent();
+  harness.document.PrimaryGrade()->SetMix(0.4f);
+  harness.Collect();
+  EXPECT_TRUE(harness.Current(source_id));
+  EXPECT_TRUE(harness.Current(result_id));
+  EXPECT_GT(harness.Required(harness.Primary().scene_output),
+            harness.Completed(harness.Primary().scene_output));
+}
+
+TEST(RuntimeInvalidation, WhiteBalanceInvalidatesDevelopAndDownstreamLlf) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  auto payload        = harness.document.Develop()->Params().Params();
+  payload.wb_mode     = "custom";
+  payload.custom_cct  = 4800.0f;
+  harness.document.Develop()->Params().ReplaceParams(payload);
+  harness.Collect();
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+  EXPECT_TRUE(harness.Current(harness.plan.geometry_output));
+  EXPECT_GT(harness.Required(harness.plan.develop_output),
+            harness.Completed(harness.plan.develop_output));
+  EXPECT_GT(harness.Required(LocalToneSourceId(harness.Primary().node_id)),
+            harness.Completed(LocalToneSourceId(harness.Primary().node_id)));
+}
+
+TEST(RuntimeInvalidation, DemosaicInvalidatesSensorAndDownstreamLlf) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  auto payload             = harness.document.Develop()->Params().Params();
+  payload.demosaic_method  = payload.demosaic_method == "rcd" ? "dht" : "rcd";
+  harness.document.Develop()->Params().ReplaceParams(payload);
+  harness.Collect();
+  EXPECT_GT(harness.Required(harness.plan.sensor_linear_output),
+            harness.Completed(harness.plan.sensor_linear_output));
+  EXPECT_GT(harness.Required(LocalToneSourceId(harness.Primary().node_id)),
+            harness.Completed(LocalToneSourceId(harness.Primary().node_id)));
+}
+
+TEST(RuntimeInvalidation, HighlightReconstructionInvalidatesSensorAndDownstreamLlf) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  auto payload                    = harness.document.Develop()->Params().Params();
+  payload.highlights_reconstruct  = !payload.highlights_reconstruct;
+  harness.document.Develop()->Params().ReplaceParams(payload);
+  harness.Collect();
+  EXPECT_GT(harness.Required(harness.plan.sensor_linear_output),
+            harness.Completed(harness.plan.sensor_linear_output));
+  EXPECT_GT(harness.Required(LocalToneSourceId(harness.Primary().node_id)),
+            harness.Completed(LocalToneSourceId(harness.Primary().node_id)));
+}
+
+TEST(RuntimeInvalidation, LensCorrectionInvalidatesSensorAndDownstreamLlf) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  auto payload          = harness.document.Develop()->Params().Params();
+  payload.lens_enabled  = !payload.lens_enabled;
+  harness.document.Develop()->Params().ReplaceParams(payload);
+  harness.Collect();
+  EXPECT_GT(harness.Required(harness.plan.sensor_linear_output),
+            harness.Completed(harness.plan.sensor_linear_output));
+  EXPECT_GT(harness.Required(LocalToneSourceId(harness.Primary().node_id)),
+            harness.Completed(LocalToneSourceId(harness.Primary().node_id)));
+}
+
+TEST(RuntimeInvalidation, MiddleGradeEditLeavesUpstreamValid) {
+  ValidityHarness harness;
+  multi_grade_test::AddCleanGradesBeforeDrt(harness.document, {"grade.mid", "grade.tail"});
+  harness.Recompile();
+  harness.PublishCurrent();
+  ASSERT_EQ(harness.plan.grade_nodes.size(), 3U);
+  const auto& upstream = harness.plan.grade_nodes[0];
+  const auto& middle   = harness.plan.grade_nodes[1];
+  const auto& tail     = harness.plan.grade_nodes[2];
+  auto* exposure       = dynamic_cast<ExposureModel*>(
+      multi_grade_test::GradeNode(harness.document, middle.node_id.Value())
+          ->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(0.5f);
+  harness.Collect();
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+  EXPECT_TRUE(harness.Current(upstream.scene_output));
+  EXPECT_TRUE(harness.Current(LocalToneSourceId(upstream.node_id)));
+  EXPECT_GT(harness.Required(LocalToneSourceId(middle.node_id)),
+            harness.Completed(LocalToneSourceId(middle.node_id)));
+  EXPECT_GT(harness.Required(middle.scene_output), harness.Completed(middle.scene_output));
+  EXPECT_GT(harness.Required(LocalToneSourceId(tail.node_id)),
+            harness.Completed(LocalToneSourceId(tail.node_id)));
+  EXPECT_GT(harness.Required(tail.scene_output), harness.Completed(tail.scene_output));
+}
+
+TEST(RuntimeInvalidation, SiblingMaskSourceStaysValidWhenOneMaskChanges) {
+  ValidityHarness harness;
+  grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.a"});
+  grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.b"});
+  harness.Recompile();
+  harness.PublishCurrent();
+  ASSERT_TRUE(harness.Primary().mask_stack.has_value());
+  ASSERT_EQ(harness.Primary().mask_stack->sources.size(), 2U);
+  const auto first  = harness.Primary().mask_stack->sources[0].effective_output;
+  const auto second = harness.Primary().mask_stack->sources[1].effective_output;
+  harness.document.PrimaryGrade()->SetMaskOpacity(harness.Primary().mask_stack->sources[0].mask_id,
+                                                  0.4f);
+  harness.Collect();
+  EXPECT_GT(harness.Required(first), harness.Completed(first));
+  EXPECT_TRUE(harness.Current(second));
+  EXPECT_GT(harness.Required(harness.Primary().mask_output),
+            harness.Completed(harness.Primary().mask_output));
+  EXPECT_TRUE(harness.Current(LocalToneSourceId(harness.Primary().node_id)));
+}
+
+TEST(RuntimeInvalidation, ViewportChangeKeepsCanonicalLlfAndMismatchesFrameResults) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto source_id = LocalToneSourceId(harness.Primary().node_id);
+  const auto grade_id  = harness.Primary().scene_output;
+  const ImageExtent geometry{harness.plan.geometry.render_extent.width,
+                             harness.plan.geometry.render_extent.height};
+  const auto llf_needed =
+      harness.invalidation.MakeImageRepresentation(source_id, geometry, TextureFormat::R32f);
+  const auto frame_needed =
+      harness.invalidation.MakeImageRepresentation(grade_id, geometry, TextureFormat::Rgba32f);
+  EXPECT_TRUE(harness.invalidation.IsSatisfied(source_id, llf_needed));
+  EXPECT_TRUE(harness.invalidation.IsSatisfied(grade_id, frame_needed));
+
+  RenderRequest viewport;
+  viewport.view.visible_rect_in_edit_space = {0.2f, 0.2f, 0.6f, 0.6f};
+  viewport.view.viewport_extent            = {8, 6};
+  GraphCompiler::BindFrameGeometry(harness.plan, harness.document, viewport);
+  harness.Collect();
+  EXPECT_TRUE(harness.Current(source_id));
+  EXPECT_TRUE(harness.Current(grade_id));
+  const auto llf_after =
+      harness.invalidation.MakeImageRepresentation(source_id, geometry, TextureFormat::R32f);
+  const auto frame_after =
+      harness.invalidation.MakeImageRepresentation(grade_id, geometry, TextureFormat::Rgba32f);
+  EXPECT_TRUE(harness.invalidation.IsSatisfied(source_id, llf_after));
+  EXPECT_FALSE(harness.invalidation.IsSatisfied(grade_id, frame_after));
+}
+
+TEST(RuntimeInvalidation, CropChangeMismatchesCanonicalLlfWithoutBumpingUnrelatedSensorRevision) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto sensor_before = harness.Required(harness.plan.sensor_linear_output);
+  const auto source_id     = LocalToneSourceId(harness.Primary().node_id);
+  const ImageExtent geometry{harness.plan.geometry.render_extent.width,
+                             harness.plan.geometry.render_extent.height};
+  harness.document.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
+  GraphCompiler::BindFrameGeometry(harness.plan, harness.document, RenderRequest{});
+  harness.Collect();
+  EXPECT_EQ(harness.Required(harness.plan.sensor_linear_output), sensor_before);
+  const auto llf_after =
+      harness.invalidation.MakeImageRepresentation(source_id, geometry, TextureFormat::R32f);
+  EXPECT_FALSE(harness.invalidation.IsSatisfied(source_id, llf_after));
+}
+
+TEST(RuntimeInvalidation, RenderScaleMismatchRejectsPriorFrameRepresentation) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto sensor_before = harness.Required(harness.plan.sensor_linear_output);
+  const auto grade_id      = harness.Primary().scene_output;
+  const ImageExtent geometry{harness.plan.geometry.render_extent.width,
+                             harness.plan.geometry.render_extent.height};
+  EXPECT_TRUE(harness.invalidation.IsSatisfied(
+      grade_id,
+      harness.invalidation.MakeImageRepresentation(grade_id, geometry, TextureFormat::Rgba32f)));
+
+  RenderRequest scaled;
+  scaled.resolution.render_scale = 0.5f;
+  GraphCompiler::BindFrameGeometry(harness.plan, harness.document, scaled);
+  harness.Collect();
+  EXPECT_EQ(harness.Required(harness.plan.sensor_linear_output), sensor_before);
+  const ImageExtent scaled_extent{harness.plan.geometry.render_extent.width,
+                                  harness.plan.geometry.render_extent.height};
+  EXPECT_FALSE(harness.invalidation.IsSatisfied(
+      grade_id, harness.invalidation.MakeImageRepresentation(grade_id, scaled_extent,
+                                                            TextureFormat::Rgba32f)));
+}
+
+TEST(RuntimeInvalidation, ExportQualityMismatchRejectsPriorFrameRepresentation) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto grade_id = harness.Primary().scene_output;
+  const ImageExtent geometry{harness.plan.geometry.render_extent.width,
+                             harness.plan.geometry.render_extent.height};
+  EXPECT_TRUE(harness.invalidation.IsSatisfied(
+      grade_id,
+      harness.invalidation.MakeImageRepresentation(grade_id, geometry, TextureFormat::Rgba32f)));
+
+  RenderRequest export_quality;
+  export_quality.resolution.quality = RenderQuality::Export;
+  GraphCompiler::BindFrameGeometry(harness.plan, harness.document, export_quality);
+  harness.Collect();
+  EXPECT_FALSE(harness.invalidation.IsSatisfied(
+      grade_id,
+      harness.invalidation.MakeImageRepresentation(grade_id, geometry, TextureFormat::Rgba32f)));
+}
+
+TEST(RuntimeInvalidation, DocumentEpochPreventsReuseOfSameNodeIds) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto grade_id = harness.Primary().scene_output;
+  EXPECT_TRUE(harness.Current(grade_id));
+  harness.invalidation.AdvanceDocumentEpoch();
+  EXPECT_GT(harness.Required(grade_id), harness.Completed(grade_id));
+  EXPECT_GT(harness.Required(harness.plan.sensor_linear_output),
+            harness.Completed(harness.plan.sensor_linear_output));
+}
+
+TEST(RuntimeInvalidation, RepeatedEditsDoNotGrowTrackedValueCount) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto tracked = harness.invalidation.TrackedValueCount();
+  auto* exposure     = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  for (int step = 0; step < 12; ++step) {
+    exposure->SetValue(0.1f * static_cast<float>(step));
+    harness.PublishCurrent();
+  }
+  EXPECT_EQ(harness.invalidation.TrackedValueCount(), tracked);
+}
+
+TEST(RuntimeInvalidation, DisplayNameDoesNotInvalidateResults) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto grade = harness.Required(harness.Primary().scene_output);
+  harness.document.PrimaryGrade()->SetDisplayName("Look A");
+  harness.Collect();
+  EXPECT_EQ(harness.Required(harness.Primary().scene_output), grade);
+}
+
+TEST(RuntimeInvalidation, AddedGradeLeavesUpstreamValidAndInvalidatesDisplay) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto sensor  = harness.Required(harness.plan.sensor_linear_output);
+  const auto primary = harness.Required(harness.Primary().scene_output);
+  multi_grade_test::AddCleanGradesBeforeDrt(harness.document, {"grade.tail"});
+  harness.Recompile();
+  harness.Collect();
+  EXPECT_EQ(harness.Required(harness.plan.sensor_linear_output), sensor);
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+  EXPECT_EQ(harness.Required(harness.plan.grade_nodes.front().scene_output), primary);
+  EXPECT_TRUE(harness.Current(harness.plan.grade_nodes.front().scene_output));
+  EXPECT_GT(harness.Required(harness.plan.grade_nodes.back().scene_output),
+            harness.Completed(harness.plan.grade_nodes.back().scene_output));
+  EXPECT_GT(harness.Required(harness.plan.display_output),
+            harness.Completed(harness.plan.display_output));
+}
+
+TEST(RuntimeInvalidation, RemovingMaskInvalidatesGradeOutputNotDevelop) {
+  ValidityHarness harness;
+  grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.radial"});
+  harness.Recompile();
+  harness.PublishCurrent();
+  const auto develop = harness.Required(harness.plan.develop_output);
+  const auto grade   = harness.Required(harness.Primary().scene_output);
+  harness.document.PrimaryGrade()->RemoveMask(MaskId{"mask.radial"});
+  harness.Recompile();
+  harness.Collect();
+  EXPECT_EQ(harness.Required(harness.plan.develop_output), develop);
+  EXPECT_TRUE(harness.Current(harness.plan.develop_output));
+  EXPECT_GT(harness.Required(harness.Primary().scene_output), grade);
+}
+
+TEST(ResultPersistence, QualityBaseRolePersistsOnlySensorDevelopAndTheNegativeScanPrescan) {
+  const GraphValueId sensor{NodeId{"develop"}, PortId{"sensor_linear"}};
+  const GraphValueId geometry{NodeId{"geometry"}, PortId{"scene_source"}};
+  // The prescan of Negative Scan has a fixed size and covers the full frame, so a QualityBase
+  // publishes it, and the Detail patch after a settled edit samples it. The other film print
+  // results stay local to the QualityBase.
+  const NodeId       drt{"drt"};
+  EXPECT_TRUE(PersistsGraphValue(ResultPersistenceScope::SensorDevelopOnly,
+                                 FilmScanPrescanResultId(drt), sensor));
+  EXPECT_FALSE(PersistsGraphValue(ResultPersistenceScope::SensorDevelopOnly,
+                                  FilmHalationResultId(drt), sensor));
+  EXPECT_FALSE(PersistsGraphValue(ResultPersistenceScope::SensorDevelopOnly, FilmFlareResultId(drt),
+                                  sensor));
+  EXPECT_EQ(ResultPersistenceScopeForRole(FrameRole::InteractivePrimary),
+            ResultPersistenceScope::AllCurrentResults);
+  EXPECT_EQ(ResultPersistenceScopeForRole(FrameRole::DetailPatch),
+            ResultPersistenceScope::AllCurrentResults);
+  EXPECT_EQ(ResultPersistenceScopeForRole(FrameRole::QualityBase),
+            ResultPersistenceScope::SensorDevelopOnly);
+  EXPECT_TRUE(PersistsGraphValue(ResultPersistenceScope::SensorDevelopOnly, sensor, sensor));
+  EXPECT_FALSE(PersistsGraphValue(ResultPersistenceScope::SensorDevelopOnly, geometry, sensor));
+  EXPECT_TRUE(PersistsGraphValue(ResultPersistenceScope::AllCurrentResults, geometry, sensor));
+}
+
+TEST(RuntimeInvalidation, QualityBaseMutationInvalidatesOnlyDependentInteractiveResults) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto sensor_repr = harness.invalidation.MakeImageRepresentation(
+      harness.plan.sensor_linear_output,
+      {harness.plan.source.develop_output_extent.width,
+       harness.plan.source.develop_output_extent.height},
+      TextureFormat::Rgba32f);
+  const auto geometry_repr = harness.invalidation.MakeImageRepresentation(
+      harness.plan.geometry_output,
+      {harness.plan.geometry.render_extent.width, harness.plan.geometry.render_extent.height},
+      TextureFormat::Rgba32f);
+
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(exposure->Value() + 0.25f);
+  harness.Collect();
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+  EXPECT_TRUE(harness.Current(harness.plan.geometry_output));
+  EXPECT_TRUE(harness.invalidation.IsSatisfied(harness.plan.sensor_linear_output, sensor_repr));
+  EXPECT_TRUE(harness.invalidation.IsSatisfied(harness.plan.geometry_output, geometry_repr));
+  EXPECT_FALSE(harness.Current(harness.Primary().scene_output));
+  EXPECT_FALSE(harness.Current(harness.plan.display_output));
+
+  ValidityHarness crop;
+  crop.PublishCurrent();
+  crop.document.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
+  crop.Recompile();
+  crop.Collect();
+  EXPECT_TRUE(crop.Current(crop.plan.sensor_linear_output));
+  const auto cropped_geometry = crop.invalidation.MakeImageRepresentation(
+      crop.plan.geometry_output,
+      {crop.plan.geometry.render_extent.width, crop.plan.geometry.render_extent.height},
+      TextureFormat::Rgba32f);
+  EXPECT_FALSE(crop.invalidation.IsSatisfied(crop.plan.geometry_output, cropped_geometry));
+  EXPECT_FALSE(crop.invalidation.IsSatisfied(crop.plan.develop_output, cropped_geometry));
+
+  ValidityHarness raw;
+  raw.PublishCurrent();
+  auto develop                   = raw.document.Develop()->Params().Params();
+  develop.highlights_reconstruct = !develop.highlights_reconstruct;
+  raw.document.Develop()->Params().ReplaceParams(develop);
+  raw.Collect();
+  EXPECT_FALSE(raw.Current(raw.plan.sensor_linear_output));
+  EXPECT_FALSE(raw.Current(raw.plan.geometry_output));
+  EXPECT_FALSE(raw.Current(raw.plan.develop_output));
+  EXPECT_FALSE(raw.Current(raw.Primary().scene_output));
+  EXPECT_FALSE(raw.Current(raw.plan.display_output));
+}
+
+TEST(RuntimeInvalidation, CanonicalIdentityIgnoresViewportAndFollowsCrop) {
+  auto       prepared = MakePrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base_canonical = HashCanonicalReferenceIdentity(plan, prepared);
+  const auto base_frame     = HashFrameImageIdentity(plan, prepared, 1);
+
+  RenderRequest viewport;
+  viewport.view.visible_rect_in_edit_space = {0.25f, 0.25f, 0.5f, 0.5f};
+  viewport.view.viewport_extent            = {8, 6};
+  GraphCompiler::BindFrameGeometry(plan, document, viewport);
+  EXPECT_EQ(HashCanonicalReferenceIdentity(plan, prepared), base_canonical);
+  EXPECT_NE(HashFrameImageIdentity(plan, prepared, 1), base_frame);
+
+  document.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
+  GraphCompiler::BindFrameGeometry(plan, document, viewport);
+  EXPECT_NE(HashCanonicalReferenceIdentity(plan, prepared), base_canonical);
+}
+
+TEST(RuntimeInvalidation, LmtEncodingChangeInvalidatesLikeReferenceChange) {
+  // An encoding change has no new resource identity; it reaches the repack through the LMT
+  // adjustment revision, the path of a Reference change (lut_color_encoding_plan.md, 6.3).
+  ValidityHarness harness;
+  const auto directory = lut_resource_test::FixtureDirectory("validity", "lmt_encoding_change");
+  const auto cube      = directory / "look.cube";
+  lut_resource_test::WriteConstantCube(cube, {0.1f, 0.2f, 0.3f});
+  auto* lmt = dynamic_cast<LmtModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(lmt, nullptr);
+  const auto resources = DefaultLutResourceResolver();
+  const auto source_id = LocalToneSourceId(harness.Primary().node_id);
+  const auto collect   = [&] {
+    harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared,
+                                               *resources);
+  };
+
+  lmt->SetCubePath(cube.string());
+  collect();
+  harness.Complete();
+  const auto identity = GradeLutResourceIdentity(*harness.document.PrimaryGrade(), *resources);
+
+  lmt->SetEncodings("sony_slog3_sgamut3cine", "rec709_bt1886");
+  collect();
+  EXPECT_EQ(GradeLutResourceIdentity(*harness.document.PrimaryGrade(), *resources), identity);
+  EXPECT_TRUE(harness.Current(harness.plan.develop_output));
+  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  EXPECT_GT(harness.Required(harness.Primary().scene_output),
+            harness.Completed(harness.Primary().scene_output));
+  harness.Complete();
+
+  // The same reference change for comparison invalidates the same values.
+  lmt->SetCubePath((directory / "other.cube").string());
+  collect();
+  EXPECT_TRUE(harness.Current(harness.plan.develop_output));
+  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  harness.Complete();
+
+  collect();
+  EXPECT_TRUE(harness.Current(harness.Primary().scene_output)) << "an unchanged LMT is reused";
+}
+
+TEST(RuntimeInvalidation, LutResourceChangeInvalidatesGradeWithoutModelRevision) {
+  ValidityHarness harness;
+  const auto directory = lut_resource_test::FixtureDirectory("validity", "lut_resource_change");
+  const auto first     = directory / "a" / "look.cube";
+  const auto second    = directory / "b" / "look.cube";
+  lut_resource_test::WriteConstantCube(first, {0.1f, 0.2f, 0.3f});
+  lut_resource_test::WriteConstantCube(second, {0.4f, 0.5f, 0.6f});
+  const LutReference official = OfficialLutReference{"spektrafilm_lut", "portra-400"};
+  lut_resource_test::SwitchableLutResolver resolver;
+  resolver.Map(official, first);
+  auto* lmt = dynamic_cast<LmtModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(lmt, nullptr);
+  lmt->SetReference(official);
+  const auto revision = lmt->Revision();
+  const auto publish  = [&] {
+    harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared,
+                                              resolver);
+    harness.Complete();
+  };
+  publish();
+  const auto source_id = LocalToneSourceId(harness.Primary().node_id);
+  const auto collect   = [&] {
+    harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared,
+                                               resolver);
+  };
+  collect();
+  EXPECT_TRUE(harness.Current(harness.Primary().scene_output)) << "an unchanged resource is reused";
+
+  // A package update resolves the same official ID to other content.
+  resolver.Map(official, second);
+  collect();
+  EXPECT_TRUE(harness.Current(harness.plan.develop_output));
+  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  EXPECT_GT(harness.Required(harness.Primary().scene_output),
+            harness.Completed(harness.Primary().scene_output));
+  harness.Complete();
+
+  // The file disappears, then returns: each availability change invalidates the Grade.
+  std::filesystem::rename(second, directory / "parked.cube");
+  collect();
+  EXPECT_FALSE(harness.Current(harness.Primary().scene_output));
+  harness.Complete();
+  std::filesystem::rename(directory / "parked.cube", second);
+  collect();
+  EXPECT_FALSE(harness.Current(harness.Primary().scene_output));
+  EXPECT_EQ(lmt->Revision(), revision);
+}
+
+}  // namespace
+}  // namespace alcedo

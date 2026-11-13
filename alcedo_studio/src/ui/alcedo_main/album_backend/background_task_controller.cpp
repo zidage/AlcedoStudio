@@ -4,6 +4,7 @@
 
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 
+#include <QDateTime>
 #include <cstddef>
 #include <utility>
 #include <vector>
@@ -13,7 +14,8 @@ namespace alcedo::ui {
 namespace {
 // Keep at most this many finished tasks in the recent list so the popover can
 // surface recent successes/failures. Active (Queued/Running/Canceling) tasks
-// are always retained regardless of this cap.
+// and pinned tasks are always retained regardless of this cap, and pinned tasks
+// do not count toward it.
 constexpr size_t kMaxFinishedRetention = 8;
 }  // namespace
 
@@ -30,12 +32,25 @@ QVariantList BackgroundTaskController::Tasks() const {
 }
 
 QVariantMap BackgroundTaskController::PrimaryTask() const {
-  // The first active task in registration order is the "primary" one the bar
-  // summarizes; if none is active, fall back to the most recent finished task
-  // so the bar briefly shows the last result.
+  // The task the island summarizes, in this order:
+  //   1. the first active pinned task (the agent that works now);
+  //   2. the first active task in registration order;
+  //   3. the newest pinned task, so that frequent short tasks such as an
+  //      editor save do not hide how the agent session ended;
+  //   4. the most recent finished task, so the bar shows the last result.
+  for (const auto& record : tasks_) {
+    if (record.snapshot_.pinned_ && IsActive(record.snapshot_.state_)) {
+      return ToVariantMap(record);
+    }
+  }
   for (const auto& record : tasks_) {
     if (IsActive(record.snapshot_.state_)) {
       return ToVariantMap(record);
+    }
+  }
+  for (auto it = tasks_.rbegin(); it != tasks_.rend(); ++it) {
+    if (it->snapshot_.pinned_) {
+      return ToVariantMap(*it);
     }
   }
   if (!tasks_.empty()) {
@@ -48,6 +63,14 @@ int BackgroundTaskController::RunningCount() const {
   int n = 0;
   for (const auto& record : tasks_) {
     if (IsActive(record.snapshot_.state_)) ++n;
+  }
+  return n;
+}
+
+int BackgroundTaskController::ActiveCountExcept(BackgroundTaskKind kind) const {
+  int n = 0;
+  for (const auto& record : tasks_) {
+    if (record.snapshot_.kind_ != kind && IsActive(record.snapshot_.state_)) ++n;
   }
   return n;
 }
@@ -108,6 +131,21 @@ void BackgroundTaskController::CancelAll() {
   EmitChanged();
 }
 
+bool BackgroundTaskController::DismissTask(const QString& taskId) {
+  for (auto it = tasks_.begin(); it != tasks_.end(); ++it) {
+    if (it->snapshot_.id_ != taskId) {
+      continue;
+    }
+    if (!IsTerminal(it->snapshot_.state_)) {
+      return false;
+    }
+    tasks_.erase(it);
+    EmitChanged();
+    return true;
+  }
+  return false;
+}
+
 QString BackgroundTaskController::RegisterTask(const BackgroundTaskSnapshot& snapshot,
                                                std::function<void()>        cancel_callback) {
   const QString id = QStringLiteral("bgtask-%1").arg(++next_id_);
@@ -154,6 +192,53 @@ void BackgroundTaskController::FinishTask(const QString& id, BackgroundTaskState
   EmitChanged();
 }
 
+bool BackgroundTaskController::ResumeTask(const QString& id, const QString& detail,
+                                          std::function<void()> cancel_callback) {
+  auto* record = Find(id);
+  if (!record || !IsTerminal(record->snapshot_.state_)) return false;
+  record->snapshot_.state_  = BackgroundTaskState::Running;
+  record->snapshot_.detail_ = detail;
+  record->cancel_callback_  = std::move(cancel_callback);
+  record->cancel_invoked_   = false;
+  EmitChanged();
+  return true;
+}
+
+auto BackgroundTaskController::AppendTaskActivity(const QString& id, const QString& text,
+                                                  const QString&              note,
+                                                  BackgroundTaskActivityState state) -> quint64 {
+  auto* record = Find(id);
+  if (!record) return 0;
+  ActivityEntry entry;
+  entry.id_            = ++next_activity_id_;
+  entry.text_          = text;
+  entry.note_          = note;
+  entry.state_         = state;
+  entry.started_at_ms_ = QDateTime::currentMSecsSinceEpoch();
+  record->activity_.push_back(std::move(entry));
+  if (record->activity_.size() > kMaxTaskActivityEntries) {
+    record->activity_.erase(
+        record->activity_.begin(),
+        record->activity_.end() - static_cast<std::ptrdiff_t>(kMaxTaskActivityEntries));
+  }
+  EmitChanged();
+  return next_activity_id_;
+}
+
+void BackgroundTaskController::FinishTaskActivity(const QString& id, quint64 activity_id,
+                                                  BackgroundTaskActivityState state) {
+  auto* record = Find(id);
+  if (!record) return;
+  for (auto& entry : record->activity_) {
+    if (entry.id_ == activity_id) {
+      if (entry.state_ == state) return;
+      entry.state_ = state;
+      EmitChanged();
+      return;
+    }
+  }
+}
+
 BackgroundTaskController::TaskRecord* BackgroundTaskController::Find(const QString& id) {
   for (auto& record : tasks_) {
     if (record.snapshot_.id_ == id) return &record;
@@ -194,13 +279,25 @@ auto BackgroundTaskController::ToVariantMap(const TaskRecord& record) -> QVarian
     locks.append(lm);
   }
   m.insert(QStringLiteral("locks"), locks);
+  m.insert(QStringLiteral("pinned"), s.pinned_);
+  // Oldest first. `startedAtMs` is the local clock in milliseconds since the epoch.
+  QVariantList activity;
+  activity.reserve(static_cast<int>(record.activity_.size()));
+  for (const auto& entry : record.activity_) {
+    QVariantMap am;
+    am.insert(QStringLiteral("id"), entry.id_);
+    am.insert(QStringLiteral("text"), entry.text_);
+    am.insert(QStringLiteral("note"), entry.note_);
+    am.insert(QStringLiteral("state"), ActivityStateToString(entry.state_));
+    am.insert(QStringLiteral("startedAtMs"), entry.started_at_ms_);
+    activity.append(am);
+  }
+  m.insert(QStringLiteral("activity"), activity);
   return m;
 }
 
 auto BackgroundTaskController::KindToString(BackgroundTaskKind kind) -> QString {
   switch (kind) {
-    case BackgroundTaskKind::ImageAnalysis:
-      return QStringLiteral("imageAnalysis");
     case BackgroundTaskKind::SemanticGeneration:
       return QStringLiteral("semanticGeneration");
     case BackgroundTaskKind::ModelDownload:
@@ -213,6 +310,16 @@ auto BackgroundTaskController::KindToString(BackgroundTaskKind kind) -> QString 
       return QStringLiteral("export");
     case BackgroundTaskKind::EditorSave:
       return QStringLiteral("editorSave");
+    case BackgroundTaskKind::AdjustmentPaste:
+      return QStringLiteral("adjustmentPaste");
+    case BackgroundTaskKind::RatingUpdate:
+      return QStringLiteral("ratingUpdate");
+    case BackgroundTaskKind::LibraryMarkUpdate:
+      return QStringLiteral("libraryMarkUpdate");
+    case BackgroundTaskKind::ImageDelete:
+      return QStringLiteral("imageDelete");
+    case BackgroundTaskKind::AgentControl:
+      return QStringLiteral("agentControl");
   }
   return QStringLiteral("unknown");
 }
@@ -256,12 +363,8 @@ auto BackgroundTaskController::CapabilityToString(InteractionCapability capabili
       return QStringLiteral("editImageRating");
     case InteractionCapability::EditImageRatingReason:
       return QStringLiteral("editImageRatingReason");
-    case InteractionCapability::RunImageAnalysis:
-      return QStringLiteral("runImageAnalysis");
-    case InteractionCapability::CommitImageAnalysisResults:
-      return QStringLiteral("commitImageAnalysisResults");
-    case InteractionCapability::ChangeImageAnalysisProvider:
-      return QStringLiteral("changeImageAnalysisProvider");
+    case InteractionCapability::EditImageMarks:
+      return QStringLiteral("editImageMarks");
     case InteractionCapability::ChangeSemanticModel:
       return QStringLiteral("changeSemanticModel");
     case InteractionCapability::RunSemanticGeneration:
@@ -280,8 +383,20 @@ auto BackgroundTaskController::CapabilityToString(InteractionCapability capabili
       return QStringLiteral("checkoutVersion");
     case InteractionCapability::PasteAdjustments:
       return QStringLiteral("pasteAdjustments");
-    case InteractionCapability::MergeAdjustments:
-      return QStringLiteral("mergeAdjustments");
+    case InteractionCapability::UserStateChange:
+      return QStringLiteral("userStateChange");
+  }
+  return QStringLiteral("unknown");
+}
+
+auto BackgroundTaskController::ActivityStateToString(BackgroundTaskActivityState state) -> QString {
+  switch (state) {
+    case BackgroundTaskActivityState::Running:
+      return QStringLiteral("running");
+    case BackgroundTaskActivityState::Succeeded:
+      return QStringLiteral("succeeded");
+    case BackgroundTaskActivityState::Failed:
+      return QStringLiteral("failed");
   }
   return QStringLiteral("unknown");
 }
@@ -299,13 +414,13 @@ auto BackgroundTaskController::IsActive(BackgroundTaskState state) -> bool {
 void BackgroundTaskController::PruneFinished() {
   size_t finished_count = 0;
   for (const auto& record : tasks_) {
-    if (IsTerminal(record.snapshot_.state_)) ++finished_count;
+    if (IsTerminal(record.snapshot_.state_) && !record.snapshot_.pinned_) ++finished_count;
   }
   if (finished_count <= kMaxFinishedRetention) return;
   const size_t        to_remove = finished_count - kMaxFinishedRetention;
   std::vector<size_t> remove_indices;
   for (size_t i = 0; i < tasks_.size() && remove_indices.size() < to_remove; ++i) {
-    if (IsTerminal(tasks_[i].snapshot_.state_)) {
+    if (IsTerminal(tasks_[i].snapshot_.state_) && !tasks_[i].snapshot_.pinned_) {
       remove_indices.push_back(i);
     }
   }

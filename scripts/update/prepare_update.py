@@ -84,6 +84,27 @@ def discover_one(package_dir: Path, pattern: str, role: str) -> Path:
     )
 
 
+def packaged_commit_stamp(package_path: Path) -> Path:
+    """Return the file in which the package script records the commit it packaged."""
+    return package_path.with_name(package_path.name + ".commit")
+
+
+def read_packaged_commit(package_path: Path) -> str:
+    stamp = packaged_commit_stamp(package_path)
+    if not stamp.is_file():
+        raise SystemExit(
+            f"packaged commit record not found: {stamp}. "
+            "Run the platform package script from the commit you publish."
+        )
+    value = stamp.read_text(encoding="utf-8").strip()
+    if value.endswith("-dirty"):
+        raise SystemExit(
+            f"{package_path.name} was packaged from a dirty worktree ({value}). "
+            "Commit the changes, then package again."
+        )
+    return validate_commit(value)
+
+
 def default_signer(platform: str, build_dir: Path) -> Path:
     executable = "alcedo_update_signer.exe" if platform == "windows" else "alcedo_update_signer"
     candidates = [
@@ -165,6 +186,13 @@ def main() -> int:
             package_dir,
             str(config["dmg_pattern"]).format(version=version),
             "macOS manual-install DMG",
+        )
+
+    packaged_commit = read_packaged_commit(package_path)
+    if packaged_commit != commit:
+        raise SystemExit(
+            f"{package_path.name} was packaged from {packaged_commit}, but the manifest commit "
+            f"is {commit}. Package again from {commit}, or check out {packaged_commit}."
         )
 
     if not args.private_key.is_file():

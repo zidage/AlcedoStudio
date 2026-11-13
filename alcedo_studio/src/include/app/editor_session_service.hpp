@@ -8,40 +8,187 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_action_policy.hpp"
-#include "app/editor_session_request_ids.hpp"
+#include "app/editor_comparison_service.hpp"
+#include "app/editor_comparison_types.hpp"
+#include "app/editor_image_render_port.hpp"
+#include "app/editor_mask_coverage_port.hpp"
+#include "app/editor_mask_coverage_preview.hpp"
+#include "app/editor_mask_creation_controller.hpp"
+#include "app/editor_panel_projection.hpp"
+#include "app/editor_parameter_write.hpp"
+#include "app/editor_pending_input.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
+#include "app/editor_serial_frame_admission.hpp"
 #include "app/editor_session_command_queue.hpp"
 #include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_navigation_controller.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_render_controller.hpp"
+#include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/graph/graph_ids.hpp"
+#include "edit/mask/mask_asset.hpp"
+#include "edit/mask/mask_id.hpp"
+#include "edit/mask/mask_model.hpp"
+#include "json.hpp"
+#include "sidecar_client/dto/segmentation.hpp"
 
 namespace alcedo {
+
+class CommitGraph;
+class PipelineDocument;
 
 /// Background-task restrictions pushed by the controller or task port into the
 /// session service for action evaluation.
 struct EditorBackgroundActionRestrictions {
   bool blocks_select_image = false;
   bool blocks_paste        = false;
-  bool blocks_merge        = false;
   bool blocks_checkout     = false;
   bool blocks_workspace    = false;
 };
 
 /// Presentation target queued with the active image-load operation.
 struct EditorPendingPresentationTarget {
-  sl_element_id_t    element_id         = 0;
-  image_id_t         image_id           = 0;
+  sl_element_id_t    element_id = 0;
+  image_id_t         image_id   = 0;
   ImageLoadRequestId image_load_request{};
+};
+
+/// Images that one preview image request renders.
+enum class EditorPreviewImageSet : std::uint8_t {
+  /// The working values and the imported root.
+  CurrentAndRoot,
+  /// Only the working values.
+  CurrentOnly,
+};
+
+/// Terminal state of one preview image request.
+enum class EditorPreviewImagesStatus : std::uint8_t {
+  /// Every requested image rendered.
+  Completed,
+  /// The session cannot render the open image now; the message says why.
+  Rejected,
+  /// The render failed or was cancelled; the message says why.
+  Failed,
+};
+
+/// Root and Current images of the open image, in host pixels.
+struct EditorPreviewImagesResult {
+  EditorPreviewImagesStatus status = EditorPreviewImagesStatus::Failed;
+  std::string               message;
+  /// Set only when Completed, and only for EditorPreviewImageSet::CurrentAndRoot.
+  RenderedPipelineImage     root;
+  /// Set only when Completed.
+  RenderedPipelineImage     current;
+};
+
+/// Receives the outcome of RenderPreviewImages, once, on the session owner or the render worker.
+using EditorPreviewImagesCompletion = std::function<void(EditorPreviewImagesResult result)>;
+
+/// What one AI Mask analysis request produces (SM4 plan section 2).
+enum class EditorAiMaskAnalysisContent : std::uint8_t {
+  /// Only the image key. No render runs.
+  KeyOnly,
+  /// The image key and the RGB8 analysis image.
+  KeyAndPixels,
+};
+
+/// Terminal state of one AI Mask analysis request.
+enum class EditorAiMaskAnalysisStatus : std::uint8_t {
+  /// The requested content is in the result.
+  Completed,
+  /// The session cannot render the open image now; the message says why.
+  Rejected,
+  /// The analysis document, the render, or the conversion failed; the message has the real error.
+  Failed,
+};
+
+/// The analysis image of the open image: the whole source without crop and rotation, with the
+/// import root look and the current Develop settings. Normalized coordinates of @ref image are
+/// normalized ReferenceSpace coordinates.
+struct EditorAiMaskAnalysisResult {
+  EditorAiMaskAnalysisStatus status = EditorAiMaskAnalysisStatus::Failed;
+  std::string                message;
+  /// Image key of the sidecar embedding cache; set when Completed.
+  std::string                image_key;
+  /// RGB8 pixels; set only when Completed with KeyAndPixels.
+  SegmentationRgb8Image      image;
+  /// ReferenceSpace size of the render; set only when Completed with KeyAndPixels.
+  Extent2D                   full_reference_extent{};
+};
+
+/// Receives the outcome of RenderAiMaskAnalysisImage, once, on the session owner or the render
+/// worker.
+using EditorAiMaskAnalysisCompletion = std::function<void(EditorAiMaskAnalysisResult result)>;
+
+/// One LUT browser preview (issue #598): the import root of the open image with one LUT.
+struct EditorLutPreviewRequest {
+  /// Image the caller keys the preview with. The session refuses the request (Rejected) when
+  /// the open image is another one, so a preview is never stored under the wrong image.
+  image_id_t     image_id = 0;
+  /// Reference, display name, and encodings of the browser entry. The strength is ignored: a
+  /// preview shows the complete LUT result.
+  EditorLutWrite write;
+};
+
+/// Terminal state of one LUT preview request.
+enum class EditorLutPreviewStatus : std::uint8_t {
+  /// The preview rendered.
+  Completed,
+  /// The session cannot render the open image now; the message says why.
+  Rejected,
+  /// The preview document or the render failed; the message has the real error.
+  Failed,
+};
+
+/// One rendered LUT preview.
+struct EditorLutPreviewResult {
+  EditorLutPreviewStatus status = EditorLutPreviewStatus::Failed;
+  std::string            message;
+  /// Host pixels of the preview; set only when Completed.
+  RenderedPipelineImage  image;
+};
+
+/// Receives the outcome of RenderLutPreview, once, on the session owner or the render worker.
+using EditorLutPreviewCompletion = std::function<void(EditorLutPreviewResult result)>;
+
+/**
+ * @brief Outcome of one OpenAiMaskEdit request (SM5 section 7.3).
+ *
+ * @p result is Accepted when the session is open and holds the AiMaskEdit lease; Rejected or
+ * Failed with the reason otherwise. The other fields are set only when Accepted.
+ */
+struct EditorAiMaskEditOpenResult {
+  EditorSessionResult                     result;
+  /// MakeAiMaskGeometryFingerprint of the Develop of the working document.
+  std::string                             geometry_fingerprint;
+  /// Copy of the stored source; set when a Mask id was given. Section 5.5: the session edits its
+  /// own recipe while the lease keeps the live document unchanged; Commit writes through
+  /// ReplaceMaskSource.
+  std::optional<AiSegmentationMaskSource> stored_source;
+  /// Verified R8 asset of @ref stored_source; set together with it.
+  std::optional<MaskAsset>                stored_asset;
+};
+
+/// Receives the outcome of OpenAiMaskEdit, once, on the session owner thread.
+using EditorAiMaskEditOpenCompletion = std::function<void(EditorAiMaskEditOpenResult result)>;
+
+/// Output of AiMaskEditSession::PrepareCommit for the open AI Mask edit.
+struct EditorAiMaskCommit {
+  NodeId                   grade_id;
+  /// Empty for a new Mask; the opened Mask otherwise.
+  std::optional<MaskId>    mask_id;
+  MaskAsset                asset;
+  AiSegmentationMaskSource source;
 };
 
 /// Narrow backend surface for EditorSessionController tests. Production uses
@@ -51,6 +198,10 @@ class IEditorSessionBackend {
   virtual ~IEditorSessionBackend() = default;
 
   using ChangeNotifier             = std::function<void()>;
+  /// Optional: notified when render-busy or inflight reason changes. Does not
+  /// replace SetChangeNotifier and must not be used for identity, errors, or
+  /// authoritative panel values.
+  using RenderProgressObserver     = std::function<void()>;
   /// Optional: notified for every typed session result that crosses Emit /
   /// NotifyResult. Phase 7A R4 uses this so the controller can publish a
   /// correlated terminal HistoryOperationEvent after an async save checkpoint
@@ -66,12 +217,10 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto has_pending_recovery() const -> bool { return false; }
   [[nodiscard]] virtual auto has_unmaterialized_changes() -> bool { return false; }
   [[nodiscard]] virtual auto last_error() const -> std::string = 0;
-  /// Read-only snapshot of the committed editor adjustment state (panel values,
-  /// not runtime pipeline handles). Returns the default-constructed empty
-  /// snapshot when the backend has no image or the history port is unavailable.
-  [[nodiscard]] virtual auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
-    return {};
-  }
+  /// Load-only panel values copied from Graph Node Models. Empty when the
+  /// backend has no image. GUI delivery is discarded when session_generation
+  /// does not match the live session.
+  [[nodiscard]] virtual auto panel_projection() const -> EditorPanelProjection { return {}; }
   /// Monotonic counter incremented only when history-display-affecting state
   /// changes (active Version ID, a Version ref creation/removal/rename/head
   /// move, working head or redo suffix, visible commit set, recovered-head
@@ -80,17 +229,45 @@ class IEditorSessionBackend {
   /// across backend change notifications to emit one dedicated history signal
   /// instead of refreshing on every renderer event.
   [[nodiscard]] virtual auto history_revision() const -> std::uint64_t { return 0; }
+  /// Lightweight active Version identity for session/layout comparisons.
+  [[nodiscard]] virtual auto active_version_id() const -> version_ref_id_t { return {}; }
   [[nodiscard]] virtual auto history_snapshot() -> EditorHistorySnapshot { return {}; }
+  /// Detached copy of the open image's CommitGraph and immutable root document for
+  /// read-only consumers (Copy Adjustments). The session is the only owner of an open
+  /// image's history, so other modules read it through here instead of loading it.
+  virtual auto SnapshotHistorySource(
+      std::shared_ptr<const CommitGraph>* /*graph*/,
+      std::shared_ptr<const PipelineDocument>* /*root_document*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "History source snapshot is not supported";
+    return false;
+  }
+  /// Immutable PipelineDocument for GUI projections (Nodes page, typed write
+  /// targets): the preview the history published after its last write, before
+  /// any change notification, so GUI readers never dereference the working
+  /// document the session thread writes. Empty when no image document is
+  /// loaded. Default fakes return null.
+  [[nodiscard]] virtual auto pipeline_document() const
+      -> std::shared_ptr<const PipelineDocument> {
+    return {};
+  }
 
   /// Optional: notified after state/identity changes from async results.
-  virtual void               SetChangeNotifier(ChangeNotifier notifier) {
+  virtual void SetChangeNotifier(ChangeNotifier notifier) {
+    std::scoped_lock lock(observer_mutex_);
     change_notifier_ = std::move(notifier);
+  }
+
+  /// Optional: notified when coordinator busy/inflight reason changes.
+  virtual void SetRenderProgressObserver(RenderProgressObserver observer) {
+    std::scoped_lock lock(observer_mutex_);
+    render_progress_observer_ = std::move(observer);
   }
 
   /// Optional: notified for each typed EditorSessionResult published by the
   /// backend. Production installs this from EditorSessionController. Fakes may
   /// call NotifyResult from CompletePendingVersionOp-style helpers.
   virtual void SetResultObserver(ResultObserver observer) {
+    std::scoped_lock lock(observer_mutex_);
     result_observer_ = std::move(observer);
   }
 
@@ -99,6 +276,28 @@ class IEditorSessionBackend {
   /// Keep geometry editing on the source-frame overlay until the panel closes.
   /// Backends that do not render through the unified session path may ignore it.
   virtual void SetGeometryOverlayActive(bool /*active*/) {}
+  /// The bound viewport was minimized/hidden (true) or shown again (false). Frames refused
+  /// while suspended are rendered again on resume. Backends without a viewport may ignore it.
+  virtual void SetPresentationSuspended(bool /*suspended*/) {}
+  /// An export released the editor GPU resources (true) or ended (false). Frames the render port
+  /// refused meanwhile are rendered again when it ends. Backends without a GPU renderer may
+  /// ignore it.
+  virtual void SetSuspendedForExport(bool /*suspended*/) {}
+  /**
+   * @brief Reproject load-only panel values from @p node_id.
+   *
+   * Does not enqueue an edit, commit history, or render. Does not wait for an
+   * inflight frame.
+   * Default fakes accept without changing stored projection.
+   */
+  virtual auto SetAdjustmentProjectionNode(const NodeId& /*node_id*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Adjustment projection node ignored";
+    return result;
+  }
   virtual auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult   = 0;
   virtual auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult = 0;
   /// Check out another Version on the open image after a save checkpoint.
@@ -174,8 +373,12 @@ class IEditorSessionBackend {
     result.message  = "Version removal is not supported by this backend";
     return result;
   }
+  /// Paste @p package as a new root-relative Version of the open image. @p attribution names
+  /// the author of the Paste commit; nullopt is the user. Default backends reject.
   virtual auto PasteAdjustments(const AdjustmentTransferPackage& /*package*/,
-                                std::string /*version_display_name*/) -> EditorSessionResult {
+                                std::string /*version_display_name*/,
+                                std::optional<EditCommitAttribution> /*attribution*/ = std::nullopt)
+      -> EditorSessionResult {
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::Rejected;
     result.state    = state();
@@ -183,34 +386,19 @@ class IEditorSessionBackend {
     result.message  = "Editor Paste is not supported by this backend";
     return result;
   }
-  virtual auto BeginMerge(const AdjustmentTransferPackage& /*package*/,
-                          AdjustmentMergePreview* /*preview*/) -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind     = EditorSessionResultKind::Rejected;
-    result.state    = state();
-    result.identity = identity();
-    result.message  = "Editor Merge is not supported by this backend";
-    return result;
-  }
-  virtual auto CompleteMerge(const std::vector<AdjustmentMergeResolution>& /*resolutions*/)
-      -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind     = EditorSessionResultKind::Rejected;
-    result.state    = state();
-    result.identity = identity();
-    result.message  = "Editor Merge is not supported by this backend";
-    return result;
-  }
-  virtual auto CancelMerge() -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind     = EditorSessionResultKind::Rejected;
-    result.state    = state();
-    result.identity = identity();
-    result.message  = "Editor Merge cancellation is not supported by this backend";
-    return result;
-  }
   virtual auto Close(bool persist_changes) -> EditorSessionResult = 0;
-  virtual auto Shutdown() -> EditorSessionResult                  = 0;
+  /// Materialize the open image without leaving Interactive. Used when the
+  /// workspace routes to Library so the album thumbnail matches the last
+  /// settled edit. Default backends accept without saving.
+  virtual auto PersistCurrentImage() -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Persist current image ignored";
+    return result;
+  }
+  virtual auto Shutdown() -> EditorSessionResult = 0;
   virtual auto Discard() -> EditorSessionResult                   = 0;
   virtual auto Undo() -> EditorSessionResult                      = 0;
   virtual auto Redo() -> EditorSessionResult                      = 0;
@@ -239,6 +427,162 @@ class IEditorSessionBackend {
     result.message = "Adjustment commit not supported by this backend";
     return result;
   }
+  /**
+   * @brief Admit one typed field write into the pending-input queue.
+   *
+   * Acceptance means queued for later owner processing. It does not apply the
+   * write to the live document, capture history before-values, or commit.
+   * The queued payload is the caller's field write, not a copy of live
+   * operator/node/document parameters.
+   * Accepted writes are not appended to the session result log; inspect the
+   * pending-input queue instead. Default backends reject so fakes must opt in.
+   */
+  virtual auto EnqueueAdjustmentInput(EditorAdjustmentPatch /*patch*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Queued adjustment input is not supported by this backend";
+    return result;
+  }
+  /**
+   * @brief Admit a Release, Cancel, or NodeSwitch seal on the open sequence.
+   *
+   * @p attribution names the author of the commits of the sealed sequence; nullopt is the user,
+   * and only kEditCommitAuthorAgent is accepted. Does not apply or restore live parameters.
+   * Default backends reject.
+   */
+  virtual auto EnqueuePendingInputBoundary(
+      EditorPendingInputBoundaryKind /*kind*/,
+      std::optional<EditCommitAttribution> /*attribution*/ = std::nullopt) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Queued adjustment input is not supported by this backend";
+    return result;
+  }
+
+  /**
+   * @brief Queue one Mask-creation command for owner-thread consume.
+   *
+   * Does not mutate the working Grade. Latest Append
+   * samples with the same pointer identity coalesce. Default backends reject.
+   * A BeginMaskField of `luminance_range` or `color_range` opens a range edit of the command's
+   * Mask, of any kind, without a selection change. During an AI Mask edit only Cancel and the
+   * range edit of its stored Mask (BeginMaskField, SetMaskField, Finish) are admitted (MR4).
+   */
+  virtual auto EnqueueMaskCreation(EditorMaskCreationCommand /*command*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Queued Mask creation is not supported by this backend";
+    return result;
+  }
+  /**
+   * @brief True while queued Mask commands have not reached the session owner.
+   *
+   * UI adapters use this owner read to avoid replacing a just-requested local
+   * selection or removal with the previous owner state. Implementations must
+   * synchronize this read with their Mask command queue.
+   */
+  [[nodiscard]] virtual auto mask_creation_commands_pending() const -> bool { return false; }
+  /**
+   * @brief Copy of queued Mask-creation commands. Empty when none are waiting.
+   *
+   * Synchronized with the Mask command queue. Latest non-ordered Append samples
+   * with the same pointer identity are already coalesced. Does not mutate the
+   * working Grade.
+   */
+  [[nodiscard]] virtual auto PeekPendingMaskCommands() const
+      -> std::vector<EditorMaskCreationCommand> {
+    return {};
+  }
+  [[nodiscard]] virtual auto mask_creation_node_id() const -> NodeId { return {}; }
+  [[nodiscard]] virtual auto mask_creation_mask_id() const -> MaskId { return {}; }
+  /**
+   * @brief Owner-side Mask-creation state machine value.
+   *
+   * UI adapters compare this with their local armed state so a rejected tool
+   * arming cannot leave a stale armed kind waiting for the next press.
+   */
+  [[nodiscard]] virtual auto mask_creation_state() const -> EditorMaskCreationState {
+    return EditorMaskCreationState::Inactive;
+  }
+  [[nodiscard]] virtual auto mask_creation_source() const -> std::optional<MaskSource> {
+    return std::nullopt;
+  }
+  [[nodiscard]] virtual auto mask_creation_last_removed_mask_id() const -> MaskId { return {}; }
+  /**
+   * @brief Inspect queued change descriptions. Empty when the backend has none.
+   *
+   * The view is the pending-input queue itself, not a live parameter-body copy.
+   */
+  [[nodiscard]] virtual auto PeekPendingInput() const -> EditorPendingInputView { return {}; }
+  /**
+   * @brief Consume the next pending-input batch when the owner is idle.
+   *
+   * No-op on backends that do not own a pending-input queue. Must run on the
+   * session owner thread.
+   */
+  virtual void               TryConsumePendingInput() {}
+  virtual void               SetAdmissionDeadlineHandler(
+                    std::function<void(std::int64_t /*delay_ns*/)> /*handler*/) {}
+  /// Rename a Color Grade as a metadata-only history change. Default backends reject.
+  virtual auto RenameColorGrade(const NodeId& /*node_id*/, std::string /*display_name*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade rename is not supported by this backend";
+    return result;
+  }
+  /// Set deletion-only protection as metadata history; equal values are no-ops. Default rejects.
+  virtual auto SetColorGradeDeletionProtected(const NodeId& /*node_id*/, bool /*deletion_protected*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade deletion protection is not supported by this backend";
+    return result;
+  }
+  /// Apply one net node-graph topology delta as one history commit. Default rejects.
+  virtual auto EditNodeGraph(NodeGraphTopologyChange /*change*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Node graph topology edit is not supported by this backend";
+    return result;
+  }
+  /// Mask Groups: insert one clean Color Grade at the top of the stack,
+  /// directly before DRT/Post, as one typed history commit.
+  /// @p expected_predecessor_id is the committed node the caller observed
+  /// directly before DRT/Post; the owner rejects the request when the live
+  /// backbone no longer matches. Default backends reject.
+  virtual auto InsertColorGradeAtTop(const NodeId& /*new_id*/,
+                                     const NodeId& /*expected_predecessor_id*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade top insertion is not supported by this backend";
+    return result;
+  }
+  /// Mask Groups: remove one Color Grade and bridge its scene-image neighbors
+  /// as one typed history commit. Default backends reject.
+  virtual auto RemoveColorGradeAndBridge(const NodeId& /*node_id*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade bridge removal is not supported by this backend";
+    return result;
+  }
   virtual auto RequestViewChange(EditorRenderReason /*reason*/,
                                  std::optional<ViewportRenderRegion> /*region*/)
       -> EditorSessionResult {
@@ -248,13 +592,231 @@ class IEditorSessionBackend {
     result.message = "View change not supported by this backend";
     return result;
   }
+  /**
+   * @brief Open the editor comparison of the open image and render Root and Current.
+   *
+   * Admitted through EditorAction::OpenComparison. Settles pending parameter input, captures the
+   * working values once, and blocks image writes, history movement, Version writes, Paste, and
+   * view changes until the comparison closes. Saves nothing. Default backends reject.
+   */
+  virtual auto OpenComparison(EditorComparisonKind /*kind*/) -> EditorSessionResult {
+    return RejectComparison("Comparison is not supported by this backend");
+  }
+  /// Select the kind and sources of the open comparison; renders a new pair when a source changed.
+  virtual auto SelectComparisonSources(EditorComparisonKind /*kind*/,
+                                       EditorComparisonSource /*a*/, EditorComparisonSource /*b*/)
+      -> EditorSessionResult {
+    return RejectComparison("Comparison is not supported by this backend");
+  }
+  /// Render the selected pair of the open comparison again.
+  virtual auto RetryComparison() -> EditorSessionResult {
+    return RejectComparison("Comparison is not supported by this backend");
+  }
+  /**
+   * @brief Close the open comparison and release its documents and images.
+   *
+   * With @p refresh_current_view, routes one Quality render of the current document with
+   * @p region afterwards. Accepted without a change when no comparison is open.
+   */
+  virtual auto CloseComparison(bool /*refresh_current_view*/,
+                               std::optional<ViewportRenderRegion> /*region*/)
+      -> EditorSessionResult {
+    return RejectComparison("Comparison is not supported by this backend");
+  }
+  /**
+   * @brief Render the working values of the open image, and with @p images also the imported
+   *        root, to host pixels.
+   *
+   * Uses the image render port with @p geometry; presents nothing and writes nothing. The
+   * working values include input that is not settled yet. The root keeps every stored Develop
+   * setting (EditorComparisonDevelopSettings::Stored), including demosaic, highlight
+   * reconstruction, Lens Correction, and white balance, so the root image is the image as
+   * imported.
+   * @return Rejected only when the command queue refuses the command. Every other outcome,
+   *         including a refusal on the owner, reaches @p on_complete exactly once.
+   */
+  virtual auto RenderPreviewImages(RenderRequest /*geometry*/, EditorPreviewImageSet /*images*/,
+                                   EditorPreviewImagesCompletion /*on_complete*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = state();
+    result.message = "Preview images are not supported by this backend";
+    return result;
+  }
+  /**
+   * @brief Give the image key of the AI Mask analysis image of the open image, and with
+   *        @p content also its RGB8 pixels.
+   *
+   * The analysis document is the import root with the current Develop settings; the render uses
+   * the image render port without crop and rotation, at a long edge of at most 4096. Presents
+   * nothing and writes nothing.
+   * @return Rejected only when the command queue refuses the command. Every other outcome,
+   *         including a refusal on the owner, reaches @p on_complete exactly once.
+   */
+  virtual auto RenderAiMaskAnalysisImage(EditorAiMaskAnalysisContent /*content*/,
+                                         EditorAiMaskAnalysisCompletion /*on_complete*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = state();
+    result.message = "The AI Mask analysis image is not supported by this backend";
+    return result;
+  }
+  /**
+   * @brief Render the LUT browser preview of @p request (issue #598).
+   *
+   * Builds the preview document from the import root of the open image
+   * (IEditorHistoryPort::BuildLutPreviewDocument) and renders it with the image render port at
+   * the LUT preview size (MakeLutPreviewRenderRequest), after the image jobs accepted before it.
+   * Edits of the image do not change the document. Presents nothing and writes nothing.
+   * @return Rejected only when the command queue refuses the command. Every other outcome,
+   *         including a refusal on the owner, reaches @p on_complete exactly once.
+   */
+  virtual auto RenderLutPreview(EditorLutPreviewRequest /*request*/,
+                                EditorLutPreviewCompletion /*on_complete*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = state();
+    result.message = "LUT previews are not supported by this backend";
+    return result;
+  }
+  /**
+   * @brief Open an AI Mask edit session on Color Grade @p grade_id.
+   *
+   * Without @p mask_id the session makes a new AI Mask; with it, the Mask must be an AI Mask of
+   * the Grade. Requires CommitAdjustment admission (an interactive image and no other lease that
+   * blocks writes) and no open AI Mask edit. Settles pending input, then acquires the AiMaskEdit
+   * lease: document writes, history movement, Version writes, Paste, and the comparison stay
+   * blocked until Commit, Cancel, or an image change. Writes nothing.
+   * @return Rejected only when the command queue refuses the command. Every other outcome reaches
+   *         @p on_complete exactly once.
+   */
+  virtual auto OpenAiMaskEdit(const NodeId& /*grade_id*/, std::optional<MaskId> /*mask_id*/,
+                              EditorAiMaskEditOpenCompletion on_complete) -> EditorSessionResult {
+    EditorAiMaskEditOpenResult refused;
+    refused.result = RejectComparison("AI Mask edit is not supported by this backend");
+    if (on_complete) {
+      on_complete(refused);
+    }
+    return refused.result;
+  }
+  /**
+   * @brief Store the asset of the open AI Mask edit, then publish one history operation.
+   *
+   * The asset put commits its own database transaction before the publish (M12): AddMask for a
+   * new Mask, ReplaceMaskSource for an opened Mask (nothing for an equal source). Releases the
+   * lease on success. A failed put or publish keeps the document, the history, and the lease.
+   */
+  virtual auto CommitAiMaskEdit(EditorAiMaskCommit /*commit*/) -> EditorSessionResult {
+    return RejectComparison("AI Mask edit is not supported by this backend");
+  }
+  /// End the open AI Mask edit and release its lease. Publishes and stores nothing. The coverage
+  /// preview returns to the selected committed AI Mask, or hides when none is selected.
+  virtual auto CancelAiMaskEdit() -> EditorSessionResult {
+    return RejectComparison("AI Mask edit is not supported by this backend");
+  }
+  /**
+   * @brief Present @p candidate, the current coverage of the AI Mask edit session, in the
+   *        viewport (SM8.7 UpdateAiMaskCandidateCoverage).
+   *
+   * @p candidate.pixels is the shared read of AiMaskEditSession::AcquireCoveragePixels; the
+   * session keeps it unchanged, so the presentation holds it without a copy until the upload
+   * completes. Requires the open AI Mask edit. The viewport keeps the coverage it displays until
+   * the GPU work of this request completes. Writes nothing.
+   * @return Rejected only when the command queue refuses the command. Every other outcome reaches
+   *         @p on_complete exactly once, on the session owner thread.
+   */
+  virtual auto UpdateAiMaskCandidateCoverage(MaskCoverageCandidateSelection /*candidate*/,
+                                             EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult {
+    return RefuseMaskCoverage(std::move(on_complete));
+  }
+  /**
+   * @brief Select committed AI Mask @p mask_id of Color Grade @p grade_id as the coverage preview
+   *        and present it (SM8.7 SelectMaskCoveragePreview). Refused during an AI Mask edit.
+   *
+   * Without @p mask_id the selection is the Union of the Grade, which the coverage-only operation
+   * does not evaluate; it is refused with that reason, as is an analytic Mask.
+   * @return Rejected only when the command queue refuses the command. Every other outcome reaches
+   *         @p on_complete exactly once, on the session owner thread.
+   */
+  virtual auto SelectMaskCoveragePreview(const NodeId& /*grade_id*/,
+                                         std::optional<MaskId> /*mask_id*/,
+                                         EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult {
+    return RefuseMaskCoverage(std::move(on_complete));
+  }
+  /// Forget the coverage preview (candidate and committed selection) and hide it after the
+  /// presentation in flight. Idempotent.
+  virtual auto ClearMaskCoveragePreview() -> EditorSessionResult {
+    return RejectComparison("Coverage preview is not supported by this backend");
+  }
+  /**
+   * @brief Present the newest coverage request again after a failed presentation (status
+   *        Previous). Uses the same shared pixels and edge values; runs no model.
+   * @return Rejected only when the command queue refuses the command. Every other outcome reaches
+   *         @p on_complete exactly once, on the session owner thread.
+   */
+  virtual auto RetryMaskCoveragePreview(EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult {
+    return RefuseMaskCoverage(std::move(on_complete));
+  }
+  /**
+   * @brief Present the newest coverage request again because the viewport lost the displayed
+   *        coverage (#514: it released its QRhi resources). Uses the same shared pixels and edge
+   *        values; runs no model. A failed presentation moves the preview to Previous (Retry).
+   *
+   * The outcome is Rejected, with the preview unchanged, when nothing is presented again: no
+   * coverage is shown, the preview is already in the Previous status, or the coverage is a range
+   * probe, which the next photo frame carries.
+   * @return Rejected only when the command queue refuses the command. Every other outcome reaches
+   *         @p on_complete exactly once, on the session owner thread.
+   */
+  virtual auto PresentMaskCoverageAgain(EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult {
+    return RefuseMaskCoverage(std::move(on_complete));
+  }
+  /**
+   * @brief Show the coverage of Mask @p mask_id of Color Grade @p grade_id in the viewport, from
+   *        the photo renders, evaluated on the image that enters that Grade (Mask ranges D8-D11).
+   *
+   * Any Mask kind. While shown, every Interactive, Quality, and Detail render request of the editor
+   * carries the probe, so the coverage follows each frame (a range drag shows the selection
+   * live); one Quality render presents it at once. It replaces a committed AI Mask preview, and a
+   * later AI preview replaces it. During the AI Mask edit of a stored Mask it covers the candidate
+   * for that Mask only (MR4): Hide or a candidate update shows the candidate again, and the end of
+   * the edit ends the probe. During the AI Mask edit of a new Mask, an empty @p mask_id probes the
+   * candidate (#604): the renders evaluate the newest candidate with the ranges set during the
+   * edit on the input of Grade @p grade_id, for the display only. Refused during the AI Mask edit
+   * for another Mask, while the candidate failed to present or has no coverage, without an
+   * interactive session, and for a Grade or Mask that the working document does not have. Writes
+   * nothing.
+   */
+  virtual auto ShowMaskRangeCoverage(const NodeId& /*grade_id*/, const MaskId& /*mask_id*/)
+      -> EditorSessionResult {
+    return RejectComparison("Mask range coverage is not supported by this backend");
+  }
+  /// Hide the range probe coverage without a photo render. Idempotent.
+  virtual auto HideMaskRangeCoverage() -> EditorSessionResult {
+    return RejectComparison("Mask range coverage is not supported by this backend");
+  }
+  /// Published state of the coverage preview. Any thread.
+  [[nodiscard]] virtual auto mask_coverage_preview_state() const -> EditorMaskCoveragePreviewState {
+    return {};
+  }
+  /// True from AI Mask edit Open to Commit, Cancel, or image change. Any thread.
+  [[nodiscard]] virtual auto ai_mask_edit_open() const -> bool { return false; }
+  /// Published state of the open comparison; Inactive when none is open. Any thread.
+  [[nodiscard]] virtual auto comparison_state() const -> EditorComparisonState { return {}; }
+  /// Move the Ready pair @p pair_id (A, B) out of the backend; empty when it is not Ready.
+  virtual auto TakeComparisonImages(std::uint64_t /*pair_id*/)
+      -> std::vector<RenderedPipelineImage> {
+    return {};
+  }
   [[nodiscard]] virtual auto render_busy() const -> bool { return false; }
-  [[nodiscard]] virtual auto action_availability() const -> EditorActionAvailability {
-    return {};
-  }
-  [[nodiscard]] virtual auto active_image_load_request() const -> ImageLoadRequestId {
-    return {};
-  }
+  [[nodiscard]] virtual auto action_availability() const -> EditorActionAvailability { return {}; }
+  [[nodiscard]] virtual auto active_image_load_request() const -> ImageLoadRequestId { return {}; }
   [[nodiscard]] virtual auto pending_presentation_target() const
       -> std::optional<EditorPendingPresentationTarget> {
     return std::nullopt;
@@ -269,9 +831,31 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto first_frame_time_ms() const -> double { return -1.0; }
 
  protected:
+  [[nodiscard]] auto RejectComparison(std::string message) const -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = std::move(message);
+    return result;
+  }
+  /// Default refusal of the coverage preview requests: the completion receives Rejected.
+  auto RefuseMaskCoverage(EditorMaskCoverageCompletion on_complete) const -> EditorSessionResult {
+    auto refused = RejectComparison("Coverage preview is not supported by this backend");
+    if (on_complete) {
+      on_complete({EditorMaskCoverageOutcome::Rejected, refused.message, {}});
+    }
+    return refused;
+  }
+
   void NotifyChange() {
-    if (change_notifier_) {
-      change_notifier_();
+    ChangeNotifier notifier;
+    {
+      std::scoped_lock lock(observer_mutex_);
+      notifier = change_notifier_;
+    }
+    if (notifier) {
+      notifier();
     }
   }
 
@@ -279,13 +863,33 @@ class IEditorSessionBackend {
   /// NotifyChange — callers that also mutate visible state should NotifyChange
   /// separately (or go through EditorSessionService::Emit).
   void NotifyResult(const EditorSessionResult& result) {
-    if (result_observer_) {
-      result_observer_(result);
+    ResultObserver observer;
+    {
+      std::scoped_lock lock(observer_mutex_);
+      observer = result_observer_;
+    }
+    if (observer) {
+      observer(result);
     }
   }
 
-  ChangeNotifier change_notifier_;
-  ResultObserver result_observer_;
+  void NotifyRenderProgress() {
+    RenderProgressObserver observer;
+    {
+      std::scoped_lock lock(observer_mutex_);
+      observer = render_progress_observer_;
+    }
+    if (observer) {
+      observer();
+    }
+  }
+
+  // Guards the observer slots below: they are installed from the GUI thread
+  // and invoked from the session owner thread.
+  mutable std::mutex     observer_mutex_;
+  ChangeNotifier         change_notifier_;
+  RenderProgressObserver render_progress_observer_;
+  ResultObserver         result_observer_;
 };
 
 /// Thin facade that owns five focused collaborators and routes typed intents.
@@ -298,7 +902,6 @@ class EditorSessionService final : public IEditorSessionBackend {
     std::shared_ptr<IEditorPipelinePort>             pipeline;
     std::shared_ptr<IEditorHistoryPort>              history;
     std::shared_ptr<IEditorTaskPort>                 tasks;
-    std::shared_ptr<IEditorJournalPort>              journal;
     std::shared_ptr<IEditorCheckpointStore>          checkpoint_store;
     std::shared_ptr<IEditorThumbnailPort>            thumbnails;
     std::shared_ptr<IEditorRenderSubmitPort>         render;
@@ -307,13 +910,28 @@ class EditorSessionService final : public IEditorSessionBackend {
     /// Delivery port for the thread that owns the session reducer. When null,
     /// the runtime uses a deterministic manual executor.
     std::shared_ptr<IEditorSessionCommandExecutor>   command_executor;
+    /// One-shot host images of the held image (editor comparison). Null disables comparison
+    /// rendering; an opened comparison then reports that reason.
+    std::shared_ptr<IEditorImageRenderPort>          images;
+    /// AI Mask R8 asset store. Null rejects AI Mask Commit and the Open of a stored AI Mask.
+    std::shared_ptr<IEditorMaskAssetPort>            mask_assets;
+    /// Coverage-only presentation on the editor executor (SM8.7). Null makes every coverage
+    /// preview request fail with that reason.
+    std::shared_ptr<IEditorMaskCoveragePort>         mask_coverage;
   };
 
   explicit EditorSessionService(Dependencies dependencies);
   ~EditorSessionService() override;
 
+  /// Runs the session work that is already due, joins the session-owner worker, and discards
+  /// work that has not started. After this returns, no result, change, progress, or availability
+  /// observer runs on the worker, so the host calls it before it destroys the observer receivers.
+  /// Must not be called from the session-owner thread. Idempotent.
+  void               StopCommandExecutor();
+
   void               SetResultObserver(ResultObserver observer) override;
   void               SetChangeNotifier(ChangeNotifier notifier) override;
+  void               SetRenderProgressObserver(RenderProgressObserver observer) override;
   void               SetActionAvailabilityObserver(ActionAvailabilityObserver observer) override;
 
   [[nodiscard]] auto state() const -> EditorSessionState override { return lifecycle_.state(); }
@@ -324,10 +942,12 @@ class EditorSessionService final : public IEditorSessionBackend {
     return lifecycle_.active_image_load_request();
   }
   [[nodiscard]] auto action_availability() const -> EditorActionAvailability override {
+    std::scoped_lock lock(publish_mutex_);
     return published_availability_;
   }
   [[nodiscard]] auto pending_presentation_target() const
       -> std::optional<EditorPendingPresentationTarget> override {
+    std::scoped_lock lock(publish_mutex_);
     return pending_presentation_target_;
   }
   void SetCopiedPackageAvailable(bool available) override;
@@ -343,11 +963,17 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto first_frame_request_id() const -> std::uint64_t {
     return render_.first_frame_request_id();
   }
-  [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override;
+  [[nodiscard]] auto panel_projection() const -> EditorPanelProjection override;
   [[nodiscard]] auto history_revision() const -> std::uint64_t override {
     return history_revision_.load(std::memory_order_acquire);
   }
+  [[nodiscard]] auto active_version_id() const -> version_ref_id_t override;
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override;
+  auto SnapshotHistorySource(std::shared_ptr<const CommitGraph>*      graph,
+                             std::shared_ptr<const PipelineDocument>* root_document,
+                             std::string*                             error) -> bool override;
+  [[nodiscard]] auto pipeline_document() const
+      -> std::shared_ptr<const PipelineDocument> override;
   [[nodiscard]] auto presentation_sink_id() const -> PresentationSinkId {
     return render_.presentation_sink_id();
   }
@@ -361,6 +987,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   void SetPresentationSinkId(PresentationSinkId sink_id) override;
   void SetPresentationSize(int width, int height) override;
   void SetGeometryOverlayActive(bool active) override;
+  void SetPresentationSuspended(bool suspended) override;
+  void SetSuspendedForExport(bool suspended) override;
 
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
@@ -379,31 +1007,126 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto RenameVersion(const version_ref_id_t& version_id, std::string display_name)
       -> EditorSessionResult override;
   auto RemoveVersion(const version_ref_id_t& version_id) -> EditorSessionResult override;
-  auto PasteAdjustments(const AdjustmentTransferPackage& package, std::string version_display_name)
+  auto PasteAdjustments(const AdjustmentTransferPackage& package, std::string version_display_name,
+                        std::optional<EditCommitAttribution> attribution = std::nullopt)
       -> EditorSessionResult override;
-  auto BeginMerge(const AdjustmentTransferPackage& package, AdjustmentMergePreview* preview)
-      -> EditorSessionResult override;
-  auto CompleteMerge(const std::vector<AdjustmentMergeResolution>& resolutions)
-      -> EditorSessionResult override;
-  auto               CancelMerge() -> EditorSessionResult override;
   auto               Close(bool persist_changes) -> EditorSessionResult override;
+  auto               PersistCurrentImage() -> EditorSessionResult override;
   [[nodiscard]] auto render_busy() const -> bool override { return render_.render_busy(); }
-  /// Phase 7A: true when the session is awaiting save-failure recovery.
+  /// Phase 7A: true when the session is awaiting save-failure recovery. The
+  /// value mirrors owner state refreshed on every availability publish, so a
+  /// GUI read never dereferences the navigation controller off-thread.
   [[nodiscard]] auto has_pending_recovery() const -> bool override {
-    return navigation_.has_pending_recovery();
+    return pending_recovery_published_.load(std::memory_order_acquire);
   }
   [[nodiscard]] auto has_unmaterialized_changes() -> bool override;
   auto               Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto               CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;
-  auto               Patch(std::string patch_key) -> EditorSessionResult;
-  auto               CommitAdjustment(std::string patch_key) -> EditorSessionResult;
-  auto               Undo() -> EditorSessionResult override;
-  auto               Redo() -> EditorSessionResult override;
+  auto EnqueueAdjustmentInput(EditorAdjustmentPatch patch) -> EditorSessionResult override;
+  auto EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind       kind,
+                                   std::optional<EditCommitAttribution> attribution = std::nullopt)
+      -> EditorSessionResult override;
+  auto EnqueueMaskCreation(EditorMaskCreationCommand command) -> EditorSessionResult override;
+  [[nodiscard]] auto mask_creation_commands_pending() const -> bool override;
+  [[nodiscard]] auto PeekPendingMaskCommands() const
+      -> std::vector<EditorMaskCreationCommand> override;
+  // Mask-creation reads serve the GUI: they return the last owner-published
+  // read state, never the live controller (whose source accessor dereferences
+  // the bound PipelineDocument).
+  [[nodiscard]] auto mask_creation_node_id() const -> NodeId override {
+    std::scoped_lock lock(publish_mutex_);
+    return mask_read_state_.node_id;
+  }
+  [[nodiscard]] auto mask_creation_mask_id() const -> MaskId override {
+    std::scoped_lock lock(publish_mutex_);
+    return mask_read_state_.mask_id;
+  }
+  [[nodiscard]] auto mask_creation_state() const -> EditorMaskCreationState override {
+    std::scoped_lock lock(publish_mutex_);
+    return mask_read_state_.state;
+  }
+  [[nodiscard]] auto mask_creation_source() const -> std::optional<MaskSource> override {
+    std::scoped_lock lock(publish_mutex_);
+    return mask_read_state_.source;
+  }
+  [[nodiscard]] auto mask_creation_last_removed_mask_id() const -> MaskId override {
+    std::scoped_lock lock(publish_mutex_);
+    return mask_read_state_.last_removed_mask_id;
+  }
+  auto SetAdjustmentProjectionNode(const NodeId& node_id) -> EditorSessionResult override;
+  [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override;
+  void               TryConsumePendingInput() override;
+  void SetAdmissionDeadlineHandler(std::function<void(std::int64_t delay_ns)> handler) override;
+  void SetMonotonicClock(std::shared_ptr<IEditorMonotonicClock> clock);
+  [[nodiscard]] auto serial_frame_admission() const -> const EditorSerialFrameAdmission& {
+    return serial_admission_;
+  }
+  [[nodiscard]] auto serial_frame_admission() -> EditorSerialFrameAdmission& {
+    return serial_admission_;
+  }
+  auto RenameColorGrade(const NodeId& node_id, std::string display_name)
+      -> EditorSessionResult override;
+  /// Queue a metadata-only deletion-lock command against the active history session.
+  auto SetColorGradeDeletionProtected(const NodeId& node_id, bool deletion_protected)
+      -> EditorSessionResult override;
+  auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override;
+  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_predecessor_id)
+      -> EditorSessionResult override;
+  auto RemoveColorGradeAndBridge(const NodeId& node_id) -> EditorSessionResult override;
+  auto Patch(std::string patch_key) -> EditorSessionResult;
+  auto CommitAdjustment(std::string patch_key) -> EditorSessionResult;
+  auto Undo() -> EditorSessionResult override;
+  auto Redo() -> EditorSessionResult override;
   auto MoveHeadToCommit(const commit_hash_t& commit_id) -> EditorSessionResult override;
   auto Discard() -> EditorSessionResult override;
   auto Shutdown() -> EditorSessionResult override;
   auto RequestViewChange(EditorRenderReason reason, std::optional<ViewportRenderRegion> region)
       -> EditorSessionResult override;
+  auto OpenComparison(EditorComparisonKind kind) -> EditorSessionResult override;
+  auto SelectComparisonSources(EditorComparisonKind kind, EditorComparisonSource a,
+                               EditorComparisonSource b) -> EditorSessionResult override;
+  auto RetryComparison() -> EditorSessionResult override;
+  auto CloseComparison(bool refresh_current_view, std::optional<ViewportRenderRegion> region)
+      -> EditorSessionResult override;
+  auto RenderPreviewImages(RenderRequest geometry, EditorPreviewImageSet images,
+                           EditorPreviewImagesCompletion on_complete)
+      -> EditorSessionResult override;
+  auto RenderAiMaskAnalysisImage(EditorAiMaskAnalysisContent    content,
+                                 EditorAiMaskAnalysisCompletion on_complete)
+      -> EditorSessionResult override;
+  auto RenderLutPreview(EditorLutPreviewRequest request, EditorLutPreviewCompletion on_complete)
+      -> EditorSessionResult override;
+  auto               OpenAiMaskEdit(const NodeId& grade_id, std::optional<MaskId> mask_id,
+                                    EditorAiMaskEditOpenCompletion on_complete) -> EditorSessionResult override;
+  auto               CommitAiMaskEdit(EditorAiMaskCommit commit) -> EditorSessionResult override;
+  auto               CancelAiMaskEdit() -> EditorSessionResult override;
+  auto               UpdateAiMaskCandidateCoverage(MaskCoverageCandidateSelection candidate,
+                                                   EditorMaskCoverageCompletion   on_complete)
+      -> EditorSessionResult override;
+  auto SelectMaskCoveragePreview(const NodeId& grade_id, std::optional<MaskId> mask_id,
+                                 EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult override;
+  auto ClearMaskCoveragePreview() -> EditorSessionResult override;
+  auto ShowMaskRangeCoverage(const NodeId& grade_id, const MaskId& mask_id)
+      -> EditorSessionResult override;
+  auto HideMaskRangeCoverage() -> EditorSessionResult override;
+  auto RetryMaskCoveragePreview(EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult override;
+  auto PresentMaskCoverageAgain(EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult override;
+  [[nodiscard]] auto mask_coverage_preview_state() const
+      -> EditorMaskCoveragePreviewState override {
+    return coverage_preview_.State();
+  }
+  [[nodiscard]] auto ai_mask_edit_open() const -> bool override {
+    return ai_mask_edit_active_.load(std::memory_order_acquire);
+  }
+  [[nodiscard]] auto comparison_state() const -> EditorComparisonState override {
+    return comparison_.state();
+  }
+  auto TakeComparisonImages(std::uint64_t pair_id) -> std::vector<RenderedPipelineImage> override {
+    return comparison_.TakeImages(pair_id);
+  }
   [[nodiscard]] auto render_diagnostics() const -> EditorRenderCoordinatorDiagnostics override {
     return render_.render_diagnostics();
   }
@@ -426,31 +1149,83 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// result is available immediately for owner-thread callers and is a queued
   /// acknowledgement for callers from other threads.
   auto SubmitCommand(EditorSessionCommand command, CommandReducer reducer) -> EditorSessionResult;
+  /// True only on the session owner thread while a command reduction is in
+  /// flight. Public entry points use this instead of reading `reducing_command_`
+  /// directly so a GUI caller can never take the nested-direct path and run
+  /// reducer bodies off the owner thread.
+  [[nodiscard]] auto InOwnerReduction() const -> bool {
+    return command_queue_.IsOwnerThread() && reducing_command_;
+  }
   void BeginPublication();
   void EndPublication();
   void PostCompletion(EditorSessionCompletion completion);
+  /// Post @p task to the owner thread inside one publication: action availability and the
+  /// change notification are published after it runs. Never runs the task inline.
+  void PostOwnerTask(std::function<void()> task);
+  /**
+   * @brief Close the open comparison on the owner thread and remove its action restriction.
+   *
+   * Image selection, editor close, and shutdown call this before they release the image. With
+   * @p refresh_current_view, routes one Quality render (EditorRenderReason::ComparisonClosed) of
+   * the current document with @p region, so the downstream runtime state follows the current
+   * document again. Returns true when a comparison was open.
+   */
+  auto CloseComparisonOnOwner(bool refresh_current_view, std::optional<ViewportRenderRegion> region)
+      -> bool;
+  /// End the open AI Mask edit on the owner thread and release its lease. Returns true when one
+  /// was open.
+  auto               EndAiMaskEditOnOwner() -> bool;
+  /// End the open AI Mask edit and the coverage preview of the image. Image selection, editor
+  /// close, and shutdown call this before they release the image.
+  void               EndAiMaskWorkForImageChange();
+  /// The image that coverage preview requests present on: the held image and its load request.
+  [[nodiscard]] auto CoveragePreviewTarget() const -> EditorMaskCoveragePreview::ImageTarget;
+  /**
+   * @brief Read the committed AI Mask @p mask_id of Grade @p grade_id from the working document.
+   * @return The selection, or nullopt with @p error set when the Grade, the Mask, or an AI source
+   *         is missing.
+   */
+  [[nodiscard]] auto ReadCommittedAiMask(const NodeId& grade_id, const MaskId& mask_id,
+                                         std::string* error) const
+      -> std::optional<EditorMaskCoveragePreview::CommittedMask>;
+  /**
+   * @brief CommitAdjustment admission on the owner thread.
+   *
+   * With @p ignore_ai_mask_edit_lease, the AiMaskEdit lease does not count, so its own Commit is
+   * admitted while every other lease that blocks writes still refuses it.
+   */
+  [[nodiscard]] auto EvaluateDocumentWriteAdmission(bool ignore_ai_mask_edit_lease)
+      -> EditorActionDecision;
   void HandleRenderEvent(const EditorRenderEvent& event);
   void HandleNavigationCompletion(const NavigationCompletion& completion);
   void HandleImageAcquiredCompletion(const EditorSessionCompletion& completion);
   void HandleSaveCheckpointCompletion(const EditorSessionCompletion& completion);
   void PublishActionAvailabilityIfChanged();
   [[nodiscard]] auto BuildActionInputs() -> EditorActionInputs;
-  void AcquireLease(EditorOperationLeaseKind kind, std::uint64_t command_id,
-                    sl_element_id_t element_id, image_id_t image_id,
-                    ImageLoadRequestId image_load_request, std::string blocking_reason = {});
-  void ReleaseLeaseByCommandId(std::uint64_t command_id);
-  void ReleaseLeasesByKind(EditorOperationLeaseKind kind);
-  void SetPendingPresentationTarget(sl_element_id_t element_id, image_id_t image_id,
-                                    ImageLoadRequestId image_load_request);
-  void ClearPendingPresentationTarget();
+  /// True while an input sequence of the open image is not committed: the pending input queue
+  /// holds a write for the image, or the working document holds an uncommitted value.
+  [[nodiscard]] auto HasOpenInputSequence() const -> bool;
+  void               AcquireLease(EditorOperationLeaseKind kind, std::uint64_t command_id,
+                                  sl_element_id_t element_id, image_id_t image_id,
+                                  ImageLoadRequestId image_load_request, std::string blocking_reason = {});
+  void               ReleaseLeaseByCommandId(std::uint64_t command_id);
+  void               ReleaseLeasesByKind(EditorOperationLeaseKind kind);
+  void               SetPendingPresentationTarget(sl_element_id_t element_id, image_id_t image_id,
+                                                  ImageLoadRequestId image_load_request);
+  void               ClearPendingPresentationTarget();
 
   /// Publish a result to the observer and change-notifier. The only state the
   /// facade owns is the result history and observer registration.
-  auto Emit(EditorSessionResult result) -> EditorSessionResult;
-  auto Reject(std::string message) -> EditorSessionResult;
+  auto               Emit(EditorSessionResult result) -> EditorSessionResult;
+  /// Record and deliver a result without marking the publication dirty. Use
+  /// for render outcomes that change no session-visible state (frame reuse on
+  /// continuous view churn): every field OnBackendChanged reads is unchanged,
+  /// so a full change notification per frame is pure cost.
+  auto               EmitQuiet(EditorSessionResult result) -> EditorSessionResult;
+  auto               Reject(std::string message) -> EditorSessionResult;
   /// Transition lifecycle to Failed and emit a Failed result. Used when a
   /// navigation or save failure requires the session to enter the Failed state.
-  auto Fail(std::string message) -> EditorSessionResult;
+  auto               Fail(std::string message) -> EditorSessionResult;
   auto FinishVersionNavigation(const NavigationOutcome& outcome) -> EditorSessionResult;
   /// Persist a graph mutation through the same journal/materialization path as
   /// ordinary editor saves. The terminal outcome is delivered as a typed
@@ -463,13 +1238,86 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// save-service start whose result is posted back as SaveCheckpointFinished.
   /// Publishes SaveStarted (or Rejected/Failed) for the current operation.
   auto StartHistoryCheckpointSave() -> EditorSessionResult;
-  auto CancelPendingMergeForNavigation(std::string* error) -> bool;
   /// Increment the history revision so the controller emits one dedicated
   /// history signal on the next change notification. Call only at points where
   /// history-display-affecting state actually changed (settled commit, head
   /// move, Version ref change, image open/close, recovery). Never call for
   /// interactive preview, render routing, view changes, or presentation size.
   void BumpHistoryRevision() { history_revision_.fetch_add(1, std::memory_order_acq_rel); }
+
+  /**
+   * @brief Shared success tail for RenameColorGrade and EditNodeGraph.
+   *
+   * Reads the history port's last published render reason, routes a photo
+   * render only when that reason is present, bumps the history revision, and
+   * emits the session result. Owns no additional state. Queue admission and
+   * interactive-history checks stay in the calling command.
+   *
+   * @param message User-visible success message stored on the result.
+   * @pre Called on the session owner thread after a successful history mutation.
+   */
+  auto PublishTypedNodeHistorySuccess(std::string message) -> EditorSessionResult;
+
+  void RequestPendingInputConsume();
+  /// Serial consume body: wraps TryConsumePendingInput in the publication
+  /// guard. Runs on the session owner thread only; used by both the immediate
+  /// consume wakeup and the pacing-deadline delivery.
+  void ConsumePendingInputOnOwner();
+  /// Session-owner deadline delivery: schedules ConsumePendingInputOnOwner on
+  /// the command executor after `delay_ns`. Installed as the admission's
+  /// default deadline handler so pacing never waits on a GUI-thread timer.
+  void ScheduleDeadlineConsume(std::int64_t delay_ns);
+  /// Copy the mask-creation controller's observable state into
+  /// `mask_read_state_`. Owner-thread only; called after every mask command
+  /// batch and abort while the controller is still bound to a live document.
+  void RefreshMaskCreationReadState();
+  void PublishRenderProgressIfChanged();
+  void NoteExtraScheduleWait(const EditorPendingSequence& sequence, std::uint64_t request_id);
+  void FinishSerialFrameIfNeeded(const EditorRenderResult& render_result);
+  auto ConsumeTakenSequence(const EditorPendingSequence& sequence) -> EditorSessionResult;
+  /// Apply and commit every queued edit of the current image now, bypassing
+  /// render pacing. Every persisting seal (switch, close, Version change,
+  /// explicit save) runs this first, so the capture includes the user's last
+  /// edit and no input of this image survives into the next session. Input
+  /// admitted for another image is discarded, never applied here.
+  auto SettlePendingInputForBoundary(std::string* error) -> bool;
+  /// Slider part of @ref SettlePendingInputForBoundary.
+  auto SettlePendingParameterInputForBoundary(std::string* error) -> bool;
+  /// Mask part of @ref SettlePendingInputForBoundary: apply queued Mask commands and finish an
+  /// open Mask input sequence as a pointer release would, so a Mask drag commits exactly like a
+  /// slider drag at the same boundary.
+  auto SettleMaskInputForBoundary(std::string* error) -> bool;
+  void AbortMaskCreation();
+  void ConsumePendingMaskCommands();
+  /// What one batch of Mask commands did to the live document.
+  struct MaskCommandBatchOutcome {
+    bool interactive_preview = false;
+    bool quality_requested   = false;
+    bool committed           = false;
+  };
+  /**
+   * @brief Apply @p batch to the live document under the history's locked-document access.
+   *
+   * The one path for queued Mask commands. With @p finish_open_input, an input sequence left open
+   * after the batch is finished (committed) as a pointer release would finish it. Reports the
+   * sequence state to the history on every return path. A rejected command cancels the open
+   * sequence and returns false with @p error set.
+   */
+  auto ApplyMaskCommandsToLiveDocument(const std::vector<EditorMaskCreationCommand>& batch,
+                                       bool finish_open_input, MaskCommandBatchOutcome* outcome,
+                                       std::string* error) -> bool;
+  /**
+   * @brief Apply a range command of the new candidate of the open AI Mask edit (#604) to its
+   *        ranges, on the owner thread. Writes no document; a shown probe of the candidate takes
+   *        the new ranges and routes a render (Interactive while the edit is open, Quality at its
+   *        end). Cancel and CancelMode restore the value before the open edit.
+   */
+  auto ApplyAiMaskCandidateRangeCommand(const EditorMaskCreationCommand& command)
+      -> EditorMaskCreationResult;
+  auto ApplyMaskCreationCommand(const EditorMaskCreationCommand& command)
+      -> EditorMaskCreationResult;
+  auto RouteMaskCreationRender(bool interactive_preview, bool quality_requested, bool committed)
+      -> EditorSessionResult;
 
   /// Queue-owned publish flavor for one in-flight history save checkpoint.
   /// Set by StartHistoryCheckpoint and consumed by the matching
@@ -479,32 +1327,82 @@ class EditorSessionService final : public IEditorSessionBackend {
     std::string success_message;
   };
 
-  Dependencies                            dependencies_;
-  EditorSessionCommandQueue               command_queue_;
-  EditorSessionNavigationState            navigation_state_;
-  EditorSessionLifecycle                  lifecycle_;
-  EditorSaveCheckpointService             save_service_;
-  EditorSessionRenderController           render_;
-  EditorSessionEditController             edit_;
-  EditorSessionNavigationController       navigation_;
-  bool                                    reducing_command_     = false;
-  std::uint64_t                           current_operation_id_ = 0;
-  std::size_t                             publication_depth_    = 0;
-  bool                                    publication_dirty_    = false;
-  std::vector<EditorSessionResult>        results_;
-  mutable std::mutex                      results_mutex_;
-  std::unique_ptr<AdjustmentMergePreview>          pending_merge_preview_;
-  std::optional<AdjustmentTransferPackage>         pending_merge_package_;
-  MergePreviewId                                   next_merge_preview_id_{1};
-  std::optional<MergePreviewId>                    active_merge_preview_id_;
-  std::optional<PendingHistoryCheckpoint>          pending_history_checkpoint_;
-  std::vector<EditorOperationLease>       active_leases_;
-  EditorActionAvailability                published_availability_{};
-  ActionAvailabilityObserver              action_availability_observer_;
+  /// Owner-published mask-creation read state. GUI getters return this copy;
+  /// the live controller is only touched on the session thread.
+  struct MaskCreationReadState {
+    EditorMaskCreationState   state = EditorMaskCreationState::Inactive;
+    NodeId                    node_id;
+    MaskId                    mask_id;
+    std::optional<MaskSource> source;
+    MaskId                    last_removed_mask_id;
+  };
+
+  Dependencies                                   dependencies_;
+  EditorSessionCommandQueue                      command_queue_;
+  EditorSessionNavigationState                   navigation_state_;
+  EditorSessionLifecycle                         lifecycle_;
+  EditorSaveCheckpointService                    save_service_;
+  EditorSessionRenderController                  render_;
+  EditorSessionEditController                    edit_;
+  EditorSessionNavigationController              navigation_;
+  EditorPendingInputQueue                        pending_input_;
+  EditorSerialFrameAdmission                     serial_admission_;
+  EditorMaskCreationController                   mask_creation_;
+  /// Open editor comparison. Its action restriction is the Comparison operation lease.
+  EditorComparisonService                        comparison_;
+  /// True from comparison entry to close. Read by input admission off the owner thread.
+  std::atomic<bool>                              comparison_active_{false};
+  /// Grade and Mask of the open AI Mask edit; owner thread only. Its action restriction is the
+  /// AiMaskEdit operation lease.
+  struct AiMaskEditTarget {
+    NodeId                             grade_id;
+    std::optional<MaskId>              mask_id;
+    /// Ranges of a new candidate (#604). Range commands without a Mask set them; the commit
+    /// writes them with the new Mask, and the end of the edit discards them.
+    std::optional<LuminanceRangeModel> candidate_luminance_range;
+    std::optional<ColorRangeModel>     candidate_color_range;
+    /// Field key of the open range edit of the candidate (BeginMaskField to Finish), and its value
+    /// before the edit, which Cancel restores.
+    std::string                        candidate_range_edit_key;
+    nlohmann::json                     candidate_range_before;
+  };
+  std::optional<AiMaskEditTarget>                ai_mask_edit_;
+  /// True from AI Mask edit Open to its end. Read by input admission off the owner thread.
+  std::atomic<bool>                              ai_mask_edit_active_{false};
+  /// Coverage preview of the image: candidate or committed selection and its requests (SM8.7).
+  EditorMaskCoveragePreview                      coverage_preview_;
+  std::vector<EditorMaskCreationCommand>         pending_mask_commands_;
+  mutable std::mutex                             mask_command_mutex_;
+  bool                                           reducing_command_     = false;
+  std::uint64_t                                  current_operation_id_ = 0;
+  std::size_t                                    publication_depth_    = 0;
+  bool                                           publication_dirty_    = false;
+  /// Input-sequence fact of the last published availability. An input sequence opens and closes
+  /// without a session result, so the end of each publication compares the fact with this value.
+  bool                                           published_input_sequence_open_ = false;
+  std::atomic<bool>                              consume_wakeup_posted_{false};
+  bool                                           last_published_render_busy_ = false;
+  /// When the last frame finished (ready, failed, or cancelled); preview diagnostics only.
+  std::atomic<std::int64_t>                      last_frame_finished_ns_{0};
+  std::vector<EditorSessionResult>               results_;
+  mutable std::mutex                             results_mutex_;
+  std::optional<PendingHistoryCheckpoint>        pending_history_checkpoint_;
+  bool                                           pending_close_after_persist_ = false;
+  std::vector<EditorOperationLease>              active_leases_;
+  /// Guards the GUI-facing published fields below. The owner writes them
+  /// during publish; GUI getters take the same lock for a consistent read.
+  mutable std::mutex                             publish_mutex_;
+  EditorActionAvailability                       published_availability_{};
+  ActionAvailabilityObserver                     action_availability_observer_;
   std::optional<EditorPendingPresentationTarget> pending_presentation_target_;
-  bool                                    package_available_ = false;
-  EditorBackgroundActionRestrictions      background_restrictions_{};
-  std::atomic<std::uint64_t>              history_revision_{0};
+  MaskCreationReadState                          mask_read_state_;
+  bool                                           package_available_ = false;
+  EditorBackgroundActionRestrictions             background_restrictions_{};
+  std::atomic<bool>                              pending_recovery_published_{false};
+  /// Installed on `serial_admission_` so an empty SetAdmissionDeadlineHandler
+  /// restores owner-thread deadline delivery instead of dropping wakeups.
+  EditorSerialFrameAdmission::DeadlineHandler    default_deadline_handler_;
+  std::atomic<std::uint64_t>                     history_revision_{0};
 };
 
 }  // namespace alcedo

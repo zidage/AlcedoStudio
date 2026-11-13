@@ -1,0 +1,4 @@
+interface:
+  display_name: "Alcedo Create Plan"
+  short_description: "Create detailed Alcedo implementation plans"
+  default_prompt: "Use $alcedo-create-plan to create an implementation-ready Alcedo roadmap plan from my requirements."

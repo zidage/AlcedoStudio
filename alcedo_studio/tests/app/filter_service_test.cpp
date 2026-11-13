@@ -5,31 +5,35 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "ai/ai_description.hpp"
+#include "ai/ai_rating.hpp"
 #include "app/import_service.hpp"
+#include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "sleeve/sleeve_filter/filter_factory.hpp"
+#include "storage/query/filter_compiler.hpp"
 #include "storage/store/ai/ai_store.hpp"
-#include "storage/store/semantic/semantic_store.hpp"
+#include "support/semantic_stores_test_support.hpp"
+#include "support/storage_invariants.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
-
-#include "ai/ai_description.hpp"
-#include "ai/ai_rating.hpp"
 
 namespace alcedo {
 namespace {
@@ -44,10 +48,10 @@ auto OneHot(size_t index) -> std::vector<float> {
   return embedding;
 }
 
-void RegisterSemanticSearchModel(SemanticStore& semantic, const std::string& model_key,
+void RegisterSemanticSearchModel(const semantic_test::SemanticStores& semantic, const std::string& model_key,
                                  bool active = true) {
   std::string error;
-  ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = model_key,
+  ASSERT_TRUE(semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = model_key,
                                                        .model_id_      = "mobileclip-test",
                                                        .revision_      = "test-rev",
                                                        .embedding_dim_ = kSemanticEmbeddingDim,
@@ -68,7 +72,7 @@ auto FindImageId(ProjectService& project, sl_element_id_t file_id) -> image_id_t
 
 void StoreSemanticLabel(ProjectService& project, const std::string& model_key,
                         sl_element_id_t file_id, const std::string& label, size_t embedding_index) {
-  auto&       semantic = project.GetStorage()->GetSemanticStore();
+  auto        semantic = semantic_test::StoresOf(*project.GetStorage());
   const auto  image_id = FindImageId(project, file_id);
   std::string error;
   ASSERT_NE(image_id, 0u);
@@ -81,7 +85,7 @@ void StoreSemanticLabel(ProjectService& project, const std::string& model_key,
                                   .margin_          = 0.79,
                                   .confident_       = true,
                                   .top_scores_json_ = R"([{"label":"test","score":0.91}])"};
-  ASSERT_TRUE(semantic.UpsertImageEmbeddingWithLabel(
+  ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbeddingWithLabel(
       SemanticImageEmbeddingRecord{.file_id_   = file_id,
                                    .image_id_  = image_id,
                                    .model_key_ = model_key,
@@ -133,7 +137,7 @@ void StoreAiRating(ProjectService& project, sl_element_id_t file_id, const std::
 }
 
 // Phase 7a: persist a rating's *reasons* only (rating = 0 sentinel) through the new
-// UpsertRatingReasons path — the path AlbumImageAnalysisSink uses. The reasons must still
+// UpsertRatingReasons path, which earlier analysis runs used. The reasons must still
 // be excluded from full-text search.
 void StoreAiRatingReasons(ProjectService& project, sl_element_id_t file_id,
                           const std::string& task_id, const std::string& reasons) {
@@ -170,26 +174,25 @@ struct SyntheticFileSpec {
 
 class FilterServiceTests : public ::testing::Test {
  protected:
+  /// The test closed its project after production writes; TearDown checks the stored rows
+  /// (#805). A test that writes broken rows on purpose sets it to false.
+  bool check_storage_invariants_ = true;
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
   void                  SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    RegisterAllOperators();
 
-    db_path_ = std::filesystem::temp_directory_path() / "filter_service_test.db";
-    meta_path_ = std::filesystem::temp_directory_path() / "filter_service_test.json";
-
-    if (std::filesystem::exists(db_path_)) {
-      std::filesystem::remove(db_path_);
-    }
-    if (std::filesystem::exists(meta_path_)) {
-      std::filesystem::remove(meta_path_);
-    }
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   void TearDown() override {
+    if (check_storage_invariants_) {
+      test::ExpectStoredStorageInvariants(db_path_);
+    }
     if (std::filesystem::exists(db_path_)) {
       std::filesystem::remove(db_path_);
     }
@@ -215,8 +218,8 @@ class FilterServiceTests : public ::testing::Test {
     auto                           fs_service       = project.GetSleeveService();
     auto                           img_pool_service = project.GetImagePoolService();
 
-    std::unique_ptr<ImportService> import_service =
-        std::make_unique<ImportServiceImpl>(fs_service, img_pool_service);
+    std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+        fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
     const image_path_t        batch_dir = std::string(TEST_IMG_PATH) + "/raw/batch";
 
@@ -252,8 +255,8 @@ class FilterServiceTests : public ::testing::Test {
     return result.imported_;
   }
 
-  static auto CreateSyntheticFile(ProjectService& project, const file_name_t& file_name,
-                                  const std::string& camera_model) -> sl_element_id_t {
+  auto CreateSyntheticFile(ProjectService& project, const file_name_t& file_name,
+                           const std::string& camera_model) -> sl_element_id_t {
     return CreateSyntheticFile(project,
                                SyntheticFileSpec{.file_name_    = file_name,
                                                  .image_path_   = std::filesystem::path{file_name},
@@ -261,8 +264,11 @@ class FilterServiceTests : public ::testing::Test {
                                                  .lens_         = "Synthetic 50mm"});
   }
 
-  static auto CreateSyntheticFile(ProjectService& project, const SyntheticFileSpec& spec)
+  /// A library file whose Image row the test writes directly, with no import and no history
+  /// root. The project then does not keep the storage invariants, so TearDown does not check it.
+  auto CreateSyntheticFile(ProjectService& project, const SyntheticFileSpec& spec)
       -> sl_element_id_t {
+    check_storage_invariants_ = false;
     auto image_pool          = project.GetImagePoolService();
     auto image               = image_pool->CreateAndReturnPinnedEmpty();
     auto image_id            = image.Get()->image_id_;
@@ -320,7 +326,7 @@ TEST_F(FilterServiceTests, SQLCompilationTest) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model = ?)");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Canon EOS 5D Mark IV");
 }
@@ -344,8 +350,8 @@ TEST_F(FilterServiceTests, ComplexFilterSQLTest) {
 
   const auto sql = FilterSQLCompiler::Compile(root);
   EXPECT_EQ(sql.sql_,
-            "((json_extract(i.metadata, '$.Model') = ?) AND "
-            "(UPPER(i.file_name) LIKE ?))");
+            "((i.camera_model = ?) AND "
+            "(UPPER(i.file_name) LIKE ? ESCAPE '~'))");
   ASSERT_EQ(sql.binds_.size(), 2u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Nikon D850");
   EXPECT_EQ(std::get<std::string>(sql.binds_[1]), "%.NEF");
@@ -361,7 +367,7 @@ TEST_F(FilterServiceTests, BetweenConditionSQLTest) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.ISO')::INT BETWEEN ? AND ?)");
+  EXPECT_EQ(sql.sql_, "(i.iso BETWEEN ? AND ?)");
   ASSERT_EQ(sql.binds_.size(), 2u);
   EXPECT_EQ(std::get<int64_t>(sql.binds_[0]), 100);
   EXPECT_EQ(std::get<int64_t>(sql.binds_[1]), 800);
@@ -376,16 +382,9 @@ TEST_F(FilterServiceTests, BindsStringFilterValueWithEmbeddedQuote) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model = ?)");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "O'Brien");
-}
-
-TEST_F(FilterServiceTests, RawSQLBridgeNodeCompilesAsTrustedText) {
-  FilterNode root{FilterNode::Type::RawSQL, {}, {}, std::nullopt, std::wstring(L"e.id > 0")};
-  const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "e.id > 0");
-  EXPECT_TRUE(sql.binds_.empty());
 }
 
 TEST_F(FilterServiceTests, FolderIndexTest_Model) {
@@ -597,7 +596,7 @@ TEST_F(FilterServiceTests, FuzzySearchMatchesGeneratedSemanticLabelsAsOrdinaryTe
   ASSERT_NE(landscape_id, 0u);
   ASSERT_NE(portrait_id, 0u);
 
-  auto& semantic = project.GetStorage()->GetSemanticStore();
+  auto  semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticSearchModel(semantic, "mobileclip-test-a");
   RegisterSemanticSearchModel(semantic, "mobileclip-test-b");
   StoreSemanticLabel(project, "mobileclip-test-a", landscape_id, "landscape", 4);
@@ -657,10 +656,10 @@ TEST_F(FilterServiceTests, FuzzySearchIgnoresSemanticLabelsWhenNoModelIsActive) 
                                                      .camera_model_ = "Neutral Camera"});
   ASSERT_NE(landscape_id, 0u);
 
-  auto& semantic = project.GetStorage()->GetSemanticStore();
+  auto  semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticSearchModel(semantic, "inactive-mobileclip-test", false);
   StoreSemanticLabel(project, "inactive-mobileclip-test", landscape_id, "landscape", 4);
-  ASSERT_TRUE(semantic.ActiveModelKey().empty());
+  ASSERT_TRUE(semantic.models_.ActiveModelKey().empty());
 
   SleeveFilterService filter_service(project.GetStorage());
   EXPECT_TRUE(filter_service.SearchFolder(0, L"landscape", 0, 10).empty());
@@ -799,7 +798,7 @@ TEST_F(FilterServiceTests, AiRatingReasonsAreNotInFullScreenSearch) {
 }
 
 // Phase 7a: the reasons-only path (UpsertRatingReasons, rating = 0 sentinel — the path
-// AlbumImageAnalysisSink uses) still keeps rating reasons out of full-text search. A
+// that earlier analysis runs used) still keeps rating reasons out of full-text search. A
 // distinctive word that appears only in the reasons must not be searchable.
 TEST_F(FilterServiceTests, AiRatingReasonsOnlyRowIsNotInFullScreenSearch) {
   ProjectService project(db_path_, meta_path_);
@@ -1341,60 +1340,97 @@ TEST_F(FilterServiceTests, AutoInvalidationOnLink) {
   EXPECT_EQ(result_after->front(), file_id);
 }
 
-// A fake SemanticSearchProvider that records its calls and returns a fixed
-// result set, used to verify the semantic-search seam (5B/5C) without starting
-// the Rust runtime. The concrete provider is 5D.
+// A fake SemanticSearchProvider that records its calls and returns fixed embeddings, used to
+// verify the semantic search path through SleeveFilterService without starting the sidecar.
 class FakeSemanticSearchProvider : public SemanticSearchProvider {
  public:
-  std::vector<FuzzySearchMatch> matches_{};
-  mutable bool                  was_called_           = false;
-  mutable std::wstring          last_query_           = {};
-  mutable sl_element_id_t       last_folder_id_       = 0;
-  mutable size_t                last_offset_          = 0;
-  mutable size_t                last_limit_           = 0;
+  SemanticQueryEmbedding embedding_{};
+  int                    call_count_ = 0;
+  std::wstring           last_query_{};
 
-  [[nodiscard]] auto Search(sl_element_id_t folder_id, const std::wstring& query, size_t offset,
-                            size_t limit) const -> std::vector<FuzzySearchMatch> override {
-    was_called_     = true;
-    last_query_     = query;
-    last_folder_id_ = folder_id;
-    last_offset_    = offset;
-    last_limit_     = limit;
-    return matches_;
+  [[nodiscard]] auto EmbedQuery(const std::wstring& query) -> SemanticQueryEmbedding override {
+    ++call_count_;
+    last_query_ = query;
+    return embedding_;
   }
 };
 
+auto OneHotEmbedding(size_t index) -> std::vector<float> {
+  std::vector<float> embedding(kSemanticEmbeddingDim, 0.0F);
+  embedding.at(index) = 1.0F;
+  return embedding;
+}
+
+auto EmbeddingWithSimilarity(size_t auxiliary, float similarity) -> std::vector<float> {
+  std::vector<float> embedding(kSemanticEmbeddingDim, 0.0F);
+  embedding.at(0)         = similarity;
+  embedding.at(auxiliary) = std::sqrt(1.0F - (similarity * similarity));
+  return embedding;
+}
+
 TEST_F(FilterServiceTests, SemanticSearchProviderDelegatesWhenRegistered) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  ASSERT_NE(CreateSyntheticFile(project, L"semantic_seam.dng", "Nikon D850"), 0u);
+  const auto     weak_id   = CreateSyntheticFile(project, L"semantic_weak.dng", "Nikon D850");
+  const auto     strong_id = CreateSyntheticFile(project, L"semantic_strong.dng", "Nikon D850");
+  const auto     middle_id = CreateSyntheticFile(project, L"semantic_middle.dng", "Nikon D850");
+  ASSERT_NE(weak_id, 0u);
+  ASSERT_NE(strong_id, 0u);
+  ASSERT_NE(middle_id, 0u);
+
+  constexpr const char* kModelKey = "mobileclip-provider-test";
+  auto                  semantic  = semantic_test::StoresOf(*project.GetStorage());
+  RegisterSemanticSearchModel(semantic, kModelKey);
+  const auto store = [&](sl_element_id_t file_id, std::vector<float> embedding) {
+    std::string error;
+    ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbedding(
+        SemanticImageEmbeddingRecord{.file_id_   = file_id,
+                                     .image_id_  = FindImageId(project, file_id),
+                                     .model_key_ = kModelKey,
+                                     .embedding_ = std::move(embedding)},
+        &error))
+        << error;
+  };
+  store(weak_id, EmbeddingWithSimilarity(1, 0.5F));
+  store(strong_id, EmbeddingWithSimilarity(2, 0.9F));
+  store(middle_id, EmbeddingWithSimilarity(3, 0.7F));
 
   SleeveFilterService filter_service(project.GetStorage());
 
-  // No provider registered: the seam reports unavailable and returns nothing.
+  // No provider registered: the search reports nothing and the embedding call fails.
   EXPECT_FALSE(filter_service.HasSemanticSearchProvider());
-  EXPECT_TRUE(filter_service.SearchFolderSemantic(0, L"sunset over mountains", 0, 10).empty());
+  EXPECT_TRUE(filter_service.SearchFolderSemantic(0, L"sunset over mountains", 0, 10).rows_.empty());
+  EXPECT_THROW(static_cast<void>(filter_service.EmbedSemanticQuery(L"sunset")), std::runtime_error);
 
-  auto fake = std::make_shared<FakeSemanticSearchProvider>();
-  fake->matches_.push_back(FuzzySearchMatch{.file_id_   = 4242,
-                                            .image_id_  = 7,
-                                            .file_name_ = "semantic_hit.dng"});
+  auto fake        = std::make_shared<FakeSemanticSearchProvider>();
+  fake->embedding_ = SemanticQueryEmbedding{.model_key_ = kModelKey,
+                                            .dimension_ = kSemanticEmbeddingDim,
+                                            .query_     = OneHotEmbedding(0),
+                                            .neutral_   = OneHotEmbedding(kSemanticEmbeddingDim - 1)};
   filter_service.SetSemanticSearchProvider(fake);
-
   EXPECT_TRUE(filter_service.HasSemanticSearchProvider());
-  const auto rows = filter_service.SearchFolderSemantic(0, L"sunset over mountains", 0, 10);
-  ASSERT_EQ(rows.size(), 1u);
-  EXPECT_EQ(rows.front().file_id_, 4242u);
-  EXPECT_EQ(rows.front().image_id_, 7u);
-  EXPECT_EQ(rows.front().file_name_, "semantic_hit.dng");
-  EXPECT_TRUE(fake->was_called_);
+
+  // The provider receives the trimmed query once; the storage ranks the files by relevance.
+  const auto ranked = filter_service.SearchFolderSemantic(0, L"  sunset over mountains ", 0, 10);
+  EXPECT_EQ(fake->call_count_, 1);
   EXPECT_EQ(fake->last_query_, L"sunset over mountains");
-  EXPECT_EQ(fake->last_offset_, 0u);
-  EXPECT_EQ(fake->last_limit_, 10u);
+  ASSERT_EQ(ranked.rows_.size(), 3u);
+  EXPECT_EQ(ranked.total_, 3u);
+  EXPECT_EQ(ranked.rows_[0].file_id_, strong_id);
+  EXPECT_EQ(ranked.rows_[1].file_id_, middle_id);
+  EXPECT_EQ(ranked.rows_[2].file_id_, weak_id);
+
+  // The display rows keep the rank order, and a page carries the total of all kept files.
+  const auto page = filter_service.SearchFolderSemanticRows(0, L"sunset over mountains", 1, 1);
+  EXPECT_EQ(fake->call_count_, 2);
+  EXPECT_EQ(page.total_, 3u);
+  ASSERT_EQ(page.rows_.size(), 1u);
+  EXPECT_EQ(page.rows_.front().file_id_, middle_id);
+  EXPECT_EQ(page.rows_.front().file_name_, "semantic_middle.dng");
 
   // Clearing the provider restores the unavailable state.
   filter_service.SetSemanticSearchProvider(nullptr);
   EXPECT_FALSE(filter_service.HasSemanticSearchProvider());
-  EXPECT_TRUE(filter_service.SearchFolderSemantic(0, L"sunset over mountains", 0, 10).empty());
+  EXPECT_TRUE(filter_service.SearchFolderSemantic(0, L"sunset over mountains", 0, 10).rows_.empty());
 }
 
 TEST_F(FilterServiceTests, LabelQueryUsesOrdinaryPathNotSemanticProvider) {
@@ -1406,7 +1442,7 @@ TEST_F(FilterServiceTests, LabelQueryUsesOrdinaryPathNotSemanticProvider) {
                                      .lens_         = "Plain Lens"});
   ASSERT_NE(landscape_id, 0u);
 
-  auto& semantic = project.GetStorage()->GetSemanticStore();
+  auto  semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticSearchModel(semantic, "mobileclip-route-test");
   StoreSemanticLabel(project, "mobileclip-route-test", landscape_id, "landscape", 4);
 
@@ -1421,13 +1457,13 @@ TEST_F(FilterServiceTests, LabelQueryUsesOrdinaryPathNotSemanticProvider) {
   const auto rows = filter_service.SearchFolder(0, L"landscape", 0, 10);
   ASSERT_EQ(rows.size(), 1u);
   EXPECT_EQ(rows.front().file_id_, landscape_id);
-  EXPECT_FALSE(fake->was_called_);
+  EXPECT_EQ(fake->call_count_, 0);
 
   // The Chinese surface form of the same label also uses the ordinary path.
   const auto zh_rows = filter_service.SearchFolder(0, L"风景", 0, 10);
   ASSERT_EQ(zh_rows.size(), 1u);
   EXPECT_EQ(zh_rows.front().file_id_, landscape_id);
-  EXPECT_FALSE(fake->was_called_);
+  EXPECT_EQ(fake->call_count_, 0);
 }
 
 TEST_F(FilterServiceTests, StatsBarAndSearchMergeUnderOneCompiledPredicate) {
@@ -1436,7 +1472,8 @@ TEST_F(FilterServiceTests, StatsBarAndSearchMergeUnderOneCompiledPredicate) {
       project, SyntheticFileSpec{.file_name_    = L"merge_a.dng",
                                  .image_path_   = std::filesystem::path{L"D:/merge/a.dng"},
                                  .camera_model_ = "Nikon D850",
-                                 .lens_         = "NIKKOR 24mm"});
+                                 .lens_         = "NIKKOR 24mm",
+                                 .focal_        = 24.0f});
   const auto d850_50 = CreateSyntheticFile(
       project, SyntheticFileSpec{.file_name_    = L"merge_b.dng",
                                  .image_path_   = std::filesystem::path{L"D:/merge/b.dng"},
@@ -1456,7 +1493,7 @@ TEST_F(FilterServiceTests, StatsBarAndSearchMergeUnderOneCompiledPredicate) {
   const auto          search_node = filter_service.BuildFuzzySearchWhere(L"50mm");
   ASSERT_TRUE(search_node.has_value());
 
-  // Search alone: two files carry "50mm" in the lens field.
+  // Search alone: two files have a 50 mm focal length and "50mm" in the lens field.
   const auto search_where = CompileFilterPredicate(search_node);
   ASSERT_TRUE(search_where.has_value());
   auto search_rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
@@ -1525,13 +1562,13 @@ TEST_F(FilterServiceTests, StatsSemanticLabelExistsFilterRestrictsFolderStats) {
   ASSERT_NE(landscape_id, 0u);
   ASSERT_NE(portrait_id, 0u);
 
-  auto& semantic = project.GetStorage()->GetSemanticStore();
+  auto  semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticSearchModel(semantic, "mobileclip-stats-filter");
   StoreSemanticLabel(project, "mobileclip-stats-filter", landscape_id, "landscape", 4);
 
   SleeveFilterService filter_service(project.GetStorage());
-  const auto          stats_node = sleeve_filter::BuildSemanticLabelExistsFilter(
-      "mobileclip-stats-filter", SemanticLabelAliases("landscape"));
+  const auto          stats_node =
+      sleeve_filter::BuildSemanticLabelBucketFilter("mobileclip-stats-filter", "landscape");
 
   const auto stats = filter_service.BuildFolderStats(0, stats_node);
   EXPECT_EQ(stats.total_photo_count_, 1);
@@ -1682,7 +1719,7 @@ TEST_F(FilterServiceTests, FuzzySearchInjectPayloadDoesNotWidenFolderResults) {
   ASSERT_FALSE(predicate->binds_.empty());
 }
 
-TEST_F(FilterServiceTests, FuzzySearchZeroFieldMaskCompilesToFalseRawSql) {
+TEST_F(FilterServiceTests, FuzzySearchZeroFieldMaskCompilesToFalse) {
   ProjectService project(db_path_, meta_path_);
   const auto     file_id = CreateSyntheticFile(
       project, SyntheticFileSpec{.file_name_    = L"mask_zero.dng",
@@ -1693,10 +1730,12 @@ TEST_F(FilterServiceTests, FuzzySearchZeroFieldMaskCompilesToFalseRawSql) {
   SleeveFilterService filter_service(project.GetStorage());
   const auto          node = filter_service.BuildFuzzySearchWhere(L"Nikon", SearchFieldMask{0});
   ASSERT_TRUE(node.has_value());
-  EXPECT_EQ(node->type_, FilterNode::Type::RawSQL);
-  ASSERT_TRUE(node->raw_sql_.has_value());
-  EXPECT_EQ(*node->raw_sql_, L"FALSE");
-  EXPECT_TRUE(node->raw_binds_.empty());
+  EXPECT_EQ(node->type_, FilterNode::Type::LibrarySearch);
+  ASSERT_TRUE(node->library_search_.has_value());
+  EXPECT_EQ(node->library_search_->request.fields, SearchFieldMask{0});
+  const auto frag = FilterSQLCompiler::Compile(*node);
+  EXPECT_EQ(frag.sql_, "FALSE");
+  EXPECT_TRUE(frag.binds_.empty());
 
   EXPECT_TRUE(filter_service.SearchFolder(0, L"Nikon", 0, 10, SearchFieldMask{0}).empty());
   EXPECT_EQ(filter_service.CountSearchResults(0, L"Nikon", SearchFieldMask{0}), 0u);
@@ -1712,7 +1751,9 @@ TEST_F(FilterServiceTests, ExactFileWhereBindsFileIdAsParam) {
 
   SleeveFilterService filter_service(project.GetStorage());
   const auto          node = filter_service.BuildExactFileWhere(file_id);
-  EXPECT_EQ(node.type_, FilterNode::Type::RawSQL);
+  EXPECT_EQ(node.type_, FilterNode::Type::Condition);
+  ASSERT_TRUE(node.condition_.has_value());
+  EXPECT_EQ(node.condition_->field_, FilterField::FileId);
 
   const auto frag = FilterSQLCompiler::Compile(node);
   EXPECT_EQ(frag.sql_, "(e.id = ?)");

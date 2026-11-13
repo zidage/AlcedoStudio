@@ -6,14 +6,18 @@
 
 #include <QMetaObject>
 #include <QPointer>
-
+#include <exception>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <thread>
 
+#include "app/mask_thumbnail_service.hpp"
 #include "app/project_package_service.hpp"
 #include "image/image.hpp"
-#include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 
@@ -23,12 +27,48 @@ namespace alcedo::ui {
 
 ProjectHandler::ProjectHandler(ProjectModule& project_module) : project_module_(project_module) {}
 
-bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
-                                        const std::filesystem::path& metaPath,
-                                        ProjectOpenMode              openMode,
-                                        const std::filesystem::path& packagePath,
-                                        const std::filesystem::path& workspaceDir,
-                                        const std::filesystem::path& recentProjectPath) {
+bool ProjectHandler::InitializeServices(
+    const std::filesystem::path& dbPath, const std::filesystem::path& metaPath,
+    ProjectOpenMode openMode, const std::filesystem::path& packagePath,
+    const std::filesystem::path& workspaceDir, project_pack::ProjectWorkspaceLock workspaceLock,
+    const std::filesystem::path& recentProjectPath, ProjectEntryMode entryMode) {
+  return StartProjectLoad(dbPath, metaPath, openMode, packagePath, workspaceDir,
+                          std::move(workspaceLock), recentProjectPath, std::nullopt, entryMode);
+}
+
+bool ProjectHandler::OpenPackedProject(const std::filesystem::path&       packagePath,
+                                       const std::filesystem::path&       workspaceDir,
+                                       project_pack::ProjectWorkspaceLock workspaceLock,
+                                       const QString& projectName, ProjectEntryMode entryMode) {
+  return StartProjectLoad({}, {}, ProjectOpenMode::kLoadExisting, packagePath, workspaceDir,
+                          std::move(workspaceLock), packagePath, projectName, entryMode);
+}
+
+bool ProjectHandler::RequestEnterLoadedProject() {
+  if (project_loading_) {
+    if (load_entry_mode_ != ProjectEntryMode::kPreview) {
+      return false;
+    }
+    // The completion runs on this thread too, so it reads the changed mode.
+    load_entry_mode_ = ProjectEntryMode::kEnter;
+    project_module_.NotifyProjectLoadStateChanged();
+    return true;
+  }
+  if (!project_ || project_entered_) {
+    return false;
+  }
+  project_entered_ = true;
+  project_module_.RegisterRecentProject(recent_project_path_);
+  project_module_.NotifyProjectEntryStateChanged();
+  return true;
+}
+
+bool ProjectHandler::StartProjectLoad(
+    const std::filesystem::path& dbPath, const std::filesystem::path& metaPath,
+    ProjectOpenMode openMode, const std::filesystem::path& packagePath,
+    const std::filesystem::path& workspaceDir, project_pack::ProjectWorkspaceLock workspaceLock,
+    const std::filesystem::path& recentProjectPath, std::optional<QString> unpackProjectName,
+    ProjectEntryMode entryMode) {
   if (project_loading_) {
     project_module_.SetServiceMessageForCurrentProject(PL_TEXT("A project load is already in progress."));
     return false;
@@ -42,6 +82,8 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
 
   project_module_.FinalizeEditorSession();
 
+  load_entry_mode_ = entryMode;
+
   project_module_.SetServiceMessageForCurrentProject((openMode == ProjectOpenMode::kCreateNew)
                                                   ? PL_TEXT("Creating project...")
                                                   : PL_TEXT("Loading project..."));
@@ -52,6 +94,7 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
 
   const auto request_id = ++project_load_request_id_;
   const auto accelerator_preference = project_module_.accelerator_preference();
+  auto                    lut_resources          = project_module_.lut_resources();
 
   auto old_project   = project_;
   auto old_pipeline  = pipeline_service_;
@@ -59,14 +102,21 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
   auto old_meta      = meta_path_;
   auto old_package   = project_package_path_;
   auto old_workspace = project_workspace_dir_;
+  // A project that the user did not enter has no user changes. Its package stays as it is on
+  // disk, so the loader skips the persist sequence for it.
+  const bool old_project_entered = project_entered_;
 
   QPointer<ProjectModule> self(&project_module_);
   std::thread([self, request_id, old_project = std::move(old_project),
-               old_pipeline = std::move(old_pipeline),
-               old_thumbnail = std::move(old_thumbnail), old_meta = std::move(old_meta),
-               old_package = std::move(old_package), old_workspace = std::move(old_workspace),
-               dbPath, metaPath, packagePath, workspaceDir, recentProjectPath, openMode,
-               accelerator_preference]() mutable {
+               old_pipeline = std::move(old_pipeline), old_thumbnail = std::move(old_thumbnail),
+               old_meta = std::move(old_meta), old_package = std::move(old_package),
+               old_workspace = std::move(old_workspace), old_project_entered,
+               started_as_preview = entryMode == ProjectEntryMode::kPreview, dbPath = std::filesystem::path(dbPath),
+               metaPath = std::filesystem::path(metaPath), packagePath, workspaceDir,
+               workspace_lock = std::move(workspaceLock), recentProjectPath, openMode,
+               accelerator_preference,
+               lut_resources     = std::move(lut_resources),
+               unpackProjectName = std::move(unpackProjectName)]() mutable {
     struct LoadResult {
       bool                                    success_ = false;
       QString                                 error_{};
@@ -79,16 +129,19 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       std::filesystem::path                   meta_path_{};
       std::filesystem::path                   package_path_{};
       std::filesystem::path                   workspace_dir_{};
+      project_pack::ProjectWorkspaceLock      workspace_lock_{};
       std::filesystem::path                   recent_project_path_{};
       std::filesystem::path                   workspace_to_cleanup_{};
+      ProjectOverviewCounts                   overview_{};
     };
 
     auto result = std::make_shared<LoadResult>();
 
     try {
-      if (old_pipeline) {
+      if (old_pipeline && old_project_entered) {
         old_pipeline->Sync();
       }
+      // The thumbnail cache index is not part of the project package; flush it for every project.
       if (old_thumbnail) {
         auto stats = old_thumbnail->GetDiskCacheStats();
         if (stats.enabled) {
@@ -96,7 +149,7 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
         }
       }
 
-      if (old_project && !old_meta.empty()) {
+      if (old_project && old_project_entered && !old_meta.empty()) {
         old_project->GetSleeveService()->Sync();
         old_project->GetImagePoolService()->SyncWithStorage();
         old_project->SaveProject(old_meta);
@@ -129,11 +182,24 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
 
       result->workspace_to_cleanup_ = old_workspace;
 
+      if (unpackProjectName.has_value()) {
+        ProjectPackageService package_service;
+        QString               unpack_error;
+        if (!package_service.UnpackProjectToWorkspace(packagePath, workspaceDir, *unpackProjectName,
+                                                      &dbPath, &metaPath, &unpack_error)) {
+          const QByteArray err =
+              (unpack_error.isEmpty() ? PL_TEXT("Failed to unpack project package.").Render()
+                                      : unpack_error)
+                  .toUtf8();
+          throw std::runtime_error(err.constData());
+        }
+      }
+
       result->project_   = std::make_shared<ProjectService>(dbPath, metaPath, openMode);
-      result->pipeline_  = std::make_shared<PipelineMgmtService>(result->project_->GetStorage());
-      result->pipeline_->SetAcceleratorBackendPreference(accelerator_preference);
-      qInfo("pipeline.accelerator backend=%s source=active-editor-backend",
-            AcceleratorBackendPreferenceToString(accelerator_preference).data());
+      result->pipeline_             = std::make_shared<PipelineMgmtService>(
+          result->project_->GetStorage(), accelerator_preference, lut_resources);
+      qCInfo(alcedo::diag::appLog, "pipeline.accelerator backend=%s source=active-editor-backend",
+             AcceleratorBackendPreferenceToString(accelerator_preference).data());
       result->thumbnail_ = std::make_shared<ThumbnailService>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
           result->pipeline_, result->project_->GetStorage(), result->project_->GetProjectUUID());
@@ -150,6 +216,8 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
         result->project_->SaveProject(metaPath);
       }
 
+      result->overview_ = result->project_->GetAlbumBrowseService()->ReadProjectOverview();
+
       result->db_path_   = result->project_->GetDBPath();
       result->meta_path_ = result->project_->GetMetaPath();
       if (result->meta_path_.empty()) {
@@ -157,6 +225,7 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       }
       result->package_path_  = packagePath;
       result->workspace_dir_ = workspaceDir;
+      result->workspace_lock_ = std::move(workspace_lock);
       result->recent_project_path_ = recentProjectPath;
       result->success_       = true;
     } catch (const std::exception& e) {
@@ -168,7 +237,8 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
     }
 
     if (!result->success_ && !workspaceDir.empty()) {
-      album_util::CleanupWorkspaceDirectory(workspaceDir);
+      workspace_lock.Release();
+      (void)album_util::CleanupWorkspaceDirectory(workspaceDir);
     }
 
     if (!self) {
@@ -177,7 +247,8 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
 
     QMetaObject::invokeMethod(
         self,
-        [self, request_id, result]() mutable {
+        [self, request_id, result, started_as_preview,
+         failed_project_path = recentProjectPath]() mutable {
           if (!self || request_id != self->handler().project_load_request_id()) {
             return;
           }
@@ -185,13 +256,29 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
           auto& ph = self->handler();
 
           if (!result->success_) {
-            ph.SetProjectLoadingState(false, {});
+            // The message is set before the load state changes, so a reader of the load end
+            // reads the failure.
             self->SetServiceMessageForCurrentProject(
                 ph.project_ ? PL_TEXT("Requested project failed to open: %1", result->error_)
                             : PL_TEXT("Project open failed: %1", result->error_));
             self->SetTaskState(PL_TEXT("Project open failed."), 0, false);
+            ph.SetProjectLoadingState(false, {});
+            // A load that PreviewProject started reports the failure on the welcome surface,
+            // also when the user changed it to kEnter while it ran.
+            if (started_as_preview) {
+              self->HandlePreviewLoadFailed(failed_project_path, result->error_);
+            }
             return;
           }
+
+          // The replaced project's services are retired after the new project is installed.
+          auto retired = std::make_shared<RetiredProject>();
+          retired->project_                = std::move(ph.project_);
+          retired->pipeline_service_       = std::move(ph.pipeline_service_);
+          retired->thumbnail_service_      = std::move(ph.thumbnail_service_);
+          retired->mask_thumbnail_service_ = std::move(ph.mask_thumbnail_service_);
+          retired->import_service_         = std::move(ph.import_service_);
+          retired->export_service_         = std::move(ph.export_service_);
 
           ph.project_               = std::move(result->project_);
           ph.pipeline_service_      = std::move(result->pipeline_);
@@ -202,6 +289,16 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
           ph.meta_path_             = std::move(result->meta_path_);
           ph.project_package_path_  = std::move(result->package_path_);
           ph.project_workspace_dir_ = std::move(result->workspace_dir_);
+          retired->workspace_lock_   = std::move(ph.project_workspace_lock_);
+          ph.project_workspace_lock_ = std::move(result->workspace_lock_);
+          ph.mask_thumbnail_service_ = std::make_shared<alcedo::MaskThumbnailService>();
+          ph.recent_project_path_    = result->recent_project_path_.empty()
+                                           ? (!ph.project_package_path_.empty()
+                                                  ? ph.project_package_path_
+                                                  : ph.meta_path_)
+                                           : result->recent_project_path_;
+          ph.project_overview_       = std::move(result->overview_);
+          ph.project_entered_        = ph.load_entry_mode_ == ProjectEntryMode::kEnter;
 
           if (ph.project_) {
             (void)ph.project_->GetAiSidecarRuntimeService();
@@ -219,18 +316,19 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
                         : PL_TEXT("Loaded packed project: %1 (DB temp: %2)",
                                   album_util::PathToQString(ph.project_package_path_),
                                   album_util::PathToQString(ph.db_path_)));
-          self->RegisterRecentProject(result->recent_project_path_.empty()
-                                          ? (!ph.project_package_path_.empty() ? ph.project_package_path_
-                                                                               : ph.meta_path_)
-                                          : result->recent_project_path_);
+          if (ph.project_entered_) {
+            self->RegisterRecentProject(ph.recent_project_path_);
+          }
           emit self->ProjectChanged();
           emit self->projectChanged();
+          self->NotifyProjectEntryStateChanged();
           ph.SetProjectLoadingState(false, {});
 
           if (!result->workspace_to_cleanup_.empty() &&
               result->workspace_to_cleanup_ != ph.project_workspace_dir_) {
-            album_util::CleanupWorkspaceDirectory(result->workspace_to_cleanup_);
+            retired->workspace_dir_ = result->workspace_to_cleanup_;
           }
+          ph.RetireProject(std::move(retired));
         },
         Qt::QueuedConnection);
   }).detach();
@@ -238,11 +336,35 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
   return true;
 }
 
+void ProjectHandler::RetireProject(std::shared_ptr<RetiredProject> retired) {
+  if (!retired) {
+    return;
+  }
+  // The sidecar runtime stops on the UI thread (its owner). Everything left runs without it.
+  if (retired->project_) {
+    retired->project_->StopAiSidecarRuntime();
+  }
+  project_retirement_thread_.Submit([retired]() {
+    // Services first, then the project that owns the database they use. A service another
+    // module still holds is destroyed by that module's last release instead.
+    retired->import_service_.reset();
+    retired->export_service_.reset();
+    retired->thumbnail_service_.reset();
+    retired->mask_thumbnail_service_.reset();
+    retired->pipeline_service_.reset();
+    retired->project_.reset();
+    retired->workspace_lock_.Release();
+    if (!retired->workspace_dir_.empty()) {
+      (void)album_util::CleanupWorkspaceDirectory(retired->workspace_dir_);
+    }
+  });
+}
+
 bool ProjectHandler::PurgeUninstalledSemanticModels() {
   if (!project_) {
     return false;
   }
-  auto&      semantic = project_->GetStorage()->GetSemanticStore();
+  auto&      semantic = project_->GetStorage()->GetSemanticModelRegistry();
   std::string err;
   const auto  models = semantic.ListModels(&err);
   bool        changed = false;
@@ -286,12 +408,88 @@ bool ProjectHandler::PersistCurrentProjectState() {
   }
 }
 
-bool ProjectHandler::PackageCurrentProjectFiles(QString* errorOut) const {
-  if (!project_ || db_path_.empty() || meta_path_.empty() || project_package_path_.empty()) {
+auto ProjectHandler::editor_journal_directory() const -> std::filesystem::path {
+  auto root = db_path_.parent_path();
+  if (root.empty()) {
+    root = project_workspace_dir_;
+  }
+  if (root.empty()) {
+    return {};
+  }
+  return root / "editor-journal";
+}
+
+bool ProjectHandler::PersistProjectForClose(QString* error) {
+  if (!project_) {
+    return true;
+  }
+  try {
+    if (!project_entered_) {
+      if (thumbnail_service_ && thumbnail_service_->GetDiskCacheStats().enabled) {
+        thumbnail_service_->FlushDiskCacheMetadata();
+      }
+      return true;
+    }
+    if (pipeline_service_) {
+      pipeline_service_->Sync();
+      // Clean-close Mini-Git garbage collection: delete EditCommit rows that no Version head
+      // reaches. An abnormal exit does not run this path.
+      (void)pipeline_service_->CollectUnreachableEditCommits();
+      // Then delete the AI Mask assets that no remaining commit, checkpoint, root, or journal
+      // record refers to.
+      (void)pipeline_service_->CollectUnreferencedMaskAssets(editor_journal_directory());
+    }
+    (void)PurgeUninstalledSemanticModels();
+  } catch (const std::exception& e) {
+    if (error != nullptr) {
+      *error = QString::fromUtf8(e.what());
+    }
+    return false;
+  }
+  if (!PersistCurrentProjectState()) {
+    if (error != nullptr) {
+      *error = PL_TEXT("Project save failed.").Render();
+    }
+    return false;
+  }
+  return PackageCurrentProjectFiles(error);
+}
+
+void ProjectHandler::CloseProject() {
+  if (!project_) {
+    return;
+  }
+  auto retired                     = std::make_shared<RetiredProject>();
+  retired->project_                = std::move(project_);
+  retired->pipeline_service_       = std::move(pipeline_service_);
+  retired->thumbnail_service_      = std::move(thumbnail_service_);
+  retired->mask_thumbnail_service_ = std::move(mask_thumbnail_service_);
+  retired->import_service_         = std::move(import_service_);
+  retired->export_service_         = std::move(export_service_);
+  retired->workspace_dir_          = project_workspace_dir_;
+  retired->workspace_lock_         = std::move(project_workspace_lock_);
+  db_path_.clear();
+  meta_path_.clear();
+  project_package_path_.clear();
+  project_workspace_dir_.clear();
+  recent_project_path_.clear();
+  project_entered_ = false;
+  project_overview_.reset();
+  ClearProjectData();
+  RetireProject(std::move(retired));
+}
+
+namespace {
+
+auto PackageProjectFiles(const std::shared_ptr<ProjectService>& project,
+                         const std::filesystem::path&           db_path,
+                         const std::filesystem::path&           meta_path,
+                         const std::filesystem::path& package_path, QString* errorOut) -> bool {
+  if (!project || db_path.empty() || meta_path.empty() || package_path.empty()) {
     return true;
   }
 
-  auto package_service = project_->GetProjectPackageService();
+  auto package_service = project->GetProjectPackageService();
   if (!package_service) {
     if (errorOut) {
       *errorOut = QStringLiteral("Project package service is unavailable.");
@@ -304,7 +502,7 @@ bool ProjectHandler::PackageCurrentProjectFiles(QString* errorOut) const {
     return false;
   }
 
-  const bool snapshot_ok = package_service->CreateLiveDbSnapshot(project_, snapshot_path, errorOut);
+  const bool snapshot_ok = package_service->CreateLiveDbSnapshot(project, snapshot_path, errorOut);
   if (!snapshot_ok) {
     std::error_code ec;
     std::filesystem::remove(snapshot_path, ec);
@@ -312,10 +510,35 @@ bool ProjectHandler::PackageCurrentProjectFiles(QString* errorOut) const {
   }
 
   const bool packed_ok =
-      package_service->WritePackedProject(project_package_path_, meta_path_, snapshot_path, errorOut);
+      package_service->WritePackedProject(package_path, meta_path, snapshot_path, errorOut);
   std::error_code ec;
   std::filesystem::remove(snapshot_path, ec);
   return packed_ok;
+}
+
+}  // namespace
+
+bool ProjectHandler::PackageCurrentProjectFiles(QString* errorOut) const {
+  std::lock_guard lock(*package_mutex_);
+  return PackageProjectFiles(project_, db_path_, meta_path_, project_package_path_, errorOut);
+}
+
+auto ProjectHandler::MakeSaveAndPackageJob() const -> std::function<bool(QString*)> {
+  return [project = project_, db_path = db_path_, meta_path = meta_path_,
+          package_path = project_package_path_, mutex = package_mutex_](QString* errorOut) {
+    if (!project) {
+      return false;
+    }
+    try {
+      if (!meta_path.empty()) {
+        project->SaveProject(meta_path);
+      }
+    } catch (...) {
+      return false;
+    }
+    std::lock_guard lock(*mutex);
+    return PackageProjectFiles(project, db_path, meta_path, package_path, errorOut);
+  };
 }
 
 void ProjectHandler::SetProjectLoadingState(bool loading, const i18n::LocalizedText& message) {

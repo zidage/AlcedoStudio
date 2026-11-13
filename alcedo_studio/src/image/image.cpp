@@ -20,6 +20,7 @@ using json = nlohmann::json;
 
 namespace {
 constexpr auto kRawRuntimeContextJsonKey = "RawRuntimeColorContext";
+constexpr auto kRasterColorDescriptionJsonKey = "RasterColorDescription";
 
 template <typename T>
 auto MakeJsonArray(const T* values, const int count) -> json {
@@ -50,6 +51,7 @@ void LoadJsonArray(const json& value, const char* key, T* dst, const int count) 
 
 auto RawColorContextToJson(const RawRuntimeColorContext& ctx) -> json {
   json value;
+  value["DngProfileFingerprint"]       = DngColorProfileRefToJson(ctx.dng_profile_);
   value["Valid"]                      = ctx.valid_;
   value["OutputInCameraSpace"]        = ctx.output_in_camera_space_;
   value["CamMul"]              = MakeJsonArray(ctx.cam_mul_, 3);
@@ -87,6 +89,8 @@ auto RawColorContextFromJson(const json& value, RawRuntimeColorContext& ctx) -> 
     return false;
   }
 
+  ctx.dng_profile_ =
+      DngColorProfileRefFromJson(value.value("DngProfileFingerprint", json(nullptr)));
   ctx.valid_                  = value.value("Valid", false);
   ctx.output_in_camera_space_ = value.value("OutputInCameraSpace", false);
   LoadJsonArray(value, "CamMul", ctx.cam_mul_, 3);
@@ -150,7 +154,9 @@ Image::Image(Image&& other)
       exif_data_(std::move(other.exif_data_)),
       image_data_(std::move(other.image_data_)),
       thumbnail_(std::move(other.thumbnail_)),
-      image_type_(other.image_type_) {}
+      image_type_(other.image_type_),
+      color_labels_(other.color_labels_),
+      delete_mark_(other.delete_mark_) {}
 
 std::wostream& operator<<(std::wostream& os, const Image& img) {
   os << "img_id: " << img.image_id_ << "\timage_path: " << img.image_path_.wstring()
@@ -193,9 +199,26 @@ auto Image::ExifToJson() -> std::string {
   if (has_raw_color_context_) {
     exif_json_[kRawRuntimeContextJsonKey] = RawColorContextToJson(raw_color_context_);
   }
+  if (has_raster_color_description_) {
+    exif_json_[kRasterColorDescriptionJsonKey] =
+        RasterColorDescriptionToJson(raster_color_description_);
+  }
 
   has_exif_json_ = true;
   return nlohmann::to_string(exif_json_);
+}
+
+auto Image::ExifDisplayToJson() const -> json {
+  if (has_exif_display_) {
+    return exif_display_.ToJson();
+  }
+  if (!has_exif_json_ || !exif_json_.is_object()) {
+    return json::object();
+  }
+  auto display = exif_json_;
+  display.erase(kRawRuntimeContextJsonKey);
+  display.erase(kRasterColorDescriptionJsonKey);
+  return display;
 }
 
 void Image::JsonToExif(std::string json_str) {
@@ -208,6 +231,12 @@ void Image::JsonToExif(std::string json_str) {
     has_raw_color_context_ =
         exif_json_.contains(kRawRuntimeContextJsonKey) &&
         RawColorContextFromJson(exif_json_[kRawRuntimeContextJsonKey], raw_color_context_);
+    raster_color_description_     = {};
+    has_raster_color_description_ = exif_json_.contains(kRasterColorDescriptionJsonKey);
+    if (has_raster_color_description_) {
+      raster_color_description_ =
+          RasterColorDescriptionFromJson(exif_json_[kRasterColorDescriptionJsonKey]);
+    }
   } catch (nlohmann::json::parse_error& e) {
     throw std::runtime_error("[ERROR] Image: JSON parse error, " + std::string(e.what()));
   } catch (std::exception& e) {
@@ -222,6 +251,27 @@ void Image::SetExifDisplayMetaData(ExifDisplayMetaData&& exif_display) {
   exif_display_     = std::move(exif_display);
   has_exif_display_ = true;
   has_exif_json_    = false;
+  if (sync_state_.load() == ImageSyncState::SYNCED) {
+    sync_state_ = ImageSyncState::MODIFIED;
+  }
+}
+
+void Image::SetColorLabel(ColorLabel code, bool on) {
+  const ColorLabelMask next = WithColorLabel(color_labels_, code, on);
+  if (next == color_labels_) {
+    return;
+  }
+  color_labels_ = next;
+  if (sync_state_.load() == ImageSyncState::SYNCED) {
+    sync_state_ = ImageSyncState::MODIFIED;
+  }
+}
+
+void Image::SetDeleteMark(bool on) {
+  if (delete_mark_ == on) {
+    return;
+  }
+  delete_mark_ = on;
   if (sync_state_.load() == ImageSyncState::SYNCED) {
     sync_state_ = ImageSyncState::MODIFIED;
   }
@@ -254,6 +304,23 @@ auto Image::GetRawColorContext() const -> const RawRuntimeColorContext& {
 }
 
 auto Image::HasRawColorContext() const -> bool { return has_raw_color_context_.load(); }
+
+void Image::SetRasterColorDescription(RasterColorDescription&& description) {
+  raster_color_description_     = std::move(description);
+  has_raster_color_description_ = true;
+  has_exif_json_                = false;
+  if (sync_state_.load() == ImageSyncState::SYNCED) {
+    sync_state_ = ImageSyncState::MODIFIED;
+  }
+}
+
+auto Image::GetRasterColorDescription() const -> const RasterColorDescription& {
+  return raster_color_description_;
+}
+
+auto Image::HasRasterColorDescription() const -> bool {
+  return has_raster_color_description_.load();
+}
 
 void Image::ComputeChecksum() { checksum_ = XXH3_64bits(this, sizeof(*this)); }
 

@@ -7,6 +7,7 @@
 #include "opencl/opencl_program_library.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <fstream>
 #include <iterator>
@@ -73,24 +74,33 @@ auto RelativeOpenClSourcePath(const std::filesystem::path& path) -> std::filesys
   return {};
 }
 
-auto ResolveOpenClSourcePath(const std::filesystem::path& path) -> std::filesystem::path {
-  if (IsRegularFile(path)) {
-    return path;
-  }
+/// The install writes this inventory into the packaged shader root, and only the install does.
+constexpr const char* kPackagedAssetInventory = "runtime-assets.sha256";
 
-  const auto rel = RelativeOpenClSourcePath(path);
+/**
+ * @brief Map a compile-time OpenCL source path to the file the process must load.
+ *
+ * A packaged shader root is an `opencl/` directory next to the executable that holds the GPU asset
+ * inventory of the install. The packaged copy is then authoritative, even if it is missing: the
+ * program build fails with the packaged path instead of silently reading the build machine's source
+ * checkout. A build tree has a CMake-generated `opencl/` directory beside alcedo_main, with no
+ * inventory, so it reads @p path directly.
+ */
+auto ResolveOpenClSourcePath(const std::filesystem::path& path) -> std::filesystem::path {
+  const auto rel     = RelativeOpenClSourcePath(path);
   const auto exe_dir = GetExecutableDir();
   if (rel.empty() || exe_dir.empty()) {
     return path;
   }
 
-  const std::vector<std::filesystem::path> candidates = {
-      exe_dir / "opencl" / rel,
-      exe_dir / "Resources" / "opencl" / rel,
+  const std::vector<std::filesystem::path> packaged_roots = {
+      exe_dir / "opencl",
+      exe_dir / "Resources" / "opencl",
   };
-  for (const auto& candidate : candidates) {
-    if (IsRegularFile(candidate)) {
-      return candidate;
+  for (const auto& packaged_root : packaged_roots) {
+    const auto packaged_path = packaged_root / rel;
+    if (IsRegularFile(packaged_root / kPackagedAssetInventory)) {
+      return packaged_path;
     }
   }
   return path;
@@ -191,11 +201,16 @@ auto OpenClProgramLibrary::BuildProgram(const std::shared_ptr<ProgramSlot>& slot
     source_lengths.push_back(source.size());
   }
 
+  TraceBuild("opencl.program.build.begin " + build_diagnostic_prefix());
+  const auto build_start = std::chrono::steady_clock::now();
+
   cl_int     error = CL_SUCCESS;
   cl_program program =
       clCreateProgramWithSource(context.Context(), static_cast<cl_uint>(source_ptrs.size()),
                                 source_ptrs.data(), source_lengths.data(), &error);
   if (error != CL_SUCCESS || program == nullptr) {
+    TraceBuild("opencl.program.build.end program='" + slot->descriptor.name +
+               "' create_error=" + std::to_string(error));
     throw std::runtime_error(build_diagnostic_prefix() +
                              ": failed to create program (OpenCL error " +
                              std::to_string(error) + ").");
@@ -206,6 +221,11 @@ auto OpenClProgramLibrary::BuildProgram(const std::shared_ptr<ProgramSlot>& slot
   const cl_device_id device = context.Device();
   error = clBuildProgram(program, 1, &device, build_options_arg, nullptr, nullptr);
   NoteOpenClProgramBuild();
+  const auto build_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - build_start)
+                            .count();
+  TraceBuild("opencl.program.build.end program='" + slot->descriptor.name +
+             "' error=" + std::to_string(error) + " ms=" + std::to_string(build_ms));
   if (error != CL_SUCCESS) {
     const auto build_log = GetBuildLog(program, device);
     clReleaseProgram(program);
@@ -220,6 +240,18 @@ auto OpenClProgramLibrary::BuildProgram(const std::shared_ptr<ProgramSlot>& slot
   }
 
   return program;
+}
+
+void OpenClProgramLibrary::SetBuildTraceSink(std::function<void(std::string_view)> sink) {
+  std::lock_guard<std::mutex> lock(trace_mutex_);
+  build_trace_sink_ = std::move(sink);
+}
+
+void OpenClProgramLibrary::TraceBuild(std::string_view message) {
+  std::lock_guard<std::mutex> lock(trace_mutex_);
+  if (build_trace_sink_) {
+    build_trace_sink_(message);
+  }
 }
 
 void OpenClProgramLibrary::RegisterProgram(OpenClProgramDescriptor descriptor) {
@@ -318,6 +350,25 @@ auto OpenClProgramLibrary::RegisteredProgramNames() const -> std::vector<std::st
   }
   std::sort(names.begin(), names.end());
   return names;
+}
+
+auto OpenClProgramLibrary::RegisteredSourcePaths(std::string_view name) const
+    -> std::vector<std::filesystem::path> {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto                  it = programs_.find(std::string(name));
+  if (it == programs_.end() || !it->second) {
+    return {};
+  }
+  return it->second->descriptor.source_paths;
+}
+
+auto OpenClProgramLibrary::RegisteredBuildOptions(std::string_view name) const -> std::string {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto                  it = programs_.find(std::string(name));
+  if (it == programs_.end() || !it->second) {
+    return {};
+  }
+  return it->second->descriptor.build_options;
 }
 
 }  // namespace alcedo

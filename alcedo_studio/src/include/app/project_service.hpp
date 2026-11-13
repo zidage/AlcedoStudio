@@ -51,6 +51,20 @@ class ProjectService {
   }
   auto GetAiSidecarRuntimeService() const -> std::shared_ptr<AiSidecarRuntimeService>;
 
+  /// QSettings key of "Keep AI model loaded": seconds the AI sidecar keeps running after its
+  /// last use. 0 stops it at once, -1 keeps it until the project closes.
+  static constexpr const char* kAiSidecarIdleStopSecondsKey     = "ai/sidecarIdleStopSeconds";
+  static constexpr int         kDefaultAiSidecarIdleStopSeconds = 30;
+  /// @p seconds when it is one of the setting values (0, 30, 60, 300, 900, -1), else the default.
+  [[nodiscard]] static auto    NormalizedAiSidecarIdleStopSeconds(int seconds) -> int;
+  /// Applies the "Keep AI model loaded" value @p seconds (normalized as above) to the runtime
+  /// service of this project, at once. Call on the UI thread. Does not write the setting.
+  void                         SetAiSidecarIdleStopSeconds(int seconds);
+  /// Stop and release the AI sidecar runtime of this project. The runtime stops on its owner
+  /// (UI) thread, so a caller that destroys the project on another thread calls this on the UI
+  /// thread first; the destructor then has no UI-thread work left.
+  void StopAiSidecarRuntime();
+
   auto GetDBPath() const -> const std::filesystem::path& { return db_path_; }
   auto GetMetaPath() const -> const std::filesystem::path& { return meta_path_; }
   auto GetProjectUUID() const -> const std::string& { return project_uuid_; }
@@ -69,6 +83,8 @@ class ProjectService {
   std::shared_ptr<SleeveFilterService>   filter_service_;
   std::shared_ptr<AlbumBrowseService>    browse_service_;
   std::shared_ptr<ProjectPackageService> package_service_;
+  // A rating batch saves from a worker thread while the UI thread can also save.
+  std::mutex                             save_project_mutex_;
   mutable std::mutex                     ai_sidecar_runtime_mutex_;
   mutable std::shared_ptr<AiSidecarRuntimeService> ai_sidecar_runtime_service_;
 };

@@ -7,8 +7,6 @@
 #include <cstdint>
 #include <memory>
 
-#include "edit/history/edit_history.hpp"
-#include "edit/history/version.hpp"
 #include "image/image.hpp"
 #include "sleeve_element.hpp"
 #include "type/type.hpp"
@@ -16,16 +14,15 @@
 namespace alcedo {
 
 /**
- * @brief A type of element, it contains an image file, its edit history, and other metadata used in
- * this software
+ * @brief A file element: binds one image and its metadata to a Sleeve element id.
+ *
+ * Edit history is not stored here. Mini-Git history is keyed by the element id and
+ * owned by the pipeline and history services.
  *
  */
 class SleeveFile : public SleeveElement {
  private:
-  std::shared_ptr<Image>       image_;
-
-  std::shared_ptr<EditHistory> edit_history_;
-  std::shared_ptr<Version>     current_version_;
+  std::shared_ptr<Image> image_;
 
  public:
   image_id_t image_id_;
@@ -37,9 +34,6 @@ class SleeveFile : public SleeveElement {
   auto Copy(sl_element_id_t new_id) const -> std::shared_ptr<SleeveElement>;
   auto GetImage() -> std::shared_ptr<Image>;
   void SetImage(const std::shared_ptr<Image> img);
-
-  auto GetEditHistory() -> std::shared_ptr<EditHistory>;
-  auto SetEditHistory(const std::shared_ptr<EditHistory> history) -> void;
   ~SleeveFile();
 };
 };  // namespace alcedo

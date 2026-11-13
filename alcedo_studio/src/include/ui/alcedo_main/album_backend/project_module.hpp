@@ -7,18 +7,21 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <QVariantMap>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "app/semantic_generation_service.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 #include "ui/alcedo_main/album_backend/project_handler.hpp"
 #include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
 #include "ui/alcedo_main/i18n.hpp"
-#include "app/semantic_generation_service.hpp"
 
 namespace alcedo::ui {
 
@@ -26,14 +29,16 @@ namespace alcedo::ui {
 /// are behavior seams, not a service bag: project code can ask the composition
 /// root to perform one lifecycle operation without acquiring sibling modules.
 struct ProjectLifecycleHooks {
-  std::function<QString()> project_switch_block_reason;
-  std::function<void()> finalize_editor_session;
-  std::function<void()> clear_project_ui_state;
-  std::function<void()> project_opened;
+  std::function<QString()>            project_switch_block_reason;
+  std::function<void()>               finalize_editor_session;
+  /// True while the editor session has an image or runs a close or a persist.
+  std::function<bool()>               editor_session_busy;
+  std::function<void()>               clear_project_ui_state;
+  std::function<void()>               project_opened;
   std::function<bool(const QString&)> should_keep_semantic_model_data;
-  std::function<void()> refresh_semantic_state;
-  std::function<bool()> export_inflight;
-  std::function<void()> refresh_translations;
+  std::function<void()>               refresh_semantic_state;
+  std::function<bool()>               export_inflight;
+  std::function<void()>               refresh_translations;
 };
 
 /// Project lifecycle module: open/create/save, accelerator preference, recent
@@ -54,6 +59,12 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   Q_PROPERTY(bool projectLoading READ ProjectLoading NOTIFY ProjectLoadStateChanged)
   Q_PROPERTY(
       QString projectLoadingMessage READ ProjectLoadingMessage NOTIFY ProjectLoadStateChanged)
+  Q_PROPERTY(bool projectEntered READ ProjectEntered NOTIFY ProjectEnteredChanged)
+  Q_PROPERTY(
+      QString projectLoadEntryMode READ ProjectLoadEntryMode NOTIFY ProjectLoadStateChanged)
+  Q_PROPERTY(QString welcomeProjectPath READ WelcomeProjectPath NOTIFY WelcomeProjectChanged)
+  Q_PROPERTY(QVariantMap projectOverview READ ProjectOverview NOTIFY WelcomeProjectChanged)
+  Q_PROPERTY(QString previewErrorMessage READ PreviewErrorMessage NOTIFY WelcomeProjectChanged)
   Q_PROPERTY(QString taskStatus READ TaskStatus NOTIFY TaskStateChanged)
   Q_PROPERTY(int taskProgress READ TaskProgress NOTIFY TaskStateChanged)
   Q_PROPERTY(bool taskCancelVisible READ TaskCancelVisible NOTIFY TaskStateChanged)
@@ -62,7 +73,7 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   explicit ProjectModule(QObject* parent = nullptr);
   ~ProjectModule() override = default;
 
-  void SetLifecycleHooks(ProjectLifecycleHooks hooks);
+  void               SetLifecycleHooks(ProjectLifecycleHooks hooks);
 
   // ── Core accessors ─────────────────────────────────────────────────────
   [[nodiscard]] auto handler() -> ProjectHandler& { return handler_; }
@@ -70,7 +81,15 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   [[nodiscard]] auto accelerator_preference() const -> AcceleratorBackendPreference {
     return accelerator_preference_;
   }
-  void SetRuntimeAcceleratorPreference(AcceleratorBackendPreference preference);
+  void         SetRuntimeAcceleratorPreference(AcceleratorBackendPreference preference);
+  /// LUT resolver (the application LUT library) that projects opened later pass to their
+  /// render executors. Set once by the application module host before any project opens.
+  void         SetLutResources(std::shared_ptr<const LutResourceResolver> resources) {
+    lut_resources_ = std::move(resources);
+  }
+  [[nodiscard]] auto lut_resources() const -> const std::shared_ptr<const LutResourceResolver>& {
+    return lut_resources_;
+  }
   // ── Q_PROPERTY getters ─────────────────────────────────────────────────
   bool         ServiceReady() const { return service_ready_; }
   QString      ServiceMessage() const { return service_message_text_.Render(); }
@@ -86,42 +105,77 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   }
   bool    ProjectLoading() const { return handler_.project_loading(); }
   QString ProjectLoadingMessage() const { return handler_.project_loading_message(); }
+  bool    ProjectEntered() const { return handler_.project_entered(); }
+  /// `"preview"` or `"enter"` for the running load; empty when no load runs.
+  QString ProjectLoadEntryMode() const;
+  /// Normalized path of the project that the welcome surface describes.
+  QString WelcomeProjectPath() const { return welcome_project_path_; }
+  /// `{photoCount, editedPhotoCount, earliestCaptureDate, latestCaptureDate}` of the loaded
+  /// project; an empty map when no project is loaded. A date is an invalid QDate when no file
+  /// has a capture date.
+  QVariantMap ProjectOverview() const;
+  /// Error text of the last failed preview load; cleared by the next PreviewProject.
+  QString PreviewErrorMessage() const { return preview_error_message_; }
   QString TaskStatus() const { return task_status_text_.Render(); }
   int     TaskProgress() const { return task_progress_; }
   bool    TaskCancelVisible() const { return task_cancel_visible_; }
 
   // ── IUiStatusSink ──────────────────────────────────────────────────────
-  void SetServiceMessage(const i18n::LocalizedText& message) override;
-  void SetTaskState(const i18n::LocalizedText& status, int progress,
-                    bool cancelVisible) override;
+  void    SetServiceMessage(const i18n::LocalizedText& message) override;
+  void SetTaskState(const i18n::LocalizedText& status, int progress, bool cancelVisible) override;
   void ScheduleIdleTaskStateReset(int delayMs) override;
 
   void SetServiceState(bool ready, const i18n::LocalizedText& message);
   void SetServiceMessageForCurrentProject(const i18n::LocalizedText& message);
 
   // ── Project lifecycle Q_INVOKABLE ──────────────────────────────────────
-  Q_INVOKABLE bool PromptAndLoadProject();
-  Q_INVOKABLE bool PromptAndCreateProject();
-  Q_INVOKABLE bool SetAcceleratorBackend(const QString& backendKey);
-  Q_INVOKABLE void StartAcceleratorPreparation();
-  Q_INVOKABLE void AcknowledgeAcceleratorWarning();
-  Q_INVOKABLE bool LoadProject(const QString& metaFileUrlOrPath);
-  Q_INVOKABLE bool CreateProjectInFolder(const QString& folderUrlOrPath);
-  Q_INVOKABLE bool CreateProjectInFolderNamed(const QString& folderUrlOrPath,
-                                              const QString& projectName);
-  Q_INVOKABLE bool SaveProject();
+  Q_INVOKABLE bool   PromptAndLoadProject();
+  Q_INVOKABLE bool   PromptAndCreateProject();
+  Q_INVOKABLE bool   SetAcceleratorBackend(const QString& backendKey);
+  Q_INVOKABLE void   StartAcceleratorPreparation();
+  Q_INVOKABLE void   AcknowledgeAcceleratorWarning();
+  Q_INVOKABLE bool   LoadProject(const QString& metaFileUrlOrPath);
+  Q_INVOKABLE bool   CreateProjectInFolder(const QString& folderUrlOrPath);
+  Q_INVOKABLE bool   CreateProjectInFolderNamed(const QString& folderUrlOrPath,
+                                                const QString& projectName);
+  Q_INVOKABLE bool   SaveProject();
+  /// Loads the project at @p projectUrlOrPath in preview mode for the welcome surface.
+  /// Returns false and changes nothing when a load runs or a project switch is blocked. When
+  /// the project is already loaded and not entered, only sets the welcome project path.
+  /// A pre-check failure or a load failure removes the recent entry and sets
+  /// previewErrorMessage; the loaded project stays loaded.
+  Q_INVOKABLE bool   PreviewProject(const QString& projectUrlOrPath);
+  /// Enters the previewed project (ProjectHandler::RequestEnterLoadedProject).
+  Q_INVOKABLE bool   EnterLoadedProject();
+  /// The reason why the loaded project cannot close now: a load runs, no project is loaded, or
+  /// an import or an export runs. Empty when the project can close. The editor session rule of
+  /// CloseProject is not part of it.
+  [[nodiscard]] auto ProjectCloseBlockReason() const -> QString;
+  /// Closes the loaded project. With @p persist, saves and packs it first
+  /// (ProjectHandler::PersistProjectForClose); without it, the changes since the last save are
+  /// discarded. Returns false, sets the service message, and keeps the project open when
+  /// ProjectCloseBlockReason is not empty, the editor session still has an image or runs a
+  /// close or a persist, or the save fails. On success no project is loaded, and ProjectChanged
+  /// and ProjectEnteredChanged are emitted.
+  bool               CloseProject(bool persist);
 
   // ── Internals used by ProjectHandler / host ────────────────────────────
-  void InitializeAcceleratorSettings();
-  void RefreshTranslations();
-  void LoadRecentProjectsFromSettings();
-  void RegisterRecentProject(const std::filesystem::path& projectPath);
-  void RemoveRecentProject(const std::filesystem::path& projectPath);
-  void NotifyProjectLoadStateChanged();
-  void HandleProjectOpened();
-  void ClearProjectUiState();
+  void               InitializeAcceleratorSettings();
+  void               RefreshTranslations();
+  void               LoadRecentProjectsFromSettings();
+  void               RegisterRecentProject(const std::filesystem::path& projectPath);
+  void               RemoveRecentProject(const std::filesystem::path& projectPath);
+  void               NotifyProjectLoadStateChanged();
+  /// Publishes projectEntered, the overview, and the welcome project state after a change.
+  void               NotifyProjectEntryStateChanged();
+  /// Applies the preview failure rules: removes the recent entry of @p projectPath and shows
+  /// @p errorMessage for it on the welcome surface.
+  void               HandlePreviewLoadFailed(const std::filesystem::path& projectPath,
+                                             const QString&               errorMessage);
+  void               HandleProjectOpened();
+  void               ClearProjectUiState();
   [[nodiscard]] auto ProjectSwitchBlockReason() const -> QString;
-  void              FinalizeEditorSession();
+  void               FinalizeEditorSession();
   [[nodiscard]] bool ShouldKeepSemanticModelData(const QString& profileId) const;
 
  signals:
@@ -133,23 +187,35 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   void ProjectChanged();
   void projectChanged();
   void ProjectLoadStateChanged();
+  void ProjectEnteredChanged();
+  void WelcomeProjectChanged();
 
  private:
-  void StartOpenClPreparationIfNeeded();
-  void SetAcceleratorPreparationState(bool preparing, const i18n::LocalizedText& status);
-  void RebuildAcceleratorOptions();
-  bool IsAcceleratorWarningAcknowledged() const;
-  void PersistAcceleratorWarningAcknowledgement() const;
-  void PersistRecentProjects() const;
+  void           StartOpenClPreparationIfNeeded();
+  void           SetAcceleratorPreparationState(bool preparing, const i18n::LocalizedText& status);
+  void           RebuildAcceleratorOptions();
+  bool           IsAcceleratorWarningAcknowledged() const;
+  void           PersistAcceleratorWarningAcknowledgement() const;
+  void           PersistRecentProjects() const;
+  // Checks that @p projectPath is a supported packed project and starts its load. Returns
+  // false on failure. A pre-check failure writes its reason to @p error and sets
+  // @p fileRejected when the file itself is the cause. A refusal by ProjectHandler leaves
+  // @p error empty; the handler already set the service message.
+  bool           StartPackedProjectLoad(const std::filesystem::path& projectPath,
+                                        ProjectEntryMode entryMode, i18n::LocalizedText* error,
+                                        bool* fileRejected);
 
   ProjectHandler handler_;
 
-  ProjectLifecycleHooks lifecycle_hooks_{};
+  ProjectLifecycleHooks        lifecycle_hooks_{};
 
-  i18n::LocalizedText service_message_text_{};
-  bool                service_ready_ = false;
-  QVariantList        recent_projects_{};
+  i18n::LocalizedText          service_message_text_{};
+  bool                         service_ready_ = false;
+  QVariantList                 recent_projects_{};
+  QString                      welcome_project_path_{};
+  QString                      preview_error_message_{};
   AcceleratorBackendPreference accelerator_preference_ = AcceleratorBackendPreference::Auto;
+  std::shared_ptr<const LutResourceResolver> lut_resources_;
   QString                      accelerator_backend_key_{};
   QString                      accelerator_warning_id_{};
   QVariantList                 accelerator_options_{};
@@ -163,6 +229,9 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   i18n::LocalizedText          task_status_text_{};
   int                          task_progress_       = 0;
   bool                         task_cancel_visible_ = false;
+  // Join kernel preparation before this module and the process OpenCL library
+  // are destroyed. Closing the window can occur while clBuildProgram is active.
+  std::jthread                               opencl_preparation_thread_;
 };
 
 }  // namespace alcedo::ui

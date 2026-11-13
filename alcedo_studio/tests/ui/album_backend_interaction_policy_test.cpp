@@ -54,44 +54,37 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, NoTasks_AllCapabilitiesAllow
   EXPECT_TRUE(policy.EvaluateEditImageDescription(42).value("allowed").toBool());
   EXPECT_TRUE(policy.EvaluateEditImageRating(42).value("allowed").toBool());
   EXPECT_TRUE(policy.EvaluateEditImageRatingReason(42).value("allowed").toBool());
-  EXPECT_TRUE(policy.EvaluateRunImageAnalysis(Targets({42})).value("allowed").toBool());
   EXPECT_TRUE(policy.EvaluateDeleteImages(Targets({42})).value("allowed").toBool());
   EXPECT_TRUE(policy.EvaluateChangeSemanticModel().value("allowed").toBool());
   EXPECT_TRUE(policy.EvaluateRunSemanticGeneration().value("allowed").toBool());
   EXPECT_TRUE(policy.EvaluateChangeModelDownloadSettings().value("allowed").toBool());
-  EXPECT_TRUE(policy.EvaluateChangeImageAnalysisProvider().value("allowed").toBool());
   // Cached Q_PROPERTYs likewise true.
   policy.SetFocusedElementId(42);
   EXPECT_TRUE(policy.CanEditFocusedDescription());
   EXPECT_TRUE(policy.CanEditFocusedRating());
   EXPECT_TRUE(policy.CanEditFocusedRatingReason());
   EXPECT_TRUE(policy.CanDeletePendingTargets());
-  EXPECT_TRUE(policy.CanRunAnalysis());
   EXPECT_TRUE(policy.CanChangeSemanticModel());
   EXPECT_TRUE(policy.CanRunSemanticGeneration());
   EXPECT_TRUE(policy.CanChangeModelDownloadSettings());
-  EXPECT_TRUE(policy.CanChangeImageAnalysisProvider());
 }
 
-TEST_F(ApplicationModuleHostInteractionPolicyTests, ImageAnalysisPerElementLocks_BlockAffectedOnly) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, PerElementLocks_BlockAffectedOnly) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   const QString               id = RegisterLockedTask(
-      registry, BackgroundTaskKind::ImageAnalysis,
+      registry, BackgroundTaskKind::AdjustmentPaste,
       {
-          Lock(InteractionCapability::EditImageDescription, 42, QStringLiteral("analyzing")),
-          Lock(InteractionCapability::EditImageRating, 42, QStringLiteral("analyzing")),
-          Lock(InteractionCapability::EditImageRatingReason, 42, QStringLiteral("analyzing")),
-          Lock(InteractionCapability::RunImageAnalysis, 42, QStringLiteral("rerun")),
+          Lock(InteractionCapability::EditImageDescription, 42, QStringLiteral("pasting")),
+          Lock(InteractionCapability::EditImageRating, 42, QStringLiteral("pasting")),
+          Lock(InteractionCapability::EditImageRatingReason, 42, QStringLiteral("pasting")),
           Lock(InteractionCapability::DeleteImages, 42, QStringLiteral("no delete")),
-          Lock(InteractionCapability::ChangeImageAnalysisProvider, 0,
-                             QStringLiteral("provider locked")),
           Lock(InteractionCapability::ChangeSemanticModel, 0, QStringLiteral("model locked")),
           Lock(InteractionCapability::ChangeModelDownloadSettings, 0,
                              QStringLiteral("model files locked")),
       });
 
-  // Affected image 42 is blocked across the image-edit + run + delete caps.
+  // Affected image 42 is blocked across the image-edit + delete caps.
   const QVariantMap desc42 = policy.EvaluateEditImageDescription(42);
   EXPECT_FALSE(desc42.value("allowed").toBool());
   EXPECT_FALSE(desc42.value("reason").toString().isEmpty());
@@ -101,14 +94,11 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, ImageAnalysisPerElementLocks
   EXPECT_FALSE(policy.EvaluateEditImageRating(42).value("allowed").toBool());
   EXPECT_FALSE(policy.EvaluateEditImageRatingReason(42).value("allowed").toBool());
   EXPECT_FALSE(policy.EvaluateDeleteImages(Targets({42})).value("allowed").toBool());
-  EXPECT_FALSE(policy.EvaluateRunImageAnalysis(Targets({42})).value("allowed").toBool());
   // Unrelated image 99 is unaffected for the per-element caps.
   EXPECT_TRUE(policy.EvaluateEditImageDescription(99).value("allowed").toBool());
   EXPECT_TRUE(policy.EvaluateEditImageRating(99).value("allowed").toBool());
   EXPECT_TRUE(policy.EvaluateDeleteImages(Targets({99})).value("allowed").toBool());
-  EXPECT_TRUE(policy.EvaluateRunImageAnalysis(Targets({99})).value("allowed").toBool());
   // Snapshot-setting caps are global, so they are blocked regardless of element.
-  EXPECT_FALSE(policy.EvaluateChangeImageAnalysisProvider().value("allowed").toBool());
   EXPECT_FALSE(policy.EvaluateChangeSemanticModel().value("allowed").toBool());
   EXPECT_FALSE(policy.EvaluateChangeModelDownloadSettings().value("allowed").toBool());
   // A semantic run may still reuse the already-running sidecar; it is not a
@@ -127,32 +117,26 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, ImageAnalysisPerElementLocks
   EXPECT_TRUE(policy.CanEditFocusedRatingReason());
   EXPECT_TRUE(policy.FocusedEditReason().isEmpty());
 
-  // Pending delete / analysis target gates.
+  // Pending delete target check.
   policy.SetPendingDeleteTargets(Targets({42}));
   EXPECT_FALSE(policy.CanDeletePendingTargets());
   EXPECT_FALSE(policy.PendingDeleteReason().isEmpty());
   policy.SetPendingDeleteTargets(Targets({99}));
   EXPECT_TRUE(policy.CanDeletePendingTargets());
-
-  policy.SetPendingAnalysisTargets(Targets({42}));
-  EXPECT_FALSE(policy.CanRunAnalysis());
-  EXPECT_FALSE(policy.RunAnalysisReason().isEmpty());
-  policy.SetPendingAnalysisTargets(Targets({99}));
-  EXPECT_TRUE(policy.CanRunAnalysis());
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests, GlobalLock_BlocksEveryElement) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   RegisterLockedTask(
-      registry, BackgroundTaskKind::ImageAnalysis,
+      registry, BackgroundTaskKind::ImageDelete,
       {
           Lock(InteractionCapability::DeleteImages, 0, QStringLiteral("album delete locked")),
-          Lock(InteractionCapability::RunImageAnalysis, 0, QStringLiteral("album run locked")),
+          Lock(InteractionCapability::EditImageRating, 0, QStringLiteral("album rating locked")),
       });
   // A global (element_id == 0) lock blocks every element, not just 0.
   EXPECT_FALSE(policy.EvaluateDeleteImages(Targets({99})).value("allowed").toBool());
-  EXPECT_FALSE(policy.EvaluateRunImageAnalysis(Targets({7})).value("allowed").toBool());
+  EXPECT_FALSE(policy.EvaluateEditImageRatings(Targets({7})).value("allowed").toBool());
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests, SemanticGenerationLocks_BlockModelAndGeneration) {
@@ -164,13 +148,10 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, SemanticGenerationLocks_Bloc
           Lock(InteractionCapability::ChangeSemanticModel, 0, QStringLiteral("model")),
           Lock(InteractionCapability::RunSemanticGeneration, 0, QStringLiteral("gen")),
           Lock(InteractionCapability::ChangeModelDownloadSettings, 0, QStringLiteral("dl")),
-          Lock(InteractionCapability::ChangeImageAnalysisProvider, 0, QStringLiteral("provider")),
       });
   EXPECT_FALSE(policy.EvaluateChangeSemanticModel().value("allowed").toBool());
   EXPECT_FALSE(policy.EvaluateRunSemanticGeneration().value("allowed").toBool());
   EXPECT_FALSE(policy.EvaluateChangeModelDownloadSettings().value("allowed").toBool());
-  EXPECT_FALSE(policy.EvaluateChangeImageAnalysisProvider().value("allowed").toBool());
-  EXPECT_TRUE(policy.EvaluateRunImageAnalysis(Targets({42})).value("allowed").toBool());
   EXPECT_FALSE(policy.CanChangeSemanticModel());
   EXPECT_FALSE(policy.CanRunSemanticGeneration());
   EXPECT_FALSE(policy.CanChangeModelDownloadSettings());
@@ -202,21 +183,45 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, ModelActivationLocks_BlockAl
           Lock(InteractionCapability::ChangeSemanticModel, 0, QStringLiteral("model")),
           Lock(InteractionCapability::RunSemanticGeneration, 0, QStringLiteral("gen")),
           Lock(InteractionCapability::ChangeModelDownloadSettings, 0, QStringLiteral("dl")),
-          Lock(InteractionCapability::ChangeImageAnalysisProvider, 0, QStringLiteral("provider")),
       });
   EXPECT_FALSE(policy.EvaluateChangeSemanticModel().value("allowed").toBool());
   EXPECT_FALSE(policy.EvaluateRunSemanticGeneration().value("allowed").toBool());
   EXPECT_FALSE(policy.EvaluateChangeModelDownloadSettings().value("allowed").toBool());
-  EXPECT_FALSE(policy.EvaluateChangeImageAnalysisProvider().value("allowed").toBool());
-  EXPECT_TRUE(policy.EvaluateRunImageAnalysis(Targets({42})).value("allowed").toBool());
+}
+
+// The agent control lock refuses only the user-facing adapters. The capabilities that the editor
+// session admission reads stay open, so the commands of the agent still run.
+TEST(InteractionPolicyControllerTest, UserStateChangeLockDoesNotRestrictSessionAdmission) {
+  BackgroundTaskController    registry;
+  InteractionPolicyController policy(&registry);
+  EXPECT_TRUE(policy.CanChangeStateAsUser());
+  EXPECT_TRUE(UserStateChangeRefusal(&policy).isEmpty());
+  EXPECT_TRUE(UserStateChangeRefusal(nullptr).isEmpty());
+
+  const QString id = RegisterLockedTask(
+      registry, BackgroundTaskKind::AgentControl,
+      {Lock(InteractionCapability::UserStateChange, 0, QStringLiteral("agent"))});
+  EXPECT_FALSE(policy.CanChangeStateAsUser());
+  EXPECT_EQ(policy.ChangeStateAsUserReason(), QStringLiteral("agent"));
+  EXPECT_FALSE(policy.EvaluateChangeStateAsUser().value("allowed").toBool());
+  EXPECT_EQ(UserStateChangeRefusal(&policy), QStringLiteral("agent"));
+
+  EXPECT_TRUE(policy.CanSelectEditorImage());
+  EXPECT_TRUE(policy.CanPasteAdjustments());
+  EXPECT_TRUE(policy.CanCheckoutVersion());
+  EXPECT_TRUE(policy.CanSwitchWorkspace());
+  EXPECT_TRUE(policy.CanDeletePendingTargets());
+
+  registry.FinishTask(id, BackgroundTaskState::Succeeded);
+  EXPECT_TRUE(policy.CanChangeStateAsUser());
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests, FinishTask_ClearsLocks) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   const QString               id = RegisterLockedTask(
-      registry, BackgroundTaskKind::ImageAnalysis,
-      {Lock(InteractionCapability::EditImageDescription, 42, QStringLiteral("analyzing"))});
+      registry, BackgroundTaskKind::AdjustmentPaste,
+      {Lock(InteractionCapability::EditImageDescription, 42, QStringLiteral("pasting"))});
   policy.SetFocusedElementId(42);
   EXPECT_FALSE(policy.CanEditFocusedDescription());
   registry.FinishTask(id, BackgroundTaskState::Succeeded);
@@ -224,7 +229,7 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, FinishTask_ClearsLocks) {
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests,
-       EditorSaveLocksDisableFilmstripWorkspaceCheckoutPasteAndMergeWithReason) {
+       EditorSaveLocksDisableFilmstripWorkspaceCheckoutAndPasteWithReason) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   const QString               reason = QStringLiteral("Saving editor changes");
@@ -234,24 +239,20 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests,
                          Lock(InteractionCapability::SwitchWorkspace, 0, reason),
                          Lock(InteractionCapability::CheckoutVersion, 0, reason),
                          Lock(InteractionCapability::PasteAdjustments, 0, reason),
-                         Lock(InteractionCapability::MergeAdjustments, 0, reason),
                      });
 
   EXPECT_FALSE(policy.CanSelectEditorImage());
   EXPECT_FALSE(policy.CanSwitchWorkspace());
   EXPECT_FALSE(policy.CanCheckoutVersion());
   EXPECT_FALSE(policy.CanPasteAdjustments());
-  EXPECT_FALSE(policy.CanMergeAdjustments());
   EXPECT_EQ(policy.SelectEditorImageReason(), reason);
   EXPECT_EQ(policy.SwitchWorkspaceReason(), reason);
   EXPECT_EQ(policy.CheckoutVersionReason(), reason);
   EXPECT_EQ(policy.PasteAdjustmentsReason(), reason);
-  EXPECT_EQ(policy.MergeAdjustmentsReason(), reason);
   EXPECT_EQ(policy.EvaluateSelectEditorImage().value("reason").toString(), reason);
   EXPECT_EQ(policy.EvaluateSwitchWorkspace().value("reason").toString(), reason);
   EXPECT_EQ(policy.EvaluateCheckoutVersion().value("reason").toString(), reason);
   EXPECT_EQ(policy.EvaluatePasteAdjustments().value("reason").toString(), reason);
-  EXPECT_EQ(policy.EvaluateMergeAdjustments().value("reason").toString(), reason);
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests, PolicyChanged_FiresOnlyOnLockSetChange) {
@@ -259,8 +260,8 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, PolicyChanged_FiresOnlyOnLoc
   InteractionPolicyController policy(&registry);
   QSignalSpy                  spy(&policy, &InteractionPolicyController::PolicyChanged);
   const QString               id = RegisterLockedTask(
-      registry, BackgroundTaskKind::ImageAnalysis,
-      {Lock(InteractionCapability::EditImageDescription, 42, QStringLiteral("analyzing"))});
+      registry, BackgroundTaskKind::AdjustmentPaste,
+      {Lock(InteractionCapability::EditImageDescription, 42, QStringLiteral("pasting"))});
   const int after_register = spy.count();
   EXPECT_GE(after_register, 1);
   // A progress tick does not change the lock set, so PolicyChanged must NOT fire.
@@ -321,14 +322,14 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, NaturalLanguageSearchGate_Di
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests,
-       ProductionEditorSaveTaskPublishesAndClearsFiveCheckpointLocks) {
+       ProductionEditorSaveTaskPublishesAndClearsFourCheckpointLocks) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   EditorSessionTaskPort       task_port(&registry);
   constexpr uint64_t          kElementA = 101;
   const QString               expected_reason = QStringLiteral("Saving editor changes");
 
-  // ── Begin task publishes all five checkpoint locks ──
+  // ── Begin task publishes all four checkpoint locks ──
   const auto task_id = task_port.BeginTask("editor_save", kElementA);
   EXPECT_NE(task_id, 0u);
 
@@ -336,24 +337,21 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests,
   EXPECT_FALSE(policy.CanSwitchWorkspace());
   EXPECT_FALSE(policy.CanCheckoutVersion());
   EXPECT_FALSE(policy.CanPasteAdjustments());
-  EXPECT_FALSE(policy.CanMergeAdjustments());
   EXPECT_EQ(policy.SelectEditorImageReason(), expected_reason);
   EXPECT_EQ(policy.SwitchWorkspaceReason(), expected_reason);
   EXPECT_EQ(policy.CheckoutVersionReason(), expected_reason);
   EXPECT_EQ(policy.PasteAdjustmentsReason(), expected_reason);
-  EXPECT_EQ(policy.MergeAdjustmentsReason(), expected_reason);
 
   // Non-checkpoint capabilities remain enabled.
   EXPECT_TRUE(policy.CanChangeSemanticModel());
   EXPECT_TRUE(policy.CanRunSemanticGeneration());
 
-  // ── End task as success clears all five locks ──
+  // ── End task as success clears all four locks ──
   task_port.EndTask(task_id, true, "");
   EXPECT_TRUE(policy.CanSelectEditorImage());
   EXPECT_TRUE(policy.CanSwitchWorkspace());
   EXPECT_TRUE(policy.CanCheckoutVersion());
   EXPECT_TRUE(policy.CanPasteAdjustments());
-  EXPECT_TRUE(policy.CanMergeAdjustments());
 
   // ── Failure also clears locks ──
   const auto task2 = task_port.BeginTask("editor_save", kElementA);
@@ -363,7 +361,6 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests,
   EXPECT_TRUE(policy.CanSwitchWorkspace());
   EXPECT_TRUE(policy.CanCheckoutVersion());
   EXPECT_TRUE(policy.CanPasteAdjustments());
-  EXPECT_TRUE(policy.CanMergeAdjustments());
 
   // ── Cancellation (task removed from registry) clears locks ──
   task_port.BeginTask("editor_save", kElementA);
@@ -389,7 +386,6 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests,
   EXPECT_TRUE(policy.CanSelectEditorImage());
   EXPECT_TRUE(policy.CanSwitchWorkspace());
   EXPECT_TRUE(policy.CanPasteAdjustments());
-  EXPECT_TRUE(policy.CanMergeAdjustments());
 
   // General editor capabilities are not affected by a CheckoutVersion-only lock.
   policy.SetFocusedElementId(42);

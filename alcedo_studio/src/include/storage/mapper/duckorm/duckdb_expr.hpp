@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -21,8 +22,10 @@ namespace duckorm {
  *
  * @details Prefer expr::lit for product WHERE text that is still pasted as a
  * string. Use expr::param when the caller prepares the fragment and binds.
+ * `std::monostate` binds NULL; `std::vector<std::uint8_t>` binds a BLOB.
  */
-using BindValue = std::variant<std::monostate, int64_t, double, bool, std::string>;
+using BindValue =
+    std::variant<std::monostate, int64_t, double, bool, std::string, std::vector<std::uint8_t>>;
 
 /**
  * @brief Generic SQL expression fragment with optional bind values.
@@ -113,8 +116,14 @@ namespace expr {
 [[nodiscard]] auto param(std::string_view value) -> SqlFragment;
 [[nodiscard]] auto param(const char* value) -> SqlFragment;
 [[nodiscard]] auto param(const std::string& value) -> SqlFragment;
+/// A `?` placeholder that binds a copy of @p blob as a BLOB.
+[[nodiscard]] auto param(std::span<const std::uint8_t> blob) -> SqlFragment;
 
 [[nodiscard]] auto eq(SqlFragment left, SqlFragment right) -> SqlFragment;
+/// `(column = ?)` with @p value bound.
+[[nodiscard]] auto column_eq(std::string_view column, const std::string& value) -> SqlFragment;
+/// `(column = ?)` with @p value bound.
+[[nodiscard]] auto column_eq(std::string_view column, int64_t value) -> SqlFragment;
 [[nodiscard]] auto ne(SqlFragment left, SqlFragment right) -> SqlFragment;
 [[nodiscard]] auto gt(SqlFragment left, SqlFragment right) -> SqlFragment;
 [[nodiscard]] auto lt(SqlFragment left, SqlFragment right) -> SqlFragment;
@@ -160,6 +169,51 @@ namespace expr {
 [[nodiscard]] auto or_(std::span<const SqlFragment> parts) -> SqlFragment;
 [[nodiscard]] auto and_(std::initializer_list<SqlFragment> parts) -> SqlFragment;
 [[nodiscard]] auto or_(std::initializer_list<SqlFragment> parts) -> SqlFragment;
+
+/**
+ * @brief `operand IN (v1, v2, ...)` with the values as integer literals.
+ *
+ * @param operand Column or expression on the left.
+ * @param values Integer values, for example element ids. Each value must fit in int64_t.
+ * @return The IN predicate, or `FALSE` for an empty list (no row matches).
+ *
+ * @details Literals instead of binds: an id list can hold thousands of values, and integer
+ * literals need no escaping.
+ */
+template <std::integral T>
+[[nodiscard]] auto in_list(SqlFragment operand, std::span<const T> values) -> SqlFragment {
+  if (values.empty()) {
+    return raw("FALSE");
+  }
+  operand.append(raw(" IN ("));
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      operand.append(raw(", "));
+    }
+    operand.append(lit(static_cast<int64_t>(values[i])));
+  }
+  operand.append(raw(")"));
+  return operand;
+}
+
+/**
+ * @brief `operand IN (?, ?, ...)` with each text value bound.
+ *
+ * @param operand Column or expression on the left.
+ * @param values Text values, for example hash strings. Each value is a bind, so quotes need no
+ *        escaping.
+ * @return The IN predicate, or `FALSE` for an empty list (no row matches).
+ */
+[[nodiscard]] auto in_list(SqlFragment operand, std::span<const std::string> values) -> SqlFragment;
+
+/**
+ * @brief A `FLOAT[n]` array literal, for example `[0.5,-1]::FLOAT[2]`.
+ *
+ * @details Written with the classic locale and 9 significant digits, so every float value
+ * reads back unchanged. Used where a vector must be part of the SQL text (DuckDB binds have
+ * no array type here).
+ */
+[[nodiscard]] auto lit_float_array(std::span<const float> values) -> SqlFragment;
 
 }  // namespace expr
 }  // namespace duckorm

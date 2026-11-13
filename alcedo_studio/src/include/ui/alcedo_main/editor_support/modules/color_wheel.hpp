@@ -7,17 +7,16 @@
 #include <QPointF>
 #include <array>
 
+#include "edit/operators/models/color_wheel_tone.hpp"
+
+// QPointF forms of the tone wheel disc equations in edit/operators/models/color_wheel_tone.hpp.
 namespace alcedo::ui::color_wheel {
 
-constexpr int   kSliderUiMin     = -800;
-constexpr int   kSliderUiMax     = 800;
-constexpr float kSliderToParam   = 8000.0f;
-constexpr float kStrengthDefault = 0.10f;
-constexpr float kEpsilon         = 1e-6f;
+using alcedo::color_wheel::kDiscMaxStops;
+using alcedo::color_wheel::kMasterMaxStops;
 
-auto            ClampDiscPoint(const QPointF& p) -> QPointF;
-auto            DiscToCdlDelta(const QPointF& position, float strength) -> std::array<float, 3>;
-auto            CdlSliderUiToMaster(int slider_value) -> float;
-auto            CdlMasterToSliderUi(float master_value) -> int;
+auto ClampDiscPoint(const QPointF& p) -> QPointF;
+/// Per-channel stops of the disc point @p position at @p strength stops for full radius.
+auto DiscToChannelStops(const QPointF& position, float strength) -> std::array<float, 3>;
 
 }  // namespace alcedo::ui::color_wheel

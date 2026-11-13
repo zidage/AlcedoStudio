@@ -4,14 +4,21 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_session_ports.hpp"
+#include "edit/graph/graph_ids.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
+#include "edit/mask/mask_id.hpp"
+#include "edit/mask/mask_model.hpp"
+#include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 
 namespace alcedo::ui {
@@ -48,21 +55,82 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
       -> alcedo::EditorHistoryGuardHandle override;
   /// Drop the working history state for one image.
   void Release(const alcedo::EditorHistoryGuardHandle& guard) override;
+  void ReleaseDiscardingUnmaterialized(const alcedo::EditorHistoryGuardHandle& guard) override;
   auto CaptureAdjustmentBeforePreview(const alcedo::EditorHistoryGuardHandle& guard,
                                       const alcedo::EditorAdjustmentPatch& patch,
                                       std::string* error) -> bool override;
+  auto RestoreUnsettledPreview(const alcedo::EditorHistoryGuardHandle& guard, bool* live_changed,
+                               std::string* error) -> bool override;
   auto CommitAdjustment(const alcedo::EditorHistoryGuardHandle& guard,
                         const alcedo::EditorAdjustmentPatch& patch, std::string* error)
       -> bool override;
+  auto CommitPipelineEditBatch(const alcedo::EditorHistoryGuardHandle& guard,
+                               alcedo::PipelineEditBatch batch, std::string* error) -> bool;
+  auto EditNodeGraph(const alcedo::EditorHistoryGuardHandle& guard,
+                     alcedo::NodeGraphTopologyChange change, std::string* error) -> bool override;
+  auto RenameColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
+                        std::string display_name, std::string* error) -> bool override;
+  /// Serialize a deletion-lock edit; equal values do not create a history commit.
+  auto SetColorGradeDeletionProtected(const alcedo::EditorHistoryGuardHandle& guard,
+                                      const alcedo::NodeId& node_id, bool deletion_protected,
+                                      std::string* error, bool* changed = nullptr) -> bool override;
+  auto InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
+                             const alcedo::NodeId& new_id,
+                             const alcedo::NodeId& expected_predecessor_id, std::string* error)
+      -> bool override;
+  auto RemoveColorGradeAndBridge(const alcedo::EditorHistoryGuardHandle& guard,
+                                 const alcedo::NodeId& node_id, std::string* error)
+      -> bool override;
+  auto SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
+                            bool enabled, std::string* error) -> bool;
+  auto SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
+                        float mix, std::string* error) -> bool;
+  auto AddMask(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
+               alcedo::MaskModel mask, std::uint32_t display_index, std::string* error) -> bool;
+  auto RemoveMask(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
+                  const alcedo::MaskId& mask_id, std::string* error) -> bool;
+  auto ReplaceMaskSource(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
+                         const alcedo::MaskId& mask_id, nlohmann::json after_source,
+                         std::string* error) -> bool;
+  auto SetMaskField(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
+                    const alcedo::MaskId& mask_id, std::string field_key, nlohmann::json after_value,
+                    std::string* error) -> bool;
   auto Undo(const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool override;
   auto Redo(const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool override;
+  [[nodiscard]] auto LastPublishedRenderReason() const
+      -> std::optional<alcedo::EditorRenderReason> override;
   auto MoveHeadToCommit(const alcedo::EditorHistoryGuardHandle& guard,
                         const alcedo::commit_hash_t& commit_id, std::string* error)
       -> bool override;
   auto CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
                        const alcedo::Hash128& version_id, std::string* error) -> bool override;
+  auto ReadActiveVersionId(const alcedo::EditorHistoryGuardHandle& guard,
+                           alcedo::version_ref_id_t* version_id,
+                           std::string* error) -> bool override;
   auto ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                            alcedo::EditorHistorySnapshot* snapshot, std::string* error)
+      -> bool override;
+  auto SnapshotHistorySource(const alcedo::EditorHistoryGuardHandle&          guard,
+                             std::shared_ptr<const alcedo::CommitGraph>*      graph,
+                             std::shared_ptr<const alcedo::PipelineDocument>* root_document,
+                             std::string* error) -> bool override;
+  auto BuildComparisonInputs(
+      const alcedo::EditorHistoryGuardHandle&                     guard,
+      const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
+      const alcedo::EditorComparisonSource& a, const alcedo::EditorComparisonSource& b,
+      alcedo::EditorComparisonDevelopSettings develop_settings,
+      alcedo::EditorComparisonInputPair* pair, std::string* error) -> bool override;
+  auto BuildAiMaskAnalysisDocument(
+      const alcedo::EditorHistoryGuardHandle&                     guard,
+      const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
+      std::shared_ptr<const alcedo::PipelineGraphSnapshot>* analysis, std::string* error)
+      -> bool override;
+  auto BuildLutPreviewDocument(
+      const alcedo::EditorHistoryGuardHandle&                     guard,
+      const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
+      const alcedo::LmtUpdate& write, std::shared_ptr<const alcedo::PipelineGraphSnapshot>* preview,
+      std::string* error) -> bool override;
+  [[nodiscard]] auto HasUncommittedLiveValues(const alcedo::EditorHistoryGuardHandle& guard) const
       -> bool override;
   auto HasUnmaterializedChanges(const alcedo::EditorHistoryGuardHandle& guard,
                                 std::string* error) -> bool override;
@@ -82,30 +150,19 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                      std::string* error) -> bool override;
   auto RemoveVersion(const alcedo::EditorHistoryGuardHandle& guard,
                      const alcedo::Hash128& version_id, std::string* error) -> bool override;
-  auto CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                   const alcedo::AdjustmentMergePreview& preview, std::string* error)
+  auto PasteLiveRootRelativeVersion(
+      const alcedo::EditorHistoryGuardHandle&  guard,
+      const alcedo::AdjustmentTransferPackage& package, std::string version_display_name,
+      alcedo::AdjustmentPasteResult* result, std::string* error,
+      std::optional<alcedo::EditCommitAttribution> attribution = std::nullopt) -> bool override;
+  auto ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
+                           alcedo::EditorPanelProjection* projection, std::string* error)
       -> bool override;
-  auto PasteLiveRootRelativeVersion(const alcedo::EditorHistoryGuardHandle& guard,
-                                    const alcedo::AdjustmentTransferPackage& package,
-                                    std::string version_display_name,
-                                    alcedo::AdjustmentPasteResult* result, std::string* error)
-      -> bool override;
-  auto CancelLivePaste(const alcedo::EditorHistoryGuardHandle& guard,
-                       const alcedo::version_ref_id_t& prior_version_id,
-                       const alcedo::version_ref_id_t& paste_version_id, std::string* error)
-      -> bool override;
-  auto BeginLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                      const alcedo::AdjustmentTransferPackage& package,
-                      alcedo::AdjustmentMergePreview* preview, std::string* error)
-      -> bool override;
-  auto CompleteLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                         const alcedo::AdjustmentTransferPackage& package,
-                         const alcedo::AdjustmentMergePreview& preview,
-                         const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
-                         alcedo::AdjustmentMergeResult* result, std::string* error)
-      -> bool override;
-  auto ReadAdjustmentSnapshot(const alcedo::EditorHistoryGuardHandle& guard,
-                              alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
+  auto SetPanelProjectionNode(const alcedo::EditorHistoryGuardHandle& guard,
+                              const alcedo::NodeId& node_id, std::uint64_t session_generation,
+                              std::string* error) -> bool override;
+  auto WithWorkingDocument(const alcedo::EditorHistoryGuardHandle&           guard,
+                           const alcedo::IEditorHistoryPort::MaskDocumentOp& op, std::string* error)
       -> bool override;
   auto CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard, std::string* error)
       -> std::shared_ptr<const alcedo::EditorMiniGitSaveCapture> override;
@@ -116,6 +173,11 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                                             std::string* error) -> bool override;
 
  private:
+  /// Publish the preview and committed snapshots of @p guard's image after an operation that may
+  /// write the working document (the operation ran while the argument was evaluated) and return
+  /// that operation's @p result.
+  auto PublishAfterWrite(const alcedo::EditorHistoryGuardHandle& guard, bool result) -> bool;
+
   std::unique_ptr<EditorHistoryState>        state_;
   std::unique_ptr<EditorHistoryProjection>   projection_;
   std::unique_ptr<EditorHistoryMutation>     mutation_;

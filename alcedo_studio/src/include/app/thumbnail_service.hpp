@@ -4,11 +4,15 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <unordered_map>
 
 #include "app/image_pool_service.hpp"
 #include "app/pipeline_service.hpp"
@@ -56,6 +60,21 @@ using ThumbnailCallback       = std::function<void(std::shared_ptr<ThumbnailGuar
 using ThumbnailResultCallback = std::function<void(ThumbnailRequestResult)>;
 using CallbackDispatcher      = std::function<void(std::function<void()>)>;
 
+/**
+ * @brief Renders thumbnails of committed image states.
+ *
+ * Every render reads the committed pipeline graph snapshot of the image
+ * (@ref PipelineMgmtService::AcquireCommittedSnapshot): uncommitted editor values never reach a
+ * thumbnail or the disk cache, and the disk cache key is the snapshot's
+ * history label (head and chain).
+ *
+ * Owns its own renderers: a fixed pool of batch executors (@ref kDefaultBatchExecutorCount) and a
+ * scheduler with one worker per executor. It never takes the editor's render lock and never
+ * renders on the editor's executor.
+ *
+ * Request flow: memory cache → lookup worker (snapshot, disk cache read) →
+ * batch render → RGBA8 display buffer → disk cache write → callback.
+ */
 class ThumbnailService {
  private:
   struct State;
@@ -64,14 +83,27 @@ class ThumbnailService {
   static void            HandleEvict(State& st, std::optional<ThumbnailCacheKey> evicted_key);
 
  public:
+  /// Batch executors (and render workers) of one service unless the caller asks for another count.
+  static constexpr std::size_t kDefaultBatchExecutorCount = 2;
+
   ThumbnailService() = delete;
-  ThumbnailService(std::shared_ptr<SleeveServiceImpl>      sleeve_service,
-                   std::shared_ptr<ImagePoolService>       image_pool_service,
-                   std::shared_ptr<PipelineMgmtService>    pipeline_service,
-                   std::shared_ptr<Storage>          storage_service      = nullptr,
-                   const std::string&                      project_uuid         = {},
-                   const std::filesystem::path&            thumbnail_cache_root = {});
-  ~ThumbnailService() = default;
+  /**
+   * @param batch_executor_count Number of batch executors and render workers; at least 1. Each
+   *        executor creates its GPU device on first use with the pipeline service's accelerator
+   *        preference at construction time.
+   */
+  ThumbnailService(std::shared_ptr<SleeveServiceImpl>   sleeve_service,
+                   std::shared_ptr<ImagePoolService>    image_pool_service,
+                   std::shared_ptr<PipelineMgmtService> pipeline_service,
+                   std::shared_ptr<Storage>             storage_service      = nullptr,
+                   const std::string&                   project_uuid         = {},
+                   const std::filesystem::path&         thumbnail_cache_root = {},
+                   std::size_t batch_executor_count = kDefaultBatchExecutorCount);
+  /// Drops queued work, waits for running renders, and releases the executors.
+  ~ThumbnailService();
+
+  ThumbnailService(const ThumbnailService&)                    = delete;
+  auto operator=(const ThumbnailService&) -> ThumbnailService& = delete;
 
   // Request a thumbnail for the given element/image pair.
   // resolution selects the desired fixed tier (256, 512, 1024, 2048).
@@ -79,23 +111,12 @@ class ThumbnailService {
                     bool pin_if_found = true, CallbackDispatcher dispatcher = nullptr,
                     ThumbnailResolution resolution = ThumbnailResolution::k1024);
 
-  // Request a thumbnail and receive a detailed result. This distinguishes
-  // cancellation from render/load failures, while GetThumbnail preserves the
-  // legacy guard/null callback contract.
+  // Request a thumbnail and receive a detailed result that distinguishes cancellation from
+  // render/load failures; GetThumbnail keeps the guard/null callback behavior.
   void GetThumbnailDetailed(sl_element_id_t id, image_id_t image_id,
                             ThumbnailResultCallback callback, bool pin_if_found = true,
                             CallbackDispatcher  dispatcher = nullptr,
                             ThumbnailResolution resolution = ThumbnailResolution::k1024);
-
-  // Phase 3: render an analysis rendition from a captured pipeline snapshot. Does
-  // NOT pin the live pipeline guard, does NOT call SavePipeline on the live guard,
-  // and does NOT cache the result in thumbnail_cache_. Disk cache hits/writes use
-  // a separate analysis namespace. One-shot delivery to the single callback. Used
-  // by background image analysis so the editor's live pipeline is never disturbed.
-  void RequestAnalysisRendition(sl_element_id_t element_id, image_id_t image_id,
-                                ThumbnailResolution resolution, ThumbnailResultCallback callback);
-  void CancelAnalysisRendition(const ThumbnailCacheKey& key);
-  void ReleaseAnalysisRendition(const ThumbnailCacheKey& key);
 
   // Cancel a pending thumbnail request for one element/resolution key.
   // Also increments the key generation token so queued tasks skip execution.
@@ -148,4 +169,5 @@ class ThumbnailService {
   };
   DiskCacheStats GetDiskCacheStats() const;
 };
+
 };  // namespace alcedo

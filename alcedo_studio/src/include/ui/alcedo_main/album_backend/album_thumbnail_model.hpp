@@ -10,6 +10,8 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
+#include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -48,6 +50,12 @@ class AlbumThumbnailModel : public QAbstractListModel {
     ThumbLoading,
     ThumbMissingSource,
     ThumbErrorText,
+    IsEdited,
+    EditedAt,
+    EditVersionName,
+    AspectRatio,  ///< Width / height of the oriented photo; 0 when unknown.
+    ColorLabels,  ///< Color label code bits (bit k = ColorLabel k), an int.
+    DeleteMark,
   };
 
   explicit AlbumThumbnailModel(QObject* parent = nullptr);
@@ -55,6 +63,11 @@ class AlbumThumbnailModel : public QAbstractListModel {
   int rowCount(const QModelIndex& parent = QModelIndex()) const override;
   QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
   QHash<int, QByteArray> roleNames() const override;
+  /// The role names of this model (roleNames), also for models that forward its roles.
+  static auto RoleNameTable() -> QHash<int, QByteArray>;
+  /// Value of @p role for @p item, as data() returns it for a row of the item. A model that
+  /// forwards these roles reads the values of an empty row from a default AlbumItem.
+  QVariant                roleValue(const AlbumItem& item, int role) const;
 
   int count() const { return static_cast<int>(rows_.size()); }
   int totalCountInt() const { return static_cast<int>(total_count_); }
@@ -67,15 +80,47 @@ class AlbumThumbnailModel : public QAbstractListModel {
   /// Full reset — emits modelReset. Use for folder/filter/language changes.
   void resetModel(const std::vector<AlbumItem>& items, size_t totalCount);
 
+  /// Start a reset whose rows are installed later by endReplace. Between the two calls the
+  /// model keeps exposing the old rows to views; other owners of the same accepted result
+  /// install their data in that window.
+  void                    beginReplace();
+  /// Install @p items and end the reset that beginReplace started. @p hasMore says whether
+  /// later rows exist (it is not derived from @p totalCount in the grouped mode).
+  void                    endReplace(std::vector<AlbumItem> items, size_t totalCount, bool hasMore);
   /// Append one page — emits beginInsertRows/endInsertRows.
   void appendPage(const std::vector<AlbumItem>& newItems);
 
+  /**
+   * @brief Change the rows in place to the photos @p elementIds in that order, without a model
+   *        reset (an import or a delete in the shown result).
+   *
+   * @details A loaded row whose photo stays keeps its item, with its thumbnail state. Rows of
+   * photos that left, and rows that changed their order, are removed in contiguous runs; then
+   * the photos that are not loaded are inserted in contiguous runs from @p newItems (keyed by
+   * element id). Every id of @p elementIds must be loaded or in @p newItems.
+   */
+  void                    applyOrder(const std::vector<sl_element_id_t>&                   elementIds,
+                                     const std::unordered_map<sl_element_id_t, AlbumItem>& newItems, size_t totalCount,
+                                     bool hasMore);
+
   /// Patch thumbnail state for a single row — emits dataChanged.
-  void updateThumbnailState(sl_element_id_t elementId, const QString& dataUrl,
-                            bool loading, bool missingSource, const QString& errorText);
+  void updateThumbnailState(sl_element_id_t elementId, const QString& thumbUrl, bool loading,
+                            bool missingSource, const QString& errorText);
 
   /// Patch rating for the currently loaded row — emits dataChanged for Rating only.
   bool updateRating(sl_element_id_t elementId, image_id_t imageId, int rating);
+
+  /// Patch the color labels and the Delete mark of the loaded row of @p elementId. Emits
+  /// dataChanged for ColorLabels and DeleteMark. Returns false when the row is not loaded or did
+  /// not change.
+  bool updateMarks(sl_element_id_t elementId, image_id_t imageId, ColorLabelMask colorLabels,
+                   bool deleteMark);
+
+  /// Patch the edit state of the loaded row of @p elementId: the head commit time of the active
+  /// Version (empty when unedited) and its display name. Emits dataChanged for IsEdited,
+  /// EditedAt, and EditVersionName. Returns false when the row is not loaded or did not change.
+  bool updateEditState(sl_element_id_t elementId, image_id_t imageId,
+                       std::optional<std::int64_t> editedAtNs, const QString& versionName);
 
   /// Patch HDR export marker for the currently loaded row — emits dataChanged for IsHdr only.
   bool updateHdrFlag(sl_element_id_t elementId, image_id_t imageId, bool isHdr);
@@ -85,6 +130,10 @@ class AlbumThumbnailModel : public QAbstractListModel {
 
   /// QML helper: return selection payloads for the loaded rows inside an index range.
   Q_INVOKABLE QVariantList getItemsInRange(int firstIndex, int lastIndex) const;
+
+  /// QML helper: return `{elementId, imageId, thumbUrl, thumbLoading}` for the loaded rows
+  /// inside an index range. Reads the thumbnail state that the grid delegates show.
+  Q_INVOKABLE QVariantList getThumbnailStatesInRange(int firstIndex, int lastIndex) const;
 
   /// Lookup row index by elementId. Returns -1 if not found.
   Q_INVOKABLE int rowByElementId(uint elementId) const;
@@ -98,11 +147,10 @@ class AlbumThumbnailModel : public QAbstractListModel {
   void totalCountChanged();
   void hasMoreChanged();
   void loadingChanged();
-  void thumbnailUpdated(uint elementId, const QString& dataUrl, bool loading,
-                        bool missingSource, const QString& errorText);
+  void thumbnailUpdated(uint elementId, const QString& thumbUrl, bool loading, bool missingSource,
+                        const QString& errorText);
 
  private:
-  QVariant roleValue(const AlbumItem& item, int role) const;
   void rebuildElementIdIndex();
 
   std::vector<AlbumItem> rows_{};
@@ -110,6 +158,7 @@ class AlbumThumbnailModel : public QAbstractListModel {
   size_t total_count_ = 0;
   bool has_more_ = false;
   bool loading_ = false;
+  bool                                     replacing_   = false;
 };
 
 }  // namespace alcedo::ui

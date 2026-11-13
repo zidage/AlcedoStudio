@@ -20,7 +20,6 @@ set(ALCEDO_OPENCV_IMAGE_DEPS
     opencv_core
     opencv_imgproc
     opencv_imgcodecs
-    opencv_highgui
 )
 
 # ==============================================================================
@@ -28,6 +27,7 @@ set(ALCEDO_OPENCV_IMAGE_DEPS
 # ==============================================================================
 add_subdirectory(concurrency)
 add_subdirectory(utils)
+add_subdirectory(color)
 add_subdirectory(nn)
 
 
@@ -53,4 +53,6 @@ add_subdirectory(io)
 add_subdirectory(sidecar_client)
 add_subdirectory(app)
 
+add_subdirectory(automation)
 add_subdirectory(ui)
+add_subdirectory(tools)

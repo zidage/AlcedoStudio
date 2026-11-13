@@ -20,16 +20,9 @@ namespace alcedo {
 
 /// Phase 5A production bootstrap ports. They succeed without touching DuckDB or
 /// the GPU so the session state machine and render-intent route can run before
-/// Phase 5B wires real PipelineMgmtService / journal / presentation.
+/// Phase 5B wires real PipelineMgmtService / checkpoint store / presentation.
 
-class EditorSessionBootstrapPipelinePort final : public IEditorPipelinePort {
- public:
-  auto Acquire(sl_element_id_t element_id, std::string* /*error*/)
-      -> EditorPipelineGuardHandle override {
-    return EditorPipelineGuardHandle{element_id, true};
-  }
-  void Release(const EditorPipelineGuardHandle& /*guard*/) override {}
-};
+class EditorSessionBootstrapPipelinePort final : public IEditorPipelinePort {};
 
 class EditorSessionBootstrapHistoryPort final : public IEditorHistoryPort {
  public:
@@ -44,21 +37,6 @@ class EditorSessionBootstrapHistoryPort final : public IEditorHistoryPort {
   auto Redo(const EditorHistoryGuardHandle& /*guard*/, std::string* /*error*/) -> bool override {
     return true;
   }
-  auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle& /*guard*/,
-                              EditorRenderAdjustmentSnapshot* snapshot, std::string* /*error*/)
-      -> bool override {
-    if (snapshot) {
-      *snapshot = current_snapshot_;
-    }
-    return true;
-  }
-
-  void SetCurrentSnapshot(EditorRenderAdjustmentSnapshot snapshot) {
-    current_snapshot_ = std::move(snapshot);
-  }
-
- private:
-  EditorRenderAdjustmentSnapshot current_snapshot_{};
 };
 
 class EditorSessionBootstrapTaskPort final : public IEditorTaskPort {
@@ -75,17 +53,6 @@ class EditorSessionBootstrapTaskPort final : public IEditorTaskPort {
 };
 
 class EditorSessionBootstrapCheckpointStore final : public IEditorCheckpointStore {};
-
-class EditorSessionBootstrapJournalPort     final : public IEditorJournalPort {
- public:
-  auto CommitJournal(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
-                         std::string* /*error*/) -> EditorJournalCommitOutcome override {
-    return {true, true, false, 0, 0, {}};
-  }
-  auto DiscardUnflushed(sl_element_id_t /*element_id*/, std::string* /*error*/) -> bool override {
-    return true;
-  }
-};
 
 /// Accepts schedule calls and records them. Does not run pipeline work.
 class EditorSessionBootstrapSchedulerPort final : public IEditorPipelineSchedulerPort {
@@ -128,7 +95,6 @@ struct EditorSessionRuntime {
   std::shared_ptr<IEditorPipelinePort>             pipeline;
   std::shared_ptr<IEditorHistoryPort>              history;
   std::shared_ptr<IEditorTaskPort>                 tasks;
-  std::shared_ptr<IEditorJournalPort>              journal;
   std::shared_ptr<IEditorCheckpointStore>          checkpoint_store;
   std::shared_ptr<IEditorThumbnailPort>            thumbnails;
   std::shared_ptr<IEditorPipelineSchedulerPort>    scheduler;
@@ -136,10 +102,13 @@ struct EditorSessionRuntime {
   /// One project-owned global save lock for editor checkpoints and Mini-Git
   /// recovery. Shared with EditorSaveCheckpointService and materializer ports.
   std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator;
-  /// Executor for the thread that owns session state. Tests use the manual
-  /// implementation; the desktop host supplies its Qt queued adapter.
-  std::shared_ptr<IEditorSessionCommandExecutor>   command_executor;
+  /// Declared before `command_executor` so destruction drops the executor
+  /// reference first and the service destructor can join the session-owner
+  /// worker while every member it may touch is still alive.
   std::unique_ptr<EditorSessionService>            service;
+  /// Executor for the thread that owns session state. Tests use the manual
+  /// implementation; the desktop host supplies the threaded executor.
+  std::shared_ptr<IEditorSessionCommandExecutor>   command_executor;
 
   /// Create runtime with bootstrap ports (no DuckDB/GPU). Coordinator results
   /// are forwarded into the session service.
@@ -147,7 +116,6 @@ struct EditorSessionRuntime {
     return CreateWithPorts(std::make_shared<EditorSessionBootstrapPipelinePort>(),
                            std::make_shared<EditorSessionBootstrapHistoryPort>(),
                            std::make_shared<EditorSessionBootstrapTaskPort>(),
-                           std::make_shared<EditorSessionBootstrapJournalPort>(),
                            std::make_shared<EditorSessionBootstrapSchedulerPort>(),
                            std::make_shared<EditorSessionBootstrapCheckpointStore>());
   }
@@ -156,19 +124,21 @@ struct EditorSessionRuntime {
   /// save_coordinator is null, a fresh project-owned coordinator is created.
   static auto CreateWithPorts(
       std::shared_ptr<IEditorPipelinePort> pipeline, std::shared_ptr<IEditorHistoryPort> history,
-      std::shared_ptr<IEditorTaskPort> tasks, std::shared_ptr<IEditorJournalPort> journal,
+      std::shared_ptr<IEditorTaskPort>              tasks,
       std::shared_ptr<IEditorPipelineSchedulerPort> scheduler,
       std::shared_ptr<IEditorCheckpointStore>       checkpoint_store =
           std::make_shared<EditorSessionBootstrapCheckpointStore>(),
       std::shared_ptr<IEditorThumbnailPort>            thumbnails       = nullptr,
       std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator = nullptr,
-      std::shared_ptr<IEditorSessionCommandExecutor>   command_executor = nullptr)
+      std::shared_ptr<IEditorSessionCommandExecutor>   command_executor = nullptr,
+      std::shared_ptr<IEditorImageRenderPort>          image_render     = nullptr,
+      std::shared_ptr<IEditorMaskAssetPort>            mask_assets      = nullptr,
+      std::shared_ptr<IEditorMaskCoveragePort>         mask_coverage    = nullptr)
       -> std::unique_ptr<EditorSessionRuntime> {
     auto runtime              = std::make_unique<EditorSessionRuntime>();
     runtime->pipeline         = std::move(pipeline);
     runtime->history          = std::move(history);
     runtime->tasks            = std::move(tasks);
-    runtime->journal          = std::move(journal);
     runtime->checkpoint_store = std::move(checkpoint_store);
     runtime->thumbnails       = std::move(thumbnails);
     runtime->scheduler        = std::move(scheduler);
@@ -183,12 +153,14 @@ struct EditorSessionRuntime {
     deps.pipeline                     = runtime->pipeline;
     deps.history                      = runtime->history;
     deps.tasks                        = runtime->tasks;
-    deps.journal                      = runtime->journal;
     deps.checkpoint_store             = runtime->checkpoint_store;
     deps.thumbnails                   = runtime->thumbnails;
     deps.render                       = runtime->coordinator;
     deps.save_coordinator             = runtime->save_coordinator;
     deps.command_executor             = runtime->command_executor;
+    deps.images                       = std::move(image_render);
+    deps.mask_assets                  = std::move(mask_assets);
+    deps.mask_coverage                = std::move(mask_coverage);
     runtime->service                  = std::make_unique<EditorSessionService>(std::move(deps));
 
     EditorSessionService* service_ptr = runtime->service.get();

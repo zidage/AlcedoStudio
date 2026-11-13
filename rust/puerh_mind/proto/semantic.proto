@@ -170,6 +170,15 @@ message GetRuntimeStatusResponse {
   uint32 image_batch_cap = 3;
   uint32 image_batch_wait_ms = 4;
   uint64 uptime_ms = 5;
+  // One entry per encoder of the model: text and image, or one multimodal session.
+  repeated EncoderResidencyStatus encoders = 6;
+}
+
+message EncoderResidencyStatus {
+  string encoder = 1;  // text, image, or multimodal
+  bool loaded = 2;
+  string device = 3;
+  uint64 idle_ms = 4;  // time since the last request; 0 before the first request
 }
 
 message ModelAsset {

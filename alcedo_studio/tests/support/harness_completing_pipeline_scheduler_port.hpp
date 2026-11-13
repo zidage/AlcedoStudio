@@ -84,7 +84,7 @@ class HarnessCompletingPipelineSchedulerPort final : public alcedo::IEditorPipel
     }
   }
 
-  void WaitForSessionIdle(std::uint64_t session_epoch) override {
+  void WaitForSessionIdle(std::uint64_t session_epoch) {
     const auto idle = [this, session_epoch] {
       return !running_job_ ||
              running_job_->request.intent.image_load_request_id.value != session_epoch;

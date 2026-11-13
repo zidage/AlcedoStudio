@@ -31,12 +31,14 @@
 #endif
 
 #if defined(HAVE_OPENCL)
-#include <QOpenGLContext>
-#include <QOpenGLFunctions>
 #include <CL/cl.h>
 #include <CL/cl_gl.h>
 
+#include <QOpenGLContext>
+#include <QOpenGLFunctions>
+
 #include "opencl/opencl_context.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 #endif
 
 namespace alcedo::editor_rhi {
@@ -401,11 +403,12 @@ void OpenClOpenGlLeaseAdapter::DestroyTarget(const WritableTargetLease& lease) {
   auto& target = *it;
   if (target->acquired && target->image) {
     cl_mem image = target->image;
-    (void)clEnqueueReleaseGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr,
+    (void)clEnqueueReleaseGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
                                     nullptr);
-    (void)clFinish(OpenClContext::Instance().Queue());
+    (void)clFinish(OpenClContext::Instance().ProductQueue());
     target->acquired = false;
   }
+  FinishOpenGlBeforeOpenClSharedTextureReuse();
   if (target->image) {
     clReleaseMemObject(target->image);
     target->image = nullptr;
@@ -433,7 +436,8 @@ auto OpenClOpenGlLeaseAdapter::AcquireForProducerWrite(const WritableTargetLease
   }
   auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
   const cl_int error =
-      clEnqueueAcquireGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr, nullptr);
+      clEnqueueAcquireGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
+                                nullptr);
   if (error != CL_SUCCESS) {
     last_error_ = "clEnqueueAcquireGLObjects failed: " + std::to_string(error);
     return false;
@@ -463,7 +467,8 @@ auto OpenClOpenGlLeaseAdapter::ReleaseAfterProducerWrite(const WritableTargetLea
   }
   auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
   const cl_int error =
-      clEnqueueReleaseGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr, nullptr);
+      clEnqueueReleaseGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
+                                nullptr);
   if (error != CL_SUCCESS) {
     last_error_ = "clEnqueueReleaseGLObjects failed: " + std::to_string(error);
     return false;
@@ -487,7 +492,7 @@ auto OpenClOpenGlLeaseAdapter::WaitProducerWriteComplete(const WritableTargetLea
     -> bool {
 #if defined(HAVE_OPENCL)
   (void)lease;
-  const cl_int error = clFinish(OpenClContext::Instance().Queue());
+  const cl_int error = clFinish(OpenClContext::Instance().ProductQueue());
   if (error != CL_SUCCESS) {
     last_error_ = "clFinish failed after OpenCL producer write: " + std::to_string(error);
     return false;
@@ -502,6 +507,20 @@ auto OpenClOpenGlLeaseAdapter::WaitProducerWriteComplete(const WritableTargetLea
 #endif
 }
 
+void FinishOpenGlBeforeOpenClSharedTextureReuse() {
+#if defined(HAVE_OPENCL)
+  QOpenGLContext* context = QOpenGLContext::currentContext();
+  if (context == nullptr) {
+    return;
+  }
+  QOpenGLFunctions* functions = context->functions();
+  if (functions == nullptr) {
+    return;
+  }
+  functions->glFinish();
+#endif
+}
+
 auto MakeLeaseTargetAdapter(EditorBackend backend) -> std::unique_ptr<ILeaseTargetAdapter> {
   switch (backend) {
     case EditorBackend::Cuda:
@@ -509,8 +528,6 @@ auto MakeLeaseTargetAdapter(EditorBackend backend) -> std::unique_ptr<ILeaseTarg
     case EditorBackend::OpenCl:
       return std::make_unique<OpenClOpenGlLeaseAdapter>();
     case EditorBackend::Metal:
-      return std::make_unique<UnsupportedLeaseTargetAdapter>(backend);
-    case EditorBackend::Cpu:
       return std::make_unique<UnsupportedLeaseTargetAdapter>(backend);
   }
   return std::make_unique<UnsupportedLeaseTargetAdapter>(backend);
@@ -524,11 +541,13 @@ auto ProducerAcquireWritable(const WritableTargetLease& lease) -> bool {
     }
     auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
     const cl_int error =
-        clEnqueueAcquireGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr, nullptr);
+        clEnqueueAcquireGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
+                                  nullptr);
     if (error != CL_SUCCESS) {
-      qWarning("ProducerAcquireWritable: clEnqueueAcquireGLObjects failed: %d "
-               "(OpenCL/GL share group mismatch?)",
-               static_cast<int>(error));
+      qCWarning(alcedo::diag::gpuLog,
+                "ProducerAcquireWritable: clEnqueueAcquireGLObjects failed: %d "
+                "(OpenCL/GL share group mismatch?)",
+                static_cast<int>(error));
       return false;
     }
     return true;
@@ -546,7 +565,7 @@ auto ProducerReleaseWritable(const WritableTargetLease& lease) -> bool {
       return false;
     }
     auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
-    return clEnqueueReleaseGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr,
+    return clEnqueueReleaseGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
                                      nullptr) == CL_SUCCESS;
 #else
     return false;
@@ -565,7 +584,7 @@ auto ProducerWaitWritableComplete(const WritableTargetLease& lease) -> bool {
   }
   if (lease.writable_kind == LeaseWritableResourceKind::OpenClImage) {
 #if defined(HAVE_OPENCL)
-    return clFinish(OpenClContext::Instance().Queue()) == CL_SUCCESS;
+    return clFinish(OpenClContext::Instance().ProductQueue()) == CL_SUCCESS;
 #else
     return false;
 #endif

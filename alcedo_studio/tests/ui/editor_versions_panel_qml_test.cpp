@@ -5,10 +5,14 @@
 /// @file editor_versions_panel_qml_test.cpp
 /// @brief Production Versions panel: inline draft, outline selection, trash remove.
 
-#include "editor_history_versions_rail_qml_harness.hpp"
-
 #include <QMetaObject>
 #include <QtGlobal>
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+#include "editor_history_versions_rail_qml_harness.hpp"
+#include "ui/alcedo_main/album_backend/album_catalog.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -20,6 +24,82 @@ using rail_harness::StableId;
 using rail_harness::TypeText;
 
 class EditorVersionsPanelQmlTest : public RailQmlFixture {};
+
+/// Album catalog that records the edit states the editor session shows on the Library card.
+class RecordingAlbumCatalog final : public IAlbumCatalog {
+ public:
+  struct EditState {
+    sl_element_id_t             element_id = 0;
+    image_id_t                  image_id   = 0;
+    std::optional<std::int64_t> edited_at_ns;
+    QString                     version_name;
+  };
+
+  auto FindAlbumItem(sl_element_id_t) -> AlbumItem* override { return nullptr; }
+  auto FindAlbumItem(sl_element_id_t) const -> const AlbumItem* override { return nullptr; }
+  void AddOrUpdateAlbumItem(sl_element_id_t, image_id_t, sl_element_id_t, const QString&,
+                            const file_name_t&, const std::filesystem::path&) override {}
+  void SetAlbumItemHdrFlag(sl_element_id_t, image_id_t, bool) override {}
+  void SetAlbumItemEditState(sl_element_id_t element_id, image_id_t image_id,
+                             std::optional<std::int64_t> edited_at_ns,
+                             const QString&              version_name) override {
+    states.push_back({element_id, image_id, edited_at_ns, version_name});
+  }
+  void PersistImageHdrFlag(sl_element_id_t, image_id_t, bool) override {}
+  auto view_state() -> AlbumViewState& override { return view_state_; }
+  auto view_state() const -> const AlbumViewState& override { return view_state_; }
+  void ReloadFolderTree(const std::filesystem::path&) override {}
+  void ReloadCurrentFolder() override {}
+  bool LoadThumbnailWindow(const std::optional<FilterNode>&, bool) override { return false; }
+
+  std::vector<EditState> states;
+
+ private:
+  AlbumViewState view_state_;
+};
+
+// Issue #589: the edit mark of the photo open in the editor follows its history at once, before
+// the journaled edits reach storage: a new head (commit) shows the head commit time and the
+// active Version name, an undo back to the image root shows it as unedited, and a Version switch
+// reads the head and the name of the new active Version.
+TEST_F(EditorVersionsPanelQmlTest, OpenPhotoEditStateFollowsTheHistoryHeadInTheAlbumCatalog) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  RecordingAlbumCatalog catalog;
+  controller_.SetAlbumCatalog(&catalog);
+  const auto last_state = [&]() -> const RecordingAlbumCatalog::EditState& {
+    return catalog.states.back();
+  };
+
+  backend_.UndoToImageRoot();
+  ASSERT_TRUE(WaitFor([&] { return catalog.states.size() == 1u; }));
+  EXPECT_EQ(last_state().element_id, 1u);
+  EXPECT_EQ(last_state().image_id, 2u);
+  EXPECT_FALSE(last_state().edited_at_ns.has_value());
+
+  // Redo to the first commit (the fake history stamps a commit with its id as its time).
+  ASSERT_EQ(backend_.MoveHeadToCommit(StableId(11)).kind, EditorSessionResultKind::Accepted);
+  ASSERT_TRUE(WaitFor([&] { return catalog.states.size() == 2u; }));
+  ASSERT_TRUE(last_state().edited_at_ns.has_value());
+  EXPECT_EQ(*last_state().edited_at_ns, 11);
+  EXPECT_EQ(last_state().version_name, QStringLiteral("Base Look"));
+
+  // Version switch: the second Version's head is the first commit.
+  ASSERT_EQ(backend_.CheckoutVersion(StableId(2)).kind, EditorSessionResultKind::Accepted);
+  ASSERT_TRUE(WaitFor([&] { return catalog.states.size() == 3u; }));
+  ASSERT_TRUE(last_state().edited_at_ns.has_value());
+  EXPECT_EQ(*last_state().edited_at_ns, 11);
+  EXPECT_EQ(last_state().version_name, QStringLiteral("Alternate Look"));
+
+  // A new Version at the image root is unedited.
+  ASSERT_EQ(backend_.CreateRootVersion("Fresh").kind, EditorSessionResultKind::Accepted);
+  ASSERT_TRUE(WaitFor([&] { return catalog.states.size() == 4u; }));
+  EXPECT_FALSE(last_state().edited_at_ns.has_value());
+
+  // Closing the image keeps the last state: the close checkpoint writes it to storage.
+  ASSERT_EQ(backend_.Close(true).kind, EditorSessionResultKind::Accepted);
+  EXPECT_FALSE(WaitFor([&] { return catalog.states.size() != 4u; }, 200));
+  controller_.SetAlbumCatalog(nullptr);
+}
 
 TEST_F(EditorVersionsPanelQmlTest, ClickingNamedVersionChecksOutStableVersionId) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
@@ -49,13 +129,16 @@ TEST_F(EditorVersionsPanelQmlTest, ClickingNamedVersionChecksOutStableVersionId)
             selected_outline);
   auto* versions_button = Find(QStringLiteral("editorVersionsRailButton"));
   ASSERT_NE(versions_button, nullptr);
-  EXPECT_TRUE(versions_button->property("selectedOutline").toBool());
-  EXPECT_EQ(versions_button->property("fillSelected").value<QColor>(),
+  // Selected rail tile is outline-only: text-colored border over the card surface.
+  EXPECT_TRUE(versions_button->property("selected").toBool());
+  EXPECT_EQ(versions_button->property("selectedOutlineColor").value<QColor>(), selected_outline);
+  EXPECT_EQ(versions_button->property("fillColor").value<QColor>(),
             AppTheme::Instance().cardSurfaceColor());
   const QString alternate_id = alternate_card->property("versionId").toString();
   ASSERT_FALSE(alternate_id.isEmpty());
 
   Click(window_, alternate_card, QPointF(12.0, alternate_card->height() / 2.0));
+  QTRY_VERIFY_WITH_TIMEOUT(backend_.checkout_count() == 1, 2000);
 
   EXPECT_EQ(backend_.checkout_count(), 1);
   EXPECT_EQ(QString::fromStdString(backend_.last_checkout_id().ToString()), alternate_id);
@@ -70,6 +153,7 @@ TEST_F(EditorVersionsPanelQmlTest, VersionNameInputCreatesRenamesAndRemovesNamed
   Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
   EXPECT_TRUE(field->property("visible").toBool());
   // Modal naming dialog must not exist on the inline path.
   EXPECT_EQ(Find(QStringLiteral("editorVersionNameDialog")), nullptr);
@@ -97,14 +181,13 @@ TEST_F(EditorVersionsPanelQmlTest, VersionNameInputCreatesRenamesAndRemovesNamed
   EXPECT_FALSE(controller_.history_snapshot().active_head.has_value());
 
   Click(window_, created_card->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
-  field = Find(QStringLiteral("editorVersionNameField"));
-  ASSERT_NE(field, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(field->hasActiveFocus() || field->property("activeFocus").toBool(),
-                           1000);
+  auto* inline_field =
+      created_card->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
+  ASSERT_NE(inline_field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      inline_field->hasActiveFocus() || inline_field->property("activeFocus").toBool(), 1000);
   TypeText(window_, QStringLiteral("renamedlook"));
-  accept = Find(QStringLiteral("editorVersionAcceptButton"));
-  ASSERT_NE(accept, nullptr);
-  Click(window_, accept);
+  QTest::keyClick(window_, Qt::Key_Return);
   QTRY_VERIFY_WITH_TIMEOUT(backend_.rename_count() == 1, 2000);
   EXPECT_EQ(QString::fromStdString(backend_.last_rename_id().ToString()), created_id);
 
@@ -139,6 +222,7 @@ TEST_F(EditorVersionsPanelQmlTest, InlineVersionDraftAcceptsEnterAndEscapeWithou
   auto* field     = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(draft_row, nullptr);
   ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
   EXPECT_TRUE(draft_row->property("visible").toBool());
   EXPECT_TRUE(field->property("visible").toBool());
   EXPECT_TRUE(field->isEnabled());
@@ -186,8 +270,8 @@ TEST_F(EditorVersionsPanelQmlTest, ActiveVersionUsesOutlineWithoutStopPlaybackAc
 
   auto cards = Cards();
   ASSERT_GE(cards.size(), 2);
-  QQuickItem* active_card     = nullptr;
-  QQuickItem* inactive_card   = nullptr;
+  QQuickItem* active_card   = nullptr;
+  QQuickItem* inactive_card = nullptr;
   for (auto* card : cards) {
     if (card->property("versionActive").toBool()) {
       active_card = card;
@@ -199,7 +283,8 @@ TEST_F(EditorVersionsPanelQmlTest, ActiveVersionUsesOutlineWithoutStopPlaybackAc
   ASSERT_NE(inactive_card, nullptr);
 
   // Outline-only: card surface stays cardSurface; border/selectionOutline is text color.
-  EXPECT_EQ(active_card->property("color").value<QColor>(), AppTheme::Instance().cardSurfaceColor());
+  EXPECT_EQ(active_card->property("color").value<QColor>(),
+            AppTheme::Instance().cardSurfaceColor());
   EXPECT_EQ(active_card->property("selectionOutlineColor").value<QColor>(),
             AppTheme::Instance().textColor());
   // Inactive uses the quieter card border, not a filled invert well.
@@ -212,16 +297,32 @@ TEST_F(EditorVersionsPanelQmlTest, ActiveVersionUsesOutlineWithoutStopPlaybackAc
             AppTheme::Instance().editorListSelectedFillColor());
 
   // No "CURRENT HEAD" pill or "Checked out" copy — outline alone marks active.
-  // Single commit identity line (no dual Head + Commit labels).
+  // Single identity line: an untranslated HEAD badge, then the bare short
+  // hash in the mono face (no translatable "Commit" word inside mono text).
+  auto* head_badge = active_card->findChild<QQuickItem*>(QStringLiteral("editorVersionHeadBadge"));
+  ASSERT_NE(head_badge, nullptr);
+  EXPECT_TRUE(head_badge->isVisible());
+  EXPECT_GT(head_badge->property("radius").toReal(), 0.0);
+  bool badge_reads_head = false;
+  for (auto* child : head_badge->findChildren<QQuickItem*>()) {
+    if (child->property("text").toString() == QStringLiteral("HEAD")) badge_reads_head = true;
+  }
+  EXPECT_TRUE(badge_reads_head);
   auto* active_subtitle =
       active_card->findChild<QQuickItem*>(QStringLiteral("editorVersionSubtitle"));
   ASSERT_NE(active_subtitle, nullptr);
   const QString active_sub = active_subtitle->property("text").toString();
   EXPECT_FALSE(active_sub.contains(QStringLiteral("Checked out"), Qt::CaseInsensitive));
   EXPECT_FALSE(active_sub.contains(QStringLiteral("CURRENT HEAD"), Qt::CaseInsensitive));
-  EXPECT_TRUE(active_sub.contains(QStringLiteral("Commit"), Qt::CaseInsensitive));
+  EXPECT_FALSE(active_sub.contains(QStringLiteral("Commit"), Qt::CaseInsensitive));
+  EXPECT_EQ(active_sub.size(), 8);
+  EXPECT_TRUE(active_card->property("versionHead").toString().startsWith(active_sub));
   EXPECT_EQ(active_subtitle->property("font").value<QFont>().family(),
             AppTheme::Instance().monoFontFamily());
+  // Head badge sits left of the hash on the same line.
+  const qreal badge_right = head_badge->mapToItem(active_card, QPointF(head_badge->width(), 0)).x();
+  const qreal hash_left   = active_subtitle->mapToItem(active_card, QPointF(0, 0)).x();
+  EXPECT_LE(badge_right, hash_left + 0.5);
 
   auto* remove_btn =
       inactive_card->findChild<QQuickItem*>(QStringLiteral("editorRemoveVersionButton"));
@@ -252,6 +353,7 @@ TEST_F(EditorVersionsPanelQmlTest, InlineDraftPendingSubmitBlocksDuplicateCreate
   Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
   TypeText(window_, QStringLiteral("pendinglook"));
 
   // Simulate a pending-save lock without closing the draft: force the property
@@ -280,7 +382,7 @@ TEST_F(EditorVersionsPanelQmlTest, InlineDraftPendingSubmitBlocksDuplicateCreate
   EXPECT_EQ(backend_.create_count(), 1);
 }
 
-TEST_F(EditorVersionsPanelQmlTest, RenameUsesSameInlineDraftField) {
+TEST_F(EditorVersionsPanelQmlTest, RenameEditsTheCardTitleInPlace) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenVersionsPage();
 
@@ -291,22 +393,90 @@ TEST_F(EditorVersionsPanelQmlTest, RenameUsesSameInlineDraftField) {
     if (card->property("versionActive").toBool()) active = card;
   }
   ASSERT_NE(active, nullptr);
+  auto* title = active->findChild<QQuickItem*>(QStringLiteral("editorVersionTitle"));
+  auto* inline_field =
+      active->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
+  ASSERT_NE(title, nullptr);
+  ASSERT_NE(inline_field, nullptr);
+  EXPECT_FALSE(inline_field->isVisible());
   Click(window_, active->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
 
-  auto* field = Find(QStringLiteral("editorVersionNameField"));
-  ASSERT_NE(field, nullptr);
+  // The title turns into the editor on the same card; the header create row
+  // stays closed and no modal dialog appears.
+  QTRY_VERIFY_WITH_TIMEOUT(inline_field->isVisible(), 1000);
+  EXPECT_FALSE(title->isVisible());
+  auto* draft_row = Find(QStringLiteral("editorVersionDraftRow"));
+  ASSERT_NE(draft_row, nullptr);
+  EXPECT_FALSE(draft_row->isVisible());
   EXPECT_EQ(Find(QStringLiteral("editorVersionNameDialog")), nullptr);
-  EXPECT_EQ(field->property("text").toString(), active->property("displayName").toString());
+  EXPECT_EQ(inline_field->property("text").toString(),
+            active->property("displayName").toString());
+  QTRY_VERIFY_WITH_TIMEOUT(
+      inline_field->hasActiveFocus() || inline_field->property("activeFocus").toBool(), 1000);
   TypeText(window_, QStringLiteral("renamedbase"));
   QTest::keyClick(window_, Qt::Key_Return);
   ProcessEvents();
   EXPECT_EQ(backend_.rename_count(), 1);
   EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
             QStringLiteral("renameVersion"));
+  QTRY_VERIFY_WITH_TIMEOUT(!inline_field->isVisible(), 2000);
+  EXPECT_TRUE(title->isVisible());
 }
 
-TEST_F(EditorVersionsPanelQmlTest,
-       VersionListPreservesContentYAcrossCreateRenameAndCheckout) {
+TEST_F(EditorVersionsPanelQmlTest, InlineRenameEscapeRestoresTitleWithoutSubmitting) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  QQuickItem* active = nullptr;
+  for (auto* card : Cards()) {
+    if (card->property("versionActive").toBool()) active = card;
+  }
+  ASSERT_NE(active, nullptr);
+  const QString original = active->property("displayName").toString();
+  Click(window_, active->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
+  auto* inline_field =
+      active->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
+  ASSERT_NE(inline_field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      inline_field->hasActiveFocus() || inline_field->property("activeFocus").toBool(), 1000);
+  TypeText(window_, QStringLiteral("discarded"));
+  QTest::keyClick(window_, Qt::Key_Escape);
+  ProcessEvents();
+  EXPECT_EQ(backend_.rename_count(), 0);
+  QTRY_VERIFY_WITH_TIMEOUT(!inline_field->isVisible(), 1000);
+  EXPECT_EQ(active->property("displayName").toString(), original);
+}
+
+TEST_F(EditorVersionsPanelQmlTest, AcceptClickCreatesVersionWithUnchangedDefaultName) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+  const int cards_before = static_cast<int>(Cards().size());
+
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
+  auto* field = Find(QStringLiteral("editorVersionNameField"));
+  ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->hasActiveFocus() || field->property("activeFocus").toBool(),
+                           1000);
+  const QString generated = field->property("text").toString().trimmed();
+  ASSERT_FALSE(generated.isEmpty());
+
+  // A real pointer click on "+" with the generated name untouched must create
+  // the Version; the press must not steal focus and cancel the draft first.
+  auto* accept = Find(QStringLiteral("editorVersionAcceptButton"));
+  ASSERT_NE(accept, nullptr);
+  Click(window_, accept);
+  QTRY_VERIFY_WITH_TIMEOUT(backend_.create_count() == 1, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(static_cast<int>(Cards().size()) == cards_before + 1, 2000);
+  const QString created_id = QString::fromStdString(backend_.last_created_id().ToString());
+  QQuickItem*   created    = nullptr;
+  for (auto* card : Cards()) {
+    if (card->property("versionId").toString() == created_id) created = card;
+  }
+  ASSERT_NE(created, nullptr);
+  EXPECT_EQ(created->property("displayName").toString(), generated);
+}
+
+TEST_F(EditorVersionsPanelQmlTest, VersionListPreservesContentYAcrossCreateRenameAndCheckout) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenVersionsPage();
 
@@ -321,8 +491,7 @@ TEST_F(EditorVersionsPanelQmlTest,
 
   auto* list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(list, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(
-      list->property("contentHeight").toReal() > list->height() + 48.0, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(list->property("contentHeight").toReal() > list->height() + 48.0, 2000);
 
   const qreal target_y = 96.0;
   ASSERT_TRUE(list->setProperty("contentY", target_y));
@@ -331,7 +500,7 @@ TEST_F(EditorVersionsPanelQmlTest,
   const qreal y_after_scroll = list->property("contentY").toReal();
 
   // Create via the production inline draft — grows the model (full reset path).
-  const int create_before = backend_.create_count();
+  const int   create_before  = backend_.create_count();
   Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
@@ -342,31 +511,33 @@ TEST_F(EditorVersionsPanelQmlTest,
   list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(list, nullptr);
   // Allow the panel's Qt.callLater restore to run.
-  QTRY_VERIFY_WITH_TIMEOUT(
-      qAbs(list->property("contentY").toReal() - y_after_scroll) <= 2.0, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(qAbs(list->property("contentY").toReal() - y_after_scroll) <= 2.0, 2000);
 
   // Rename active Version — same-count path may use dataChanged; still preserve Y.
   const qreal y_before_rename = list->property("contentY").toReal();
-  QQuickItem* active_card = nullptr;
+  QQuickItem* active_card     = nullptr;
   for (auto* card : Cards()) {
     if (card->property("versionActive").toBool()) active_card = card;
   }
   ASSERT_NE(active_card, nullptr);
   Click(window_, active_card->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
-  field = Find(QStringLiteral("editorVersionNameField"));
-  ASSERT_NE(field, nullptr);
+  auto* inline_field =
+      active_card->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
+  ASSERT_NE(inline_field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      inline_field->hasActiveFocus() || inline_field->property("activeFocus").toBool(), 1000);
   TypeText(window_, QStringLiteral("scrolledrenamed"));
   QTest::keyClick(window_, Qt::Key_Return);
   ProcessEvents();
   QTRY_VERIFY_WITH_TIMEOUT(backend_.rename_count() == 1, 2000);
   list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(list, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(
-      qAbs(list->property("contentY").toReal() - y_before_rename) <= 2.0, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(qAbs(list->property("contentY").toReal() - y_before_rename) <= 2.0,
+                           2000);
 
   // Checkout a non-active card — data-only active flag update.
   const qreal y_before_checkout = list->property("contentY").toReal();
-  QQuickItem* inactive_card = nullptr;
+  QQuickItem* inactive_card     = nullptr;
   for (auto* card : Cards()) {
     if (!card->property("versionActive").toBool()) {
       inactive_card = card;
@@ -380,12 +551,11 @@ TEST_F(EditorVersionsPanelQmlTest,
   QTRY_VERIFY_WITH_TIMEOUT(backend_.checkout_count() == checkout_before + 1, 2000);
   list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(list, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(
-      qAbs(list->property("contentY").toReal() - y_before_checkout) <= 2.0, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(qAbs(list->property("contentY").toReal() - y_before_checkout) <= 2.0,
+                           2000);
 }
 
-TEST_F(EditorVersionsPanelQmlTest,
-       InlineDraftFocusLossCommitsChangedTextAndCancelsUnchanged) {
+TEST_F(EditorVersionsPanelQmlTest, InlineDraftFocusLossCommitsChangedTextAndCancelsUnchanged) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenVersionsPage();
   auto* page = Find(QStringLiteral("editorVersionsPageBody"));
@@ -424,7 +594,7 @@ TEST_F(EditorVersionsPanelQmlTest,
   QTRY_VERIFY_WITH_TIMEOUT(!page->property("draftVisible").toBool(), 2000);
 
   const QString created_id = QString::fromStdString(backend_.last_created_id().ToString());
-  QQuickItem* created = nullptr;
+  QQuickItem*   created    = nullptr;
   for (auto* card : Cards()) {
     if (card->property("versionId").toString() == created_id) created = card;
   }
@@ -452,15 +622,13 @@ TEST_F(EditorVersionsPanelQmlTest, BranchFromCurrentButtonBranchesFromActiveHead
   Click(window_, accept);
   QTRY_VERIFY_WITH_TIMEOUT(backend_.branch_count() == 1, 2000);
   EXPECT_EQ(backend_.last_branch_commit(), StableId(13));
-  EXPECT_EQ(QString::fromStdString(backend_.last_branch_name()),
-            QStringLiteral("currentbranch"));
+  EXPECT_EQ(QString::fromStdString(backend_.last_branch_name()), QStringLiteral("currentbranch"));
   EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
             QStringLiteral("branchFromCommit"));
   EXPECT_FALSE(controller_.last_history_failed());
 }
 
-TEST_F(EditorVersionsPanelQmlTest,
-       PendingCreateDraftClosesWhenHistoryModelProjectsSubmittedName) {
+TEST_F(EditorVersionsPanelQmlTest, PendingCreateDraftClosesWhenHistoryModelProjectsSubmittedName) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenVersionsPage();
   QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorVersionsPageBody")) != nullptr, 2000);
@@ -495,6 +663,63 @@ TEST_F(EditorVersionsPanelQmlTest,
   EXPECT_FALSE(page->property("draftVisible").toBool());
 }
 
+// EditorSessionController publishes the terminal result of an async Version create through
+// HistoryOperationFinished, a signal that starts with an upper-case letter. The panel reads it
+// through lastHistoryResult.
+TEST_F(EditorVersionsPanelQmlTest, AsyncCreateSuccessClosesDraftAndReleasesSubmitLock) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+  auto* page = Find(QStringLiteral("editorVersionsPageBody"));
+  ASSERT_NE(page, nullptr);
+  backend_.SetAsyncVersionOps(true);
+
+  // Offscreen pointer input does not reach the buttons reliably; the panel functions behind
+  // the fork-from-root button, the name field, and the accept button run the same draft.
+  ASSERT_TRUE(QMetaObject::invokeMethod(page, "openCreateVersion",
+                                        Q_ARG(QVariant, QVariant(QStringLiteral("forkRoot")))));
+  ASSERT_TRUE(WaitFor([&] { return page->property("draftVisible").toBool(); }));
+  ASSERT_TRUE(QMetaObject::invokeMethod(page, "setDraftText",
+                                        Q_ARG(QVariant, QVariant(QStringLiteral("asynclook")))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(page, "commitDraft", Q_ARG(QVariant, QVariant(false))));
+
+  // SaveStarted hides the naming row and keeps the submit lock.
+  ASSERT_TRUE(WaitFor([&] { return page->property("draftSubmitPending").toBool(); }));
+  EXPECT_FALSE(page->property("draftVisible").toBool());
+  EXPECT_EQ(backend_.create_count(), 0);
+
+  backend_.CompletePendingCreateRootVersion(true, "Root Version created");
+  EXPECT_TRUE(WaitFor([&] { return !page->property("draftSubmitPending").toBool(); }));
+  EXPECT_EQ(backend_.create_count(), 1);
+  EXPECT_FALSE(page->property("draftVisible").toBool());
+}
+
+TEST_F(EditorVersionsPanelQmlTest, AsyncCreateFailureReopensDraftWithBackendMessage) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+  auto* page = Find(QStringLiteral("editorVersionsPageBody"));
+  ASSERT_NE(page, nullptr);
+  backend_.SetAsyncVersionOps(true);
+
+  // Offscreen pointer input does not reach the buttons reliably; the panel functions behind
+  // the fork-from-root button, the name field, and the accept button run the same draft.
+  ASSERT_TRUE(QMetaObject::invokeMethod(page, "openCreateVersion",
+                                        Q_ARG(QVariant, QVariant(QStringLiteral("forkRoot")))));
+  ASSERT_TRUE(WaitFor([&] { return page->property("draftVisible").toBool(); }));
+  ASSERT_TRUE(QMetaObject::invokeMethod(page, "setDraftText",
+                                        Q_ARG(QVariant, QVariant(QStringLiteral("failedlook")))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(page, "commitDraft", Q_ARG(QVariant, QVariant(false))));
+  ASSERT_TRUE(WaitFor([&] { return page->property("draftSubmitPending").toBool(); }));
+
+  // A failed create changes no history, so only the terminal result reaches the panel.
+  backend_.CompletePendingCreateRootVersion(false, "root Version creation failed: disk full");
+  EXPECT_TRUE(WaitFor([&] { return !page->property("draftSubmitPending").toBool(); }));
+  EXPECT_EQ(backend_.create_count(), 0);
+  EXPECT_TRUE(page->property("draftVisible").toBool());
+  EXPECT_EQ(page->property("draftError").toString(),
+            QStringLiteral("root Version creation failed: disk full"));
+  EXPECT_EQ(page->property("draftText").toString(), QStringLiteral("failedlook"));
+}
+
 TEST_F(EditorVersionsPanelQmlTest, CheckoutWorksWhileDraftSubmitPending) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenVersionsPage();
@@ -521,5 +746,100 @@ TEST_F(EditorVersionsPanelQmlTest, CheckoutWorksWhileDraftSubmitPending) {
   QTRY_VERIFY_WITH_TIMEOUT(backend_.checkout_count() == 1, 2000);
   EXPECT_EQ(QString::fromStdString(backend_.last_checkout_id().ToString()), alternate_id);
 }
+
+TEST_F(EditorVersionsPanelQmlTest, CtrlACreatesDefaultRootVersionWhenVersionsOwnsFocus) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  auto* page = Find(QStringLiteral("editorVersionsPageBody"));
+  ASSERT_NE(page, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(Cards().size() == 2, 2000);
+  const int cards_before = Cards().size();
+
+  // The panel surface owns focus: Ctrl+A resolves through the
+  // editor.versions scope and creates a default-named root Version.
+  page->forceActiveFocus();
+  ProcessEvents();
+  QTest::keyClick(window_, Qt::Key_A, Qt::ControlModifier);
+  QTRY_VERIFY_WITH_TIMEOUT(backend_.create_count() == 1, 2000);
+  EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
+            QStringLiteral("createRootVersion"));
+  EXPECT_FALSE(controller_.last_history_failed());
+
+  const QString created_id = QString::fromStdString(backend_.last_created_id().ToString());
+  QQuickItem*   created    = nullptr;
+  const auto    cards      = Cards();
+  EXPECT_EQ(cards.size(), cards_before + 1);
+  for (auto* card : cards) {
+    if (card->property("versionId").toString() == created_id) created = card;
+  }
+  ASSERT_NE(created, nullptr);
+  EXPECT_EQ(created->property("displayName").toString(),
+            QStringLiteral("Version %1").arg(cards_before + 1));
+  EXPECT_TRUE(created->property("versionActive").toBool());
+}
+
+TEST_F(EditorVersionsPanelQmlTest, VersionNameFieldKeepsNativeCtrlA) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
+  auto* field = Find(QStringLiteral("editorVersionNameField"));
+  ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
+  QTRY_VERIFY_WITH_TIMEOUT(field->hasActiveFocus() || field->property("activeFocus").toBool(),
+                           1000);
+
+  // Ctrl+A inside the naming field is native select-all, never a version
+  // create: the field consumes the key before the panel scope sees it.
+  const QString before = field->property("text").toString();
+  ASSERT_FALSE(before.trimmed().isEmpty());
+  QTest::keyClick(window_, Qt::Key_A, Qt::ControlModifier);
+  ProcessEvents();
+  EXPECT_EQ(backend_.create_count(), 0);
+  EXPECT_EQ(field->property("selectedText").toString(), before);
+}
+
+TEST_F(EditorVersionsPanelQmlTest, DisabledRootVersionActionDoesNotConsumeCtrlA) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  auto* page = Find(QStringLiteral("editorVersionsPageBody"));
+  ASSERT_NE(page, nullptr);
+  auto* fork_button = Find(QStringLiteral("editorForkFromRootButton"));
+  ASSERT_NE(fork_button, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(fork_button->isEnabled(), 1000);
+
+  // The command shares the fork-from-root gate; disable checkout so the
+  // action is unavailable and the key must not be consumed into an action.
+  ASSERT_TRUE(page->setProperty("versionCheckoutEnabled", false));
+  ProcessEvents();
+  EXPECT_FALSE(fork_button->isEnabled());
+
+  page->forceActiveFocus();
+  ProcessEvents();
+  QTest::keyClick(window_, Qt::Key_A, Qt::ControlModifier);
+  ProcessEvents();
+  EXPECT_EQ(backend_.create_count(), 0);
+  EXPECT_TRUE(Cards().size() == 2);
+}
+
+TEST_F(EditorVersionsPanelQmlTest, PasteAsVersionButtonUsesClipboardIconAndPastesIntoEditor) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  auto* paste = Find(QStringLiteral("editorVersionsPasteButton"));
+  ASSERT_NE(paste, nullptr);
+  EXPECT_EQ(paste->property("iconSrc").toString(),
+            QStringLiteral("qrc:/panel_icons/clipboard.svg"));
+  EXPECT_TRUE(paste->isEnabled());
+
+  Click(window_, paste);
+  EXPECT_EQ(transfer_.paste_count(), 1);
+  auto* paste_error = Find(QStringLiteral("editorVersionsPasteError"));
+  ASSERT_NE(paste_error, nullptr);
+  EXPECT_FALSE(paste_error->isVisible());
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test

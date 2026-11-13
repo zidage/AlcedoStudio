@@ -35,6 +35,10 @@ struct OpenClDeviceCandidate {
   OpenClDeviceCapabilities capabilities;
 };
 
+// Render-local queue bound to the calling thread by EnterThreadQueueScope.
+// Only batch render threads bind; product/editor threads leave it null.
+thread_local cl_command_queue t_thread_queue_override = nullptr;
+
 auto ToLower(std::string value) -> std::string {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -134,7 +138,8 @@ auto QueryCapabilities(cl_device_id device) -> OpenClDeviceCapabilities {
 }
 
 auto IsUsable(const OpenClDeviceCandidate& candidate) -> bool {
-  return candidate.capabilities.available && candidate.capabilities.compiler_available;
+  return (candidate.capabilities.device_type & CL_DEVICE_TYPE_GPU) != 0 &&
+         candidate.capabilities.available && candidate.capabilities.compiler_available;
 }
 
 auto IsGpu(const OpenClDeviceCandidate& candidate) -> bool {
@@ -284,6 +289,13 @@ auto SupportsD3D11Sharing(const OpenClDeviceCandidate& candidate, void* d3d11_de
   return std::find(devices.begin(), devices.end(), candidate.device) != devices.end();
 }
 
+#else
+auto SupportsD3D11Sharing(const OpenClDeviceCandidate&, void* d3d11_device) -> bool {
+  return d3d11_device == nullptr;
+}
+#endif
+
+#if defined(_WIN32) || defined(__linux__)
 auto MakeGLContextProperties(cl_platform_id platform, void* gl_context, void* gl_device_context,
                              OpenClGlContextApi gl_context_api)
     -> std::vector<cl_context_properties> {
@@ -291,8 +303,7 @@ auto MakeGLContextProperties(cl_platform_id platform, void* gl_context, void* gl
     return {};
   }
 #if defined(_WIN32)
-  if (gl_context_api != OpenClGlContextApi::Auto &&
-      gl_context_api != OpenClGlContextApi::Wgl) {
+  if (gl_context_api != OpenClGlContextApi::Auto && gl_context_api != OpenClGlContextApi::Wgl) {
     return {};
   }
   return {
@@ -373,10 +384,6 @@ auto SupportsGLSharing(const OpenClDeviceCandidate& candidate, void* gl_context,
   return std::find(devices.begin(), devices.end(), candidate.device) != devices.end();
 }
 #else
-auto SupportsD3D11Sharing(const OpenClDeviceCandidate&, void* d3d11_device) -> bool {
-  return d3d11_device == nullptr;
-}
-
 auto MakeGLContextProperties(cl_platform_id, void*, void*, OpenClGlContextApi)
     -> std::vector<cl_context_properties> {
   return {};
@@ -411,7 +418,7 @@ auto SelectCandidate(const std::vector<OpenClDeviceCandidate>& candidates,
             ? "[FATAL] OpenClContext: no usable OpenCL device supports OpenGL sharing."
         : options.d3d11_device != nullptr
             ? "[FATAL] OpenClContext: no usable OpenCL device supports D3D11 sharing."
-            : "[FATAL] OpenClContext: OpenCL devices exist, but none are usable.");
+            : "[FATAL] OpenClContext: OpenCL devices exist, but no usable GPU is available.");
   }
 
   const auto preferred_device = ResolvePreferredDevice(options);
@@ -448,6 +455,10 @@ auto SelectCandidate(const std::vector<OpenClDeviceCandidate>& candidates,
 
 OpenClContext::~OpenClContext() {
   queue_override_ = nullptr;
+  if (scope_queue_ != nullptr) {
+    clReleaseCommandQueue(scope_queue_);
+    scope_queue_ = nullptr;
+  }
   if (profiling_queue_ != nullptr) {
     clReleaseCommandQueue(profiling_queue_);
     profiling_queue_ = nullptr;
@@ -521,23 +532,36 @@ void OpenClContext::Initialize(const OpenClInitializationOptions& options) {
   const cl_context_properties default_context_properties[] = {
       CL_CONTEXT_PLATFORM, reinterpret_cast<cl_context_properties>(selected.platform), 0};
   const cl_context_properties* context_properties =
-      !gl_context_properties.empty()
-          ? gl_context_properties.data()
+      !gl_context_properties.empty() ? gl_context_properties.data()
 #if defined(_WIN32)
-          : options.d3d11_device != nullptr ? d3d11_context_properties
+      : options.d3d11_device != nullptr ? d3d11_context_properties
 #endif
-                                             : default_context_properties;
+                                        : default_context_properties;
   cl_int error = CL_SUCCESS;
   context_     = clCreateContext(context_properties, 1, &selected.device, nullptr, nullptr, &error);
   if (error != CL_SUCCESS || context_ == nullptr) {
     throw std::runtime_error("[FATAL] OpenClContext: failed to create OpenCL context.");
   }
 
-  queue_ = clCreateCommandQueue(context_, selected.device, 0, &error);
+  queue_ = clCreateCommandQueue(context_, selected.device, CL_QUEUE_PROFILING_ENABLE, &error);
+  if (error != CL_SUCCESS || queue_ == nullptr) {
+    error  = CL_SUCCESS;
+    queue_ = clCreateCommandQueue(context_, selected.device, 0, &error);
+  }
   if (error != CL_SUCCESS || queue_ == nullptr) {
     clReleaseContext(context_);
     context_ = nullptr;
     throw std::runtime_error("[FATAL] OpenClContext: failed to create OpenCL command queue.");
+  }
+
+  error        = CL_SUCCESS;
+  scope_queue_ = clCreateCommandQueue(context_, selected.device, 0, &error);
+  if (error != CL_SUCCESS || scope_queue_ == nullptr) {
+    clReleaseCommandQueue(queue_);
+    queue_ = nullptr;
+    clReleaseContext(context_);
+    context_ = nullptr;
+    throw std::runtime_error("[FATAL] OpenClContext: failed to create OpenCL scope queue.");
   }
 
   platform_     = selected.platform;
@@ -549,7 +573,7 @@ void OpenClContext::Initialize(const OpenClInitializationOptions& options) {
 #else
       false;
 #endif
-  gl_sharing_enabled_   = !gl_context_properties.empty();
+  gl_sharing_enabled_ = !gl_context_properties.empty();
   initialized_  = true;
   last_initialization_error_.clear();
 }
@@ -602,6 +626,9 @@ auto OpenClContext::Context() const -> cl_context {
 }
 
 auto OpenClContext::Queue() const -> cl_command_queue {
+  if (t_thread_queue_override != nullptr) {
+    return t_thread_queue_override;
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   return queue_override_ != nullptr ? queue_override_ : queue_;
 }
@@ -609,6 +636,22 @@ auto OpenClContext::Queue() const -> cl_command_queue {
 auto OpenClContext::ProductQueue() const -> cl_command_queue {
   std::lock_guard<std::mutex> lock(mutex_);
   return queue_;
+}
+
+auto OpenClContext::ScopeQueue() const -> cl_command_queue {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (scope_queue_ != nullptr) {
+    return scope_queue_;
+  }
+  if (!initialized_ || context_ == nullptr || device_ == nullptr) {
+    throw std::runtime_error("[FATAL] OpenClContext: ScopeQueue requires an initialized context.");
+  }
+  cl_int error = CL_SUCCESS;
+  scope_queue_ = clCreateCommandQueue(context_, device_, 0, &error);
+  if (error != CL_SUCCESS || scope_queue_ == nullptr) {
+    throw std::runtime_error("[FATAL] OpenClContext: failed to create OpenCL scope queue.");
+  }
+  return scope_queue_;
 }
 
 auto OpenClContext::D3D11SharingEnabled() const -> bool {
@@ -661,6 +704,40 @@ auto OpenClContext::ProfilingQueueInstalled() const -> bool {
 auto OpenClContext::HasProfilingQueue() const -> bool {
   std::lock_guard<std::mutex> lock(mutex_);
   return profiling_queue_ != nullptr;
+}
+
+auto OpenClContext::EnterThreadQueueScope(cl_command_queue queue) -> OpenClThreadQueueScope {
+  if (queue == nullptr) {
+    throw std::invalid_argument(
+        "OpenClContext::EnterThreadQueueScope: queue must not be null.");
+  }
+  OpenClThreadQueueScope scope(t_thread_queue_override);
+  t_thread_queue_override = queue;
+  return scope;
+}
+
+OpenClThreadQueueScope::~OpenClThreadQueueScope() {
+  if (active_) {
+    t_thread_queue_override = previous_;
+  }
+}
+
+OpenClThreadQueueScope::OpenClThreadQueueScope(OpenClThreadQueueScope&& other) noexcept
+    : previous_(other.previous_), active_(other.active_) {
+  other.active_ = false;
+}
+
+auto OpenClThreadQueueScope::operator=(OpenClThreadQueueScope&& other) noexcept
+    -> OpenClThreadQueueScope& {
+  if (this != &other) {
+    if (active_) {
+      t_thread_queue_override = previous_;
+    }
+    previous_     = other.previous_;
+    active_       = other.active_;
+    other.active_ = false;
+  }
+  return *this;
 }
 
 }  // namespace alcedo

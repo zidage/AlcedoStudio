@@ -31,6 +31,13 @@ TEST_F(ApplicationModuleHostLifecycleTests,
       return event.kind == ApplicationModuleHost::LifecycleEvent::Kind::Constructed;
     }));
     EXPECT_NE(host.editor_session(), nullptr);
+    // One LUT browser and target, bound to the library and the editor session (plan L5).
+    ASSERT_NE(host.lut_browser(), nullptr);
+    ASSERT_NE(host.lut_target(), nullptr);
+    EXPECT_EQ(host.lut_browser()->library(), host.lut_library());
+    EXPECT_EQ(host.lut_target()->library(), host.lut_library());
+    EXPECT_EQ(host.lut_target()->editorSession(), host.editor_session());
+    EXPECT_FALSE(host.lut_target()->canApply());
     EXPECT_NE(host.workspace_router(), nullptr);
   }
 
@@ -62,6 +69,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
   };
 
   EXPECT_LT(index_of("BackgroundTaskController"), index_of("InteractionPolicyController"));
+  EXPECT_LT(index_of("InteractionPolicyController"), index_of("AgentControlOwner"));
   EXPECT_LT(index_of("ProjectModule"), index_of("LibraryModule"));
   EXPECT_LT(index_of("LibraryModule"), index_of("FolderController"));
   EXPECT_LT(index_of("FolderController"), index_of("ImageController"));
@@ -69,8 +77,12 @@ TEST_F(ApplicationModuleHostLifecycleTests,
   EXPECT_LT(index_of("StatsEngine"), index_of("SearchController"));
   EXPECT_LT(index_of("BackgroundTaskController"), index_of("ModelDownloadController"));
   EXPECT_LT(index_of("ModelDownloadController"), index_of("SemanticGenerationController"));
-  EXPECT_LT(index_of("ProjectDbWriteBarrier"), index_of("ImageAnalysisSink"));
-  EXPECT_LT(index_of("ImageAnalysisSink"), index_of("ImageAnalysisController"));
+  // The AI model directory is read through ModelDownloadController (AI Models plan, P7).
+  EXPECT_LT(index_of("ModelDownloadController"), index_of("AiModelPackageService"));
+  EXPECT_LT(index_of("AiModelPackageService"), index_of("AiModelDownloadTaskPublisher"));
+  // Advanced Content Analysis is removed (issue #710).
+  EXPECT_EQ(index_of("ImageAnalysisController"), -1);
+  EXPECT_EQ(index_of("ImageAnalysisSink"), -1);
   EXPECT_LT(index_of("ImportExportHandler"), index_of("NikonHeRecoveryController"));
   EXPECT_LT(index_of("ImportExportHandler"), index_of("AdjustmentTransferController"));
 
@@ -90,12 +102,27 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     EXPECT_NE(host.interaction_policy(), nullptr);
     EXPECT_NE(host.model_download(), nullptr);
     EXPECT_NE(host.updates(), nullptr);
+    EXPECT_NE(host.lut_library(), nullptr);
+    EXPECT_NE(host.lut_packages(), nullptr);
+    EXPECT_NE(host.camera_profiles(), nullptr);
+    // Constructing the application modules makes no LUT feed request (plan L3).
+    EXPECT_FALSE(host.lut_packages()->checking());
+    EXPECT_FALSE(host.lut_packages()->checked());
+    // Projects opened later render LUT references through the library (plan L4).
+    ASSERT_NE(host.project(), nullptr);
+    EXPECT_EQ(host.project()->lut_resources(), host.lut_library()->Resources());
     EXPECT_NE(host.semantic_generation(), nullptr);
     EXPECT_NE(host.ai_provider_profiles(), nullptr);
-    EXPECT_NE(host.image_analysis(), nullptr);
     EXPECT_NE(host.adjustment_transfer(), nullptr);
     EXPECT_NE(host.editor_session(), nullptr);
+    EXPECT_NE(host.editor_comparison(), nullptr);
     EXPECT_NE(host.workspace_router(), nullptr);
+    EXPECT_NE(host.editor_behavior(), nullptr);
+    EXPECT_NE(host.project_launch(), nullptr);
+    EXPECT_NE(host.application_close(), nullptr);
+    EXPECT_NE(host.library_mutations(), nullptr);
+    EXPECT_NE(host.export_queue(), nullptr);
+    EXPECT_NE(host.export_recipe(), nullptr);
     EXPECT_FALSE(host.project()->ServiceReady());
 
     const auto*                                            meta           = host.metaObject();
@@ -110,20 +137,36 @@ TEST_F(ApplicationModuleHostLifecycleTests,
         {"nikonHeRecovery", "alcedo::ui::NikonHeRecoveryController*"},
         {"backgroundTasks", "alcedo::ui::BackgroundTaskController*"},
         {"interactionPolicy", "alcedo::ui::InteractionPolicyController*"},
+        {"agentControl", "alcedo::ui::AgentControlOwner*"},
         {"modelDownload", "alcedo::ui::ModelDownloadController*"},
         {"updates", "alcedo::UpdateService*"},
+        {"lutLibrary", "alcedo::LutLibraryService*"},
+        {"lutPackages", "alcedo::LutPackageService*"},
+        {"cameraProfiles", "alcedo::CameraProfileLibraryService*"},
+        {"aiModelPackages", "alcedo::AiModelPackageService*"},
+        {"lutBrowser", "alcedo::ui::LutLibraryModel*"},
+        {"lutTarget", "alcedo::ui::LutLibraryController*"},
+        {"lutPreview", "alcedo::ui::LutPreviewController*"},
         {"semanticGeneration", "alcedo::ui::SemanticGenerationController*"},
         {"aiProviderProfiles", "alcedo::AiProviderProfileController*"},
-        {"imageAnalysis", "alcedo::ui::ImageAnalysisController*"},
         {"adjustmentTransfer", "alcedo::ui::AdjustmentTransferController*"},
         {"workspaceRouter", "alcedo::ui::WorkspaceRouter*"},
         {"editorSession", "alcedo::ui::EditorSessionController*"},
+        {"editorComparison", "alcedo::ui::EditorComparisonController*"},
+        {"editorBehavior", "alcedo::ui::EditorBehaviorPreferences*"},
+        {"libraryView", "alcedo::ui::LibraryViewPreferences*"},
+        {"projectLaunch", "alcedo::ui::ProjectLaunchCoordinator*"},
+        {"applicationClose", "alcedo::ui::ApplicationCloseCoordinator*"},
+        {"libraryMutations", "alcedo::ui::LibraryMutationOperations*"},
+        {"exportQueue", "alcedo::ui::ExportQueue*"},
+        {"exportRecipe", "alcedo::ui::ExportRecipeBuilder*"},
     };
     for (const auto& [name, type_name] : property_types) {
       const int index = meta->indexOfProperty(name);
       ASSERT_GE(index, 0) << name;
       EXPECT_STREQ(meta->property(index).typeName(), type_name) << name;
     }
+    EXPECT_LT(meta->indexOfProperty("imageAnalysis"), 0);
   }
 }
 
@@ -135,14 +178,13 @@ TEST_F(ApplicationModuleHostLifecycleTests, ModulesCanBeConstructedWithoutTheCom
     void ScheduleIdleTaskStateReset(int) override {}
   } status;
 
-  ProjectDbWriteBarrier barrier;
-  ProjectModule         project;
-  LibraryModule         library(nullptr);
-  FolderController      folders(nullptr, nullptr, &status);
-  ImageController       images(nullptr, nullptr, nullptr, &status);
-  StatsEngine           stats(nullptr, nullptr, nullptr);
-  SearchController      search(nullptr, nullptr, nullptr, nullptr);
-  ImportExportHandler   import_export(nullptr, nullptr, nullptr, &status, &barrier);
+  ProjectModule       project;
+  LibraryModule       library(nullptr);
+  FolderController    folders(nullptr, nullptr, &status);
+  ImageController     images(nullptr, nullptr, nullptr, &status);
+  StatsEngine         stats(nullptr, nullptr, nullptr);
+  SearchController    search(nullptr, nullptr, nullptr, nullptr);
+  ImportExportHandler import_export(nullptr, nullptr, nullptr, &status);
 
   EXPECT_EQ(project.parent(), nullptr);
   EXPECT_EQ(library.parent(), nullptr);
@@ -151,7 +193,6 @@ TEST_F(ApplicationModuleHostLifecycleTests, ModulesCanBeConstructedWithoutTheCom
   EXPECT_EQ(stats.parent(), nullptr);
   EXPECT_EQ(search.parent(), nullptr);
   EXPECT_EQ(import_export.parent(), nullptr);
-  EXPECT_EQ(stats.FormatPhotoInfo(0, 0), QStringLiteral("No images loaded."));
 }
 
 }  // namespace

@@ -1,0 +1,107 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include "edit/runtime/cuda/cuda_backend.hpp"
+#include "edit/runtime/cuda/cuda_develop_pass.hpp"
+#include "edit/runtime/cuda/cuda_diffusion_filter_pass.hpp"
+#include "edit/runtime/cuda/cuda_drt_pass.hpp"
+#include "edit/runtime/cuda/cuda_mask_pass.hpp"
+#include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
+#include "edit/runtime/cuda/cuda_render_device.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
+#include "edit/runtime/pass_encoder.hpp"
+
+namespace alcedo {
+
+/**
+ * @brief CUDA sensor develop (raw or RGB upload plus the compiled develop sequence).
+ */
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::UploadRaw> {
+  static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput& input, const PipelineDocument& document) {
+    ExecuteCudaDevelop(device, plan, input, document);
+  }
+};
+
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::UploadRgb> {
+  static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput& input, const PipelineDocument& document) {
+    ExecuteCudaDevelop(device, plan, input, document);
+  }
+};
+
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::GeometryResample> {
+  static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument&) {
+    ExecuteCudaGeometryResample(device, plan);
+  }
+};
+
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::CameraToAp1> {
+  static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document) {
+    ExecuteCudaCameraColor(device, plan, document);
+  }
+};
+
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::DisplayToAp1> {
+  static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput& input, const PipelineDocument& document) {
+    ExecuteCudaDisplayToAp1(device, plan, input, document);
+  }
+};
+
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::MaskEvaluate> {
+  static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                     const CompiledMaskSource& source, const FrameSceneBinding& scene) {
+    (void)ExecuteCudaMask(device, plan, document, compiled_grade, source, scene);
+  }
+};
+
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::MaskUnion> {
+  static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade) {
+    (void)ExecuteCudaMaskUnion(device, plan, document, compiled_grade);
+  }
+};
+
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::PrimaryColorGrade> {
+  static auto Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput& input, const PipelineDocument& document,
+                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene)
+      -> FrameSceneBinding {
+    return ExecuteCudaPrimaryGrade(device, plan, input, document, compiled_grade, scene)
+        .output_binding;
+  }
+};
+
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::DiffusionFilter> {
+  static auto Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document, const FrameSceneBinding& scene)
+      -> FrameSceneBinding {
+    return ExecuteCudaDiffusionFilter(device, plan, document, scene);
+  }
+};
+
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::Drt> {
+  static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document, const FrameSceneBinding& scene) {
+    (void)ExecuteCudaDrt(device, plan, document, scene);
+  }
+};
+
+}  // namespace alcedo

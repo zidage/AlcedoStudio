@@ -24,9 +24,9 @@ namespace alcedo::ui {
 [[nodiscard]] auto CdlTrackballToNormalizedPoint(const QPointF& widget_point, const QRectF& disc)
     -> QPointF;
 
-/// QQuickItem that paints one CDL color wheel (Lift, Gamma, or Gain) and drives
-/// `EditorCdlTrackballModel` through pointer input. Three instances share one
-/// model in the original triangle layout. Does not touch the pipeline.
+/// QQuickItem that paints one tone color wheel (Lift, Gamma, Gain, or Offset) and drives
+/// `EditorCdlTrackballModel` through pointer input. Four instances share one model.
+/// Does not touch the pipeline.
 class EditorCdlTrackballItem : public QQuickItem {
   Q_OBJECT
   Q_PROPERTY(EditorCdlTrackballModel* model READ model WRITE setModel NOTIFY modelChanged)

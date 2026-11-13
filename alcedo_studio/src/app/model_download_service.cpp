@@ -4,13 +4,14 @@
 
 #include "app/model_download_service.hpp"
 
-#include "app/model_asset_catalog.hpp"
-
 #include <QDir>
 #include <QFileInfo>
 #include <QUuid>
 #include <algorithm>
 #include <filesystem>
+#include <utility>
+
+#include "app/model_asset_catalog.hpp"
 
 namespace alcedo {
 namespace {
@@ -37,7 +38,11 @@ auto ValidateDownloadedProfile(const ModelProfileSpec& profile,
 }  // namespace
 
 ModelDownloadService::ModelDownloadService(DownloadService& downloads, QObject* parent)
-    : QObject(parent), downloads_(downloads) {
+    : ModelDownloadService(downloads, SemanticModelProfiles(), parent) {}
+
+ModelDownloadService::ModelDownloadService(DownloadService&              downloads,
+                                           std::vector<ModelProfileSpec> profiles, QObject* parent)
+    : QObject(parent), downloads_(downloads), profiles_(std::move(profiles)) {
   qRegisterMetaType<alcedo::ModelDownloadProgress>("alcedo::ModelDownloadProgress");
   connect(&downloads_, &DownloadService::ProgressChanged, this,
           [this](const DownloadProgress& progress) {
@@ -65,7 +70,7 @@ ModelDownloadService::ModelDownloadService(DownloadService& downloads, QObject* 
             if (!running_ || id != request_id_) {
               return;
             }
-            const auto* profile = FindSemanticProfile(profile_id_);
+            const auto* profile = FindProfile(profile_id_);
             if (!ok || profile == nullptr) {
               ModelDownloadProgress progress;
               progress.phase = canceled ? "cancelled" : "failed";
@@ -122,7 +127,7 @@ auto ModelDownloadService::StartDownload(const std::string& profile_id,
   if (running_) {
     return false;
   }
-  const auto* profile = FindSemanticProfile(profile_id);
+  const auto* profile = FindProfile(profile_id);
   if (profile == nullptr) {
     return false;
   }
@@ -131,7 +136,8 @@ auto ModelDownloadService::StartDownload(const std::string& profile_id,
   std::error_code error;
   if (std::filesystem::exists(root, error)
       && ValidateDownloadedProfile(*profile, root).isEmpty()) {
-    running_ = true;
+    running_    = true;
+    profile_id_ = profile->profile_id;
     QMetaObject::invokeMethod(
         this,
         [this, profile] {
@@ -168,7 +174,7 @@ auto ModelDownloadService::StartDownload(const std::string& profile_id,
     return false;
   }
   request_id_ = request.id;
-  profile_id_ = profile_id;
+  profile_id_ = profile->profile_id;
   model_root_ = model_root;
   running_    = true;
 
@@ -188,5 +194,19 @@ void ModelDownloadService::CancelDownload() {
 }
 
 auto ModelDownloadService::IsRunning() const -> bool { return running_; }
+
+auto ModelDownloadService::RunningProfileId() const -> std::string {
+  return running_ ? profile_id_ : std::string{};
+}
+
+auto ModelDownloadService::FindProfile(const std::string& profile_or_model_id) const
+    -> const ModelProfileSpec* {
+  for (const auto& profile : profiles_) {
+    if (profile_or_model_id == profile.profile_id || profile_or_model_id == profile.model_id) {
+      return &profile;
+    }
+  }
+  return nullptr;
+}
 
 }  // namespace alcedo

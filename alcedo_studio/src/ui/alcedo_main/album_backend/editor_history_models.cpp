@@ -8,6 +8,7 @@
 
 #include <QMetaObject>
 
+#include "app/version_name_rules.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
 namespace alcedo::ui {
@@ -149,13 +150,6 @@ auto EditorHistoryModel::data(const QModelIndex& index, int role) const -> QVari
       return QString::fromStdString(row.commit_hash.ToString());
     case FirstParentIdRole:
       return HeadText(row.first_parent_hash);
-    case SecondParentIdRole:
-      return row.second_parent_hash.has_value()
-                 ? QString::fromStdString(row.second_parent_hash->ToString())
-                 : QString{};
-    case CommitKindRole:
-      return row.kind == alcedo::EditCommitKind::kMerge ? QStringLiteral("merge")
-                                                        : QStringLiteral("edit");
     case CreatedAtNsRole:
       return static_cast<qulonglong>(row.created_at_ns);
     case FieldKeyRole:
@@ -172,32 +166,23 @@ auto EditorHistoryModel::data(const QModelIndex& index, int role) const -> QVari
       return pres.delta_text;
     case IconKeyRole:
       return pres.icon_key;
-    case IsMergeRole:
-      return pres.is_merge;
-    case MergeSummaryRole:
-      return pres.merge_summary;
+    case AuthorRole:
+      return QString::fromStdString(row.author);
+    case NoteRole:
+      return QString::fromStdString(row.note);
     default:
       return {};
   }
 }
 
 auto EditorHistoryModel::roleNames() const -> QHash<int, QByteArray> {
-  return {{CommitIdRole, "commitId"},
-          {FirstParentIdRole, "firstParentId"},
-          {SecondParentIdRole, "secondParentId"},
-          {CommitKindRole, "commitKind"},
-          {CreatedAtNsRole, "createdAtNs"},
-          {LabelRole, "label"},
-          {FieldKeyRole, "fieldKey"},
-          {CurrentRole, "current"},
-          {DisplayNameRole, "displayName"},
-          {BeforeTextRole, "beforeText"},
-          {AfterTextRole, "afterText"},
-          {DeltaTextRole, "deltaText"},
-          {IconKeyRole, "iconKey"},
-          {TimelinePositionRole, "timelinePosition"},
-          {IsMergeRole, "isMerge"},
-          {MergeSummaryRole, "mergeSummary"}};
+  return {{CommitIdRole, "commitId"},       {FirstParentIdRole, "firstParentId"},
+          {CreatedAtNsRole, "createdAtNs"}, {LabelRole, "label"},
+          {FieldKeyRole, "fieldKey"},       {CurrentRole, "current"},
+          {DisplayNameRole, "displayName"}, {BeforeTextRole, "beforeText"},
+          {AfterTextRole, "afterText"},     {DeltaTextRole, "deltaText"},
+          {IconKeyRole, "iconKey"},         {TimelinePositionRole, "timelinePosition"},
+          {AuthorRole, "author"},           {NoteRole, "note"}};
 }
 
 void EditorHistoryModel::SetSnapshot(alcedo::EditorHistorySnapshot snapshot) {
@@ -227,9 +212,7 @@ auto EditorHistoryModel::PresentationFor(const alcedo::EditorHistoryCommit& comm
       it != presentation_cache_.end()) {
     return it->second;
   }
-  auto pres = PresentEditorHistoryCommit(
-      commit.field_key, commit.before_value_json, commit.after_value_json,
-      commit.before_enabled, commit.after_enabled, commit.kind, commit.merge_field_keys);
+  auto pres = PresentEditorHistoryCommit(commit);
   presentation_cache_.emplace(commit.commit_hash, pres);
   return pres;
 }
@@ -335,6 +318,20 @@ void EditorHistoryModel::removeVersion(const QString& versionId) {
   if (editor_session_) editor_session_->RemoveVersion(versionId);
 }
 
+QString EditorHistoryModel::normalizeVersionName(const QString& text) const {
+  const auto name = alcedo::NormalizeVersionName(text.toStdString());
+  return name.has_value() ? QString::fromStdString(*name) : QString{};
+}
+
+QString EditorHistoryModel::defaultVersionName(const QString& pattern) const {
+  return QString::fromStdString(alcedo::DefaultVersionName(
+      static_cast<std::size_t>(versions_->rowCount()), pattern.toStdString()));
+}
+
+bool EditorHistoryModel::isUnchangedVersionName(const QString& current,
+                                                const QString& requested) const {
+  return alcedo::IsUnchangedVersionName(current.toStdString(), requested.toStdString());
+}
 
 void RegisterEditorHistoryQmlTypes() {
   qmlRegisterType<EditorHistoryModel>("Alcedo.Main", 1, 0, "EditorHistoryModel");

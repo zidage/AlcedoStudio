@@ -1,0 +1,337 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+
+__constant sampler_t kNearestClamp =
+    CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
+
+typedef struct {
+  uint  behavior;
+  uint  count;
+  float values[48];
+  uint  reserved[2];
+} GradeAdjustmentParams;
+
+typedef struct {
+  uint  command_count;
+  uint  command_offset;
+  uint  lut_edge;
+  float local_reference;
+  uint  width;
+  uint  pad[3];
+} PrimaryGradeDispatchParams;
+
+static inline float Luma(float3 c) { return 0.272229f * c.x + 0.674082f * c.y + 0.053689f * c.z; }
+
+// Contrast: S curve on OkLab lightness of scene-linear AP1 (oklab.cl) around 18% grey, chroma
+// scaled by sqrt(k) * min(gain, 1). Same math as ApplyOkLabContrast in cuda_primary_grade_pass.cu
+// (documented there) and tests/edit/runtime/oklab_contrast_reference.hpp.
+static inline float3 ApplyOkLabContrast(float3 acescc, float contrast) {
+  const float kPivotLightness  = 0.5646216f;  // cbrt(0.18)
+  const float kCurveWidthStops = 2.5f;
+  const float slope            = exp2(contrast * 0.01f);
+  float3      lab              = LinearAp1ToOkLab(AcesccToLinearAp1(acescc));
+  const float shape =
+      lab.x > 0.0f ? tanh(3.0f * log2(lab.x / kPivotLightness) / kCurveWidthStops) : -1.0f;
+  const float gain         = exp2((slope - 1.0f) * kCurveWidthStops * shape / 3.0f);
+  const float chroma_scale = sqrt(slope) * fmin(gain, 1.0f);
+  lab                      = (float3)(lab.x * gain, lab.y * chroma_scale, lab.z * chroma_scale);
+  return LinearAp1ToAcescc(OkLabToLinearAp1(lab));
+}
+
+static inline float ExtrapolateCurve(float value, __global const GradeAdjustmentParams* p, uint a,
+                                     uint b) {
+  const float x0 = p->values[a * 2];
+  const float y0 = p->values[a * 2 + 1];
+  const float x1 = p->values[b * 2];
+  const float y1 = p->values[b * 2 + 1];
+  return y0 + (value - x0) * (y1 - y0) / max(x1 - x0, 1.0e-6f);
+}
+
+static inline float ApplyCurve(float value, __global const GradeAdjustmentParams* p) {
+  if (p->count < 2u) {
+    return value;
+  }
+  if (value <= p->values[0]) {
+    return ExtrapolateCurve(value, p, 0u, 1u);
+  }
+  for (uint i = 1u; i < p->count; ++i) {
+    const float x1 = p->values[i * 2u];
+    if (value <= x1) {
+      const float x0 = p->values[(i - 1u) * 2u];
+      const float y0 = p->values[(i - 1u) * 2u + 1u];
+      const float y1 = p->values[i * 2u + 1u];
+      const float t  = (value - x0) / max(x1 - x0, 1.0e-6f);
+      return y0 + t * (y1 - y0);
+    }
+  }
+  return ExtrapolateCurve(value, p, p->count - 2u, p->count - 1u);
+}
+
+// Tone color wheels (edit/operators/models/color_wheel_tone.hpp). values[0..2]: Offset as an ACEScc
+// increment; [3..5]: Lift K / R; [6..8]: Gamma exponent; [9..11]: Gain K / R; [12]: ACEScc at
+// t = 0; [13]: ACEScc width of the tone range.
+static inline float ApplyToneWheel(float c, __global const GradeAdjustmentParams* p, int ch) {
+  // Neutral Lift, Gamma, and Gain leave the value exact (only the Offset applies).
+  if (p->values[3 + ch] == 0.0f && p->values[6 + ch] == 1.0f && p->values[9 + ch] == 0.0f) {
+    return c + p->values[ch];
+  }
+  const float black = p->values[12];
+  const float range = p->values[13];
+  float       t     = (c + p->values[ch] - black) / range;
+  t += p->values[3 + ch] * clamp(1.0f - t, 0.0f, 1.0f);
+  if (t > 0.0f && t < 1.0f) t = pow(t, p->values[6 + ch]);
+  t += p->values[9 + ch] * max(t, 0.0f);
+  return black + t * range;
+}
+
+static inline float3 ApplyHls(float3 c, __global const GradeAdjustmentParams* p) {
+  const float maximum = max(c.x, max(c.y, c.z));
+  const float minimum = min(c.x, min(c.y, c.z));
+  const float chroma  = maximum - minimum;
+  float       hue     = 0.0f;
+  if (chroma > 1.0e-6f) {
+    if (maximum == c.x) {
+      hue = 60.0f * fmod((c.y - c.z) / chroma, 6.0f);
+    } else if (maximum == c.y) {
+      hue = 60.0f * ((c.z - c.x) / chroma + 2.0f);
+    } else {
+      hue = 60.0f * ((c.x - c.y) / chroma + 4.0f);
+    }
+  }
+  if (hue < 0.0f) {
+    hue += 360.0f;
+  }
+  if (chroma <= 1.0e-6f) return c;
+  float sum_h = 0.0f, sum_l = 0.0f, sum_s = 0.0f, sum_weight = 0.0f;
+  for (int i = 0; i < 8; ++i) {
+    const float difference = fabs(hue - p->values[i]);
+    const float distance   = fmin(difference, 360.0f - difference);
+    const float width      = fmax(p->values[32 + i], 1.0f);
+    const float weight     = exp2(-distance * distance / (width * width));
+    sum_h += p->values[8 + i * 3] * weight;
+    sum_l += p->values[8 + i * 3 + 1] * weight;
+    sum_s += p->values[8 + i * 3 + 2] * weight;
+    sum_weight += weight;
+  }
+  if (sum_weight <= 1.0e-6f) return c;
+  const float inv_weight = 1.0f / sum_weight;
+  const float adj_h = sum_h * inv_weight;
+  const float adj_l = sum_l * inv_weight;
+  const float adj_s = sum_s * inv_weight;
+  if (fabs(adj_h) <= 1.0e-6f && fabs(adj_l) <= 1.0e-6f && fabs(adj_s) <= 1.0e-6f) return c;
+  const float angle = adj_h * 2.25f * 0.017453292519943295f;
+  const float scale = exp2(adj_s * 2.25f * (adj_s >= 0.0f ? 4.5f : 3.25f));
+  const float luma  = Luma(c) + adj_l * 1.125f;
+  const float i     = 0.596f * c.x - 0.274f * c.y - 0.322f * c.z;
+  const float q     = 0.211f * c.x - 0.523f * c.y + 0.312f * c.z;
+  const float ri    = (i * cos(angle) - q * sin(angle)) * scale;
+  const float rq    = (i * sin(angle) + q * cos(angle)) * scale;
+  return (float3)(luma + 0.956f * ri + 0.621f * rq, luma - 0.272f * ri - 0.647f * rq,
+                  luma - 1.106f * ri + 1.703f * rq);
+}
+
+static inline uint LutIndex(uint edge, uint x, uint y, uint z) { return (z * edge + y) * edge + x; }
+
+static inline float3 SampleLut3d(__global const float4* lut, uint edge, float u, float v, float w) {
+  const float3 coord   = clamp((float3)(u, v, w), 0.0f, 1.0f);
+  const float3 tex_pos = coord * (float)edge - 0.5f;
+  const float3 pos     = clamp(tex_pos, 0.0f, (float)(edge - 1u));
+  const uint3  lo      = convert_uint3(pos);
+  const uint3  hi      = min(lo + (uint3)(1u), (uint3)(edge - 1u));
+  const float3 t       = pos - convert_float3(lo);
+  const float4 c000    = lut[LutIndex(edge, lo.x, lo.y, lo.z)];
+  const float4 c100    = lut[LutIndex(edge, hi.x, lo.y, lo.z)];
+  const float4 c010    = lut[LutIndex(edge, lo.x, hi.y, lo.z)];
+  const float4 c110    = lut[LutIndex(edge, hi.x, hi.y, lo.z)];
+  const float4 c001    = lut[LutIndex(edge, lo.x, lo.y, hi.z)];
+  const float4 c101    = lut[LutIndex(edge, hi.x, lo.y, hi.z)];
+  const float4 c011    = lut[LutIndex(edge, lo.x, hi.y, hi.z)];
+  const float4 c111    = lut[LutIndex(edge, hi.x, hi.y, hi.z)];
+  const float4 c00     = mix(c000, c100, t.x);
+  const float4 c10     = mix(c010, c110, t.x);
+  const float4 c01     = mix(c001, c101, t.x);
+  const float4 c11     = mix(c011, c111, t.x);
+  const float4 c0      = mix(c00, c10, t.y);
+  const float4 c1      = mix(c01, c11, t.y);
+  const float4 sampled = mix(c0, c1, t.z);
+  return sampled.xyz;
+}
+
+static inline float3 ApplyAdjustment(float3 c, __global const GradeAdjustmentParams* p,
+                                     __global const float4* lut, uint lut_edge) {
+  const uint  behavior = p->behavior;
+  const float value    = p->values[0];
+  if (behavior == 0u && value != 0.0f) {
+    // values[1..9]: row-major CAT02 adaptation in linear AP1 (resolved on the CPU).
+    __global const float* m   = p->values + 1;
+    const float3          lin = (float3)(CeAcesccDecode(c.x), CeAcesccDecode(c.y),
+                                         CeAcesccDecode(c.z));
+    c = (float3)(CeAcesccEncode(m[0] * lin.x + m[1] * lin.y + m[2] * lin.z),
+                 CeAcesccEncode(m[3] * lin.x + m[4] * lin.y + m[5] * lin.z),
+                 CeAcesccEncode(m[6] * lin.x + m[7] * lin.y + m[8] * lin.z));
+  } else if (behavior == 1u) {
+    const float offset = value / CE_ACESCC_B;
+    c.x += offset;
+    c.y += offset;
+    c.z += offset;
+  } else if (behavior == 2u && value != 0.0f) {
+    c = ApplyOkLabContrast(c, value);
+  } else if (behavior == 3u) {
+    const float gain = 1.0f + max(value, 0.0f) * 0.005f;
+    c.x *= gain;
+    c.y *= gain;
+    c.z *= gain;
+  } else if (behavior == 4u) {
+    const float offset = value * 0.001f;
+    c.x += offset;
+    c.y += offset;
+    c.z += offset;
+  } else if (behavior == 7u) {
+    c.x = ApplyCurve(c.x, p);
+    c.y = ApplyCurve(c.y, p);
+    c.z = ApplyCurve(c.z, p);
+  } else if (behavior == 8u) {
+    c = ApplyHls(c, p);
+  } else if (behavior == 9u || behavior == 10u) {
+    float scale = behavior == 9u ? value : 1.0f + value * 0.01f;
+    if (behavior == 10u) {
+      const float maximum = max(c.x, max(c.y, c.z));
+      const float minimum = min(c.x, min(c.y, c.z));
+      scale               = 1.0f + (scale - 1.0f) * (1.0f - min(maximum - minimum, 1.0f));
+    }
+    const float l = Luma(c);
+    if (scale > 1.5f) {
+      const float peak       = max(c.x, max(c.y, c.z));
+      const float peak_raise = (peak - l) * (scale - 1.0f);
+      if (peak_raise > 0.1f) scale = 1.0f + 0.1f / max(peak - l, 1.0e-6f);
+    }
+    c             = l + (c - l) * scale;
+  } else if (behavior == 11u) {
+    c.x = ApplyToneWheel(c.x, p, 0);
+    c.y = ApplyToneWheel(c.y, p, 1);
+    c.z = ApplyToneWheel(c.z, p, 2);
+  } else if (behavior == 12u && value > 0.0f && lut_edge > 1u) {
+    // value is the LUT strength a in (0, 1]: c + a * (L(c) - c) in ACEScc; a = 1 is L(c).
+    // An empty LUT (edge 0) means the referenced file is missing: the operation is skipped.
+    const float  scale   = (float)(lut_edge - 1u) / (float)lut_edge;
+    const float  offset  = 1.0f / (2.0f * (float)lut_edge);
+    const float3 sampled = SampleLut3d(lut, lut_edge, c.x * scale + offset, c.y * scale + offset,
+                                       c.z * scale + offset);
+    c = value >= 1.0f ? sampled : c + value * (sampled - c);
+  }
+  return c;
+}
+
+static inline float4 GradePixel(read_only image2d_t src, __global const uchar* parameter_base,
+                                __global const uint* commands, PrimaryGradeDispatchParams dispatch,
+                                int2 gid, __global const float4* lut) {
+  const float4 source = read_imagef(src, kNearestClamp, gid);
+  float3       c      = source.xyz;
+  for (uint i = 0u; i < dispatch.command_count; ++i) {
+    const uint                            offset = commands[dispatch.command_offset + i];
+    __global const GradeAdjustmentParams* params =
+        (__global const GradeAdjustmentParams*)(parameter_base + offset);
+    c = ApplyAdjustment(c, params, lut, dispatch.lut_edge);
+  }
+  return (float4)(c.x, c.y, c.z, source.w);
+}
+
+static inline void WriteGradePixel(read_only image2d_t src, write_only image2d_t dst,
+                                   __global const uchar*      parameter_base,
+                                   __global const uint*       commands,
+                                   PrimaryGradeDispatchParams dispatch, __global const float4* lut,
+                                   int2 gid) {
+  const int2 size = get_image_dim(dst);
+  if (gid.x >= size.x || gid.y >= size.y) {
+    return;
+  }
+  write_imagef(dst, gid, GradePixel(src, parameter_base, commands, dispatch, gid, lut));
+}
+
+__kernel void primary_grade_pointwise_rgba32f(__read_only image2d_t src, __write_only image2d_t dst,
+                                              __global const uchar*      parameter_base,
+                                              __global const uint*       commands,
+                                              PrimaryGradeDispatchParams dispatch,
+                                              __global const float4*     lut) {
+  const int2 gid = (int2)((int)get_global_id(0), (int)get_global_id(1));
+  WriteGradePixel(src, dst, parameter_base, commands, dispatch, lut, gid);
+}
+
+__kernel void primary_grade_mix_rgba32f(__read_only image2d_t source,
+                                        __read_only image2d_t adjusted, __write_only image2d_t dst,
+                                        float grade_mix) {
+  const int2 gid  = (int2)((int)get_global_id(0), (int)get_global_id(1));
+  const int2 size = get_image_dim(dst);
+  if (gid.x >= size.x || gid.y >= size.y) {
+    return;
+  }
+  const float4 a   = read_imagef(adjusted, kNearestClamp, gid);
+  const float4 s   = read_imagef(source, kNearestClamp, gid);
+  const float  mix = clamp(grade_mix, 0.0f, 1.0f);
+  write_imagef(dst, gid, (float4)(s.xyz + (a.xyz - s.xyz) * mix, s.w));
+}
+
+__kernel void primary_grade_mix_masked_rgba32f(__read_only image2d_t  source,
+                                               __read_only image2d_t  adjusted,
+                                               __write_only image2d_t dst,
+                                               __read_only image2d_t mask, float grade_mix) {
+  const int2 gid  = (int2)((int)get_global_id(0), (int)get_global_id(1));
+  const int2 size = get_image_dim(dst);
+  if (gid.x >= size.x || gid.y >= size.y) {
+    return;
+  }
+  const float4 a   = read_imagef(adjusted, kNearestClamp, gid);
+  const float4 s   = read_imagef(source, kNearestClamp, gid);
+  const float  mix = clamp(grade_mix * read_imagef(mask, kNearestClamp, gid).x, 0.0f, 1.0f);
+  write_imagef(dst, gid, (float4)(s.xyz + (a.xyz - s.xyz) * mix, s.w));
+}
+
+static inline float4 SceneReadRgba(read_only image2d_t image, __global const float4* buffer,
+                                   int is_buffer, int2 gid, uint width) {
+  if (is_buffer != 0) {
+    return buffer[(uint)gid.y * width + (uint)gid.x];
+  }
+  return read_imagef(image, kNearestClamp, gid);
+}
+
+static inline void SceneWriteRgba(write_only image2d_t image, __global float4* buffer, int is_buffer,
+                                  int2 gid, uint width, float4 value) {
+  if (is_buffer != 0) {
+    buffer[(uint)gid.y * width + (uint)gid.x] = value;
+    return;
+  }
+  write_imagef(image, gid, value);
+}
+
+__kernel void primary_grade_pointwise_scene_rgba32f(
+    __read_only image2d_t src_image, __global const float4* src_buffer, int src_is_buffer,
+    __write_only image2d_t dst_image, __global float4* dst_buffer, int dst_is_buffer,
+    __read_only image2d_t mix_image, __global const float4* mix_buffer, int mix_is_buffer,
+    __read_only image2d_t mask, int has_mask, float grade_mix, uint height,
+    __global const uchar* parameter_base, __global const uint* commands,
+    PrimaryGradeDispatchParams dispatch, __global const float4* lut) {
+  const int2 gid = (int2)((int)get_global_id(0), (int)get_global_id(1));
+  if (gid.x >= (int)dispatch.width || gid.y >= (int)height) {
+    return;
+  }
+  const float4 source = SceneReadRgba(src_image, src_buffer, src_is_buffer, gid, dispatch.width);
+  float3       c      = source.xyz;
+  for (uint i = 0u; i < dispatch.command_count; ++i) {
+    const uint offset = commands[dispatch.command_offset + i];
+    __global const GradeAdjustmentParams* params =
+        (__global const GradeAdjustmentParams*)(parameter_base + offset);
+    c = ApplyAdjustment(c, params, lut, dispatch.lut_edge);
+  }
+  float4 adjusted = (float4)(c.x, c.y, c.z, source.w);
+  if (mix_is_buffer >= 0) {
+    const float4 original =
+        SceneReadRgba(mix_image, mix_buffer, mix_is_buffer, gid, dispatch.width);
+    float mix = grade_mix;
+    if (has_mask != 0) {
+      mix *= read_imagef(mask, kNearestClamp, gid).x;
+    }
+    mix      = clamp(mix, 0.0f, 1.0f);
+    adjusted = (float4)(original.xyz + (adjusted.xyz - original.xyz) * mix, original.w);
+  }
+  SceneWriteRgba(dst_image, dst_buffer, dst_is_buffer, gid, dispatch.width, adjusted);
+}

@@ -5,12 +5,21 @@ import QtQuick.Layouts
 // Shared monochrome checkbox row matching AdjustmentTransferDialog parameter
 // checks: light selected well + dark check when on; hairline empty box when off.
 // Label uses textColor when checked / alwaysPrimary, else textMutedColor.
+// Disabled (DESIGN.md "Component states"): muted tint on the box, the check, and
+// the labels; no parent opacity.
 Item {
     id: root
     objectName: "themeCheckBox"
 
     property bool checked: false
+    // Optional tri-state marker for bulk controls whose children may be partly
+    // selected. Toggling a partial row selects everything (checked -> true).
+    property bool partiallyChecked: false
     property string text: ""
+    // Optional trailing value text (e.g. the item's display value).
+    property string valueText: ""
+    // Accessible name override; falls back to text when empty.
+    property string accessibleText: ""
     property bool enabled: true
     /// When true, label stays textColor even while unchecked (static captions).
     property bool alwaysPrimaryText: false
@@ -23,9 +32,10 @@ Item {
     Layout.fillWidth: true
     activeFocusOnTab: enabled
     Accessible.role: Accessible.CheckBox
-    Accessible.name: text
+    Accessible.name: root.accessibleText.length > 0 ? root.accessibleText : root.text
     Accessible.checkable: true
     Accessible.checked: checked
+    Accessible.checkStateMixed: root.partiallyChecked
     Accessible.onToggleAction: toggle()
 
     function toggle() {
@@ -50,7 +60,6 @@ Item {
                : "transparent"
         border.width: root.activeFocus ? 1 : 0
         border.color: appTheme.accentColor
-        opacity: root.enabled ? 1.0 : 0.55
     }
 
     RowLayout {
@@ -65,19 +74,31 @@ Item {
             Layout.preferredHeight: appTheme.iconOpticalSizeCompact
             Layout.alignment: Qt.AlignVCenter
             radius: appTheme.badgeRadius
-            color: root.checked
+            color: root.enabled && (root.checked || root.partiallyChecked)
                    ? appTheme.editorListSelectedFillColor
                    : "transparent"
             border.width: 1
-            border.color: root.checked
+            border.color: root.enabled && (root.checked || root.partiallyChecked)
                           ? appTheme.editorListSelectedFillColor
                           : appTheme.cardBorderColor
 
             Label {
                 anchors.centerIn: parent
-                visible: root.checked
+                visible: root.checked && !root.partiallyChecked
                 text: "✓"
-                color: appTheme.editorListSelectedInkColor
+                color: root.enabled ? appTheme.editorListSelectedInkColor
+                                    : appTheme.textMutedColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeCaption
+                font.weight: appTheme.fontWeightHeading
+            }
+
+            Label {
+                anchors.centerIn: parent
+                visible: root.partiallyChecked
+                text: "–"
+                color: root.enabled ? appTheme.editorListSelectedInkColor
+                                    : appTheme.textMutedColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
                 font.weight: appTheme.fontWeightHeading
@@ -87,13 +108,29 @@ Item {
         Label {
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter
+            visible: root.text.length > 0
             text: root.text
-            color: (root.checked || root.alwaysPrimaryText)
+            color: root.enabled
+                   && (root.checked || root.partiallyChecked || root.alwaysPrimaryText)
                    ? appTheme.textColor
                    : appTheme.textMutedColor
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeBody
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
+        }
+
+        Label {
+            Layout.maximumWidth: root.width / 3
+            Layout.alignment: Qt.AlignVCenter
+            visible: root.valueText.length > 0
+            text: root.valueText
+            color: root.enabled && (root.checked || root.partiallyChecked)
+                   ? appTheme.textColor
+                   : appTheme.textMutedColor
+            font.family: appTheme.dataFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+            horizontalAlignment: Text.AlignRight
+            wrapMode: Text.Wrap
         }
     }
 

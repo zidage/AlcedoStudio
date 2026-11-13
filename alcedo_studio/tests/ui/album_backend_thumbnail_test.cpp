@@ -2,20 +2,31 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "ui/album_backend_test_fixture.hpp"
-
 #include <QByteArray>
+#include <QDate>
+#include <QDateTime>
 #include <QImage>
 #include <QSignalSpy>
-
+#include <QTime>
+#include <QTimeZone>
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
+#include <string>
+#include <utility>
 
+#include "app/editor_adjustment_types.hpp"
+#include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/history/commit_graph.hpp"
+#include "edit/history/edit_commit.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
+#include "ui/album_backend_test_fixture.hpp"
 #ifdef HAVE_METAL
 #include "image/metal_image.hpp"
 #endif
@@ -182,6 +193,60 @@ TEST_F(ThumbnailTests, ThumbnailModelSelectionRangeExtendsAfterPagedAppend) {
   EXPECT_EQ(model.rowByElementId(10), 9);
 }
 
+// Issue #589: the edit state roles of a loaded row, and the patch that the editor session and
+// Paste send after a commit, an undo to the image root, or a Version switch.
+TEST_F(ThumbnailTests, ThumbnailModelEditStateRolesFollowUpdateEditState) {
+  AlbumThumbnailModel    model;
+  auto                   items       = MakeAlbumItems(0, 3);
+  // 2026-09-03 10:00:00 UTC.
+  constexpr std::int64_t kEditedAtNs = 1'788'429'600'000'000'000;
+  items[1].edited_at_ns              = kEditedAtNs;
+  items[1].edit_version_name         = QStringLiteral("Warm");
+  model.resetModel(items, items.size());
+
+  const auto role = [&](int row, AlbumThumbnailModel::Roles name) {
+    return model.data(model.index(row), name);
+  };
+  EXPECT_FALSE(role(0, AlbumThumbnailModel::IsEdited).toBool());
+  EXPECT_FALSE(role(0, AlbumThumbnailModel::EditedAt).isValid());
+  EXPECT_TRUE(role(0, AlbumThumbnailModel::EditVersionName).toString().isEmpty());
+  EXPECT_TRUE(role(1, AlbumThumbnailModel::IsEdited).toBool());
+  EXPECT_EQ(role(1, AlbumThumbnailModel::EditedAt).toDateTime().toUTC(),
+            QDateTime(QDate(2026, 9, 3), QTime(10, 0), QTimeZone::utc()));
+  EXPECT_EQ(role(1, AlbumThumbnailModel::EditVersionName).toString(), QStringLiteral("Warm"));
+  const auto names = model.roleNames();
+  EXPECT_EQ(names.value(AlbumThumbnailModel::IsEdited), QByteArray("isEdited"));
+  EXPECT_EQ(names.value(AlbumThumbnailModel::EditedAt), QByteArray("editedAt"));
+  EXPECT_EQ(names.value(AlbumThumbnailModel::EditVersionName), QByteArray("editVersionName"));
+  EXPECT_TRUE(model.getItemAt(1).value(QStringLiteral("isEdited")).toBool());
+
+  QSignalSpy changed(&model, &QAbstractItemModel::dataChanged);
+  // First commit of row 0.
+  const auto element0 = items[0].element_id;
+  ASSERT_TRUE(model.updateEditState(element0, items[0].image_id, kEditedAtNs, "Default"));
+  ASSERT_EQ(changed.count(), 1);
+  const auto changed_roles = changed.takeFirst().at(2).value<QList<int>>();
+  EXPECT_TRUE(changed_roles.contains(AlbumThumbnailModel::IsEdited));
+  EXPECT_TRUE(changed_roles.contains(AlbumThumbnailModel::EditedAt));
+  EXPECT_TRUE(changed_roles.contains(AlbumThumbnailModel::EditVersionName));
+  EXPECT_FALSE(changed_roles.contains(AlbumThumbnailModel::Rating));
+  EXPECT_TRUE(role(0, AlbumThumbnailModel::IsEdited).toBool());
+  // The same state again changes nothing; another image id is not this row.
+  EXPECT_FALSE(model.updateEditState(element0, items[0].image_id, kEditedAtNs, "Default"));
+  EXPECT_FALSE(model.updateEditState(element0, items[0].image_id + 100, std::nullopt, {}));
+  EXPECT_EQ(changed.count(), 0);
+  // Undo to the image root: unedited, and the Version name is dropped with the edit time.
+  ASSERT_TRUE(model.updateEditState(element0, items[0].image_id, std::nullopt, "Default"));
+  EXPECT_FALSE(role(0, AlbumThumbnailModel::IsEdited).toBool());
+  EXPECT_FALSE(role(0, AlbumThumbnailModel::EditedAt).isValid());
+  EXPECT_TRUE(role(0, AlbumThumbnailModel::EditVersionName).toString().isEmpty());
+  // A Version switch to another head.
+  ASSERT_TRUE(model.updateEditState(items[1].element_id, 0, kEditedAtNs + 1, "Cool"));
+  EXPECT_EQ(role(1, AlbumThumbnailModel::EditVersionName).toString(), QStringLiteral("Cool"));
+  // A row that is not loaded is not patched.
+  EXPECT_FALSE(model.updateEditState(999999, 0, kEditedAtNs, "Default"));
+}
+
 TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesProviderUrl) {
 #ifndef HAVE_METAL
   GTEST_SKIP() << "Metal is not enabled in this build.";
@@ -216,36 +281,42 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesP
 
   ProjectService project(db_path_, meta_path_);
   auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto           pipeline_guard   = pipeline_service->LoadPipeline(element_id);
-  ASSERT_NE(pipeline_guard, nullptr);
-  ASSERT_NE(pipeline_guard->pipeline_, nullptr);
+  // Crop the image with one commit on its stored history, as a library edit does; thumbnails
+  // render the stored history.
+  {
+    auto base = pipeline_service->LoadHistorySnapshot(element_id);
+    auto cropped =
+        ClonePipelineDocument(pipeline_service->AcquireCommittedSnapshot(element_id)->Document());
+    EditorParameterTarget read_target;
+    read_target.owner_kind = EditorParameterOwnerKind::Document;
+    read_target.field_key  = "crop_rotate";
+    nlohmann::json before;
+    nlohmann::json after;
+    std::string    error;
+    ASSERT_TRUE(ReadEditorParameterJson(cropped, read_target, &before, &error)) << error;
+    cropped.Geometry().SetCropRect({0.12f, 0.08f, 0.62f, 0.58f});
+    ASSERT_TRUE(ReadEditorParameterJson(cropped, read_target, &after, &error)) << error;
 
-  auto exec = pipeline_guard->pipeline_;
-  auto& global_params  = exec->GetGlobalParams();
-  auto& loading_stage  = exec->GetStage(PipelineStageName::Image_Loading);
-  auto& geometry_stage = exec->GetStage(PipelineStageName::Geometry_Adjustment);
+    PipelineEditBatch  batch;
+    SetParameterChange change;
+    change.target.owner_kind = PipelineParameterOwnerKind::Document;
+    change.target.field_key  = "crop_rotate";
+    change.before_value      = std::move(before);
+    change.after_value       = std::move(after);
+    change.before_enabled    = true;
+    change.after_enabled     = true;
+    batch.operation_kind     = PipelineEditOperationKind::SetParameter;
+    batch.presentation_key   = "history.operation.set_parameter";
+    batch.changes.push_back(std::move(change));
 
-  // The decode backend is a runtime property of the pipeline (resolved from
-  // the accelerator preference); the params must not carry it.
-  nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
-  raw_params["raw"]["backend"] = "alcedo";
-  loading_stage.SetOperator(OperatorType::RAW_DECODE, raw_params);
-
-  nlohmann::json crop_params = pipeline_defaults::MakeDefaultCropRotateParams();
-  crop_params["crop_rotate"]["enabled"]     = true;
-  crop_params["crop_rotate"]["enable_crop"] = true;
-  crop_params["crop_rotate"]["angle_degrees"] = 0.0f;
-  crop_params["crop_rotate"]["crop_rect"] = {
-      {"x", 0.12f},
-      {"y", 0.08f},
-      {"w", 0.62f},
-      {"h", 0.58f},
-  };
-  geometry_stage.SetOperator(OperatorType::CROP_ROTATE, crop_params, global_params);
-
-  pipeline_guard->dirty_ = true;
-  pipeline_service->SavePipeline(pipeline_guard);
-  pipeline_service->Sync();
+    CommitGraph graph  = *base.graph_;
+    auto        commit = EditCommit::MakePipelineEdit(graph.GetRootId(),
+                                                      graph.GetActiveVersionRef().head_commit_hash, batch);
+    const auto  head   = commit.GetCommitHash();
+    ASSERT_TRUE(graph.InsertCommit(std::move(commit)));
+    graph.MoveWorkingHead(graph.GetActiveVersionId(), head);
+    ASSERT_NE(pipeline_service->PersistHistory(base, graph), nullptr);
+  }
 
   QSignalSpy thumb_spy(backend.library(), &LibraryModule::ThumbnailUpdated);
 
@@ -391,6 +462,88 @@ TEST_F(ThumbnailTests, VisibleThumbnailRerequestsWhenMaxEdgeChanges) {
   backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), false,
                               256);
   ProcessEvents(250);
+}
+
+// The Library grid and the retained Editor filmstrip pin the same element at different tiers.
+// Pinning the second tier must keep the first consumer's pin and stored image, and releasing the
+// second tier must leave the row on an image that the provider still resolves.
+TEST_F(ThumbnailTests, ReleasingOneTierKeepsTheOtherConsumersPinnedTier) {
+  ApplicationModuleHost backend;
+  PinAcceleratorBeforeProjectOpen(backend);
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  auto images = CollectRawTestImages("airplane", 1);
+  if (images.empty()) {
+    images = CollectRawTestImages("still_life", 1);
+  }
+  if (images.empty()) {
+    GTEST_SKIP() << "No RAW test image available for the two-tier thumbnail pin test.";
+  }
+
+  backend.import_export()->StartImport(PathsToQStringList(images));
+  WaitForImportFinished(backend);
+
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  ASSERT_GE(backend.library()->ShownCount(), 1);
+
+  const QVariantMap first_row = backend.library()->Thumbnails().front().toMap();
+  const auto        element_id =
+      static_cast<sl_element_id_t>(first_row.value("elementId").toUInt());
+  const auto image_id = static_cast<image_id_t>(first_row.value("imageId").toUInt());
+  ASSERT_NE(element_id, 0);
+  ASSERT_NE(image_id, 0);
+  auto store = backend.library()->thumbs().image_store();
+  ASSERT_NE(store, nullptr);
+
+  constexpr uint kGridEdge      = 256;
+  constexpr uint kFilmstripEdge = 512;
+  const auto     settled_row    = [](const QVariantMap& row) {
+    return !row.value("thumbUrl").toString().isEmpty() && !row.value("thumbLoading").toBool();
+  };
+
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id),
+                                         static_cast<uint>(image_id), true, kGridEdge);
+  const QVariantMap grid_row = WaitForThumbnailRow(backend, element_id, settled_row, 30000);
+  ASSERT_FALSE(grid_row.isEmpty()) << "The grid tier thumbnail did not load.";
+  const QString grid_url = grid_row.value("thumbUrl").toString();
+  ASSERT_FALSE(store->Get(element_id, kGridEdge).isNull());
+
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id),
+                                         static_cast<uint>(image_id), true, kFilmstripEdge);
+  const QVariantMap filmstrip_row = WaitForThumbnailRow(
+      backend, element_id,
+      [&grid_url, &settled_row](const QVariantMap& row) {
+        return settled_row(row) && row.value("thumbUrl").toString() != grid_url;
+      },
+      30000);
+  ASSERT_FALSE(filmstrip_row.isEmpty()) << "The filmstrip tier thumbnail did not load.";
+  EXPECT_TRUE(backend.library()->thumbs().IsThumbnailPinned(element_id));
+  EXPECT_FALSE(store->Get(element_id, kGridEdge).isNull())
+      << "Pinning the filmstrip tier removed the grid tier's stored image.";
+
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id),
+                                         static_cast<uint>(image_id), false, kFilmstripEdge);
+  const QVariantMap after_release_row =
+      WaitForThumbnailRow(backend, element_id, settled_row, 30000);
+  ASSERT_FALSE(after_release_row.isEmpty())
+      << "Releasing the filmstrip tier cleared the row although the grid tier stays pinned.";
+  EXPECT_TRUE(backend.library()->thumbs().IsThumbnailPinned(element_id));
+  const QImage shown_image =
+      ResolveThumbUrlImage(backend, after_release_row.value("thumbUrl").toString());
+  ASSERT_FALSE(shown_image.isNull())
+      << "The row URL does not resolve in the image store after the filmstrip tier release.";
+  EXPECT_LE(MaxImageEdge(shown_image), static_cast<int>(kGridEdge));
+
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id),
+                                         static_cast<uint>(image_id), false, kGridEdge);
+  const QVariantMap released_row = WaitForThumbnailRow(
+      backend, element_id,
+      [](const QVariantMap& row) {
+        return row.value("thumbUrl").toString().isEmpty() && !row.value("thumbLoading").toBool();
+      },
+      5000);
+  EXPECT_FALSE(released_row.isEmpty()) << "Releasing the last tier did not clear the row.";
+  EXPECT_FALSE(backend.library()->thumbs().IsThumbnailPinned(element_id));
 }
 
 }  // namespace alcedo::ui::test

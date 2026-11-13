@@ -5,6 +5,11 @@
 #include "ui/editor_rhi/editor_startup.hpp"
 
 #include <QtGui/rhi/qrhi.h>
+#if defined(__APPLE__) && defined(HAVE_METAL)
+#include <QQuickGraphicsDevice>
+
+#include "metal/metal_context.hpp"
+#endif
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -14,6 +19,7 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QSurfaceFormat>
+#include <exception>
 #include <memory>
 #include <sstream>
 
@@ -77,7 +83,7 @@ class OpenClGlSharingBootstrap {
       context_.reset();
       return false;
     }
-    options.gl_context_api  = alcedo::OpenClGlContextApi::Wgl;
+    options.gl_context_api    = alcedo::OpenClGlContextApi::Wgl;
     options.gl_context        = hglrc;
     options.gl_device_context = hdc;
 #elif defined(Q_OS_LINUX)
@@ -87,18 +93,18 @@ class OpenClGlSharingBootstrap {
       const auto egl_context = native_context->nativeContext();
       const auto egl_display = native_context->display();
       if (egl_context != nullptr && egl_display != nullptr) {
-        options.gl_context_api  = alcedo::OpenClGlContextApi::Egl;
-        options.gl_context      = egl_context;
+        options.gl_context_api    = alcedo::OpenClGlContextApi::Egl;
+        options.gl_context        = egl_context;
         options.gl_device_context = egl_display;
-        native_handles_resolved = true;
+        native_handles_resolved   = true;
       }
     }
 #endif
 #if defined(ALCEDO_HAS_OPENGL_GLX) && QT_CONFIG(xcb_glx_plugin)
     if (!native_handles_resolved) {
-      auto* native_context = context_->nativeInterface<QNativeInterface::QGLXContext>();
-      const auto glx_context = native_context ? native_context->nativeContext() : nullptr;
-      const auto glx_display = glXGetCurrentDisplay();
+      auto*      native_context = context_->nativeInterface<QNativeInterface::QGLXContext>();
+      const auto glx_context    = native_context ? native_context->nativeContext() : nullptr;
+      const auto glx_display    = glXGetCurrentDisplay();
       if (glx_context != nullptr && glx_display != nullptr) {
         options.gl_context_api    = alcedo::OpenClGlContextApi::Glx;
         options.gl_context        = reinterpret_cast<void*>(glx_context);
@@ -126,6 +132,12 @@ class OpenClGlSharingBootstrap {
     return initialized_;
   }
 
+  void Release() {
+    context_.reset();
+    surface_.reset();
+    initialized_ = false;
+  }
+
   [[nodiscard]] auto error() const -> const std::string& { return error_; }
 
  private:
@@ -135,9 +147,18 @@ class OpenClGlSharingBootstrap {
   std::string                        error_;
 };
 
-// Keep bootstrap alive for process lifetime so the share group remains valid.
+// Retain the share group until Qt starts application teardown.
 auto SharedOpenClGlBootstrap() -> OpenClGlSharingBootstrap& {
   static OpenClGlSharingBootstrap bootstrap;
+#if defined(Q_OS_LINUX)
+  // A process-static QOffscreenSurface destructor runs after Qt's thread-local
+  // OpenGL state is gone. Release EGL/GLX objects from QGuiApplication teardown.
+  static const bool cleanup_registered = [] {
+    qAddPostRoutine([] { bootstrap.Release(); });
+    return true;
+  }();
+  (void)cleanup_registered;
+#endif
   return bootstrap;
 }
 #endif
@@ -222,24 +243,20 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
       // handles). Keep the OpenCL compute pipeline usable in that case: it
       // downloads the final image and submits a host frame for the Qt Quick
       // upload path.
-      if (alcedo::TryInitializeOpenClRuntime()) {
+      try {
+        alcedo::InitializeOpenClRuntime();
         result.diagnostics.notes =
             "OpenCL initialized without GL sharing; final frames use OpenCL readback to "
             "Qt Quick OpenGL host upload";
         result.ok = true;
         SetActiveEditorBackend(backend);
         return result;
+      } catch (const std::exception& error) {
+        result.error = std::string("OpenCL GPU initialization failed: ") + error.what();
       }
-#endif
-
-#if defined(Q_OS_LINUX)
-      result.error = bootstrap.error().empty()
-                         ? "OpenCL/OpenGL sharing bootstrap failed; plain OpenCL fallback also failed"
-                         : bootstrap.error() + "; plain OpenCL fallback also failed";
 #else
-      result.error = bootstrap.error().empty()
-                         ? "OpenCL/OpenGL sharing bootstrap failed"
-                         : bootstrap.error();
+      result.error =
+          bootstrap.error().empty() ? "OpenCL/OpenGL sharing bootstrap failed" : bootstrap.error();
 #endif
       return result;
 #else
@@ -250,8 +267,9 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
     case EditorBackend::Metal: {
 #if defined(__APPLE__) && defined(HAVE_METAL)
       QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
+      (void)alcedo::MetalContext::Instance();
       result.diagnostics.notes =
-          "Metal API selected; shared-texture presentation qualified by the macOS RHI harness";
+          "Metal API selected; Qt Quick presents from the process MetalContext device";
       result.ok = true;
       SetActiveEditorBackend(backend);
       return result;
@@ -260,16 +278,6 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
       return result;
 #endif
     }
-    case EditorBackend::Cpu:
-      // CPU frames arrive through IFrameSink::SubmitHostFrame and are uploaded
-      // to a sampled QRhi texture on the scene-graph thread. OpenGL keeps the
-      // host-upload path identical across X11 and Wayland Qt Quick sessions.
-      QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
-      result.diagnostics.notes =
-          "CPU pipeline selected; final frames use host RAM to Qt Quick OpenGL upload";
-      result.ok = true;
-      SetActiveEditorBackend(backend);
-      return result;
   }
 
   result.error = "unknown editor backend";
@@ -286,8 +294,16 @@ void BindEditorGraphicsToWindow(QQuickWindow* window, const EditorStartupResult&
     window->setGraphicsDevice(QQuickGraphicsDevice::fromAdapter(
         static_cast<quint32>(luid.LowPart), static_cast<qint32>(luid.HighPart)));
   }
-#else
-  (void)startup;
+#endif
+#if defined(__APPLE__) && defined(HAVE_METAL)
+  if (startup.diagnostics.backend == EditorBackend::Metal) {
+    auto& context = alcedo::MetalContext::Instance();
+    if (context.Device() != nullptr && context.Queue() != nullptr) {
+      window->setGraphicsDevice(QQuickGraphicsDevice::fromDeviceAndCommandQueue(
+          reinterpret_cast<MTLDevice*>(context.Device()),
+          reinterpret_cast<MTLCommandQueue*>(context.Queue())));
+    }
+  }
 #endif
 }
 

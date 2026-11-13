@@ -4,7 +4,8 @@ import QtQuick.Layouts
 
 // One transaction timeline entry (Git-graph row): the commit-graph cell on the
 // left, then a flat two-line commit row — title + relative time, then hash
-// chip + delta / merge summary. Only the checked-out row carries the card
+// chip + delta summary. An agent commit adds the Agent chip after the hash
+// chip and its note on a third line. Only the checked-out row carries the card
 // surface with the quiet 1 px text outline; other rows stay flat on the
 // sunken timeline well (DESIGN.md, Git-graph timeline language).
 Item {
@@ -17,14 +18,13 @@ Item {
 
     required property int index
     required property bool current
-    required property bool isMerge
     required property string commitId
     required property string displayName
     required property string deltaText
     required property string timelinePosition
-    required property string mergeSummary
-    required property string secondParentId
     required property var createdAtNs
+    required property string author
+    required property string note
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -36,22 +36,26 @@ Item {
     readonly property int rowTopPadding: appTheme.spaceXs
     readonly property int rowLineGap: appTheme.spaceXs
     readonly property int rowBottomPadding: appTheme.spaceSm
-    readonly property int titleRowHeight: appTheme.lineHeightTitle
-    readonly property int metaRowHeight: appTheme.lineHeightCaption + appTheme.spaceXs
+    readonly property real titleRowHeight: Math.max(appTheme.lineHeightTitle,
+                                                    titleLabel.implicitHeight)
+    readonly property real metaRowHeight: Math.max(appTheme.lineHeightCaption + appTheme.spaceXs,
+                                                   deltaLabel.implicitHeight + appTheme.spaceXs)
+    // The note line exists only for an agent commit with a note.
+    readonly property real noteRowHeight: commitNote.length > 0
+                                          ? rowLineGap + noteLabel.implicitHeight : 0
     readonly property int listRowGap: ListView.view ? ListView.view.spacing : 0
     readonly property int rowCount: ListView.view ? ListView.view.count : 0
 
     property bool currentTransaction: current
-    property bool mergeTransaction: isMerge
     property string transactionId: String(commitId || "")
     property string transactionDisplayName: String(displayName || "")
     property string transactionDelta: String(deltaText || "")
     property string transactionPosition: String(timelinePosition || "applied")
-    property string transactionMergeSummary: String(mergeSummary || "")
-    property string secondParent: String(secondParentId || "")
     property string transactionTime: relativeTime(createdAtNs)
     property string shortCommitId: transactionId.length > 0
                                    ? transactionId.slice(0, 8) : ""
+    property bool agentCommit: author === "agent"
+    property string commitNote: agentCommit ? String(note || "") : ""
     property bool futureRow: transactionPosition === "future"
     // Model order is newest-first: the last row is the graph root commit.
     property bool firstRow: index === 0
@@ -77,7 +81,8 @@ Item {
     }
 
     width: ListView.view ? ListView.view.width : 0
-    height: rowTopPadding + titleRowHeight + rowLineGap + metaRowHeight + rowBottomPadding
+    height: rowTopPadding + titleRowHeight + rowLineGap + metaRowHeight + noteRowHeight
+            + rowBottomPadding
 
     ListView.onPooled: {}
     ListView.onReused: {}
@@ -88,7 +93,6 @@ Item {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         current: root.currentTransaction
-        merge: root.mergeTransaction
         rootCommit: root.lastRow
         future: root.futureRow
         connectAbove: !root.firstRow
@@ -160,14 +164,13 @@ Item {
             spacing: appTheme.spaceSm
 
             Label {
+                id: titleLabel
                 objectName: "editorHistoryCommitTitle"
                 Layout.fillWidth: true
-                text: root.mergeTransaction
-                      ? qsTr("Merge")
-                      : (root.transactionDisplayName.length > 0
-                         ? root.transactionDisplayName : qsTr("Adjustment"))
+                text: root.transactionDisplayName.length > 0
+                      ? root.transactionDisplayName : qsTr("Adjustment")
                 color: root.futureRow ? root.colMuted : root.colText
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 verticalAlignment: Text.AlignVCenter
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeBody
@@ -178,7 +181,7 @@ Item {
                 Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                 text: root.transactionTime
                 color: root.colMuted
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignRight
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
@@ -198,7 +201,7 @@ Item {
 
             Rectangle {
                 id: hashChip
-                visible: root.shortCommitId.length > 0 || root.mergeTransaction
+                visible: root.shortCommitId.length > 0
                 Layout.preferredWidth: hashLabel.implicitWidth + appTheme.spaceSm * 2
                 Layout.preferredHeight: root.metaRowHeight
                 radius: appTheme.badgeRadius
@@ -210,32 +213,65 @@ Item {
                     id: hashLabel
                     objectName: "editorHistoryCommitHash"
                     anchors.centerIn: parent
-                    text: {
-                        if (root.mergeTransaction && root.secondParent.length > 0)
-                            return qsTr("2nd %1").arg(root.secondParent.slice(0, 8))
-                        if (root.shortCommitId.length > 0)
-                            return root.shortCommitId
-                        return ""
-                    }
+                    text: root.shortCommitId
                     color: root.colMuted
                     font.family: appTheme.monoFontFamily
                     font.pixelSize: appTheme.fontSizeCaption
                 }
             }
 
+            // Requested by the automation plan (commit attribution): marks a
+            // commit that an agent made. Same chip language as the hash chip.
+            Rectangle {
+                id: authorChip
+                visible: root.agentCommit
+                Layout.preferredWidth: authorLabel.implicitWidth + appTheme.spaceSm * 2
+                Layout.preferredHeight: root.metaRowHeight
+                radius: appTheme.badgeRadius
+                color: root.currentTransaction ? appTheme.bgBaseColor : root.colCardSurface
+                border.width: 1
+                border.color: root.colCardBorder
+
+                Label {
+                    id: authorLabel
+                    objectName: "editorHistoryCommitAuthor"
+                    anchors.centerIn: parent
+                    text: qsTr("Agent")
+                    color: root.colText
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
+                    font.weight: appTheme.fontWeightStrong
+                }
+            }
+
             Label {
+                id: deltaLabel
                 objectName: "editorHistoryCommitValue"
                 Layout.fillWidth: true
-                text: root.mergeTransaction
-                      ? (root.transactionMergeSummary.length > 0
-                         ? root.transactionMergeSummary : qsTr("Resolved adjustments"))
-                      : root.transactionDelta
+                text: root.transactionDelta
                 color: root.colMuted
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 verticalAlignment: Text.AlignVCenter
                 font.family: appTheme.monoFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
             }
+        }
+
+        Label {
+            id: noteLabel
+            objectName: "editorHistoryCommitNote"
+            visible: root.commitNote.length > 0
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: metaRow.bottom
+            anchors.leftMargin: appTheme.spaceSm
+            anchors.rightMargin: appTheme.spaceSm
+            anchors.topMargin: root.rowLineGap
+            text: root.commitNote
+            color: root.colMuted
+            wrapMode: Text.Wrap
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
         }
     }
 }

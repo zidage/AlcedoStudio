@@ -1,0 +1,175 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+#include "edit/mask/brush_stroke.hpp"
+#include "edit/mask/mask_asset.hpp"
+#endif
+#include "edit/mask/mask_model.hpp"
+
+namespace alcedo::grade_mask_test {
+
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+inline auto MakePaintStroke(std::string_view id, float local_x = 8.0f, float local_y = 12.0f,
+                            float radius = 4.0f) -> BrushStroke {
+  return MakeBrushStroke(StrokeId{std::string{id}}, BrushStrokeMode::Paint,
+                         {{local_x, local_y, radius, 1.0f, 1.0f}});
+}
+
+inline auto MakeParameterizedBrushMask(MaskId id, std::vector<BrushStroke> strokes = {},
+                                       Vector2 translation = {}) -> MaskModel {
+  MaskModel mask;
+  mask.id = std::move(id);
+  BrushMaskSource brush;
+  brush.strokes               = std::move(strokes);
+  brush.placement_translation = translation;
+  mask.source                 = std::move(brush);
+  return mask;
+}
+
+inline auto MakeBrushMask(MaskId id, MaskAssetKey key, MaskAssetDescriptor descriptor = {},
+                          float feather = 0.0f, bool invert = false) -> MaskModel {
+  MaskModel mask;
+  mask.id     = std::move(id);
+  mask.invert = invert;
+  BrushMaskSource brush;
+  if (!key.Empty() && descriptor.extent.Empty()) {
+    descriptor.extent = {1, 1};
+  }
+  brush.asset_key      = std::move(key);
+  brush.descriptor     = descriptor;
+  brush.feather_radius = feather;
+  mask.source          = std::move(brush);
+  return mask;
+}
+
+inline auto MakeBrushMask(MaskId id, const MaskAsset& asset, float feather = 0.0f,
+                          bool invert = false) -> MaskModel {
+  return MakeBrushMask(std::move(id), asset.key, asset.descriptor, feather, invert);
+}
+#endif
+
+inline auto MakeRadialMask(MaskId id, RadialMaskSource source = {}, bool invert = false)
+    -> MaskModel {
+  MaskModel mask;
+  mask.id     = std::move(id);
+  mask.invert = invert;
+  mask.source = std::move(source);
+  return mask;
+}
+
+inline auto MakeLinearGradientMask(MaskId id, LinearGradientMaskSource source = {},
+                                   bool invert = false) -> MaskModel {
+  MaskModel mask;
+  mask.id     = std::move(id);
+  mask.invert = invert;
+  mask.source = std::move(source);
+  return mask;
+}
+
+/// Recipe with a People component (one toggle) and two prompt groups (a click with level 1, and a
+/// stroke followed by a box step).
+inline auto MakeAiMaskRecipe() -> AiMaskRecipe {
+  AiMaskRecipe        recipe;
+  AiMaskTaskComponent people;
+  people.task = AiMaskTaskKind::People;
+  people.person_toggles.push_back(
+      {2, AiMaskComponentOperation::Subtract, AiMaskBox{0.625f, 0.25f, 0.875f, 0.875f}});
+  recipe.components.push_back({AiMaskComponentOperation::Add, people});
+
+  AiMaskPromptGroup click;
+  click.steps.push_back({{{0.3125f, 0.4375f, AiMaskComponentOperation::Add}}, std::nullopt, 1});
+  recipe.components.push_back({AiMaskComponentOperation::Subtract, click});
+
+  AiMaskPromptGroup stroke;
+  stroke.steps.push_back({{{0.125f, 0.25f, AiMaskComponentOperation::Add},
+                           {0.1875f, 0.3125f, AiMaskComponentOperation::Add}},
+                          std::nullopt,
+                          0});
+  stroke.steps.push_back({{{0.5f, 0.5f, AiMaskComponentOperation::Subtract}},
+                          AiMaskBox{0.0625f, 0.125f, 0.5f, 0.75f},
+                          0});
+  recipe.components.push_back({AiMaskComponentOperation::Add, stroke});
+  return recipe;
+}
+
+/// Valid AI Segmentation source; @p asset_key must be 32 lowercase hexadecimal digits.
+inline auto MakeAiSegmentationSource(std::string asset_key = std::string(32, 'a'))
+    -> AiSegmentationMaskSource {
+  AiSegmentationMaskSource source;
+  source.asset_key                   = MaskAssetKey{std::move(asset_key)};
+  source.descriptor.extent           = {812, 1530};
+  source.descriptor.reference_bounds = NormalizedRect{0.25f, 0.0625f, 0.1875f, 0.5f};
+  source.analysis_extent             = {4096, 3072};
+  source.recipe                      = MakeAiMaskRecipe();
+  source.edge                        = {2.0f, -1};
+  source.model_set_id                = "sam2.1-tiny+people-sky-head-p1r2e15+s3od-synth";
+  source.geometry_fingerprint        = "9a1b2c3d4e5f60718293a4b5c6d7e877";
+  return source;
+}
+
+inline auto MakeAiSegmentationMask(MaskId                   id,
+                                   AiSegmentationMaskSource source = MakeAiSegmentationSource())
+    -> MaskModel {
+  MaskModel mask;
+  mask.id           = std::move(id);
+  mask.display_name = "AI Mask 1";
+  mask.source       = std::move(source);
+  return mask;
+}
+
+inline auto AddMask(ColorGradeNodeModel& grade, MaskModel mask) -> const MaskModel& {
+  const auto id = mask.id;
+  grade.AddMask(std::move(mask), grade.MaskCount());
+  return *grade.FindMask(id);
+}
+
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+inline auto AddParameterizedBrushMask(PipelineDocument& document, MaskId id,
+                                      std::vector<BrushStroke> strokes = {},
+                                      Vector2 translation = {}) -> const MaskModel& {
+  const auto& mask = AddMask(*document.PrimaryGrade(), MakeParameterizedBrushMask(
+                                                     std::move(id), std::move(strokes), translation));
+  document.MarkTopologyChanged();
+  return mask;
+}
+
+inline auto AddBrushMask(PipelineDocument& document, MaskId id, MaskAssetKey key,
+                         MaskAssetDescriptor descriptor = {}, float feather = 0.0f,
+                         bool invert = false) -> const MaskModel& {
+  const auto& mask = AddMask(*document.PrimaryGrade(),
+                       MakeBrushMask(std::move(id), std::move(key), descriptor, feather, invert));
+  document.MarkTopologyChanged();
+  return mask;
+}
+#endif
+
+inline auto AddRadialMask(PipelineDocument& document, MaskId id, RadialMaskSource source = {},
+                          bool invert = false) -> const MaskModel& {
+  const auto& mask =
+      AddMask(*document.PrimaryGrade(), MakeRadialMask(std::move(id), std::move(source), invert));
+  document.MarkTopologyChanged();
+  return mask;
+}
+
+inline auto AddLinearGradientMask(PipelineDocument& document, MaskId id,
+                                  LinearGradientMaskSource source = {}, bool invert = false)
+    -> const MaskModel& {
+  const auto& mask = AddMask(*document.PrimaryGrade(),
+                       MakeLinearGradientMask(std::move(id), std::move(source), invert));
+  document.MarkTopologyChanged();
+  return mask;
+}
+
+}  // namespace alcedo::grade_mask_test

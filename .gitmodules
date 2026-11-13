@@ -6,8 +6,8 @@
 	path = alcedo/third_party/opencv_contrib
 	url = https://github.com/opencv/opencv_contrib.git
 	branch = 4.x
-[submodule "alcedo/src/third_party/lensfun"]
-	path = alcedo/src/third_party/lensfun
+[submodule "alcedo_studio/src/third_party/lensfun"]
+	path = alcedo_studio/src/third_party/lensfun
 	url = https://github.com/lensfun/lensfun.git
 [submodule "alcedo/src/third_party/metal-cpp"]
 	path = alcedo/src/third_party/metal-cpp
@@ -20,9 +20,6 @@
 	path = alcedo_studio/src/third_party/libraw
 	url = https://github.com/zidage/LibRaw.git
 	branch = main_alcedo
-[submodule "alcedo_studio/third_party/dawn"]
-	path = alcedo_studio/third_party/dawn
-	url = https://dawn.googlesource.com/dawn
 [submodule "alcedo_studio/src/third_party/protobuf"]
 	path = alcedo_studio/src/third_party/protobuf
 	url = https://github.com/protocolbuffers/protobuf.git
@@ -32,3 +29,6 @@
 [submodule "alcedo_studio/src/third_party/cutlass"]
 	path = alcedo_studio/src/third_party/cutlass
 	url = https://github.com/NVIDIA/cutlass.git
+[submodule "alcedo_studio/src/third_party/QuickQanava"]
+	path = alcedo_studio/src/third_party/QuickQanava
+	url = https://github.com/cneben/QuickQanava.git

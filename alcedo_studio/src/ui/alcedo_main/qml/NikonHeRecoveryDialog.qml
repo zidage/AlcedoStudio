@@ -156,7 +156,8 @@ Popup {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: root.converterRowHeight
+                    Layout.preferredHeight: Math.max(root.converterRowHeight,
+                                                     converterPathLabel.implicitHeight + 14)
                     spacing: 8
 
                     Rectangle {
@@ -169,6 +170,7 @@ Popup {
                         border.color: root.strokeColor
 
                         Label {
+                            id: converterPathLabel
                             anchors.fill: parent
                             anchors.leftMargin: 14
                             anchors.rightMargin: 14
@@ -181,7 +183,7 @@ Popup {
                             color: root.converterPath.length > 0 ? root.textColor : root.mutedTextColor
                             font.family: appTheme.dataFontFamily
                             font.pixelSize: 12
-                            elide: Text.ElideMiddle
+                            wrapMode: Text.Wrap
                         }
                     }
 
@@ -337,7 +339,8 @@ Popup {
                                 required property int index
                                 required property var modelData
                                 width: fileList.width
-                                height: 40
+                                height: Math.max(40, fileRowLayout.implicitHeight
+                                                 + appTheme.spaceXs)
                                 color: fileRow.index % 2 === 0 ? Qt.rgba(1, 1, 1, 0.018) : "transparent"
 
                                 Rectangle {
@@ -349,6 +352,7 @@ Popup {
                                 }
 
                                 RowLayout {
+                                    id: fileRowLayout
                                     anchors.fill: parent
                                     anchors.leftMargin: 18
                                     anchors.rightMargin: 18
@@ -361,7 +365,7 @@ Popup {
                                         font.family: appTheme.dataFontFamily
                                         font.pixelSize: 12
                                         font.weight: 600
-                                        elide: Text.ElideMiddle
+                                        wrapMode: Text.Wrap
                                         verticalAlignment: Text.AlignVCenter
                                     }
 
@@ -371,7 +375,7 @@ Popup {
                                         color: root.mutedTextColor
                                         font.family: appTheme.dataFontFamily
                                         font.pixelSize: 11
-                                        elide: Text.ElideMiddle
+                                        wrapMode: Text.Wrap
                                         verticalAlignment: Text.AlignVCenter
                                     }
                                 }

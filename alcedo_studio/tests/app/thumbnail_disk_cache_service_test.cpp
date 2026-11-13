@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/thumbnail_disk_cache_service.hpp"
+#include "support/test_temp_directory.hpp"
 
 #include <gtest/gtest.h>
 
@@ -10,8 +11,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
-#include <opencv2/opencv.hpp>
+#include <opencv2/core.hpp>
 #include <string>
 #include <thread>
 #include <vector>
@@ -21,14 +23,9 @@ namespace {
 
 class ThumbnailDiskCacheServiceTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory test_dir_;
   void SetUp() override {
-    temp_dir_ = std::filesystem::temp_directory_path() / "alcedo_test_cache";
-    std::filesystem::create_directories(temp_dir_);
-  }
-
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove_all(temp_dir_, ec);
+    temp_dir_ = test_dir_.Path();
   }
 
   static cv::Mat CreateTestImage(int width, int height, uint8_t r, uint8_t g, uint8_t b) {
@@ -803,9 +800,9 @@ TEST_F(ThumbnailDiskCacheServiceTest, ClearProjectRemovesOnlyProjectEntries) {
     ImageBuffer buf(mat);
     service.EnqueueWrite(key_b, std::move(buf));
   }
-  ASSERT_TRUE(WaitForEntryCount(service, 2, std::chrono::seconds(2)));
+  // The open project's index holds only its own entries.
+  ASSERT_TRUE(WaitForEntryCount(service, 1, std::chrono::seconds(2)));
 
-  // Now we have entries from both projects in the global metadata.
   // Clear project-b only.
   service.ClearProject("project-b");
   EXPECT_FALSE(service.Lookup(key_b));
@@ -818,53 +815,119 @@ TEST_F(ThumbnailDiskCacheServiceTest, ClearProjectRemovesOnlyProjectEntries) {
   service.Shutdown();
 }
 
-TEST_F(ThumbnailDiskCacheServiceTest, GlobalMetadataPersistence) {
+TEST_F(ThumbnailDiskCacheServiceTest, WritesNoSharedIndexFile) {
   ThumbnailDiskCacheService service(temp_dir_);
-  service.Initialize("global-meta-project");
+  service.Initialize("own-index-project");
 
-  auto key = MakeTestKey("global-meta-project", 1, ThumbnailResolution::k256, "hash");
+  auto key = MakeTestKey("own-index-project", 1, ThumbnailResolution::k256, "hash");
   {
     cv::Mat     mat = CreateTestImage(32, 32, 128, 128, 128);
     ImageBuffer buf(mat);
     service.EnqueueWrite(key, std::move(buf));
   }
   ASSERT_TRUE(WaitForEntryCount(service, 1, std::chrono::seconds(2)));
-
   service.Shutdown();
 
-  // Check global metadata file exists
-  auto global_meta = temp_dir_ / "cache_global.json";
-  EXPECT_TRUE(std::filesystem::exists(global_meta));
+  EXPECT_TRUE(std::filesystem::exists(temp_dir_ / "own-index-project" / "cache_metadata.json"));
+  EXPECT_FALSE(std::filesystem::exists(temp_dir_ / "cache_global.json"));
 
-  // Reinitialize and verify
-  service.Initialize("global-meta-project");
+  service.Initialize("own-index-project");
   EXPECT_TRUE(service.Lookup(key));
   service.Shutdown();
 }
 
-TEST_F(ThumbnailDiskCacheServiceTest, MetadataRebuildFromDirectoryScan) {
-  ThumbnailDiskCacheService service(temp_dir_);
-  service.Initialize("rebuild-project");
-
-  auto key = MakeTestKey("rebuild-project", 1, ThumbnailResolution::k256, "rebuild_hash");
+// Earlier versions kept every project's entries in cache_global.json. Opening a project reads only
+// that project's own index, so the old file has no effect.
+TEST_F(ThumbnailDiskCacheServiceTest, OpenIgnoresLegacySharedIndex) {
+  auto key = MakeTestKey("legacy-project", 1, ThumbnailResolution::k256, "hash");
   {
+    ThumbnailDiskCacheService service(temp_dir_);
+    service.Initialize("legacy-project");
     cv::Mat     mat = CreateTestImage(32, 32, 200, 100, 50);
     ImageBuffer buf(mat);
     service.EnqueueWrite(key, std::move(buf));
+    ASSERT_TRUE(WaitForEntryCount(service, 1, std::chrono::seconds(2)));
+    service.Shutdown();
   }
-  ASSERT_TRUE(WaitForEntryCount(service, 1, std::chrono::seconds(2)));
+
+  // A legacy index that lists one more entry of this project, backed by a real file.
+  const auto extra_file = temp_dir_ / "legacy-project" / "ff" / "ff" / "extra.jpg";
+  std::filesystem::create_directories(extra_file.parent_path());
+  {
+    std::ofstream file(extra_file, std::ios::binary);
+    file << "x";
+  }
+  {
+    std::ofstream file(temp_dir_ / "cache_global.json", std::ios::trunc);
+    file << R"({"cache_schema_version":1,"entries":[{"key_hash":"ffff","project_uuid":")"
+         << "legacy-project" << R"(","element_id":2,"file_path":")"
+         << extra_file.generic_string() << R"(","file_size_bytes":1}]})";
+  }
+
+  ThumbnailDiskCacheService reopened(temp_dir_);
+  reopened.Initialize("legacy-project");
+  EXPECT_EQ(reopened.GetStats().total_entries, 1u);
+  EXPECT_TRUE(reopened.Lookup(key));
+  reopened.Shutdown();
+}
+
+// Each project has its own entry budget: filling one project never evicts another's entries.
+TEST_F(ThumbnailDiskCacheServiceTest, ProjectBudgetsAreIndependent) {
+  constexpr size_t                   kMax = 3;
+  std::vector<ThumbnailDiskCacheKey> keys_a;
+  ThumbnailDiskCacheService          service(temp_dir_);
+
+  service.Initialize("budget-a");
+  service.SetMaxEntries(kMax);
+  for (int i = 0; i < static_cast<int>(kMax); ++i) {
+    keys_a.push_back(MakeTestKey("budget-a", static_cast<sl_element_id_t>(i),
+                                 ThumbnailResolution::k256, "a_" + std::to_string(i)));
+    cv::Mat     mat = CreateTestImage(16, 16, static_cast<uint8_t>(i * 40), 10, 10);
+    ImageBuffer buf(mat);
+    service.EnqueueWrite(keys_a.back(), std::move(buf));
+  }
+  ASSERT_TRUE(WaitForEntryCount(service, kMax, std::chrono::seconds(3)));
   service.Shutdown();
 
-  // Corrupt the global metadata file
+  service.Initialize("budget-b");
+  service.SetMaxEntries(kMax);
+  for (int i = 0; i < static_cast<int>(2 * kMax); ++i) {
+    auto        key = MakeTestKey("budget-b", static_cast<sl_element_id_t>(i),
+                                  ThumbnailResolution::k256, "b_" + std::to_string(i));
+    cv::Mat     mat = CreateTestImage(16, 16, 10, static_cast<uint8_t>(i * 40), 10);
+    ImageBuffer buf(mat);
+    service.EnqueueWrite(key, std::move(buf));
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  EXPECT_LE(service.GetStats().total_entries, kMax);
+  service.Shutdown();
+
+  service.Initialize("budget-a");
+  EXPECT_EQ(service.GetStats().total_entries, kMax);
+  for (const auto& key : keys_a) {
+    EXPECT_TRUE(service.Lookup(key));
+  }
+  service.Shutdown();
+}
+
+TEST_F(ThumbnailDiskCacheServiceTest, ClearAllRemovesOtherProjectsAndLegacyFiles) {
+  const auto other_file = temp_dir_ / "other-project" / "ab" / "cd" / "entry.jpg";
+  std::filesystem::create_directories(other_file.parent_path());
   {
-    auto global_meta = temp_dir_ / "cache_global.json";
-    std::ofstream file(global_meta, std::ios::trunc);
-    file << "corrupted{not valid json";
+    std::ofstream file(other_file, std::ios::binary);
+    file << "x";
+  }
+  {
+    std::ofstream file(temp_dir_ / "cache_global.json", std::ios::trunc);
+    file << R"({"entries":[]})";
   }
 
-  // Reinitialize — should fall back to directory scan via per-project metadata
-  service.Initialize("rebuild-project");
-  EXPECT_TRUE(service.Lookup(key));
+  ThumbnailDiskCacheService service(temp_dir_);
+  service.Initialize("clearing-project");
+  service.ClearAll();
+
+  EXPECT_FALSE(std::filesystem::exists(temp_dir_ / "other-project"));
+  EXPECT_FALSE(std::filesystem::exists(temp_dir_ / "cache_global.json"));
   service.Shutdown();
 }
 
@@ -991,12 +1054,14 @@ TEST_F(ThumbnailDiskCacheServiceTest, ClearAllSuppressesPendingWrites) {
   reopened.Shutdown();
 }
 
-TEST_F(ThumbnailDiskCacheServiceTest, CurrentProjectMetadataCorruptionFallsBackToGlobalMetadata) {
-  auto key = MakeTestKey("global-fallback-project", 1, ThumbnailResolution::k256, "hash");
+// Cache files are named by key hash only. Without a readable index none of them can be found
+// again, so the project's cache starts empty and its unreachable files are removed.
+TEST_F(ThumbnailDiskCacheServiceTest, UnreadableProjectIndexStartsEmptyAndRemovesItsFiles) {
+  auto key = MakeTestKey("corrupt-index-project", 1, ThumbnailResolution::k256, "hash");
 
   {
     ThumbnailDiskCacheService service(temp_dir_);
-    service.Initialize("global-fallback-project");
+    service.Initialize("corrupt-index-project");
     cv::Mat     mat = CreateTestImage(32, 32, 128, 64, 32);
     ImageBuffer buf(mat);
     service.EnqueueWrite(key, std::move(buf));
@@ -1005,17 +1070,67 @@ TEST_F(ThumbnailDiskCacheServiceTest, CurrentProjectMetadataCorruptionFallsBackT
   }
 
   {
-    std::ofstream file(temp_dir_ / "global-fallback-project" / "cache_metadata.json",
+    std::ofstream file(temp_dir_ / "corrupt-index-project" / "cache_metadata.json",
                        std::ios::trunc);
     file << "corrupted{not valid json";
   }
 
   ThumbnailDiskCacheService reopened(temp_dir_);
-  reopened.Initialize("global-fallback-project");
+  reopened.Initialize("corrupt-index-project");
+  EXPECT_EQ(reopened.GetStats().total_entries, 0u);
+  EXPECT_FALSE(reopened.Lookup(key));
+  size_t files_left = 0;
+  for (const auto& entry :
+       std::filesystem::recursive_directory_iterator(temp_dir_ / "corrupt-index-project")) {
+    files_left += entry.is_regular_file() ? 1 : 0;
+  }
+  EXPECT_EQ(files_left, 0u);
+
+  cv::Mat     mat = CreateTestImage(32, 32, 10, 20, 30);
+  ImageBuffer buf(mat);
+  reopened.EnqueueWrite(key, std::move(buf));
+  ASSERT_TRUE(WaitForEntryCount(reopened, 1, std::chrono::seconds(2)));
+  reopened.Shutdown();
+}
+
+// A non-ASCII cache root, such as %LOCALAPPDATA% under a Chinese user name, used to crash the
+// app on systems whose ANSI code page is GBK: the index stored path::string() bytes, which
+// nlohmann::json refuses to dump, and the exception escaped the writer thread. The index must
+// hold UTF-8 whatever the code page is. U+011F has no GBK mapping at all.
+TEST_F(ThumbnailDiskCacheServiceTest, NonAsciiCacheRootKeepsUtf8IndexAcrossRestarts) {
+  const std::u8string   root_name = u8"缩略图_ğ";
+  const auto            root      = temp_dir_ / std::filesystem::path(root_name);
+  const std::string     root_name_utf8(root_name.begin(), root_name.end());
+  auto key = MakeTestKey("non-ascii-project", 1, ThumbnailResolution::k256, "hash");
+
+  {
+    ThumbnailDiskCacheService service(root);
+    service.Initialize("non-ascii-project");
+    cv::Mat     mat = CreateTestImage(32, 32, 1, 2, 3);
+    ImageBuffer buf(mat);
+    service.EnqueueWrite(key, std::move(buf));
+    ASSERT_TRUE(WaitForEntryCount(service, 1, std::chrono::seconds(2)));
+    const auto cache_root_path = service.GetStats().cache_root_path;
+    EXPECT_NE(cache_root_path.find(root_name_utf8), std::string::npos);
+    service.Shutdown();
+  }
+
+  const auto metadata_path = root / "non-ascii-project" / "cache_metadata.json";
+  ASSERT_TRUE(std::filesystem::exists(metadata_path));
+  std::string metadata;
+  {
+    std::ifstream file(metadata_path, std::ios::binary);
+    metadata.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+  }
+  EXPECT_NE(metadata.find(root_name_utf8), std::string::npos);
+
+  ThumbnailDiskCacheService reopened(root);
+  reopened.Initialize("non-ascii-project");
+  EXPECT_EQ(reopened.GetStats().total_entries, 1u);
   EXPECT_TRUE(reopened.Lookup(key));
   auto read = reopened.Read(key);
   ASSERT_NE(read, nullptr);
-  EXPECT_TRUE(read->cpu_data_valid_);
+  EXPECT_EQ(read->GetCPUData().rows, 32);
   reopened.Shutdown();
 }
 

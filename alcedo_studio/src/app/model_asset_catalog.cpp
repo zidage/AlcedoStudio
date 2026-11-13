@@ -4,11 +4,14 @@
 
 #include "app/model_asset_catalog.hpp"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSettings>
 #include <algorithm>
 #include <system_error>
 
@@ -39,6 +42,17 @@ constexpr const char* kSiglip2CoreMlRepo     = "zidage/siglip2-base-coreml-macos
 constexpr const char* kSiglip2CoreMlRevision = "5419f7d827b15c5d7e6e0fe947c25620e1c24a7e";
 constexpr const char* kSiglip2CoreMlProfile  = "siglip2-base-256-coreml-macos";
 
+// Licenses (Hugging Face model cards, 2026-10-27); the Rust catalog holds the same values. The
+// SigLIP2 repositories that Alcedo uses have no license tag; the upstream Google SigLIP2 weights
+// are Apache-2.0.
+constexpr const char* kAppleAmlrLicenseName  = "apple-amlr";
+constexpr const char* kAppleAmlrLicenseUrl =
+    "https://huggingface.co/apple/MobileCLIP2-S2/blob/main/LICENSE";
+constexpr const char* kJinaClipLicenseName = "cc-by-nc-4.0";
+constexpr const char* kJinaClipLicenseUrl  = "https://creativecommons.org/licenses/by-nc/4.0/";
+constexpr const char* kSiglip2LicenseName  = "Apache-2.0";
+constexpr const char* kSiglip2LicenseUrl   = "https://www.apache.org/licenses/LICENSE-2.0";
+
 auto                  BuildProfiles() -> std::vector<ModelProfileSpec> {
   std::vector<ModelProfileSpec> profiles;
 
@@ -54,6 +68,8 @@ auto                  BuildProfiles() -> std::vector<ModelProfileSpec> {
   mobileclip.native_embedding_dimension = kSemanticRequiredEmbeddingDimension;
   mobileclip.image_size                 = 256;
   mobileclip.embedding_transform        = "l2_normalize";
+  mobileclip.license_name               = kAppleAmlrLicenseName;
+  mobileclip.license_url                = kAppleAmlrLicenseUrl;
   mobileclip.assets                     = {
       {ModelAssetRole::kTextModel, kMobileClipRepo, kMobileClipRevision, "onnx/s2/text_model.onnx",
                                             "onnx/s2/text_model.onnx", 254'053'669,
@@ -84,6 +100,8 @@ auto                  BuildProfiles() -> std::vector<ModelProfileSpec> {
   jina.native_embedding_dimension = 1024;
   jina.image_size                 = 512;
   jina.embedding_transform        = "matryoshka_truncate_then_l2_normalize";
+  jina.license_name               = kJinaClipLicenseName;
+  jina.license_url                = kJinaClipLicenseUrl;
   jina.assets                     = {
       {ModelAssetRole::kMultimodalModel, kJinaClipRepo, kJinaClipRevision, kJinaClipOnnxRemotePath,
                                             kJinaClipOnnxLocalPath, kJinaClipOnnxSize, kJinaClipOnnxSha256},
@@ -113,6 +131,8 @@ auto                  BuildProfiles() -> std::vector<ModelProfileSpec> {
   siglip.native_embedding_dimension = kSemanticSiglip2EmbeddingDimension;
   siglip.image_size                 = 256;
   siglip.embedding_transform        = "l2_normalize";
+  siglip.license_name               = kSiglip2LicenseName;
+  siglip.license_url                = kSiglip2LicenseUrl;
   siglip.assets                     = {
       {ModelAssetRole::kTextModel, kSiglip2Repo, kSiglip2Revision, "textual/model.onnx",
                                             "textual/model.onnx", 1'129'435'819,
@@ -146,6 +166,8 @@ auto                  BuildProfiles() -> std::vector<ModelProfileSpec> {
   siglip_coreml.native_embedding_dimension = kSemanticSiglip2EmbeddingDimension;
   siglip_coreml.image_size                 = 256;
   siglip_coreml.embedding_transform        = "l2_normalize";
+  siglip_coreml.license_name               = kSiglip2LicenseName;
+  siglip_coreml.license_url                = kSiglip2LicenseUrl;
   siglip_coreml.assets                     = {
       {ModelAssetRole::kCoreMlVisionModel, kSiglip2CoreMlRepo, kSiglip2CoreMlRevision,
                                             "ImageEncoder.mlmodelc.zip",
@@ -246,10 +268,15 @@ auto IsModelProfileSupportedOnCurrentPlatform(const ModelProfileSpec& profile) -
   return false;
 }
 
+auto AllSemanticModelProfiles() -> const std::vector<ModelProfileSpec>& {
+  static const std::vector<ModelProfileSpec> kProfiles = BuildProfiles();
+  return kProfiles;
+}
+
 auto SemanticModelProfiles() -> const std::vector<ModelProfileSpec>& {
   static const std::vector<ModelProfileSpec> kProfiles = [] {
     std::vector<ModelProfileSpec> profiles;
-    for (const auto& profile : BuildProfiles()) {
+    for (const auto& profile : AllSemanticModelProfiles()) {
       if (IsModelProfileSupportedOnCurrentPlatform(profile)) {
         profiles.push_back(profile);
       }
@@ -274,6 +301,54 @@ auto ProfileTotalBytes(const ModelProfileSpec& profile) -> uint64_t {
     total += asset.size_bytes;
   }
   return total;
+}
+
+auto DefaultSemanticModelDirectory() -> QString {
+  return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("model"));
+}
+
+auto ConfiguredSemanticModelDirectory() -> QString {
+  const QString stored =
+      QSettings{}.value(QLatin1String(kSemanticModelDirectoryKey), QString{}).toString().trimmed();
+  return stored.isEmpty() ? DefaultSemanticModelDirectory() : stored;
+}
+
+auto NormalizedModelEndpointPreset(QString preset) -> QString {
+  preset = preset.trimmed().toLower();
+  if (preset == QLatin1String("huggingface") || preset == QLatin1String("sufy") ||
+      preset == QLatin1String("custom")) {
+    return preset;
+  }
+  return QStringLiteral("mirror");
+}
+
+auto ModelEndpointForPreset(const QString& preset, const QString& custom_endpoint) -> QString {
+  const QString normalized = NormalizedModelEndpointPreset(preset);
+  if (normalized == QLatin1String("huggingface")) {
+    return QStringLiteral("https://huggingface.co");
+  }
+  if (normalized == QLatin1String("sufy")) {
+    return QStringLiteral("https://hf-cdn.sufy.com");
+  }
+  if (normalized == QLatin1String("custom") && !custom_endpoint.trimmed().isEmpty()) {
+    return custom_endpoint.trimmed();
+  }
+  return QStringLiteral("https://hf-mirror.com");
+}
+
+auto ConfiguredModelEndpointPreset() -> QString {
+  return NormalizedModelEndpointPreset(
+      QSettings{}
+          .value(QLatin1String(kSemanticModelEndpointPresetKey), QStringLiteral("mirror"))
+          .toString());
+}
+
+auto ConfiguredCustomModelEndpoint() -> QString {
+  return QSettings{}.value(QLatin1String(kSemanticCustomModelEndpointKey), QString{}).toString();
+}
+
+auto EffectiveSemanticModelEndpoint() -> QString {
+  return ModelEndpointForPreset(ConfiguredModelEndpointPreset(), ConfiguredCustomModelEndpoint());
 }
 
 auto StagingRoot(const std::filesystem::path& root) -> std::filesystem::path {

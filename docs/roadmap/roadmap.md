@@ -35,8 +35,33 @@
 
 ## Still Planned
 
+- [ ] Add the film print DRT method: spectral film and print tables on the host, then CUDA, Metal, and
+      OpenCL passes; see the [Film Print DRT Plan](alcedo_studio/edit/film_print_drt_plan.md).
+- [ ] Fix the review findings of the executor ownership refactor, starting with history moves
+      during an open input sequence; see the
+      [Executor Ownership Refactor Review Findings](alcedo_studio/edit/executor_ownership_review_findings.md).
 - [ ] Add JSON serialization for pipeline configurations.
+- [ ] Complete the Simplified Chinese UI translations added from PR #93 through PR #176; see the
+      [PR 93-176 Simplified Chinese UI Translation Plan](alcedo_studio/ui/pr_93_176_simplified_chinese_ui_translation_plan.md).
+- [ ] Add configurable, focus-scoped keyboard bindings for basic Library and Editor actions; see the
+      [Configurable Keyboard Shortcut Registry Plan](alcedo_studio/ui/configurable_keyboard_shortcut_registry_plan.md).
+- [ ] Replace the editor image-processing path with the
+      [GPU DAG pipeline](alcedo_studio/edit/gpu_dag_pipeline_rebuild_phase_plan.md), delivered as
+      a Stacked PR series across CUDA, OpenCL, and Metal.
+- [ ] Add user-facing node-aware pipeline editing with Radial and Linear Gradient Mask authoring,
+      a Brush-disabled project-format/build cut in NM7, and whole-DAG performance qualification in
+      NM8; see the
+      [Node-aware Pipeline Editing and Mask Authoring master plan](alcedo_studio/edit/node_mask_editor_master_plan.md).
+- [ ] Reintroduce Brush in the following release through binary stroke objects, Mini-Git references,
+      verified tiled R8 materialization, and batched native raster execution; see the
+      [Brush Mask Architecture, History, and Raster Materialization master plan](alcedo_studio/edit/brush_mask_architecture_master_plan.md).
+- [ ] Add a scene-linear Black Pro-Mist diffusion filter simulation to the Develop pipeline on
+      CUDA, OpenCL, and Metal; see the
+      [Black Pro-Mist Diffusion Filter Simulation Plan](alcedo_studio/edit/black_pro_mist_diffusion_plan.md).
 - [ ] Extend HDR workflow and output.
+- [ ] Complete AI Mask GPU coverage and one shared viewport composite in SM8, then the SM9 tool,
+      then the SM7 misalignment notice; see the
+      [AI Segmentation Mask master plan](alcedo_studio/edit/ai_segmentation_mask_master_plan.md).
 - [ ] Continue semantic search and AI-assisted tagging work; see the
       [semantic generation plan](alcedo_studio/ai/semantic_generation_search_plan.md) and
       [AI sidecar backend plan](alcedo_studio/ai/ai_sidecar_backend_plan.md).

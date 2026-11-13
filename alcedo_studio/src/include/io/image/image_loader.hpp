@@ -14,6 +14,11 @@
 #include "image/image.hpp"
 #include "type/type.hpp"
 #include "utils/queue/queue.hpp"
+
+#ifdef LoadImage
+#undef LoadImage
+#endif
+
 namespace alcedo {
 
 class ImageLoader {

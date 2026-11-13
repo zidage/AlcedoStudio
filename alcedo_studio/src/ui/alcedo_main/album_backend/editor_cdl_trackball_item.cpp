@@ -270,6 +270,8 @@ void EditorCdlTrackballItem::bindModel(EditorCdlTrackballModel* model) {
           &EditorCdlTrackballItem::onModelWheelChanged);
   connect(model_, &EditorCdlTrackballModel::gainChanged, this,
           &EditorCdlTrackballItem::onModelWheelChanged);
+  connect(model_, &EditorCdlTrackballModel::offsetChanged, this,
+          &EditorCdlTrackballItem::onModelWheelChanged);
   connect(model_, &EditorCdlTrackballModel::enabledChanged, this,
           [this]() { setEnabled(model_ ? model_->enabled() : true); });
   setEnabled(model_->enabled());
@@ -281,13 +283,7 @@ auto EditorCdlTrackballItem::currentDiscPosition() const -> QPointF {
   if (!model_) {
     return QPointF(0.0, 0.0);
   }
-  if (wheel_role_.compare(QStringLiteral("gamma"), Qt::CaseInsensitive) == 0) {
-    return QPointF(model_->gammaX(), model_->gammaY());
-  }
-  if (wheel_role_.compare(QStringLiteral("gain"), Qt::CaseInsensitive) == 0) {
-    return QPointF(model_->gainX(), model_->gainY());
-  }
-  return QPointF(model_->liftX(), model_->liftY());
+  return model_->discPosition(wheel_role_);
 }
 
 void EditorCdlTrackballItem::rebuildGeometry() {
@@ -369,7 +365,7 @@ void EditorCdlTrackballItem::mousePressEvent(QMouseEvent* event) {
   }
   dragging_  = true;
   discMoved_ = false;
-  // Click-to-position: sample on press. updateDiscDrag only marks the gesture
+  // Click-to-position: sample on press. updateDiscDrag only marks the drag
   // moved (and submits) when the disc value actually changes — so a double-click
   // on an unchanged point does not settle before resetWheel.
   model_->beginDiscDrag(wheel_role_);

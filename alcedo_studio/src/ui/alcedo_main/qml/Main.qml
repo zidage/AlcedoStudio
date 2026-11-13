@@ -25,9 +25,24 @@ ApplicationWindow {
     property bool collectionsSidebarExpanded: true
     property bool collectionsSidebarUserAdjusted: false
     property bool collectionsWorkspaceObservationReady: false
-    property real collectionsSidebarGap: collectionsSidebarExpanded
-                                                 ? appTheme.spaceMd : 0
+    // How far the collections sidebar is open: 0 folded, 1 open. One animation drives the slide
+    // and the fade of the sidebar and the left edge of the workspace (issue 751). Only
+    // setCollectionsSidebarExpanded writes it; it starts open, as collectionsSidebarExpanded.
+    property real collectionsSidebarReveal: 1.0
+    // The width of the open sidebar and its gap to the workspace.
+    readonly property real collectionsSidebarOpenExtent: appTheme.collectionsSidebarWidth
+                                                         + appTheme.spaceMd
+    // The left edge of the workspace: the shown part of the sidebar and its gap.
+    readonly property real collectionsSidebarExtent: collectionsSidebarReveal
+                                                     * collectionsSidebarOpenExtent
+    // True while a manual toggle folds or opens the sidebar. The shown workspace follows the
+    // sidebar edge on every frame and defers the work that only its final size needs. It turns
+    // false after the shown workspace has its final size (collectionsSidebarFoldAnimation).
+    property bool collectionsSidebarFolding: false
     property bool editorAdjustmentStackExpanded: true
+    // Luminance/Hue Range section of the Mask panel (#605): collapsed at the start of the session;
+    // the user's choice survives the editor Loader.
+    property bool editorMaskRangeSectionExpanded: false
     readonly property string activeWorkspace: appModules.workspaceRouter
                                               ? String(appModules.workspaceRouter.workspace
                                                        || "library")
@@ -111,6 +126,7 @@ ApplicationWindow {
     readonly property color colScopeHistogramRed: appTheme.scopeHistogramRedColor
     readonly property color colScopeHistogramGreen: appTheme.scopeHistogramGreenColor
     readonly property color colScopeHistogramBlue: appTheme.scopeHistogramBlueColor
+    readonly property color colScopeMarker: appTheme.scopeMarkerColor
     readonly property string dataFontFamily: appTheme.dataFontFamily
     readonly property string uiFontFamily: appTheme.uiFontFamily
     readonly property string headlineFontFamily: appTheme.headlineFontFamily
@@ -135,14 +151,43 @@ ApplicationWindow {
 
     function toggleCollectionsSidebar() {
         root.collectionsSidebarUserAdjusted = true
-        root.collectionsSidebarExpanded = !root.collectionsSidebarExpanded
+        root.setCollectionsSidebarExpanded(!root.collectionsSidebarExpanded, true)
     }
 
-    function applyDefaultCollectionsSidebarForWorkspace() {
-        if (root.collectionsSidebarUserAdjusted) {
+    // Opens or folds the collections sidebar. @p animated slides it over the fold duration;
+    // otherwise the sidebar and the workspace edge take the new state at once, and a running
+    // fold stops at its end.
+    function setCollectionsSidebarExpanded(expanded, animated) {
+        root.collectionsSidebarExpanded = expanded
+        const target = expanded ? 1.0 : 0.0
+        if (!animated || appTheme.reduceMotion) {
+            collectionsSidebarFoldAnimation.stop()
+            root.collectionsSidebarReveal = target
             return
         }
-        root.collectionsSidebarExpanded = root.activeWorkspace === "library"
+        if (collectionsSidebarFoldAnimation.running
+                && collectionsSidebarFoldAnimation.to === target) {
+            return
+        }
+        collectionsSidebarFoldAnimation.stop()
+        if (root.collectionsSidebarReveal === target) {
+            return
+        }
+        collectionsSidebarFoldAnimation.from = root.collectionsSidebarReveal
+        collectionsSidebarFoldAnimation.to = target
+        collectionsSidebarFoldAnimation.duration = expanded ? appTheme.motionFoldOpenMs
+                                                            : appTheme.motionFoldCloseMs
+        collectionsSidebarFoldAnimation.start()
+    }
+
+    // A workspace switch replaces the whole content: the sidebar state of the new workspace
+    // applies at once, and the workspace fades in at its final size (WorkspaceHost). The user's
+    // own choice stays, and a fold in progress ends at once.
+    function applyDefaultCollectionsSidebarForWorkspace(workspace) {
+        const expanded = root.collectionsSidebarUserAdjusted
+                ? root.collectionsSidebarExpanded
+                : workspace === "library"
+        root.setCollectionsSidebarExpanded(expanded, false)
     }
 
     function toggleActiveRightSidebar() {
@@ -153,20 +198,22 @@ ApplicationWindow {
         root.libraryInspectorVisible = !root.libraryInspectorVisible
     }
 
-    onActiveWorkspaceChanged: {
-        if (!root.collectionsWorkspaceObservationReady) {
-            return
-        }
-        root.applyDefaultCollectionsSidebarForWorkspace()
-    }
+    NumberAnimation {
+        id: collectionsSidebarFoldAnimation
+        target: root
+        property: "collectionsSidebarReveal"
+        easing.type: appTheme.motionEasing
 
-    Behavior on collectionsSidebarGap {
-        NumberAnimation {
-            duration: appTheme.reduceMotion ? 0
-                      : (root.collectionsSidebarExpanded
-                         ? appTheme.motionFoldOpenMs
-                         : appTheme.motionFoldCloseMs)
-            easing.type: appTheme.motionEasing
+        // The last reveal value can reach the nested layouts of the shown workspace in their
+        // next polish, after the animation stops (issue 754). The host applies those layouts
+        // first, so the workspace has its final size when the flag drops.
+        onRunningChanged: {
+            if (running) {
+                root.collectionsSidebarFolding = true
+                return
+            }
+            workspaceHost.settleShownWorkspaceLayouts()
+            root.collectionsSidebarFolding = false
         }
     }
 
@@ -183,17 +230,40 @@ ApplicationWindow {
         return colButtonPrimary
     }
 
+    // Button hover and press change only the fill colour; the button keeps its size.
+    // Dark secondary action (Add to Export Queue, Import Images): hover lifts the fill,
+    // press sinks it below the idle fill.
     function secondaryButtonFill(enabled, hovered, pressed) {
         if (!enabled) {
             return withAlpha(colButtonSecondary, 0.55)
         }
         if (pressed) {
-            return Qt.darker(colButtonSecondary, 1.14)
+            return Qt.darker(colButtonSecondary, 1.2)
         }
         if (hovered) {
-            return Qt.lighter(colButtonSecondary, 1.08)
+            return Qt.lighter(colButtonSecondary, 1.34)
         }
         return colButtonSecondary
+    }
+
+    // Neutral filled action (Load Project, Export, Import From Folder): the light list well
+    // with its ink. Hover darkens the well, press darkens it more. A disabled action drops to
+    // the sunken base fill with muted ink.
+    function filledActionFill(enabled, hovered, pressed) {
+        if (!enabled) {
+            return appTheme.bgBaseColor
+        }
+        if (pressed) {
+            return Qt.darker(appTheme.editorListSelectedFillColor, 1.24)
+        }
+        if (hovered) {
+            return Qt.darker(appTheme.editorListSelectedFillColor, 1.14)
+        }
+        return appTheme.editorListSelectedFillColor
+    }
+
+    function filledActionInk(enabled) {
+        return enabled ? appTheme.editorListSelectedInkColor : appTheme.textMutedColor
     }
 
     Material.theme: Material.Dark
@@ -209,12 +279,10 @@ ApplicationWindow {
     readonly property bool backendInteractive: appModules.project.serviceReady
                                                && !appModules.project.projectLoading
                                                && !appModules.project.acceleratorPreparing
-    readonly property var selectedImagesById: selectionState.selectedImagesById
-    readonly property var exportQueueById: exportQueueState.exportQueueById
-    readonly property var exportPreviewRows: exportQueueState.exportPreviewRows
+    readonly property var exportQueueById: appModules.exportQueue.entriesById
     readonly property var semanticGeneration: appModules.semanticGeneration
     readonly property int selectedCount: selectionState.selectedCount
-    readonly property int exportQueueCount: exportQueueState.exportQueueCount
+    readonly property int exportQueueCount: appModules.exportQueue.count
     readonly property var languageOptions: languageManager.availableLanguages
     property alias pendingDeleteTargets: imageActionsController.pendingDeleteTargets
     property alias pendingRatingTarget: imageActionsController.pendingRatingTarget
@@ -228,8 +296,6 @@ ApplicationWindow {
         objectName: "imageActionsController"
         host: root
     }
-    property alias projectLaunchPending: projectLaunchController.projectLaunchPending
-    property alias welcomeDismissedForLaunch: projectLaunchController.welcomeDismissedForLaunch
     readonly property alias projectLoadingOverlayVisible: projectLaunchController.projectLoadingOverlayVisible
     readonly property alias projectLaunchBusy: projectLaunchController.projectLaunchBusy
 
@@ -247,15 +313,25 @@ ApplicationWindow {
     property alias contentY: root.globalContentY
     property alias contentX: root.globalContentX
 
-    // Application close gate: when the editor has an open image, caption/X and
+    // Application close check: when the editor has an open image, caption/X and
     // OS close are intercepted so the user can Save (Finalize true) or Discard
     // (Finalize false) before the process exits. Async save must finish first —
-    // quitting during Saving aborts the checkpoint.
+    // quitting during Saving aborts the checkpoint. The close decision and the
+    // editor finalize sequence live in C++ (appModules.applicationClose,
+    // ApplicationCloseCoordinator); this window keeps the dialog and the update
+    // install hand-off.
     property bool allowApplicationClose: false
-    property bool waitingEditorCloseSave: false
     property bool updateInstallPending: false
-    property string editorCloseSessionState: appModules.editorSession
-                                             ? appModules.editorSession.sessionState : ""
+
+    // A scroll anchor names occurrences of one project's result.
+    Connections {
+        target: appModules.project
+        ignoreUnknownSignals: true
+
+        function onProjectChanged() {
+            root.librarySectionScrollAnchor = null
+        }
+    }
 
     Connections {
         target: appModules.updates
@@ -266,23 +342,27 @@ ApplicationWindow {
         }
     }
 
+    Connections {
+        target: appModules.applicationClose
+
+        function onApplicationCloseFinished() {
+            root.finishApplicationClose()
+        }
+
+        function onApplicationCloseAborted(message) {
+            root.abortEditorCloseSave(message)
+        }
+    }
+
     function editorCloseNeedsConfirm() {
         if (root.automationModeEnabled || root.allowApplicationClose) {
             return false
         }
-        if (root.waitingEditorCloseSave) {
-            return true
-        }
-        const router = appModules.workspaceRouter
-        if (!router || String(router.workspace || "") !== "editor") {
-            return false
-        }
-        const session = appModules.editorSession
-        return !!(session && session.hasImage === true)
+        return appModules.applicationClose.CloseNeedsConfirmation()
     }
 
     function cancelEditorCloseConfirm() {
-        root.waitingEditorCloseSave = false
+        appModules.applicationClose.Cancel()
         if (root.updateInstallPending) {
             root.updateInstallPending = false
             appModules.updates.CancelInstall()
@@ -293,7 +373,6 @@ ApplicationWindow {
     }
 
     function finishApplicationClose() {
-        root.waitingEditorCloseSave = false
         if (root.updateInstallPending) {
             root.updateInstallPending = false
             if (!appModules.updates.CommitInstall()) {
@@ -310,7 +389,6 @@ ApplicationWindow {
     }
 
     function abortEditorCloseSave(messageText) {
-        root.waitingEditorCloseSave = false
         if (root.updateInstallPending) {
             root.updateInstallPending = false
             appModules.updates.CancelInstall()
@@ -328,68 +406,17 @@ ApplicationWindow {
     }
 
     function beginEditorCloseDiscard() {
-        const session = appModules.editorSession
-        if (session) {
-            if (session.hasPendingRecovery === true
-                    && session.actions
-                    && session.actions.canDiscardAndContinue === true) {
-                session.DiscardAndContinue()
-            } else {
-                session.Finalize(false)
-            }
-        }
-        root.finishApplicationClose()
-    }
-
-    function beginEditorCloseSave() {
-        // Application exit explicitly seals the editor session. Ordinary
-        // workspace routing keeps it alive for immediate re-entry.
-        root.waitingEditorCloseSave = true
         if (appDialogs.editorCloseConfirmDialog) {
             appDialogs.editorCloseConfirmDialog.busy = true
         }
-        if (appModules.editorSession) {
-            appModules.editorSession.Finalize(true)
-        }
-        if (appModules.workspaceRouter) {
-            appModules.workspaceRouter.openLibrary()
-        }
-        Qt.callLater(root.pollEditorCloseSave)
+        appModules.applicationClose.BeginDiscard()
     }
 
-    function pollEditorCloseSave() {
-        if (!root.waitingEditorCloseSave) {
-            return
+    function beginEditorCloseSave() {
+        if (appDialogs.editorCloseConfirmDialog) {
+            appDialogs.editorCloseConfirmDialog.busy = true
         }
-        const session = appModules.editorSession
-        if (!session) {
-            root.finishApplicationClose()
-            return
-        }
-        const state = String(session.sessionState || "")
-        // Same in-flight seal gate as EditorFilmstrip.
-        if (state === "Saving" || state === "Switching") {
-            return
-        }
-        if (session.hasPendingRecovery === true
-                || state === "RetainedImageFailure"
-                || state === "Failed") {
-            root.abortEditorCloseSave(session.lastError)
-            return
-        }
-        // Close completed (or sync no-op). Do not quit while still Interactive
-        // after a rejected seal — that would drop unsaved work.
-        if (state === "NoImage" || state === "ShuttingDown") {
-            root.finishApplicationClose()
-            return
-        }
-        root.abortEditorCloseSave(session.lastError)
-    }
-
-    onEditorCloseSessionStateChanged: {
-        if (root.waitingEditorCloseSave) {
-            root.pollEditorCloseSave()
-        }
+        appModules.applicationClose.BeginSave()
     }
 
     onClosing: function(close) {
@@ -404,11 +431,17 @@ ApplicationWindow {
             return
         }
         close.accepted = false
-        if (root.waitingEditorCloseSave) {
+        if (appModules.applicationClose.waiting) {
             return
         }
         if (appDialogs.editorCloseConfirmDialog
                 && appDialogs.editorCloseConfirmDialog.opened) {
+            return
+        }
+        const router = appModules.workspaceRouter
+        const inEditor = !!(router && String(router.workspace || "") === "editor")
+        if (!inEditor && appModules.applicationClose.EditorPersistBusy()) {
+            appModules.applicationClose.BeginPersistWait()
             return
         }
         appDialogs.openEditorCloseConfirmDialog()
@@ -420,6 +453,9 @@ ApplicationWindow {
     property real libraryInspectorWidth: 300
     property int libraryGridZoomLevel: 4
     property alias libraryGridContentY: root.globalContentY
+    // Scroll anchor of the grouped library view (AlbumSectionView.scrollAnchor), written when
+    // that view is torn down (editor round trip, flat mode) and read once by the next one.
+    property var librarySectionScrollAnchor: null
     property alias editorFilmstripContentX: root.globalContentX
 
     // Cross-workspace reveal requests are consumed by the next live view. The
@@ -435,13 +471,19 @@ ApplicationWindow {
     Component.onCompleted: {
         appDialogs.blurSource = mainContent
         imageActionsController.selectionState = selectionStateObj
-        imageActionsController.exportQueueState = exportQueueStateObj
         imageActionsController.imageContextMenu = appDialogs.imageContextMenu
         imageActionsController.adjustmentTransferDialog = appDialogs.adjustmentTransferDialog
         imageActionsController.deleteConfirmDialog = appDialogs.deleteConfirmDialog
         projectLaunchController.welcomeDialog = appDialogs.welcomeDialog
         projectLaunchController.start()
         root.collectionsWorkspaceObservationReady = true
+        Qt.callLater(savedAiKeysReminder.showIfSavedKeys)
+    }
+
+    SavedAiKeysReminder {
+        id: savedAiKeysReminder
+        host: root
+        profileController: appModules.aiProviderProfiles
     }
 
 
@@ -461,22 +503,64 @@ ApplicationWindow {
         appDialogs.openSettingsDialog(category)
     }
 
-    function openAdvancedAnalysisDialog() {
-        appDialogs.openAdvancedAnalysisDialog()
-    }
-
     function openBackgroundTasksDialog() {
         appDialogs.openBackgroundTasksDialog()
     }
 
+    // ── Library file drop (issue #757) ──────────────────────────────────────
+    // A drop of files and folders from the system file manager imports into one collection
+    // with the rules of the Import buttons. The grid drops into the current collection, a
+    // Collections row into its own collection.
+
+    // True when the Library may take a file drop now: a project is open, no import runs, no
+    // dialog is open, and no agent holds control.
+    readonly property bool fileDropImportAllowed: root.backendInteractive
+        && !appModules.importExport.importRunning
+        && appModules.interactionPolicy.canChangeStateAsUser
+        && !appDialogs.anyDialogOpened()
+
+    // Collection name for the drop overlay and the folder dialog title.
+    function collectionDisplayName(folderId) {
+        if (Number(folderId) === 0) {
+            return qsTr("All Photos")
+        }
+        const rows = appModules.folders ? appModules.folders.folders : []
+        for (let i = 0; i < rows.length; ++i) {
+            if (Number(rows[i].folderId) === Number(folderId)) {
+                return String(rows[i].name)
+            }
+        }
+        return ""
+    }
+
+    function importDroppedUrls(urls, folderId) {
+        appDialogs.importDroppedUrls(urls, Number(folderId), root.collectionDisplayName(folderId))
+    }
+
+    function openLutImportDialog() {
+        appDialogs.openLutImportDialog()
+    }
+
     function openUpdateSettings() {
-        appDialogs.openSettingsDialog(6)
+        appDialogs.openUpdateSettings()
     }
 
-
-    function beginProjectLaunch(loadAction) {
-        projectLaunchController.beginProjectLaunch(loadAction)
+    function openLutSettings() {
+        appDialogs.openLutSettings()
     }
+
+    function openAiModelSettings() {
+        appDialogs.openAiModelSettings()
+    }
+
+    function openColorLabelSettings() {
+        appDialogs.openColorLabelSettings()
+    }
+
+    function refreshFocusedImageInspection() {
+        imageActionsController.refreshFocusedImageInspection()
+    }
+
 
     function revealLibraryAfterProjectLoad() {
         const library = workspaceHost.libraryItem
@@ -485,12 +569,16 @@ ApplicationWindow {
         }
     }
 
-    function startPendingProjectLaunch() {
-        projectLaunchController.startPendingProjectLaunch()
-    }
-
     function updateWelcomeDialogVisibility() {
         projectLaunchController.updateWelcomeDialogVisibility()
+    }
+
+    function requestStartupPreview() {
+        projectLaunchController.requestStartupPreview()
+    }
+
+    function continueWelcomeProject() {
+        return projectLaunchController.continueWelcomeProject()
     }
 
     function setFocusedImage(item) {
@@ -550,6 +638,10 @@ ApplicationWindow {
         imageActionsController.requestSetFocusedImageRating(rating)
     }
 
+    function requestSetCardImageRating(item, rating) {
+        imageActionsController.requestSetCardImageRating(item, rating)
+    }
+
     function requestSaveFocusedDescription(caption) {
         imageActionsController.requestSaveFocusedDescription(caption)
     }
@@ -558,8 +650,8 @@ ApplicationWindow {
         imageActionsController.requestSaveFocusedRatingReason(reasons)
     }
 
-    function editorImageStillExists(elementId) {
-        return imageActionsController.editorImageStillExists(elementId)
+    function openLastEditorImage(elementId, imageId) {
+        imageActionsController.openLastEditorImage(elementId, imageId)
     }
 
     function firstLibraryImage() {
@@ -567,15 +659,14 @@ ApplicationWindow {
     }
 
     readonly property alias workspaceLayer: workspaceHost
-    readonly property alias exportQueueState: exportQueueStateObj
+    // Thumbnail tier of the Library grid; the welcome cover pins share it.
+    readonly property int libraryThumbnailMaxEdge: workspaceHost.libraryItem
+                                                   && workspaceHost.libraryItem.thumbnailMaxEdge !== undefined
+                                                   ? workspaceHost.libraryItem.thumbnailMaxEdge : 0
     readonly property alias selectionState: selectionStateObj
     readonly property var importDialog: appDialogs.importDialog
     readonly property var importFolderDialog: appDialogs.importFolderDialog
     readonly property var globalSearchDialog: appDialogs.globalSearchDialog
-
-    ExportQueueState {
-        id: exportQueueStateObj
-    }
 
     SelectionState {
         id: selectionStateObj
@@ -587,7 +678,6 @@ ApplicationWindow {
         automationMode: root.automationModeEnabled
         imageActionsController: imageActionsController
         selectionState: selectionStateObj
-        exportQueueState: exportQueueStateObj
     }
 
 
@@ -627,62 +717,58 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
-            CollectionsPanel {
-                id: collectionsSidebar
+            // The shown part of the sidebar and its gap. The panel keeps its full width and
+            // slides inside this clip, so its folder list and text never reflow during a fold.
+            Item {
+                id: collectionsSidebarSlot
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                width: root.collectionsSidebarExpanded ? appTheme.collectionsSidebarWidth : 0
-                opacity: root.collectionsSidebarExpanded ? 1.0 : 0.0
-                enabled: root.collectionsSidebarExpanded
-                folderController: appModules.folders
-                theme: root
-                host: root
-                backendInteractive: root.backendInteractive
-                selectedCount: root.selectedCount
-                onImportRequested: root.importDialog.open()
-                onImportFromFolderRequested: root.importFolderDialog.open()
-                onSearchRequested: root.globalSearchDialog.openFromCollection()
-                onAdvancedAnalysisRequested: root.openAdvancedAnalysisDialog()
-                onBackgroundTasksRequested: root.openBackgroundTasksDialog()
+                width: root.collectionsSidebarExtent
+                clip: true
+                visible: root.collectionsSidebarReveal > 0
 
-                Behavior on width {
-                    NumberAnimation {
-                        duration: appTheme.reduceMotion ? 0
-                                  : (root.collectionsSidebarExpanded
-                                     ? appTheme.motionFoldOpenMs
-                                     : appTheme.motionFoldCloseMs)
-                        easing.type: appTheme.motionEasing
+                CollectionsPanel {
+                    id: collectionsSidebar
+                    objectName: "collectionsSidebar"
+                    x: collectionsSidebarSlot.width - root.collectionsSidebarOpenExtent
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    opacity: root.collectionsSidebarReveal
+                    enabled: root.collectionsSidebarExpanded
+                    folderController: appModules.folders
+                    theme: root
+                    host: root
+                    backendInteractive: root.backendInteractive
+                    fileDropEnabled: root.fileDropImportAllowed
+                    onImportRequested: root.importDialog.open()
+                    onImportFromFolderRequested: root.importFolderDialog.open()
+                    onFilesDropped: function(urls, folderId) {
+                        root.importDroppedUrls(urls, folderId)
                     }
-                }
-                Behavior on opacity {
-                    NumberAnimation {
-                        duration: appTheme.reduceMotion ? 0 : appTheme.motionFadeMs
-                        easing.type: appTheme.motionEasing
-                    }
+                    onSearchRequested: root.globalSearchDialog.openFromCollection()
+                    onBackgroundTasksRequested: root.openBackgroundTasksDialog()
                 }
             }
 
-            ColumnLayout {
-                anchors.left: collectionsSidebar.right
+            // Anchored, not in a layout: the host width follows the sidebar edge in the same
+            // event, so a workspace switch sizes the shown workspace once (WorkspaceHost).
+            WorkspaceHost {
+                id: workspaceHost
+                objectName: "workspaceHost"
+                anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                anchors.leftMargin: root.collectionsSidebarGap
-                spacing: appTheme.spaceMd
-
-                WorkspaceHost {
-                    id: workspaceHost
-                    objectName: "workspaceHost"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    theme: root
-                    host: root
-                    workspaceRouter: appModules.workspaceRouter
-                }
-
-                BackgroundTaskBar {
-                    Layout.fillWidth: true
+                anchors.leftMargin: root.collectionsSidebarExtent
+                theme: root
+                host: root
+                workspaceRouter: appModules.workspaceRouter
+                geometryAnimating: root.collectionsSidebarFolding
+                onWorkspaceShowing: function(workspace) {
+                    if (root.collectionsWorkspaceObservationReady) {
+                        root.applyDefaultCollectionsSidebarForWorkspace(workspace)
+                    }
                 }
             }
         }
@@ -700,7 +786,6 @@ ApplicationWindow {
         host: root
         imageActionsController: imageActionsController
         selectionState: selectionStateObj
-        exportQueueState: exportQueueStateObj
         deleteConfirmDialog: appDialogs.deleteConfirmDialog
     }
 
@@ -716,10 +801,61 @@ ApplicationWindow {
         host: root
         active: root.visibility === Window.Windowed && !root.nativeTrafficLightsEnabled
     }
-    Shortcut {
-        sequence: StandardKey.SelectAll
-        enabled: root.backendInteractive && !appDialogs.anyDialogOpened()
+
+    // Workspace-scoped commands: the registry scope string tracks the router's
+    // active workspace, so Ctrl+A / Ctrl+S resolve to exactly one owner.
+    readonly property string activeShortcutScope: "workspace." + root.activeWorkspace
+
+    RegisteredShortcut {
+        objectName: "librarySelectAllShortcut"
+        commandId: "library.selectAll"
+        activeScope: root.activeShortcutScope
+        commandEnabled: root.backendInteractive && !appDialogs.anyDialogOpened()
         onActivated: root.selectAllCurrentAlbum()
+    }
+
+    RegisteredShortcut {
+        objectName: "librarySaveProjectShortcut"
+        commandId: "library.saveProject"
+        activeScope: root.activeShortcutScope
+        commandEnabled: root.backendInteractive && !appDialogs.anyDialogOpened()
+        suppressWhileEditing: false
+        onActivated: root.requestSaveProject()
+    }
+
+    RegisteredShortcut {
+        objectName: "editorUndoShortcut"
+        commandId: "editor.undo"
+        activeScope: root.activeShortcutScope
+        commandEnabled: !appDialogs.anyDialogOpened()
+                        && appModules.editorSession
+                        && appModules.editorSession.actions
+                        && appModules.editorSession.actions.canUndo === true
+        onActivated: appModules.editorSession.Undo()
+    }
+
+    RegisteredShortcut {
+        objectName: "editorRedoShortcut"
+        commandId: "editor.redo"
+        activeScope: root.activeShortcutScope
+        commandEnabled: !appDialogs.anyDialogOpened()
+                        && appModules.editorSession
+                        && appModules.editorSession.actions
+                        && appModules.editorSession.actions.canRedo === true
+        onActivated: appModules.editorSession.Redo()
+    }
+
+    RegisteredShortcut {
+        objectName: "editorSaveImageShortcut"
+        commandId: "editor.saveCurrentImage"
+        activeScope: root.activeShortcutScope
+        commandEnabled: !appDialogs.anyDialogOpened()
+                        && appModules.editorSession
+                        && appModules.editorSession.hasImage === true
+                        && appModules.editorSession.persistInFlight !== true
+                        && appModules.editorSession.closeInFlight !== true
+        suppressWhileEditing: false
+        onActivated: appModules.editorSession.PersistCurrentImage()
     }
 
     // ── Accelerator preparation overlay ───────────────────────────────

@@ -19,11 +19,11 @@
 #include <vector>
 
 #include "app/ai_sidecar_runtime_service.hpp"
-#include "app/thumbnail_service.hpp"
-#include "app/thumbnail_types.hpp"
+#include "app/semantic_input_image_service.hpp"
 #include "sidecar_client/dto/semantic_embedding.hpp"
+#include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "storage/store/semantic/semantic_label_config.hpp"
-#include "storage/store/semantic/semantic_store.hpp"
+#include "storage/store/semantic/semantic_label_store.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -35,7 +35,7 @@ struct SemanticGenerationItem {
 
 enum class SemanticGenerationItemStatus : uint8_t {
   kPending = 0,
-  kThumbnailReady,
+  kInputReady,
   kEmbeddingRequested,
   kEmbedded,
   kSkipped,
@@ -48,6 +48,8 @@ struct SemanticGenerationItemResult {
   std::string                  request_id;
   SemanticGenerationItemStatus status = SemanticGenerationItemStatus::kPending;
   std::string                  error;
+  /// The embedding of an embedded item when the job has no persistence; empty with persistence,
+  /// where the embedding store owns the vector.
   std::vector<float>           embedding;
   uint32_t                     embedding_dimension = 0;
   bool                         has_label           = false;
@@ -61,7 +63,10 @@ struct SemanticGenerationItemResult {
 
 struct SemanticGenerationProgress {
   size_t total               = 0;
-  size_t thumbnails_ready    = 0;
+  /// Model inputs that are ready, and how many of them came from each source.
+  size_t inputs_ready        = 0;
+  size_t preview_inputs      = 0;
+  size_t render_inputs       = 0;
   size_t embedding_requested = 0;
   size_t embedded            = 0;
   size_t skipped             = 0;
@@ -70,7 +75,10 @@ struct SemanticGenerationProgress {
 };
 
 struct SemanticGenerationPersistenceOptions {
-  SemanticStore* storage_controller = nullptr;
+  // Label prompts and prototypes of the model.
+  SemanticLabelStore*        label_store = nullptr;
+  // Image embeddings and the labels assigned with them.
+  SemanticEmbeddingStore*    embedding_store = nullptr;
   std::string                model_key;
   std::string                prompt_config_hash = kDefaultSemanticPhotographyPromptConfigHash;
   size_t                     label_prototype_batch_size  = 64;
@@ -80,10 +88,13 @@ struct SemanticGenerationPersistenceOptions {
 };
 
 struct SemanticGenerationOptions {
-  ThumbnailResolution                     thumbnail_resolution = ThumbnailResolution::k256;
-  size_t                                  thumbnail_batch_size = 32;
   size_t                                  embedding_batch_size = 64;
+  /// Embedding batches that wait for the sidecar at one time: while the sidecar embeds one batch,
+  /// the next one fills.
+  size_t                                              max_in_flight_embedding_batches = 2;
   std::chrono::milliseconds               embedding_timeout{30000};
+  /// Shortest time between two progress callbacks; the last progress of the job always arrives.
+  std::chrono::milliseconds                           progress_interval{250};
   std::optional<AiSidecarRuntimeModelInfo> expected_model_info;
   std::optional<SemanticGenerationPersistenceOptions> persistence;
   bool                                                force_regenerate = false;
@@ -94,6 +105,8 @@ struct SemanticImageEmbeddingInput {
   std::string            request_id;
   std::vector<uint8_t>   rgba8_image;
   std::string            format_hint;
+  /// Longer edge of the input image in pixels; stored with the embedding.
+  uint32_t               long_edge = 0;
 };
 
 struct SemanticImageEmbeddingBatchResult {
@@ -104,32 +117,8 @@ struct SemanticImageEmbeddingBatchResult {
 using SemanticGenerationProgressCallback = std::function<void(const SemanticGenerationProgress&)>;
 using SemanticGenerationFinishedCallback =
     std::function<void(std::vector<SemanticGenerationItemResult>)>;
-using SemanticThumbnailRequestCallback = std::function<void(ThumbnailRequestResult)>;
 using SemanticImageEmbeddingBatchCallback =
     std::function<void(std::vector<SemanticImageEmbeddingBatchResult>)>;
-
-class ISemanticThumbnailProvider {
- public:
-  virtual ~ISemanticThumbnailProvider()                                    = default;
-
-  virtual void RequestThumbnail(const SemanticGenerationItem& item, ThumbnailResolution resolution,
-                                SemanticThumbnailRequestCallback callback) = 0;
-  virtual void CancelThumbnail(const ThumbnailCacheKey& key)               = 0;
-  virtual void ReleaseThumbnail(const ThumbnailCacheKey& key)              = 0;
-};
-
-class ThumbnailServiceSemanticThumbnailProvider final : public ISemanticThumbnailProvider {
- public:
-  explicit ThumbnailServiceSemanticThumbnailProvider(std::shared_ptr<ThumbnailService> service);
-
-  void RequestThumbnail(const SemanticGenerationItem& item, ThumbnailResolution resolution,
-                        SemanticThumbnailRequestCallback callback) override;
-  void CancelThumbnail(const ThumbnailCacheKey& key) override;
-  void ReleaseThumbnail(const ThumbnailCacheKey& key) override;
-
- private:
-  std::shared_ptr<ThumbnailService> service_;
-};
 
 class ISemanticImageEmbeddingClient {
  public:
@@ -219,7 +208,7 @@ class SemanticGenerationJob final {
 
 class SemanticGenerationService final {
  public:
-  SemanticGenerationService(std::shared_ptr<ISemanticThumbnailProvider>    thumbnail_provider,
+  SemanticGenerationService(std::shared_ptr<ISemanticInputImageSource>     input_source,
                             std::shared_ptr<ISemanticImageEmbeddingClient> embedding_client);
 
   static auto EnsureLabelPrototypes(const SemanticGenerationPersistenceOptions& persistence,
@@ -238,10 +227,10 @@ class SemanticGenerationService final {
                      SemanticGenerationOptions                      options,
                      SemanticGenerationProgressCallback             on_progress,
                      SemanticGenerationFinishedCallback             on_finished,
-                     std::shared_ptr<ISemanticThumbnailProvider>    thumbnail_provider,
+                     std::shared_ptr<ISemanticInputImageSource>     input_source,
                      std::shared_ptr<ISemanticImageEmbeddingClient> embedding_client);
 
-  std::shared_ptr<ISemanticThumbnailProvider>    thumbnail_provider_;
+  std::shared_ptr<ISemanticInputImageSource>     input_source_;
   std::shared_ptr<ISemanticImageEmbeddingClient> embedding_client_;
 };
 

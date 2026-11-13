@@ -74,7 +74,8 @@ endfunction()
 #      appended after vcpkg applocal.
 #   4. Per-target ${name}_runtime/ output dir so parallel Ninja builds cannot
 #      re-applocal a sibling EXE's shared folder.
-#   5. Force-copy third_party lensfun + vendored duckdb (never leave vcpkg's).
+#   5. Force-copy submodule lensfun.dll after applocal. Never leave a
+#      package-manager lensfun.dll next to a test EXE.
 #
 # Domain CMakeLists must NOT hand-roll lensfun/duckdb POST_BUILD copies.
 
@@ -111,8 +112,8 @@ function(alcedo_copy_windows_test_runtime_dlls target_name)
   alcedo_copy_linked_runtime_dlls(${target_name})
 
   set(_lensfun_dll "")
-  if(TARGET alcedo_lensfun)
-    set(_lensfun_dll "$<TARGET_FILE:alcedo_lensfun>")
+  if(TARGET puerhlab_lensfun)
+    set(_lensfun_dll "$<TARGET_FILE:puerhlab_lensfun>")
   elseif(EXISTS "${CMAKE_BINARY_DIR}/third_party/lensfun/install/bin/lensfun.dll")
     set(_lensfun_dll "${CMAKE_BINARY_DIR}/third_party/lensfun/install/bin/lensfun.dll")
   endif()
@@ -122,7 +123,7 @@ function(alcedo_copy_windows_test_runtime_dlls target_name)
       COMMAND ${CMAKE_COMMAND} -E copy
               "${_lensfun_dll}"
               "$<TARGET_FILE_DIR:${target_name}>/lensfun.dll"
-      COMMENT "Alcedo: overwrite vcpkg applocal lensfun.dll with third_party for ${target_name}"
+      COMMENT "Alcedo: install submodule lensfun.dll next to ${target_name}"
       VERBATIM)
   else()
     message(WARNING
@@ -177,7 +178,7 @@ endfunction()
 
 # Register one test executable with one or more category aggregates.
 # Call after target_link_libraries. Category names match tests/CMakeLists.txt:
-#   core image io raw gpu edit ui app storage demos ci_core ci_raw ci_metal
+#   core image io raw gpu edit ui app storage demos ci_core ci_raw ci_metal ci_automation
 #
 # Category registration only. Windows DLL fixup is scheduled for the whole
 # directory (include this module or call register once).
@@ -225,6 +226,9 @@ function(alcedo_register_test_target test_target)
         ${test_target})
     elseif(category STREQUAL "ci_metal")
       alcedo_assign_test_category(ci_metal ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_metal
+        ${test_target})
+    elseif(category STREQUAL "ci_automation")
+      alcedo_assign_test_category(ci_automation ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_automation
         ${test_target})
     else()
       message(FATAL_ERROR

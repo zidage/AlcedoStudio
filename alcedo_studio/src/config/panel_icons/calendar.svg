@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#A7ABB3" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M7 3.5v3"/>
-  <path d="M17 3.5v3"/>
-  <rect x="3.5" y="5.5" width="17" height="15" rx="2.2"/>
-  <path d="M3.8 10h16.4"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M8 3v3"/>
+  <path d="M16 3v3"/>
+  <rect x="4" y="5" width="16" height="16" rx="2"/>
+  <path d="M4 10h16"/>
   <path d="M8 14h.01"/>
   <path d="M12 14h.01"/>
   <path d="M16 14h.01"/>
-  <path d="M8 17h.01"/>
-  <path d="M12 17h.01"/>
+  <path d="M8 18h.01"/>
+  <path d="M12 18h.01"/>
 </svg>

@@ -33,6 +33,13 @@ class OpenClImage {
   OpenClImage(OpenClImage&& other) noexcept;
   auto operator=(OpenClImage&& other) noexcept -> OpenClImage&;
 
+  /**
+   * @brief Retain and wrap an existing tightly packed OpenCL image buffer.
+   *
+   * The returned image owns one retained reference. It does not copy pixels.
+   */
+  static auto Wrap(cl_mem buffer, int width, int height, int type) -> OpenClImage;
+
   auto Buffer() const -> cl_mem;
   auto Width() const -> int;
   auto Height() const -> int;

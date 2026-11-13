@@ -203,7 +203,7 @@ Execution behavior:
 - OpenAI-compatible providers should receive one `response_format.json_schema`
   request for the selected output bundle. Anthropic-compatible providers should
   receive one forced tool-use request for the selected output bundle. The
-  protocol mechanism changes the structured-output envelope only; it must not
+  protocol mechanism changes the structured-output JSON schema / `response_format` only; it must not
   multiply provider round-trips.
 - Progress counts per-image remote request units, not item-task units. A
   10-image describe+score run reads as 10 remote requests because each image is
