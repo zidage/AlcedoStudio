@@ -29,11 +29,13 @@
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/color_wheel_tone.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/operators/models/tone_curve_spline.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -49,6 +51,7 @@
 #include "gpu/transient_buffer_arena.hpp"
 #include "oklab_contrast_reference.hpp"
 #include "opencl/opencl_runtime.hpp"
+#include "tone_curve_test_curves.hpp"
 
 namespace alcedo {
 namespace {
@@ -162,35 +165,6 @@ auto CpuAcesccDecode(float value) -> float {
   return std::exp2(value * kB - kA);
 }
 
-auto ExtrapolateCurve(float value, const GradeAdjustmentParams& p, std::uint32_t a, std::uint32_t b)
-    -> float {
-  const float x0 = p.values[a * 2];
-  const float y0 = p.values[a * 2 + 1];
-  const float x1 = p.values[b * 2];
-  const float y1 = p.values[b * 2 + 1];
-  return y0 + (value - x0) * (y1 - y0) / std::max(x1 - x0, 1.0e-6f);
-}
-
-auto ApplyCurve(float value, const GradeAdjustmentParams& p) -> float {
-  if (p.count < 2) {
-    return value;
-  }
-  if (value <= p.values[0]) {
-    return ExtrapolateCurve(value, p, 0, 1);
-  }
-  for (std::uint32_t i = 1; i < p.count; ++i) {
-    const float x1 = p.values[i * 2];
-    if (value <= x1) {
-      const float x0 = p.values[(i - 1) * 2];
-      const float y0 = p.values[(i - 1) * 2 + 1];
-      const float y1 = p.values[i * 2 + 1];
-      const float t  = (value - x0) / std::max(x1 - x0, 1.0e-6f);
-      return y0 + t * (y1 - y0);
-    }
-  }
-  return ExtrapolateCurve(value, p, p.count - 2, p.count - 1);
-}
-
 auto ApplyHls(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   const float maximum = std::max(c.r, std::max(c.g, c.b));
   const float minimum = std::min(c.r, std::min(c.g, c.b));
@@ -270,9 +244,9 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
     c.g += offset;
     c.b += offset;
   } else if (behavior == AdjustmentBehavior::Curve) {
-    c.r = ApplyCurve(c.r, p);
-    c.g = ApplyCurve(c.g, p);
-    c.b = ApplyCurve(c.b, p);
+    c.r = tone_curve_test::ApplyPackedCurve(c.r, p);
+    c.g = tone_curve_test::ApplyPackedCurve(c.g, p);
+    c.b = tone_curve_test::ApplyPackedCurve(c.b, p);
   } else if (behavior == AdjustmentBehavior::Hls) {
     c = ApplyHls(c, p);
   } else if (behavior == AdjustmentBehavior::Saturation ||
@@ -790,6 +764,23 @@ TEST_F(OpenClGradeFixture, OpenClContrastMatchesOkLabLightnessReferenceForEveryP
                 kContrastRelativeLinearTolerance)
           << contrast << " @ " << i;
     }
+  }
+}
+
+TEST_F(OpenClGradeFixture, OpenClCurveMatchesSplineReferenceForThreeAndSixteenPoints) {
+  (void)RenderGrade();
+  const auto input = last_develop_pixels_;
+  ASSERT_FALSE(input.empty());
+  const auto range = tone_curve_test::RgbValueRange(input);
+  auto&      curve = ModelByType<CurveModel>(type_ids::Curve());
+  for (const std::size_t count : {std::size_t{3}, std::size_t{16}}) {
+    curve.SetPoints(tone_curve_test::LiftedMidtonePoints(count, range.low, range.high));
+    const auto spline = tone_curve::SolveToneCurveSpline(curve.Points());
+    (void)RenderGrade();
+    ASSERT_EQ(last_output_pixels_.size(), input.size());
+    EXPECT_LT(tone_curve_test::MaxCurveError(input, last_output_pixels_, spline),
+              tone_curve_test::kGpuCurveTolerance)
+        << count << " points";
   }
 }
 

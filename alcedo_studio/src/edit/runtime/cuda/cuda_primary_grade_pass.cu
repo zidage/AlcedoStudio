@@ -93,29 +93,25 @@ __device__ auto ApplyOkLabContrast(const float3& acescc, float contrast) -> floa
   return LinearAp1ToAcescc(OkLabToLinearAp1(lab));
 }
 
-__device__ auto ExtrapolateCurve(float value, const CudaAdjustmentParams& p, std::uint32_t a,
-                                 std::uint32_t b) -> float {
-  const float x0 = p.values[a * 2];
-  const float y0 = p.values[a * 2 + 1];
-  const float x1 = p.values[b * 2];
-  const float y1 = p.values[b * 2 + 1];
-  return y0 + (value - x0) * (y1 - y0) / fmaxf(x1 - x0, 1.0e-6f);
-}
-
+// Tone Curve spline (edit/operators/models/tone_curve_spline.hpp; CPU reference
+// EvaluateToneCurveSpline). values[0..15]: x of the control points; [16..31]: y; [32..47]: slope.
+// Monotone cubic Hermite between the points, straight along the end slope outside them.
 __device__ auto ApplyCurve(float value, const CudaAdjustmentParams& p) -> float {
-  if (p.count < 2) return value;
-  if (value <= p.values[0]) return ExtrapolateCurve(value, p, 0, 1);
-  for (std::uint32_t i = 1; i < p.count; ++i) {
-    const float x1 = p.values[i * 2];
-    if (value <= x1) {
-      const float x0 = p.values[(i - 1) * 2];
-      const float y0 = p.values[(i - 1) * 2 + 1];
-      const float y1 = p.values[i * 2 + 1];
-      const float t  = (value - x0) / fmaxf(x1 - x0, 1.0e-6f);
-      return y0 + t * (y1 - y0);
-    }
-  }
-  return ExtrapolateCurve(value, p, p.count - 2, p.count - 1);
+  const std::uint32_t n = p.count;
+  if (n < 2) return value;
+  const float* xs = p.values;
+  const float* ys = p.values + 16;
+  const float* ms = p.values + 32;
+  if (value <= xs[0]) return ys[0] + ms[0] * (value - xs[0]);
+  if (value >= xs[n - 1]) return ys[n - 1] + ms[n - 1] * (value - xs[n - 1]);
+  std::uint32_t i = 0;
+  while (i + 2 < n && value >= xs[i + 1]) ++i;
+  const float h  = xs[i + 1] - xs[i];
+  const float t  = (value - xs[i]) / h;
+  const float dy = ys[i + 1] - ys[i];
+  const float d  = dy / h;
+  const float u  = 1.0f - t;
+  return ys[i] + t * dy + h * t * u * (u * (ms[i] - d) - t * (ms[i + 1] - d));
 }
 
 // Tone color wheels (edit/operators/models/color_wheel_tone.hpp). values[0..2]: Offset as an ACEScc

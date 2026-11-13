@@ -26,6 +26,7 @@
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/operators/models/tone_curve_spline.hpp"
 
 namespace alcedo {
 namespace {
@@ -194,6 +195,10 @@ auto ParseCurveWrite(const nlohmann::json& params) -> EditorCurveWrite {
   const auto& points_json = object.at("points");
   if (!points_json.is_array() || points_json.size() < 2) {
     throw std::invalid_argument("curve.points must contain at least two points");
+  }
+  if (points_json.size() > tone_curve::kMaxControlPoints) {
+    throw std::invalid_argument("curve.points must contain at most " +
+                                std::to_string(tone_curve::kMaxControlPoints) + " points");
   }
   if (object.contains("size")) {
     if (!object.at("size").is_number_integer() ||

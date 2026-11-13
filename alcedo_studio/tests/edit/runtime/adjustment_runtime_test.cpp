@@ -26,6 +26,7 @@
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/operators/models/tone_curve_spline.hpp"
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
@@ -231,11 +232,16 @@ TEST(GpuDagAdjustmentRuntime, PackedGradeParamsMatchOwnerFieldsWithoutFullDtoCop
   CurveModel curve;
   curve.SetPoints({{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}});
   const auto packed_curve = MakeGradeRuntimeParams(curve, AdjustmentBehavior::Curve);
+  const auto curve_spline = tone_curve::SolveToneCurveSpline(curve.Points());
+  // x in values[0..15], y in values[16..31], slope in values[32..47].
   EXPECT_EQ(packed_curve.count, 3U);
-  EXPECT_FLOAT_EQ(packed_curve.values[0], 0.0f);
-  EXPECT_FLOAT_EQ(packed_curve.values[1], 0.0f);
-  EXPECT_FLOAT_EQ(packed_curve.values[2], 0.5f);
-  EXPECT_FLOAT_EQ(packed_curve.values[3], 0.6f);
+  for (std::size_t i = 0; i < 3; ++i) {
+    EXPECT_EQ(packed_curve.values[i], curve_spline.x[i]) << i;
+    EXPECT_EQ(packed_curve.values[16 + i], curve_spline.y[i]) << i;
+    EXPECT_EQ(packed_curve.values[32 + i], curve_spline.slope[i]) << i;
+  }
+  EXPECT_FLOAT_EQ(packed_curve.values[1], 0.5f);
+  EXPECT_FLOAT_EQ(packed_curve.values[17], 0.6f);
 
   HlsModel hls;
   auto     table = hls.AdjustmentTable();
@@ -302,6 +308,33 @@ TEST(GpuDagAdjustmentRuntime, PackedGradeParamsMatchOwnerFieldsWithoutFullDtoCop
   EXPECT_FLOAT_EQ(MakeGradeRuntimeParams(lmt, AdjustmentBehavior::Lmt).values[0], 0.0f);
 
   EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
+TEST(GpuDagAdjustmentRuntime, CurvePackingCarriesAllSixteenPointsAndRejectsSeventeen) {
+  std::vector<CurvePoint> points;
+  for (int i = 0; i < 16; ++i) {
+    const float x = static_cast<float>(i) / 15.0f;
+    points.push_back({x, x * x});
+  }
+  CurveModel curve;
+  curve.SetPoints(points);
+  const auto packed = MakeGradeRuntimeParams(curve, AdjustmentBehavior::Curve);
+  EXPECT_EQ(packed.count, 16U);
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    EXPECT_EQ(packed.values[i], points[i].x) << i;
+    EXPECT_EQ(packed.values[16 + i], points[i].y) << i;
+  }
+
+  // A Model can load more points than the render supports (LoadJson keeps the stored points);
+  // packing names the limit instead of dropping points.
+  points.push_back({1.5f, 1.5f});
+  curve.SetPoints(points);
+  try {
+    (void)MakeGradeRuntimeParams(curve, AdjustmentBehavior::Curve);
+    ADD_FAILURE() << "17 points were packed";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_STREQ(error.what(), "Tone curve has 17 control points; a curve has 2 to 16 points");
+  }
 }
 
 TEST(GpuDagAdjustmentRuntime, NeighborhoodParamsReadOwnerFieldsWithoutFullDtoCopy) {
