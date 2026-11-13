@@ -1146,7 +1146,8 @@ Item {
             }
             onWheel: function(wheel) {
                 // A zoom step needs one wheel notch (120); a touchpad sends smaller steps,
-                // which add up. The cell under the pointer keeps its place.
+                // which add up. The cell under the pointer keeps its place. Wheel forward shows
+                // fewer, larger photos (a lower zoom level), as in the editor viewport.
                 if (wheel.modifiers & Qt.ControlModifier) {
                     const angle = wheel.angleDelta.y
                     if (angle !== 0 && (root.zoomWheelAngle > 0) !== (angle > 0)) {
@@ -1155,9 +1156,9 @@ Item {
                     root.zoomWheelAngle += angle
                     let level = root.zoomLevel
                     while (Math.abs(root.zoomWheelAngle) >= 120) {
-                        const step = root.zoomWheelAngle > 0 ? 1 : -1
-                        root.zoomWheelAngle -= step * 120
-                        level = Math.max(0, Math.min(root.zoomColumns.length - 1, level + step))
+                        const notch = root.zoomWheelAngle > 0 ? 1 : -1
+                        root.zoomWheelAngle -= notch * 120
+                        level = Math.max(0, Math.min(root.zoomColumns.length - 1, level - notch))
                     }
                     if (level !== root.zoomLevel) {
                         const p = cellHit.mapToItem(list, wheel.x, wheel.y)
