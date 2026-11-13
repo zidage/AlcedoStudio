@@ -12,8 +12,11 @@
 #include <QThread>
 #include <QVector2D>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <mutex>
+#include <stdexcept>
+#include <string>
 
 #include "ui/edit_viewer/color_manager.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
@@ -22,6 +25,7 @@
 #include "utils/diagnostics/app_logging.hpp"
 #include "utils/diagnostics/render_e2e_timing.hpp"
 
+using alcedo::diag::editorLog;
 using alcedo::diag::editorPresentLog;
 
 namespace alcedo::editor_rhi {
@@ -456,6 +460,13 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
           applyDisplayConfig();
         }
       });
+#ifdef _WIN32
+  // Created before the screenChanged connection below, so that its own screenChanged slot reads
+  // the new monitor first.
+  display_destination_connection_ =
+      connect(WindowDisplayDestination::ForWindow(attached_window_),
+              &WindowDisplayDestination::DestinationChanged, this, [this] { applyDisplayConfig(); });
+#endif
   window_screen_connection_ =
       connect(attached_window_, &QWindow::screenChanged, this, [this](QScreen*) {
         window_color_space_applied_.store(false, std::memory_order_release);
@@ -529,6 +540,7 @@ void EditorViewportItem::detachWindow(bool reset_display) {
   }
   QObject::disconnect(window_visibility_connection_);
   QObject::disconnect(window_screen_connection_);
+  QObject::disconnect(display_destination_connection_);
   QObject::disconnect(scene_graph_invalidated_connection_);
   QObject::disconnect(scene_graph_initialized_connection_);
   QObject::disconnect(before_rendering_connection_);
@@ -537,6 +549,7 @@ void EditorViewportItem::detachWindow(bool reset_display) {
   QObject::disconnect(after_frame_end_connection_);
   window_visibility_connection_       = {};
   window_screen_connection_           = {};
+  display_destination_connection_     = {};
   scene_graph_invalidated_connection_ = {};
   scene_graph_initialized_connection_ = {};
   before_rendering_connection_        = {};
@@ -554,11 +567,62 @@ void EditorViewportItem::applyDisplayConfig() {
   if (!native_handle) {
     return;
   }
-  const bool applied  = ColorManager::ApplyWindowColorSpace(native_handle, displayConfig());
+#ifdef _WIN32
+  // Windows has no window color space: the composite converts with the display table.
+  const bool applied = updateDisplayTransform(displayConfig());
+#else
+  const bool applied = ColorManager::ApplyWindowColorSpace(native_handle, displayConfig());
+#endif
   const bool previous = window_color_space_applied_.exchange(applied, std::memory_order_acq_rel);
   if (previous != applied) {
     emit DisplayConfigChanged();
   }
+}
+
+auto EditorViewportItem::displayTransform() const -> std::shared_ptr<const DisplayTransformLut> {
+  std::lock_guard lock(mutex_);
+  return display_transform_;
+}
+
+auto EditorViewportItem::updateDisplayTransform(const ViewerDisplayConfig& config) -> bool {
+  auto destination = WindowDisplayDestination::ForWindow(attached_window_)->Destination();
+  {
+    std::lock_guard lock(mutex_);
+    if (display_transform_destination_ == destination && display_transform_config_ == config) {
+      return display_transform_ != nullptr;
+    }
+  }
+  std::shared_ptr<const DisplayTransformLut> table;
+  if (HasDisplayTransform(config) && !destination->profile_bytes.empty()) {
+    const auto start = std::chrono::steady_clock::now();
+    try {
+      table = std::make_shared<const DisplayTransformLut>(
+          BuildDisplayTransformLut(config, destination->profile_bytes));
+      const double elapsed_ms =
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+              .count();
+      qCInfo(editorLog, "[DisplayProfile] viewport table %s %s to '%s': %.1f ms",
+             ColorUtils::ColorSpaceToString(config.encoding_space).c_str(),
+             ColorUtils::EOTFToString(config.encoding_eotf).c_str(),
+             table->display_description.c_str(), elapsed_ms);
+    } catch (const std::runtime_error& error) {
+      // Plan decision D11: no conversion, and the reason in the log once for this destination.
+      if (warned_display_destination_ != destination) {
+        warned_display_destination_ = destination;
+        const auto path             = destination->profile_path.u8string();
+        qCWarning(editorLog, "[DisplayProfile] no viewport display conversion to %s: %s",
+                  std::string(path.begin(), path.end()).c_str(), error.what());
+      }
+    }
+  }
+  {
+    std::lock_guard lock(mutex_);
+    display_transform_             = table;
+    display_transform_config_      = config;
+    display_transform_destination_ = std::move(destination);
+  }
+  update();
+  return table != nullptr;
 }
 
 void EditorViewportItem::resetWindowDisplayConfig() {

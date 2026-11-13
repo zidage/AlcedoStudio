@@ -2384,6 +2384,57 @@ if(ALCEDO_METAL_ENABLED)
 endif()
 alcedo_register_test_target(MaskCoveragePresentationTest ui)
 
+# Windows display ICC plan W1: the display table and the 8-bit image conversion with LittleCMS.
+add_executable(DisplayColorTransformTest
+    ${ALCEDO_TEST_ROOT}/ui/display_color_transform_test.cpp
+)
+target_include_directories(DisplayColorTransformTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DisplayColorTransformTest
+    PRIVATE DisplayColorTransform lcms2::lcms2 GTest::gtest_main Qt6::Gui)
+alcedo_ui_gtest_discover_tests(DisplayColorTransformTest
+    TEST_PREFIX "DisplayColorTransformTest."
+    PROPERTIES LABELS "editor_rhi;display_output")
+alcedo_register_test_target(DisplayColorTransformTest ui)
+
+# W2: the destination rules, the monitor state change detection, and the window object on the Qt
+# offscreen platform.
+add_executable(WindowDisplayDestinationTest
+    ${ALCEDO_TEST_ROOT}/ui/window_display_destination_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(WindowDisplayDestinationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(WindowDisplayDestinationTest
+    PRIVATE
+        WindowDisplayDestination
+        lcms2::lcms2
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(WindowDisplayDestinationTest
+    TEST_PREFIX "WindowDisplayDestinationTest."
+    PROPERTIES LABELS "editor_rhi;display_output")
+alcedo_register_test_target(WindowDisplayDestinationTest ui)
+
+# W2: the Windows color system query on the monitors of the test machine.
+if(WIN32)
+    add_executable(MonitorColorProfileTest
+        ${ALCEDO_TEST_ROOT}/ui/monitor_color_profile_test.cpp
+    )
+    target_include_directories(MonitorColorProfileTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+    target_link_libraries(MonitorColorProfileTest
+        PRIVATE WindowDisplayDestination GTest::gtest_main user32)
+    alcedo_ui_gtest_discover_tests(MonitorColorProfileTest
+        TEST_PREFIX "MonitorColorProfileTest."
+        PROPERTIES LABELS "editor_rhi;display_output")
+    alcedo_register_test_target(MonitorColorProfileTest ui)
+endif()
+
 # SM8.6: the one viewport composite of the photo and the Mask coverage, on the real QRhi and coverage
 # channel of each backend (one process per backend, as MaskCoveragePresentationTest).
 add_executable(ViewportCoverageCompositeTest

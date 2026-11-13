@@ -309,6 +309,8 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     content_dirty_ = true;
   }
   coverage_style_ = item_->maskCoverageStyle();
+  // The pass uploads the table on the next render only when it is a new table.
+  composite_.SetDisplayTransform(item_->displayTransform());
 
   if (item_->takeAdjustmentFrameRequest()) {
     // The old QRhiWidget presenter kept one active full-frame slot and made the
