@@ -24,11 +24,13 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/operators/models/tone_curve_spline.hpp"
 #include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
@@ -39,6 +41,7 @@
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "film_grain_colour_statistics.hpp"
 #include "oklab_contrast_reference.hpp"
+#include "tone_curve_test_curves.hpp"
 
 namespace alcedo {
 namespace {
@@ -561,6 +564,23 @@ TEST_F(CudaPrimaryGradeFixture, CudaContrastMatchesOkLabLightnessReferenceForEve
                 kContrastRelativeLinearTolerance)
           << contrast << " @ " << i;
     }
+  }
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaCurveMatchesSplineReferenceForThreeAndSixteenPoints) {
+  (void)Render();
+  const auto input = Download(plan_.develop_output);
+  ASSERT_FALSE(input.empty());
+  const auto range = tone_curve_test::RgbValueRange(input);
+  auto&      curve = ModelByType<CurveModel>(type_ids::Curve());
+  for (const std::size_t count : {std::size_t{3}, std::size_t{16}}) {
+    curve.SetPoints(tone_curve_test::LiftedMidtonePoints(count, range.low, range.high));
+    const auto spline = tone_curve::SolveToneCurveSpline(curve.Points());
+    const auto output = Download(Render().output);
+    ASSERT_EQ(output.size(), input.size());
+    EXPECT_LT(tone_curve_test::MaxCurveError(input, output, spline),
+              tone_curve_test::kGpuCurveTolerance)
+        << count << " points";
   }
 }
 

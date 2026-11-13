@@ -1480,6 +1480,26 @@ TEST(EditorParameterCatalogTest, CurvePointsOutsideTheUnitSquareOrOutOfOrderAreR
       << error;
 }
 
+TEST(EditorParameterCatalogTest, CurveWriteAcceptsSixteenPointsAndRejectsSeventeen) {
+  const auto evenly_spaced = [](int count) {
+    nlohmann::json points = nlohmann::json::array();
+    for (int i = 0; i < count; ++i) {
+      const double x = static_cast<double>(i) / static_cast<double>(count - 1);
+      points.push_back({{"x", x}, {"y", x}});
+    }
+    return nlohmann::json{{"curve", {{"points", std::move(points)}}}};
+  };
+  std::string error;
+  const auto  sixteen = ParseEditorParameterWrite("curve", evenly_spaced(16), &error);
+  ASSERT_TRUE(sixteen.has_value()) << error;
+  const auto* write = std::get_if<EditorCurveWrite>(&*sixteen);
+  ASSERT_NE(write, nullptr);
+  EXPECT_EQ(write->points.size(), 16U);
+
+  EXPECT_FALSE(ParseEditorParameterWrite("curve", evenly_spaced(17), &error).has_value());
+  EXPECT_EQ(error, "curve.points must contain at most 16 points");
+}
+
 TEST(EditorParameterCatalogTest, CurveAndLutUseTheModelShape) {
   std::string          error;
   const nlohmann::json curve = {
