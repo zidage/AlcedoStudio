@@ -91,7 +91,8 @@ Lightroom Classic installation.
 
 ### Library folder and camera match
 
-**Settings > Camera Profiles** holds one DCP folder (setting key `cameraProfiles/dcpLibraryRoot`).
+The Camera profiles tile of **Settings > LUTs and Color Management** holds one DCP folder
+(setting key `cameraProfiles/dcpLibraryRoot`), with Browse and Rescan.
 `CameraProfileLibraryService` scans the folder on one worker task and publishes the complete index
 of `DcpProfileLibrary` in one step. The scan reads only the identity of each file:
 `UniqueCameraModel` and `ProfileName`. A file that fails to read counts as rejected, and the log
@@ -109,6 +110,8 @@ The editor section **Camera Profile**, above White Balance, lists the default en
 matched profiles in name order. The default entry is **Built-in** for a RAW file and **Embedded**
 for a DNG file with an embedded profile; it renders the import profile. A selection is one settled
 edit of the Develop field `camera_profile_file`, so Undo, Redo, and version checkout restore it.
+When the combo holds only the default entry, a note under it gives the reason: no DCP folder is
+set, or the folder has no profile of this camera.
 
 With a selected profile, the camera pass takes `ColorMatrix1/2`, `ForwardMatrix1/2`, the two
 illuminant CCT values, the HueSatMap, the LookTable, their encodings, and `BaselineExposureOffset`

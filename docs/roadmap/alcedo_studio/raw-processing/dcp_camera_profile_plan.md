@@ -3,10 +3,12 @@
 Date: 2026-11-12
 
 Status: **C1 complete** (2026-11-12, reader and profile value). **C2 implemented** (2026-11-12,
-library index, camera match, folder setting, Settings page); the user check of the Settings page
-is open. **C3 complete** (2026-11-12, Develop reference and effective profile in the render).
+library index, camera match, folder setting); the Settings page did not pass the user check and
+became a tile of Settings > LUTs and Color Management, whose check is open. **C3 complete**
+(2026-11-12, Develop reference and effective profile in the render).
 **C4 complete** (2026-11-12, Develop field, history, and binding on each load path). **C5
-complete** (2026-11-12, editor section and list model; the C7 review checked the section).
+complete** (2026-11-12, editor section and list model; the C7 review checked the section; Choose
+Folder became a note after the C2 check).
 **C6 complete** (2026-11-12, DCP profile on a DNG source with the source calibration). **C7
 complete** (2026-11-12, CUDA, OpenCL, and Metal against the scalar reference, user review
 approved, documents).
@@ -93,34 +95,33 @@ below `kMaxDngTableFloats`.
 
 ## 2. Product design specification
 
-### 2.1 Settings page "Camera Profiles"
+### 2.1 Settings tile "Camera profiles"
 
-`SettingDialog.qml` gets one new category, **Camera Profiles**.
+Revised 2026-11-12 after the user check of C2: the DCP folder has no page of its own and no
+counts. The LUTs category of `SettingDialog.qml` becomes **LUTs and Color Management** (later
+color management settings, such as ICC profiles, join it), and its page `LutSettingsPanel.qml`
+holds the tile `CameraProfileFolderTile.qml` after the LUT library tiles.
 
 ```
-Camera Profiles
+LUTs and Color Management
 +--------------------------------------------------------------+
-| DCP Folder                                                   |
-| [ D:\Adobe\...\CameraProfiles\Camera            ] [Browse]   |
-|                                                              |
-|  2,445            359                                        |
-|  Profiles         Cameras                                    |
-|                                                  [Rescan]    |
+| Camera profiles                                              |
+| The folder of the DCP camera profiles that the editor lists  |
+| for each camera.                                             |
+| [ D:\Adobe\...\CameraProfiles\Camera        ] [Browse] [Rescan] |
 +--------------------------------------------------------------+
 ```
 
 - The folder row uses `FolderPathField.qml`. **Browse** opens a `FolderDialog`.
-- The two counts use the shared `CountTile` component and the compact number format.
-- **Rescan** reads the folder again. It is disabled while a scan runs and when no folder is set.
-- While a scan runs, the count tiles show the last completed counts and a busy indicator.
-- An empty path is the default. Both counts then show `0`.
+- **Rescan** reads the folder again. It is disabled while a scan runs and when no folder is set,
+  and it spins while a scan runs.
+- An empty path is the default.
 - A folder that does not exist, or that the process cannot read, shows the operating system error
   text below the folder row. The stored path stays, so that a removable drive works after it
   returns.
-- A file that fails to parse does not stop the scan. The page shows the number of rejected files
-  as a third tile, **Rejected**, when the number is above zero. The log holds one line for each
-  rejected file with the path and the reason.
-- Buttons are neutral (black and white). The page has no explanatory paragraph.
+- A file that fails to parse does not stop the scan. The log holds one line for each rejected
+  file with the path and the reason.
+- Buttons are neutral (black and white).
 
 ### 2.2 Editor section "Camera Profile"
 
@@ -141,10 +142,11 @@ Camera Profile
   embedded profile.
 - A selection commits one settled edit of the Develop field `camera_profile_file`. Undo, Redo, and
   version checkout restore the previous selection.
-- When no folder is set, the section shows the combo with the default entry and a neutral button
-  **Choose Folder**. The button opens the same `FolderDialog` as the Settings page.
+- When no folder is set, the section shows the combo with the default entry and, under it, the
+  note "Set a DCP folder in Settings > LUTs and Color Management." The section has no folder
+  button (revised 2026-11-12 after the user check of C2).
 - When the folder is set and no profile matches the camera, the combo holds the default entry
-  only.
+  only, and the note under it reads "The DCP folder has no profile of this camera."
 - When the stored reference does not resolve (P-4), the combo shows the stored profile name with
   the warning color of `appTheme`. The list still holds the default entry and the matched
   profiles. The viewport shows the render error through the current render error surface.
@@ -356,7 +358,7 @@ Stored reference, identity absent from the library
 | `include/app/camera_profile_library_service.hpp`, `app/camera_profile_library_service.cpp` | `CameraProfileLibraryService` |
 | `include/app/dcp_camera_profile_binding.hpp`, `app/dcp_camera_profile_binding.cpp` | `BindDcpCameraProfile(PipelineDocument&)` |
 | `include/ui/alcedo_main/album_backend/editor_camera_profile_list_model.hpp` and its `.cpp` | `EditorCameraProfileListModel` |
-| `ui/alcedo_main/qml/CameraProfileSettingsPanel.qml` | Settings page |
+| `ui/alcedo_main/qml/CameraProfileFolderTile.qml` | DCP folder tile of Settings > LUTs and Color Management |
 | `ui/alcedo_main/qml/EditorCameraProfileSection.qml` | Editor section |
 | `tests/image/dcp_file_reader_test.cpp`, `tests/image/dcp_profile_library_test.cpp`, `tests/image/dcp_test_file_writer.hpp` | Reader and library tests, and a writer of synthetic DCP files |
 | `tests/edit/runtime/dcp_camera_profile_render_test.cpp` | Scalar transform tests |
@@ -383,7 +385,7 @@ Stored reference, identity absent from the library
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | C1 | DCP file reader and profile value | `image/` | None | 900 to 1200 | Complete |
-| C2 | Library index, camera match, folder setting, Settings page | `image/`, `app/`, `ui/alcedo_main/` | C1 | 1300 to 1700 | Implemented; user page check open |
+| C2 | Library index, camera match, folder setting, Settings page | `image/`, `app/`, `ui/alcedo_main/` | C1 | 1300 to 1700 | Implemented; page revised after the user check, check of the tile open |
 | C3 | Profile reference in the Develop payload and the effective profile in the render | `edit/graph/`, `edit/runtime/` | C1 | 1100 to 1500 | Complete |
 | C4 | Develop field, history, and binding on each load path | `app/` | C2, C3 | 1200 to 1600 | Complete |
 | C5 | Editor section and list model | `ui/alcedo_main/`, `app/` | C4 | 900 to 1300 | Complete (section checked in the C7 review) |
@@ -650,9 +652,10 @@ ctest --test-dir build/debug -R "DcpProfileLibraryTest|CameraProfileLibraryServi
 **Exit criteria.**
 
 - [x] Both suites pass.
-- [ ] The Settings page shows 2445 profiles and 357 cameras for the user folder. The user
-      confirms the page. (The service and the library report 2445 and 357 for the user folder;
-      the page check by the user is open. 357, not 359: see the completion record.)
+- [ ] The user confirms the Settings tile. (The first page, with counts and its own category, did
+      not pass the user check on 2026-11-12; section 2.1 has the revised tile, and its check is
+      open. The service and the library report 2445 profiles and 357 cameras for the user
+      folder; 357, not 359: see the completion record.)
 - [x] The recorded scan time of the user folder is below 2 seconds in a Release build. A higher
       value is a stop condition (section 12).
 - [x] After the scan, the project database file has the same size and tables as before. (By
@@ -772,6 +775,17 @@ Evidence path: build/tmp/dcp_camera_profile/c2/ (configure, build, and ctest log
   after the pull request.
 Remaining defects or unavailable platforms: macOS build of the new files not run; the code uses
   the C++20 standard library and Qt Core only. The Settings page layout needs the user check.
+
+Revision after the user check (2026-11-12, branch feature/dcp-profile-settings-merge):
+  The user rejected the page: the folder needs no category of its own and no counts, and the
+  path field wrapped into a narrow box next to the count tiles. CameraProfileSettingsPanel.qml
+  becomes CameraProfileFolderTile.qml, a BentoTile with the title, one description line, the
+  full-width folder field, Rescan, and the error badge. LutSettingsPanel.qml hosts it after the
+  Categories tile (property cameraProfiles). The LUTs category is renamed "LUTs and Color
+  Management" (user decision; ICC profiles join it later); the Camera Profiles category is
+  removed, so AI Models is category 9 and About 10. The service keeps its count properties for
+  its tests and the log; no page shows them. The editor section loses Choose Folder (C5).
+  New test: LutSettingsQmlTest.DcpFolderIsATileOfTheLutsAndColorManagementPage.
 ```
 
 ### C3. Profile reference in the Develop payload and the effective profile in the render

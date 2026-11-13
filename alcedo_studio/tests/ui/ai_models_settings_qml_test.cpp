@@ -60,8 +60,8 @@ namespace {
 
 namespace fs                    = std::filesystem;
 
-constexpr int kAiModelsCategory = 10;
-constexpr int kAboutCategory    = 11;
+constexpr int kAiModelsCategory = 9;
+constexpr int kAboutCategory    = 10;
 const char*   kAiMaskId         = "alcedo-ai-mask";
 const QUrl    kFeedUrl(QStringLiteral("https://static.aoraw.org/ai-models/v1/manifest.json"));
 #ifdef __APPLE__
