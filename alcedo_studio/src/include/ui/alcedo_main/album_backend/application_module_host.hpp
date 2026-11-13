@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QObject>
+#include <QWindow>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -224,6 +225,10 @@ class ApplicationModuleHost final : public QObject {
   /// Register the album thumbnail `image://alcedo-thumb/` provider on @p engine.
   /// Safe to call once per engine; the engine takes ownership of the provider.
   void AttachQmlEngine(QQmlEngine* engine);
+
+  /// The comparison view and the LUT previews convert to the display destination of @p window,
+  /// the main window (Windows display ICC plan, W5). Call once after the QML root loads.
+  void               AttachDisplayWindow(QWindow* window);
 
  private:
   void RecordConstruction(const char* type_name, const void* object);

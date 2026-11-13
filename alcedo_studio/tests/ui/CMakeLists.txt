@@ -1808,6 +1808,7 @@ target_include_directories(EditorComparisonImageProviderTest
 target_link_libraries(EditorComparisonImageProviderTest
     PRIVATE
         AlbumBackendLib
+        lcms2::lcms2
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -1868,6 +1869,7 @@ target_include_directories(EditorComparisonControllerTest
 target_link_libraries(EditorComparisonControllerTest
     PRIVATE
         AlbumBackendLib
+        lcms2::lcms2
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -2794,6 +2796,7 @@ target_include_directories(LutLibraryModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${AL
 target_link_libraries(LutLibraryModelTest
   PRIVATE
     AlbumBackendLib
+    lcms2::lcms2
     EditRuntime
     GTest::gtest
     JSON

@@ -7,6 +7,7 @@
 #include <QGuiApplication>
 #include <QString>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
@@ -102,6 +103,51 @@ auto ResolveDisplayDestination(const MonitorColorProfile& monitor) -> DisplayDes
     destination.error = PathText(monitor.profile_path) + ": " + error.what();
   }
   return destination;
+}
+
+auto ConvertImageForDestination(const QImage& source, const ViewerDisplayConfig& encoding,
+                                const DisplayDestination* destination) -> QImage {
+  if (destination == nullptr || destination->profile_bytes.empty() ||
+      !HasDisplayTransform(encoding) || source.isNull()) {
+    return source;
+  }
+  QImage converted = source.copy();
+  ConvertImageToDisplay(converted, encoding, destination->profile_bytes);
+  return converted;
+}
+
+void DisplayImageConverter::SetDestination(std::shared_ptr<const DisplayDestination> destination) {
+  // The previous destination is released after the lock.
+  std::shared_ptr<const DisplayDestination> released;
+  std::lock_guard                           lock(mutex_);
+  released = std::exchange(destination_, std::move(destination));
+}
+
+auto DisplayImageConverter::Destination() const -> std::shared_ptr<const DisplayDestination> {
+  std::lock_guard lock(mutex_);
+  return destination_;
+}
+
+auto DisplayImageConverter::Convert(const QImage& source, const ViewerDisplayConfig& encoding) const
+    -> QImage {
+  const auto destination = Destination();
+  try {
+    return ConvertImageForDestination(source, encoding, destination.get());
+  } catch (const std::exception& error) {
+    bool first = false;
+    {
+      std::lock_guard lock(mutex_);
+      first = reported_failure_ != destination;
+      if (first) {
+        reported_failure_ = destination;
+      }
+    }
+    if (first) {
+      qCWarning(editorLog, "[DisplayProfile] image shown without display conversion: %s",
+                error.what());
+    }
+    return source;
+  }
 }
 
 DisplayDestinationTracker::DisplayDestinationTracker()
