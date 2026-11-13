@@ -2,7 +2,7 @@
 
 Date: 2026-11-12
 
-Status: **Planned.** No implementation evidence.
+Status: **C1 complete** (2026-11-12, reader and profile value). C2 to C7 planned.
 
 Parent: [Roadmap](../../roadmap.md).
 
@@ -360,7 +360,7 @@ Stored reference, identity absent from the library
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
-| C1 | DCP file reader and profile value | `image/` | None | 900 to 1200 | Planned |
+| C1 | DCP file reader and profile value | `image/` | None | 900 to 1200 | Complete |
 | C2 | Library index, camera match, folder setting, Settings page | `image/`, `app/`, `ui/alcedo_main/` | C1 | 1300 to 1700 | Planned |
 | C3 | Profile reference in the Develop payload and the effective profile in the render | `edit/graph/`, `edit/runtime/` | C1 | 1100 to 1500 | Planned |
 | C4 | Develop field, history, and binding on each load path | `app/` | C2, C3 | 1200 to 1600 | Planned |
@@ -458,14 +458,88 @@ ctest --test-dir build/debug -R "DcpFileReaderTest|DngColorProfileTest" --output
 
 **Exit criteria.**
 
-- [ ] `DcpFileReaderTest` passes with all listed tests discovered.
-- [ ] `DngColorProfileTest` and `DngColorProfileCacheTest` pass unchanged.
-- [ ] A manual run of the reader over the user folder of section 1.4 loads 2445 files with zero
+- [x] `DcpFileReaderTest` passes with all listed tests discovered.
+- [x] `DngColorProfileTest` and `DngColorProfileCacheTest` pass unchanged.
+- [x] A manual run of the reader over the user folder of section 1.4 loads 2445 files with zero
       rejected files. The record states the command and the counts.
 
 **Expected diff.** 900 to 1200 lines.
 
-**Completion record.** Empty. Use the template in section 13.
+**Completion record.**
+
+```text
+Phase / date / status: C1 / 2026-11-12 / complete
+Source revision and branch: 10643e8d0 (plan branch docs/dcp-camera-profile-plan), work branch
+  feature/dcp-file-reader
+Actual changed modules: image/ (reader, profile value, MakeDngHueSatMap,
+  CalibrationIlluminantToCct), tests/image/ (reader tests, synthetic DCP writer)
+Implemented behavior:
+  - include/image/dcp_camera_profile.hpp: DcpCameraProfile, DcpCameraProfilePtr,
+    DcpCameraProfileToJson (fingerprint input), MakeDcpCameraProfile.
+  - include/image/dcp_file_reader.hpp, image/dcp_file_reader.cpp: DcpProfileIdentity,
+    ReadDcpProfileIdentity, ReadDcpCameraProfile, kMaxDcpFileBytes. The file-local class
+    DcpIfdReader reads the header and the entry table, then one payload for each request.
+  - MakeDngHueSatMap (dng_color_profile_import.hpp/.cpp) holds the row logic of ReadMap; the
+    embedded DNG import and the DCP reader both call it.
+  - CalibrationIlluminantToCct moved unchanged from an anonymous namespace in
+    image/metadata/dng_color_metadata.cpp to include/image/dng_camera_matrix.hpp, so that the
+    DCP reader uses the same table.
+Detail decisions made in this phase:
+  - String tags accept TIFF type ASCII and BYTE. The DNG specification permits BYTE (UTF-8) for
+    ProfileName, ProfileCalibrationSignature, and ProfileCopyright.
+  - ProfileHueSatMapDims and ProfileLookTableDims need count 3, as the DNG specification states.
+    Encoding tags are LONG with count 1. The reader does not require ascending tag order; a tag
+    that appears two times fails.
+  - An absent CalibrationIlluminant tag reads as 0 (Unknown), which has no CCT, so a profile
+    without an illuminant for each ColorMatrix fails with the tag number and illuminant 0.
+  - Rejected tags (P-7): ReductionMatrix1/2/3, CalibrationIlluminant3, ColorMatrix3,
+    ForwardMatrix3, ProfileHueSatMapData3, RGBTables. The check runs before any payload read.
+  - The tables (DngColorProfile) have the profile name, identity calibration, unit analog
+    balance, and baseline_exposure 0. The DCP fingerprint mixes the tables fingerprint, so it
+    covers the complete table content.
+  - Extra tests beyond the plan list: AcceptsTiffMagicFortyTwo,
+    ProfileWithoutForwardMatricesMarksThemInvalid,
+    ProfileToneCurveIsReadPastAndDoesNotChangeTheProfile (P-5), MissingColorMatrix1Fails,
+    ReductionMatrixFails, FourChannelColorMatrixFails, IlluminantWithoutTemperatureFails,
+    TagWithAnotherTypeFails, LookTableWithWrongEntryCountFails, FileAboveSizeLimitFailsBeforeRead,
+    MissingFileFailsWithThePath.
+  - The folder check is the test DcpFileReaderFolderTest.EveryFileOfTheUserFolderLoadsWithout
+    Rejection. It reads the folder in the environment variable ALCEDO_DCP_FOLDER and skips when
+    the variable is not set, as the private fixture tests do.
+Explicitly unimplemented items: none in C1. Library index, camera match, and cache are C2.
+Primary success call chain:
+  ReadDcpCameraProfile(path)
+    -> DcpIfdReader(path): file size limit, header (II/MM, 0x4352/42), entry table of IFD 0
+    -> unsupported tag check (P-7)
+    -> ReadRequiredString x2, ReadMatrix (CM1/CM2/FM1/FM2), ReadIlluminantCct
+       -> CalibrationIlluminantToCct
+    -> ReadMap x3 -> DcpIfdReader::ReadLongs/ReadFloats -> MakeDngHueSatMap
+    -> MakeDngColorProfile(tables) -> MakeDcpCameraProfile -> DcpCameraProfilePtr
+  ReadDcpProfileIdentity(path) -> DcpIfdReader(path) -> ReadRequiredString x2 -> identity
+Primary failure and restore call chain:
+  ReadDcpCameraProfile(path) -> DcpIfdReader::Payload: offset + size > file size
+    -> DcpIfdReader::Fail -> std::runtime_error("DCP <path>: tag 50982 data is outside the
+       file") -> no profile object. Errors of MakeDngHueSatMap, MakeDngColorProfile, and
+       MakeDcpCameraProfile are thrown again with the path (and the data tag for a table).
+       No state exists to restore.
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target DcpFileReaderTest
+    DngColorProfileTest DngColorProfileCacheTest --parallel 4                       exit 0
+  ctest --test-dir build/debug -R "DcpFileReaderTest|DngColorProfileTest|DngColorProfileCacheTest"
+    --output-on-failure                                                             exit 0
+  $env:ALCEDO_DCP_FOLDER = 'D:\Adobe\Adobe Lightroom Classic\Resources\CameraProfiles\Camera'
+  build/debug/alcedo_studio/tests/image/DcpFileReaderTest_runtime/DcpFileReaderTest.exe exit 0
+Discovered / passed / failed / skipped counts:
+  ctest: 47 discovered, 47 passed, 0 failed (DcpFileReaderTest 24 with the folder test skipped,
+  DngColorProfileTest 18, DngColorProfileCacheTest 5). Direct run with the folder: 24 / 24 passed.
+Manual verification: folder run output "DCP files: 2445, cameras: 359, rejected: 0, identity
+  read time: 3169 ms" (Debug build, identity reads only).
+Performance or resource evidence, if required: not required in C1. The identity read time above
+  is a Debug measurement; the scan time target of section 14 is a C2 Release measurement.
+Evidence path: build/tmp/dcp_c1/ (build1.log, ctest1.log, folder_run.log), removed after the PR.
+Remaining defects or unavailable platforms: macOS build of the new files not run in C1; the
+  code uses only the C++20 standard library.
+```
 
 ### C2. Library index, camera match, folder setting, and Settings page
 

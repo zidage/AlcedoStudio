@@ -34,6 +34,14 @@ gtest_discover_tests(DngColorProfileCacheTest TEST_PREFIX "DngColorProfileCacheT
   PROPERTIES LABELS "ci_core_flow;image")
 alcedo_register_test_target(DngColorProfileCacheTest image ci_core)
 
+# DCP file reader: synthetic DCP files from dcp_test_file_writer.hpp, no vendor profile bytes.
+add_executable(DcpFileReaderTest ${ALCEDO_TEST_ROOT}/image/dcp_file_reader_test.cpp)
+target_include_directories(DcpFileReaderTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DcpFileReaderTest PRIVATE GTest::gtest_main Image)
+gtest_discover_tests(DcpFileReaderTest TEST_PREFIX "DcpFileReaderTest."
+  PROPERTIES LABELS "ci_core_flow;image")
+alcedo_register_test_target(DcpFileReaderTest image ci_core)
+
 # Exiv2 XMP toolkit started on the main thread before parallel XMP decodes (issue 389). Its own
 # executable, so no other test in the process starts the toolkit first.
 add_executable(Exiv2XmpToolkitScopeTest ${ALCEDO_TEST_ROOT}/image/exiv2_xmp_toolkit_scope_test.cpp)

@@ -4,7 +4,9 @@
 #include "image/dng_color_profile_import.hpp"
 
 #include <limits>
+#include <span>
 #include <type_traits>
+#include <vector>
 
 #include "image/dng_camera_matrix.hpp"
 
@@ -61,24 +63,37 @@ auto ReadMap(const Exiv2::ExifData& exif, std::uint16_t dims_tag, std::uint16_t 
   const double encoding = ReadScalar(exif, encoding_tag, 0);
   if (encoding != 0 && encoding != 1)
     throw std::runtime_error("DNG profile: unsupported table encoding");
-  map.encoding         = static_cast<std::uint32_t>(encoding);
-  const auto [h, s, v] = map.divisions;
+  if (datum->count() > kMaxDngTableFloats) {
+    throw std::runtime_error("DNG profile: table dimensions disagree with data count");
+  }
+  std::vector<float> data(datum->count());
+  for (std::size_t i = 0; i < data.size(); ++i) data[i] = datum->toFloat(i);
+  return MakeDngHueSatMap(map.divisions, static_cast<std::uint32_t>(encoding), data);
+}
+}  // namespace
+
+auto MakeDngHueSatMap(const std::array<std::uint32_t, 3>& divisions, std::uint32_t encoding,
+                      std::span<const float> data) -> DngHueSatMap {
+  if (encoding > 1) throw std::runtime_error("DNG profile: unsupported table encoding");
+  const auto [h, s, v] = divisions;
   if (h == 0 || s < 2 || v == 0 || h > 360 || s > 256 || v > 256) {
     throw std::runtime_error("DNG profile: invalid table dimensions");
   }
   const std::uint64_t count = static_cast<std::uint64_t>(h) * s * v * 3;
-  const bool          omit_zero_saturation =
-      datum->count() == static_cast<std::uint64_t>(h) * (s - 1) * v * 3;
-  if (count > kMaxDngTableFloats || (!omit_zero_saturation && count != datum->count())) {
+  const bool omit_zero_saturation = data.size() == static_cast<std::uint64_t>(h) * (s - 1) * v * 3;
+  if (count > kMaxDngTableFloats || (!omit_zero_saturation && count != data.size())) {
     throw std::runtime_error("DNG profile: table dimensions disagree with data count");
   }
+  DngHueSatMap map;
+  map.divisions = divisions;
+  map.encoding  = encoding;
   map.entries.resize(static_cast<std::size_t>(count));
   std::size_t input_index = 0;
   for (std::size_t slice = 0; slice < static_cast<std::size_t>(h) * v; ++slice) {
     const auto offset = slice * s * 3;
     for (unsigned saturation = omit_zero_saturation ? 1 : 0; saturation < s; ++saturation) {
       for (unsigned channel = 0; channel < 3; ++channel) {
-        map.entries[offset + saturation * 3 + channel] = datum->toFloat(input_index++);
+        map.entries[offset + saturation * 3 + channel] = data[input_index++];
       }
     }
     // DNG permits omitting the neutral row; extrapolate hue/saturation from the first row.
@@ -93,7 +108,6 @@ auto ReadMap(const Exiv2::ExifData& exif, std::uint16_t dims_tag, std::uint16_t 
   map.Validate();
   return map;
 }
-}  // namespace
 
 auto ReadDngColorProfile(const Exiv2::ExifData& exif) -> DngColorProfilePtr {
   DngColorProfile profile;
