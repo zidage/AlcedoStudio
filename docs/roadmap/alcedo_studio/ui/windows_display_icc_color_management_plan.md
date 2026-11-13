@@ -1,7 +1,7 @@
 # Windows Display ICC Color Management Plan
 
 - Date: 2026-11-12
-- Status: W1, W2, W3, W4, and W5 implemented (2026-11-12). W6 planned.
+- Status: W1, W2, W3, W4, and W5 implemented (2026-11-12). W6 implemented (2026-11-13).
 - Tracking issue: [#873](https://github.com/zidage/AlcedoStudio/issues/873) (W1 to W3, PR [#874](https://github.com/zidage/AlcedoStudio/pull/874)); W4 [#875](https://github.com/zidage/AlcedoStudio/issues/875), W5 [#876](https://github.com/zidage/AlcedoStudio/issues/876), W6 [#877](https://github.com/zidage/AlcedoStudio/issues/877)
 - Source revision of the audit: `e7251164b` (`main`)
 - Related plans:
@@ -145,8 +145,9 @@ All paths are below `alcedo_studio/`.
 | Settings page | `src/ui/alcedo_main/qml/LutSettingsPanel.qml` | The page `LUTs and Color Management` has the LUT library tiles and `CameraProfileFolderTile`. | Add the tile of section 3.2. |
 | Tests | `tests/ui/viewport_coverage_composite_test.cpp` with `viewport_coverage_composite_test_support.hpp`; `tests/ui/editor_window_color_management_test.mm` (macOS) | The composite runs on the real QRhi of each backend. No test reads a monitor profile on Windows. | New tests per phase. |
 
-Inference, not verified in source: the pixels of a thumbnail have the encoding of the DRT node of
-the rendered pipeline. Phase W6 must confirm this before it changes the service.
+The pixels of a thumbnail have the encoding of the DRT node of the rendered pipeline. The audit
+step of W6 confirmed this in source for the render path and the disk cache path (see the W6
+completion record).
 
 The audit was written when draft files of `display_color_transform` and `monitor_color_profile`
 existed in the working tree only. W1 and W2 registered, completed, and tested them (see their
@@ -272,6 +273,7 @@ Proposed APIs:
 | `SrgbDisplayProfile()` | None | ICC bytes of sRGB | No | `std::runtime_error` |
 | `BuildDisplayTransformLut(source, display_profile, edge)` | Encoding, ICC bytes, nodes per axis | `DisplayTransformLut` by value | No | Section 6.1 |
 | `ConvertImageToDisplay(image, source, display_profile)` | RGBA8 `QImage` by reference, encoding, ICC bytes | The image, converted in place | The image only | Section 6.1 |
+| `DisplayImageTransform(source, display_profile)`, `Apply(image)` (W6) | Encoding, ICC bytes; then an RGBA8 `QImage` by reference on any thread | A prepared conversion; `Apply` converts the image in place with the pixels of `ConvertImageToDisplay` | The image only | Section 6.1, at construction; `std::invalid_argument` for another image format |
 | `QueryMonitorColorProfile(native_window)` | `HWND` as `void*` | `std::optional<MonitorColorProfile>` | No | `std::nullopt` |
 | `WindowDisplayDestination::ForWindow(window)` | `QWindow*` | The child object of the window; created on the first call | Creates the child | None |
 | `WindowDisplayDestination::Destination()` | None | `std::shared_ptr<const DisplayDestination>` | No | `kind` and `error` |
@@ -287,7 +289,7 @@ Proposed APIs:
 | W3 | Converted editor viewport | `ui/editor_rhi`, `tests/ui` | W1, W2 | 600 to 850 | done |
 | W4 | Settings tile | `ui/alcedo_main` | W2 | 350 to 500 | done |
 | W5 | Converted comparison view and LUT previews | `ui/alcedo_main/album_backend` | W1, W2 | 450 to 700 | done |
-| W6 | Converted thumbnails | `app/thumbnail_service`, `ui/alcedo_main/album_backend` | W1, W2 | 700 to 1100 | planned |
+| W6 | Converted thumbnails | `app/thumbnail_service`, `ui/alcedo_main/album_backend` | W1, W2 | 700 to 1100 | done |
 
 W5 and W6 are separate because W6 changes an app-layer result type and three thumbnail producers.
 
@@ -928,15 +930,132 @@ results show converted pixels on Windows.
 
 **Exit criteria.**
 
-- [ ] The audit result is recorded.
-- [ ] The tests pass.
-- [ ] The grid scroll frame times with the conversion are recorded next to the values without it.
+- [x] The audit result is recorded.
+- [x] The tests pass.
+- [x] The grid scroll frame times with the conversion are recorded next to the values without it.
 - [ ] The grid, the filmstrip, and the viewport show the same colors for the same photo on the
       development machine (manual, user).
 
 **Expected diff.** 700 to 1100 lines.
 
-**Completion record.** Empty.
+**Audit result (step 1).** The thumbnail pixels have the encoding of the DRT node of the
+rendered snapshot on both paths. The service therefore takes the encoding from the same snapshot
+with `ThumbnailEncodingOf(snapshot)`, which is `ViewerDisplayConfigFromDrt` of the DRT node, or
+the default `ViewerDisplayConfig` (Rec.709, gamma 2.2) for a document without one.
+
+| Path | Source evidence | Encoding of the pixels |
+| --- | --- | --- |
+| Render | `ScheduleRenditionRender` renders the snapshot with `RenderType::THUMBNAIL`. `PipelineScheduler` gives that render type no `output_color`; only `FULL_RES_EXPORT` sets it. Without `output_color` the renderer (`renderer.inl.hpp`) takes the display encoding of the frame from `ViewerDisplayConfigFromDrt` of the DRT node, as for the editor viewer. `MakeDisplayCacheThumbnailBuffer` then scales the float code values by 255 to RGBA8 with no color step. | The DRT encoding of the rendered snapshot |
+| Disk cache | The key of an entry is `CommittedHistoryLabel(snapshot)`: the head and the transaction chain, which fold the root and every commit, so one key names one DRT state. The entry holds the RGBA8 buffer of a render of that state (`EnqueueWrite` after `DeliverPixels`). A hit is a snapshot with the same label. | The DRT encoding of the snapshot of the request |
+
+**Measurements (step 5).** Release build, LG ULTRAFINE monitor profile of the development
+machine (`\\.\DISPLAY2`), Rec.709 gamma 2.2 source, 50 timed conversions after 10 warm-up
+conversions per row. "One-shot" builds a LittleCMS conversion per image
+(`ConvertImageForDestination`, the W5 path); "prepared" is `DisplayImageConverter::Convert` with
+the kept conversion of this phase.
+
+| Destination | Size | One-shot median / p90 | Prepared median / p90 |
+| --- | --- | --- | --- |
+| LG ULTRAFINE | 256 x 171 | 2.23 / 2.50 ms | 0.44 / 0.54 ms |
+| LG ULTRAFINE | 512 x 341 | 3.51 / 3.83 ms | 1.77 / 2.03 ms |
+| sRGB (LittleCMS built-in) | 256 x 171 | 3.45 / 3.88 ms | 0.47 / 0.52 ms |
+| sRGB (LittleCMS built-in) | 512 x 341 | 4.93 / 5.17 ms | 1.95 / 2.32 ms |
+| sRGB (LittleCMS built-in) | 1024 x 683 | 10.19 / 11.41 ms | 7.69 / 8.63 ms |
+
+Grid frame times: the library grid benchmark recipe (release `alcedo_main`, the perf project of
+the library grid benchmark, justified layout at zoom level 7, window client 3866 x 2090 at 192
+dpi, `PostMessage` wheel notches and button clicks, `qt.scenegraph.time.renderloop` frame log).
+"Without" is the W5 head `8c7972703`, where the thumbnail store converts nothing. Each cell is
+frames / gaps above 50 ms / longest gap.
+
+| Run | Fast scroll down (30 notches, 40 ms apart) | Slow scroll up (30 notches, 150 ms apart) | Zoom 7 to 4, longest gaps | Zoom 4 to 7, longest gaps |
+| --- | --- | --- | --- | --- |
+| Without, run 1 | 79 / 0 / 46 ms | 233 / 9 / 117 ms | 516, 500, 385 ms | 433, 428, 423 ms |
+| Without, run 2 | 81 / 0 / 45 ms | 194 / 17 / 125 ms | 516, 500, 402 ms | 450, 441, 416 ms |
+| With, one-shot conversion (`5f82369ea`) | 75 / 1 / 53 ms | 256 / 7 / 96 ms | 517, 515, 375 ms | 434, 433, 427 ms |
+| With, prepared conversion (`6cdde3402`) | 83 / 0 / 50 ms | 202 / 15 / 134 ms | 500, 500, 403 ms | 445, 434, 417 ms |
+
+The scroll values of the four runs overlap, and the zoom gaps of 300 to 520 ms and one gap of 430
+to 465 ms after a scroll stops occur in the runs without the conversion too. A gap in this log
+also counts idle time of the GUI thread, so it is an upper bound of blocked time. The
+`[DisplayProfile]` line of each "with" run names the LG ULTRAFINE monitor profile, so the store
+converted every thumbnail.
+
+**Completion record.**
+
+```text
+Phase / date / status: W6 / 2026-11-13 / done (manual color check of the user open)
+Source revision and branch: 6cdde3402 + feature/windows-display-icc-thumbnails (on PR #881)
+Actual changed modules: app/thumbnail_service (ThumbnailGuard::encoding, ThumbnailEncodingOf),
+  ui/alcedo_main/album_backend (ThumbnailImageStore, ThumbnailImageProvider, ThumbnailManager,
+  SearchController, LibraryModule, ApplicationModuleHost::AttachDisplayWindow), ui/edit_viewer
+  (DisplayImageTransform in DisplayColorTransform; prepared conversions in
+  DisplayImageConverter), tests/app (ThumbnailServiceTest), tests/ui (AlbumBackendThumbnailTest,
+  DisplayColorTransformTest, WindowDisplayDestinationTest)
+Implemented behavior: each delivered thumbnail reports the encoding of its pixels from the
+  render path and the disk cache path; the thumbnail store keeps the source pixels and the
+  encoding; requestImage converts them to the destination of the main window; a new destination
+  gives the loaded grid and filmstrip rows and the shown search previews new URLs and renders
+  nothing; an ST 2084 or HLG thumbnail is shown unconverted
+Explicitly unimplemented items: none
+Primary success call chain: ThumbnailService::GetThumbnail -> lookup worker -> disk hit:
+  DeliverPixels(pixels, ThumbnailEncodingOf(snapshot)) | render: ScheduleRenditionRender
+  (encoding = ThumbnailEncodingOf(snapshot)) -> callback_ -> MakeDisplayCacheThumbnailBuffer ->
+  DeliverPixels(pixels, encoding) -> on_pixels -> ThumbnailGuard::encoding ->
+  ThumbnailManager / SearchController callback -> ThumbnailImageStore::Put(id, edge, image,
+  guard->encoding) -> URL `image://alcedo-thumb/<id>/<edge>/<revision>`; QML Image
+  (asynchronous) -> ThumbnailImageProvider::requestImage -> GetForDisplayByProviderId ->
+  DisplayImageConverter::Convert -> TransformFor(destination, encoding) ->
+  DisplayImageTransform::Apply; main.cpp -> ApplicationModuleHost::AttachDisplayWindow ->
+  LibraryModule::SetDisplayWindow -> WindowDisplayDestination::DestinationChanged ->
+  ApplyDisplayDestination -> SetDisplayDestination -> ThumbnailManager::SetDisplayDestination
+  (store SetDestination, new revisions, UpdateThumbnailState of each pinned row) and
+  SearchController::RepublishSearchPreviewThumbnails
+Primary failure and restore call chain: building or applying the conversion throws ->
+  DisplayImageConverter::Convert writes one `[DisplayProfile]` warning for that destination ->
+  the source pixels; the next destination converts again
+Build and test commands with exit codes: build build\debug --target ThumbnailServiceTest
+  AlbumBackendThumbnailTest DisplayColorTransformTest WindowDisplayDestinationTest
+  EditorComparisonImageProviderTest EditorComparisonControllerTest LutLibraryModelTest (0);
+  ThumbnailServiceTest --gtest_filter=-*Fuzz* (0); each other binary (0); build build\release
+  --target alcedo_main (0) for the frame times
+Discovered / passed / failed / skipped counts: ThumbnailServiceTest without the fuzz cases
+  25 / 24 / 0 / 1 (MetalGeometryPipelineThumbnailStillRenders, Metal only), with
+  DeliveredThumbnailReportsTheDrtEncoding; AlbumBackendThumbnailTest 9 / 8 / 0 / 1
+  (MetalThumbnailGridLifecycleWithGeometryOperatorsProducesProviderUrl, Metal only);
+  DisplayColorTransformTest 10 / 10 / 0 / 0; WindowDisplayDestinationTest 7 / 7 / 0 / 0;
+  EditorComparisonImageProviderTest 9 / 9 / 0 / 0; EditorComparisonControllerTest
+  6 / 6 / 0 / 0; LutLibraryModelTest 33 / 33 / 0 / 0
+Manual verification: open (the user compares the grid, the filmstrip, and the viewport)
+Performance or resource evidence: the two tables above
+Evidence path: build/tmp/display_icc/ (w6_conversion_bench.txt, w6_conversion_bench2.txt,
+  w6_scroll_base1.txt, w6_scroll_base2.txt, w6_scroll_conv1.txt, w6_scroll_conv2.txt, and the
+  test logs w6_*.log)
+Remaining defects or unavailable platforms: on macOS the destination stays NoWindow and the
+  store gives the source pixels, as before; the Metal thumbnail tests run on macOS only
+```
+
+Changes against the plan:
+
+- The tests name the gtest suites `ThumbnailServiceTests.DeliveredThumbnailReportsTheDrtEncoding`
+  and `ThumbnailTests.*` of the binary `AlbumBackendThumbnailTest`.
+- `DisplayImageConverter` keeps one prepared `DisplayImageTransform` for each encoding of the
+  current destination and drops them on `SetDestination`. Step 5 measured 2.2 to 3.5 ms per
+  thumbnail for building the LittleCMS conversion alone, and the QML image provider serves the
+  requests of one view one after another, so a page of about 150 cells waited for one build per
+  cell. The kept conversion gives the same pixels (`ConvertImageToDisplay` builds and applies a
+  `DisplayImageTransform` too); the W5 stores use it as well. This is the response of the risk
+  "the thumbnail conversion makes the grid scroll slower" in section 12, applied to the
+  conversion instead of to the converted pixels: the store keeps no converted images.
+- `LibraryModule::SetDisplayDestination(destination)` is public. `SetDisplayWindow` connects
+  `DestinationChanged` of the window to it, and the tests call it directly, because the UI test
+  main runs a `QCoreApplication` without screens.
+- A new destination publishes the new URLs of the search previews too
+  (`SearchController::RepublishSearchPreviewThumbnails`): the pinned search thumbnails get the
+  current URL of the store, and each shown key without a request in flight is published again.
+- `ThumbnailImageStore::ParseUrl` reads the element id and edge of a row URL, so that
+  `ThumbnailManager::SetDisplayDestination` publishes the current URL of the edge that each row
+  shows. `Put` stores another image format as `Format_RGBA8888`; the producers give RGBA8888.
 
 ## 10. Cross-phase acceptance matrix
 
@@ -1012,3 +1131,4 @@ Remaining defects or unavailable platforms:
 | Identity tolerance of a table | 5e-4 | W1 tests |
 | Matrix conversion tolerance of a table | 1e-3 | W1 tests |
 | Table build time limit on the GUI thread | 50 ms (release build) | Section 12 |
+| Prepared image conversions of a store | One for each encoding of the current destination | `DisplayImageConverter`, W6 |
