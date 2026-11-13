@@ -523,6 +523,8 @@ def_ui_test(AlbumBackendLibraryMarksTest album_backend_library_marks_test.cpp)
 alcedo_register_test_target(AlbumBackendLibraryMarksTest ui)
 
 def_ui_test(AlbumBackendThumbnailTest album_backend_thumbnail_test.cpp)
+# display_destination_test_support.hpp builds the P3 test profile with LittleCMS.
+target_link_libraries(AlbumBackendThumbnailTest PRIVATE lcms2::lcms2)
 alcedo_register_test_target(AlbumBackendThumbnailTest ui)
 
 def_ui_test(AlbumBackendStatsFilterTest album_backend_stats_filter_test.cpp)

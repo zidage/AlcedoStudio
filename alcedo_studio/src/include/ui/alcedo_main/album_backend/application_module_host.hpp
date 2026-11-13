@@ -226,8 +226,9 @@ class ApplicationModuleHost final : public QObject {
   /// Safe to call once per engine; the engine takes ownership of the provider.
   void AttachQmlEngine(QQmlEngine* engine);
 
-  /// The comparison view and the LUT previews convert to the display destination of @p window,
-  /// the main window (Windows display ICC plan, W5). Call once after the QML root loads.
+  /// The comparison view, the LUT previews (Windows display ICC plan, W5), and the thumbnails of
+  /// the grid, the filmstrip, and the search results (W6) convert to the display destination of
+  /// @p window, the main window. Call once after the QML root loads.
   void               AttachDisplayWindow(QWindow* window);
 
  private:
