@@ -390,6 +390,20 @@ target_link_libraries(DngColorProfileTest PRIVATE GTest::gtest_main EditRuntime 
 gtest_discover_tests(DngColorProfileTest TEST_PREFIX "DngColorProfileTest.")
 alcedo_register_test_target(DngColorProfileTest edit)
 
+# DCP camera profile reference in the Develop payload and the effective profile on the scalar
+# render path (color transform, table packing, content keys). No GPU.
+add_executable(DcpCameraProfileRenderTest
+  ${ALCEDO_TEST_ROOT}/edit/runtime/dcp_camera_profile_render_test.cpp)
+target_include_directories(DcpCameraProfileRenderTest PRIVATE ${ALCEDO_INCLUDE_DIR}
+  ${ALCEDO_TEST_ROOT}/edit)
+target_link_libraries(DcpCameraProfileRenderTest PRIVATE GTest::gtest_main EditInput EditRuntime
+  Image)
+target_compile_definitions(DcpCameraProfileRenderTest PRIVATE
+  ALCEDO_EXPECTED_JSON_DIR="${ALCEDO_TEST_ROOT}/resources/expected_json")
+gtest_discover_tests(DcpCameraProfileRenderTest TEST_PREFIX "DcpCameraProfileRenderTest."
+  PROPERTIES LABELS "ci_core_flow;edit;runtime")
+alcedo_register_test_target(DcpCameraProfileRenderTest edit ci_core)
+
 add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/input/raw_input_loader_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/input/raster_input_loader_test.cpp

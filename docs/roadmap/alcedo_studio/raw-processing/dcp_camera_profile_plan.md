@@ -4,7 +4,8 @@ Date: 2026-11-12
 
 Status: **C1 complete** (2026-11-12, reader and profile value). **C2 implemented** (2026-11-12,
 library index, camera match, folder setting, Settings page); the user check of the Settings page
-is open. C3 to C7 planned.
+is open. **C3 complete** (2026-11-12, Develop reference and effective profile in the render). C4
+to C7 planned.
 
 Parent: [Roadmap](../../roadmap.md).
 
@@ -364,7 +365,7 @@ Stored reference, identity absent from the library
 | --- | --- | --- | --- | ---: | --- |
 | C1 | DCP file reader and profile value | `image/` | None | 900 to 1200 | Complete |
 | C2 | Library index, camera match, folder setting, Settings page | `image/`, `app/`, `ui/alcedo_main/` | C1 | 1300 to 1700 | Implemented; user page check open |
-| C3 | Profile reference in the Develop payload and the effective profile in the render | `edit/graph/`, `edit/runtime/` | C1 | 1100 to 1500 | Planned |
+| C3 | Profile reference in the Develop payload and the effective profile in the render | `edit/graph/`, `edit/runtime/` | C1 | 1100 to 1500 | Complete |
 | C4 | Develop field, history, and binding on each load path | `app/` | C2, C3 | 1200 to 1600 | Planned |
 | C5 | Editor section and list model | `ui/alcedo_main/`, `app/` | C4 | 900 to 1300 | Planned |
 | C6 | DCP profile on a DNG source | `image/`, `app/`, `edit/graph/` | C4 | 600 to 900 | Planned |
@@ -838,14 +839,133 @@ ctest --test-dir build/debug -R "DcpCameraProfileRenderTest|DngColorProfileTest|
 
 **Exit criteria.**
 
-- [ ] `DcpCameraProfileRenderTest` passes.
-- [ ] The current Develop model, color transform, and content key suites pass unchanged.
-- [ ] A project made before this phase opens: the root id check in `TryDecodeRootState` succeeds
+- [x] `DcpCameraProfileRenderTest` passes.
+- [x] The current Develop model, color transform, and content key suites pass unchanged.
+- [x] A project made before this phase opens: the root id check in `TryDecodeRootState` succeeds
       for a stored root in `PipelineDngProfileBindingTest`.
 
 **Expected diff.** 1100 to 1500 lines.
 
-**Completion record.** Empty.
+**Completion record.**
+
+```text
+Phase / date / status: C3 / 2026-11-12 / complete
+Source revision and branch: 7fb3403e1 (C2, branch feature/dcp-profile-library), work branch
+  feature/dcp-profile-develop-reference stacked on the C2 pull request
+Actual changed modules: edit/graph/ (Develop payload, Model, color transform), edit/runtime/
+  (table packing, content keys, the camera color pass of CUDA, OpenCL, and Metal: message and
+  packing call only), tests/edit/, tests/resources/expected_json/
+Implemented behavior:
+  - include/edit/graph/develop_node_model.hpp, edit/graph/develop_node_model.cpp:
+    DevelopCameraProfileFile (camera_model, profile_name, fingerprint, DcpCameraProfilePtr
+    profile; equality without the pointer), MakeDevelopCameraProfileFile,
+    DevelopCameraProfileFileToJson, DevelopCameraProfileFileFromJson,
+    DevelopPayload::camera_profile_file (std::optional), DevelopCameraProfileFileUpdate,
+    DevelopParamsModel::ApplyCameraProfileFileUpdate and CameraProfileFile. ToJson writes the key
+    only when the optional has a value. LoadJson keeps the bound profile for an equal reference
+    and gives an unbound reference otherwise; an absent key clears the reference. ReplaceParams
+    installs the bound profile of an equal reference (the C4 binding step uses this) and marks
+    WhiteBalance dirty for a changed reference. IsDefault is false while a reference is set.
+  - include/edit/graph/develop_color_transform.hpp, edit/graph/develop_color_transform.cpp:
+    EffectiveCameraProfile, SolveDevelopAsShotWhiteBalance, ColorTransformFailureMessage,
+    ColorTransformError::UnboundCameraProfileFile. ResolveDevelopColorTransform returns the new
+    error for an unbound reference and otherwise reads every matrix, CCT value, and table from
+    EffectiveCameraProfile. BindDevelopCameraProfile solves the as-shot values through
+    SolveDevelopAsShotWhiteBalance, so a bound reference uses the DCP matrices.
+  - edit/runtime/dng_profile_gpu_data.cpp: PackDngProfileGpuData(const DevelopPayload&,
+    transform) packs the tables of the effective profile. The three backends call it and throw
+    ColorTransformFailureMessage. The kernels do not change.
+  - edit/runtime/result_content_key.cpp: MixCameraColorParams mixes the reference fingerprint
+    when a reference is set. The sensor key does not read it.
+Detail decisions made in this phase:
+  - EffectiveCameraProfile returns a DevelopCameraProfile value: the existing representation
+    that every matrix reader of develop_color_transform.cpp takes. It is a computed result; the
+    payload member camera_profile keeps the import values. With a bound reference: ColorMatrix1/2,
+    ForwardMatrix1/2, the two CCT values, calibration_illuminants_valid = true, and the DCP tables
+    as dng_profile (identity AnalogBalance and CameraCalibration). AsShotNeutral and cam_mul stay.
+    The render therefore takes the DNG branch of the transform (ForwardMatrix normalization to
+    D50, BaselineExposureOffset of the DCP in the table header).
+  - An embedded DNG profile of the source is not read while a DCP reference is bound. Phase C6
+    adds the source calibration of a DNG source.
+  - DevelopCameraProfileFileUpdate holds only the DcpCameraProfilePtr. The reference values come
+    from the profile itself, so an update cannot name one profile and carry another. A null
+    profile clears the reference.
+  - Step 2: the as-shot solve became SolveDevelopAsShotWhiteBalance(DevelopPayload&). It reads
+    the matrices and the neutral through ResolveDevelopColorTransform, which reads
+    EffectiveCameraProfile, so one function serves the import binding and the update.
+  - PackDngProfileGpuData keeps its DevelopCameraProfile overload (the current DNG tests call it)
+    and gets the DevelopPayload overload that the backends call.
+  - The render message is: camera profile "<profile_name>" for "<camera_model>" is not in the DCP
+    folder. edit/graph/ has no access to the folder setting, so the message has no path. The C4
+    binding step logs the folder path when the library has no such identity.
+  - A malformed camera_profile_file value (not an object, a missing or empty string, a fingerprint
+    that is not 16 lowercase hexadecimal digits) fails LoadJson with std::runtime_error, as the
+    DNG profile fingerprint does.
+  - The content key mixes nothing for a document without a reference, so the current keys stay.
+  - The stored text expected_develop_without_camera_profile_file.json is the ToJson output of a
+    RAW payload with the import matrices of FillTestCameraProfile and default settings, captured
+    with a temporary test from the unchanged serializer (edit/ has no change between c54ac05fa and
+    7fb3403e1) before the production change.
+  - Tests added to the plan list: LoadJsonKeepsBoundProfileOnlyForEqualReference,
+    MalformedReferenceJsonIsRejected, ReplaceParamsInstallsBoundProfileOfEqualReference. The
+    suite name in the binary is DcpCameraProfileRender.
+Explicitly unimplemented items: none in C3. The Develop field, history, and load-path binding are
+  C4; the DNG source calibration is C6; the GPU comparison is C7.
+Primary success call chain:
+  DevelopParamsModel::ApplyCameraProfileFileUpdate({DcpCameraProfilePtr})
+    -> MakeDevelopCameraProfileFile (identity and fingerprint from the profile)
+    -> MutateWithDirtyFields: raster check -> payload.camera_profile_file = bound reference
+    -> SolveDevelopAsShotWhiteBalance -> ResolveDevelopColorTransform (as_shot)
+       -> EffectiveCameraProfile -> DCP matrices and CCT values -> as_shot_cct, as_shot_tint
+    -> WhiteBalance stamp
+  Render: ExecuteCudaCameraColor / ExecuteOpenClCameraColor / ExecuteMetalCameraColor
+    -> ResolveDevelopColorTransform(payload) -> EffectiveCameraProfile -> DNG branch with the DCP
+       ForwardMatrix -> camera_to_ap1
+    -> PackDngProfileGpuData(payload, transform) -> EffectiveCameraProfile -> DCP maps blended by
+       the DCP CCT values, DCP look table, exp2(BaselineExposureOffset)
+    -> DngApplyColorProfile in the unchanged kernel
+  Content keys: BuildFrameResultContentKeys -> MixCameraColorParams -> reference fingerprint in
+    develop_image and downstream keys; sensor_linear and geometry keys unchanged
+Primary failure and restore call chain:
+  DevelopParamsModel::LoadJson(JSON with camera_profile_file) -> unbound reference
+    -> ResolveDevelopColorTransform -> ColorTransformError::UnboundCameraProfileFile
+    -> backend throws "Execute...CameraColor: camera profile "<name>" for "<model>" is not in the
+       DCP folder" -> no render with another profile
+    -> PackDngProfileGpuData(payload, ...) throws the same message; RawWhiteBalanceCct is empty
+  ApplyCameraProfileFileUpdate on a raster document -> std::logic_error before any write; payload
+    and stamps unchanged.
+  ApplyCameraProfileFileUpdate({}) -> reference cleared -> as-shot values solved from the import
+    matrices again -> transform and packed tables equal the values before the selection.
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target DcpCameraProfileRenderTest
+    DngColorProfileTest --parallel 4                                                  exit 0
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditRuntimeCuda
+    EditRuntimeOpenCl GpuDagModelGraphTest GpuDagRawInputTest PipelineDngProfileBindingTest
+    ImportPipelineDocumentTest --parallel 4                                           exit 0
+  ctest --test-dir build/debug -R "DcpCameraProfileRenderTest|DngColorProfileTest|
+    GpuDagModelGraphTest|GpuDagResultContentKey|PipelineDngProfileBindingTest|
+    ImportPipelineDocumentTest" -j 4 --output-on-failure                             exit 0
+  After clang-format and the IsDefault change: the same build of DcpCameraProfileRenderTest,
+    DngColorProfileTest, GpuDagModelGraphTest, EditRuntimeCuda, EditRuntimeOpenCl (exit 0) and
+    ctest -R "DcpCameraProfileRenderTest|DngColorProfileTest|GpuDagModelGraphTest"   exit 0
+Discovered / passed / failed / skipped counts:
+  245 discovered, 245 passed, 0 failed, 0 skipped: DcpCameraProfileRenderTest 13,
+  DngColorProfileTest 18, GpuDagModelGraphTest 182 (Develop model, JSON, color transform,
+  imported camera profile JSON), GpuDagRawInputTest.GpuDagResultContentKey 25,
+  PipelineDngProfileBindingTest 5 (stored root decoded through TryDecodeRootState),
+  ImportPipelineDocumentTest 2. Second run: 213 of 213 passed.
+Manual verification: none needed; no user-visible change in this phase.
+Performance or resource evidence, if required: not required.
+Evidence path: build/tmp/dcp_camera_profile/c3/ (build and ctest logs), removed after the pull
+  request.
+Remaining defects or unavailable platforms: the Metal pass (metal_develop_pass.mm) got the same
+  two-line change as the CUDA and OpenCL passes; the macOS build was not run. C7 runs the three
+  backends.
+LOC note: develop_color_transform.cpp 938 lines, develop_node_model.cpp 573,
+  develop_node_model.hpp 411, dcp_camera_profile_render_test.cpp 467. The transform file is near
+  1000 lines; a further addition there needs a split by responsibility (white-balance solve
+  apart from the matrix resolve).
+```
 
 ### C4. Develop field, history, and binding on each load path
 

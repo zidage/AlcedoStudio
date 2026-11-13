@@ -17,6 +17,7 @@
 #include "edit/graph/i_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_model_base.hpp"
+#include "image/dcp_camera_profile.hpp"
 #include "image/dng_color_profile.hpp"
 
 namespace alcedo {
@@ -65,6 +66,52 @@ inline auto operator!=(const DevelopCameraProfile& a, const DevelopCameraProfile
   return !(a == b);
 }
 
+/**
+ * @brief Reference from the Develop data to a DCP file of the user DCP folder.
+ *
+ * Project data stores only @ref camera_model, @ref profile_name, and @ref fingerprint (Develop JSON
+ * key `camera_profile_file`). @ref profile is runtime data: the owner of a loaded document binds it
+ * from the DCP library before the document renders. A reference is bound when @ref profile is set,
+ * and unbound when it was read from project data and no binding step resolved it. Rendering code
+ * must fail for an unbound reference; it never renders it as the import profile.
+ *
+ * Equality compares the three stored values only, so a bound and an unbound reference to the same
+ * file content are equal.
+ */
+struct DevelopCameraProfileFile {
+  std::string         camera_model;     ///< UniqueCameraModel of the DCP file.
+  std::string         profile_name;     ///< ProfileName of the DCP file.
+  std::uint64_t       fingerprint = 0;  ///< DcpCameraProfile::fingerprint of the file content.
+  DcpCameraProfilePtr profile;          ///< Bound profile; null for an unbound reference.
+
+  [[nodiscard]] auto  IsBound() const -> bool { return profile != nullptr; }
+};
+
+inline auto operator==(const DevelopCameraProfileFile& a, const DevelopCameraProfileFile& b)
+    -> bool {
+  return a.camera_model == b.camera_model && a.profile_name == b.profile_name &&
+         a.fingerprint == b.fingerprint;
+}
+
+/**
+ * @brief Bound reference to @p profile: identity and fingerprint come from the profile itself.
+ * @throws std::invalid_argument when @p profile is null.
+ */
+[[nodiscard]] auto MakeDevelopCameraProfileFile(DcpCameraProfilePtr profile)
+    -> DevelopCameraProfileFile;
+
+/// Persisted form: `{"camera_model", "profile_name", "fingerprint"}`. The profile is not written.
+[[nodiscard]] auto DevelopCameraProfileFileToJson(const DevelopCameraProfileFile& reference)
+    -> nlohmann::json;
+
+/**
+ * @brief Read a persisted reference. The result is unbound.
+ * @throws std::runtime_error when @p json is not an object with two non-empty strings and a
+ *         fingerprint text of 16 lowercase hexadecimal digits.
+ */
+[[nodiscard]] auto DevelopCameraProfileFileFromJson(const nlohmann::json& json)
+    -> DevelopCameraProfileFile;
+
 struct DevelopPayload {
   std::string          demosaic_method        = "default";
   bool                 highlights_reconstruct = true;
@@ -76,6 +123,11 @@ struct DevelopPayload {
   float                as_shot_cct            = 6500.0f;
   float                as_shot_tint           = 0.0f;
   DevelopCameraProfile camera_profile{};
+  /// DCP profile that replaces the matrices and tables of @ref camera_profile in the render.
+  /// Absent means the import profile applies; the JSON key is then absent too, so the JSON and root
+  /// id of a document without a selection stay as before. @ref camera_profile keeps the import
+  /// values while a reference is set.
+  std::optional<DevelopCameraProfileFile> camera_profile_file;
   bool                 lens_enabled         = false;
   bool                 apply_vignetting     = true;
   bool                 apply_distortion     = true;
@@ -100,11 +152,12 @@ inline auto operator==(const DevelopPayload& a, const DevelopPayload& b) -> bool
          a.use_camera_wb == b.use_camera_wb && a.user_wb == b.user_wb && a.wb_mode == b.wb_mode &&
          a.custom_cct == b.custom_cct && a.custom_tint == b.custom_tint &&
          a.as_shot_cct == b.as_shot_cct && a.as_shot_tint == b.as_shot_tint &&
-         a.camera_profile == b.camera_profile && a.lens_enabled == b.lens_enabled &&
-         a.apply_vignetting == b.apply_vignetting && a.apply_distortion == b.apply_distortion &&
-         a.apply_tca == b.apply_tca && a.apply_crop == b.apply_crop &&
-         a.auto_scale == b.auto_scale && a.use_user_scale == b.use_user_scale &&
-         a.user_scale == b.user_scale && a.projection_enabled == b.projection_enabled &&
+         a.camera_profile == b.camera_profile && a.camera_profile_file == b.camera_profile_file &&
+         a.lens_enabled == b.lens_enabled && a.apply_vignetting == b.apply_vignetting &&
+         a.apply_distortion == b.apply_distortion && a.apply_tca == b.apply_tca &&
+         a.apply_crop == b.apply_crop && a.auto_scale == b.auto_scale &&
+         a.use_user_scale == b.use_user_scale && a.user_scale == b.user_scale &&
+         a.projection_enabled == b.projection_enabled &&
          a.target_projection == b.target_projection &&
          a.lens_profile_db_path == b.lens_profile_db_path && a.lens_maker == b.lens_maker &&
          a.lens_model == b.lens_model && a.input == b.input;
@@ -177,6 +230,16 @@ struct DevelopInputProfileUpdate {
 };
 
 /**
+ * @brief DCP profile selection (`camera_profile_file` field).
+ *
+ * @ref profile null clears the reference, so the import profile applies again. A non-null profile
+ * comes from the DCP library and gives a bound reference with its own identity and fingerprint.
+ */
+struct DevelopCameraProfileFileUpdate {
+  DcpCameraProfilePtr profile;
+};
+
+/**
  * @brief Develop endpoint parameters. LibRaw unpack stays outside the graph.
  */
 class DevelopParamsModel final
@@ -244,11 +307,12 @@ class DevelopParamsModel final
    * @brief Take every field except white balance, with its stamp, from @p current, and keep the
    *        white balance of this Model.
    *
-   * Afterwards demosaic, highlight reconstruction, lens/projection, and the camera profile equal
-   * @p current with the same field stamps, so a renderer that applied @p current reuses its
-   * sensor result. The white-balance fields (`use_camera_wb`, `user_wb`, `wb_mode`, custom and
-   * as-shot CCT/tint) keep this Model's values. When they differ from @p current they get one new
-   * stamp; when they are equal they keep the stamp of @p current. Runs under both Model locks.
+   * Afterwards demosaic, highlight reconstruction, lens/projection, the camera profile, and the
+   * DCP profile reference with its bound profile equal @p current with the same field stamps, so a
+   * renderer that applied @p current reuses its sensor result. The white-balance fields
+   * (`use_camera_wb`, `user_wb`, `wb_mode`, custom and as-shot CCT/tint) keep this Model's values.
+   * When they differ from @p current they get one new stamp; when they are equal they keep the
+   * stamp of @p current. Runs under both Model locks.
    *
    * Used for documents of the editor comparison, which render a selected state with the current
    * sensor settings. Never call it on a Model of the working document.
@@ -268,6 +332,21 @@ class DevelopParamsModel final
    */
   void               UseAllSettingsFrom(const DevelopParamsModel& current);
 
+  /**
+   * @brief Set or clear the DCP profile reference atomically.
+   *
+   * Solves `as_shot_cct` and `as_shot_tint` again from the effective matrices (see
+   * EffectiveCameraProfile); `custom_cct` and `custom_tint` keep their numbers. Marks WhiteBalance
+   * dirty when the reference, its bound profile, or a solved value changes. When the as-shot solve
+   * fails (no usable import neutral), the as-shot values keep their numbers, as at import.
+   * @throws std::logic_error for a raster document, which has no camera profile; the payload is
+   *         unchanged.
+   */
+  void               ApplyCameraProfileFileUpdate(DevelopCameraProfileFileUpdate update);
+
+  /// Current DCP profile reference, or std::nullopt when the import profile applies.
+  [[nodiscard]] auto CameraProfileFile() const -> std::optional<DevelopCameraProfileFile>;
+
   /// Current DNG profile reference, read under the Model lock.
   [[nodiscard]] auto DngProfile() const -> DngColorProfileRef;
 
@@ -284,14 +363,14 @@ class DevelopParamsModel final
    */
   void               BindDngColorProfile(DngColorProfilePtr profile);
 
-  /// JSON writes the DNG profile fingerprint only. LoadJson keeps a bound profile whose
-  /// fingerprint matches the JSON; any other fingerprint gives an unbound reference.
+  /// JSON writes the DNG profile fingerprint and the DCP reference only. LoadJson keeps a bound
+  /// profile whose stored values match the JSON; any other value gives an unbound reference.
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
   void               LoadJson(const nlohmann::json& json) override;
 
   [[nodiscard]] auto Params() const -> DevelopPayload { return PayloadCopy(); }
   /// Replace the payload and mark the changed field groups dirty. A payload equal to the current
-  /// one (same DNG profile fingerprint) still installs its bound DNG profile.
+  /// one (same DNG profile fingerprint, same DCP reference) still installs its bound profiles.
   void               ReplaceParams(DevelopPayload payload);
 };
 
@@ -310,7 +389,8 @@ class DevelopNodeModel final : public INodeModel {
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
-  /// Copies the Develop parameters; the bound DNG profile stays shared (@ref INodeModel::Clone).
+  /// Copies the Develop parameters; the bound DNG and DCP profiles stay shared (@ref
+  /// INodeModel::Clone).
   [[nodiscard]] auto Clone() const -> std::shared_ptr<INodeModel> override;
 
   [[nodiscard]] auto Params() -> DevelopParamsModel& { return params_; }

@@ -14,6 +14,16 @@ namespace alcedo {
 auto PackDngProfileGpuData(const DevelopCameraProfile&  profile,
                            const DevelopColorTransform& transform) -> std::vector<float>;
 
+/**
+ * @brief Pack the tables of the effective camera profile of @p develop (EffectiveCameraProfile).
+ *
+ * With a bound DCP reference the buffer holds the DCP tables, blended by the DCP illuminant CCT
+ * values. @p transform must come from ResolveDevelopColorTransform of the same @p develop.
+ * @throws std::runtime_error for an unbound DNG profile or an unbound DCP reference.
+ */
+auto PackDngProfileGpuData(const DevelopPayload& develop, const DevelopColorTransform& transform)
+    -> std::vector<float>;
+
 /// Keep the exact table buffer alive with the workspace until its GPU submission completes.
 template <class Workspace, class Context>
 auto UploadDngProfileGpuData(Workspace& workspace, const NodeId& node,

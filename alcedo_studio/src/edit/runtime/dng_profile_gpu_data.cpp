@@ -51,4 +51,9 @@ auto PackDngProfileGpuData(const DevelopCameraProfile&  profile,
   }
   return result;
 }
+
+auto PackDngProfileGpuData(const DevelopPayload& develop, const DevelopColorTransform& transform)
+    -> std::vector<float> {
+  return PackDngProfileGpuData(EffectiveCameraProfile(develop), transform);
+}
 }  // namespace alcedo
