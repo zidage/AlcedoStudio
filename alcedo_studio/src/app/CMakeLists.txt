@@ -126,6 +126,15 @@ def_library(LutPackageManifest
     PRIVATE_DEPS DetachedSignature
 )
 
+# DCP library folder setting and scans (dcp_camera_profile_plan.md, C2). The index and the loaded
+# profiles live in DcpProfileLibrary (Image); this service owns only the QSettings folder path.
+def_library(CameraProfileLibraryService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/camera_profile_library_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/camera_profile_library_service.hpp"
+    PUBLIC_DEPS Image Qt6::Core ThreadPool
+)
+
 # Owner of the local LUT library: root choice, inventory, favorites, import,
 # and root migration (lut_library_and_package_management_plan.md, L2).
 # Package extraction and activation (L3) run as a library operation. The published state is

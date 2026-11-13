@@ -29,6 +29,18 @@ gtest_discover_tests(LutLibraryServiceTest TEST_PREFIX "LutLibraryServiceTest."
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(LutLibraryServiceTest app ci_core)
 
+# DCP folder setting and scans of the Camera Profiles settings page (DCP plan C2).
+add_executable(CameraProfileLibraryServiceTest
+    ${ALCEDO_TEST_ROOT}/app/camera_profile_library_service_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
+target_include_directories(CameraProfileLibraryServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+    ${ALCEDO_TEST_ROOT})
+target_link_libraries(CameraProfileLibraryServiceTest PRIVATE CameraProfileLibraryService
+    GTest::gtest Qt6::Test)
+gtest_discover_tests(CameraProfileLibraryServiceTest TEST_PREFIX "CameraProfileLibraryServiceTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(CameraProfileLibraryServiceTest app ci_core)
+
 add_executable(LutPackageServiceTest
     ${ALCEDO_TEST_ROOT}/app/lut_package_service_test.cpp
     ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)

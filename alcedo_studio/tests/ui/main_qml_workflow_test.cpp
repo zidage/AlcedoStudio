@@ -191,7 +191,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   ASSERT_NE(update_status, nullptr);
   EXPECT_TRUE(update_status->property("visible").toBool());
   EXPECT_FALSE(update_status->property("text").toString().trimmed().isEmpty());
-  settings->setProperty("currentCategory", 9);  // About
+  settings->setProperty("currentCategory", 11);  // About
   ProcessEvents(50);
   auto* build_label = settings->findChild<QObject*>(QStringLiteral("aboutBuildLabel"));
   ASSERT_NE(build_label, nullptr);

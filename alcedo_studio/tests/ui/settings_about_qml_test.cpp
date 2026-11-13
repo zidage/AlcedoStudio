@@ -46,8 +46,8 @@
 namespace alcedo::ui::test {
 namespace {
 
-constexpr int kSettingsCategoryCount = 11;
-constexpr int kAboutCategory         = 10;
+constexpr int kSettingsCategoryCount = 12;
+constexpr int kAboutCategory         = 11;
 
 void          ProcessEvents(int milliseconds = 40) {
   QEventLoop loop;
