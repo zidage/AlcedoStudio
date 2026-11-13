@@ -1523,8 +1523,8 @@ TEST(EditorParameterCatalogTest, CurveWriteWithPointsOnlyLeavesTheChannelCurvesA
   CurveModel  model;
   CurveUpdate blue;
   blue.blue = std::vector<CurvePoint>{{0.0f, 0.1f}, {1.0f, 0.9f}};
-  model.Apply(blue);
-  model.Apply(*write);
+  model.ApplyUpdate(blue);
+  model.ApplyUpdate(*write);
   EXPECT_EQ(model.Points().size(), 3U);
   EXPECT_EQ(model.ChannelPoints(CurveChannel::Blue), *blue.blue);
 }
@@ -1546,8 +1546,8 @@ TEST(EditorParameterCatalogTest, CurveWriteWithOneChannelKeySetsOnlyThatCurve) {
   CurveModel  model;
   CurveUpdate rgb;
   rgb.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.4f, 0.5f}, {1.0f, 1.0f}};
-  model.Apply(rgb);
-  model.Apply(*write);
+  model.ApplyUpdate(rgb);
+  model.ApplyUpdate(*write);
   EXPECT_EQ(model.Points(), *rgb.points);
   EXPECT_EQ(model.ChannelPoints(CurveChannel::Blue), *write->blue);
 }
@@ -1658,8 +1658,8 @@ TEST(EditorParameterCatalogTest, CurveResetValueResetsTheFourCurves) {
   CurveUpdate edited;
   edited.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.4f, 0.5f}, {1.0f, 1.0f}};
   edited.red    = std::vector<CurvePoint>{{0.0f, 0.1f}, {1.0f, 0.9f}};
-  model.Apply(edited);
-  model.Apply(std::get<EditorCurveWrite>(*parsed));
+  model.ApplyUpdate(edited);
+  model.ApplyUpdate(std::get<EditorCurveWrite>(*parsed));
   EXPECT_TRUE(model.IsDefault());
 }
 

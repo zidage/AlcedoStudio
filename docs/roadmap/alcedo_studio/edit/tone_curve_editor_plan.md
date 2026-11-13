@@ -220,8 +220,8 @@ to its channel.
 **Model.** `CurvePayload` has `points` (RGB), `red`, `green`, and `blue`; each is the identity
 `(0, 0) - (1, 1)` by default. `CurveChannel` (`Rgb`, `Red`, `Green`, `Blue`) names a curve, and
 `CurveChannelKey` gives its JSON key (`points`, `red`, `green`, `blue`). `CurveUpdate` has an
-optional list of points for each curve; `CurveModel::Apply(CurveUpdate)` sets the curves that the
-update has in one Model change (one revision, one dirty bit for each changed curve). A curve with
+optional list of points for each curve; `CurveModel::ApplyUpdate(CurveUpdate)` sets the curves
+that the update has in one Model change (one revision, one dirty bit for each changed curve). A curve with
 fewer than two points becomes the identity, as `SetPoints` did before. `IsDefault` is true only
 when the four curves are the identity.
 
@@ -269,11 +269,11 @@ curve that is not the identity, for example `4 points, R 3, B 5`.
 
 **Success call chain (write).** `alcedo-cli editor.set curve` -> `EditorParameterCatalog::
 ToModelJson` -> `ParseEditorParameterWrite` -> `ParseCurveWrite(params, ParseForm::Write)` ->
-`ApplyEditorParameterWrite` -> `CurveModel::Apply`.
+`ApplyEditorParameterWrite` -> `CurveModel::ApplyUpdate`.
 
 **Success call chain (undo).** `ApplySetParameter` -> `ApplyEditorParameterValue` ->
 `ParseEditorParameterValue` -> `ParseCurveWrite(value, ParseForm::Value)` (absent channel keys are
-the identity) -> `CurveModel::Apply`.
+the identity) -> `CurveModel::ApplyUpdate`.
 
 **Success call chain (render).** `BindAndScheduleGrade` -> `BindOrRefreshGradeRuntimeSlot` ->
 `MakeCurveGradeRuntimeParams` (four solved splines) -> `ParameterArena::WritePackedSlot` (832

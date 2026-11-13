@@ -473,7 +473,7 @@ TEST_F(ExecutorSnapshotRenderTest, InteractiveRenderGivesTheCurveInputHistogramT
   ASSERT_NE(curve, nullptr);
   CurveUpdate s_curve;
   s_curve.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.3f, 0.2f}, {0.7f, 0.85f}, {1.0f, 1.0f}};
-  curve->Apply(s_curve);
+  curve->ApplyUpdate(s_curve);
   EXPECT_EQ(counts_of(render(grade_id)), histogram.counts) << "a curve edit changed the histogram";
 
   RaiseExposure(loaded.source->Document(), 1.0f);
