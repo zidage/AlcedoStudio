@@ -1,7 +1,7 @@
 # Windows Display ICC Color Management Plan
 
 - Date: 2026-11-12
-- Status: W1, W2, and W3 implemented (2026-11-12). W4, W5, and W6 planned.
+- Status: W1, W2, W3, and W4 implemented (2026-11-12). W5 and W6 planned.
 - Tracking issue: [#873](https://github.com/zidage/AlcedoStudio/issues/873) (W1 to W3, PR [#874](https://github.com/zidage/AlcedoStudio/pull/874)); W4 [#875](https://github.com/zidage/AlcedoStudio/issues/875), W5 [#876](https://github.com/zidage/AlcedoStudio/issues/876), W6 [#877](https://github.com/zidage/AlcedoStudio/issues/877)
 - Source revision of the audit: `e7251164b` (`main`)
 - Related plans:
@@ -85,8 +85,9 @@ The tile is in `LutSettingsPanel.qml`, below `CameraProfileFolderTile`. It follo
 | --- | --- |
 | Title | `Display profile` |
 | First line, left | The `desc` text of the destination. `sRGB` when the destination is sRGB by D9 or D10. |
-| First line, right | The state: `Applied`, `Managed by Windows` (D9), `No profile, sRGB` (D10), or the error text (D11) in the error color of the theme. |
+| First line, right | The state: `Applied`, `Managed by Windows` (D9), `No profile, sRGB` (D10), `Not applied` (D11), or `No monitor` (the window has no monitor yet). |
 | Second line | The file path of the monitor profile, in the data font. Empty when the monitor has no profile. |
+| Alert badge | The reason of D11 (`AlertBadge`, DESIGN.md "Alert badges"). Hidden for the other states. |
 
 The tile shows the monitor of the settings window. It has no button and no input. The tile is
 visible on Windows only. The zh_CN strings are added by hand (`lupdate` is not run).
@@ -284,7 +285,7 @@ Proposed APIs:
 | W1 | Display table and image conversion library with tests | `ui/edit_viewer`, `tests/ui` | None | 500 to 700 | done |
 | W2 | Monitor profile query and window destination with tests | `ui/edit_viewer`, `tests/ui` | W1 | 550 to 750 | done |
 | W3 | Converted editor viewport | `ui/editor_rhi`, `tests/ui` | W1, W2 | 600 to 850 | done |
-| W4 | Settings tile | `ui/alcedo_main` | W2 | 350 to 500 | planned |
+| W4 | Settings tile | `ui/alcedo_main` | W2 | 350 to 500 | done |
 | W5 | Converted comparison view and LUT previews | `ui/alcedo_main/album_backend` | W1, W2 | 450 to 700 | planned |
 | W6 | Converted thumbnails | `app/thumbnail_service`, `ui/alcedo_main/album_backend` | W1, W2 | 700 to 1100 | planned |
 
@@ -693,12 +694,69 @@ Run the QML test with `QT_FORCE_STDERR_LOGGING=1` and check the log for QML warn
 
 **Exit criteria.**
 
-- [ ] The two tests pass.
-- [ ] A screenshot of the settings page on the development machine is in the pull request.
+- [x] The two tests pass.
+- [ ] A screenshot of the tile on the development machine is in the pull request. The screenshot
+      exists (see the completion record); the GitHub CLI cannot upload an image, so the user
+      attaches it to the pull request.
 
 **Expected diff.** 350 to 500 lines.
 
-**Completion record.** Empty.
+**Completion record.**
+
+```text
+Phase / date / status: W4 / 2026-11-12 / done (the user attaches the screenshot to the pull request)
+Source revision and branch: 0a02d2c86 + feature/windows-display-icc-settings-tile (on PR #874)
+Actual changed modules: ui/edit_viewer (WindowDisplayDestination::ApplyMonitorReading),
+  ui/alcedo_main (DisplayProfileReadout library, DisplayProfileTile.qml, LutSettingsPanel.qml,
+  alcedo_main_zh_CN.ts, ApplicationModuleHost registration), tests/ui (DisplayProfileTileQmlTest)
+Implemented behavior: the tile below CameraProfileFolderTile on Windows shows the 'desc' text,
+  the state, the profile path, and the reason of an unusable profile of the monitor of the
+  settings window, and follows DestinationChanged.
+Explicitly unimplemented items: none
+Primary success call chain: DisplayProfileTile -> DisplayProfileReadout.window =
+  Window.window -> WindowDisplayDestination::ForWindow -> connect DestinationChanged;
+  QWindow expose / screenChanged / ApplicationActive -> Refresh -> QueryMonitorColorProfile ->
+  ApplyMonitorReading -> DisplayDestinationTracker::Update -> DestinationChanged ->
+  DisplayProfileReadout::destinationChanged -> the getters read Destination() -> the labels
+Primary failure and restore call chain: the profile cannot be read or used ->
+  DisplayDestination{Unusable, error} -> state Unusable -> `Not applied` and the reason in the
+  alert badge; the next usable read hides the badge
+Build and test commands with exit codes: build --target DisplayProfileTileQmlTest
+  WindowDisplayDestinationTest LutSettingsQmlTest SettingsAboutQmlTest alcedo_main (0);
+  ctest -R "DisplayProfileTileQmlTest|WindowDisplayDestinationTest" -j 1 (0) with
+  QT_FORCE_STDERR_LOGGING=1 (no QML warning); ctest -R "LutSettingsQmlTest|SettingsAboutQmlTest"
+  -j 1 (8: one failure, issue #878)
+Discovered / passed / failed / skipped counts: DisplayProfileTileQmlTest 2 / 2 / 0 / 0;
+  WindowDisplayDestinationTest 6 / 6 / 0 / 0; LutSettingsQmlTest 6 / 6 / 0 / 0 (the LUT page
+  with the tile); SettingsAboutQmlTest 3 / 2 / 1 / 0: OpenLogFolderButtonOpensTheLogDirectory
+  opens category 11, and About is category 10 since #858 (issue #878, present before W4);
+  SettingsPagesUseTheThemeTypeScale passes with the tile
+Manual verification: a screenshot of the tile with the monitor of the development machine
+  (QueryMonitorColorProfile(GetDesktopWindow()) given to the tile window of the offscreen
+  harness, in a local test case that is not committed): `LG ULTRAFINE`, `Applied`,
+  `C:\WINDOWS\system32\spool\drivers\color\LG ULTRAFINE-2D8FE6D4-...-B2535AC83D83.icc`
+Performance or resource evidence: not required
+Evidence path: build/tmp/display_icc_w4/ (removed at the end of the task)
+Remaining defects or unavailable platforms: macOS has no tile (Windows only by section 3.2)
+```
+
+Changes against the plan:
+
+- The readout has the property `state` (enum `DisplayProfileReadout::State`) and `errorText` in
+  place of `stateText` and `hasError`. The tile translates the state with `qsTr`, so that
+  `QQmlEngine::retranslate` after a language change also changes the state text. A text that C++
+  translates does not follow a retranslation.
+- The reason of D11 is in an `AlertBadge` below the path, and the state text is `Not applied`.
+  DESIGN.md requires the alert badge for each error sentence in place of plain red text, and
+  section 3.2 requires the tile to follow DESIGN.md. Section 3.2 above shows the result.
+- A window without a monitor (before its first exposure) shows the state `No monitor`.
+- `WindowDisplayDestination::ApplyMonitorReading` is the second half of `Refresh` (publish, log
+  line, signal). `Refresh` calls it with the Windows query; the test gives it monitor states,
+  because the offscreen platform has no monitor.
+- `alcedo_main_en.ts` gets no entry: the source texts are English and have no plural form, as for
+  `CameraProfileFolderTile`.
+- `DisplayProfileTileQmlTest` is built on Windows only, because the tile is Windows only
+  (`Qt.platform.os`).
 
 ### W5. Converted comparison view and LUT previews
 

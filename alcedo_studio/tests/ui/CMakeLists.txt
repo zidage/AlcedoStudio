@@ -2433,6 +2433,39 @@ if(WIN32)
         TEST_PREFIX "MonitorColorProfileTest."
         PROPERTIES LABELS "editor_rhi;display_output")
     alcedo_register_test_target(MonitorColorProfileTest ui)
+
+    # W4: the Display profile tile of Settings > LUTs and Color Management (a Windows-only tile)
+    # with monitor states given to the window destination of the tile.
+    add_executable(DisplayProfileTileQmlTest
+        ${ALCEDO_TEST_ROOT}/ui/display_profile_tile_qml_test.cpp
+        ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    )
+    target_include_directories(DisplayProfileTileQmlTest
+        PUBLIC ${ALCEDO_INCLUDE_DIR}
+        PRIVATE ${ALCEDO_TEST_DIR}
+    )
+    target_link_libraries(DisplayProfileTileQmlTest
+        PRIVATE
+            DisplayProfileReadout
+            AppTheme
+            ColorEncodingCatalog
+            lcms2::lcms2
+            GTest::gtest
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Test
+            Qt6::Qml
+            Qt6::Quick
+            Qt6::QuickControls2
+            Qt6::Widgets
+    )
+    target_compile_definitions(DisplayProfileTileQmlTest
+        PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+    )
+    alcedo_ui_gtest_discover_tests(DisplayProfileTileQmlTest
+        TEST_PREFIX "DisplayProfileTileQmlTest."
+        PROPERTIES LABELS "workspace_qml;display_output")
+    alcedo_register_test_target(DisplayProfileTileQmlTest ui)
 endif()
 
 # SM8.6: the one viewport composite of the photo and the Mask coverage, on the real QRhi and coverage

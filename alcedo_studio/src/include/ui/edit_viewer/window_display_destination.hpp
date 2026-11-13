@@ -138,9 +138,20 @@ class WindowDisplayDestination final : public QObject {
     return tracker_.Destination();
   }
 
-  /// Read the monitor of the window now. Emits @ref DestinationChanged when the destination
-  /// changes. Does not create the native window.
+  /// Read the monitor of the window now and apply it with @ref ApplyMonitorReading. Does not
+  /// create the native window.
   void               Refresh();
+
+  /**
+   * @brief Take one read of the monitor of the window.
+   *
+   * Publishes a new destination, writes its `[DisplayProfile]` log line, and emits
+   * @ref DestinationChanged when the monitor state differs from the last read. @ref Refresh
+   * calls it with the result of the Windows query; a test gives it a monitor state, because the
+   * offscreen platform has no monitor.
+   * @param monitor The monitor of the window, or std::nullopt when the window has none.
+   */
+  void               ApplyMonitorReading(const std::optional<MonitorColorProfile>& monitor);
 
  signals:
   void DestinationChanged();

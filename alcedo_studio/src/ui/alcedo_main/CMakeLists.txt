@@ -90,6 +90,18 @@ if(WIN32)
     target_link_libraries(WindowDisplayDestination PRIVATE user32 gdi32)
 endif()
 
+# The data of the Display profile tile of Settings > LUTs and Color Management (W4).
+def_library(DisplayProfileReadout
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/display_profile_readout.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/display_profile_readout.hpp"
+    PUBLIC_DEPS
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        WindowDisplayDestination
+)
+
 def_library(BackgroundTaskController
     SOURCES
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/background_task_controller.cpp"
@@ -326,6 +338,7 @@ target_link_libraries(AlbumBackendLib
         UiLocalization
         BackgroundTaskController
         AgentControlOwner
+        DisplayProfileReadout
         EditorRhiViewport
         # The editor scope controller and item analyze the presented frame through EditScope.
         EditScope
@@ -797,6 +810,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdatesSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LutSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CameraProfileFolderTile.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/DisplayProfileTile.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelsSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelDownloadStatementDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/PackageCard.qml"
