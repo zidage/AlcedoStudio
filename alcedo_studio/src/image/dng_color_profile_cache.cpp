@@ -63,7 +63,10 @@ auto DngColorProfileCache::ShareByFingerprintLocked(DngColorProfilePtr profile)
     return profile;
   }
   if (const auto it = by_fingerprint_.find(profile->fingerprint); it != by_fingerprint_.end()) {
-    if (auto existing = it->second.lock()) {
+    // The source calibration is outside the fingerprint; a file with other values keeps its own
+    // profile, and the map then points to the newest one.
+    if (auto existing = it->second.lock();
+        existing && existing->source_calibration == profile->source_calibration) {
       return existing;
     }
   }

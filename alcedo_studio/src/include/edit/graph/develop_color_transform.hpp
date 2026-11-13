@@ -40,7 +40,8 @@ enum class ColorTransformError {
   InvalidWhitePoint,
   /// The Develop data references a DNG profile that no owner bound from the source file.
   UnboundDngProfile,
-  /// The Develop data references a DCP file that no owner bound from the DCP library.
+  /// The Develop data references a DCP file that no owner bound from the DCP library, or whose
+  /// bound tables do not belong to the DNG profile of the source.
   UnboundCameraProfileFile,
 };
 
@@ -62,12 +63,15 @@ struct ColorTransformResult {
  * This is the only reader of matrices and tables for the render:
  * - no `camera_profile_file`: the import values of `camera_profile`;
  * - bound reference: `ColorMatrix1/2`, `ForwardMatrix1/2`, and the two illuminant CCT values of the
- *   DCP profile, with its tables (identity calibration) as the DNG profile, and `AsShotNeutral`
- *   and `cam_mul` of `camera_profile`.
+ *   DCP profile, and `AsShotNeutral` and `cam_mul` of `camera_profile`. The DNG profile is the
+ *   source tables of the reference for a source with an embedded DNG profile (the DCP tables with
+ *   the AnalogBalance, BaselineExposure, and CameraCalibration of the source; plan phase C6), and
+ *   the DCP tables with identity calibration otherwise.
  *
  * The result is a computed value; `camera_profile` keeps the import values.
- * @throws std::runtime_error for an unbound reference, with the message of
- *         @ref ColorTransformFailureMessage.
+ * @throws std::runtime_error for an unbound reference, or for source tables that do not belong
+ *         to the DNG profile of `camera_profile` (DcpSourceTablesMatchSource), with the message
+ *         of @ref ColorTransformFailureMessage.
  */
 [[nodiscard]] auto EffectiveCameraProfile(const DevelopPayload& payload) -> DevelopCameraProfile;
 

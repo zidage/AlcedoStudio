@@ -7,7 +7,7 @@ library index, camera match, folder setting, Settings page); the user check of t
 is open. **C3 complete** (2026-11-12, Develop reference and effective profile in the render).
 **C4 complete** (2026-11-12, Develop field, history, and binding on each load path). **C5
 implemented** (2026-11-12, editor section and list model); the user check of the section is open.
-C6 and C7 planned.
+**C6 complete** (2026-11-12, DCP profile on a DNG source with the source calibration). C7 planned.
 
 Parent: [Roadmap](../../roadmap.md).
 
@@ -369,8 +369,8 @@ Stored reference, identity absent from the library
 | C2 | Library index, camera match, folder setting, Settings page | `image/`, `app/`, `ui/alcedo_main/` | C1 | 1300 to 1700 | Implemented; user page check open |
 | C3 | Profile reference in the Develop payload and the effective profile in the render | `edit/graph/`, `edit/runtime/` | C1 | 1100 to 1500 | Complete |
 | C4 | Develop field, history, and binding on each load path | `app/` | C2, C3 | 1200 to 1600 | Complete |
-| C5 | Editor section and list model | `ui/alcedo_main/`, `app/` | C4 | 900 to 1300 | Planned |
-| C6 | DCP profile on a DNG source | `image/`, `app/`, `edit/graph/` | C4 | 600 to 900 | Planned |
+| C5 | Editor section and list model | `ui/alcedo_main/`, `app/` | C4 | 900 to 1300 | Implemented; user section check open |
+| C6 | DCP profile on a DNG source | `image/`, `app/`, `edit/graph/` | C4 | 600 to 900 | Complete |
 | C7 | Backend verification on CUDA, OpenCL, and Metal, user review, documents | tests, `docs/` | C5, C6 | 500 to 800 | Planned |
 
 C2 and C3 have no dependency on each other. Each phase estimate is below 2000 lines.
@@ -1524,7 +1524,109 @@ Source DNG file missing -> LoadSourceDngColorProfile throws (current behavior) -
 
 **Expected diff.** 600 to 900 lines.
 
-**Completion record.** Empty.
+**Completion record.**
+
+```text
+Phase / date / status: C6 / 2026-11-12 / complete
+Source revision and branch: 99632f8f6 (C5, branch feature/dcp-profile-editor-section), work
+  branch feature/dcp-profile-dng-source stacked on the C5 pull request
+Actual changed modules: image/ (DngSourceCalibration in dng_color_profile.hpp, the source tags in
+  dng_color_profile_import.cpp, the sharing rule of DngColorProfileCache, new dcp_source_tables,
+  DcpProfileLibrary::SourceTables), edit/graph/ (source tables in DevelopCameraProfileFile and
+  its update, DcpSourceTablesMatchSource, EffectiveCameraProfile, ResolveDevelopColorTransform,
+  the failure message), edit/runtime/ (camera content key), app/ (AddDcpSourceTables,
+  BindDcpCameraProfile, the camera_profile_file field write, comments of pipeline_root_state)
+Implemented behavior:
+  - ReadDngColorProfile also reads CameraCalibrationSignature (ASCII or BYTE) and the
+    unconditioned CameraCalibration1/2 into DngColorProfile::source_calibration. The field is
+    outside DngColorProfileToJson, so the fingerprint of each stored DNG profile is unchanged.
+    Malformed source matrices count as absent, so a DNG that imported before still imports.
+  - DngColorProfileCache shares two loads only when the fingerprint and the source calibration
+    are equal.
+  - MergeDcpTablesWithSourceCalibration: AnalogBalance and BaselineExposure of the source,
+    CameraCalibration1/2 of the source when CameraCalibrationSignaturesMatch(source signature,
+    ProfileCalibrationSignature of the DCP) and identity otherwise, and the name, maps, look
+    table, encodings, and BaselineExposureOffset of the DCP.
+  - DcpProfileLibrary::SourceTables shares the merges in a map with weak values and the key (DCP
+    fingerprint, source fingerprint, source calibration). The key holds the source calibration
+    because two files can share a DNG fingerprint with other unconditioned matrices.
+  - DevelopCameraProfileFile holds the runtime pair (source_tables, source_fingerprint).
+    ApplyCameraProfileFileUpdate rejects a profile without merged tables on a DNG source, merged
+    tables on a source without a DNG profile, and tables of another fingerprint.
+  - EffectiveCameraProfile returns the merged tables for a DNG source. A reference whose tables
+    do not belong to the current DNG profile of the image fails the transform with
+    UnboundCameraProfileFile and the message "... is not bound to the DNG profile of the source
+    file"; the as-shot solve keeps its values in that state.
+  - AddDcpSourceTables (app/) merges through DcpProfileLibrary::Shared() for the selection write,
+    the history apply, and BindDcpCameraProfile. BindDcpCameraProfile now also merges a bound
+    reference again after the import binding, so a source file with another DNG profile renders
+    with that profile.
+  - The camera content key mixes the fingerprint of the merged tables when they are present; keys
+    of documents without them are unchanged.
+Deviations from this section:
+  - The source signature and matrices are fields of the DngColorProfile object that the cache
+    returns, not a separate cache entry. The Develop payload already holds that object, so the
+    selection write, the history apply, and every load path reach the values without a source
+    file path.
+  - The merge map is a member of DcpProfileLibrary, and the app layer calls it: EditGraph does not
+    link Image, so the Develop model takes the merged tables in the update.
+  - Files: dng_color_profile_import.cpp replaces dng_color_metadata.cpp, which only calls
+    ReadDngColorProfile.
+Explicitly unimplemented items: none in C6. The GPU comparison on the three backends is C7.
+Primary success call chain:
+  BuildDocumentFromRoot -> ReplayPipelineDocumentFromRoot -> ApplyEditorParameterValue
+    -> AddDcpSourceTables -> DcpProfileLibrary::SourceTables (map hit or merge)
+    -> DevelopParamsModel::ApplyCameraProfileFileUpdate
+  -> BindRootCameraProfile -> BindImportedCameraProfile -> BindDcpCameraProfile
+    -> AddDcpSourceTables for the bound DNG profile -> ApplyCameraProfileFileUpdate (no dirty
+       mark for the same binding) -> EffectiveCameraProfile (merged tables) -> render
+Primary failure and restore call chain:
+  Source DNG file missing -> LoadSourceDngColorProfile throws (current behavior) -> load fails
+  Import binding gives another DNG profile -> ResolveDevelopColorTransform returns
+    UnboundCameraProfileFile ("not bound to the DNG profile") -> BindDcpCameraProfile merges again
+    -> the transform succeeds
+  Selection clear -> camera_profile_file absent -> the embedded profile renders as before
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target DcpCameraProfileRenderTest
+    DngColorProfileCacheTest PipelineDcpProfileBindingTest PipelineDngProfileBindingTest
+    DcpProfileLibraryTest DcpFileReaderTest --parallel 6                             exit 0
+  ctest --test-dir build/debug -R "DcpCameraProfileRenderTest|PipelineDcpProfileBindingTest|
+    PipelineDngProfileBindingTest|DngColorProfileCacheTest|DcpProfileLibraryTest|
+    DcpFileReaderTest" --output-on-failure                                           exit 0
+  Caller suites (QT_QPA_PLATFORM=offscreen): ctest -R for EditorPanelProjectionTest,
+    EditorParameterCatalogTest, PipelineDocumentRenderTest, DngColorProfileTest,
+    EditorCameraProfileListModelTest, GpuDagRawInputTest ResultContentKey cases, and
+    GpuDagOpenClDevelopTest DNG cases                                                exit 0
+    126 discovered, 126 passed: 13, 43, 13, 18, 11, 25, and 3.
+Discovered / passed / failed / skipped counts:
+  83 discovered, 81 passed, 0 failed, 2 skipped (the two user folder checks, which need
+  ALCEDO_DCP_FOLDER): DcpCameraProfileRenderTest 19, PipelineDcpProfileBindingTest 15,
+  PipelineDngProfileBindingTest 5 (unchanged), DngColorProfileCacheTest 7 (six unchanged),
+  DcpProfileLibraryTest 13, DcpFileReaderTest 24.
+  New in DcpCameraProfileRenderTest: StoredDngFingerprintIsUnchangedByThisPhase (8e0ba24fda9f0e83
+  and 972fcc24583d5cf5, captured at 99632f8f6 before the change),
+  DngSourceKeepsAnalogBalanceAndBaselineExposureWithDcpProfile,
+  CameraCalibrationAppliesOnlyWhenSignaturesMatch (ASCII and BYTE signature),
+  SourceTablesAreSharedForEqualInputs, ClearingReferenceOnDngSourceRestoresEmbeddedProfile,
+  SourceTablesOfAnotherDngProfileFailUntilMergedAgain.
+  New in PipelineDcpProfileBindingTest (fixture PipelineDcpProfileDngSourceTest, CI DNG
+  DSC06683.dng, CameraCalibrationSignature "com.adobe", BaselineExposure 0.15):
+  DngSourceKeepsAnalogBalanceAndBaselineExposureWithDcpProfile (editor, checkpoint, replay,
+  committed snapshot), CameraCalibrationAppliesOnlyWhenSignaturesMatch,
+  MergedProfileIsSharedByTwoDocumentsOfOneImage (snapshot, editor lease, replay),
+  ClearingReferenceOnDngSourceRestoresEmbeddedProfile,
+  SourceFileWithAnotherProfileIsMergedAgainOnLoad.
+  New in DngColorProfileCacheTest: EqualFingerprintWithOtherSourceCalibrationKeepsItsOwnProfile.
+Manual verification: none required for C6; the user check of C5 covers the editor.
+Performance or resource evidence, if required: not required. One merge per (DCP, source) pair
+  while a document holds it.
+Evidence path: build/tmp/dcp_c6/ (build and ctest logs), removed after the pull request.
+Remaining defects or unavailable platforms: the macOS build was not run; this phase has no
+  platform code.
+LOC note: about 830 changed lines. dcp_source_tables.hpp 31, dcp_source_tables.cpp 33,
+  develop_node_model.hpp 452, develop_color_transform.cpp 959,
+  dcp_camera_profile_render_test.cpp 707, pipeline_dcp_profile_binding_test.cpp 831.
+```
 
 ### C7. Backend verification, user review, and documents
 

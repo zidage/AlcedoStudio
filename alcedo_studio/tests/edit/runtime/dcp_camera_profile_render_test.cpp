@@ -27,10 +27,33 @@
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "image/dcp_camera_profile.hpp"
+#include "image/dcp_profile_library.hpp"
+#include "image/dcp_source_tables.hpp"
 #include "image/dng_color_profile.hpp"
+#include "image/dng_color_profile_import.hpp"
 
 namespace alcedo {
 namespace {
+
+/// IFD0 of a DNG source: AnalogBalance, CameraCalibration1/2, both signatures, BaselineExposure,
+/// and a 2x2x1 hue and saturation map. @p camera_signature is CameraCalibrationSignature;
+/// @p profile_signature is the ProfileCalibrationSignature of the embedded profile.
+auto MakeSourceExif(const std::string& camera_signature, const std::string& profile_signature)
+    -> Exiv2::ExifData {
+  Exiv2::ExifData exif;
+  exif["Exif.Image.AnalogBalance"]         = "9/10 1/1 11/10";
+  exif["Exif.Image.CameraCalibration1"]    = "105/100 0/1 0/1 0/1 1/1 0/1 0/1 0/1 95/100";
+  exif["Exif.Image.CameraCalibration2"]    = "102/100 0/1 0/1 0/1 1/1 0/1 0/1 0/1 97/100";
+  exif["Exif.Image.BaselineExposure"]      = "-1/2";
+  exif["Exif.Image.ProfileHueSatMapDims"]  = "2 2 1";
+  exif["Exif.Image.ProfileHueSatMapData1"] = "10 1 1 10 1.2 1 -20 1 1 -20 1.4 1";
+  exif["Exif.Image.ProfileHueSatMapData2"] = "8 1 1 8 1.1 1 -15 1 1 -15 1.3 1";
+  const Exiv2::AsciiValue camera(camera_signature);
+  const Exiv2::AsciiValue profile(profile_signature);
+  exif.add(Exiv2::ExifKey("Exif.Image.CameraCalibrationSignature"), &camera);
+  exif.add(Exiv2::ExifKey("Exif.Image.ProfileCalibrationSignature"), &profile);
+  return exif;
+}
 
 constexpr std::array<double, 9> kDcpColorMatrixA{0.92, -0.31, -0.06, -0.44, 1.21,
                                                  0.19, -0.08, 0.27,  0.68};
@@ -68,6 +91,7 @@ struct DcpFixtureOptions {
   std::array<double, 9> forward_matrix_1 = kDcpForwardMatrixA;
   std::array<double, 9> forward_matrix_2 = kDcpForwardMatrixD65;
   std::string           profile_name     = "Camera Standard";
+  std::string           calibration_signature;  ///< ProfileCalibrationSignature.
 };
 
 auto MakeDcp(const DcpFixtureOptions& options = {}) -> DcpCameraProfilePtr {
@@ -88,8 +112,41 @@ auto MakeDcp(const DcpFixtureOptions& options = {}) -> DcpCameraProfilePtr {
   profile.forward_matrix_2       = options.forward_matrix_2;
   profile.color_matrix_1_cct     = 2856.0;
   profile.color_matrix_2_cct     = 6504.0;
-  profile.tables                 = MakeDngColorProfile(std::move(tables));
+  profile.profile_calibration_signature = options.calibration_signature;
+  profile.tables                        = MakeDngColorProfile(std::move(tables));
   return MakeDcpCameraProfile(std::move(profile));
+}
+
+// Exiv2 reads the rational tags at float precision.
+constexpr std::array<double, 9> kSourceCalibration1{1.05f, 0, 0, 0, 1, 0, 0, 0, 0.95f};
+constexpr std::array<double, 9> kSourceCalibration2{1.02f, 0, 0, 0, 1, 0, 0, 0, 0.97f};
+
+/// RAW payload of a DNG source: the import matrices of the CameraColor tests and the embedded
+/// profile @p source, with solved as-shot values.
+auto MakeDngSourcePayload(const DngColorProfilePtr& source) -> DevelopPayload {
+  DevelopPayload payload;
+  gpu_dag_test::FillTestCameraProfile(payload.camera_profile);
+  payload.camera_profile.dng_profile = DngColorProfileRef(source);
+  SolveDevelopAsShotWhiteBalance(payload);
+  return payload;
+}
+
+auto MakeDngSourceModel(const DngColorProfilePtr& source) -> DevelopParamsModel {
+  DevelopParamsModel model;
+  model.ReplaceParams(MakeDngSourcePayload(source));
+  return model;
+}
+
+/// Select @p dcp with the tables merged for the DNG profile of @p model, as AddDcpSourceTables
+/// does with DcpProfileLibrary::Shared().
+void SelectForSource(DevelopParamsModel& model, DcpProfileLibrary& library,
+                     const DcpCameraProfilePtr& dcp) {
+  const auto                     source = model.DngProfile();
+  DevelopCameraProfileFileUpdate update;
+  update.profile            = dcp;
+  update.source_tables      = library.SourceTables(dcp, source.Profile());
+  update.source_fingerprint = *source.Fingerprint();
+  model.ApplyCameraProfileFileUpdate(std::move(update));
 }
 
 /// RAW payload with the import matrices of the CameraColor tests and solved as-shot values, as
@@ -443,6 +500,189 @@ TEST(DcpCameraProfileRender, RasterDocumentRejectsUpdate) {
   EXPECT_EQ(model.Params(), before);
   EXPECT_FALSE(model.CameraProfileFile().has_value());
   EXPECT_EQ(model.FieldsRevision(DirtyFieldMask{DevelopDirty::WhiteBalance}), revision);
+}
+
+TEST(DcpCameraProfileRender, StoredDngFingerprintIsUnchangedByThisPhase) {
+  // Captured from ReadDngColorProfile at revision 99632f8f6 (before phase C6) for the fixture
+  // source, with equal and with different calibration signatures.
+  const auto matched   = ReadDngColorProfile(MakeSourceExif("com.example", "com.example"));
+  const auto unmatched = ReadDngColorProfile(MakeSourceExif("com.example", "com.other"));
+  EXPECT_EQ(DngColorProfileFingerprintToText(matched->fingerprint), "8e0ba24fda9f0e83");
+  EXPECT_EQ(DngColorProfileFingerprintToText(unmatched->fingerprint), "972fcc24583d5cf5");
+}
+
+TEST(DcpCameraProfileRender, DngSourceKeepsAnalogBalanceAndBaselineExposureWithDcpProfile) {
+  const auto        source = ReadDngColorProfile(MakeSourceExif("com.example", "com.example"));
+  const auto        dcp    = MakeDcp();
+  DcpProfileLibrary library;
+  auto              model = MakeDngSourceModel(source);
+  SelectForSource(model, library, dcp);
+
+  const auto payload = model.Params();
+  ASSERT_TRUE(payload.camera_profile_file.has_value());
+  EXPECT_EQ(payload.camera_profile_file->source_fingerprint, source->fingerprint);
+  EXPECT_EQ(payload.camera_profile.dng_profile.Profile(), source) << "import values stay";
+  const auto effective = EffectiveCameraProfile(payload).dng_profile;
+  ASSERT_TRUE(effective.IsBound());
+  EXPECT_EQ(effective.Profile(), payload.camera_profile_file->source_tables);
+  // Source values.
+  EXPECT_EQ(effective->analog_balance, (std::array<double, 3>{0.9f, 1.0f, 1.1f}));
+  EXPECT_EQ(effective->analog_balance, source->analog_balance);
+  EXPECT_EQ(effective->baseline_exposure, -0.5);
+  // DCP values.
+  EXPECT_EQ(effective->baseline_exposure_offset, kBaselineExposureOffset);
+  EXPECT_EQ(effective->look_table, dcp->tables->look_table);
+  EXPECT_EQ(effective->hue_sat_map_1, dcp->tables->hue_sat_map_1);
+  EXPECT_EQ(effective->hue_sat_map_2, dcp->tables->hue_sat_map_2);
+  EXPECT_NE(effective->hue_sat_map_1, source->hue_sat_map_1);
+
+  const auto transform = RequireTransform(payload);
+  const auto data      = PackDngProfileGpuData(payload, transform);
+  ASSERT_GE(data.size(), 32u);
+  EXPECT_FLOAT_EQ(data[1], static_cast<float>(std::exp2(-0.5 + kBaselineExposureOffset)));
+  const auto  offset = static_cast<std::size_t>(data[7]);
+  const auto& look   = dcp->tables->look_table.entries;
+  ASSERT_EQ(data.size(), offset + look.size());
+  EXPECT_TRUE(std::equal(look.begin(), look.end(), data.begin() + offset));
+
+  // Without the source values (the C3 rule for a RAW source) the camera matrix differs: the
+  // analog balance enters XYZ to camera.
+  auto without                                    = payload;
+  without.camera_profile.dng_profile              = {};
+  without.camera_profile_file->source_tables      = nullptr;
+  without.camera_profile_file->source_fingerprint = 0;
+  EXPECT_NE(RequireTransform(without).camera_to_xyz, transform.camera_to_xyz);
+}
+
+TEST(DcpCameraProfileRender, CameraCalibrationAppliesOnlyWhenSignaturesMatch) {
+  // The embedded profile has another signature than the camera, so its own calibration is
+  // identity; only the DCP signature decides for the DCP tables.
+  const auto source = ReadDngColorProfile(MakeSourceExif("com.example", "com.other"));
+  EXPECT_EQ(source->camera_calibration_1, kDngIdentityMatrix);
+  EXPECT_EQ(source->source_calibration.signature, "com.example");
+  EXPECT_EQ(source->source_calibration.camera_calibration_1, kSourceCalibration1);
+  EXPECT_EQ(source->source_calibration.camera_calibration_2, kSourceCalibration2);
+
+  DcpFixtureOptions matching;
+  matching.calibration_signature = "com.example";
+  const auto equal               = MergeDcpTablesWithSourceCalibration(*MakeDcp(matching), *source);
+  EXPECT_EQ(equal->camera_calibration_1, kSourceCalibration1);
+  EXPECT_EQ(equal->camera_calibration_2, kSourceCalibration2);
+  EXPECT_EQ(equal->source_calibration, DngSourceCalibration{});
+
+  DcpFixtureOptions other;
+  other.calibration_signature = "com.other";
+  for (const auto& dcp : {MakeDcp(other), MakeDcp()}) {
+    const auto different = MergeDcpTablesWithSourceCalibration(*dcp, *source);
+    EXPECT_EQ(different->camera_calibration_1, kDngIdentityMatrix) << dcp->profile_name;
+    EXPECT_EQ(different->camera_calibration_2, kDngIdentityMatrix);
+    EXPECT_EQ(different->analog_balance, source->analog_balance);
+  }
+
+  // DNG permits a BYTE signature; it reads as the same text.
+  auto       exif = MakeSourceExif("com.example", "com.other");
+  const auto key  = Exiv2::ExifKey("Exif.Image.CameraCalibrationSignature");
+  exif.erase(exif.findKey(key));
+  const std::string text("com.example");
+  Exiv2::DataValue  bytes(Exiv2::unsignedByte);
+  bytes.read(reinterpret_cast<const Exiv2::byte*>(text.c_str()), text.size() + 1);
+  exif.add(key, &bytes);
+  const auto byte_source = ReadDngColorProfile(exif);
+  EXPECT_EQ(byte_source->source_calibration.signature, "com.example");
+  EXPECT_EQ(
+      MergeDcpTablesWithSourceCalibration(*MakeDcp(matching), *byte_source)->camera_calibration_1,
+      kSourceCalibration1);
+}
+
+TEST(DcpCameraProfileRender, SourceTablesAreSharedForEqualInputs) {
+  const auto        source = ReadDngColorProfile(MakeSourceExif("com.example", "com.example"));
+  const auto        dcp    = MakeDcp();
+  DcpProfileLibrary library;
+  {
+    const auto first  = library.SourceTables(dcp, source);
+    const auto second = library.SourceTables(dcp, source);
+    EXPECT_EQ(first, second);
+    EXPECT_EQ(library.SourceTablesMergeCount(), 1u);
+  }
+  // The map holds no strong reference: the released result is merged again.
+  (void)library.SourceTables(dcp, source);
+  EXPECT_EQ(library.SourceTablesMergeCount(), 2u);
+
+  // Another source calibration with the same source fingerprint is another merge. Both embedded
+  // profiles have another signature than the camera, so both fingerprints omit the calibration.
+  DcpFixtureOptions matching;
+  matching.calibration_signature = "com.example";
+  const auto matching_dcp        = MakeDcp(matching);
+  const auto example             = ReadDngColorProfile(MakeSourceExif("com.example", "com.other"));
+  const auto third               = ReadDngColorProfile(MakeSourceExif("com.third", "com.other"));
+  ASSERT_EQ(example->fingerprint, third->fingerprint);
+  const auto example_tables = library.SourceTables(matching_dcp, example);
+  const auto third_tables   = library.SourceTables(matching_dcp, third);
+  EXPECT_NE(example_tables, third_tables);
+  EXPECT_EQ(example_tables->camera_calibration_1, kSourceCalibration1);
+  EXPECT_EQ(third_tables->camera_calibration_1, kDngIdentityMatrix);
+  EXPECT_THROW((void)library.SourceTables(nullptr, source), std::invalid_argument);
+}
+
+TEST(DcpCameraProfileRender, ClearingReferenceOnDngSourceRestoresEmbeddedProfile) {
+  const auto        source = ReadDngColorProfile(MakeSourceExif("com.example", "com.example"));
+  DcpProfileLibrary library;
+  auto              model     = MakeDngSourceModel(source);
+  const auto        before    = model.Params();
+  const auto        transform = RequireTransform(before);
+  const auto        packed    = PackDngProfileGpuData(before, transform);
+
+  SelectForSource(model, library, MakeDcp());
+  EXPECT_NE(PackDngProfileGpuData(model.Params(), RequireTransform(model.Params())), packed);
+  model.ApplyCameraProfileFileUpdate({});
+
+  const auto after = model.Params();
+  EXPECT_EQ(after, before);
+  EXPECT_EQ(after.camera_profile.dng_profile.Profile(), source);
+  const auto restored = RequireTransform(after);
+  EXPECT_EQ(restored.camera_to_xyz, transform.camera_to_xyz);
+  EXPECT_EQ(restored.camera_to_xyz_d50, transform.camera_to_xyz_d50);
+  EXPECT_EQ(restored.camera_to_ap1, transform.camera_to_ap1);
+  EXPECT_EQ(PackDngProfileGpuData(after, restored), packed);
+}
+
+TEST(DcpCameraProfileRender, SourceTablesOfAnotherDngProfileFailUntilMergedAgain) {
+  const auto        source = ReadDngColorProfile(MakeSourceExif("com.example", "com.example"));
+  const auto        dcp    = MakeDcp();
+  DcpProfileLibrary library;
+  auto              model  = MakeDngSourceModel(source);
+
+  // A DNG source rejects a selection without merged tables; a RAW source rejects merged tables.
+  const auto        before = model.Params();
+  EXPECT_THROW(model.ApplyCameraProfileFileUpdate({dcp}), std::invalid_argument);
+  EXPECT_EQ(model.Params(), before);
+  EXPECT_FALSE(model.CameraProfileFile().has_value());
+  auto                           raw = MakeImportedModel();
+  DevelopCameraProfileFileUpdate with_tables;
+  with_tables.profile            = dcp;
+  with_tables.source_tables      = library.SourceTables(dcp, source);
+  with_tables.source_fingerprint = source->fingerprint;
+  EXPECT_THROW(raw.ApplyCameraProfileFileUpdate(with_tables), std::invalid_argument);
+  EXPECT_FALSE(raw.CameraProfileFile().has_value());
+
+  // An import binding that gives another DNG profile leaves the old merge: no render with it.
+  SelectForSource(model, library, dcp);
+  const auto replaced = ReadDngColorProfile(MakeSourceExif("com.example", "com.other"));
+  ASSERT_NE(replaced->fingerprint, source->fingerprint);
+  auto payload                       = model.Params();
+  payload.camera_profile.dng_profile = DngColorProfileRef(replaced);
+  model.ReplaceParams(payload);
+  const auto stale  = model.Params();
+  const auto result = ResolveDevelopColorTransform(stale);
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.error, ColorTransformError::UnboundCameraProfileFile);
+  const auto message = ColorTransformFailureMessage(stale, result.error);
+  EXPECT_NE(message.find("not bound to the DNG profile"), std::string::npos) << message;
+  EXPECT_THROW((void)EffectiveCameraProfile(stale), std::runtime_error);
+
+  SelectForSource(model, library, dcp);
+  EXPECT_TRUE(ResolveDevelopColorTransform(model.Params()).ok);
+  EXPECT_EQ(model.CameraProfileFile()->source_fingerprint, replaced->fingerprint);
 }
 
 TEST(DcpCameraProfileRender, ComparisonDocumentTakesReferenceFromCurrent) {
