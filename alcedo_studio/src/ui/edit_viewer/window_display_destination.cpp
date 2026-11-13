@@ -189,6 +189,11 @@ void WindowDisplayDestination::Refresh() {
     monitor = QueryMonitorColorProfile(reinterpret_cast<void*>(window_->winId()));
   }
 #endif
+  ApplyMonitorReading(monitor);
+}
+
+void WindowDisplayDestination::ApplyMonitorReading(
+    const std::optional<MonitorColorProfile>& monitor) {
   if (!tracker_.Update(monitor)) {
     return;
   }

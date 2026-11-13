@@ -2221,6 +2221,34 @@ Alcedo 将改用 %1。</translation>
     </message>
 </context>
 <context>
+    <name>DisplayProfileTile</name>
+    <message>
+        <location filename="../qml/DisplayProfileTile.qml" line="+27"/>
+        <source>Applied</source>
+        <translation>已应用</translation>
+    </message>
+    <message>
+        <source>Managed by Windows</source>
+        <translation>由 Windows 管理</translation>
+    </message>
+    <message>
+        <source>No profile, sRGB</source>
+        <translation>无配置文件，按 sRGB</translation>
+    </message>
+    <message>
+        <source>Not applied</source>
+        <translation>未应用</translation>
+    </message>
+    <message>
+        <source>No monitor</source>
+        <translation>无显示器</translation>
+    </message>
+    <message>
+        <source>Display profile</source>
+        <translation>显示器配置文件</translation>
+    </message>
+</context>
+<context>
     <name>CacheSettingsPanel</name>
     <message>
         <location filename="../qml/CacheSettingsPanel.qml" line="+75"/>

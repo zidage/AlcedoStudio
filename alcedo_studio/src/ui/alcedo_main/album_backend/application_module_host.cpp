@@ -32,6 +32,7 @@
 #include "app/project_service.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/display_profile_readout.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
@@ -112,6 +113,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   alcedo::ui::RegisterJustifiedLayoutQmlType();
   alcedo::ui::RegisterEditorHistoryQmlTypes();
   alcedo::ui::RegisterEditorNodeQmlTypes();
+  alcedo::ui::RegisterDisplayProfileReadoutQmlType();
   background_tasks_ = std::make_unique<BackgroundTaskController>();
   RecordConstruction("BackgroundTaskController", background_tasks_.get());
   interaction_policy_ =
