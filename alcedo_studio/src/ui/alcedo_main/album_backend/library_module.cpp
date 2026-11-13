@@ -96,6 +96,28 @@ void LibraryModule::BindCollaborators(FolderController* folders, SearchControlle
   stats_ = stats;
 }
 
+void LibraryModule::SetDisplayWindow(QWindow* window) {
+  QObject::disconnect(display_connection_);
+  display_source_ = window != nullptr ? WindowDisplayDestination::ForWindow(window) : nullptr;
+  if (display_source_ != nullptr) {
+    display_connection_ = connect(display_source_, &WindowDisplayDestination::DestinationChanged,
+                                  this, &LibraryModule::ApplyDisplayDestination);
+  }
+  ApplyDisplayDestination();
+}
+
+void LibraryModule::ApplyDisplayDestination() {
+  SetDisplayDestination(display_source_ != nullptr ? display_source_->Destination() : nullptr);
+}
+
+void LibraryModule::SetDisplayDestination(std::shared_ptr<const DisplayDestination> destination) {
+  thumbs_.SetDisplayDestination(std::move(destination));
+  // Search previews can show a tier that no library row shows.
+  if (search_ != nullptr) {
+    search_->RepublishSearchPreviewThumbnails();
+  }
+}
+
 void LibraryModule::SetSemanticLabelProvider(
     std::function<QString(sl_element_id_t)> provider) {
   semantic_label_provider_ = std::move(provider);

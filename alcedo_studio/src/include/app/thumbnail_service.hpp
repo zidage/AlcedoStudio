@@ -18,8 +18,10 @@
 #include "app/pipeline_service.hpp"
 #include "app/sleeve_service.hpp"
 #include "app/thumbnail_types.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "image/image_buffer.hpp"
 #include "type/type.hpp"
+#include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
 class ThumbnailDiskCacheService;
@@ -30,6 +32,10 @@ namespace alcedo {
 struct ThumbnailGuard {
   std::unique_ptr<ImageBuffer> thumbnail_buffer_   = nullptr;
   int                          pin_count_          = 0;
+  /// Output encoding of the pixels of `thumbnail_buffer_`: the DRT node of the committed snapshot
+  /// that the thumbnail shows (@ref ThumbnailEncodingOf). A disk cache hit reports the same
+  /// encoding, because the disk cache key is the history of that snapshot.
+  ViewerDisplayConfig          encoding{};
 
   ThumbnailGuard()                                 = default;
   ~ThumbnailGuard()                                = default;
@@ -56,6 +62,16 @@ struct ThumbnailRequestResult {
   ThumbnailCacheKey               key{};
 };
 
+/**
+ * @brief The output encoding of a thumbnail of @p snapshot.
+ *
+ * A thumbnail render sets no output color override, so its pixels have the encoding of the DRT
+ * node of the document, as the renderer reports for each render; the default encoding when the
+ * document has no DRT node.
+ */
+[[nodiscard]] auto ThumbnailEncodingOf(const PipelineGraphSnapshot& snapshot)
+    -> ViewerDisplayConfig;
+
 using ThumbnailCallback       = std::function<void(std::shared_ptr<ThumbnailGuard>)>;
 using ThumbnailResultCallback = std::function<void(ThumbnailRequestResult)>;
 using CallbackDispatcher      = std::function<void(std::function<void()>)>;
@@ -73,7 +89,8 @@ using CallbackDispatcher      = std::function<void(std::function<void()>)>;
  * renders on the editor's executor.
  *
  * Request flow: memory cache → lookup worker (snapshot, disk cache read) →
- * batch render → RGBA8 display buffer → disk cache write → callback.
+ * batch render → RGBA8 display buffer → disk cache write → callback. Each delivered guard
+ * reports the output encoding of its pixels (@ref ThumbnailGuard::encoding).
  */
 class ThumbnailService {
  private:

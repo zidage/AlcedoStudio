@@ -850,6 +850,9 @@ void ApplicationModuleHost::AttachDisplayWindow(QWindow* window) {
   if (lut_preview_) {
     lut_preview_->SetDisplayWindow(window);
   }
+  if (library_) {
+    library_->SetDisplayWindow(window);
+  }
 }
 
 void ApplicationModuleHost::RecordConstruction(const char* type_name, const void* object) {

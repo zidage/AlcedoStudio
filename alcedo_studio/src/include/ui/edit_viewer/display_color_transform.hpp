@@ -12,6 +12,7 @@
 
 #include <QImage>
 #include <cstddef>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -84,5 +85,33 @@ struct DisplayTransformLut {
  */
 void ConvertImageToDisplay(QImage& image, const ViewerDisplayConfig& source,
                            std::span<const std::byte> display_profile);
+
+/**
+ * @brief The conversion of @ref ConvertImageToDisplay, prepared once for many images.
+ *
+ * Building the LittleCMS conversion costs about 2 to 3 ms (release build), more than converting a
+ * 512-pixel thumbnail. An image store keeps one object for each encoding of its destination
+ * (DisplayImageConverter). The pixels equal those of @ref ConvertImageToDisplay.
+ *
+ * Thread: @ref Apply runs on any thread, also on several threads at once (the LittleCMS
+ * conversion has no pixel cache).
+ */
+class DisplayImageTransform {
+ public:
+  /// @throws as @ref ConvertImageToDisplay for @p source and @p display_profile.
+  DisplayImageTransform(const ViewerDisplayConfig& source,
+                        std::span<const std::byte> display_profile);
+
+  /**
+   * @brief Convert the pixels of @p image in place; the alpha values stay.
+   * @param image An image of `QImage::Format_RGBA8888`.
+   * @throws std::invalid_argument when @p image has a different format.
+   */
+  void Apply(QImage& image) const;
+
+ private:
+  /// The LittleCMS transform (TYPE_RGBA_8 to TYPE_RGBA_8); the deleter frees it.
+  std::shared_ptr<void> transform_;
+};
 
 }  // namespace alcedo

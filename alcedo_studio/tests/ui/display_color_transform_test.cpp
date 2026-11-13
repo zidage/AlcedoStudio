@@ -10,6 +10,8 @@
 /// The expected values come from the catalog matrices and the Ce* curve functions, not from the
 /// code under test.
 
+#include "ui/edit_viewer/display_color_transform.hpp"
+
 #include <gtest/gtest.h>
 #include <lcms2.h>
 
@@ -23,11 +25,11 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "color/color_encoding_catalog.hpp"
 #include "color/color_encoding_math.h"
-#include "ui/edit_viewer/display_color_transform.hpp"
 
 namespace alcedo {
 namespace {
@@ -312,6 +314,52 @@ TEST(DisplayColorTransformTest, ConvertedImageEqualsTableAtNodeColors) {
 
   QImage other(2, 2, QImage::Format_ARGB32);
   EXPECT_THROW(ConvertImageToDisplay(other, config, display), std::invalid_argument);
+}
+
+// Windows display ICC plan, W6: an image store converts many thumbnails with one prepared
+// conversion, also from several image provider threads at once.
+TEST(DisplayColorTransformTest, PreparedTransformGivesTheOneShotPixelsOnEveryThread) {
+  const auto display = MatrixDisplayProfile(ColorGamutId::P3D65, 2.2);
+  const auto config  = Encoding(ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::SRGB_PIECEWISE);
+  QImage     source(96, 64, QImage::Format_RGBA8888);
+  for (int y = 0; y < source.height(); ++y) {
+    uchar* row = source.scanLine(y);
+    for (int x = 0; x < source.width(); ++x) {
+      row[x * 4 + 0] = static_cast<uchar>(x * 255 / (source.width() - 1));
+      row[x * 4 + 1] = static_cast<uchar>(y * 255 / (source.height() - 1));
+      row[x * 4 + 2] = static_cast<uchar>((x * 7 + y * 13) % 256);
+      row[x * 4 + 3] = static_cast<uchar>((x + y) % 256);
+    }
+  }
+  QImage expected = source.copy();
+  ConvertImageToDisplay(expected, config, display);
+  ASSERT_NE(expected, source);
+
+  const DisplayImageTransform prepared(config, display);
+  constexpr int               kThreads = 4;
+  std::vector<QImage>         results(kThreads * 3);
+  std::vector<std::thread>    threads;
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&, t] {
+      for (int i = 0; i < 3; ++i) {
+        QImage image = source.copy();
+        prepared.Apply(image);
+        results[static_cast<std::size_t>(t * 3 + i)] = image;
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  for (const auto& image : results) {
+    EXPECT_EQ(image, expected);
+  }
+
+  QImage other(2, 2, QImage::Format_ARGB32);
+  EXPECT_THROW(prepared.Apply(other), std::invalid_argument);
+  EXPECT_THROW(DisplayImageTransform(
+                   Encoding(ColorUtils::ColorSpace::REC2020, ColorUtils::EOTF::ST2084), display),
+               std::invalid_argument);
 }
 
 }  // namespace

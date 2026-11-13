@@ -209,5 +209,51 @@ TEST_F(WindowDisplayDestinationTest, OffscreenWindowHasNoDestination) {
   EXPECT_EQ(g_warning_count.load(), 0);
 }
 
+// Windows display ICC plan, W6: the converter keeps one prepared conversion for each encoding of
+// its destination, and a new destination converts with its own profile.
+TEST_F(WindowDisplayDestinationTest, ConverterFollowsTheDestinationOfEachEncoding) {
+  QImage source(40, 30, QImage::Format_RGBA8888);
+  for (int y = 0; y < source.height(); ++y) {
+    uchar* row = source.scanLine(y);
+    for (int x = 0; x < source.width(); ++x) {
+      row[x * 4 + 0] = static_cast<uchar>(x * 6);
+      row[x * 4 + 1] = static_cast<uchar>(y * 8);
+      row[x * 4 + 2] = static_cast<uchar>((x * y) % 256);
+      row[x * 4 + 3] = 255;
+    }
+  }
+  const auto expected = [&source](const ViewerDisplayConfig&    encoding,
+                                  const std::vector<std::byte>& profile) {
+    QImage image = source.copy();
+    ConvertImageToDisplay(image, encoding, profile);
+    return image;
+  };
+  const auto destination_of = [](std::vector<std::byte> bytes) {
+    auto destination           = std::make_shared<DisplayDestination>();
+    destination->kind          = DisplayDestinationKind::MonitorProfile;
+    destination->profile_bytes = std::move(bytes);
+    return std::shared_ptr<const DisplayDestination>(std::move(destination));
+  };
+  const ViewerDisplayConfig rec709{ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::GAMMA_2_2};
+  const ViewerDisplayConfig p3{ColorUtils::ColorSpace::P3_D65, ColorUtils::EOTF::SRGB_PIECEWISE};
+  const auto                p3_gamma22 = P3ProfileBytes(2.2);
+  const auto                p3_gamma18 = P3ProfileBytes(1.8);
+
+  DisplayImageConverter     converter;
+  EXPECT_EQ(converter.Convert(source, rec709), source) << "no destination converts nothing";
+  converter.SetDestination(destination_of(p3_gamma22));
+  // Each encoding twice: the second request uses the kept conversion.
+  for (int i = 0; i < 2; ++i) {
+    EXPECT_EQ(converter.Convert(source, rec709), expected(rec709, p3_gamma22));
+    EXPECT_EQ(converter.Convert(source, p3), expected(p3, p3_gamma22));
+  }
+  converter.SetDestination(destination_of(p3_gamma18));
+  EXPECT_NE(expected(rec709, p3_gamma18), expected(rec709, p3_gamma22));
+  EXPECT_EQ(converter.Convert(source, rec709), expected(rec709, p3_gamma18))
+      << "a new destination does not use the conversion of the old one";
+  converter.SetDestination(nullptr);
+  EXPECT_EQ(converter.Convert(source, rec709), source);
+}
+
 }  // namespace
 }  // namespace alcedo
