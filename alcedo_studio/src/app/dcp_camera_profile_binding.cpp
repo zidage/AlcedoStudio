@@ -65,7 +65,9 @@ auto ResolveStoredDcpCameraProfileFile(const DevelopCameraProfileFile& stored)
                             << DngColorProfileFingerprintToText(profile->fingerprint)
                             << "); the DCP folder file is used.";
   }
-  return MakeDevelopCameraProfileFile(std::move(profile));
+  auto resolved         = MakeDevelopCameraProfileFile(std::move(profile));
+  resolved.profile_tone = stored.profile_tone;
+  return resolved;
 }
 
 void AddDcpSourceTables(DevelopCameraProfileFileUpdate& update, const DngColorProfileRef& source) {
@@ -99,7 +101,8 @@ void BindDcpCameraProfile(PipelineDocument& document) {
   // A replayed document was bound by its history apply against the DNG profile of the root; the
   // import binding before this call can have bound another one.
   DevelopCameraProfileFileUpdate update;
-  update.profile = std::move(profile);
+  update.profile      = std::move(profile);
+  update.profile_tone = stored->profile_tone;
   AddDcpSourceTables(update, develop->Params().DngProfile());
   develop->Params().ApplyCameraProfileFileUpdate(std::move(update));
 }

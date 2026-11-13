@@ -313,6 +313,7 @@ static inline float3 DisplayEncoding(float3 rgb, constant float* mat_limit_to_di
 #include "drt_aces.metal"
 #include "drt_opendrt.metal"
 #include "../../../../include/edit/runtime/aces_reference_gamut_compression.h"
+#include "../../../../include/edit/runtime/profile_tone_gpu_math.h"
 
 /// The display transform of one pixel of linear AP1, with the encoding of the output: the ACES
 /// reference gamut compression, then ACES 2.0 or OpenDRT. `drt_display` calls this function, and
@@ -330,16 +331,26 @@ static inline float3 DrtDisplayPixel(float3 ap1, constant MetalToOutputParams& p
                          params.display_linear_scale_);
 }
 
+/// @p profile_tone is the buffer of the profile tone stage (profile_tone_gpu_math.h); the stage runs
+/// first when @p profile_tone_enabled is not 0.
 kernel void drt_display(texture2d<float, access::read> input [[texture(0)]],
                         texture2d<float, access::write> output [[texture(1)]],
                         constant MetalToOutputParams& params [[buffer(0)]],
+                        device const float* profile_tone [[buffer(1)]],
+                        constant uint& profile_tone_enabled [[buffer(2)]],
                         uint2 gid [[thread_position_in_grid]]) {
   if (gid.x >= input.get_width() || gid.y >= input.get_height()) {
     return;
   }
   const float4 source = input.read(gid);
   // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
-  output.write(float4(DrtDisplayPixel(source.xyz, params), source.w), gid);
+  float3 ap1 = source.xyz;
+  if (profile_tone_enabled != 0u) {
+    const ProfileToneRgb toned =
+        ProfileToneApplyStage(ProfileToneMakeRgb(ap1.x, ap1.y, ap1.z), profile_tone);
+    ap1 = float3(toned.r, toned.g, toned.b);
+  }
+  output.write(float4(DrtDisplayPixel(ap1, params), source.w), gid);
 }
 
 /// DiffusionFilter with strength 0: decode the ACEScc AP1 scene to linear AP1 for the DRT.

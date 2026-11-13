@@ -167,6 +167,14 @@ void RuntimeInvalidationState::CollectDevelopChanges(const ExecutionPlan& plan,
     origins.push_back(plan.develop_output);
     last_white_balance_revision_ = white_balance_revision;
   }
+  // `profile_tone` reaches only the display transform (dcp_profile_tone_curve_study.md, section
+  // 6.3), so the camera pass result and every scene result stay valid.
+  const auto profile_tone_revision =
+      develop->Params().FieldsRevision(DirtyFieldMask{DevelopDirty::ProfileTone});
+  if (profile_tone_revision != last_profile_tone_revision_) {
+    origins.push_back(plan.display_output);
+    last_profile_tone_revision_ = profile_tone_revision;
+  }
 }
 
 void RuntimeInvalidationState::CollectGradeChanges(
@@ -405,6 +413,7 @@ void RuntimeInvalidationState::ClearLastSeenRevisions() {
   last_lut_identity_.clear();
   last_sensor_revision_        = kNoParameterRevision;
   last_white_balance_revision_ = kNoParameterRevision;
+  last_profile_tone_revision_  = kNoParameterRevision;
   last_drt_revision_           = kNoParameterRevision;
   last_diffusion_revision_     = kNoParameterRevision;
   last_film_exposure_revision_ = kNoParameterRevision;

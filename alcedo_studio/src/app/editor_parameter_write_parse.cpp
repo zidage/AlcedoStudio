@@ -885,9 +885,10 @@ enum class ParseForm { Write, Value };
 
 /// `camera_profile_file` (dcp_camera_profile_plan.md, phase C4).
 ///
-/// A write is a selection: {"camera_model", "profile_name"}, or the same object under
-/// "camera_profile_file". `{}`, null, and {"camera_profile_file": null} clear the reference. The
-/// identity is resolved through the DCP library; an identity that the library does not hold is
+/// A write is a selection: {"camera_model", "profile_name"} with an optional boolean
+/// "profile_tone" (default true; dcp_profile_tone_curve_study.md, section 6.3), or the same object
+/// under "camera_profile_file". `{}`, null, and {"camera_profile_file": null} clear the reference.
+/// The identity is resolved through the DCP library; an identity that the library does not hold is
 /// rejected, so the document stays unchanged.
 ///
 /// A value is a stored Develop JSON, complete or reduced to the owned key: the reference with its
@@ -911,15 +912,19 @@ auto ParseCameraProfileFileUpdate(const nlohmann::json& params, ParseForm form)
     return {};
   }
   if (form == ParseForm::Value) {
-    const auto stored   = DevelopCameraProfileFileFromJson(*reference);
-    auto       resolved = ResolveStoredDcpCameraProfileFile(stored);
+    const auto                     stored   = DevelopCameraProfileFileFromJson(*reference);
+    auto                           resolved = ResolveStoredDcpCameraProfileFile(stored);
+    DevelopCameraProfileFileUpdate update;
+    update.profile_tone = resolved.profile_tone;
     if (resolved.IsBound()) {
-      return {std::move(resolved.profile), std::nullopt};
+      update.profile = std::move(resolved.profile);
+    } else {
+      update.unresolved = std::move(resolved);
     }
-    return {nullptr, std::move(resolved)};
+    return update;
   }
   RequireObject(*reference, kField);
-  RejectUnknownKeys(*reference, {"camera_model", "profile_name"}, kField);
+  RejectUnknownKeys(*reference, {"camera_model", "profile_name", "profile_tone"}, kField);
   const auto camera_model = ReadOptionalString(*reference, {"camera_model"}, kField);
   const auto profile_name = ReadOptionalString(*reference, {"profile_name"}, kField);
   if (!camera_model.has_value() || camera_model->empty() || !profile_name.has_value() ||
@@ -927,7 +932,10 @@ auto ParseCameraProfileFileUpdate(const nlohmann::json& params, ParseForm form)
     throw std::invalid_argument(
         "camera_profile_file: a selection needs the strings camera_model and profile_name");
   }
-  return {FindSelectableDcpCameraProfile(*camera_model, *profile_name), std::nullopt};
+  DevelopCameraProfileFileUpdate update;
+  update.profile      = FindSelectableDcpCameraProfile(*camera_model, *profile_name);
+  update.profile_tone = ReadOptionalBool(*reference, {"profile_tone"}, kField).value_or(true);
+  return update;
 }
 
 auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, ParseForm form)

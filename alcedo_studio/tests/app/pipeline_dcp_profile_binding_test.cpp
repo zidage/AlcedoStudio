@@ -403,6 +403,56 @@ TEST_F(PipelineDcpProfileBindingTest, UndoRestoresImportProfileAndRedoRestoresDc
   pipelines.ReleaseEditorLease(element_id_);
 }
 
+// `camera_profile_file.profile_tone` (dcp_profile_tone_curve_study.md, phase T2): the write, the
+// history in both directions, the replay, and the binding keep the switch.
+TEST_F(PipelineDcpProfileBindingTest, ProfileToneSwitchCommitsUndoesAndReplaysWithTheBinding) {
+  PipelineMgmtService pipelines(project_->GetStorage());
+  auto                lease    = pipelines.AcquireEditorLease(element_id_);
+  auto&               document = *lease.document_;
+  (void)CommitSelection(lease);
+  ASSERT_TRUE(Payload(document).camera_profile_file->profile_tone);
+
+  std::string error;
+  const auto  tone_off = CommitPatch(
+      lease,
+      {{"camera_model", kCameraModel}, {"profile_name", kProfileName}, {"profile_tone", false}},
+      &error);
+  ASSERT_TRUE(tone_off.has_value()) << error;
+  ExpectBoundToLibraryProfile(document);
+  EXPECT_FALSE(Payload(document).camera_profile_file->profile_tone);
+  EXPECT_EQ(document.Develop()->Params().ToJson().at("camera_profile_file").at("profile_tone"),
+            false);
+
+  ASSERT_TRUE(
+      ApplyPipelineEditBatch(document, *tone_off, PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  ExpectBoundToLibraryProfile(document);
+  EXPECT_TRUE(Payload(document).camera_profile_file->profile_tone);
+  EXPECT_FALSE(
+      document.Develop()->Params().ToJson().at("camera_profile_file").contains("profile_tone"));
+  ASSERT_TRUE(
+      ApplyPipelineEditBatch(document, *tone_off, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  EXPECT_FALSE(Payload(document).camera_profile_file->profile_tone);
+
+  const auto head   = lease.graph_.GetActiveVersionRef().head_commit_hash;
+  const auto replay = BuildDocumentFromRoot(lease.graph_, *lease.root_, head, &error);
+  ASSERT_NE(replay, nullptr) << error;
+  ExpectBoundToLibraryProfile(*replay);
+  EXPECT_FALSE(Payload(*replay).camera_profile_file->profile_tone);
+
+  // A switch that is not a boolean is rejected; the document stays.
+  const auto json = document.ToJson().dump();
+  EXPECT_FALSE(
+      CommitPatch(
+          lease,
+          {{"camera_model", kCameraModel}, {"profile_name", kProfileName}, {"profile_tone", "off"}},
+          &error)
+          .has_value());
+  EXPECT_EQ(document.ToJson().dump(), json);
+  pipelines.ReleaseEditorLease(element_id_);
+}
+
 TEST_F(PipelineDcpProfileBindingTest, CheckoutOfEarlierVersionClearsTheReference) {
   PipelineMgmtService pipelines(project_->GetStorage());
   auto                lease = pipelines.AcquireEditorLease(element_id_);

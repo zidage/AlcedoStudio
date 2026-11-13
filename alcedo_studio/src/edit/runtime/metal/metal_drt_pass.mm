@@ -110,9 +110,11 @@ auto Pipeline() -> NS::SharedPtr<MTL::ComputePipelineState> {
 #endif
 }
 
+/// @p profile_tone is the buffer of the profile tone stage, or null without the stage. The kernel
+/// then reads no stage buffer, and the parameter buffer fills its argument.
 void DispatchDrt(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
                  MetalBackend::Texture2D& dst, const MetalBackend::Buffer& params,
-                 std::uint32_t offset) {
+                 std::uint32_t offset, const MetalBackend::Buffer* profile_tone) {
   auto  pipeline = Pipeline();
   auto* encoder  = static_cast<MTL::ComputeCommandEncoder*>(
       device.Workspace().Device().EnsureComputeCommandEncoder(device.CommandContext()));
@@ -123,6 +125,11 @@ void DispatchDrt(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
   encoder->setTexture(static_cast<MTL::Texture*>(src.Native()), 0);
   encoder->setTexture(static_cast<MTL::Texture*>(dst.Native()), 1);
   encoder->setBuffer(static_cast<MTL::Buffer*>(params.Native()), offset, 0);
+  const std::uint32_t profile_tone_enabled = profile_tone != nullptr ? 1U : 0U;
+  encoder->setBuffer(
+      static_cast<MTL::Buffer*>(profile_tone != nullptr ? profile_tone->Native() : params.Native()),
+      0, 1);
+  encoder->setBytes(&profile_tone_enabled, sizeof(profile_tone_enabled), 2);
   const auto thread_width = std::max<NS::UInteger>(1, pipeline->threadExecutionWidth());
   const auto thread_height =
       std::max<NS::UInteger>(1, pipeline->maxTotalThreadsPerThreadgroup() / thread_width);
@@ -222,12 +229,13 @@ struct MetalDrtOps {
 
   static void DispatchDisplayTransform(MetalRenderDevice& device, const FrameSceneBinding& scene,
                                        const FrameSceneBinding& display, const NodeId& drt_id,
-                                       std::uint32_t, std::uint32_t) {
+                                       const MetalBackend::Buffer* profile_tone, std::uint32_t,
+                                       std::uint32_t) {
     auto&                  arena   = device.Workspace().Parameters();
     const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
     const auto             binding = arena.Binding(key);
     DispatchDrt(device, MetalSceneTexture(device, scene), MetalSceneTexture(device, display),
-                arena.DeviceBuffer(), binding.offset);
+                arena.DeviceBuffer(), binding.offset, profile_tone);
   }
 
   static void DispatchFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,

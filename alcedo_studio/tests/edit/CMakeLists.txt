@@ -509,6 +509,7 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_grain_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_grain_negative_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_print_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_profile_tone_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
@@ -654,7 +655,8 @@ if(ALCEDO_METAL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_diffusion_filter_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_grain_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_grain_negative_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_print_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_print_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_profile_tone_test.cpp)
   target_include_directories(GpuDagMetalDrtTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalDrtTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditRuntimeFilm EditInput RawProcessorOp
@@ -762,6 +764,7 @@ if(ALCEDO_OPENCL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_grain_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_grain_negative_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_print_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_profile_tone_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_lut_resource_test.cpp)

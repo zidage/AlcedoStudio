@@ -25,6 +25,7 @@
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/parameter_binding.hpp"
+#include "edit/runtime/profile_tone_stage.hpp"
 
 namespace alcedo {
 
@@ -64,6 +65,10 @@ class DrtPostExecutor {
    * neighborhood kernels. The film print skips the Film Grain write, and Ops::DispatchFilmPrint
    * receives the stored strength of Film Grain (0 when it is disabled) for the grain of its
    * negative (decision U4).
+   *
+   * With a profile tone stage (ResolveProfileToneStage), the stage buffer is uploaded before any
+   * GPU start, and Ops::DispatchDisplayTransform receives it; it receives null without the stage.
+   * The stage resolve throws for an unbound DCP reference before any GPU start.
    */
   static auto Execute(Device& device, const ExecutionPlan& plan, const PipelineDocument& document,
                       const FrameSceneBinding& scene) -> DrtPostExecutionResult {
@@ -137,6 +142,14 @@ class DrtPostExecutor {
     if (!film_print) {
       Ops::BindDisplayParams(device, plan, *drt);
     }
+    // The profile tone stage of a DCP reference: the first operation of the display transform.
+    // The film print keeps it out (ResolveProfileToneStage).
+    const auto profile_tone = ResolveProfileToneStage(document);
+    auto*      profile_tone_buffer =
+        profile_tone.has_value()
+            ? &UploadProfileToneGpuData(workspace, drt->Id(), PackProfileToneGpuData(*profile_tone),
+                                        device.CommandContext())
+            : nullptr;
     workspace.Parameters().UploadDirty(device.CommandContext());
     Ops::PrepareNeighborCommands(device, drt->Id(), command_offsets);
 
@@ -167,10 +180,12 @@ class DrtPostExecutor {
             Ops::DispatchFilmPrint(device, plan, *drt, FilmSceneRawWhite(document), current, dest,
                                    width, height, film_print_grain);
           } else {
-            Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), width, height);
+            Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), profile_tone_buffer,
+                                          width, height);
           }
         } else {
-          Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), width, height);
+          Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), profile_tone_buffer,
+                                        width, height);
         }
       } else {
         const auto& work = works[index - 1];

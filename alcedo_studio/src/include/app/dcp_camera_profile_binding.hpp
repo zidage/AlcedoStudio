@@ -45,7 +45,8 @@ namespace alcedo {
  *   log names the identity, the DCP folder, and the read error. The render then fails with
  *   `UnboundCameraProfileFile`; no other profile applies (plan decision P-4).
  *
- * The fingerprint of @p stored is compared only; the identity selects the profile.
+ * The fingerprint of @p stored is compared only; the identity selects the profile. The result keeps
+ * the `profile_tone` value of @p stored.
  */
 [[nodiscard]] auto ResolveStoredDcpCameraProfileFile(const DevelopCameraProfileFile& stored)
     -> DevelopCameraProfileFile;

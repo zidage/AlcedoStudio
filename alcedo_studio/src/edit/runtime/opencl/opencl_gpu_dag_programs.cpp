@@ -66,19 +66,18 @@ void RegisterOpenClGpuDagPrograms() {
                     .required_at_startup = false,
                 },
                 OpenClProgramDescriptor{
-                    .name          = OpenCL::GpuDag::kDrtProgramName,
+                    .name = OpenCL::GpuDag::kDrtProgramName,
                     // FP6 of Negative Scan shows its linear AP1 with the display transform of this
                     // program, so it has its kernels here (film_print_scan.cl), with the grain of
                     // the negative.
-                    .source_paths  = {ALCEDO_OPENCL_COLOR_ENCODING_MATH_H, ALCEDO_OPENCL_ACES_RGC_H,
-                                      ALCEDO_OPENCL_DAG_DRT_PARAMS_CL, ALCEDO_OPENCL_DAG_COMMON_CL,
-                                      ALCEDO_OPENCL_DAG_CST_CL, ALCEDO_OPENCL_DAG_DRT_CL,
-                                      ALCEDO_OPENCL_FILM_PRINT_MATH_H,
-                                      ALCEDO_OPENCL_FILM_GRAIN_FIELD_H,
-                                      ALCEDO_OPENCL_FILM_GRAIN_TILE_H,
-                                      ALCEDO_OPENCL_FILM_GRAIN_NEGATIVE_H,
-                                      ALCEDO_OPENCL_DAG_FILM_PRINT_SCAN_CL},
-                    .build_options = "-cl-std=CL1.2",
+                    .source_paths =
+                        {ALCEDO_OPENCL_COLOR_ENCODING_MATH_H, ALCEDO_OPENCL_ACES_RGC_H,
+                         ALCEDO_OPENCL_PROFILE_TONE_MATH_H, ALCEDO_OPENCL_DAG_DRT_PARAMS_CL,
+                         ALCEDO_OPENCL_DAG_COMMON_CL, ALCEDO_OPENCL_DAG_CST_CL,
+                         ALCEDO_OPENCL_DAG_DRT_CL, ALCEDO_OPENCL_FILM_PRINT_MATH_H,
+                         ALCEDO_OPENCL_FILM_GRAIN_FIELD_H, ALCEDO_OPENCL_FILM_GRAIN_TILE_H,
+                         ALCEDO_OPENCL_FILM_GRAIN_NEGATIVE_H, ALCEDO_OPENCL_DAG_FILM_PRINT_SCAN_CL},
+                    .build_options       = "-cl-std=CL1.2",
                     .required_at_startup = false,
                 },
                 OpenClProgramDescriptor{

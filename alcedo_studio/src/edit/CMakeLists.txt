@@ -126,6 +126,7 @@ set(EDIT_RUNTIME_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/drt_post_schedule.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/dng_profile_gpu_data.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/profile_tone_reference.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/profile_tone_stage.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/execution_plan.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/raster_develop_params.cpp
