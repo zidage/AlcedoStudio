@@ -22,6 +22,7 @@
 #include <QVariantMap>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <memory>
@@ -665,6 +666,112 @@ TEST(EditorRawDecodePanelQmlTest, CameraProfileSectionListsMatchedProfilesAndSub
   session.SwitchImage(RasterSnapshot(QStringLiteral("auto")));
   ProcessEvents(80);
   EXPECT_FALSE(section->isVisible());
+}
+
+// T3 (dcp_profile_tone_curve_study.md, section 6.4): the Tone Curve switch under the profile combo
+// is shown for a bound profile with a ProfileToneCurve, commits one settled camera_profile_file
+// write, and is disabled while the DRT method is Film Print.
+TEST(EditorRawDecodePanelQmlTest, CameraProfileToneCurveSwitchCommitsAndFollowsTheDrtMethod) {
+  namespace fs = std::filesystem;
+  std::random_device device;
+  const auto         temp = fs::temp_directory_path() /
+                    ("alcedo_raw_panel_tone_curve_test_" + std::to_string(device()) + "_" +
+                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const auto folder = temp / "Camera";
+  fs::create_directories(folder);
+  constexpr std::uint16_t kProfileToneCurve = 50940;
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Camera Standard")
+      .Floats(kProfileToneCurve, {0.0f, 0.0f, 0.18f, 0.44f, 1.0f, 1.0f})
+      .Write(folder / "standard.dcp");
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Camera Flat").Write(folder / "flat.dcp");
+  struct Cleanup {
+    fs::path temp;
+    ~Cleanup() {
+      DcpProfileLibrary::Shared().Scan({});
+      std::error_code error;
+      fs::remove_all(temp, error);
+    }
+  } cleanup{temp};
+
+  CameraProfileLibraryServiceOptions options;
+  options.settings_file = QString::fromStdWString((temp / "settings.ini").wstring());
+  CameraProfileLibraryService library(std::move(options));
+
+  const auto stored = [](const QString& name, bool has_tone_curve, bool profile_tone) {
+    QVariantMap reference;
+    reference.insert(QStringLiteral("raster"), false);
+    reference.insert(QStringLiteral("embedded_default"), false);
+    reference.insert(QStringLiteral("selected"), true);
+    reference.insert(QStringLiteral("resolved"), true);
+    reference.insert(QStringLiteral("has_tone_curve"), has_tone_curve);
+    reference.insert(QStringLiteral("profile_tone"), profile_tone);
+    reference.insert(QStringLiteral("camera_model"), QStringLiteral("Canon EOS R6"));
+    reference.insert(QStringLiteral("profile_name"), name);
+    return QVariantMap{{QStringLiteral("camera_profile_file"), reference}};
+  };
+  const auto odt = [](const QString& method) {
+    QVariantMap value;
+    value.insert(QStringLiteral("method"), method);
+    return QVariantMap{{QStringLiteral("odt"), value}};
+  };
+  auto snapshot = Snapshot(QStringLiteral("default"), true);
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(QStringLiteral("Camera Standard"), true, true));
+  snapshot.insert(QStringLiteral("odt"), odt(QStringLiteral("aces_2_0")));
+  RawDecodeSession       session(snapshot);
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* section = harness.findObject<QQuickItem>(QStringLiteral("editorCameraProfileSection"));
+  auto* row     = harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileToneCurveRow"));
+  auto* tone_switch =
+      harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileToneCurveSwitch"));
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(row, nullptr);
+  ASSERT_NE(tone_switch, nullptr);
+  QSignalSpy finished(&library, &CameraProfileLibraryService::ScanFinished);
+  section->setProperty("library", QVariant::fromValue(static_cast<QObject*>(&library)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      section, "useFolder",
+      Q_ARG(QVariant, QVariant(QUrl::fromLocalFile(QString::fromStdWString(folder.wstring()))))));
+  ASSERT_TRUE(finished.wait(10000));
+  ProcessEvents(50);
+
+  EXPECT_TRUE(row->isVisible());
+  EXPECT_TRUE(tone_switch->isEnabled());
+  EXPECT_TRUE(tone_switch->property("checked").toBool());
+
+  ScrollItemIntoView(harness, tone_switch);
+  QTest::mouseClick(harness.window(), Qt::LeftButton, {}, CenterInWindow(tone_switch));
+  ProcessEvents(80);
+  ASSERT_EQ(session.calls.size(), 1u);
+  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("camera_profile_file"));
+  EXPECT_TRUE(session.calls.back().settled);
+  const auto* update =
+      std::get_if<alcedo::DevelopCameraProfileFileUpdate>(&session.calls.back().write);
+  ASSERT_NE(update, nullptr);
+  ASSERT_NE(update->profile, nullptr);
+  EXPECT_EQ(update->profile->profile_name, "Camera Standard");
+  EXPECT_FALSE(update->profile_tone);
+
+  // The echo of the write; then Film Print disables the switch and keeps its stored value.
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(QStringLiteral("Camera Standard"), true, false));
+  snapshot.insert(QStringLiteral("odt"), odt(QStringLiteral("film_print")));
+  session.SwitchImage(snapshot);
+  ProcessEvents(80);
+  EXPECT_TRUE(row->isVisible());
+  EXPECT_FALSE(tone_switch->isEnabled());
+  EXPECT_FALSE(tone_switch->property("checked").toBool());
+
+  // A profile without a curve hides the switch.
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(QStringLiteral("Camera Flat"), false, true));
+  snapshot.insert(QStringLiteral("odt"), odt(QStringLiteral("open_drt")));
+  session.SwitchImage(snapshot);
+  ProcessEvents(80);
+  EXPECT_FALSE(row->isVisible());
+  EXPECT_EQ(session.calls.size(), 1u);
 }
 
 }  // namespace alcedo::ui::test

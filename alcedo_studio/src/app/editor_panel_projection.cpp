@@ -18,6 +18,7 @@
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "image/dcp_camera_profile.hpp"
 
 namespace alcedo {
 namespace {
@@ -460,6 +461,8 @@ auto ReadCameraProfileFile(const PipelineDocument& document, const EditorParamet
   if (const auto reference = params->CameraProfileFile(); reference.has_value()) {
     value.selected     = true;
     value.resolved     = reference->IsBound();
+    value.has_tone_curve = value.resolved && reference->profile->profile_tone_curve != nullptr;
+    value.profile_tone   = reference->profile_tone;
     value.camera_model = reference->camera_model;
     value.profile_name = reference->profile_name;
   }

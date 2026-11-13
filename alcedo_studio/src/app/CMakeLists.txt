@@ -617,6 +617,7 @@ def_library(EditorPipelineCommandService
         "${ALCEDO_APP_ROOT}/editor_pipeline_command_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_pipeline_command_service.hpp"
     PUBLIC_DEPS EditGraph JSON EditorParameterWrite
+    PRIVATE_DEPS DcpCameraProfileBinding
 )
 
 def_library(EditorPanelProjection

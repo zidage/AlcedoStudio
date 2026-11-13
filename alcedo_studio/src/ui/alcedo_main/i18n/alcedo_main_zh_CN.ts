@@ -4759,6 +4759,10 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <source>Choose Folder</source>
         <translation>选择文件夹</translation>
     </message>
+    <message>
+        <source>Tone Curve</source>
+        <translation>色调曲线</translation>
+    </message>
 </context>
 <context>
     <name>EditorRawDecodePanel</name>

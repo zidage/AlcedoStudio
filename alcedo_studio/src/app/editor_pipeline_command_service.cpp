@@ -3,7 +3,6 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/editor_pipeline_command_service.hpp"
-#include "app/editor_parameter_write.hpp"
 
 #include <exception>
 #include <optional>
@@ -12,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "app/dcp_camera_profile_binding.hpp"
+#include "app/editor_parameter_write.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
@@ -20,6 +21,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "image/dcp_camera_profile.hpp"
 
 namespace alcedo {
 namespace {
@@ -202,6 +204,82 @@ auto FilmPrintEntrySaturationTarget(const PipelineDocument& document,
   }
   std::string ignored;
   return CompleteCurrentPanelParameterTarget(document, "saturation", &ignored);
+}
+
+namespace {
+
+/// True when the DRT method of @p document runs the profile tone stage (study section 6.2).
+auto MethodRunsProfileTone(const PipelineDocument& document) -> bool {
+  const auto* drt = document.Drt();
+  if (drt == nullptr) return false;
+  const auto method = drt->Params().Method();
+  return method == DrtMethod::Aces20 || method == DrtMethod::OpenDrt;
+}
+
+/// True when @p reference selects the stage and its bound profile has a curve.
+auto ReferenceRunsProfileTone(const std::optional<DevelopCameraProfileFile>& reference) -> bool {
+  return reference.has_value() && reference->profile_tone && reference->IsBound() &&
+         reference->profile->profile_tone_curve != nullptr;
+}
+
+/// True when the reference of a Develop Model JSON selects the stage and the DCP library binds
+/// its identity to a profile with a curve.
+auto StoredReferenceRunsProfileTone(const nlohmann::json& develop) -> bool {
+  const auto found = develop.find("camera_profile_file");
+  if (found == develop.end() || found->is_null()) return false;
+  const auto stored = DevelopCameraProfileFileFromJson(*found);
+  return stored.profile_tone && ReferenceRunsProfileTone(ResolveStoredDcpCameraProfileFile(stored));
+}
+
+}  // namespace
+
+auto ProfileToneEntryResetTargets(const PipelineDocument& document,
+                                  const nlohmann::json&   develop_before)
+    -> std::vector<EditorEntryResetWrite> {
+  const auto* develop = document.Develop();
+  if (develop == nullptr || !MethodRunsProfileTone(document) ||
+      !ReferenceRunsProfileTone(develop->Params().CameraProfileFile())) {
+    return {};
+  }
+  // The stage ran before the edit too (another profile with a curve): no entry.
+  if (StoredReferenceRunsProfileTone(develop_before)) return {};
+  const auto* grade = document.PrimaryGrade();
+  if (grade == nullptr) return {};
+  std::vector<EditorEntryResetWrite> writes;
+  const auto                         add = [&](const char* field, float value) {
+    std::string ignored;
+    auto        target = CompleteCurrentPanelParameterTarget(document, field, &ignored);
+    if (target.has_value()) {
+      writes.push_back({std::move(*target), {{field, value}}});
+    }
+  };
+  const auto* contrast =
+      dynamic_cast<const ContrastModel*>(grade->FindAdjustmentByType(type_ids::Contrast()));
+  if (contrast != nullptr && contrast->Value() == kDefaultPipelineContrast) {
+    add("contrast", kProfileToneEntryContrast);
+  }
+  const auto* saturation =
+      dynamic_cast<const SaturationModel*>(grade->FindAdjustmentByType(type_ids::Saturation()));
+  if (saturation != nullptr && saturation->Value() == kDefaultPipelineSaturation) {
+    add("saturation", kProfileToneEntrySaturation);
+  }
+  return writes;
+}
+
+auto EntryResetWrites(const PipelineDocument& document, std::string_view field_key,
+                      const nlohmann::json& before, const nlohmann::json& after)
+    -> std::vector<EditorEntryResetWrite> {
+  if (field_key == "odt") {
+    auto target = FilmPrintEntrySaturationTarget(document, before, after);
+    if (!target.has_value()) return {};
+    std::vector<EditorEntryResetWrite> writes;
+    writes.push_back({std::move(*target), {{"saturation", kFilmPrintEntrySaturation}}});
+    return writes;
+  }
+  if (field_key == "camera_profile_file") {
+    return ProfileToneEntryResetTargets(document, before);
+  }
+  return {};
 }
 
 auto CanonicalPipelineDocumentJson(const PipelineDocument& document) -> std::string {

@@ -38,9 +38,15 @@ namespace alcedo::ui {
  * row without a submit; the model keeps no selection of its own.
  *
  * A user selection submits `{"camera_model", "profile_name"}` (the default entry: null) through
- * ParseEditorParameterWrite, which resolves the identity in DcpProfileLibrary::Shared(). When the
- * parse or the submit fails (for example, the file was removed after the scan), the model logs the
- * reason and returns to the row of the stored reference.
+ * ParseEditorParameterWrite, which resolves the identity in DcpProfileLibrary::Shared(). The
+ * selection keeps the Tone Curve switch of the stored reference: `"profile_tone": false` joins it
+ * when a stored reference has the switch off. When the parse or the submit fails (for example, the
+ * file was removed after the scan), the model logs the reason and returns to the row of the stored
+ * reference.
+ *
+ * The Tone Curve switch of the section (dcp_profile_tone_curve_study.md, section 6.4) reads
+ * @ref toneCurveAvailable, @ref profileTone, and @ref filmPrintMethod, and submits its settled
+ * write with @ref submitProfileTone.
  *
  * Thread affinity: GUI thread.
  */
@@ -56,6 +62,14 @@ class EditorCameraProfileListModel : public EditorAdjustmentEnumModel {
   Q_PROPERTY(bool currentUnresolved READ currentUnresolved NOTIFY storedReferenceChanged)
   /// True for a raster document, which has no camera profile and no rows.
   Q_PROPERTY(bool raster READ raster NOTIFY storedReferenceChanged)
+  /// True when the stored reference is bound and its profile has a `ProfileToneCurve`: the
+  /// section shows the Tone Curve switch.
+  Q_PROPERTY(bool toneCurveAvailable READ toneCurveAvailable NOTIFY storedReferenceChanged)
+  /// The stored `profile_tone` switch; false without a reference.
+  Q_PROPERTY(bool profileTone READ profileTone NOTIFY storedReferenceChanged)
+  /// True when the DRT method of the loaded snapshot is Film Print, which runs no profile tone
+  /// stage (study section 6.2): the switch is disabled.
+  Q_PROPERTY(bool filmPrintMethod READ filmPrintMethod NOTIFY filmPrintMethodChanged)
 
  public:
   explicit EditorCameraProfileListModel(QObject* parent = nullptr);
@@ -70,21 +84,40 @@ class EditorCameraProfileListModel : public EditorAdjustmentEnumModel {
     return stored_.selected && !stored_.resolved;
   }
   [[nodiscard]] auto raster() const -> bool { return stored_.raster; }
+  [[nodiscard]] auto toneCurveAvailable() const -> bool {
+    return stored_.selected && stored_.resolved && stored_.has_tone_curve;
+  }
+  [[nodiscard]] auto profileTone() const -> bool { return stored_.profile_tone; }
+  [[nodiscard]] auto filmPrintMethod() const -> bool { return film_print_method_; }
 
   /**
    * @brief Programmatic load of the `camera_profile_file` entry of an adjustment snapshot.
    *
-   * Reads `raster`, `embedded_default`, `selected`, `resolved`, `camera_model`, and
-   * `profile_name`, composes the rows, and sets the current row to the stored reference (row 0
-   * when no reference is stored). Does not submit. A snapshot without the entry leaves the model
-   * unchanged.
+   * Reads `raster`, `embedded_default`, `selected`, `resolved`, `has_tone_curve`,
+   * `profile_tone`, `camera_model`, and `profile_name`, composes the rows, and sets the current row
+   * to the stored reference (row 0 when no reference is stored). The `odt` entry gives
+   * @ref filmPrintMethod. Does not submit. A snapshot without an entry leaves its part of the
+   * model unchanged.
    */
   Q_INVOKABLE void   loadFromSnapshot(const QVariantMap& snapshot);
+
+  /**
+   * @brief Submit one settled `camera_profile_file` write that sets the Tone Curve switch of the
+   *        stored reference to @p on: `{"camera_model", "profile_name", "profile_tone"}`.
+   *
+   * The write resolves the stored identity in DcpProfileLibrary::Shared(), as a selection does.
+   * The switch follows the echo of the write (@ref loadFromSnapshot); the model keeps no switch
+   * value of its own.
+   * @return false, after a log line with the reason, when no reference is stored, @p on equals the
+   *         stored value, the parse fails, or the session rejects the write.
+   */
+  Q_INVOKABLE bool   submitProfileTone(bool on);
 
  signals:
   void libraryChanged();
   void cameraChanged();
   void storedReferenceChanged();
+  void filmPrintMethodChanged();
 
  protected:
   auto submitSelection() -> bool override;
@@ -96,6 +129,8 @@ class EditorCameraProfileListModel : public EditorAdjustmentEnumModel {
     bool        embedded_default = false;
     bool        selected         = false;
     bool        resolved         = false;
+    bool        has_tone_curve   = false;
+    bool        profile_tone     = false;
     std::string camera_model;
     std::string profile_name;
   };
@@ -112,6 +147,7 @@ class EditorCameraProfileListModel : public EditorAdjustmentEnumModel {
   QString                               camera_model_;
   std::vector<DcpProfileIdentity>       matched_;
   StoredReference                       stored_;
+  bool                                  film_print_method_ = false;
 };
 
 }  // namespace alcedo::ui

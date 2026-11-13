@@ -37,6 +37,10 @@
 #define PROFILE_TONE_INVERSE_TABLE    4117  // `N_m^-1` at display light (i / 4096)^2.4.
 #define PROFILE_TONE_GPU_FLOATS       8214
 
+// Knee `k` of the highlight shoulder `H` at the curve input, ACR scale (raw white 1): one stop
+// below raw white. Equal to kProfileToneHighlightKnee (profile_tone_reference.hpp).
+#define PROFILE_TONE_HIGHLIGHT_KNEE   0.5f
+
 typedef struct {
   float r, g, b;
 } ProfileToneRgb;
@@ -51,6 +55,16 @@ PROFILE_TONE_INLINE ProfileToneRgb ProfileToneMakeRgb(float r, float g, float b)
 
 PROFILE_TONE_INLINE float ProfileToneClamp01(float x) {
   return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x);
+}
+
+/// The highlight shoulder `H` at the curve input (study section 6.6): 0 below 0, identity up to the
+/// knee `k`, then `1 - (1 - k)^2 / (x + 1 - 2k)`, which has slope 1 at the knee and stays below 1.
+/// With `k` = 0.5, each stop of scene light above the knee halves the distance to the curve's
+/// white, so scene light above raw white keeps its gradation.
+PROFILE_TONE_INLINE float ProfileToneHighlight(float x) {
+  const float k = PROFILE_TONE_HIGHLIGHT_KNEE;
+  if (x <= k) return x < 0.0f ? 0.0f : x;
+  return 1.0f - (1.0f - k) * (1.0f - k) / (x + 1.0f - 2.0f * k);
 }
 
 PROFILE_TONE_INLINE ProfileToneRgb ProfileToneMatrix(ProfileToneRgb                   c,
@@ -157,15 +171,15 @@ PROFILE_TONE_INLINE ProfileToneRgb ProfileToneBaselineRgb(ProfileToneRgb        
   return ProfileToneMakeRgb(out_lo, out_hi, out_mid);
 }
 
-/// The stage on one pixel of linear AP1: `p = clamp(M * x * 2^-E_a, 0, 1)` in linear ProPhoto,
+/// The stage on one pixel of linear AP1: `p = H(M * x * 2^-E_a)` per channel in linear ProPhoto,
 /// `d = R_C(p)`, `s = N_m^-1(d)` per channel, and `M^-1 * s` in linear AP1.
 PROFILE_TONE_INLINE ProfileToneRgb ProfileToneApplyStage(ProfileToneRgb                   ap1,
                                                          PROFILE_TONE_GLOBAL const float* data) {
   const float    anchor = data[PROFILE_TONE_ANCHOR_SCALE];
   ProfileToneRgb p      = ProfileToneMatrix(ap1, data + PROFILE_TONE_AP1_TO_PROPHOTO);
-  p.r                   = ProfileToneClamp01(p.r * anchor);
-  p.g                   = ProfileToneClamp01(p.g * anchor);
-  p.b                   = ProfileToneClamp01(p.b * anchor);
+  p.r                   = ProfileToneHighlight(p.r * anchor);
+  p.g                   = ProfileToneHighlight(p.g * anchor);
+  p.b                   = ProfileToneHighlight(p.b * anchor);
   p                     = ProfileToneBaselineRgb(p, data);
   p.r                   = ProfileToneInverse(data, p.r);
   p.g                   = ProfileToneInverse(data, p.g);

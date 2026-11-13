@@ -188,6 +188,75 @@ def compare_default(folder, aces):
             "%+6.2f" % math.log2(max(v, 1e-6) / d) for v, d in zip(values, default)))
 
 
+def code_value(display):
+    """8-bit code of display light on a gamma 2.2 display."""
+    return 255.0 * min(max(display, 0.0), 1.0) ** (1 / 2.2)
+
+
+def shoulder_rational(x, knee):
+    """Highlight shoulder of the stage (study section 6.6): slope 1 at the knee, limit 1."""
+    if x <= knee:
+        return max(x, 0.0)
+    return 1 - (1 - knee) ** 2 / (x + 1 - 2 * knee)
+
+
+def shoulder_exponential(x, knee):
+    """Candidate shoulder with the same knee and slope that reaches 1 faster."""
+    if x <= knee:
+        return max(x, 0.0)
+    return knee + (1 - knee) * (1 - math.exp(-(x - knee) / (1 - knee)))
+
+
+def percentile(values, q):
+    values = sorted(values)
+    return values[int(q * (len(values) - 1))]
+
+
+def compare_shoulder(folder):
+    """Section 6.6: the clip at raw white against the highlight shoulder, in 8-bit codes."""
+    stops = [-1, -0.5, 0, 1, 2, 3, 4]
+    print("\nhighlight shoulder, stops from raw white: " + " ".join("%6.1f" % e for e in stops))
+    for rel in SAMPLE_PROFILES:
+        path = os.path.join(folder, rel)
+        if not os.path.exists(path):
+            continue
+        points = tone_points(read_tags(path))
+        name = os.path.basename(rel)[:-4]
+        print("%-41s " % name[:40] + " ".join(
+            "%6.1f" % code_value(curve(points, min(2 ** e, 1.0))) for e in stops))
+        print("%-41s " % "  shoulder, knee 0.5" + " ".join(
+            "%6.1f" % code_value(curve(points, shoulder_rational(2 ** e, 0.5))) for e in stops))
+
+    distinct = {}
+    for root, _, names in os.walk(folder):
+        for name in names:
+            if name.lower().endswith(".dcp"):
+                tags = read_tags(os.path.join(root, name))
+                if TAG_TONE_CURVE in tags:
+                    distinct.setdefault(tuple(tags[TAG_TONE_CURVE][2]), tone_points(tags))
+    curves = list(distinct.values())
+    top = [code_value(curve(p, 1.0)) - code_value(curve(p, 0.5)) for p in curves]
+    print("\ncodes in the top stop of the profile curves: p10 %.1f, median %.1f, p90 %.1f" % (
+        percentile(top, 0.1), percentile(top, 0.5), percentile(top, 0.9)))
+    print("shoulder candidates over %d distinct curves (codes; loss = largest drop at or below "
+          "raw white, gain = codes from raw white to 2 stops above it):" % len(curves))
+    for label, function in (("rational", shoulder_rational), ("exponential", shoulder_exponential)):
+        for knee in (0.35, 0.5, 0.6):
+            loss, gain = [], []
+            for points in curves:
+                worst = 0.0
+                for i in range(1, 401):
+                    x = knee + (1 - knee) * i / 400
+                    worst = max(worst, code_value(curve(points, x)) -
+                                code_value(curve(points, function(x, knee))))
+                loss.append(worst)
+                white = code_value(curve(points, function(1.0, knee)))
+                gain.append(code_value(curve(points, function(4.0, knee))) - white)
+            print("  %-11s knee %.2f: loss median %.1f, p90 %.1f, max %.1f; gain median %.1f, "
+                  "p10 %.1f" % (label, knee, percentile(loss, 0.5), percentile(loss, 0.9),
+                                max(loss), percentile(gain, 0.5), percentile(gain, 0.1)))
+
+
 def main():
     if len(sys.argv) != 2:
         print(__doc__)
@@ -195,6 +264,7 @@ def main():
     aces = aces2_params(100.0)
     survey(sys.argv[1], aces)
     compare_default(sys.argv[1], aces)
+    compare_shoulder(sys.argv[1])
     return 0
 
 
