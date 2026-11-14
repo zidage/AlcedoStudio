@@ -20,9 +20,10 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
-#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 #include "metal/compute_pipeline_cache.hpp"
@@ -147,6 +148,13 @@ void ResetProductLookToIdentity(PipelineDocument& document) {
   exposure->SetValue(0.0f);
   saturation->SetValue(1.0f);
   contrast->SetValue(0.0f);
+  // The default look carries the Film-like curve (#898).
+  auto* curve =
+      dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  CurveUpdate identity;
+  identity.points = IdentityCurvePoints();
+  curve->ApplyUpdate(identity);
 }
 
 auto AcesccEncode(float value) -> float {

@@ -24,6 +24,7 @@
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
 #include "edit/runtime/opencl/opencl_scene_work.hpp"
+#include "grade_order_cost_measurement.hpp"
 #include "multi_grade_runtime_test_support.hpp"
 #include "opencl/opencl_runtime.hpp"
 
@@ -527,6 +528,18 @@ TEST_F(OpenClMultiGradeFixture, MiddleGradeEditReusesKeyStagesAndReexecutesEvery
           100.0f),
       0.5f);
   EXPECT_TRUE(multi_grade_test::RgbNear(output.front(), expected, 1.0e-5f));
+}
+
+TEST_F(OpenClMultiGradeFixture, GradeStageOrderCostMeasurement) {
+  if (!grade_order_measurement::Enabled()) {
+    GTEST_SKIP() << "Set ALCEDO_GRADE_ORDER_MEASUREMENT=1 to measure (issue #900).";
+  }
+  grade_order_measurement::MeasureGradeStageOrder(
+      "OpenCL", [this](PreparedRawInput input) { prepared_ = std::move(input); },
+      [this](PipelineDocument& document) { return Compile(document); },
+      [this](PipelineDocument& document, const ExecutionPlan& plan) {
+        (void)Render(document, plan);
+      });
 }
 
 }  // namespace alcedo

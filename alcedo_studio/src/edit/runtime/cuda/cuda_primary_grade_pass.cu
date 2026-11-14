@@ -402,12 +402,15 @@ void LaunchPointwise(CudaRenderDevice& device, const FrameSceneBinding& src,
                      std::uint32_t width, std::uint32_t height) {
   auto& workspace = device.Workspace();
   auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
-  if (commands == nullptr || command_count == 0) {
+  if (commands == nullptr && command_count != 0U) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: missing fused command buffer");
   }
   const auto  pixels = width * height;
+  // A mix without commands (GradeExecutor, issue #900) reads no command.
   const auto* device_commands =
-      static_cast<const CudaAdjustmentCommand*>(commands->DevicePointer());
+      commands == nullptr
+          ? nullptr
+          : static_cast<const CudaAdjustmentCommand*>(commands->DevicePointer()) + command_start;
   const auto* parameter_base =
       static_cast<const unsigned char*>(workspace.Parameters().DeviceBuffer().DevicePointer());
   auto&       src_tex = CudaSceneTexture(device, src);
@@ -419,9 +422,9 @@ void LaunchPointwise(CudaRenderDevice& device, const FrameSceneBinding& src,
   constexpr std::uint32_t block = 256;
   PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
       static_cast<const float4*>(src_tex.DevicePointer()),
-      static_cast<float4*>(dst_tex.DevicePointer()), pixels, parameter_base,
-      device_commands + command_start, command_count, static_cast<const float4*>(lut.device_pointer),
-      lut.edge_size, mix_ptr, mix, MaskPointer(device, mask_id, width, height));
+      static_cast<float4*>(dst_tex.DevicePointer()), pixels, parameter_base, device_commands,
+      command_count, static_cast<const float4*>(lut.device_pointer), lut.edge_size, mix_ptr, mix,
+      MaskPointer(device, mask_id, width, height));
 }
 
 struct CudaGradeOps {

@@ -97,8 +97,9 @@ struct FrameResultContentKeys {
  * @brief Identity of the canonical LLF reference for @p grade_id. Viewport ROI is omitted.
  *
  * Includes prepared source, user crop/rotation, CameraColor params, every preceding
- * Color Grade, this Grade's mask, and this Grade's adjustments including local-tone
- * sliders. Viewport, render extent, and dynamic scale are not mixed.
+ * Color Grade, this Grade's mask, and this Grade's Basic Tone and local-tone
+ * adjustments. This Grade's Color adjustments (Curve through LMT) run after the LLF
+ * stage and are not mixed. Viewport, render extent, and dynamic scale are not mixed.
  *
  * @param grade_id Compiled Color Grade that owns the LLF stage.
  * @throws std::runtime_error when @p grade_id is not a compiled Color Grade.
@@ -117,9 +118,9 @@ struct FrameResultContentKeys {
 /**
  * @brief Identity of the canonical LLF source pyramid for @p grade_id.
  *
- * Viewport ROI and this Grade's Shadows/Highlights slider values are omitted so a
- * slider edit can reuse the source. Preceding Grades are mixed in full, including
- * their local-tone sliders.
+ * Viewport ROI, this Grade's Shadows/Highlights slider values, and this Grade's Color
+ * adjustments are omitted, so a slider edit or a Curve edit can reuse the source.
+ * Preceding Grades are mixed in full, including their local-tone sliders.
  *
  * @param grade_id Compiled Color Grade that owns the LLF stage.
  * @throws std::runtime_error when @p grade_id is not a compiled Color Grade.

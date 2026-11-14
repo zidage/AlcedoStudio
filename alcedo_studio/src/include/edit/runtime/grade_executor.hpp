@@ -76,6 +76,10 @@ class GradeExecutor {
    *
    * @param histogram When not null, also record the curve input histogram of this Grade
    *        (RecordCurveInputHistogram), also for a zero-mix Grade. Null records nothing.
+   *        When the Local Laplacian stage runs, the histogram reads its output before the
+   *        mix; otherwise it evaluates the Basic Tone adjustments on the Grade input.
+   *        A zero-mix Grade does not run the Local Laplacian stage, so its histogram
+   *        leaves out Shadows and Highlights.
    */
   static auto Execute(Device& device, const ExecutionPlan& plan, const PreparedRawInput& prepared,
                       const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
@@ -117,8 +121,13 @@ class GradeExecutor {
 
     auto& context = device.CommandContext();
     arena.UploadDirty(context);
-    if (histogram != nullptr) {
-      RecordCurveInputHistogram(device, *grade, compiled_grade, scene, *histogram);
+    // The Curve reads the output of the Local Laplacian stage when that stage runs
+    // (ColorGradeCompileOrder), so the histogram then waits for it.
+    const bool histogram_after_local_tone =
+        histogram != nullptr && !schedule.alias_to_input && schedule.local_tone_active;
+    if (histogram != nullptr && !histogram_after_local_tone) {
+      RecordCurveInputHistogram(device, *grade, scene,
+                                BasicToneCommandOffsets(arena, *grade, compiled_grade), *histogram);
     }
     if (schedule.alias_to_input) {
       diag::PreviewPerformance::SetPassState(diag::PreviewExecutionState::Aliased);
@@ -165,8 +174,11 @@ class GradeExecutor {
         ++result.detail_pass_count;
         wrote_dest = true;
       } else if (op.kind == CompiledGradeStageKind::LocalLaplacian) {
-        const float stage_mix          = last ? mix : 1.0f;
-        const GraphValueId* stage_mask = last && needs_mix ? mask_id : nullptr;
+        // The histogram reads the stage output before the mix. When this stage is the last
+        // write and mixes, it writes the unmixed output, and a pass without commands mixes.
+        const bool          separate_mix = histogram_after_local_tone && last && needs_mix;
+        const float         stage_mix    = last && !separate_mix ? mix : 1.0f;
+        const GraphValueId* stage_mask   = last && needs_mix && !separate_mix ? mask_id : nullptr;
         const auto tone =
             Ops::ExecuteLocalTone(device, src, dest_binding, scene, grade->Id(),
                                   schedule.shadows_slider, schedule.highlights_slider,
@@ -177,6 +189,16 @@ class GradeExecutor {
         result.local_tone_transient_bytes             = tone.transient_bytes;
         ++result.local_tone_pass_count;
         wrote_dest = true;
+        if (histogram_after_local_tone) {
+          RecordCurveInputHistogram(device, *grade, dest_binding, {}, *histogram);
+        }
+        if (separate_mix) {
+          diag::PreviewSubStageInterval pointwise(diag::PreviewSubStageKind::Pointwise);
+          GpuWorkSample<Device>         gpu(device);
+          Ops::DispatchPointwiseWithMix(device, dest_binding, dest_binding, scene, lut, grade->Id(),
+                                        0U, 0U, mix, mask_id, width, height);
+          ++result.pointwise_dispatch_count;
+        }
       } else {
         diag::PreviewSubStageInterval pointwise(diag::PreviewSubStageKind::Pointwise);
         GpuWorkSample<Device> gpu(device);
@@ -201,22 +223,22 @@ class GradeExecutor {
   }
 
  private:
-  /// Byte offset of the GPU slot of each compiled adjustment before the Curve, in compile order.
+  /// Byte offset of the GPU slot of each compiled Basic Tone adjustment, in compile order.
   /// The compiled list is in ColorGradeCompileOrder, so these are White Balance, Exposure,
   /// Contrast, Whites, and Blacks, as far as the Grade has them. All of them are pointwise.
-  static auto CurveInputCommandOffsets(const ParameterArena<typename Ops::Backend>& arena,
-                                       const ColorGradeNodeModel&                   grade,
-                                       const CompiledGradeNode&                     compiled_grade)
+  /// They are the whole curve input when the Local Laplacian stage does not run.
+  static auto BasicToneCommandOffsets(const ParameterArena<typename Ops::Backend>& arena,
+                                      const ColorGradeNodeModel&                   grade,
+                                      const CompiledGradeNode&                     compiled_grade)
       -> std::vector<std::uint32_t> {
-    const auto                 curve_rank = ColorGradeCompileRank(type_ids::Curve());
     std::vector<std::uint32_t> offsets;
     for (const auto& compiled : compiled_grade.adjustments) {
-      if (ColorGradeCompileRank(compiled.type) >= curve_rank) {
+      if (ColorGradeCompileGroupOf(compiled.type) != ColorGradeCompileGroup::BasicTone) {
         break;
       }
       if (compiled.algorithm != CompiledAdjustmentAlgorithm::Pointwise) {
         throw std::runtime_error(std::string{Ops::kErrorPrefix} +
-                                 ": an adjustment before the Curve is not pointwise");
+                                 ": a Basic Tone adjustment is not pointwise");
       }
       offsets.push_back(arena.Binding(ParameterSlotKey{grade.Id(), compiled.instance_id}).offset);
     }
@@ -240,22 +262,22 @@ class GradeExecutor {
   }
 
   /**
-   * @brief Record the histogram of the curve input of @p grade on its input @p scene.
+   * @brief Record the histogram of the curve input of @p grade from the image @p scene.
    *
-   * Uploads the slot offsets of the adjustments before the Curve and zero counts, then
-   * Ops::DispatchCurveInputHistogram evaluates those adjustments on the pixels of the sample grid
-   * (CurveInputHistogramSampleStep) and adds the bins. The Grade parameters must be uploaded.
+   * Uploads @p offsets and zero counts, then Ops::DispatchCurveInputHistogram evaluates the
+   * adjustments of those slots on the pixels of the sample grid (CurveInputHistogramSampleStep)
+   * and adds the bins. @p scene is the Grade input with the Basic Tone offsets, or the output
+   * of the Local Laplacian stage with no offsets. The Grade parameters must be uploaded.
    * Changes no image and no result.
    */
   static void RecordCurveInputHistogram(Device& device, const ColorGradeNodeModel& grade,
-                                        const CompiledGradeNode&   compiled_grade,
-                                        const FrameSceneBinding&   scene,
-                                        CurveInputHistogramRecord& histogram) {
-    auto&      workspace = device.Workspace();
-    auto&      backend   = workspace.Device();
-    auto&      context   = device.CommandContext();
-    const auto offsets   = CurveInputCommandOffsets(workspace.Parameters(), grade, compiled_grade);
-    auto&      order =
+                                        const FrameSceneBinding&          scene,
+                                        const std::vector<std::uint32_t>& offsets,
+                                        CurveInputHistogramRecord&        histogram) {
+    auto& workspace = device.Workspace();
+    auto& backend   = workspace.Device();
+    auto& context   = device.CommandContext();
+    auto& order =
         EnsureValueBuffer(device, CurveInputHistogramOrderId(grade.Id()),
                           std::max<std::size_t>(offsets.size(), 1U) * sizeof(std::uint32_t));
     if (!offsets.empty()) {

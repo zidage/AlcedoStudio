@@ -194,15 +194,26 @@ auto FilmPrintTableKey(const FilmPrintParams& film) -> ContentKey {
   return hash.Key();
 }
 
-auto MixGradeExcludingLocalToneValues(ContentHash& hash, const ColorGradeNodeModel& grade) -> void {
+/**
+ * @brief Mix the adjustments of @p grade that the LLF stage of this Grade reads.
+ *
+ * The LLF stage runs after Basic Tone and before Color (ColorGradeCompileOrder), so
+ * the Color adjustments (Curve through LMT) are left out. @p include_local_tone_values
+ * false also leaves out the Shadows and Highlights values (the LLF source key).
+ */
+auto MixGradeThroughLocalTone(ContentHash& hash, const ColorGradeNodeModel& grade,
+                              bool include_local_tone_values) -> void {
   hash.MixBool(grade.Enabled());
   hash.MixF32(grade.Mix());
-  hash.MixU64(grade.AdjustmentCount());
   for (const auto index : GradeCompileIndices(grade)) {
-    const auto& type = grade.AdjustmentAt(index).Type();
+    const auto& type  = grade.AdjustmentAt(index).Type();
+    const auto  group = ColorGradeCompileGroupOf(type);
+    if (group == ColorGradeCompileGroup::Color) {
+      break;
+    }
     hash.MixText(grade.AdjustmentIdAt(index).Value());
     hash.MixText(type.Text());
-    if (type == type_ids::Shadows() || type == type_ids::Highlights()) {
+    if (group == ColorGradeCompileGroup::LocalTone && !include_local_tone_values) {
       continue;
     }
     hash.MixText(grade.AdjustmentAt(index).ToJson().dump());
@@ -368,8 +379,8 @@ auto MixLlfGradeChain(ContentHash& hash, const ExecutionPlan& plan,
       MixCompiledMaskStack(hash, document, *compiled.mask_stack);
     }
     const bool target = compiled.node_id == grade_id;
-    if (target && !include_local_tone_values) {
-      MixGradeExcludingLocalToneValues(hash, *grade);
+    if (target) {
+      MixGradeThroughLocalTone(hash, *grade, include_local_tone_values);
     } else {
       MixGrade(hash, *grade);
     }

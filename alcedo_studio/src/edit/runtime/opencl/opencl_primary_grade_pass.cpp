@@ -315,14 +315,17 @@ struct OpenClGradeOps {
                                        std::uint32_t command_count, float mix,
                                        const GraphValueId* mask_id, std::uint32_t width,
                                        std::uint32_t height) {
-    auto& workspace = device.Workspace();
-    auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
-    if (commands == nullptr) {
+    auto&       workspace = device.Workspace();
+    const auto& params    = workspace.Parameters().DeviceBuffer();
+    const auto* commands = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
+    if (commands == nullptr && command_count != 0U) {
       throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing fused command buffer");
     }
-    EnqueueGradePointwiseScene(device, src, dst, &original, workspace.Parameters().DeviceBuffer(),
-                               *commands, command_start, command_count, lut, mix, mask_id, width,
-                               height);
+    // A mix without commands (GradeExecutor, issue #900) reads no command; the parameter buffer
+    // stands in for the command argument of a Grade that has no fused command buffer.
+    EnqueueGradePointwiseScene(device, src, dst, &original, params,
+                               commands != nullptr ? *commands : params, command_start,
+                               command_count, lut, mix, mask_id, width, height);
   }
 
   static void DispatchCurveInputHistogram(OpenClRenderDevice& device, const FrameSceneBinding& src,

@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
@@ -18,6 +19,7 @@
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/mask/mask_model.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 
@@ -176,6 +178,35 @@ TEST(GpuDagResultContentKey, LlfSourceKeyIgnoresShadowsAndHighlightsSliderValues
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(-0.5f);
   EXPECT_NE(HashLlfSourceKey(plan, prepared, document), base_source);
+}
+
+TEST(GpuDagResultContentKey, LlfKeysIgnoreTheColorAdjustmentsOfTheirGrade) {
+  // Issue #900: Curve through LMT run after the LLF stage of their Grade.
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  auto         plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const NodeId primary{"grade.primary"};
+  const NodeId second{"grade.b"};
+  const auto   primary_source = HashLlfSourceKey(plan, prepared, document, primary);
+  const auto   primary_ref    = HashLlfReferenceKey(plan, prepared, document, primary);
+  const auto   second_source  = HashLlfSourceKey(plan, prepared, document, second);
+
+  auto*        saturation     = dynamic_cast<SaturationModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(saturation, nullptr);
+  saturation->SetValue(1.25f);
+  auto* curve =
+      dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  CurveUpdate lifted;
+  lifted.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}};
+  curve->ApplyUpdate(lifted);
+
+  EXPECT_EQ(HashLlfSourceKey(plan, prepared, document, primary), primary_source);
+  EXPECT_EQ(HashLlfReferenceKey(plan, prepared, document, primary), primary_ref);
+  // A later Grade reads the whole output of this Grade.
+  EXPECT_NE(HashLlfSourceKey(plan, prepared, document, second), second_source);
 }
 
 TEST(GpuDagResultContentKey, HighlightRecoverChangesSensorLinearAndAllDownstreamKeys) {

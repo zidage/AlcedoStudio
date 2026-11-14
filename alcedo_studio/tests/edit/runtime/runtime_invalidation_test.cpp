@@ -17,6 +17,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
@@ -410,7 +411,8 @@ TEST(RuntimeInvalidation, LlfSliderKeepsSourceAndInvalidatesResult) {
             harness.Completed(harness.Primary().scene_output));
 }
 
-TEST(RuntimeInvalidation, ColorEditInvalidatesLlfSourceResultAndMixKeepsThem) {
+TEST(RuntimeInvalidation, ColorEditAndMixKeepLlfSourceAndResult) {
+  // Issue #900: Curve through LMT run after the LLF stage, so their edits keep the LLF maps.
   ValidityHarness harness;
   harness.PublishCurrent();
   const auto source_id = LocalToneSourceId(harness.Primary().node_id);
@@ -420,8 +422,21 @@ TEST(RuntimeInvalidation, ColorEditInvalidatesLlfSourceResultAndMixKeepsThem) {
   ASSERT_NE(saturation, nullptr);
   saturation->SetValue(1.1f);
   harness.Collect();
-  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
-  EXPECT_GT(harness.Required(result_id), harness.Completed(result_id));
+  EXPECT_TRUE(harness.Current(source_id));
+  EXPECT_TRUE(harness.Current(result_id));
+  EXPECT_GT(harness.Required(harness.Primary().scene_output),
+            harness.Completed(harness.Primary().scene_output));
+
+  harness.PublishCurrent();
+  auto* curve = dynamic_cast<CurveModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  CurveUpdate lifted;
+  lifted.points = {{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}};
+  curve->ApplyUpdate(lifted);
+  harness.Collect();
+  EXPECT_TRUE(harness.Current(source_id));
+  EXPECT_TRUE(harness.Current(result_id));
   EXPECT_GT(harness.Required(harness.Primary().scene_output),
             harness.Completed(harness.Primary().scene_output));
 
@@ -810,7 +825,7 @@ TEST(RuntimeInvalidation, LmtEncodingChangeInvalidatesLikeReferenceChange) {
   collect();
   EXPECT_EQ(GradeLutResourceIdentity(*harness.document.PrimaryGrade(), *resources), identity);
   EXPECT_TRUE(harness.Current(harness.plan.develop_output));
-  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  EXPECT_TRUE(harness.Current(source_id)) << "the LMT runs after the LLF stage";
   EXPECT_GT(harness.Required(harness.Primary().scene_output),
             harness.Completed(harness.Primary().scene_output));
   harness.Complete();
@@ -819,7 +834,7 @@ TEST(RuntimeInvalidation, LmtEncodingChangeInvalidatesLikeReferenceChange) {
   lmt->SetCubePath((directory / "other.cube").string());
   collect();
   EXPECT_TRUE(harness.Current(harness.plan.develop_output));
-  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  EXPECT_TRUE(harness.Current(source_id));
   harness.Complete();
 
   collect();
@@ -859,7 +874,7 @@ TEST(RuntimeInvalidation, LutResourceChangeInvalidatesGradeWithoutModelRevision)
   resolver.Map(official, second);
   collect();
   EXPECT_TRUE(harness.Current(harness.plan.develop_output));
-  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  EXPECT_TRUE(harness.Current(source_id)) << "the LMT runs after the LLF stage";
   EXPECT_GT(harness.Required(harness.Primary().scene_output),
             harness.Completed(harness.Primary().scene_output));
   harness.Complete();
