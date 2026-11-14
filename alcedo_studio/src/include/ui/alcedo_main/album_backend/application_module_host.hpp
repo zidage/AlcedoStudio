@@ -49,6 +49,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_launch_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/raw_import_look_settings_model.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
@@ -101,6 +102,8 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(EditorBehaviorPreferences* editorBehavior READ editor_behavior CONSTANT)
   /// Library view settings (the layout of the ungrouped Library grid).
   Q_PROPERTY(LibraryViewPreferences* libraryView READ library_view CONSTANT)
+  /// The RAW Import section of Settings > Default Behavior: the look of new RAW imports (#920).
+  Q_PROPERTY(RawImportLookSettingsModel* rawImportLook READ raw_import_look CONSTANT)
   /// The Open Log Folder action of Settings > About.
   Q_PROPERTY(LogFolderController* logFolder READ log_folder CONSTANT)
   /// Project open and create launch state and requests.
@@ -192,6 +195,9 @@ class ApplicationModuleHost final : public QObject {
     return editor_behavior_.get();
   }
   [[nodiscard]] auto library_view() -> LibraryViewPreferences* { return library_view_.get(); }
+  [[nodiscard]] auto raw_import_look() -> RawImportLookSettingsModel* {
+    return raw_import_look_.get();
+  }
   [[nodiscard]] auto log_folder() -> LogFolderController* { return log_folder_.get(); }
   [[nodiscard]] auto project_launch() -> ProjectLaunchCoordinator* { return project_launch_.get(); }
   [[nodiscard]] auto application_close() -> ApplicationCloseCoordinator* {
@@ -280,6 +286,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<WorkspaceRouter>                     workspace_router_;
   std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
   std::unique_ptr<LibraryViewPreferences>              library_view_;
+  std::unique_ptr<RawImportLookSettingsModel>          raw_import_look_;
   std::unique_ptr<LogFolderController>                 log_folder_;
   std::unique_ptr<ProjectLaunchCoordinator>            project_launch_;
   std::unique_ptr<ApplicationCloseCoordinator>         application_close_;

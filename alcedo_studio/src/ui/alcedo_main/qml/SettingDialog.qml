@@ -123,6 +123,8 @@ Dialog {
         pendingLockedNodeMaskAction = appModules.editorBehavior.lockedNodeMaskAction
         pendingLibraryGridLayout = appModules.libraryView.gridLayout
         pendingColorLabelNames = Array.from(appModules.libraryView.colorLabelUserNames)
+        // The stored look, so a value written by another window or by alcedo-cli appears.
+        appModules.rawImportLook.load()
         cachePanel.reloadPending()
     }
 
@@ -246,6 +248,10 @@ Dialog {
             }
         }
         cachePanel.applyPending()
+        if (!appModules.rawImportLook.apply()) {
+            messageRequested(appModules.rawImportLook.errorMessage)
+            return
+        }
         if (appModules.semanticGeneration.importPreference !== pendingSemanticImportPreference) {
             appModules.semanticGeneration.SetImportPreference(pendingSemanticImportPreference)
         }
@@ -826,6 +832,19 @@ Dialog {
                                             lineHeight: 1.25
                                         }
                                     }
+                                }
+
+                                RawImportLookSettingsSection {
+                                    objectName: "rawImportLookSettingsSection"
+                                    Layout.fillWidth: true
+                                    Layout.leftMargin: 34
+                                    Layout.rightMargin: 34
+                                    Layout.bottomMargin: 26
+                                    model: appModules.rawImportLook
+                                    textColor: dialog.textColor
+                                    mutedTextColor: dialog.mutedTextColor
+                                    dividerColor: dialog.dividerColor
+                                    dangerColor: dialog.dangerColor
                                 }
                             }
                         }

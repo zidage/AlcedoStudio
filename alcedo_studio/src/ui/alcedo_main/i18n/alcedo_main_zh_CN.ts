@@ -9601,4 +9601,146 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>剩余约 %1 小时 %2 分钟</translation>
     </message>
 </context>
+<context>
+    <name>RawImportLookSettingsSection</name>
+    <message>
+        <source>RAW Import</source>
+        <translation>RAW 导入</translation>
+    </message>
+    <message>
+        <source>Exposure</source>
+        <translation>曝光</translation>
+    </message>
+    <message>
+        <source>Saturation</source>
+        <translation>饱和度</translation>
+    </message>
+    <message>
+        <source>Tone Curve</source>
+        <translation>色调曲线</translation>
+    </message>
+    <message>
+        <source>Display Transform</source>
+        <translation>显示变换</translation>
+    </message>
+    <message>
+        <source>OpenDRT Look</source>
+        <translation>OpenDRT 外观</translation>
+    </message>
+    <message>
+        <source>Lens Correction</source>
+        <translation>镜头校正</translation>
+    </message>
+    <message>
+        <source>Restore Defaults</source>
+        <translation>恢复默认</translation>
+    </message>
+    <message>
+        <source>Reset %1</source>
+        <translation>重置 %1</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::RawImportLookSettingsModel</name>
+    <message>
+        <source>Linear</source>
+        <translation>线性</translation>
+    </message>
+    <message>
+        <source>Soft Contrast</source>
+        <translation>柔和对比度</translation>
+    </message>
+    <message>
+        <source>Medium Contrast</source>
+        <translation>中等对比度</translation>
+    </message>
+    <message>
+        <source>Strong Contrast</source>
+        <translation>强对比度</translation>
+    </message>
+    <message>
+        <source>Cl. Digit</source>
+        <translation>经典数码</translation>
+    </message>
+    <message>
+        <source>Kodak 2383</source>
+        <translation>Kodak 2383</translation>
+    </message>
+    <message>
+        <source>Velvia 50</source>
+        <translation>Velvia 50</translation>
+    </message>
+    <message>
+        <source>Ektachrome E100</source>
+        <translation>Ektachrome E100</translation>
+    </message>
+    <message>
+        <source>Contrast</source>
+        <translation>对比度</translation>
+    </message>
+    <message>
+        <source>Rendering</source>
+        <translation>渲染</translation>
+    </message>
+    <message>
+        <source>Film</source>
+        <translation>胶片</translation>
+    </message>
+    <message>
+        <source>ACES 2.0</source>
+        <translation>ACES 2.0</translation>
+    </message>
+    <message>
+        <source>OpenDRT</source>
+        <translation>OpenDRT</translation>
+    </message>
+    <message>
+        <source>Standard</source>
+        <translation>标准</translation>
+    </message>
+    <message>
+        <source>Arriba</source>
+        <translation>Arriba</translation>
+    </message>
+    <message>
+        <source>Sylvan</source>
+        <translation>Sylvan</translation>
+    </message>
+    <message>
+        <source>Colorful</source>
+        <translation>多彩</translation>
+    </message>
+    <message>
+        <source>Aery</source>
+        <translation>Aery</translation>
+    </message>
+    <message>
+        <source>Dystopic</source>
+        <translation>Dystopic</translation>
+    </message>
+    <message>
+        <source>Umbra</source>
+        <translation>Umbra</translation>
+    </message>
+    <message>
+        <source>Exposure must be from -10 to +10 EV.</source>
+        <translation>曝光必须在 -10 到 +10 EV 之间。</translation>
+    </message>
+    <message>
+        <source>Saturation must be from -100 to +100.</source>
+        <translation>饱和度必须在 -100 到 +100 之间。</translation>
+    </message>
+    <message>
+        <source>No Tone Curve preset has the id %1.</source>
+        <translation>没有 ID 为 %1 的色调曲线预设。</translation>
+    </message>
+    <message>
+        <source>The display transform must be ACES 2.0 or OpenDRT.</source>
+        <translation>显示变换必须是 ACES 2.0 或 OpenDRT。</translation>
+    </message>
+    <message>
+        <source>No OpenDRT look preset has the id %1.</source>
+        <translation>没有 ID 为 %1 的 OpenDRT 外观预设。</translation>
+    </message>
+</context>
 </TS>
