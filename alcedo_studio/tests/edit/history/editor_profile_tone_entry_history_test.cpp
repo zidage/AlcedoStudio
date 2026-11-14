@@ -215,6 +215,32 @@ TEST_F(EditorProfileToneEntryHistoryTest, DocumentImportedBeforeFilmLikeResetsCo
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
 }
 
+TEST_F(EditorProfileToneEntryHistoryTest, DocumentWithFilmLikeBeforeTheShoulderResetsTheCurve) {
+  // The RAW import look between #891 and #899: the Film-like points before the highlight shoulder.
+  const auto                    before_shoulder = FilmLikeToneCurvePointsBeforeShoulder();
+  const std::vector<CurvePoint> stored{before_shoulder.begin(), before_shoulder.end()};
+  ASSERT_NE(stored, FilmLikePoints());
+  auto  root_document = CreateDefaultPipelineDocument();
+  auto* grade         = root_document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  dynamic_cast<CurveModel*>(grade->FindAdjustmentByType(type_ids::Curve()))->SetPoints(stored);
+  lease_ = test::MakeInMemoryEditorLease(42, std::move(root_document));
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_EQ(RgbCurve(), stored);
+
+  ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
+  EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
+
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  EXPECT_EQ(RgbCurve(), stored);
+  // The Film Print entry reads the same curve.
+  ASSERT_TRUE(CommitMethod(handle, "film_print"));
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
+}
+
 TEST_F(EditorProfileToneEntryHistoryTest, DcpSelectionOnAces20ResetsCurveAndSaturation) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);

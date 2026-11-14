@@ -2,8 +2,9 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Tone Curve presets (#891, tone_curve_preset_study.md): the point rules, 18% grey, monotony, and
-// the neutral axis that the render gives with each preset against the source tone of the study.
+// Tone Curve presets (#891, tone_curve_preset_study.md): the point rules, 18% grey, monotony, the
+// neutral axis that the render gives with each preset against the source tone of the study, and
+// the highlight shoulder of Film-like and Filmic (#899).
 
 #include <gtest/gtest.h>
 
@@ -12,6 +13,7 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "color/color_encoding_math.h"
@@ -105,6 +107,74 @@ TEST(ToneCurvePresetTest, MatchFindsThePresetOfExactlyItsPoints) {
     moved[moved.size() / 2].y += 1e-4f;
     EXPECT_EQ(MatchToneCurvePreset(moved), nullptr) << preset.id;
   }
+}
+
+TEST(ToneCurvePresetTest, FilmLikeAndFilmicRollOffAboveTheKneeToTheDisplayPeak) {
+  // #899: above the knee the slope falls from the knee slope, stays above the end slope of the
+  // shoulder target (no flat segment), and x = 1 maps to the display peak.
+  constexpr int kSteps = 1024;
+  ASSERT_EQ(tone_curve_study::kHighlightShoulders.size(), 2U);
+  for (const auto& shoulder : tone_curve_study::kHighlightShoulders) {
+    SCOPED_TRACE(std::string{shoulder.preset_id});
+    const auto* preset = FindToneCurvePreset(shoulder.preset_id);
+    ASSERT_NE(preset, nullptr);
+    EXPECT_EQ(preset->points.back().x, 1.0f);
+    EXPECT_EQ(preset->points.back().y, 0.95434f);
+    ASSERT_GT(shoulder.knee_slope, shoulder.end_slope);
+    const auto   spline = Solve(*preset);
+    const double knee   = shoulder.knee_x;
+    const double step   = (1.0 - knee) / kSteps;
+    double       first  = 0.0;
+    double       last   = 0.0;
+    for (int i = 0; i < kSteps; ++i) {
+      const auto   x0    = static_cast<float>(knee + step * i);
+      const auto   x1    = static_cast<float>(knee + step * (i + 1));
+      const double slope = (tone_curve::EvaluateToneCurveSpline(spline, x1) -
+                            tone_curve::EvaluateToneCurveSpline(spline, x0)) /
+                           static_cast<double>(x1 - x0);
+      ASSERT_GE(slope, shoulder.end_slope) << "x " << x0;
+      if (i == 0) first = slope;
+      last = slope;
+    }
+    std::cout << shoulder.preset_id << ": slope " << first << " at the knee, " << last
+              << " at x = 1\n";
+    EXPECT_LT(last, 0.25 * first);
+  }
+}
+
+TEST(ToneCurvePresetTest, FilmLikeKeepsItsPointsBelowTheKnee) {
+  // The points of Film-like before the shoulder stay up to the point next to the knee.
+  const auto shoulder =
+      std::ranges::find(tone_curve_study::kHighlightShoulders, std::string_view{"film_like"},
+                        &tone_curve_study::HighlightShoulder::preset_id);
+  ASSERT_NE(shoulder, tone_curve_study::kHighlightShoulders.end());
+  const auto* preset = FindToneCurvePreset(kFilmLikeToneCurvePresetId);
+  ASSERT_NE(preset, nullptr);
+  const auto  before = FilmLikeToneCurvePointsBeforeShoulder();
+  std::size_t kept   = 0;
+  while (kept < before.size() && before[kept].x <= shoulder->kept_points_up_to_x) ++kept;
+  ASSERT_GE(kept, 7U);
+  ASSERT_GE(preset->points.size(), kept);
+  for (std::size_t i = 0; i < kept; ++i) {
+    EXPECT_EQ(preset->points[i], before[i]) << "point " << i;
+  }
+  EXPECT_LT(shoulder->kept_points_up_to_x, shoulder->knee_x);
+}
+
+TEST(ToneCurvePresetTest, FilmLikeCurveIsRecognizedNowAndBeforeTheShoulder) {
+  const auto* film_like = FindToneCurvePreset(kFilmLikeToneCurvePresetId);
+  ASSERT_NE(film_like, nullptr);
+  EXPECT_TRUE(IsFilmLikeToneCurve(film_like->points));
+  const auto before = FilmLikeToneCurvePointsBeforeShoulder();
+  EXPECT_TRUE(IsFilmLikeToneCurve(before));
+  EXPECT_FALSE(std::ranges::equal(before, film_like->points));
+  // The menu shows the earlier points as a custom curve.
+  EXPECT_EQ(MatchToneCurvePreset(before), nullptr);
+  EXPECT_FALSE(IsFilmLikeToneCurve(FindToneCurvePreset("filmic")->points));
+  EXPECT_FALSE(IsFilmLikeToneCurve(IdentityCurvePoints()));
+  std::vector<CurvePoint> moved{before.begin(), before.end()};
+  moved.back().y -= 1e-4f;
+  EXPECT_FALSE(IsFilmLikeToneCurve(moved));
 }
 
 TEST(ToneCurvePresetTest, StudyToneScaleIsTheProductAces2NeutralResponse) {

@@ -210,15 +210,18 @@ auto FilmPrintEntrySaturationTarget(const PipelineDocument& document,
 
 namespace {
 
+static_assert(kDefaultPipelineToneCurvePresetId == kFilmLikeToneCurvePresetId,
+              "HasImportLookCurve recognizes the Film-like points of the RAW import look");
+
 /// True when the RGB curve of @p grade has the points of the Film-like preset of the RAW import
-/// look.
+/// look: the current points, or the points before the highlight shoulder (#899) that documents
+/// imported between #891 and #899 store.
 auto HasImportLookCurve(const ColorGradeNodeModel& grade) -> bool {
   const auto* curve =
       dynamic_cast<const CurveModel*>(grade.FindAdjustmentByType(type_ids::Curve()));
-  const auto* preset = FindToneCurvePreset(kDefaultPipelineToneCurvePresetId);
-  if (curve == nullptr || preset == nullptr) return false;
+  if (curve == nullptr) return false;
   const auto points = curve->Points();
-  return MatchToneCurvePreset(points) == preset;
+  return IsFilmLikeToneCurve(points);
 }
 
 /// The curve write of an entry reset: the RGB curve becomes the identity, the channel curves stay.
