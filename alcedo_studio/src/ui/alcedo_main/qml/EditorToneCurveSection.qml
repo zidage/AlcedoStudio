@@ -47,7 +47,7 @@ CollapsibleSection {
     }
 
     // The body content margin and the curve body margin at the top and at the bottom.
-    bodyContentHeight: curveBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+    bodyContentHeight: curveBody.implicitHeight + 2 * appTheme.spaceXs
 
     TextMetrics {
         id: axisLabelMetrics

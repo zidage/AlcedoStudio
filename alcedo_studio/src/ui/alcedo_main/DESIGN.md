@@ -1631,7 +1631,7 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | Component | Responsibility |
 | --- | --- |
 | `IconActionButton.qml` | Structural SVG action (Item root, true square chrome): hit/optical/source, tooltip, a11y, hover, focus, selected fill; SVG tint via `ColorImage` (same as `Button.icon.color`) |
-| `CollapsibleSection.qml` | Folding group shell with shared motion driver |
+| `CollapsibleSection.qml` | Folding group shell with shared motion driver. The body insets its content by `spaceSm` on every side and adds those insets to `bodyContentHeight`, so a caller passes the height of its content column |
 | `DialogActionButton.qml` | Text dialog actions (46 px floor; wrapped labels grow the button; `fontWeightStrong`); kinds `normal`, `light` (main action of a neutral surface), `accent`, `danger`, `warning`; optional `iconSource` (16 px monochrome SVG before the text, tinted with the text color) |
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
 | `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive; per-entry `stretch` (default 1) sets the width share of a segment; `titlePixelSize` (default `fontSizeBody`) sets the title size |

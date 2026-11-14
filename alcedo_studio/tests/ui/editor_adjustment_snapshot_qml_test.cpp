@@ -286,6 +286,90 @@ TEST(EditorAdjustmentSnapshotQmlTest, LookHlsLoadsCatalogUiValuesAndRanges) {
   EXPECT_EQ(range("lookHlsSmoothnessSlider"), (std::pair{1.0, 180.0}));
 }
 
+// #922: Shadows takes +150 and Highlights -150 past their +-100 rails; the slider keeps the
+// handle at the rail end and hatches the end of the fill.
+TEST(EditorAdjustmentSnapshotQmlTest, ToneShadowsAndHighlightsTakeTheExtendedValues) {
+  SnapshotSession              session(QVariantMap{}, 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  struct Case {
+    const char* slider;
+    const char* field;
+    double      typed;
+  };
+  for (const Case& c : {Case{"toneShadowsSlider", "shadows", 150.0},
+                        Case{"toneHighlightsSlider", "highlights", -150.0}}) {
+    auto* slider = harness.root()->findChild<QObject*>(QString::fromLatin1(c.slider));
+    ASSERT_NE(slider, nullptr) << c.slider;
+    EXPECT_DOUBLE_EQ(slider->property("softFrom").toDouble(), -100.0) << c.slider;
+    EXPECT_DOUBLE_EQ(slider->property("softTo").toDouble(), 100.0) << c.slider;
+    auto* hatch = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHatch"));
+    ASSERT_NE(hatch, nullptr) << c.slider;
+    EXPECT_FALSE(hatch->isVisible()) << c.slider;
+
+    // A typed value: the field emits valueEntered with the value limited to [from, to].
+    ASSERT_TRUE(QMetaObject::invokeMethod(slider, "valueEntered", Q_ARG(double, c.typed)));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(session.lastScalarField(), QString::fromLatin1(c.field));
+    EXPECT_FLOAT_EQ(session.lastScalarValue(), static_cast<float>(c.typed)) << c.slider;
+    EXPECT_DOUBLE_EQ(slider->property("value").toDouble(), c.typed) << c.slider;
+    EXPECT_TRUE(slider->property("beyondSoftRange").toBool()) << c.slider;
+    EXPECT_TRUE(hatch->isVisible()) << c.slider;
+  }
+}
+
+// Every expanded card holds its whole content: the section body adds its insets to the height of
+// the content column, so the last control (Tone Blacks, Selective Color Hue Smoothness) is not
+// cut by the card below.
+TEST(EditorAdjustmentSnapshotQmlTest, ExpandedCardsHoldTheirWholeContent) {
+  SnapshotSession              session(QVariantMap{}, 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  const auto body_of = [](QQuickItem* item) -> QQuickItem* {
+    for (QQuickItem* parent = item; parent != nullptr; parent = parent->parentItem()) {
+      if (parent->objectName() == QLatin1String("collapsibleSectionBody")) {
+        return parent;
+      }
+    }
+    return nullptr;
+  };
+  for (const char* name : {"toneBlacksSlider", "lookHlsSmoothnessSlider"}) {
+    auto* slider = harness.root()->findChild<QQuickItem*>(QString::fromLatin1(name));
+    ASSERT_NE(slider, nullptr) << name;
+    auto* body = body_of(slider);
+    ASSERT_NE(body, nullptr) << name;
+    const QPointF bottom = slider->mapToItem(body, QPointF(0, slider->height()));
+    EXPECT_LE(bottom.y() + 4.0, body->height())
+        << name << " ends at " << bottom.y() << " in a body of " << body->height();
+  }
+
+  int checked = 0;
+  for (auto* body : harness.root()->findChildren<QQuickItem*>(
+           QStringLiteral("collapsibleSectionBody"))) {
+    auto* section = body->parentItem();
+    while (section != nullptr && !section->property("foldProgress").isValid()) {
+      section = section->parentItem();
+    }
+    if (section == nullptr || section->property("foldProgress").toReal() < 0.999) {
+      continue;
+    }
+    auto* content = body->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionBodyContent"));
+    ASSERT_NE(content, nullptr);
+    for (QQuickItem* column : content->childItems()) {
+      // Cards of the panels that are not shown keep their layout, so they count too.
+      if (column->height() <= 0.0) {
+        continue;
+      }
+      const QPointF bottom = column->mapToItem(body, QPointF(0, column->height()));
+      EXPECT_LE(bottom.y(), body->height() + 0.5) << section->objectName().toStdString();
+      ++checked;
+    }
+  }
+  EXPECT_GT(checked, 5);
+}
+
 // #922: the Selective Color rails show the selected hue: Hue Shift its hue band, Lightness dark
 // to light, Chroma grey to full color. A new hue selection recolors them.
 TEST(EditorAdjustmentSnapshotQmlTest, LookHlsRailsFollowTheSelectedHue) {

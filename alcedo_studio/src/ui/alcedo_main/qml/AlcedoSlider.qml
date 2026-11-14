@@ -285,6 +285,7 @@ Item {
 
             // Hatch at the handle end while the value is beyond the soft range.
             Item {
+                objectName: root.partName + "Hatch"
                 visible: root.beyondSoftRange
                 width: Math.min(28, parent.width)
                 height: parent.height
