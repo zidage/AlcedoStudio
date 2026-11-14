@@ -240,6 +240,8 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor plotChannelBlueColor READ plotChannelBlueColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor plotPointerLineColor READ plotPointerLineColor NOTIFY ThemeChanged)
   Q_PROPERTY(qreal plotInactiveLineOpacity READ plotInactiveLineOpacity CONSTANT)
+  Q_PROPERTY(qreal plotHistogramFillOpacity READ plotHistogramFillOpacity CONSTANT)
+  Q_PROPERTY(qreal plotHistogramEdgeOpacity READ plotHistogramEdgeOpacity CONSTANT)
   Q_PROPERTY(qreal plotCurveHitRadius READ plotCurveHitRadius CONSTANT)
   Q_PROPERTY(qreal plotChannelMarkSize READ plotChannelMarkSize CONSTANT)
   // Nodes graph canvas and node-card geometry. Colors follow the active theme;
@@ -519,6 +521,8 @@ class AppTheme final : public QObject {
   auto plotChannelBlueColor() const -> QColor;
   auto plotPointerLineColor() const -> QColor;
   auto plotInactiveLineOpacity() const -> qreal;
+  auto plotHistogramFillOpacity() const -> qreal;
+  auto plotHistogramEdgeOpacity() const -> qreal;
   auto plotCurveHitRadius() const -> qreal;
   auto plotChannelMarkSize() const -> qreal;
   auto graphCanvasColor() const -> QColor;

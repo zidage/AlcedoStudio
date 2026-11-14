@@ -367,6 +367,8 @@ CollapsibleSection {
                     blueColor: appTheme.scopeHistogramBlueColor
                     cutColor: appTheme.plotSurfaceColor
                     edgeWidth: appTheme.plotLineWidth
+                    fillOpacity: appTheme.plotHistogramFillOpacity
+                    edgeOpacity: appTheme.plotHistogramEdgeOpacity
                 }
                 PlotPolylineLayer {
                     objectName: "toneCurveIdentityLine"

@@ -786,6 +786,45 @@ TEST_F(PlotPanePaintTest, PaneDrawsEachLayer) {
   EXPECT_GT(label_pixels, 4);
 }
 
+TEST_F(PlotPanePaintTest, HistogramOpacityScalesTheLightOfTheFillAndOfTheEdge) {
+  // The red that the histogram adds over the surface in the column at x 0.15 (bins 20 to 59): at
+  // the baseline for the fill, and the most in the column for the edge (with no fill). The
+  // diagonal line crosses the column, so it is hidden.
+  line_.set_visible(false);
+  const auto fill_red = [&] {
+    const QImage image = Present();
+    return Pixel(image, pane_->mapFromData({0.15, 0.03})).red() - kSurface.red();
+  };
+  const auto edge_red = [&] {
+    const QImage image = Present();
+    const qreal  dpr   = image.devicePixelRatio();
+    const int    x     = static_cast<int>(std::floor(pane_->mapFromData({0.15, 0.0}).x() * dpr));
+    int          most  = 0;
+    for (int y = static_cast<int>(kPlotRect.top() * dpr);
+         y < static_cast<int>(kPlotRect.bottom() * dpr); ++y) {
+      most = std::max(most, image.pixelColor(x, y).red() - kSurface.red());
+    }
+    return most;
+  };
+
+  const int full_fill = fill_red();
+  EXPECT_GT(full_fill, 60);
+  histogram_.set_fill_opacity(0.5);
+  EXPECT_NEAR(fill_red(), 0.5 * full_fill, 2.0);
+
+  histogram_.set_fill_opacity(0.0);
+  const int full_edge = edge_red();
+  EXPECT_GT(full_edge, 150);
+  histogram_.set_edge_opacity(0.4);
+  EXPECT_NEAR(edge_red(), 0.4 * full_edge, 3.0);
+
+  // Values outside [0, 1] are clamped.
+  histogram_.set_edge_opacity(1.5);
+  EXPECT_DOUBLE_EQ(histogram_.edge_opacity(), 1.0);
+  histogram_.set_fill_opacity(-1.0);
+  EXPECT_DOUBLE_EQ(histogram_.fill_opacity(), 0.0);
+}
+
 TEST_F(PlotPanePaintTest, CurveLineIsOnePointTwoFivePixelsWideAtItsPosition) {
   // The Tone Curve section draws the curve with the plotLineWidth token: 1.25 px.
   constexpr double kCurveLineWidth = 1.25;
