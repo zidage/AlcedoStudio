@@ -5,7 +5,9 @@ Date: 2026-11-13
 Issue: [#891](https://github.com/zidage/AlcedoStudio/issues/891) (TC6 of
 [tone_curve_editor_plan.md](tone_curve_editor_plan.md), tracking issue
 [#885](https://github.com/zidage/AlcedoStudio/issues/885)). Highlight shoulder of Film-like and
-Filmic: [#899](https://github.com/zidage/AlcedoStudio/issues/899) (2026-11-13, section 4.3).
+Filmic: [#899](https://github.com/zidage/AlcedoStudio/issues/899) (2026-11-13, section 4.3). Shadow
+toe of Film-like and Filmic: [#910](https://github.com/zidage/AlcedoStudio/issues/910) (2026-11-13,
+section 4.4).
 
 Script: [`scripts/fit_tone_curve_presets.py`](../../../../scripts/fit_tone_curve_presets.py).
 Figures: [`tone_curve_preset_study/`](tone_curve_preset_study/).
@@ -176,6 +178,55 @@ from +4.5 EV to +10 EV (Filmic). In exchange the top stop below the source white
 keep their tops as fitted: a slide reaches its minimum density about 4 stops above 18% grey, and
 that clip belongs to the look of the film.
 
+### 4.4 Shadow toe of Film-like and Filmic (#910)
+
+Finding (#910): the sources of Film-like and Filmic keep a display black well above 0 at x = 0,
+the bottom of the curve axis (about 9.7 stops below scene 1.0). Their fits started at (0, 0.14493)
+(Film-like) and (0, 0.11720) (Filmic): the output of x = 0 lies 4.7 and 5.2 stops below 18% grey.
+On Film-like, the RAW import look, that lifts the black point of every new image, and the curve
+in the Tone Curve panel does not start at the bottom-left corner.
+
+The two presets now fit a target with a shadow toe that ends at (0, 0). With `y_t` the target of
+section 4.1, or of section 4.3 for these two presets:
+
+- Knee: `x_t = g - 3s` (0.24236), three stops below 18% grey. Above the knee the target stays.
+- Below the knee the target is the parabola
+
+  `y(x) = y_t0 - m_t * u - c * u^2`, with `u = x_t - x` and `c = (y_t0 - m_t * x_t) / x_t^2`,
+
+  where `y_t0 = y_t(x_t)` and `m_t` is the slope of `y_t` at the knee. Value and slope agree at
+  the knee, and `y(0) = 0`. The slope at x = 0 is `m_t + 2 * c * x_t`; the toe is monotone while
+  it is not negative. The parabola has the smallest constant curvature that meets both ends.
+
+The fit keeps the points of the fit with the shoulder from the point after the knee point, and
+fits the points below them as in section 4.2, from the start point (0, 0). As with the shoulder,
+the point next to the knee moves with the toe points.
+
+| Preset | Knee `x_t` | Knee (EV) | `y_t0` | `m_t` | Slope at x = 0 | Points kept from x | Change above the knee (codes) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Film-like | 0.24236 | -3.00 | 0.26269 | 0.577 | 1.591 | 0.28192 | 0.21 |
+| Filmic | 0.24236 | -3.00 | 0.26049 | 0.856 | 1.293 | 0.36624 | 0.74 |
+
+The change above the knee is the largest code difference between the fits with and without the
+toe; both fits lie within their fit error of the same target there. Filmic needs fewer points with
+the toe: the fit replaces four shadow points by one, and the points kept start at 0.36624.
+
+Display codes of a neutral at the curve input (8 bit, gamma 2.2):
+
+| Preset | Form | -7 | -6 | -5 | -4 | -3 | -2 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Film-like | target without the toe | 7.1 | 9.7 | 13.5 | 18.3 | 25.0 | 36.9 |
+| Film-like | points without the toe | 7.1 | 9.8 | 13.2 | 18.0 | 24.8 | 36.4 |
+| Film-like | points with the toe | 1.4 | 3.6 | 8.7 | 16.6 | 24.6 | 36.5 |
+| Filmic | target without the toe | 4.7 | 5.7 | 8.7 | 14.5 | 24.4 | 39.7 |
+| Filmic | points without the toe | 4.8 | 5.6 | 8.3 | 14.9 | 24.1 | 39.5 |
+| Filmic | points with the toe | 1.3 | 3.2 | 7.0 | 13.8 | 24.5 | 40.1 |
+
+From -3 EV up the two presets render as before. Below it the shadows fall toward black: -5 EV
+renders 4.8 codes darker on Film-like and 1.7 codes darker on Filmic, and -7 EV is near black. The
+three films keep their raised black: the maximum density of the print or the slide belongs to
+their look.
+
 ## 5. Results
 
 | Preset | Points | Fit error (codes) | Grey exposure `e_g` (EV) |
@@ -185,7 +236,7 @@ that clip belongs to the look of the film.
 | Medium Contrast | 6 | 0.22 | 0 |
 | Strong Contrast | 6 | 0.26 | 0 |
 | Film-like | 13 | 0.56 | -0.071 |
-| Filmic | 15 | 0.49 | -0.808 |
+| Filmic | 12 | 0.49 | -0.808 |
 | Kodak 2383 | 12 | 0.46 | -0.344 |
 | Velvia 50 | 15 | 0.51 | -0.897 |
 | Ektachrome E100 | 15 | 0.41 | -0.925 |
@@ -194,21 +245,22 @@ The points are in `alcedo_studio/src/edit/operators/models/tone_curve_preset_poi
 the script writes. `ToneCurvePresetTest` evaluates the product spline and the product neutral
 response at 257 axis samples and checks each preset against the source tone within its fit error
 plus 0.05 codes; the largest difference of each preset is below its recorded error. For Film-like
-and Filmic the source tone of the test is the source tone with the shoulder (section 4.3), and
-the test also checks the shoulder: from the knee to x = 1 the slope of the curve stays above the
-target slope at x = 1, falls to below a quarter of its value at the knee, and the end point is
-(1, 0.95434).
+and Filmic the source tone of the test is the source tone with the toe and the shoulder
+(sections 4.3 and 4.4), and the test also checks the shoulder: from the knee to x = 1 the slope of
+the curve stays above the target slope at x = 1, falls to below a quarter of its value at the knee,
+and the end point is (1, 0.95434). It checks the toe too: the curve starts at (0, 0) and meets the
+target at the toe knee.
 
-Film-like and Filmic points (section 4.3):
+Film-like and Filmic points (sections 4.3 and 4.4):
 
 | Preset | Points |
 | --- | --- |
-| Film-like | (0, 0.14493), (0.24811, 0.26545), (0.28192, 0.28731), (0.32285, 0.32092), (0.36954, 0.36613), (0.41359, 0.41359), (0.50517, 0.53603), (0.57179, 0.64589), (0.59180, 0.68831), (0.63221, 0.76256), (0.66469, 0.79612), (0.71636, 0.84267), (1, 0.95434) |
-| Filmic | (0, 0.11720), (0.05139, 0.12594), (0.14117, 0.17422), (0.17031, 0.20220), (0.24522, 0.26164), (0.36624, 0.37069), (0.41359, 0.41359), (0.52741, 0.52984), (0.57421, 0.59107), (0.61226, 0.65677), (0.65470, 0.75574), (0.70435, 0.82835), (0.72436, 0.84677), (0.80094, 0.89869), (1, 0.95434) |
+| Film-like | (0, 0), (0.17357, 0.21516), (0.28192, 0.28731), (0.32285, 0.32092), (0.36954, 0.36613), (0.41359, 0.41359), (0.50517, 0.53603), (0.57179, 0.64589), (0.59180, 0.68831), (0.63221, 0.76256), (0.66469, 0.79612), (0.71636, 0.84267), (1, 0.95434) |
+| Filmic | (0, 0), (0.13938, 0.16232), (0.36624, 0.37069), (0.41359, 0.41359), (0.52741, 0.52984), (0.57421, 0.59107), (0.61226, 0.65677), (0.65470, 0.75574), (0.70435, 0.82835), (0.72436, 0.84677), (0.80094, 0.89869), (1, 0.95434) |
 
 Figures: for each preset, the curve on the axis (target, fitted spline, points) and the neutral
 axis through ACES 2.0 (source tone, the render with the preset, and Linear). The Film-like and
-Filmic figures also draw the source without the shoulder.
+Filmic figures also draw the source without the toe and the shoulder.
 
 | Preset | Curve axis | Neutral axis |
 | --- | --- | --- |
@@ -223,8 +275,9 @@ Filmic figures also draw the source without the shoulder.
 
 Observations:
 
-- Film-like lifts the shadows over the toe of ACES 2.0 (the curve starts at y = 0.145). Its
-  source reaches the display peak at raw white (+3.97 EV at the curve input of the Default
+- The source of Film-like lifts the shadows over the toe of ACES 2.0 (its fit started at
+  y = 0.145); the preset falls to (0, 0) below -3 EV (section 4.4). Its source reaches the display
+  peak at raw white (+3.97 EV at the curve input of the Default
   document), where ACES 2.0 alone keeps 72% of the peak, and the ACR exposure ramp clips there.
   The preset rolls off from one stop below raw white toward the peak at x = 1 (section 4.3).
 - The three films hold a display black above 0 (the maximum density of the print or the slide):
@@ -242,7 +295,7 @@ would add a second S. Documents imported before keep their stored values (contra
 identity curve), and their bytes and root ids stay the same.
 
 The entry resets of the import look (dcp_profile_tone_curve_study.md, section 6.5) follow. The
-Film-like points are the current points or those of the first fit (section 7):
+Film-like points are the current points or those of an earlier fit (section 7):
 
 - A profile tone entry writes the identity RGB curve while the RGB curve still has the Film-like
   points: the `ProfileToneCurve` of the camera profile replaces the Adobe default curve, as in
@@ -251,23 +304,27 @@ Film-like points are the current points or those of the first fit (section 7):
   negative and the print give the tone of that display transform, and Film-like is defined on
   ACES 2.0.
 
-## 7. Documents with the Film-like points of #891
+## 7. Documents with earlier Film-like points
 
-The shoulder of #899 changes the Film-like points. A document stores its curve points, so a
-document imported between #891 and #899 keeps the 12 points of the first fit and renders as
-before; new imports get the points of section 5.
+The shoulder of #899 and the toe of #910 each changed the Film-like points. A document stores its
+curve points, so a document imported with an earlier look keeps its points and renders as before;
+new imports get the points of section 5.
 
-The entry resets of section 6 recognize both point lists as the import look
-(`IsFilmLikeToneCurve` in `tone_curve_presets.hpp`): the first fit stays in
-`tone_curve_presets.cpp` as `FilmLikeToneCurvePointsBeforeShoulder()`, by hand, since the script
-writes only the current points:
+The entry resets of section 6 recognize each point list as the import look
+(`IsFilmLikeToneCurve` in `tone_curve_presets.hpp`). The earlier fits stay in
+`tone_curve_presets.cpp` as `FilmLikeToneCurveEarlierPoints()`, by hand, since the script writes
+only the current points:
 
-(0, 0.14493), (0.24811, 0.26545), (0.28192, 0.28731), (0.32285, 0.32092), (0.36954, 0.36613),
-(0.41359, 0.41359), (0.50517, 0.53603), (0.58131, 0.66565), (0.62018, 0.77121),
-(0.64790, 0.92653), (0.94031, 0.94154), (1, 0.95434)
+- #891, before the shoulder: (0, 0.14493), (0.24811, 0.26545), (0.28192, 0.28731),
+  (0.32285, 0.32092), (0.36954, 0.36613), (0.41359, 0.41359), (0.50517, 0.53603),
+  (0.58131, 0.66565), (0.62018, 0.77121), (0.64790, 0.92653), (0.94031, 0.94154), (1, 0.95434)
+- #899, with the shoulder and before the toe: (0, 0.14493), (0.24811, 0.26545),
+  (0.28192, 0.28731), (0.32285, 0.32092), (0.36954, 0.36613), (0.41359, 0.41359),
+  (0.50517, 0.53603), (0.57179, 0.64589), (0.59180, 0.68831), (0.63221, 0.76256),
+  (0.66469, 0.79612), (0.71636, 0.84267), (1, 0.95434)
 
-The preset menu matches exact points, so it shows the first fit as a custom curve; choosing
-Film-like gives the points with the shoulder.
+The preset menu matches exact points, so it shows an earlier fit as a custom curve; choosing
+Film-like gives the current points.
 
 ## 8. Parameters
 
@@ -290,6 +347,10 @@ Film-like gives the points with the shoulder.
 | `D` | Scale of the rational roll-off | ACEScc | from `y(1) = 0.95434` | inferred |
 | End point | Curve output at which `N` reaches the display peak | ACEScc | 0.95434 | data (ACEScc of scene 128) |
 | Refit points | Points of the first fit next to the knee that move with the shoulder | | 1 | creative |
-| Slope step | Central difference step of `m_k` on the curve axis | ACEScc | 0.002 | inferred |
+| Slope step | Central difference step of `m_k` and `m_t` on the curve axis | ACEScc | 0.002 | inferred |
+| `x_t` | Knee of the shadow toe | ACEScc | `g - 3s` = 0.24236 | creative |
+| `y_t0`, `m_t` | Target value and slope at the toe knee | ACEScc | section 4.4 | fit |
+| `c` | Curvature of the toe parabola | ACEScc | from `y(0) = 0` | inferred |
+| Toe refit points | Points of the earlier fit next to the toe knee that move with the toe | | 1 | creative |
 | Filmic parameters | Defaults of filmic rgb | | section 3.2 | data (darktable) |
 | Film resources | Film print resources | | schema 11 | data (alcedo-film-lab) |

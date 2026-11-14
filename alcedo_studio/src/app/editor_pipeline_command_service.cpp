@@ -214,8 +214,8 @@ static_assert(kDefaultPipelineToneCurvePresetId == kFilmLikeToneCurvePresetId,
               "HasImportLookCurve recognizes the Film-like points of the RAW import look");
 
 /// True when the RGB curve of @p grade has the points of the Film-like preset of the RAW import
-/// look: the current points, or the points before the highlight shoulder (#899) that documents
-/// imported between #891 and #899 store.
+/// look: the current points, or the earlier points that documents imported with an earlier look
+/// store (FilmLikeToneCurveEarlierPoints).
 auto HasImportLookCurve(const ColorGradeNodeModel& grade) -> bool {
   const auto* curve =
       dynamic_cast<const CurveModel*>(grade.FindAdjustmentByType(type_ids::Curve()));

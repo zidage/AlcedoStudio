@@ -14,11 +14,17 @@ inline constexpr std::array<CurvePoint, 2> kLinearPoints{{{0.0f, 0.0f}, {1.0f, 1
 
 #include "tone_curve_preset_points.inc"
 
-// Film-like as fitted in #891, before the highlight shoulder of #899 (tone_curve_preset_study.md,
-// section 7). Kept by hand: the fit script writes only the current points.
+// Earlier fits of Film-like (tone_curve_preset_study.md, section 7). Kept by hand: the fit script
+// writes only the current points.
 // clang-format off
+// #891, before the highlight shoulder of #899.
 inline constexpr std::array<CurvePoint, 12> kFilmLikePointsBeforeShoulder{{{0.00000f, 0.14493f}, {0.24811f, 0.26545f}, {0.28192f, 0.28731f}, {0.32285f, 0.32092f}, {0.36954f, 0.36613f}, {0.41359f, 0.41359f}, {0.50517f, 0.53603f}, {0.58131f, 0.66565f}, {0.62018f, 0.77121f}, {0.64790f, 0.92653f}, {0.94031f, 0.94154f}, {1.00000f, 0.95434f}}};
+// #899, before the shadow toe of #910.
+inline constexpr std::array<CurvePoint, 13> kFilmLikePointsBeforeToe{{{0.00000f, 0.14493f}, {0.24811f, 0.26545f}, {0.28192f, 0.28731f}, {0.32285f, 0.32092f}, {0.36954f, 0.36613f}, {0.41359f, 0.41359f}, {0.50517f, 0.53603f}, {0.57179f, 0.64589f}, {0.59180f, 0.68831f}, {0.63221f, 0.76256f}, {0.66469f, 0.79612f}, {0.71636f, 0.84267f}, {1.00000f, 0.95434f}}};
 // clang-format on
+
+const std::array<std::span<const CurvePoint>, 2> kFilmLikeEarlierPoints{
+    kFilmLikePointsBeforeShoulder, kFilmLikePointsBeforeToe};
 
 const std::array<ToneCurvePreset, 9> kPresets{{
     {"linear", "Linear", "", kLinearPoints},
@@ -52,13 +58,15 @@ auto MatchToneCurvePreset(std::span<const CurvePoint> points) -> const ToneCurve
   return found == kPresets.end() ? nullptr : &*found;
 }
 
-auto FilmLikeToneCurvePointsBeforeShoulder() -> std::span<const CurvePoint> {
-  return kFilmLikePointsBeforeShoulder;
+auto FilmLikeToneCurveEarlierPoints() -> std::span<const std::span<const CurvePoint>> {
+  return kFilmLikeEarlierPoints;
 }
 
 auto IsFilmLikeToneCurve(std::span<const CurvePoint> points) -> bool {
   return std::ranges::equal(kFilmLikePoints, points) ||
-         std::ranges::equal(kFilmLikePointsBeforeShoulder, points);
+         std::ranges::any_of(kFilmLikeEarlierPoints, [points](std::span<const CurvePoint> earlier) {
+           return std::ranges::equal(earlier, points);
+         });
 }
 
 }  // namespace alcedo
