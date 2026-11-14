@@ -321,14 +321,14 @@ TEST_F(EditorSessionCommandQueueBaselineTest, StaleFirstFrameCannotEnableEditing
 
 /// Invariant: Undo on the command thread never waits on the executor render
 /// mutex. While a render worker owns the executor, Undo must return without
-/// blocking. The history reduction and worker gate are separate; a bounded
+/// blocking. The history reduction and worker lock are separate; a bounded
 /// timeout reports any unfinished operation.
 TEST_F(EditorSessionCommandQueueBaselineTest,
        UndoWhileRenderWorkerOwnsExecutorDoesNotBlockCommandThread) {
   openInteractive(10, 20);  // image A, interactive
 
-  // Hold a shared worker gate. The CQ2 history port intentionally does not
-  // acquire this gate while reducing Undo.
+  // Hold a shared worker lock. The CQ2 history port intentionally does not
+  // acquire this lock while reducing Undo.
   std::mutex render_lock;
   history_->render_lock = &render_lock;
 
@@ -408,6 +408,25 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0], "version_created");
   EXPECT_EQ(events[1], "save_started");
+}
+
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       CurrentVersionPasteUsesQueuedModeAndMaterializesOneCheckpoint) {
+  openInteractive(10, 20);
+  std::vector<std::string> events;
+  history_->event_log                  = &events;
+  checkpoint_store_->event_log         = &events;
+  checkpoint_store_->async_materialize = false;
+  const auto captures                  = history_->checkpoint_capture_count;
+  const auto renders                   = runtime_->coordinator->diagnostics().accepted_count;
+  const auto result = service_->PasteAdjustments(MakeExposureTransferPackage(0.75), "Ignored name",
+                                                 std::nullopt, AdjustmentPasteMode::CurrentVersion);
+  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted);
+  drainQueue();
+  EXPECT_EQ(events, (std::vector<std::string>{"current_version_pasted", "save_started"}));
+  EXPECT_EQ(history_->checkpoint_capture_count, captures + 1);
+  EXPECT_EQ(runtime_->coordinator->diagnostics().accepted_count, renders + 1);
+  EXPECT_FALSE(history_->dirty_journal);
 }
 
 /// An automation Paste carries its own package, so it is admitted when the GUI

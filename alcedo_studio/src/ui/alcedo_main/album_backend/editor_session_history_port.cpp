@@ -4,16 +4,19 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
 
+#include <exception>
 #include <functional>
 #include <optional>
 #include <utility>
 
 #include "app/ai_mask_analysis_image.hpp"
+#include "app/document_transfer_planner.hpp"
 #include "app/editor_comparison_inputs.hpp"
 #include "app/editor_session_types.hpp"
 #include "app/lut_preview_image.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/history/commit_graph.hpp"
+#include "edit/history/mini_git_working_history.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_checkpoint.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_mutation.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_projection.hpp"
@@ -421,6 +424,39 @@ auto EditorSessionHistoryPort::RemoveVersion(const alcedo::EditorHistoryGuardHan
                                              std::string* error) -> bool {
   std::scoped_lock lock(mutex_);
   return PublishAfterWrite(guard, version_refs_->RemoveVersion(guard, version_id, error));
+}
+
+auto EditorSessionHistoryPort::PasteLiveCurrentVersion(
+    const alcedo::EditorHistoryGuardHandle& guard, const alcedo::AdjustmentTransferPackage& package,
+    alcedo::AdjustmentPasteResult* result, std::string* error,
+    std::optional<alcedo::EditCommitAttribution> attribution) -> bool {
+  std::scoped_lock lock(mutex_);
+  auto             state = state_->EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  if (!result || !state->history || state->HasUncommittedLiveValues()) {
+    if (error) *error = "Current-Version Paste requires settled history and result storage";
+    return false;
+  }
+  *result                  = {};
+  result->prior_version_id = state->graph->GetActiveVersionId();
+  try {
+    auto batch =
+        alcedo::DocumentTransferPlanner::PlanOntoCurrent(package, state->document->Document());
+    if (!batch) {
+      result->unchanged = true;
+      return true;
+    }
+    if (!mutation_->CommitPipelineEditBatch(guard, std::move(*batch), error,
+                                            std::move(attribution)))
+      return false;
+    result->pasted         = true;
+    result->new_version_id = result->prior_version_id;
+    result->new_head       = state->history->working_head().value_or(alcedo::commit_hash_t{});
+    return PublishAfterWrite(guard, true);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
 }
 
 auto EditorSessionHistoryPort::PasteLiveRootRelativeVersion(

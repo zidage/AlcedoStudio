@@ -2288,13 +2288,14 @@ auto EditorSessionController::history_snapshot() const -> alcedo::EditorHistoryS
 }
 
 auto EditorSessionController::PasteAdjustmentPackage(
-    const alcedo::AdjustmentTransferPackage& package, const QString& versionDisplayName)
-    -> alcedo::EditorSessionResult {
+    const alcedo::AdjustmentTransferPackage& package, const QString& versionDisplayName,
+    alcedo::AdjustmentPasteMode mode) -> alcedo::EditorSessionResult {
   if (!session_backend_) return {};
   if (const QString refusal = UserStateChangeRefusalText(); !refusal.isEmpty()) {
     return RejectedResult(refusal);
   }
-  return session_backend_->PasteAdjustments(package, versionDisplayName.toStdString());
+  return session_backend_->PasteAdjustments(package, versionDisplayName.toStdString(), std::nullopt,
+                                            mode);
 }
 
 auto EditorSessionController::RequestPasteAdjustmentPackage(

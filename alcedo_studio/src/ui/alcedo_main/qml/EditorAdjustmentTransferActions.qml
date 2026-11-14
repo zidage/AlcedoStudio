@@ -42,21 +42,19 @@ QtObject {
         }
 
         adjustmentTransferDialog.mode = "paste"
-        adjustmentTransferDialog.pasteStrategy = "paste"
         adjustmentTransferDialog.sourceTitle = adjustmentTransfer.packageSourceTitle
         adjustmentTransferDialog.adjustmentRows = adjustmentTransfer.packageSummary
         adjustmentTransferDialog.open()
     }
 
-    // Applies Paste while its current policy gate allows it. Paste creates a
-    // root-relative Version per target. Merge is not a product action.
+    // Applies the selected destination to every target while policy allows Paste.
     function applyPaste(strategy) {
         if (!adjustmentTransfer || !hasTargets) {
             return false
         }
 
         const selectedStrategy = String(strategy || "")
-        if (selectedStrategy !== "paste") {
+        if (selectedStrategy !== "paste" && selectedStrategy !== "current") {
             return false
         }
         if (!pasteEnabled) {

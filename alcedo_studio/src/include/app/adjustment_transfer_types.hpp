@@ -19,6 +19,9 @@
 
 namespace alcedo {
 
+/// Destination of one Paste action, shared by every selected target.
+enum class AdjustmentPasteMode : std::uint8_t { NewRootRelativeVersion, CurrentVersion };
+
 /// Transferable item kinds on one node. @ref Adjustment requires
 /// @ref AdjustmentTransferItemSelection::adjustment_id; the other kinds describe
 /// one complete node value each. The Develop kinds are valid only on the
@@ -176,8 +179,11 @@ struct AdjustmentApplyResult {
 
 struct AdjustmentPasteResult {
   bool             pasted = false;
+  /// Current-Version Paste found no differing selected values and wrote no commit.
+  bool             unchanged = false;
+  /// Destination Version: newly created in root-relative mode, unchanged in current mode.
   version_ref_id_t new_version_id{};
-  /// Active Version observed before the paste Version was created.
+  /// Active Version observed before Paste.
   version_ref_id_t prior_version_id{};
   commit_hash_t    new_head{};
   std::string      error;

@@ -543,16 +543,16 @@ auto EditorHistoryMutation::MoveHeadToCommit(const alcedo::EditorHistoryGuardHan
   return ApplyPreparedHeadMoveOnLivePipeline(*state, state_, prepared, error);
 }
 
-auto EditorHistoryMutation::CommitPipelineEditBatch(const alcedo::EditorHistoryGuardHandle& guard,
-                                                    alcedo::PipelineEditBatch batch,
-                                                    std::string* error) -> bool {
+auto EditorHistoryMutation::CommitPipelineEditBatch(
+    const alcedo::EditorHistoryGuardHandle& guard, alcedo::PipelineEditBatch batch,
+    std::string* error, std::optional<alcedo::EditCommitAttribution> attribution) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
   if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
+  return PublishAppliedTypedBatch(*state, state_, batch, false, error, std::move(attribution));
 }
 
 auto EditorHistoryMutation::EditNodeGraph(const alcedo::EditorHistoryGuardHandle& guard,
