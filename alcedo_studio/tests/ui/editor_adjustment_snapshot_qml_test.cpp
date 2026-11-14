@@ -406,9 +406,10 @@ TEST(EditorAdjustmentSnapshotQmlTest, LookHlsRailsFollowTheSelectedHue) {
     QCoreApplication::processEvents();
     const double hue = model->property("targetHue").toDouble();
     expect_near(stop_color("lookHlsHueShiftSlider", 0),
-                hsl(std::fmod(hue - 30.0 + 360.0, 360.0), 1, 0.5), "hue shift left end");
+                hsl(std::fmod(hue + 30.0, 360.0), 1, 0.5), "hue shift left end");
     expect_near(stop_color("lookHlsHueShiftSlider", 2), hsl(hue, 1, 0.5), "hue shift center");
-    expect_near(stop_color("lookHlsHueShiftSlider", 4), hsl(std::fmod(hue + 30.0, 360.0), 1, 0.5),
+    expect_near(stop_color("lookHlsHueShiftSlider", 4),
+                hsl(std::fmod(hue - 30.0 + 360.0, 360.0), 1, 0.5),
                 "hue shift right end");
     expect_near(stop_color("lookHlsLightnessSlider", 0), hsl(hue, 1, 0.1), "lightness left end");
     expect_near(stop_color("lookHlsLightnessSlider", 2), hsl(hue, 1, 0.9), "lightness right end");

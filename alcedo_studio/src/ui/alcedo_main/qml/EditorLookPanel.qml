@@ -466,7 +466,8 @@ Item {
                     }
 
                     // The rails show what each slider does to the selected hue: the hue
-                    // band of Hue Shift, dark to light for Lightness, grey to full
+                    // that each Hue Shift gives (a positive shift lowers the HSL hue
+                    // angle of the result), dark to light for Lightness, grey to full
                     // color for Chroma.
                     EditorDragSlider {
                         objectName: "lookHlsHueShiftSlider"
@@ -483,11 +484,11 @@ Item {
                         flickable: lookScroll
                         railGradient: Gradient {
                             orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_min, 1.0, 0.5) }
-                            GradientStop { position: 0.25; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_min / 2, 1.0, 0.5) }
+                            GradientStop { position: 0.0; color: root.hlsRailColor(-root.hlsHueShiftSpec.ui_min, 1.0, 0.5) }
+                            GradientStop { position: 0.25; color: root.hlsRailColor(-root.hlsHueShiftSpec.ui_min / 2, 1.0, 0.5) }
                             GradientStop { position: 0.5; color: root.hlsRailColor(0, 1.0, 0.5) }
-                            GradientStop { position: 0.75; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_max / 2, 1.0, 0.5) }
-                            GradientStop { position: 1.0; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_max, 1.0, 0.5) }
+                            GradientStop { position: 0.75; color: root.hlsRailColor(-root.hlsHueShiftSpec.ui_max / 2, 1.0, 0.5) }
+                            GradientStop { position: 1.0; color: root.hlsRailColor(-root.hlsHueShiftSpec.ui_max, 1.0, 0.5) }
                         }
                         beginEdit: function () { hlsModel.beginHueShiftDrag() }
                         updateEdit: function (v) { hlsModel.updateHueShiftDrag(v) }
