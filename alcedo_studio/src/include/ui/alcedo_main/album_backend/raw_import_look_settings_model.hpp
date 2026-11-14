@@ -72,6 +72,9 @@ class RawImportLookSettingsModel final : public QObject {
   Q_PROPERTY(bool lensCorrectionModified READ lens_correction_modified NOTIFY pendingChanged)
   /// True when any row differs from its app default.
   Q_PROPERTY(bool anyModified READ any_modified NOTIFY pendingChanged)
+  /// App defaults of the slider rows, in page units (the default mark of the slider).
+  Q_PROPERTY(double exposureEvDefault READ exposure_ev_default CONSTANT)
+  Q_PROPERTY(double saturationDefault READ saturation_default CONSTANT)
 
   /// The Tone Curve presets in menu order: maps with `value` (id), `label` (translated name), and
   /// `group` (translated menu group; empty for Linear).
@@ -118,6 +121,8 @@ class RawImportLookSettingsModel final : public QObject {
   [[nodiscard]] auto        open_drt_look_preset_modified() const -> bool;
   [[nodiscard]] auto        lens_correction_modified() const -> bool;
   [[nodiscard]] auto        any_modified() const -> bool;
+  [[nodiscard]] static auto exposure_ev_default() -> double;
+  [[nodiscard]] static auto saturation_default() -> double;
   /// True when the pending value of @p field differs from its app default.
   [[nodiscard]] auto        IsModified(alcedo::RawImportLookField field) const -> bool;
 

@@ -9635,10 +9635,6 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Restore Defaults</source>
         <translation>恢复默认</translation>
     </message>
-    <message>
-        <source>Reset %1</source>
-        <translation>重置 %1</translation>
-    </message>
 </context>
 <context>
     <name>alcedo::ui::RawImportLookSettingsModel</name>

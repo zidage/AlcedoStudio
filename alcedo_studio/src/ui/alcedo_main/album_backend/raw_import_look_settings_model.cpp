@@ -213,6 +213,14 @@ auto RawImportLookSettingsModel::any_modified() const -> bool {
   return std::ranges::any_of(kAllFields, [this](auto field) { return IsModified(field); });
 }
 
+auto RawImportLookSettingsModel::exposure_ev_default() -> double {
+  return AppDefaults().exposure_ev;
+}
+
+auto RawImportLookSettingsModel::saturation_default() -> double {
+  return AppDefaults().saturation;
+}
+
 auto RawImportLookSettingsModel::tone_curve_presets() -> QVariantList {
   QVariantList list;
   for (const auto& preset : alcedo::ToneCurvePresets()) {

@@ -5,8 +5,9 @@ import Alcedo.Main 1.0
 
 // RAW Import section of Settings > Default Behavior (#920): the look that new RAW imports write
 // into the history root of each image. The rows edit the pending values of
-// RawImportLookSettingsModel; the Done button of the dialog writes them (model.apply()). Each row
-// has a reset that shows while its value differs from the app default.
+// RawImportLookSettingsModel; the Done button of the dialog writes them (model.apply()). A
+// double-click on the name of a row (or on a slider rail) sets the row to its app default;
+// "Restore Defaults" sets every row.
 ColumnLayout {
     id: section
     objectName: "rawImportLookSection"
@@ -72,65 +73,12 @@ ColumnLayout {
         color: section.dividerColor
     }
 
-    // Adapters: the shared controls read their value and limits from a model object.
-    QtObject {
-        id: exposureControl
-        property string label: ""
-        property bool enabled: section.model !== null
-        property bool valid: true
-        readonly property real value: section.model ? section.model.exposureEv : 0
-        // A value that the model accepted or read again clears the error of the field.
-        onValueChanged: valid = true
-        readonly property real minimum: -10
-        readonly property real maximum: 10
-        readonly property real step: 0.01
-        readonly property int precision: 2
-        readonly property string suffix: ""
-        function beginDrag() {}
-        function updateDrag(v) { editValue(v) }
-        function finishDrag() {}
-        function editValue(v) {
-            if (section.model)
-                valid = section.model.setExposureEv(v)
-        }
-        function commitImmediately() {}
-        function setInvalid(message) { valid = false }
-        function reset() {
-            valid = true
-            if (section.model)
-                section.model.resetRow("exposureEv")
-        }
+    function resetRow(field) {
+        if (section.model)
+            section.model.resetRow(field)
     }
 
-    QtObject {
-        id: saturationControl
-        property string label: ""
-        property bool enabled: section.model !== null
-        property bool valid: true
-        readonly property real value: section.model ? section.model.saturation : 0
-        // A value that the model accepted or read again clears the error of the field.
-        onValueChanged: valid = true
-        readonly property real minimum: -100
-        readonly property real maximum: 100
-        readonly property real step: 1
-        readonly property int precision: 0
-        readonly property string suffix: ""
-        function beginDrag() {}
-        function updateDrag(v) { editValue(v) }
-        function finishDrag() {}
-        function editValue(v) {
-            if (section.model)
-                valid = section.model.setSaturation(v)
-        }
-        function commitImmediately() {}
-        function setInvalid(message) { valid = false }
-        function reset() {
-            valid = true
-            if (section.model)
-                section.model.resetRow("saturation")
-        }
-    }
-
+    // Adapters: the shared combo and toggle read their value and entries from a model object.
     QtObject {
         id: toneCurveControl
         property string label: ""
@@ -188,18 +136,31 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 12
 
+        // The rail covers +-5 EV; typing and a drag on the value reach +-10 EV.
         LookRow {
             objectName: "rawImportExposureRow"
             label: qsTr("Exposure")
             labelWidth: section.labelWidth
             textColor: section.textColor
-            onResetClicked: section.model.resetRow("exposureEv")
-            modified: section.model ? section.model.exposureEvModified : false
+            onResetRequested: section.resetRow("exposureEv")
 
-            AdjustmentSlider {
+            AlcedoSlider {
                 objectName: "rawImportExposureSlider"
                 Layout.fillWidth: true
-                model: exposureControl
+                inlineHeight: 36
+                valuePixelSize: appTheme.fontSizeBody
+                enabled: section.model !== null
+                from: -10
+                to: 10
+                softFrom: -5
+                softTo: 5
+                stepSize: 0.01
+                precision: 2
+                defaultValue: section.model ? section.model.exposureEvDefault : 0
+                value: section.model ? section.model.exposureEv : 0
+                onValueEdited: function (v) { section.model.setExposureEv(v) }
+                onValueEntered: function (v) { section.model.setExposureEv(v) }
+                onResetRequested: section.resetRow("exposureEv")
             }
         }
 
@@ -208,13 +169,23 @@ ColumnLayout {
             label: qsTr("Saturation")
             labelWidth: section.labelWidth
             textColor: section.textColor
-            onResetClicked: section.model.resetRow("saturation")
-            modified: section.model ? section.model.saturationModified : false
+            onResetRequested: section.resetRow("saturation")
 
-            AdjustmentSlider {
+            AlcedoSlider {
                 objectName: "rawImportSaturationSlider"
                 Layout.fillWidth: true
-                model: saturationControl
+                inlineHeight: 36
+                valuePixelSize: appTheme.fontSizeBody
+                enabled: section.model !== null
+                from: -100
+                to: 100
+                stepSize: 1
+                precision: 0
+                defaultValue: section.model ? section.model.saturationDefault : 0
+                value: section.model ? section.model.saturation : 0
+                onValueEdited: function (v) { section.model.setSaturation(v) }
+                onValueEntered: function (v) { section.model.setSaturation(v) }
+                onResetRequested: section.resetRow("saturation")
             }
         }
 
@@ -223,8 +194,7 @@ ColumnLayout {
             label: qsTr("Tone Curve")
             labelWidth: section.labelWidth
             textColor: section.textColor
-            onResetClicked: section.model.resetRow("toneCurvePreset")
-            modified: section.model ? section.model.toneCurvePresetModified : false
+            onResetRequested: section.resetRow("toneCurvePreset")
 
             AdjustmentCombo {
                 controlObjectName: "rawImportToneCurveCombo"
@@ -283,8 +253,7 @@ ColumnLayout {
             label: qsTr("Display Transform")
             labelWidth: section.labelWidth
             textColor: section.textColor
-            onResetClicked: section.model.resetRow("drtMethod")
-            modified: section.model ? section.model.drtMethodModified : false
+            onResetRequested: section.resetRow("drtMethod")
 
             AdjustmentCombo {
                 controlObjectName: "rawImportDrtMethodCombo"
@@ -302,8 +271,7 @@ ColumnLayout {
             label: qsTr("OpenDRT Look")
             labelWidth: section.labelWidth
             textColor: section.textColor
-            onResetClicked: section.model.resetRow("openDrtLookPreset")
-            modified: section.model ? section.model.openDrtLookPresetModified : false
+            onResetRequested: section.resetRow("openDrtLookPreset")
 
             AdjustmentCombo {
                 controlObjectName: "rawImportOpenDrtLookCombo"
@@ -319,8 +287,7 @@ ColumnLayout {
             label: qsTr("Lens Correction")
             labelWidth: section.labelWidth
             textColor: section.textColor
-            onResetClicked: section.model.resetRow("lensCorrection")
-            modified: section.model ? section.model.lensCorrectionModified : false
+            onResetRequested: section.resetRow("lensCorrection")
 
             AdjustmentToggle {
                 objectName: "rawImportLensCorrectionToggle"
@@ -361,25 +328,24 @@ ColumnLayout {
         }
     }
 
-    // One row: the name, the control (the default property), and the reset of the row in a slot
-    // of fixed width, so the control keeps its width when the reset shows. The use site binds the
-    // label width, the colors, and the reset: an inline component has no access to the ids of
-    // this file.
+    // One row: the name and the control (the default property). A double-click on the name resets
+    // the row. The use site binds the label width, the colors, and the reset: an inline component
+    // has no access to the ids of this file.
     component LookRow: RowLayout {
         id: lookRow
 
         property string label: ""
-        property bool modified: false
         property int labelWidth: 160
         property color textColor: appTheme.textColor
         default property alias control: controlSlot.data
 
-        signal resetClicked()
+        signal resetRequested()
 
         Layout.fillWidth: true
         spacing: 16
 
         Label {
+            objectName: lookRow.objectName + "Label"
             Layout.preferredWidth: lookRow.labelWidth
             Layout.alignment: Qt.AlignVCenter
             text: lookRow.label
@@ -387,28 +353,18 @@ ColumnLayout {
             font.pixelSize: appTheme.fontSizeTitle
             font.weight: appTheme.fontWeightStrong
             wrapMode: Text.Wrap
+
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.LeftButton
+                onDoubleClicked: lookRow.resetRequested()
+            }
         }
 
         RowLayout {
             id: controlSlot
             Layout.fillWidth: true
             spacing: 0
-        }
-
-        Item {
-            Layout.preferredWidth: appTheme.iconButtonHitSizeCompact
-            Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-            Layout.alignment: Qt.AlignVCenter
-
-            IconActionButton {
-                objectName: lookRow.objectName + "Reset"
-                anchors.centerIn: parent
-                compact: true
-                visible: lookRow.modified
-                iconSrc: "qrc:/panel_icons/reset.svg"
-                actionName: qsTr("Reset %1").arg(lookRow.label)
-                onClicked: lookRow.resetClicked()
-            }
         }
     }
 }

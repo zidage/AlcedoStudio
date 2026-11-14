@@ -6,7 +6,8 @@
 // ApplicationModuleHost. QSettings goes to a temporary INI directory. The values are edited
 // through the section model (appModules.rawImportLook); offscreen pointer delivery into the
 // scrolled page of the dialog is not reliable (AGENTS.md). The test checks that the rows follow
-// the model, the OpenDRT Look row follows the method, the preview takes no input, and Done writes
+// the model, the sliders clamp to the hard range and reset on a double-click (resetRequested),
+// the OpenDRT Look row follows the method, the preview takes no input, and Done writes
 // the look that RawImportLookSettings::Read returns.
 
 #include <gtest/gtest.h>
@@ -148,12 +149,44 @@ TEST_F(RawImportLookSettingsQmlTest, RowsFollowTheModelAndDoneWritesTheLook) {
   ASSERT_NE(item("rawImportLookSettingsSection"), nullptr) << warnings_.join('\n').toStdString();
   EXPECT_DOUBLE_EQ(model()->exposure_ev(), 2.0);
 
-  auto* exposure_reset   = item("rawImportExposureRowReset");
-  auto* saturation_reset = item("rawImportSaturationRowReset");
-  ASSERT_NE(exposure_reset, nullptr);
-  ASSERT_NE(saturation_reset, nullptr);
-  EXPECT_TRUE(exposure_reset->isVisible());
-  EXPECT_FALSE(saturation_reset->isVisible());
+  // The rows have no reset buttons; the value of a changed slider shows in the text color.
+  EXPECT_EQ(item("rawImportExposureRowReset"), nullptr);
+  auto* exposure_slider   = item("rawImportExposureSlider");
+  auto* saturation_slider = item("rawImportSaturationSlider");
+  ASSERT_NE(exposure_slider, nullptr);
+  ASSERT_NE(saturation_slider, nullptr);
+  EXPECT_DOUBLE_EQ(exposure_slider->property("value").toDouble(), 2.0);
+  EXPECT_TRUE(exposure_slider->property("modified").toBool());
+  EXPECT_FALSE(saturation_slider->property("modified").toBool());
+  EXPECT_EQ(item("rawImportExposureSliderValueText")->property("text").toString(), "+2.00");
+
+  // An edit outside the hard range is clamped to it; beyond the soft range (+-5 EV) the handle
+  // stays inside the rail at its end.
+  QMetaObject::invokeMethod(exposure_slider, "edit", Q_ARG(QVariant, 12.0));
+  ProcessEvents(200);
+  EXPECT_DOUBLE_EQ(model()->exposure_ev(), 10.0);
+  EXPECT_TRUE(exposure_slider->property("beyondSoftRange").toBool());
+  auto* rail   = item("rawImportExposureSliderRail");
+  auto* handle = item("rawImportExposureSliderHandle");
+  ASSERT_NE(rail, nullptr);
+  ASSERT_NE(handle, nullptr);
+  EXPECT_DOUBLE_EQ(handle->x() + handle->width(), rail->width() - 2.0);
+  QVariant parsed;
+  QMetaObject::invokeMethod(exposure_slider, "parseText", Q_RETURN_ARG(QVariant, parsed),
+                            Q_ARG(QVariant, QString(QChar(0x2212)) + QStringLiteral("3.5")));
+  EXPECT_DOUBLE_EQ(parsed.toDouble(), -3.5);
+
+  // A double-click on the rail or the row name resets the row to the app default.
+  QMetaObject::invokeMethod(saturation_slider, "edit", Q_ARG(QVariant, 55.0));
+  ProcessEvents();
+  EXPECT_DOUBLE_EQ(model()->saturation(), 55.0);
+  QMetaObject::invokeMethod(saturation_slider, "resetRequested");
+  ProcessEvents();
+  EXPECT_DOUBLE_EQ(model()->saturation(), 30.0);
+  ASSERT_TRUE(model()->setToneCurvePreset(QStringLiteral("linear")));
+  QMetaObject::invokeMethod(item("rawImportToneCurveRow"), "resetRequested");
+  ProcessEvents();
+  EXPECT_EQ(model()->tone_curve_preset(), QStringLiteral("cl_digital"));
 
   auto* tone_curve_combo = item("rawImportToneCurveCombo");
   ASSERT_NE(tone_curve_combo, nullptr);
@@ -180,9 +213,10 @@ TEST_F(RawImportLookSettingsQmlTest, RowsFollowTheModelAndDoneWritesTheLook) {
   ProcessEvents();
   EXPECT_FALSE(open_drt_look_row->isVisible());
 
-  model()->ResetField(RawImportLookField::ExposureEv);
+  QMetaObject::invokeMethod(item("rawImportExposureRow"), "resetRequested");
   ProcessEvents();
-  EXPECT_FALSE(exposure_reset->isVisible());
+  EXPECT_DOUBLE_EQ(model()->exposure_ev(), 1.5);
+  EXPECT_FALSE(exposure_slider->property("modified").toBool());
 
   QMetaObject::invokeMethod(dialog(), "applySettings");
   ProcessEvents(150);
