@@ -7,6 +7,13 @@ target_link_libraries(SleeveFSTest PRIVATE GTest::gtest_main SleeveFS StrConv)
 gtest_discover_tests(SleeveFSTest TEST_PREFIX "SleeveFSTest.")
 alcedo_register_test_target(SleeveFSTest storage)
 
+add_executable(SleeveFolderRestoreTest ${ALCEDO_TEST_ROOT}/sleeve/sleeve_folder_restore_test.cpp)
+target_include_directories(SleeveFolderRestoreTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(SleeveFolderRestoreTest PRIVATE GTest::gtest_main SleeveFS)
+gtest_discover_tests(SleeveFolderRestoreTest TEST_PREFIX "SleeveFolderRestoreTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(SleeveFolderRestoreTest storage ci_core)
+
 add_executable(DuckormExprTest ${ALCEDO_TEST_ROOT}/storage/duckorm_expr_test.cpp)
 target_include_directories(DuckormExprTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(DuckormExprTest PRIVATE GTest::gtest_main DuckORM)

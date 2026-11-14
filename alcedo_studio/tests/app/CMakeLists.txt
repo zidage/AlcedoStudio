@@ -427,6 +427,27 @@ gtest_discover_tests(LibrarySearchRecallTest TEST_PREFIX "LibrarySearchRecallTes
 alcedo_copy_duckdb_fts_extension(LibrarySearchRecallTest)
 alcedo_register_test_target(LibrarySearchRecallTest app ci_core)
 
+add_executable(PhotoStackStoreTest ${ALCEDO_TEST_ROOT}/app/photo_stack_store_test.cpp)
+target_include_directories(PhotoStackStoreTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(PhotoStackStoreTest
+  StorageInvariantsTestSupport PhotoStackService ProjectService PipelineMgmtService GTest::gtest_main)
+gtest_discover_tests(PhotoStackStoreTest TEST_PREFIX "PhotoStackStoreTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_fts_extension(PhotoStackStoreTest)
+alcedo_register_test_target(PhotoStackStoreTest app ci_core)
+
+add_executable(PhotoStackLifecycleTest
+  ${ALCEDO_TEST_ROOT}/app/photo_stack_lifecycle_test.cpp
+  ${ALCEDO_TEST_ROOT}/app/photo_stack_package_test.cpp)
+target_include_directories(PhotoStackLifecycleTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(PhotoStackLifecycleTest
+  PhotoStackService ProjectService PipelineMgmtService ImportService StorageInvariantsTestSupport
+  OpenImageIO::OpenImageIO GTest::gtest_main)
+gtest_discover_tests(PhotoStackLifecycleTest TEST_PREFIX "PhotoStackLifecycleTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_fts_extension(PhotoStackLifecycleTest)
+alcedo_register_test_target(PhotoStackLifecycleTest app ci_core)
+
 # Library sort, group, and import-time reads (album_sort_group_and_import_time_plan.md).
 add_executable(AlbumQueryTest ${ALCEDO_TEST_ROOT}/app/album_query_test.cpp)
 target_include_directories(AlbumQueryTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})

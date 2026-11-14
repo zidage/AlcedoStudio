@@ -100,6 +100,11 @@ class FileSystem {
   auto GetUnsyncedElements() -> std::vector<std::shared_ptr<SleeveElement>>;
   auto GetDeletedElements() -> std::vector<std::shared_ptr<SleeveElement>>;
 
+  /// Reload only affected identities and folder links from committed storage after failed sync.
+  /// Caller holds the SleeveService lock. Preserve existing object identities and allocated IDs;
+  /// discard only newly created entries that did not commit. Throws if restoration fails.
+  void RestoreAfterFailedSync(std::span<const sl_element_id_t> affected_ids);
+
   void GarbageCollect() { storage_handler_.GarbageCollect(); }
 
   auto Tree(const std::filesystem::path& path) -> std::wstring;

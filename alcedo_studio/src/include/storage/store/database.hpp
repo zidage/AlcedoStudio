@@ -313,6 +313,18 @@ class Database {
       "CREATE INDEX IF NOT EXISTS idx_ai_rating_file_active "
       "ON AiImageRating(file_id, active);";
 
+  // Idempotent table creation also migrates supported 0.10.0 and 0.11.0 databases to empty
+  // stacks. ProjectService checks the metadata version before opening this database and
+  // validates stored relations through the stack owner before it exposes project services.
+  constexpr static const char* photo_stack_table_query =
+      "CREATE TABLE IF NOT EXISTS PhotoStack ("
+      "stack_id VARCHAR PRIMARY KEY, cover_file_id BIGINT NOT NULL);"
+      "CREATE TABLE IF NOT EXISTS PhotoStackMember ("
+      "file_id BIGINT PRIMARY KEY, stack_id VARCHAR NOT NULL,"
+      "member_order BIGINT NOT NULL CHECK (member_order >= 0),"
+      "UNIQUE (stack_id, member_order));"
+      "CREATE INDEX IF NOT EXISTS idx_photo_stack_member_stack ON PhotoStackMember(stack_id);";
+
   void PopulateSemanticLabelQueries(duckdb_connection conn);
 
  public:

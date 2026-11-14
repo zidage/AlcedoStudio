@@ -381,13 +381,21 @@ def_library(ModelDownloadService
     PUBLIC_DEPS DownloadService Qt6::Core Qt6::Network
 )
 
+def_library(PhotoStackService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/photo_stack_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/photo_stack_service.hpp"
+    PUBLIC_DEPS Storage
+    PRIVATE_DEPS Qt6::Core
+)
+
 def_library(ProjectService
     SOURCES
         "${ALCEDO_APP_ROOT}/project_service.cpp"
         "${ALCEDO_APP_ROOT}/project_package_backend.cpp"
         "${ALCEDO_APP_ROOT}/project_package_service.cpp"
         "${ALCEDO_SRC_ROOT}/ui/alcedo_main/album_backend/path_utils.cpp"
-    PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService
+    PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService PhotoStackService
                 AiSidecarRuntimeService ModelDownloadService SemanticQueryEmbeddingCache
                 StrConv JSON xxHash stduuid EditMaskCore
     PRIVATE_DEPS

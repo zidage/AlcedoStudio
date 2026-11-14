@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "../support/storage_test_access.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -24,10 +25,11 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/storage.hpp"
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "support/test_temp_directory.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
-#include "../support/storage_test_access.hpp"
-#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -136,6 +138,10 @@ void WriteStoredExposure(Storage& storage, sl_element_id_t id, float exposure_ev
 
 TEST(ProjectVersionTests, MiniGitSchemaBumpRejectsPreviousProjectVersion) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.12.0");
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.10.0"));
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.11.0"));
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.13.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.5"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.4"));
 }
@@ -1090,6 +1096,60 @@ TEST_F(SleeveServiceTests, FolderMoveAndRenameRefuseOwnSubtreeAndTakenNames) {
   EXPECT_EQ(service->ResolveFolder(L"/A/Inner")->element_id_, inner_id);
   EXPECT_NE(service->ResolveFolder(L"/A/Same"), nullptr);
   EXPECT_NE(service->ResolveFolder(L"/B/Same"), nullptr);
+}
+
+TEST_F(SleeveServiceTests, PublicSyncCommitsPendingFolderChangesAndPreservesIdentity) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     service = project.GetSleeveService();
+  const auto     parent  = service->CreateFolder(L"/", L"Parent").first;
+  const auto     child   = service->Write_NoSync<std::shared_ptr<SleeveElement>>(
+      [](FileSystem& fs) { return fs.Create(L"/Parent", L"Child", ElementType::FOLDER); });
+  EXPECT_EQ(parent->sync_flag_, SyncFlag::MODIFIED);
+  EXPECT_EQ(child->sync_flag_, SyncFlag::UNSYNC);
+  const auto result = service->Sync();
+  ASSERT_TRUE(result.success_) << result.message_;
+  EXPECT_EQ(result.elements_synced_, 2);
+  EXPECT_EQ(service->ResolveFolder(L"/Parent"), parent);
+  EXPECT_EQ(service->ResolveElement(L"/Parent/Child"), child);
+  EXPECT_EQ(parent->sync_flag_, SyncFlag::SYNCED);
+  EXPECT_EQ(child->sync_flag_, SyncFlag::SYNCED);
+  EXPECT_TRUE(parent->ContentAddedSinceSync().empty());
+  EXPECT_EQ(project.GetStorage()->GetElementStore().GetFolderContent(parent->element_id_),
+            std::vector<sl_element_id_t>{child->element_id_});
+  EXPECT_EQ(service->Sync().elements_synced_, 0);
+}
+
+TEST_F(SleeveServiceTests, FailedFirstSyncKeepsRootUsableAndDoesNotReuseDiscardedIds) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     service = project.GetSleeveService();
+  const auto     root    = service->ResolveFolder(L"/");
+  {
+    auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
+    auto lock  = guard.Lock();
+    duckorm::execute(guard.conn_, duckorm::expr::raw("DROP TABLE FileImage"));
+    duckorm::execute(
+        guard.conn_,
+        duckorm::expr::raw(
+            "CREATE TABLE FileImage (file_id BIGINT, image_id BIGINT CHECK(image_id <> 0))"));
+  }
+  const auto rejected = service->CreateFileInLibrary(L"Rejected.jpg");
+  ASSERT_FALSE(rejected.second.success_);
+  EXPECT_EQ(rejected.first->sync_flag_, SyncFlag::DELETED);
+  EXPECT_THROW(project.GetStorage()->GetElementStore().GetElementById(0), std::runtime_error);
+  EXPECT_THROW(project.GetStorage()->GetElementStore().GetElementById(rejected.first->element_id_),
+               std::runtime_error);
+  EXPECT_TRUE(project.GetStorage()->GetElementStore().GetFolderContent(0).empty());
+  EXPECT_EQ(service->ResolveFolder(L"/"), root);
+  EXPECT_EQ(root->sync_flag_, SyncFlag::UNSYNC);
+  EXPECT_TRUE(root->ListElements().empty());
+  EXPECT_TRUE(root->ContentAddedSinceSync().empty());
+  EXPECT_THROW(service->ResolveFile(L"/Rejected.jpg"), std::runtime_error);
+  const auto next = service->CreateFolder(L"/", L"Next");
+  ASSERT_TRUE(next.second.success_) << next.second.message_;
+  EXPECT_GT(next.first->element_id_, rejected.first->element_id_);
+  EXPECT_EQ(service->ResolveFolder(L"/"), root);
+  EXPECT_EQ(root->sync_flag_, SyncFlag::SYNCED);
+  EXPECT_TRUE(root->ContainsElementId(next.first->element_id_));
 }
 
 }  // namespace alcedo
