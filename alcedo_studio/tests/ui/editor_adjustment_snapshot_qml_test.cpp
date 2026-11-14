@@ -345,7 +345,8 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveSectionLoadsFourCurvesAndMarksThe
 }
 
 TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurveAndAppliesOne) {
-  // A document with the Film-like RGB curve (the RAW import look) and a custom red curve.
+  // A document with the Default (Film-like) RGB curve (the RAW import look) and a custom red
+  // curve.
   const auto* film_like = alcedo::FindToneCurvePreset("film_like");
   ASSERT_NE(film_like, nullptr);
   alcedo::EditorPanelCurveValue curve;
@@ -367,7 +368,7 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurv
   auto* button = harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePresetButton"));
   ASSERT_NE(model, nullptr);
   ASSERT_NE(button, nullptr);
-  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Film-like"));
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Default (Film-like)"));
 
   model->setProperty("channel", 1);
   EXPECT_EQ(button->property("text").toString(), QStringLiteral("Custom"));
@@ -382,7 +383,7 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurv
   EXPECT_TRUE(item->property("checked").toBool());
 
   model->setProperty("channel", 0);
-  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Film-like"));
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Default (Film-like)"));
   auto* film_item =
       harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePreset_film_like"));
   ASSERT_NE(film_item, nullptr);

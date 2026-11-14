@@ -5,7 +5,7 @@ Date: 2026-11-13
 Status: TC1 to TC6 complete. #900 (Shadows and Highlights before the Curve) complete. #901 (right
 click removes a point) complete. #902 (quiet curve histogram) complete. #903 (dense text) complete.
 #910 (Film-like and Filmic toe ends at (0, 0)) complete. #911 (DCP profile curve loaded into the
-RGB curve) complete.
+RGB curve) complete. #914 (Default (Film-like) placed by hand, Filmic removed) complete.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -32,7 +32,8 @@ the control of the RawTherapee curve editor and a modern look:
 - The histogram of the pixels at the input of the curve shows behind the curve.
 - Four curves: RGB (the current curve), R, G, and B.
 - A preset menu: contrast shapes, the Adobe default tone curve ("Film-like"), the darktable filmic
-  shape, and the tone of Kodak 2383, Velvia 50, and Ektachrome E100.
+  shape, and the tone of Kodak 2383, Velvia 50, and Ektachrome E100. Since #914: contrast shapes,
+  Default (Film-like) placed by hand, and the three films.
 - The render applies the same spline that the panel draws, on CUDA, OpenCL, and Metal.
 - A new reusable plot pane draws the plot. The Tone Curve section is its only user in this work.
 
@@ -1194,3 +1195,32 @@ Status: complete. Issue [#911](https://github.com/zidage/AlcedoStudio/issues/911
 | `DcpCameraProfileRenderTest`, `PipelineDcpProfileBindingTest`, `EditorPipelineCommandServiceTest` | 23, 16, 24 passed |
 | `EditorCameraProfileListModelTest`, `EditorPanelProjectionTest`, `EditorRawDecodePanelQmlTest`, `ToneCurvePresetTest` | 15, 14, 10, 10 passed |
 | `GpuDagOpenClGradeTest` (grade, film print, diffusion fixtures), `GpuDagCudaDrtProductTest` (DRT product, expected output, film print fixtures) | 76, 56 passed |
+
+### #914: Default (Film-like) placed by hand, Filmic removed (2026-11-14)
+
+Status: complete. Issue [#914](https://github.com/zidage/AlcedoStudio/issues/914), branch
+`fix/tone-curve-default-film-like-shape`, stacked on #911 (PR #913). Shape, reference, and codes:
+[tone_curve_preset_study.md](tone_curve_preset_study.md), section 4.5.
+
+- User review against RawTherapee: the fitted Film-like (13 points) and Filmic (12 points) lifted
+  the shadows above the identity line and bent twice; RawTherapee shows a single S with 8 points
+  and shadows below the identity line. Cause: the fit target divides the source tone by ACES 2.0,
+  whose toe is deeper than both sources.
+- User decision: the curve axis is an EV axis, so the default curve is placed by hand; Filmic
+  gives nearly the same curve and leaves the menu; the menu name is Default (Film-like), the id
+  stays `film_like`.
+- Points (EV in to EV out): (-4, -4.7), (0, 0), (+2, +2.8), (+4, +6.1), (+6.5, +8.3) with the ends
+  (0, 0) and (1, 0.95434): 7 points, inflection at +2.80 EV, slope 1.29 at grey. From +1 to +3 EV
+  the display codes stay within 2.5 codes of the ACR3 tone; the shadows render darker than Linear.
+- `scripts/fit_tone_curve_presets.py` takes the hand points from `HAND_PRESETS` and reports the
+  shape; the fitted presets come out byte-identical. The Filmic port, the shoulder, and the toe
+  fits left the script; sections 4.3 and 4.4 of the study keep their record.
+- `FilmLikeToneCurveEarlierPoints()` adds the #910 points, so the entry resets recognize
+  documents imported with them.
+
+| Binary and filter | Result |
+| --- | --- |
+| `ToneCurvePresetTest` (all, with `DefaultFilmLikeIsOneSCurveWithTheShadowsBelowTheIdentity`) | 8 passed |
+| `EditorToneCurveModelTest`, `EditorAdjustmentSnapshotQmlTest`, `GpuDagModelGraphTest` | 18, 8, 195 passed |
+| `AutomationEditorCommandsTest`, `AutomationAdjustmentCommandsTest`, `EditorParameterCatalogTest`, `AdjustmentTransferCatalogTest` | 9, 4, 51, 13 passed |
+| `EditorSessionHistoryPortTest` | 133 passed; `CheckoutAndPasteHashesAreUnchanged` fails (#555) |

@@ -483,11 +483,11 @@ TEST(EditorToneCurveModelTest, MenuNameFollowsThePointsPresetAfterApplyCustomAft
 
   // A document load of the preset points (float JSON values) shows the preset.
   QVariantList points;
-  for (const auto& point : alcedo::FindToneCurvePreset("filmic")->points) {
+  for (const auto& point : alcedo::FindToneCurvePreset("kodak_2383")->points) {
     points.push_back(PointMap(static_cast<double>(point.x), static_cast<double>(point.y)));
   }
   model->loadFromSnapshotEntry(QVariantMap{{QStringLiteral("points"), points}});
-  EXPECT_EQ(model->presetId(), QStringLiteral("filmic"));
+  EXPECT_EQ(model->presetId(), QStringLiteral("kodak_2383"));
 }
 
 }  // namespace alcedo::ui::test

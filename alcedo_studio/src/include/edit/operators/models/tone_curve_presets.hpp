@@ -12,7 +12,7 @@
 
 namespace alcedo {
 
-/// Id of the Film-like preset, the RGB curve of the RAW import look
+/// Id of the Default (Film-like) preset, the RGB curve of the RAW import look
 /// (CreateDefaultPipelineDocument).
 inline constexpr std::string_view kFilmLikeToneCurvePresetId = "film_like";
 
@@ -20,15 +20,16 @@ inline constexpr std::string_view kFilmLikeToneCurvePresetId = "film_like";
  * @brief One preset of the Tone Curve section: a list of control points with a stable id.
  *
  * A preset replaces the points of one curve. The document stores only the points; the id is not
- * stored. The points of the fitted presets come from tone_curve_preset_study.md
- * (scripts/fit_tone_curve_presets.py): 2 to 16 points with rising x in the unit square, 18% grey
- * on the curve axis at (0.41359, 0.41359), and a monotone spline.
+ * stored. The points come from tone_curve_preset_study.md (scripts/fit_tone_curve_presets.py):
+ * fitted to a source tone, or placed by hand (Default (Film-like)). Each preset has 2 to 16
+ * points with rising x in the unit square, 18% grey on the curve axis at (0.41359, 0.41359), and a
+ * monotone spline.
  */
 struct ToneCurvePreset {
   /// Stable id: `linear`, `soft_contrast`, `medium_contrast`, `strong_contrast`, `film_like`,
-  /// `filmic`, `kodak_2383`, `fuji_velvia_50`, `kodak_ektachrome_e100`.
+  /// `kodak_2383`, `fuji_velvia_50`, `kodak_ektachrome_e100`.
   std::string_view            id;
-  /// English display name, for example `Film-like`. The UI translates it by id.
+  /// English display name, for example `Default (Film-like)`. The UI translates it by id.
   std::string_view            display_name;
   /// Menu group: empty for Linear, `Contrast`, `Rendering`, or `Film`.
   std::string_view            group;
@@ -38,7 +39,7 @@ struct ToneCurvePreset {
   [[nodiscard]] auto          PointList() const -> std::vector<CurvePoint>;
 };
 
-/// All presets in menu order: Linear, the contrast shapes, the rendering looks, the films.
+/// All presets in menu order: Linear, the contrast shapes, Default (Film-like), the films.
 [[nodiscard]] auto ToneCurvePresets() -> std::span<const ToneCurvePreset>;
 
 /// The preset with id @p id, or null.
@@ -53,6 +54,7 @@ struct ToneCurvePreset {
  *
  * - The first fit of #891, before the highlight shoulder.
  * - The fit with the highlight shoulder of #899, before the shadow toe of #910.
+ * - The fit with the shadow toe of #910, before the points placed by hand of #914.
  *
  * The RAW import look wrote each of them as the RGB curve of Color Grade 1, and documents store
  * their points, so documents imported with an earlier look keep them. The preset menu shows them

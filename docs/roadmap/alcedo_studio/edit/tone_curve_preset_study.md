@@ -7,19 +7,22 @@ Issue: [#891](https://github.com/zidage/AlcedoStudio/issues/891) (TC6 of
 [#885](https://github.com/zidage/AlcedoStudio/issues/885)). Highlight shoulder of Film-like and
 Filmic: [#899](https://github.com/zidage/AlcedoStudio/issues/899) (2026-11-13, section 4.3). Shadow
 toe of Film-like and Filmic: [#910](https://github.com/zidage/AlcedoStudio/issues/910) (2026-11-13,
-section 4.4).
+section 4.4). Default (Film-like) placed by hand, Filmic removed:
+[#914](https://github.com/zidage/AlcedoStudio/issues/914) (2026-11-14, section 4.5).
 
 Script: [`scripts/fit_tone_curve_presets.py`](../../../../scripts/fit_tone_curve_presets.py).
 Figures: [`tone_curve_preset_study/`](tone_curve_preset_study/).
 
 ## 1. Question
 
-The Tone Curve section gets a preset menu: Linear, three contrast shapes, Film-like, Filmic, and
+The Tone Curve section gets a preset menu: Linear, three contrast shapes, Default (Film-like), and
 the tone of Kodak 2383, Velvia 50, and Ektachrome E100. A preset is a list of at most 16 control
 points of the product spline (TC1) on the curve axis. This study gives the points of each preset,
-the source of each shape, and the error of each fit.
+the source of each shape, and the error of each fit. Default (Film-like) has no fit: its points
+are placed by hand (section 4.5).
 
-Film-like is also the RGB curve of the RAW import look (user decision of 2026-11-13, section 6).
+Default (Film-like) is also the RGB curve of the RAW import look (user decision of 2026-11-13,
+section 6). Until #914 its menu name was Film-like, and the menu also had Filmic.
 
 ## 2. Terms
 
@@ -42,6 +45,9 @@ Film-like is also the RGB curve of the RAW import look (user decision of 2026-11
 
 ### 3.1 Film-like: the Adobe default tone curve
 
+From #914 on, this source is the reference of the hand-placed Default (Film-like) (section 4.5):
+the script reports its display codes next to those of the preset. Sections 4.1 to 4.4 fitted it.
+
 The ACR3 default curve of the DNG SDK (`dng_tone_curve_acr3_default`): a table of 1025 values on
 [0, 1], linear between entries, applied to linear ProPhoto values after the exposure ramp. Adobe
 Camera Raw and Lightroom apply it to a profile that lacks a `ProfileToneCurve` (Adobe Standard), and
@@ -54,7 +60,11 @@ Exposure scale: Alcedo +1.5 EV equals ACR 0 EV
 3.3), so the source of a scene value `v` at the curve input is `S(v) = acr3(v * 2^-1.5)`. The ramp
 clips at raw white, which is +3.97 EV from 18% grey at the curve input of the Default document.
 
-### 3.2 Filmic: darktable filmic rgb
+### 3.2 Filmic: darktable filmic rgb (removed by #914)
+
+#914 removed the Filmic preset (section 4.5); the script no longer ports filmic rgb. The
+parameters below were checked against the `$DEFAULT` values of `dt_iop_filmicrgb_params_t` at the
+pinned commit before the removal.
 
 darktable filmic rgb (`src/iop/filmicrgb.c`, commit
 `f30f439fd801eef58047bc417644e66939b3f3b7`) with the default parameters of the module: middle grey
@@ -121,6 +131,9 @@ end slopes from the end segments), in float like the kernels:
 
 ### 4.3 Highlight shoulder of Film-like and Filmic (#899)
 
+Superseded by section 4.5 (#914). The section records how the earlier Film-like points of
+section 7 came about.
+
 Finding (#899): the sources of Film-like and Filmic reach display white 4 to 5 stops above 18%
 grey and stay there. Their first fits followed that: the curve climbed steeply to the peak and
 then ran flat (Film-like: (0.64790, 0.92653) to (0.94031, 0.94154), a slope of 0.05), so every
@@ -180,6 +193,8 @@ that clip belongs to the look of the film.
 
 ### 4.4 Shadow toe of Film-like and Filmic (#910)
 
+Superseded by section 4.5 (#914), as section 4.3.
+
 Finding (#910): the sources of Film-like and Filmic keep a display black well above 0 at x = 0,
 the bottom of the curve axis (about 9.7 stops below scene 1.0). Their fits started at (0, 0.14493)
 (Film-like) and (0, 0.11720) (Filmic): the output of x = 0 lies 4.7 and 5.2 stops below 18% grey.
@@ -227,6 +242,73 @@ renders 4.8 codes darker on Film-like and 1.7 codes darker on Filmic, and -7 EV 
 three films keep their raised black: the maximum density of the print or the slide belongs to
 their look.
 
+### 4.5 Default (Film-like) placed by hand, Filmic removed (#914)
+
+Finding (#914, user review against RawTherapee): the fitted Film-like and Filmic curves of
+sections 4.3 and 4.4 had 13 and 12 points, lay above the identity line below 18% grey (they
+lifted the shadows), and changed slope direction twice (steep, flat, steep, flat).
+
+Cause: the target of section 4.1 divides the source tone by the ACES 2.0 tone scale. ACES 2.0 has
+a deeper toe than both sources, so the target rises above the identity line below about -2 EV:
+
+| Target `y_t - x` on the curve axis | -7 EV | -5 EV | -3 EV | -2 EV | -1 EV | 0 | +2 EV | +3 EV |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Film-like (ACR3) | +0.137 | +0.078 | +0.020 | +0.003 | -0.003 | 0 | +0.042 | +0.087 |
+| Filmic | +0.104 | +0.040 | +0.018 | +0.011 | +0.004 | 0 | +0.002 | +0.023 |
+
+The toe of section 4.4 then bends the curve down to (0, 0), and the fit follows each bend within
+0.5 codes with extra points.
+
+In RawTherapee, Film-like is the way a curve is applied (`ToneCurveMode::FILMLIKE`, the
+`AdobeToneCurve` of `rtengine/curves.h`: the curve sets the largest and the smallest channel, and
+the middle channel keeps its place between them); the shape comes from the curve. The
+auto-matched curve of RawTherapee (`rtengine/histmatching.cc`, `mappingToCurve`) has
+`npoints = 8` and drops points that break the S ("we assume we are matching an S-shaped curve").
+On its sRGB-encoded axis its shadows lie below the identity line.
+
+Change: the curve axis is an EV axis, so the preset is placed by hand as one S on it, and the
+fit target of section 4.1 is dropped for it. The ACR3 tone of section 3.1 stays as a reference
+for the mid-tones and the highlights. Filmic gave nearly the same curve under this rule and left
+the menu; the menu name of Film-like is Default (Film-like), its id stays `film_like`.
+
+Rule of the shape:
+
+- 18% grey stays at (0.41359, 0.41359). The ends are (0, 0) and (1, 0.95434), the curve output
+  at which ACES 2.0 reaches the display peak.
+- One S: from x = 0 the slope rises to one inflection above 18% grey (a convex toe, so the
+  shadows stay at or below the identity line), and it falls from there to x = 1 (a concave
+  shoulder).
+- At most 8 points, as the auto-matched curve of RawTherapee.
+- From 18% grey up, the display codes stay close to the ACR3 tone (+1 to +3 EV within 2.5
+  codes); the shoulder reaches the peak at x = 1 in place of the ACR3 clip at raw white.
+
+Points, as (input, output) in EV from 18% grey at the curve input (`HAND_PRESETS` of the script),
+between the ends:
+
+| Input (EV) | -7.25 (x = 0) | -4 | 0 | +2 | +4 | +6.5 | +10.27 (x = 1) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Output (EV) | -7.25 | -4.7 | 0 | +2.8 | +6.1 | +8.3 | +9.47 |
+| Curve axis | (0, 0) | (0.18528, 0.14532) | (0.41359, 0.41359) | (0.52774, 0.57341) | (0.64190, 0.76176) | (0.78459, 0.88733) | (1, 0.95434) |
+
+Shape of the product spline (1024 slope steps on the axis): the slope is 0.78 at x = 0, 1.29 at
+18% grey, 1.82 at the inflection (+2.80 EV), and 0.31 at x = 1. The curve stays at or below the
+identity line below 18% grey (largest value of `y - x` there: -0.00015, next to x = 0). Against
+the S the slope moves 0.049 below the inflection and 0.054 above it, both in the end segments: the
+spline takes the end slope from the end segment, so the middle of the first and the last segment
+dips about 0.05 below the end slope.
+
+Display codes of a neutral at the curve input (8 bit, gamma 2.2):
+
+| Form | -7 | -6 | -5 | -4 | -3 | -2 | -1 | 0 | +1 | +2 | +3 | +4 | +5 | +6 | +8 | +10 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Default (Film-like) | 1.2 | 2.1 | 3.6 | 6.6 | 13.1 | 26.7 | 51.8 | 89.5 | 138.1 | 189.2 | 229.7 | 246.2 | 251.2 | 253.3 | 254.5 | 254.9 |
+| Linear (ACES 2.0) | 1.3 | 2.7 | 5.4 | 10.6 | 20.1 | 35.9 | 59.2 | 89.5 | 125.2 | 162.3 | 195.3 | 220.1 | 236.2 | 245.5 | 253.3 | 255.0 |
+| ACR3 default tone curve | 7.1 | 9.7 | 13.5 | 18.3 | 25.0 | 36.9 | 57.9 | 89.5 | 135.7 | 187.4 | 229.5 | 254.5 | 255.0 | 255.0 | 255.0 | 255.0 |
+| Film-like of #910 | 1.4 | 3.6 | 8.7 | 16.6 | 24.6 | 36.5 | 57.5 | 89.5 | 135.7 | 187.6 | 230.0 | 247.5 | 251.6 | 253.1 | 254.3 | 254.9 |
+
+The shadows now render darker than Linear: -3 EV at 13.1 codes against 20.1, -5 EV at 3.6
+against 5.4. The mid-tones and the highlights stay where the #910 points had them.
+
 ## 5. Results
 
 | Preset | Points | Fit error (codes) | Grey exposure `e_g` (EV) |
@@ -235,59 +317,53 @@ their look.
 | Soft Contrast | 6 | 0.15 | 0 |
 | Medium Contrast | 6 | 0.22 | 0 |
 | Strong Contrast | 6 | 0.26 | 0 |
-| Film-like | 13 | 0.56 | -0.071 |
-| Filmic | 12 | 0.49 | -0.808 |
+| Default (Film-like) | 7 | placed by hand (section 4.5) | |
 | Kodak 2383 | 12 | 0.46 | -0.344 |
 | Velvia 50 | 15 | 0.51 | -0.897 |
 | Ektachrome E100 | 15 | 0.41 | -0.925 |
 
 The points are in `alcedo_studio/src/edit/operators/models/tone_curve_preset_points.inc`, which
 the script writes. `ToneCurvePresetTest` evaluates the product spline and the product neutral
-response at 257 axis samples and checks each preset against the source tone within its fit error
-plus 0.05 codes; the largest difference of each preset is below its recorded error. For Film-like
-and Filmic the source tone of the test is the source tone with the toe and the shoulder
-(sections 4.3 and 4.4), and the test also checks the shoulder: from the knee to x = 1 the slope of
-the curve stays above the target slope at x = 1, falls to below a quarter of its value at the knee,
-and the end point is (1, 0.95434). It checks the toe too: the curve starts at (0, 0) and meets the
-target at the toe knee.
+response at 257 axis samples and checks each fitted preset against the source tone within its
+fit error plus 0.05 codes; the largest difference of each preset is below its recorded error. For
+Default (Film-like) the test checks the rule of section 4.5: at most 8 points, the ends (0, 0) and
+(1, 0.95434), the curve at or below the identity line below 18% grey, one inflection above 18%
+grey with a slope above 1 at grey, and the slope within 0.06 of an S on both sides of the
+inflection (1024 steps).
 
-Film-like and Filmic points (sections 4.3 and 4.4):
-
-| Preset | Points |
-| --- | --- |
-| Film-like | (0, 0), (0.17357, 0.21516), (0.28192, 0.28731), (0.32285, 0.32092), (0.36954, 0.36613), (0.41359, 0.41359), (0.50517, 0.53603), (0.57179, 0.64589), (0.59180, 0.68831), (0.63221, 0.76256), (0.66469, 0.79612), (0.71636, 0.84267), (1, 0.95434) |
-| Filmic | (0, 0), (0.13938, 0.16232), (0.36624, 0.37069), (0.41359, 0.41359), (0.52741, 0.52984), (0.57421, 0.59107), (0.61226, 0.65677), (0.65470, 0.75574), (0.70435, 0.82835), (0.72436, 0.84677), (0.80094, 0.89869), (1, 0.95434) |
+Default (Film-like) points (section 4.5): (0, 0), (0.18528, 0.14532), (0.41359, 0.41359),
+(0.52774, 0.57341), (0.64190, 0.76176), (0.78459, 0.88733), (1, 0.95434).
 
 Figures: for each preset, the curve on the axis (target, fitted spline, points) and the neutral
-axis through ACES 2.0 (source tone, the render with the preset, and Linear). The Film-like and
-Filmic figures also draw the source without the toe and the shoulder.
+axis through ACES 2.0 (source tone, the render with the preset, and Linear). Default (Film-like)
+draws its curve and points on the axis, and the ACR3 tone (section 3.1) as a reference on the
+neutral axis.
 
 | Preset | Curve axis | Neutral axis |
 | --- | --- | --- |
 | Soft Contrast | ![](tone_curve_preset_study/soft_contrast_curve.svg) | ![](tone_curve_preset_study/soft_contrast_neutral.svg) |
 | Medium Contrast | ![](tone_curve_preset_study/medium_contrast_curve.svg) | ![](tone_curve_preset_study/medium_contrast_neutral.svg) |
 | Strong Contrast | ![](tone_curve_preset_study/strong_contrast_curve.svg) | ![](tone_curve_preset_study/strong_contrast_neutral.svg) |
-| Film-like | ![](tone_curve_preset_study/film_like_curve.svg) | ![](tone_curve_preset_study/film_like_neutral.svg) |
-| Filmic | ![](tone_curve_preset_study/filmic_curve.svg) | ![](tone_curve_preset_study/filmic_neutral.svg) |
+| Default (Film-like) | ![](tone_curve_preset_study/film_like_curve.svg) | ![](tone_curve_preset_study/film_like_neutral.svg) |
 | Kodak 2383 | ![](tone_curve_preset_study/kodak_2383_curve.svg) | ![](tone_curve_preset_study/kodak_2383_neutral.svg) |
 | Velvia 50 | ![](tone_curve_preset_study/fuji_velvia_50_curve.svg) | ![](tone_curve_preset_study/fuji_velvia_50_neutral.svg) |
 | Ektachrome E100 | ![](tone_curve_preset_study/kodak_ektachrome_e100_curve.svg) | ![](tone_curve_preset_study/kodak_ektachrome_e100_neutral.svg) |
 
 Observations:
 
-- The source of Film-like lifts the shadows over the toe of ACES 2.0 (its fit started at
-  y = 0.145); the preset falls to (0, 0) below -3 EV (section 4.4). Its source reaches the display
-  peak at raw white (+3.97 EV at the curve input of the Default
-  document), where ACES 2.0 alone keeps 72% of the peak, and the ACR exposure ramp clips there.
-  The preset rolls off from one stop below raw white toward the peak at x = 1 (section 4.3).
+- The ACR3 tone lifts the shadows over the toe of ACES 2.0, and it reaches the display peak at
+  raw white (+3.97 EV at the curve input of the Default document), where ACES 2.0 alone keeps 72%
+  of the peak. Default (Film-like) keeps the shadows at or below Linear and rolls off toward the
+  peak at x = 1 (section 4.5).
 - The three films hold a display black above 0 (the maximum density of the print or the slide):
   their curves start at y = 0.19 and stay flat over the deepest 3 stops.
 - Velvia 50 and Ektachrome E100 have the steepest mid-tones and reach white about +4 EV above
   18% grey.
 
-## 6. Film-like as the RAW import look
+## 6. Default (Film-like) as the RAW import look
 
-User decision of 2026-11-13: the default look is Film-like. `CreateDefaultPipelineDocument` sets
+User decision of 2026-11-13: the default look is Film-like (menu name Default (Film-like) since
+#914). `CreateDefaultPipelineDocument` sets
 the RGB curve of Color Grade 1 to the points of `film_like`, with exposure +1.5 EV and saturation
 1.3 as before. Contrast stays 0, because the curve carries the contrast of the look: the curve
 and ACES 2.0 together give the Adobe tone at Alcedo +1.5 EV = ACR 0 EV, and contrast +15 on top
@@ -306,7 +382,8 @@ Film-like points are the current points or those of an earlier fit (section 7):
 
 ## 7. Documents with earlier Film-like points
 
-The shoulder of #899 and the toe of #910 each changed the Film-like points. A document stores its
+The shoulder of #899, the toe of #910, and the points placed by hand of #914 each changed the
+Film-like points. A document stores its
 curve points, so a document imported with an earlier look keeps its points and renders as before;
 new imports get the points of section 5.
 
@@ -319,6 +396,10 @@ only the current points:
   (0.32285, 0.32092), (0.36954, 0.36613), (0.41359, 0.41359), (0.50517, 0.53603),
   (0.58131, 0.66565), (0.62018, 0.77121), (0.64790, 0.92653), (0.94031, 0.94154), (1, 0.95434)
 - #899, with the shoulder and before the toe: (0, 0.14493), (0.24811, 0.26545),
+  (0.28192, 0.28731), (0.32285, 0.32092), (0.36954, 0.36613), (0.41359, 0.41359),
+  (0.50517, 0.53603), (0.57179, 0.64589), (0.59180, 0.68831), (0.63221, 0.76256),
+  (0.66469, 0.79612), (0.71636, 0.84267), (1, 0.95434)
+- #910, with the toe and before the points placed by hand: (0, 0), (0.17357, 0.21516),
   (0.28192, 0.28731), (0.32285, 0.32092), (0.36954, 0.36613), (0.41359, 0.41359),
   (0.50517, 0.53603), (0.57179, 0.64589), (0.59180, 0.68831), (0.63221, 0.76256),
   (0.66469, 0.79612), (0.71636, 0.84267), (1, 0.95434)
@@ -341,7 +422,7 @@ Film-like gives the current points.
 | Goal | Error at which the fit stops adding points | display codes | 0.5 | creative |
 | Points | Largest number of points of a preset | | 16 | data (TC1 limit) |
 | Allowance | Test allowance over the fit error | display codes | 0.05 | inferred |
-| `x_w` | Curve input at which a source reaches display white | ACEScc | Film-like 0.64449, Filmic 0.69003 | fit (section 4.3) |
+| `x_w` | Curve input at which a source reaches display white (#899, superseded) | ACEScc | Film-like 0.64449, Filmic 0.69003 | fit (section 4.3) |
 | Knee distance | Stops from the knee `x_k` up to `x_w` | stops | 1 | creative (as the DCP stage shoulder) |
 | `y_k`, `m_k` | Target value and slope at the knee | ACEScc | section 4.3 | fit |
 | `D` | Scale of the rational roll-off | ACEScc | from `y(1) = 0.95434` | inferred |
@@ -352,5 +433,9 @@ Film-like gives the current points.
 | `y_t0`, `m_t` | Target value and slope at the toe knee | ACEScc | section 4.4 | fit |
 | `c` | Curvature of the toe parabola | ACEScc | from `y(0) = 0` | inferred |
 | Toe refit points | Points of the earlier fit next to the toe knee that move with the toe | | 1 | creative |
-| Filmic parameters | Defaults of filmic rgb | | section 3.2 | data (darktable) |
+| Filmic parameters | Defaults of filmic rgb (Filmic removed by #914) | | section 3.2 | data (darktable) |
+| Hand points | Inner points of Default (Film-like), input to output | EV from 18% grey | (-4, -4.7), (0, 0), (+2, +2.8), (+4, +6.1), (+6.5, +8.3) | creative (section 4.5) |
+| Hand point limit | Largest number of points of Default (Film-like) | | 8 | data (RawTherapee `npoints`) |
+| Slope steps | Steps of the shape check on the curve axis | | 1024 | inferred |
+| S allowance | How far the slope of Default (Film-like) may go against the S | slope on the axis | 0.06 | inferred (end segments, section 4.5) |
 | Film resources | Film print resources | | schema 11 | data (alcedo-film-lab) |

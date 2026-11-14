@@ -3,14 +3,15 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 // Tone Curve presets (#891, tone_curve_preset_study.md): the point rules, 18% grey, monotony, the
-// neutral axis that the render gives with each preset against the source tone of the study, and
-// the highlight shoulder (#899) and the shadow toe (#910) of Film-like and Filmic.
+// neutral axis that the render gives with each fitted preset against the source tone of the
+// study, and the S shape of Default (Film-like), placed by hand (#914).
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <iterator>
 #include <set>
 #include <span>
 #include <string>
@@ -36,6 +37,15 @@ constexpr float  kPanelPointSpacing    = 0.001f;
 /// Allowance of the rendered axis over the recorded fit error: float evaluation and the product
 /// neutral response against the tone scale of the study.
 constexpr double kRenderAllowanceCodes = 0.05;
+/// Largest number of points of Default (Film-like), as the auto-matched curve of RawTherapee.
+constexpr std::size_t kFilmLikeMaxPoints    = 8;
+/// Curve output at which ACES 2.0 reaches the display peak: the end point of Default (Film-like).
+constexpr float       kAxisAtPeak           = 0.95434f;
+/// Slope steps of the S shape check on the curve axis.
+constexpr int         kSlopeSteps           = 1024;
+/// How far the slope may go against the S: the end segments take their end slope from the
+/// segment itself, so their middle dips about 0.05 below it (study, section 4).
+constexpr double      kSlopeAgainstS        = 0.06;
 
 auto             Code(double display) -> double {
   return 255.0 * std::pow(std::clamp(display, 0.0, 1.0), 1.0 / 2.2);
@@ -49,9 +59,9 @@ auto AxisSample(int index) -> float {
   return static_cast<float>(index) / static_cast<float>(tone_curve_study::kAxisSampleCount - 1);
 }
 
-TEST(ToneCurvePresetTest, MenuListsTheNinePresetsWithUniqueIds) {
+TEST(ToneCurvePresetTest, MenuListsTheEightPresetsWithUniqueIds) {
   const auto presets = ToneCurvePresets();
-  ASSERT_EQ(presets.size(), 9U);
+  ASSERT_EQ(presets.size(), 8U);
   std::set<std::string> ids;
   for (const auto& preset : presets) {
     EXPECT_TRUE(ids.insert(std::string{preset.id}).second) << preset.id;
@@ -62,7 +72,9 @@ TEST(ToneCurvePresetTest, MenuListsTheNinePresetsWithUniqueIds) {
   EXPECT_EQ(presets.front().PointList(), IdentityCurvePoints());
   EXPECT_EQ(FindToneCurvePreset("no_such_preset"), nullptr);
   ASSERT_NE(FindToneCurvePreset(kFilmLikeToneCurvePresetId), nullptr);
-  EXPECT_EQ(FindToneCurvePreset(kFilmLikeToneCurvePresetId)->display_name, "Film-like");
+  EXPECT_EQ(FindToneCurvePreset(kFilmLikeToneCurvePresetId)->display_name, "Default (Film-like)");
+  // #914: Filmic gave nearly the same curve as Default (Film-like) and left the menu.
+  EXPECT_EQ(FindToneCurvePreset("filmic"), nullptr);
 }
 
 TEST(ToneCurvePresetTest, EachPresetHasTwoToSixteenPointsWithRisingXInTheUnitSquare) {
@@ -110,90 +122,49 @@ TEST(ToneCurvePresetTest, MatchFindsThePresetOfExactlyItsPoints) {
   }
 }
 
-TEST(ToneCurvePresetTest, FilmLikeAndFilmicRollOffAboveTheKneeToTheDisplayPeak) {
-  // #899: above the knee the slope falls from the knee slope, stays above the end slope of the
-  // shoulder target (no flat segment), and x = 1 maps to the display peak.
-  constexpr int kSteps = 1024;
-  ASSERT_EQ(tone_curve_study::kHighlightShoulders.size(), 2U);
-  for (const auto& shoulder : tone_curve_study::kHighlightShoulders) {
-    SCOPED_TRACE(std::string{shoulder.preset_id});
-    const auto* preset = FindToneCurvePreset(shoulder.preset_id);
-    ASSERT_NE(preset, nullptr);
-    EXPECT_EQ(preset->points.back().x, 1.0f);
-    EXPECT_EQ(preset->points.back().y, 0.95434f);
-    ASSERT_GT(shoulder.knee_slope, shoulder.end_slope);
-    const auto   spline = Solve(*preset);
-    const double knee   = shoulder.knee_x;
-    const double step   = (1.0 - knee) / kSteps;
-    double       first  = 0.0;
-    double       last   = 0.0;
-    for (int i = 0; i < kSteps; ++i) {
-      const auto   x0    = static_cast<float>(knee + step * i);
-      const auto   x1    = static_cast<float>(knee + step * (i + 1));
-      const double slope = (tone_curve::EvaluateToneCurveSpline(spline, x1) -
-                            tone_curve::EvaluateToneCurveSpline(spline, x0)) /
-                           static_cast<double>(x1 - x0);
-      ASSERT_GE(slope, shoulder.end_slope) << "x " << x0;
-      if (i == 0) first = slope;
-      last = slope;
-    }
-    std::cout << shoulder.preset_id << ": slope " << first << " at the knee, " << last
-              << " at x = 1\n";
-    EXPECT_LT(last, 0.25 * first);
-  }
-}
-
-TEST(ToneCurvePresetTest, FilmLikeAndFilmicFallToTheOriginBelowTheToeKnee) {
-  // #910: the curve starts at (0, 0) and meets the target of the toe at the knee.
-  ASSERT_EQ(tone_curve_study::kShadowToes.size(), 2U);
-  for (const auto& toe : tone_curve_study::kShadowToes) {
-    SCOPED_TRACE(std::string{toe.preset_id});
-    const auto* preset = FindToneCurvePreset(toe.preset_id);
-    ASSERT_NE(preset, nullptr);
-    EXPECT_EQ(preset->points.front(), (CurvePoint{0.0f, 0.0f}));
-    EXPECT_GT(toe.start_slope, 0.0);
-    EXPECT_LT(toe.kept_points_from_x, kAxisGrey);
-    const auto spline = Solve(*preset);
-    EXPECT_EQ(tone_curve::EvaluateToneCurveSpline(spline, 0.0f), 0.0f);
-    // The fit bounds display codes (the test of the rendered neutral axis); on the axis the knee
-    // stays within 0.05 stop (one stop is 0.0571).
-    EXPECT_NEAR(tone_curve::EvaluateToneCurveSpline(spline, static_cast<float>(toe.knee_x)),
-                toe.knee_y, 0.05 * 0.0571);
-  }
-}
-
-TEST(ToneCurvePresetTest, FilmLikeKeepsItsPointsBetweenTheToeAndTheShoulder) {
-  // The points of the first fit stay from the point after the toe knee point up to the point
-  // before the shoulder knee point; the fit with the shoulder keeps all points from there up.
-  const auto shoulder =
-      std::ranges::find(tone_curve_study::kHighlightShoulders, std::string_view{"film_like"},
-                        &tone_curve_study::HighlightShoulder::preset_id);
-  const auto toe = std::ranges::find(tone_curve_study::kShadowToes, std::string_view{"film_like"},
-                                     &tone_curve_study::ShadowToe::preset_id);
-  ASSERT_NE(shoulder, tone_curve_study::kHighlightShoulders.end());
-  ASSERT_NE(toe, tone_curve_study::kShadowToes.end());
+TEST(ToneCurvePresetTest, DefaultFilmLikeIsOneSCurveWithTheShadowsBelowTheIdentity) {
+  // #914: a few points placed by hand on the EV axis. From (0, 0) the slope rises to one
+  // inflection above 18% grey (a convex toe: the shadows stay at or below the identity line) and
+  // falls from there to the display peak at x = 1 (a concave shoulder).
   const auto* preset = FindToneCurvePreset(kFilmLikeToneCurvePresetId);
   ASSERT_NE(preset, nullptr);
-  const auto earlier = FilmLikeToneCurveEarlierPoints();
-  ASSERT_EQ(earlier.size(), 2U);
-  const auto kept_from = [](std::span<const CurvePoint> points, double from_x) {
-    return std::vector<CurvePoint>(
-        std::ranges::find_if(points, [from_x](const CurvePoint& p) { return p.x >= from_x; }),
-        points.end());
-  };
-  const auto current = kept_from(preset->points, toe->kept_points_from_x);
-  ASSERT_GE(current.size(), 10U);
-  EXPECT_EQ(current, kept_from(earlier[1], toe->kept_points_from_x));
-  std::size_t first_fit = 0;
-  for (const auto& point : kept_from(earlier[0], toe->kept_points_from_x)) {
-    if (point.x > shoulder->kept_points_up_to_x) break;
-    ASSERT_LT(first_fit, current.size());
-    EXPECT_EQ(current[first_fit], point) << "point " << first_fit;
-    ++first_fit;
+  EXPECT_LE(preset->points.size(), kFilmLikeMaxPoints);
+  EXPECT_EQ(preset->points.front(), (CurvePoint{0.0f, 0.0f}));
+  EXPECT_EQ(preset->points.back(), (CurvePoint{1.0f, kAxisAtPeak}));
+
+  const auto          spline = Solve(*preset);
+  std::vector<double> slopes;
+  float               previous = tone_curve::EvaluateToneCurveSpline(spline, 0.0f);
+  for (int i = 1; i <= kSlopeSteps; ++i) {
+    const float x     = static_cast<float>(i) / kSlopeSteps;
+    const float value = tone_curve::EvaluateToneCurveSpline(spline, x);
+    if (x < kAxisGrey) {
+      EXPECT_LE(value, x) << "x " << x;
+    }
+    slopes.push_back(static_cast<double>(value - previous) * kSlopeSteps);
+    previous = value;
   }
-  EXPECT_GE(first_fit, 4U);
-  EXPECT_LT(shoulder->kept_points_up_to_x, shoulder->knee_x);
-  EXPECT_GT(toe->kept_points_from_x, toe->knee_x);
+  const auto   steepest        = std::ranges::max_element(slopes);
+  const auto   inflection      = std::distance(slopes.begin(), steepest);
+  const double inflection_x    = static_cast<double>(inflection) / kSlopeSteps;
+  double       steepest_so_far = slopes.front();
+  double       fall_below      = 0.0;
+  for (auto it = slopes.begin(); it != steepest; ++it) {
+    steepest_so_far = std::max(steepest_so_far, *it);
+    fall_below      = std::max(fall_below, steepest_so_far - *it);
+  }
+  double flattest_so_far = *steepest;
+  double rise_above      = 0.0;
+  for (auto it = steepest; it != slopes.end(); ++it) {
+    flattest_so_far = std::min(flattest_so_far, *it);
+    rise_above      = std::max(rise_above, *it - flattest_so_far);
+  }
+  std::cout << "film_like: inflection at x " << inflection_x << ", slope " << *steepest
+            << "; slope falls " << fall_below << " below it, rises " << rise_above << " above it\n";
+  EXPECT_GT(inflection_x, kAxisGrey);
+  EXPECT_GT(slopes[static_cast<std::size_t>(kAxisGrey * kSlopeSteps)], 1.0);
+  EXPECT_LT(fall_below, kSlopeAgainstS);
+  EXPECT_LT(rise_above, kSlopeAgainstS);
 }
 
 TEST(ToneCurvePresetTest, FilmLikeCurveIsRecognizedNowAndInEachEarlierFit) {
@@ -209,7 +180,7 @@ TEST(ToneCurvePresetTest, FilmLikeCurveIsRecognizedNowAndInEachEarlierFit) {
     moved.back().y -= 1e-4f;
     EXPECT_FALSE(IsFilmLikeToneCurve(moved));
   }
-  EXPECT_FALSE(IsFilmLikeToneCurve(FindToneCurvePreset("filmic")->points));
+  EXPECT_FALSE(IsFilmLikeToneCurve(FindToneCurvePreset("medium_contrast")->points));
   EXPECT_FALSE(IsFilmLikeToneCurve(IdentityCurvePoints()));
 }
 
@@ -231,7 +202,8 @@ TEST(ToneCurvePresetTest, RenderedNeutralAxisAgreesWithTheStudySourceToneWithinT
   // The grade stage applies the curve on the ACEScc axis and ACES 2.0 renders the result: the
   // display light of a neutral at each axis sample, against the source tone of the study.
   const auto response = ProfileToneNeutralResponse::Resolve(DrtMethod::Aces20);
-  ASSERT_EQ(tone_curve_study::kPresetStudies.size(), ToneCurvePresets().size() - 1);
+  // Linear and Default (Film-like) have no fit.
+  ASSERT_EQ(tone_curve_study::kPresetStudies.size(), ToneCurvePresets().size() - 2);
   for (const auto& study : tone_curve_study::kPresetStudies) {
     SCOPED_TRACE(std::string{study.preset_id});
     const auto* preset = FindToneCurvePreset(study.preset_id);
