@@ -2,7 +2,7 @@
 
 Date: 2026-11-13
 
-Status: TC1 to TC6 complete.
+Status: TC1 to TC6 complete. #900 (Shadows and Highlights before the Curve) complete.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -946,3 +946,106 @@ Verification (Windows, debug build, RTX 3080 Laptop):
 The preset menu was not driven in the running application (no input is sent to a real window).
 The Metal render was not run: the presets are points of the TC1 spline, whose Metal test runs on
 the macOS CI. The full test suite was not run.
+
+### #900: Shadows and Highlights before the Curve (2026-11-13)
+
+Status: complete. Issue [#900](https://github.com/zidage/AlcedoStudio/issues/900), branch
+`feature/color-grade-shadows-highlights-first`, stacked on the #899 shoulder (PR #904).
+
+The Color Grade compiles in three groups (`ColorGradeCompileOrder`, `ColorGradeCompileGroupOf`):
+
+```
+Basic Tone: White Balance, Exposure, Contrast, Whites, Blacks   -> Pointwise stage
+Local Tone: Shadows, Highlights                                 -> Local Laplacian stage
+Color:      Curve, HLS, Saturation, Vibrance, Color Wheels, LMT -> Pointwise stage
+```
+
+Shadows and Highlights act on the basic tone result, and the Curve shapes their output. The panel
+order (`ColorGradeAdjustmentTypes`) is the same order. When the Local Laplacian stage does not run
+(both sliders at 0), `CompactGradeOps` fuses the two pointwise groups into one pass, as before.
+
+Changes:
+
+- Versions: `kGradeCompileAlgorithmVersion` 2, `kPrimaryGradeImplementationVersion` 7,
+  `kLlfReferenceImplementationVersion` 3. Plans, derived images, and LLF maps of the order before
+  are not reused. The stored JSON stays the same; documents that use Shadows or Highlights together
+  with a Color adjustment render with new pixels.
+- Invalidation (`AdjustmentChangeOrigin` in `runtime_invalidation.cpp`): a Basic Tone edit
+  invalidates the LLF source, a Shadows or Highlights edit the LLF result, and a Color edit (also a
+  changed LMT resource) only the Grade output. `HashLlfSourceKey` and `HashLlfReferenceKey` mix the
+  Basic Tone and Local Tone adjustments of their Grade and leave out its Color adjustments.
+- Curve input histogram (TC3): the curve input is the output of the Local Laplacian stage when that
+  stage runs. `GradeExecutor` then counts that image before the mix, with no commands. When the stage
+  does not run, the histogram evaluates the Basic Tone commands on the Grade input
+  (`BasicToneCommandOffsets`). A Grade whose last write is the Local Laplacian stage and that mixes
+  (mix below 1 or a mask) writes the unmixed output, records the histogram, and mixes in a pointwise
+  pass without commands; the CUDA, OpenCL, and Metal pointwise dispatch accepts zero commands for
+  this pass. A zero-mix Grade skips the Local Laplacian stage, so its histogram is the Basic Tone
+  result.
+
+Call chain of one Grade with an active Local Laplacian stage:
+
+```
+GradeExecutor<Ops>::Execute
+  BindAndScheduleGrade -> MakeGradeSchedule -> ops: Pointwise, LocalLaplacian, Pointwise
+  Ops::DispatchPointwise                  (Basic Tone)
+  Ops::ExecuteLocalTone -> LocalToneExecutor<Ops>::Execute
+  RecordCurveInputHistogram(dest, no offsets)        (only with a histogram request)
+  Ops::DispatchPointwiseWithMix           (Color, mix fused into the last write)
+```
+
+#### Cost of the second pointwise pass
+
+`grade_order_cost_measurement.hpp` renders the same Grade in both orders on one device: the order
+before #900 comes from the compiled plan with the adjustments permuted to Basic Tone, Color, Local
+Tone (one Pointwise and one Local Laplacian stage). Each frame is `Execute` plus `WaitIdle` of the
+whole plan (Grade and display transform) on the host clock. The Grade has Exposure 0.2,
+Saturation 1.2, Shadows 40, Highlights -30, and a three-point curve. Run it with
+`ALCEDO_GRADE_ORDER_MEASUREMENT=1` and the filter `*MultiGradeFixture.GradeStageOrderCostMeasurement`.
+
+- Exposure edit: both orders rebuild the LLF maps, so the P50 difference is the cost of the second
+  pointwise pass. The two Exposure scenarios alternate and swap their order each round.
+- Saturation edit: the #900 order keeps the LLF maps and runs only the Color pass and the display
+  transform. The order before #900 rebuilt the LLF maps on this edit, which is its Exposure row.
+
+P50 frame time in milliseconds, 31 frames per scenario, two runs each:
+
+| Backend | Input | Before #900, Exposure edit | #900, Exposure edit | Second pass | #900, Saturation edit |
+| --- | --- | ---: | ---: | ---: | ---: |
+| CUDA | 2560 x 1705 | 8.90 / 8.99 | 9.30 / 9.35 | +0.40 / +0.36 | 2.96 / 2.95 |
+| CUDA | 4600 x 3064 | 14.37 / 14.39 | 15.80 / 15.78 | +1.43 / +1.39 | 9.54 / 9.71 |
+| OpenCL | 2560 x 1705 | 11.82 / 11.65 | 12.16 / 12.17 | +0.35 / +0.52 | 4.60 / 4.53 |
+| OpenCL | 4600 x 3064 | 18.05 / 17.06 | 19.83 / 18.24 | +1.78 / +1.17 | 11.64 / 11.49 |
+| Metal | 2560 x 1705 | 37.31 / 37.67 | 37.64 / 37.61 | +0.33 / -0.06 | 14.92 / 14.89 |
+| Metal | 4600 x 3064 | 67.72 / 67.61 | 68.68 / 69.36 | +0.96 / +1.75 | 41.66 / 42.19 |
+
+CUDA and OpenCL: Windows release build, RTX 3080 Laptop GPU, driver 610.62. Metal: macOS 27.0.1
+debug build, MacBook Air Apple M4, 16 GB.
+
+The second pass costs about 0.4 ms at 2560 x 1705 and 1 to 1.8 ms at 4600 x 3064, at most 10 %
+of a frame that rebuilds the LLF maps. A Curve or other Color edit, which is the frequent edit of
+the Tone Curve section, no longer rebuilds them: such a frame takes 33 to 68 % of the frame of the
+order before (CUDA 2560: 2.96 ms against 8.90 ms).
+
+#### Verification
+
+| Binary and filter | Result |
+| --- | --- |
+| `GpuDagRawInputTest` (all: compiler, content keys, invalidation, static plan cache) | 266 passed |
+| `GpuDagModelGraphTest` (all) | 195 passed |
+| `GraphImageCacheRetentionTest` (all) | 17 passed |
+| `GpuDagCudaPrimaryGradeTest` (all) | 85 passed, 10 failed; the same 10 fail at the #904 head ([#905](https://github.com/zidage/AlcedoStudio/issues/905)) |
+| `GpuDagOpenClGradeTest` (all) | 150 passed, 6 failed; the same 6 fail at the #904 head ([#905](https://github.com/zidage/AlcedoStudio/issues/905)) |
+| `GpuDagMetalGradeTest` (all, Apple M4) | 84 passed, 10 failed; the #904 head fails these 10 and 12 more ([#905](https://github.com/zidage/AlcedoStudio/issues/905)) |
+
+The identity-look test helpers of the grade tests now also reset the Curve, which carries the
+Film-like look since #898; most of the failures at the #904 head came from that.
+
+| Term | Meaning |
+| --- | --- |
+| Basic Tone | White Balance, Exposure, Contrast, Whites, Blacks: the pointwise group before the LLF stage |
+| Local Tone | Shadows and Highlights: the Local Laplacian (LLF) stage |
+| Color | Curve, HLS, Saturation, Vibrance, Color Wheels, LMT: the pointwise group after the LLF stage |
+| LLF maps | The canonical LLF source and result planes (`local_tone.source.0`, `local_tone.result.0`) |
+| P50 | Median frame time of the 31 timed frames of a scenario |
+| Second pass | P50 of the #900 Exposure row minus P50 of the Exposure row of the order before |
