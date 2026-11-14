@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "edit/scope/scope_analyzer.hpp"
@@ -432,6 +433,101 @@ TEST(PlotPaneInputTest, KeysReachTheHandleLayerOnlyWithASelectedHandle) {
   pane.mouseDoubleClickEvent(&double_click);
   ASSERT_EQ(double_clicked.count(), 1);
   EXPECT_EQ(double_clicked.at(0).at(0).toInt(), 0);
+}
+
+TEST(PlotPaneInputTest, RightClickReachesTheHandleUnderItAndStartsNoDrag) {
+  InputPlotPane pane;
+  ConfigurePane(pane);
+  PlotPolylineLayer line;
+  line.set_interactive(true);
+  line.set_points({{0.0, 0.0}, {1.0, 1.0}});
+  PlotHandleLayer handles;
+  handles.set_interactive(true);
+  handles.set_points({{0.0, 0.0}, {0.5, 0.5}, {1.0, 1.0}});
+  pane.AddLayer(&line);
+  pane.AddLayer(&handles);
+  QSignalSpy right_clicked(&handles, &PlotHandleLayer::rightClicked);
+  QSignalSpy handle_pressed(&handles, &PlotHandleLayer::pressed);
+  QSignalSpy line_pressed(&line, &PlotPolylineLayer::pressed);
+  QSignalSpy background(&pane, &PlotPane::backgroundPressed);
+  const auto right = [](QEvent::Type type, const QPointF& position) {
+    return QMouseEvent(type, position, position, Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+  };
+
+  auto on_handle = right(QEvent::MouseButtonPress, pane.mapFromData({0.5, 0.5}));
+  pane.mousePressEvent(&on_handle);
+  EXPECT_TRUE(on_handle.isAccepted());
+  ASSERT_EQ(right_clicked.count(), 1);
+  EXPECT_EQ(right_clicked.at(0).at(0).toInt(), 1);
+  EXPECT_EQ(handles.pressed_index(), -1);
+
+  // A move with the right button down drags nothing.
+  QMouseEvent move(QEvent::MouseMove, pane.mapFromData({0.6, 0.7}), pane.mapFromData({0.6, 0.7}),
+                   Qt::NoButton, Qt::RightButton, Qt::NoModifier);
+  pane.mouseMoveEvent(&move);
+  auto release = right(QEvent::MouseButtonRelease, pane.mapFromData({0.6, 0.7}));
+  pane.mouseReleaseEvent(&release);
+
+  // Of a fast pair, the second press is a right click; the double click after it is not one more.
+  auto second_press = right(QEvent::MouseButtonPress, pane.mapFromData({1.0, 1.0}));
+  pane.mousePressEvent(&second_press);
+  auto double_click = right(QEvent::MouseButtonDblClick, pane.mapFromData({1.0, 1.0}));
+  pane.mouseDoubleClickEvent(&double_click);
+  ASSERT_EQ(right_clicked.count(), 2);
+  EXPECT_EQ(right_clicked.at(1).at(0).toInt(), 2);
+
+  // On the curve away from a handle and on the empty plot, no layer takes the right click: it
+  // stays unaccepted and is no background press.
+  auto on_line = right(QEvent::MouseButtonPress, pane.mapFromData({0.25, 0.25}));
+  pane.mousePressEvent(&on_line);
+  EXPECT_FALSE(on_line.isAccepted());
+  auto empty = right(QEvent::MouseButtonPress, pane.mapFromData({0.2, 0.7}));
+  pane.mousePressEvent(&empty);
+  EXPECT_FALSE(empty.isAccepted());
+  EXPECT_EQ(right_clicked.count(), 2);
+  EXPECT_EQ(handle_pressed.count(), 0);
+  EXPECT_EQ(line_pressed.count(), 0);
+  EXPECT_EQ(background.count(), 0);
+
+  // During a left drag of a handle, the right button does not reach the layers.
+  auto left_press = Mouse(QEvent::MouseButtonPress, pane.mapFromData({0.5, 0.5}), Qt::LeftButton);
+  pane.mousePressEvent(&left_press);
+  ASSERT_EQ(handles.pressed_index(), 1);
+  auto during_drag = right(QEvent::MouseButtonPress, pane.mapFromData({0.5, 0.5}));
+  pane.mousePressEvent(&during_drag);
+  EXPECT_TRUE(during_drag.isAccepted());
+  EXPECT_EQ(right_clicked.count(), 2);
+  EXPECT_EQ(handles.pressed_index(), 1);
+}
+
+TEST(PlotPaneInputTest, DoubleClickEndsTheInteractionOfTheSecondPressFirst) {
+  InputPlotPane pane;
+  ConfigurePane(pane);
+  PlotHandleLayer handles;
+  handles.set_interactive(true);
+  handles.set_points({{0.5, 0.5}});
+  pane.AddLayer(&handles);
+  std::vector<std::string> order;
+  QObject::connect(&handles, &PlotHandleLayer::released,
+                   [&](int, QPointF, int) { order.emplace_back("released"); });
+  QObject::connect(&handles, &PlotHandleLayer::doubleClicked,
+                   [&](int) { order.emplace_back("doubleClicked"); });
+
+  // The window gives the second press of a double click as a press, then the double click.
+  const QPointF handle       = pane.mapFromData({0.5, 0.5});
+  auto          second_press = Mouse(QEvent::MouseButtonPress, handle, Qt::LeftButton);
+  pane.mousePressEvent(&second_press);
+  ASSERT_EQ(handles.pressed_index(), 0);
+  auto double_click = Mouse(QEvent::MouseButtonDblClick, handle, Qt::LeftButton);
+  pane.mouseDoubleClickEvent(&double_click);
+  EXPECT_TRUE(double_click.isAccepted());
+  EXPECT_EQ(handles.pressed_index(), -1);
+  EXPECT_EQ(order, (std::vector<std::string>{"released", "doubleClicked"}));
+
+  // The release after the double click reaches no layer.
+  auto release = Mouse(QEvent::MouseButtonRelease, handle, Qt::NoButton);
+  pane.mouseReleaseEvent(&release);
+  EXPECT_EQ(order.size(), 2U);
 }
 
 TEST(PlotPaneInputTest, PressThatNoLayerTakesReportsTheBackgroundPress) {

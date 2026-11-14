@@ -70,6 +70,8 @@ class PlotHandleLayer : public PlotLayer {
   void PointerRelease(const PlotViewTransform& view, const PlotPointerEvent& event) override;
   auto PointerDoubleClick(const PlotViewTransform& view, const PlotPointerEvent& event)
       -> bool override;
+  auto PointerRightClick(const PlotViewTransform& view, const PlotPointerEvent& event)
+      -> bool override;
   auto Hover(const PlotViewTransform& view, const PlotPointerEvent& event) -> bool override;
   void HoverLeave() override;
   [[nodiscard]] auto Cursor() const -> Qt::CursorShape override;
@@ -86,6 +88,8 @@ class PlotHandleLayer : public PlotLayer {
   void moved(int index, QPointF position, int modifiers);
   void released(int index, QPointF position, int modifiers);
   void doubleClicked(int index);
+  /// A press of the right button on the handle @p index.
+  void rightClicked(int index);
   void keyPressed(int index, int key, int modifiers);
 
  protected:

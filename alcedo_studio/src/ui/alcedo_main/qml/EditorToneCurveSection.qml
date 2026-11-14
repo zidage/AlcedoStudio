@@ -6,7 +6,8 @@ import Alcedo.Main 1.0
 // Tone Curve section of the Tone panel (#890): channel selector, the curve plot on PlotPane over
 // the histogram of the curve input, and the In and Out fields of the selected point. The plot
 // layers only report positions; EditorToneCurveModel moves the points and writes them (one settled
-// history entry per drag, key move sequence, field edit, removal, and reset).
+// history entry per drag, key move sequence, field edit, removal, and reset). A double click or a
+// right click on an interior point, or Delete / Backspace on the selected point, removes it.
 CollapsibleSection {
     id: section
     objectName: "editorToneCurveGroup"
@@ -456,6 +457,11 @@ CollapsibleSection {
                             section.model.finishDrag()
                     }
                     onDoubleClicked: function(index) {
+                        if (section.model)
+                            section.model.removePoint(index)
+                    }
+                    // The model keeps the end points.
+                    onRightClicked: function(index) {
                         if (section.model)
                             section.model.removePoint(index)
                     }

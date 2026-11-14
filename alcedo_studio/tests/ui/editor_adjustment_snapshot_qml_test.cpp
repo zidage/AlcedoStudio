@@ -19,6 +19,7 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QTest>
 #include <QVariantMap>
 #include <filesystem>
 #include <memory>
@@ -34,6 +35,7 @@
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/alcedo_main/plot_pane/plot_pane.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -55,8 +57,8 @@ class SnapshotSession final : public QObject, public IEditorAdjustmentSubmitter 
     if (const auto* scalar = std::get_if<alcedo::EditorScalarWrite>(&write)) {
       last_scalar_field_ = fieldKey;
       last_scalar_value_ = scalar->value;
-      last_settled_      = settled;
     }
+    last_settled_ = settled;
     ++submit_count_;
     return true;
   }
@@ -378,6 +380,85 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurv
       harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePreset_film_like"));
   ASSERT_NE(film_item, nullptr);
   EXPECT_TRUE(film_item->property("checked").toBool());
+}
+
+TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveRightClickRemovesAnInteriorPointAndNoEndPoint) {
+  alcedo::EditorPanelCurveValue curve;
+  curve.points = {{0.0f, 0.0f},  {0.2f, 0.15f}, {0.4f, 0.4f},
+                  {0.6f, 0.65f}, {0.8f, 0.85f}, {1.0f, 1.0f}};
+  curve.red    = alcedo::IdentityCurvePoints();
+  curve.green  = alcedo::IdentityCurvePoints();
+  curve.blue   = alcedo::IdentityCurvePoints();
+  alcedo::EditorPanelProjection projection;
+  projection.session_generation = 1;
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = "curve";
+  field.value     = curve;
+  projection.fields.push_back(std::move(field));
+
+  SnapshotSession              session(alcedo::ui::PanelProjectionToVariantMap(projection), 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model = harness.root()->findChild<QObject*>(QStringLiteral("toneCurveModel"));
+  auto* pane  = harness.root()->findChild<PlotPane*>(QStringLiteral("toneCurvePlotPane"));
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(pane, nullptr);
+  QQuickWindow* window = pane->window();
+  ASSERT_NE(window, nullptr);
+  // The Tone Curve plot sits under the Tone sliders: a tall window shows it.
+  window->resize(500, 1600);
+  harness.root()->setSize(window->size());
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+  const auto points       = [&] { return model->property("points").value<QList<QPointF>>(); };
+  const auto point_count  = [&] { return model->property("pointCount").toInt(); };
+  // The window point of a data position of the plot. The loaded points are float, so the clicks
+  // go to the positions that the model holds.
+  const auto window_point = [&](const QPointF& data) {
+    const QPointF scene = pane->mapToScene(pane->mapFromData(data));
+    EXPECT_TRUE(QRectF(QPointF(0, 0), window->size()).contains(scene)) << "plot outside window";
+    return scene.toPoint();
+  };
+  const auto right_click = [&](const QPointF& data) {
+    QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, window_point(data));
+  };
+  ASSERT_EQ(point_count(), 6);
+  const QList<QPointF> loaded = points();
+
+  // A right click on an interior point removes it with one settled write: one undo step.
+  right_click(loaded[2]);
+  EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[1], loaded[3], loaded[4], loaded[5]}));
+  EXPECT_EQ(session.submitCount(), 1);
+  EXPECT_TRUE(session.lastSettled());
+  EXPECT_FALSE(model->property("dragActive").toBool());
+
+  // On an end point, on the curve between points, and on the plot away from the curve, the
+  // right click changes nothing and adds no point.
+  right_click(loaded[0]);
+  right_click(loaded[5]);
+  double on_curve = 0.0;
+  ASSERT_TRUE(QMetaObject::invokeMethod(model, "evaluate", Q_RETURN_ARG(double, on_curve),
+                                        Q_ARG(int, 0), Q_ARG(double, 0.5)));
+  right_click({0.5, on_curve});
+  right_click({0.3, 0.8});
+  EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[1], loaded[3], loaded[4], loaded[5]}));
+  EXPECT_EQ(session.submitCount(), 1);
+
+  // Two fast right clicks on a point remove that point only.
+  QTest::mouseDClick(window, Qt::RightButton, Qt::NoModifier, window_point(loaded[3]));
+  EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[1], loaded[4], loaded[5]}));
+  EXPECT_EQ(session.submitCount(), 2);
+
+  // The double click and the Delete key still remove a point.
+  QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, window_point(loaded[1]));
+  EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[4], loaded[5]}));
+  EXPECT_EQ(session.submitCount(), 3);
+  EXPECT_FALSE(model->property("dragActive").toBool());
+  QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, window_point(loaded[4]));
+  EXPECT_EQ(model->property("selectedIndex").toInt(), 1);
+  QTest::keyClick(window, Qt::Key_Delete);
+  EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[5]}));
+  EXPECT_EQ(session.submitCount(), 4);
 }
 
 }  // namespace

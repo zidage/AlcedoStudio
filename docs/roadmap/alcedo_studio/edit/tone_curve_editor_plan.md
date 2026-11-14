@@ -2,7 +2,8 @@
 
 Date: 2026-11-13
 
-Status: TC1 to TC6 complete. #900 (Shadows and Highlights before the Curve) complete.
+Status: TC1 to TC6 complete. #900 (Shadows and Highlights before the Curve) complete. #901 (right
+click removes a point) complete.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -547,6 +548,7 @@ pane of TC4, over the curve input histogram of TC3, with the drawing, input, and
 - Keys (`PlotHandleLayer.keyPressed`): arrows move the selected point by 0.001, with Shift by
   0.01; Delete and Backspace remove it.
 - Double click on an inner point removes it. A double click elsewhere does nothing.
+- Right click on an inner point removes it (#901). A right click elsewhere does nothing.
 - Reset sets the selected curve to the identity.
 
 **History.** Each change below gives exactly one settled write of the `curve` field; a write has
@@ -1049,3 +1051,35 @@ Film-like look since #898; most of the failures at the #904 head came from that.
 | LLF maps | The canonical LLF source and result planes (`local_tone.source.0`, `local_tone.result.0`) |
 | P50 | Median frame time of the 31 timed frames of a scenario |
 | Second pass | P50 of the #900 Exposure row minus P50 of the Exposure row of the order before |
+
+### #901: right click removes a control point (2026-11-13)
+
+Status: complete. Issue [#901](https://github.com/zidage/AlcedoStudio/issues/901), branch
+`feature/tone-curve-right-click-remove`, stacked on #900 (PR #906).
+
+- `PlotPane` accepts the right button. A right press goes to `PlotLayer::PointerRightClick` of the
+  top input layer that accepts it; it starts no drag and gives the layer no move and no release. A
+  right press that no layer accepts stays unaccepted and is no `backgroundPressed`, so it changes
+  no selection. During a left-button interaction the right button does nothing.
+- `PlotHandleLayer` accepts a right press on a handle and emits `rightClicked(index)`.
+  `EditorToneCurveSection` calls `EditorToneCurveModel::removePoint(index)`, which keeps the end
+  points and gives one settled write (one history entry). The curve line layer has no right-click
+  input, so a right click on the curve adds no point.
+- Fix found with the test: the window gives the second press of a double click as a press and then
+  the double click. The second press on a handle started a drag, and `removePoint` refuses during a
+  drag, so the double click removed no point. `PlotPane::mouseDoubleClickEvent` now ends the
+  interaction of the second press first (release, then double click). A right double click is no
+  second right click: the second press already was one.
+
+Call chain:
+
+```
+QQuickWindow -> PlotPane::mousePressEvent (Qt::RightButton) -> PlotPane::RightClick
+  -> PlotHandleLayer::PointerRightClick -> rightClicked(index)
+  -> EditorToneCurveSection onRightClicked -> EditorToneCurveModel::removePoint -> CommitSettled
+```
+
+| Binary and filter | Result |
+| --- | --- |
+| `EditorPlotPaneTest` (all) | 20 passed |
+| `EditorAdjustmentSnapshotQmlTest` (all) | 7 passed |

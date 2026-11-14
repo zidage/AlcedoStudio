@@ -32,7 +32,9 @@ namespace alcedo::ui {
  *
  * Input: pointer and key events go to the top visible, interactive layer that accepts them, in
  * data coordinates. The layer that accepts a press keeps the pointer grab until the release. A
- * press that no layer accepts emits @ref backgroundPressed and pans a zoomed view. Ctrl + wheel
+ * press that no layer accepts emits @ref backgroundPressed and pans a zoomed view. A press of the
+ * right button is a click (PlotLayer::PointerRightClick): it starts no drag, and one that no layer
+ * accepts stays unaccepted, so it reaches the items under the pane. Ctrl + wheel
  * zooms at the pointer; a plain wheel event stays unaccepted, so a parent Flickable scrolls.
  * @ref pointerInside and @ref pointerPosition follow the pointer over the plot rectangle (hover,
  * and the moves of a press).
@@ -169,6 +171,8 @@ class PlotPane : public QQuickItem {
   void               RemoveSlot(const PlotLayer* layer);
   void               MarkLayerDirty(LayerSlot& slot);
   void               MarkAllLayersDirty();
+  /// Gives a right-button press to the top layer that accepts it.
+  void               RightClick(QMouseEvent* event);
   void               UpdatePlotRect();
   void               OnViewChanged();
   void               BuildLabels(LayerSlot& slot) const;
