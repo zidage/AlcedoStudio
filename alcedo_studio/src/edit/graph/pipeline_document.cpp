@@ -182,7 +182,7 @@ void ApplyDefaultPipelineLook(ColorGradeNodeModel& grade) {
   }
   exposure->LoadJson({{"exposure_ev", kDefaultPipelineExposureEv}});
   saturation->LoadJson({{"saturation", kDefaultPipelineSaturation}});
-  // The Film-like curve carries the contrast of the look; the Contrast slider stays at 0.
+  // The Cl. Digit curve carries the contrast of the look; the Contrast slider stays at 0.
   curve->SetPoints(preset->PointList());
 }
 

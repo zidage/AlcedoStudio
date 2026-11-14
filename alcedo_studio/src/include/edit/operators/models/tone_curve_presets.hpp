@@ -14,7 +14,7 @@ namespace alcedo {
 
 /// Id of the Cl. Digit preset, the RGB curve of the RAW import look
 /// (CreateDefaultPipelineDocument).
-inline constexpr std::string_view kFilmLikeToneCurvePresetId = "film_like";
+inline constexpr std::string_view kClDigitalToneCurvePresetId = "cl_digital";
 
 /**
  * @brief One preset of the Tone Curve section: a list of control points with a stable id.
@@ -26,7 +26,7 @@ inline constexpr std::string_view kFilmLikeToneCurvePresetId = "film_like";
  * monotone spline.
  */
 struct ToneCurvePreset {
-  /// Stable id: `linear`, `soft_contrast`, `medium_contrast`, `strong_contrast`, `film_like`,
+  /// Stable id: `linear`, `soft_contrast`, `medium_contrast`, `strong_contrast`, `cl_digital`,
   /// `kodak_2383`, `fuji_velvia_50`, `kodak_ektachrome_e100`.
   std::string_view            id;
   /// English display name, for example `Cl. Digit`. The UI translates it by id.
@@ -45,12 +45,22 @@ struct ToneCurvePreset {
 /// The preset with id @p id, or null.
 [[nodiscard]] auto FindToneCurvePreset(std::string_view id) -> const ToneCurvePreset*;
 
+/**
+ * @brief The preset that a write by id applies: the preset with id @p id, or Cl. Digit.
+ *
+ * An id that names no preset gives Cl. Digit (@ref kClDigitalToneCurvePresetId). That covers
+ * `film_like`, the id of the preset until #914, and `filmic`, which left the menu in #914. The
+ * curve write (`editor.set` on `curve`) and the preset menu apply presets through this.
+ */
+[[nodiscard]] auto ResolveToneCurvePreset(std::string_view id) -> const ToneCurvePreset&;
+
 /// The preset whose points equal @p points exactly (float values, same count), or null.
 [[nodiscard]] auto MatchToneCurvePreset(std::span<const CurvePoint> points)
     -> const ToneCurvePreset*;
 
 /**
- * @brief Earlier point lists of the Film-like preset, oldest first.
+ * @brief Earlier point lists of the Cl. Digit preset (named Film-like until #914), oldest
+ * first.
  *
  * - The first fit of #891, before the highlight shoulder.
  * - The fit with the highlight shoulder of #899, before the shadow toe of #910.
@@ -60,10 +70,11 @@ struct ToneCurvePreset {
  * their points, so documents imported with an earlier look keep them. The preset menu shows them
  * as a custom curve.
  */
-[[nodiscard]] auto FilmLikeToneCurveEarlierPoints() -> std::span<const std::span<const CurvePoint>>;
+[[nodiscard]] auto ClDigitalToneCurveEarlierPoints()
+    -> std::span<const std::span<const CurvePoint>>;
 
-/// True when @p points equal the Film-like preset exactly, as it is now or as it was earlier
-/// (@ref FilmLikeToneCurveEarlierPoints).
-[[nodiscard]] auto IsFilmLikeToneCurve(std::span<const CurvePoint> points) -> bool;
+/// True when @p points equal the Cl. Digit preset exactly, as it is now or as it was earlier
+/// (@ref ClDigitalToneCurveEarlierPoints).
+[[nodiscard]] auto IsClDigitalToneCurve(std::span<const CurvePoint> points) -> bool;
 
 }  // namespace alcedo

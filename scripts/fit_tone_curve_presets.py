@@ -69,7 +69,7 @@ CONTRAST_WIDTH_STOPS = 3.0
 # with a convex toe below the identity line, the steepest slope between +2 and +4 EV, and a
 # concave shoulder that reaches the display peak at x = 1.
 HAND_PRESETS = {
-    "film_like": [(-4.0, -4.7), (0.0, 0.0), (2.0, 2.8), (4.0, 6.1), (6.5, 8.3)],
+    "cl_digital": [(-4.0, -4.7), (0.0, 0.0), (2.0, 2.8), (4.0, 6.1), (6.5, 8.3)],
 }
 HAND_TABLE_EVS = tuple(float(ev) for ev in range(-7, 11))
 SLOPE_STEPS = 1024            # slope samples of the shape report on the curve axis
@@ -80,7 +80,7 @@ PRESETS = [
     ("soft_contrast", "Soft Contrast", "Contrast", "contrast"),
     ("medium_contrast", "Medium Contrast", "Contrast", "contrast"),
     ("strong_contrast", "Strong Contrast", "Contrast", "contrast"),
-    ("film_like", "Cl. Digit", "Rendering", "hand"),
+    ("cl_digital", "Cl. Digit", "Rendering", "hand"),
     ("kodak_2383", "Kodak 2383", "Film", "film"),
     ("fuji_velvia_50", "Velvia 50", "Film", "film"),
     ("kodak_ektachrome_e100", "Ektachrome E100", "Film", "film"),

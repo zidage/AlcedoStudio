@@ -145,8 +145,9 @@ class EditorToneCurveModel : public EditorAdjustmentModelBase {
   Q_INVOKABLE void   clearSelection() { setSelectedIndex(-1); }
   /// Sets the selected curve to the identity. One settled write when it changed.
   Q_INVOKABLE void reset();
-  /// Replaces the points of the selected curve with the points of preset @p id. One settled write
-  /// when they changed. Returns false for an unknown id and during a drag.
+  /// Replaces the points of the selected curve with the points of preset @p id; an id that names
+  /// no preset gives Cl. Digit (alcedo::ResolveToneCurvePreset). One settled write when they
+  /// changed. Returns false during a drag.
   Q_INVOKABLE bool          applyPreset(const QString& id);
   /// Writes the settled entry of a pending key move sequence now.
   Q_INVOKABLE void   settlePendingKeyMoves();

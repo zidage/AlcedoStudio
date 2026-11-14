@@ -229,16 +229,11 @@ auto ParseCurvePoints(const nlohmann::json& points_json, std::string_view key)
   return points;
 }
 
-/// The points of the Tone Curve preset @p id_json for `curve.<key>` (a write only).
-auto ParseCurvePresetPoints(const nlohmann::json& id_json, std::string_view key)
-    -> std::vector<CurvePoint> {
-  const auto  id     = id_json.get<std::string>();
-  const auto* preset = FindToneCurvePreset(id);
-  if (preset == nullptr) {
-    throw std::invalid_argument("curve." + std::string{key} + " names no Tone Curve preset: " + id +
-                                "; curve.presets lists them");
-  }
-  return preset->PointList();
+/// The points of the Tone Curve preset @p id_json for a `curve` key (a write only). An id that
+/// names no preset, such as `film_like` (the id before #914), gives Cl. Digit
+/// (ResolveToneCurvePreset).
+auto ParseCurvePresetPoints(const nlohmann::json& id_json) -> std::vector<CurvePoint> {
+  return ResolveToneCurvePreset(id_json.get<std::string>()).PointList();
 }
 
 /// `curve`: the RGB curve under `points` (with an optional `size`, the point count) and the
@@ -268,7 +263,7 @@ auto ParseCurveWrite(const nlohmann::json& params, ParseForm form) -> EditorCurv
   for (const auto channel : kCurveChannels) {
     const std::string key{CurveChannelKey(channel)};
     if (object.contains(key) && form == ParseForm::Write && object.at(key).is_string()) {
-      write.Channel(channel) = ParseCurvePresetPoints(object.at(key), key);
+      write.Channel(channel) = ParseCurvePresetPoints(object.at(key));
     } else if (object.contains(key)) {
       write.Channel(channel) = ParseCurvePoints(object.at(key), key);
     } else if (form == ParseForm::Value) {

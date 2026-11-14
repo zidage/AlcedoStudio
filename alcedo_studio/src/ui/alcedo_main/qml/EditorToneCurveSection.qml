@@ -64,7 +64,7 @@ CollapsibleSection {
         case "soft_contrast": return qsTr("Soft Contrast")
         case "medium_contrast": return qsTr("Medium Contrast")
         case "strong_contrast": return qsTr("Strong Contrast")
-        case "film_like": return qsTr("Cl. Digit")
+        case "cl_digital": return qsTr("Cl. Digit")
         case "kodak_2383": return qsTr("Kodak 2383")
         case "fuji_velvia_50": return qsTr("Velvia 50")
         case "kodak_ektachrome_e100": return qsTr("Ektachrome E100")
@@ -303,7 +303,7 @@ CollapsibleSection {
                     }
                     AppMenuSeparator {}
                     PresetMenuItem {
-                        presetId: "film_like"
+                        presetId: "cl_digital"
                         text: section.presetLabel(presetId)
                         checked: section.presetId === presetId
                         onTriggered: section.applyPreset(presetId)

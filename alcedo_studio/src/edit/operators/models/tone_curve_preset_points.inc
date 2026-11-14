@@ -13,7 +13,7 @@ inline constexpr std::array<CurvePoint, 6> kMediumContrastPoints{{{0.04992f, 0.0
 // Fit error 0.26 codes.
 inline constexpr std::array<CurvePoint, 6> kStrongContrastPoints{{{0.08212f, 0.00000f}, {0.30049f, 0.25053f}, {0.41359f, 0.41359f}, {0.43412f, 0.44471f}, {0.57319f, 0.63643f}, {0.91487f, 1.00000f}}};
 // Placed by hand.
-inline constexpr std::array<CurvePoint, 7> kFilmLikePoints{{{0.00000f, 0.00000f}, {0.18528f, 0.14532f}, {0.41359f, 0.41359f}, {0.52774f, 0.57341f}, {0.64190f, 0.76176f}, {0.78459f, 0.88733f}, {1.00000f, 0.95434f}}};
+inline constexpr std::array<CurvePoint, 7> kClDigitalPoints{{{0.00000f, 0.00000f}, {0.18528f, 0.14532f}, {0.41359f, 0.41359f}, {0.52774f, 0.57341f}, {0.64190f, 0.76176f}, {0.78459f, 0.88733f}, {1.00000f, 0.95434f}}};
 // Fit error 0.46 codes.
 inline constexpr std::array<CurvePoint, 12> kKodak2383Points{{{0.00000f, 0.19040f}, {0.10593f, 0.19623f}, {0.21591f, 0.21537f}, {0.34839f, 0.32782f}, {0.37359f, 0.36115f}, {0.41359f, 0.41359f}, {0.47163f, 0.49296f}, {0.49553f, 0.52254f}, {0.70303f, 0.76391f}, {0.76860f, 0.83360f}, {0.87942f, 0.89908f}, {1.00000f, 0.92308f}}};
 // Fit error 0.51 codes.

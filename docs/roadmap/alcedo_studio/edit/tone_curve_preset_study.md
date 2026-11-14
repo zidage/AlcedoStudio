@@ -270,8 +270,9 @@ Change: the curve axis is an EV axis, so the preset is placed by hand as one S o
 fit target of section 4.1 is dropped for it. The ACR3 tone of section 3.1 stays as a reference
 for the mid-tones and the highlights. Filmic gave nearly the same curve under this rule and left
 the menu. User decision of 2026-11-14: the menu name of Film-like is Cl. Digit (Chinese
-menu: 经典数码), the classic digital camera look; its id stays `film_like`, the id that
-`curve.presets` and the `curve` write take.
+menu: 经典数码), the classic digital camera look, with the id `cl_digital`. A write by id
+(the `curve` write of `editor.set`, the preset menu) takes an id that names no preset, such
+as `film_like` (the id until then) or `filmic`, as `cl_digital` (`ResolveToneCurvePreset`).
 
 Rule of the shape:
 
@@ -346,7 +347,7 @@ neutral axis.
 | Soft Contrast | ![](tone_curve_preset_study/soft_contrast_curve.svg) | ![](tone_curve_preset_study/soft_contrast_neutral.svg) |
 | Medium Contrast | ![](tone_curve_preset_study/medium_contrast_curve.svg) | ![](tone_curve_preset_study/medium_contrast_neutral.svg) |
 | Strong Contrast | ![](tone_curve_preset_study/strong_contrast_curve.svg) | ![](tone_curve_preset_study/strong_contrast_neutral.svg) |
-| Cl. Digit | ![](tone_curve_preset_study/film_like_curve.svg) | ![](tone_curve_preset_study/film_like_neutral.svg) |
+| Cl. Digit | ![](tone_curve_preset_study/cl_digital_curve.svg) | ![](tone_curve_preset_study/cl_digital_neutral.svg) |
 | Kodak 2383 | ![](tone_curve_preset_study/kodak_2383_curve.svg) | ![](tone_curve_preset_study/kodak_2383_neutral.svg) |
 | Velvia 50 | ![](tone_curve_preset_study/fuji_velvia_50_curve.svg) | ![](tone_curve_preset_study/fuji_velvia_50_neutral.svg) |
 | Ektachrome E100 | ![](tone_curve_preset_study/kodak_ektachrome_e100_curve.svg) | ![](tone_curve_preset_study/kodak_ektachrome_e100_neutral.svg) |
@@ -366,7 +367,7 @@ Observations:
 
 User decision of 2026-11-13: the default look is Film-like (menu name Cl. Digit since
 #914). `CreateDefaultPipelineDocument` sets
-the RGB curve of Color Grade 1 to the points of `film_like`, with exposure +1.5 EV and saturation
+the RGB curve of Color Grade 1 to the points of `cl_digital` (`film_like` before #914), with exposure +1.5 EV and saturation
 1.3 as before. Contrast stays 0, because the curve carries the contrast of the look: the curve
 and ACES 2.0 together give the Adobe tone at Alcedo +1.5 EV = ACR 0 EV, and contrast +15 on top
 would add a second S. Documents imported before keep their stored values (contrast 15, the
@@ -390,8 +391,8 @@ curve points, so a document imported with an earlier look keeps its points and r
 new imports get the points of section 5.
 
 The entry resets of section 6 recognize each point list as the import look
-(`IsFilmLikeToneCurve` in `tone_curve_presets.hpp`). The earlier fits stay in
-`tone_curve_presets.cpp` as `FilmLikeToneCurveEarlierPoints()`, by hand, since the script writes
+(`IsClDigitalToneCurve` in `tone_curve_presets.hpp`). The earlier fits stay in
+`tone_curve_presets.cpp` as `ClDigitalToneCurveEarlierPoints()`, by hand, since the script writes
 only the current points:
 
 - #891, before the shoulder: (0, 0.14493), (0.24811, 0.26545), (0.28192, 0.28731),

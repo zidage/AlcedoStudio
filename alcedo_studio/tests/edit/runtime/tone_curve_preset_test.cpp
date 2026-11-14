@@ -38,7 +38,7 @@ constexpr float  kPanelPointSpacing    = 0.001f;
 /// neutral response against the tone scale of the study.
 constexpr double kRenderAllowanceCodes = 0.05;
 /// Largest number of points of Cl. Digit, as the auto-matched curve of RawTherapee.
-constexpr std::size_t kFilmLikeMaxPoints    = 8;
+constexpr std::size_t kClDigitalMaxPoints   = 8;
 /// Curve output at which ACES 2.0 reaches the display peak: the end point of Cl. Digit.
 constexpr float       kAxisAtPeak           = 0.95434f;
 /// Slope steps of the S shape check on the curve axis.
@@ -71,10 +71,22 @@ TEST(ToneCurvePresetTest, MenuListsTheEightPresetsWithUniqueIds) {
   EXPECT_EQ(presets.front().id, "linear");
   EXPECT_EQ(presets.front().PointList(), IdentityCurvePoints());
   EXPECT_EQ(FindToneCurvePreset("no_such_preset"), nullptr);
-  ASSERT_NE(FindToneCurvePreset(kFilmLikeToneCurvePresetId), nullptr);
-  EXPECT_EQ(FindToneCurvePreset(kFilmLikeToneCurvePresetId)->display_name, "Cl. Digit");
+  ASSERT_NE(FindToneCurvePreset(kClDigitalToneCurvePresetId), nullptr);
+  EXPECT_EQ(FindToneCurvePreset(kClDigitalToneCurvePresetId)->display_name, "Cl. Digit");
   // #914: Filmic gave nearly the same curve as Cl. Digit and left the menu.
   EXPECT_EQ(FindToneCurvePreset("filmic"), nullptr);
+}
+
+TEST(ToneCurvePresetTest, ResolveGivesThePresetOfAnIdAndClDigitalForAnyOtherId) {
+  for (const auto& preset : ToneCurvePresets()) {
+    EXPECT_EQ(&ResolveToneCurvePreset(preset.id), &preset) << preset.id;
+  }
+  // film_like was the id of Cl. Digit until #914; filmic left the menu in #914.
+  const auto* cl_digital = FindToneCurvePreset(kClDigitalToneCurvePresetId);
+  for (const std::string_view id : {"film_like", "filmic", "no_such_preset", ""}) {
+    EXPECT_EQ(&ResolveToneCurvePreset(id), cl_digital) << id;
+    EXPECT_EQ(FindToneCurvePreset(id), nullptr) << id;
+  }
 }
 
 TEST(ToneCurvePresetTest, EachPresetHasTwoToSixteenPointsWithRisingXInTheUnitSquare) {
@@ -122,13 +134,13 @@ TEST(ToneCurvePresetTest, MatchFindsThePresetOfExactlyItsPoints) {
   }
 }
 
-TEST(ToneCurvePresetTest, DefaultFilmLikeIsOneSCurveWithTheShadowsBelowTheIdentity) {
+TEST(ToneCurvePresetTest, ClDigitalIsOneSCurveWithTheShadowsBelowTheIdentity) {
   // #914: a few points placed by hand on the EV axis. From (0, 0) the slope rises to one
   // inflection above 18% grey (a convex toe: the shadows stay at or below the identity line) and
   // falls from there to the display peak at x = 1 (a concave shoulder).
-  const auto* preset = FindToneCurvePreset(kFilmLikeToneCurvePresetId);
+  const auto* preset = FindToneCurvePreset(kClDigitalToneCurvePresetId);
   ASSERT_NE(preset, nullptr);
-  EXPECT_LE(preset->points.size(), kFilmLikeMaxPoints);
+  EXPECT_LE(preset->points.size(), kClDigitalMaxPoints);
   EXPECT_EQ(preset->points.front(), (CurvePoint{0.0f, 0.0f}));
   EXPECT_EQ(preset->points.back(), (CurvePoint{1.0f, kAxisAtPeak}));
 
@@ -159,7 +171,7 @@ TEST(ToneCurvePresetTest, DefaultFilmLikeIsOneSCurveWithTheShadowsBelowTheIdenti
     flattest_so_far = std::min(flattest_so_far, *it);
     rise_above      = std::max(rise_above, *it - flattest_so_far);
   }
-  std::cout << "film_like: inflection at x " << inflection_x << ", slope " << *steepest
+  std::cout << "cl_digital: inflection at x " << inflection_x << ", slope " << *steepest
             << "; slope falls " << fall_below << " below it, rises " << rise_above << " above it\n";
   EXPECT_GT(inflection_x, kAxisGrey);
   EXPECT_GT(slopes[static_cast<std::size_t>(kAxisGrey * kSlopeSteps)], 1.0);
@@ -167,21 +179,21 @@ TEST(ToneCurvePresetTest, DefaultFilmLikeIsOneSCurveWithTheShadowsBelowTheIdenti
   EXPECT_LT(rise_above, kSlopeAgainstS);
 }
 
-TEST(ToneCurvePresetTest, FilmLikeCurveIsRecognizedNowAndInEachEarlierFit) {
-  const auto* film_like = FindToneCurvePreset(kFilmLikeToneCurvePresetId);
-  ASSERT_NE(film_like, nullptr);
-  EXPECT_TRUE(IsFilmLikeToneCurve(film_like->points));
-  for (const auto earlier : FilmLikeToneCurveEarlierPoints()) {
-    EXPECT_TRUE(IsFilmLikeToneCurve(earlier));
-    EXPECT_FALSE(std::ranges::equal(earlier, film_like->points));
+TEST(ToneCurvePresetTest, ClDigitalCurveIsRecognizedNowAndInEachEarlierFit) {
+  const auto* cl_digital = FindToneCurvePreset(kClDigitalToneCurvePresetId);
+  ASSERT_NE(cl_digital, nullptr);
+  EXPECT_TRUE(IsClDigitalToneCurve(cl_digital->points));
+  for (const auto earlier : ClDigitalToneCurveEarlierPoints()) {
+    EXPECT_TRUE(IsClDigitalToneCurve(earlier));
+    EXPECT_FALSE(std::ranges::equal(earlier, cl_digital->points));
     // The menu shows the earlier points as a custom curve.
     EXPECT_EQ(MatchToneCurvePreset(earlier), nullptr);
     std::vector<CurvePoint> moved{earlier.begin(), earlier.end()};
     moved.back().y -= 1e-4f;
-    EXPECT_FALSE(IsFilmLikeToneCurve(moved));
+    EXPECT_FALSE(IsClDigitalToneCurve(moved));
   }
-  EXPECT_FALSE(IsFilmLikeToneCurve(FindToneCurvePreset("medium_contrast")->points));
-  EXPECT_FALSE(IsFilmLikeToneCurve(IdentityCurvePoints()));
+  EXPECT_FALSE(IsClDigitalToneCurve(FindToneCurvePreset("medium_contrast")->points));
+  EXPECT_FALSE(IsClDigitalToneCurve(IdentityCurvePoints()));
 }
 
 TEST(ToneCurvePresetTest, StudyToneScaleIsTheProductAces2NeutralResponse) {

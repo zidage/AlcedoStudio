@@ -215,18 +215,18 @@ auto FilmPrintEntrySaturationTarget(const PipelineDocument& document,
 
 namespace {
 
-static_assert(kDefaultPipelineToneCurvePresetId == kFilmLikeToneCurvePresetId,
-              "HasImportLookCurve recognizes the Film-like points of the RAW import look");
+static_assert(kDefaultPipelineToneCurvePresetId == kClDigitalToneCurvePresetId,
+              "HasImportLookCurve recognizes the Cl. Digit points of the RAW import look");
 
-/// True when the RGB curve of @p grade has the points of the Film-like preset of the RAW import
-/// look: the current points, or the earlier points that documents imported with an earlier look
-/// store (FilmLikeToneCurveEarlierPoints).
+/// True when the RGB curve of @p grade has the points of the Cl. Digit preset of the RAW import
+/// look: the current points, or the earlier (Film-like) points that documents imported with an
+/// earlier look store (ClDigitalToneCurveEarlierPoints).
 auto HasImportLookCurve(const ColorGradeNodeModel& grade) -> bool {
   const auto* curve =
       dynamic_cast<const CurveModel*>(grade.FindAdjustmentByType(type_ids::Curve()));
   if (curve == nullptr) return false;
   const auto points = curve->Points();
-  return IsFilmLikeToneCurve(points);
+  return IsClDigitalToneCurve(points);
 }
 
 /// The curve write of an entry reset: the RGB curve gets @p points, the channel curves stay.
@@ -364,7 +364,7 @@ auto EntryResetWrites(const PipelineDocument& document, std::string_view field_k
       writes.push_back({std::move(*target), IdentityRgbCurvePatch()});
     }
     // The RGB curve follows the profile curve of the new method. The Film Print curve rule reads
-    // a Film-like curve only, so the two rules never write the curve together.
+    // a Cl. Digit curve only, so the two rules never write the curve together.
     const auto* develop = document.Develop();
     if (develop != nullptr) {
       auto profile = ProfileToneCurveWrites(document, develop->Params().CameraProfileFile(),

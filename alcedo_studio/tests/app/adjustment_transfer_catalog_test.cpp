@@ -575,9 +575,9 @@ TEST(AdjustmentTransferCatalogTest, CurveItemSummaryNamesTheChannelCurves) {
   auto& curve =
       dynamic_cast<CurveModel&>(*document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
   // A RAW import document carries the Film-like RGB curve and identity channel curves (#891).
-  const auto* film_like = FindToneCurvePreset(kFilmLikeToneCurvePresetId);
-  ASSERT_NE(film_like, nullptr);
-  EXPECT_EQ(curve_value(document), std::to_string(film_like->points.size()) + " points");
+  const auto* cl_digital = FindToneCurvePreset(kClDigitalToneCurvePresetId);
+  ASSERT_NE(cl_digital, nullptr);
+  EXPECT_EQ(curve_value(document), std::to_string(cl_digital->points.size()) + " points");
 
   CurveUpdate update;
   update.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.3f, 0.2f}, {0.7f, 0.8f}, {1.0f, 1.0f}};

@@ -347,10 +347,10 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveSectionLoadsFourCurvesAndMarksThe
 TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurveAndAppliesOne) {
   // A document with the Cl. Digit RGB curve (the RAW import look) and a custom red
   // curve.
-  const auto* film_like = alcedo::FindToneCurvePreset("film_like");
-  ASSERT_NE(film_like, nullptr);
+  const auto* cl_digital = alcedo::FindToneCurvePreset("cl_digital");
+  ASSERT_NE(cl_digital, nullptr);
   alcedo::EditorPanelCurveValue curve;
-  curve.points = film_like->PointList();
+  curve.points = cl_digital->PointList();
   curve.red    = {{0.0f, 0.1f}, {0.5f, 0.45f}, {1.0f, 1.0f}};
   curve.green  = alcedo::IdentityCurvePoints();
   curve.blue   = alcedo::IdentityCurvePoints();
@@ -385,7 +385,7 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurv
   model->setProperty("channel", 0);
   EXPECT_EQ(button->property("text").toString(), QStringLiteral("Cl. Digit"));
   auto* film_item =
-      harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePreset_film_like"));
+      harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePreset_cl_digital"));
   ASSERT_NE(film_item, nullptr);
   EXPECT_TRUE(film_item->property("checked").toBool());
 }

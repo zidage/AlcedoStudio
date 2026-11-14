@@ -1208,19 +1208,21 @@ Status: complete. Issue [#914](https://github.com/zidage/AlcedoStudio/issues/914
   whose toe is deeper than both sources.
 - User decision: the curve axis is an EV axis, so the default curve is placed by hand; Filmic
   gives nearly the same curve and leaves the menu. Menu name (user decision of 2026-11-14):
-  Cl. Digit, Chinese 经典数码; the id stays `film_like`.
+  Cl. Digit, Chinese 经典数码, id `cl_digital`. A write by id resolves `film_like` and any
+  other unknown id to `cl_digital` (`ResolveToneCurvePreset`, used by the `curve` write and
+  `EditorToneCurveModel::applyPreset`).
 - Points (EV in to EV out): (-4, -4.7), (0, 0), (+2, +2.8), (+4, +6.1), (+6.5, +8.3) with the ends
   (0, 0) and (1, 0.95434): 7 points, inflection at +2.80 EV, slope 1.29 at grey. From +1 to +3 EV
   the display codes stay within 2.5 codes of the ACR3 tone; the shadows render darker than Linear.
 - `scripts/fit_tone_curve_presets.py` takes the hand points from `HAND_PRESETS` and reports the
   shape; the fitted presets come out byte-identical. The Filmic port, the shoulder, and the toe
   fits left the script; sections 4.3 and 4.4 of the study keep their record.
-- `FilmLikeToneCurveEarlierPoints()` adds the #910 points, so the entry resets recognize
-  documents imported with them.
+- `ClDigitalToneCurveEarlierPoints()` (formerly `FilmLikeToneCurveEarlierPoints()`) adds the
+  #910 points, so the entry resets recognize documents imported with them.
 
 | Binary and filter | Result |
 | --- | --- |
-| `ToneCurvePresetTest` (all, with `DefaultFilmLikeIsOneSCurveWithTheShadowsBelowTheIdentity`) | 8 passed |
+| `ToneCurvePresetTest` (all, with `ClDigitalIsOneSCurveWithTheShadowsBelowTheIdentity` and `ResolveGivesThePresetOfAnIdAndClDigitalForAnyOtherId`) | 9 passed |
 | `EditorToneCurveModelTest`, `EditorAdjustmentSnapshotQmlTest`, `GpuDagModelGraphTest` | 18, 8, 195 passed |
-| `AutomationEditorCommandsTest`, `AutomationAdjustmentCommandsTest`, `EditorParameterCatalogTest`, `AdjustmentTransferCatalogTest` | 9, 4, 51, 13 passed |
+| `AutomationEditorCommandsTest`, `AutomationAdjustmentCommandsTest`, `EditorParameterCatalogTest`, `AdjustmentTransferCatalogTest`, `EditorPipelineCommandServiceTest` | 9, 4, 51, 13, 24 passed |
 | `EditorSessionHistoryPortTest` | 133 passed; `CheckoutAndPasteHashesAreUnchanged` fails (#555) |
