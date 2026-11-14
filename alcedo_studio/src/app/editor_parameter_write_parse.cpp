@@ -932,7 +932,7 @@ auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
 /// `camera_profile_file` (dcp_camera_profile_plan.md, phase C4).
 ///
 /// A write is a selection: {"camera_model", "profile_name"} with an optional boolean
-/// "profile_tone" (default true; dcp_profile_tone_curve_study.md, section 6.3), or the same object
+/// "profile_tone" (default true; dcp_profile_tone_curve_study.md, section 11), or the same object
 /// under "camera_profile_file". `{}`, null, and {"camera_profile_file": null} clear the reference.
 /// The identity is resolved through the DCP library; an identity that the library does not hold is
 /// rejected, so the document stays unchanged.

@@ -4,8 +4,12 @@
 
 #include "app/editor_pipeline_command_service.hpp"
 
+#include <algorithm>
 #include <exception>
+#include <iterator>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -23,6 +27,7 @@
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/tone_curve_presets.hpp"
+#include "edit/runtime/profile_tone_curve_import.hpp"
 #include "image/dcp_camera_profile.hpp"
 
 namespace alcedo {
@@ -224,14 +229,16 @@ auto HasImportLookCurve(const ColorGradeNodeModel& grade) -> bool {
   return IsFilmLikeToneCurve(points);
 }
 
-/// The curve write of an entry reset: the RGB curve becomes the identity, the channel curves stay.
-auto IdentityRgbCurvePatch() -> nlohmann::json {
-  nlohmann::json points = nlohmann::json::array();
-  for (const auto& point : IdentityCurvePoints()) {
-    points.push_back({{"x", point.x}, {"y", point.y}});
+/// The curve write of an entry reset: the RGB curve gets @p points, the channel curves stay.
+auto RgbCurvePatch(std::span<const CurvePoint> points) -> nlohmann::json {
+  nlohmann::json list = nlohmann::json::array();
+  for (const auto& point : points) {
+    list.push_back({{"x", point.x}, {"y", point.y}});
   }
-  return {{"curve", {{"points", std::move(points)}}}};
+  return {{"curve", {{"points", std::move(list)}}}};
 }
+
+auto IdentityRgbCurvePatch() -> nlohmann::json { return RgbCurvePatch(IdentityCurvePoints()); }
 
 }  // namespace
 
@@ -254,67 +261,93 @@ auto FilmPrintEntryCurveTarget(const PipelineDocument& document, const nlohmann:
 
 namespace {
 
-/// True when the DRT method of @p document runs the profile tone stage (study section 6.2).
-auto MethodRunsProfileTone(const PipelineDocument& document) -> bool {
-  const auto* drt = document.Drt();
-  if (drt == nullptr) return false;
-  const auto method = drt->Params().Method();
-  return method == DrtMethod::Aces20 || method == DrtMethod::OpenDrt;
+/// The DRT method of a DRT Model JSON (`odt`): the default OpenDRT without a known `method`.
+auto MethodOfOdtJson(const nlohmann::json& odt) -> DrtMethod {
+  const auto method = odt.value("method", std::string{});
+  if (method == "aces_2_0") return DrtMethod::Aces20;
+  if (method == "film_print") return DrtMethod::FilmPrint;
+  return DrtMethod::OpenDrt;
 }
 
-/// True when @p reference selects the stage and its bound profile has a curve.
-auto ReferenceRunsProfileTone(const std::optional<DevelopCameraProfileFile>& reference) -> bool {
-  return reference.has_value() && reference->profile_tone && reference->IsBound() &&
-         reference->profile->profile_tone_curve != nullptr;
+/// The fitted profile curve that the RGB curve follows for @p reference on the DRT @p method, or
+/// null when it follows none: no reference, the switch off, an unbound reference, a profile
+/// without `ProfileToneCurve`, or Film Print, whose negative and print give the tone.
+auto FollowedProfileCurve(const std::optional<DevelopCameraProfileFile>& reference,
+                          DrtMethod method) -> std::shared_ptr<const ProfileToneCurveFit> {
+  if (!reference.has_value() || !reference->profile_tone || !reference->IsBound() ||
+      reference->profile->profile_tone_curve == nullptr || method == DrtMethod::FilmPrint) {
+    return nullptr;
+  }
+  return ProfileToneCurvePoints(reference->profile->profile_tone_curve, method);
 }
 
-/// True when the reference of a Develop Model JSON selects the stage and the DCP library binds
-/// its identity to a profile with a curve.
-auto StoredReferenceRunsProfileTone(const nlohmann::json& develop) -> bool {
+/// The reference of a Develop Model JSON, bound through DcpProfileLibrary::Shared(); an identity
+/// that the library does not hold stays unbound.
+auto StoredReference(const nlohmann::json& develop) -> std::optional<DevelopCameraProfileFile> {
   const auto found = develop.find("camera_profile_file");
-  if (found == develop.end() || found->is_null()) return false;
-  const auto stored = DevelopCameraProfileFileFromJson(*found);
-  return stored.profile_tone && ReferenceRunsProfileTone(ResolveStoredDcpCameraProfileFile(stored));
+  if (found == develop.end() || found->is_null()) return std::nullopt;
+  return ResolveStoredDcpCameraProfileFile(DevelopCameraProfileFileFromJson(*found));
 }
 
 }  // namespace
 
-auto ProfileToneEntryResetTargets(const PipelineDocument& document,
-                                  const nlohmann::json&   develop_before)
-    -> std::vector<EditorEntryResetWrite> {
+auto ProfileToneCurveWrites(const PipelineDocument&                        document,
+                            const std::optional<DevelopCameraProfileFile>& reference_before,
+                            DrtMethod method_before) -> std::vector<EditorEntryResetWrite> {
   const auto* develop = document.Develop();
-  if (develop == nullptr || !MethodRunsProfileTone(document) ||
-      !ReferenceRunsProfileTone(develop->Params().CameraProfileFile())) {
-    return {};
-  }
-  // The stage ran before the edit too (another profile with a curve): no entry.
-  if (StoredReferenceRunsProfileTone(develop_before)) return {};
+  const auto* drt     = document.Drt();
+  if (develop == nullptr || drt == nullptr) return {};
+  const auto method_after = drt->Params().Method();
+  const auto before       = FollowedProfileCurve(reference_before, method_before);
+  const auto after = FollowedProfileCurve(develop->Params().CameraProfileFile(), method_after);
+  if (before == after || (before && after && before->points == after->points)) return {};
   const auto* grade = document.PrimaryGrade();
   if (grade == nullptr) return {};
+  const auto* curve =
+      dynamic_cast<const CurveModel*>(grade->FindAdjustmentByType(type_ids::Curve()));
+  if (curve == nullptr) return {};
+  const auto                         current = curve->Points();
+
   std::vector<EditorEntryResetWrite> writes;
-  const auto                         add = [&](const char* field, float value) {
-    std::string ignored;
-    auto        target = CompleteCurrentPanelParameterTarget(document, field, &ignored);
-    if (target.has_value()) {
-      writes.push_back({std::move(*target), {{field, value}}});
-    }
-  };
-  const auto* contrast =
-      dynamic_cast<const ContrastModel*>(grade->FindAdjustmentByType(type_ids::Contrast()));
-  if (contrast != nullptr && contrast->Value() == kImportLookContrastBeforeFilmLike) {
-    add("contrast", kProfileToneEntryContrast);
-  }
-  const auto* saturation =
-      dynamic_cast<const SaturationModel*>(grade->FindAdjustmentByType(type_ids::Saturation()));
-  if (saturation != nullptr && saturation->Value() == kDefaultPipelineSaturation) {
-    add("saturation", kProfileToneEntrySaturation);
-  }
-  if (HasImportLookCurve(*grade)) {
+  const auto                         add_curve = [&](std::span<const CurvePoint> points) {
     std::string ignored;
     auto        target = CompleteCurrentPanelParameterTarget(document, "curve", &ignored);
     if (target.has_value()) {
-      writes.push_back({std::move(*target), IdentityRgbCurvePatch()});
+      writes.push_back({std::move(*target), RgbCurvePatch(points)});
     }
+  };
+  if (after && !before) {
+    // Entry: the profile curve and LookTable carry the camera's contrast and color, so the RAW
+    // import look stays out of them. The RGB curve takes the profile curve whatever it held.
+    const auto add = [&](const char* field, float value) {
+      std::string ignored;
+      auto        target = CompleteCurrentPanelParameterTarget(document, field, &ignored);
+      if (target.has_value()) {
+        writes.push_back({std::move(*target), {{field, value}}});
+      }
+    };
+    const auto* contrast =
+        dynamic_cast<const ContrastModel*>(grade->FindAdjustmentByType(type_ids::Contrast()));
+    if (contrast != nullptr && contrast->Value() == kImportLookContrastBeforeFilmLike) {
+      add("contrast", kProfileToneEntryContrast);
+    }
+    const auto* saturation =
+        dynamic_cast<const SaturationModel*>(grade->FindAdjustmentByType(type_ids::Saturation()));
+    if (saturation != nullptr && saturation->Value() == kDefaultPipelineSaturation) {
+      add("saturation", kProfileToneEntrySaturation);
+    }
+    add_curve(after->points);
+    return writes;
+  }
+  // A change or an exit: only an RGB curve that still has the points of the curve before follows.
+  if (!before || current != before->points) return writes;
+  if (after) {
+    add_curve(after->points);
+  } else if (method_after == DrtMethod::FilmPrint) {
+    add_curve(IdentityCurvePoints());
+  } else {
+    const auto* look = FindToneCurvePreset(kDefaultPipelineToneCurvePresetId);
+    if (look != nullptr) add_curve(look->points);
   }
   return writes;
 }
@@ -330,10 +363,20 @@ auto EntryResetWrites(const PipelineDocument& document, std::string_view field_k
     if (auto target = FilmPrintEntryCurveTarget(document, before, after)) {
       writes.push_back({std::move(*target), IdentityRgbCurvePatch()});
     }
+    // The RGB curve follows the profile curve of the new method. The Film Print curve rule reads
+    // a Film-like curve only, so the two rules never write the curve together.
+    const auto* develop = document.Develop();
+    if (develop != nullptr) {
+      auto profile = ProfileToneCurveWrites(document, develop->Params().CameraProfileFile(),
+                                            MethodOfOdtJson(before));
+      std::ranges::move(profile, std::back_inserter(writes));
+    }
     return writes;
   }
   if (field_key == "camera_profile_file") {
-    return ProfileToneEntryResetTargets(document, before);
+    const auto* drt = document.Drt();
+    if (drt == nullptr) return {};
+    return ProfileToneCurveWrites(document, StoredReference(before), drt->Params().Method());
   }
   return {};
 }

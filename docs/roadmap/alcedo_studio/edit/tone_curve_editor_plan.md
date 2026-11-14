@@ -4,7 +4,8 @@ Date: 2026-11-13
 
 Status: TC1 to TC6 complete. #900 (Shadows and Highlights before the Curve) complete. #901 (right
 click removes a point) complete. #902 (quiet curve histogram) complete. #903 (dense text) complete.
-#910 (Film-like and Filmic toe ends at (0, 0)) complete.
+#910 (Film-like and Filmic toe ends at (0, 0)) complete. #911 (DCP profile curve loaded into the
+RGB curve) complete.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -1167,3 +1168,29 @@ Status: complete. Issue [#910](https://github.com/zidage/AlcedoStudio/issues/910
 | `EditorSessionHistoryPortTest --gtest_filter=*ProfileTone*:*Curve*:*FilmPrint*:*Default*` | 19 passed |
 | `GpuDagModelGraphTest`, `AdjustmentTransferCatalogTest`, `EditorPipelineCommandServiceTest`, `EditorToneCurveModelTest` | 195, 13, 24, 18 passed |
 | `PipelineDocumentCheckpointTest` | 20 passed; 3 `Existing*Root*` failures from the HLS defaults (#553) |
+
+### #911: the DCP profile curve as points of the RGB curve (2026-11-13)
+
+Status: complete. Issue [#911](https://github.com/zidage/AlcedoStudio/issues/911), branch
+`feature/profile-tone-curve-import-911`, stacked on #910 (PR #912). Design, fit, and measurements:
+[dcp_profile_tone_curve_study.md](../raw-processing/dcp_profile_tone_curve_study.md), section 11.
+
+- User request: with the camera profile's Tone Curve on, the app's own tone curve gives way; the
+  better form loads the profile curve into the Tone Curve panel and drops the stage before the DRT.
+- `FitProfileToneCurve` / `ProfileToneCurvePoints` (library `ProfileToneCurve`) fit at most 16
+  points of the TC1 spline to the neutral axis of the profile curve through the DRT, within 0.83
+  CIE L* on every curve of the 2445-file user folder (median 0.20).
+- `ProfileToneCurveWrites` (editor command service) writes the points into the RGB curve on an
+  entry, moves an unedited curve on a profile or method change, and puts the import look back on
+  an exit; Film Print follows no profile curve. One Undo restores the batch.
+- The stage at the DRT entry is removed on CUDA, OpenCL, and Metal; whole files are archived in
+  `alcedo_studio/deprecated/profile_tone_stage/`. The stored switch `profile_tone` keeps its key.
+
+| Binary and filter | Result |
+| --- | --- |
+| `ProfileToneReferenceTest` (all, with the new `ProfileToneCurveImportTest`) | 10 passed |
+| `ProfileToneReferenceTest --gtest_filter=ProfileToneCurveImportFolderTest.*` with `ALCEDO_DCP_FOLDER` | passed (1390 curves, both methods) |
+| `EditorSessionHistoryPortTest --gtest_filter=EditorProfileToneEntryHistoryTest.*` | 15 passed |
+| `DcpCameraProfileRenderTest`, `PipelineDcpProfileBindingTest`, `EditorPipelineCommandServiceTest` | 23, 16, 24 passed |
+| `EditorCameraProfileListModelTest`, `EditorPanelProjectionTest`, `EditorRawDecodePanelQmlTest`, `ToneCurvePresetTest` | 15, 14, 10, 10 passed |
+| `GpuDagOpenClGradeTest` (grade, film print, diffusion fixtures), `GpuDagCudaDrtProductTest` (DRT product, expected output, film print fixtures) | 76, 56 passed |

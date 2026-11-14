@@ -36,8 +36,8 @@ struct DngToneCurvePoint {
  * (dcp_profile_tone_curve_study.md, section 2).
  *
  * The value is session data like the profile tables. @ref fingerprint is FNV-1a of the points; it
- * is the curve identity for result caches and stays outside the profile fingerprint
- * (study section 6.3).
+ * is the curve identity of the fitted RGB curves (ProfileToneCurvePoints) and stays outside the
+ * profile fingerprint (study section 6.3).
  */
 struct DngToneCurve {
   std::vector<DngToneCurvePoint>          points;
