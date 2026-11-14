@@ -33,7 +33,8 @@ void EditorSessionNavigationController::SetOperationId(std::uint64_t operation_i
 }
 
 auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t element_id,
-                                                            image_id_t image_id, bool is_switch)
+                                                            image_id_t image_id, bool is_switch,
+                                                            bool reload_source)
     -> NavigationOutcome {
   AssertOwnerThread();
   NavigationOutcome outcome;
@@ -45,11 +46,20 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
   }
 
   if (state_->pending_action.has_value()) {
+    if (reload_source && (state_->pending_action->kind == PendingEditorActionKind::SwitchImage ||
+                          state_->pending_action->kind == PendingEditorActionKind::CloseEditor)) {
+      // The selected image will load fresh bytes, or this image is closing. A source refresh
+      // must not replace the user's pending selection with the image being left.
+      outcome.completed_synchronously = true;
+      outcome.same_image_noop         = true;
+      outcome.message                 = "Source refresh is covered by the pending image navigation";
+      return outcome;
+    }
     // A save is in progress for the running target. A rapid SwitchImage
     // selection queues behind a running switch (replacing any earlier queued
     // selection) and is promoted once the running save completes and the prior
     // image is acquired. It never replaces the running target's save identity.
-    if (state_->pending_action->kind == PendingEditorActionKind::SwitchImage) {
+    if (state_->pending_action->kind == PendingEditorActionKind::SwitchImage || reload_source) {
       PendingEditorAction queued;
       queued.kind                    = PendingEditorActionKind::SwitchImage;
       queued.element_id              = element_id;
@@ -75,7 +85,8 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
   const auto current_state    = lifecycle_.state();
 
   // Same image already open: no-op.
-  if (current_identity.element_id == element_id && current_identity.image_id == image_id &&
+  if (!reload_source && current_identity.element_id == element_id &&
+      current_identity.image_id == image_id &&
       (current_state == EditorSessionState::Loading ||
        current_state == EditorSessionState::Interactive ||
        current_state == EditorSessionState::Acquiring ||
@@ -338,6 +349,7 @@ void EditorSessionNavigationController::CompletePendingAction(
     if (ContinueCheckoutVersion(pending.version_id, &checkout_error)) {
       NotifyCompletion(true, false, "Checked out Version", pending.ticket,
                        version_render_request_id_);
+      PromoteQueuedSwitchTarget();
     } else {
       // Phase 7A repair: the save succeeded and the history port fails closed,
       // so the prior Version is still active. Transition to
@@ -354,6 +366,7 @@ void EditorSessionNavigationController::CompletePendingAction(
     if (ContinueCreateRootVersion(std::move(pending.display_name), &create_error)) {
       NotifyCompletion(true, false, "Created root Version", pending.ticket,
                        version_render_request_id_);
+      PromoteQueuedSwitchTarget();
     } else {
       RetainPendingFailure(pending,
                            create_error.empty() ? "Failed to create root Version" : create_error);
@@ -367,6 +380,7 @@ void EditorSessionNavigationController::CompletePendingAction(
                                  &branch_error)) {
       NotifyCompletion(true, false, "Branched from commit", pending.ticket,
                        version_render_request_id_);
+      PromoteQueuedSwitchTarget();
     } else {
       RetainPendingFailure(pending,
                            branch_error.empty() ? "Failed to branch from commit" : branch_error);

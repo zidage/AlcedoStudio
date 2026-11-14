@@ -1878,6 +1878,26 @@ Alcedo 将改用 %1。</translation>
         <source>Activate an AI model in Settings before generating labels.</source>
         <translation>请先在设置中激活 AI 模型，再生成标签。</translation>
     </message>
+    <message>
+        <source>Importing: %1 imported, %2 duplicates skipped, %3 failed</source>
+        <translation>正在导入：已导入 %1 个，跳过重复 %2 个，失败 %3 个</translation>
+    </message>
+    <message>
+        <source>Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 failed</source>
+        <translation>导入完成：已导入 %1 个，跳过重复 %2 个，未选择 %3 个，不支持 %4 个，失败 %5 个</translation>
+    </message>
+    <message>
+        <source>Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 unsupported, %6 failed</source>
+        <translation>导入已取消：已导入 %1 个，跳过重复 %2 个，未读取 %3 个，未选择 %4 个，不支持 %5 个，失败 %6 个</translation>
+    </message>
+    <message>
+        <source>Converted Nikon HE files were reimported: %1 imported, %2 duplicates skipped, %3 failed.</source>
+        <translation>已重新导入转换后的尼康 HE 文件：已导入 %1 个，跳过重复 %2 个，失败 %3 个。</translation>
+    </message>
+    <message>
+        <source>%1 source file(s) changed size. Existing edits and ratings now apply to the current files.</source>
+        <translation>%1 个源文件的大小已更改。现有编辑和评分将应用于当前文件。</translation>
+    </message>
 </context>
 <context>
     <name>AgentSessionCard</name>
@@ -6294,6 +6314,10 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <source>Other photos: %1 of %2 imported</source>
         <translation>其他照片：已导入 %1 / %2</translation>
     </message>
+    <message>
+        <source>%1 duplicates skipped</source>
+        <translation>已跳过 %1 个重复文件</translation>
+    </message>
 </context>
 <context>
     <name>InspectorPanel</name>
@@ -7072,6 +7096,10 @@ Create a new layer above it and draw the Mask there?</source>
         <source>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</source>
         <translation>未在 /Applications/Adobe DNG Converter.app 安装 Adobe DNG Converter。</translation>
     </message>
+    <message>
+        <source>%1 / %2 converted files reimported, %3 duplicates skipped, %4 failed</source>
+        <translation>已重新导入 %1 / %2 个转换文件，跳过重复 %3 个，失败 %4 个</translation>
+    </message>
 </context>
 <context>
     <name>ProjectLoadingOverlay</name>
@@ -7847,6 +7875,18 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>已保存的 AI 密钥</translation>
     </message>
     <message>
+        <source>Import</source>
+        <translation>导入</translation>
+    </message>
+    <message>
+        <source>Skip duplicate imports</source>
+        <translation>跳过重复导入</translation>
+    </message>
+    <message>
+        <source>Skips repeated imports from the same source path. Files in different folders remain separate.</source>
+        <translation>跳过同一源路径的重复导入。不同文件夹中的文件将保持独立。</translation>
+    </message>
+    <message>
         <source>The AI model runs on this computer, and no photo is uploaded. The labeling speed depends on the CPU, the GPU, and the disk.</source>
         <translation>AI 模型在本机运行，照片不会上传。标注速度取决于 CPU、GPU 和磁盘。</translation>
     </message>
@@ -8337,6 +8377,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location filename="../qml/WelcomeDialog.qml" line="669"/>
         <source>Quit</source>
         <translation>退出</translation>
+    </message>
+    <message>
+        <source>Settings</source>
+        <translation>设置</translation>
     </message>
 </context>
 <context>

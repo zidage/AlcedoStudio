@@ -34,6 +34,8 @@ class ImagePoolService {
   std::shared_ptr<Storage>   storage_;
 
   std::mutex                        pool_lock_;
+  /// Flush with pool_lock_ already held, including focused mutations made by Write.
+  auto                              SyncWithStorageLocked() -> ImagePoolSyncStatus;
 
  public:
   ImagePoolService() = delete;
@@ -97,11 +99,11 @@ class ImagePoolService {
     img->MarkSyncState(ImageSyncState::MODIFIED);
     if constexpr (std::is_void_v<TResult>) {
       operation(img);
-      status = SyncWithStorage();
+      status = SyncWithStorageLocked();
       return status;
     } else {
       TResult result = operation(img);
-      status         = SyncWithStorage();
+      status         = SyncWithStorageLocked();
       return {result, status};
     }
   }
@@ -146,6 +148,12 @@ class ImagePoolService {
   void Remove(image_id_t image_id);
   void RemoveBatch(std::span<const image_id_t> image_ids);
   auto SyncWithStorage() -> ImagePoolSyncStatus;
+  /// Persist only new admitted imports. Holds the pool lock and propagates the batch write
+  /// error without retry. Marks objects synced only after the entire insert succeeds.
+  void PersistImportedImages(std::span<const image_id_t> ids);
+  /// Remove provisional imports without syncing other pool entries. Throws before eviction
+  /// when storage removal fails, and never retries through a substitute write path.
+  void DiscardImportedImages(std::span<const image_id_t> ids);
   auto GetCurrentID() -> image_id_t;
 };
 };  // namespace alcedo

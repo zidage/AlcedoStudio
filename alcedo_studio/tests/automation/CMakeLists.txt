@@ -127,6 +127,12 @@ alcedo_add_automation_test(AutomationProjectCommandsTest
     CATEGORIES ci_automation)
 
 # library.* and tasks.* parameter and state rules in an in-process headless session.
+alcedo_add_automation_test(ImportSourceReplacementRenderingTest
+    SOURCES import_source_replacement_rendering_test.cpp
+    LIBRARIES AutomationHostLib OpenImageIO::OpenImageIO
+    LABEL ci_automation_flow
+    CATEGORIES ci_automation)
+
 alcedo_add_automation_test(AutomationLibraryCommandsTest
     SOURCES automation_library_commands_test.cpp
     LIBRARIES AutomationHostLib

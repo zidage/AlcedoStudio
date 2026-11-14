@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
@@ -184,6 +185,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// effect at the configured strength and a removed one is skipped. No history change.
   /// No-op without an interactive image.
   void               NotifyLutResourcesChanged();
+  /// Reload an affected open source through the editor save boundary. If loading or saving is
+  /// in progress, wait until Interactive. Navigating to another image clears this request.
+  void               NotifySourceChanged(uint element_id);
   [[nodiscard]] auto mask_thumbnail_service() const
       -> std::shared_ptr<alcedo::MaskThumbnailService>;
 
@@ -588,6 +592,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Local mirror when no backend is injected (legacy shell tests).
   bool                            active_                    = false;
   uint                            element_id_                = 0;
+  /// Explicit source refresh requested by import. Minimal target IDs, owned until the current
+  /// navigation completes; no document or image data is captured.
+  std::optional<std::pair<uint, uint>> source_reload_pending_;
   uint                            image_id_                  = 0;
   uint                            last_element_id_           = 0;
   uint                            last_image_id_             = 0;

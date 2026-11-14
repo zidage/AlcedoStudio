@@ -607,17 +607,17 @@ def_ui_test(AdjustmentTransferControllerTest adjustment_transfer_controller_test
 alcedo_register_test_target(AdjustmentTransferControllerTest ui)
 
 # Phase 0: deterministic editor RHI checks (backend parse, fixtures, lease schema).
-add_executable(EditorRhiContractsTest
-    ${ALCEDO_TEST_ROOT}/ui/editor_rhi_contracts_test.cpp
+add_executable(EditorPresentationTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_presentation_test.cpp
 )
-target_include_directories(EditorRhiContractsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorRhiContractsTest PRIVATE
-    EditorRhiContracts
+target_include_directories(EditorPresentationTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorPresentationTest PRIVATE
+    EditorPresentation
     GTest::gtest_main
     Qt6::Core
 )
-alcedo_ui_gtest_discover_tests(EditorRhiContractsTest TEST_PREFIX "EditorRhiContractsTest.")
-alcedo_register_test_target(EditorRhiContractsTest ui)
+alcedo_ui_gtest_discover_tests(EditorPresentationTest TEST_PREFIX "EditorPresentationTest.")
+alcedo_register_test_target(EditorPresentationTest ui)
 
 # Phase 0: maintained GPU presentation harness (manual / CI GPU workers).
 if(TARGET EditorRhiHarness)

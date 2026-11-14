@@ -136,8 +136,9 @@ class EditorSessionNavigationController final {
   /// Request to open or switch to a new image. If the current image has
   /// unsealed changes, starts a save checkpoint and captures the pending
   /// action. Returns a NavigationOutcome describing the immediate result.
-  auto RequestOpenOrSwitch(sl_element_id_t element_id, image_id_t image_id, bool is_switch)
-      -> NavigationOutcome;
+  /// With reload_source, save and reacquire even when the image IDs are unchanged.
+  auto RequestOpenOrSwitch(sl_element_id_t element_id, image_id_t image_id, bool is_switch,
+                           bool reload_source = false) -> NavigationOutcome;
 
   /// Request to close the editor. If the current image has unsealed changes,
   /// starts a save checkpoint and captures the pending close action.

@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -23,6 +24,7 @@
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/folder_import_scan_model.hpp"
+#include "ui/alcedo_main/album_backend/import_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
 #include "ui/alcedo_main/i18n.hpp"
@@ -66,6 +68,9 @@ class ImportExportHandler final : public QObject {
   Q_PROPERTY(int importPrepared READ ImportPrepared NOTIFY ImportStateChanged)
   Q_PROPERTY(int importCompleted READ ImportCompleted NOTIFY ImportStateChanged)
   Q_PROPERTY(int importFailed READ ImportFailed NOTIFY ImportStateChanged)
+  Q_PROPERTY(int importDuplicates READ ImportDuplicates NOTIFY ImportStateChanged)
+  Q_PROPERTY(int importUpdated READ ImportUpdated NOTIFY ImportStateChanged)
+  Q_PROPERTY(int importRawDuplicates READ ImportRawDuplicates NOTIFY ImportStateChanged)
   /// Subset of importFailed: files that are not a supported RAW or raster image.
   Q_PROPERTY(int importUnsupported READ ImportUnsupported NOTIFY ImportStateChanged)
   /// Subset of importFailed: supported files whose type was not selected for the import.
@@ -102,6 +107,10 @@ class ImportExportHandler final : public QObject {
   /// The policy whose agent control refuses the user imports (StartImport, StartImportToFolder,
   /// StartFolderImportAsUser, StartFolderImportToFolderAsUser). Null refuses nothing.
   void                    SetInteractionPolicy(InteractionPolicyController* interaction_policy);
+  /// Borrow the application preference owner. Resolve its value on this object's thread only.
+  void                    SetImportPreferences(ImportBehaviorPreferences* preferences) {
+    import_preferences_ = preferences;
+  }
   /// The editor GPU resources each export releases before it renders. Empty releases nothing.
   void                    SetExportGpuResourceRelease(ExportGpuResourceRelease release);
 
@@ -164,11 +173,13 @@ class ImportExportHandler final : public QObject {
   [[nodiscard]] static auto SupportedImportNameFilters() -> QStringList;
   [[nodiscard]] static auto SupportedImportPatterns() -> QString;
 
-  /// Import @p paths (duplicates removed). @p anyCategoryPaths are accepted in every category
-  /// whatever @p allowedCategories says (ImportOptions::any_category_paths_).
+  /// Import each occurrence in @p paths; the import service applies the duplicate policy.
+  /// @p anyCategoryPaths are accepted in every category whatever @p allowedCategories says
+  /// (ImportOptions::any_category_paths_).
   void StartImportPaths(const std::vector<image_path_t>& paths, bool preserveTarget = false,
-                        ImportCategoryMask allowedCategories = kAllImportCategories,
-                        ImportPathSet      anyCategoryPaths  = {});
+                        ImportCategoryMask  allowedCategories = kAllImportCategories,
+                        std::optional<bool> skipDuplicates    = std::nullopt,
+                        ImportPathSet anyCategoryPaths = {});
   void FinishImport(const ImportResult& result);
   void FinishExport(const std::shared_ptr<std::vector<ExportResult>>& results, int skippedCount);
   void AddImportedEntries(const ImportLogSnapshot& snapshot);
@@ -202,6 +213,9 @@ class ImportExportHandler final : public QObject {
   [[nodiscard]] int  ImportCompleted() const { return import_completed_; }
   [[nodiscard]] int  import_completed() const { return import_completed_; }
   [[nodiscard]] int  ImportFailed() const { return import_failed_; }
+  [[nodiscard]] int  ImportDuplicates() const { return import_duplicates_; }
+  int                ImportUpdated() const { return import_updated_; }
+  [[nodiscard]] int  ImportRawDuplicates() const { return import_raw_duplicates_; }
   [[nodiscard]] int  import_failed() const { return import_failed_; }
   [[nodiscard]] auto ImportStatus() const -> QString { return import_status_text_.Render(); }
   [[nodiscard]] auto import_status() const -> QString { return import_status_text_.Render(); }
@@ -250,6 +264,8 @@ class ImportExportHandler final : public QObject {
   }
 
  signals:
+  /// A persisted source-size update requires loaded bytes and previews to be refreshed.
+  void SourceFileChanged(uint element_id);
   void ImportStateChanged();
   void importStateChanged();
   void ExportStateChanged();
@@ -272,11 +288,11 @@ class ImportExportHandler final : public QObject {
   };
 
   void              StartImportResolvedPaths(std::vector<image_path_t> paths, bool preserveTarget,
-                                             ImportCategoryMask allowedCategories,
-                                             ImportPathSet      anyCategoryPaths = {});
-  /// The regular files of @p fileUrlsOrPaths in input order, duplicates removed: the file filter
-  /// of StartImport and StartImportToFolder.
-  [[nodiscard]] static auto RegularFilePaths(const QStringList& fileUrlsOrPaths)
+                                             ImportCategoryMask  allowedCategories,
+                                             std::optional<bool> skipDuplicates = std::nullopt,
+                                             ImportPathSet anyCategoryPaths = {});
+  /// Parse @p fileUrlsOrPaths in input order. The import service validates each occurrence.
+  [[nodiscard]] static auto InputPaths(const QStringList& fileUrlsOrPaths)
       -> std::vector<image_path_t>;
   /// Set import_target_folder_id_ and import_target_folder_path_ to the folder row
   /// @p folderUiId. Returns false (with a status message) when no folder row has that id.
@@ -325,6 +341,10 @@ class ImportExportHandler final : public QObject {
   int                           import_prepared_    = 0;
   int                           import_completed_   = 0;
   int                           import_failed_      = 0;
+  int                           import_duplicates_     = 0;
+  int                           import_updated_        = 0;
+  int                           import_raw_duplicates_ = 0;
+  ImportBehaviorPreferences*    import_preferences_    = nullptr;
   int                           import_unsupported_ = 0;
   int                           import_excluded_    = 0;
   int                           import_canceled_    = 0;

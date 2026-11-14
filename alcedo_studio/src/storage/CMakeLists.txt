@@ -52,6 +52,7 @@ set(STORAGE_SRCS
     "${ALCEDO_SRC_ROOT}/storage/store/database.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/duckdb_extension.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/image/image_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/image/source_file_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/semantic/semantic_model_registry.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/semantic/semantic_embedding_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/semantic/semantic_label_store.cpp"
@@ -72,7 +73,7 @@ set(STORAGE_SRCS
 def_library(Storage
     SOURCES ${STORAGE_SRCS}
     PUBLIC_DEPS Ai DuckDB DuckORM SleeveMapper StorageQuery StrConv PipelineScheduler
-    PRIVATE_DEPS AppDiagnostics
+    PRIVATE_DEPS AppDiagnostics SourceImageFile
 )
 # MaskAssetStore compresses R8 pixels with zlib. The bundled gRPC static zlib is used when it
 # exists, so that a target that links both has one zlib (as for Image).

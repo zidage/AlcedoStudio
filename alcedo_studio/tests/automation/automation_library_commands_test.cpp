@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSettings>
 #include <QStringList>
 #include <vector>
 
@@ -24,6 +25,11 @@ using test::InProcessAutomationSession;
 
 class AutomationLibraryCommandsTest : public ui::test::ApplicationModuleHostTestFixture {
  protected:
+  void SetUp() override {
+    ui::test::ApplicationModuleHostTestFixture::SetUp();
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, Folder());
+  }
   auto Folder() const -> QString { return ui::test::PathToQString(temp_dir_); }
 };
 
@@ -102,6 +108,134 @@ TEST_F(AutomationLibraryCommandsTest, ImportRequiresExactlyOneSource) {
       AutomationErrorCode::InvalidParams);
   EXPECT_EQ(ErrorCode(session.Call(QStringLiteral("library.list"), QJsonObject{{"limit", 0}})),
             AutomationErrorCode::InvalidParams);
+}
+
+TEST_F(AutomationLibraryCommandsTest,
+       AutomationOmittedOptionInheritsPreferenceAndExplicitOptionOverridesIt) {
+  InProcessAutomationSession session;
+  const auto                 created =
+      session.CallResult("project.create", {{"folder", Folder()}, {"name", "duplicates"}});
+  ASSERT_FALSE(created.isEmpty());
+  const auto       source = std::filesystem::path(__FILE__).parent_path().parent_path() /
+                            "resources/raster/adobe_rgb_exif_r03_no_icc.jpg";
+  const QJsonArray paths{ui::test::PathToQString(source)};
+  session.host().import_behavior()->SetSkipDuplicateImports(false);
+  auto import = [&](QJsonObject options) {
+    options.insert("paths", paths);
+    const auto id = session.CallResult("library.import", options).value("task_id");
+    return session.CallResult("tasks.wait", {{"task_id", id}}).value("counts").toObject();
+  };
+  EXPECT_EQ(import({}).value("completed").toInt(), 1);
+  const auto skipped = import({{"skip_duplicates", true}});
+  EXPECT_EQ(skipped.value("duplicates").toInt(), 1);
+  EXPECT_EQ(skipped.value("completed").toInt(), 0);
+  EXPECT_EQ(skipped.value("failed").toInt(), 0);
+  EXPECT_FALSE(session.host().import_behavior()->SkipDuplicateImports());
+  EXPECT_EQ(import({}).value("completed").toInt(), 1);
+  EXPECT_EQ(session.CallResult("library.list").value("total").toInt(), 2);
+  const auto reopened = session.CallResult("project.open", {{"path", created.value("path")}});
+  EXPECT_EQ(reopened.value("photo_count").toInt(), 2);
+  EXPECT_EQ(import({{"skip_duplicates", true}}).value("duplicates").toInt(), 1);
+}
+
+TEST_F(AutomationLibraryCommandsTest, FolderRequestsKeepThePreferenceAndPerRequestOverride) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(
+      session.CallResult("project.create", {{"folder", Folder()}, {"name", "folder_policy"}})
+          .isEmpty());
+  const auto input = QDir(Folder()).filePath("incoming");
+  ASSERT_TRUE(QDir().mkpath(input));
+  const auto fixture = std::filesystem::path(__FILE__).parent_path().parent_path() /
+                       "resources/raster/adobe_rgb_exif_r03_no_icc.jpg";
+  ASSERT_TRUE(QFile::copy(ui::test::PathToQString(fixture), QDir(input).filePath("image.jpg")));
+  session.host().import_behavior()->SetSkipDuplicateImports(true);
+  const auto first =
+      session
+          .CallResult("library.import",
+                      {{"folder", input}, {"recursive", false}, {"skip_duplicates", false}})
+          .value("task_id");
+  EXPECT_EQ(session.CallResult("tasks.wait", {{"task_id", first}})
+                .value("counts")
+                .toObject()
+                .value("completed")
+                .toInt(),
+            1);
+  const auto second = session.CallResult("library.import", {{"folder", input}, {"recursive", true}})
+                          .value("task_id");
+  const auto counts =
+      session.CallResult("tasks.wait", {{"task_id", second}}).value("counts").toObject();
+  EXPECT_EQ(counts.value("duplicates").toInt(), 1);
+  EXPECT_EQ(counts.value("failed").toInt(), 0);
+  EXPECT_TRUE(session.host().import_behavior()->SkipDuplicateImports());
+}
+
+TEST_F(AutomationLibraryCommandsTest,
+       ChangedSourceReportsUpdatedCountAndNoticeAndReopensAsOneEntry) {
+  InProcessAutomationSession session;
+  const auto                 created =
+      session.CallResult("project.create", {{"folder", Folder()}, {"name", "changed_source"}});
+  ASSERT_FALSE(created.isEmpty());
+  const auto fixture = std::filesystem::path(__FILE__).parent_path().parent_path() /
+                       "resources/raster/adobe_rgb_exif_r03_no_icc.jpg";
+  const auto source  = QDir(Folder()).filePath("source.jpg");
+  ASSERT_TRUE(QFile::copy(ui::test::PathToQString(fixture), source));
+  const auto import = [&] {
+    const auto id = session
+                        .CallResult("library.import",
+                                    {{"paths", QJsonArray{source}}, {"skip_duplicates", true}})
+                        .value("task_id");
+    return session.CallResult("tasks.wait", {{"task_id", id}});
+  };
+  EXPECT_EQ(import().value("counts").toObject().value("completed").toInt(), 1);
+  QFile changed(source);
+  ASSERT_TRUE(changed.open(QIODevice::Append));
+  ASSERT_EQ(changed.write("x"), 1);
+  changed.close();
+  const auto result = import();
+  EXPECT_EQ(result.value("state").toString(), QStringLiteral("succeeded"));
+  const auto counts = result.value("counts").toObject();
+  EXPECT_EQ(counts.value("completed").toInt(), 1);
+  EXPECT_EQ(counts.value("updated").toInt(), 1);
+  EXPECT_EQ(counts.value("duplicates").toInt(), 0);
+  EXPECT_EQ(counts.value("failed").toInt(), 0);
+  EXPECT_TRUE(result.value("message").toString().contains("Existing edits and ratings"));
+  EXPECT_EQ(session.CallResult("library.list").value("total").toInt(), 1);
+  EXPECT_EQ(session.CallResult("project.open", {{"path", created.value("path")}})
+                .value("photo_count")
+                .toInt(),
+            1);
+  EXPECT_EQ(import().value("counts").toObject().value("duplicates").toInt(), 1);
+}
+
+TEST_F(AutomationLibraryCommandsTest, InvalidDuplicateOverrideIsRejectedBeforeImport) {
+  InProcessAutomationSession session;
+  const auto                 response =
+      session.Call("library.import", {{"folder", Folder()}, {"skip_duplicates", "true"}});
+  EXPECT_EQ(ErrorCode(response), AutomationErrorCode::InvalidParams);
+  EXPECT_FALSE(session.host().import_export()->ImportRunning());
+}
+
+TEST_F(AutomationLibraryCommandsTest, NativePickerCancellationAndFileDropUseTheCommonPreference) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session.CallResult("project.create", {{"folder", Folder()}, {"name", "file_drop"}})
+                   .isEmpty());
+  auto* handler = session.host().import_export();
+  handler->StartImport({});
+  EXPECT_FALSE(handler->ImportRunning());
+  session.host().import_behavior()->SetSkipDuplicateImports(true);
+  const auto source = std::filesystem::path(__FILE__).parent_path().parent_path() /
+                      "resources/raster/adobe_rgb_exif_r03_no_icc.jpg";
+  handler->StartImport({ui::test::PathToQString(source), ui::test::PathToQString(source)});
+  session.host().import_behavior()->SetSkipDuplicateImports(false);
+  session.CallResult("tasks.wait", {{"idle", true}});
+  EXPECT_EQ(handler->ImportTotal(), 2);
+  EXPECT_EQ(handler->ImportCompleted(), 1);
+  EXPECT_EQ(handler->ImportDuplicates(), 1);
+  EXPECT_EQ(handler->ImportFailed(), 0);
+  handler->StartImport({ui::test::PathToQString(source)});
+  session.CallResult("tasks.wait", {{"idle", true}});
+  EXPECT_EQ(handler->ImportCompleted(), 1);
+  EXPECT_EQ(handler->ImportDuplicates(), 0);
 }
 
 TEST_F(AutomationLibraryCommandsTest, SelectionCommandsAreNotReadyInHeadlessHost) {

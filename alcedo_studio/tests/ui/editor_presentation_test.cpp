@@ -57,7 +57,7 @@ TEST(EditorBackendParseTest, RejectsUnknownBackendToken) {
   EXPECT_FALSE(result.error.empty());
 }
 
-TEST(EditorBackendParseTest, GraphicsApiNamesMatchStartupContract) {
+TEST(EditorBackendParseTest, GraphicsApiNamesMatchBackendRequirements) {
   EXPECT_STREQ(QtGraphicsApiName(EditorBackend::Cuda), "Direct3D11");
   EXPECT_STREQ(QtGraphicsApiName(EditorBackend::OpenCl), "OpenGL");
   EXPECT_STREQ(QtGraphicsApiName(EditorBackend::Metal), "Metal");
@@ -111,7 +111,7 @@ TEST(HarnessFixturesTest, MaxAbsPixelErrorWithinTolerance) {
   EXPECT_LE(err, kHarnessPixelAbsTolerance);
 }
 
-TEST(FramePresentationLeaseTest, MetalLeaseContractIsDefinedWithoutImplementationClaim) {
+TEST(FramePresentationLeaseTest, MetalTextureLeaseHasValidDimensionsAndNativeHandle) {
   MetalSharedTextureLeasePayload metal{};
   metal.mtl_texture      = 0x1;
   metal.width            = 64;

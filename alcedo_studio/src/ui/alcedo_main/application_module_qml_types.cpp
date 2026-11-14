@@ -11,6 +11,7 @@
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
+#include "ui/alcedo_main/album_backend/import_behavior_preferences.hpp"
 #include "ui/alcedo_main/shortcut_registry.hpp"
 
 namespace alcedo::ui {
@@ -68,6 +69,8 @@ void RegisterApplicationModuleTypes() {
                                               "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorBehaviorPreferences>(
       "Alcedo.Main", 1, 0, "EditorBehaviorPreferences", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<ImportBehaviorPreferences>(
+      "Alcedo.Main", 1, 0, "ImportBehaviorPreferences", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<LibraryViewPreferences>(
       "Alcedo.Main", 1, 0, "LibraryViewPreferences", "Owned by ApplicationModuleHost");
 }

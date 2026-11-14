@@ -300,6 +300,14 @@ class IEditorSessionBackend {
     return result;
   }
   virtual auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult   = 0;
+  /// Save the current document and reload the matching source without changing its history.
+  /// Backends without source loading report an explicit unsupported operation.
+  virtual auto ReloadSource(sl_element_id_t, image_id_t) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.message = "Source reload is not supported by this backend";
+    return result;
+  }
   virtual auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult = 0;
   /// Check out another Version on the open image after a save checkpoint.
   virtual auto CheckoutVersion(const version_ref_id_t& /*version_id*/) -> EditorSessionResult {
@@ -1012,6 +1020,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   void SetSuspendedForExport(bool suspended) override;
 
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
+  auto ReloadSource(sl_element_id_t element_id, image_id_t image_id)
+      -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto CheckoutVersion(const version_ref_id_t& version_id) -> EditorSessionResult override;
   /// Phase 7A: create a root Version and check it out.
@@ -1168,6 +1178,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   void NotifyRenderResult(const EditorRenderResult& render_result);
 
  private:
+  /// Route normal opens and explicit source reloads through the same owner and save boundary.
+  auto OpenOrReload(sl_element_id_t element_id, image_id_t image_id, bool reload_source)
+      -> EditorSessionResult;
   using CommandReducer = std::function<EditorSessionResult(const EditorSessionCommand&)>;
 
   /// Submit a typed command and reduce it on the session owner thread. The

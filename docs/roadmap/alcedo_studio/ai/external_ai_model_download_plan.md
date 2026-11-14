@@ -593,8 +593,8 @@ Details the plan did not specify, chosen in AM3:
   with the green border) instead of the combo box, the status card, and the four buttons, so
   the app works until AM4 moves this to the AI Models page. The new texts get their Chinese
   entries with the page in AM4.
-- **Terminology.** `SemanticGrpcDependencySmokeTest` is now `SemanticGrpcDependencyLinkTest`
-  (touched `tests/app/CMakeLists.txt`). The `EditorRhiContracts` library and test in
+- **Terminology.** The dependency link test is named `SemanticGrpcDependencyLinkTest`
+  (touched `tests/app/CMakeLists.txt`). The `EditorPresentation` library and test in
   `tests/ui/CMakeLists.txt` are outside AM3: issue
   [#582](https://github.com/zidage/AlcedoStudio/issues/582).
 

@@ -108,7 +108,7 @@ Item {
             }
             root.importSessionObserved = false
             if (root.host) {
-                root.host.showSnackbar(qsTr("Imported %1 image(s).").arg(appModules.importExport.importCompleted))
+                root.host.showSnackbar(appModules.importExport.importStatus)
             }
         }
         function onExportFinished(succeeded, failed, skipped) {
