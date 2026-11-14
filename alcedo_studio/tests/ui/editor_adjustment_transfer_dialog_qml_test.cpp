@@ -14,6 +14,7 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QFont>
+#include <QMetaObject>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
@@ -302,6 +303,12 @@ TEST(AdjustmentTransferDialogQmlTest, LoadsInPasteModeWithPasteAcceptLabel) {
   ASSERT_NE(dialog, nullptr) << harness.warnings.join("\n").toStdString()
                              << "| createError=" << harness.createError().toStdString();
   EXPECT_EQ(dialog->property("mode").toString(), QStringLiteral("paste"));
+  auto* destination = harness.find(QStringLiteral("adjustmentTransferPasteDestination"));
+  ASSERT_NE(destination, nullptr);
+  EXPECT_EQ(destination->property("currentValue").toString(), QStringLiteral("paste"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(destination, "selected", Q_ARG(int, 1),
+                                        Q_ARG(QString, QStringLiteral("current"))));
+  EXPECT_EQ(dialog->property("pasteStrategy").toString(), QStringLiteral("current"));
   EXPECT_EQ(harness.find(QStringLiteral("adjustmentTransferStrategySwitcher")), nullptr);
   EXPECT_EQ(harness.find(QStringLiteral("adjustmentTransferMergeNotice")), nullptr);
 

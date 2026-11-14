@@ -134,7 +134,7 @@ enum class EditorSessionCompletionKind : std::uint8_t {
   SaveCheckpointFinished,
 };
 
-/// State of the session command admission gate.
+/// State of session command admission.
 enum class EditorSessionQueueState : std::uint8_t {
   Accepting = 0,
   ShuttingDown,
@@ -154,6 +154,7 @@ struct EditorSessionCommand {
   version_ref_id_t                        version_id{};
   commit_hash_t                           commit_id{};
   AdjustmentTransferPackage               transfer_package{};
+  AdjustmentPasteMode                     paste_mode = AdjustmentPasteMode::NewRootRelativeVersion;
   std::string                             text;
   /// ApplyPaste: author of the Paste commit; nullopt is the user.
   std::optional<EditCommitAttribution>    attribution;

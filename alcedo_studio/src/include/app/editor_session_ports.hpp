@@ -428,6 +428,16 @@ class IEditorHistoryPort {
   /// Paste onto the live CommitGraph and WAL, then apply package operators to
   /// the live pipeline. @p attribution names the author of the Paste commit; nullopt is the
   /// user. Default fake records success without mutating state.
+  /// Apply selected values to the current Version with one undoable Paste commit.
+  virtual auto PasteLiveCurrentVersion(const EditorHistoryGuardHandle&,
+                                       const AdjustmentTransferPackage&, AdjustmentPasteResult*,
+                                       std::string* error,
+                                       std::optional<EditCommitAttribution> = std::nullopt)
+      -> bool {
+    if (error) *error = "Current-Version Paste is not supported by this history port";
+    return false;
+  }
+
   virtual auto PasteLiveRootRelativeVersion(
       const EditorHistoryGuardHandle& /*guard*/, const AdjustmentTransferPackage& package,
       std::string version_display_name, AdjustmentPasteResult* result, std::string* error,

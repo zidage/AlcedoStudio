@@ -115,4 +115,34 @@ auto AdjustmentTransferService::PasteAsRootRelativeVersion(
   }
 }
 
+auto AdjustmentTransferService::PasteIntoCurrentVersion(
+    CommitGraph& graph, const PipelineDocument& current_document,
+    const AdjustmentTransferPackage& package, const DocumentTransferPasteOptions& options,
+    std::optional<EditCommitAttribution> attribution) -> AdjustmentPasteResult {
+  AdjustmentPasteResult result;
+  result.prior_version_id = graph.GetActiveVersionId();
+  if (attribution && !IsStorableEditCommitAttribution(*attribution)) {
+    result.error = "Paste attribution author is not agent";
+    return result;
+  }
+  try {
+    auto batch = DocumentTransferPlanner::PlanOntoCurrent(package, current_document, options);
+    if (!batch) {
+      result.unchanged = true;
+      return result;
+    }
+    const auto parent = graph.GetActiveVersionRef().head_commit_hash;
+    auto       commit = EditCommit::MakePipelineEdit(graph.GetRootId(), parent, std::move(*batch));
+    if (!graph.InsertCommit(commit)) throw std::runtime_error("Paste commit was not inserted");
+    if (attribution) graph.SetCommitAttribution(commit.GetCommitHash(), std::move(*attribution));
+    graph.MoveWorkingHead(result.prior_version_id, commit.GetCommitHash());
+    result.pasted         = true;
+    result.new_version_id = result.prior_version_id;
+    result.new_head       = commit.GetCommitHash();
+  } catch (const std::exception& ex) {
+    result.error = ex.what();
+  }
+  return result;
+}
+
 }  // namespace alcedo

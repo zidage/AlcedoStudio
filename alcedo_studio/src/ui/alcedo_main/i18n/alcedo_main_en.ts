@@ -217,6 +217,14 @@
 <context>
     <name>AdjustmentTransferDialog</name>
     <message>
+        <source>New root-relative Version</source>
+        <translation>New root-relative Version</translation>
+    </message>
+    <message>
+        <source>Current Version</source>
+        <translation>Current Version</translation>
+    </message>
+    <message>
         <location filename="../qml/AdjustmentTransferDialog.qml" line="+70"/>
         <source>Other</source>
         <translation type="unfinished"></translation>

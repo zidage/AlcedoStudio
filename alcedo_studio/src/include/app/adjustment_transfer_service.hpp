@@ -20,11 +20,20 @@ namespace alcedo {
  * @brief Façade for Copy/Paste of transferable Color Grade, Mask, and DRT/Post data.
  *
  * Capture and JSON live in @ref CaptureDocumentTransfer. Paste builds one typed
- * batch and one root-relative Version. This type does not create merge commits.
+ * batch on a new root-relative Version or the current Version. This type does not create merge
+ * commits.
  */
 class AdjustmentTransferService final {
  public:
   AdjustmentTransferService() = delete;
+
+  /// Append selected values to the active Version, with its current head as parent. The caller
+  /// supplies that head's document and persists the graph through its owner only after success.
+  /// Equal selected values return unchanged without creating a commit or Version.
+  [[nodiscard]] static auto PasteIntoCurrentVersion(
+      CommitGraph& graph, const PipelineDocument& current_document,
+      const AdjustmentTransferPackage& package, const DocumentTransferPasteOptions& options = {},
+      std::optional<EditCommitAttribution> attribution = std::nullopt) -> AdjustmentPasteResult;
 
   /**
    * @brief Capture transferable DAG data from @p document.

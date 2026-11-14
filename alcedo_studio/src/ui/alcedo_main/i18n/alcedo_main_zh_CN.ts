@@ -365,6 +365,14 @@
 <context>
     <name>AdjustmentTransferDialog</name>
     <message>
+        <source>New root-relative Version</source>
+        <translation>新建基于根状态的版本</translation>
+    </message>
+    <message>
+        <source>Current Version</source>
+        <translation>当前版本</translation>
+    </message>
+    <message>
         <location filename="../qml/AdjustmentTransferDialog.qml" line="+70"/>
         <source>Other</source>
         <translation>其他</translation>

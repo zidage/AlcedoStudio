@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "app/adjustment_transfer_types.hpp"
 #include "edit/graph/graph_ids.hpp"
@@ -94,9 +95,9 @@ struct DocumentTransferPasteOptions {
 };
 
 /**
- * @brief Plans one root-relative Paste batch from a sparse v7 transfer package.
+ * @brief Plans Paste batches from a sparse v7 transfer package.
  *
- * Starts from the target immutable root document, applies the selected Develop
+ * Root-relative Paste starts from the target immutable root document, applies the selected Develop
  * fields and geometry to the target root Develop node and document geometry
  * (the target camera profile and as-shot white balance stay), replaces the target
  * Color Grades with the selected Color Grades, applies the selected DRT/Post values
@@ -110,6 +111,20 @@ struct DocumentTransferPasteOptions {
 class DocumentTransferPlanner {
  public:
   DocumentTransferPlanner() = delete;
+
+  /**
+   * @brief Plan selected writes against the current document; nullopt means no changes.
+   *
+   * Matches the source default Grade to the target default, then other Grades by identity or
+   * display name in backbone order. Unmatched Grades are appended. Existing Grade identities,
+   * uncopied adjustments, other Grades, and unselected Mask sets stay unchanged. Selected Mask
+   * sets replace transferable Masks; target AI Masks stay with their own image.
+   * Does not mutate the document. The caller records the batch on the current Version.
+   */
+  [[nodiscard]] static auto PlanOntoCurrent(const AdjustmentTransferPackage&    package,
+                                            const PipelineDocument&             document,
+                                            const DocumentTransferPasteOptions& options = {})
+      -> std::optional<PipelineEditBatch>;
 
   /**
    * @brief Remap identities and build one typed Paste batch.

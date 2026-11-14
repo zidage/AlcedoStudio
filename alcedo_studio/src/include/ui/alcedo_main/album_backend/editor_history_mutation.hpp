@@ -6,11 +6,13 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/history/edit_commit_attribution.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -52,8 +54,10 @@ class EditorHistoryMutation {
 
   /// Apply @p batch to the live document, then append one typed commit.
   /// WAL failure inverse-applies the batch. Used by graph/Mask commands and tests.
-  auto CommitPipelineEditBatch(const alcedo::EditorHistoryGuardHandle& guard,
-                               alcedo::PipelineEditBatch batch, std::string* error) -> bool;
+  auto CommitPipelineEditBatch(
+      const alcedo::EditorHistoryGuardHandle& guard, alcedo::PipelineEditBatch batch,
+      std::string* error, std::optional<alcedo::EditCommitAttribution> attribution = std::nullopt)
+      -> bool;
 
   auto EditNodeGraph(const alcedo::EditorHistoryGuardHandle& guard,
                      alcedo::NodeGraphTopologyChange change, std::string* error) -> bool;

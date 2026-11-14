@@ -11,6 +11,7 @@
 #include "app/adjustment_transfer_package_builder.hpp"
 #include "app/adjustment_transfer_service.hpp"
 #include "app/editor_pipeline_command_service.hpp"
+#include "app/pipeline_root_state.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
@@ -71,6 +72,39 @@ class AdjustmentTransferPasteMergeTest : public ::testing::Test {
   test::EditorMiniGitProjectFixture    project_;
   std::unique_ptr<PipelineMgmtService> pipeline_service_;
 };
+
+TEST_F(AdjustmentTransferPasteMergeTest, CurrentPastePersistsOnSameVersionAndKeepsParentHistory) {
+  constexpr sl_element_id_t id = 303;
+  pipeline_service_->InitializeImageRoot(id, test::DocumentWithExposureEv(0.25), nullptr);
+  const auto apply = [&](double exposure) {
+    const auto  base  = pipeline_service_->LoadHistorySnapshot(id);
+    CommitGraph graph = *base.graph_;
+    std::string error;
+    auto current = BuildDocumentFromRoot(graph, *base.root_,
+                                         graph.GetActiveVersionRef().head_commit_hash, &error);
+    EXPECT_NE(current, nullptr) << error;
+    const auto result = AdjustmentTransferService::PasteIntoCurrentVersion(
+        graph, *current, MakeExposurePackage(static_cast<float>(exposure)));
+    EXPECT_TRUE(result.pasted) << result.error;
+    EXPECT_EQ(graph.GetActiveVersionId(), base.graph_->GetActiveVersionId());
+    EXPECT_EQ(graph.GetAllVersionRefs().size(), base.graph_->GetAllVersionRefs().size());
+    EXPECT_EQ(graph.GetCommit(result.new_head).GetFirstParentHash(),
+              base.graph_->GetActiveVersionRef().head_commit_hash);
+    const auto committed = pipeline_service_->PersistHistory(base, graph);
+    EXPECT_DOUBLE_EQ(DocumentExposureEv(committed->Document()), exposure);
+  };
+  apply(0.75);
+  apply(-0.5);
+  const auto reopened = pipeline_service_->LoadHistorySnapshot(id);
+  EXPECT_EQ(reopened.graph_->CommitCount(), 2u);
+  const auto  current   = pipeline_service_->AcquireCommittedSnapshot(id);
+  CommitGraph unchanged = *reopened.graph_;
+  const auto  result    = AdjustmentTransferService::PasteIntoCurrentVersion(
+      unchanged, current->Document(), MakeExposurePackage(-0.5f));
+  EXPECT_TRUE(result.unchanged);
+  EXPECT_FALSE(result.pasted);
+  EXPECT_EQ(unchanged.CommitCount(), 2u);
+}
 
 /// Paste creates a new root-relative Version that does not inherit the previously
 /// active Version's commits. The old Version keeps its head and ancestry; the new

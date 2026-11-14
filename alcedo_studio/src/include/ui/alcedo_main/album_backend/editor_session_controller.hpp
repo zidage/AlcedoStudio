@@ -425,8 +425,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_INVOKABLE void   submitViewChange(int kind);
 
   /// A user Paste into the open image: refused while an automation agent holds control.
-  auto               PasteAdjustmentPackage(const alcedo::AdjustmentTransferPackage& package,
-                                            const QString& versionDisplayName) -> alcedo::EditorSessionResult;
+  auto               PasteAdjustmentPackage(
+      const alcedo::AdjustmentTransferPackage& package, const QString& versionDisplayName,
+      alcedo::AdjustmentPasteMode mode = alcedo::AdjustmentPasteMode::NewRootRelativeVersion)
+      -> alcedo::EditorSessionResult;
   /// The Paste of PasteAdjustmentPackage without the agent control check, for automation.
   /// @p attribution names the author of the Paste commit.
   auto RequestPasteAdjustmentPackage(const alcedo::AdjustmentTransferPackage& package,

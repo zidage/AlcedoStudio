@@ -422,6 +422,21 @@ Dialog {
                 wrapMode: Text.WordWrap
             }
 
+            SegmentedCardSwitcher {
+                objectName: "adjustmentTransferPasteDestination"
+                visible: !dialog.copyMode
+                Layout.fillWidth: true
+                Layout.leftMargin: appTheme.spaceLg
+                Layout.rightMargin: appTheme.spaceLg
+                entries: [
+                    { label: qsTr("New root-relative Version"), value: "paste" },
+                    { label: qsTr("Current Version"), value: "current" }
+                ]
+                currentValue: dialog.pasteStrategy
+                focusOutlineColor: appTheme.textColor
+                onSelected: function(index, value) { dialog.pasteStrategy = value }
+            }
+
             // ── Footer bar ───────────────────────────────────────────────────
             Rectangle {
                 objectName: "adjustmentTransferFooter"
