@@ -501,7 +501,7 @@ class HangProbe : public QObject {
     (void)QTest::qWaitForWindowActive(window);
     // Prefer the real handle position for the matching model when possible.
     EditorAdjustmentValueModel* model = nullptr;
-    if (item->objectName() == QLatin1String("adjustmentSliderHandle")) {
+    if (item->objectName() == QLatin1String("adjustmentSliderRail")) {
       // Ambiguous which slider; use fromNx as press (callers pass handle nx).
       model = nullptr;
     }
@@ -553,10 +553,9 @@ class HangProbe : public QObject {
     const QPoint pos = MapToWindow(item, nx, ny);
     last_click_pos_  = pos;
     const auto t0    = std::chrono::steady_clock::now();
-    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
-    QCoreApplication::processEvents();
-    QTest::qWait(40);
-    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
+    // A real double-click sequence: QTest spaces separate clicks beyond the double-click
+    // interval, so two mouseClick calls never reach MouseArea.doubleClicked.
+    QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, pos);
     QCoreApplication::processEvents();
     QTest::qWait(20);
     NoteSubmitWall(t0);
@@ -887,10 +886,7 @@ class HangProbe : public QObject {
     auto*        window = item->window();
     const QPoint pos    = MapToWindow(item, nx, ny);
     last_click_pos_     = pos;
-    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
-    QTest::qWait(40);
-    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
+    QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, pos);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
   }
 

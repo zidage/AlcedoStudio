@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QColor>
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QFont>
@@ -19,6 +20,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlError>
+#include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -27,6 +29,7 @@
 #include <QTest>
 #include <QVariantMap>
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -281,6 +284,53 @@ TEST(EditorAdjustmentSnapshotQmlTest, LookHlsLoadsCatalogUiValuesAndRanges) {
   EXPECT_EQ(range("lookHlsLightnessSlider"), (std::pair{-100.0, 100.0}));
   EXPECT_EQ(range("lookHlsChromaSlider"), (std::pair{-100.0, 100.0}));
   EXPECT_EQ(range("lookHlsSmoothnessSlider"), (std::pair{1.0, 180.0}));
+}
+
+// #922: the Selective Color rails show the selected hue: Hue Shift its hue band, Lightness dark
+// to light, Chroma grey to full color. A new hue selection recolors them.
+TEST(EditorAdjustmentSnapshotQmlTest, LookHlsRailsFollowTheSelectedHue) {
+  SnapshotSession              session(QVariantMap{}, 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model = harness.root()->findChild<QObject*>(QStringLiteral("lookHlsModel"));
+  ASSERT_NE(model, nullptr);
+
+  const auto stop_color = [&](const char* slider_name, int stop) -> QColor {
+    auto* slider = harness.root()->findChild<QObject*>(QString::fromLatin1(slider_name));
+    EXPECT_NE(slider, nullptr) << slider_name;
+    if (slider == nullptr) {
+      return {};
+    }
+    QQmlExpression expression(qmlContext(slider), slider,
+                              QStringLiteral("railGradient.stops[%1].color").arg(stop));
+    const QVariant color = expression.evaluate();
+    EXPECT_FALSE(expression.hasError()) << expression.error().toString().toStdString();
+    return color.value<QColor>();
+  };
+  const auto hsl = [](double hue, double saturation, double lightness) {
+    return QColor::fromHslF(static_cast<float>(hue / 360.0), static_cast<float>(saturation),
+                            static_cast<float>(lightness));
+  };
+  const auto expect_near = [](const QColor& actual, const QColor& expected, const char* what) {
+    EXPECT_NEAR(actual.redF(), expected.redF(), 0.01) << what;
+    EXPECT_NEAR(actual.greenF(), expected.greenF(), 0.01) << what;
+    EXPECT_NEAR(actual.blueF(), expected.blueF(), 0.01) << what;
+  };
+
+  for (const int index : {2, 5}) {
+    ASSERT_TRUE(QMetaObject::invokeMethod(model, "selectHueIndex", Q_ARG(int, index)));
+    QCoreApplication::processEvents();
+    const double hue = model->property("targetHue").toDouble();
+    expect_near(stop_color("lookHlsHueShiftSlider", 0),
+                hsl(std::fmod(hue - 30.0 + 360.0, 360.0), 1, 0.5), "hue shift left end");
+    expect_near(stop_color("lookHlsHueShiftSlider", 2), hsl(hue, 1, 0.5), "hue shift center");
+    expect_near(stop_color("lookHlsHueShiftSlider", 4), hsl(std::fmod(hue + 30.0, 360.0), 1, 0.5),
+                "hue shift right end");
+    expect_near(stop_color("lookHlsLightnessSlider", 0), hsl(hue, 1, 0.1), "lightness left end");
+    expect_near(stop_color("lookHlsLightnessSlider", 2), hsl(hue, 1, 0.9), "lightness right end");
+    expect_near(stop_color("lookHlsChromaSlider", 0), hsl(hue, 0, 0.5), "chroma left end");
+    expect_near(stop_color("lookHlsChromaSlider", 2), hsl(hue, 1, 0.5), "chroma right end");
+  }
 }
 
 TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveSectionLoadsFourCurvesAndMarksTheChangedChannels) {

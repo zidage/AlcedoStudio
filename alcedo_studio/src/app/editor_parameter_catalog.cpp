@@ -35,6 +35,11 @@ using PropertyType = EditorParameterPropertyType;
 using json         = nlohmann::json;
 
 constexpr EditorScalarUiRange kSignedPercentRange{-100.0, 100.0, 0.0, 1.0, 0};
+/// Exposure: the rail covers +-5 EV; typing reaches +-10 EV.
+constexpr EditorScalarUiRange kExposureRange{-10.0, 10.0, 0.0, 0.01, 2, -5.0, 5.0};
+/// Highlights and Shadows: the rail covers +-50; typing reaches +-100, where the local tone
+/// amount reaches its backend limit (Shadows at 80, Highlights at 100).
+constexpr EditorScalarUiRange kLocalToneRange{-100.0, 100.0, 0.0, 1.0, 0, -50.0, 50.0};
 constexpr EditorScalarUiRange kPercentRange{0.0, 100.0, 0.0, 1.0, 0};
 /// Film Grain: 100 % is the datasheet granularity of the film (decision U3).
 constexpr EditorScalarUiRange kFilmGrainRange{0.0, 200.0, 0.0, 1.0, 0};
@@ -1564,13 +1569,13 @@ auto ModelEntry(std::string_view field, std::string_view alias, EditorAdjustment
 auto Table() -> const std::array<EditorParameterCatalogEntry, 25>& {
   static const std::array<EditorParameterCatalogEntry, 25> entries = {
       Scalar("exposure", {}, EditorAdjustmentField::Exposure, "tone", "exposure_ev",
-             Conversion::Identity, EditorScalarUiRange{-10.0, 10.0, 0.0, 0.01, 2}),
+             Conversion::Identity, kExposureRange),
       Scalar("contrast", {}, EditorAdjustmentField::Contrast, "tone", "contrast",
              Conversion::Identity, kSignedPercentRange),
       Scalar("highlights", {}, EditorAdjustmentField::Highlights, "tone", "highlights",
-             Conversion::Identity, kSignedPercentRange),
+             Conversion::Identity, kLocalToneRange),
       Scalar("shadows", {}, EditorAdjustmentField::Shadows, "tone", "shadows",
-             Conversion::Identity, kSignedPercentRange),
+             Conversion::Identity, kLocalToneRange),
       Scalar("white", "whites", EditorAdjustmentField::Whites, "tone", "white",
              Conversion::Identity, kSignedPercentRange),
       Scalar("black", "blacks", EditorAdjustmentField::Blacks, "tone", "black",

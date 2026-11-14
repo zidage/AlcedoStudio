@@ -154,6 +154,14 @@ QVariantMap EditorParameterCatalogAdapter::propertySpec(const QString& field,
   return {};
 }
 
+int EditorParameterCatalogAdapter::kelvinToSliderPosition(double kelvin) const {
+  return EditorParameterCatalog::KelvinToSliderPosition(kelvin);
+}
+
+double EditorParameterCatalogAdapter::sliderPositionToKelvin(int position) const {
+  return EditorParameterCatalog::SliderPositionToKelvin(position);
+}
+
 QVariantList EditorParameterCatalogAdapter::options(const QString& field,
                                                     const QString& name) const {
   return propertySpec(field, name).value(QStringLiteral("options")).toList();

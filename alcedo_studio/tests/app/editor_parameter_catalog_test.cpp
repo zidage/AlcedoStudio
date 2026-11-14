@@ -161,6 +161,36 @@ TEST(EditorParameterCatalogTest, ScalarRangesMatchPreviousPanelSliders) {
   }
 }
 
+// #922: Exposure, Highlights, and Shadows have a rail narrower than the accepted range; every
+// other scalar field has its rail on the full range.
+TEST(EditorParameterCatalogTest, ExposureHighlightsAndShadowsHaveANarrowerRail) {
+  struct Case {
+    const char* field;
+    double      rail_minimum;
+    double      rail_maximum;
+  };
+  const Case narrower[] = {
+      {"exposure", -5.0, 5.0}, {"highlights", -50.0, 50.0}, {"shadows", -50.0, 50.0}};
+  for (const auto& entry : EditorParameterCatalog::Entries()) {
+    if (entry.kind != EditorParameterValueKind::Scalar) {
+      continue;
+    }
+    const auto* match = std::find_if(std::begin(narrower), std::end(narrower),
+                                     [&](const Case& c) { return entry.field == c.field; });
+    if (match == std::end(narrower)) {
+      EXPECT_DOUBLE_EQ(entry.range.rail_minimum, entry.range.minimum) << entry.field;
+      EXPECT_DOUBLE_EQ(entry.range.rail_maximum, entry.range.maximum) << entry.field;
+      continue;
+    }
+    EXPECT_DOUBLE_EQ(entry.range.rail_minimum, match->rail_minimum) << entry.field;
+    EXPECT_DOUBLE_EQ(entry.range.rail_maximum, match->rail_maximum) << entry.field;
+    EXPECT_GT(entry.range.rail_minimum, entry.range.minimum) << entry.field;
+    EXPECT_LT(entry.range.rail_maximum, entry.range.maximum) << entry.field;
+    EXPECT_GE(entry.range.default_value, entry.range.rail_minimum) << entry.field;
+    EXPECT_LE(entry.range.default_value, entry.range.rail_maximum) << entry.field;
+  }
+}
+
 TEST(EditorParameterCatalogTest, SaturationUiValueRoundTrips) {
   for (const double ui_value : {-100.0, 0.0, 37.0, 100.0}) {
     const auto model = UiToModelJson("saturation", ui_value);

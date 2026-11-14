@@ -13,11 +13,18 @@ import QtQuick
 //   dragStarted / valueEdited... / dragFinished   rail drag and value drag
 //   valueEdited                                   arrow keys on the rail
 //   valueEntered                                  typed value, Up/Down in the field
+//   textRejected                                  typed text that is not a number
+// Part object names start with `partName` (the object name unless set): <partName>Rail,
+// <partName>RailInput, <partName>Handle, <partName>Value, <partName>ValueInput, ...
 Item {
     id: root
     objectName: "alcedoSlider"
 
+    property string partName: objectName
     property string label: ""
+    /// Optional explanation: an "i" glyph after the label shows it.
+    property string infoText: ""
+    property string infoObjectName: partName + "InfoHint"
     /// "inline": label, rail, value in one row. "stacked": label and value above the rail.
     property string layout: "inline"
     property int labelWidth: 160
@@ -25,6 +32,8 @@ Item {
     property int labelWeight: Font.Normal
     property int valuePixelSize: appTheme.fontSizeCaption
     property int valueFieldWidth: 64
+    /// False hides the value field (a toolbar slider without a number).
+    property bool showValue: true
     /// Row height of the inline layout.
     property int inlineHeight: 32
     property int spacing: 12
@@ -43,6 +52,15 @@ Item {
     property string suffix: ""
     /// Optional horizontal gradient drawn in the rail instead of the fill.
     property Gradient railGradient: null
+    property real railGradientOpacity: 0.7
+    /// Optional value text: function (value) -> text shown in the value field, function (value)
+    /// -> text to edit, and function (text) -> value (NaN when the text is not a value). Used
+    /// when the rail unit differs from the shown unit (Kelvin on a position rail).
+    property var valueFormatter: null
+    property var editFormatter: null
+    property var editParser: null
+    /// False shows the value in the danger color (the owner rejected the last entry).
+    property bool valueValid: true
     /// Optional parent Flickable to lock while a drag runs (beginInputLock / endInputLock, or
     /// `interactive`).
     property var flickable: null
@@ -57,10 +75,14 @@ Item {
     signal valueEdited(real value)
     signal dragFinished()
     signal valueEntered(real value)
+    signal textRejected(string text)
     signal resetRequested()
 
     readonly property bool _stacked: layout === "stacked"
     readonly property bool _hasLabel: label.length > 0
+    readonly property bool _hasInfo: infoText.length > 0
+    readonly property int _valueWidth: showValue ? valueFieldWidth : 0
+    readonly property int _valueGap: showValue ? spacing : 0
     readonly property color _text: appTheme.textColor
     readonly property color _muted: appTheme.textMutedColor
     readonly property int _railHeight: 18
@@ -72,6 +94,7 @@ Item {
     property bool _cancelEdit: false
 
     implicitWidth: 240
+    opacity: enabled ? 1 : 0.45
     implicitHeight: _stacked
                     ? Math.max(labelText.implicitHeight, _valueHeight) + _stackGap + _railHeight
                     : Math.max(inlineHeight, labelText.implicitHeight, _valueHeight)
@@ -90,6 +113,8 @@ Item {
     }
 
     function formatValue(v) {
+        if (typeof root.valueFormatter === "function")
+            return root.valueFormatter(v)
         var text = Math.abs(v).toFixed(root.precision)
         if (v < 0 && Number(text) !== 0)
             text = "−" + text
@@ -98,9 +123,15 @@ Item {
         return text + root.suffix
     }
 
-    function editText(v) { return Number(v).toFixed(root.precision) }
+    function editText(v) {
+        if (typeof root.editFormatter === "function")
+            return root.editFormatter(v)
+        return Number(v).toFixed(root.precision)
+    }
 
     function parseText(text) {
+        if (typeof root.editParser === "function")
+            return root.editParser(text)
         var s = text.replace(/−/g, "-").trim()
         if (root.suffix.length > 0 && s.endsWith(root.suffix.trim()))
             s = s.substring(0, s.length - root.suffix.trim().length).trim()
@@ -131,18 +162,24 @@ Item {
 
     function commitTyped() {
         var n = root.parseText(valueInput.text)
-        if (!isNaN(n))
+        if (isNaN(n))
+            root.textRejected(valueInput.text)
+        else
             root.valueEntered(root.snap(root.clampHard(n)))
     }
 
     Text {
         id: labelText
-        objectName: root.objectName + "Label"
+        objectName: root.partName + "Label"
         visible: root._hasLabel
         x: 0
         y: root._stacked ? 0 : (root.height - height) / 2
-        width: root._stacked ? Math.max(0, root.width - root.valueFieldWidth - root.spacing)
-                             : root.labelWidth
+        readonly property real available: (root._stacked
+                                           ? Math.max(0, root.width - root._valueWidth
+                                                      - root._valueGap)
+                                           : root.labelWidth)
+                                          - (root._hasInfo ? infoHint.width + 4 : 0)
+        width: root._hasInfo ? Math.min(implicitWidth, available) : available
         text: root.label
         color: root._text
         font.family: appTheme.uiFontFamily
@@ -157,9 +194,18 @@ Item {
         }
     }
 
+    EditorInfoHint {
+        id: infoHint
+        objectName: root.infoObjectName
+        visible: root._hasInfo
+        x: labelText.x + labelText.width + 4
+        y: labelText.y + (Math.min(labelText.height, labelText.font.pixelSize * 1.4) - height) / 2
+        text: root.infoText
+    }
+
     Rectangle {
         id: rail
-        objectName: root.objectName + "Rail"
+        objectName: root.partName + "Rail"
         readonly property real travel: Math.max(1, width - 2 * root._inset - root._thumbWidth)
 
         function positionOf(v) {
@@ -173,8 +219,8 @@ Item {
         x: root._stacked || !root._hasLabel ? 0 : root.labelWidth + root.spacing
         y: root._stacked ? root.height - height : (root.height - height) / 2
         width: Math.max(root._thumbWidth + 2 * root._inset,
-                        root.width - x - root.spacing - root.valueFieldWidth
-                        + (root._stacked ? root.spacing + root.valueFieldWidth : 0))
+                        root.width - x - root._valueGap - root._valueWidth
+                        + (root._stacked ? root._valueGap + root._valueWidth : 0))
         height: root._railHeight
         radius: 5
         activeFocusOnTab: true
@@ -207,13 +253,13 @@ Item {
             anchors.fill: parent
             anchors.margins: 1
             radius: parent.radius - 1
-            opacity: 0.55
+            opacity: root.railGradientOpacity
             gradient: root.railGradient
         }
 
         // App default.
         Rectangle {
-            objectName: root.objectName + "DefaultMark"
+            objectName: root.partName + "DefaultMark"
             visible: root.defaultValue >= root.softFrom && root.defaultValue <= root.softTo
             x: Math.round(rail.centerOf(root.defaultValue))
             y: 1
@@ -224,7 +270,7 @@ Item {
 
         Rectangle {
             id: fill
-            objectName: root.objectName + "Fill"
+            objectName: root.partName + "Fill"
             readonly property real handleCenter: rail.centerOf(root.value)
             readonly property real originCenter: rail.centerOf(root.origin)
             readonly property bool beyondEnd: root.value > root.softTo + root.stepSize * 0.5
@@ -262,7 +308,7 @@ Item {
 
         Rectangle {
             id: thumb
-            objectName: root.objectName + "Handle"
+            objectName: root.partName + "Handle"
             x: rail.centerOf(root.value) - width / 2
             y: root._inset
             width: root._thumbWidth
@@ -273,7 +319,7 @@ Item {
             border.color: Qt.rgba(0, 0, 0, 0.55)
 
             Behavior on x {
-                enabled: !root.dragging
+                enabled: !root.dragging && !appTheme.reduceMotion
                 NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
             }
         }
@@ -293,7 +339,7 @@ Item {
 
         MouseArea {
             id: railInput
-            objectName: root.objectName + "RailInput"
+            objectName: root.partName + "RailInput"
             property bool dragging: false
             property real pressX: 0
             property real lastX: 0
@@ -351,7 +397,8 @@ Item {
 
     Rectangle {
         id: valueBox
-        objectName: root.objectName + "Value"
+        objectName: root.partName + "Value"
+        visible: root.showValue
         x: root.width - width
         y: root._stacked ? Math.max(0, (Math.max(labelText.implicitHeight, root._valueHeight) - height) / 2)
                          : (root.height - height) / 2
@@ -366,13 +413,14 @@ Item {
                                       ? root.textAlpha(0.14) : "transparent")
 
         Text {
-            objectName: root.objectName + "ValueText"
+            objectName: root.partName + "ValueText"
             visible: !root.editing
             anchors.fill: parent
             anchors.leftMargin: 6
             anchors.rightMargin: 6
             text: root.formatValue(root.value)
-            color: root.modified ? root._text : root._muted
+            color: !root.valueValid ? appTheme.dangerColor
+                                    : (root.modified ? root._text : root._muted)
             font.family: appTheme.dataFontFamily
             font.pixelSize: root.valuePixelSize
             font.features: { "tnum": 1 }
@@ -383,7 +431,7 @@ Item {
 
         TextInput {
             id: valueInput
-            objectName: root.objectName + "ValueInput"
+            objectName: root.partName + "ValueInput"
             visible: root.editing
             anchors.fill: parent
             anchors.leftMargin: 6
@@ -434,7 +482,7 @@ Item {
         // Drag scrubs the value; a click without movement starts editing.
         MouseArea {
             id: valueInputArea
-            objectName: root.objectName + "ValueInputArea"
+            objectName: root.partName + "ValueInputArea"
             property bool scrubbing: false
             property real pressX: 0
             property real startValue: 0

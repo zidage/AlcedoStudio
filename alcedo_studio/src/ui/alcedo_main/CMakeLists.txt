@@ -933,7 +933,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentStack.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentHeader.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LockedNodeMaskPromptDialog.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMonoSlider.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDragSlider.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorCameraProfileSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSliders.qml"

@@ -308,7 +308,7 @@ TEST(EditorAdjustmentControlQmlTest,
                                << h.warnings.join(QStringLiteral("\n")).toStdString();
   auto* slider = h.find(QStringLiteral("testSlider"));
   ASSERT_NE(slider, nullptr);
-  auto* handle = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  auto* handle = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
   ASSERT_NE(handle, nullptr);
   handle->forceActiveFocus();
   ProcessEvents(50);
@@ -329,7 +329,7 @@ TEST(EditorAdjustmentControlQmlTest, PointerDragSubmitsPreviewAndOneSettledValue
                                << h.warnings.join(QStringLiteral("\n")).toStdString();
   auto* slider = h.find(QStringLiteral("testSlider"));
   ASSERT_NE(slider, nullptr);
-  auto* control = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  auto* control = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
   ASSERT_NE(control, nullptr);
 
   const QPoint start =
@@ -353,7 +353,7 @@ TEST(EditorAdjustmentControlQmlTest, TextFieldTypingCommitsSettledOnEnter) {
                                << h.warnings.join(QStringLiteral("\n")).toStdString();
   auto* slider = h.find(QStringLiteral("testSlider"));
   ASSERT_NE(slider, nullptr);
-  auto* field = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderField"));
+  auto* field = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderValueInput"));
   ASSERT_NE(field, nullptr);
   field->forceActiveFocus();
   ProcessEvents(50);
@@ -376,7 +376,7 @@ TEST(EditorAdjustmentControlQmlTest, DoubleClickSliderRestoresDefaultAndSubmitsO
   // Move the value away from default first via the model (programmatic, no submit).
   h.exposure.setValue(0.7);
   ASSERT_EQ(h.submitter.calls.size(), 0u);
-  auto* handle = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  auto* handle = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
   ASSERT_NE(handle, nullptr);
   const QPoint pos = centerInWindow(handle);
   QTest::mouseDClick(h.window, Qt::LeftButton, {}, pos);
@@ -392,17 +392,19 @@ TEST(EditorAdjustmentControlQmlTest, InvalidTextFieldSetsModelInvalidAndDoesNotS
                                << h.warnings.join(QStringLiteral("\n")).toStdString();
   auto* slider = h.find(QStringLiteral("testSlider"));
   ASSERT_NE(slider, nullptr);
-  auto* field = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderField"));
+  auto* field = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderValueInput"));
   ASSERT_NE(field, nullptr);
   field->forceActiveFocus();
   ProcessEvents(50);
   const auto settledBefore = h.submitter.settledForField(QStringLiteral("exposure"));
-  // Drive the field's onEditingFinished handler directly: set non-numeric text
-  // and emit editingFinished. (The TextFieldTyping test above covers keyboard
+  // Set non-numeric text in the value field and move the focus to the rail: the field
+  // commits on focus-out. (The TextFieldTyping test above covers keyboard
   // entry with valid digits; typing letters via keyClick uses key codes outside
   // Qt::Key's A–Z range, so we exercise the parse-failure path here instead.)
   field->setProperty("text", QStringLiteral("abc"));
-  ASSERT_TRUE(QMetaObject::invokeMethod(field, "editingFinished", Qt::DirectConnection));
+  auto* rail = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
+  ASSERT_NE(rail, nullptr);
+  rail->forceActiveFocus();
   ProcessEvents(50);
   EXPECT_FALSE(h.exposure.valid());
   EXPECT_EQ(h.submitter.settledForField(QStringLiteral("exposure")), settledBefore);
@@ -417,7 +419,7 @@ TEST(EditorAdjustmentControlQmlTest, DisabledModelBlocksSubmitAndDisablesControl
   ASSERT_NE(slider, nullptr);
   h.exposure.setEnabled(false);
   ProcessEvents(50);
-  auto* handle = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  auto* handle = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
   ASSERT_NE(handle, nullptr);
   EXPECT_FALSE(handle->isEnabled());
   handle->forceActiveFocus();
@@ -463,6 +465,57 @@ TEST(EditorAdjustmentControlQmlTest, AdjustmentComboActivatedSubmitsOneSettled) 
   ProcessEvents(50);
   EXPECT_EQ(h.submitter.settledForField(QStringLiteral("color_temp_mode")), 1);
   EXPECT_EQ(h.combo.currentIndex(), 1);
+}
+
+// #922: a rail drag stops at the rail end; a typed value reaches the full range, and the handle
+// then stays at the rail end.
+TEST(EditorAdjustmentControlQmlTest, RailDragStopsAtTheRailEndAndTypingReachesTheFullRange) {
+  Harness h;
+  ASSERT_NE(h.window, nullptr) << "QML harness failed to load. Warnings:\n"
+                               << h.warnings.join(QStringLiteral("\n")).toStdString();
+  h.exposure.setMinimum(-10.0);
+  h.exposure.setMaximum(10.0);
+  h.exposure.setRailMinimum(-5.0);
+  h.exposure.setRailMaximum(5.0);
+  ProcessEvents(50);
+  auto* slider = h.find(QStringLiteral("testSlider"));
+  ASSERT_NE(slider, nullptr);
+  auto* rail = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
+  auto* handle = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  auto* field = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderValueInput"));
+  ASSERT_NE(rail, nullptr);
+  ASSERT_NE(handle, nullptr);
+  ASSERT_NE(field, nullptr);
+
+  // From the center to near the right end is more than the rail half: the value stops at +5.
+  const QPoint start =
+      rail->mapToScene(QPointF(rail->width() * 0.1, rail->height() * 0.5)).toPoint();
+  const QPoint end =
+      rail->mapToScene(QPointF(rail->width() * 0.95, rail->height() * 0.5)).toPoint();
+  QTest::mousePress(h.window, Qt::LeftButton, {}, start);
+  QTest::mouseMove(h.window, end, 20);
+  QTest::mouseRelease(h.window, Qt::LeftButton, {}, end);
+  ProcessEvents(100);
+  EXPECT_DOUBLE_EQ(h.exposure.value(), 5.0);
+  EXPECT_EQ(h.submitter.settledForField(QStringLiteral("exposure")), 1);
+
+  field->forceActiveFocus();
+  ProcessEvents(50);
+  TypeText(h.window, QStringLiteral("8"));
+  QTest::keyClick(h.window, Qt::Key_Return);
+  ProcessEvents(250);
+  EXPECT_DOUBLE_EQ(h.exposure.value(), 8.0);
+  EXPECT_EQ(h.submitter.settledForField(QStringLiteral("exposure")), 2);
+  // The handle stays inside the rail, 2 px from its right end.
+  EXPECT_NEAR(handle->x() + handle->width(), rail->width() - 2.0, 0.5);
+
+  // A typed value outside the full range is limited to it.
+  field->forceActiveFocus();
+  ProcessEvents(50);
+  TypeText(h.window, QStringLiteral("25"));
+  QTest::keyClick(h.window, Qt::Key_Return);
+  ProcessEvents(100);
+  EXPECT_DOUBLE_EQ(h.exposure.value(), 10.0);
 }
 
 }  // namespace
