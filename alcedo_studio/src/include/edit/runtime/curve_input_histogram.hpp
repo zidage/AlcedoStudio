@@ -20,13 +20,15 @@
  *        the Tone Curve editor plan, issue #888).
  *
  * The Curve adjustment runs per channel on the ACEScc values of the grade stage, after White
- * Balance, Exposure, Contrast, Whites, and Blacks (`ColorGradeCompileOrder`). The histogram counts
- * the red, green, and blue values at that point, on the axis of the curve: 256 bins on [0, 1].
- * The scope histogram cannot give this: it reads the final display frame, after the curve and the
- * display transform.
+ * Balance, Exposure, Contrast, Whites, Blacks, Shadows, and Highlights (`ColorGradeCompileOrder`).
+ * The histogram counts the red, green, and blue values at that point, on the axis of the curve:
+ * 256 bins on [0, 1]. The scope histogram cannot give this: it reads the final display frame,
+ * after the curve and the display transform.
  *
- * The grade pass of the requested Color Grade evaluates the adjustments before the Curve on a
- * sampled grid of its input and adds the bins on the device (`GradeExecutor`). The renderer reads
+ * The grade pass of the requested Color Grade adds the bins on the device (`GradeExecutor`). When
+ * the Local Laplacian stage (Shadows, Highlights) runs, it counts a sampled grid of that stage's
+ * output before the mix. Otherwise it evaluates the Basic Tone adjustments (White Balance through
+ * Blacks) on a sampled grid of the grade input. The renderer reads
  * the 768 counts after the render and gives them to the sink of the request. A render without a
  * request does no histogram work.
  */
@@ -144,7 +146,7 @@ struct CurveInputHistogramRecord {
   return GraphValueId{grade_id, PortId{"runtime.curve_input_histogram"}};
 }
 
-/// Workspace value that holds the parameter offsets of the adjustments before the Curve.
+/// Workspace value that holds the parameter offsets that the histogram kernel evaluates.
 [[nodiscard]] inline auto CurveInputHistogramOrderId(const NodeId& grade_id) -> GraphValueId {
   return GraphValueId{grade_id, PortId{"runtime.curve_input_order"}};
 }

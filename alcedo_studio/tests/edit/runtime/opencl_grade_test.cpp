@@ -581,6 +581,13 @@ void ResetProductLookToIdentity(PipelineDocument& document) {
   exposure->SetValue(0.0f);
   saturation->SetValue(1.0f);
   contrast->SetValue(0.0f);
+  // The default look carries the Film-like curve (#898).
+  auto* curve =
+      dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  CurveUpdate identity;
+  identity.points = IdentityCurvePoints();
+  curve->ApplyUpdate(identity);
 }
 
 auto DownloadR32f(OpenClRenderDevice& device, const GraphValueId& id) -> std::vector<float> {
@@ -669,17 +676,36 @@ class OpenClGradeFixture : public ::testing::Test {
     return result;
   }
 
-  /// Render through Color Grade with @p record; keep the grade input in last_develop_pixels_.
-  void RenderWithHistogramRecord(CurveInputHistogramRecord& record) {
+  /// Render through Color Grade with @p record; keep the grade input in last_develop_pixels_ and
+  /// the grade output in last_output_pixels_.
+  auto RenderWithHistogramRecord(CurveInputHistogramRecord& record) -> OpenClPrimaryGradeResult {
     device_->BeginRender();
     ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
     ExecuteOpenClGeometryResample(*device_, plan_);
     ExecuteOpenClCameraColor(*device_, plan_, document_);
-    (void)ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_, &record);
+    const auto result = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_, &record);
     device_->EndRender();
     device_->WaitIdle();
     last_develop_pixels_ = Download(*device_, plan_.develop_output);
+    last_output_pixels_  = DownloadBinding(*device_, result.output_binding);
     device_->PublishResults();
+    return result;
+  }
+
+  /// Remove the Color adjustments (Curve through LMT) of the primary Grade and recompile, so the
+  /// Local Laplacian stage is the last write of the Grade.
+  void RemoveColorAdjustments() {
+    auto* grade = document_.PrimaryGrade();
+    ASSERT_NE(grade, nullptr);
+    for (const auto& type : ColorGradeCompileOrder()) {
+      if (ColorGradeCompileGroupOf(type) != ColorGradeCompileGroup::Color) {
+        continue;
+      }
+      const auto* id = grade->FindAdjustmentIdByType(type);
+      ASSERT_NE(id, nullptr) << type.Text();
+      grade->RemoveAdjustment(AdjustmentInstanceId{*id});
+    }
+    plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
   /// Counts of the curve input histogram of the primary Grade from one render.
@@ -889,6 +915,58 @@ TEST_F(OpenClGradeFixture, OpenClCurveInputHistogramIgnoresCurveEditsAndFollowsE
                                                     1.0f / CE_ACESCC_B, "Exposure +1");
 }
 
+TEST_F(OpenClGradeFixture, OpenClCurveInputHistogramCountsTheLocalToneOutput) {
+  // Issue #900: Shadows runs before the Curve, so the curve input is the LLF output. With the
+  // Color adjustments neutral, the Grade output is that image.
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(60.0f);
+  (void)RenderGrade();
+  const auto  local_tone_output = last_output_pixels_;
+  const auto& extent            = plan_.geometry.render_extent;
+
+  auto&       curve             = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate s_curve;
+  s_curve.points = tone_curve_test::LiftedMidtonePoints(5, 0.1f, 0.9f);
+  curve.ApplyUpdate(s_curve);
+  const auto counts = RenderCurveInputHistogram();
+  ASSERT_NE(
+      curve_histogram_test::ReferenceCounts(local_tone_output, extent.width, extent.height),
+      curve_histogram_test::ReferenceCounts(last_develop_pixels_, extent.width, extent.height))
+      << "Shadows must change the bins of this input";
+  curve_histogram_test::ExpectCountsOfShiftedPixels(counts, local_tone_output, extent.width,
+                                                    extent.height, 0.0f, "Shadows 60");
+}
+
+TEST_F(OpenClGradeFixture, OpenClCurveInputHistogramOfAFinalLocalToneStageReadsItBeforeTheMix) {
+  RemoveColorAdjustments();
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(60.0f);
+  (void)RenderGrade();
+  const auto  full     = last_output_pixels_;
+  const auto  input    = last_develop_pixels_;
+  const auto& extent   = plan_.geometry.render_extent;
+  const auto  full_mix = RenderCurveInputHistogram();
+  EXPECT_EQ(full_mix, curve_histogram_test::ReferenceCounts(full, extent.width, extent.height));
+
+  document_.PrimaryGrade()->SetMix(0.5f);
+  (void)RenderGrade();
+  const auto plain = last_output_pixels_;
+  EXPECT_EQ(RenderCurveInputHistogram(), full_mix) << "the mix changed the curve input";
+
+  // The histogram render writes the unmixed LLF output and mixes in a pass without commands.
+  CurveInputHistogramRecord record{document_.PrimaryGrade()->Id()};
+  const auto                result = RenderWithHistogramRecord(record);
+  EXPECT_EQ(result.local_tone_pass_count, 1U);
+  EXPECT_EQ(result.pointwise_dispatch_count, 2U);
+  ASSERT_EQ(last_output_pixels_.size(), plain.size());
+  ASSERT_EQ(input.size(), plain.size());
+  for (std::size_t i = 0; i < plain.size(); ++i) {
+    for (const auto channel : {&Rgba::r, &Rgba::g, &Rgba::b}) {
+      EXPECT_NEAR(last_output_pixels_[i].*channel, plain[i].*channel, 1.0e-5f) << "pixel " << i;
+      EXPECT_NEAR(plain[i].*channel, 0.5f * (input[i].*channel + full[i].*channel), 1.0e-5f)
+          << "pixel " << i;
+    }
+  }
+}
+
 TEST_F(OpenClGradeFixture, OpenClRenderWithoutAHistogramRequestRecordsNoHistogram) {
   (void)RenderGrade();
   EXPECT_EQ(device_->PassStats().curve_input_histogram_execute, 0U);
@@ -928,12 +1006,12 @@ TEST_F(OpenClGradeFixture, OpenClHlsHueAdjustmentChangesGradePixels) {
   EXPECT_TRUE(changed);
 }
 
-TEST_F(OpenClGradeFixture, OpenClPointwiseAdjustmentsFuseIntoOnePassBeforeLlf) {
+TEST_F(OpenClGradeFixture, OpenClLlfSplitsBasicToneAndColorIntoTwoPointwisePasses) {
   const auto identity = RenderGrade();
   EXPECT_EQ(identity.pointwise_dispatch_count, 1U);
   ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(25.0f);
   const auto with_llf = RenderGrade();
-  EXPECT_EQ(with_llf.pointwise_dispatch_count, 1U);
+  EXPECT_EQ(with_llf.pointwise_dispatch_count, 2U);
   EXPECT_EQ(with_llf.local_tone_pass_count, 1U);
 }
 

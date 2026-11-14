@@ -23,6 +23,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "oklab_contrast_reference.hpp"
@@ -91,6 +92,13 @@ inline void ResetGradeLookToIdentity(ColorGradeNodeModel& grade) {
   }
   if (contrast != nullptr) {
     contrast->SetValue(0.0f);
+  }
+  // The default look carries the Film-like curve (#898).
+  if (auto* curve = dynamic_cast<CurveModel*>(grade.FindAdjustmentByType(type_ids::Curve()));
+      curve != nullptr) {
+    CurveUpdate identity;
+    identity.points = IdentityCurvePoints();
+    curve->ApplyUpdate(identity);
   }
 }
 

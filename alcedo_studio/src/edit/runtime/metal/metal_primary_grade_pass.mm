@@ -246,9 +246,10 @@ struct MetalGradeOps {
                                        std::uint32_t command_count, float mix,
                                        const GraphValueId* mask_id, std::uint32_t width,
                                        std::uint32_t height) {
-    auto& workspace = device.Workspace();
-    auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
-    if (commands == nullptr) {
+    auto&       workspace = device.Workspace();
+    const auto& params    = workspace.Parameters().DeviceBuffer();
+    const auto* commands = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
+    if (commands == nullptr && command_count != 0U) {
       throw std::runtime_error("ExecuteMetalPrimaryGrade: missing fused command buffer");
     }
     const Texture* mask = nullptr;
@@ -259,10 +260,12 @@ struct MetalGradeOps {
       }
       mask = &lease->Texture();
     }
+    // A mix without commands (GradeExecutor, issue #900) reads no command; the parameter buffer
+    // stands in for the command argument of a Grade that has no fused command buffer.
     EnqueueGradePointwise(device, MetalSceneTexture(device, src), MetalSceneTexture(device, dst),
-                          &MetalSceneTexture(device, original), mask,
-                          workspace.Parameters().DeviceBuffer(), *commands, command_start,
-                          command_count, lut, mix, width, height);
+                          &MetalSceneTexture(device, original), mask, params,
+                          commands != nullptr ? *commands : params, command_start, command_count,
+                          lut, mix, width, height);
   }
 
   static auto AcquireHorizontalScratch(MetalRenderDevice& device, std::uint32_t width,

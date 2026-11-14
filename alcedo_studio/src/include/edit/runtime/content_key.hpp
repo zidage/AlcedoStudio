@@ -21,12 +21,12 @@ inline constexpr std::uint32_t kGeometryImplementationVersion      = 1;
 /// Bumped when CameraColorPass math changes. Version 5 applies the ACES 1.3 Reference Gamut
 /// Compression to the profiled linear AP1 value before ACEScc encoding.
 inline constexpr std::uint32_t kCameraColorImplementationVersion   = 5;
-/// Bumped when Primary Grade pixel rules change. Version 6 fixes the compiled Grade
-/// stage order to Basic Tone + Color before the Local Laplacian stage.
-inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 6;
+/// Bumped when Primary Grade pixel rules change. Version 7 compiles the Local Laplacian stage
+/// (Shadows, Highlights) between Basic Tone and Color, before the Curve (issue #900).
+inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 7;
 /// Bumped when the canonical LLF reference identity or sampling rules change.
-/// Version 2 makes the canonical LLF source the post-Basic Tone + Color image.
-inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 2;
+/// Version 3 makes the canonical LLF source the post-Basic Tone image (issue #900).
+inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 3;
 /// Bumped when DRT pixel rules change, including the DiffusionFilter pass and the
 /// DiffusionFilterShape constants. Version 5 decodes ACEScc in the DiffusionFilter pass and
 /// applies the diffusion filter, built on the full-frame scatter canvas, before the display

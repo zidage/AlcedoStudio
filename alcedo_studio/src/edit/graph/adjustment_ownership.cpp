@@ -48,11 +48,19 @@ auto DrtPostAdjustmentTypes() -> std::array<OperatorTypeId, 4> {
 }
 
 auto ColorGradeCompileOrder() -> std::array<OperatorTypeId, 13> {
-  return {type_ids::Cat02WhiteBalance(), type_ids::Exposure(),   type_ids::Contrast(),
-          type_ids::White(),             type_ids::Black(),      type_ids::Curve(),
-          type_ids::Hls(),               type_ids::Saturation(), type_ids::Vibrance(),
-          type_ids::ColorWheel(),        type_ids::Lmt(),        type_ids::Shadows(),
-          type_ids::Highlights()};
+  return {type_ids::Cat02WhiteBalance(),
+          type_ids::Exposure(),
+          type_ids::Contrast(),
+          type_ids::White(),
+          type_ids::Black(),
+          type_ids::Shadows(),
+          type_ids::Highlights(),
+          type_ids::Curve(),
+          type_ids::Hls(),
+          type_ids::Saturation(),
+          type_ids::Vibrance(),
+          type_ids::ColorWheel(),
+          type_ids::Lmt()};
 }
 
 auto ColorGradeCompileRank(const OperatorTypeId& type) -> std::uint32_t {
@@ -63,6 +71,17 @@ auto ColorGradeCompileRank(const OperatorTypeId& type) -> std::uint32_t {
     }
   }
   return static_cast<std::uint32_t>(order.size());
+}
+
+auto ColorGradeCompileGroupOf(const OperatorTypeId& type) -> ColorGradeCompileGroup {
+  const auto rank = ColorGradeCompileRank(type);
+  if (rank < ColorGradeCompileRank(type_ids::Shadows())) {
+    return ColorGradeCompileGroup::BasicTone;
+  }
+  if (rank < ColorGradeCompileRank(type_ids::Curve())) {
+    return ColorGradeCompileGroup::LocalTone;
+  }
+  return ColorGradeCompileGroup::Color;
 }
 
 auto ColorGradeCompileIndexOrder(std::span<const OperatorTypeId> types)
