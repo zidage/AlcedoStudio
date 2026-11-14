@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "app/editor_adjustment_types.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "json.hpp"
 
@@ -94,9 +96,10 @@ inline constexpr float kFilmPrintEntrySaturation = 1.0f;
                                              const nlohmann::json&   odt_after)
     -> std::optional<EditorParameterTarget>;
 
-/// Contrast of Color Grade 1 after a profile tone entry: the catalog identity.
+/// Contrast of Color Grade 1 after a profile tone curve entry: the catalog identity.
 inline constexpr float kProfileToneEntryContrast   = 0.0f;
-/// Saturation of Color Grade 1 after a profile tone entry, as @ref kFilmPrintEntrySaturation.
+/// Saturation of Color Grade 1 after a profile tone curve entry, as
+/// @ref kFilmPrintEntrySaturation.
 inline constexpr float kProfileToneEntrySaturation = 1.0f;
 
 /// One Grade write of an entry reset: the field target and its patch JSON.
@@ -106,38 +109,44 @@ struct EditorEntryResetWrite {
 };
 
 /**
- * @brief Grade writes that a `camera_profile_file` edit makes when it turns on the profile tone
- *        stage (dcp_profile_tone_curve_study.md, section 6.5).
+ * @brief Grade writes that keep the RGB curve of Color Grade 1 on the `ProfileToneCurve` of the
+ *        camera profile (#911, dcp_profile_tone_curve_study.md, section 11).
  *
- * The profile curve and LookTable carry the camera's contrast and color, so the RAW import look
- * stays out of them. The rule applies only on an entry: the stage runs after the edit and stayed
- * out of the render before it. The stage runs when the reference is bound, its profile has a
- * `ProfileToneCurve`, `profile_tone` is true, and the DRT method is ACES 2.0 or OpenDRT.
+ * The RGB curve follows a profile curve while the Develop reference is bound, its profile has a
+ * `ProfileToneCurve`, `profile_tone` (the Tone Curve switch) is on, and the DRT method is ACES
+ * 2.0 or OpenDRT; the followed points are ProfileToneCurvePoints of the curve and the method. An
+ * edit of `camera_profile_file` or of the DRT method changes the followed curve:
  *
- * On an entry, when the document has Color Grade 1 (`grade.primary`), the result holds a write of
- * @ref kProfileToneEntryContrast while its contrast still equals
- * @ref kImportLookContrastBeforeFilmLike (a document imported before #891), a write of
- * @ref kProfileToneEntrySaturation while its saturation still equals
- * @ref kDefaultPipelineSaturation, and a write of the identity RGB curve while the RGB curve still
- * has the points of the Film-like preset (@ref kDefaultPipelineToneCurvePresetId). A value that the
- * user selected stays; a document without `grade.primary` gets no write. Exposure is never written
- * (the anchor of section 3.3).
+ * - Entry (no followed curve before, one after): the RGB curve takes the followed points, whatever
+ *   it held. The profile curve and LookTable carry the camera's contrast and color, so the RAW
+ *   import look stays out of them: contrast goes to @ref kProfileToneEntryContrast while it still
+ *   equals @ref kImportLookContrastBeforeFilmLike (a document imported before #891), and
+ *   saturation to @ref kProfileToneEntrySaturation while it still equals
+ *   @ref kDefaultPipelineSaturation. Exposure is never written (the anchor of study section 3.3).
+ * - Change (another profile curve or another method): the RGB curve takes the new points while it
+ *   still has the points before.
+ * - Exit (a followed curve before, none after): while the RGB curve still has the points before,
+ *   it goes back to the RAW import look: the Film-like preset, or the identity on Film Print.
+ *
+ * A curve that the user edited stays in a change and an exit. The channel curves always stay. A
+ * document without `grade.primary` gets no write.
  *
  * @param document Live document after the edit; its Develop reference is bound by the write.
- * @param develop_before Develop Model JSON before the edit (the history before-side). Its stored
- *        reference is resolved through DcpProfileLibrary::Shared() to read whether its profile has
- *        a curve; an identity that the library does not hold had no stage.
- * @return The writes in the order contrast, saturation, curve; empty when the rule does not apply.
- * @throws std::exception when @p develop_before holds a malformed reference.
+ * @param reference_before The Develop reference before the edit, bound when its identity is in
+ *        the DCP library; an unbound reference followed no curve.
+ * @param method_before The DRT method before the edit.
+ * @return The writes in the order contrast, saturation, curve; empty when the followed curve does
+ *         not change.
  */
-[[nodiscard]] auto ProfileToneEntryResetTargets(const PipelineDocument& document,
-                                                const nlohmann::json&   develop_before)
+[[nodiscard]] auto ProfileToneCurveWrites(
+    const PipelineDocument&                        document,
+    const std::optional<DevelopCameraProfileFile>& reference_before, DrtMethod method_before)
     -> std::vector<EditorEntryResetWrite>;
 
 /**
  * @brief Grade writes of the entry resets of the RAW import look that a settled edit of
  *        @p field_key makes: @ref FilmPrintEntrySaturationTarget and
- *        @ref FilmPrintEntryCurveTarget for `odt`, and @ref ProfileToneEntryResetTargets for
+ *        @ref FilmPrintEntryCurveTarget for `odt`, and @ref ProfileToneCurveWrites for `odt` and
  *        `camera_profile_file`.
  *
  * The caller applies them in the history batch of the edit, so one Undo restores them with it.

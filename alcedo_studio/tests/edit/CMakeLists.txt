@@ -98,12 +98,14 @@ gtest_discover_tests(Aces2ForwardTest TEST_PREFIX "Aces2ForwardTest."
   PROPERTIES LABELS "edit;runtime;color")
 alcedo_register_test_target(Aces2ForwardTest edit)
 
-# Profile tone stage host reference: ACES 2.0 and OpenDRT neutral responses, inverse tables,
-# neutral error, and the CIEDE2000 measurement record (DCP profile tone curve study, phase T1).
+# Profile tone curve: ACES 2.0 and OpenDRT neutral responses, inverse tables, the CIEDE2000
+# measurement record (DCP profile tone curve study, phase T1), and the import of the curve into
+# points of the RGB curve (#911).
 add_executable(ProfileToneReferenceTest
+  ${ALCEDO_TEST_ROOT}/edit/runtime/profile_tone_curve_import_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/profile_tone_reference_test.cpp)
 target_include_directories(ProfileToneReferenceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(ProfileToneReferenceTest PRIVATE GTest::gtest_main EditRuntime Image)
+target_link_libraries(ProfileToneReferenceTest PRIVATE GTest::gtest_main ProfileToneCurve EditRuntime Image)
 gtest_discover_tests(ProfileToneReferenceTest TEST_PREFIX "ProfileToneReferenceTest."
   PROPERTIES LABELS "edit;runtime;color")
 alcedo_register_test_target(ProfileToneReferenceTest edit ci_core)
@@ -275,7 +277,7 @@ alcedo_register_test_target(FilmPrintTablesTest edit)
 add_executable(ToneCurvePresetTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/tone_curve_preset_test.cpp)
 target_include_directories(ToneCurvePresetTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ToneCurvePresetTest PRIVATE GTest::gtest_main EditGraph EditRuntime Image)
+target_link_libraries(ToneCurvePresetTest PRIVATE GTest::gtest_main EditGraph ProfileToneCurve Image)
 gtest_discover_tests(ToneCurvePresetTest TEST_PREFIX "ToneCurvePresetTest."
   PROPERTIES LABELS "edit;runtime")
 alcedo_register_test_target(ToneCurvePresetTest edit ci_core)
@@ -534,7 +536,6 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_grain_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_grain_negative_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_print_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_profile_tone_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
@@ -680,8 +681,7 @@ if(ALCEDO_METAL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_diffusion_filter_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_grain_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_grain_negative_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_print_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_profile_tone_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_print_test.cpp)
   target_include_directories(GpuDagMetalDrtTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalDrtTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditRuntimeFilm EditInput RawProcessorOp
@@ -789,7 +789,6 @@ if(ALCEDO_OPENCL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_grain_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_grain_negative_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_print_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_profile_tone_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_lut_resource_test.cpp)

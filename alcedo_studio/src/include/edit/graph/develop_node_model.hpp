@@ -84,9 +84,10 @@ struct DevelopCameraProfileFile {
   std::string         camera_model;      ///< UniqueCameraModel of the DCP file.
   std::string         profile_name;      ///< ProfileName of the DCP file.
   std::uint64_t       fingerprint  = 0;  ///< DcpCameraProfile::fingerprint of the file content.
-  /// The profile tone stage of the display transform applies the `ProfileToneCurve` of the
-  /// profile (dcp_profile_tone_curve_study.md, section 6). Key `profile_tone`, written only as
-  /// `false`, so a reference made before the key keeps its bytes. The camera pass does not read it.
+  /// The Tone Curve switch of the camera profile: while it is on, the RGB curve of Color Grade 1
+  /// follows the `ProfileToneCurve` of the profile (the entry rules of
+  /// ProfileToneCurveWrites, #911). Key `profile_tone`, written only as `false`, so a reference
+  /// made before the key keeps its bytes. No render reads it.
   bool                profile_tone = true;
   DcpCameraProfilePtr profile;  ///< Bound profile; null for an unbound reference.
   /// For a DNG source: the tables of @ref profile merged with the source values (AnalogBalance,
@@ -230,8 +231,8 @@ enum class DevelopDirty : std::uint32_t {
   /// Raster input description or profile override. Changes the raster linearize step, so it
   /// invalidates from the sensor result.
   Input        = 1U << 4,
-  /// `camera_profile_file.profile_tone` alone. The camera pass does not read it, so it invalidates
-  /// the display result only (dcp_profile_tone_curve_study.md, section 6.3).
+  /// `camera_profile_file.profile_tone` alone. No render reads it, so it invalidates no result;
+  /// the editor writes the RGB curve that follows it (#911).
   ProfileTone  = 1U << 5,
   All          = Demosaic | Highlights | WhiteBalance | Lens | Input | ProfileTone,
 };
@@ -303,7 +304,7 @@ struct DevelopInputProfileUpdate {
  * @ref unresolved reference keeps its own value.
  *
  * A change of `profile_tone` alone marks DevelopDirty::ProfileTone and not
- * DevelopDirty::WhiteBalance, so the camera pass result stays valid.
+ * DevelopDirty::WhiteBalance, so every render result stays valid.
  */
 struct DevelopCameraProfileFileUpdate {
   DcpCameraProfilePtr                     profile;

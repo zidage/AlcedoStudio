@@ -9,8 +9,9 @@ import Alcedo.Main 1.0
 // Develop field camera_profile_file. A stored reference that does not resolve shows its name in
 // dangerColor. A note under the combo names the reason when it holds only the default entry: no
 // DCP folder (set in Settings > LUTs and Color Management), or no profile of this camera.
-// Under the combo, the Tone Curve switch turns the profile tone stage of a profile with a
-// ProfileToneCurve on or off; each change is one settled edit of camera_profile_file.
+// Under the combo, the Tone Curve switch of a profile with a ProfileToneCurve loads that curve
+// into the RGB curve of the Tone Curve section, or puts the import look back (#911); each change is
+// one settled edit of camera_profile_file, with the curve write in the same history batch.
 Item {
     id: root
     objectName: "editorCameraProfileSection"
@@ -82,9 +83,9 @@ Item {
                 warning: profileModel.currentUnresolved
             }
 
-            // Profile tone stage of the selected DCP profile (dcp_profile_tone_curve_study.md,
-            // section 6.4). Film Print runs no stage, so the switch is disabled there and keeps
-            // its stored value. The switch follows the echo of its write.
+            // Tone Curve switch of the selected DCP profile (dcp_profile_tone_curve_study.md,
+            // section 11). Film Print follows no profile curve, so the switch is disabled there and
+            // keeps its stored value. The switch follows the echo of its write.
             RowLayout {
                 objectName: "rawCameraProfileToneCurveRow"
                 Layout.fillWidth: true
