@@ -4,7 +4,8 @@ Date: 2026-11-13
 
 Issue: [#891](https://github.com/zidage/AlcedoStudio/issues/891) (TC6 of
 [tone_curve_editor_plan.md](tone_curve_editor_plan.md), tracking issue
-[#885](https://github.com/zidage/AlcedoStudio/issues/885)).
+[#885](https://github.com/zidage/AlcedoStudio/issues/885)). Highlight shoulder of Film-like and
+Filmic: [#899](https://github.com/zidage/AlcedoStudio/issues/899) (2026-11-13, section 4.3).
 
 Script: [`scripts/fit_tone_curve_presets.py`](../../../../scripts/fit_tone_curve_presets.py).
 Figures: [`tone_curve_preset_study/`](tone_curve_preset_study/).
@@ -116,6 +117,65 @@ end slopes from the end segments), in float like the kernels:
    largest error and move the points again.
 4. Round each coordinate to 5 decimals and report the error of the rounded points.
 
+### 4.3 Highlight shoulder of Film-like and Filmic (#899)
+
+Finding (#899): the sources of Film-like and Filmic reach display white 4 to 5 stops above 18%
+grey and stay there. Their first fits followed that: the curve climbed steeply to the peak and
+then ran flat (Film-like: (0.64790, 0.92653) to (0.94031, 0.94154), a slope of 0.05), so every
+highlight above about +4 EV rendered as the same code.
+
+The two presets now fit a target with a highlight shoulder. With `x_w` the curve input at which
+the source reaches display white and `y_t` the target of section 4.1:
+
+- Knee: `x_k = x_w - s`, one stop below the source white. The DCP profile tone stage puts its
+  shoulder at the same place, one stop below raw white
+  ([dcp_profile_tone_curve_study.md](../raw-processing/dcp_profile_tone_curve_study.md), section
+  6.6).
+- Up to the knee the target stays `y_t`.
+- Above the knee the target is the rational roll-off
+
+  `y(x) = y_k + D * t / (1 + t)`, with `t = m_k * (x - x_k) / D`,
+
+  where `y_k = y_t(x_k)` and `m_k` is the slope of `y_t` at the knee. Value and slope agree at the
+  knee, the slope falls as `m_k / (1 + t)^2`, and `D` is chosen so that `y(1) = 0.95434`, the
+  curve output at which `N` reaches the display peak:
+  `D = R * m_k * (1 - x_k) / (m_k * (1 - x_k) - R)`, `R = 0.95434 - y_k`. Each stop above the knee
+  maps to its own output value up to x = 1 (+10.3 EV).
+
+The fit keeps the rounded points of the fit without the shoulder up to the point before the knee
+point, and fits the points above them as in section 4.2, with the end point (1, 0.95434). The
+point next to the knee moves with the shoulder points: its spline slope follows its right
+neighbour, so with the shoulder in place of the steep top a fixed point there leaves an error of
+0.93 codes (Film-like) and 0.88 codes (Filmic) in the stop below the knee. With that one point
+free, the curve below the knee stays within 0.32 codes (Film-like) and 0.49 codes (Filmic) of the
+curve without the shoulder.
+
+| Preset | Source white (EV) | Knee `x_k` | Knee (EV) | `m_k` | Target slope at x = 1 | Points kept up to x | Change below the knee (codes) | Smallest slope of the fit above the knee |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Film-like | +4.05 | 0.58741 | +3.05 | 2.282 | 0.197 | 0.50517 | 0.32 | 0.324 |
+| Filmic | +4.84 | 0.63295 | +3.84 | 2.694 | 0.170 | 0.41359 | 0.49 | 0.232 |
+
+EV values are stops from 18% grey at the curve input. For Film-like the target with the shoulder
+lies within 0.54 codes of the ACR3 curve after the DCP stage shoulder `H` (knee 0.5 of raw white):
+the two forms give the same roll-off.
+
+Display codes of a neutral at the curve input (8 bit, gamma 2.2):
+
+| Preset | Form | +2 | +3 | +3.5 | +4 | +4.5 | +5 | +6 | +8 | +10 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Film-like | source tone | 187.4 | 229.5 | 244.8 | 254.5 | 255.0 | 255.0 | 255.0 | 255.0 | 255.0 |
+| Film-like | points of #891 | 187.4 | 229.9 | 244.5 | 254.3 | 254.7 | 254.7 | 254.7 | 254.8 | 255.0 |
+| Film-like | points with the shoulder | 187.6 | 230.0 | 242.2 | 247.5 | 249.8 | 251.6 | 253.1 | 254.3 | 254.9 |
+| Filmic | source tone | 163.8 | 206.2 | 225.9 | 242.2 | 252.6 | 255.0 | 255.0 | 255.0 | 255.0 |
+| Filmic | points of #891 | 163.7 | 206.4 | 225.4 | 242.7 | 253.1 | 254.8 | 254.8 | 254.8 | 254.9 |
+| Filmic | points with the shoulder | 163.8 | 206.3 | 225.8 | 241.7 | 248.3 | 251.2 | 253.3 | 254.5 | 254.9 |
+
+The shoulder spreads the highlights over 7.4 codes from +4 EV to +10 EV (Film-like) and 6.6 codes
+from +4.5 EV to +10 EV (Filmic). In exchange the top stop below the source white renders darker:
+7.0 codes at +4 EV for Film-like, 4.3 codes at +4.5 EV for Filmic. Velvia 50 and Ektachrome E100
+keep their tops as fitted: a slide reaches its minimum density about 4 stops above 18% grey, and
+that clip belongs to the look of the film.
+
 ## 5. Results
 
 | Preset | Points | Fit error (codes) | Grey exposure `e_g` (EV) |
@@ -124,8 +184,8 @@ end slopes from the end segments), in float like the kernels:
 | Soft Contrast | 6 | 0.15 | 0 |
 | Medium Contrast | 6 | 0.22 | 0 |
 | Strong Contrast | 6 | 0.26 | 0 |
-| Film-like | 12 | 0.49 | -0.071 |
-| Filmic | 13 | 0.49 | -0.808 |
+| Film-like | 13 | 0.56 | -0.071 |
+| Filmic | 15 | 0.49 | -0.808 |
 | Kodak 2383 | 12 | 0.46 | -0.344 |
 | Velvia 50 | 15 | 0.51 | -0.897 |
 | Ektachrome E100 | 15 | 0.41 | -0.925 |
@@ -133,10 +193,22 @@ end slopes from the end segments), in float like the kernels:
 The points are in `alcedo_studio/src/edit/operators/models/tone_curve_preset_points.inc`, which
 the script writes. `ToneCurvePresetTest` evaluates the product spline and the product neutral
 response at 257 axis samples and checks each preset against the source tone within its fit error
-plus 0.05 codes; the largest difference of each preset is below its recorded error.
+plus 0.05 codes; the largest difference of each preset is below its recorded error. For Film-like
+and Filmic the source tone of the test is the source tone with the shoulder (section 4.3), and
+the test also checks the shoulder: from the knee to x = 1 the slope of the curve stays above the
+target slope at x = 1, falls to below a quarter of its value at the knee, and the end point is
+(1, 0.95434).
+
+Film-like and Filmic points (section 4.3):
+
+| Preset | Points |
+| --- | --- |
+| Film-like | (0, 0.14493), (0.24811, 0.26545), (0.28192, 0.28731), (0.32285, 0.32092), (0.36954, 0.36613), (0.41359, 0.41359), (0.50517, 0.53603), (0.57179, 0.64589), (0.59180, 0.68831), (0.63221, 0.76256), (0.66469, 0.79612), (0.71636, 0.84267), (1, 0.95434) |
+| Filmic | (0, 0.11720), (0.05139, 0.12594), (0.14117, 0.17422), (0.17031, 0.20220), (0.24522, 0.26164), (0.36624, 0.37069), (0.41359, 0.41359), (0.52741, 0.52984), (0.57421, 0.59107), (0.61226, 0.65677), (0.65470, 0.75574), (0.70435, 0.82835), (0.72436, 0.84677), (0.80094, 0.89869), (1, 0.95434) |
 
 Figures: for each preset, the curve on the axis (target, fitted spline, points) and the neutral
-axis through ACES 2.0 (source tone, the render with the preset, and Linear).
+axis through ACES 2.0 (source tone, the render with the preset, and Linear). The Film-like and
+Filmic figures also draw the source without the shoulder.
 
 | Preset | Curve axis | Neutral axis |
 | --- | --- | --- |
@@ -151,10 +223,10 @@ axis through ACES 2.0 (source tone, the render with the preset, and Linear).
 
 Observations:
 
-- Film-like lifts the shadows over the toe of ACES 2.0 (the curve starts at y = 0.145) and
-  reaches the display peak at raw white (+3.97 EV at the curve input of the Default document),
-  where ACES 2.0 alone keeps 72% of the peak. Above raw white the curve is flat, as the ACR
-  exposure ramp clips there.
+- Film-like lifts the shadows over the toe of ACES 2.0 (the curve starts at y = 0.145). Its
+  source reaches the display peak at raw white (+3.97 EV at the curve input of the Default
+  document), where ACES 2.0 alone keeps 72% of the peak, and the ACR exposure ramp clips there.
+  The preset rolls off from one stop below raw white toward the peak at x = 1 (section 4.3).
 - The three films hold a display black above 0 (the maximum density of the print or the slide):
   their curves start at y = 0.19 and stay flat over the deepest 3 stops.
 - Velvia 50 and Ektachrome E100 have the steepest mid-tones and reach white about +4 EV above
@@ -169,7 +241,8 @@ and ACES 2.0 together give the Adobe tone at Alcedo +1.5 EV = ACR 0 EV, and cont
 would add a second S. Documents imported before keep their stored values (contrast 15, the
 identity curve), and their bytes and root ids stay the same.
 
-The entry resets of the import look (dcp_profile_tone_curve_study.md, section 6.5) follow:
+The entry resets of the import look (dcp_profile_tone_curve_study.md, section 6.5) follow. The
+Film-like points are the current points or those of the first fit (section 7):
 
 - A profile tone entry writes the identity RGB curve while the RGB curve still has the Film-like
   points: the `ProfileToneCurve` of the camera profile replaces the Adobe default curve, as in
@@ -178,7 +251,25 @@ The entry resets of the import look (dcp_profile_tone_curve_study.md, section 6.
   negative and the print give the tone of that display transform, and Film-like is defined on
   ACES 2.0.
 
-## 7. Parameters
+## 7. Documents with the Film-like points of #891
+
+The shoulder of #899 changes the Film-like points. A document stores its curve points, so a
+document imported between #891 and #899 keeps the 12 points of the first fit and renders as
+before; new imports get the points of section 5.
+
+The entry resets of section 6 recognize both point lists as the import look
+(`IsFilmLikeToneCurve` in `tone_curve_presets.hpp`): the first fit stays in
+`tone_curve_presets.cpp` as `FilmLikeToneCurvePointsBeforeShoulder()`, by hand, since the script
+writes only the current points:
+
+(0, 0.14493), (0.24811, 0.26545), (0.28192, 0.28731), (0.32285, 0.32092), (0.36954, 0.36613),
+(0.41359, 0.41359), (0.50517, 0.53603), (0.58131, 0.66565), (0.62018, 0.77121),
+(0.64790, 0.92653), (0.94031, 0.94154), (1, 0.95434)
+
+The preset menu matches exact points, so it shows the first fit as a custom curve; choosing
+Film-like gives the points with the shoulder.
+
+## 8. Parameters
 
 | Symbol | Meaning | Unit | Value | Source |
 | --- | --- | --- | --- | --- |
@@ -193,5 +284,12 @@ The entry resets of the import look (dcp_profile_tone_curve_study.md, section 6.
 | Goal | Error at which the fit stops adding points | display codes | 0.5 | creative |
 | Points | Largest number of points of a preset | | 16 | data (TC1 limit) |
 | Allowance | Test allowance over the fit error | display codes | 0.05 | inferred |
+| `x_w` | Curve input at which a source reaches display white | ACEScc | Film-like 0.64449, Filmic 0.69003 | fit (section 4.3) |
+| Knee distance | Stops from the knee `x_k` up to `x_w` | stops | 1 | creative (as the DCP stage shoulder) |
+| `y_k`, `m_k` | Target value and slope at the knee | ACEScc | section 4.3 | fit |
+| `D` | Scale of the rational roll-off | ACEScc | from `y(1) = 0.95434` | inferred |
+| End point | Curve output at which `N` reaches the display peak | ACEScc | 0.95434 | data (ACEScc of scene 128) |
+| Refit points | Points of the first fit next to the knee that move with the shoulder | | 1 | creative |
+| Slope step | Central difference step of `m_k` on the curve axis | ACEScc | 0.002 | inferred |
 | Filmic parameters | Defaults of filmic rgb | | section 3.2 | data (darktable) |
 | Film resources | Film print resources | | schema 11 | data (alcedo-film-lab) |

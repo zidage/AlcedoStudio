@@ -48,4 +48,17 @@ struct ToneCurvePreset {
 [[nodiscard]] auto MatchToneCurvePreset(std::span<const CurvePoint> points)
     -> const ToneCurvePreset*;
 
+/**
+ * @brief Points of the Film-like preset before its highlight shoulder (#899).
+ *
+ * The RAW import look of #891 wrote them as the RGB curve of Color Grade 1, and documents store
+ * their points, so documents imported with that look keep them. The preset menu shows them as a
+ * custom curve.
+ */
+[[nodiscard]] auto FilmLikeToneCurvePointsBeforeShoulder() -> std::span<const CurvePoint>;
+
+/// True when @p points equal the Film-like preset exactly, as it is now or as it was before its
+/// highlight shoulder (@ref FilmLikeToneCurvePointsBeforeShoulder).
+[[nodiscard]] auto IsFilmLikeToneCurve(std::span<const CurvePoint> points) -> bool;
+
 }  // namespace alcedo
