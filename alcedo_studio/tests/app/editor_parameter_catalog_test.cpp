@@ -142,7 +142,7 @@ TEST(EditorParameterCatalogTest, ScalarRangesMatchPreviousPanelSliders) {
   };
   const Case cases[] = {
       {"exposure", "tone", -10.0, 10.0, 0.01, 2},  {"contrast", "tone", -100.0, 100.0, 1.0, 0},
-      {"highlights", "tone", -100.0, 100.0, 1.0, 0}, {"shadows", "tone", -100.0, 100.0, 1.0, 0},
+      {"highlights", "tone", -150.0, 100.0, 1.0, 0}, {"shadows", "tone", -100.0, 150.0, 1.0, 0},
       {"white", "tone", -100.0, 100.0, 1.0, 0},      {"black", "tone", -100.0, 100.0, 1.0, 0},
       {"saturation", "look", -100.0, 100.0, 1.0, 0}, {"vibrance", "look", -100.0, 100.0, 1.0, 0},
       {"diffusion", "post", 0.0, 100.0, 1.0, 0},     {"clarity", "post", -100.0, 100.0, 1.0, 0},
@@ -161,8 +161,9 @@ TEST(EditorParameterCatalogTest, ScalarRangesMatchPreviousPanelSliders) {
   }
 }
 
-// #922: Exposure, Highlights, and Shadows have a rail narrower than the accepted range; every
-// other scalar field has its rail on the full range.
+// #922: Exposure, Highlights, and Shadows have a rail narrower than the accepted range (typing
+// reaches +-10 EV, Highlights -150, Shadows +150). Every other field has its rail on the full
+// range.
 TEST(EditorParameterCatalogTest, ExposureHighlightsAndShadowsHaveANarrowerRail) {
   struct Case {
     const char* field;
@@ -170,7 +171,7 @@ TEST(EditorParameterCatalogTest, ExposureHighlightsAndShadowsHaveANarrowerRail) 
     double      rail_maximum;
   };
   const Case narrower[] = {
-      {"exposure", -5.0, 5.0}, {"highlights", -50.0, 50.0}, {"shadows", -50.0, 50.0}};
+      {"exposure", -5.0, 5.0}, {"highlights", -100.0, 100.0}, {"shadows", -100.0, 100.0}};
   for (const auto& entry : EditorParameterCatalog::Entries()) {
     if (entry.kind != EditorParameterValueKind::Scalar) {
       continue;
@@ -184,8 +185,11 @@ TEST(EditorParameterCatalogTest, ExposureHighlightsAndShadowsHaveANarrowerRail) 
     }
     EXPECT_DOUBLE_EQ(entry.range.rail_minimum, match->rail_minimum) << entry.field;
     EXPECT_DOUBLE_EQ(entry.range.rail_maximum, match->rail_maximum) << entry.field;
-    EXPECT_GT(entry.range.rail_minimum, entry.range.minimum) << entry.field;
-    EXPECT_LT(entry.range.rail_maximum, entry.range.maximum) << entry.field;
+    EXPECT_GE(entry.range.rail_minimum, entry.range.minimum) << entry.field;
+    EXPECT_LE(entry.range.rail_maximum, entry.range.maximum) << entry.field;
+    EXPECT_LT(entry.range.rail_maximum - entry.range.rail_minimum,
+              entry.range.maximum - entry.range.minimum)
+        << entry.field;
     EXPECT_GE(entry.range.default_value, entry.range.rail_minimum) << entry.field;
     EXPECT_LE(entry.range.default_value, entry.range.rail_maximum) << entry.field;
   }

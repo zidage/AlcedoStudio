@@ -368,8 +368,17 @@ TEST(EditorAdjustmentModelTest, CatalogFieldKeyAppliesTheRailRangeInsideTheFullR
 
   EditorAdjustmentValueModel shadows;
   shadows.setFieldKey(QStringLiteral("shadows"));
-  EXPECT_DOUBLE_EQ(shadows.railMinimum(), -50.0);
-  EXPECT_DOUBLE_EQ(shadows.railMaximum(), 50.0);
+  EXPECT_DOUBLE_EQ(shadows.minimum(), -100.0);
+  EXPECT_DOUBLE_EQ(shadows.maximum(), 150.0);
+  EXPECT_DOUBLE_EQ(shadows.railMinimum(), -100.0);
+  EXPECT_DOUBLE_EQ(shadows.railMaximum(), 100.0);
+
+  EditorAdjustmentValueModel highlights;
+  highlights.setFieldKey(QStringLiteral("highlights"));
+  EXPECT_DOUBLE_EQ(highlights.minimum(), -150.0);
+  EXPECT_DOUBLE_EQ(highlights.maximum(), 100.0);
+  EXPECT_DOUBLE_EQ(highlights.railMinimum(), -100.0);
+  EXPECT_DOUBLE_EQ(highlights.railMaximum(), 100.0);
 
   EditorAdjustmentValueModel contrast;
   contrast.setFieldKey(QStringLiteral("contrast"));

@@ -43,6 +43,7 @@
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_plan.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
 #include "edit/runtime/opencl/opencl_drt_pass.hpp"
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
@@ -426,12 +427,8 @@ auto CpuApplyLlf(const std::vector<Rgba>& input, int width, int height, float sh
   }
   auto        source = CpuBuildPyramid(source_base);
 
-  const float shadow_amount =
-      std::clamp(shadows_slider * local_tone_mapping::kHighlightStrengthScale / 80.0f,
-                 -local_tone_mapping::kBackendAmountLimit, local_tone_mapping::kBackendAmountLimit);
-  const float highlight_amount =
-      std::clamp(-highlights_slider * local_tone_mapping::kHighlightStrengthScale / 100.0f,
-                 -local_tone_mapping::kBackendAmountLimit, local_tone_mapping::kBackendAmountLimit);
+  const float shadow_amount    = ClampedLocalToneShadow(shadows_slider);
+  const float highlight_amount = ClampedLocalToneHighlight(highlights_slider);
   const float sigma       = local_tone_mapping::SigmaR(shadow_amount, highlight_amount);
   const auto  samples     = local_tone_mapping::BuildSamples(shadow_amount, highlight_amount);
 
