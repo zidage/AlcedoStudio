@@ -452,8 +452,18 @@ TEST(EditorToneCurveModelTest, ApplyPresetWritesThePointsOfTheSelectedCurveInOne
   // The same preset again changes nothing and writes nothing.
   ASSERT_TRUE(model->applyPreset(QStringLiteral("kodak_2383")));
   EXPECT_EQ(sub.settledCount(), 1);
-  EXPECT_FALSE(model->applyPreset(QStringLiteral("no_such_preset")));
-  EXPECT_EQ(sub.settledCount(), 1);
+
+  // An id that names no preset applies Cl. Digit: film_like (the id before #914), then any other
+  // id, which then changes nothing.
+  ASSERT_TRUE(model->applyPreset(QStringLiteral("film_like")));
+  EXPECT_EQ(sub.settledCount(), 2);
+  write = CurveWrite(sub.lastSettledWrite());
+  ASSERT_NE(write, nullptr);
+  ASSERT_TRUE(write->green.has_value());
+  EXPECT_EQ(*write->green, alcedo::FindToneCurvePreset("cl_digital")->PointList());
+  EXPECT_EQ(model->presetId(), QStringLiteral("cl_digital"));
+  ASSERT_TRUE(model->applyPreset(QStringLiteral("no_such_preset")));
+  EXPECT_EQ(sub.settledCount(), 2);
 }
 
 TEST(EditorToneCurveModelTest, MenuNameFollowsThePointsPresetAfterApplyCustomAfterAnEdit) {
@@ -462,8 +472,8 @@ TEST(EditorToneCurveModelTest, MenuNameFollowsThePointsPresetAfterApplyCustomAft
   QSignalSpy         changed(model.get(), &EditorToneCurveModel::pointsChanged);
   EXPECT_EQ(model->presetId(), QStringLiteral("linear"));
 
-  ASSERT_TRUE(model->applyPreset(QStringLiteral("film_like")));
-  EXPECT_EQ(model->presetId(), QStringLiteral("film_like"));
+  ASSERT_TRUE(model->applyPreset(QStringLiteral("cl_digital")));
+  EXPECT_EQ(model->presetId(), QStringLiteral("cl_digital"));
   EXPECT_GE(changed.count(), 1);
 
   // A point edit: the points are no preset any more.
@@ -483,11 +493,11 @@ TEST(EditorToneCurveModelTest, MenuNameFollowsThePointsPresetAfterApplyCustomAft
 
   // A document load of the preset points (float JSON values) shows the preset.
   QVariantList points;
-  for (const auto& point : alcedo::FindToneCurvePreset("filmic")->points) {
+  for (const auto& point : alcedo::FindToneCurvePreset("kodak_2383")->points) {
     points.push_back(PointMap(static_cast<double>(point.x), static_cast<double>(point.y)));
   }
   model->loadFromSnapshotEntry(QVariantMap{{QStringLiteral("points"), points}});
-  EXPECT_EQ(model->presetId(), QStringLiteral("filmic"));
+  EXPECT_EQ(model->presetId(), QStringLiteral("kodak_2383"));
 }
 
 }  // namespace alcedo::ui::test

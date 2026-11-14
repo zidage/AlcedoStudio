@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Control points of the fitted Tone Curve presets, written by
+// Control points of the Tone Curve presets, written by
 // scripts/fit_tone_curve_presets.py (tone_curve_preset_study.md). Do not edit.
 // clang-format off
 
@@ -12,10 +12,8 @@ inline constexpr std::array<CurvePoint, 6> kSoftContrastPoints{{{0.02514f, 0.000
 inline constexpr std::array<CurvePoint, 6> kMediumContrastPoints{{{0.04992f, 0.00000f}, {0.29805f, 0.26796f}, {0.41359f, 0.41359f}, {0.43533f, 0.44215f}, {0.58643f, 0.62629f}, {0.94883f, 1.00000f}}};
 // Fit error 0.26 codes.
 inline constexpr std::array<CurvePoint, 6> kStrongContrastPoints{{{0.08212f, 0.00000f}, {0.30049f, 0.25053f}, {0.41359f, 0.41359f}, {0.43412f, 0.44471f}, {0.57319f, 0.63643f}, {0.91487f, 1.00000f}}};
-// Fit error 0.56 codes.
-inline constexpr std::array<CurvePoint, 13> kFilmLikePoints{{{0.00000f, 0.00000f}, {0.17357f, 0.21516f}, {0.28192f, 0.28731f}, {0.32285f, 0.32092f}, {0.36954f, 0.36613f}, {0.41359f, 0.41359f}, {0.50517f, 0.53603f}, {0.57179f, 0.64589f}, {0.59180f, 0.68831f}, {0.63221f, 0.76256f}, {0.66469f, 0.79612f}, {0.71636f, 0.84267f}, {1.00000f, 0.95434f}}};
-// Fit error 0.49 codes.
-inline constexpr std::array<CurvePoint, 12> kFilmicPoints{{{0.00000f, 0.00000f}, {0.13938f, 0.16232f}, {0.36624f, 0.37069f}, {0.41359f, 0.41359f}, {0.52741f, 0.52984f}, {0.57421f, 0.59107f}, {0.61226f, 0.65677f}, {0.65470f, 0.75574f}, {0.70435f, 0.82835f}, {0.72436f, 0.84677f}, {0.80094f, 0.89869f}, {1.00000f, 0.95434f}}};
+// Placed by hand.
+inline constexpr std::array<CurvePoint, 7> kClDigitalPoints{{{0.00000f, 0.00000f}, {0.18528f, 0.14532f}, {0.41359f, 0.41359f}, {0.52774f, 0.57341f}, {0.64190f, 0.76176f}, {0.78459f, 0.88733f}, {1.00000f, 0.95434f}}};
 // Fit error 0.46 codes.
 inline constexpr std::array<CurvePoint, 12> kKodak2383Points{{{0.00000f, 0.19040f}, {0.10593f, 0.19623f}, {0.21591f, 0.21537f}, {0.34839f, 0.32782f}, {0.37359f, 0.36115f}, {0.41359f, 0.41359f}, {0.47163f, 0.49296f}, {0.49553f, 0.52254f}, {0.70303f, 0.76391f}, {0.76860f, 0.83360f}, {0.87942f, 0.89908f}, {1.00000f, 0.92308f}}};
 // Fit error 0.51 codes.

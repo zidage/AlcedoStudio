@@ -83,7 +83,7 @@ inline constexpr float kFilmPrintEntrySaturation = 1.0f;
 /**
  * @brief Default Grade curve that an `odt` edit resets when it turns on the film print.
  *
- * The Film-like curve of the RAW import look (@ref kDefaultPipelineToneCurvePresetId) is the
+ * The Cl. Digit curve of the RAW import look (@ref kDefaultPipelineToneCurvePresetId) is the
  * Adobe tone on top of ACES 2.0; the negative and the print give the tone of the film print. The
  * rule applies on the entry of @ref FilmPrintEntrySaturationTarget, and only while the RGB curve
  * still has the points of the preset. The write sets the RGB curve to the identity; the channel
@@ -126,7 +126,7 @@ struct EditorEntryResetWrite {
  * - Change (another profile curve or another method): the RGB curve takes the new points while it
  *   still has the points before.
  * - Exit (a followed curve before, none after): while the RGB curve still has the points before,
- *   it goes back to the RAW import look: the Film-like preset, or the identity on Film Print.
+ *   it goes back to the RAW import look: the Cl. Digit preset, or the identity on Film Print.
  *
  * A curve that the user edited stays in a change and an exit. The channel curves always stay. A
  * document without `grade.primary` gets no write.

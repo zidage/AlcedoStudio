@@ -338,11 +338,11 @@ TEST_F(AutomationAdjustmentCommandsTest, PasteOfExposureOnlyKeepsImportLookOfOth
               ItemOfType(target_before, type).value("value"))
         << type.toStdString();
   }
-  const auto* film_like = FindToneCurvePreset(kFilmLikeToneCurvePresetId);
-  ASSERT_NE(film_like, nullptr);
+  const auto* cl_digital = FindToneCurvePreset(kClDigitalToneCurvePresetId);
+  ASSERT_NE(cl_digital, nullptr);
   EXPECT_EQ(
       ItemOfType(target_after, QStringLiteral("alcedo.adjustment.curve")).value("value").toString(),
-      QStringLiteral("%1 points").arg(film_like->points.size()));
+      QStringLiteral("%1 points").arg(cl_digital->points.size()));
 }
 
 }  // namespace

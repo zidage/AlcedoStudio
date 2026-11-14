@@ -100,7 +100,7 @@ TEST(GpuDagModelGraph, DefaultPrimaryGradeUsesFullMixAndNoMask) {
 }
 
 TEST(GpuDagModelGraph,
-     DefaultPipelineDocumentBakesOnePointFiveEvSaturationOnePointThreeAndTheFilmLikeCurve) {
+     DefaultPipelineDocumentBakesOnePointFiveEvSaturationOnePointThreeAndTheClDigitalCurve) {
   const auto document = CreateDefaultPipelineDocument();
   const auto* grade   = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
@@ -124,10 +124,10 @@ TEST(GpuDagModelGraph,
   const auto* curve =
       dynamic_cast<const CurveModel*>(grade->FindAdjustmentByType(type_ids::Curve()));
   ASSERT_NE(curve, nullptr);
-  const auto* film_like = FindToneCurvePreset("film_like");
-  ASSERT_NE(film_like, nullptr);
-  EXPECT_EQ(kDefaultPipelineToneCurvePresetId, "film_like");
-  EXPECT_EQ(curve->Points(), film_like->PointList());
+  const auto* cl_digital = FindToneCurvePreset("cl_digital");
+  ASSERT_NE(cl_digital, nullptr);
+  EXPECT_EQ(kDefaultPipelineToneCurvePresetId, "cl_digital");
+  EXPECT_EQ(curve->Points(), cl_digital->PointList());
   for (const auto channel : {CurveChannel::Red, CurveChannel::Green, CurveChannel::Blue}) {
     EXPECT_TRUE(IsIdentityCurve(curve->ChannelPoints(channel)));
   }

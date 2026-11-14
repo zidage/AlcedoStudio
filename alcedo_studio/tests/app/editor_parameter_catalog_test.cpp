@@ -1604,21 +1604,28 @@ TEST(EditorParameterCatalogTest, EachToneCurvePresetPassesTheCurveWrite) {
 TEST(EditorParameterCatalogTest, CurveWriteAppliesAPresetById) {
   std::string error;
   const auto  parsed = ParseEditorParameterWrite(
-      "curve", {{"curve", {{"points", "film_like"}, {"blue", "kodak_2383"}}}}, &error);
+      "curve", {{"curve", {{"points", "cl_digital"}, {"blue", "kodak_2383"}}}}, &error);
   ASSERT_TRUE(parsed.has_value()) << error;
   const auto* write = std::get_if<EditorCurveWrite>(&*parsed);
   ASSERT_NE(write, nullptr);
   ASSERT_TRUE(write->points.has_value());
-  EXPECT_EQ(*write->points, FindToneCurvePreset("film_like")->PointList());
+  EXPECT_EQ(*write->points, FindToneCurvePreset("cl_digital")->PointList());
   EXPECT_FALSE(write->red.has_value());
   ASSERT_TRUE(write->blue.has_value());
   EXPECT_EQ(*write->blue, FindToneCurvePreset("kodak_2383")->PointList());
 
-  EXPECT_FALSE(
-      ParseEditorParameterWrite("curve", {{"curve", {{"green", "velvia"}}}}, &error).has_value());
-  EXPECT_EQ(error, "curve.green names no Tone Curve preset: velvia; curve.presets lists them");
+  // An id that names no preset applies Cl. Digit: film_like, the id before #914, and any other.
+  const auto cl_digital = FindToneCurvePreset(kClDigitalToneCurvePresetId)->PointList();
+  for (const auto* id : {"film_like", "filmic", "velvia"}) {
+    const auto fallback = ParseEditorParameterWrite("curve", {{"curve", {{"green", id}}}}, &error);
+    ASSERT_TRUE(fallback.has_value()) << id << ": " << error;
+    const auto* green = std::get_if<EditorCurveWrite>(&*fallback);
+    ASSERT_NE(green, nullptr);
+    ASSERT_TRUE(green->green.has_value()) << id;
+    EXPECT_EQ(*green->green, cl_digital) << id;
+  }
   // A stored value holds points only.
-  EXPECT_FALSE(ParseEditorParameterValue("curve", {{"points", "film_like"}}, &error).has_value());
+  EXPECT_FALSE(ParseEditorParameterValue("curve", {{"points", "cl_digital"}}, &error).has_value());
 }
 
 TEST(EditorParameterCatalogTest, CurveValueWithoutAChannelKeyReadsThatChannelAsIdentity) {

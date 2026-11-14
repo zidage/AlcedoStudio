@@ -184,9 +184,10 @@ class PipelineDocument {
 inline constexpr float kDefaultPipelineExposureEv = 1.5f;
 /// Product Default saturation multiplier (legacy UI +30 → 1 + 30/100).
 inline constexpr float kDefaultPipelineSaturation = 1.3f;
-/// Product Default RGB curve: the Tone Curve preset `film_like` (tone_curve_presets.hpp), the
-/// shape of the Adobe default tone curve on top of the ACES 2.0 display transform (#891).
-inline constexpr std::string_view kDefaultPipelineToneCurvePresetId = "film_like";
+/// Product Default RGB curve: the Tone Curve preset `cl_digital` (Cl. Digit,
+/// tone_curve_presets.hpp), one S curve placed by hand on top of the ACES 2.0 display transform
+/// (#914; Film-like before).
+inline constexpr std::string_view kDefaultPipelineToneCurvePresetId = "cl_digital";
 /**
  * Contrast slider value of the RAW import look before the Film-like curve (OkLab lightness S
  * curve, slope 2^(15/100) at mid grey). Documents imported before #891 keep it; the entry resets of
