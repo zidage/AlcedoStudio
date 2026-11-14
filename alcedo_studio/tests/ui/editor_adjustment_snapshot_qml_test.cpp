@@ -10,6 +10,9 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QFont>
+#include <QFontMetricsF>
+#include <QHoverEvent>
 #include <QList>
 #include <QPointF>
 #include <QQmlComponent>
@@ -19,14 +22,18 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QRectF>
+#include <QSizeF>
 #include <QTest>
 #include <QVariantMap>
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "app/editor_panel_projection.hpp"
 #include "edit/operators/models/curve_model.hpp"
@@ -459,6 +466,118 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveRightClickRemovesAnInteriorPointA
   QTest::keyClick(window, Qt::Key_Delete);
   EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[5]}));
   EXPECT_EQ(session.submitCount(), 4);
+}
+
+// Every text item under @p item, at any depth.
+void CollectTextItems(QQuickItem* item, std::vector<QQuickItem*>& out) {
+  for (QQuickItem* child : item->childItems()) {
+    if (child->inherits("QQuickText") || child->inherits("QQuickTextInput")) {
+      out.push_back(child);
+    }
+    CollectTextItems(child, out);
+  }
+}
+
+TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveSectionShowsAllTextInFullAtTheDefaultPanelWidth) {
+  // Modified RGB and red curves show the modified dots. The selected end point at 1.0 has the
+  // longest EV texts of the fields (+10.27 EV).
+  alcedo::EditorPanelCurveValue curve;
+  curve.points = {{0.0f, 0.0f}, {0.06f, 0.03f}, {0.75f, 0.82f}, {1.0f, 1.0f}};
+  curve.red    = {{0.0f, 0.1f}, {1.0f, 1.0f}};
+  curve.green  = alcedo::IdentityCurvePoints();
+  curve.blue   = alcedo::IdentityCurvePoints();
+  alcedo::EditorPanelProjection projection;
+  projection.session_generation = 1;
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = "curve";
+  field.value     = curve;
+  projection.fields.push_back(std::move(field));
+
+  SnapshotSession              session(alcedo::ui::PanelProjectionToVariantMap(projection), 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  const AppTheme& theme = AppTheme::Instance();
+  auto*           model = harness.root()->findChild<QObject*>(QStringLiteral("toneCurveModel"));
+  auto* section = harness.root()->findChild<QQuickItem*>(QStringLiteral("editorToneCurveGroup"));
+  auto* pane    = harness.root()->findChild<PlotPane*>(QStringLiteral("toneCurvePlotPane"));
+  auto* grid    = harness.root()->findChild<QObject*>(QStringLiteral("toneCurveGridLayer"));
+  auto* selector =
+      harness.root()->findChild<QQuickItem*>(QStringLiteral("toneCurveChannelSelector"));
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(pane, nullptr);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(selector, nullptr);
+  QQuickWindow* window = pane->window();
+  ASSERT_NE(window, nullptr);
+
+  // The stack at the default editor panel width, tall enough to show the Tone Curve section.
+  window->resize(theme.editorSidePanelWidth(), 1600);
+  harness.root()->setSize(QSizeF(theme.editorSidePanelWidth(), 1600));
+  model->setProperty("selectedIndex", 3);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+  // The pointer over the plot shows the In and Out readout, here with long In and Out texts.
+  const QPointF hover_point = pane->mapFromData({0.99, 0.05});
+  QHoverEvent   hover(QEvent::HoverMove, hover_point, pane->mapToGlobal(hover_point), hover_point);
+  QCoreApplication::sendEvent(pane, &hover);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+  auto* readout = harness.root()->findChild<QQuickItem*>(QStringLiteral("toneCurvePointerReadout"));
+  ASSERT_NE(readout, nullptr);
+  ASSERT_TRUE(pane->property("pointerInside").toBool());
+  EXPECT_TRUE(readout->isVisible());
+  EXPECT_EQ(selector->property("titlePixelSize").toInt(), theme.fontSizeMicro());
+
+  // No visible text of the section is elided or reaches past the clip of the section.
+  const QRectF             section_rect(0.0, 0.0, section->width(), section->height());
+  std::vector<QQuickItem*> texts;
+  CollectTextItems(section, texts);
+  int checked = 0;
+  for (QQuickItem* text_item : texts) {
+    const QString text = text_item->property("text").toString();
+    if (!text_item->isVisible() || text.trimmed().isEmpty()) {
+      continue;
+    }
+    ++checked;
+    if (text_item->inherits("QQuickText")) {
+      EXPECT_FALSE(text_item->property("truncated").toBool()) << text.toStdString();
+    } else {
+      EXPECT_LE(text_item->property("contentWidth").toReal(), text_item->width() + 0.5)
+          << text.toStdString();
+    }
+    const QRectF content(0.0, 0.0, std::max(text_item->width(), text_item->implicitWidth()),
+                         std::max(text_item->height(), text_item->implicitHeight()));
+    const QRectF in_section = text_item->mapRectToItem(section, content);
+    EXPECT_TRUE(section_rect.adjusted(-0.5, -0.5, 0.5, 0.5).contains(in_section))
+        << text.toStdString() << " at " << in_section.x() << "," << in_section.y() << " "
+        << in_section.width() << "x" << in_section.height() << " in section "
+        << section_rect.width() << "x" << section_rect.height();
+  }
+  // The title, the channel titles, the preset name, the readout, and the two fields with their
+  // labels and EV texts.
+  EXPECT_GE(checked, 16);
+
+  // The EV labels under the plot show in full at both ends of the X axis.
+  const QFont font = grid->property("labelFont").value<QFont>();
+  EXPECT_EQ(font.pixelSize(), theme.fontSizeMicro());
+  const QFontMetricsF metrics(font);
+  const QRectF        plot = pane->property("plotRect").toRectF();
+  EXPECT_LE(plot.bottom() + grid->property("labelGap").toReal() + metrics.height(),
+            pane->height() + 0.5);
+  int labels = 0;
+  for (const QVariant& tick : grid->property("xTicks").toList()) {
+    const QVariantMap map   = tick.toMap();
+    const QString     label = map.value(QStringLiteral("label")).toString();
+    if (label.isEmpty()) {
+      continue;
+    }
+    ++labels;
+    const qreal x    = pane->mapFromData({map.value(QStringLiteral("value")).toDouble(), 0.0}).x();
+    const qreal half = 0.5 * metrics.horizontalAdvance(label);
+    EXPECT_GE(x - half, -0.5) << label.toStdString();
+    EXPECT_LE(x + half, pane->width() + 0.5) << label.toStdString();
+  }
+  EXPECT_GE(labels, 8);
+  EXPECT_TRUE(section_rect.contains(pane->mapRectToItem(section, pane->boundingRect())));
 }
 
 }  // namespace

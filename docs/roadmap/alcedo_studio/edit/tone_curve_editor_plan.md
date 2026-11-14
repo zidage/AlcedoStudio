@@ -1104,3 +1104,41 @@ Status: complete. Issue [#902](https://github.com/zidage/AlcedoStudio/issues/902
 | --- | --- |
 | `EditorPlotPaneTest` (all, with `HistogramOpacityScalesTheLightOfTheFillAndOfTheEdge`) | 21 passed |
 | `EditorAdjustmentSnapshotQmlTest` (all) | 7 passed |
+
+### #903: dense text of the Tone Curve section (2026-11-13)
+
+Status: complete. Issue [#903](https://github.com/zidage/AlcedoStudio/issues/903), branch
+`fix/tone-curve-dense-font-903`, stacked on #902 (PR #908).
+
+- `AppTheme::fontSizeMicro` is 10 px, the size of dense data controls. The Tone Curve section uses
+  it for the EV axis labels, the In and Out readout at the top of the plot, the labels and the EV
+  texts of the In and Out fields, and the channel titles. The preset name and the field values keep
+  `fontSizeBody`.
+- `SegmentedCardSwitcher` has `titlePixelSize` (default `fontSizeBody`) and a per-entry `stretch`
+  (default 1). A segment takes `stretch / sum of stretches` of the track width through its
+  preferred width. `Layout.horizontalStretchFactor` gives equal segments here: the layout engine
+  scales a stretch by the preferred widths, which are all 0. The RGB entry has stretch 1.6, so the
+  RGB title and its modified dot fit beside the one-letter titles.
+- The plot has a left and a right inset of half the width of the widest EV label (`+10`), so a
+  label centered on a tick at an end of the X axis shows in full. The plot stays square.
+- Cause of the clipped field row: the section body has a margin of `spaceSm` on each side and the
+  curve body a margin of `spaceXs`, 24 px in all, and the section reserved 8 px. The section now
+  reserves `2 * (spaceSm + spaceXs)`.
+- The field box is as wide as `0.0000` (the value format) plus its padding, so the longest EV text
+  (`+10.27 EV`, the point at 1.0) has room after the field.
+
+At the default editor panel width (320 px), the track of the channel selector gives the RGB segment
+41 px and each letter segment 26 px; the In field row gives its EV text 54 px for the 47 px of
+`+10.27 EV`.
+
+| Binary and filter | Result |
+| --- | --- |
+| `EditorAdjustmentSnapshotQmlTest` (all, with `ToneCurveSectionShowsAllTextInFullAtTheDefaultPanelWidth`) | 8 passed; the new test fails on the QML before the fix (RGB and EV texts elided, field values clipped, `+10` past the pane) |
+| `EditorRawDecodePanelQmlTest` (all, a caller of `SegmentedCardSwitcher`) | 10 passed |
+
+| Parameter | Value | Meaning |
+| --- | --- | --- |
+| `fontSizeMicro` | 10 px | Text size of dense data controls |
+| RGB `stretch` | 1.6 | Width share of the RGB segment; a letter segment has 1 |
+| `labelSideInset` | `ceil(width of "+10" / 2)` | Left and right inset of the plot |
+| `bodyContentHeight` | curve body height + `2 * (spaceSm + spaceXs)` | Body height of the section |

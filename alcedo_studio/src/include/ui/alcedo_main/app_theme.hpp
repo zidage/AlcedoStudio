@@ -154,6 +154,9 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int motionEasing READ motionEasing CONSTANT)
   Q_PROPERTY(int backgroundTaskAutoCollapseMs READ backgroundTaskAutoCollapseMs CONSTANT)
   Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY ReduceMotionChanged)
+  /// Text of dense data controls, smaller than fontSizeCaption: plot axis labels, the readout and
+  /// the values around a plot, and the titles of a crowded segmented switcher.
+  Q_PROPERTY(int fontSizeMicro READ fontSizeMicro CONSTANT)
   Q_PROPERTY(int fontSizeCaption READ fontSizeCaption CONSTANT)
   Q_PROPERTY(int fontSizeBody READ fontSizeBody CONSTANT)
   Q_PROPERTY(int fontSizeTitle READ fontSizeTitle CONSTANT)
@@ -462,6 +465,7 @@ class AppTheme final : public QObject {
   auto        backgroundTaskAutoCollapseMs() const -> int;
   auto        reduceMotion() const -> bool;
   void        setReduceMotion(bool enabled);
+  auto        fontSizeMicro() const -> int;
   auto        fontSizeCaption() const -> int;
   auto        fontSizeBody() const -> int;
   auto        fontSizeTitle() const -> int;
