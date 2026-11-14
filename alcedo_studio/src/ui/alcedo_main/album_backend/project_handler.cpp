@@ -14,6 +14,7 @@
 
 #include "app/mask_thumbnail_service.hpp"
 #include "app/project_package_service.hpp"
+#include "app/raw_import_look_settings.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
@@ -203,9 +204,10 @@ bool ProjectHandler::StartProjectLoad(
       result->thumbnail_ = std::make_shared<ThumbnailService>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
           result->pipeline_, result->project_->GetStorage(), result->project_->GetProjectUUID());
+      // RAW imports take the look of the Import defaults settings (#918).
       result->import_ = std::make_unique<ImportServiceImpl>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
-          result->pipeline_);
+          result->pipeline_, std::make_shared<const RawImportLookSettings>());
       result->export_ = std::make_shared<ExportService>(result->project_->GetSleeveService(),
                                                         result->project_->GetImagePoolService(),
                                                         result->pipeline_);
