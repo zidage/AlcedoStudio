@@ -263,6 +263,11 @@ class EditorAdjustmentEnumModel : public EditorAdjustmentModelBase {
   void defaultIndexChanged();
 
  protected:
+  /// Submit the current entry as one settled write; called by selectIndex and reset after the
+  /// index changed. The default uses paramsBuilder when it is callable, else
+  /// @ref selectionWrite. A field whose write can fail before the submit overrides it.
+  /// @return True when the submitter accepted the write.
+  virtual auto               submitSelection() -> bool;
   /// Typed Model operation for the selected entry @p value (used when paramsBuilder is unset).
   /// The default writes an enum value; a field whose Model takes another operation overrides it.
   [[nodiscard]] virtual auto selectionWrite(const QString& value) const

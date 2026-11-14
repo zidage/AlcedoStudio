@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -76,6 +77,9 @@ inline constexpr std::array<ImportFileCategory, 5> kImportableCategories = {
 }
 
 inline constexpr ImportCategoryMask kAllImportCategories = 0x1F;
+
+/// Set of import file paths in their native form (std::filesystem::path::native()).
+using ImportPathSet = std::unordered_set<std::filesystem::path::string_type>;
 
 [[nodiscard]] constexpr auto        operator|(ImportFileCategory lhs, ImportFileCategory rhs)
     -> ImportCategoryMask {

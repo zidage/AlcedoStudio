@@ -30,6 +30,7 @@
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
+#include "edit/runtime/profile_tone_gpu_math.h"
 #include "edit/runtime/texture_format.hpp"
 
 namespace alcedo {
@@ -37,14 +38,22 @@ namespace {
 
 constexpr std::uint32_t kDrtDirtyBits = static_cast<std::uint32_t>(DrtDirty::All);
 
+/// @p profile_tone is the buffer of the profile tone stage (profile_tone_gpu_math.h), or null when
+/// the document has no stage.
 __global__ void         DrtKernel(const float4* input, float4* output, std::uint32_t pixel_count,
-                                  const CudaDrtGpuParams* params) {
+                                  const CudaDrtGpuParams* params, const float* profile_tone) {
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixel_count) return;
   auto         runtime = *params;
   const float4 source  = input[index];
   // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
-  const float3 encoded = CUDA::DrtDisplayPixel(make_float3(source.x, source.y, source.z), runtime);
+  float3       ap1     = make_float3(source.x, source.y, source.z);
+  if (profile_tone != nullptr) {
+    const ProfileToneRgb toned =
+        ProfileToneApplyStage(ProfileToneMakeRgb(ap1.x, ap1.y, ap1.z), profile_tone);
+    ap1 = make_float3(toned.r, toned.g, toned.b);
+  }
+  const float3 encoded = CUDA::DrtDisplayPixel(ap1, runtime);
   output[index]        = make_float4(encoded.x, encoded.y, encoded.z, source.w);
 }
 
@@ -146,7 +155,8 @@ struct CudaDrtOps {
 
   static void DispatchDisplayTransform(CudaRenderDevice& device, const FrameSceneBinding& scene,
                                        const FrameSceneBinding& display, const NodeId& drt_id,
-                                       std::uint32_t width, std::uint32_t height) {
+                                       const CudaBackend::Buffer* profile_tone, std::uint32_t width,
+                                       std::uint32_t height) {
     auto&                  arena   = device.Workspace().Parameters();
     const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
     const auto&            binding = arena.Binding(key);
@@ -158,7 +168,9 @@ struct CudaDrtOps {
     auto& display_tex = CudaSceneTexture(device, display);
     DrtKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
         static_cast<const float4*>(scene_tex.DevicePointer()),
-        static_cast<float4*>(display_tex.DevicePointer()), pixels, params);
+        static_cast<float4*>(display_tex.DevicePointer()), pixels, params,
+        profile_tone != nullptr ? static_cast<const float*>(profile_tone->DevicePointer())
+                                : nullptr);
   }
 
   static void DispatchFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,

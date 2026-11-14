@@ -9,6 +9,7 @@
 
 #ifdef HAVE_OPENCL
 #include "opencl/opencl_context.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 #endif
 
 namespace alcedo::automation {
@@ -56,7 +57,8 @@ auto HeadlessFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain)
       opencl_image_ = clCreateImage(OpenClContext::Instance().Context(), CL_MEM_READ_WRITE, &format,
                                     &desc, nullptr, &status);
       if (status != CL_SUCCESS || opencl_image_ == nullptr) {
-        qWarning("HeadlessFrameSink: clCreateImage(%dx%d) failed with %d", width_, height_, status);
+        qCWarning(alcedo::diag::gpuLog, "HeadlessFrameSink: clCreateImage(%dx%d) failed with %d",
+                  width_, height_, status);
         opencl_image_ = nullptr;
         return mapping;
       }

@@ -24,6 +24,7 @@
 #include <QStyleHints>
 #include <QTest>
 #include <QUrl>
+#include <QWheelEvent>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -211,7 +212,7 @@ auto AlbumWarnings(const std::vector<std::string>& warnings) -> std::vector<std:
           "StarRatingFilter.qml", "ThumbnailGridView.qml", "ThumbnailStarRating.qml",
           "ThumbnailEditMark.qml", "JustifiedThumbnailTile.qml", "ThumbnailPinBinding.qml",
           "ThumbnailLayoutAnimation.qml", "ThumbnailColorLabelDots.qml", "ThumbnailDeleteMark.qml",
-          "ColorLabelFilterChips.qml"}) {
+          "ColorLabelFilterChips.qml", "StaggeredGridMark.qml"}) {
       if (warning.find(file) != std::string::npos) {
         out.push_back(warning);
         break;
@@ -312,9 +313,11 @@ auto GridCard(QQuickWindow* window, sl_element_id_t element_id) -> QQuickItem* {
   CollectItems(
       window ? window->contentItem() : nullptr,
       [&](QQuickItem* item) {
+        // A card in the pool of the grid is not drawn and keeps the values of its last photo.
         return item->objectName().startsWith(QStringLiteral("thumbnailGridView_")) &&
                (item->objectName().contains(QStringLiteral("Card")) ||
                 item->objectName().contains(QStringLiteral("card_"))) &&
+               item->isVisible() && !item->property("pooled").toBool() &&
                item->property("elementId").toUInt() == element_id;
       },
       cards);
@@ -329,6 +332,14 @@ auto DrawnRect(QQuickItem* item, QQuickItem* view) -> QRectF {
 
 auto SceneCenter(QQuickItem* item) -> QPoint {
   return item->mapToScene(QPointF(item->width() / 2.0, item->height() / 2.0)).toPoint();
+}
+
+/// One mouse wheel event with Ctrl held at the scene point @p pos. A positive @p angle is a turn
+/// forward, away from the user; one notch is 120.
+void SendCtrlWheel(QQuickWindow* window, const QPointF& pos, int angle) {
+  QWheelEvent event(pos, window->mapToGlobal(pos), QPoint(), QPoint(0, angle), Qt::NoButton,
+                    Qt::ControlModifier, Qt::NoScrollPhase, false);
+  QCoreApplication::sendEvent(window, &event);
 }
 
 auto RatingOf(ApplicationModuleHost& backend, sl_element_id_t element_id) -> int {
@@ -804,6 +815,130 @@ TEST_F(AlbumSectionQmlTests, LargeSectionTraversalKeepsCellsAndLoadedRowsBounded
   EXPECT_LE(max_pages, 3u);
   EXPECT_LE(max_rows, 360);
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// The thumbnail loading mark draws from one shared wave clock. A shown mark holds the clock, which
+// then ticks every loadingWaveFrameMs (not at the display rate); a hidden mark, a mark under
+// reduceMotion, and a destroyed mark hold nothing, and the clock stops with no holder.
+TEST_F(AlbumSectionQmlTests, StaggeredGridMarkHoldsTheSharedWaveClockOnlyWhileItShows) {
+  auto&      theme                = AppTheme::Instance();
+  const bool reduce_motion_before = theme.reduceMotion();
+  theme.setReduceMotion(false);
+  const int             holders_before = theme.loadingWaveHolders();
+
+  ApplicationModuleHost backend;
+  LoadedComponent       view(backend, "StaggeredGridMark.qml", 27);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* mark = view.loaded();
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before + 1);
+  EXPECT_EQ(mark->property("animated").toReal(), 1.0);
+
+  QSignalSpy    ticks(&theme, &AppTheme::LoadingWavePhaseChanged);
+  QElapsedTimer elapsed;
+  elapsed.start();
+  ProcessEvents(400);
+  const auto frames_at_clock_rate =
+      static_cast<double>(elapsed.elapsed()) / theme.loadingWaveFrameMs();
+  EXPECT_GE(ticks.count(), static_cast<int>(frames_at_clock_rate * 0.5));
+  EXPECT_LE(ticks.count(), static_cast<int>(frames_at_clock_rate * 1.2) + 2);
+  EXPECT_DOUBLE_EQ(mark->property("phase").toReal(), theme.loadingWavePhase());
+
+  mark->setProperty("visible", false);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before);
+  mark->setProperty("visible", true);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before + 1);
+
+  theme.setReduceMotion(true);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before);
+  EXPECT_EQ(mark->property("animated").toReal(), 0.0);
+  EXPECT_EQ(mark->property("phase").toReal(), 0.0);
+  theme.setReduceMotion(false);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before + 1);
+
+  // Destroying the mark lets go of the clock, and the clock stops.
+  view.window()->setProperty("loaderActive", false);
+  ASSERT_TRUE(WaitUntil([&]() { return theme.loadingWaveHolders() == holders_before; }));
+  if (holders_before == 0) {
+    ticks.clear();
+    ProcessEvents(200);
+    EXPECT_EQ(ticks.count(), 0);
+  }
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(view.warnings());
+  theme.setReduceMotion(reduce_motion_before);
+}
+
+// A zoom to a smaller thumbnail tier keeps the larger pin of a card that already shows a larger
+// thumbnail, so the card requests no render; a card without a thumbnail pins the new tier.
+TEST_F(AlbumSectionQmlTests, FlatGridZoomOutKeepsTheLargerThumbnailOfACardThatShowsOne) {
+  ApplicationModuleHost backend;
+  const auto            packed = PackedProjectWithOneEditedPhoto(temp_dir_);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto& keys = packed->images_;
+  ASSERT_GE(keys.size(), 2u);
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  // 4 columns: the 1024 tier.
+  view.loaded()->setProperty("zoomLevel", 2);
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  ASSERT_NE(window, nullptr);
+  const auto pin_of = [&](sl_element_id_t id) -> QObject* {
+    auto* card = GridCard(window, id);
+    return card ? card->findChild<QObject*>(QStringLiteral("thumbnailPinBinding")) : nullptr;
+  };
+  ASSERT_TRUE(WaitUntil([&]() {
+    for (const auto& key : keys) {
+      auto* pin = pin_of(key.file_id_);
+      if (pin == nullptr || pin->property("pinnedMaxEdge").toInt() != 1024) return false;
+    }
+    return view.loaded()->property("desiredMaxEdge").toInt() == 1024;
+  })) << Joined(view.warnings());
+  // The thumbnail requests of the fixture finish (with a thumbnail or an error) before the test
+  // sets the shown state of two cards.
+  ASSERT_TRUE(WaitUntil([&]() {
+    for (const auto& key : keys) {
+      auto* card = GridCard(window, key.file_id_);
+      if (card == nullptr || card->property("thumbnailLoadingState").toBool()) return false;
+    }
+    return true;
+  }));
+  ProcessEvents(300);
+
+  auto*         library    = backend.library();
+  const QString shown_url  = QStringLiteral("image://alcedo-thumb/%1/1024/7").arg(keys[0].file_id_);
+  library->thumbs().UpdateThumbnailState(keys[0].file_id_, shown_url, false, false);
+  library->thumbs().UpdateThumbnailState(keys[1].file_id_, QString(), false, false);
+  ASSERT_TRUE(WaitUntil([&]() {
+    auto* card = GridCard(window, keys[0].file_id_);
+    return card != nullptr && card->property("liveThumbUrl").toString() == shown_url;
+  }));
+
+  // 8 columns: the 256 tier.
+  view.loaded()->setProperty("zoomLevel", 5);
+  ASSERT_TRUE(WaitUntil([&]() {
+    return view.loaded()->property("columns").toInt() == 8 &&
+           view.loaded()->property("desiredMaxEdge").toInt() == 256 &&
+           !view.loaded()->property("thumbnailBindingSuspended").toBool();
+  })) << Joined(view.warnings());
+  ProcessEvents(500);
+
+  auto* shown_pin = pin_of(keys[0].file_id_);
+  ASSERT_NE(shown_pin, nullptr);
+  EXPECT_EQ(shown_pin->property("pinnedMaxEdge").toInt(), 1024);
+  EXPECT_EQ(GridCard(window, keys[0].file_id_)->property("liveThumbUrl").toString(), shown_url);
+  auto* empty_pin = pin_of(keys[1].file_id_);
+  ASSERT_NE(empty_pin, nullptr);
+  EXPECT_EQ(empty_pin->property("pinnedMaxEdge").toInt(), 256);
+  // The set URL has no pixels in the image store, so its Image warns; nothing else may.
+  std::vector<std::string> warnings;
+  for (const auto& warning : AlbumWarnings(view.warnings())) {
+    if (warning.find(shown_url.toStdString()) == std::string::npos) {
+      warnings.push_back(warning);
+    }
+  }
+  EXPECT_TRUE(warnings.empty()) << Joined(warnings);
 }
 
 // Issue #589, Library at 4 columns: the edit mark shows only on the edited photo; the stars
@@ -1438,7 +1573,7 @@ void UseTestSettings(const std::filesystem::path& dir) {
   settings.sync();
 }
 
-/// The justified tiles under @p root by photo index.
+/// The justified tiles under @p root by photo index; the empty slots (photo index -1) are left out.
 auto JustifiedTiles(QQuickItem* root) -> std::map<int, QQuickItem*> {
   std::vector<QQuickItem*> items;
   CollectItems(
@@ -1449,7 +1584,10 @@ auto JustifiedTiles(QQuickItem* root) -> std::map<int, QQuickItem*> {
       items);
   std::map<int, QQuickItem*> tiles;
   for (auto* item : items) {
-    tiles[item->property("photoIndex").toInt()] = item;
+    const int photo = item->property("photoIndex").toInt();
+    if (photo >= 0) {
+      tiles[photo] = item;
+    }
   }
   return tiles;
 }
@@ -1583,6 +1721,85 @@ TEST_F(AlbumSectionQmlTests, FlatGridZoomStepMovesEachCardFromItsOldRectangleToI
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
 }
 
+// Ctrl + wheel forward shows fewer, larger photos (a lower zoom level) and wheel backward more,
+// as wheel forward zooms in the editor viewport (#883). Touchpad steps below one notch add up.
+TEST_F(AlbumSectionQmlTests, FlatGridCtrlWheelForwardShowsFewerLargerPhotos) {
+  ApplicationModuleHost backend;
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 60);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto&     keys = packed->images_;
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys[0].file_id_) != nullptr; }));
+  ProcessEvents(300);
+  ASSERT_EQ(view.loaded()->property("zoomLevel").toInt(), 4);
+  const auto zoom_level = [&]() { return view.loaded()->property("zoomLevel").toInt(); };
+  const auto wheel      = [&](int angle) {
+    auto* card = GridCard(window, keys[0].file_id_);
+    ASSERT_NE(card, nullptr);
+    SendCtrlWheel(window, SceneCenter(card), angle);
+    ProcessEvents(400);
+  };
+
+  wheel(120);
+  EXPECT_EQ(zoom_level(), 3) << "wheel forward";
+  EXPECT_EQ(view.loaded()->property("columns").toInt(), 5);
+  wheel(-120);
+  wheel(-120);
+  EXPECT_EQ(zoom_level(), 5) << "two notches backward";
+  wheel(60);
+  EXPECT_EQ(zoom_level(), 5) << "half a notch";
+  wheel(60);
+  EXPECT_EQ(zoom_level(), 4) << "the second half";
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+TEST_F(AlbumSectionQmlTests, SectionCtrlWheelForwardRequestsFewerLargerPhotos) {
+  ApplicationModuleHost         backend;
+  std::vector<LibraryPhotoSpec> specs(40);
+  for (size_t index = 0; index < specs.size(); ++index) {
+    specs[index].model_ = index < 30 ? "Canon R5" : "Sony A7";
+  }
+  const auto packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, specs);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  auto* library = backend.library();
+  library->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+
+  LoadedComponent view(backend, "AlbumSectionView.qml", 1000);
+  auto*           window = qobject_cast<QQuickWindow*>(view.window());
+  QQuickItem*     cell   = nullptr;
+  ASSERT_TRUE(WaitUntil([&]() {
+    std::vector<QQuickItem*> cells;
+    CollectNamedItems(window != nullptr ? window->contentItem() : nullptr,
+                      QStringLiteral("albumSectionPhotoCell"), cells);
+    for (auto* candidate : cells) {
+      if (candidate->isVisible() && candidate->width() > 0) {
+        cell = candidate;
+        return true;
+      }
+    }
+    return false;
+  })) << Joined(view.warnings());
+  ProcessEvents(300);
+  ASSERT_EQ(view.loaded()->property("zoomLevel").toInt(), 4);
+  // The section view reports the level; its owner applies it. zoomLevel stays 4 here.
+  QSignalSpy requests(view.loaded(), SIGNAL(zoomChanged(int)));
+
+  SendCtrlWheel(window, SceneCenter(cell), 120);
+  ASSERT_EQ(requests.count(), 1);
+  EXPECT_EQ(requests.takeFirst().at(0).toInt(), 3) << "wheel forward";
+  SendCtrlWheel(window, SceneCenter(cell), -120);
+  ASSERT_EQ(requests.count(), 1);
+  EXPECT_EQ(requests.takeFirst().at(0).toInt(), 5) << "wheel backward";
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
 // Justified rows: the setting is read by a new view; the tiles of a row share one photo height,
 // a complete row fills the view width, each tile width follows the photo aspect ratio; the hover
 // details show the camera line and rate a photo with a star click; a zoom step keeps the tile
@@ -1647,16 +1864,21 @@ TEST_F(AlbumSectionQmlTests, JustifiedRowsFillTheWidthFollowTheAspectRatioAndRat
   ASSERT_TRUE(requests.isValid());
   auto* tile = JustifiedTiles(flick).at(1);
   ASSERT_NE(tile, nullptr);
-  const auto target  = tile->property("elementId").toUInt();
-  auto*      details = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_details"));
-  auto*      camera  = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_camera"));
-  auto*      stars   = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_stars"));
-  ASSERT_NE(details, nullptr);
+  const auto target = tile->property("elementId").toUInt();
+  // The details panel is made when the pointer first enters the tile (issue 836).
+  EXPECT_EQ(FirstItem(tile, QStringLiteral("justifiedThumbnailTile_details")), nullptr);
+  QTest::mouseMove(window, SceneCenter(tile));
+  QQuickItem* details = nullptr;
+  ASSERT_TRUE(WaitUntil(
+      [&]() {
+        details = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_details"));
+        return details != nullptr && details->property("opacity").toReal() >= 1.0;
+      },
+      3000));
+  auto* camera = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_camera"));
+  auto* stars  = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_stars"));
   ASSERT_NE(camera, nullptr);
   ASSERT_NE(stars, nullptr);
-  EXPECT_DOUBLE_EQ(details->property("opacity").toReal(), 0.0);
-  QTest::mouseMove(window, SceneCenter(tile));
-  ASSERT_TRUE(WaitUntil([&]() { return details->property("opacity").toReal() >= 1.0; }, 3000));
   EXPECT_TRUE(
       camera->property("text").toString().contains(QStringLiteral("Synthetic Album Camera")));
   auto* star4 = FirstItem(stars, QStringLiteral("thumbnailStar_4"));
@@ -1725,9 +1947,11 @@ auto ShownPhotoItems(QQuickItem* root) -> std::map<uint, QQuickItem*> {
       root,
       [](QQuickItem* item) {
         const auto name = item->objectName();
-        return item->isVisible() && (name == QStringLiteral("thumbnailGridView_firstCard") ||
-                                     name.startsWith(QStringLiteral("thumbnailGridView_card_")) ||
-                                     name.startsWith(QStringLiteral("thumbnailGridView_tile_")));
+        // A pooled grid card is not drawn but stays visible (issue 836).
+        return item->isVisible() && !item->property("pooled").toBool() &&
+               (name == QStringLiteral("thumbnailGridView_firstCard") ||
+                name.startsWith(QStringLiteral("thumbnailGridView_card_")) ||
+                name.startsWith(QStringLiteral("thumbnailGridView_tile_")));
       },
       items);
   std::map<uint, QQuickItem*> out;
@@ -1804,6 +2028,91 @@ TEST_F(AlbumSectionQmlTests, ClassicGridSliderZoomStepsKeepTheCentrePhotoAtTheCe
 TEST_F(AlbumSectionQmlTests, JustifiedRowsSliderZoomStepsKeepTheCentrePhotoAtTheCentre) {
   ApplicationModuleHost backend;
   ExpectSliderZoomKeepsTheCentrePhoto(backend, "justified", temp_dir_);
+}
+
+namespace {
+
+/// A lens filter applied deep in a long result: the filtered photos show from the top, and each
+/// photo in the viewport is a photo of the lens with its thumbnail pinned. The viewport position
+/// before the filter lies below the end of the filtered result.
+void ExpectALensFilterResultShowsFromTheTop(ApplicationModuleHost& backend, const char* layout,
+                                            const std::filesystem::path& dir) {
+  UseTestSettings(dir);
+  ASSERT_TRUE(backend.library_view()->setGridLayout(QString::fromLatin1(layout)));
+  auto specs = MixedSizePhotoSpecs(300);
+  for (size_t i = 0; i < specs.size(); ++i) {
+    specs[i].lens_ = i % 3 == 0 ? "Lens A" : "Lens B";
+  }
+  const auto packed = CreatePopulatedPackedProject(dir, {}, 0, specs);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  auto*                     library = backend.library();
+  std::set<sl_element_id_t> lens_a;
+  for (size_t i = 0; i < packed->images_.size(); i += 3) {
+    lens_a.insert(packed->images_[i].file_id_);
+  }
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* shown_view = qobject_cast<QQuickItem*>(view.Find(std::string(layout) == "justified"
+                                                             ? "thumbnailGridView_justified"
+                                                             : "thumbnailGridView_grid"));
+  ASSERT_NE(shown_view, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() { return ShownPhotoItems(shown_view).size() > 6; }));
+  ProcessEvents(300);
+  const auto max_y = shown_view->property("contentHeight").toReal() - shown_view->height();
+  ASSERT_GT(max_y, 2.0 * shown_view->height());
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(view.loaded(), "restoreContentY", Q_ARG(QVariant, 0.9 * max_y)));
+  ProcessEvents(300);
+  ASSERT_GT(shown_view->property("contentY").toReal(), 0.8 * max_y);
+
+  // The photos of the viewport, by element id.
+  const auto photos_in_view = [&]() {
+    std::map<uint, QQuickItem*> out;
+    const auto                  content_y = shown_view->property("contentY").toReal();
+    for (const auto& [id, item] : ShownPhotoItems(shown_view)) {
+      const auto y = item->y() - content_y;
+      if (id != 0 && y + item->height() > 0 && y < shown_view->height()) {
+        out[id] = item;
+      }
+    }
+    return out;
+  };
+
+  backend.stats()->ToggleStatsFilter(QStringLiteral("lens"), QStringLiteral("Lens A"));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  ASSERT_EQ(library->model().count(), static_cast<int>(lens_a.size()));
+  ASSERT_TRUE(WaitUntil([&]() { return photos_in_view().size() > 6; }))
+      << layout << " contentY " << shown_view->property("contentY").toReal() << " shown "
+      << ShownPhotoItems(shown_view).size();
+  ProcessEvents(300);
+
+  EXPECT_NEAR(shown_view->property("contentY").toReal() - shown_view->property("originY").toReal(),
+              0.0, 0.5);
+  const auto in_view = photos_in_view();
+  EXPECT_TRUE(in_view.contains(static_cast<uint>(packed->images_[0].file_id_)));
+  for (const auto& [id, item] : in_view) {
+    EXPECT_TRUE(lens_a.contains(id)) << "photo " << id << " is not a Lens A photo";
+    auto* pin = item->findChild<QObject*>(QStringLiteral("thumbnailPinBinding"));
+    ASSERT_NE(pin, nullptr);
+    EXPECT_EQ(pin->property("pinnedElementId").toUInt(), id);
+    EXPECT_TRUE(library->thumbs().IsThumbnailPinned(id)) << "photo " << id;
+  }
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+}  // namespace
+
+TEST_F(AlbumSectionQmlTests, ClassicGridShowsALensFilterResultFromTheTopAfterADeepScroll) {
+  ApplicationModuleHost backend;
+  ExpectALensFilterResultShowsFromTheTop(backend, "classic", temp_dir_);
+}
+
+TEST_F(AlbumSectionQmlTests, JustifiedRowsShowALensFilterResultFromTheTopAfterADeepScroll) {
+  ApplicationModuleHost backend;
+  ExpectALensFilterResultShowsFromTheTop(backend, "justified", temp_dir_);
 }
 
 // Issue #766: a Library Overview section folds with the shared fold motion. The header stays;

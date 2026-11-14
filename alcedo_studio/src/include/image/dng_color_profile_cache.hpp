@@ -28,8 +28,10 @@ namespace alcedo {
  *   the file again.
  * - Capacity: least-recently-used eviction at @ref kDefaultCapacity entries. An evicted entry is
  *   read from its source file again on the next @ref Load.
- * - Sharing: loads that give the same fingerprint return one shared DngColorProfilePtr while any
- *   holder keeps it alive, so many files from one camera use one profile in memory.
+ * - Sharing: loads that give the same fingerprint and the same source calibration
+ *   (DngColorProfile::source_calibration, runtime data outside the fingerprint) return one shared
+ *   DngColorProfilePtr while any holder keeps it alive, so many files from one camera use one
+ *   profile in memory.
  *
  * Thread safety: all members are safe to call from any thread. The loader runs without the cache
  * lock; two threads that miss the same file at the same time can both read it, and both get the

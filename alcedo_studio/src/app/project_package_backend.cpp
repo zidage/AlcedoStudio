@@ -47,6 +47,7 @@
 #include "app/project_service.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/i18n.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo::project_pack {
@@ -696,8 +697,9 @@ void RemoveAbandonedProjectTempFiles(const std::filesystem::path& root) {
     entries.push_back(*it);
   }
   if (ec) {
-    qWarning().noquote() << "Project temp sweep cannot list" << PathText(root)
-                         << QString::fromStdString(ec.message());
+    qCWarning(alcedo::diag::projectLog).noquote()
+        << "Project temp sweep cannot list" << PathText(root)
+        << QString::fromStdString(ec.message());
   }
 
   for (const auto& entry : entries) {
@@ -719,7 +721,8 @@ void RemoveAbandonedProjectTempFiles(const std::filesystem::path& root) {
         continue;
       }
       if (album_util::CleanupWorkspaceDirectory(entry.path())) {
-        qInfo().noquote() << "Removed abandoned runtime workspace:" << PathText(entry.path());
+        qCInfo(alcedo::diag::projectLog).noquote()
+            << "Removed abandoned runtime workspace:" << PathText(entry.path());
       }
       continue;
     }
@@ -729,10 +732,12 @@ void RemoveAbandonedProjectTempFiles(const std::filesystem::path& root) {
     }
     std::error_code remove_error;
     if (std::filesystem::remove(entry.path(), remove_error)) {
-      qInfo().noquote() << "Removed abandoned DB snapshot:" << PathText(entry.path());
+      qCInfo(alcedo::diag::projectLog).noquote()
+          << "Removed abandoned DB snapshot:" << PathText(entry.path());
     } else if (remove_error) {
-      qWarning().noquote() << "Abandoned DB snapshot removal failed:" << PathText(entry.path())
-                           << QString::fromStdString(remove_error.message());
+      qCWarning(alcedo::diag::projectLog).noquote()
+          << "Abandoned DB snapshot removal failed:" << PathText(entry.path())
+          << QString::fromStdString(remove_error.message());
     }
   }
 }

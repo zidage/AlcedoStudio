@@ -601,7 +601,7 @@ TEST(AiModelsSettingsQmlTest, AcceptStartsOnlyTheChosenDownloadAndTheStatementSt
   QObject* about_link = harness.item(QStringLiteral("aboutAiModelStatementLink"));
   ASSERT_NE(about_link, nullptr);
   ASSERT_TRUE(about_link->property("visible").toBool());
-  ASSERT_TRUE(QMetaObject::invokeMethod(about_link, "activated"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(about_link, "clicked"));
   QObject* about_statement = harness.item(QStringLiteral("aboutAiModelStatementDialog"));
   ASSERT_NE(about_statement, nullptr);
   ASSERT_TRUE(WaitUntil([&] { return about_statement->property("visible").toBool(); }));

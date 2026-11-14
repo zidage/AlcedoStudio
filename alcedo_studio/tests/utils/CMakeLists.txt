@@ -23,13 +23,24 @@ target_link_libraries(CudaDriverRequirementsTest PRIVATE GTest::gtest_main)
 gtest_discover_tests(CudaDriverRequirementsTest TEST_PREFIX "CudaDriverRequirementsTest.")
 alcedo_register_test_target(CudaDriverRequirementsTest core)
 
+# Qt-free logging interface (#822): compile-time floor, enabled flags, one handler call per line.
+add_executable(AlcedoLogTest
+    ${ALCEDO_TEST_ROOT}/utils/alcedo_log_test.cpp
+    ${ALCEDO_TEST_ROOT}/utils/alcedo_log_release_floor_test.cpp)
+target_include_directories(AlcedoLogTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(AlcedoLogTest PRIVATE AlcedoLog GTest::gtest_main)
+gtest_discover_tests(AlcedoLogTest TEST_PREFIX "AlcedoLogTest."
+  PROPERTIES LABELS "ci_core_flow;editor_logging")
+alcedo_register_test_target(AlcedoLogTest core ci_core)
+
 # Phase 7A R0/R1: presentation logging policy (disabled-by-default present
 # category, buffered info/debug writes, immediate warning/critical/fatal flush).
+# #822: messages of the Qt-free interface reach the log file through the Qt categories.
 add_executable(EditorAppLoggingTest
     ${ALCEDO_TEST_ROOT}/utils/editor_app_logging_test.cpp
     ${ALCEDO_SRC_DIR}/utils/diagnostics/app_logging.cpp)
 target_include_directories(EditorAppLoggingTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorAppLoggingTest PRIVATE GTest::gtest_main Qt6::Core)
+target_link_libraries(EditorAppLoggingTest PRIVATE GTest::gtest_main Qt6::Core AlcedoLog)
 gtest_discover_tests(EditorAppLoggingTest TEST_PREFIX "EditorAppLoggingTest."
   PROPERTIES LABELS "ci_core_flow;editor_logging")
 alcedo_register_test_target(EditorAppLoggingTest core)

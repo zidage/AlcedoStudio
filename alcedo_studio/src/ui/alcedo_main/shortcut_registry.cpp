@@ -11,6 +11,8 @@
 #include <QKeyCombination>
 #include <QQmlEngine>
 
+#include "utils/diagnostics/app_logging.hpp"
+
 namespace alcedo::ui {
 namespace {
 
@@ -501,7 +503,7 @@ auto ShortcutRegistry::FinalizeRegistration() -> QStringList {
 
   registration_errors_ = errors;
   for (const auto& error : errors) {
-    qWarning().noquote() << error;
+    qCWarning(alcedo::diag::appLog).noquote() << error;
   }
 
   beginResetModel();
@@ -964,7 +966,7 @@ void RegisterShortcutRegistryQmlType() {
                                                RegisterBuiltinShortcuts(registry);
                                                const auto errors = registry->FinalizeRegistration();
                                                for (const auto& error : errors) {
-                                                 qWarning().noquote() << error;
+                                                 qCWarning(alcedo::diag::appLog).noquote() << error;
                                                }
                                                return registry;
                                              });

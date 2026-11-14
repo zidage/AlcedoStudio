@@ -16,6 +16,7 @@
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -83,7 +84,8 @@ void LibraryModule::RevealLastEditedFile() {
             return;
           }
           if (!error.isEmpty()) {
-            qWarning().noquote() << "Last edited photo read failed:" << error;
+            qCWarning(alcedo::diag::libraryLog).noquote()
+                << "Last edited photo read failed:" << error;
             SetQueryError(error);
             return;
           }

@@ -23,6 +23,7 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSettings>
+#include <QSignalSpy>
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QTest>
@@ -41,6 +42,7 @@ extern "C" {
 #include <ed25519.h>
 }
 
+#include "app/camera_profile_library_service.hpp"
 #include "app/lut_library_inventory.hpp"
 #include "app/lut_library_service.hpp"
 #include "app/lut_package_service.hpp"
@@ -48,6 +50,7 @@ extern "C" {
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
 #include "ui/alcedo_main/shortcut_registry.hpp"
+#include "image/dcp_test_file_writer.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -153,11 +156,17 @@ class HeldArchiveDownloader final : public alcedo::PackageArchiveDownloader {
     state_->canceled_ids.push_back(request_id);
     if (!state_->pending) return;
     FinishedCallback finished = std::move(state_->pending);
-    QTimer::singleShot(0, [finished] { finished(false, true, QStringLiteral("canceled")); });
+    // The posted completion calls into the LutPackageService that owns this downloader. Bound to
+    // context_, it is dropped when the service (and this downloader) is destroyed first, as at
+    // the end of a test that cancels a download; otherwise it ran in the next test's event loop
+    // on the freed service.
+    QTimer::singleShot(0, context_.get(),
+                       [finished] { finished(false, true, QStringLiteral("canceled")); });
   }
 
  private:
-  std::shared_ptr<State> state_;
+  std::shared_ptr<State>   state_;
+  std::unique_ptr<QObject> context_ = std::make_unique<QObject>();
 };
 
 class MemoryLibraryPreferences final : public alcedo::LutLibraryPreferences {
@@ -341,7 +350,7 @@ TEST(LutSettingsQmlTest, SettingsOpenChecksOnceAndStartupDoesNotCheck) {
   harness.dialog()->setProperty("currentCategory", kLutCategory);
   ProcessEvents(100);
   EXPECT_EQ(Text(harness.item(QStringLiteral("settingsPageTitle"))),
-            QCoreApplication::translate("SettingDialog", "LUTs"));
+            QCoreApplication::translate("SettingDialog", "LUTs and Color Management"));
   EXPECT_TRUE(harness.item(QStringLiteral("lutSettingsScroll"))->isVisible());
   harness.dialog()->setProperty("currentCategory", 2);
   harness.dialog()->setProperty("currentCategory", kLutCategory);
@@ -556,6 +565,50 @@ TEST(LutSettingsQmlTest, ChangeFolderSwitchesToAFolderThatAlreadyHoldsFiles) {
   ASSERT_TRUE(WaitUntil([&] { return !harness.library()->busy(); }));
   EXPECT_EQ(harness.library()->Root(), existing);
   EXPECT_TRUE(fs::exists(harness.root_));
+  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+}
+
+// The DCP folder is a tile of the LUTs and Color Management page (DCP plan, section 2.1): no
+// separate page and no counts.
+TEST(LutSettingsQmlTest, DcpFolderIsATileOfTheLutsAndColorManagementPage) {
+  LutSettingsHarness harness;
+  ASSERT_NE(harness.dialog(), nullptr) << harness.warnings_.join('\n').toStdString();
+  harness.Open(kLutCategory);
+  ASSERT_TRUE(harness.WaitForCheck());
+
+  EXPECT_EQ(Text(harness.item(QStringLiteral("settingsPageTitle"))),
+            QCoreApplication::translate("SettingDialog", "LUTs and Color Management"));
+  EXPECT_EQ(harness.dialog()->property("aiModelsCategory").toInt(), 9);
+  EXPECT_EQ(harness.dialog()->property("aboutCategory").toInt(), 10);
+  EXPECT_EQ(harness.item(QStringLiteral("cameraProfileSettingsPanel")), nullptr);
+  EXPECT_EQ(harness.item(QStringLiteral("cameraProfileProfilesTile")), nullptr);
+  EXPECT_EQ(harness.item(QStringLiteral("cameraProfileCamerasTile")), nullptr);
+
+  QQuickItem* tile  = harness.item(QStringLiteral("cameraProfileFolderTile"));
+  QQuickItem* panel = harness.item(QStringLiteral("lutSettingsPanel"));
+  ASSERT_NE(tile, nullptr);
+  ASSERT_NE(panel, nullptr);
+  EXPECT_TRUE(tile->isVisible());
+  EXPECT_EQ(tile->parentItem(), panel);
+  QQuickItem* rescan = harness.item(QStringLiteral("cameraProfileRescanButton"));
+  ASSERT_NE(rescan, nullptr);
+
+  const fs::path folder = harness.base_ / "dcp profiles";
+  fs::create_directories(folder);
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Camera Standard")
+      .Write(folder / "standard.dcp");
+  auto*      service = harness.host_->camera_profiles();
+  QSignalSpy finished(service, &alcedo::CameraProfileLibraryService::ScanFinished);
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      tile, "useFolder",
+      Q_ARG(QVariant, QVariant(QUrl::fromLocalFile(QString::fromStdWString(folder.wstring()))))));
+  ASSERT_TRUE(finished.wait(10000));
+  ProcessEvents();
+  EXPECT_EQ(service->profile_count(), 1);
+  EXPECT_TRUE(Text(harness.item(QStringLiteral("cameraProfileRootPath")))
+                  .contains(QStringLiteral("dcp profiles")));
+  EXPECT_TRUE(rescan->isEnabled());
+  EXPECT_FALSE(harness.item(QStringLiteral("cameraProfileFolderError"))->isVisible());
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 

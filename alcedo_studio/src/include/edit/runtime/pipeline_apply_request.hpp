@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "edit/geometry/render_request.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/mask_coverage_probe.hpp"
 #include "io/image/export_color_profile_config.hpp"
@@ -51,6 +52,10 @@ struct PipelineApplyRequest {
   std::optional<MaskCoverageProbe>            mask_coverage_probe;
   /// Coverage channel that receives the probed coverage; required with @ref mask_coverage_probe.
   IMaskCoverageSink*                          mask_coverage_sink = nullptr;
+  /// Interactive only: also count the curve input of this Color Grade and give the counts to the
+  /// sink of the request after the frame (issue #888). The caller sets it only for a render of
+  /// the whole edit frame. Not part of any key: the photo output does not change.
+  std::optional<CurveInputHistogramRequest>   curve_input_histogram;
 };
 
 /// Long-edge limit, in output pixels, of the editor's full-image Quality Base render.

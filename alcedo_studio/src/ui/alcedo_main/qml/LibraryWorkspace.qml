@@ -1,8 +1,10 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
+import "FileDrop.js" as FileDrop
 
 // Extracted library/album surface. Layout and behavior match the former Main.qml body.
 Item {
@@ -87,6 +89,62 @@ Item {
     property bool _viewStateReady: false
     property real libraryGridRevealOpacity: 1
     property real libraryGridRevealShift: 0
+
+    // Library loading (DESIGN.md "Library loading"). A refresh that replaces the shown result
+    // (a collection switch, a filter, the search) shows the staggered grid loader after
+    // libraryLoadingRevealDelayMs, so a fast read draws no frame of it. In-place refreshes
+    // (a rating write, an import into the shown collection) keep the grid as it is.
+    readonly property bool libraryQueryReplacing: appModules.library.queryReplacing
+                                                  && appModules.library.queryError.length === 0
+    readonly property int libraryLoadingRevealDelayMs: 150
+    property bool libraryLoadingShown: false
+    // Opacity of the previous result: it dims while a replacing read runs over it.
+    property real libraryStaleViewOpacity: libraryLoadingShown && contentViewLoader.active
+                                           ? 0.3 : 1
+    Behavior on libraryStaleViewOpacity {
+        NumberAnimation {
+            duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldOpenMs
+            easing.type: appTheme.motionEasing
+        }
+    }
+    readonly property var libraryZoomColumns: [2, 3, 4, 5, 6, 8, 11, 14]
+
+    onLibraryQueryReplacingChanged: {
+        if (libraryQueryReplacing) {
+            libraryLoadingRevealTimer.restart()
+        } else {
+            libraryLoadingRevealTimer.stop()
+            libraryLoadingShown = false
+        }
+    }
+
+    Timer {
+        id: libraryLoadingRevealTimer
+        interval: root.libraryLoadingRevealDelayMs
+        onTriggered: root.libraryLoadingShown = root.libraryQueryReplacing
+    }
+
+    // Card geometry of the classic photo grid at the current zoom level and @p viewWidth; the
+    // same formula as ThumbnailGridView.metricsForZoomLevel, so the placeholder tiles stand
+    // where the photo cards appear.
+    function libraryLoadingGridMetrics(viewWidth) {
+        const level = Math.max(0, Math.min(libraryZoomColumns.length - 1, gridZoomLevel))
+        const visualCols = libraryZoomColumns[level]
+        const inset = visualCols >= 11 ? 4 : (visualCols >= 8 ? 6 : 8)
+        const gap = visualCols >= 11 ? 4 : (visualCols >= 8 ? 6 : 12)
+        const textHeight = visualCols >= 14 ? 0 : (visualCols >= 8 ? 18 : 50)
+        const cellW = Math.max(72, Math.floor(viewWidth / visualCols))
+        const cellH = Math.max(64, Math.round((cellW - inset * 2) * 2 / 3
+                                              + textHeight + inset * 2 + gap))
+        const cols = Math.max(1, Math.floor(viewWidth / cellW))
+        return {
+            cols: cols,
+            width: cols * cellW - gap,
+            gap: gap,
+            aspect: (cellW - gap) / Math.max(1, cellH - gap),
+            radius: visualCols >= 11 ? 6 : appTheme.panelRadius
+        }
+    }
 
     function prepareLibraryGridReveal() {
         libraryGridRevealAnim.stop()
@@ -267,6 +325,9 @@ Item {
     Component.onCompleted: {
         root.applyHostViewState()
         Qt.callLater(root.revealPendingFile)
+        if (root.libraryQueryReplacing) {
+            libraryLoadingRevealTimer.restart()
+        }
     }
     Component.onDestruction: root.persistViewState()
 
@@ -386,8 +447,8 @@ RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
-                // Query state: the last accepted view stays visible while a read runs; a
-                // failure keeps it and offers Retry.
+                // Query failure: the last accepted view stays visible and the row offers
+                // Retry. A running read shows the loading grid instead (libraryLoadingShown).
                 RowLayout {
                     id: libraryQueryStateRow
                     objectName: "libraryQueryStateRow"
@@ -396,16 +457,12 @@ RowLayout {
                     anchors.top: parent.top
                     z: 2
                     visible: appModules.library.queryError.length > 0
-                             || appModules.library.queryUpdating
                     spacing: appTheme.spaceSm
 
                     Label {
                         Layout.fillWidth: true
-                        text: appModules.library.queryError.length > 0
-                              ? qsTr("Library query failed: %1").arg(appModules.library.queryError)
-                              : qsTr("Updating")
-                        color: appModules.library.queryError.length > 0
-                               ? appTheme.dangerColor : appTheme.textMutedColor
+                        text: qsTr("Library query failed: %1").arg(appModules.library.queryError)
+                        color: appTheme.dangerColor
                         font.family: appTheme.uiFontFamily
                         font.pixelSize: appTheme.fontSizeCaption
                         wrapMode: Text.Wrap
@@ -435,7 +492,7 @@ RowLayout {
                             ? appModules.library.sectionModel.groupCount > 0
                             : appModules.library.shownCount > 0
                     sourceComponent: appModules.library.grouped ? sectionComp : gridComp
-                    opacity: root.libraryGridRevealOpacity
+                    opacity: root.libraryGridRevealOpacity * root.libraryStaleViewOpacity
                     transform: Translate { y: root.libraryGridRevealShift }
                     onLoaded: {
                         if (host && host.projectLoadingOverlayVisible) {
@@ -444,6 +501,140 @@ RowLayout {
                             root.playLibraryGridReveal()
                         }
                         Qt.callLater(root.restoreScrollPosition)
+                    }
+                }
+
+                // Drop of local files and folders onto the grid: import into the current
+                // collection, the same as the Import buttons (issue #757).
+                DropArea {
+                    id: gridFileDropArea
+                    objectName: "libraryGridFileDropArea"
+                    anchors.fill: parent
+                    keys: ["text/uri-list"]
+
+                    readonly property int targetFolderId: Number(appModules.folders.currentFolderId)
+                    property var urls: []
+
+                    // The action is always Copy: import reads the files in place, and a Move
+                    // answer lets the file manager delete them.
+                    onEntered: function(drag) {
+                        urls = host && host.fileDropImportAllowed ? FileDrop.localFileUrls(drag) : []
+                        if (urls.length > 0) {
+                            drag.accept(Qt.CopyAction)
+                        } else {
+                            drag.accepted = false
+                        }
+                    }
+                    onExited: urls = []
+                    onDropped: function(drop) {
+                        const dropped = urls.length > 0 ? urls : FileDrop.localFileUrls(drop)
+                        urls = []
+                        if (!host || !host.fileDropImportAllowed || dropped.length === 0) {
+                            drop.accepted = false
+                            return
+                        }
+                        drop.accept(Qt.CopyAction)
+                        host.importDroppedUrls(dropped, targetFolderId)
+                    }
+                }
+
+                // Drop overlay: a hairline frame on a dimmed grid with the target collection.
+                Rectangle {
+                    objectName: "libraryGridFileDropOverlay"
+                    anchors.fill: parent
+                    z: 5
+                    visible: gridFileDropArea.containsDrag && gridFileDropArea.urls.length > 0
+                    radius: appTheme.controlRadiusSmall
+                    color: Qt.rgba(root.colBgDeep.r, root.colBgDeep.g, root.colBgDeep.b, 0.78)
+                    border.width: 1
+                    border.color: appTheme.textMutedColor
+
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        width: Math.min(parent.width - appTheme.spaceXl * 2, 420)
+                        spacing: appTheme.spaceSm
+
+                        IconImage {
+                            Layout.alignment: Qt.AlignHCenter
+                            Layout.preferredWidth: 28
+                            Layout.preferredHeight: 28
+                            source: "qrc:/panel_icons/import.svg"
+                            sourceSize: Qt.size(28, 28)
+                            color: root.colText
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
+                            elide: Text.ElideMiddle
+                            text: qsTr("Import to %1")
+                                  .arg(host ? host.collectionDisplayName(gridFileDropArea.targetFolderId) : "")
+                            color: root.colText
+                            font.family: root.headlineFontFamily
+                            font.pixelSize: appTheme.fontSizeSection
+                            font.weight: appTheme.fontWeightHeading
+                        }
+                    }
+                }
+
+                // Loading, no result shown (a collection switch): placeholder cards at the
+                // grid's column count and card proportion, in place of the empty state.
+                Item {
+                    id: libraryLoadingGrid
+                    objectName: "libraryLoadingGrid"
+                    anchors.fill: parent
+                    anchors.topMargin: contentViewLoader.anchors.topMargin
+                    z: 1
+                    clip: true
+                    visible: root.libraryLoadingShown && !contentViewLoader.active
+
+                    readonly property var metrics: root.libraryLoadingGridMetrics(width)
+
+                    StaggeredGridLoader {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: libraryLoadingGrid.metrics.width
+                        running: libraryLoadingGrid.visible
+                        columns: libraryLoadingGrid.metrics.cols
+                        rows: 0
+                        spacing: libraryLoadingGrid.metrics.gap
+                        tileAspect: libraryLoadingGrid.metrics.aspect
+                        tileRadius: libraryLoadingGrid.metrics.radius
+                        cycleMs: 1600
+                        waveStrength: 0.1
+                        accessibleName: qsTr("Updating")
+                    }
+                }
+
+                // Loading over the previous result (a filter or search change): the dimmed
+                // grid stays and a compact staggered grid stands at its centre.
+                Rectangle {
+                    id: libraryLoadingMark
+                    objectName: "libraryLoadingMark"
+                    anchors.centerIn: parent
+                    z: 3
+                    width: 72
+                    height: 72
+                    radius: appTheme.panelRadius
+                    color: root.colBgPanel
+                    border.width: 1
+                    border.color: root.colGlassStroke
+                    visible: opacity > 0
+                    opacity: root.libraryLoadingShown && contentViewLoader.active ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: appTheme.reduceMotion ? 0 : appTheme.motionFadeMs
+                            easing.type: appTheme.motionEasing
+                        }
+                    }
+
+                    StaggeredGridMark {
+                        anchors.centerIn: parent
+                        width: 36
+                        height: 36
+                        running: root.libraryLoadingShown
+                        accessibleName: qsTr("Updating")
                     }
                 }
 
@@ -480,8 +671,11 @@ RowLayout {
                     anchors.right: parent.right
                     anchors.top: parent.top
                     anchors.topMargin: contentViewLoader.anchors.topMargin
+                    // A replacing read decides whether the scope is empty; until it publishes,
+                    // the loading grid (after its delay) stands here.
                     visible: appModules.library.shownCount === 0
                              && appModules.library.queryError.length === 0
+                             && !root.libraryQueryReplacing
                     spacing: 8
                     Label {
                         text: parent.noMatchingPhotos ? qsTr("No Matching Photos")
@@ -547,22 +741,27 @@ RowLayout {
                                : 0
         Behavior on Layout.preferredWidth { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
-        ColumnLayout {
+        // One panel: the Inspector pages, then the marks card and the button row at the bottom.
+        // The marks card and the buttons have the inset of the Album section cards (the 10 px
+        // page margin plus spaceMd), so every card of the panel has one width.
+        Rectangle {
             anchors.fill: parent
-            spacing: 10
+            radius: root.panelRadius
+            color: root.colBgPanel
+            border.width: 0
+            clip: true
 
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: root.panelRadius
-                color: root.colBgPanel
-                border.width: 0
-                clip: true
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
 
                 InspectorPanel {
                     id: inspectorPanel
-                    anchors.fill: parent
-                    anchors.margins: 10
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.topMargin: 10
+                    Layout.leftMargin: 10
+                    Layout.rightMargin: 10
                     focusedImage: host.focusedImageInspection
                     interactionPolicy: appModules.interactionPolicy
                     selectionState: host.selectionState
@@ -581,29 +780,39 @@ RowLayout {
                     }
                     onColorLabelSettingsRequested: host.openColorLabelSettings()
                 }
-            }
 
-            // Rating, color labels, and Delete mark of the selection (#772).
-            LibraryMarksControl {
-                Layout.fillWidth: true
-                visible: !inspectorPanel.exportPageActive
-                selectionState: host.selectionState
-                selectedCount: host.selectedCount
-                backendInteractive: host.backendInteractive
-                theme: root
-                onMessageRequested: function(message) { host.showSnackbar(message) }
-                onRatingApplied: host.refreshFocusedImageInspection()
-            }
+                ColumnLayout {
+                    objectName: "libraryInspectorFooter"
+                    Layout.fillWidth: true
+                    Layout.topMargin: appTheme.spaceSm
+                    Layout.leftMargin: 10 + appTheme.spaceMd
+                    Layout.rightMargin: 10 + appTheme.spaceMd
+                    Layout.bottomMargin: 10 + appTheme.spaceMd
+                    spacing: appTheme.spaceSm
 
-            LibraryInspectorActions {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 52
-                inspectorPanel: inspectorPanel
-                selectionState: host.selectionState
-                selectedCount: host.selectedCount
-                backendInteractive: host.backendInteractive
-                exportQueueCount: host.exportQueueCount
-                theme: root
+                    // Rating, color labels, and Delete mark of the selection (#772).
+                    LibraryMarksControl {
+                        Layout.fillWidth: true
+                        visible: !inspectorPanel.exportPageActive
+                        selectionState: host.selectionState
+                        selectedCount: host.selectedCount
+                        backendInteractive: host.backendInteractive
+                        theme: root
+                        onMessageRequested: function(message) { host.showSnackbar(message) }
+                        onRatingApplied: host.refreshFocusedImageInspection()
+                    }
+
+                    LibraryInspectorActions {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: buttonHeight
+                        inspectorPanel: inspectorPanel
+                        selectionState: host.selectionState
+                        selectedCount: host.selectedCount
+                        backendInteractive: host.backendInteractive
+                        exportQueueCount: host.exportQueueCount
+                        theme: root
+                    }
+                }
             }
         }
 

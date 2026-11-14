@@ -16,8 +16,10 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -26,6 +28,7 @@
 #include "sidecar_client/dto/model_manager.hpp"
 #include "sidecar_client/dto/semantic_embedding.hpp"
 #include "support/test_temp_directory.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo {
 namespace {
@@ -288,6 +291,66 @@ void SetModelRootEnv(const std::string& value) {
     setenv("ALCEDO_MIND_MODEL_ROOT", value.c_str(), 1);
   }
 #endif
+}
+
+struct CapturedLogMessage {
+  QtMsgType   type = QtDebugMsg;
+  std::string text;
+};
+
+/// Collects the `semantic.runtime.stdout` messages of `alcedo.semantic` while it exists.
+class ScopedSidecarStdoutCapture final {
+ public:
+  ScopedSidecarStdoutCapture() {
+    {
+      std::lock_guard lock(Mutex());
+      Store() = {};
+    }
+    previous_handler_ = qInstallMessageHandler(&ScopedSidecarStdoutCapture::Capture);
+  }
+  ~ScopedSidecarStdoutCapture() { qInstallMessageHandler(previous_handler_); }
+
+  ScopedSidecarStdoutCapture(const ScopedSidecarStdoutCapture&)            = delete;
+  ScopedSidecarStdoutCapture& operator=(const ScopedSidecarStdoutCapture&) = delete;
+
+  auto                        Messages() const -> std::vector<CapturedLogMessage> {
+    std::lock_guard lock(Mutex());
+    return Store();
+  }
+
+ private:
+  static auto Mutex() -> std::mutex& {
+    static std::mutex mutex;
+    return mutex;
+  }
+  static auto Store() -> std::vector<CapturedLogMessage>& {
+    static std::vector<CapturedLogMessage> messages;
+    return messages;
+  }
+  static void Capture(QtMsgType type, const QMessageLogContext& context, const QString& message) {
+    if (context.category == nullptr ||
+        std::string_view(context.category) != std::string_view("alcedo.semantic") ||
+        !message.startsWith(QStringLiteral("semantic.runtime.stdout"))) {
+      return;
+    }
+    std::lock_guard lock(Mutex());
+    Store().push_back(CapturedLogMessage{.type = type, .text = message.toStdString()});
+  }
+
+  QtMessageHandler previous_handler_ = nullptr;
+};
+
+/// Runs the owner thread event loop until the stdout tail of @p service holds @p marker.
+auto WaitForStdoutTail(AiSidecarRuntimeService& service, std::string_view marker) -> bool {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (std::chrono::steady_clock::now() < deadline) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    if (service.Status().stdout_tail.find(marker) != std::string::npos) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
 }
 
 class ScopedModelRootEnv final {
@@ -593,6 +656,103 @@ TEST(AiSidecarRuntimeServiceTest, RuntimeArgumentsOmitModelIdWithoutActiveModel)
   EXPECT_EQ(args.find("--revision"), std::string::npos) << args;
   EXPECT_NE(args.find("--model-root\n"), std::string::npos) << args;
   std::filesystem::remove(record_path);
+}
+
+// The sidecar log of the session is next to the application log (#823): the host passes
+// `--log-file <log dir>/<application log stem>_mind.log`.
+TEST(AiSidecarRuntimeServiceTest, ArgumentsNameTheSidecarLogFileNextToTheApplicationLog) {
+  const test::TestTempDirectory temp_dir;
+  const auto                    record_path     = temp_dir.Path() / "semantic_runtime_log_args.txt";
+  const QString                 application_log = diag::InitializeApplicationLogging(
+      QString::fromStdWString((temp_dir.Path() / "logs").wstring()));
+  ASSERT_FALSE(application_log.isEmpty());
+  ASSERT_TRUE(application_log.endsWith(QStringLiteral(".log")));
+  const QString expected_sidecar_log = application_log.chopped(4) + QStringLiteral("_mind.log");
+
+  auto          client               = std::make_shared<FakeSidecarClient>();
+  AiSidecarRuntimeService service(FakeFactory(client));
+  auto                    options = BaseOptions();
+  options.extra_arguments         = {"--record-args", record_path.string(), "--sleep-ms", "30000"};
+  ASSERT_TRUE(service.StartAndWait(options));
+  service.Stop();
+  diag::ShutdownApplicationLogging();
+
+  std::ifstream in(record_path);
+  ASSERT_TRUE(in.is_open());
+  const std::string args((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  in.close();
+  EXPECT_NE(args.find("--log-file\n" + expected_sidecar_log.toStdString() + "\n"),
+            std::string::npos)
+      << args;
+}
+
+// Without an open application log the sidecar writes to stderr only: no `--log-file`.
+TEST(AiSidecarRuntimeServiceTest, ArgumentsHaveNoLogFileWithoutApplicationLog) {
+  const test::TestTempDirectory temp_dir;
+  const auto                    record_path = temp_dir.Path() / "semantic_runtime_no_log_args.txt";
+  ASSERT_TRUE(diag::CompanionLogFilePath(QStringLiteral("mind")).isEmpty());
+
+  auto                    client = std::make_shared<FakeSidecarClient>();
+  AiSidecarRuntimeService service(FakeFactory(client));
+  auto                    options = BaseOptions();
+  options.extra_arguments         = {"--record-args", record_path.string(), "--sleep-ms", "30000"};
+  ASSERT_TRUE(service.StartAndWait(options));
+  service.Stop();
+
+  std::ifstream in(record_path);
+  ASSERT_TRUE(in.is_open());
+  const std::string args((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  in.close();
+  EXPECT_EQ(args.find("--log-file"), std::string::npos) << args;
+}
+
+// A stdout chunk with an INFO, a WARN, and an ERROR line of the sidecar `tracing` output writes
+// two application log messages: the WARN line as a warning and the ERROR line as a critical
+// message (#823). The stdout tail keeps every line.
+TEST(AiSidecarRuntimeServiceTest, StdoutChunkCopiesOnlyWarnAndErrorLinesToTheApplicationLog) {
+  const ScopedSidecarStdoutCapture capture;
+  auto                             client = std::make_shared<FakeSidecarClient>();
+  AiSidecarRuntimeService          service(FakeFactory(client));
+  auto                             options = BaseOptions();
+  options.extra_arguments                  = {"--print-tracing-lines", "--sleep-ms", "30000"};
+
+  ASSERT_TRUE(service.StartAndWait(options));
+  ASSERT_TRUE(WaitForStdoutTail(service, "marker-error"));
+  const auto messages = capture.Messages();
+  service.Stop();
+
+  ASSERT_EQ(messages.size(), 2u);
+  EXPECT_EQ(messages[0].type, QtWarningMsg);
+  EXPECT_NE(messages[0].text.find("WARN fake warn line marker-warn"), std::string::npos)
+      << messages[0].text;
+  EXPECT_EQ(messages[1].type, QtCriticalMsg);
+  EXPECT_NE(messages[1].text.find("ERROR fake error line marker-error"), std::string::npos)
+      << messages[1].text;
+  const auto status = service.Status();
+  EXPECT_NE(status.stdout_tail.find("marker-info"), std::string::npos);
+  EXPECT_NE(status.stdout_tail.find("marker-warn"), std::string::npos);
+}
+
+// A WARN line that arrives in two chunks is one message, and the continuation line of the message
+// without a level has the WARN level of the line before it.
+TEST(AiSidecarRuntimeServiceTest, StdoutLineSplitAcrossChunksIsOneApplicationLogMessage) {
+  const ScopedSidecarStdoutCapture capture;
+  auto                             client = std::make_shared<FakeSidecarClient>();
+  AiSidecarRuntimeService          service(FakeFactory(client));
+  auto                             options = BaseOptions();
+  options.extra_arguments                  = {"--print-split-warn-line", "--sleep-ms", "30000"};
+
+  ASSERT_TRUE(service.StartAndWait(options));
+  ASSERT_TRUE(WaitForStdoutTail(service, "marker-end"));
+  const auto messages = capture.Messages();
+  service.Stop();
+
+  ASSERT_EQ(messages.size(), 2u);
+  EXPECT_EQ(messages[0].type, QtWarningMsg);
+  EXPECT_NE(messages[0].text.find("fake split line first-half second-half"), std::string::npos)
+      << messages[0].text;
+  EXPECT_EQ(messages[1].type, QtWarningMsg);
+  EXPECT_NE(messages[1].text.find("marker-continuation"), std::string::npos) << messages[1].text;
 }
 
 TEST(AiSidecarRuntimeServiceTest, TextIdleUnloadFollowsIdleStopDelay) {

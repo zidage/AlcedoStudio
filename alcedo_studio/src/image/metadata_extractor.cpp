@@ -6,7 +6,6 @@
 
 #include <libraw/libraw.h>
 
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -22,6 +21,7 @@
 #include "metadata/metadata_values.hpp"
 #include "metadata/raster_metadata_reader.hpp"
 #include "type/supported_file_type.hpp"
+#include "utils/logging/log.hpp"
 
 // MetadataExtractor is the entry point of the metadata readers. The readers are in
 // src/image/metadata/: raster files (raster_metadata_reader), DNG color tags and geometry
@@ -181,8 +181,8 @@ auto MetadataExtractor::ExtractRawMetadata_ToImage(const image_path_t& image_pat
   int ret = raw_processor->open_file(image_path.string().c_str());
 #endif
   if (ret != LIBRAW_SUCCESS) {
-    std::cerr << "MetadataExtractor: libraw open_file failed for '" << image_path.string()
-              << "' (error " << ret << ")" << std::endl;
+    ALCEDO_LOG_WARN(Import) << "MetadataExtractor: libraw open_file failed for '"
+                            << image_path.string() << "' (error " << ret << ")";
     return false;
   }
 

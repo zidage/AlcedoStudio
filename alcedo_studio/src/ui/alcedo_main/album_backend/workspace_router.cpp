@@ -7,6 +7,7 @@
 #include <QDebug>
 
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 
@@ -23,7 +24,7 @@ bool WorkspaceRouter::openEditor(uint elementId, uint imageId) {
                             editor_session_->element_id() == elementId &&
                             editor_session_->image_id() == imageId;
     if (!open_image) {
-      qInfo().noquote() << "workspace.openEditor refused:" << refusal;
+      qCInfo(alcedo::diag::editorLog).noquote() << "workspace.openEditor refused:" << refusal;
       return false;
     }
   }

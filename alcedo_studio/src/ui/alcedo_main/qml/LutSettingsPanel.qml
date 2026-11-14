@@ -5,9 +5,9 @@ import QtQuick.Controls.Basic
 import QtQuick.Dialogs
 import QtQuick.Layouts
 
-// Settings > LUTs, laid out as bento tiles: the LUT library folder (open,
-// change, refresh), the total LUT count, the film simulation / custom split,
-// and the official LUT packages as store cards (download, update, repair,
+// Settings > LUTs and Color Management, laid out as bento tiles: the LUT library folder (open,
+// change, refresh), the total LUT count, the film simulation / custom split, the DCP camera
+// profile folder (CameraProfileFolderTile), the monitor profile on Windows (DisplayProfileTile), and the official LUT packages as store cards (download, update, repair,
 // cancel, retry, remove). "Change folder" moves the library into an empty folder and
 // switches to a folder that already holds files (LutLibraryService::
 // RootChangeMigrates). The dialog starts the signed package check when
@@ -22,6 +22,8 @@ ColumnLayout {
 
     property var library: null
     property var packageService: null
+    // CameraProfileLibraryService (appModules.cameraProfiles), for the camera profiles tile.
+    property var cameraProfiles: null
     property color textColor: appTheme.textColor
     property color mutedTextColor: appTheme.textMutedColor
     property color dividerColor: appTheme.dividerColor
@@ -439,7 +441,7 @@ ColumnLayout {
                     color: page.textColor
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeSection
-                    font.weight: appTheme.fontWeightHeading
+                    font.weight: appTheme.fontWeightStrong
                 }
                 LegendItem {
                     objectName: "lutSettingsFilmCount"
@@ -465,6 +467,28 @@ ColumnLayout {
         }
     }
 
+    // ── Camera profiles (DCP folder) ──────────────────────────────────────
+    CameraProfileFolderTile {
+        Layout.fillWidth: true
+        Layout.leftMargin: 34
+        Layout.rightMargin: 34
+        library: page.cameraProfiles
+        textColor: page.textColor
+        mutedTextColor: page.mutedTextColor
+        dataFontFamily: page.dataFontFamily
+    }
+
+    // ── Display profile (Windows monitor ICC profile) ─────────────────────
+    DisplayProfileTile {
+        Layout.fillWidth: true
+        Layout.leftMargin: 34
+        Layout.rightMargin: 34
+        visible: supported
+        textColor: page.textColor
+        mutedTextColor: page.mutedTextColor
+        dataFontFamily: page.dataFontFamily
+    }
+
     // ── Official LUT packages ─────────────────────────────────────────────
     RowLayout {
         Layout.fillWidth: true
@@ -482,7 +506,7 @@ ColumnLayout {
                 text: qsTr("Official LUT Packages")
                 color: page.textColor
                 font.family: appTheme.headlineFontFamily
-                font.pixelSize: 18
+                font.pixelSize: appTheme.fontSizeSection
                 font.weight: Font.DemiBold
             }
             // Only a failed check is reported; a running check spins the refresh icon.

@@ -30,6 +30,7 @@
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo::ui {
@@ -93,6 +94,28 @@ void LibraryModule::BindCollaborators(FolderController* folders, SearchControlle
   folders_ = folders;
   search_ = search;
   stats_ = stats;
+}
+
+void LibraryModule::SetDisplayWindow(QWindow* window) {
+  QObject::disconnect(display_connection_);
+  display_source_ = window != nullptr ? WindowDisplayDestination::ForWindow(window) : nullptr;
+  if (display_source_ != nullptr) {
+    display_connection_ = connect(display_source_, &WindowDisplayDestination::DestinationChanged,
+                                  this, &LibraryModule::ApplyDisplayDestination);
+  }
+  ApplyDisplayDestination();
+}
+
+void LibraryModule::ApplyDisplayDestination() {
+  SetDisplayDestination(display_source_ != nullptr ? display_source_->Destination() : nullptr);
+}
+
+void LibraryModule::SetDisplayDestination(std::shared_ptr<const DisplayDestination> destination) {
+  thumbs_.SetDisplayDestination(std::move(destination));
+  // Search previews can show a tier that no library row shows.
+  if (search_ != nullptr) {
+    search_->RepublishSearchPreviewThumbnails();
+  }
 }
 
 void LibraryModule::SetSemanticLabelProvider(
@@ -569,18 +592,23 @@ void LibraryModule::RequestLibraryRefresh() { ScheduleRefresh(RefreshKind::kRepl
 void LibraryModule::RequestLibraryContentRefresh() { ScheduleRefresh(RefreshKind::kInPlace); }
 
 void LibraryModule::ScheduleRefresh(RefreshKind kind) {
-  if (!refresh_in_flight_) {
-    refresh_in_flight_ = true;
-    emit QueryStateChanged();
-  }
+  const bool was_updating  = refresh_in_flight_;
+  const bool was_replacing = QueryReplacing();
+  refresh_in_flight_       = true;
   if (refresh_scheduled_) {
     if (kind == RefreshKind::kReplace) {
       scheduled_refresh_kind_ = RefreshKind::kReplace;
+    }
+    if (!was_updating || was_replacing != QueryReplacing()) {
+      emit QueryStateChanged();
     }
     return;
   }
   refresh_scheduled_      = true;
   scheduled_refresh_kind_ = kind;
+  if (!was_updating || was_replacing != QueryReplacing()) {
+    emit QueryStateChanged();
+  }
   // Combine the requests of this event loop turn: a caller that clears a filter and then
   // reloads the folder gets one read with both changes.
   QMetaObject::invokeMethod(this, [this]() { SubmitPendingRefresh(); }, Qt::QueuedConnection);
@@ -695,7 +723,8 @@ void LibraryModule::SubmitStatisticsRead() {
             return;
           }
           if (!output.error_.isEmpty()) {
-            qWarning().noquote() << "Library statistics read failed:" << output.error_;
+            qCWarning(alcedo::diag::libraryLog).noquote()
+                << "Library statistics read failed:" << output.error_;
             SetQueryError(output.error_);
             return;
           }
@@ -778,8 +807,11 @@ void LibraryModule::SubmitPendingRefresh() {
                                   .read_groups_              = true,
                                   .read_statistics_          = true,
                                   .read_occurrence_file_ids_ = true};
-  } else {
-    unpublished_replace_ = true;
+  } else if (!std::exchange(unpublished_replace_, true) &&
+             requested_kind == RefreshKind::kInPlace) {
+    // A content refresh that must replace (a pending presentation or search change): the
+    // Library now shows the loading grid.
+    emit QueryStateChanged();
   }
 
   // A different scope must not show the previous scope's photos while the new read runs.
@@ -856,7 +888,7 @@ auto LibraryModule::ItemFromRow(const AlbumQueryRow& query_row, const AlbumItem&
 
 void LibraryModule::FailRefresh(const QString& error) {
   // The accepted content and settings stay; the pending changes stay for Retry.
-  qWarning().noquote() << "Library query failed:" << error;
+  qCWarning(alcedo::diag::libraryLog).noquote() << "Library query failed:" << error;
   refresh_in_flight_ = refresh_scheduled_;
   after_refresh_.clear();
   SetQueryError(error);

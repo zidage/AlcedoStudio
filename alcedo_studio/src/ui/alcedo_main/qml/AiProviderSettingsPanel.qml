@@ -34,8 +34,8 @@ Item {
         property bool danger: false
 
         Layout.preferredHeight: Math.max(36, implicitHeight)
-        font.pixelSize: 13
-        font.weight: 700
+        font.pixelSize: appTheme.fontSizeTitle
+        font.weight: appTheme.fontWeightStrong
         hoverEnabled: true
         leftPadding: 16
         rightPadding: 16
@@ -124,16 +124,16 @@ Item {
                 text: confirm.titleText
                 color: appTheme.textColor
                 font.family: appTheme.headlineFontFamily
-                font.pixelSize: 20
-                font.weight: 700
+                font.pixelSize: appTheme.fontSizeHeadline
+                font.weight: appTheme.fontWeightStrong
             }
 
             Label {
                 Layout.fillWidth: true
                 text: confirm.bodyText
                 color: appTheme.textMutedColor
-                font.pixelSize: 13
-                font.weight: 500
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightRegular
                 wrapMode: Text.WordWrap
             }
 
@@ -186,8 +186,8 @@ Item {
             visible: !panel.hasSavedCredentials
             text: qsTr("No saved keys")
             color: panel.mutedTextColor
-            font.pixelSize: 13
-            font.weight: 600
+            font.pixelSize: appTheme.fontSizeTitle
+            font.weight: appTheme.fontWeightStrong
             wrapMode: Text.Wrap
         }
 
@@ -233,8 +233,8 @@ Item {
                                 Layout.fillWidth: true
                                 text: profileRow.modelData.displayName
                                 color: panel.textColor
-                                font.pixelSize: 15
-                                font.weight: 800
+                                font.pixelSize: appTheme.fontSizeTitle
+                                font.weight: appTheme.fontWeightStrong
                                 wrapMode: Text.Wrap
                             }
 
@@ -245,7 +245,7 @@ Item {
                                       : profileRow.modelData.baseUrl
                                 color: panel.mutedTextColor
                                 font.family: panel.dataFontFamily
-                                font.pixelSize: 12
+                                font.pixelSize: appTheme.fontSizeBody
                                 wrapMode: Text.Wrap
                             }
 
@@ -259,7 +259,7 @@ Item {
                                 color: profileRow.modelData.credentialAvailable
                                        ? panel.secondaryAccent : panel.mutedTextColor
                                 font.family: panel.dataFontFamily
-                                font.pixelSize: 11
+                                font.pixelSize: appTheme.fontSizeCaption
                                 wrapMode: Text.Wrap
                             }
                         }

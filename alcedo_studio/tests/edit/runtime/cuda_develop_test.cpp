@@ -189,6 +189,10 @@ TEST_F(CudaDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesO
   gpu_dag_test::VerifyCanonDngProfile<CudaRenderDevice>("cuda");
 }
 
+TEST_F(CudaDevelopFixture, DcpProfileMatchesScalarReference) {
+  gpu_dag_test::VerifyDcpCameraProfile<CudaRenderDevice>("cuda");
+}
+
 TEST_F(CudaDevelopFixture, ConvertedLinearDngRendersWarpAndPublishesCacheOutputAtFullResolution) {
   gpu_dag_test::VerifyCameraRgbFile<CudaRenderDevice>("DSC04739_dng.dng", ImageType::DNG, "cuda");
 }

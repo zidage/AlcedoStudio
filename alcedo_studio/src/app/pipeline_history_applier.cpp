@@ -100,6 +100,11 @@ auto DevelopFieldOwnedKeys(std::string_view field_key) -> const std::vector<std:
   // unchanged.
   static const std::vector<std::string_view> kInputProfile{"input"};
   if (field_key == "input_profile") return &kInputProfile;
+  // The DCP profile reference. The key is absent when the import profile applies, so the owned
+  // JSON of that state is empty. It is not a wrapper name: the reference object holds no Develop
+  // keys.
+  static const std::vector<std::string_view> kCameraProfileFile{"camera_profile_file"};
+  if (field_key == "camera_profile_file") return &kCameraProfileFile;
   return nullptr;
 }
 
@@ -130,6 +135,20 @@ auto FieldOwnedParameterJson(std::string_view field_key, const nlohmann::json& j
 
 namespace {
 
+/// The owned JSON that the expected-side check compares. The fingerprint of a DCP reference is
+/// binding state: a load takes the fingerprint of the DCP folder file when that file changed
+/// (plan section 2.3), so a stored side keeps the earlier fingerprint. The identity selects the
+/// profile, so the check compares the identity only.
+auto ComparedParameterJson(std::string_view field_key, const nlohmann::json& json)
+    -> nlohmann::json {
+  auto owned = FieldOwnedParameterJson(field_key, json);
+  if (field_key == "camera_profile_file" && owned.contains("camera_profile_file") &&
+      owned.at("camera_profile_file").is_object()) {
+    owned.at("camera_profile_file").erase("fingerprint");
+  }
+  return owned;
+}
+
 auto ExpectedParameterJson(const PipelineDocument& document, const SetParameterChange& change,
                            PipelineEditApplyDirection direction, nlohmann::json* json,
                            std::string* error) -> bool {
@@ -137,8 +156,8 @@ auto ExpectedParameterJson(const PipelineDocument& document, const SetParameterC
   const auto& expected =
       direction == PipelineEditApplyDirection::Forward ? change.before_value : change.after_value;
   return ReadEditorParameterJson(document, target, json, error) &&
-         JsonEqual(FieldOwnedParameterJson(target.field_key, *json),
-                   FieldOwnedParameterJson(target.field_key, expected));
+         JsonEqual(ComparedParameterJson(target.field_key, *json),
+                   ComparedParameterJson(target.field_key, expected));
 }
 
 auto ApplySetParameter(PipelineDocument& document, const SetParameterChange& change,

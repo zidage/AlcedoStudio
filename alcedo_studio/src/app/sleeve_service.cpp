@@ -5,11 +5,11 @@
 #include "app/sleeve_service.hpp"
 
 #include <algorithm>
-#include <iostream>
 #include <stdexcept>
 #include <unordered_set>
 
 #include "edit/graph/pipeline_document.hpp"
+#include "utils/logging/log.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -51,9 +51,9 @@ void LogSyncElement(const char* bucket, const std::shared_ptr<SleeveElement>& el
   if (!element) {
     return;
   }
-  std::cout << "[LOG] SleeveServiceImpl: " << bucket << " " << ElementTypeLabel(element->type_)
-            << " id=" << element->element_id_ << " name=" << conv::ToBytes(element->element_name_)
-            << std::endl;
+  ALCEDO_LOG_DEBUG(Library) << "SleeveServiceImpl: " << bucket << " "
+                            << ElementTypeLabel(element->type_) << " id=" << element->element_id_
+                            << " name=" << conv::ToBytes(element->element_name_);
 }
 
 void ClonePipelineForDuplicate(Storage& storage_service, sl_element_id_t source_file_id,

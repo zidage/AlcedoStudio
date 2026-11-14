@@ -11,6 +11,7 @@
 
 #include "ui/alcedo_main/album_backend/comparison_presentation_image.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -110,6 +111,7 @@ void LutPreviewController::SetImageStore(std::shared_ptr<LutPreviewImageStore> s
   }
   shown_.clear();
   store_ = store ? std::move(store) : SharedLutPreviewImageStore();
+  store_->SetDestination(display_source_ != nullptr ? display_source_->Destination() : nullptr);
   BumpRevision();
 }
 
@@ -180,8 +182,8 @@ void LutPreviewController::RefreshEntry(const QString& entry_id) {
   }
   const auto shown = shown_.constFind(entry_id);
   if (shown != shown_.constEnd() && shown->key == *key) return;
-  if (auto image = CachedImage(*key)) {
-    Show(entry_id, *key, *image);
+  if (auto preview = CachedImage(*key)) {
+    Show(entry_id, *key, *preview);
     return;
   }
   // The encodings changed: the old preview shows another LUT result.
@@ -191,10 +193,13 @@ void LutPreviewController::RefreshEntry(const QString& entry_id) {
   }
 }
 
-void LutPreviewController::Show(const QString& entry_id, const QString& key, const QImage& image) {
+void LutPreviewController::Show(const QString& entry_id, const QString& key,
+                                const RenderedPreview& preview) {
   Hide(entry_id, /*notify=*/false);
   const std::uint64_t display_id = next_display_id_++;
-  shown_.insert(entry_id, ShownPreview{key, display_id, store_->Put(display_id, image)});
+  shown_.insert(entry_id,
+                ShownPreview{key, display_id,
+                             store_->Put(display_id, preview.image, preview.encoding), preview});
   BumpRevision();
 }
 
@@ -223,8 +228,8 @@ void LutPreviewController::Pump() {
     EditorLutWrite write;
     const auto     key = KeyFor(entry_id, &write);
     if (!key || failed_.contains(*key)) continue;
-    if (auto image = CachedImage(*key)) {
-      Show(entry_id, *key, *image);
+    if (auto preview = CachedImage(*key)) {
+      Show(entry_id, *key, *preview);
       continue;
     }
 
@@ -260,7 +265,7 @@ void LutPreviewController::SubmitRender(const QString& entry_id, const QString& 
   if (!submitted) {
     // The session refused the command; a later state change refreshes the tiles again.
     in_flight_.reset();
-    qWarning().noquote() << "LUT preview not started:" << ToQString(error);
+    qCWarning(alcedo::diag::editorLog).noquote() << "LUT preview not started:" << ToQString(error);
   }
 }
 
@@ -270,39 +275,41 @@ void LutPreviewController::OnRendered(const QString& entry_id, const QString& ke
   if (result.status == EditorLutPreviewStatus::Completed) {
     try {
       auto presentation = ConvertRenderedImageForComparison(result.image);
-      CachePut(key, std::move(presentation.image));
+      CachePut(key, RenderedPreview{std::move(presentation.image), result.image.display});
     } catch (const std::exception& ex) {
       failed_.insert(key);
-      qWarning().noquote() << "LUT preview of" << entry_id << "cannot be shown:" << ex.what();
+      qCWarning(alcedo::diag::editorLog).noquote()
+          << "LUT preview of" << entry_id << "cannot be shown:" << ex.what();
     }
   } else if (result.status == EditorLutPreviewStatus::Failed) {
     failed_.insert(key);
-    qWarning().noquote() << "LUT preview of" << entry_id << "failed:" << ToQString(result.message);
+    qCWarning(alcedo::diag::editorLog).noquote()
+        << "LUT preview of" << entry_id << "failed:" << ToQString(result.message);
   }
   // Rejected: the session cannot render now; the entry renders after the next refresh.
   if (watched_.contains(entry_id)) {
     const auto current = KeyFor(entry_id, nullptr);
     if (current && *current == key) {
-      if (auto image = CachedImage(key)) Show(entry_id, key, *image);
+      if (auto preview = CachedImage(key)) Show(entry_id, key, *preview);
     }
   }
   Pump();
 }
 
-auto LutPreviewController::CachedImage(const QString& key) -> std::optional<QImage> {
+auto LutPreviewController::CachedImage(const QString& key) -> std::optional<RenderedPreview> {
   const auto found = lru_index_.find(key);
   if (found == lru_index_.end()) return std::nullopt;
   lru_.splice(lru_.begin(), lru_, found.value());
   return lru_.front().second;
 }
 
-void LutPreviewController::CachePut(const QString& key, QImage image) {
-  if (image.isNull()) return;
+void LutPreviewController::CachePut(const QString& key, RenderedPreview preview) {
+  if (preview.image.isNull()) return;
   if (const auto found = lru_index_.find(key); found != lru_index_.end()) {
     lru_.erase(found.value());
     lru_index_.erase(found);
   }
-  lru_.emplace_front(key, std::move(image));
+  lru_.emplace_front(key, std::move(preview));
   lru_index_.insert(key, lru_.begin());
   while (lru_.size() > kLutPreviewCacheCapacity) {
     lru_index_.remove(lru_.back().first);
@@ -313,6 +320,30 @@ void LutPreviewController::CachePut(const QString& key, QImage image) {
 void LutPreviewController::BumpRevision() {
   ++revision_;
   emit revisionChanged();
+}
+
+void LutPreviewController::SetDisplayWindow(QWindow* window) {
+  QObject::disconnect(display_connection_);
+  display_source_ = window != nullptr ? WindowDisplayDestination::ForWindow(window) : nullptr;
+  if (display_source_ != nullptr) {
+    display_connection_ = connect(display_source_, &WindowDisplayDestination::DestinationChanged,
+                                  this, &LutPreviewController::ApplyDisplayDestination);
+  }
+  ApplyDisplayDestination();
+}
+
+void LutPreviewController::ApplyDisplayDestination() {
+  auto destination = display_source_ != nullptr ? display_source_->Destination() : nullptr;
+  if (store_->Destination() == destination) return;
+  store_->SetDestination(std::move(destination));
+  if (shown_.isEmpty()) return;
+  // The stored pixels stay; a new display id makes the tile request the new conversion.
+  for (auto& shown : shown_) {
+    store_->Remove(shown.display_id);
+    shown.display_id = next_display_id_++;
+    shown.url        = store_->Put(shown.display_id, shown.preview.image, shown.preview.encoding);
+  }
+  BumpRevision();
 }
 
 }  // namespace alcedo::ui

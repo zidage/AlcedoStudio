@@ -25,7 +25,7 @@ endif()
 
 def_library(EditorPresentation
     SOURCES ${EDITOR_PRESENTATION_SRCS}
-    PUBLIC_DEPS Qt6::Core
+    PUBLIC_DEPS Qt6::Core AlcedoLog
 )
 if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(EditorPresentation PUBLIC HAVE_CUDA)
@@ -88,6 +88,8 @@ def_library(EditorRhiViewport
     PUBLIC_DEPS
         EditorPresentation
         EditorViewerLogic
+        DisplayColorTransform
+        WindowDisplayDestination
         Qt6::Core
         Qt6::Gui
         Qt6::GuiPrivate

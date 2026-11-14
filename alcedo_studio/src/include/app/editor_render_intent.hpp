@@ -12,6 +12,7 @@
 
 #include "app/editor_session_request_ids.hpp"
 #include "edit/frame_presentation_types.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/mask_coverage_probe.hpp"
 #include "type/type.hpp"
 
@@ -54,6 +55,9 @@ enum class EditorRenderReason : std::uint8_t {
   // The Mask coverage probe of the editor changed (Mask ranges D9): one Quality render presents
   // the coverage of the newly probed Mask. The photo pixels do not change; no history change.
   MaskCoverageProbeChanged,
+  // A consumer asked for the curve input histogram of a Color Grade (issue #888): one Quality
+  // render of the whole frame counts it. The photo pixels do not change; no history change.
+  CurveInputHistogramRequested,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -130,6 +134,9 @@ struct EditorRenderIntent {
   // The Mask whose coverage this frame also presents (Mask ranges D9). Presentation state: the
   // port hands it to the renderer with the coverage channel of the frame role; it is in no key.
   std::optional<MaskCoverageProbe>               mask_coverage_probe;
+  // The Color Grade whose curve input this frame also counts, and the receiver of the counts
+  // (issue #888). Presentation state in no key; only a render of the whole frame counts it.
+  std::optional<CurveInputHistogramRequest>      curve_input_histogram;
 };
 
 struct EditorRenderRequest {
@@ -179,6 +186,7 @@ struct EditorRenderResult {
     case EditorRenderReason::ResourceChanged:
     case EditorRenderReason::ComparisonClosed:
     case EditorRenderReason::MaskCoverageProbeChanged:
+    case EditorRenderReason::CurveInputHistogramRequested:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -198,6 +206,7 @@ struct EditorRenderResult {
     case EditorRenderReason::ResourceChanged:
     case EditorRenderReason::ComparisonClosed:
     case EditorRenderReason::MaskCoverageProbeChanged:
+    case EditorRenderReason::CurveInputHistogramRequested:
       return EditorRenderQuality::Quality;
     case EditorRenderReason::InitialFrame:
     case EditorRenderReason::InteractiveAdjustment:
@@ -225,7 +234,8 @@ struct EditorRenderResult {
 [[nodiscard]] inline auto ScopeUpdateAllowedForReason(EditorRenderReason reason) -> bool {
   return reason != EditorRenderReason::ZoomPan && reason != EditorRenderReason::Resize &&
          reason != EditorRenderReason::DetailRefresh &&
-         reason != EditorRenderReason::MaskCoverageProbeChanged;
+         reason != EditorRenderReason::MaskCoverageProbeChanged &&
+         reason != EditorRenderReason::CurveInputHistogramRequested;
 }
 
 /// Fill frame-role defaults derived from quality before Submit stores the

@@ -19,22 +19,23 @@
 
 #include "app/editor_parameter_catalog.hpp"
 #include "app/editor_parameter_write.hpp"
+#include "ui/alcedo_main/album_backend/editor_camera_profile_list_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_geometry_math.hpp"
-#include "ui/alcedo_main/album_backend/editor_parameter_catalog_adapter.hpp"
 #include "ui/alcedo_main/album_backend/editor_grade_white_balance_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_adjustment_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_encoding_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_parameter_catalog_adapter.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_item.hpp"
-#include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_preview_controller.hpp"
+#include "ui/alcedo_main/plot_pane/plot_pane.hpp"
 
 namespace alcedo::ui {
 
@@ -484,13 +485,16 @@ void EditorAdjustmentEnumModel::selectIndex(int i) {
   }
   currentIndex_ = i;
   emit currentIndexChanged();
+  submitSelection();
+}
+
+auto EditorAdjustmentEnumModel::submitSelection() -> bool {
   if (paramsBuilder().isCallable()) {
-    submitJsonBoundary(
+    return submitJsonBoundary(
         resolveParams(QJSValue(currentValue()), enumParamsJson(currentIndex_, currentValue())),
         true);
-    return;
   }
-  submitNow(selectionWrite(currentValue()), true);
+  return submitNow(selectionWrite(currentValue()), true);
 }
 
 auto EditorAdjustmentEnumModel::selectionWrite(const QString& value) const
@@ -505,13 +509,7 @@ void EditorAdjustmentEnumModel::reset() {
   }
   currentIndex_ = defaultIndex_;
   emit currentIndexChanged();
-  if (paramsBuilder().isCallable()) {
-    submitJsonBoundary(
-        resolveParams(QJSValue(currentValue()), enumParamsJson(currentIndex_, currentValue())),
-        true);
-    return;
-  }
-  submitNow(selectionWrite(currentValue()), true);
+  submitSelection();
 }
 
 // ── EditorAdjustmentToggleModel ──────────────────────────────────────────────
@@ -559,7 +557,6 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorAdjustmentEnumModel>("Alcedo.Main", 1, 0, "EditorAdjustmentEnumModel");
   qmlRegisterType<EditorAdjustmentToggleModel>("Alcedo.Main", 1, 0, "EditorAdjustmentToggleModel");
   qmlRegisterType<EditorToneCurveModel>("Alcedo.Main", 1, 0, "EditorToneCurveModel");
-  qmlRegisterType<EditorToneCurveItem>("Alcedo.Main", 1, 0, "EditorToneCurveItem");
   qmlRegisterType<EditorColorTempModel>("Alcedo.Main", 1, 0, "EditorColorTempModel");
   qmlRegisterType<EditorGradeWhiteBalanceModel>("Alcedo.Main", 1, 0,
                                                 "EditorGradeWhiteBalanceModel");
@@ -574,7 +571,10 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorGeometryMath>("Alcedo.Main", 1, 0, "EditorGeometryMath");
   qmlRegisterType<EditorParameterCatalogAdapter>("Alcedo.Main", 1, 0, "EditorParameterCatalog");
   qmlRegisterType<EditorLensCatalogModel>("Alcedo.Main", 1, 0, "EditorLensCatalogModel");
+  qmlRegisterType<EditorCameraProfileListModel>("Alcedo.Main", 1, 0,
+                                                "EditorCameraProfileListModel");
   EditorScopeItem::RegisterQmlType();
+  PlotPane::RegisterQmlTypes();
 }
 
 }  // namespace alcedo::ui

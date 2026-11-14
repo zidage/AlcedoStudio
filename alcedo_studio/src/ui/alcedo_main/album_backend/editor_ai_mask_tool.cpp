@@ -23,6 +23,7 @@
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/edit_viewer/ai_mask_prompt_geometry.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -210,7 +211,8 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
       services_.model_set ? services_.model_set() : AiMaskModelSetReadiness{};
   if (model_set.availability != AiMaskModelSetAvailability::kReady) {
     model_set_availability_ = model_set.availability;
-    qInfo().noquote() << "[AI Mask] no usable model set:" << model_set_state();
+    qCInfo(alcedo::diag::maskLog).noquote()
+        << "[AI Mask] no usable model set:" << model_set_state();
     emit toolChanged();
     return;
   }
@@ -311,7 +313,7 @@ void EditorAiMaskTool::OnAnalysisRendered(std::uint64_t serial, EditorAiMaskAnal
 void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartRequest request) {
   const auto serial = request.serial;
   const auto fail   = [this, serial](QString message) {
-    qWarning().noquote() << "[AI Mask]" << message;
+    qCWarning(alcedo::diag::maskLog).noquote() << "[AI Mask]" << message;
     QMetaObject::invokeMethod(
         this,
         [this, serial, message] {
@@ -395,18 +397,19 @@ void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartR
   }
   worker_.service = std::move(service);
 
-  qInfo().noquote() << QStringLiteral(
-                           "[AI Mask] session started: %1 x %2, %3 on %4 (%5), sidecar %6 ms, "
-                           "load %7 ms, image %8 ms (encoder %9 ms%10)")
-                           .arg(started.image_width)
-                           .arg(started.image_height)
-                           .arg(ToQString(models.model_set_id), ToQString(models.backend),
-                                ToQString(models.device))
-                           .arg(sidecar_ms)
-                           .arg(load_ms)
-                           .arg(image_ms)
-                           .arg(started.encoder_ms)
-                           .arg(started.from_cache ? QStringLiteral(", cached") : QString{});
+  qCInfo(alcedo::diag::maskLog).noquote()
+      << QStringLiteral(
+             "[AI Mask] session started: %1 x %2, %3 on %4 (%5), sidecar %6 ms, "
+             "load %7 ms, image %8 ms (encoder %9 ms%10)")
+             .arg(started.image_width)
+             .arg(started.image_height)
+             .arg(ToQString(models.model_set_id), ToQString(models.backend),
+                  ToQString(models.device))
+             .arg(sidecar_ms)
+             .arg(load_ms)
+             .arg(image_ms)
+             .arg(started.encoder_ms)
+             .arg(started.from_cache ? QStringLiteral(", cached") : QString{});
   auto view = ReadView(*worker_.session);
   QMetaObject::invokeMethod(
       this,
@@ -551,8 +554,8 @@ void EditorAiMaskTool::RunStep(AiMaskToolStage stage, SessionOperation operation
       }
       view = ReadView(*worker.session);
     }
-    qInfo().noquote() << "[AI Mask] step" << StepResultText(result) << "in" << ElapsedMs(start)
-                      << "ms";
+    qCInfo(alcedo::diag::maskLog).noquote()
+        << "[AI Mask] step" << StepResultText(result) << "in" << ElapsedMs(start) << "ms";
     QMetaObject::invokeMethod(
         this,
         [this, serial, result, view = std::move(view)]() mutable {
@@ -706,7 +709,8 @@ void EditorAiMaskTool::OnCoveragePresented(EditorMaskCoverageResult result) {
     preview_.error = result.message;
   }
   if (result.outcome == EditorMaskCoverageOutcome::Failed) {
-    qWarning().noquote() << "[AI Mask] coverage presentation failed:" << ToQString(result.message);
+    qCWarning(alcedo::diag::maskLog).noquote()
+        << "[AI Mask] coverage presentation failed:" << ToQString(result.message);
   }
   emit previewChanged();
 }
@@ -800,7 +804,7 @@ void EditorAiMaskTool::OnSessionResult(const EditorSessionResult& result) {
   if (backend != nullptr && !backend->ai_mask_edit_open()) {
     commit_operation_id_ = 0;
     lease_open_          = false;
-    qInfo().noquote() << "[AI Mask] committed:" << ToQString(result.message);
+    qCInfo(alcedo::diag::maskLog).noquote() << "[AI Mask] committed:" << ToQString(result.message);
     Close({});
   }
 }
@@ -813,7 +817,7 @@ void EditorAiMaskTool::OnSessionStateChanged() {
   if (backend != nullptr && !backend->ai_mask_edit_open()) {
     // The editor ended the edit (image change or close) and released the lease.
     lease_open_ = false;
-    qInfo().noquote() << "[AI Mask] the editor ended the AI Mask edit";
+    qCInfo(alcedo::diag::maskLog).noquote() << "[AI Mask] the editor ended the AI Mask edit";
     Close({});
   }
 }
@@ -836,8 +840,8 @@ void EditorAiMaskTool::Close(QString error) {
     if (worker.service) {
       const auto closed = worker.service->Close();
       if (!closed.ok) {
-        qWarning().noquote() << "[AI Mask] closing the segmentation service failed:"
-                             << ToQString(closed.error);
+        qCWarning(alcedo::diag::maskLog).noquote()
+            << "[AI Mask] closing the segmentation service failed:" << ToQString(closed.error);
       }
       worker.service.reset();
     }
@@ -868,7 +872,7 @@ void EditorAiMaskTool::Close(QString error) {
 }
 
 void EditorAiMaskTool::Fail(QString error) {
-  qWarning().noquote() << "[AI Mask]" << error;
+  qCWarning(alcedo::diag::maskLog).noquote() << "[AI Mask]" << error;
   error_text_ = std::move(error);
   ClearPending();
   emit messageChanged();

@@ -15,6 +15,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSpinBox>
+#include <QTimer>
 #include <QVariantMap>
 #include <QWidget>
 #include <algorithm>
@@ -1117,6 +1118,67 @@ auto AppTheme::scopeHistogramBlueColor() const -> QColor {
 
 auto AppTheme::scopeMarkerColor() const -> QColor { return textColor(); }
 
+auto AppTheme::plotSurfaceColor() const -> QColor { return bgBaseColor(); }
+
+auto AppTheme::plotGridColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.22);
+}
+
+auto AppTheme::plotGridStrongColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.55);
+}
+
+auto AppTheme::plotLabelColor() const -> QColor { return textMutedColor(); }
+
+auto AppTheme::plotLineColor() const -> QColor { return textColor(); }
+
+auto AppTheme::plotReferenceLineColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.70);
+}
+
+auto AppTheme::plotHandleColor() const -> QColor { return textColor(); }
+
+auto AppTheme::plotHandleOutlineColor() const -> QColor {
+  // Dark halo around a handle, so a ring reads over the histogram and the line under it.
+  return WithAlpha(bgDeepColor(), 200);
+}
+
+auto AppTheme::plotGridLineWidth() const -> qreal { return 1.0; }
+
+auto AppTheme::plotLineWidth() const -> qreal { return 1.25; }
+
+auto AppTheme::plotHandleRadius() const -> qreal { return 3.5; }
+
+auto AppTheme::plotHandleRingWidth() const -> qreal { return 1.25; }
+
+auto AppTheme::plotHandleOutlineWidth() const -> qreal { return 1.0; }
+
+auto AppTheme::plotHitRadius() const -> qreal { return 8.0; }
+
+// Curves of the color channels: stronger than the histogram tints, so a line reads over its own
+// channel of the histogram.
+auto AppTheme::plotChannelRedColor() const -> QColor {
+  return Blend(QColor(0xE8, 0x66, 0x66), textColor(), 0.12);
+}
+
+auto AppTheme::plotChannelGreenColor() const -> QColor {
+  return Blend(QColor(0x74, 0xC2, 0x66), textColor(), 0.12);
+}
+
+auto AppTheme::plotChannelBlueColor() const -> QColor {
+  return Blend(QColor(0x66, 0xA0, 0xE8), textColor(), 0.12);
+}
+
+auto AppTheme::plotPointerLineColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.45);
+}
+
+auto AppTheme::plotInactiveLineOpacity() const -> qreal { return 0.4; }
+
+auto AppTheme::plotCurveHitRadius() const -> qreal { return 6.0; }
+
+auto AppTheme::plotChannelMarkSize() const -> qreal { return 4.0; }
+
 auto AppTheme::dateGraphLevel0Color() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.22);
 }
@@ -1256,6 +1318,65 @@ auto AppTheme::welcomeEmptyContentWidth() const -> int { return 400; }
 // One sweep of the SkeletonBlock highlight band. Not scaled by reduceMotion:
 // under reduceMotion the band does not run at all.
 auto AppTheme::skeletonCycleMs() const -> int { return 1200; }
+
+// StaggeredGridMark wave clock. One pass of the wave takes loadingWaveCycleMs; the phase advances
+// every loadingWaveFrameMs (about 30 updates per second) while a mark holds the clock. A mark
+// under reduceMotion holds nothing and draws its tiles at rest.
+auto AppTheme::loadingWaveCycleMs() const -> int { return 1200; }
+auto AppTheme::loadingWaveFrameMs() const -> int { return 33; }
+auto AppTheme::loadingWavePhase() const -> qreal { return loading_wave_phase_; }
+auto AppTheme::loadingWaveHolders() const -> int {
+  return static_cast<int>(loading_wave_holders_.size());
+}
+
+void AppTheme::setLoadingWaveHolder(QObject* holder, bool holds) {
+  if (holder == nullptr) {
+    return;
+  }
+  const auto it = loading_wave_holders_.find(holder);
+  if (holds && it == loading_wave_holders_.end()) {
+    loading_wave_holders_.insert(holder,
+                                 connect(holder, &QObject::destroyed, this, [this, holder]() {
+                                   loading_wave_holders_.remove(holder);
+                                   UpdateLoadingWaveTimer();
+                                 }));
+  } else if (!holds && it != loading_wave_holders_.end()) {
+    disconnect(it.value());
+    loading_wave_holders_.erase(it);
+  }
+  UpdateLoadingWaveTimer();
+}
+
+void AppTheme::UpdateLoadingWaveTimer() {
+  const bool run = !loading_wave_holders_.isEmpty();
+  if (!run) {
+    if (loading_wave_timer_ != nullptr) {
+      loading_wave_timer_->stop();
+    }
+    return;
+  }
+  if (loading_wave_timer_ == nullptr) {
+    loading_wave_timer_ = new QTimer(this);
+    loading_wave_timer_->setInterval(loadingWaveFrameMs());
+    connect(loading_wave_timer_, &QTimer::timeout, this, &AppTheme::AdvanceLoadingWave);
+  }
+  if (loading_wave_timer_->isActive()) {
+    return;
+  }
+  if (!loading_wave_clock_.isValid()) {
+    loading_wave_clock_.start();
+  }
+  AdvanceLoadingWave();
+  loading_wave_timer_->start();
+}
+
+void AppTheme::AdvanceLoadingWave() {
+  const auto cycle = static_cast<qint64>(loadingWaveCycleMs());
+  loading_wave_phase_ =
+      static_cast<qreal>(loading_wave_clock_.elapsed() % cycle) / static_cast<qreal>(cycle);
+  emit LoadingWavePhaseChanged();
+}
+
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
 auto AppTheme::lineHeightBody() const -> int { return 16; }
 auto AppTheme::lineHeightTitle() const -> int { return 18; }
@@ -1303,6 +1424,7 @@ auto AppTheme::fontSizeBody() const -> int { return 12; }
 auto AppTheme::fontSizeTitle() const -> int { return 13; }
 auto AppTheme::fontSizeSection() const -> int { return 14; }
 auto AppTheme::fontSizeHeadline() const -> int { return 22; }
+auto AppTheme::fontSizeDisplay() const -> int { return 72; }
 auto AppTheme::fontWeightRegular() const -> int { return 500; }
 auto AppTheme::fontWeightStrong() const -> int { return 600; }
 auto AppTheme::fontWeightHeading() const -> int { return 700; }

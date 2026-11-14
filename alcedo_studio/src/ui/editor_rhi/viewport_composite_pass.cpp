@@ -8,7 +8,10 @@
 #include <QFile>
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include "ui/edit_viewer/viewport_mapper.hpp"
 
@@ -166,6 +169,10 @@ ViewportCompositePass::ViewportCompositePass(QString vertex_shader, QString frag
 
 ViewportCompositePass::~ViewportCompositePass() { Release(); }
 
+void ViewportCompositePass::SetDisplayTransform(std::shared_ptr<const DisplayTransformLut> lut) {
+  display_lut_ = std::move(lut);
+}
+
 void ViewportCompositePass::ForgetTexture(const QRhiTexture* texture) {
   if (texture == nullptr) {
     return;
@@ -189,6 +196,11 @@ void ViewportCompositePass::Release() {
   DestroyRhi(linear_sampler_);
   DestroyRhi(nearest_sampler_);
   DestroyRhi(placeholder_texture_);
+  DestroyRhi(display_sampler_);
+  DestroyRhi(display_texture_);
+  display_texture_edge_ = 0;
+  // The table of the next draws stays: a new QRhi uploads it again.
+  uploaded_display_lut_.reset();
   pipeline_target_  = nullptr;
   pipeline_pass_    = nullptr;
   pipeline_samples_ = 0;
@@ -304,7 +316,9 @@ auto ViewportCompositePass::EnsureBindings(QRhi* rhi, const Textures& textures) 
        QRhiShaderResourceBinding::sampledTexture(3, QRhiShaderResourceBinding::FragmentStage,
                                                  coverage, linear_sampler_),
        QRhiShaderResourceBinding::sampledTexture(4, QRhiShaderResourceBinding::FragmentStage,
-                                                 detail_coverage, linear_sampler_)});
+                                                 detail_coverage, linear_sampler_),
+       QRhiShaderResourceBinding::sampledTexture(5, QRhiShaderResourceBinding::FragmentStage,
+                                                 display_texture_, display_sampler_)});
   if (!bindings_->create()) {
     DestroyRhi(bindings_);
     last_error_ = "viewport composite: the shader resource bindings could not be created";
@@ -315,6 +329,81 @@ auto ViewportCompositePass::EnsureBindings(QRhi* rhi, const Textures& textures) 
   bound_detail_   = detail;
   bound_coverage_        = coverage;
   bound_detail_coverage_ = detail_coverage;
+  return true;
+}
+
+auto ViewportCompositePass::EnsureDisplayTable(QRhi* rhi, QRhiResourceUpdateBatch* updates)
+    -> bool {
+  if (!rhi->isFeatureSupported(QRhi::ThreeDimensionalTextures)) {
+    last_error_ = "viewport composite: the graphics API has no 3D texture for the display table";
+    return false;
+  }
+  if (display_lut_ != nullptr &&
+      (display_lut_->edge < 2 || display_lut_->rgba.size() !=
+                                     static_cast<std::size_t>(display_lut_->edge) *
+                                         display_lut_->edge * display_lut_->edge * 4)) {
+    last_error_ = "viewport composite: the display table has no values for each node";
+    return false;
+  }
+  // Without a table the shader does not sample the texture; a 2-node texture fills its binding.
+  const int edge  = display_lut_ != nullptr ? display_lut_->edge : 2;
+  bool      fresh = false;
+  if (display_texture_ == nullptr || display_texture_edge_ != edge) {
+    if (display_texture_ != nullptr) {
+      // The bindings keep the texture pointer.
+      DestroyRhi(bindings_);
+      bound_primary_         = nullptr;
+      bound_detail_          = nullptr;
+      bound_coverage_        = nullptr;
+      bound_detail_coverage_ = nullptr;
+      DestroyRhi(display_texture_);
+    }
+    display_texture_edge_ = 0;
+    uploaded_display_lut_.reset();
+    display_texture_ = rhi->newTexture(QRhiTexture::RGBA32F, edge, edge, edge, 1,
+                                       QRhiTexture::ThreeDimensional);
+    if (!display_texture_->create()) {
+      DestroyRhi(display_texture_);
+      last_error_ = "viewport composite: the display table texture could not be created";
+      return false;
+    }
+    display_texture_edge_ = edge;
+    fresh                 = true;
+  }
+  if (display_sampler_ == nullptr) {
+    display_sampler_ =
+        rhi->newSampler(QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
+                        QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge,
+                        QRhiSampler::ClampToEdge);
+    if (!display_sampler_->create()) {
+      DestroyRhi(display_sampler_);
+      last_error_ = "viewport composite: the display table sampler could not be created";
+      return false;
+    }
+  }
+  if (!fresh && display_lut_ == uploaded_display_lut_) {
+    return true;
+  }
+  const auto slice_values = static_cast<std::size_t>(edge) * edge * 4;
+  const std::vector<float> empty_slice(display_lut_ == nullptr ? slice_values : 0, 0.0f);
+  std::vector<QRhiTextureUploadEntry> entries;
+  entries.reserve(static_cast<std::size_t>(edge));
+  for (int slice = 0; slice < edge; ++slice) {
+    // One blue index of the table is one slice of the texture (DisplayTransformLut layout).
+    const float* values = display_lut_ != nullptr
+                              ? display_lut_->rgba.data() + static_cast<std::size_t>(slice) *
+                                                                slice_values
+                              : empty_slice.data();
+    QRhiTextureSubresourceUploadDescription description(QByteArray(
+        reinterpret_cast<const char*>(values), static_cast<int>(slice_values * sizeof(float))));
+    description.setDataStride(static_cast<quint32>(edge * 4 * sizeof(float)));
+    description.setSourceSize(QSize(edge, edge));
+    entries.emplace_back(slice, 0, description);
+  }
+  QRhiTextureUploadDescription upload;
+  upload.setEntries(entries.cbegin(), entries.cend());
+  updates->uploadTexture(display_texture_, upload);
+  uploaded_display_lut_ = display_lut_;
   return true;
 }
 
@@ -368,9 +457,21 @@ auto ViewportCompositePass::Record(QRhi* rhi, QRhiCommandBuffer* command_buffer,
   auto* updates = rhi->nextResourceUpdateBatch();
   bool  ready   = EnsureResources(rhi, updates);
   if (ready && textures.primary != nullptr) {
-    ready = EnsureBindings(rhi, textures) && EnsurePipeline(rhi, render_target);
+    ready = EnsureDisplayTable(rhi, updates) && EnsureBindings(rhi, textures) &&
+            EnsurePipeline(rhi, render_target);
     if (ready) {
-      updates->updateDynamicBuffer(uniform_buffer_, 0, sizeof(uniforms), &uniforms);
+      ViewportCompositeUniforms draw = uniforms;
+      if (uploaded_display_lut_ != nullptr) {
+        draw.display_lut[0] = 1.0f;
+        draw.display_lut[1] = static_cast<float>(uploaded_display_lut_->edge);
+        draw.display_lut[2] = uploaded_display_lut_->input_exponent;
+      } else {
+        draw.display_lut[0] = 0.0f;
+        draw.display_lut[1] = 0.0f;
+        draw.display_lut[2] = 1.0f;
+      }
+      draw.display_lut[3] = 0.0f;
+      updates->updateDynamicBuffer(uniform_buffer_, 0, sizeof(draw), &draw);
     }
   }
   command_buffer->beginPass(render_target, Qt::black, {1.0f, 0}, updates);

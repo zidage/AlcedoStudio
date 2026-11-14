@@ -9,6 +9,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 
@@ -38,22 +39,28 @@ struct CudaPrimaryGradeResult {
  * workspace. Reads the document only; a failed parameter transfer stays queued in the
  * workspace arena.
  * No CPU image-processing fallback.
+ *
+ * @param histogram When not null, the Grade also records the histogram of its curve input
+ *        (GradeExecutor::Execute, issue #888).
  */
 [[nodiscard]] auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
-                                           const PreparedRawInput&  prepared,
-                                           const PipelineDocument&  document,
-                                           const CompiledGradeNode& compiled_grade,
-                                           const FrameSceneBinding& scene)
+                                           const PreparedRawInput&    prepared,
+                                           const PipelineDocument&    document,
+                                           const CompiledGradeNode&   compiled_grade,
+                                           const FrameSceneBinding&   scene,
+                                           CurveInputHistogramRecord* histogram = nullptr)
     -> CudaPrimaryGradeResult;
 
 /**
  * @brief Execute every compiled Color Grade in backbone order.
  *
+ * @param histogram When not null, the Grade with its `grade_id` records its curve input histogram.
  * @return The last Grade result. @throws std::runtime_error when the plan has no Color Grade.
  */
 [[nodiscard]] auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
-                                           const PreparedRawInput& prepared,
-                                           const PipelineDocument& document)
+                                           const PreparedRawInput&    prepared,
+                                           const PipelineDocument&    document,
+                                           CurveInputHistogramRecord* histogram = nullptr)
     -> CudaPrimaryGradeResult;
 
 }  // namespace alcedo

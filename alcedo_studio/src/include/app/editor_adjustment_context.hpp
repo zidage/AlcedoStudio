@@ -50,6 +50,12 @@ struct EditorImageExifDisplay {
   /// These are not header tokens; empty means the EXIF field is missing.
   std::string                        lens_make;
   std::string                        lens_model;
+  /// Camera identity of the image RAW color context (`RawRuntimeColorContext::camera_make_` and
+  /// `camera_model_`, the import values that the image root also records). The Camera Profile
+  /// section matches DCP files with it (dcp_camera_profile_plan.md, section 2.4). For a DNG
+  /// file the model already follows UniqueCameraModel. Empty without a RAW color context.
+  std::string                        camera_make;
+  std::string                        camera_model;
 };
 
 /// UTF-8 em dash used when a header EXIF field is missing or invalid.
@@ -96,7 +102,8 @@ struct EditorAdjustmentContext {
     -> EditorImageExifDisplay;
 
 /**
- * @brief Copy the four display EXIF fields from @p image when display metadata is present.
+ * @brief Copy the four display EXIF fields from @p image when display metadata is present, and
+ *        the camera identity of its RAW color context when the image has one.
  */
 [[nodiscard]] auto ReadEditorImageExifDisplay(const Image& image) -> EditorImageExifDisplay;
 

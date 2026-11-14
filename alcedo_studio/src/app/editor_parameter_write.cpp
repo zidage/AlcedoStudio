@@ -10,6 +10,7 @@
 #include <string_view>
 #include <variant>
 
+#include "app/dcp_camera_profile_binding.hpp"
 #include "app/editor_adjustment_types.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
@@ -117,7 +118,7 @@ void ApplyColorGradeWrite(IOperatorModel& model, std::string_view field,
     if (typed == nullptr) {
       throw std::invalid_argument("Adjustment Model type does not match field curve");
     }
-    typed->SetPoints(RequireWrite<EditorCurveWrite>(write, field).points);
+    typed->ApplyUpdate(RequireWrite<EditorCurveWrite>(write, field));
     return;
   }
   if (field == "grade_white_balance") {
@@ -226,6 +227,11 @@ auto ApplyEditorParameterWrite(PipelineDocument& document, const EditorParameter
         } else if (target.field_key == "input_profile") {
           develop->Params().ApplyInputProfileUpdate(
               RequireWrite<DevelopInputProfileUpdate>(write, target.field_key));
+        } else if (target.field_key == "camera_profile_file") {
+          auto update = RequireWrite<DevelopCameraProfileFileUpdate>(write, target.field_key);
+          // A DNG source keeps its own calibration with the DCP tables (plan phase C6).
+          AddDcpSourceTables(update, develop->Params().DngProfile());
+          develop->Params().ApplyCameraProfileFileUpdate(std::move(update));
         } else {
           return SetError(error, "Unsupported Develop parameter field: " + target.field_key);
         }

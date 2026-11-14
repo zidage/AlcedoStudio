@@ -8,7 +8,6 @@
 #include <string>
 #include <string_view>
 #include <variant>
-#include <vector>
 
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
@@ -59,14 +58,14 @@ struct EditorToggleWrite {
 };
 
 /**
- * @brief Replacement tone-curve control points for one Curve Model.
+ * @brief Replacement control points for some of the four curves of one Curve Model.
  *
- * Points are the edited curve only. They are not a copy of unrelated Grade
- * parameters.
+ * `points` is the RGB curve; `red`, `green`, and `blue` are the channel curves. A write
+ * (@ref ParseEditorParameterWrite) leaves a curve that it does not have as it is. A complete value
+ * (@ref ParseEditorParameterValue: history replay) has all four curves: a channel key that the
+ * stored Model JSON does not have is the identity.
  */
-struct EditorCurveWrite {
-  std::vector<CurvePoint> points;
-};
+using EditorCurveWrite = CurveUpdate;
 
 /**
  * @brief LUT selection and/or strength for one LMT Model.
@@ -90,7 +89,7 @@ using EditorParameterWrite =
                  EditorLutWrite, HlsUpdate, ColorWheelUpdate, Cat02WhiteBalanceUpdate,
                  SharpenUpdate, DevelopRawDecodeUpdate, DevelopColorTemperatureUpdate,
                  DevelopLensCalibrationUpdate, DevelopInputProfileUpdate, DrtParameterUpdate,
-                 ImageGeometryUpdate, DrtFilmFormatUpdate>;
+                 ImageGeometryUpdate, DrtFilmFormatUpdate, DevelopCameraProfileFileUpdate>;
 
 /**
  * @brief Parse a field JSON object into the matching Model operation.
@@ -115,8 +114,9 @@ using EditorParameterWrite =
  * A write (@ref ParseEditorParameterWrite) sets only the keys that it has. A complete value sets
  * every field: a key that @p value does not have takes the default of the Model. For `odt`, the
  * Model omits a key of Negative Scan at its default and the film print object of another method,
- * so each film print field that @p value does not have is the default. Other fields read as a
- * write, because their Model JSON has every key.
+ * so each film print field that @p value does not have is the default. For `curve`, the Model omits
+ * a red, green, or blue curve that is the identity, so each channel curve that @p value does not
+ * have is the identity. Other fields read as a write, because their Model JSON has every key.
  *
  * @return The operation, or nullopt when keys, types, or dimensions are invalid.
  */

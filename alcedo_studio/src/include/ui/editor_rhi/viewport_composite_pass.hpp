@@ -10,10 +10,12 @@
 #include <QSize>
 #include <QString>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 
 #include "edit/geometry/resolved_render_geometry.hpp"
+#include "ui/edit_viewer/display_color_transform.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo::editor_rhi {
@@ -76,7 +78,12 @@ struct ViewportCompositeUniforms {
   float detail_coverage_u[4] = {1.0f, 0.0f, 0.0f, 0.0f};
   /// xyz: CoverageUvTransform::v_row of the detail coverage frame.
   float detail_coverage_v[4] = {0.0f, 1.0f, 0.0f, 0.0f};
+  /// x: 1 when the display table converts the output; y: nodes per axis; z: input exponent.
+  /// @ref ViewportCompositePass::Record writes it from the table of the pass.
+  float display_lut[4]       = {0.0f, 0.0f, 1.0f, 0.0f};
 };
+static_assert(sizeof(ViewportCompositeUniforms) == 10 * 4 * sizeof(float),
+              "ViewportCompositeUniforms must match the std140 block ViewerUniforms");
 
 /// The selected photo layer of one viewport draw.
 struct ViewportCompositePhoto {
@@ -136,7 +143,9 @@ enum class ViewportCompositeOutcome : std::uint8_t {
  * the coverage tint: `a = clamp(coverage, 0, 1) × opacity`,
  * `rgb = photo_rgb × (1 − a) + tint_rgb × a`. Pixels with `a = 0` keep their photo value, including
  * negative and above-one values, and every pixel keeps its photo alpha. Candidate coverage, a
- * committed Mask, and a Grade Union all use this draw.
+ * committed Mask, and a Grade Union all use this draw. With a display table
+ * (@ref SetDisplayTransform) the last step samples the table at the clamped result, so the photo
+ * and the tint are converted to the monitor profile together.
  *
  * Owns the QRhi resources of the draw: samplers, uniform and vertex buffers, the shader resource
  * bindings, and the graphics pipeline. Input textures belong to the caller; call @ref ForgetTexture
@@ -173,6 +182,15 @@ class ViewportCompositePass {
               const Textures& textures, const ViewportCompositeUniforms& uniforms)
       -> ViewportCompositeOutcome;
 
+  /**
+   * @brief Use @p lut as the display table of the next draws, or no table when it is null.
+   *
+   * The pass uploads a table once: the next @ref Record uploads it when the pointer differs from
+   * the uploaded one, and creates the 3D texture again when the node count changes. Without a
+   * table the draw output keeps the photo encoding.
+   */
+  void               SetDisplayTransform(std::shared_ptr<const DisplayTransformLut> lut);
+
   /// Drop the shader resource bindings when they use @p texture. Call before destroying it.
   void               ForgetTexture(const QRhiTexture* texture);
   /// Destroy every QRhi resource of the pass. Idempotent.
@@ -184,6 +202,7 @@ class ViewportCompositePass {
   auto                        EnsureResources(QRhi* rhi, QRhiResourceUpdateBatch* updates) -> bool;
   auto                        EnsureBindings(QRhi* rhi, const Textures& textures) -> bool;
   auto                        EnsurePipeline(QRhi* rhi, QRhiRenderTarget* render_target) -> bool;
+  auto EnsureDisplayTable(QRhi* rhi, QRhiResourceUpdateBatch* updates) -> bool;
   auto                        Fail(std::string error) -> ViewportCompositeOutcome;
 
   QString                     vertex_shader_path_;
@@ -203,6 +222,13 @@ class ViewportCompositePass {
   QRhiTexture*                bound_detail_        = nullptr;
   QRhiTexture*                bound_coverage_      = nullptr;
   QRhiTexture*                bound_detail_coverage_ = nullptr;
+  /// The 3D texture of the display table: 2 nodes per axis while there is no table.
+  QRhiTexture*                display_texture_       = nullptr;
+  QRhiSampler*                display_sampler_       = nullptr;
+  int                         display_texture_edge_  = 0;
+  /// The table of the next draws, and the table that display_texture_ holds.
+  std::shared_ptr<const DisplayTransformLut> display_lut_;
+  std::shared_ptr<const DisplayTransformLut> uploaded_display_lut_;
   bool                        static_upload_       = false;
   std::string                 last_error_;
 };

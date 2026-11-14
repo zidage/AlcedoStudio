@@ -11,7 +11,9 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 
 namespace alcedo {
 
@@ -98,7 +100,7 @@ TEST(GpuDagModelGraph, DefaultPrimaryGradeUsesFullMixAndNoMask) {
 }
 
 TEST(GpuDagModelGraph,
-     DefaultPipelineDocumentBakesOnePointFiveEvContrastFifteenAndSaturationOnePointThree) {
+     DefaultPipelineDocumentBakesOnePointFiveEvSaturationOnePointThreeAndTheFilmLikeCurve) {
   const auto document = CreateDefaultPipelineDocument();
   const auto* grade   = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
@@ -116,8 +118,22 @@ TEST(GpuDagModelGraph,
   const auto* contrast =
       dynamic_cast<const ContrastModel*>(grade->FindAdjustmentByType(type_ids::Contrast()));
   ASSERT_NE(contrast, nullptr);
-  EXPECT_FLOAT_EQ(contrast->Value(), 15.0f);
-  EXPECT_FLOAT_EQ(kDefaultPipelineContrast, 15.0f);
+  // The Film-like curve carries the contrast of the look (#891).
+  EXPECT_FLOAT_EQ(contrast->Value(), 0.0f);
+
+  const auto* curve =
+      dynamic_cast<const CurveModel*>(grade->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  const auto* film_like = FindToneCurvePreset("film_like");
+  ASSERT_NE(film_like, nullptr);
+  EXPECT_EQ(kDefaultPipelineToneCurvePresetId, "film_like");
+  EXPECT_EQ(curve->Points(), film_like->PointList());
+  for (const auto channel : {CurveChannel::Red, CurveChannel::Green, CurveChannel::Blue}) {
+    EXPECT_TRUE(IsIdentityCurve(curve->ChannelPoints(channel)));
+  }
+  // The document stores only the points of the RGB curve.
+  EXPECT_FALSE(curve->ToJson().contains("preset"));
+  EXPECT_FALSE(curve->ToJson().contains("red"));
 
   EXPECT_NE(document.Graph().FindNode(NodeId{"grade.primary"}), nullptr);
   EXPECT_TRUE(document.Graph().Validate().empty());

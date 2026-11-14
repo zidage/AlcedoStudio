@@ -51,8 +51,12 @@ struct EditorPanelLutValue {
   std::string  output_encoding{kDefaultLutEncodingId};
 };
 
+/// The four curves of a Curve Model: `points` is the RGB curve.
 struct EditorPanelCurveValue {
   std::vector<CurvePoint> points;
+  std::vector<CurvePoint> red;
+  std::vector<CurvePoint> green;
+  std::vector<CurvePoint> blue;
 };
 
 struct EditorPanelHlsValue {
@@ -121,6 +125,25 @@ struct EditorPanelInputProfileValue {
   std::string referral;
 };
 
+/// DCP profile reference of the Develop node (`camera_profile_file`). `selected` is false when the
+/// import profile applies. `resolved` is false for a stored reference that the DCP library could
+/// not bind, whose render fails (plan decision P-4). `raster` is true for a raster document, which
+/// has no camera profile. `embedded_default` is true when the import profile is the embedded
+/// profile of a DNG file (the default entry reads "Embedded", else "Built-in"). `has_tone_curve`
+/// is true when the bound profile has a `ProfileToneCurve`, and `profile_tone` is the stored
+/// switch of the profile tone stage (dcp_profile_tone_curve_study.md, section 6.4); both are
+/// false without a reference.
+struct EditorPanelCameraProfileFileValue {
+  bool        raster           = false;
+  bool        embedded_default = false;
+  bool        selected         = false;
+  bool        resolved         = false;
+  bool        has_tone_curve   = false;
+  bool        profile_tone     = false;
+  std::string camera_model;
+  std::string profile_name;
+};
+
 /// The film format of the DRT node, as its document identifier (`16mm`, `35mm`, or `70mm`).
 struct EditorPanelFilmFormatValue {
   std::string film_format = "35mm";
@@ -138,7 +161,8 @@ using EditorPanelFieldValue =
                  EditorPanelCurveValue, EditorPanelHlsValue, EditorPanelColorWheelValue,
                  EditorPanelColorTempValue, EditorPanelRawDecodeValue, EditorPanelOdtValue,
                  EditorPanelLensValue, EditorPanelGeometryValue, EditorPanelGradeWhiteBalanceValue,
-                 EditorPanelInputProfileValue, EditorPanelFilmFormatValue>;
+                 EditorPanelInputProfileValue, EditorPanelFilmFormatValue,
+                 EditorPanelCameraProfileFileValue>;
 
 /**
  * @brief One panel field copied from a Graph Node Model.

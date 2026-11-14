@@ -186,7 +186,7 @@ Item {
             }
         }
 
-        ThumbnailLoadingSpinner {
+        StaggeredGridMark {
             anchors.centerIn: parent
             width: appTheme.iconOpticalSize
             height: appTheme.iconOpticalSize

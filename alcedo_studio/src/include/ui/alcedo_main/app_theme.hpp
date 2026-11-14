@@ -5,12 +5,15 @@
 #pragma once
 
 #include <QColor>
+#include <QElapsedTimer>
 #include <QFont>
+#include <QHash>
 #include <QObject>
 #include <QString>
 #include <QVariantList>
 
 class QApplication;
+class QTimer;
 class QWidget;
 
 namespace alcedo::ui {
@@ -117,6 +120,13 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int welcomeInfoMinWidth READ welcomeInfoMinWidth CONSTANT)
   Q_PROPERTY(int welcomeEmptyContentWidth READ welcomeEmptyContentWidth CONSTANT)
   Q_PROPERTY(int skeletonCycleMs READ skeletonCycleMs CONSTANT)
+  // Shared clock of the StaggeredGridMark wave (DESIGN.md "Library loading"): 0 to 1 over
+  // loadingWaveCycleMs, advanced every loadingWaveFrameMs while at least one mark holds it
+  // (setLoadingWaveHolder). Every mark reads the same phase, so a dense grid repaints once per
+  // tick, not once per display frame.
+  Q_PROPERTY(qreal loadingWavePhase READ loadingWavePhase NOTIFY LoadingWavePhaseChanged)
+  Q_PROPERTY(int loadingWaveCycleMs READ loadingWaveCycleMs CONSTANT)
+  Q_PROPERTY(int loadingWaveFrameMs READ loadingWaveFrameMs CONSTANT)
   // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
   Q_PROPERTY(int lineHeightCaption READ lineHeightCaption CONSTANT)
   Q_PROPERTY(int lineHeightBody READ lineHeightBody CONSTANT)
@@ -149,6 +159,8 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int fontSizeTitle READ fontSizeTitle CONSTANT)
   Q_PROPERTY(int fontSizeSection READ fontSizeSection CONSTANT)
   Q_PROPERTY(int fontSizeHeadline READ fontSizeHeadline CONSTANT)
+  /// The large count of a Settings bento tile (CountTile): the one display size.
+  Q_PROPERTY(int fontSizeDisplay READ fontSizeDisplay CONSTANT)
   Q_PROPERTY(int fontWeightRegular READ fontWeightRegular CONSTANT)
   Q_PROPERTY(int fontWeightStrong READ fontWeightStrong CONSTANT)
   Q_PROPERTY(int fontWeightHeading READ fontWeightHeading CONSTANT)
@@ -206,6 +218,30 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor scopeHistogramGreenColor READ scopeHistogramGreenColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramBlueColor READ scopeHistogramBlueColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeMarkerColor READ scopeMarkerColor NOTIFY ThemeChanged)
+  // Plot pane (PlotPane and its layers). Colors follow the active theme; sizes are logical px.
+  // See DESIGN.md "Plot pane".
+  Q_PROPERTY(QColor plotSurfaceColor READ plotSurfaceColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotGridColor READ plotGridColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotGridStrongColor READ plotGridStrongColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotLabelColor READ plotLabelColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotLineColor READ plotLineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotReferenceLineColor READ plotReferenceLineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotHandleColor READ plotHandleColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotHandleOutlineColor READ plotHandleOutlineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(qreal plotGridLineWidth READ plotGridLineWidth CONSTANT)
+  Q_PROPERTY(qreal plotLineWidth READ plotLineWidth CONSTANT)
+  Q_PROPERTY(qreal plotHandleRadius READ plotHandleRadius CONSTANT)
+  Q_PROPERTY(qreal plotHandleRingWidth READ plotHandleRingWidth CONSTANT)
+  Q_PROPERTY(qreal plotHandleOutlineWidth READ plotHandleOutlineWidth CONSTANT)
+  Q_PROPERTY(qreal plotHitRadius READ plotHitRadius CONSTANT)
+  // Tone Curve section (DESIGN.md "Tone Curve section").
+  Q_PROPERTY(QColor plotChannelRedColor READ plotChannelRedColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotChannelGreenColor READ plotChannelGreenColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotChannelBlueColor READ plotChannelBlueColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotPointerLineColor READ plotPointerLineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(qreal plotInactiveLineOpacity READ plotInactiveLineOpacity CONSTANT)
+  Q_PROPERTY(qreal plotCurveHitRadius READ plotCurveHitRadius CONSTANT)
+  Q_PROPERTY(qreal plotChannelMarkSize READ plotChannelMarkSize CONSTANT)
   // Nodes graph canvas and node-card geometry. Colors follow the active theme;
   // sizes are logical px. See DESIGN.md "Nodes panel and graph nodes".
   Q_PROPERTY(QColor graphCanvasColor READ graphCanvasColor NOTIFY ThemeChanged)
@@ -394,6 +430,14 @@ class AppTheme final : public QObject {
   auto        welcomeInfoMinWidth() const -> int;
   auto        welcomeEmptyContentWidth() const -> int;
   auto        skeletonCycleMs() const -> int;
+  auto             loadingWavePhase() const -> qreal;
+  auto             loadingWaveCycleMs() const -> int;
+  auto             loadingWaveFrameMs() const -> int;
+  /// Number of objects that hold the loading wave clock; the clock runs while it is above 0.
+  auto             loadingWaveHolders() const -> int;
+  /// @p holder holds the loading wave clock while @p holds is true. A destroyed holder lets go
+  /// by itself, so a mark that is torn down without its QML handlers releases the clock too.
+  Q_INVOKABLE void setLoadingWaveHolder(QObject* holder, bool holds);
   auto        lineHeightCaption() const -> int;
   auto        lineHeightBody() const -> int;
   auto        lineHeightTitle() const -> int;
@@ -421,6 +465,7 @@ class AppTheme final : public QObject {
   auto        fontSizeTitle() const -> int;
   auto        fontSizeSection() const -> int;
   auto        fontSizeHeadline() const -> int;
+  auto        fontSizeDisplay() const -> int;
   auto        fontWeightRegular() const -> int;
   auto        fontWeightStrong() const -> int;
   auto        fontWeightHeading() const -> int;
@@ -455,6 +500,27 @@ class AppTheme final : public QObject {
   auto scopeHistogramGreenColor() const -> QColor;
   auto scopeHistogramBlueColor() const -> QColor;
   auto scopeMarkerColor() const -> QColor;
+  auto plotSurfaceColor() const -> QColor;
+  auto plotGridColor() const -> QColor;
+  auto plotGridStrongColor() const -> QColor;
+  auto plotLabelColor() const -> QColor;
+  auto plotLineColor() const -> QColor;
+  auto plotReferenceLineColor() const -> QColor;
+  auto plotHandleColor() const -> QColor;
+  auto plotHandleOutlineColor() const -> QColor;
+  auto plotGridLineWidth() const -> qreal;
+  auto plotLineWidth() const -> qreal;
+  auto plotHandleRadius() const -> qreal;
+  auto plotHandleRingWidth() const -> qreal;
+  auto plotHandleOutlineWidth() const -> qreal;
+  auto plotHitRadius() const -> qreal;
+  auto plotChannelRedColor() const -> QColor;
+  auto plotChannelGreenColor() const -> QColor;
+  auto plotChannelBlueColor() const -> QColor;
+  auto plotPointerLineColor() const -> QColor;
+  auto plotInactiveLineOpacity() const -> qreal;
+  auto plotCurveHitRadius() const -> qreal;
+  auto plotChannelMarkSize() const -> qreal;
   auto graphCanvasColor() const -> QColor;
   auto graphEdgeColor() const -> QColor;
   auto graphCandidateEdgeColor() const -> QColor;
@@ -512,11 +578,20 @@ class AppTheme final : public QObject {
   void UiFontFamilyChanged();
   void ThemeChanged();
   void ReduceMotionChanged();
+  void LoadingWavePhaseChanged();
 
  private:
   explicit AppTheme(QObject* parent = nullptr);
 
   static auto  ResolveRole(QWidget* widget) -> FontRole;
+  void                                     AdvanceLoadingWave();
+
+  void                                     UpdateLoadingWaveTimer();
+
+  QTimer*                                  loading_wave_timer_ = nullptr;
+  QElapsedTimer                            loading_wave_clock_{};
+  QHash<QObject*, QMetaObject::Connection> loading_wave_holders_{};
+  qreal                                    loading_wave_phase_   = 0.0;
 
   int          current_theme_index_  = 0;
   // Lazy-loaded from QSettings("ui/reduceMotion") on first read so the

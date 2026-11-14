@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <QByteArray>
+#include <QByteArrayView>
 #include <QObject>
 #include <QProcess>
 #include <QString>
@@ -154,8 +156,21 @@ class AiSidecarRuntimeService final : public QObject {
 
  private:
   void SetStatus(AiSidecarRuntimeState state, AiSidecarRuntimeIssue issue, std::string message);
+  /// Level of a `tracing` line of the sidecar stdout.
+  enum class SidecarLogLevel : std::uint8_t { kTrace, kDebug, kInfo, kWarn, kError };
+  /// The level of a `tracing-subscriber` fmt line `<timestamp> <LEVEL> <target>: <message>`, or
+  /// no value when the second word of @p line is not a level.
+  static auto TracingLineLevel(QByteArrayView line) -> std::optional<SidecarLogLevel>;
+
+  // The sidecar file in the log directory holds every sidecar line. AppendStdout copies each
+  // complete WARN and ERROR line of the stdout `tracing` output to the application log, one
+  // message per line; AppendStderr copies each complete stderr line as a warning.
   void AppendStdout(const QByteArray& bytes);
   void AppendStderr(const QByteArray& bytes);
+  void        WriteStdoutLine(QByteArrayView line);
+  // Reads the output that the exited process left in the pipes, and writes its last lines that
+  // have no newline.
+  void        ReadRemainingProcessOutput();
   void RefreshProcessExit();
   auto BuildArguments() const -> QStringList;
   auto ChoosePort() const -> uint16_t;
@@ -186,6 +201,12 @@ class AiSidecarRuntimeService final : public QObject {
   QProcess                                process_;
   AiSidecarRuntimeOptions                 options_;
   AiSidecarRuntimeStatusSnapshot          status_;
+  // Bytes after the last newline of each stream; the next chunk completes the line.
+  QByteArray                              stdout_partial_line_;
+  QByteArray                              stderr_partial_line_;
+  // Level of the last stdout line that has one. A line without a level (the continuation of a
+  // message with several lines) has this level.
+  SidecarLogLevel                         stdout_line_level_ = SidecarLogLevel::kInfo;
   std::string                             endpoint_;
   int                                     active_leases_ = 0;
   // Residency of the process after the last lease (SetIdleStopDelay). Owner thread only.

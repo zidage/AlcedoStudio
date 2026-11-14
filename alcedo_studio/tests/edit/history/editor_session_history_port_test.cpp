@@ -37,6 +37,7 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
@@ -300,12 +301,37 @@ TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRed
   EXPECT_TRUE(Head().has_value());
 }
 
+/// The Default document with the RAW import look before #891 (contrast 15, identity curve): the
+/// look that the pinned hashes below fold in as prior values.
+auto DefaultDocumentWithTheImportLookBeforeFilmLike() -> alcedo::PipelineDocument {
+  auto  document = alcedo::CreateDefaultPipelineDocument();
+  auto* grade    = document.PrimaryGrade();
+  grade->FindAdjustmentByType(alcedo::type_ids::Contrast())
+      ->LoadJson({{"contrast", alcedo::kImportLookContrastBeforeFilmLike}});
+  dynamic_cast<alcedo::CurveModel*>(grade->FindAdjustmentByType(alcedo::type_ids::Curve()))
+      ->SetPoints(alcedo::IdentityCurvePoints());
+  return document;
+}
+
+/// The package of a whole Default document with the import look before #891 and exposure
+/// @p exposure_ev: the source of the pinned paste hashes.
+auto ExposurePackageWithTheImportLookBeforeFilmLike(double exposure_ev)
+    -> alcedo::AdjustmentTransferPackage {
+  auto document = DefaultDocumentWithTheImportLookBeforeFilmLike();
+  alcedo::test::PatchDocumentField(&document, alcedo::test::ColorGradeFieldTarget("exposure"),
+                                   nlohmann::json{{"exposure_ev", exposure_ev}});
+  return alcedo::test::CaptureDocumentPackage(document);
+}
+
 // Commit hashes fold root id, parent, created_at_ns, and the canonical batch payload. The test pins
 // the root id and the CommitClock so the hashes depend only on the edit payloads. The expected
 // values were recorded at fd7dae19 (after G10.1, before G10.2 removed the stage mirror); the
 // contrast hashes were re-recorded when the product Default look gained contrast +15, which the
-// contrast commit payload folds in as its prior value.
+// contrast commit payload folds in as its prior value. The root keeps that look since the
+// Film-like curve replaced it (#891).
 TEST_F(EditorSessionHistoryPortTest, ExposureEditSequenceProducesUnchangedCommitAndChainHashes) {
+  lease_ =
+      alcedo::test::MakeInMemoryEditorLease(42, DefaultDocumentWithTheImportLookBeforeFilmLike());
   const auto root_id = alcedo::Hash128::FromString("0123456789abcdef0fedcba987654321");
   lease_.graph_      = alcedo::CommitGraph::CreateEmptyWithRootId(42, root_id);
   // A previous timestamp far after the wall clock makes NextGlobal return previous + 1.
@@ -344,8 +370,10 @@ TEST_F(EditorSessionHistoryPortTest, ExposureEditSequenceProducesUnchangedCommit
 // G10.3 changed Checkout and Paste to build-then-swap. The pinned root id and CommitClock make the
 // hashes depend only on the payloads. The expected values were recorded at cd0a4f2e (after G10.2,
 // before G10.3); the paste hashes were re-recorded after the product Default look gained contrast
-// +15 (the exposure edit hashes did not change).
+// +15 (the exposure edit hashes did not change). The root keeps that look (#891).
 TEST_F(EditorSessionHistoryPortTest, CheckoutAndPasteHashesAreUnchanged) {
+  lease_ =
+      alcedo::test::MakeInMemoryEditorLease(42, DefaultDocumentWithTheImportLookBeforeFilmLike());
   const auto root_id = alcedo::Hash128::FromString("0123456789abcdef0fedcba987654321");
   lease_.graph_      = alcedo::CommitGraph::CreateEmptyWithRootId(42, root_id);
   constexpr std::uint64_t kPinnedPreviousNs = 0x7000'0000'0000'0000ULL;
@@ -364,7 +392,8 @@ TEST_F(EditorSessionHistoryPortTest, CheckoutAndPasteHashesAreUnchanged) {
   alcedo::SetDocumentTransferIdentitySourceForTesting(&identities);
   alcedo::AdjustmentPasteResult paste_result;
   const bool                    pasted = history_.PasteLiveRootRelativeVersion(
-      handle, MakeExposureTransferPackage(1.25), "Pasted", &paste_result, &error);
+      handle, ExposurePackageWithTheImportLookBeforeFilmLike(1.25), "Pasted", &paste_result,
+      &error);
   alcedo::SetDocumentTransferIdentitySourceForTesting(nullptr);
   ASSERT_TRUE(pasted) << error;
   const auto paste_head  = Head();

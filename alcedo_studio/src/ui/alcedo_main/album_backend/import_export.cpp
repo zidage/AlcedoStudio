@@ -137,11 +137,8 @@ void ImportExportHandler::SetExportGpuResourceRelease(ExportGpuResourceRelease r
   export_gpu_resource_release_ = std::move(release);
 }
 
-void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
-  if (!UserStateChangeRefusal(interaction_policy_).isEmpty()) {
-    status_->SetTaskState(PL_TEXT("An agent controls the session."), 0, false);
-    return;
-  }
+auto ImportExportHandler::InputPaths(const QStringList& fileUrlsOrPaths)
+    -> std::vector<image_path_t> {
   std::vector<image_path_t>        paths;
 
   for (const QString& raw : fileUrlsOrPaths) {
@@ -151,7 +148,38 @@ void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
     }
     paths.push_back(pathOpt.value());
   }
+  return paths;
+}
 
+bool ImportExportHandler::UserImportAllowed() {
+  if (!UserStateChangeRefusal(interaction_policy_).isEmpty()) {
+    status_->SetTaskState(PL_TEXT("An agent controls the session."), 0, false);
+    return false;
+  }
+  return true;
+}
+
+bool ImportExportHandler::SetImportTargetFromFolderRow(const int folderUiId) {
+  const auto path = folderUiId >= 0
+                        ? folders_->FolderFsPathForUiId(static_cast<uint>(folderUiId))
+                        : std::nullopt;
+  const auto element_id =
+      path.has_value() ? folders_->FolderElementIdForUiId(static_cast<uint>(folderUiId))
+                       : std::nullopt;
+  if (!path.has_value() || !element_id.has_value()) {
+    status_->SetTaskState(PL_TEXT("The collection is no longer in the library."), 0, false);
+    return false;
+  }
+  import_target_folder_id_   = element_id.value();
+  import_target_folder_path_ = path.value();
+  return true;
+}
+
+void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
+  if (!UserImportAllowed()) {
+    return;
+  }
+  auto paths = InputPaths(fileUrlsOrPaths);
   if (paths.empty()) {
     status_->SetTaskState(PL_TEXT("No files selected."), 0, false);
     return;
@@ -160,12 +188,71 @@ void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
   StartImportResolvedPaths(std::move(paths), false, kAllImportCategories);
 }
 
+void ImportExportHandler::StartImportToFolder(const QStringList& fileUrlsOrPaths,
+                                              const int          folderUiId) {
+  if (!UserImportAllowed()) {
+    return;
+  }
+  auto paths = InputPaths(fileUrlsOrPaths);
+  if (paths.empty()) {
+    status_->SetTaskState(PL_TEXT("No files selected."), 0, false);
+    return;
+  }
+  // The running import's finalize step and Nikon HE recovery read the target, so it stays as it
+  // is until CompleteImport. Every other start sets the target before it imports.
+  if (import_running_) {
+    status_->SetTaskState(PL_TEXT("Import already running."), 0, true);
+    return;
+  }
+  if (!SetImportTargetFromFolderRow(folderUiId)) {
+    return;
+  }
+  // The user dropped these files, so every importable category is allowed.
+  StartImportResolvedPaths(std::move(paths), true, kAllImportCategories);
+}
+
+bool ImportExportHandler::DropHoldsFolder(const QStringList& fileUrlsOrPaths) const {
+  for (const QString& raw : fileUrlsOrPaths) {
+    const auto path = InputToPath(raw);
+    if (!path.has_value()) {
+      continue;
+    }
+    std::error_code ec;
+    if (std::filesystem::is_directory(path.value(), ec) && !ec) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void ImportExportHandler::StartFolderImportAsUser() {
-  if (!UserStateChangeRefusal(interaction_policy_).isEmpty()) {
-    status_->SetTaskState(PL_TEXT("An agent controls the session."), 0, false);
+  if (!UserImportAllowed()) {
     return;
   }
   StartFolderImport();
+}
+
+void ImportExportHandler::StartFolderImportToFolderAsUser(const int folderUiId) {
+  if (!UserImportAllowed()) {
+    return;
+  }
+  if (!folder_scan_->ScanFinished()) {
+    status_->SetTaskState(PL_TEXT("The folder is still being scanned."), 0, false);
+    return;
+  }
+  if (import_running_) {
+    status_->SetTaskState(PL_TEXT("Import already running."), 0, true);
+    return;
+  }
+  if (!SetImportTargetFromFolderRow(folderUiId)) {
+    return;
+  }
+  // The folder files keep the checked categories, which import also applies to the file
+  // content; a dropped file is imported whatever its type, as in StartImport.
+  ImportPathSet dropped_paths;
+  auto          paths   = folder_scan_->TakeFilePaths(&dropped_paths);
+  const auto    allowed = static_cast<ImportCategoryMask>(folder_scan_->AllowedCategories());
+  StartImportPaths(paths, true, allowed, std::nullopt, std::move(dropped_paths));
 }
 
 void ImportExportHandler::StartFolderImport() {
@@ -180,7 +267,8 @@ void ImportExportHandler::StartFolderImport() {
 void ImportExportHandler::StartImportPaths(const std::vector<image_path_t>& paths,
                                            const bool                       preserveTarget,
                                            const ImportCategoryMask         allowedCategories,
-                                           std::optional<bool>              skipDuplicates) {
+                                           std::optional<bool>              skipDuplicates,
+                                           ImportPathSet                    anyCategoryPaths) {
   std::vector<image_path_t> selected_paths;
   selected_paths.reserve(paths.size());
   for (const auto& path : paths) {
@@ -194,13 +282,14 @@ void ImportExportHandler::StartImportPaths(const std::vector<image_path_t>& path
     return;
   }
   StartImportResolvedPaths(std::move(selected_paths), preserveTarget, allowedCategories,
-                           skipDuplicates);
+                           skipDuplicates, std::move(anyCategoryPaths));
 }
 
 void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> paths,
                                                    const bool                preserveTarget,
                                                    const ImportCategoryMask  allowedCategories,
-                                                   std::optional<bool>       skipDuplicates) {
+                                                   std::optional<bool>       skipDuplicates,
+                                                   ImportPathSet             anyCategoryPaths) {
   if (project_->handler().project_loading()) {
     status_->SetTaskState(PL_TEXT("Project is loading. Please wait."), 0, false);
     return;
@@ -278,6 +367,7 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
     options.skip_duplicates_ = skipDuplicates.value_or(
         import_preferences_ ? import_preferences_->SkipDuplicateImports() : true);
     options.allowed_categories_ = allowedCategories;
+    options.any_category_paths_ = std::move(anyCategoryPaths);
     current_import_job_ = isvc->ImportToFolder(paths, import_target_folder_path_, options, job);
     // ImportToFolder sets the RAW file count before it returns; the dialog sizes its rings now.
     if (current_import_job_ && current_import_job_->progress_) {

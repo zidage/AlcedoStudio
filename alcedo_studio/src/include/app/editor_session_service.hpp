@@ -39,6 +39,7 @@
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "json.hpp"
 #include "sidecar_client/dto/segmentation.hpp"
 
@@ -809,6 +810,26 @@ class IEditorSessionBackend {
   virtual auto HideMaskRangeCoverage() -> EditorSessionResult {
     return RejectComparison("Mask range coverage is not supported by this backend");
   }
+  /**
+   * @brief Count the curve input of Color Grade @p grade_id in the editor renders and give the
+   *        counts to @p sink (issue #888).
+   *
+   * While shown, every editor render request carries a CurveInputHistogramRequest; the renders
+   * of the whole frame (Interactive full frame and Quality) count the histogram, and viewport
+   * region and Detail renders do not. When the request changes and the session is interactive,
+   * one Quality render counts it at once. The request stays across an image change: a render of
+   * a document without @p grade_id gives the sink a histogram with no counts. Refused for an
+   * empty @p grade_id or a null @p sink. Writes nothing.
+   */
+  virtual auto ShowCurveInputHistogram(const NodeId& /*grade_id*/,
+                                       std::shared_ptr<ICurveInputHistogramSink> /*sink*/)
+      -> EditorSessionResult {
+    return RejectComparison("The curve input histogram is not supported by this backend");
+  }
+  /// Stop the curve input histogram: later renders count none. No render. Idempotent.
+  virtual auto HideCurveInputHistogram() -> EditorSessionResult {
+    return RejectComparison("The curve input histogram is not supported by this backend");
+  }
   /// Published state of the coverage preview. Any thread.
   [[nodiscard]] virtual auto mask_coverage_preview_state() const -> EditorMaskCoveragePreviewState {
     return {};
@@ -1120,6 +1141,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto ShowMaskRangeCoverage(const NodeId& grade_id, const MaskId& mask_id)
       -> EditorSessionResult override;
   auto HideMaskRangeCoverage() -> EditorSessionResult override;
+  auto ShowCurveInputHistogram(const NodeId&                             grade_id,
+                               std::shared_ptr<ICurveInputHistogramSink> sink)
+      -> EditorSessionResult override;
+  auto HideCurveInputHistogram() -> EditorSessionResult override;
   auto RetryMaskCoveragePreview(EditorMaskCoverageCompletion on_complete)
       -> EditorSessionResult override;
   auto PresentMaskCoverageAgain(EditorMaskCoverageCompletion on_complete)

@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <QMetaObject>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QVariantList>
+#include <QWindow>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -33,6 +36,7 @@
 #include "ui/alcedo_main/album_backend/search_request_worker.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_manager.hpp"
 #include "ui/alcedo_main/i18n.hpp"
+#include "ui/edit_viewer/window_display_destination.hpp"
 
 namespace alcedo::ui {
 
@@ -123,6 +127,9 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   Q_PROPERTY(QString groupField READ GroupFieldName NOTIFY PresentationChanged)
   Q_PROPERTY(bool grouped READ Grouped NOTIFY PresentationChanged)
   Q_PROPERTY(bool queryUpdating READ QueryUpdating NOTIFY QueryStateChanged)
+  /// A refresh that replaces the shown result (scope, filter, search, presentation) is
+  /// scheduled or running. The Library shows the loading grid only for these refreshes.
+  Q_PROPERTY(bool queryReplacing READ QueryReplacing NOTIFY QueryStateChanged)
   Q_PROPERTY(QString queryError READ QueryError NOTIFY QueryStateChanged)
   Q_PROPERTY(uint pendingRevealFileId READ PendingRevealFileId NOTIFY PendingRevealChanged)
   /// The library image selection.
@@ -137,6 +144,24 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
 
   void BindCollaborators(FolderController* folders, SearchController* search, StatsEngine* stats);
   void SetSemanticLabelProvider(std::function<QString(sl_element_id_t)> provider);
+  /**
+   * @brief Convert the thumbnails to the display destination of @p window (Windows display ICC
+   *        plan, W6).
+   *
+   * Follows WindowDisplayDestination::DestinationChanged of @p window: a new destination goes to
+   * the thumbnail store (ThumbnailManager::SetDisplayDestination), and the loaded rows of the
+   * grid and the filmstrip and the shown search previews get new URLs; nothing renders again.
+   * Null converts nothing.
+   */
+  void SetDisplayWindow(QWindow* window);
+  /**
+   * @brief Convert the thumbnails to @p destination now: the store, then the loaded rows, then the
+   *        shown search previews get it.
+   *
+   * SetDisplayWindow calls it for each destination of its window; a test without a window (the
+   * test main has no QGuiApplication) calls it directly. Null converts nothing.
+   */
+  void SetDisplayDestination(std::shared_ptr<const DisplayDestination> destination);
 
   [[nodiscard]] auto thumbs() -> ThumbnailManager& { return thumbs_; }
   [[nodiscard]] auto thumbs() const -> const ThumbnailManager& { return thumbs_; }
@@ -175,6 +200,11 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   QString GroupFieldName() const { return InspectorFieldName(accepted_options_.group_field_); }
   bool    Grouped() const { return accepted_options_.group_field_ != AlbumGroupField::kNone; }
   bool    QueryUpdating() const { return refresh_in_flight_; }
+  bool    QueryReplacing() const {
+    return refresh_in_flight_ &&
+           (unpublished_replace_ ||
+            (refresh_scheduled_ && scheduled_refresh_kind_ == RefreshKind::kReplace));
+  }
   QString QueryError() const { return query_error_; }
   uint             PendingRevealFileId() const { return pending_reveal_file_id_; }
 
@@ -435,6 +465,8 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
                                      const std::filesystem::path& filePath) -> AlbumItem&;
   void               SetQueryError(const QString& message);
   void               RunAfterRefresh(std::function<void()> action);
+  /// Give the thumbnails the destination of the display window, and the shown thumbnails new URLs.
+  void                  ApplyDisplayDestination();
   /// Run request @p requestId of RequestEditorListPosition unless a newer one replaced it.
   void                SubmitEditorListPosition(qulonglong requestId, uint fileId, bool loadPage);
   void                SetPendingReveal(uint fileId);
@@ -448,6 +480,9 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   StatsEngine*       stats_   = nullptr;
 
   ThumbnailManager    thumbs_;
+  /// The destination of the display window; null without a window.
+  QPointer<WindowDisplayDestination>       display_source_;
+  QMetaObject::Connection                  display_connection_;
   AlbumThumbnailModel thumbnail_model_{};
   AlbumViewState      view_state_{};
   LibrarySelection    selection_{this};

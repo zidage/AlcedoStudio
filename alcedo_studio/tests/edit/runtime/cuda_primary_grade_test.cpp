@@ -19,26 +19,32 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "color/color_encoding_math.h"
+#include "curve_input_histogram_test_support.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/operators/models/tone_curve_spline.hpp"
 #include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "film_grain_colour_statistics.hpp"
 #include "oklab_contrast_reference.hpp"
+#include "tone_curve_test_curves.hpp"
 
 namespace alcedo {
 namespace {
@@ -320,6 +326,29 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
     return result;
   }
 
+  /// Render through Color Grade with @p record; keep the grade input in last_develop_pixels_.
+  void RenderWithHistogramRecord(CurveInputHistogramRecord& record) {
+    device_.BeginRender();
+    ExecuteCudaDevelop(device_, plan_, prepared_, document_);
+    ExecuteCudaGeometryResample(device_, plan_);
+    ExecuteCudaCameraColor(device_, plan_, document_);
+    (void)ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_, &record);
+    device_.EndRender();
+    device_.WaitIdle();
+    last_develop_pixels_ = DownloadLive(plan_.develop_output);
+    device_.PublishResults();
+  }
+
+  /// Counts of the curve input histogram of the primary Grade from one render.
+  auto RenderCurveInputHistogram() -> std::vector<std::uint32_t> {
+    CurveInputHistogramRecord record{document_.PrimaryGrade()->Id()};
+    RenderWithHistogramRecord(record);
+    const auto& extent = plan_.geometry.render_extent;
+    EXPECT_TRUE(record.recorded);
+    EXPECT_EQ(record.sample_count, CurveInputHistogramSampleCount(extent.width, extent.height));
+    return ReadCurveInputHistogramCounts(device_, record.grade_id);
+  }
+
   auto Download(const GraphValueId& id) -> std::vector<Rgba> {
     if (id == last_output_id_ && !last_output_pixels_.empty()) {
       return last_output_pixels_;
@@ -562,6 +591,117 @@ TEST_F(CudaPrimaryGradeFixture, CudaContrastMatchesOkLabLightnessReferenceForEve
           << contrast << " @ " << i;
     }
   }
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaCurveMatchesSplineReferenceForThreeAndSixteenPoints) {
+  (void)Render();
+  const auto input = Download(plan_.develop_output);
+  ASSERT_FALSE(input.empty());
+  const auto range = tone_curve_test::RgbValueRange(input);
+  auto&      curve = ModelByType<CurveModel>(type_ids::Curve());
+  for (const std::size_t count : {std::size_t{3}, std::size_t{16}}) {
+    curve.SetPoints(tone_curve_test::LiftedMidtonePoints(count, range.low, range.high));
+    const auto spline = tone_curve::SolveToneCurveSpline(curve.Points());
+    const auto output = Download(Render().output);
+    ASSERT_EQ(output.size(), input.size());
+    EXPECT_LT(tone_curve_test::MaxCurveError(input, output, spline),
+              tone_curve_test::kGpuCurveTolerance)
+        << count << " points";
+  }
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaChannelCurvesMatchSplineReferenceForRedAloneAndRgbWithBlue) {
+  (void)Render();
+  const auto input = Download(plan_.develop_output);
+  ASSERT_FALSE(input.empty());
+  const auto range = tone_curve_test::RgbValueRange(input);
+  auto&      curve = ModelByType<CurveModel>(type_ids::Curve());
+
+  // A red curve alone: the green and blue channels stay as they are.
+  CurveUpdate red_alone;
+  red_alone.red = tone_curve_test::LiftedMidtonePoints(5, range.low, range.high);
+  curve.ApplyUpdate(red_alone);
+  const auto red_output = Download(Render().output);
+  ASSERT_EQ(red_output.size(), input.size());
+  EXPECT_LT(tone_curve_test::MaxCurveSetError(input, red_output,
+                                              tone_curve_test::SolveCurveSplines(curve)),
+            tone_curve_test::kGpuCurveTolerance)
+      << "red curve alone";
+
+  // The RGB curve together with a blue curve: blue gets the RGB curve, then the blue curve.
+  CurveUpdate rgb_with_blue;
+  rgb_with_blue.red    = IdentityCurvePoints();
+  rgb_with_blue.points = tone_curve_test::LiftedMidtonePoints(4, range.low, range.high);
+  rgb_with_blue.blue   = tone_curve_test::LiftedMidtonePoints(6, range.low, range.high, -0.15f);
+  curve.ApplyUpdate(rgb_with_blue);
+  const auto blue_output = Download(Render().output);
+  ASSERT_EQ(blue_output.size(), input.size());
+  EXPECT_LT(tone_curve_test::MaxCurveSetError(input, blue_output,
+                                              tone_curve_test::SolveCurveSplines(curve)),
+            tone_curve_test::kGpuCurveTolerance)
+      << "RGB curve with a blue curve";
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaCurveInputHistogramCountsTheGradeInputOnTheCurveAxis) {
+  // A curve that is not the identity: the histogram counts the curve input, not its output.
+  auto&       curve = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate s_curve;
+  s_curve.points = tone_curve_test::LiftedMidtonePoints(5, 0.1f, 0.9f);
+  curve.ApplyUpdate(s_curve);
+
+  const auto  counts = RenderCurveInputHistogram();
+  const auto& extent = plan_.geometry.render_extent;
+  ASSERT_FALSE(last_develop_pixels_.empty());
+  EXPECT_EQ(counts, curve_histogram_test::ReferenceCounts(last_develop_pixels_, extent.width,
+                                                          extent.height));
+  EXPECT_EQ(device_.PassStats().curve_input_histogram_execute, 1U);
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaCurveInputHistogramSamplesEveryStepPixelsOfALargeInput) {
+  constexpr std::uint32_t width  = 2100;
+  constexpr std::uint32_t height = 5;
+  prepared_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(width, height),
+                                            gpu_dag_test::FullSensor(width, height));
+  plan_     = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
+  ASSERT_EQ(plan_.geometry.render_extent.width, width);
+  ASSERT_EQ(plan_.geometry.render_extent.height, height);
+  ASSERT_EQ(CurveInputHistogramSampleStep(width, height), 3U);
+
+  const auto counts = RenderCurveInputHistogram();
+  EXPECT_EQ(counts, curve_histogram_test::ReferenceCounts(last_develop_pixels_, width, height));
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaCurveInputHistogramIgnoresCurveEditsAndFollowsExposure) {
+  const auto  identity_curve = RenderCurveInputHistogram();
+  const auto  input          = last_develop_pixels_;
+  const auto& extent         = plan_.geometry.render_extent;
+
+  auto&       curve          = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate edit;
+  edit.points = tone_curve_test::LiftedMidtonePoints(6, 0.05f, 0.95f, -0.25f);
+  edit.blue   = tone_curve_test::LiftedMidtonePoints(4, 0.2f, 0.8f);
+  curve.ApplyUpdate(edit);
+  EXPECT_EQ(RenderCurveInputHistogram(), identity_curve) << "a curve edit changed the histogram";
+
+  ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
+  const auto exposed = RenderCurveInputHistogram();
+  EXPECT_NE(exposed, identity_curve);
+  curve_histogram_test::ExpectCountsOfShiftedPixels(exposed, input, extent.width, extent.height,
+                                                    1.0f / CE_ACESCC_B, "Exposure +1");
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaRenderWithoutAHistogramRequestRecordsNoHistogram) {
+  (void)Render();
+  EXPECT_EQ(device_.PassStats().curve_input_histogram_execute, 0U);
+  EXPECT_EQ(device_.Workspace().Values().Find(
+                CurveInputHistogramCountsId(document_.PrimaryGrade()->Id())),
+            nullptr);
+
+  // A request for a Grade that the plan does not have records nothing.
+  CurveInputHistogramRecord missing{NodeId{"grade.missing"}};
+  RenderWithHistogramRecord(missing);
+  EXPECT_FALSE(missing.recorded);
+  EXPECT_EQ(device_.PassStats().curve_input_histogram_execute, 0U);
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaHlsHueAdjustmentChangesGradePixels) {

@@ -191,11 +191,11 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   ASSERT_NE(update_status, nullptr);
   EXPECT_TRUE(update_status->property("visible").toBool());
   EXPECT_FALSE(update_status->property("text").toString().trimmed().isEmpty());
-  settings->setProperty("currentCategory", 9);  // About
+  settings->setProperty("currentCategory", 11);  // About
   ProcessEvents(50);
-  auto* version_label = settings->findChild<QObject*>(QStringLiteral("aboutVersionLabel"));
-  ASSERT_NE(version_label, nullptr);
-  EXPECT_TRUE(version_label->property("text").toString().contains(
+  auto* build_label = settings->findChild<QObject*>(QStringLiteral("aboutBuildLabel"));
+  ASSERT_NE(build_label, nullptr);
+  EXPECT_TRUE(build_label->property("text").toString().contains(
       QString::number(host.updates()->current_build())));
   EXPECT_EQ(root->findChild<QObject*>(QStringLiteral("updateOfferDialog")), nullptr);
   ASSERT_TRUE(QMetaObject::invokeMethod(settings, "close"));

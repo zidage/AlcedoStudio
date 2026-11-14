@@ -2,21 +2,20 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "edit/runtime/lens/cuda/cuda_lens_calib_ops.hpp"
-
 #include <cuda_runtime.h>
-#include <opencv2/core.hpp>
-#include <opencv2/core/cuda_stream_accessor.hpp>
-#include <opencv2/core/cuda_types.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <iostream>
+#include <opencv2/core.hpp>
+#include <opencv2/core/cuda_stream_accessor.hpp>
+#include <opencv2/core/cuda_types.hpp>
 #include <stdexcept>
 #include <vector>
 
 #include "decoders/processor/operators/gpu/cuda_raw_proc_utils.hpp"
+#include "edit/runtime/lens/cuda/cuda_lens_calib_ops.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
 namespace CUDA {
@@ -738,9 +737,9 @@ void ApplyLensCalibration(cv::cuda::GpuMat& image, const LensCalibGpuParams& par
 
   if (has_rect_crop) {
     const cv::Rect roi = ComputeRectCropRoi(launch);
-    std::cout << "LensCalib CUDA rect crop: src=" << image.cols << "x" << image.rows
-              << " roi=(" << roi.x << ", " << roi.y << ", " << roi.width << ", " << roi.height
-              << ")" << std::endl;
+    ALCEDO_LOG_DEBUG(Lens) << "LensCalib CUDA rect crop: src=" << image.cols << "x" << image.rows
+                           << " roi=(" << roi.x << ", " << roi.y << ", " << roi.width << ", "
+                           << roi.height << ")";
     if (roi.width > 0 && roi.height > 0) {
       if (stream != nullptr) {
         cv::cuda::GpuMat cropped;
@@ -749,8 +748,8 @@ void ApplyLensCalibration(cv::cuda::GpuMat& image, const LensCalibGpuParams& par
       } else {
         image = image(roi).clone();
       }
-      std::cout << "LensCalib CUDA rect crop result: " << image.cols << "x" << image.rows
-                << std::endl;
+      ALCEDO_LOG_DEBUG(Lens) << "LensCalib CUDA rect crop result: " << image.cols << "x"
+                             << image.rows;
     }
   }
 }

@@ -104,8 +104,8 @@ class ImportExportHandler final : public QObject {
   void                    BindCollaborators(StatsEngine* stats, NikonHeRecoveryController* nikon,
                                             SemanticGenerationController* semantic);
 
-  /// The policy whose agent control refuses the user imports StartImport and
-  /// StartFolderImportAsUser. Null refuses nothing.
+  /// The policy whose agent control refuses the user imports (StartImport, StartImportToFolder,
+  /// StartFolderImportAsUser, StartFolderImportToFolderAsUser). Null refuses nothing.
   void                    SetInteractionPolicy(InteractionPolicyController* interaction_policy);
   /// Borrow the application preference owner. Resolve its value on this object's thread only.
   void                    SetImportPreferences(ImportBehaviorPreferences* preferences) {
@@ -114,15 +114,25 @@ class ImportExportHandler final : public QObject {
   /// The editor GPU resources each export releases before it renders. Empty releases nothing.
   void                    SetExportGpuResourceRelease(ExportGpuResourceRelease release);
 
-  /// The user import of the Import dialog and file drop. Refused while an automation agent holds
+  /// The user import of the Import Images dialog into the current folder: the regular files of
+  /// @p fileUrlsOrPaths, every import category allowed. Refused while an automation agent holds
   /// control.
   Q_INVOKABLE void        StartImport(const QStringList& fileUrlsOrPaths);
+  /// The files-only Library drop (issue #757): StartImport into the folder row @p folderUiId
+  /// (0 = the root collection) instead of the current folder.
+  Q_INVOKABLE void        StartImportToFolder(const QStringList& fileUrlsOrPaths, int folderUiId);
+  /// True when at least one entry of a drop is a folder; such a drop opens the folder import
+  /// dialog (folderScan.StartSources) instead of StartImportToFolder.
+  Q_INVOKABLE bool        DropHoldsFolder(const QStringList& fileUrlsOrPaths) const;
   /// Import the files of the finished folder scan (folderScan) into the current folder. Shared
   /// operation of the UI and the automation commands.
   Q_INVOKABLE void        StartFolderImport();
   /// The user folder import of the folder import dialog: StartFolderImport, refused while an
   /// automation agent holds control.
   Q_INVOKABLE void        StartFolderImportAsUser();
+  /// The confirm action of a Library drop that holds a folder: StartFolderImportAsUser into the
+  /// folder row @p folderUiId (0 = the root collection).
+  Q_INVOKABLE void        StartFolderImportToFolderAsUser(int folderUiId);
   Q_INVOKABLE void        CancelImport();
   Q_INVOKABLE void        StartExport(const QString& outputDirUrlOrPath);
   Q_INVOKABLE void        StartExportWithOptions(const QString& outputDirUrlOrPath,
@@ -163,9 +173,13 @@ class ImportExportHandler final : public QObject {
   [[nodiscard]] static auto SupportedImportNameFilters() -> QStringList;
   [[nodiscard]] static auto SupportedImportPatterns() -> QString;
 
+  /// Import each occurrence in @p paths; the import service applies the duplicate policy.
+  /// @p anyCategoryPaths are accepted in every category whatever @p allowedCategories says
+  /// (ImportOptions::any_category_paths_).
   void StartImportPaths(const std::vector<image_path_t>& paths, bool preserveTarget = false,
                         ImportCategoryMask  allowedCategories = kAllImportCategories,
-                        std::optional<bool> skipDuplicates    = std::nullopt);
+                        std::optional<bool> skipDuplicates    = std::nullopt,
+                        ImportPathSet anyCategoryPaths = {});
   void FinishImport(const ImportResult& result);
   void FinishExport(const std::shared_ptr<std::vector<ExportResult>>& results, int skippedCount);
   void AddImportedEntries(const ImportLogSnapshot& snapshot);
@@ -275,7 +289,16 @@ class ImportExportHandler final : public QObject {
 
   void              StartImportResolvedPaths(std::vector<image_path_t> paths, bool preserveTarget,
                                              ImportCategoryMask  allowedCategories,
-                                             std::optional<bool> skipDuplicates = std::nullopt);
+                                             std::optional<bool> skipDuplicates = std::nullopt,
+                                             ImportPathSet anyCategoryPaths = {});
+  /// Parse @p fileUrlsOrPaths in input order. The import service validates each occurrence.
+  [[nodiscard]] static auto InputPaths(const QStringList& fileUrlsOrPaths)
+      -> std::vector<image_path_t>;
+  /// Set import_target_folder_id_ and import_target_folder_path_ to the folder row
+  /// @p folderUiId. Returns false (with a status message) when no folder row has that id.
+  [[nodiscard]] bool SetImportTargetFromFolderRow(int folderUiId);
+  /// True when the user may start an import now; otherwise reports the agent refusal.
+  [[nodiscard]] bool UserImportAllowed();
   /// Publish the live counters of current_import_job_ (read through ImportJob::progress_).
   void              ApplyImportProgress();
   void              CompleteImport(const ImportResult& result,

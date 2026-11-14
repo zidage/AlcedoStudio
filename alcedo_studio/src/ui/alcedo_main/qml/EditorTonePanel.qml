@@ -4,7 +4,8 @@ import QtQuick.Layouts
 import Alcedo.Main 1.0
 
 // Phase 6B Tone panel: exposure / contrast / highlights / shadows / whites /
-// blacks + tone-curve editor. Values and curve points submit through the
+// blacks + the Tone Curve section (EditorToneCurveSection, #890). Values and curve points submit
+// through the
 // EditorSessionController submitter seam (operator-shaped params JSON). Models
 // own pointer-drag state (one settled transaction per completed drag).
 // No pipeline/scheduler calls from this file.
@@ -64,37 +65,14 @@ Item {
         loadCurveFromSnapshot(curveModel, "curve", snapshot)
     }
 
-    /// Load curve control points from the snapshot.
-    /// Snapshot shape matches the operator params published by the session:
-    ///   snapshot.curve = { curve: { size, points: [{x,y}, ...] } }
+    /// Load the four curves from the snapshot (load-only, no write):
+    ///   snapshot.curve = { curve: { points: [{x,y}, ...], red: [...], green: [...], blue: [...] } }
+    /// The selected channel is panel state and stays.
     function loadCurveFromSnapshot(model, fieldKey, snapshot) {
         if (!model || !fieldKey || !snapshot) return
-        if (model.dragActive) return
         const entry = snapshot[fieldKey]
         if (entry === undefined || entry === null) return
-        if (typeof model.loadFromSnapshotEntry === "function") {
-            model.loadFromSnapshotEntry(entry)
-            return
-        }
-        // Fallback for older fakes: unwrap nested {"curve":{…}} and setPoints.
-        var curve = entry
-        if (entry[fieldKey] !== undefined)
-            curve = entry[fieldKey]
-        const points = curve.points
-        if (points === undefined) return
-        var list = []
-        for (var i = 0; i < points.length; ++i) {
-            var p = points[i]
-            if (p === undefined || p === null) continue
-            var x = p.x !== undefined ? Number(p.x)
-                  : (p[0] !== undefined ? Number(p[0]) : NaN)
-            var y = p.y !== undefined ? Number(p.y)
-                  : (p[1] !== undefined ? Number(p[1]) : NaN)
-            if (!isFinite(x) || !isFinite(y)) continue
-            list.push({ x: x, y: y })
-        }
-        if (list.length < 2) return
-        model.setPoints(list)
+        model.loadFromSnapshotEntry(entry)
     }
 
     EditorAdjustmentValueModel {
@@ -287,12 +265,12 @@ Item {
                 }
             }
 
-            CollapsibleSection {
+            EditorToneCurveSection {
                 id: curveGroup
-                objectName: "editorToneCurveGroup"
                 Layout.fillWidth: true
-                title: qsTr("Tone Curve")
-                expanded: true
+                model: curveModel
+                editorSession: root.editorSession
+                panelVisible: root.visible
                 controlsEnabled: root.controlsEnabled
                 surfaceColor: root.colCardSurface
                 disabledSurfaceColor: root.colCardSurface
@@ -301,52 +279,6 @@ Item {
                 mutedColor: root.colMuted
                 hoverColor: root.colHover
                 accentColor: root.colAccent
-                bodyContentHeight: curveBody.implicitHeight + appTheme.spaceSm
-
-                ColumnLayout {
-                    id: curveBody
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: appTheme.spaceXs
-                    spacing: appTheme.spaceXs
-
-                    EditorToneCurveItem {
-                        id: curveItem
-                        objectName: "editorToneCurveItem"
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 300
-                        Layout.minimumHeight: 260
-                        model: curveModel
-                        // Monochrome only — same family as AdjustmentSlider (no accent gold/blue).
-                        backgroundColor: appTheme.cardSurfaceColor
-                        plotColor: appTheme.bgBaseColor
-                        gridColor: appTheme.cardBorderColor
-                        diagonalColor: appTheme.textMutedColor
-                        curveColor: appTheme.editorSliderHandleColor
-                        handleColor: appTheme.editorSliderHandleColor
-                        handleActiveColor: appTheme.textColor
-                        handleOutlineColor: appTheme.editorSliderHandleBorderColor
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: appTheme.spaceSm
-
-                        Label {
-                            Layout.fillWidth: true
-                            wrapMode: Text.WordWrap
-                            text: qsTr("Left click/drag to shape. Right click a point to remove. Double click to reset.")
-                            color: root.colMuted
-                            font.pixelSize: appTheme.fontSizeCaption
-                        }
-
-                        AdjustmentResetButton {
-                            objectName: "toneCurveResetButton"
-                            model: curveModel
-                        }
-                    }
-                }
             }
         }
     }

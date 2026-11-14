@@ -15,18 +15,27 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSignalSpy>
 #include <QTest>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <random>
+#include <string>
+#include <system_error>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include "app/camera_profile_library_service.hpp"
+#include "image/dcp_profile_library.hpp"
+#include "image/dcp_test_file_writer.hpp"
 #include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
@@ -42,6 +51,9 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
   Q_PROPERTY(quint64 snapshotRevision READ snapshotRevision NOTIFY adjustmentSnapshotChanged)
   Q_PROPERTY(QString activeAdjustmentPanel READ activeAdjustmentPanel WRITE setActiveAdjustmentPanel
                  NOTIFY activeAdjustmentPanelChanged)
+  // Camera identity of the image RAW color context (EditorSessionController::cameraMake).
+  Q_PROPERTY(QString cameraMake MEMBER camera_make CONSTANT)
+  Q_PROPERTY(QString cameraModel MEMBER camera_model CONSTANT)
 
  public:
   struct Call {
@@ -131,6 +143,8 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
   }
 
   std::vector<Call> calls;
+  QString           camera_make  = QStringLiteral("Canon");
+  QString           camera_model = QStringLiteral("Canon EOS R6");
 
  signals:
   void adjustmentSnapshotChanged();
@@ -543,6 +557,234 @@ TEST(EditorRawDecodePanelQmlTest, RasterImageShowsInputColorAndSubmitsInputProfi
   EXPECT_FALSE(input_section->isVisible());
   EXPECT_TRUE(raw_section->isVisible());
   EXPECT_TRUE(white_balance->isVisible());
+}
+
+// DCP plan C5: the Camera Profile section above White Balance lists the default entry and the
+// matched DCP profiles, submits a selection as one settled camera_profile_file write, shows an
+// unresolved stored reference in dangerColor, and offers Choose Folder without a DCP folder.
+TEST(EditorRawDecodePanelQmlTest, CameraProfileSectionListsMatchedProfilesAndSubmitsSelection) {
+  namespace fs = std::filesystem;
+  std::random_device device;
+  const auto         temp = fs::temp_directory_path() /
+                    ("alcedo_raw_panel_camera_profile_test_" + std::to_string(device()) + "_" +
+                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const auto folder = temp / "Camera";
+  fs::create_directories(folder);
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Camera Standard").Write(folder / "standard.dcp");
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Adobe Color").Write(folder / "adobe.dcp");
+  alcedo::test::MinimalDcpProfile("Sony ILCE-7M4", "Camera ST").Write(folder / "sony.dcp");
+  struct Cleanup {
+    fs::path temp;
+    ~Cleanup() {
+      DcpProfileLibrary::Shared().Scan({});
+      std::error_code error;
+      fs::remove_all(temp, error);
+    }
+  } cleanup{temp};
+
+  // The selection parse resolves the identity in DcpProfileLibrary::Shared().
+  CameraProfileLibraryServiceOptions options;
+  options.settings_file = QString::fromStdWString((temp / "settings.ini").wstring());
+  CameraProfileLibraryService library(std::move(options));
+
+  auto                        snapshot = Snapshot(QStringLiteral("default"), true);
+  auto                        stored   = [](bool selected, const QString& name) {
+    QVariantMap reference;
+    reference.insert(QStringLiteral("raster"), false);
+    reference.insert(QStringLiteral("embedded_default"), false);
+    reference.insert(QStringLiteral("selected"), selected);
+    reference.insert(QStringLiteral("resolved"), false);
+    reference.insert(QStringLiteral("camera_model"),
+                     selected ? QStringLiteral("Canon EOS R6") : QString());
+    reference.insert(QStringLiteral("profile_name"), name);
+    return QVariantMap{{QStringLiteral("camera_profile_file"), reference}};
+  };
+  snapshot.insert(QStringLiteral("camera_profile_file"), stored(false, QString()));
+  RawDecodeSession       session(snapshot);
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* section   = harness.findObject<QQuickItem>(QStringLiteral("editorCameraProfileSection"));
+  auto* model     = harness.findObject<QObject>(QStringLiteral("rawCameraProfileModel"));
+  auto* combo_row = harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileComboRow"));
+  auto* note      = harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileNote"));
+  auto* white_balance = harness.findObject<QQuickItem>(QStringLiteral("editorWhiteBalanceSection"));
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(combo_row, nullptr);
+  ASSERT_NE(note, nullptr);
+  ASSERT_NE(white_balance, nullptr);
+  EXPECT_TRUE(section->isVisible());
+  EXPECT_LT(section->mapToScene({0, 0}).y(), white_balance->mapToScene({0, 0}).y());
+  // The folder is set in Settings only; the section has no folder button.
+  EXPECT_EQ(harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileChooseFolderButton")),
+            nullptr);
+
+  // No DCP folder: the default entry only, and a note that names the Settings page.
+  section->setProperty("library", QVariant::fromValue(static_cast<QObject*>(&library)));
+  ProcessEvents(50);
+  EXPECT_TRUE(note->isVisible());
+  EXPECT_EQ(note->property("text").toString(),
+            QStringLiteral("Set a DCP folder in Settings > LUTs and Color Management."));
+  EXPECT_LT(combo_row->mapToScene({0, 0}).y(), note->mapToScene({0, 0}).y());
+  EXPECT_EQ(model->property("entries").toList().size(), 1);
+
+  // A folder without a profile of this camera (Canon EOS R6): the default entry and a note.
+  const auto other_folder = temp / "Other";
+  fs::create_directories(other_folder);
+  alcedo::test::MinimalDcpProfile("Sony ILCE-7M4", "Camera ST").Write(other_folder / "sony.dcp");
+  QSignalSpy finished(&library, &CameraProfileLibraryService::ScanFinished);
+  library.setRootFolder(QUrl::fromLocalFile(QString::fromStdWString(other_folder.wstring())));
+  ASSERT_TRUE(finished.wait(10000));
+  ProcessEvents(50);
+  EXPECT_EQ(model->property("entries").toList().size(), 1);
+  EXPECT_TRUE(note->isVisible());
+  EXPECT_EQ(note->property("text").toString(),
+            QStringLiteral("The DCP folder has no profile of this camera."));
+
+  library.setRootFolder(QUrl::fromLocalFile(QString::fromStdWString(folder.wstring())));
+  ASSERT_TRUE(finished.wait(10000));
+  ProcessEvents(50);
+  EXPECT_FALSE(note->isVisible());
+  QStringList labels;
+  for (const auto& entry : model->property("entries").toList()) {
+    labels << entry.toMap().value(QStringLiteral("label")).toString();
+  }
+  EXPECT_EQ(labels, (QStringList{QStringLiteral("Built-in"), QStringLiteral("Adobe Color"),
+                                 QStringLiteral("Camera Standard")}));
+  EXPECT_TRUE(model->property("enabled").toBool());
+  EXPECT_FALSE(combo_row->property("warning").toBool());
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(model, "selectIndex", Q_ARG(int, 2)));
+  ProcessEvents(50);
+  ASSERT_EQ(session.calls.size(), 1u);
+  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("camera_profile_file"));
+  EXPECT_TRUE(session.calls.back().settled);
+  const auto* update =
+      std::get_if<alcedo::DevelopCameraProfileFileUpdate>(&session.calls.back().write);
+  ASSERT_NE(update, nullptr);
+  ASSERT_NE(update->profile, nullptr);
+  EXPECT_EQ(update->profile->profile_name, "Camera Standard");
+
+  // A stored reference that the folder does not hold: its name, in the warning color.
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(true, QStringLiteral("Camera Vivid")));
+  session.SwitchImage(snapshot);
+  ProcessEvents(80);
+  EXPECT_EQ(model->property("currentIndex").toInt(), 3);
+  EXPECT_TRUE(combo_row->property("warning").toBool());
+  auto* combo = harness.findObject<QObject>(QStringLiteral("rawCameraProfileCombo"));
+  ASSERT_NE(combo, nullptr);
+  EXPECT_EQ(combo->property("displayText").toString(), QStringLiteral("Camera Vivid"));
+
+  // A raster image hides the section.
+  session.SwitchImage(RasterSnapshot(QStringLiteral("auto")));
+  ProcessEvents(80);
+  EXPECT_FALSE(section->isVisible());
+}
+
+// T3 (dcp_profile_tone_curve_study.md, section 6.4): the Tone Curve switch under the profile combo
+// is shown for a bound profile with a ProfileToneCurve, commits one settled camera_profile_file
+// write, and is disabled while the DRT method is Film Print.
+TEST(EditorRawDecodePanelQmlTest, CameraProfileToneCurveSwitchCommitsAndFollowsTheDrtMethod) {
+  namespace fs = std::filesystem;
+  std::random_device device;
+  const auto         temp = fs::temp_directory_path() /
+                    ("alcedo_raw_panel_tone_curve_test_" + std::to_string(device()) + "_" +
+                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const auto folder = temp / "Camera";
+  fs::create_directories(folder);
+  constexpr std::uint16_t kProfileToneCurve = 50940;
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Camera Standard")
+      .Floats(kProfileToneCurve, {0.0f, 0.0f, 0.18f, 0.44f, 1.0f, 1.0f})
+      .Write(folder / "standard.dcp");
+  alcedo::test::MinimalDcpProfile("Canon EOS R6", "Camera Flat").Write(folder / "flat.dcp");
+  struct Cleanup {
+    fs::path temp;
+    ~Cleanup() {
+      DcpProfileLibrary::Shared().Scan({});
+      std::error_code error;
+      fs::remove_all(temp, error);
+    }
+  } cleanup{temp};
+
+  CameraProfileLibraryServiceOptions options;
+  options.settings_file = QString::fromStdWString((temp / "settings.ini").wstring());
+  CameraProfileLibraryService library(std::move(options));
+
+  const auto stored = [](const QString& name, bool has_tone_curve, bool profile_tone) {
+    QVariantMap reference;
+    reference.insert(QStringLiteral("raster"), false);
+    reference.insert(QStringLiteral("embedded_default"), false);
+    reference.insert(QStringLiteral("selected"), true);
+    reference.insert(QStringLiteral("resolved"), true);
+    reference.insert(QStringLiteral("has_tone_curve"), has_tone_curve);
+    reference.insert(QStringLiteral("profile_tone"), profile_tone);
+    reference.insert(QStringLiteral("camera_model"), QStringLiteral("Canon EOS R6"));
+    reference.insert(QStringLiteral("profile_name"), name);
+    return QVariantMap{{QStringLiteral("camera_profile_file"), reference}};
+  };
+  const auto odt = [](const QString& method) {
+    QVariantMap value;
+    value.insert(QStringLiteral("method"), method);
+    return QVariantMap{{QStringLiteral("odt"), value}};
+  };
+  auto snapshot = Snapshot(QStringLiteral("default"), true);
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(QStringLiteral("Camera Standard"), true, true));
+  snapshot.insert(QStringLiteral("odt"), odt(QStringLiteral("aces_2_0")));
+  RawDecodeSession       session(snapshot);
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* section = harness.findObject<QQuickItem>(QStringLiteral("editorCameraProfileSection"));
+  auto* row     = harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileToneCurveRow"));
+  auto* tone_switch =
+      harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileToneCurveSwitch"));
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(row, nullptr);
+  ASSERT_NE(tone_switch, nullptr);
+  QSignalSpy finished(&library, &CameraProfileLibraryService::ScanFinished);
+  section->setProperty("library", QVariant::fromValue(static_cast<QObject*>(&library)));
+  library.setRootFolder(QUrl::fromLocalFile(QString::fromStdWString(folder.wstring())));
+  ASSERT_TRUE(finished.wait(10000));
+  ProcessEvents(50);
+
+  EXPECT_TRUE(row->isVisible());
+  EXPECT_TRUE(tone_switch->isEnabled());
+  EXPECT_TRUE(tone_switch->property("checked").toBool());
+
+  ScrollItemIntoView(harness, tone_switch);
+  QTest::mouseClick(harness.window(), Qt::LeftButton, {}, CenterInWindow(tone_switch));
+  ProcessEvents(80);
+  ASSERT_EQ(session.calls.size(), 1u);
+  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("camera_profile_file"));
+  EXPECT_TRUE(session.calls.back().settled);
+  const auto* update =
+      std::get_if<alcedo::DevelopCameraProfileFileUpdate>(&session.calls.back().write);
+  ASSERT_NE(update, nullptr);
+  ASSERT_NE(update->profile, nullptr);
+  EXPECT_EQ(update->profile->profile_name, "Camera Standard");
+  EXPECT_FALSE(update->profile_tone);
+
+  // The echo of the write; then Film Print disables the switch and keeps its stored value.
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(QStringLiteral("Camera Standard"), true, false));
+  snapshot.insert(QStringLiteral("odt"), odt(QStringLiteral("film_print")));
+  session.SwitchImage(snapshot);
+  ProcessEvents(80);
+  EXPECT_TRUE(row->isVisible());
+  EXPECT_FALSE(tone_switch->isEnabled());
+  EXPECT_FALSE(tone_switch->property("checked").toBool());
+
+  // A profile without a curve hides the switch.
+  snapshot.insert(QStringLiteral("camera_profile_file"),
+                  stored(QStringLiteral("Camera Flat"), false, true));
+  snapshot.insert(QStringLiteral("odt"), odt(QStringLiteral("open_drt")));
+  session.SwitchImage(snapshot);
+  ProcessEvents(80);
+  EXPECT_FALSE(row->isVisible());
+  EXPECT_EQ(session.calls.size(), 1u);
 }
 
 }  // namespace alcedo::ui::test

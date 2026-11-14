@@ -13,6 +13,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/execution_plan.hpp"
@@ -56,6 +57,9 @@ class PlanExecutor {
    *        `probe->target`. A probe with a candidate (#604) records the candidate of the probed
    *        Grade with RecordMaskCandidateRangeDisplay instead. The probe changes no result key
    *        and no photo pass.
+   * @param histogram Optional curve input histogram (issue #888). The grade pass of the Grade
+   *        with `histogram->grade_id` also records the histogram of its curve input and sets
+   *        `recorded`. It changes no result key and no photo pixel.
    * @return Display GraphValueId of the compiled plan.
    * @throws std::exception from encode, upload, or submit after CancelRender.
    */
@@ -65,10 +69,15 @@ class PlanExecutor {
       const PipelineDocument& document, bool publish_on_success,
       TransientAllocationPolicy         transient_policy = TransientAllocationPolicy::SessionPacked,
       ResultPersistenceScope            persistence = ResultPersistenceScope::AllCurrentResults,
-      MaskCoverageProbeRecord<Backend>* probe       = nullptr) -> GraphValueId {
+      MaskCoverageProbeRecord<Backend>* probe       = nullptr,
+      CurveInputHistogramRecord*        histogram   = nullptr) -> GraphValueId {
     try {
       if (probe != nullptr) {
         probe->target = nullptr;
+      }
+      if (histogram != nullptr) {
+        histogram->recorded     = false;
+        histogram->sample_count = 0;
       }
       auto& workspace = device.Workspace();
       workspace.TransientBuffers().SetAllocationPolicy(transient_policy);
@@ -267,8 +276,11 @@ class PlanExecutor {
           diag::PreviewPassInterval grade_pass(compiled_grade.node_id.Value(),
                                                diag::PreviewPassKind::PrimaryColorGrade);
           GpuWorkSample<Device> gpu(device);
+          auto*                     grade_histogram =
+              histogram != nullptr && histogram->grade_id == compiled_grade.node_id ? histogram
+                                                                                                        : nullptr;
           scene = PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(
-              device, plan, input, document, compiled_grade, scene);
+              device, plan, input, document, compiled_grade, scene, grade_histogram);
           ++stats.primary_grade_execute;
         }
         if (exact_release) {

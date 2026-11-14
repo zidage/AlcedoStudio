@@ -81,6 +81,8 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/models/lut_reference.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/parameter_revision.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/sharpen_model.cpp
+    ${ALCEDO_SRC_ROOT}/edit/operators/models/tone_curve_spline.cpp
+    ${ALCEDO_SRC_ROOT}/edit/operators/models/tone_curve_presets.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/adjustment_ownership.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/color_grade_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_color_transform.cpp
@@ -125,6 +127,8 @@ set(EDIT_RUNTIME_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/grade_schedule.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/drt_post_schedule.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/dng_profile_gpu_data.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/profile_tone_reference.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/profile_tone_stage.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/execution_plan.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/raster_develop_params.cpp
@@ -171,7 +175,7 @@ endif()
 def_cuda_library(EditRuntimeLens
     SOURCES ${EDIT_RUNTIME_LENS_SRCS}
     PUBLIC_DEPS EditGraph EditGeometry ${ALCEDO_OPENCV_CORE_DEPS}
-    PRIVATE_DEPS puerhlab_lensfun
+    PRIVATE_DEPS puerhlab_lensfun AlcedoLog
 )
 if(ALCEDO_CUDA_ENABLED)
     set_target_properties(EditRuntimeLens PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)

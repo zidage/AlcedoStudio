@@ -9,6 +9,7 @@
 #include <QVariantList>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 namespace alcedo::ui {
 namespace {
@@ -63,16 +64,22 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           map.insert(QStringLiteral("input_encoding"), String(value.input_encoding));
           map.insert(QStringLiteral("output_encoding"), String(value.output_encoding));
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelCurveValue>) {
-          QVariantList points;
-          points.reserve(static_cast<int>(value.points.size()));
-          for (const auto& point : value.points) {
-            QVariantMap row;
-            row.insert(QStringLiteral("x"), point.x);
-            row.insert(QStringLiteral("y"), point.y);
-            points.push_back(row);
-          }
+          const auto point_list = [](const std::vector<alcedo::CurvePoint>& curve_points) {
+            QVariantList points;
+            points.reserve(static_cast<int>(curve_points.size()));
+            for (const auto& point : curve_points) {
+              QVariantMap row;
+              row.insert(QStringLiteral("x"), point.x);
+              row.insert(QStringLiteral("y"), point.y);
+              points.push_back(row);
+            }
+            return points;
+          };
           QVariantMap curve;
-          curve.insert(QStringLiteral("points"), points);
+          curve.insert(QStringLiteral("points"), point_list(value.points));
+          curve.insert(QStringLiteral("red"), point_list(value.red));
+          curve.insert(QStringLiteral("green"), point_list(value.green));
+          curve.insert(QStringLiteral("blue"), point_list(value.blue));
           map.insert(QStringLiteral("curve"), curve);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelHlsValue>) {
           QVariantList table;
@@ -169,6 +176,17 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           input.insert(QStringLiteral("origin"), String(value.origin));
           input.insert(QStringLiteral("referral"), String(value.referral));
           map.insert(QStringLiteral("input"), input);
+        } else if constexpr (std::is_same_v<T, alcedo::EditorPanelCameraProfileFileValue>) {
+          QVariantMap reference;
+          reference.insert(QStringLiteral("raster"), value.raster);
+          reference.insert(QStringLiteral("embedded_default"), value.embedded_default);
+          reference.insert(QStringLiteral("selected"), value.selected);
+          reference.insert(QStringLiteral("resolved"), value.resolved);
+          reference.insert(QStringLiteral("has_tone_curve"), value.has_tone_curve);
+          reference.insert(QStringLiteral("profile_tone"), value.profile_tone);
+          reference.insert(QStringLiteral("camera_model"), String(value.camera_model));
+          reference.insert(QStringLiteral("profile_name"), String(value.profile_name));
+          map.insert(QStringLiteral("camera_profile_file"), reference);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelFilmFormatValue>) {
           QVariantMap format;
           format.insert(QStringLiteral("film_format"), String(value.film_format));

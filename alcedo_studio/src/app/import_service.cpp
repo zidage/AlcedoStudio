@@ -301,8 +301,11 @@ void ImportServiceImpl::RunImport(const std::vector<image_path_t>& paths, const 
         auto promise  = std::make_shared<std::promise<PreparedImport>>();
         pending.ready = promise->get_future();
         job->metadata_tasks_submitted_.fetch_add(1);
+        const auto allowed = options.any_category_paths_.contains(path.native())
+                                 ? kAllImportCategories
+                                 : options.allowed_categories_;
         thread_pool_.Submit([this, pin = pending.pin, element = pending.element, path,
-                             allowed = options.allowed_categories_, promise, job] {
+                             allowed, promise, job] {
           PreparedImport work;
           try {
             if (job->IsCancelled()) {

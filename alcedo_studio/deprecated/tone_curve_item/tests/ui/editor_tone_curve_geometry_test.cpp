@@ -75,8 +75,25 @@ TEST(EditorToneCurveGeometryTest, SceneGeometrySamplesHermiteAndHandles) {
 TEST(EditorToneCurveGeometryTest, LiftedBlackEndpointRaisesNearBlackOutput) {
   const std::vector<QPointF> lifted = {QPointF(0.0, 0.2), QPointF(0.25, 0.25), QPointF(0.75, 0.75),
                                        QPointF(1.0, 1.0)};
-  const auto                 cache  = curve::BuildCurveHermiteCache(lifted);
-  EXPECT_GT(curve::EvaluateCurveHermite(0.10f, lifted, cache), 0.10f);
+  const auto                 spline = curve::SolveCurveSpline(lifted);
+  EXPECT_GT(tone_curve::EvaluateToneCurveSpline(spline, 0.10f), 0.10f);
+}
+
+TEST(EditorToneCurveGeometryTest, DrawingSamplesEqualTheRenderSplineAtTheSameInputs) {
+  // End points inside the unit range: the drawing continues along the end slopes, as the render.
+  const std::vector<QPointF> points   = {QPointF(0.1, 0.05), QPointF(0.3, 0.2), QPointF(0.5, 0.6),
+                                         QPointF(0.9, 0.85)};
+  constexpr int              kSamples = 64;
+  const auto g = BuildToneCurveSceneGeometry(points, 320, 240, /*active_index=*/-1, kSamples);
+  ASSERT_EQ(static_cast<int>(g.curve_samples.size()), kSamples + 1);
+  const auto spline = curve::SolveCurveSpline(points);
+  for (int i = 0; i <= kSamples; ++i) {
+    const float   x        = static_cast<float>(i) / static_cast<float>(kSamples);
+    const QPointF expected = ToneCurveToWidgetPoint(
+        QPointF(x, tone_curve::EvaluateToneCurveSpline(spline, x)), g.plot_rect);
+    EXPECT_NEAR(g.curve_samples[static_cast<size_t>(i)].x(), expected.x(), 1e-6) << i;
+    EXPECT_NEAR(g.curve_samples[static_cast<size_t>(i)].y(), expected.y(), 1e-6) << i;
+  }
 }
 
 }  // namespace

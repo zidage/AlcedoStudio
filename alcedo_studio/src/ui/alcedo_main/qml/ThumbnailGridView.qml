@@ -4,6 +4,7 @@ import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
 import Alcedo.Main 1.0
+import "ColorLabelNames.js" as ColorLabelNames
 
 // Flat (ungrouped) Library photo area. Two layouts show the loaded photos of
 // LibraryModule.thumbnailModel; LibraryViewPreferences.gridLayout selects one:
@@ -343,6 +344,32 @@ Item {
         _deferredThumbnailReleases = pending
     }
 
+    // Thumbnail bindings whose delegate got another photo; pinBindTimer binds each once, after
+    // the model has written every role of the change (ThumbnailPinBinding.schedulePhotoBind).
+    property var _pendingPinBinds: []
+
+    function schedulePinBind(pin) {
+        if (_pendingPinBinds.indexOf(pin) < 0) {
+            _pendingPinBinds.push(pin)
+        }
+        pinBindTimer.start()
+    }
+
+    function unschedulePinBind(pin) {
+        const at = _pendingPinBinds.indexOf(pin)
+        if (at >= 0) {
+            _pendingPinBinds.splice(at, 1)
+        }
+    }
+
+    function bindPendingPins() {
+        const pins = _pendingPinBinds
+        _pendingPinBinds = []
+        for (let i = 0; i < pins.length; ++i) {
+            pins[i].bind(false)
+        }
+    }
+
     function syncVisibleThumbnailBindings() {
         const cards = root.photoDelegates()
         for (let i = 0; i < cards.length; ++i) {
@@ -428,19 +455,21 @@ Item {
             return null
         }
         if (_layoutJustified) {
-            const row = index - justifiedModel.firstIndex
-            return row >= 0 && row < justifiedRepeater.count ? justifiedRepeater.itemAt(row) : null
+            const slot = justifiedModel.slotOfIndex(index)
+            return slot >= 0 && slot < justifiedRepeater.count ? justifiedRepeater.itemAt(slot)
+                                                               : null
         }
         return grid.itemAtIndex(index)
     }
 
-    // The created photo delegates of the shown layout.
+    // The created photo delegates of the shown layout (not the empty slots of the justified rows
+    // or the cards in the pool of the grid).
     function photoDelegates() {
         const cards = []
         if (_layoutJustified) {
             for (let i = 0; i < justifiedRepeater.count; ++i) {
                 const tile = justifiedRepeater.itemAt(i)
-                if (tile) {
+                if (tile && tile.photoIndex >= 0) {
                     cards.push(tile)
                 }
             }
@@ -453,7 +482,7 @@ Item {
         for (let i = 0; i < children.length; ++i) {
             const child = children[i]
             if (child && child.cardIndex !== undefined && child.startZoomLayoutAnim
-                    && child.visible) {
+                    && child.visible && !child.pooled) {
                 cards.push(child)
             }
         }
@@ -1036,6 +1065,13 @@ Item {
     }
 
     Timer {
+        id: pinBindTimer
+        interval: 0
+        repeat: false
+        onTriggered: root.bindPendingPins()
+    }
+
+    Timer {
         id: relayoutAndClampTimer
         interval: 0
         repeat: false
@@ -1232,6 +1268,10 @@ Item {
         source: root._layoutJustified ? appModules.library.thumbnailModel : null
         viewportY: justifiedView.contentY
         viewportHeight: justifiedView.height
+        // The tile count stays while a scroll moves the window, so the window asks for pages.
+        onWindowChanged: root.maybeLoadMoreThumbnails()
+        // Another result shows from the top, as the classic GridView shows a reset model.
+        onViewportReset: justifiedView.contentY = 0
     }
 
     // A plain item with the scroll properties of a Flickable, not a Flickable: the view takes no
@@ -1278,6 +1318,8 @@ Item {
         model: root._layoutJustified ? null : appModules.library.thumbnailModel
         clip: true
         cacheBuffer: 0
+        // A scroll gives the cards that leave the view to the rows that enter it.
+        reuseItems: true
         boundsBehavior: Flickable.StopAtBounds
         cellWidth: root.classicMetrics.cellW
         cellHeight: root.classicMetrics.cellH
@@ -1354,20 +1396,42 @@ Item {
                 thumbPin.sync()
             }
 
+            // A card in the pool of the grid: the grid only stops drawing it (visible stays true),
+            // and it keeps the values of its last photo. It pins nothing and shows its next photo
+            // at its new place at once.
+            property bool pooled: false
+            GridView.onPooled: {
+                pooled = true
+                layoutAnimation.finish()
+                thumbPin.release()
+            }
+            GridView.onReused: {
+                pooled = false
+                thumbPin.bind(false)
+            }
+
             readonly property bool isSelected: root.isImageSelected(elementId)
             readonly property bool isHovered: root.hoveredCardIndex === index
 
             // Star (1 to 5) under the overlay point @p x, @p y, or 0 (see ThumbnailStarRating).
             function starAtOverlay(x, y) {
-                if (!cardStars.visible || root.hideMetadata) {
+                const stars = starControl()
+                if (!stars || !stars.visible) {
                     return 0
                 }
-                const p = overlay.mapToItem(cardStars, x, y)
-                return cardStars.starAt(p.x, p.y)
+                const p = overlay.mapToItem(stars, x, y)
+                return stars.starAt(p.x, p.y)
             }
 
             function ratingForStar(star) {
-                return cardStars.ratingForStar(star)
+                const stars = starControl()
+                return stars ? stars.ratingForStar(star) : 0
+            }
+
+            // The star control of the card (2 to 6 columns); null at the other zoom levels.
+            function starControl() {
+                const caption = captionLoader.item
+                return caption && caption.stars ? caption.stars : null
             }
 
             function editMarkAtOverlay(x, y) {
@@ -1387,7 +1451,11 @@ Item {
                     parts.push(qsTr("Edited"))
                 }
                 if (colorLabels !== 0) {
-                    parts.push(cardLabelDots.Accessible.name)
+                    parts.push(ColorLabelNames.shownNames(
+                                   colorLabels,
+                                   appModules.libraryView ? appModules.libraryView.colorLabelNames
+                                                          : [],
+                                   appTheme.colorLabelColors.length).join(", "))
                 }
                 if (deleteMark) {
                     parts.push(cardDeleteMark.Accessible.name)
@@ -1456,10 +1524,10 @@ Item {
                     border.width: root.columns >= 11 ? 1 : 2
                     border.color: appTheme.dividerColor
                 }
-                ThumbnailLoadingSpinner {
+                StaggeredGridMark {
                     anchors.centerIn: parent
-                    width: 28
-                    height: 28
+                    width: 27
+                    height: 27
                     visible: cardDelegate.thumbnailLoadingState
                 }
                 Image {
@@ -1470,8 +1538,9 @@ Item {
                     source: thumbPin.liveThumbUrl
                     visible: false
                     asynchronous: true
-                    // A new tier keeps the shown thumbnail until the new image is ready.
-                    retainWhileLoading: true
+                    // A new tier of the same photo keeps the shown thumbnail until the new image is
+                    // ready; another photo (a reused delegate) does not show the old one.
+                    retainWhileLoading: thumbPin.retainShownImage
                     fillMode: Image.PreserveAspectFit
                 }
                 Rectangle {
@@ -1522,30 +1591,35 @@ Item {
                     border.width: 1
                     border.color: root.cardDanger
                 }
-                Column {
+                // The text of a thumbnail problem, made only for a card that shows one.
+                Loader {
                     anchors.centerIn: parent
                     width: parent.width - 12
-                    visible: cardDelegate.thumbnailProblemState
-                    spacing: 2
-                    Label {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: "!"
-                        color: root.cardDanger
-                        font.family: appTheme.dataFontFamily
-                        font.pixelSize: root.columns >= 11 ? 24 : 30
-                        font.weight: 700
-                    }
-                    Label {
-                        width: parent.width
-                        text: cardDelegate.thumbnailProblemText
-                        color: root.cardDanger
-                        font.family: appTheme.dataFontFamily
-                        font.pixelSize: root.columns >= 11 ? 8 : 10
-                        font.weight: root.dataFontWeight
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.Wrap
-                        maximumLineCount: 2
-                        elide: Text.ElideRight
+                    active: cardDelegate.thumbnailProblemState
+                    sourceComponent: Component {
+                        Column {
+                            spacing: 2
+                            Label {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: "!"
+                                color: root.cardDanger
+                                font.family: appTheme.dataFontFamily
+                                font.pixelSize: root.columns >= 11 ? 24 : 30
+                                font.weight: 700
+                            }
+                            Label {
+                                width: parent.width
+                                text: cardDelegate.thumbnailProblemText
+                                color: root.cardDanger
+                                font.family: appTheme.dataFontFamily
+                                font.pixelSize: root.columns >= 11 ? 8 : 10
+                                font.weight: root.dataFontWeight
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
+                            }
+                        }
                     }
                 }
                 HoverHandler {
@@ -1556,23 +1630,27 @@ Item {
                 ToolTip.delay: 150
             }
 
-            Column {
-                id: textColumn
+            // Caption below the photo. Only the caption of the shown zoom level exists: none at 14
+            // columns, one line at 8 and 11 columns, three lines at 2 to 6 columns. The caption is
+            // made between frames (asynchronous), so a zoom that changes the caption of every card
+            // and a page that fills the view do not stop the frames.
+            Loader {
+                id: captionLoader
+                asynchronous: true
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.margins: root.cardInset
                 height: root.textAreaHeight
-                visible: root.textAreaHeight > 0
-                spacing: root.compactText ? 0 : 2
+                active: !root.hideAllText
+                sourceComponent: root.compactText ? compactCaption : fullCaption
+            }
 
-                // 8 and 11 columns: one line with the file name, the color label dots, and the
-                // filled stars. The file name elides first.
+            // 8 and 11 columns: one line with the file name, the color label dots, and the filled
+            // stars. The file name elides first.
+            Component {
+                id: compactCaption
                 Item {
-                    visible: root.compactText && !root.hideAllText
-                    width: parent.width
-                    height: root.textAreaHeight
-
                     Label {
                         id: compactName
                         objectName: "thumbnailGridCompactName"
@@ -1584,7 +1662,7 @@ Item {
                                         - (compactLabelDots.visible
                                            ? compactLabelDots.width + compactLabelDots.leadingGap
                                            : 0)))
-                        text: fileName
+                        text: cardDelegate.fileName
                         color: cardDelegate.deleteMark ? root.cardMuted : root.cardText
                         font.family: appTheme.dataFontFamily
                         font.pixelSize: root.titleFontSize
@@ -1614,116 +1692,126 @@ Item {
                             objectName: "thumbnailGridCompactStars"
                             anchors.verticalCenter: parent.verticalCenter
                             visible: rating > 0
-                            photoId: elementId
+                            photoId: cardDelegate.elementId
                             rating: cardDelegate.rating
                             interactive: false
                             pixelSize: root.titleFontSize
                         }
                     }
                 }
+            }
 
-                // 2 to 6 columns: file name with the color label dots; camera line; date line
-                // with the stars.
-                Item {
-                    visible: !root.compactText
-                    width: parent.width
-                    height: titleLabel.implicitHeight
+            // 2 to 6 columns: file name with the color label dots; camera line; date line with the
+            // stars.
+            Component {
+                id: fullCaption
+                Column {
+                    readonly property alias stars: cardStars
+                    spacing: 2
 
-                    Label {
-                        id: titleLabel
-                        objectName: "thumbnailGridName"
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: Math.min(implicitWidth, Math.max(0, parent.width
-                                        - (cardLabelDots.visible
-                                           ? cardLabelDots.width + cardLabelDots.leadingGap
-                                           : 0)))
-                        text: fileName
-                        color: cardDelegate.deleteMark ? root.cardMuted : root.cardText
-                        font.family: appTheme.dataFontFamily
-                        font.pixelSize: root.titleFontSize
-                        font.weight: root.dataFontWeight
-                        font.letterSpacing: root.dataLetterSpacing
-                        elide: Text.ElideRight
+                    Item {
+                        width: parent.width
+                        height: titleLabel.implicitHeight
+
+                        Label {
+                            id: titleLabel
+                            objectName: "thumbnailGridName"
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.min(implicitWidth, Math.max(0, parent.width
+                                            - (cardLabelDots.visible
+                                               ? cardLabelDots.width + cardLabelDots.leadingGap
+                                               : 0)))
+                            text: cardDelegate.fileName
+                            color: cardDelegate.deleteMark ? root.cardMuted : root.cardText
+                            font.family: appTheme.dataFontFamily
+                            font.pixelSize: root.titleFontSize
+                            font.weight: root.dataFontWeight
+                            font.letterSpacing: root.dataLetterSpacing
+                            elide: Text.ElideRight
+                        }
+                        ThumbnailColorLabelDots {
+                            id: cardLabelDots
+                            objectName: "thumbnailGridLabelDots"
+                            anchors.left: titleLabel.right
+                            anchors.leftMargin: leadingGap
+                            anchors.verticalCenter: parent.verticalCenter
+                            labels: cardDelegate.colorLabels
+                            ringColor: cardDelegate.color
+                        }
                     }
-                    ThumbnailColorLabelDots {
-                        id: cardLabelDots
-                        objectName: "thumbnailGridLabelDots"
-                        anchors.left: titleLabel.right
-                        anchors.leftMargin: leadingGap
-                        anchors.verticalCenter: parent.verticalCenter
-                        labels: cardDelegate.colorLabels
-                        ringColor: cardDelegate.color
-                    }
-                }
-                Label {
-                    visible: !root.hideMetadata
-                    text: qsTr("%1 | ISO %2 | f/%3").arg(cameraModel).arg(iso).arg(aperture)
-                    color: root.cardMuted
-                    font.family: appTheme.dataFontFamily
-                    font.pixelSize: root.metadataFontSize
-                    font.weight: root.dataFontWeight
-                    font.letterSpacing: root.dataLetterSpacing
-                    elide: Text.ElideRight
-                    width: parent.width
-                }
-                Item {
-                    visible: !root.hideMetadata
-                    width: parent.width
-                    height: Math.max(dateLabel.implicitHeight, cardStars.implicitHeight,
-                                     hdrGridTag.visible ? hdrGridTag.height : 0)
-
                     Label {
-                        id: dateLabel
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: Math.max(0, (hdrGridTag.visible ? hdrGridTag.x : cardStars.x) - 4)
-                        text: cardDelegate.displayTags.length > 0
-                              ? qsTr("%1 | %2").arg(captureDate).arg(cardDelegate.displayTags)
-                              : captureDate
+                        text: qsTr("%1 | ISO %2 | f/%3").arg(cardDelegate.cameraModel)
+                                                         .arg(cardDelegate.iso)
+                                                         .arg(cardDelegate.aperture)
                         color: root.cardMuted
                         font.family: appTheme.dataFontFamily
                         font.pixelSize: root.metadataFontSize
                         font.weight: root.dataFontWeight
                         font.letterSpacing: root.dataLetterSpacing
                         elide: Text.ElideRight
+                        width: parent.width
                     }
+                    Item {
+                        width: parent.width
+                        height: Math.max(dateLabel.implicitHeight, cardStars.implicitHeight,
+                                         hdrGridTag.visible ? hdrGridTag.height : 0)
 
-                    // Neutral HDR mark: the Library has no accent color.
-                    Rectangle {
-                        id: hdrGridTag
-                        visible: isHdr
-                        anchors.right: cardStars.left
-                        anchors.rightMargin: 5
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: appTheme.iconSourceSizeCompact + appTheme.spaceSm
-                        height: appTheme.spaceLg
-                        radius: 3
-                        color: appTheme.bgBaseColor
-                        border.width: 1
-                        border.color: appTheme.textMutedColor
-                        ColorImage {
-                            anchors.centerIn: parent
-                            width: appTheme.iconSourceSize
-                            height: appTheme.iconSourceSize
-                            sourceSize.width: appTheme.iconSourceSize
-                            sourceSize.height: appTheme.iconSourceSize
-                            source: "qrc:/panel_icons/hdr.svg"
-                            color: appTheme.textColor
+                        Label {
+                            id: dateLabel
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.max(0, (hdrGridTag.visible ? hdrGridTag.x
+                                                                   : cardStars.x) - 4)
+                            text: cardDelegate.displayTags.length > 0
+                                  ? qsTr("%1 | %2").arg(cardDelegate.captureDate)
+                                                    .arg(cardDelegate.displayTags)
+                                  : cardDelegate.captureDate
+                            color: root.cardMuted
+                            font.family: appTheme.dataFontFamily
+                            font.pixelSize: root.metadataFontSize
+                            font.weight: root.dataFontWeight
+                            font.letterSpacing: root.dataLetterSpacing
+                            elide: Text.ElideRight
                         }
-                    }
 
-                    ThumbnailStarRating {
-                        id: cardStars
-                        objectName: "thumbnailGridStars"
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        photoId: elementId
-                        rating: cardDelegate.rating
-                        interactive: root.starsInteractive
-                        cardHovered: cardDelegate.isHovered
-                        hoveredStar: root.hoveredCardIndex === index ? root.hoveredCardStar : 0
-                        pixelSize: root.titleFontSize
+                        // Neutral HDR mark: the Library has no accent color.
+                        Rectangle {
+                            id: hdrGridTag
+                            visible: cardDelegate.isHdr
+                            anchors.right: cardStars.left
+                            anchors.rightMargin: 5
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: appTheme.iconSourceSizeCompact + appTheme.spaceSm
+                            height: appTheme.spaceLg
+                            radius: 3
+                            color: appTheme.bgBaseColor
+                            border.width: 1
+                            border.color: appTheme.textMutedColor
+                            ColorImage {
+                                anchors.centerIn: parent
+                                width: appTheme.iconSourceSize
+                                height: appTheme.iconSourceSize
+                                sourceSize.width: appTheme.iconSourceSize
+                                sourceSize.height: appTheme.iconSourceSize
+                                source: "qrc:/panel_icons/hdr.svg"
+                                color: appTheme.textColor
+                            }
+                        }
+
+                        ThumbnailStarRating {
+                            id: cardStars
+                            objectName: "thumbnailGridStars"
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            photoId: cardDelegate.elementId
+                            rating: cardDelegate.rating
+                            interactive: root.starsInteractive
+                            cardHovered: cardDelegate.isHovered
+                            hoveredStar: root.hoveredCardIndex === cardDelegate.index
+                                         ? root.hoveredCardStar : 0
+                            pixelSize: root.titleFontSize
+                        }
                     }
                 }
             }
@@ -2023,7 +2111,8 @@ Item {
 
         onWheel: function(wheel) {
             // Ctrl+Scroll → zoom, otherwise → scroll. A zoom step needs one wheel notch
-            // (120); a touchpad sends smaller steps, which add up.
+            // (120); a touchpad sends smaller steps, which add up. Wheel forward shows fewer,
+            // larger photos (a lower zoom level), as wheel forward zooms in the editor viewport.
             if (wheel.modifiers & Qt.ControlModifier) {
                 const angle = wheel.angleDelta.y
                 if (angle !== 0 && (root._zoomWheelAngle > 0) !== (angle > 0)) {
@@ -2031,9 +2120,9 @@ Item {
                 }
                 root._zoomWheelAngle += angle
                 while (Math.abs(root._zoomWheelAngle) >= 120) {
-                    const step = root._zoomWheelAngle > 0 ? 1 : -1
-                    root._zoomWheelAngle -= step * 120
-                    root.setZoomLevelAt(root.zoomLevel + step, wheel.y, wheel.x)
+                    const notch = root._zoomWheelAngle > 0 ? 1 : -1
+                    root._zoomWheelAngle -= notch * 120
+                    root.setZoomLevelAt(root.zoomLevel - notch, wheel.y, wheel.x)
                 }
                 updatePointerTargets(wheel.x, wheel.y)
                 wheel.accepted = true

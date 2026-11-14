@@ -38,33 +38,33 @@ static inline float3 ApplyOkLabContrast(float3 acescc, float contrast) {
   return LinearAp1ToAcescc(OkLabToLinearAp1(lab));
 }
 
-static inline float ExtrapolateCurve(float value, __global const GradeAdjustmentParams* p, uint a,
-                                     uint b) {
-  const float x0 = p->values[a * 2];
-  const float y0 = p->values[a * 2 + 1];
-  const float x1 = p->values[b * 2];
-  const float y1 = p->values[b * 2 + 1];
-  return y0 + (value - x0) * (y1 - y0) / max(x1 - x0, 1.0e-6f);
-}
-
+// Tone Curve spline (edit/operators/models/tone_curve_spline.hpp; CPU reference
+// EvaluateToneCurveSpline). values[0..15]: x of the control points; [16..31]: y; [32..47]: slope.
+// Monotone cubic Hermite between the points, straight along the end slope outside them.
 static inline float ApplyCurve(float value, __global const GradeAdjustmentParams* p) {
-  if (p->count < 2u) {
+  const uint n = p->count;
+  if (n < 2u) {
     return value;
   }
-  if (value <= p->values[0]) {
-    return ExtrapolateCurve(value, p, 0u, 1u);
+  __global const float* xs = p->values;
+  __global const float* ys = p->values + 16;
+  __global const float* ms = p->values + 32;
+  if (value <= xs[0]) {
+    return ys[0] + ms[0] * (value - xs[0]);
   }
-  for (uint i = 1u; i < p->count; ++i) {
-    const float x1 = p->values[i * 2u];
-    if (value <= x1) {
-      const float x0 = p->values[(i - 1u) * 2u];
-      const float y0 = p->values[(i - 1u) * 2u + 1u];
-      const float y1 = p->values[i * 2u + 1u];
-      const float t  = (value - x0) / max(x1 - x0, 1.0e-6f);
-      return y0 + t * (y1 - y0);
-    }
+  if (value >= xs[n - 1u]) {
+    return ys[n - 1u] + ms[n - 1u] * (value - xs[n - 1u]);
   }
-  return ExtrapolateCurve(value, p, p->count - 2u, p->count - 1u);
+  uint i = 0u;
+  while (i + 2u < n && value >= xs[i + 1u]) {
+    ++i;
+  }
+  const float h  = xs[i + 1u] - xs[i];
+  const float t  = (value - xs[i]) / h;
+  const float dy = ys[i + 1u] - ys[i];
+  const float d  = dy / h;
+  const float u  = 1.0f - t;
+  return ys[i] + t * dy + h * t * u * (u * (ms[i] - d) - t * (ms[i + 1u] - d));
 }
 
 // Tone color wheels (edit/operators/models/color_wheel_tone.hpp). values[0..2]: Offset as an ACEScc
@@ -187,9 +187,11 @@ static inline float3 ApplyAdjustment(float3 c, __global const GradeAdjustmentPar
     c.y += offset;
     c.z += offset;
   } else if (behavior == 7u) {
-    c.x = ApplyCurve(c.x, p);
-    c.y = ApplyCurve(c.y, p);
-    c.z = ApplyCurve(c.z, p);
+    // The Curve slot has four records (CurveGradeRuntimeParams): the RGB curve, then the red,
+    // green, and blue curves. count 0 leaves the channel unchanged.
+    c.x = ApplyCurve(ApplyCurve(c.x, p), p + 1);
+    c.y = ApplyCurve(ApplyCurve(c.y, p), p + 2);
+    c.z = ApplyCurve(ApplyCurve(c.z, p), p + 3);
   } else if (behavior == 8u) {
     c = ApplyHls(c, p);
   } else if (behavior == 9u || behavior == 10u) {
@@ -301,6 +303,49 @@ static inline void SceneWriteRgba(write_only image2d_t image, __global float4* b
     return;
   }
   write_imagef(image, gid, value);
+}
+
+// Bin of one ACEScc value on the curve axis: CurveInputHistogramBin (curve_input_histogram.hpp).
+static inline uint CurveInputHistogramBin(float value) {
+  return (uint)fmin(fmax(value * 256.0f, 0.0f), 255.0f);
+}
+
+// Histogram of the curve input (issue #888). Each work item takes samples of the grid
+// (x, y) = (column * step, row * step), applies the adjustments before the Curve, and adds the
+// three bins to the work-group counts in local memory; each work group then adds its counts to
+// @p counts (red bins 0..255, green 256..511, blue 512..767).
+__kernel void primary_grade_curve_input_histogram(
+    __read_only image2d_t src_image, __global const float4* src_buffer, int src_is_buffer,
+    uint width, uint step, uint sampled_width, uint sample_count,
+    __global const uchar* parameter_base, __global const uint* commands, uint command_count,
+    __global const float4* lut, __global uint* counts) {
+  __local uint group_counts[768];
+  for (uint i = (uint)get_local_id(0); i < 768u; i += (uint)get_local_size(0)) {
+    group_counts[i] = 0u;
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (uint sample = (uint)get_global_id(0); sample < sample_count;
+       sample += (uint)get_global_size(0)) {
+    const int2   gid    = (int2)((int)((sample % sampled_width) * step),
+                                 (int)((sample / sampled_width) * step));
+    const float4 source = SceneReadRgba(src_image, src_buffer, src_is_buffer, gid, width);
+    float3       c      = source.xyz;
+    for (uint i = 0u; i < command_count; ++i) {
+      __global const GradeAdjustmentParams* params =
+          (__global const GradeAdjustmentParams*)(parameter_base + commands[i]);
+      c = ApplyAdjustment(c, params, lut, 0u);
+    }
+    atomic_inc(&group_counts[CurveInputHistogramBin(c.x)]);
+    atomic_inc(&group_counts[256u + CurveInputHistogramBin(c.y)]);
+    atomic_inc(&group_counts[512u + CurveInputHistogramBin(c.z)]);
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (uint i = (uint)get_local_id(0); i < 768u; i += (uint)get_local_size(0)) {
+    const uint count = group_counts[i];
+    if (count != 0u) {
+      atomic_add(&counts[i], count);
+    }
+  }
 }
 
 __kernel void primary_grade_pointwise_scene_rgba32f(

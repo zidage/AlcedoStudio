@@ -11,6 +11,7 @@
 #include <opencv2/core.hpp>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "edit/operators/basic/planckian_locus_table.hpp"
@@ -371,6 +372,11 @@ auto BuildBradfordCAT(const cv::Vec2d& src_xy, const cv::Vec2d& dst_xy) -> cv::M
   return kBradfordInv * diag * kBradford;
 }
 
+/// XYZ D50 to AP1: Bradford D50 to the AP1 white, then XYZ to AP1. The same for every camera.
+auto XyzD50ToAp1() -> cv::Matx33d {
+  return kXyzD60ToAp1 * BuildBradfordCAT(cv::Vec2d(kD50X, kD50Y), cv::Vec2d(kD60X, kD60Y));
+}
+
 void StoreMatrix(const cv::Matx33d& src, std::array<float, 9>& dst) {
   for (int r = 0; r < 3; ++r) {
     for (int c = 0; c < 3; ++c) {
@@ -601,7 +607,62 @@ auto Fail(ColorTransformError error) -> ColorTransformResult {
   return ColorTransformResult{false, error, {}};
 }
 
+auto UnboundCameraProfileFileMessage(const DevelopCameraProfileFile& reference) -> std::string {
+  return "camera profile \"" + reference.profile_name + "\" for \"" + reference.camera_model +
+         "\" is not in the DCP folder";
+}
+
+auto UnmergedCameraProfileFileMessage(const DevelopCameraProfileFile& reference) -> std::string {
+  return "camera profile \"" + reference.profile_name + "\" for \"" + reference.camera_model +
+         "\" is not bound to the DNG profile of the source file";
+}
+
+/// The reference is bound, and its source tables belong to the DNG profile of the image.
+auto CameraProfileFileRenderable(const DevelopPayload& payload) -> bool {
+  const auto& reference = *payload.camera_profile_file;
+  return reference.IsBound() &&
+         DcpSourceTablesMatchSource(reference, payload.camera_profile.dng_profile);
+}
+
 }  // namespace
+
+auto EffectiveCameraProfile(const DevelopPayload& payload) -> DevelopCameraProfile {
+  DevelopCameraProfile effective = payload.camera_profile;
+  if (!payload.camera_profile_file.has_value()) {
+    return effective;
+  }
+  const auto& reference = *payload.camera_profile_file;
+  if (!reference.IsBound()) {
+    throw std::runtime_error(UnboundCameraProfileFileMessage(reference));
+  }
+  if (!CameraProfileFileRenderable(payload)) {
+    throw std::runtime_error(UnmergedCameraProfileFileMessage(reference));
+  }
+  const auto& dcp = *reference.profile;
+  // A DNG source keeps its own AnalogBalance, BaselineExposure, and CameraCalibration (phase C6).
+  effective.dng_profile =
+      DngColorProfileRef(reference.source_tables ? reference.source_tables : dcp.tables);
+  effective.color_matrices_valid          = true;
+  effective.color_matrix_1                = dcp.color_matrix_1;
+  effective.color_matrix_2                = dcp.color_matrix_2;
+  effective.forward_matrices_valid        = dcp.forward_matrices_valid;
+  effective.forward_matrix_1              = dcp.forward_matrix_1;
+  effective.forward_matrix_2              = dcp.forward_matrix_2;
+  effective.calibration_illuminants_valid = true;
+  effective.color_matrix_1_cct            = dcp.color_matrix_1_cct;
+  effective.color_matrix_2_cct            = dcp.color_matrix_2_cct;
+  return effective;
+}
+
+void SolveDevelopAsShotWhiteBalance(DevelopPayload& payload) {
+  DevelopPayload as_shot = payload;
+  as_shot.wb_mode        = "as_shot";
+  const auto solved      = ResolveDevelopColorTransform(as_shot);
+  if (solved.ok) {
+    payload.as_shot_cct  = solved.transform.resolved_cct;
+    payload.as_shot_tint = solved.transform.resolved_tint;
+  }
+}
 
 void BindDevelopCameraProfile(DevelopPayload& payload, const RawRuntimeColorContext& imported) {
   // The as-shot solve below needs the DNG calibration; an unbound reference must not bind.
@@ -625,13 +686,8 @@ void BindDevelopCameraProfile(DevelopPayload& payload, const RawRuntimeColorCont
     profile.cam_mul[static_cast<std::size_t>(i)]        = imported.cam_mul_[i];
   }
 
-  DevelopPayload as_shot = payload;
-  as_shot.wb_mode        = "as_shot";
-  const auto solved      = ResolveDevelopColorTransform(as_shot);
-  if (solved.ok) {
-    payload.as_shot_cct  = solved.transform.resolved_cct;
-    payload.as_shot_tint = solved.transform.resolved_tint;
-  }
+  // With a bound DCP reference the solve uses the DCP matrices (EffectiveCameraProfile).
+  SolveDevelopAsShotWhiteBalance(payload);
 }
 
 void BindImportedCameraProfile(PipelineDocument& document, const RawRuntimeColorContext& imported) {
@@ -696,17 +752,23 @@ auto RawWhiteBalanceWhite(const DevelopPayload& develop)
 }
 
 auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransformResult {
-  cv::Matx33d cm1;
-  cv::Matx33d cm2;
-  double      endpoint_cct_1 = kCalibrationLowCCT;
-  double      endpoint_cct_2 = kCalibrationHighCCT;
-  const auto  endpoint_error =
-      ResolveColorMatrixEndpoints(develop.camera_profile, cm1, cm2, endpoint_cct_1, endpoint_cct_2);
+  // An import binding that changed the DNG profile leaves tables merged with the old profile
+  // until BindDcpCameraProfile merges again; until then the reference counts as unbound.
+  if (develop.camera_profile_file.has_value() && !CameraProfileFileRenderable(develop)) {
+    return Fail(ColorTransformError::UnboundCameraProfileFile);
+  }
+  const DevelopCameraProfile camera_profile = EffectiveCameraProfile(develop);
+  cv::Matx33d                cm1;
+  cv::Matx33d                cm2;
+  double                     endpoint_cct_1 = kCalibrationLowCCT;
+  double                     endpoint_cct_2 = kCalibrationHighCCT;
+  const auto                 endpoint_error =
+      ResolveColorMatrixEndpoints(camera_profile, cm1, cm2, endpoint_cct_1, endpoint_cct_2);
   if (endpoint_error != ColorTransformError::Ok) {
     return Fail(endpoint_error);
   }
 
-  const auto& dng_profile_ref = develop.camera_profile.dng_profile;
+  const auto& dng_profile_ref = camera_profile.dng_profile;
   if (dng_profile_ref.IsReferenced() && !dng_profile_ref.IsBound()) {
     return Fail(ColorTransformError::UnboundDngProfile);
   }
@@ -720,9 +782,8 @@ auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransfo
 
   cv::Matx33d fm1;
   cv::Matx33d fm2;
-  const bool  has_forward_matrices =
-      ResolveForwardMatrixEndpoints(develop.camera_profile, fm1, fm2);
-  if (dng_profile && develop.camera_profile.forward_matrices_valid && !has_forward_matrices) {
+  const bool  has_forward_matrices = ResolveForwardMatrixEndpoints(camera_profile, fm1, fm2);
+  if (dng_profile && camera_profile.forward_matrices_valid && !has_forward_matrices) {
     return Fail(ColorTransformError::NonFiniteMatrix);
   }
 
@@ -730,8 +791,8 @@ auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransfo
   double    selected_cct  = develop.custom_cct;
   double    selected_tint = develop.custom_tint;
   if (!IsCustomWbMode(develop.wb_mode)) {
-    if (!SolveAsShotWhiteXY(develop.camera_profile, cm1, cm2, endpoint_cct_1, endpoint_cct_2,
-                            selected_xy, selected_cct, selected_tint)) {
+    if (!SolveAsShotWhiteXY(camera_profile, cm1, cm2, endpoint_cct_1, endpoint_cct_2, selected_xy,
+                            selected_cct, selected_tint)) {
       return Fail(ColorTransformError::InvalidAsShotNeutral);
     }
   } else {
@@ -800,9 +861,7 @@ auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransfo
   }
   if (!IsFiniteMatrix(camera_to_xyz_d50)) return Fail(ColorTransformError::NonFiniteMatrix);
 
-  const cv::Matx33d cat_d50_to_d60 =
-      BuildBradfordCAT(cv::Vec2d(kD50X, kD50Y), cv::Vec2d(kD60X, kD60Y));
-  const cv::Matx33d xyz_d50_to_ap1 = kXyzD60ToAp1 * cat_d50_to_d60;
+  const cv::Matx33d xyz_d50_to_ap1 = XyzD50ToAp1();
   const cv::Matx33d camera_to_ap1  = xyz_d50_to_ap1 * camera_to_xyz_d50;
   if (!IsFiniteMatrix(camera_to_ap1) || !IsFiniteMatrix(xyz_d50_to_ap1)) {
     return Fail(ColorTransformError::NonFiniteMatrix);
@@ -834,8 +893,21 @@ auto ColorTransformErrorMessage(ColorTransformError error) -> std::string_view {
       return "invalid white point";
     case ColorTransformError::UnboundDngProfile:
       return "DNG profile is referenced but was not loaded from the source file";
+    case ColorTransformError::UnboundCameraProfileFile:
+      return "camera profile file is referenced but was not loaded from the DCP folder";
   }
   return "color transform error";
+}
+
+auto ColorTransformFailureMessage(const DevelopPayload& develop, ColorTransformError error)
+    -> std::string {
+  if (error == ColorTransformError::UnboundCameraProfileFile &&
+      develop.camera_profile_file.has_value()) {
+    const auto& reference = *develop.camera_profile_file;
+    return reference.IsBound() ? UnmergedCameraProfileFileMessage(reference)
+                               : UnboundCameraProfileFileMessage(reference);
+  }
+  return std::string(ColorTransformErrorMessage(error));
 }
 
 auto WhiteBalanceTemperatureTintToXy(double cct, double tint) -> std::array<double, 2> {
@@ -885,6 +957,15 @@ auto BuildAp1Cat02WhiteBalanceMatrix(double cct, double tint) -> std::array<floa
   std::array<float, 9> result{};
   StoreMatrix(adaptation, result);
   return result;
+}
+
+auto XyzD50ToAp1Matrix() -> const std::array<float, 9>& {
+  static const std::array<float, 9> matrix = [] {
+    std::array<float, 9> result{};
+    StoreMatrix(XyzD50ToAp1(), result);
+    return result;
+  }();
+  return matrix;
 }
 
 }  // namespace alcedo

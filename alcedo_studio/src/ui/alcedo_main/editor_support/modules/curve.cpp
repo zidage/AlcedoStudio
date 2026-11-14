@@ -95,87 +95,33 @@ auto CurveControlPointsEqual(const std::vector<QPointF>& a, const std::vector<QP
   return true;
 }
 
-auto BuildCurveHermiteCache(const std::vector<QPointF>& points) -> CurveHermiteCache {
-  CurveHermiteCache cache;
-  const size_t      n = points.size();
-  if (n == 0) {
-    return cache;
+auto SolveCurveSpline(const std::vector<QPointF>& points) -> tone_curve::ToneCurveSpline {
+  std::vector<CurvePoint> curve_points;
+  curve_points.reserve(points.size());
+  for (const auto& point : points) {
+    curve_points.push_back(
+        CurvePoint{static_cast<float>(point.x()), static_cast<float>(point.y())});
   }
-
-  cache.m_.assign(n, 0.0f);
-  if (n == 1) {
-    return cache;
-  }
-
-  cache.h_.assign(n - 1, 0.0f);
-  std::vector<float> delta(n - 1, 0.0f);
-  for (size_t i = 0; i + 1 < n; ++i) {
-    const float dx = static_cast<float>(points[i + 1].x() - points[i].x());
-    cache.h_[i]    = dx;
-    if (std::abs(dx) > kCurveEpsilon) {
-      delta[i] = static_cast<float>(points[i + 1].y() - points[i].y()) / dx;
-    }
-  }
-
-  cache.m_[0]     = delta[0];
-  cache.m_[n - 1] = delta[n - 2];
-  for (size_t i = 1; i + 1 < n; ++i) {
-    if (delta[i - 1] * delta[i] <= 0.0f) {
-      cache.m_[i] = 0.0f;
-      continue;
-    }
-    const float w1    = 2.0f * cache.h_[i] + cache.h_[i - 1];
-    const float w2    = cache.h_[i] + 2.0f * cache.h_[i - 1];
-    const float denom = (w1 / delta[i - 1]) + (w2 / delta[i]);
-    cache.m_[i] = ((w1 + w2) > 0.0f && std::abs(denom) > kCurveEpsilon) ? (w1 + w2) / denom : 0.0f;
-  }
-
-  return cache;
+  return tone_curve::SolveToneCurveSpline(curve_points);
 }
 
-auto EvaluateCurveHermite(float x, const std::vector<QPointF>& points,
-                          const CurveHermiteCache& cache) -> float {
-  const size_t n = points.size();
-  if (n == 0) {
-    return Clamp01(x);
-  }
-  if (n == 1) {
-    return Clamp01(static_cast<float>(points.front().y()));
-  }
-  if (x <= points.front().x()) {
-    return Clamp01(static_cast<float>(points.front().y()));
-  }
-  if (x >= points.back().x()) {
-    return Clamp01(static_cast<float>(points.back().y()));
-  }
-
-  int idx = static_cast<int>(n) - 2;
-  for (int i = 0; i < static_cast<int>(n) - 1; ++i) {
-    if (x < points[i + 1].x()) {
-      idx = i;
-      break;
+auto SampleCurveLine(const tone_curve::ToneCurveSpline& spline) -> QList<QPointF> {
+  QList<QPointF> line;
+  line.reserve(kCurveLineSteps + 1 + static_cast<qsizetype>(spline.count));
+  std::uint32_t knot = 0;
+  for (int step = 0; step <= kCurveLineSteps; ++step) {
+    const double x = static_cast<double>(step) / kCurveLineSteps;
+    // The control points between the previous step and this one, so the line passes through them.
+    while (knot < spline.count && static_cast<double>(spline.x[knot]) < x) {
+      const double knot_x = spline.x[knot];
+      if (line.isEmpty() || knot_x > line.back().x()) {
+        line.push_back(QPointF(knot_x, spline.y[knot]));
+      }
+      ++knot;
     }
+    line.push_back(QPointF(x, tone_curve::EvaluateToneCurveSpline(spline, static_cast<float>(x))));
   }
-
-  if (idx < 0 || static_cast<size_t>(idx) >= cache.h_.size() ||
-      static_cast<size_t>(idx + 1) >= cache.m_.size()) {
-    return Clamp01(x);
-  }
-
-  const float dx = cache.h_[idx];
-  if (std::abs(dx) <= kCurveEpsilon) {
-    return Clamp01(static_cast<float>(points[idx].y()));
-  }
-
-  const float t   = (x - static_cast<float>(points[idx].x())) / dx;
-  const float h00 = 2.0f * t * t * t - 3.0f * t * t + 1.0f;
-  const float h10 = t * t * t - 2.0f * t * t + t;
-  const float h01 = -2.0f * t * t * t + 3.0f * t * t;
-  const float h11 = t * t * t - t * t;
-
-  const float y   = h00 * static_cast<float>(points[idx].y()) + h10 * dx * cache.m_[idx] +
-                  h01 * static_cast<float>(points[idx + 1].y()) + h11 * dx * cache.m_[idx + 1];
-  return Clamp01(y);
+  return line;
 }
 
 auto CurveControlPointsToParams(const std::vector<QPointF>& points) -> nlohmann::json {

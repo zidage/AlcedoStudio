@@ -14,6 +14,7 @@
 #include <utility>
 #include <variant>
 
+#include "../edit/graph/imported_camera_profile_fixtures.hpp"
 #include "../edit/graph/test_camera_profile.hpp"
 #include "app/editor_parameter_write.hpp"
 #include "app/editor_pipeline_command_service.hpp"
@@ -29,6 +30,9 @@
 #include "edit/operators/models/operator_param_dto.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "image/dcp_camera_profile.hpp"
+#include "image/dng_color_profile.hpp"
+#include "image/dng_tone_curve.hpp"
 #include "image/raster_color_description.hpp"
 #include "json.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -137,8 +141,11 @@ void SetOwnedScalars(PipelineDocument& document) {
   dynamic_cast<SaturationModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()))
       ->SetValue(1.8f);
+  CurveUpdate curve;
+  curve.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.4f, 0.55f}, {1.0f, 1.0f}};
+  curve.green  = std::vector<CurvePoint>{{0.0f, 0.05f}, {1.0f, 0.95f}};
   dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()))
-      ->SetPoints({{0.0f, 0.0f}, {0.4f, 0.55f}, {1.0f, 1.0f}});
+      ->ApplyUpdate(curve);
   dynamic_cast<LmtModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()))
       ->SetCubePath("D:/luts/look.cube");
   dynamic_cast<Cat02WhiteBalanceModel*>(
@@ -284,6 +291,10 @@ TEST(EditorPanelProjectionTest, ProjectsToneLookLutRawOdtAndGeometryFromExplicit
   ASSERT_EQ(curve_value->points.size(), 3u);
   EXPECT_FLOAT_EQ(curve_value->points[1].x, 0.4f);
   EXPECT_FLOAT_EQ(curve_value->points[1].y, 0.55f);
+  // The projection has the four curves: the green curve and the identity red and blue curves.
+  EXPECT_EQ(curve_value->green, (std::vector<CurvePoint>{{0.0f, 0.05f}, {1.0f, 0.95f}}));
+  EXPECT_EQ(curve_value->red, IdentityCurvePoints());
+  EXPECT_EQ(curve_value->blue, IdentityCurvePoints());
 
   const auto* grain = NestedOf(projection, "film_grain");
   ASSERT_NE(grain, nullptr);
@@ -529,6 +540,99 @@ TEST(EditorPanelProjectionTest, InputProfileProjectsRasterDescriptionAndRawDocum
   const auto* adapter  = adapters.Find("input_profile");
   ASSERT_NE(adapter, nullptr);
   EXPECT_EQ(adapter->panel_id, "raw");
+}
+
+// DCP plan C5: the Camera Profile combo names its default entry "Embedded" when the import
+// profile is the embedded profile of a DNG file, and "Built-in" otherwise.
+TEST(EditorPanelProjectionTest, CameraProfileFileProjectsWhetherTheDefaultIsAnEmbeddedProfile) {
+  auto project = [](const PipelineDocument& document) {
+    EditorPanelProjection projection;
+    std::string           error;
+    EXPECT_TRUE(ProjectCurrentPanelFields(document, 5, &projection, &error)) << error;
+    const auto* field = FindField(projection, "camera_profile_file");
+    EXPECT_NE(field, nullptr);
+    const auto* value =
+        field ? std::get_if<EditorPanelCameraProfileFileValue>(&field->value) : nullptr;
+    EXPECT_NE(value, nullptr);
+    return value ? *value : EditorPanelCameraProfileFileValue{};
+  };
+
+  auto raw = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(raw);
+  const auto built_in = project(raw);
+  EXPECT_FALSE(built_in.raster);
+  EXPECT_FALSE(built_in.embedded_default);
+  EXPECT_FALSE(built_in.selected);
+
+  auto dng = CreateDefaultPipelineDocument();
+  for (const auto& fixture : gpu_dag_test::MakeImportedCameraProfileFixtures()) {
+    if (fixture.name_ == "dng") {
+      gpu_dag_test::ApplyImportedCameraProfile(dng, fixture.context_);
+    }
+  }
+  const auto embedded = project(dng);
+  EXPECT_FALSE(embedded.raster);
+  EXPECT_TRUE(embedded.embedded_default);
+  EXPECT_FALSE(embedded.selected);
+}
+
+// T3 (dcp_profile_tone_curve_study.md, section 6.4): the Tone Curve switch is shown for a bound
+// profile with a ProfileToneCurve, and reads the stored profile_tone value.
+TEST(EditorPanelProjectionTest, CameraProfileFileProjectsTheToneCurveAndItsSwitch) {
+  const auto make_profile = [](bool with_curve) {
+    DcpCameraProfile profile;
+    profile.unique_camera_model = "Test Camera Z1";
+    profile.profile_name        = with_curve ? "Camera Tone" : "Camera Flat";
+    profile.color_matrix_1      = {0.92, -0.31, -0.06, -0.44, 1.21, 0.19, -0.08, 0.27, 0.68};
+    profile.color_matrix_2      = {0.81, -0.22, -0.09, -0.41, 1.17, 0.27, -0.06, 0.18, 0.59};
+    profile.color_matrix_1_cct  = 2856.0;
+    profile.color_matrix_2_cct  = 6504.0;
+    profile.tables              = MakeDngColorProfile(DngColorProfile{});
+    if (with_curve) {
+      profile.profile_tone_curve = MakeDngToneCurve({{0.0f, 0.0f}, {0.18f, 0.44f}, {1.0f, 1.0f}});
+    }
+    return MakeDcpCameraProfile(std::move(profile));
+  };
+  const auto project = [](const PipelineDocument& document) {
+    EditorPanelProjection projection;
+    std::string           error;
+    EXPECT_TRUE(ProjectCurrentPanelFields(document, 6, &projection, &error)) << error;
+    const auto* field = FindField(projection, "camera_profile_file");
+    const auto* value =
+        field ? std::get_if<EditorPanelCameraProfileFileValue>(&field->value) : nullptr;
+    EXPECT_NE(value, nullptr);
+    return value ? *value : EditorPanelCameraProfileFileValue{};
+  };
+  const auto select = [](PipelineDocument& document, DcpCameraProfilePtr profile,
+                         bool profile_tone) {
+    DevelopCameraProfileFileUpdate update;
+    update.profile      = std::move(profile);
+    update.profile_tone = profile_tone;
+    document.Develop()->Params().ApplyCameraProfileFileUpdate(std::move(update));
+  };
+
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  const auto none = project(document);
+  EXPECT_FALSE(none.has_tone_curve);
+  EXPECT_FALSE(none.profile_tone);
+
+  select(document, make_profile(true), true);
+  const auto on = project(document);
+  EXPECT_TRUE(on.selected);
+  EXPECT_TRUE(on.has_tone_curve);
+  EXPECT_TRUE(on.profile_tone);
+
+  select(document, make_profile(true), false);
+  const auto off = project(document);
+  EXPECT_TRUE(off.has_tone_curve);
+  EXPECT_FALSE(off.profile_tone);
+
+  select(document, make_profile(false), true);
+  const auto flat = project(document);
+  EXPECT_TRUE(flat.selected);
+  EXPECT_FALSE(flat.has_tone_curve);
+  EXPECT_TRUE(flat.profile_tone);
 }
 
 // L4: the `lut` field write carries the stored encodings, so replaying an LMT Model JSON (undo,

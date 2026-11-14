@@ -5,8 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -14,6 +12,7 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/frame_presenter.hpp"
@@ -25,41 +24,41 @@
 #include "gpu/transient_allocation_policy.hpp"
 #include "image/image_buffer.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
 namespace detail {
 
+/// ROI geometry of one GPU DAG render, at Debug level in alcedo.render.roi. Release builds compile
+/// it out; Debug builds write it when QT_LOGGING_RULES enables alcedo.render.roi.debug.
 template <class Backend>
 void TraceGpuDagGeometry(const ExecutionPlan& plan, const RenderRequest& request,
                          const FrameCompletionSubmission& submission) {
-  const char* enabled = std::getenv("ALCEDO_ROI_TRACE");
-  if (enabled == nullptr || enabled[0] == '\0' || enabled[0] == '0') {
-    return;
-  }
-  const auto& view                  = request.view.visible_rect_in_edit_space;
-  const auto& geometry              = plan.geometry;
-  const auto  native_visible_width  = static_cast<float>(geometry.edit_extent.width) * view.w;
-  const auto  native_visible_height = static_cast<float>(geometry.edit_extent.height) * view.h;
-  const bool  nearest_viewer_expansion =
-      !view.IsFullFrame() && (request.view.viewport_extent.width > geometry.render_extent.width ||
-                              request.view.viewport_extent.height > geometry.render_extent.height);
-  std::fprintf(
-      stderr,
-      "[ROI_TRACE][gpu-dag-geometry] backend=%s request=%llu role=%d mode=%d "
-      "decoded=%ux%u full_ref=%ux%u edit=%ux%u roi=%.6f,%.6f,%.6f,%.6f "
-      "native_roi=%.2fx%.2f viewport_target=%ux%u max_edge=%u render=%ux%u filter=%d "
-      "viewer_nearest_expand=%d required_decoded=%d,%d,%d,%d\n",
-      Backend::kName, static_cast<unsigned long long>(submission.metadata.presentation_request_id),
-      static_cast<int>(submission.metadata.frame_role), static_cast<int>(submission.mode),
-      geometry.decoded_extent.width, geometry.decoded_extent.height,
-      geometry.full_reference_extent.width, geometry.full_reference_extent.height,
-      geometry.edit_extent.width, geometry.edit_extent.height, view.x, view.y, view.w, view.h,
-      native_visible_width, native_visible_height, request.view.viewport_extent.width,
-      request.view.viewport_extent.height, request.resolution.max_edge,
-      geometry.render_extent.width, geometry.render_extent.height,
-      static_cast<int>(geometry.filter), nearest_viewer_expansion ? 1 : 0,
-      geometry.required_decoded_region.x, geometry.required_decoded_region.y,
-      geometry.required_decoded_region.width, geometry.required_decoded_region.height);
+  const auto& view     = request.view.visible_rect_in_edit_space;
+  const auto& geometry = plan.geometry;
+  ALCEDO_LOG_DEBUG(RenderRoi)
+      << "gpu-dag-geometry backend=" << Backend::kName
+      << " request=" << submission.metadata.presentation_request_id
+      << " role=" << static_cast<int>(submission.metadata.frame_role)
+      << " mode=" << static_cast<int>(submission.mode)
+      << " decoded=" << geometry.decoded_extent.width << "x" << geometry.decoded_extent.height
+      << " full_ref=" << geometry.full_reference_extent.width << "x"
+      << geometry.full_reference_extent.height << " edit=" << geometry.edit_extent.width << "x"
+      << geometry.edit_extent.height << " roi=" << view.x << "," << view.y << "," << view.w << ","
+      << view.h << " native_roi=" << static_cast<float>(geometry.edit_extent.width) * view.w << "x"
+      << static_cast<float>(geometry.edit_extent.height) * view.h
+      << " viewport_target=" << request.view.viewport_extent.width << "x"
+      << request.view.viewport_extent.height << " max_edge=" << request.resolution.max_edge
+      << " render=" << geometry.render_extent.width << "x" << geometry.render_extent.height
+      << " filter=" << static_cast<int>(geometry.filter) << " viewer_nearest_expand="
+      << (!view.IsFullFrame() &&
+                  (request.view.viewport_extent.width > geometry.render_extent.width ||
+                   request.view.viewport_extent.height > geometry.render_extent.height)
+              ? 1
+              : 0)
+      << " required_decoded=" << geometry.required_decoded_region.x << ","
+      << geometry.required_decoded_region.y << "," << geometry.required_decoded_region.width << ","
+      << geometry.required_decoded_region.height;
 }
 
 }  // namespace detail
@@ -121,6 +120,11 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
           "Renderer: a Mask coverage probe needs an interactive render with a frame sink and a "
           "coverage sink");
     }
+  }
+  if (request.curve_input_histogram.has_value() &&
+      (!interactive || request.curve_input_histogram->sink == nullptr)) {
+    throw std::invalid_argument(
+        "Renderer: a curve input histogram needs an interactive render and a histogram sink");
   }
   if (interactive) {
     const auto key = RenderBindingKey::Of(snapshot);
@@ -247,13 +251,18 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
   if (request.mask_coverage_probe.has_value()) {
     probe.emplace(MaskCoverageProbeRecord<Backend>{*request.mask_coverage_probe});
   }
+  std::optional<CurveInputHistogramRecord> histogram;
+  if (request.curve_input_histogram.has_value()) {
+    histogram.emplace(CurveInputHistogramRecord{request.curve_input_histogram->grade_id});
+  }
   GraphValueId output_id;
   try {
     diag::PreviewCpuInterval encode(diag::PreviewCpuStage::Encode);
     output_id = render_device->Execute(plan, prepared, document, false,
                                        interactive ? TransientAllocationPolicy::SessionPacked
                                                    : TransientAllocationPolicy::ExactRelease,
-                                       persistence, probe.has_value() ? &*probe : nullptr);
+                                       persistence, probe.has_value() ? &*probe : nullptr,
+                                       histogram.has_value() ? &*histogram : nullptr);
   } catch (...) {
     // PlanExecutor has already cancelled the render and reported the error.
     release_batch_resources_after_failure();
@@ -307,6 +316,25 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
         *request.mask_coverage_sink);
   };
 
+  // The curve input histogram follows its photo frame: same identity. A plan without the
+  // requested Grade gives a histogram with no counts, so the receiver shows no older counts.
+  const auto publish_histogram = [&]() {
+    if (!histogram.has_value()) {
+      return;
+    }
+    const auto&         metadata = request.submission.metadata;
+    CurveInputHistogram result;
+    result.grade_id                = histogram->grade_id;
+    result.image_identity          = metadata.image_identity;
+    result.session_epoch           = metadata.session_epoch;
+    result.presentation_request_id = metadata.presentation_request_id;
+    if (histogram->recorded) {
+      result.counts       = ReadCurveInputHistogramCounts(*render_device, histogram->grade_id);
+      result.sample_count = histogram->sample_count;
+    }
+    request.curve_input_histogram->sink->PublishCurveInputHistogram(std::move(result));
+  };
+
   try {
     if (request.sink != nullptr) {
       // Attach the exact resolved geometry so viewer-side Mask mapping uses the
@@ -323,6 +351,7 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
       auto host = FramePresenter<Backend>::Download(*render_device, output_id);
       finish_successful_session();
       const auto coverage = publish_probe();
+      publish_histogram();
       return {.pixels        = std::move(host),
               .geometry      = plan.geometry,
               .display       = display_config,
@@ -330,6 +359,7 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     }
     finish_successful_session();
     const auto coverage = publish_probe();
+    publish_histogram();
     return {.pixels        = std::make_shared<ImageBuffer>(),
             .geometry      = plan.geometry,
             .display       = display_config,

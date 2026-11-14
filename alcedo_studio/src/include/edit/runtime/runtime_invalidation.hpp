@@ -227,6 +227,8 @@ class RuntimeInvalidationState {
   std::map<NodeId, std::uint64_t>                   last_lut_identity_;
   ParameterRevision                                 last_sensor_revision_ = kNoParameterRevision;
   ParameterRevision last_white_balance_revision_                          = kNoParameterRevision;
+  /// DevelopDirty::ProfileTone: the profile tone stage reads it at the display transform.
+  ParameterRevision last_profile_tone_revision_                           = kNoParameterRevision;
   ParameterRevision last_drt_revision_                                    = kNoParameterRevision;
   ParameterRevision last_diffusion_revision_                              = kNoParameterRevision;
   ParameterRevision last_film_exposure_revision_                          = kNoParameterRevision;

@@ -21,6 +21,7 @@
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "display_destination_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
@@ -544,6 +545,147 @@ TEST_F(ThumbnailTests, ReleasingOneTierKeepsTheOtherConsumersPinnedTier) {
       5000);
   EXPECT_FALSE(released_row.isEmpty()) << "Releasing the last tier did not clear the row.";
   EXPECT_FALSE(backend.library()->thumbs().IsThumbnailPinned(element_id));
+}
+
+// Windows display ICC plan, W6: the store keeps the thumbnail pixels and their encoding, and the
+// provider converts them to the destination of the main window.
+TEST_F(ThumbnailTests, RequestedThumbnailIsConvertedToTheDestination) {
+  auto                      store = std::make_shared<ThumbnailImageStore>();
+  ThumbnailImageProvider    provider(store);
+  const ViewerDisplayConfig encoding{ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::GAMMA_2_2};
+  const QString             url = store->Put(7, 256, alcedo::test::GradientImage(32, 24), encoding);
+  ASSERT_FALSE(url.isEmpty());
+  const QString provider_id = url.mid(QStringLiteral("image://alcedo-thumb/").size());
+  const QImage  source      = store->Get(7, 256);
+  ASSERT_EQ(source.format(), QImage::Format_RGBA8888);
+  ASSERT_EQ(store->Encoding(7, 256), encoding);
+
+  // Without a destination the provider gives the source pixels.
+  EXPECT_EQ(provider.requestImage(provider_id, nullptr, {}), source);
+
+  const auto p3_bytes = alcedo::test::P3DisplayProfileBytes();
+  store->SetDestination(
+      alcedo::test::MakeDestination(DisplayDestinationKind::MonitorProfile, p3_bytes));
+  const QImage shown = provider.requestImage(provider_id, nullptr, {});
+  EXPECT_EQ(shown, alcedo::test::ExpectedDisplayImage(source, encoding, p3_bytes));
+  EXPECT_NE(shown, source);
+  EXPECT_EQ(store->Get(7, 256), source) << "the store keeps the source pixels";
+  EXPECT_NE(store->CurrentUrl(7, 256), url) << "a new destination gives the entry a new revision";
+
+  // An opaque image in another 8-bit format is stored as RGBA8888 with the same codes.
+  const QImage premultiplied =
+      alcedo::test::GradientImage(32, 24).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+  (void)store->Put(8, 256, premultiplied, encoding);
+  EXPECT_EQ(store->Get(8, 256).format(), QImage::Format_RGBA8888);
+  EXPECT_EQ(store->Get(8, 256), alcedo::test::GradientImage(32, 24));
+  EXPECT_EQ(store->GetForDisplay(8, 256),
+            alcedo::test::ExpectedDisplayImage(store->Get(8, 256), encoding, p3_bytes));
+
+  // Unusable and NoWindow destinations give the source pixels.
+  store->SetDestination(alcedo::test::MakeDestination(DisplayDestinationKind::Unusable));
+  EXPECT_EQ(provider.requestImage(provider_id, nullptr, {}), source);
+  store->SetDestination(alcedo::test::MakeDestination(DisplayDestinationKind::NoWindow));
+  EXPECT_EQ(provider.requestImage(provider_id, nullptr, {}), source);
+}
+
+TEST_F(ThumbnailTests, HdrThumbnailIsNotConverted) {
+  auto                   store = std::make_shared<ThumbnailImageStore>();
+  ThumbnailImageProvider provider(store);
+  store->SetDestination(alcedo::test::MakeDestination(DisplayDestinationKind::MonitorProfile,
+                                                      alcedo::test::P3DisplayProfileBytes()));
+  const ViewerDisplayConfig pq{ColorUtils::ColorSpace::REC2020, ColorUtils::EOTF::ST2084, 1000.0f};
+  const QString             url = store->Put(9, 512, alcedo::test::GradientImage(16, 16), pq);
+  ASSERT_FALSE(url.isEmpty());
+  const QImage source = store->Get(9, 512);
+  EXPECT_EQ(
+      provider.requestImage(url.mid(QStringLiteral("image://alcedo-thumb/").size()), nullptr, {}),
+      source);
+}
+
+// A destination change of the main window gives each loaded row of the grid and the filmstrip, and
+// each shown search preview, a new URL whose pixels are the new conversion. Nothing renders again.
+TEST_F(ThumbnailTests, NewDestinationPublishesNewUrlsForLoadedRows) {
+  ApplicationModuleHost backend;
+  PinAcceleratorBeforeProjectOpen(backend);
+  ASSERT_TRUE(CreateTestProject(backend));
+  auto images = CollectRawTestImages("airplane", 1);
+  if (images.empty()) {
+    images = CollectRawTestImages("still_life", 1);
+  }
+  if (images.empty()) {
+    GTEST_SKIP() << "No RAW test image available for the display destination thumbnail test.";
+  }
+  backend.import_export()->StartImport(PathsToQStringList(images));
+  WaitForImportFinished(backend);
+  ASSERT_GE(backend.library()->ShownCount(), 1);
+
+  const QVariantMap first_row = backend.library()->Thumbnails().front().toMap();
+  const auto     element_id   = static_cast<sl_element_id_t>(first_row.value("elementId").toUInt());
+  const auto     image_id     = static_cast<image_id_t>(first_row.value("imageId").toUInt());
+  constexpr uint kGridEdge    = 256;
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id),
+                                         true, kGridEdge);
+  const QVariantMap loaded_row = WaitForThumbnailRow(
+      backend, element_id,
+      [](const QVariantMap& row) {
+        return !row.value("thumbUrl").toString().isEmpty() && !row.value("thumbLoading").toBool();
+      },
+      30000);
+  ASSERT_FALSE(loaded_row.isEmpty()) << "The grid thumbnail did not load.";
+  const QString url_before = loaded_row.value("thumbUrl").toString();
+
+  auto          store      = backend.library()->thumbs().image_store();
+  const QImage  source     = store->Get(element_id, kGridEdge);
+  ASSERT_FALSE(source.isNull());
+  const auto encoding = store->Encoding(element_id, kGridEdge);
+  ASSERT_TRUE(encoding.has_value());
+  EXPECT_EQ(*encoding, ViewerDisplayConfig{}) << "the imported photo has the default DRT output";
+  ThumbnailImageProvider provider(store);
+  const auto             provider_id = [](const QString& url) {
+    return url.mid(QStringLiteral("image://alcedo-thumb/").size());
+  };
+  // Without a destination the grid shows the source pixels.
+  EXPECT_EQ(provider.requestImage(provider_id(url_before), nullptr, {}), source);
+
+  // The search palette shows the same photo.
+  QSignalSpy search_spy(backend.search(), &SearchController::SearchPreviewThumbnailUpdated);
+  backend.search()->SetSearchPreviewThumbnailVisible(static_cast<uint>(element_id),
+                                                     static_cast<uint>(image_id), true, kGridEdge);
+  ASSERT_EQ(search_spy.count(), 1);
+  EXPECT_EQ(search_spy.takeFirst().at(1).toString(), url_before);
+
+  // The main window moves to a monitor with a P3 profile (the test main has no QGuiApplication,
+  // so the destination comes without a window).
+  const auto p3_bytes = alcedo::test::P3DisplayProfileBytes();
+  QSignalSpy row_spy(backend.library(), &LibraryModule::ThumbnailUpdated);
+  backend.library()->SetDisplayDestination(
+      alcedo::test::MakeDestination(DisplayDestinationKind::MonitorProfile, p3_bytes));
+
+  const QVariantMap converted_row = WaitForThumbnailRow(
+      backend, element_id,
+      [&url_before](const QVariantMap& row) {
+        return row.value("thumbUrl").toString() != url_before;
+      },
+      1000);
+  ASSERT_FALSE(converted_row.isEmpty()) << "The loaded row kept its URL.";
+  const QString url_after = converted_row.value("thumbUrl").toString();
+  EXPECT_FALSE(converted_row.value("thumbLoading").toBool());
+  EXPECT_EQ(provider.requestImage(provider_id(url_after), nullptr, {}),
+            alcedo::test::ExpectedDisplayImage(source, *encoding, p3_bytes));
+  // No request reached the service: the row never went to loading, and the stored pixels are the
+  // same image.
+  for (const auto& arguments : row_spy) {
+    EXPECT_FALSE(arguments.at(2).toBool()) << "a new destination requested a render";
+  }
+  EXPECT_EQ(store->Get(element_id, kGridEdge).cacheKey(), source.cacheKey());
+  ASSERT_GE(search_spy.count(), 1);
+  EXPECT_EQ(search_spy.last().at(1).toString(), url_after);
+
+  backend.search()->CancelSearchPreviewThumbnails();
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id),
+                                         false, kGridEdge);
+  backend.library()->SetDisplayDestination(nullptr);
+  ProcessEvents(250);
 }
 
 }  // namespace alcedo::ui::test

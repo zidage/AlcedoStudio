@@ -4,26 +4,26 @@
 //  This file also contains material subject to the upstream notices below.
 
 /**
-* RATIO CORRECTED DEMOSAICING
-* Luis Sanz Rodríguez (luis.sanz.rodriguez(at)gmail(dot)com)
-*
-* Release 2.3 @ 171125
-*/
+ * RATIO CORRECTED DEMOSAICING
+ * Luis Sanz Rodríguez (luis.sanz.rodriguez(at)gmail(dot)com)
+ *
+ * Release 2.3 @ 171125
+ */
 
-#include "decoders/processor/operators/gpu/cuda_debayer_rcd.hpp"
-#include "decoders/processor/operators/gpu/cuda_image_ops.hpp"
+#include <cuda_runtime.h>
 
 #include <array>
 #include <cstdint>
-#include <cuda_runtime.h>
-#include <iostream>
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/core/cuda_stream_accessor.hpp>
 #include <opencv2/core/cuda_types.hpp>
 #include <sstream>
 #include <stdexcept>
 
+#include "decoders/processor/operators/gpu/cuda_debayer_rcd.hpp"
+#include "decoders/processor/operators/gpu/cuda_image_ops.hpp"
 #include "decoders/processor/operators/gpu/cuda_raw_proc_utils.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
 namespace CUDA {
@@ -41,7 +41,10 @@ constexpr int   kDirTileWidth     = kThreadsX + 2;
 constexpr int   kDirTileHeight    = kThreadsY + 2;
 constexpr int   kLpfTileWidth     = kThreadsX + 4;
 constexpr int   kLpfTileHeight    = kThreadsY + 4;
-constexpr bool  kLogRcdKernelBreakdown = true;
+// The per-stage timing waits on CUDA events; it runs only when its Debug log line can be
+// written (Debug build, and alcedo.decode.debug enabled).
+constexpr bool  kLogRcdKernelBreakdown =
+    ::alcedo::log::kCompiledMinLevel == ::alcedo::log::Level::Debug;
 
 __device__ __forceinline__ int FC(const BayerPattern2x2& pattern, const int y, const int x) {
   return pattern.rgb_fc[BayerCellIndex(y, x)];
@@ -272,25 +275,25 @@ __global__ void RCD_GreenAtRBKernel(const cv::cuda::PtrStep<float> raw,
   const int ltx = threadIdx.x + 2;
   const int lty = threadIdx.y + 2;
 
-  const float c   = raw_tile[ty][tx];
+  const float c      = raw_tile[ty][tx];
 
-  const float vm1 = raw_tile[ty - 1][tx];
-  const float vp1 = raw_tile[ty + 1][tx];
-  const float vm2 = raw_tile[ty - 2][tx];
-  const float vp2 = raw_tile[ty + 2][tx];
-  const float vm3 = raw_tile[ty - 3][tx];
-  const float vp3 = raw_tile[ty + 3][tx];
-  const float vm4 = raw_tile[ty - 4][tx];
-  const float vp4 = raw_tile[ty + 4][tx];
+  const float vm1    = raw_tile[ty - 1][tx];
+  const float vp1    = raw_tile[ty + 1][tx];
+  const float vm2    = raw_tile[ty - 2][tx];
+  const float vp2    = raw_tile[ty + 2][tx];
+  const float vm3    = raw_tile[ty - 3][tx];
+  const float vp3    = raw_tile[ty + 3][tx];
+  const float vm4    = raw_tile[ty - 4][tx];
+  const float vp4    = raw_tile[ty + 4][tx];
 
-  const float hm1 = raw_tile[ty][tx - 1];
-  const float hp1 = raw_tile[ty][tx + 1];
-  const float hm2 = raw_tile[ty][tx - 2];
-  const float hp2 = raw_tile[ty][tx + 2];
-  const float hm3 = raw_tile[ty][tx - 3];
-  const float hp3 = raw_tile[ty][tx + 3];
-  const float hm4 = raw_tile[ty][tx - 4];
-  const float hp4 = raw_tile[ty][tx + 4];
+  const float hm1    = raw_tile[ty][tx - 1];
+  const float hp1    = raw_tile[ty][tx + 1];
+  const float hm2    = raw_tile[ty][tx - 2];
+  const float hp2    = raw_tile[ty][tx + 2];
+  const float hm3    = raw_tile[ty][tx - 3];
+  const float hp3    = raw_tile[ty][tx + 3];
+  const float hm4    = raw_tile[ty][tx - 4];
+  const float hp4    = raw_tile[ty][tx + 4];
 
   const float lpf_c  = lpf_tile[lty][ltx];
   const float lpf_n2 = lpf_tile[lty - 2][ltx];
@@ -298,10 +301,14 @@ __global__ void RCD_GreenAtRBKernel(const cv::cuda::PtrStep<float> raw,
   const float lpf_w2 = lpf_tile[lty][ltx - 2];
   const float lpf_e2 = lpf_tile[lty][ltx + 2];
 
-  const float N_grad = kEps + fabsf(vm1 - vp1) + fabsf(c - vm2) + fabsf(vm1 - vm3) + fabsf(vm2 - vm4);
-  const float S_grad = kEps + fabsf(vp1 - vm1) + fabsf(c - vp2) + fabsf(vp1 - vp3) + fabsf(vp2 - vp4);
-  const float W_grad = kEps + fabsf(hm1 - hp1) + fabsf(c - hm2) + fabsf(hm1 - hm3) + fabsf(hm2 - hm4);
-  const float E_grad = kEps + fabsf(hp1 - hm1) + fabsf(c - hp2) + fabsf(hp1 - hp3) + fabsf(hp2 - hp4);
+  const float N_grad =
+      kEps + fabsf(vm1 - vp1) + fabsf(c - vm2) + fabsf(vm1 - vm3) + fabsf(vm2 - vm4);
+  const float S_grad =
+      kEps + fabsf(vp1 - vm1) + fabsf(c - vp2) + fabsf(vp1 - vp3) + fabsf(vp2 - vp4);
+  const float W_grad =
+      kEps + fabsf(hm1 - hp1) + fabsf(c - hm2) + fabsf(hm1 - hm3) + fabsf(hm2 - hm4);
+  const float E_grad =
+      kEps + fabsf(hp1 - hm1) + fabsf(c - hp2) + fabsf(hp1 - hp3) + fabsf(hp2 - hp4);
 
   const float N_est  = vm1 * (1.f + (lpf_c - lpf_n2) / (kEps + lpf_c + lpf_n2));
   const float S_est  = vp1 * (1.f + (lpf_c - lpf_s2) / (kEps + lpf_c + lpf_s2));
@@ -341,8 +348,8 @@ __global__ void RCD_RBAtRBKernel(const cv::cuda::PtrStep<float> pq_dir,
     const int tile_x0 = static_cast<int>(blockIdx.x) * blockDim.x - 2;
     const int tile_y0 = static_cast<int>(blockIdx.y) * blockDim.y - 2;
     for (int ty = threadIdx.y; ty < (kThreadsY + 4); ty += blockDim.y) {
-      const int    gy      = ClampCoord(tile_y0 + ty, height);
-      const float* g_row   = g.ptr(gy);
+      const int    gy       = ClampCoord(tile_y0 + ty, height);
+      const float* g_row    = g.ptr(gy);
       float*       tile_row = g_tile[ty];
       for (int tx = threadIdx.x; tx < (kThreadsX + 4); tx += blockDim.x) {
         tile_row[tx] = g_row[ClampCoord(tile_x0 + tx, width)];
@@ -354,15 +361,15 @@ __global__ void RCD_RBAtRBKernel(const cv::cuda::PtrStep<float> pq_dir,
     const int tile_x0 = static_cast<int>(blockIdx.x) * blockDim.x - 3;
     const int tile_y0 = static_cast<int>(blockIdx.y) * blockDim.y - 3;
     for (int ty = threadIdx.y; ty < (kThreadsY + 7); ty += blockDim.y) {
-      const int    gy       = ClampCoord(tile_y0 + ty, height);
-      const float* r_row    = r.ptr(gy);
-      const float* b_row    = b.ptr(gy);
-      float*       r_trow   = r_tile[ty];
-      float*       b_trow   = b_tile[ty];
+      const int    gy     = ClampCoord(tile_y0 + ty, height);
+      const float* r_row  = r.ptr(gy);
+      const float* b_row  = b.ptr(gy);
+      float*       r_trow = r_tile[ty];
+      float*       b_trow = b_tile[ty];
       for (int tx = threadIdx.x; tx < (kThreadsX + 7); tx += blockDim.x) {
         const int gx = ClampCoord(tile_x0 + tx, width);
-        r_trow[tx] = r_row[gx];
-        b_trow[tx] = b_row[gx];
+        r_trow[tx]   = r_row[gx];
+        b_trow[tx]   = b_row[gx];
       }
     }
   }
@@ -371,7 +378,8 @@ __global__ void RCD_RBAtRBKernel(const cv::cuda::PtrStep<float> pq_dir,
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = blockIdx.y * blockDim.y + threadIdx.y;
   if (x >= width || y >= height) return;
-  if (y < kRcdRadius || y >= height - kRcdRadius || x < kRcdRadius || x >= width - kRcdRadius) return;
+  if (y < kRcdRadius || y >= height - kRcdRadius || x < kRcdRadius || x >= width - kRcdRadius)
+    return;
 
   const int color = FC(pattern, y, x);
   if (color == 1) return;
@@ -381,14 +389,14 @@ __global__ void RCD_RBAtRBKernel(const cv::cuda::PtrStep<float> pq_dir,
 
   const int ptx = threadIdx.x + 1;
   const int pty = threadIdx.y + 1;
-  const int gtx = threadIdx.x + 2;
-  const int gty = threadIdx.y + 2;
-  const int ctx = threadIdx.x + 3;
-  const int cty = threadIdx.y + 3;
+  const int   gtx                       = threadIdx.x + 2;
+  const int   gty                       = threadIdx.y + 2;
+  const int   ctx                       = threadIdx.x + 3;
+  const int   cty                       = threadIdx.y + 3;
 
-  const float PQ_c     = pq_tile[pty][ptx];
+  const float PQ_c                      = pq_tile[pty][ptx];
   const float PQ_n     = 0.25f * (pq_tile[pty - 1][ptx - 1] + pq_tile[pty - 1][ptx + 1] +
-                                 pq_tile[pty + 1][ptx - 1] + pq_tile[pty + 1][ptx + 1]);
+                              pq_tile[pty + 1][ptx - 1] + pq_tile[pty + 1][ptx + 1]);
   const float PQ_disc  = (fabsf(0.5f - PQ_c) < fabsf(0.5f - PQ_n)) ? PQ_n : PQ_c;
 
   const float g_c      = g_tile[gty][gtx];
@@ -408,23 +416,23 @@ __global__ void RCD_RBAtRBKernel(const cv::cuda::PtrStep<float> pq_dir,
   const float g_sw2    = g_tile[gty + 2][gtx - 2];
   const float g_se2    = g_tile[gty + 2][gtx + 2];
 
-  const float NW_grad  = kEps + fabsf(ch_nw1 - ch_se1) + fabsf(ch_nw1 - ch_nw3) + fabsf(g_c - g_nw2);
-  const float NE_grad  = kEps + fabsf(ch_ne1 - ch_sw1) + fabsf(ch_ne1 - ch_ne3) + fabsf(g_c - g_ne2);
-  const float SW_grad  = kEps + fabsf(ch_sw1 - ch_ne1) + fabsf(ch_sw1 - ch_sw3) + fabsf(g_c - g_sw2);
-  const float SE_grad  = kEps + fabsf(ch_se1 - ch_nw1) + fabsf(ch_se1 - ch_se3) + fabsf(g_c - g_se2);
+  const float NW_grad = kEps + fabsf(ch_nw1 - ch_se1) + fabsf(ch_nw1 - ch_nw3) + fabsf(g_c - g_nw2);
+  const float NE_grad = kEps + fabsf(ch_ne1 - ch_sw1) + fabsf(ch_ne1 - ch_ne3) + fabsf(g_c - g_ne2);
+  const float SW_grad = kEps + fabsf(ch_sw1 - ch_ne1) + fabsf(ch_sw1 - ch_sw3) + fabsf(g_c - g_sw2);
+  const float SE_grad = kEps + fabsf(ch_se1 - ch_nw1) + fabsf(ch_se1 - ch_se3) + fabsf(g_c - g_se2);
 
-  const float g_nw1    = g_tile[gty - 1][gtx - 1];
-  const float g_ne1    = g_tile[gty - 1][gtx + 1];
-  const float g_sw1    = g_tile[gty + 1][gtx - 1];
-  const float g_se1    = g_tile[gty + 1][gtx + 1];
+  const float g_nw1   = g_tile[gty - 1][gtx - 1];
+  const float g_ne1   = g_tile[gty - 1][gtx + 1];
+  const float g_sw1   = g_tile[gty + 1][gtx - 1];
+  const float g_se1   = g_tile[gty + 1][gtx + 1];
 
-  const float NW_est   = ch_nw1 - g_nw1;
-  const float NE_est   = ch_ne1 - g_ne1;
-  const float SW_est   = ch_sw1 - g_sw1;
-  const float SE_est   = ch_se1 - g_se1;
+  const float NW_est  = ch_nw1 - g_nw1;
+  const float NE_est  = ch_ne1 - g_ne1;
+  const float SW_est  = ch_sw1 - g_sw1;
+  const float SE_est  = ch_se1 - g_se1;
 
-  const float P_est    = (NW_grad * SE_est + SE_grad * NW_est) / (NW_grad + SE_grad);
-  const float Q_est    = (NE_grad * SW_est + SW_grad * NE_est) / (NE_grad + SW_grad);
+  const float P_est   = (NW_grad * SE_est + SE_grad * NW_est) / (NW_grad + SE_grad);
+  const float Q_est   = (NE_grad * SW_est + SW_grad * NE_est) / (NE_grad + SW_grad);
 
   const float out_val =
       ClampRcdOutput(g_c + (1.f - PQ_disc) * P_est + PQ_disc * Q_est, clamp_high);
@@ -463,8 +471,8 @@ __global__ void RCD_RBAtGKernel(const cv::cuda::PtrStep<float> vh_dir,
     const int tile_x0 = static_cast<int>(blockIdx.x) * blockDim.x - 2;
     const int tile_y0 = static_cast<int>(blockIdx.y) * blockDim.y - 2;
     for (int ty = threadIdx.y; ty < (kThreadsY + 4); ty += blockDim.y) {
-      const int    gy      = ClampCoord(tile_y0 + ty, height);
-      const float* g_row   = g.ptr(gy);
+      const int    gy       = ClampCoord(tile_y0 + ty, height);
+      const float* g_row    = g.ptr(gy);
       float*       tile_row = g_tile[ty];
       for (int tx = threadIdx.x; tx < (kThreadsX + 4); tx += blockDim.x) {
         tile_row[tx] = g_row[ClampCoord(tile_x0 + tx, width)];
@@ -476,15 +484,15 @@ __global__ void RCD_RBAtGKernel(const cv::cuda::PtrStep<float> vh_dir,
     const int tile_x0 = static_cast<int>(blockIdx.x) * blockDim.x - 3;
     const int tile_y0 = static_cast<int>(blockIdx.y) * blockDim.y - 3;
     for (int ty = threadIdx.y; ty < (kThreadsY + 7); ty += blockDim.y) {
-      const int    gy      = ClampCoord(tile_y0 + ty, height);
-      const float* r_row   = r.ptr(gy);
-      const float* b_row   = b.ptr(gy);
-      float*       r_trow  = r_tile[ty];
-      float*       b_trow  = b_tile[ty];
+      const int    gy     = ClampCoord(tile_y0 + ty, height);
+      const float* r_row  = r.ptr(gy);
+      const float* b_row  = b.ptr(gy);
+      float*       r_trow = r_tile[ty];
+      float*       b_trow = b_tile[ty];
       for (int tx = threadIdx.x; tx < (kThreadsX + 7); tx += blockDim.x) {
         const int gx = ClampCoord(tile_x0 + tx, width);
-        r_trow[tx] = r_row[gx];
-        b_trow[tx] = b_row[gx];
+        r_trow[tx]   = r_row[gx];
+        b_trow[tx]   = b_row[gx];
       }
     }
   }
@@ -493,30 +501,30 @@ __global__ void RCD_RBAtGKernel(const cv::cuda::PtrStep<float> vh_dir,
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = blockIdx.y * blockDim.y + threadIdx.y;
   if (x >= width || y >= height) return;
-  if (y < kRcdRadius || y >= height - kRcdRadius || x < kRcdRadius || x >= width - kRcdRadius) return;
+  if (y < kRcdRadius || y >= height - kRcdRadius || x < kRcdRadius || x >= width - kRcdRadius)
+    return;
 
   const int color = FC(pattern, y, x);
   if (color != 1) return;
 
-  const int vtx = threadIdx.x + 1;
-  const int vty = threadIdx.y + 1;
-  const int gtx = threadIdx.x + 2;
-  const int gty = threadIdx.y + 2;
-  const int ctx = threadIdx.x + 3;
-  const int cty = threadIdx.y + 3;
+  const int   vtx        = threadIdx.x + 1;
+  const int   vty        = threadIdx.y + 1;
+  const int   gtx        = threadIdx.x + 2;
+  const int   gty        = threadIdx.y + 2;
+  const int   ctx        = threadIdx.x + 3;
+  const int   cty        = threadIdx.y + 3;
 
   const float VH_central = vh_tile[vty][vtx];
   const float VH_neigh   = 0.25f * (vh_tile[vty - 1][vtx - 1] + vh_tile[vty - 1][vtx + 1] +
-                                   vh_tile[vty + 1][vtx - 1] + vh_tile[vty + 1][vtx + 1]);
-  const float VH_disc =
-      (fabsf(0.5f - VH_central) < fabsf(0.5f - VH_neigh)) ? VH_neigh : VH_central;
+                                  vh_tile[vty + 1][vtx - 1] + vh_tile[vty + 1][vtx + 1]);
+  const float VH_disc = (fabsf(0.5f - VH_central) < fabsf(0.5f - VH_neigh)) ? VH_neigh : VH_central;
 
-  const float g_c = g_tile[gty][gtx];
+  const float g_c     = g_tile[gty][gtx];
 
-  const float g_m2 = g_tile[gty - 2][gtx];
-  const float g_p2 = g_tile[gty + 2][gtx];
-  const float g_l2 = g_tile[gty][gtx - 2];
-  const float g_r2 = g_tile[gty][gtx + 2];
+  const float g_m2    = g_tile[gty - 2][gtx];
+  const float g_p2    = g_tile[gty + 2][gtx];
+  const float g_l2    = g_tile[gty][gtx - 2];
+  const float g_r2    = g_tile[gty][gtx + 2];
 
   // --- R @ G ---
   {
@@ -605,8 +613,11 @@ void RunRcdKernels(const cv::cuda::GpuMat& raw, const BayerPattern2x2& pattern,
                                                       "RAW CUDA RCD merge"};
   const size_t stage_count = merged_output == nullptr ? 4 : 5;
   std::array<cudaEvent_t, 6> stage_events{};
+  const bool                           log_breakdown =
+      kLogRcdKernelBreakdown &&
+      ::alcedo::log::IsEnabled(::alcedo::log::Level::Debug, ::alcedo::log::Category::Decode);
 
-  if constexpr (kLogRcdKernelBreakdown) {
+  if (log_breakdown) {
     for (cudaEvent_t& event : stage_events) {
       CUDA_CHECK(cudaEventCreate(&event));
     }
@@ -620,28 +631,28 @@ void RunRcdKernels(const cv::cuda::GpuMat& raw, const BayerPattern2x2& pattern,
   RCD_InitAndVHKernel<<<blocks, threads, 0, cuda_stream>>>(raw, r, g, b, vh_dir, pq_dir, width,
                                                             height, pattern);
   CUDA_CHECK(cudaGetLastError());
-  if constexpr (kLogRcdKernelBreakdown) {
+  if (log_breakdown) {
     CUDA_CHECK(cudaEventRecord(stage_events[1], cuda_stream));
   }
 
   RCD_GreenAtRBKernel<<<blocks, threads, 0, cuda_stream>>>(raw, vh_dir, g, width, height, pattern,
                                                             clamp_high);
   CUDA_CHECK(cudaGetLastError());
-  if constexpr (kLogRcdKernelBreakdown) {
+  if (log_breakdown) {
     CUDA_CHECK(cudaEventRecord(stage_events[2], cuda_stream));
   }
 
   RCD_RBAtRBKernel<<<blocks, threads, 0, cuda_stream>>>(pq_dir, g, r, b, width, height, pattern,
                                                          clamp_high);
   CUDA_CHECK(cudaGetLastError());
-  if constexpr (kLogRcdKernelBreakdown) {
+  if (log_breakdown) {
     CUDA_CHECK(cudaEventRecord(stage_events[3], cuda_stream));
   }
 
   RCD_RBAtGKernel<<<blocks, threads, 0, cuda_stream>>>(vh_dir, g, r, b, width, height, pattern,
                                                         clamp_high);
   CUDA_CHECK(cudaGetLastError());
-  if constexpr (kLogRcdKernelBreakdown) {
+  if (log_breakdown) {
     CUDA_CHECK(cudaEventRecord(stage_events[4], cuda_stream));
   }
 
@@ -653,7 +664,7 @@ void RunRcdKernels(const cv::cuda::GpuMat& raw, const BayerPattern2x2& pattern,
 
   if (merged_output != nullptr) {
     MergeRGB(r_valid, g_valid, b_valid, *merged_output, &stream);
-    if constexpr (kLogRcdKernelBreakdown) {
+    if (log_breakdown) {
       CUDA_CHECK(cudaEventRecord(stage_events[5], cuda_stream));
     }
   } else {
@@ -662,12 +673,11 @@ void RunRcdKernels(const cv::cuda::GpuMat& raw, const BayerPattern2x2& pattern,
     workspace.b = std::move(b_valid);
   }
 
-  if constexpr (kLogRcdKernelBreakdown) {
+  if (log_breakdown) {
     const size_t last_event = merged_output == nullptr ? 4 : 5;
     CUDA_CHECK(cudaEventSynchronize(stage_events[last_event]));
 
     std::ostringstream oss;
-    oss << "[LOG] ";
     float subtotal_ms = 0.0f;
     for (size_t i = 0; i < stage_count; ++i) {
       float elapsed_ms = 0.0f;
@@ -679,7 +689,7 @@ void RunRcdKernels(const cv::cuda::GpuMat& raw, const BayerPattern2x2& pattern,
       subtotal_ms += elapsed_ms;
     }
     oss << " | RAW CUDA RCD subtotal=" << subtotal_ms << " ms";
-    std::cout << oss.str() << '\n';
+    ALCEDO_LOG_DEBUG(Decode) << oss.str();
 
     for (cudaEvent_t& event : stage_events) {
       cudaEventDestroy(event);
@@ -724,5 +734,5 @@ void Bayer2x2ToPlanarRGB_RCD(const cv::cuda::GpuMat& raw, const BayerPattern2x2&
     active_stream.waitForCompletion();
   }
 }
-}
-}
+}  // namespace CUDA
+}  // namespace alcedo

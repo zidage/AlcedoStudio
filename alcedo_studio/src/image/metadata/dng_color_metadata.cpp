@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "camera_name_match.hpp"
+#include "image/dng_camera_matrix.hpp"
 #include "image/dng_color_profile_import.hpp"
 #include "metadata_values.hpp"
 #include "read_only_file_mapping.hpp"
@@ -119,48 +120,6 @@ auto ReadExifUnsignedIntTag(const Exiv2::ExifData& exif_data, const char* key, u
     } catch (...) {
       return false;
     }
-  }
-}
-
-auto CalibrationIlluminantToCct(const uint32_t illuminant) -> double {
-  switch (illuminant) {
-    case 1:   // Daylight
-    case 21:  // D65
-      return 6504.0;
-    case 2:  // Fluorescent
-      return 4150.0;
-    case 3:   // Tungsten
-    case 17:  // Standard Light A
-      return 2856.0;
-    case 4:  // Flash
-    case 9:  // Fine weather
-      return 5500.0;
-    case 10:  // Cloudy
-      return 6500.0;
-    case 11:  // Shade
-      return 7500.0;
-    case 12:  // Daylight fluorescent
-      return 6430.0;
-    case 13:  // Day white fluorescent
-      return 5300.0;
-    case 14:  // Cool white fluorescent
-      return 4230.0;
-    case 15:  // White fluorescent
-      return 3450.0;
-    case 18:  // Standard Light B
-      return 4874.0;
-    case 19:  // Standard Light C
-      return 6774.0;
-    case 20:  // D55
-      return 5503.0;
-    case 22:  // D75
-      return 7504.0;
-    case 23:  // D50
-      return 5003.0;
-    case 24:  // ISO studio tungsten
-      return 3200.0;
-    default:
-      return std::numeric_limits<double>::quiet_NaN();
   }
 }
 

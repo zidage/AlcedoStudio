@@ -12,7 +12,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <limits>
 #include <mutex>
 #include <opencv2/core/mat.hpp>
@@ -27,6 +26,7 @@
 #include "json.hpp"
 #include "type/hash_type.hpp"
 #include "utils/cache/lru_cache.hpp"
+#include "utils/logging/log.hpp"
 #include "utils/queue/queue.hpp"
 
 namespace alcedo {
@@ -611,9 +611,9 @@ void ThumbnailDiskCacheService::WriterThreadLoop() {
     try {
       index_changed = WriteEntry(task) || index_changed;
     } catch (const std::exception& e) {
-      std::cerr << "[ThumbnailDiskCache] Failed to write cache entry: " << e.what() << '\n';
+      ALCEDO_LOG_WARN(Thumbnail) << "ThumbnailDiskCache: failed to write cache entry: " << e.what();
     } catch (...) {
-      std::cerr << "[ThumbnailDiskCache] Failed to write cache entry\n";
+      ALCEDO_LOG_WARN(Thumbnail) << "ThumbnailDiskCache: failed to write cache entry";
     }
     // Save once per burst of writes, not once per thumbnail.
     if (--state_->pending_writes_ == 0 && index_changed) {
@@ -757,9 +757,9 @@ void ThumbnailDiskCacheService::FlushMetadata() {
   try {
     FlushMetadataOrThrow();
   } catch (const std::exception& e) {
-    std::cerr << "[ThumbnailDiskCache] Failed to save cache index: " << e.what() << '\n';
+    ALCEDO_LOG_WARN(Thumbnail) << "ThumbnailDiskCache: failed to save cache index: " << e.what();
   } catch (...) {
-    std::cerr << "[ThumbnailDiskCache] Failed to save cache index\n";
+    ALCEDO_LOG_WARN(Thumbnail) << "ThumbnailDiskCache: failed to save cache index";
   }
 }
 

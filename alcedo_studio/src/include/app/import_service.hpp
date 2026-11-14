@@ -46,6 +46,9 @@ struct ImportOptions {
   /// Content categories that import accepts. A file of another category is counted as
   /// excluded_type_. Folder import passes the dialog selection; the file picker allows all.
   ImportCategoryMask allowed_categories_               = kAllImportCategories;
+  /// Paths (native form) that import accepts in every category, whatever allowed_categories_
+  /// says: the dropped files of a Library drop that also holds folders (issue #757).
+  ImportPathSet      any_category_paths_{};
 };
 
 struct ImportProgress {

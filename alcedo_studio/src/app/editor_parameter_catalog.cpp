@@ -1384,12 +1384,18 @@ auto ColorWheelValidate(const json& ui_value, std::string* error) -> bool {
 // ---------------------------------------------------------------------------------------------
 // curve and lut: the UI value is the Model JSON.
 
+/// The reset value has the four curves, because a curve write leaves a curve that it does not
+/// have as it is.
 auto CurveUiDefault() -> json {
-  json points = json::array();
-  for (const auto& point : CurvePayload{}.points) {
-    points.push_back({{"x", static_cast<double>(point.x)}, {"y", static_cast<double>(point.y)}});
+  json result = json::object();
+  for (const auto channel : kCurveChannels) {
+    json points = json::array();
+    for (const auto& point : IdentityCurvePoints()) {
+      points.push_back({{"x", static_cast<double>(point.x)}, {"y", static_cast<double>(point.y)}});
+    }
+    result[std::string{CurveChannelKey(channel)}] = std::move(points);
   }
-  return {{"points", std::move(points)}};
+  return result;
 }
 
 auto CurveModelToUi(const json& model_json, std::string* error) -> std::optional<json> {
@@ -1612,8 +1618,14 @@ auto Table() -> const std::array<EditorParameterCatalogEntry, 25>& {
                                &ColorWheelUiToModel, nullptr),
                    &ColorWheelValidate),
       ModelEntry("curve", {}, EditorAdjustmentField::Curve, "tone",
-                 "{\"points\": [{\"x\": number, \"y\": number}, ...]}: at least two control "
-                 "points in the unit square",
+                 "{\"points\": [{\"x\": number, \"y\": number}, ...], \"red\": [...], "
+                 "\"green\": [...], \"blue\": [...]}: the RGB curve (points) and the red, green, "
+                 "and blue curves, each 2 to 16 control points in the unit square with x "
+                 "strictly increasing. A write needs one or more of the four keys and leaves "
+                 "the other curves as they are; in a write, the value of a key can be the id of "
+                 "a Tone Curve preset (curve.presets), which writes the points of the preset. "
+                 "The render applies the RGB curve to each channel, then the curve of the "
+                 "channel",
                  &CurveUiDefault, &CurveModelToUi),
       ModelEntry("lut", "ocio_lmt", EditorAdjustmentField::Lut, "lut",
                  "{\"cube_path\": string} or a tagged {\"reference\": object}, and optional "

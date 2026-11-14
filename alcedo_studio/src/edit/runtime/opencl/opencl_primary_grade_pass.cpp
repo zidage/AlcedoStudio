@@ -325,6 +325,64 @@ struct OpenClGradeOps {
                                height);
   }
 
+  static void DispatchCurveInputHistogram(OpenClRenderDevice& device, const FrameSceneBinding& src,
+                                          const OpenClBackend::Buffer& commands,
+                                          std::uint32_t                command_count,
+                                          OpenClBackend::Buffer& counts, std::uint32_t width,
+                                          std::uint32_t height, std::uint32_t step) {
+    const auto sampled_width = CurveInputHistogramSampledLength(width, step);
+    const auto sample_count  = static_cast<std::uint32_t>(
+        static_cast<std::uint64_t>(sampled_width) * CurveInputHistogramSampledLength(height, step));
+    if (sample_count == 0U) {
+      return;
+    }
+    auto kernel = OpenClKernelCache::Instance().GetKernel(
+        OpenCL::GpuDag::kPrimaryGradeProgramName,
+        OpenCL::GpuDag::kPrimaryGradeCurveInputHistogramKernelName);
+    auto& backend = device.Workspace().Device();
+    BindOpenClSceneView(kernel, 0, OpenClBindScene(device, src), backend,
+                        "OpenCL curve input histogram source", OpenClSceneArgAccess::Read);
+    CheckOpenCl(clSetKernelArg(kernel, 3, sizeof(width), &width),
+                "OpenCL curve input histogram width");
+    CheckOpenCl(clSetKernelArg(kernel, 4, sizeof(step), &step),
+                "OpenCL curve input histogram step");
+    CheckOpenCl(clSetKernelArg(kernel, 5, sizeof(sampled_width), &sampled_width),
+                "OpenCL curve input histogram sampled width");
+    CheckOpenCl(clSetKernelArg(kernel, 6, sizeof(sample_count), &sample_count),
+                "OpenCL curve input histogram sample count");
+    const auto params_mem   = device.Workspace().Parameters().DeviceBuffer().Native();
+    const auto commands_mem = commands.Native();
+    CheckOpenCl(clSetKernelArg(kernel, 7, sizeof(cl_mem), &params_mem),
+                "OpenCL curve input histogram parameter argument");
+    CheckOpenCl(clSetKernelArg(kernel, 8, sizeof(cl_mem), &commands_mem),
+                "OpenCL curve input histogram command argument");
+    CheckOpenCl(clSetKernelArg(kernel, 9, sizeof(command_count), &command_count),
+                "OpenCL curve input histogram command count");
+    // The adjustments before the Curve never read the LUT; the kernel still needs a valid buffer.
+    const auto lut_mem = backend.DummyLut().native;
+    if (lut_mem == nullptr) {
+      throw std::runtime_error("ExecuteOpenClPrimaryGrade: LUT resource is missing");
+    }
+    CheckOpenCl(clSetKernelArg(kernel, 10, sizeof(cl_mem), &lut_mem),
+                "OpenCL curve input histogram LUT argument");
+    const auto counts_mem = counts.Native();
+    CheckOpenCl(clSetKernelArg(kernel, 11, sizeof(cl_mem), &counts_mem),
+                "OpenCL curve input histogram counts argument");
+
+    constexpr std::size_t kGroup     = 256;
+    constexpr std::size_t kMaxGroups = 128;
+    const std::size_t     groups     = std::min<std::size_t>(
+        (static_cast<std::size_t>(sample_count) + kGroup - 1) / kGroup, kMaxGroups);
+    const std::size_t local[1]  = {kGroup};
+    const std::size_t global[1] = {groups * kGroup};
+    cl_event          event     = nullptr;
+    CheckOpenCl(clEnqueueNDRangeKernel(backend.NativeQueue(), kernel, 1, nullptr, global, local, 0,
+                                       nullptr, &event),
+                "OpenCL curve input histogram enqueue");
+    NoteOpenClEnqueueNdRange();
+    backend.TrackKernelEvent(device.CommandContext(), event);
+  }
+
   static auto AcquireHorizontalScratch(OpenClRenderDevice& device, std::uint32_t width,
                                        std::uint32_t height) -> HorizontalScratch {
     return AcquireOpenClScratch(device.Workspace(), width, height);
@@ -366,9 +424,10 @@ struct OpenClGradeOps {
 auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                const PreparedRawInput& prepared, const PipelineDocument& document,
                                const CompiledGradeNode& compiled_grade_node,
-                               const FrameSceneBinding& scene) -> OpenClPrimaryGradeResult {
-  const auto executed = GradeExecutor<OpenClGradeOps>::Execute(device, plan, prepared, document,
-                                                              compiled_grade_node, scene);
+                               const FrameSceneBinding& scene, CurveInputHistogramRecord* histogram)
+    -> OpenClPrimaryGradeResult {
+  const auto executed = GradeExecutor<OpenClGradeOps>::Execute(
+      device, plan, prepared, document, compiled_grade_node, scene, histogram);
   OpenClPrimaryGradeResult result;
   result.output                                 = executed.output;
   result.output_binding                         = executed.output_binding;
@@ -385,8 +444,8 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
 }
 
 auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                               const PreparedRawInput& prepared, const PipelineDocument& document)
-    -> OpenClPrimaryGradeResult {
+                               const PreparedRawInput& prepared, const PipelineDocument& document,
+                               CurveInputHistogramRecord* histogram) -> OpenClPrimaryGradeResult {
   if (plan.grade_nodes.empty()) {
     throw std::runtime_error("ExecuteOpenClPrimaryGrade: plan has no Color Grade");
   }
@@ -396,7 +455,10 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
   FrameSceneBinding scene = FrameSceneBinding::CachedImage(plan.develop_output);
   OpenClPrimaryGradeResult last{};
   for (const auto& compiled_grade : plan.grade_nodes) {
-    last  = ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade, scene);
+    auto* grade_histogram =
+        histogram != nullptr && histogram->grade_id == compiled_grade.node_id ? histogram : nullptr;
+    last  = ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade, scene,
+                                      grade_histogram);
     scene = last.output_binding;
   }
   return last;
