@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="520" height="360" viewBox="0 0 520 360" font-family="Helvetica, Arial, sans-serif" font-size="11">
 <rect width="520" height="360" fill="white"/>
-<text x="58" y="18" font-size="13" font-weight="bold">Default (Film-like): neutral axis through ACES 2.0</text>
+<text x="58" y="18" font-size="13" font-weight="bold">Cl. Digit: neutral axis through ACES 2.0</text>
 <rect x="58" y="30" width="446" height="286" fill="none" stroke="#999"/>
 <line x1="95.2" y1="30" x2="95.2" y2="316" stroke="#e4e4e4"/>
 <text x="95.2" y="330" text-anchor="middle">-6</text>

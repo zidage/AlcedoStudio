@@ -13,7 +13,7 @@ Fit sources:
     script runs ToneCurvePresetFilmSourceTest (--film-test) and reads its lines.
   - Soft, Medium, and Strong contrast: S curves around 18% grey on the curve axis.
 
-Default (Film-like) is placed by hand (issue #914): one S curve with a few points on the EV axis
+Cl. Digit is placed by hand (issue #914): one S curve with a few points on the EV axis
 (HAND_PRESETS). The script converts the points to the curve axis and reports the display codes it
 gives through ACES 2.0 next to the ACR3 default tone curve of the DNG SDK, the 1025-entry table
 that RawTherapee uses for an Adobe profile without a tone curve (rtengine/dcp.cc). Pass that file
@@ -65,7 +65,7 @@ FILM_FIRST_EV, FILM_STEP_EV, FILM_COUNT = -12.0, 0.0625, 385
 CONTRAST_SHAPES = {"soft_contrast": 1.15, "medium_contrast": 1.3, "strong_contrast": 1.5}
 CONTRAST_WIDTH_STOPS = 3.0
 # Presets placed by hand (#914): inner points as (input, output) in EV from 18% grey on the curve
-# axis. The curve also has the end points (0, 0) and (1, AXIS_AT_PEAK). Default (Film-like): one S
+# axis. The curve also has the end points (0, 0) and (1, AXIS_AT_PEAK). Cl. Digit: one S
 # with a convex toe below the identity line, the steepest slope between +2 and +4 EV, and a
 # concave shoulder that reaches the display peak at x = 1.
 HAND_PRESETS = {
@@ -80,7 +80,7 @@ PRESETS = [
     ("soft_contrast", "Soft Contrast", "Contrast", "contrast"),
     ("medium_contrast", "Medium Contrast", "Contrast", "contrast"),
     ("strong_contrast", "Strong Contrast", "Contrast", "contrast"),
-    ("film_like", "Default (Film-like)", "Rendering", "hand"),
+    ("film_like", "Cl. Digit", "Rendering", "hand"),
     ("kodak_2383", "Kodak 2383", "Film", "film"),
     ("fuji_velvia_50", "Velvia 50", "Film", "film"),
     ("kodak_ektachrome_e100", "Ektachrome E100", "Film", "film"),
@@ -294,7 +294,7 @@ def target_from_axis(curve) -> Target:
     return Target(curve, display)
 
 
-# Curve output at which N reaches the display peak: the end point of Default (Film-like).
+# Curve output at which N reaches the display peak: the end point of Cl. Digit.
 AXIS_AT_PEAK = float(acescc_from_linear(np.array([SCENE_AT_PEAK]))[0])
 
 

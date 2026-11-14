@@ -4,7 +4,7 @@
 
 // Tone Curve presets (#891, tone_curve_preset_study.md): the point rules, 18% grey, monotony, the
 // neutral axis that the render gives with each fitted preset against the source tone of the
-// study, and the S shape of Default (Film-like), placed by hand (#914).
+// study, and the S shape of Cl. Digit, placed by hand (#914).
 
 #include <gtest/gtest.h>
 
@@ -37,9 +37,9 @@ constexpr float  kPanelPointSpacing    = 0.001f;
 /// Allowance of the rendered axis over the recorded fit error: float evaluation and the product
 /// neutral response against the tone scale of the study.
 constexpr double kRenderAllowanceCodes = 0.05;
-/// Largest number of points of Default (Film-like), as the auto-matched curve of RawTherapee.
+/// Largest number of points of Cl. Digit, as the auto-matched curve of RawTherapee.
 constexpr std::size_t kFilmLikeMaxPoints    = 8;
-/// Curve output at which ACES 2.0 reaches the display peak: the end point of Default (Film-like).
+/// Curve output at which ACES 2.0 reaches the display peak: the end point of Cl. Digit.
 constexpr float       kAxisAtPeak           = 0.95434f;
 /// Slope steps of the S shape check on the curve axis.
 constexpr int         kSlopeSteps           = 1024;
@@ -72,8 +72,8 @@ TEST(ToneCurvePresetTest, MenuListsTheEightPresetsWithUniqueIds) {
   EXPECT_EQ(presets.front().PointList(), IdentityCurvePoints());
   EXPECT_EQ(FindToneCurvePreset("no_such_preset"), nullptr);
   ASSERT_NE(FindToneCurvePreset(kFilmLikeToneCurvePresetId), nullptr);
-  EXPECT_EQ(FindToneCurvePreset(kFilmLikeToneCurvePresetId)->display_name, "Default (Film-like)");
-  // #914: Filmic gave nearly the same curve as Default (Film-like) and left the menu.
+  EXPECT_EQ(FindToneCurvePreset(kFilmLikeToneCurvePresetId)->display_name, "Cl. Digit");
+  // #914: Filmic gave nearly the same curve as Cl. Digit and left the menu.
   EXPECT_EQ(FindToneCurvePreset("filmic"), nullptr);
 }
 
@@ -202,7 +202,7 @@ TEST(ToneCurvePresetTest, RenderedNeutralAxisAgreesWithTheStudySourceToneWithinT
   // The grade stage applies the curve on the ACEScc axis and ACES 2.0 renders the result: the
   // display light of a neutral at each axis sample, against the source tone of the study.
   const auto response = ProfileToneNeutralResponse::Resolve(DrtMethod::Aces20);
-  // Linear and Default (Film-like) have no fit.
+  // Linear and Cl. Digit have no fit.
   ASSERT_EQ(tone_curve_study::kPresetStudies.size(), ToneCurvePresets().size() - 2);
   for (const auto& study : tone_curve_study::kPresetStudies) {
     SCOPED_TRACE(std::string{study.preset_id});

@@ -5,7 +5,7 @@ Date: 2026-11-13
 Status: TC1 to TC6 complete. #900 (Shadows and Highlights before the Curve) complete. #901 (right
 click removes a point) complete. #902 (quiet curve histogram) complete. #903 (dense text) complete.
 #910 (Film-like and Filmic toe ends at (0, 0)) complete. #911 (DCP profile curve loaded into the
-RGB curve) complete. #914 (Default (Film-like) placed by hand, Filmic removed) complete.
+RGB curve) complete. #914 (Cl. Digit placed by hand, Filmic removed) complete.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -33,7 +33,7 @@ the control of the RawTherapee curve editor and a modern look:
 - Four curves: RGB (the current curve), R, G, and B.
 - A preset menu: contrast shapes, the Adobe default tone curve ("Film-like"), the darktable filmic
   shape, and the tone of Kodak 2383, Velvia 50, and Ektachrome E100. Since #914: contrast shapes,
-  Default (Film-like) placed by hand, and the three films.
+  Cl. Digit placed by hand, and the three films.
 - The render applies the same spline that the panel draws, on CUDA, OpenCL, and Metal.
 - A new reusable plot pane draws the plot. The Tone Curve section is its only user in this work.
 
@@ -1196,7 +1196,7 @@ Status: complete. Issue [#911](https://github.com/zidage/AlcedoStudio/issues/911
 | `EditorCameraProfileListModelTest`, `EditorPanelProjectionTest`, `EditorRawDecodePanelQmlTest`, `ToneCurvePresetTest` | 15, 14, 10, 10 passed |
 | `GpuDagOpenClGradeTest` (grade, film print, diffusion fixtures), `GpuDagCudaDrtProductTest` (DRT product, expected output, film print fixtures) | 76, 56 passed |
 
-### #914: Default (Film-like) placed by hand, Filmic removed (2026-11-14)
+### #914: Cl. Digit placed by hand, Filmic removed (2026-11-14)
 
 Status: complete. Issue [#914](https://github.com/zidage/AlcedoStudio/issues/914), branch
 `fix/tone-curve-default-film-like-shape`, stacked on #911 (PR #913). Shape, reference, and codes:
@@ -1207,8 +1207,8 @@ Status: complete. Issue [#914](https://github.com/zidage/AlcedoStudio/issues/914
   and shadows below the identity line. Cause: the fit target divides the source tone by ACES 2.0,
   whose toe is deeper than both sources.
 - User decision: the curve axis is an EV axis, so the default curve is placed by hand; Filmic
-  gives nearly the same curve and leaves the menu; the menu name is Default (Film-like), the id
-  stays `film_like`.
+  gives nearly the same curve and leaves the menu. Menu name (user decision of 2026-11-14):
+  Cl. Digit, Chinese 经典数码; the id stays `film_like`.
 - Points (EV in to EV out): (-4, -4.7), (0, 0), (+2, +2.8), (+4, +6.1), (+6.5, +8.3) with the ends
   (0, 0) and (1, 0.95434): 7 points, inflection at +2.80 EV, slope 1.29 at grey. From +1 to +3 EV
   the display codes stay within 2.5 codes of the ACR3 tone; the shadows render darker than Linear.

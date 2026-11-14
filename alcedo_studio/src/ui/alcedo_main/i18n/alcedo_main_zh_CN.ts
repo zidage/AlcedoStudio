@@ -5067,8 +5067,8 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <translation>强对比度</translation>
     </message>
     <message>
-        <source>Default (Film-like)</source>
-        <translation>默认（胶片感）</translation>
+        <source>Cl. Digit</source>
+        <translation>经典数码</translation>
     </message>
 </context>
 <context>

@@ -33,7 +33,7 @@ const std::array<ToneCurvePreset, 8> kPresets{{
     {"soft_contrast", "Soft Contrast", "Contrast", kSoftContrastPoints},
     {"medium_contrast", "Medium Contrast", "Contrast", kMediumContrastPoints},
     {"strong_contrast", "Strong Contrast", "Contrast", kStrongContrastPoints},
-    {kFilmLikeToneCurvePresetId, "Default (Film-like)", "Rendering", kFilmLikePoints},
+    {kFilmLikeToneCurvePresetId, "Cl. Digit", "Rendering", kFilmLikePoints},
     {"kodak_2383", "Kodak 2383", "Film", kKodak2383Points},
     {"fuji_velvia_50", "Velvia 50", "Film", kFujiVelvia50Points},
     {"kodak_ektachrome_e100", "Ektachrome E100", "Film", kKodakEktachromeE100Points},

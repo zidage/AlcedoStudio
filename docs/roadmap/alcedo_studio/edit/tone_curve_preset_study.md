@@ -7,7 +7,7 @@ Issue: [#891](https://github.com/zidage/AlcedoStudio/issues/891) (TC6 of
 [#885](https://github.com/zidage/AlcedoStudio/issues/885)). Highlight shoulder of Film-like and
 Filmic: [#899](https://github.com/zidage/AlcedoStudio/issues/899) (2026-11-13, section 4.3). Shadow
 toe of Film-like and Filmic: [#910](https://github.com/zidage/AlcedoStudio/issues/910) (2026-11-13,
-section 4.4). Default (Film-like) placed by hand, Filmic removed:
+section 4.4). Cl. Digit placed by hand, Filmic removed:
 [#914](https://github.com/zidage/AlcedoStudio/issues/914) (2026-11-14, section 4.5).
 
 Script: [`scripts/fit_tone_curve_presets.py`](../../../../scripts/fit_tone_curve_presets.py).
@@ -15,13 +15,13 @@ Figures: [`tone_curve_preset_study/`](tone_curve_preset_study/).
 
 ## 1. Question
 
-The Tone Curve section gets a preset menu: Linear, three contrast shapes, Default (Film-like), and
+The Tone Curve section gets a preset menu: Linear, three contrast shapes, Cl. Digit, and
 the tone of Kodak 2383, Velvia 50, and Ektachrome E100. A preset is a list of at most 16 control
 points of the product spline (TC1) on the curve axis. This study gives the points of each preset,
-the source of each shape, and the error of each fit. Default (Film-like) has no fit: its points
+the source of each shape, and the error of each fit. Cl. Digit has no fit: its points
 are placed by hand (section 4.5).
 
-Default (Film-like) is also the RGB curve of the RAW import look (user decision of 2026-11-13,
+Cl. Digit is also the RGB curve of the RAW import look (user decision of 2026-11-13,
 section 6). Until #914 its menu name was Film-like, and the menu also had Filmic.
 
 ## 2. Terms
@@ -45,7 +45,7 @@ section 6). Until #914 its menu name was Film-like, and the menu also had Filmic
 
 ### 3.1 Film-like: the Adobe default tone curve
 
-From #914 on, this source is the reference of the hand-placed Default (Film-like) (section 4.5):
+From #914 on, this source is the reference of the hand-placed Cl. Digit (section 4.5):
 the script reports its display codes next to those of the preset. Sections 4.1 to 4.4 fitted it.
 
 The ACR3 default curve of the DNG SDK (`dng_tone_curve_acr3_default`): a table of 1025 values on
@@ -242,7 +242,7 @@ renders 4.8 codes darker on Film-like and 1.7 codes darker on Filmic, and -7 EV 
 three films keep their raised black: the maximum density of the print or the slide belongs to
 their look.
 
-### 4.5 Default (Film-like) placed by hand, Filmic removed (#914)
+### 4.5 Cl. Digit placed by hand, Filmic removed (#914)
 
 Finding (#914, user review against RawTherapee): the fitted Film-like and Filmic curves of
 sections 4.3 and 4.4 had 13 and 12 points, lay above the identity line below 18% grey (they
@@ -269,7 +269,9 @@ On its sRGB-encoded axis its shadows lie below the identity line.
 Change: the curve axis is an EV axis, so the preset is placed by hand as one S on it, and the
 fit target of section 4.1 is dropped for it. The ACR3 tone of section 3.1 stays as a reference
 for the mid-tones and the highlights. Filmic gave nearly the same curve under this rule and left
-the menu; the menu name of Film-like is Default (Film-like), its id stays `film_like`.
+the menu. User decision of 2026-11-14: the menu name of Film-like is Cl. Digit (Chinese
+menu: 经典数码), the classic digital camera look; its id stays `film_like`, the id that
+`curve.presets` and the `curve` write take.
 
 Rule of the shape:
 
@@ -301,7 +303,7 @@ Display codes of a neutral at the curve input (8 bit, gamma 2.2):
 
 | Form | -7 | -6 | -5 | -4 | -3 | -2 | -1 | 0 | +1 | +2 | +3 | +4 | +5 | +6 | +8 | +10 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Default (Film-like) | 1.2 | 2.1 | 3.6 | 6.6 | 13.1 | 26.7 | 51.8 | 89.5 | 138.1 | 189.2 | 229.7 | 246.2 | 251.2 | 253.3 | 254.5 | 254.9 |
+| Cl. Digit | 1.2 | 2.1 | 3.6 | 6.6 | 13.1 | 26.7 | 51.8 | 89.5 | 138.1 | 189.2 | 229.7 | 246.2 | 251.2 | 253.3 | 254.5 | 254.9 |
 | Linear (ACES 2.0) | 1.3 | 2.7 | 5.4 | 10.6 | 20.1 | 35.9 | 59.2 | 89.5 | 125.2 | 162.3 | 195.3 | 220.1 | 236.2 | 245.5 | 253.3 | 255.0 |
 | ACR3 default tone curve | 7.1 | 9.7 | 13.5 | 18.3 | 25.0 | 36.9 | 57.9 | 89.5 | 135.7 | 187.4 | 229.5 | 254.5 | 255.0 | 255.0 | 255.0 | 255.0 |
 | Film-like of #910 | 1.4 | 3.6 | 8.7 | 16.6 | 24.6 | 36.5 | 57.5 | 89.5 | 135.7 | 187.6 | 230.0 | 247.5 | 251.6 | 253.1 | 254.3 | 254.9 |
@@ -317,7 +319,7 @@ against 5.4. The mid-tones and the highlights stay where the #910 points had the
 | Soft Contrast | 6 | 0.15 | 0 |
 | Medium Contrast | 6 | 0.22 | 0 |
 | Strong Contrast | 6 | 0.26 | 0 |
-| Default (Film-like) | 7 | placed by hand (section 4.5) | |
+| Cl. Digit | 7 | placed by hand (section 4.5) | |
 | Kodak 2383 | 12 | 0.46 | -0.344 |
 | Velvia 50 | 15 | 0.51 | -0.897 |
 | Ektachrome E100 | 15 | 0.41 | -0.925 |
@@ -326,16 +328,16 @@ The points are in `alcedo_studio/src/edit/operators/models/tone_curve_preset_poi
 the script writes. `ToneCurvePresetTest` evaluates the product spline and the product neutral
 response at 257 axis samples and checks each fitted preset against the source tone within its
 fit error plus 0.05 codes; the largest difference of each preset is below its recorded error. For
-Default (Film-like) the test checks the rule of section 4.5: at most 8 points, the ends (0, 0) and
+Cl. Digit the test checks the rule of section 4.5: at most 8 points, the ends (0, 0) and
 (1, 0.95434), the curve at or below the identity line below 18% grey, one inflection above 18%
 grey with a slope above 1 at grey, and the slope within 0.06 of an S on both sides of the
 inflection (1024 steps).
 
-Default (Film-like) points (section 4.5): (0, 0), (0.18528, 0.14532), (0.41359, 0.41359),
+Cl. Digit points (section 4.5): (0, 0), (0.18528, 0.14532), (0.41359, 0.41359),
 (0.52774, 0.57341), (0.64190, 0.76176), (0.78459, 0.88733), (1, 0.95434).
 
 Figures: for each preset, the curve on the axis (target, fitted spline, points) and the neutral
-axis through ACES 2.0 (source tone, the render with the preset, and Linear). Default (Film-like)
+axis through ACES 2.0 (source tone, the render with the preset, and Linear). Cl. Digit
 draws its curve and points on the axis, and the ACR3 tone (section 3.1) as a reference on the
 neutral axis.
 
@@ -344,7 +346,7 @@ neutral axis.
 | Soft Contrast | ![](tone_curve_preset_study/soft_contrast_curve.svg) | ![](tone_curve_preset_study/soft_contrast_neutral.svg) |
 | Medium Contrast | ![](tone_curve_preset_study/medium_contrast_curve.svg) | ![](tone_curve_preset_study/medium_contrast_neutral.svg) |
 | Strong Contrast | ![](tone_curve_preset_study/strong_contrast_curve.svg) | ![](tone_curve_preset_study/strong_contrast_neutral.svg) |
-| Default (Film-like) | ![](tone_curve_preset_study/film_like_curve.svg) | ![](tone_curve_preset_study/film_like_neutral.svg) |
+| Cl. Digit | ![](tone_curve_preset_study/film_like_curve.svg) | ![](tone_curve_preset_study/film_like_neutral.svg) |
 | Kodak 2383 | ![](tone_curve_preset_study/kodak_2383_curve.svg) | ![](tone_curve_preset_study/kodak_2383_neutral.svg) |
 | Velvia 50 | ![](tone_curve_preset_study/fuji_velvia_50_curve.svg) | ![](tone_curve_preset_study/fuji_velvia_50_neutral.svg) |
 | Ektachrome E100 | ![](tone_curve_preset_study/kodak_ektachrome_e100_curve.svg) | ![](tone_curve_preset_study/kodak_ektachrome_e100_neutral.svg) |
@@ -353,16 +355,16 @@ Observations:
 
 - The ACR3 tone lifts the shadows over the toe of ACES 2.0, and it reaches the display peak at
   raw white (+3.97 EV at the curve input of the Default document), where ACES 2.0 alone keeps 72%
-  of the peak. Default (Film-like) keeps the shadows at or below Linear and rolls off toward the
+  of the peak. Cl. Digit keeps the shadows at or below Linear and rolls off toward the
   peak at x = 1 (section 4.5).
 - The three films hold a display black above 0 (the maximum density of the print or the slide):
   their curves start at y = 0.19 and stay flat over the deepest 3 stops.
 - Velvia 50 and Ektachrome E100 have the steepest mid-tones and reach white about +4 EV above
   18% grey.
 
-## 6. Default (Film-like) as the RAW import look
+## 6. Cl. Digit as the RAW import look
 
-User decision of 2026-11-13: the default look is Film-like (menu name Default (Film-like) since
+User decision of 2026-11-13: the default look is Film-like (menu name Cl. Digit since
 #914). `CreateDefaultPipelineDocument` sets
 the RGB curve of Color Grade 1 to the points of `film_like`, with exposure +1.5 EV and saturation
 1.3 as before. Contrast stays 0, because the curve carries the contrast of the look: the curve
@@ -434,8 +436,8 @@ Film-like gives the current points.
 | `c` | Curvature of the toe parabola | ACEScc | from `y(0) = 0` | inferred |
 | Toe refit points | Points of the earlier fit next to the toe knee that move with the toe | | 1 | creative |
 | Filmic parameters | Defaults of filmic rgb (Filmic removed by #914) | | section 3.2 | data (darktable) |
-| Hand points | Inner points of Default (Film-like), input to output | EV from 18% grey | (-4, -4.7), (0, 0), (+2, +2.8), (+4, +6.1), (+6.5, +8.3) | creative (section 4.5) |
-| Hand point limit | Largest number of points of Default (Film-like) | | 8 | data (RawTherapee `npoints`) |
+| Hand points | Inner points of Cl. Digit, input to output | EV from 18% grey | (-4, -4.7), (0, 0), (+2, +2.8), (+4, +6.1), (+6.5, +8.3) | creative (section 4.5) |
+| Hand point limit | Largest number of points of Cl. Digit | | 8 | data (RawTherapee `npoints`) |
 | Slope steps | Steps of the shape check on the curve axis | | 1024 | inferred |
-| S allowance | How far the slope of Default (Film-like) may go against the S | slope on the axis | 0.06 | inferred (end segments, section 4.5) |
+| S allowance | How far the slope of Cl. Digit may go against the S | slope on the axis | 0.06 | inferred (end segments, section 4.5) |
 | Film resources | Film print resources | | schema 11 | data (alcedo-film-lab) |

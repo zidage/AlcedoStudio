@@ -58,7 +58,7 @@ auto RegisterAutomationCurveCommands(AutomationCommandRegistry& registry, QStrin
   list.method      = QStringLiteral("curve.presets");
   list.description = QStringLiteral(
       "Lists the Tone Curve presets in the order of the preset menu: Linear, the contrast "
-      "shapes, Default (Film-like) (the curve of the RAW import look), and the films. "
+      "shapes, Cl. Digit (the curve of the RAW import look), and the films. "
       "'points' are the control points that a preset writes, on the curve axis (ACEScc, "
       "18% grey at 0.41359). 'editor_value' applies the preset to the RGB curve: give it to "
       "editor.set on 'curve'. The id also applies to a channel curve, for example "
