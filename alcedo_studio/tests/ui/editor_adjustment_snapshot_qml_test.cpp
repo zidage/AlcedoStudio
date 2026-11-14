@@ -286,8 +286,8 @@ TEST(EditorAdjustmentSnapshotQmlTest, LookHlsLoadsCatalogUiValuesAndRanges) {
   EXPECT_EQ(range("lookHlsSmoothnessSlider"), (std::pair{1.0, 180.0}));
 }
 
-// #922: Shadows takes +150 and Highlights -150 past their +-100 rails; the slider keeps the
-// handle at the rail end and hatches the end of the fill.
+// #922: Shadows takes +150 and Highlights -150 past their +-100 soft limits; the rail shows the
+// extra zone on that side only.
 TEST(EditorAdjustmentSnapshotQmlTest, ToneShadowsAndHighlightsTakeTheExtendedValues) {
   SnapshotSession              session(QVariantMap{}, 1);
   AdjustmentSnapshotQmlHarness harness(&session);
@@ -297,16 +297,27 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneShadowsAndHighlightsTakeTheExtendedVal
     const char* slider;
     const char* field;
     double      typed;
+    bool        extra_low;
+    bool        extra_high;
   };
-  for (const Case& c : {Case{"toneShadowsSlider", "shadows", 150.0},
-                        Case{"toneHighlightsSlider", "highlights", -150.0}}) {
+  for (const Case& c : {Case{"toneShadowsSlider", "shadows", 150.0, false, true},
+                        Case{"toneHighlightsSlider", "highlights", -150.0, true, false}}) {
     auto* slider = harness.root()->findChild<QObject*>(QString::fromLatin1(c.slider));
     ASSERT_NE(slider, nullptr) << c.slider;
     EXPECT_DOUBLE_EQ(slider->property("softFrom").toDouble(), -100.0) << c.slider;
     EXPECT_DOUBLE_EQ(slider->property("softTo").toDouble(), 100.0) << c.slider;
-    auto* hatch = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHatch"));
-    ASSERT_NE(hatch, nullptr) << c.slider;
-    EXPECT_FALSE(hatch->isVisible()) << c.slider;
+    auto* rail = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
+    ASSERT_NE(rail, nullptr) << c.slider;
+    // The extra zones are Repeater delegates: look them up in the item tree.
+    const auto zone_visible = [rail](const char* name) {
+      for (QQuickItem* child : rail->childItems()) {
+        if (child->objectName() == QLatin1String(name)) return child->isVisible();
+      }
+      ADD_FAILURE() << "no " << name;
+      return false;
+    };
+    EXPECT_EQ(zone_visible("adjustmentSliderExtraLow"), c.extra_low) << c.slider;
+    EXPECT_EQ(zone_visible("adjustmentSliderExtraHigh"), c.extra_high) << c.slider;
 
     // A typed value: the field emits valueEntered with the value limited to [from, to].
     ASSERT_TRUE(QMetaObject::invokeMethod(slider, "valueEntered", Q_ARG(double, c.typed)));
@@ -315,7 +326,6 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneShadowsAndHighlightsTakeTheExtendedVal
     EXPECT_FLOAT_EQ(session.lastScalarValue(), static_cast<float>(c.typed)) << c.slider;
     EXPECT_DOUBLE_EQ(slider->property("value").toDouble(), c.typed) << c.slider;
     EXPECT_TRUE(slider->property("beyondSoftRange").toBool()) << c.slider;
-    EXPECT_TRUE(hatch->isVisible()) << c.slider;
   }
 }
 
@@ -405,11 +415,12 @@ TEST(EditorAdjustmentSnapshotQmlTest, LookHlsRailsFollowTheSelectedHue) {
     ASSERT_TRUE(QMetaObject::invokeMethod(model, "selectHueIndex", Q_ARG(int, index)));
     QCoreApplication::processEvents();
     const double hue = model->property("targetHue").toDouble();
+    // A positive Hue Shift raises the hue; the kernels turn the hue by 2.25 x the value, so the
+    // -30 .. +30 rail runs from the hue -67.5 to +67.5 degrees.
     expect_near(stop_color("lookHlsHueShiftSlider", 0),
-                hsl(std::fmod(hue + 30.0, 360.0), 1, 0.5), "hue shift left end");
+                hsl(std::fmod(hue - 67.5 + 360.0, 360.0), 1, 0.5), "hue shift left end");
     expect_near(stop_color("lookHlsHueShiftSlider", 2), hsl(hue, 1, 0.5), "hue shift center");
-    expect_near(stop_color("lookHlsHueShiftSlider", 4),
-                hsl(std::fmod(hue - 30.0 + 360.0, 360.0), 1, 0.5),
+    expect_near(stop_color("lookHlsHueShiftSlider", 4), hsl(std::fmod(hue + 67.5, 360.0), 1, 0.5),
                 "hue shift right end");
     expect_near(stop_color("lookHlsLightnessSlider", 0), hsl(hue, 1, 0.1), "lightness left end");
     expect_near(stop_color("lookHlsLightnessSlider", 2), hsl(hue, 1, 0.9), "lightness right end");

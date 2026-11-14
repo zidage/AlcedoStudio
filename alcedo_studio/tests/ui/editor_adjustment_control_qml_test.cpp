@@ -467,9 +467,10 @@ TEST(EditorAdjustmentControlQmlTest, AdjustmentComboActivatedSubmitsOneSettled) 
   EXPECT_EQ(h.combo.currentIndex(), 1);
 }
 
-// #922: a rail drag stops at the rail end; a typed value reaches the full range, and the handle
-// then stays at the rail end.
-TEST(EditorAdjustmentControlQmlTest, RailDragStopsAtTheRailEndAndTypingReachesTheFullRange) {
+// #922: the rail covers the full range with hatched extra zones past the soft limits; a rail
+// drag holds at a soft limit for softDetent px, then enters the extra zone; a typed value reaches
+// the full range.
+TEST(EditorAdjustmentControlQmlTest, RailDragHoldsAtTheSoftLimitAndTypingReachesTheFullRange) {
   Harness h;
   ASSERT_NE(h.window, nullptr) << "QML harness failed to load. Warnings:\n"
                                << h.warnings.join(QStringLiteral("\n")).toStdString();
@@ -487,16 +488,44 @@ TEST(EditorAdjustmentControlQmlTest, RailDragStopsAtTheRailEndAndTypingReachesTh
   ASSERT_NE(handle, nullptr);
   ASSERT_NE(field, nullptr);
 
-  // From the center to near the right end is more than the rail half: the value stops at +5.
-  const QPoint start =
-      rail->mapToScene(QPointF(rail->width() * 0.1, rail->height() * 0.5)).toPoint();
-  const QPoint end =
-      rail->mapToScene(QPointF(rail->width() * 0.95, rail->height() * 0.5)).toPoint();
+  // The extra zones are Repeater delegates: look them up in the item tree.
+  const auto zone_of = [rail](const QString& name) -> QQuickItem* {
+    for (QQuickItem* child : rail->childItems()) {
+      if (child->objectName() == name) return child;
+    }
+    return nullptr;
+  };
+  auto* extra_low  = zone_of(QStringLiteral("adjustmentSliderExtraLow"));
+  auto* extra_high = zone_of(QStringLiteral("adjustmentSliderExtraHigh"));
+  ASSERT_NE(extra_low, nullptr);
+  ASSERT_NE(extra_high, nullptr);
+  EXPECT_TRUE(extra_low->isVisible());
+  EXPECT_TRUE(extra_high->isVisible());
+  ASSERT_DOUBLE_EQ(h.exposure.value(), 0.0);
+
+  // Handle travel: the rail less the 2 px insets and the 6 px handle. One px is 20 / travel EV.
+  const double travel   = rail->width() - 2.0 * 2.0 - 6.0;
+  const double detent   = slider->property("softDetent").toDouble();
+  const double to_limit = travel / 4.0;  // 0 -> +5 EV
+  // The soft limit starts the extra zone.
+  EXPECT_NEAR(extra_high->x(), 2.0 + 3.0 + 0.75 * travel, 1.0);
+
+  // Past +5 by half the hold: the value holds at +5.
+  const QPointF origin(rail->width() * 0.3, rail->height() * 0.5);
+  const QPoint  start = rail->mapToScene(origin).toPoint();
+  const QPoint  held =
+      rail->mapToScene(origin + QPointF(to_limit + detent * 0.5, 0.0)).toPoint();
   QTest::mousePress(h.window, Qt::LeftButton, {}, start);
-  QTest::mouseMove(h.window, end, 20);
-  QTest::mouseRelease(h.window, Qt::LeftButton, {}, end);
-  ProcessEvents(100);
+  QTest::mouseMove(h.window, held, 20);
+  ProcessEvents(20);
   EXPECT_DOUBLE_EQ(h.exposure.value(), 5.0);
+  // 20 px past the hold: the value is in the extra zone, 20 px beyond +5.
+  const QPoint beyond =
+      rail->mapToScene(origin + QPointF(to_limit + detent + 20.0, 0.0)).toPoint();
+  QTest::mouseMove(h.window, beyond, 20);
+  QTest::mouseRelease(h.window, Qt::LeftButton, {}, beyond);
+  ProcessEvents(100);
+  EXPECT_NEAR(h.exposure.value(), 5.0 + 20.0 * 20.0 / travel, 0.15);
   EXPECT_EQ(h.submitter.settledForField(QStringLiteral("exposure")), 1);
 
   field->forceActiveFocus();
@@ -506,8 +535,8 @@ TEST(EditorAdjustmentControlQmlTest, RailDragStopsAtTheRailEndAndTypingReachesTh
   ProcessEvents(250);
   EXPECT_DOUBLE_EQ(h.exposure.value(), 8.0);
   EXPECT_EQ(h.submitter.settledForField(QStringLiteral("exposure")), 2);
-  // The handle stays inside the rail, 2 px from its right end.
-  EXPECT_NEAR(handle->x() + handle->width(), rail->width() - 2.0, 0.5);
+  // +8 EV is 90 % along the full-range rail.
+  EXPECT_NEAR(handle->x() + handle->width() / 2.0, 2.0 + 3.0 + 0.9 * travel, 1.0);
 
   // A typed value outside the full range is limited to it.
   field->forceActiveFocus();

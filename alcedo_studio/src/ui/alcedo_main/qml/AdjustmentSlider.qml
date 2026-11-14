@@ -9,7 +9,8 @@ import QtQuick.Layouts
 //   - Typed value (Enter, focus-out, Up/Down): editValue + commitImmediately.
 //   - Text that is not a number: setInvalid, no submit.
 //   - Double-click on the label or the rail: reset (one settled transaction).
-// The rail covers [railMinimum, railMaximum] of the model; typing reaches [minimum, maximum].
+// The rail covers [minimum, maximum]; [railMinimum, railMaximum] of the model are its soft
+// limits (hatched extra zones outside, a rail drag holds at each limit).
 // Optional `flickable`: locked while a drag runs so parent scroll areas cannot steal it.
 AlcedoSlider {
     id: root
