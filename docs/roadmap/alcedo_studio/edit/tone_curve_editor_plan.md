@@ -3,7 +3,7 @@
 Date: 2026-11-13
 
 Status: TC1 to TC6 complete. #900 (Shadows and Highlights before the Curve) complete. #901 (right
-click removes a point) complete.
+click removes a point) complete. #902 (quiet curve histogram) complete.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -1082,4 +1082,25 @@ QQuickWindow -> PlotPane::mousePressEvent (Qt::RightButton) -> PlotPane::RightCl
 | Binary and filter | Result |
 | --- | --- |
 | `EditorPlotPaneTest` (all) | 20 passed |
+| `EditorAdjustmentSnapshotQmlTest` (all) | 7 passed |
+
+### #902: quiet histogram behind the curve (2026-11-13)
+
+Status: complete. Issue [#902](https://github.com/zidage/AlcedoStudio/issues/902), branch
+`feature/tone-curve-histogram-fade`, stacked on #901.
+
+- `PlotHistogramLayer` has `fillOpacity` and `edgeOpacity` (default 1, clamped to [0, 1]). The
+  layer draws additively, so the opacity scales the light that a fill or an edge adds to the
+  surface (`kFillStrength` and `kEdgeStrength` times the opacity).
+- `AppTheme` tokens: `plotHistogramFillOpacity` 0.5 and `plotHistogramEdgeOpacity` 0.4. The Tone
+  Curve section binds them; the Scopes histogram keeps its full-strength colors.
+- Choice of the values: on `plotSurfaceColor` (Default theme `#161616`) the overlap of the three
+  fills adds about 46 to each component (about 68 in all), below the strong grid line (about 77)
+  and the identity line (about 92); a channel edge adds 80 to 94 to its own primary only. The
+  curve line and the handles use `textColor`. The look was checked on the two themes of the app,
+  Default and Classic, which are both dark; the app has no light theme.
+
+| Binary and filter | Result |
+| --- | --- |
+| `EditorPlotPaneTest` (all, with `HistogramOpacityScalesTheLightOfTheFillAndOfTheEdge`) | 21 passed |
 | `EditorAdjustmentSnapshotQmlTest` (all) | 7 passed |

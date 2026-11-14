@@ -881,7 +881,9 @@ sizes as properties; bind them to the tokens below.
 - **Layers.** `PlotGridLayer` (lines at ticks, labels under and left of the
   plot), `PlotHistogramLayer` (the scope histogram look: additive channel
   fills with a 1.25 px edge, `scopeHistogram*Color` tints, one channel in its
-  own tint when the layer shows one channel), `PlotPolylineLayer` (solid or
+  own tint when the layer shows one channel; `fillOpacity` and `edgeOpacity`
+  scale the light that the fills and the edges add, 1 by default),
+  `PlotPolylineLayer` (solid or
   dashed line), and `PlotHandleLayer` (rings; the selected handle is a filled
   disc; a hovered or pressed handle grows by 1 px). Widths are the visible
   width with the antialiased edge included.
@@ -905,7 +907,11 @@ no caption sentence.
 - **Plot.** A square `PlotPane` with `plotSurfaceColor`. Grid every 2 EV from
   18% grey with the strong line at 18% grey; signed EV labels under the plot
   only (`fontSizeCaption`, `plotLabelColor`). The histogram of the curve input
-  is behind the curves. The dashed identity line uses
+  is a quiet background behind the curves: its fills at
+  `plotHistogramFillOpacity` and its edges at `plotHistogramEdgeOpacity`, so
+  the curve, the handles, the strong grid line, and the identity line are the
+  strongest marks (#902). The Scopes histogram keeps its full strength. The
+  dashed identity line uses
   `plotReferenceLineColor`, 4 px dashes with 4 px gaps. The curve of the
   selected channel is 1.25 px in `plotLineColor` (RGB) or its channel color;
   the curves of the other channels that are not the identity show in their
@@ -926,6 +932,8 @@ no caption sentence.
 | `plotChannelBlueColor` | `#66A0E8` to `textColor` at 12 percent | Blue curve |
 | `plotPointerLineColor` | `bgBaseColor` to `textMutedColor` at 45 percent | Vertical line at the pointer |
 | `plotInactiveLineOpacity` | 0.4 | Opacity of the curves of the other channels |
+| `plotHistogramFillOpacity` | 0.5 | Scale of the light that the curve histogram fills add |
+| `plotHistogramEdgeOpacity` | 0.4 | Scale of the light that the curve histogram edges add |
 | `plotCurveHitRadius` | 6 px | Pointer distance that adds a point on the curve line |
 | `plotChannelMarkSize` | 4 px | Dot of a changed channel in the channel selector |
 

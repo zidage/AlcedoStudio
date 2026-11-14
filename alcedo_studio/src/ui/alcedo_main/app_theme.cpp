@@ -1175,6 +1175,12 @@ auto AppTheme::plotPointerLineColor() const -> QColor {
 
 auto AppTheme::plotInactiveLineOpacity() const -> qreal { return 0.4; }
 
+// The curve histogram is a quiet background: on plotSurfaceColor its neutral fill and its channel
+// edges stay darker than the 18% grey grid line and the identity line (#902).
+auto AppTheme::plotHistogramFillOpacity() const -> qreal { return 0.5; }
+
+auto AppTheme::plotHistogramEdgeOpacity() const -> qreal { return 0.4; }
+
 auto AppTheme::plotCurveHitRadius() const -> qreal { return 6.0; }
 
 auto AppTheme::plotChannelMarkSize() const -> qreal { return 4.0; }
