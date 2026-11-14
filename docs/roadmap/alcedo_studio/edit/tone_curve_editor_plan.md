@@ -3,7 +3,8 @@
 Date: 2026-11-13
 
 Status: TC1 to TC6 complete. #900 (Shadows and Highlights before the Curve) complete. #901 (right
-click removes a point) complete. #902 (quiet curve histogram) complete.
+click removes a point) complete. #902 (quiet curve histogram) complete. #903 (dense text) complete.
+#910 (Film-like and Filmic toe ends at (0, 0)) complete.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -1142,3 +1143,27 @@ At the default editor panel width (320 px), the track of the channel selector gi
 | RGB `stretch` | 1.6 | Width share of the RGB segment; a letter segment has 1 |
 | `labelSideInset` | `ceil(width of "+10" / 2)` | Left and right inset of the plot |
 | `bodyContentHeight` | curve body height + `2 * (spaceSm + spaceXs)` | Body height of the section |
+
+### #910: Film-like and Filmic toe ends at (0, 0) (2026-11-13)
+
+Status: complete. Issue [#910](https://github.com/zidage/AlcedoStudio/issues/910), branch
+`fix/tone-curve-preset-toe-910`, stacked on #903 (PR #909).
+
+- User request: the toe of Film-like and Filmic goes to (0, 0); the raised black point of the two
+  presets (y = 0.145 and 0.117 at x = 0) is a look that users may not accept.
+- `scripts/fit_tone_curve_presets.py` fits a shadow toe for the two presets: below a knee three
+  stops under 18% grey the target falls to (0, 0) along a parabola with value and slope continuous
+  at the knee. The points of the fit with the shoulder stay from the point after the knee point
+  ([tone_curve_preset_study.md](tone_curve_preset_study.md), section 4.4). Film-like keeps 13
+  points (error 0.56 codes); Filmic has 12 (0.49 codes). From -3 EV up both render as before.
+- The three films keep their raised black (the maximum density of the film).
+- `FilmLikeToneCurveEarlierPoints()` replaces `FilmLikeToneCurvePointsBeforeShoulder()` and holds
+  the #891 and #899 fits, so `IsFilmLikeToneCurve` (the entry resets) recognizes documents
+  imported with either earlier look.
+
+| Binary and filter | Result |
+| --- | --- |
+| `ToneCurvePresetTest` (all, with `FilmLikeAndFilmicFallToTheOriginBelowTheToeKnee`) | 10 passed |
+| `EditorSessionHistoryPortTest --gtest_filter=*ProfileTone*:*Curve*:*FilmPrint*:*Default*` | 19 passed |
+| `GpuDagModelGraphTest`, `AdjustmentTransferCatalogTest`, `EditorPipelineCommandServiceTest`, `EditorToneCurveModelTest` | 195, 13, 24, 18 passed |
+| `PipelineDocumentCheckpointTest` | 20 passed; 3 `Existing*Root*` failures from the HLS defaults (#553) |

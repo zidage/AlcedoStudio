@@ -217,7 +217,8 @@ TEST_F(EditorProfileToneEntryHistoryTest, DocumentImportedBeforeFilmLikeResetsCo
 
 TEST_F(EditorProfileToneEntryHistoryTest, DocumentWithFilmLikeBeforeTheShoulderResetsTheCurve) {
   // The RAW import look between #891 and #899: the Film-like points before the highlight shoulder.
-  const auto                    before_shoulder = FilmLikeToneCurvePointsBeforeShoulder();
+  // ToneCurvePresetTest checks that IsFilmLikeToneCurve knows each earlier point list.
+  const auto                    before_shoulder = FilmLikeToneCurveEarlierPoints().front();
   const std::vector<CurvePoint> stored{before_shoulder.begin(), before_shoulder.end()};
   ASSERT_NE(stored, FilmLikePoints());
   auto  root_document = CreateDefaultPipelineDocument();

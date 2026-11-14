@@ -23,6 +23,11 @@ about 4 to 5 stops above 18% grey and stay there. Above a knee one stop below th
 target rolls off to the display peak at x = 1; the points of the fit without the shoulder stay up
 to the point next to the knee.
 
+Film-like and Filmic also get a shadow toe that ends at (0, 0) (issue #910): their sources keep a
+display black well above 0 at x = 0, which lifts the black point of the default look. Below a knee
+three stops under 18% grey the fit target falls to (0, 0) along a parabola; the points of the fit
+with the shoulder stay from the point after the knee point.
+
 Usage:
   python -I scripts/fit_tone_curve_presets.py \
       --film-test build/debug/.../ToneCurvePresetFilmSourceTest.exe [--acr-source dcp.cc] [--write]
@@ -77,6 +82,13 @@ SHOULDER_KNEE_STOPS = 1.0
 SHOULDER_SLOPE_STEP = 2e-3   # central difference of the knee slope on the curve axis
 SHOULDER_REFIT_BELOW_KNEE = 1  # source points next to the knee that move with the shoulder
 SHOULDER_TABLE_EVS = (2.0, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0, 10.0)
+# Shadow toe (#910): presets whose curve keeps a raised output at x = 0. Below a knee three stops
+# under 18% grey the target falls to (0, 0) along a parabola with value and slope continuous at
+# the knee.
+TOE_PRESETS = ("film_like", "filmic")
+TOE_KNEE_STOPS = 3.0
+TOE_REFIT_ABOVE_KNEE = 1     # points of the earlier fit next to the knee that move with the toe
+TOE_TABLE_EVS = (-7.0, -6.0, -5.0, -4.0, -3.0, -2.0)
 
 PRESETS = [
     # id, display name, group, source kind
@@ -394,11 +406,47 @@ class Shoulder:
         return Target(self.axis_curve, self.display)
 
 
+class Toe:
+    """Shadow toe of a target on the curve axis (#910).
+
+    From the knee x_k down the curve is the parabola y = y_k - m_k u - c u^2, u = x_k - x, with
+    c = (y_k - m_k x_k) / x_k^2: value and slope m_k agree at the knee and x = 0 maps to 0. The
+    slope at x = 0 is m_k + 2 c x_k; the toe is monotone while it is not negative."""
+
+    def __init__(self, target: Target):
+        self.knee_x = AXIS_GREY - TOE_KNEE_STOPS * AXIS_STOP
+        step = SHOULDER_SLOPE_STEP
+        self.knee_y = float(target.axis_curve(np.array([self.knee_x]))[0])
+        self.knee_slope = float((target.axis_curve(np.array([self.knee_x + step]))[0] -
+                                 target.axis_curve(np.array([self.knee_x - step]))[0]) / (2 * step))
+        self.curvature = (self.knee_y - self.knee_slope * self.knee_x) / self.knee_x ** 2
+        self.start_slope = self.knee_slope + 2.0 * self.curvature * self.knee_x
+        if self.knee_y <= 0.0 or self.start_slope < 0.0:
+            raise SystemExit("toe: the knee cannot fall monotonically to (0, 0)")
+        self.source = target
+
+    def axis_curve(self, x):
+        x = np.asarray(x, dtype=float)
+        u = np.maximum(self.knee_x - x, 0.0)
+        return np.where(x >= self.knee_x, self.source.axis_curve(x),
+                        self.knee_y - self.knee_slope * u - self.curvature * u * u)
+
+    def display(self, x):
+        x = np.asarray(x, dtype=float)
+        toe = neutral_response(np.maximum(linear_from_acescc(self.axis_curve(x)), 0.0))
+        return np.where(x >= self.knee_x, self.source.display(x), toe)
+
+    def target(self) -> Target:
+        return Target(self.axis_curve, self.display)
+
+
 class Fit:
-    def __init__(self, target: Target, fixed_below: float = -1.0):
+    def __init__(self, target: Target, fixed_below: float = -1.0, fixed_above: float = 2.0):
         self.target = target
-        # Points at or below this x stay where they are; new points go above it.
+        # Points at or below fixed_below and at or above fixed_above stay where they are; new
+        # points go between them.
         self.fixed_below = fixed_below
+        self.fixed_above = fixed_above
         self.grid = np.linspace(0.0, 1.0, DENSE)
         self.target_code = code(target.display(self.grid))
         self.target_curve = target.axis_curve(self.grid)
@@ -437,7 +485,7 @@ class Fit:
         for index in np.argsort(-errors):
             x = float(self.grid[index])
             if all(abs(x - p[0]) >= MIN_SPACING for p in points) and \
-                    max(self.x_low, self.fixed_below) < x < self.x_high:
+                    max(self.x_low, self.fixed_below) < x < min(self.x_high, self.fixed_above):
                 points = sorted(points + [(x, float(self.y_at(x)))])
                 return points
         return points
@@ -446,7 +494,8 @@ class Fit:
         """Move the inner points (not grey) to lower the largest code error."""
         grey = next(i for i, p in enumerate(points) if abs(p[0] - AXIS_GREY) < 1e-5)
         fixed = {0, len(points) - 1, grey}
-        fixed |= {i for i, p in enumerate(points) if p[0] <= self.fixed_below}
+        fixed |= {i for i, p in enumerate(points)
+                  if p[0] <= self.fixed_below or p[0] >= self.fixed_above}
         free = [i for i in range(len(points)) if i not in fixed]
         if not free:
             return points
@@ -525,6 +574,17 @@ def fit_shoulder(shoulder: Shoulder, source_points):
     return fit, points, error, fixed_below
 
 
+def fit_toe(toe: Toe, source_points):
+    """Keep the points of the source fit above the knee and fit the toe below it, from (0, 0).
+
+    As with the shoulder, the point next to the knee moves with the toe points."""
+    above = [p for p in source_points if p[0] >= toe.knee_x]
+    fixed_above = above[TOE_REFIT_ABOVE_KNEE][0]
+    fit = Fit(toe.target(), fixed_above=fixed_above)
+    points, error = fit_points(fit, [(0.0, 0.0)] + above)
+    return fit, points, error, fixed_above
+
+
 def smallest_slope_above(points, x_from: float) -> float:
     """Smallest slope of the product spline on [x_from, 1], from steps of 1/4096."""
     xs = np.linspace(x_from, 1.0, max(2, int(round((1.0 - x_from) * 4096)) + 1))
@@ -594,10 +654,10 @@ def write_figures(out: Path, preset_id: str, name: str, fit: Fit, points,
     ev_ticks = [(AXIS_GREY + e * AXIS_STOP, f"{e:+d}" if e else "0") for e in range(-6, 11, 2)]
     axis_ticks = [(v / 4, f"{v / 4:.2f}") for v in range(0, 5)]
     curve_series = [(grid, fit.target_curve, "#888", "4 3",
-                     "fit target with the shoulder" if shoulder else "fit target")]
+                     "fit target with the toe and the shoulder" if shoulder else "fit target")]
     if shoulder:
         curve_series.append((grid, np.clip(shoulder.source.axis_curve(grid), 0.0, 1.0), "#d9a441",
-                             "2 2", "source target (clips)"))
+                             "2 2", "source target (raised black, clips)"))
     curve_series += [(grid, fitted, "#1f5fbf", "", "fitted curve"),
                      (grid, grid, "#cccccc", "2 3", "identity")]
     svg_plot(out / f"{preset_id}_curve.svg", f"{name}: curve axis (ACEScc)",
@@ -608,10 +668,10 @@ def write_figures(out: Path, preset_id: str, name: str, fit: Fit, points,
     linear = code(neutral_response(np.maximum(linear_from_acescc(grid), 0.0)))
     code_ticks = [(v, f"{v}") for v in range(0, 256, 51)]
     neutral_series = [(ev, source, "#888", "4 3",
-                       "source tone with the shoulder" if shoulder else "source tone")]
+                       "source tone with the toe and the shoulder" if shoulder else "source tone")]
     if shoulder:
         neutral_series.append((ev, code(shoulder.source.display(grid)), "#d9a441", "2 2",
-                               "source tone (clips)"))
+                               "source tone (raised black, clips)"))
     neutral_series += [(ev, final, "#c0392b", "", "with the preset"),
                        (ev, linear, "#bbbbbb", "2 3", "Linear (ACES 2.0 only)")]
     svg_plot(out / f"{preset_id}_neutral.svg", f"{name}: neutral axis through ACES 2.0",
@@ -645,7 +705,7 @@ def write_points_inc(path: Path, results):
     path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
-def write_study_header(path: Path, results, fits, film_tones, shoulders):
+def write_study_header(path: Path, results, fits, film_tones, shoulders, toes):
     grid = np.linspace(0.0, 1.0, STUDY_SAMPLES)
     lines = ["//  Copyright 2026 Yurun Zi",
              "//  SPDX-License-Identifier: GPL-3.0-only",
@@ -727,6 +787,25 @@ def write_study_header(path: Path, results, fits, film_tones, shoulders):
                      f'{shoulder.end_slope:.9g}, {shoulder.fixed_below:.9g}}},')
     lines += ["}};",
               "",
+              "/// Shadow toe of a preset (#910): the knee on the curve axis (three stops below 18%",
+              "/// grey), the target value and slope there, the slope of the target at x = 0, and",
+              "/// the smallest x from which the points of the fit without the toe stay. Below the",
+              "/// knee the target falls to (0, 0) along a parabola.",
+              "struct ShadowToe {",
+              "  std::string_view preset_id;",
+              "  double           knee_x;",
+              "  double           knee_y;",
+              "  double           knee_slope;",
+              "  double           start_slope;",
+              "  double           kept_points_from_x;",
+              "};",
+              "",
+              f"inline constexpr std::array<ShadowToe, {len(toes)}> kShadowToes{{{{"]
+    for preset_id, toe in toes.items():
+        lines.append(f'    {{"{preset_id}", {toe.knee_x:.9g}, {toe.knee_y:.9g}, '
+                     f'{toe.knee_slope:.9g}, {toe.start_slope:.9g}, {toe.fixed_above:.9g}}},')
+    lines += ["}};",
+              "",
               "/// N of the study (the ACES 2.0 SDR tone scale) at each axis sample, as display light.",
               f"inline constexpr std::array<double, kAxisSampleCount> kStudyNeutralResponse{{{{{neutral}}}}};",
               "",
@@ -746,7 +825,7 @@ def main() -> None:
 
     film_tones = read_film_tones(args.film_test)
     sources = {"acr": acr_source(load_acr_table(args.acr_source)), "filmic": filmic_source()}
-    results, fits, shoulders = [], {}, {}
+    results, fits, shoulders, toes = [], {}, {}, {}
     for preset_id, name, group, kind in PRESETS:
         if kind == "identity":
             results.append((preset_id, name, group, [(0.0, 0.0), (1.0, 1.0)], 0.0, 0.0))
@@ -785,6 +864,27 @@ def main() -> None:
                   f"slope {shoulder.knee_slope:.3f} -> {shoulder.end_slope:.3f}, "
                   f"smallest fitted slope above the knee "
                   f"{smallest_slope_above(points, shoulder.knee_x):.3f}", flush=True)
+        if preset_id in TOE_PRESETS:
+            toe = Toe(fit.target)
+            toes[preset_id] = toe
+            source_fit, source_points = fit, points
+            fit, points, error, toe.fixed_above = fit_toe(toe, points)
+            grid = fit.grid
+            above = grid >= toe.knee_x
+            toe.change_above_knee = float(np.max(np.abs(
+                code(fit.rendered(points, grid)) -
+                code(source_fit.rendered(source_points, grid)))[above]))
+            toe.code_rows = [
+                (ev, float(code(source_fit.target.display(np.array([x])))[0]),
+                 float(code(source_fit.rendered(source_points, np.array([x])))[0]),
+                 float(code(fit.rendered(points, np.array([x])))[0]))
+                for ev in TOE_TABLE_EVS
+                for x in [AXIS_GREY + ev * AXIS_STOP]]
+            print(f"{'  with the toe':24s} {len(points):2d} points  error {error:5.2f} codes  "
+                  f"points kept from x {toe.fixed_above:.5f}, change above the knee "
+                  f"{toe.change_above_knee:.2f} codes  knee x {toe.knee_x:.5f} "
+                  f"y {toe.knee_y:.5f}, slope {toe.knee_slope:.3f} at the knee, "
+                  f"{toe.start_slope:.3f} at x = 0", flush=True)
         fits[preset_id] = fit
         results.append((preset_id, name, group, points, error, shift))
 
@@ -812,6 +912,23 @@ def main() -> None:
                              (3, "points with the shoulder")):
             print(f"| {name} | {form} | " +
                   " | ".join(f"{row[column]:.1f}" for row in s.code_rows) + " |")
+    print("\n| Preset | Knee x | Knee (EV) | Knee y | Knee slope | Slope at x = 0 | "
+          "Points kept from x | Change above the knee (codes) |")
+    print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    for preset_id, t in toes.items():
+        name = next(r[1] for r in results if r[0] == preset_id)
+        print(f"| {name} | {t.knee_x:.5f} | {(t.knee_x - AXIS_GREY) / AXIS_STOP:+.2f} | "
+              f"{t.knee_y:.5f} | {t.knee_slope:.3f} | {t.start_slope:.3f} | "
+              f"{t.fixed_above:.5f} | {t.change_above_knee:.2f} |")
+    print("\nDisplay codes of a neutral at the curve input, EV from 18% grey:\n")
+    print("| Preset | Form | " + " | ".join(f"{ev:+g}" for ev in TOE_TABLE_EVS) + " |")
+    print("| --- | --- | " + " | ".join("---:" for _ in TOE_TABLE_EVS) + " |")
+    for preset_id, t in toes.items():
+        name = next(r[1] for r in results if r[0] == preset_id)
+        for column, form in ((1, "target without the toe"), (2, "points without the toe"),
+                             (3, "points with the toe")):
+            print(f"| {name} | {form} | " +
+                  " | ".join(f"{row[column]:.1f}" for row in t.code_rows) + " |")
     print()
     for preset_id, name, _group, points, _error, _shift in results:
         print(f"{preset_id}: " + ", ".join(f"({x:.{DIGITS}f}, {y:.{DIGITS}f})" for x, y in points))
@@ -826,7 +943,7 @@ def main() -> None:
                          "tone_curve_preset_points.inc", results)
         write_study_header(ROOT / "alcedo_studio" / "tests" / "edit" / "runtime" /
                            "tone_curve_preset_study_data.hpp", results, fits, film_tones,
-                           shoulders)
+                           shoulders, toes)
         print("written")
 
 
