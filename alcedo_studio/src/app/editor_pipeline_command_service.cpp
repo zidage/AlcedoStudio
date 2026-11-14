@@ -26,7 +26,6 @@
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
-#include "edit/operators/models/tone_curve_presets.hpp"
 #include "edit/runtime/profile_tone_curve_import.hpp"
 #include "image/dcp_camera_profile.hpp"
 
@@ -190,7 +189,53 @@ auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParam
   }
 }
 
+namespace {
+
+auto SaturationOf(const ColorGradeNodeModel& grade) -> std::optional<float> {
+  const auto* saturation =
+      dynamic_cast<const SaturationModel*>(grade.FindAdjustmentByType(type_ids::Saturation()));
+  if (saturation == nullptr) return std::nullopt;
+  return saturation->Value();
+}
+
+auto RgbCurveOf(const ColorGradeNodeModel& grade) -> std::optional<std::vector<CurvePoint>> {
+  const auto* curve =
+      dynamic_cast<const CurveModel*>(grade.FindAdjustmentByType(type_ids::Curve()));
+  if (curve == nullptr) return std::nullopt;
+  return curve->Points();
+}
+
+/// The Color Grade 1 of the history root: the RAW import look of the image.
+auto ImportLookGrade(const PipelineDocument& root_document) -> const ColorGradeNodeModel* {
+  return root_document.PrimaryGrade();
+}
+
+/// True when @p grade still has the saturation of the import look and that saturation is not
+/// @p reset_value, so a reset to @p reset_value changes it.
+auto HasImportLookSaturation(const ColorGradeNodeModel& grade,
+                             const PipelineDocument& root_document, float reset_value) -> bool {
+  const auto* look = ImportLookGrade(root_document);
+  if (look == nullptr) return false;
+  const auto look_saturation = SaturationOf(*look);
+  return look_saturation.has_value() && *look_saturation != reset_value &&
+         SaturationOf(grade) == look_saturation;
+}
+
+/// True when the RGB curve of @p grade still has the points of the import look and those points
+/// are not the identity, so a reset to the identity changes it.
+auto HasImportLookCurve(const ColorGradeNodeModel& grade, const PipelineDocument& root_document)
+    -> bool {
+  const auto* look = ImportLookGrade(root_document);
+  if (look == nullptr) return false;
+  const auto look_curve = RgbCurveOf(*look);
+  return look_curve.has_value() && *look_curve != IdentityCurvePoints() &&
+         RgbCurveOf(grade) == look_curve;
+}
+
+}  // namespace
+
 auto FilmPrintEntrySaturationTarget(const PipelineDocument& document,
+                                    const PipelineDocument& root_document,
                                     const nlohmann::json&   odt_before,
                                     const nlohmann::json&   odt_after)
     -> std::optional<EditorParameterTarget> {
@@ -201,12 +246,8 @@ auto FilmPrintEntrySaturationTarget(const PipelineDocument& document,
     return std::nullopt;
   }
   const auto* grade = CurrentPanelColorGrade(document);
-  if (grade == nullptr) {
-    return std::nullopt;
-  }
-  const auto* saturation =
-      dynamic_cast<const SaturationModel*>(grade->FindAdjustmentByType(type_ids::Saturation()));
-  if (saturation == nullptr || saturation->Value() != kDefaultPipelineSaturation) {
+  if (grade == nullptr ||
+      !HasImportLookSaturation(*grade, root_document, kFilmPrintEntrySaturation)) {
     return std::nullopt;
   }
   std::string ignored;
@@ -214,20 +255,6 @@ auto FilmPrintEntrySaturationTarget(const PipelineDocument& document,
 }
 
 namespace {
-
-static_assert(kDefaultPipelineToneCurvePresetId == kClDigitalToneCurvePresetId,
-              "HasImportLookCurve recognizes the Cl. Digit points of the RAW import look");
-
-/// True when the RGB curve of @p grade has the points of the Cl. Digit preset of the RAW import
-/// look: the current points, or the earlier (Film-like) points that documents imported with an
-/// earlier look store (ClDigitalToneCurveEarlierPoints).
-auto HasImportLookCurve(const ColorGradeNodeModel& grade) -> bool {
-  const auto* curve =
-      dynamic_cast<const CurveModel*>(grade.FindAdjustmentByType(type_ids::Curve()));
-  if (curve == nullptr) return false;
-  const auto points = curve->Points();
-  return IsClDigitalToneCurve(points);
-}
 
 /// The curve write of an entry reset: the RGB curve gets @p points, the channel curves stay.
 auto RgbCurvePatch(std::span<const CurvePoint> points) -> nlohmann::json {
@@ -242,8 +269,9 @@ auto IdentityRgbCurvePatch() -> nlohmann::json { return RgbCurvePatch(IdentityCu
 
 }  // namespace
 
-auto FilmPrintEntryCurveTarget(const PipelineDocument& document, const nlohmann::json& odt_before,
-                               const nlohmann::json& odt_after)
+auto FilmPrintEntryCurveTarget(const PipelineDocument& document,
+                               const PipelineDocument& root_document,
+                               const nlohmann::json& odt_before, const nlohmann::json& odt_after)
     -> std::optional<EditorParameterTarget> {
   const auto is_film_print = [](const nlohmann::json& odt) {
     return odt.value("method", std::string{}) == "film_print";
@@ -252,7 +280,7 @@ auto FilmPrintEntryCurveTarget(const PipelineDocument& document, const nlohmann:
     return std::nullopt;
   }
   const auto* grade = CurrentPanelColorGrade(document);
-  if (grade == nullptr || !HasImportLookCurve(*grade)) {
+  if (grade == nullptr || !HasImportLookCurve(*grade, root_document)) {
     return std::nullopt;
   }
   std::string ignored;
@@ -292,6 +320,7 @@ auto StoredReference(const nlohmann::json& develop) -> std::optional<DevelopCame
 }  // namespace
 
 auto ProfileToneCurveWrites(const PipelineDocument&                        document,
+                            const PipelineDocument&                        root_document,
                             const std::optional<DevelopCameraProfileFile>& reference_before,
                             DrtMethod method_before) -> std::vector<EditorEntryResetWrite> {
   const auto* develop = document.Develop();
@@ -331,9 +360,7 @@ auto ProfileToneCurveWrites(const PipelineDocument&                        docum
     if (contrast != nullptr && contrast->Value() == kImportLookContrastBeforeFilmLike) {
       add("contrast", kProfileToneEntryContrast);
     }
-    const auto* saturation =
-        dynamic_cast<const SaturationModel*>(grade->FindAdjustmentByType(type_ids::Saturation()));
-    if (saturation != nullptr && saturation->Value() == kDefaultPipelineSaturation) {
+    if (HasImportLookSaturation(*grade, root_document, kProfileToneEntrySaturation)) {
       add("saturation", kProfileToneEntrySaturation);
     }
     add_curve(after->points);
@@ -345,29 +372,31 @@ auto ProfileToneCurveWrites(const PipelineDocument&                        docum
     add_curve(after->points);
   } else if (method_after == DrtMethod::FilmPrint) {
     add_curve(IdentityCurvePoints());
-  } else {
-    const auto* look = FindToneCurvePreset(kDefaultPipelineToneCurvePresetId);
-    if (look != nullptr) add_curve(look->points);
+  } else if (const auto* look = ImportLookGrade(root_document); look != nullptr) {
+    // The RGB curve goes back to the import look of the image.
+    if (const auto look_curve = RgbCurveOf(*look)) add_curve(*look_curve);
   }
   return writes;
 }
 
-auto EntryResetWrites(const PipelineDocument& document, std::string_view field_key,
-                      const nlohmann::json& before, const nlohmann::json& after)
-    -> std::vector<EditorEntryResetWrite> {
+auto EntryResetWrites(const PipelineDocument& document, const PipelineDocument& root_document,
+                      std::string_view field_key, const nlohmann::json& before,
+                      const nlohmann::json& after) -> std::vector<EditorEntryResetWrite> {
   if (field_key == "odt") {
     std::vector<EditorEntryResetWrite> writes;
-    if (auto target = FilmPrintEntrySaturationTarget(document, before, after)) {
+    if (auto target = FilmPrintEntrySaturationTarget(document, root_document, before, after)) {
       writes.push_back({std::move(*target), {{"saturation", kFilmPrintEntrySaturation}}});
     }
-    if (auto target = FilmPrintEntryCurveTarget(document, before, after)) {
+    if (auto target = FilmPrintEntryCurveTarget(document, root_document, before, after)) {
       writes.push_back({std::move(*target), IdentityRgbCurvePatch()});
     }
     // The RGB curve follows the profile curve of the new method. The Film Print curve rule reads
-    // a Cl. Digit curve only, so the two rules never write the curve together.
+    // the curve of the import look only, and a followed profile curve is another curve, so the two
+    // rules never write the curve together.
     const auto* develop = document.Develop();
     if (develop != nullptr) {
-      auto profile = ProfileToneCurveWrites(document, develop->Params().CameraProfileFile(),
+      auto profile = ProfileToneCurveWrites(document, root_document,
+                                            develop->Params().CameraProfileFile(),
                                             MethodOfOdtJson(before));
       std::ranges::move(profile, std::back_inserter(writes));
     }
@@ -376,7 +405,8 @@ auto EntryResetWrites(const PipelineDocument& document, std::string_view field_k
   if (field_key == "camera_profile_file") {
     const auto* drt = document.Drt();
     if (drt == nullptr) return {};
-    return ProfileToneCurveWrites(document, StoredReference(before), drt->Params().Method());
+    return ProfileToneCurveWrites(document, root_document, StoredReference(before),
+                                  drt->Params().Method());
   }
   return {};
 }

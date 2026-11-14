@@ -443,9 +443,15 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   std::vector<HistoryWorkingState::DocumentFieldEdit> recorded_fields{recorded};
   const auto restore_before = [&] { return RestoreDocumentFields(*state, recorded_fields, error); };
   // Entry resets of the RAW import look join this batch, so one Undo restores them with the edit.
+  // The rules compare against the import look in the history root of the image.
+  if (!state->root) {
+    if (error) *error = "Editor history root is unavailable for the entry resets";
+    (void)restore_before();
+    return false;
+  }
   std::vector<alcedo::EditorEntryResetWrite>          resets;
   try {
-    resets = EntryResetWrites(state->document->Document(), patch.field_key,
+    resets = EntryResetWrites(state->document->Document(), state->root->document, patch.field_key,
                               recorded.before_model_json, recorded.after_model_json);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();

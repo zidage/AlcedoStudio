@@ -314,9 +314,11 @@ TEST_F(EditorProfileToneEntryHistoryTest, DocumentWithoutColorGradeOneKeepsItsVa
   ASSERT_TRUE(Reference().has_value());
   EXPECT_TRUE(Reference()->profile_tone);
   EXPECT_EQ(Working()->Document().PrimaryGrade(), nullptr);
-  // The profile curve entered, but no Grade holds a curve to write.
-  EXPECT_TRUE(
-      ProfileToneCurveWrites(Working()->Document(), std::nullopt, DrtMethod::OpenDrt).empty());
+  // The profile curve entered, but no Grade holds a curve to write. The root has no Color Grade 1
+  // either, like the working document.
+  EXPECT_TRUE(ProfileToneCurveWrites(Working()->Document(), Working()->Document(), std::nullopt,
+                                     DrtMethod::OpenDrt)
+                  .empty());
 
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   EXPECT_EQ(Working()->Document().ToJson().dump(), before);
@@ -450,6 +452,77 @@ TEST_F(EditorProfileToneEntryHistoryTest, ProfileWithoutCurveWritesNoGradeValueA
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
   EXPECT_EQ(RgbCurve(), ProfileCurve(kCurveProfile));
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
+}
+
+/// #918: the history root of an image imported with Import defaults other than the product
+/// Default. The entry rules compare against this root, not against the product Default.
+auto CustomImportLookRoot() -> PipelineDocument {
+  RawImportLook look;
+  look.saturation           = 1.2f;
+  look.tone_curve_preset_id = "strong_contrast";
+  return CreateDefaultPipelineDocument(look);
+}
+
+auto StrongContrastPoints() -> std::vector<CurvePoint> {
+  return FindToneCurvePreset("strong_contrast")->PointList();
+}
+
+TEST_F(EditorProfileToneEntryHistoryTest, FilmPrintEntryResetsTheCustomImportLook) {
+  lease_ = test::MakeInMemoryEditorLease(42, CustomImportLookRoot());
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_FLOAT_EQ(GradeValue("saturation"), 1.2f);
+  ASSERT_EQ(RgbCurve(), StrongContrastPoints());
+
+  ASSERT_TRUE(CommitMethod(handle, "film_print"));
+  EXPECT_FLOAT_EQ(GradeValue("saturation"), kFilmPrintEntrySaturation);
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
+  // One Undo restores the method and both resets.
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  EXPECT_FLOAT_EQ(GradeValue("saturation"), 1.2f);
+  EXPECT_EQ(RgbCurve(), StrongContrastPoints());
+}
+
+TEST_F(EditorProfileToneEntryHistoryTest, FilmPrintEntryKeepsProductDefaultValuesOnACustomLookImage) {
+  lease_ = test::MakeInMemoryEditorLease(42, CustomImportLookRoot());
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  // The user selects the values of the product Default: for this image they are user values.
+  ASSERT_TRUE(CommitGrade(handle, "saturation", kDefaultPipelineSaturation));
+  ASSERT_TRUE(CommitCurvePreset(handle, "cl_digital"));
+
+  ASSERT_TRUE(CommitMethod(handle, "film_print"));
+  EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
+  EXPECT_EQ(RgbCurve(), ClDigitalPoints());
+}
+
+TEST_F(EditorProfileToneEntryHistoryTest, ToneCurveSwitchOffPutsTheCustomImportLookCurveBack) {
+  lease_ = test::MakeInMemoryEditorLease(42, CustomImportLookRoot());
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
+  EXPECT_EQ(RgbCurve(), ProfileCurve(kCurveProfile));
+  EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
+
+  ASSERT_TRUE(CommitProfile(handle, kCurveProfile, false));
+  EXPECT_EQ(RgbCurve(), StrongContrastPoints());
+}
+
+TEST(EditorEntryResetWritesTest, LinearImportLookGivesNoFilmPrintEntryWrite) {
+  RawImportLook look;
+  look.saturation           = kFilmPrintEntrySaturation;
+  look.tone_curve_preset_id = "linear";
+  const auto document       = CreateDefaultPipelineDocument(look);
+  const auto root_document  = CreateDefaultPipelineDocument(look);
+  // The values already are those of the film print: a reset would write them again.
+  EXPECT_TRUE(EntryResetWrites(document, root_document, "odt",
+                               nlohmann::json{{"method", "open_drt"}},
+                               nlohmann::json{{"method", "film_print"}})
+                  .empty());
 }
 
 TEST_F(EditorProfileToneEntryHistoryTest, LeaveToDefaultEntryPutsTheImportLookCurveBack) {
