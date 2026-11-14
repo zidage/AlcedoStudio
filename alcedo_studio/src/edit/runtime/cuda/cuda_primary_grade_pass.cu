@@ -167,17 +167,19 @@ __device__ auto ApplyHls(float3 c, const CudaAdjustmentParams& p) -> float3 {
   if (fabsf(adj_h) <= 1.0e-6f && fabsf(adj_l) <= 1.0e-6f && fabsf(chroma_adj) <= 1.0e-6f) {
     return c;
   }
-  const float  hue_shift    = adj_h * 2.25f * 0.017453292519943295f;
-  const float  lightness    = adj_l * 1.125f;
-  const float  chroma_scale = exp2f(chroma_adj * 2.25f * (chroma_adj >= 0.0f ? 4.5f : 3.25f));
-  const float  luma         = Luma(c) + lightness;
-  const float  i            = 0.596f * c.x - 0.274f * c.y - 0.322f * c.z;
-  const float  q            = 0.211f * c.x - 0.523f * c.y + 0.312f * c.z;
-  const float  rotated_i    = (i * cosf(hue_shift) - q * sinf(hue_shift)) * chroma_scale;
-  const float  rotated_q    = (i * sinf(hue_shift) + q * cosf(hue_shift)) * chroma_scale;
-  return make_float3(luma + 0.956f * rotated_i + 0.621f * rotated_q,
-                     luma - 0.272f * rotated_i - 0.647f * rotated_q,
-                     luma - 1.106f * rotated_i + 1.703f * rotated_q);
+  // Hue Shift and Chroma rotate and scale the YIQ chroma (I, Q); Lightness adds to every channel.
+  // Only the change of I and Q goes back to RGB, so zero adjustments leave the color exact. A
+  // positive Hue Shift raises the hue (red toward yellow): it lowers the YIQ angle.
+  const float hue_shift    = -adj_h * 2.25f * 0.017453292519943295f;
+  const float lightness    = adj_l * 1.125f;
+  const float chroma_scale = exp2f(chroma_adj * 2.25f * (chroma_adj >= 0.0f ? 4.5f : 3.25f));
+  const float i            = 0.596f * c.x - 0.274f * c.y - 0.322f * c.z;
+  const float q            = 0.211f * c.x - 0.523f * c.y + 0.312f * c.z;
+  const float di = (i * cosf(hue_shift) - q * sinf(hue_shift)) * chroma_scale - i;
+  const float dq = (i * sinf(hue_shift) + q * cosf(hue_shift)) * chroma_scale - q;
+  return make_float3(c.x + lightness + 0.956f * di + 0.621f * dq,
+                     c.y + lightness - 0.272f * di - 0.647f * dq,
+                     c.z + lightness - 1.106f * di + 1.703f * dq);
 }
 
 __device__ auto LutIndex(std::uint32_t edge, std::uint32_t x, std::uint32_t y, std::uint32_t z)

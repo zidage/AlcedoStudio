@@ -27,6 +27,9 @@ Item {
     readonly property color colFill: "#D8D4CD"
     // Slider ranges of the HLS and color wheel controls, in UI units.
     readonly property var hlsHueShiftSpec: parameterCatalog.propertySpec("hls", "hue_shift")
+    /// The Grade kernels (ApplyHls in primary_grade.cl / .metal / cuda_primary_grade_pass.cu)
+    /// turn the YIQ chroma by 2.25 x the Hue Shift value: +30 moves the hue by about 65 degrees.
+    readonly property real hlsHueShiftAngleScale: 2.25
     readonly property var hlsLightnessSpec: parameterCatalog.propertySpec("hls", "lightness")
     readonly property var hlsChromaSpec: parameterCatalog.propertySpec("hls", "chroma")
     readonly property var hlsSmoothnessSpec: parameterCatalog.propertySpec("hls", "hue_smoothness")
@@ -466,9 +469,9 @@ Item {
                     }
 
                     // The rails show what each slider does to the selected hue: the hue
-                    // that each Hue Shift gives (a positive shift lowers the HSL hue
-                    // angle of the result), dark to light for Lightness, grey to full
-                    // color for Chroma.
+                    // that each Hue Shift gives (a positive shift raises the hue, red
+                    // toward yellow), dark to light for Lightness, grey to full color for
+                    // Chroma.
                     EditorDragSlider {
                         objectName: "lookHlsHueShiftSlider"
                         partName: "lookHlsHueShift"
@@ -484,11 +487,11 @@ Item {
                         flickable: lookScroll
                         railGradient: Gradient {
                             orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: root.hlsRailColor(-root.hlsHueShiftSpec.ui_min, 1.0, 0.5) }
-                            GradientStop { position: 0.25; color: root.hlsRailColor(-root.hlsHueShiftSpec.ui_min / 2, 1.0, 0.5) }
+                            GradientStop { position: 0.0; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_min * root.hlsHueShiftAngleScale, 1.0, 0.5) }
+                            GradientStop { position: 0.25; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_min / 2 * root.hlsHueShiftAngleScale, 1.0, 0.5) }
                             GradientStop { position: 0.5; color: root.hlsRailColor(0, 1.0, 0.5) }
-                            GradientStop { position: 0.75; color: root.hlsRailColor(-root.hlsHueShiftSpec.ui_max / 2, 1.0, 0.5) }
-                            GradientStop { position: 1.0; color: root.hlsRailColor(-root.hlsHueShiftSpec.ui_max, 1.0, 0.5) }
+                            GradientStop { position: 0.75; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_max / 2 * root.hlsHueShiftAngleScale, 1.0, 0.5) }
+                            GradientStop { position: 1.0; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_max * root.hlsHueShiftAngleScale, 1.0, 0.5) }
                         }
                         beginEdit: function () { hlsModel.beginHueShiftDrag() }
                         updateEdit: function (v) { hlsModel.updateHueShiftDrag(v) }

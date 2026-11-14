@@ -204,15 +204,17 @@ auto ApplyHls(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   const float adj_s = sum_s / sum_weight;
   if (std::fabs(adj_h) <= 1.0e-6f && std::fabs(adj_l) <= 1.0e-6f && std::fabs(adj_s) <= 1.0e-6f)
     return c;
-  const float     angle = adj_h * 2.25f * 0.017453292519943295f;
+  // A positive Hue Shift lowers the YIQ angle (raises the hue); only the change of I and Q goes
+  // back to RGB.
+  const float     angle = -adj_h * 2.25f * 0.017453292519943295f;
   const float     scale = std::exp2(adj_s * 2.25f * (adj_s >= 0.0f ? 4.5f : 3.25f));
-  const float     luma  = Luma(c) + adj_l * 1.125f;
+  const float     lift  = adj_l * 1.125f;
   const float     i     = 0.596f * c.r - 0.274f * c.g - 0.322f * c.b;
   const float     q     = 0.211f * c.r - 0.523f * c.g + 0.312f * c.b;
-  const float     ri    = (i * std::cos(angle) - q * std::sin(angle)) * scale;
-  const float     rq    = (i * std::sin(angle) + q * std::cos(angle)) * scale;
-  return {luma + 0.956f * ri + 0.621f * rq, luma - 0.272f * ri - 0.647f * rq,
-          luma - 1.106f * ri + 1.703f * rq, c.a};
+  const float     di    = (i * std::cos(angle) - q * std::sin(angle)) * scale - i;
+  const float     dq    = (i * std::sin(angle) + q * std::cos(angle)) * scale - q;
+  return {c.r + lift + 0.956f * di + 0.621f * dq, c.g + lift - 0.272f * di - 0.647f * dq,
+          c.b + lift - 1.106f * di + 1.703f * dq, c.a};
 }
 
 auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
@@ -1001,6 +1003,75 @@ TEST_F(OpenClGradeFixture, OpenClHlsHueAdjustmentChangesGradePixels) {
     }
   }
   EXPECT_TRUE(changed);
+}
+
+// A Hue Shift just above zero changes the pixels by about as much as the shift: the YIQ round
+// trip adds no luma offset (it once added up to 0.02 ACEScc to saturated colors).
+TEST_F(OpenClGradeFixture, OpenClHlsSmallHueShiftChangesThePixelsByLittle) {
+  (void)RenderGrade();
+  const auto identity = last_output_pixels_;
+  auto&      hls      = ModelByType<HlsModel>(type_ids::Hls());
+  auto       table    = hls.AdjustmentTable();
+  table[0].h          = 0.01f;
+  HlsUpdate update;
+  update.hls_adj_table = table;
+  hls.ApplyUpdate(update);
+
+  (void)RenderGrade();
+  const auto& adjusted = last_output_pixels_;
+  ASSERT_EQ(identity.size(), adjusted.size());
+  float max_err = 0.0f;
+  for (std::size_t i = 0; i < identity.size(); ++i) {
+    max_err = std::max(max_err, std::fabs(identity[i].r - adjusted[i].r));
+    max_err = std::max(max_err, std::fabs(identity[i].g - adjusted[i].g));
+    max_err = std::max(max_err, std::fabs(identity[i].b - adjusted[i].b));
+  }
+  EXPECT_LT(max_err, 1.0e-3f);
+}
+
+// A positive Hue Shift of the red bin raises the hue of red pixels (red toward yellow).
+TEST_F(OpenClGradeFixture, OpenClHlsPositiveHueShiftRaisesTheHue) {
+  const auto hue_of = [](const Rgba& c, float* chroma) {
+    const float maximum = std::max(c.r, std::max(c.g, c.b));
+    const float minimum = std::min(c.r, std::min(c.g, c.b));
+    *chroma             = maximum - minimum;
+    if (*chroma <= 1.0e-6f) return 0.0f;
+    float hue = 0.0f;
+    if (maximum == c.r) {
+      hue = 60.0f * std::fmod((c.g - c.b) / *chroma, 6.0f);
+    } else if (maximum == c.g) {
+      hue = 60.0f * ((c.b - c.r) / *chroma + 2.0f);
+    } else {
+      hue = 60.0f * ((c.r - c.g) / *chroma + 4.0f);
+    }
+    return hue < 0.0f ? hue + 360.0f : hue;
+  };
+  (void)RenderGrade();
+  const auto identity = last_output_pixels_;
+  auto&      hls      = ModelByType<HlsModel>(type_ids::Hls());
+  auto       table    = hls.AdjustmentTable();
+  table[0].h          = 10.0f;
+  HlsUpdate update;
+  update.hls_adj_table = table;
+  hls.ApplyUpdate(update);
+
+  (void)RenderGrade();
+  const auto& adjusted = last_output_pixels_;
+  ASSERT_EQ(identity.size(), adjusted.size());
+  int red_pixels = 0;
+  for (std::size_t i = 0; i < identity.size(); ++i) {
+    float      chroma = 0.0f;
+    const auto before = hue_of(identity[i], &chroma);
+    if (chroma < 0.05f || (before > 20.0f && before < 340.0f)) continue;
+    float      after_chroma = 0.0f;
+    const auto after        = hue_of(adjusted[i], &after_chroma);
+    float      change       = after - before;
+    if (change > 180.0f) change -= 360.0f;
+    if (change < -180.0f) change += 360.0f;
+    EXPECT_GT(change, 5.0f) << "pixel " << i << " hue " << before << " -> " << after;
+    ++red_pixels;
+  }
+  EXPECT_GT(red_pixels, 0);
 }
 
 TEST_F(OpenClGradeFixture, OpenClLlfSplitsBasicToneAndColorIntoTwoPointwisePasses) {
