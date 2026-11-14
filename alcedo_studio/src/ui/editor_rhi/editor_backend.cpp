@@ -102,6 +102,8 @@ auto QtGraphicsApiName(EditorBackend backend) -> const char* {
 auto IsBackendSupportedOnThisPlatform(EditorBackend backend) -> bool {
 #if defined(_WIN32)
   return backend == EditorBackend::Cuda || backend == EditorBackend::OpenCl;
+#elif defined(__linux__)
+  return backend == EditorBackend::OpenCl;
 #elif defined(__APPLE__)
   return backend == EditorBackend::Metal;
 #else
@@ -139,10 +141,8 @@ auto IsBackendAvailableInThisBuild(EditorBackend backend) -> bool {
 
 auto DefaultEditorBackendForPlatform() -> std::optional<EditorBackend> {
   // Routing follows the user's explicit selection (CLI > QSettings). This
-  // default only applies before any selection exists. On Windows, OpenCL is
-  // the baseline accelerator: it is the only viable backend on machines
-  // without an NVIDIA GPU, and it works on NVIDIA machines too, so prefer it
-  // over CUDA whenever the build carries it.
+  // default only applies before any selection exists. Preserve the existing
+  // Windows/macOS defaults; Linux uses OpenCL when built.
 #if defined(_WIN32)
 #if defined(HAVE_OPENCL)
   return EditorBackend::OpenCl;
@@ -154,6 +154,12 @@ auto DefaultEditorBackendForPlatform() -> std::optional<EditorBackend> {
 #elif defined(__APPLE__)
 #if defined(HAVE_METAL)
   return EditorBackend::Metal;
+#else
+  return std::nullopt;
+#endif
+#elif defined(__linux__)
+#if defined(HAVE_OPENCL)
+  return EditorBackend::OpenCl;
 #else
   return std::nullopt;
 #endif

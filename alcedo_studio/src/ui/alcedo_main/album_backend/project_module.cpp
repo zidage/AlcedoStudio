@@ -313,7 +313,7 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
   SetAcceleratorPreparationState(true,
                                  PL_TEXT("Compiling OpenCL kernels. This happens every launch."));
   QPointer<ProjectModule> self(this);
-  std::thread([self]() {
+  opencl_preparation_thread_ = std::jthread([self]() {
     QString error_text;
     try {
       WarmUpOpenClRuntime();
@@ -345,7 +345,7 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
               PL_TEXT("OpenCL preparation failed: %1", error_text));
         },
         Qt::QueuedConnection);
-  }).detach();
+  });
 #else
   SetAcceleratorPreparationState(false, {});
 #endif

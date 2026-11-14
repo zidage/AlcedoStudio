@@ -36,6 +36,17 @@ class EditorViewportItem;
  */
 class ViewportMaskCoverageSink final : public IMaskCoverageSink {
  public:
+  // Readback storage is retained from the producer write through QRhi upload.
+  struct PendingHostCoverage {
+    ViewerFrame              frame{};
+    MaskCoveragePresentation presentation{};
+    std::uint64_t            sequence = 0;
+  };
+  [[nodiscard]] auto TakePendingHostCoverage(std::uint64_t session_epoch,
+                                             std::uint64_t image_identity)
+      -> std::optional<PendingHostCoverage>;
+  [[nodiscard]] auto HasPendingHostCoverage() const -> bool;
+
 #ifdef HAVE_METAL
   /// A submitted Metal coverage frame that waits for the render thread.
   struct PendingMetalCoverage {
@@ -123,6 +134,8 @@ class ViewportMaskCoverageSink final : public IMaskCoverageSink {
 #ifdef HAVE_METAL
   std::optional<PendingMetalCoverage> pending_metal_;
 #endif
+  std::optional<PendingHostCoverage> mapped_host_;
+  std::optional<PendingHostCoverage> pending_host_;
   std::uint64_t published_count_ = 0;
   std::uint64_t cleared_through_ = 0;
   bool          display_lost_    = false;

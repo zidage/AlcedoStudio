@@ -84,6 +84,7 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   void               releaseQueuedNatives();
   void fulfillTargetRequests();
   void consumeDirectFrames();
+  void               consumeHostFrames(QRhiResourceUpdateBatch* updates);
   void consumeImportedGpuFrames();
   [[nodiscard]] auto selectedPrimaryLayer() const -> const LayerState*;
   [[nodiscard]] auto selectedDetailLayer() const -> const LayerState*;

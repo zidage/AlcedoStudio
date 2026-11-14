@@ -216,6 +216,7 @@ void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   detail_coverage_sink_->ClearPendingMetalCoverage();
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
+    frame_sink_->ClearPendingHostFrames();
   }
   stopInteractivePresentLoop();
   emit SessionEpochChanged();
@@ -330,6 +331,7 @@ void EditorViewportItem::cancelPendingFrames() {
   detail_coverage_sink_->ClearPendingMetalCoverage();
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
+    frame_sink_->ClearPendingHostFrames();
   }
   requestPresentUpdate();
 }
@@ -502,12 +504,14 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
       [queue = present_queue_, sink = frame_sink_, coverage_queue = coverage_queue_,
        coverage_sink = coverage_sink_, detail_queue = detail_coverage_queue_,
        detail_sink = detail_coverage_sink_, arm = consume_arm_] {
-        const bool ready = (queue && queue->HasReadyFrame()) ||
-                           (sink && sink->HasPendingImportedFrame()) ||
-                           (coverage_queue && coverage_queue->HasReadyFrame()) ||
-                           (coverage_sink && coverage_sink->HasPendingMetalCoverage()) ||
-                           (detail_queue && detail_queue->HasReadyFrame()) ||
-                           (detail_sink && detail_sink->HasPendingMetalCoverage());
+        const bool ready =
+            (queue && queue->HasReadyFrame()) || (sink && sink->HasPendingImportedFrame()) ||
+            (coverage_queue && coverage_queue->HasReadyFrame()) ||
+            (coverage_sink && (coverage_sink->HasPendingMetalCoverage() ||
+                               coverage_sink->HasPendingHostCoverage())) ||
+            (detail_queue && detail_queue->HasReadyFrame()) ||
+            (detail_sink &&
+             (detail_sink->HasPendingMetalCoverage() || detail_sink->HasPendingHostCoverage()));
         if (!ready) {
           return;
         }

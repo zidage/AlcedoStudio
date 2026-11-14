@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "app/semantic_generation_service.hpp"
@@ -228,6 +229,9 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   i18n::LocalizedText          task_status_text_{};
   int                          task_progress_       = 0;
   bool                         task_cancel_visible_ = false;
+  // Join kernel preparation before this module and the process OpenCL library
+  // are destroyed. Closing the window can occur while clBuildProgram is active.
+  std::jthread                               opencl_preparation_thread_;
 };
 
 }  // namespace alcedo::ui

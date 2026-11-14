@@ -4,6 +4,7 @@
 
 #include "ui/editor_rhi/viewport_mask_coverage_layer.hpp"
 
+#include <QByteArray>
 #include <QSize>
 #include <algorithm>
 #include <utility>
@@ -105,9 +106,33 @@ void ViewportMaskCoverageLayer::FulfillTargetRequests(QRhi* rhi, ILeaseTargetAda
 }
 
 auto ViewportMaskCoverageLayer::ConsumeNewest(QRhi* rhi, std::uint64_t session_epoch,
-                                              std::uint64_t image_identity) -> bool {
+                                              std::uint64_t            image_identity,
+                                              QRhiResourceUpdateBatch* updates) -> bool {
   if (!queue_ || rhi == nullptr) {
     return false;
+  }
+  if (updates && sink_) {
+    auto pending = sink_->TakePendingHostCoverage(session_epoch, image_identity);
+    if (pending && !ClearedBySink(pending->sequence)) {
+      const auto& frame = pending->frame;
+      auto* texture = rhi->newTexture(QRhiTexture::RGBA32F, QSize(frame.width, frame.height), 1);
+      if (!texture || !texture->create()) {
+        delete texture;
+        last_error_ = "failed to create the coverage upload texture";
+        return false;
+      }
+      // The upload batch owns these bytes until QRhi consumes the update.
+      QByteArray bytes(static_cast<const char*>(frame.pixels.get()),
+                       static_cast<qsizetype>(frame.row_bytes * frame.height));
+      QRhiTextureSubresourceUploadDescription description(bytes);
+      description.setDataStride(static_cast<quint32>(frame.row_bytes));
+      description.setSourceSize(QSize(frame.width, frame.height));
+      updates->uploadTexture(
+          texture, QRhiTextureUploadDescription(QRhiTextureUploadEntry(0, 0, description)));
+      NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
+      Install(texture, -1, {}, pending->presentation, pending->sequence);
+      return true;
+    }
   }
   return queue_->backend() == EditorBackend::Metal
              ? ConsumeMetal(rhi, session_epoch, image_identity)

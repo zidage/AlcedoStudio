@@ -118,6 +118,54 @@ cmd /c scripts\msvc_env.cmd --build --preset win_release_test --parallel 8
 ctest --preset win_release_test
 ```
 
+## Linux (Wayland + OpenCL) / Linux（Wayland + OpenCL）
+
+Linux uses the GPU processing pipeline. Install an OpenCL ICD for your GPU and
+check `clinfo -l` before you start the app. A CPU-only OpenCL runtime is not a
+supported processing backend. Startup reports an error if no usable GPU exists.
+
+Install the development packages for Qt 6 (including private GUI headers and
+ShaderTools), OpenCL, OpenGL, OpenCV, Eigen, Exiv2, OpenImageIO, OpenColorIO,
+DuckDB, LittleCMS2, xxHash, highway, LibArchive, libjpeg-turbo, GLib, and OpenMP.
+Use CMake, Ninja, and a C++20 compiler. The project builds Lensfun from its git
+submodule and uses its modern C API. Do not install system Lensfun as a substitute.
+
+Initialize the submodules, including QuickQanava without its nested submodules:
+
+```bash
+git submodule update --init alcedo_studio/src/third_party/lensfun alcedo_studio/src/third_party/QuickQanava
+git submodule update --init --recursive alcedo_studio/src/third_party/libraw alcedo_studio/src/third_party/libultrahdr alcedo_studio/src/third_party/grpc alcedo_studio/src/third_party/protobuf
+cmake --preset linux_opencl_debug
+cmake --build --preset linux_opencl_debug_app
+QT_QPA_PLATFORM=wayland ./build/linux-opencl-debug/alcedo_studio/src/ui/alcedo_main/alcedo_main --editor-backend=opencl
+```
+
+Both Linux build presets use four parallel jobs. For a DuckDB release archive
+with a flat directory layout, append `-DDUCKDB_INC=/path/to/duckdb` and
+`-DDUCKDB_LIB=/path/to/duckdb/libduckdb.so` to the configure command. For an
+installed dependency prefix, use `-DCMAKE_PREFIX_PATH=/path/to/prefix`.
+
+Wayland uses EGL for native graphics integration. Use `QT_QPA_PLATFORM=wayland`
+to select the native Wayland Qt plugin. X11/GLX is also supported.
+
+Frame transfer is selected automatically. The editor uses OpenCL/OpenGL sharing
+when available through EGL or GLX. Otherwise, the GPU produces the final RGBA32F
+image and mask coverage, then the editor reads these pixels back and uploads them
+to Qt Quick textures. This transfer path has no user setting and does not enable
+CPU image processing. The scope analyzer retains its GPU input.
+
+To build and run the focused presentation tests:
+
+```bash
+cmake --preset linux_opencl_debug -DALCEDO_BUILD_TESTS=ON -DALCEDO_BUILD_TESTS_BY_DEFAULT=OFF
+cmake --build --preset linux_opencl_debug --target OpenClGpuSelectionTest EditorViewportSuspensionTest GpuDagOpenClDrtProductTest MaskCoveragePresentationTest MaskCoverageHostUploadTest
+./build/linux-opencl-debug/alcedo_studio/tests/OpenClGpuSelectionTest
+QT_QPA_PLATFORM=offscreen ./build/linux-opencl-debug/alcedo_studio/tests/ui/EditorViewportSuspensionTest
+ALCEDO_TEST_EDITOR_BACKEND=opencl QT_QPA_PLATFORM=wayland ./build/linux-opencl-debug/alcedo_studio/tests/ui/MaskCoveragePresentationTest
+ALCEDO_TEST_EDITOR_BACKEND=opencl QT_QPA_PLATFORM=wayland ./build/linux-opencl-debug/alcedo_studio/tests/MaskCoverageHostUploadTest
+./build/linux-opencl-debug/alcedo_studio/tests/edit/GpuDagOpenClDrtProductTest --gtest_filter='OpenClRendererFixture.*Present*:OpenClRendererFixture.OpenClScopeTap*'
+```
+
 ## 4) macOS (Metal + presets) / macOS（Metal + 预设）
 
 Install dependencies:

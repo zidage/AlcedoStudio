@@ -8,6 +8,11 @@
 #include <chrono>
 #include <stdexcept>
 #include <utility>
+#include <vector>
+
+#ifdef HAVE_OPENCL
+#include "opencl/opencl_context.hpp"
+#endif
 
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
@@ -107,7 +112,7 @@ auto ViewportMaskCoverageSink::MapCoverageTarget(const MaskCoveragePresentation&
     -> FrameWriteMapping {
   {
     std::lock_guard lock(mutex_);
-    if (mapped_slot_ >= 0) {
+    if (mapped_slot_ >= 0 || mapped_host_.has_value()) {
       throw std::logic_error("ViewportMaskCoverageSink: a coverage target is already mapped");
     }
   }
@@ -120,6 +125,28 @@ auto ViewportMaskCoverageSink::MapCoverageTarget(const MaskCoveragePresentation&
   if (queue_->PresentationSuspended()) {
     return SuspendedMapping();
   }
+#if defined(__linux__) && defined(HAVE_OPENCL)
+  if (queue_->backend() == EditorBackend::OpenCl &&
+      preferred_domain == FrameMemoryDomain::OpenClDevice &&
+      !OpenClContext::Instance().GLSharingEnabled()) {
+    auto        pixels = std::make_shared<std::vector<float>>(static_cast<std::size_t>(width) *
+                                                              static_cast<std::size_t>(height) * 4);
+    ViewerFrame frame;
+    frame.width     = width;
+    frame.height    = height;
+    frame.row_bytes = static_cast<std::size_t>(width) * sizeof(float) * 4;
+    frame.pixels    = std::shared_ptr<const void>(pixels, pixels->data());
+    FrameWriteMapping mapping;
+    mapping.data          = pixels->data();
+    mapping.row_bytes     = frame.row_bytes;
+    mapping.memory_domain = FrameMemoryDomain::HostVisible;
+    mapping.target_type   = FrameWriteTargetType::LinearBuffer;
+    std::lock_guard lock(mutex_);
+    mapped_host_ = PendingHostCoverage{std::move(frame), presentation, 0};
+    unmapped_    = false;
+    return mapping;
+  }
+#endif
   const auto slot = ReserveSlot(presentation, width, height);
   if (!slot.has_value()) {
     if (queue_->PresentationSuspended()) {
@@ -176,6 +203,10 @@ void ViewportMaskCoverageSink::UnmapCoverageTarget() {
   int slot_index = -1;
   {
     std::lock_guard lock(mutex_);
+    if (mapped_host_.has_value()) {
+      unmapped_ = true;
+      return;
+    }
     if (mapped_slot_ < 0 || unmapped_) {
       return;
     }
@@ -199,6 +230,20 @@ auto ViewportMaskCoverageSink::PublishCoverage() -> MaskCoveragePublication {
   MaskCoveragePresentation presentation;
   {
     std::lock_guard lock(mutex_);
+    if (mapped_host_.has_value()) {
+      if (!unmapped_) {
+        throw std::logic_error("ViewportMaskCoverageSink: publication needs an unmapped target");
+      }
+      if (!MatchesViewportImage(mapped_host_->presentation.identity)) {
+        ResetMappedLocked();
+        return MaskCoveragePublication::DiscardedForImageChange;
+      }
+      mapped_host_->sequence = ++published_count_;
+      pending_host_          = std::move(mapped_host_);
+      ResetMappedLocked();
+      item_->requestPresentUpdate();
+      return MaskCoveragePublication::Published;
+    }
     if (mapped_slot_ < 0 || !unmapped_) {
       throw std::logic_error("ViewportMaskCoverageSink: publication needs an unmapped target");
     }
@@ -230,6 +275,10 @@ void ViewportMaskCoverageSink::AbandonCoverageTarget() {
   bool unmapped   = false;
   {
     std::lock_guard lock(mutex_);
+    if (mapped_host_.has_value()) {
+      ResetMappedLocked();
+      return;
+    }
     if (mapped_slot_ < 0) {
       return;
     }
@@ -249,6 +298,7 @@ void ViewportMaskCoverageSink::ClearCoverage() {
   {
     std::lock_guard lock(mutex_);
     cleared_through_ = published_count_;
+    pending_host_.reset();
 #ifdef HAVE_METAL
     pending_metal_.reset();
 #endif
@@ -257,9 +307,28 @@ void ViewportMaskCoverageSink::ClearCoverage() {
 }
 
 void ViewportMaskCoverageSink::ResetMappedLocked() {
+  mapped_host_.reset();
   mapped_slot_         = -1;
   unmapped_            = false;
   mapped_presentation_ = {};
+}
+
+auto ViewportMaskCoverageSink::TakePendingHostCoverage(std::uint64_t session_epoch,
+                                                       std::uint64_t image_identity)
+    -> std::optional<PendingHostCoverage> {
+  std::lock_guard lock(mutex_);
+  auto            pending = std::move(pending_host_);
+  pending_host_.reset();
+  if (pending && (pending->presentation.identity.session_epoch != session_epoch ||
+                  pending->presentation.identity.image_identity != image_identity)) {
+    return std::nullopt;
+  }
+  return pending;
+}
+
+auto ViewportMaskCoverageSink::HasPendingHostCoverage() const -> bool {
+  std::lock_guard lock(mutex_);
+  return pending_host_.has_value();
 }
 
 #ifdef HAVE_METAL
@@ -296,8 +365,9 @@ auto ViewportMaskCoverageSink::TakePendingMetalCoverage(std::uint64_t session_ep
 #endif
 
 void ViewportMaskCoverageSink::ClearPendingMetalCoverage() {
-#ifdef HAVE_METAL
   std::lock_guard lock(mutex_);
+  pending_host_.reset();
+#ifdef HAVE_METAL
   pending_metal_.reset();
 #endif
 }

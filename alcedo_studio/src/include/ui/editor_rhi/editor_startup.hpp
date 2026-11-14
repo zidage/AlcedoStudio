@@ -13,7 +13,7 @@
 #include "ui/editor_rhi/cuda_adapter_discovery.hpp"
 #endif
 
-class QQuickWindow;
+#include <QQuickWindow>
 
 namespace alcedo::editor_rhi {
 
@@ -48,7 +48,8 @@ struct EditorStartupResult {
 // On CUDA: discovers CUDA LUID, finds matching DXGI adapter, records adapter for
 // QQuickGraphicsDevice::fromAdapter on the first QQuickWindow.
 // On OpenCL: bootstraps a shareable OpenGL context topology and initializes OpenCL
-// with GL sharing when available.
+// with GL sharing when available. Linux GPUs without GL sharing use automatic
+// readback for presentation. Failure to initialize a GPU is reported.
 // On Metal: selects the Phase 9-qualified Metal API and shared-texture path.
 [[nodiscard]] auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResult;
 

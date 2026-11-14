@@ -107,3 +107,29 @@ add_test(NAME PackagedNoticeSourcesContainQuickQanavaAndBezierClauses
 set_tests_properties(PackagedNoticeSourcesContainQuickQanavaAndBezierClauses PROPERTIES
     LABELS "quickqanava;legal_notices"
 )
+
+# A CPU-only OpenCL ICD must never become an image-processing backend.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ALCEDO_OPENCL_ENABLED)
+    add_executable(OpenClGpuSelectionTest opencl/opencl_gpu_selection_test.cpp)
+    target_include_directories(OpenClGpuSelectionTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+    target_link_libraries(OpenClGpuSelectionTest PRIVATE OpenClContext GTest::gtest_main)
+    gtest_discover_tests(OpenClGpuSelectionTest TEST_PREFIX "OpenClGpuSelectionTest.")
+    alcedo_register_test_target(OpenClGpuSelectionTest gpu)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ALCEDO_OPENCL_ENABLED)
+    # Start a real GPU context without GL sharing so the production sink must upload host pixels.
+    add_executable(MaskCoverageHostUploadTest ui/mask_coverage_presentation_test.cpp)
+    target_include_directories(MaskCoverageHostUploadTest
+        PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+    target_compile_definitions(MaskCoverageHostUploadTest
+        PRIVATE ALCEDO_TEST_OPENCL_WITHOUT_GL_SHARING)
+    target_link_libraries(MaskCoverageHostUploadTest PRIVATE
+        EditorRhiViewport EditRuntimeOpenCl EditInput GTest::gtest
+        Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::OpenGL)
+    gtest_discover_tests(MaskCoverageHostUploadTest
+        TEST_PREFIX "MaskCoverageHostUploadTest."
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=opencl")
+    alcedo_register_test_target(MaskCoverageHostUploadTest gpu)
+endif()

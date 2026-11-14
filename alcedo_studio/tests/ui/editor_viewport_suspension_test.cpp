@@ -13,16 +13,19 @@
 
 #include <QSignalSpy>
 #include <QTest>
+#include <algorithm>
 #include <chrono>
 #include <future>
 #include <thread>
 
+#include "edit/scope/scope_analyzer.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/frame_presentation_lease.hpp"
+#include "ui/editor_rhi/viewport_mask_coverage_sink.hpp"
 
 namespace alcedo::editor_rhi {
 namespace {
@@ -43,6 +46,15 @@ class EditorViewportSuspensionTest : public ::testing::Test {
     viewport_->setImageIdentity(kImageIdentity);
     viewport_->setSessionEpoch(kSessionEpoch);
     // Stands in for EditorViewportRenderer::synchronize() on a shown window.
+    viewport_->resumePresentation();
+    queue().SetConsumerAvailable(true);
+  }
+
+  void SelectOpenClViewport() {
+    SetActiveEditorBackend(EditorBackend::OpenCl);
+    viewport_ = std::make_unique<EditorViewportItem>();
+    viewport_->setImageIdentity(kImageIdentity);
+    viewport_->setSessionEpoch(kSessionEpoch);
     viewport_->resumePresentation();
     queue().SetConsumerAvailable(true);
   }
@@ -80,6 +92,99 @@ class EditorViewportSuspensionTest : public ::testing::Test {
 
   std::unique_ptr<EditorViewportItem> viewport_;
 };
+
+#if defined(__linux__) && defined(HAVE_OPENCL)
+TEST_F(EditorViewportSuspensionTest, RejectsCpuBackendAndUsesOpenClByDefault) {
+  EXPECT_FALSE(ParseEditorBackendToken("cpu").has_value());
+  EXPECT_FALSE(ParseEditorBackendToken("CPU").has_value());
+  EXPECT_EQ(DefaultEditorBackendForPlatform(), EditorBackend::OpenCl);
+}
+
+TEST_F(EditorViewportSuspensionTest, HostReadbackRetainsPixelsGeometryAndDisplayEncoding) {
+  SelectOpenClViewport();
+  FrameCompletionSubmission submission;
+  submission.metadata.image_identity          = kImageIdentity;
+  submission.metadata.session_epoch           = kSessionEpoch;
+  submission.metadata.presentation_request_id = 7;
+  submission.metadata.frame_role              = FrameRole::QualityBase;
+  submission.geometry.render_extent           = {2, 2};
+  submission.geometry.full_reference_extent   = {2, 2};
+  sink().BindFrameSubmission(submission);
+  sink().EnsureSize(2, 2);
+  auto mapping = sink().MapResourceForWrite(FrameMemoryDomain::OpenClDevice);
+  ASSERT_TRUE(static_cast<bool>(mapping));
+  EXPECT_EQ(mapping.memory_domain, FrameMemoryDomain::HostVisible);
+  EXPECT_EQ(mapping.target_type, FrameWriteTargetType::LinearBuffer);
+  std::fill_n(static_cast<float*>(mapping.data), 16, 0.25f);
+  sink().UnmapResource();
+  FinalDisplayFrameView display;
+  display.display_config.peak_luminance = 250.0f;
+  sink().SubmitFinalDisplayFrame(display);
+  sink().NotifyFrameReady(submission);
+  EXPECT_TRUE(sink().HasPendingImportedFrame());
+  auto frames = sink().DrainPendingHostFrames(kSessionEpoch, kImageIdentity);
+  ASSERT_EQ(frames.size(), 1u);
+  EXPECT_EQ(frames[0].preview_metadata.presentation_request_id, 7u);
+  EXPECT_EQ(frames[0].geometry.render_extent, submission.geometry.render_extent);
+  EXPECT_FLOAT_EQ(frames[0].display_config.peak_luminance, 250.0f);
+  EXPECT_FLOAT_EQ(static_cast<const float*>(frames[0].pixels.get())[15], 0.25f);
+  EXPECT_FALSE(sink().HasPendingImportedFrame());
+  EXPECT_EQ(queue().DiagnosticsSnapshot().live_target_count, 0u);
+}
+
+TEST_F(EditorViewportSuspensionTest, HostReadbackDropsOldImageFramesAndRefusesSuspendedViewport) {
+  SelectOpenClViewport();
+  FrameCompletionSubmission submission;
+  submission.metadata.image_identity          = kImageIdentity;
+  submission.metadata.session_epoch           = kSessionEpoch;
+  submission.metadata.presentation_request_id = 8;
+  sink().BindFrameSubmission(submission);
+  sink().EnsureSize(2, 2);
+  ASSERT_TRUE(static_cast<bool>(sink().MapResourceForWrite(FrameMemoryDomain::OpenClDevice)));
+  sink().UnmapResource();
+  viewport_->setSessionEpoch(kSessionEpoch + 1);
+  viewport_->setImageIdentity(kImageIdentity + 1);
+  sink().NotifyFrameReady(submission);
+  EXPECT_FALSE(sink().HasPendingImportedFrame());
+  EXPECT_EQ(sink().submitted_frame_count(), 0u);
+  EXPECT_TRUE(sink().DrainPendingHostFrames(kSessionEpoch + 1, kImageIdentity + 1).empty());
+  viewport_->suspendPresentation();
+  const auto mapping = sink().MapResourceForWrite(FrameMemoryDomain::OpenClDevice);
+  EXPECT_FALSE(static_cast<bool>(mapping));
+  EXPECT_TRUE(mapping.presentation_suspended);
+}
+
+TEST_F(EditorViewportSuspensionTest, CoverageHostReadbackPreservesIdentityAndClearOrdering) {
+  SelectOpenClViewport();
+  auto*                    coverage = viewport_->maskCoverageSink();
+  MaskCoveragePresentation presentation;
+  presentation.identity               = {9, kSessionEpoch, kImageIdentity};
+  presentation.geometry.render_extent = {2, 2};
+  auto mapping = coverage->MapCoverageTarget(presentation, 2, 2, FrameMemoryDomain::OpenClDevice);
+  ASSERT_TRUE(static_cast<bool>(mapping));
+  EXPECT_EQ(mapping.memory_domain, FrameMemoryDomain::HostVisible);
+  std::fill_n(static_cast<float*>(mapping.data), 16, 0.5f);
+  coverage->UnmapCoverageTarget();
+  EXPECT_EQ(coverage->PublishCoverage(), MaskCoveragePublication::Published);
+  ASSERT_TRUE(coverage->HasPendingHostCoverage());
+  auto frame = coverage->TakePendingHostCoverage(kSessionEpoch, kImageIdentity);
+  ASSERT_TRUE(frame.has_value());
+  EXPECT_EQ(frame->presentation.identity.request_id, 9u);
+  EXPECT_FLOAT_EQ(static_cast<const float*>(frame->frame.pixels.get())[0], 0.5f);
+  mapping = coverage->MapCoverageTarget(presentation, 2, 2, FrameMemoryDomain::OpenClDevice);
+  ASSERT_TRUE(static_cast<bool>(mapping));
+  coverage->UnmapCoverageTarget();
+  EXPECT_EQ(coverage->PublishCoverage(), MaskCoveragePublication::Published);
+  coverage->ClearCoverage();
+  EXPECT_FALSE(coverage->HasPendingHostCoverage());
+  EXPECT_EQ(coverage->ClearedThrough(), coverage->PublishedCount());
+  mapping = coverage->MapCoverageTarget(presentation, 2, 2, FrameMemoryDomain::OpenClDevice);
+  ASSERT_TRUE(static_cast<bool>(mapping));
+  coverage->UnmapCoverageTarget();
+  viewport_->setSessionEpoch(kSessionEpoch + 1);
+  EXPECT_EQ(coverage->PublishCoverage(), MaskCoveragePublication::DiscardedForImageChange);
+}
+#endif
 
 TEST_F(EditorViewportSuspensionTest, MinimizedViewportRefusesFramesAtOnceAndResumesWritable) {
   const int slot = PublishTarget(64, 48);
