@@ -34,6 +34,30 @@ gtest_discover_tests(DngColorProfileCacheTest TEST_PREFIX "DngColorProfileCacheT
   PROPERTIES LABELS "ci_core_flow;image")
 alcedo_register_test_target(DngColorProfileCacheTest image ci_core)
 
+# DCP file reader: synthetic DCP files from dcp_test_file_writer.hpp, no vendor profile bytes.
+add_executable(DcpFileReaderTest ${ALCEDO_TEST_ROOT}/image/dcp_file_reader_test.cpp)
+target_include_directories(DcpFileReaderTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DcpFileReaderTest PRIVATE GTest::gtest_main Image)
+gtest_discover_tests(DcpFileReaderTest TEST_PREFIX "DcpFileReaderTest."
+  PROPERTIES LABELS "ci_core_flow;image")
+alcedo_register_test_target(DcpFileReaderTest image ci_core)
+
+# ProfileToneCurve spline, table, and baseline RGB tone against a port of the DNG SDK.
+add_executable(DngToneCurveTest ${ALCEDO_TEST_ROOT}/image/dng_tone_curve_test.cpp)
+target_include_directories(DngToneCurveTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DngToneCurveTest PRIVATE GTest::gtest_main Image)
+gtest_discover_tests(DngToneCurveTest TEST_PREFIX "DngToneCurveTest."
+  PROPERTIES LABELS "ci_core_flow;image")
+alcedo_register_test_target(DngToneCurveTest image ci_core)
+
+# DCP library index, camera match, and loaded-profile cache over synthetic DCP files.
+add_executable(DcpProfileLibraryTest ${ALCEDO_TEST_ROOT}/image/dcp_profile_library_test.cpp)
+target_include_directories(DcpProfileLibraryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DcpProfileLibraryTest PRIVATE GTest::gtest_main Image)
+gtest_discover_tests(DcpProfileLibraryTest TEST_PREFIX "DcpProfileLibraryTest."
+  PROPERTIES LABELS "ci_core_flow;image")
+alcedo_register_test_target(DcpProfileLibraryTest image ci_core)
+
 # Exiv2 XMP toolkit started on the main thread before parallel XMP decodes (issue 389). Its own
 # executable, so no other test in the process starts the toolkit first.
 add_executable(Exiv2XmpToolkitScopeTest ${ALCEDO_TEST_ROOT}/image/exiv2_xmp_toolkit_scope_test.cpp)

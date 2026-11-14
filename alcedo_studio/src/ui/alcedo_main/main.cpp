@@ -108,12 +108,13 @@ auto ParseStoredEditorBackendToken(const QString& raw)
   const auto parsed = alcedo::editor_rhi::ParseEditorBackendToken(
       std::string_view(encoded_value.constData(), static_cast<size_t>(encoded_value.size())));
   if (!parsed.has_value()) {
-    qWarning("Ignoring unsupported saved accelerator backend: %s", encoded_value.constData());
+    qCWarning(alcedo::diag::appLog, "Ignoring unsupported saved accelerator backend: %s",
+              encoded_value.constData());
     return std::nullopt;
   }
   if (!alcedo::editor_rhi::IsBackendAvailableInThisBuild(*parsed)) {
-    qWarning("Saved accelerator backend is unavailable in this build: %s",
-             alcedo::editor_rhi::ToString(*parsed));
+    qCWarning(alcedo::diag::appLog, "Saved accelerator backend is unavailable in this build: %s",
+              alcedo::editor_rhi::ToString(*parsed));
     return std::nullopt;
   }
   return parsed;
@@ -126,8 +127,8 @@ auto ReadConfiguredEditorBackend() -> std::optional<alcedo::editor_rhi::EditorBa
                            QLatin1String(kSettingsApplication));
   const QString stored_value =
       settings.value(QLatin1String(kAcceleratorBackendSettingsKey)).toString();
-  qInfo("editor.backend.settings key=%s value=\"%s\" file=%s", kAcceleratorBackendSettingsKey,
-        qPrintable(stored_value), qPrintable(settings.fileName()));
+  qCInfo(alcedo::diag::appLog, "editor.backend.settings key=%s value=\"%s\" file=%s",
+         kAcceleratorBackendSettingsKey, qPrintable(stored_value), qPrintable(settings.fileName()));
   return ParseStoredEditorBackendToken(stored_value);
 }
 
@@ -219,7 +220,7 @@ int main(int argc, char* argv[]) {
   //   3) platform default
   const auto backend_parse = alcedo::editor_rhi::ParseEditorBackendArgs(argc, argv);
   if (backend_parse.present && !backend_parse.error.empty()) {
-    qCritical("Invalid --editor-backend: %s", backend_parse.error.c_str());
+    qCCritical(alcedo::diag::appLog, "Invalid --editor-backend: %s", backend_parse.error.c_str());
     return 1;
   }
 
@@ -235,7 +236,7 @@ int main(int argc, char* argv[]) {
     editor_backend = *def;
     backend_source = "default";
   } else {
-    qCritical("No editor backend available for this platform/build");
+    qCCritical(alcedo::diag::appLog, "No editor backend available for this platform/build");
     return 1;
   }
 
@@ -256,7 +257,7 @@ int main(int argc, char* argv[]) {
   // Thumbnail and import workers read XMP in parallel; the toolkit must start before they do.
   const alcedo::Exiv2XmpToolkitScope xmp_toolkit;
   if (!xmp_toolkit.initialized()) {
-    qCritical("The Exiv2 XMP toolkit cannot be initialized");
+    qCCritical(alcedo::diag::appLog, "The Exiv2 XMP toolkit cannot be initialized");
     return 1;
   }
 
@@ -279,8 +280,8 @@ int main(int argc, char* argv[]) {
   // and initialize CUDA adapter or OpenCL/GL sharing.
   const auto startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(editor_backend);
   if (!startup.ok) {
-    qCritical("Editor backend startup failed (%s): %s",
-              alcedo::editor_rhi::ToString(editor_backend), startup.error.c_str());
+    qCCritical(alcedo::diag::appLog, "Editor backend startup failed (%s): %s",
+               alcedo::editor_rhi::ToString(editor_backend), startup.error.c_str());
     alcedo::diag::PreviewPerformance::Shutdown();
     alcedo::diag::ShutdownApplicationLogging();
     return 1;
@@ -384,15 +385,17 @@ int main(int argc, char* argv[]) {
       if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst())) {
 #ifdef Q_OS_WIN
         if (!native_window_frame.Install(window)) {
-          qWarning("Could not install the native Windows frame integration");
+          qCWarning(alcedo::diag::appLog, "Could not install the native Windows frame integration");
         }
 #endif
 #ifdef Q_OS_MACOS
         if (!native_window_frame.Install(window)) {
-          qWarning("Could not install the native macOS traffic-light integration");
+          qCWarning(alcedo::diag::appLog,
+                    "Could not install the native macOS traffic-light integration");
         }
 #endif
         alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);
+        app_modules.AttachDisplayWindow(window);
         window->setProperty("nativeFrameReady", true);
         window->showMaximized();
       }
@@ -418,7 +421,8 @@ int main(int argc, char* argv[]) {
             << QStringLiteral("automation.session.ready name=%1 socket=%2")
                    .arg(automation_session->session_name(), automation_session->socket_name());
       } else {
-        qWarning().noquote() << "automation.session.start.failed" << session_error;
+        qCWarning(alcedo::diag::appLog).noquote()
+            << "automation.session.start.failed" << session_error;
         automation_session.reset();
       }
     }

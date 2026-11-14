@@ -38,7 +38,6 @@
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/raster_develop_params.hpp"
 #include "edit/runtime/texture_format.hpp"
-#include "gpu/gpu_pool_trace.hpp"
 #include "gpu/transient_allocation_policy.hpp"
 #include "gpu/transient_buffer_scope.hpp"
 #include "gpu/transient_last_use.hpp"
@@ -738,7 +737,7 @@ void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& p
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
     throw std::runtime_error(std::string("ExecuteOpenClCameraColor: ") +
-                             std::string(ColorTransformErrorMessage(resolved.error)));
+                             ColorTransformFailureMessage(develop_params, resolved.error));
   }
   auto* input = workspace.Images().Find(plan.geometry_output);
   if (input == nullptr || input->Empty()) {
@@ -772,7 +771,7 @@ void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& p
   CheckOpenCl(clSetKernelArg(kernel, 1, sizeof(cl_mem), &dst_mem), "camera arg1");
   CheckOpenCl(clSetKernelArg(kernel, 2, sizeof(cl_mem), &params_mem), "camera arg2");
   CheckOpenCl(clSetKernelArg(kernel, 3, sizeof(cl_uint), &offset_floats), "camera arg3");
-  const auto table_data = PackDngProfileGpuData(develop_params.camera_profile, resolved.transform);
+  const auto table_data = PackDngProfileGpuData(develop_params, resolved.transform);
   auto&      tables =
       UploadDngProfileGpuData(workspace, develop->Id(), table_data, device.CommandContext());
   cl_mem table_mem = tables.Native();

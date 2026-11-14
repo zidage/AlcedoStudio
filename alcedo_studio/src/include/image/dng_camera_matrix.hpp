@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <string_view>
 
 namespace alcedo {
@@ -84,6 +86,55 @@ inline void ApplyAnalogBalanceAndCameraCalibration(double* color_matrix,
   double calibrated[9];
   Multiply3x3RowMajor(calibration_matrix, color_matrix, calibrated);
   Multiply3x3RowMajor(analog_matrix, calibrated, color_matrix);
+}
+
+/**
+ * @brief Correlated color temperature of a DNG `CalibrationIlluminant` value, in kelvin.
+ *
+ * Shared by the embedded DNG import and the DCP file reader.
+ *
+ * @return NaN for an illuminant with no defined temperature (for example 0 Unknown, 255 Other).
+ */
+inline auto CalibrationIlluminantToCct(const std::uint32_t illuminant) -> double {
+  switch (illuminant) {
+    case 1:   // Daylight
+    case 21:  // D65
+      return 6504.0;
+    case 2:  // Fluorescent
+      return 4150.0;
+    case 3:   // Tungsten
+    case 17:  // Standard Light A
+      return 2856.0;
+    case 4:  // Flash
+    case 9:  // Fine weather
+      return 5500.0;
+    case 10:  // Cloudy
+      return 6500.0;
+    case 11:  // Shade
+      return 7500.0;
+    case 12:  // Daylight fluorescent
+      return 6430.0;
+    case 13:  // Day white fluorescent
+      return 5300.0;
+    case 14:  // Cool white fluorescent
+      return 4230.0;
+    case 15:  // White fluorescent
+      return 3450.0;
+    case 18:  // Standard Light B
+      return 4874.0;
+    case 19:  // Standard Light C
+      return 6774.0;
+    case 20:  // D55
+      return 5503.0;
+    case 22:  // D75
+      return 7504.0;
+    case 23:  // D50
+      return 5003.0;
+    case 24:  // ISO studio tungsten
+      return 3200.0;
+    default:
+      return std::numeric_limits<double>::quiet_NaN();
+  }
 }
 
 /// Adobe SDK applies CameraCalibration only when the two signatures compare equal.

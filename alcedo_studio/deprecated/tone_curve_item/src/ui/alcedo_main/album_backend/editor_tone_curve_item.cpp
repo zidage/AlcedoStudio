@@ -188,11 +188,12 @@ auto BuildToneCurveSceneGeometry(const std::vector<QPointF>& normalized_points, 
 
   const auto points =
       normalized_points.empty() ? curve::DefaultCurveControlPoints() : normalized_points;
-  const auto cache = curve::BuildCurveHermiteCache(points);
+  // The render spline: the grade kernels apply the same tone_curve evaluation.
+  const auto spline = curve::SolveCurveSpline(points);
   g.curve_samples.reserve(static_cast<size_t>(g.sample_count) + 1);
   for (int i = 0; i <= g.sample_count; ++i) {
     const float x = static_cast<float>(i) / static_cast<float>(g.sample_count);
-    const float y = curve::EvaluateCurveHermite(x, points, cache);
+    const float y = tone_curve::EvaluateToneCurveSpline(spline, x);
     g.curve_samples.push_back(ToneCurveToWidgetPoint(QPointF(x, y), g.plot_rect));
   }
 

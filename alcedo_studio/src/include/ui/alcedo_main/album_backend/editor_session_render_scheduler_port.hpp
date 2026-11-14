@@ -78,8 +78,8 @@ using EditorGpuResourceReleaseCompletion = std::function<void(EditorGpuResourceR
  *
  * Maps the intent to render type, viewport region, and frame metadata. Sets
  * `document_geometry_ = RotatedUncroppedSource` exactly when `intent.geometry_overlay_only` is true
- * (Geometry panel open); otherwise the document crop and rotation apply. Pure value; reads no
- * pipeline state.
+ * (Geometry panel open); otherwise the document crop and rotation apply. Copies the curve input
+ * histogram request of the intent (issue #888). Pure value; reads no pipeline state.
  */
 [[nodiscard]] auto MakeEditorRenderDesc(const alcedo::EditorRenderRequest& request)
     -> alcedo::RenderDesc;

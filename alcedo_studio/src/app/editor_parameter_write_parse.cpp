@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "app/dcp_camera_profile_binding.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/film_format.hpp"
@@ -25,6 +26,8 @@
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
+#include "edit/operators/models/tone_curve_spline.hpp"
 
 namespace alcedo {
 namespace {
@@ -184,28 +187,26 @@ auto ParseScalarWrite(const nlohmann::json& params, std::string_view field,
   return EditorScalarWrite{*value};
 }
 
-auto ParseCurveWrite(const nlohmann::json& params) -> EditorCurveWrite {
-  const auto& object = UnwrapObject(params, {"curve"}, "curve");
-  RejectUnknownKeys(object, {"points", "size"}, "curve");
-  if (!object.contains("points")) {
-    throw std::invalid_argument("curve.points is required");
+/// The form of a parse: a write sets only its keys; a complete value sets every field.
+enum class ParseForm { Write, Value };
+
+/// The control points of one curve under `curve.<key>`. They lie in the unit square and their x
+/// values strictly increase, as the curve panel writes them. Out-of-range or unordered points are
+/// rejected, not clamped or sorted.
+auto ParseCurvePoints(const nlohmann::json& points_json, std::string_view key)
+    -> std::vector<CurvePoint> {
+  const std::string name = "curve." + std::string{key};
+  if (!points_json.is_array() || points_json.size() < tone_curve::kMinControlPoints) {
+    throw std::invalid_argument(name + " must contain at least two points");
   }
-  const auto& points_json = object.at("points");
-  if (!points_json.is_array() || points_json.size() < 2) {
-    throw std::invalid_argument("curve.points must contain at least two points");
+  if (points_json.size() > tone_curve::kMaxControlPoints) {
+    throw std::invalid_argument(name + " must contain at most " +
+                                std::to_string(tone_curve::kMaxControlPoints) + " points");
   }
-  if (object.contains("size")) {
-    if (!object.at("size").is_number_integer() ||
-        object.at("size").get<std::size_t>() != points_json.size()) {
-      throw std::invalid_argument("curve.size must match curve.points");
-    }
-  }
-  // The control points lie in the unit square and their x values strictly increase, as the curve
-  // panel writes them. Out-of-range or unordered points are rejected, not clamped or sorted.
   std::vector<CurvePoint> points;
   points.reserve(points_json.size());
   for (std::size_t index = 0; index < points_json.size(); ++index) {
-    const auto  context = "curve.points[" + std::to_string(index) + "]";
+    const auto  context = name + "[" + std::to_string(index) + "]";
     const auto& point   = RequireObject(points_json.at(index), context);
     RejectUnknownKeys(point, {"x", "y"}, "curve point");
     if (!point.contains("x") || !point.contains("y")) {
@@ -220,12 +221,61 @@ auto ParseCurveWrite(const nlohmann::json& params) -> EditorCurveWrite {
       throw std::invalid_argument(context + ".y must be in [0, 1]");
     }
     if (!points.empty() && parsed.x <= points.back().x) {
-      throw std::invalid_argument(context + ".x must be greater than curve.points[" +
+      throw std::invalid_argument(context + ".x must be greater than " + name + "[" +
                                   std::to_string(index - 1) + "].x");
     }
     points.push_back(parsed);
   }
-  return EditorCurveWrite{std::move(points)};
+  return points;
+}
+
+/// The points of the Tone Curve preset @p id_json for `curve.<key>` (a write only).
+auto ParseCurvePresetPoints(const nlohmann::json& id_json, std::string_view key)
+    -> std::vector<CurvePoint> {
+  const auto  id     = id_json.get<std::string>();
+  const auto* preset = FindToneCurvePreset(id);
+  if (preset == nullptr) {
+    throw std::invalid_argument("curve." + std::string{key} + " names no Tone Curve preset: " + id +
+                                "; curve.presets lists them");
+  }
+  return preset->PointList();
+}
+
+/// `curve`: the RGB curve under `points` (with an optional `size`, the point count) and the
+/// channel curves under `red`, `green`, and `blue`. A write has one or more of the four curves and
+/// leaves the others as they are; the value of a curve is its list of points or, in a write, the
+/// id of a Tone Curve preset, which writes the points of the preset. A complete value (the Model
+/// JSON of history replay) has `points`; a channel key that it does not have is the identity, as
+/// the Model omits it.
+auto ParseCurveWrite(const nlohmann::json& params, ParseForm form) -> EditorCurveWrite {
+  const auto& object = UnwrapObject(params, {"curve"}, "curve");
+  RejectUnknownKeys(object, {"points", "size", "red", "green", "blue"}, "curve");
+  if (form == ParseForm::Value && !object.contains("points")) {
+    throw std::invalid_argument("curve.points is required");
+  }
+  if (form == ParseForm::Write && !object.contains("points") && !object.contains("red") &&
+      !object.contains("green") && !object.contains("blue")) {
+    throw std::invalid_argument("curve requires points, red, green, or blue");
+  }
+  if (object.contains("size")) {
+    if (!object.contains("points") || !object.at("size").is_number_integer() ||
+        !object.at("points").is_array() ||
+        object.at("size").get<std::size_t>() != object.at("points").size()) {
+      throw std::invalid_argument("curve.size must match curve.points");
+    }
+  }
+  EditorCurveWrite write;
+  for (const auto channel : kCurveChannels) {
+    const std::string key{CurveChannelKey(channel)};
+    if (object.contains(key) && form == ParseForm::Write && object.at(key).is_string()) {
+      write.Channel(channel) = ParseCurvePresetPoints(object.at(key), key);
+    } else if (object.contains(key)) {
+      write.Channel(channel) = ParseCurvePoints(object.at(key), key);
+    } else if (form == ParseForm::Value) {
+      write.Channel(channel) = IdentityCurvePoints();
+    }
+  }
+  return write;
 }
 
 /// Parse the complete LMT state: the Model JSON (`cube_path` or a tagged `reference`,
@@ -401,6 +451,7 @@ auto ParseRawDecodeUpdate(const nlohmann::json& params) -> DevelopRawDecodeUpdat
                      "as_shot_cct",
                      "as_shot_tint",
                      "camera_profile",
+                     "camera_profile_file",
                      "lens_enabled",
                      "apply_vignetting",
                      "apply_distortion",
@@ -442,6 +493,7 @@ auto ParseColorTemperatureUpdate(const nlohmann::json& params) -> DevelopColorTe
                      "use_camera_wb",
                      "user_wb",
                      "camera_profile",
+                     "camera_profile_file",
                      "lens_enabled",
                      "apply_vignetting",
                      "apply_distortion",
@@ -531,7 +583,8 @@ auto ParseLensCalibrationUpdate(const nlohmann::json& params) -> DevelopLensCali
                      "custom_tint",
                      "as_shot_cct",
                      "as_shot_tint",
-                     "camera_profile"},
+                     "camera_profile",
+                     "camera_profile_file"},
                     "lens_calib");
   DevelopLensCalibrationUpdate update;
   update.lens_enabled         = ReadOptionalBool(object, {"lens_enabled", "enabled"}, "lens_calib");
@@ -876,8 +929,60 @@ auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
   return update;
 }
 
-/// The form of a parse: a write sets only its keys; a complete value sets every field.
-enum class ParseForm { Write, Value };
+/// `camera_profile_file` (dcp_camera_profile_plan.md, phase C4).
+///
+/// A write is a selection: {"camera_model", "profile_name"} with an optional boolean
+/// "profile_tone" (default true; dcp_profile_tone_curve_study.md, section 6.3), or the same object
+/// under "camera_profile_file". `{}`, null, and {"camera_profile_file": null} clear the reference.
+/// The identity is resolved through the DCP library; an identity that the library does not hold is
+/// rejected, so the document stays unchanged.
+///
+/// A value is a stored Develop JSON, complete or reduced to the owned key: the reference with its
+/// fingerprint under "camera_profile_file", and no key for no reference. The other keys belong to
+/// other Develop fields. An identity that the library does not hold gives an unbound reference,
+/// so a project opens without its DCP folder and its render fails with the named error.
+auto ParseCameraProfileFileUpdate(const nlohmann::json& params, ParseForm form)
+    -> DevelopCameraProfileFileUpdate {
+  constexpr std::string_view kField = "camera_profile_file";
+  RequireObject(params, kField);
+  const nlohmann::json* reference = &params;
+  if (params.contains(kField)) {
+    reference = &params.at(std::string{kField});
+    if (form == ParseForm::Write && params.size() != 1) {
+      RejectUnknownKeys(params, {kField}, kField);
+    }
+  } else if (form == ParseForm::Value && !params.contains("camera_model")) {
+    return {};
+  }
+  if (reference->is_null() || (reference->is_object() && reference->empty())) {
+    return {};
+  }
+  if (form == ParseForm::Value) {
+    const auto                     stored   = DevelopCameraProfileFileFromJson(*reference);
+    auto                           resolved = ResolveStoredDcpCameraProfileFile(stored);
+    DevelopCameraProfileFileUpdate update;
+    update.profile_tone = resolved.profile_tone;
+    if (resolved.IsBound()) {
+      update.profile = std::move(resolved.profile);
+    } else {
+      update.unresolved = std::move(resolved);
+    }
+    return update;
+  }
+  RequireObject(*reference, kField);
+  RejectUnknownKeys(*reference, {"camera_model", "profile_name", "profile_tone"}, kField);
+  const auto camera_model = ReadOptionalString(*reference, {"camera_model"}, kField);
+  const auto profile_name = ReadOptionalString(*reference, {"profile_name"}, kField);
+  if (!camera_model.has_value() || camera_model->empty() || !profile_name.has_value() ||
+      profile_name->empty()) {
+    throw std::invalid_argument(
+        "camera_profile_file: a selection needs the strings camera_model and profile_name");
+  }
+  DevelopCameraProfileFileUpdate update;
+  update.profile      = FindSelectableDcpCameraProfile(*camera_model, *profile_name);
+  update.profile_tone = ReadOptionalBool(*reference, {"profile_tone"}, kField).value_or(true);
+  return update;
+}
 
 auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, ParseForm form)
     -> EditorParameterWrite {
@@ -921,7 +1026,7 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, Par
     return ParseFilmFormatUpdate(params);
   }
   if (field == "curve") {
-    return ParseCurveWrite(params);
+    return ParseCurveWrite(params, form);
   }
   if (field == "lut" || field == "ocio_lmt") {
     return ParseLutWrite(params);
@@ -949,6 +1054,9 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, Par
   }
   if (field == "input_profile") {
     return ParseInputProfileUpdate(params);
+  }
+  if (field == "camera_profile_file") {
+    return ParseCameraProfileFileUpdate(params, form);
   }
   if (field == "odt") {
     auto update = ParseDrtUpdate(params);

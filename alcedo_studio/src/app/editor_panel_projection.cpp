@@ -18,6 +18,7 @@
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "image/dcp_camera_profile.hpp"
 
 namespace alcedo {
 namespace {
@@ -233,7 +234,12 @@ auto ReadCurve(const PipelineDocument& document, const EditorParameterTarget& ta
   if (typed == nullptr) {
     return SetError(error, "Adjustment Model type does not match field curve");
   }
-  return FinishField(target, EditorPanelCurveValue{typed->Points()}, out);
+  return FinishField(target,
+                     typed->Read([](const CurvePayload& payload) {
+                       return EditorPanelCurveValue{payload.points, payload.red, payload.green,
+                                                    payload.blue};
+                     }),
+                     out);
 }
 
 auto ReadLut(const PipelineDocument& document, const EditorParameterTarget& target,
@@ -448,6 +454,26 @@ auto ReadInputProfile(const PipelineDocument& document, const EditorParameterTar
   return FinishField(target, std::move(value), out);
 }
 
+auto ReadCameraProfileFile(const PipelineDocument& document, const EditorParameterTarget& target,
+                           EditorPanelFieldPresentation* out, std::string* error) -> bool {
+  const auto* params = DevelopParams(document, target, error);
+  if (params == nullptr) {
+    return false;
+  }
+  EditorPanelCameraProfileFileValue value;
+  value.raster           = params->RasterInput().has_value();
+  value.embedded_default = params->DngProfile().IsReferenced();
+  if (const auto reference = params->CameraProfileFile(); reference.has_value()) {
+    value.selected     = true;
+    value.resolved     = reference->IsBound();
+    value.has_tone_curve = value.resolved && reference->profile->profile_tone_curve != nullptr;
+    value.profile_tone   = reference->profile_tone;
+    value.camera_model = reference->camera_model;
+    value.profile_name = reference->profile_name;
+  }
+  return FinishField(target, std::move(value), out);
+}
+
 auto ReadGeometry(const PipelineDocument& document, const EditorParameterTarget& target,
                   EditorPanelFieldPresentation* out, std::string* error) -> bool {
   if (target.owner_kind != EditorParameterOwnerKind::Document) {
@@ -534,6 +560,7 @@ auto EditorPanelAdapterTable::Production() -> EditorPanelAdapterTable {
     table.Add({"color_temp", "look", &ReadColorTemp});
     table.Add({"lens_calib", "raw", &ReadLens});
     table.Add({"input_profile", "raw", &ReadInputProfile});
+    table.Add({"camera_profile_file", "raw", &ReadCameraProfileFile});
     table.Add({"crop_rotate", "geometry", &ReadGeometry});
     return table;
   }();

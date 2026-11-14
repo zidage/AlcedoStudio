@@ -159,6 +159,138 @@
         <source>Licenses and training data of the AI models</source>
         <translation>AI 模型的许可证与训练数据</translation>
     </message>
+    <message>
+        <source>Film simulation LUTs</source>
+        <translation>胶片模拟 LUT</translation>
+    </message>
+    <message>
+        <source>Film Print spectral simulation</source>
+        <translation>胶片印片光谱模拟</translation>
+    </message>
+    <message>
+        <source>Film Print film data</source>
+        <translation>胶片印片片种数据</translation>
+    </message>
+    <message>
+        <source>AI Mask point, path, and box selection</source>
+        <translation>AI 蒙版点选、路径和框选</translation>
+    </message>
+    <message>
+        <source>AI Mask Subject matting</source>
+        <translation>AI 蒙版主体抠图</translation>
+    </message>
+    <message>
+        <source>Camera color matrices</source>
+        <translation>相机色彩矩阵</translation>
+    </message>
+    <message>
+        <source>Neural demosaicing</source>
+        <translation>神经网络去马赛克</translation>
+    </message>
+    <message>
+        <source>Inpaint-opposed highlight reconstruction</source>
+        <translation>Inpaint-opposed 高光重建</translation>
+    </message>
+    <message>
+        <source>RCD demosaicing</source>
+        <translation>RCD 去马赛克</translation>
+    </message>
+    <message>
+        <source>OpenDRT</source>
+        <translation>OpenDRT</translation>
+    </message>
+    <message>
+        <source>ACES 2.0 output transforms</source>
+        <translation>ACES 2.0 输出变换</translation>
+    </message>
+    <message>
+        <source>Film grain</source>
+        <translation>胶片颗粒</translation>
+    </message>
+    <message>
+        <source>RAW decoding</source>
+        <translation>RAW 解码</translation>
+    </message>
+    <message>
+        <source>Lens correction</source>
+        <translation>镜头校正</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>元数据</translation>
+    </message>
+    <message>
+        <source>Image IO</source>
+        <translation>图像读写</translation>
+    </message>
+    <message>
+        <source>Color management</source>
+        <translation>色彩管理</translation>
+    </message>
+    <message>
+        <source>Catalog database</source>
+        <translation>图库数据库</translation>
+    </message>
+    <message>
+        <source>UI</source>
+        <translation>界面</translation>
+    </message>
+    <message>
+        <source>Alcedo</source>
+        <translation>Alcedo</translation>
+    </message>
+    <message>
+        <source>Studio</source>
+        <translation>Studio</translation>
+    </message>
+    <message>
+        <source>Copyright</source>
+        <translation>版权</translation>
+    </message>
+    <message>
+        <source>License</source>
+        <translation>许可证</translation>
+    </message>
+    <message>
+        <source>GPL-3.0-only, with an additional permission under GPLv3 section 7 for combining and distributing the required NVIDIA CUDA components.</source>
+        <translation>基于 GPL-3.0-only 许可，并依据 GPLv3 第 7 条附加许可，允许组合与分发所需的 NVIDIA CUDA 组件。</translation>
+    </message>
+    <message>
+        <source>GitHub</source>
+        <translation>GitHub</translation>
+    </message>
+    <message>
+        <source>Docs</source>
+        <translation>文档</translation>
+    </message>
+    <message>
+        <source>Build %1</source>
+        <translation>构建 %1</translation>
+    </message>
+    <message>
+        <source>Logs</source>
+        <translation>日志</translation>
+    </message>
+    <message>
+        <source>Open Log Folder</source>
+        <translation>打开日志文件夹</translation>
+    </message>
+    <message>
+        <source>View</source>
+        <translation>查看</translation>
+    </message>
+    <message>
+        <source>View all</source>
+        <translation>查看全部</translation>
+    </message>
+    <message>
+        <source>Components</source>
+        <translation>组件</translation>
+    </message>
+    <message>
+        <source>ACES is a trademark of the Academy of Motion Picture Arts and Sciences (A.M.P.A.S.). Alcedo Studio is an independent project and is not affiliated with, certified, or endorsed by A.M.P.A.S., Academy Software Foundation, Jed Smith, or any other upstream authors mentioned above. These names are used solely to identify the respective technologies. Film stock names such as Kodak and Fujifilm are trademarks of their owners and identify the films that Film Print simulates.</source>
+        <translation>ACES 是美国电影艺术与科学学院（A.M.P.A.S.）的商标。Alcedo Studio 是独立项目，与 A.M.P.A.S.、Academy Software Foundation、Jed Smith 及上述其他上游作者均无关联，也未获其认证或认可。这些名称仅用于标识相应技术。Kodak、Fujifilm 等胶片名称是其所有者的商标，用于标识胶片印片所模拟的胶片。</translation>
+    </message>
 </context>
 <context>
     <name>AcceleratorPreparationOverlay</name>
@@ -1099,6 +1231,10 @@
 </context>
 <context>
     <name>Alcedo</name>
+    <message>
+        <source>The collection is no longer in the library.</source>
+        <translation>该影集已不在图库中。</translation>
+    </message>
     <message>
         <location filename="../album_backend/image_controller.cpp" line="+51"/>
         <source>Capture</source>
@@ -2058,6 +2194,58 @@ Alcedo 将改用 %1。</translation>
     <message>
         <source>Other Tasks</source>
         <translation>其他任务</translation>
+    </message>
+</context>
+<context>
+    <name>CameraProfileFolderTile</name>
+    <message>
+        <location filename="../qml/CameraProfileFolderTile.qml" line="+34"/>
+        <source>Choose the DCP folder</source>
+        <translation>选择 DCP 文件夹</translation>
+    </message>
+    <message>
+        <source>Camera profiles</source>
+        <translation>相机配置文件</translation>
+    </message>
+    <message>
+        <source>The folder of the DCP camera profiles that the editor lists for each camera.</source>
+        <translation>存放 DCP 相机配置文件的文件夹。编辑器按相机列出其中的配置文件。</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>浏览…</translation>
+    </message>
+    <message>
+        <source>Rescan</source>
+        <translation>重新扫描</translation>
+    </message>
+</context>
+<context>
+    <name>DisplayProfileTile</name>
+    <message>
+        <location filename="../qml/DisplayProfileTile.qml" line="+27"/>
+        <source>Applied</source>
+        <translation>已应用</translation>
+    </message>
+    <message>
+        <source>Managed by Windows</source>
+        <translation>由 Windows 管理</translation>
+    </message>
+    <message>
+        <source>No profile, sRGB</source>
+        <translation>无配置文件，按 sRGB</translation>
+    </message>
+    <message>
+        <source>Not applied</source>
+        <translation>未应用</translation>
+    </message>
+    <message>
+        <source>No monitor</source>
+        <translation>无显示器</translation>
+    </message>
+    <message>
+        <source>Display profile</source>
+        <translation>显示器配置文件</translation>
     </message>
 </context>
 <context>
@@ -4607,6 +4795,26 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
 </context>
 <context>
+    <name>EditorCameraProfileSection</name>
+    <message>
+        <location filename="../qml/EditorCameraProfileSection.qml" line="+59"/>
+        <source>Camera Profile</source>
+        <translation>相机配置文件</translation>
+    </message>
+    <message>
+        <source>Set a DCP folder in Settings &gt; LUTs and Color Management.</source>
+        <translation>在“设置 &gt; LUT 和色彩管理”中设置 DCP 文件夹。</translation>
+    </message>
+    <message>
+        <source>The DCP folder has no profile of this camera.</source>
+        <translation>DCP 文件夹中没有这台相机的配置文件。</translation>
+    </message>
+    <message>
+        <source>Tone Curve</source>
+        <translation>色调曲线</translation>
+    </message>
+</context>
+<context>
     <name>EditorRawDecodePanel</name>
     <message>
         <location filename="../qml/EditorRawDecodePanel.qml" line="+35"/>
@@ -4814,6 +5022,53 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <location line="+1"/>
         <source>Select an image to view scopes</source>
         <translation>选择图像以查看示波器</translation>
+    </message>
+</context>
+<context>
+    <name>EditorToneCurveSection</name>
+    <message>
+        <source>Tone Curve</source>
+        <translation>色调曲线</translation>
+    </message>
+    <message>
+        <source>Histogram</source>
+        <translation>直方图</translation>
+    </message>
+    <message>
+        <source>Fit to photo range</source>
+        <translation>适配照片范围</translation>
+    </message>
+    <message>
+        <source>In</source>
+        <translation>输入</translation>
+    </message>
+    <message>
+        <source>Out</source>
+        <translation>输出</translation>
+    </message>
+    <message>
+        <source>Custom</source>
+        <translation>自定义</translation>
+    </message>
+    <message>
+        <source>Linear</source>
+        <translation>线性</translation>
+    </message>
+    <message>
+        <source>Soft Contrast</source>
+        <translation>柔和对比度</translation>
+    </message>
+    <message>
+        <source>Medium Contrast</source>
+        <translation>中等对比度</translation>
+    </message>
+    <message>
+        <source>Strong Contrast</source>
+        <translation>强对比度</translation>
+    </message>
+    <message>
+        <source>Film-like</source>
+        <translation>胶片感</translation>
     </message>
 </context>
 <context>
@@ -5713,6 +5968,22 @@ Refresh the library afterwards; they are listed under the User category. Import 
 <context>
     <name>FolderImportConfirmDialog</name>
     <message>
+        <source>The dropped items could not be read.</source>
+        <translation>无法读取拖入的项目。</translation>
+    </message>
+    <message>
+        <source>No files found in the dropped items.</source>
+        <translation>拖入的项目中没有文件。</translation>
+    </message>
+    <message>
+        <source>Import to %1</source>
+        <translation>导入到 %1</translation>
+    </message>
+    <message>
+        <source>%1 dropped file(s) are imported with every type.</source>
+        <translation>拖入的 %1 个文件不按类型筛选，全部导入。</translation>
+    </message>
+    <message>
         <location filename="../qml/FolderImportConfirmDialog.qml" line="+84"/>
         <source>Import From Folder</source>
         <translation>从文件夹导入</translation>
@@ -6207,6 +6478,10 @@ Refresh the library afterwards; they are listed under the User category. Import 
 <context>
     <name>LibraryWorkspace</name>
     <message>
+        <source>Import to %1</source>
+        <translation>导入到 %1</translation>
+    </message>
+    <message>
         <location filename="../qml/LibraryWorkspace.qml" line="+255"/>
         <source>Browser</source>
         <translation>浏览</translation>
@@ -6699,6 +6974,10 @@ Create a new layer above it and draw the Mask there?</source>
 </context>
 <context>
     <name>Main</name>
+    <message>
+        <source>All Photos</source>
+        <translation>全部图片</translation>
+    </message>
     <message>
         <location filename="../qml/Main.qml" line="+48"/>
         <source>Alcedo Studio</source>
@@ -7385,8 +7664,8 @@ Create a new layer above it and draw the Mask there?</source>
     </message>
     <message>
         <location filename="../qml/SettingDialog.qml" line="+1"/>
-        <source>LUTs</source>
-        <translation>LUT</translation>
+        <source>LUTs and Color Management</source>
+        <translation>LUT 和色彩管理</translation>
     </message>
     <message>
         <location filename="../qml/SettingDialog.qml" line="+164"/>
@@ -7626,6 +7905,14 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+2"/>
         <source>Current shortcut: %1. Press Enter or click to record a new shortcut.</source>
         <translation>当前快捷键：%1。按 Enter 或点击以录制新快捷键。</translation>
+    </message>
+</context>
+<context>
+    <name>StaggeredGridMark</name>
+    <message>
+        <location filename="../qml/StaggeredGridMark.qml" line="+25"/>
+        <source>Loading</source>
+        <translation>正在加载</translation>
     </message>
 </context>
 <context>
@@ -8343,6 +8630,19 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="-12"/>
         <source>Alcedo Studio will close and install the update.</source>
         <translation>Alcedo Studio 将关闭并安装更新。</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::EditorCameraProfileListModel</name>
+    <message>
+        <location filename="../album_backend/editor_camera_profile_list_model.cpp" line="+155"/>
+        <source>Embedded</source>
+        <translation>内嵌</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Built-in</source>
+        <translation>内置</translation>
     </message>
 </context>
 <context>

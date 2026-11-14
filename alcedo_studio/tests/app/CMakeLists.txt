@@ -29,6 +29,18 @@ gtest_discover_tests(LutLibraryServiceTest TEST_PREFIX "LutLibraryServiceTest."
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(LutLibraryServiceTest app ci_core)
 
+# DCP folder setting and scans of the Camera Profiles settings page (DCP plan C2).
+add_executable(CameraProfileLibraryServiceTest
+    ${ALCEDO_TEST_ROOT}/app/camera_profile_library_service_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
+target_include_directories(CameraProfileLibraryServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+    ${ALCEDO_TEST_ROOT})
+target_link_libraries(CameraProfileLibraryServiceTest PRIVATE CameraProfileLibraryService
+    GTest::gtest Qt6::Test)
+gtest_discover_tests(CameraProfileLibraryServiceTest TEST_PREFIX "CameraProfileLibraryServiceTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(CameraProfileLibraryServiceTest app ci_core)
+
 add_executable(LutPackageServiceTest
     ${ALCEDO_TEST_ROOT}/app/lut_package_service_test.cpp
     ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
@@ -334,6 +346,23 @@ gtest_discover_tests(PipelineDngProfileBindingTest TEST_PREFIX "PipelineDngProfi
   PROPERTIES LABELS "ci_core_flow")
 alcedo_copy_duckdb_fts_extension(PipelineDngProfileBindingTest)
 alcedo_register_test_target(PipelineDngProfileBindingTest app ci_core)
+
+# DCP camera profile reference (dcp_camera_profile_plan.md, C4): the project stores the reference,
+# and the field write, the history, and every load path bind it from the DCP library.
+add_executable(PipelineDcpProfileBindingTest
+  ${ALCEDO_TEST_ROOT}/app/pipeline_dcp_profile_binding_test.cpp)
+target_include_directories(PipelineDcpProfileBindingTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+  ${ALCEDO_TEST_DIR})
+target_link_libraries(PipelineDcpProfileBindingTest
+  ImportService ProjectService PipelineMgmtService AdjustmentTransferService
+  EditorPipelineCommandService PipelineHistoryApplier OpenImageIO::OpenImageIO
+  GTest::gtest_main)
+target_compile_definitions(PipelineDcpProfileBindingTest PRIVATE
+  ALCEDO_COMPAT_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/compat")
+gtest_discover_tests(PipelineDcpProfileBindingTest TEST_PREFIX "PipelineDcpProfileBindingTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_fts_extension(PipelineDcpProfileBindingTest)
+alcedo_register_test_target(PipelineDcpProfileBindingTest app ci_core)
 
 if(ALCEDO_CUDA_ENABLED)
   qt_add_executable(ImportPipelineDocumentTest
@@ -868,7 +897,8 @@ add_executable(AiSidecarRuntimeServiceTest ${ALCEDO_TEST_ROOT}/app/ai_sidecar_ru
 target_include_directories(AiSidecarRuntimeServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_compile_definitions(AiSidecarRuntimeServiceTest PRIVATE
   ALCEDO_AI_SIDECAR_FAKE_RUNTIME_PATH="$<TARGET_FILE:AiSidecarFakeRuntime>")
-target_link_libraries(AiSidecarRuntimeServiceTest AiSidecarRuntimeService ProjectService GTest::gtest)
+target_link_libraries(AiSidecarRuntimeServiceTest AiSidecarRuntimeService ProjectService AppDiagnostics
+  GTest::gtest)
 add_dependencies(AiSidecarRuntimeServiceTest AiSidecarFakeRuntime)
 gtest_discover_tests(AiSidecarRuntimeServiceTest TEST_PREFIX "AiSidecarRuntimeServiceTest."
   PROPERTIES LABELS "ci_core_flow")

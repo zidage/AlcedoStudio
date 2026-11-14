@@ -173,14 +173,18 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
                               .resolution_ = key.resolution};
     }
 
+    // A row with a known missing source checks the file again before it asks for a render. The
+    // path read goes through the image pool, which reads the database on a pool miss, so a row
+    // without that mark does not resolve it: a scroll pins a whole row of cards on this thread.
     const auto* item = library_.FindAlbumItem(elementId);
-    const bool known_missing = item != nullptr && item->thumb_missing_source;
-    const auto source_path = ResolveThumbnailSourcePath(elementId, imageId);
-    if (known_missing && !source_path.empty() && !PathExists(source_path)) {
-      UpdateThumbnailState(elementId, QString(), false, true,
-                           QObject::tr("Source file was moved or deleted: %1")
-                               .arg(album_util::PathToQString(source_path)));
-      return;
+    if (item != nullptr && item->thumb_missing_source) {
+      const auto source_path = ResolveThumbnailSourcePath(elementId, imageId);
+      if (!source_path.empty() && !PathExists(source_path)) {
+        UpdateThumbnailState(elementId, QString(), false, true,
+                             QObject::tr("Source file was moved or deleted: %1")
+                                 .arg(album_util::PathToQString(source_path)));
+        return;
+      }
     }
     RequestThumbnail(elementId, imageId, maxEdge);
     return;
@@ -382,7 +386,7 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
                   if (image_store) {
                     const uint32_t store_edge = static_cast<uint32_t>(key.resolution);
                     thumbUrl =
-                        image_store->Put(elementId, store_edge, std::move(scaled));
+                        image_store->Put(elementId, store_edge, std::move(scaled), guard->encoding);
                   }
                   if (thumbUrl.isEmpty()) {
                     errorText =
@@ -508,6 +512,39 @@ bool ThumbnailManager::IsThumbnailPinned(const ThumbnailCacheKey& key) const {
 void ThumbnailManager::ReleaseStoreImageIfUnpinned(const ThumbnailCacheKey& key) {
   if (!IsThumbnailPinned(key)) {
     image_store_->Remove(key.element_id, static_cast<uint32_t>(key.resolution));
+  }
+}
+
+void ThumbnailManager::SetDisplayDestination(
+    std::shared_ptr<const DisplayDestination> destination) {
+  if (image_store_->Destination() == destination) {
+    return;
+  }
+  image_store_->SetDestination(std::move(destination));
+
+  std::set<sl_element_id_t> pinned_elements;
+  for (const auto& [key, pin] : thumbnail_pins_) {
+    if (pin.ref_count_ > 0) {
+      pinned_elements.insert(key.element_id);
+    }
+  }
+  for (const auto element_id : pinned_elements) {
+    const auto* item = library_.FindAlbumItem(element_id);
+    if (item == nullptr) {
+      continue;
+    }
+    // The row keeps the tier it shows; only the revision of that tier changes.
+    sl_element_id_t shown_element = 0;
+    uint32_t        shown_edge    = 0;
+    if (!ThumbnailImageStore::ParseUrl(item->thumb_url, &shown_element, &shown_edge, nullptr) ||
+        shown_element != element_id) {
+      continue;
+    }
+    const QString url = image_store_->CurrentUrl(element_id, shown_edge);
+    if (!url.isEmpty()) {
+      UpdateThumbnailState(element_id, url, item->thumb_loading, item->thumb_missing_source,
+                           item->thumb_error_text);
+    }
   }
 }
 

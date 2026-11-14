@@ -8,41 +8,34 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaType>
-#include <QVariantMap>
+#include <QString>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "ui/alcedo_main/editor_support/modules/curve.hpp"
 
 namespace alcedo::ui {
 namespace {
 
-auto PointsToVariantList(const std::vector<QPointF>& points) -> QVariantList {
-  QVariantList out;
-  out.reserve(static_cast<int>(points.size()));
-  for (const auto& p : points) {
-    QVariantMap m;
-    m.insert(QStringLiteral("x"), p.x());
-    m.insert(QStringLiteral("y"), p.y());
-    out.push_back(m);
-  }
-  return out;
-}
+// Two loads of the same document points differ only by the float rounding of the document.
+constexpr float kLoadEqualTolerance = 1e-6f;
 
-auto VariantListToPoints(const QVariantList& list) -> std::vector<QPointF> {
+auto            VariantListToPoints(const QVariantList& list) -> std::vector<QPointF> {
   std::vector<QPointF> points;
   points.reserve(static_cast<size_t>(list.size()));
   for (const QVariant& v : list) {
-    if (v.canConvert<QPointF>()) {
+    if (v.typeId() == QMetaType::QPointF || v.typeId() == QMetaType::QPoint) {
       points.push_back(v.toPointF());
       continue;
     }
-    if (v.typeId() == QMetaType::QVariantList || v.canConvert<QVariantList>()) {
+    if (v.typeId() == QMetaType::QVariantList) {
       const QVariantList pair = v.toList();
       if (pair.size() >= 2) {
         points.emplace_back(pair.at(0).toDouble(), pair.at(1).toDouble());
-        continue;
       }
+      continue;
     }
     const QVariantMap m = v.toMap();
     if (m.contains(QStringLiteral("x")) && m.contains(QStringLiteral("y"))) {
@@ -53,211 +46,364 @@ auto VariantListToPoints(const QVariantList& list) -> std::vector<QPointF> {
   return points;
 }
 
-auto PointsFromSnapshotEntry(const QVariantMap& entry) -> std::vector<QPointF> {
-  // Snapshot key "curve" stores the full operator params:
-  //   {"curve":{"size":N,"points":[{"x":…,"y":…},…]}}
-  // Also accept the inner object directly.
-  QVariantMap curve = entry;
-  if (entry.contains(QStringLiteral("curve"))) {
-    const QVariant nested = entry.value(QStringLiteral("curve"));
-    if (nested.canConvert<QVariantMap>()) {
-      curve = nested.toMap();
-    }
-  }
-  const QVariant points_var = curve.value(QStringLiteral("points"));
-  if (!points_var.isValid()) {
-    return {};
-  }
-  return VariantListToPoints(points_var.toList());
+auto ChannelKey(int channel) -> QString {
+  return QString::fromUtf8(
+      alcedo::CurveChannelKey(alcedo::kCurveChannels[static_cast<size_t>(channel)]));
 }
 
-auto FindClosestPointIndex(const std::vector<QPointF>& points, const QPointF& target) -> int {
-  if (points.empty()) {
-    return -1;
+auto IsIdentity(const std::vector<QPointF>& points) -> bool {
+  return curve::CurveControlPointsEqual(points, curve::DefaultCurveControlPoints(),
+                                        kLoadEqualTolerance);
+}
+
+auto Text(std::string_view text) -> QString {
+  return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+/// The panel points of @p preset: the float points of the preset as doubles.
+auto PresetControlPoints(const alcedo::ToneCurvePreset& preset) -> std::vector<QPointF> {
+  std::vector<QPointF> points;
+  points.reserve(preset.points.size());
+  for (const auto& point : preset.points) {
+    points.emplace_back(point.x, point.y);
   }
-  int   best_idx  = 0;
-  qreal best_dist = std::abs(points[0].x() - target.x()) + std::abs(points[0].y() - target.y());
-  for (int i = 1; i < static_cast<int>(points.size()); ++i) {
-    const qreal dist = std::abs(points[static_cast<size_t>(i)].x() - target.x()) +
-                       std::abs(points[static_cast<size_t>(i)].y() - target.y());
-    if (dist < best_dist) {
-      best_dist = dist;
-      best_idx  = i;
-    }
-  }
-  return best_idx;
+  return points;
 }
 
 }  // namespace
 
 EditorToneCurveModel::EditorToneCurveModel(QObject* parent)
-    : EditorAdjustmentModelBase(parent), points_(curve::DefaultCurveControlPoints()) {
+    : EditorAdjustmentModelBase(parent), keySettleTimer_(new QTimer(this)) {
   setFieldKey(QStringLiteral("curve"));
   setLabel(QStringLiteral("Tone Curve"));
+  for (int channel = 0; channel < kChannelCount; ++channel) {
+    curves_[static_cast<size_t>(channel)] = curve::DefaultCurveControlPoints();
+    RebuildLine(channel);
+  }
+  keySettleTimer_->setSingleShot(true);
+  keySettleTimer_->setInterval(kDefaultKeySettleIntervalMs);
+  connect(keySettleTimer_, &QTimer::timeout, this, &EditorToneCurveModel::settlePendingKeyMoves);
 }
 
 auto EditorToneCurveModel::maxControlPoints() -> int { return curve::kCurveMaxControlPoints; }
 
-auto EditorToneCurveModel::points() const -> QVariantList { return PointsToVariantList(points_); }
+auto EditorToneCurveModel::axisGrey() -> double { return curve::kCurveAxisGrey; }
+
+auto EditorToneCurveModel::axisStop() -> double { return curve::kCurveAxisStop; }
+
+void EditorToneCurveModel::setChannel(int channel) {
+  if (channel < 0 || channel >= kChannelCount || channel == channel_) {
+    return;
+  }
+  settlePendingKeyMoves();
+  if (dragActive_) {
+    finishDrag();
+  }
+  SetSelectedIndexInternal(-1);
+  channel_ = channel;
+  emit channelChanged();
+  emit pointsChanged();
+  emit selectedPointChanged();
+}
+
+auto EditorToneCurveModel::points() const -> QList<QPointF> {
+  const auto& selected = Selected();
+  return QList<QPointF>(selected.begin(), selected.end());
+}
+
+void EditorToneCurveModel::setSelectedIndex(int index) {
+  if (index < -1 || index >= pointCount()) {
+    return;
+  }
+  if (index != selectedIndex_) {
+    settlePendingKeyMoves();
+  }
+  SetSelectedIndexInternal(index);
+}
+
+auto EditorToneCurveModel::selectedX() const -> double {
+  return hasSelection() ? Selected()[static_cast<size_t>(selectedIndex_)].x() : 0.0;
+}
+
+auto EditorToneCurveModel::selectedY() const -> double {
+  return hasSelection() ? Selected()[static_cast<size_t>(selectedIndex_)].y() : 0.0;
+}
+
+auto EditorToneCurveModel::channelModified() const -> QVariantList {
+  QVariantList modified;
+  for (const auto& points : curves_) {
+    modified.push_back(!IsIdentity(points));
+  }
+  return modified;
+}
+
+auto EditorToneCurveModel::presets() -> QVariantList {
+  QVariantList list;
+  for (const auto& preset : alcedo::ToneCurvePresets()) {
+    list.push_back(QVariantMap{{QStringLiteral("id"), Text(preset.id)},
+                               {QStringLiteral("name"), Text(preset.display_name)},
+                               {QStringLiteral("group"), Text(preset.group)}});
+  }
+  return list;
+}
+
+auto EditorToneCurveModel::presetId() const -> QString {
+  // The write converts the panel points to float, so the float values decide the match.
+  std::vector<alcedo::CurvePoint> points;
+  points.reserve(Selected().size());
+  for (const auto& point : Selected()) {
+    points.push_back({static_cast<float>(point.x()), static_cast<float>(point.y())});
+  }
+  const auto* preset = alcedo::MatchToneCurvePreset(points);
+  return preset == nullptr ? QString{} : Text(preset->id);
+}
+
+auto EditorToneCurveModel::applyPreset(const QString& id) -> bool {
+  const auto* preset = alcedo::FindToneCurvePreset(id.toStdString());
+  if (preset == nullptr || dragActive_) {
+    return false;
+  }
+  settlePendingKeyMoves();
+  SetSelectedIndexInternal(-1);
+  if (ReplaceChannelPoints(channel_, PresetControlPoints(*preset))) {
+    CommitSettled();
+  }
+  return true;
+}
+
+auto EditorToneCurveModel::channelControlPoints(int channel) const -> const std::vector<QPointF>& {
+  return curves_[static_cast<size_t>(std::clamp(channel, 0, kChannelCount - 1))];
+}
 
 void EditorToneCurveModel::setPoints(const QVariantList& points) {
   setControlPoints(VariantListToPoints(points));
 }
 
 void EditorToneCurveModel::loadFromSnapshotEntry(const QVariantMap& entry) {
-  if (dragActive_) {
+  // A drag or a key move sequence owns the selected curve until its settled write.
+  if (dragActive_ || keyMovesPending_) {
     return;
   }
-  const auto points = PointsFromSnapshotEntry(entry);
-  if (points.size() < 2) {
+  QVariantMap curve = entry;
+  if (const QVariant nested = entry.value(QStringLiteral("curve"));
+      nested.typeId() == QMetaType::QVariantMap) {
+    curve = nested.toMap();
+  }
+  if (!curve.contains(QStringLiteral("points"))) {
     return;
   }
-  setControlPoints(points);
+  for (int channel = 0; channel < kChannelCount; ++channel) {
+    auto points = VariantListToPoints(curve.value(ChannelKey(channel)).toList());
+    if (points.size() < 2) {
+      // The projection omits nothing, but a map without a channel list means the identity.
+      points = curve::DefaultCurveControlPoints();
+    }
+    ReplaceChannelPoints(channel, std::move(points));
+  }
 }
 
 void EditorToneCurveModel::setControlPoints(const std::vector<QPointF>& points) {
-  applyNormalized(points);
-  if (dragActive_) {
-    dragActive_ = false;
-    emit dragActiveChanged();
+  setChannelControlPoints(channel_, points);
+}
+
+void EditorToneCurveModel::setChannelControlPoints(int                         channel,
+                                                   const std::vector<QPointF>& points) {
+  if (channel < 0 || channel >= kChannelCount) {
+    return;
   }
-  setActiveIndex(-1);
+  ReplaceChannelPoints(channel, points);
+  if (channel == channel_) {
+    SetDragActive(false);
+    SetSelectedIndexInternal(-1);
+  }
+}
+
+auto EditorToneCurveModel::evaluate(int channel, double x) const -> double {
+  if (channel < 0 || channel >= kChannelCount || !std::isfinite(x)) {
+    return 0.0;
+  }
+  const auto spline = curve::SolveCurveSpline(curves_[static_cast<size_t>(channel)]);
+  return tone_curve::EvaluateToneCurveSpline(spline, static_cast<float>(x));
 }
 
 void EditorToneCurveModel::beginDrag(int index) {
-  if (index < 0 || index >= static_cast<int>(points_.size())) {
+  if (index < 0 || index >= pointCount()) {
     return;
   }
-  dragActive_ = true;
-  setActiveIndex(index);
-  emit dragActiveChanged();
+  settlePendingKeyMoves();
+  SetSelectedIndexInternal(index);
+  dragOrigin_  = Selected()[static_cast<size_t>(index)];
+  dragChanged_ = false;
+  SetDragActive(true);
 }
 
-void EditorToneCurveModel::updateDrag(double x, double y) {
-  if (!dragActive_ || activeIndex_ < 0) {
+void EditorToneCurveModel::updateDrag(double x, double y, int modifiers) {
+  if (!dragActive_ || !hasSelection()) {
     return;
   }
-  if (!moveActivePoint(x, y)) {
+  if ((modifiers & Qt::ShiftModifier) != 0) {
+    // One axis: the axis with the larger motion from the press position.
+    if (std::abs(x - dragOrigin_.x()) >= std::abs(y - dragOrigin_.y())) {
+      y = dragOrigin_.y();
+    } else {
+      x = dragOrigin_.x();
+    }
+  }
+  if (!MoveSelectedCurvePoint(selectedIndex_, x, y)) {
     return;
   }
-  submitInteractive();
+  dragChanged_ = true;
+  SubmitSelected(false);
 }
 
 void EditorToneCurveModel::finishDrag() {
   if (!dragActive_) {
     return;
   }
-  dragActive_ = false;
-  emit dragActiveChanged();
-  submitSettled();
-  emit settledCommitted();
+  SetDragActive(false);
+  if (std::exchange(dragChanged_, false)) {
+    CommitSettled();
+  }
 }
 
-auto EditorToneCurveModel::insertPoint(double x, double y) -> int {
-  if (static_cast<int>(points_.size()) >= curve::kCurveMaxControlPoints) {
+auto EditorToneCurveModel::insertPointOnCurve(double x) -> int {
+  if (dragActive_ || !std::isfinite(x) || pointCount() >= curve::kCurveMaxControlPoints) {
     return -1;
   }
-  if (points_.size() < 2) {
+  const auto& selected = Selected();
+  if (x <= selected.front().x() + curve::kCurveMinPointSpacing ||
+      x >= selected.back().x() - curve::kCurveMinPointSpacing) {
     return -1;
   }
+  const auto next = std::upper_bound(selected.begin(), selected.end(), x,
+                                     [](double value, const QPointF& p) { return value < p.x(); });
+  if (x - std::prev(next)->x() < curve::kCurveMinPointSpacing ||
+      next->x() - x < curve::kCurveMinPointSpacing) {
+    return -1;
+  }
+  const int    index = static_cast<int>(std::distance(selected.begin(), next));
+  const double y     = std::clamp(evaluate(channel_, x), 0.0, 1.0);
+  settlePendingKeyMoves();
+  // The indices after the new point move by one, so the selection moves to the new point.
+  SetSelectedIndexInternal(-1);
 
-  const float min_insert_x = static_cast<float>(points_.front().x()) + curve::kCurveMinPointSpacing;
-  const float max_insert_x = static_cast<float>(points_.back().x()) - curve::kCurveMinPointSpacing;
-  if (x <= min_insert_x || x >= max_insert_x) {
-    return -1;
-  }
-
-  std::vector<QPointF> next = points_;
-  next.emplace_back(curve::Clamp01(static_cast<float>(x)), curve::Clamp01(static_cast<float>(y)));
-  const auto normalized = curve::NormalizeCurveControlPoints(next);
-  if (normalized.size() <= points_.size()) {
-    return -1;
-  }
-
-  const QPointF target(x, y);
-  const int     idx = FindClosestPointIndex(normalized, target);
-  points_           = normalized;
-  dragActive_       = true;
-  setActiveIndex(idx);
+  auto& points = curves_[static_cast<size_t>(channel_)];
+  points.insert(points.begin() + index, QPointF(x, y));
+  RebuildLine(channel_);
   emit pointsChanged();
-  emit dragActiveChanged();
-  submitInteractive();
-  return idx;
+  emit curvesChanged();
+  SetSelectedIndexInternal(index);
+  dragOrigin_  = QPointF(x, y);
+  dragChanged_ = true;
+  SetDragActive(true);
+  return index;
 }
 
-auto EditorToneCurveModel::removePoint(int index) -> bool {
-  if (index <= 0 || index + 1 >= static_cast<int>(points_.size())) {
+void EditorToneCurveModel::nudgeSelected(double dx, double dy) {
+  if (!hasSelection() || dragActive_) {
+    return;
+  }
+  const QPointF point = Selected()[static_cast<size_t>(selectedIndex_)];
+  if (!MoveSelectedCurvePoint(selectedIndex_, point.x() + dx, point.y() + dy)) {
+    return;
+  }
+  keyMovesPending_ = true;
+  SubmitSelected(false);
+  keySettleTimer_->start();
+}
+
+auto EditorToneCurveModel::handleKey(int key, int modifiers) -> bool {
+  if (!hasSelection()) {
     return false;
   }
-  std::vector<QPointF> next = points_;
-  next.erase(next.begin() + index);
-  const auto normalized = curve::NormalizeCurveControlPoints(next);
-  if (curve::CurveControlPointsEqual(normalized, points_)) {
+  const double step = (modifiers & Qt::ShiftModifier) != 0 ? kKeyStepLarge : kKeyStep;
+  switch (key) {
+    case Qt::Key_Left:
+      nudgeSelected(-step, 0.0);
+      return true;
+    case Qt::Key_Right:
+      nudgeSelected(step, 0.0);
+      return true;
+    case Qt::Key_Up:
+      nudgeSelected(0.0, step);
+      return true;
+    case Qt::Key_Down:
+      nudgeSelected(0.0, -step);
+      return true;
+    case Qt::Key_Delete:
+    case Qt::Key_Backspace:
+      removeSelected();
+      return true;
+    default:
+      return false;
+  }
+}
+
+auto EditorToneCurveModel::setSelectedXValue(double x) -> bool {
+  if (!hasSelection() || dragActive_ || !std::isfinite(x)) {
     return false;
   }
-  points_     = normalized;
-  dragActive_ = false;
-  setActiveIndex(-1);
-  emit pointsChanged();
-  emit dragActiveChanged();
-  submitSettled();
-  emit settledCommitted();
+  settlePendingKeyMoves();
+  if (!MoveSelectedCurvePoint(selectedIndex_, x, selectedY())) {
+    return false;
+  }
+  CommitSettled();
   return true;
 }
 
+auto EditorToneCurveModel::setSelectedYValue(double y) -> bool {
+  if (!hasSelection() || dragActive_ || !std::isfinite(y)) {
+    return false;
+  }
+  settlePendingKeyMoves();
+  if (!MoveSelectedCurvePoint(selectedIndex_, selectedX(), y)) {
+    return false;
+  }
+  CommitSettled();
+  return true;
+}
+
+auto EditorToneCurveModel::removePoint(int index) -> bool {
+  if (dragActive_ || index <= 0 || index + 1 >= pointCount()) {
+    return false;
+  }
+  settlePendingKeyMoves();
+  SetSelectedIndexInternal(-1);
+  auto& points = curves_[static_cast<size_t>(channel_)];
+  points.erase(points.begin() + index);
+  RebuildLine(channel_);
+  emit pointsChanged();
+  emit curvesChanged();
+  CommitSettled();
+  return true;
+}
+
+auto EditorToneCurveModel::removeSelected() -> bool { return removePoint(selectedIndex_); }
+
 void EditorToneCurveModel::reset() {
-  const auto defaults = curve::DefaultCurveControlPoints();
-  if (curve::CurveControlPointsEqual(defaults, points_) && !dragActive_) {
+  if (dragActive_) {
     return;
   }
-  points_     = defaults;
-  dragActive_ = false;
-  setActiveIndex(-1);
-  emit pointsChanged();
-  emit dragActiveChanged();
-  submitSettled();
-  emit settledCommitted();
-}
-
-auto EditorToneCurveModel::paramsJson() const -> QString { return buildParamsJson(); }
-
-void EditorToneCurveModel::applyNormalized(std::vector<QPointF> points) {
-  const auto normalized = curve::NormalizeCurveControlPoints(std::move(points));
-  if (curve::CurveControlPointsEqual(normalized, points_)) {
+  settlePendingKeyMoves();
+  SetSelectedIndexInternal(-1);
+  if (!ReplaceChannelPoints(channel_, curve::DefaultCurveControlPoints())) {
     return;
   }
-  points_ = normalized;
-  emit pointsChanged();
+  CommitSettled();
 }
 
-void EditorToneCurveModel::setActiveIndex(int index) {
-  if (activeIndex_ == index) {
+void EditorToneCurveModel::settlePendingKeyMoves() {
+  if (!keyMovesPending_) {
     return;
   }
-  activeIndex_ = index;
-  emit activeIndexChanged();
+  keyMovesPending_ = false;
+  keySettleTimer_->stop();
+  CommitSettled();
 }
 
-void EditorToneCurveModel::submitInteractive() {
-  submitNow(currentCurveWrite(), false);
-}
-
-void EditorToneCurveModel::submitSettled() { submitNow(currentCurveWrite(), true); }
-
-auto EditorToneCurveModel::currentCurveWrite() const -> alcedo::EditorCurveWrite {
-  const auto              normalized = curve::NormalizeCurveControlPoints(points_);
-  alcedo::EditorCurveWrite write;
-  write.points.reserve(normalized.size());
-  for (const auto& point : normalized) {
-    write.points.push_back(
-        alcedo::CurvePoint{static_cast<float>(point.x()), static_cast<float>(point.y())});
-  }
-  return write;
-}
-
-auto EditorToneCurveModel::buildParamsJson() const -> QString {
+auto EditorToneCurveModel::paramsJson() const -> QString {
   // Match curve::CurveControlPointsToParams / pipeline ParamsForField(Curve).
-  const auto normalized = curve::NormalizeCurveControlPoints(points_);
+  const auto normalized = curve::NormalizeCurveControlPoints(curves_[0]);
   QJsonArray pts;
   for (const auto& p : normalized) {
     QJsonObject pt;
@@ -273,39 +419,93 @@ auto EditorToneCurveModel::buildParamsJson() const -> QString {
   return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
 
-auto EditorToneCurveModel::moveActivePoint(double x, double y) -> bool {
-  if (activeIndex_ < 0 || activeIndex_ >= static_cast<int>(points_.size())) {
+void EditorToneCurveModel::setKeySettleIntervalMs(int ms) {
+  keySettleTimer_->setInterval(std::max(0, ms));
+}
+
+auto EditorToneCurveModel::ReplaceChannelPoints(int channel, std::vector<QPointF> points) -> bool {
+  auto  normalized = curve::NormalizeCurveControlPoints(points);
+  auto& current    = curves_[static_cast<size_t>(channel)];
+  if (curve::CurveControlPointsEqual(normalized, current, kLoadEqualTolerance)) {
     return false;
   }
-
-  const int   last_idx = static_cast<int>(points_.size()) - 1;
-  const float nx       = static_cast<float>(x);
-  const float ny       = curve::Clamp01(static_cast<float>(y));
-  QPointF     next     = points_[static_cast<size_t>(activeIndex_)];
-
-  if (activeIndex_ == 0) {
-    const float max_x = static_cast<float>(points_[1].x()) - curve::kCurveMinPointSpacing;
-    next              = QPointF(std::clamp(nx, 0.0f, max_x), ny);
-  } else if (activeIndex_ == last_idx) {
-    const float min_x = static_cast<float>(points_[static_cast<size_t>(last_idx - 1)].x()) +
-                        curve::kCurveMinPointSpacing;
-    next = QPointF(std::clamp(nx, min_x, 1.0f), ny);
-  } else {
-    const float min_x = static_cast<float>(points_[static_cast<size_t>(activeIndex_ - 1)].x()) +
-                        curve::kCurveMinPointSpacing;
-    const float max_x = static_cast<float>(points_[static_cast<size_t>(activeIndex_ + 1)].x()) -
-                        curve::kCurveMinPointSpacing;
-    next = QPointF(std::clamp(nx, min_x, max_x), ny);
+  current = std::move(normalized);
+  RebuildLine(channel);
+  if (channel == channel_) {
+    SetSelectedIndexInternal(-1);
+    emit pointsChanged();
   }
-
-  if (std::abs(next.x() - points_[static_cast<size_t>(activeIndex_)].x()) < 1e-9 &&
-      std::abs(next.y() - points_[static_cast<size_t>(activeIndex_)].y()) < 1e-9) {
-    return false;
-  }
-
-  points_[static_cast<size_t>(activeIndex_)] = next;
-  emit pointsChanged();
+  emit curvesChanged();
   return true;
+}
+
+auto EditorToneCurveModel::MoveSelectedCurvePoint(int index, double x, double y) -> bool {
+  auto& points = curves_[static_cast<size_t>(channel_)];
+  if (index < 0 || index >= static_cast<int>(points.size()) || !std::isfinite(x) ||
+      !std::isfinite(y)) {
+    return false;
+  }
+  const double spacing = curve::kCurveMinPointSpacing;
+  const int    last    = static_cast<int>(points.size()) - 1;
+  const double minimum = index == 0 ? 0.0 : points[static_cast<size_t>(index - 1)].x() + spacing;
+  const double maximum = index == last ? 1.0 : points[static_cast<size_t>(index + 1)].x() - spacing;
+  const QPointF next(std::clamp(x, minimum, maximum), std::clamp(y, 0.0, 1.0));
+  QPointF&      point = points[static_cast<size_t>(index)];
+  if (next == point) {
+    return false;
+  }
+  point = next;
+  RebuildLine(channel_);
+  emit pointsChanged();
+  emit curvesChanged();
+  if (index == selectedIndex_) {
+    emit selectedPointChanged();
+  }
+  return true;
+}
+
+void EditorToneCurveModel::RebuildLine(int channel) {
+  lines_[static_cast<size_t>(channel)] =
+      curve::SampleCurveLine(curve::SolveCurveSpline(curves_[static_cast<size_t>(channel)]));
+}
+
+void EditorToneCurveModel::SetSelectedIndexInternal(int index) {
+  if (selectedIndex_ == index) {
+    return;
+  }
+  selectedIndex_ = index;
+  emit selectedIndexChanged();
+  emit selectedPointChanged();
+}
+
+void EditorToneCurveModel::SetDragActive(bool active) {
+  if (dragActive_ == active) {
+    return;
+  }
+  dragActive_ = active;
+  emit dragActiveChanged();
+}
+
+void EditorToneCurveModel::SubmitSelected(bool settled) {
+  submitNow(SelectedCurveWrite(), settled);
+}
+
+void EditorToneCurveModel::CommitSettled() {
+  SubmitSelected(true);
+  emit settledCommitted();
+}
+
+auto EditorToneCurveModel::SelectedCurveWrite() const -> alcedo::EditorCurveWrite {
+  std::vector<alcedo::CurvePoint> points;
+  points.reserve(Selected().size());
+  for (const auto& point : Selected()) {
+    points.push_back(
+        alcedo::CurvePoint{static_cast<float>(point.x()), static_cast<float>(point.y())});
+  }
+  // Only the selected curve: the write leaves the other three curves as they are.
+  alcedo::EditorCurveWrite write;
+  write.Channel(alcedo::kCurveChannels[static_cast<size_t>(channel_)]) = std::move(points);
+  return write;
 }
 
 }  // namespace alcedo::ui

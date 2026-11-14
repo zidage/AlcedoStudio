@@ -13,6 +13,10 @@ import QtQuick.Effects
 // Pointer input reaches the tile through the input overlay of ThumbnailGridView: the overlay
 // hit-tests with starAtOverlay and editMarkAtOverlay, and the view starts the zoom animation
 // with startZoomLayoutAnim.
+//
+// The tile is a slot of JustifiedLayoutModel: a scroll gives the tile another photo instead of a
+// new tile, and a slot without a photo (photoIndex -1) is hidden. Parts that only some tiles show
+// (the hover details, the text of a thumbnail problem) are made when they are shown.
 Item {
     id: tile
     objectName: "thumbnailGridView_tile_" + photoIndex
@@ -50,6 +54,14 @@ Item {
     readonly property bool isSelected: view.isImageSelected(elementId)
     readonly property bool isHovered: view.hoveredCardIndex === photoIndex
     readonly property bool detailsShown: isHovered && view.justifiedDetailsEnabled
+    // The hover details panel exists: set when the details are first shown, cleared when the
+    // tile gets another photo.
+    property bool detailsMade: false
+    onDetailsShownChanged: {
+        if (detailsShown) {
+            detailsMade = true
+        }
+    }
     readonly property real captionHeight: view.justifiedCaptionHeight
     readonly property int tileRadius: view.columns >= 11 ? 4 : 6
     readonly property string displayTags: view.semanticTagsDisplayText(tags)
@@ -69,6 +81,12 @@ Item {
     y: tileY
     width: tileWidth
     height: tileHeight
+    visible: photoIndex >= 0
+    // A slot that gets another photo shows it at its new place at once.
+    onPhotoIndexChanged: {
+        layoutAnimation.finish()
+        detailsMade = detailsShown
+    }
 
     ThumbnailPinBinding {
         id: thumbPin
@@ -87,15 +105,17 @@ Item {
 
     // Star (1 to 5) under the overlay point @p x, @p y, or 0 (see ThumbnailStarRating).
     function starAtOverlay(x, y) {
-        if (!detailsShown || !tileStars.visible) {
+        const stars = detailsLoader.item ? detailsLoader.item.stars : null
+        if (!detailsShown || !stars || !stars.visible) {
             return 0
         }
-        const p = tile.view.inputOverlay.mapToItem(tileStars, x, y)
-        return tileStars.starAt(p.x, p.y)
+        const p = tile.view.inputOverlay.mapToItem(stars, x, y)
+        return stars.starAt(p.x, p.y)
     }
 
     function ratingForStar(star) {
-        return tileStars.ratingForStar(star)
+        const stars = detailsLoader.item ? detailsLoader.item.stars : null
+        return stars ? stars.ratingForStar(star) : 0
     }
 
     function editMarkAtOverlay(x, y) {
@@ -170,10 +190,10 @@ Item {
             radius: tile.tileRadius
             color: appTheme.bgBaseColor
         }
-        ThumbnailLoadingSpinner {
+        StaggeredGridMark {
             anchors.centerIn: parent
-            width: 28
-            height: 28
+            width: 27
+            height: 27
             visible: tile.thumbnailLoadingState
         }
         Image {
@@ -182,8 +202,9 @@ Item {
             source: thumbPin.liveThumbUrl
             visible: false
             asynchronous: true
-            // A new tier keeps the shown thumbnail until the new image is ready.
-            retainWhileLoading: true
+            // A new tier of the same photo keeps the shown thumbnail until the new image is
+            // ready; another photo (a reused delegate) does not show the old one.
+            retainWhileLoading: thumbPin.retainShownImage
             fillMode: Image.PreserveAspectCrop
         }
         Rectangle {
@@ -234,95 +255,124 @@ Item {
             border.width: 1
             border.color: appTheme.dangerColor
         }
-        Column {
+        // The text of a thumbnail problem, made only for a tile that shows one.
+        Loader {
             anchors.centerIn: parent
             width: parent.width - 12
-            visible: tile.thumbnailProblemState
-            spacing: 2
-            Label {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: "!"
-                color: appTheme.dangerColor
-                font.family: appTheme.dataFontFamily
-                font.pixelSize: tile.view.columns >= 11 ? 24 : 30
-                font.weight: 700
-            }
-            Label {
-                width: parent.width
-                text: tile.thumbnailProblemText
-                color: appTheme.dangerColor
-                font.family: appTheme.dataFontFamily
-                font.pixelSize: tile.view.columns >= 11 ? 8 : 10
-                font.weight: tile.view.dataFontWeight
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.Wrap
-                maximumLineCount: 2
-                elide: Text.ElideRight
+            active: tile.thumbnailProblemState
+            sourceComponent: Component {
+                Column {
+                    spacing: 2
+                    Label {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: "!"
+                        color: appTheme.dangerColor
+                        font.family: appTheme.dataFontFamily
+                        font.pixelSize: tile.view.columns >= 11 ? 24 : 30
+                        font.weight: 700
+                    }
+                    Label {
+                        width: parent.width
+                        text: tile.thumbnailProblemText
+                        color: appTheme.dangerColor
+                        font.family: appTheme.dataFontFamily
+                        font.pixelSize: tile.view.columns >= 11 ? 8 : 10
+                        font.weight: tile.view.dataFontWeight
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
+                    }
+                }
             }
         }
 
-        // Hover details: the camera line, the date line, and the stars.
-        Rectangle {
-            id: detailsPanel
-            objectName: "justifiedThumbnailTile_details"
+        // Hover details: the camera line, the date line, and the stars. The panel is made when
+        // the pointer first enters the tile (detailsMade) and stays until the tile gets another
+        // photo; it fades in and out with detailsShown.
+        Loader {
+            id: detailsLoader
             z: 4
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: Math.min(parent.height, detailsColumn.implicitHeight + appTheme.spaceSm * 2)
-            visible: opacity > 0
-            opacity: tile.detailsShown ? 1 : 0
-            Behavior on opacity {
-                enabled: !appTheme.reduceMotion
-                NumberAnimation { duration: appTheme.motionFadeMs; easing.type: Easing.OutCubic }
-            }
-            color: appTheme.thumbnailDetailsScrimColor
-            bottomLeftRadius: tile.tileRadius
-            bottomRightRadius: tile.tileRadius
-            clip: true
+            anchors.fill: parent
+            active: tile.detailsMade
+            sourceComponent: Component {
+                Item {
+                    readonly property alias stars: tileStars
 
-            Column {
-                id: detailsColumn
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.margins: appTheme.spaceSm
-                spacing: 2
+                    Rectangle {
+                        id: detailsPanel
+                        objectName: "justifiedThumbnailTile_details"
+                        // False until the panel is made, so that the first show fades in.
+                        property bool shown: false
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: Math.min(parent.height,
+                                         detailsColumn.implicitHeight + appTheme.spaceSm * 2)
+                        visible: opacity > 0
+                        opacity: shown ? 1 : 0
+                        Behavior on opacity {
+                            enabled: !appTheme.reduceMotion
+                            NumberAnimation {
+                                duration: appTheme.motionFadeMs
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+                        color: appTheme.thumbnailDetailsScrimColor
+                        bottomLeftRadius: tile.tileRadius
+                        bottomRightRadius: tile.tileRadius
+                        clip: true
+                        Component.onCompleted: shown = Qt.binding(function() {
+                            return tile.detailsShown
+                        })
 
-                Label {
-                    objectName: "justifiedThumbnailTile_camera"
-                    width: parent.width
-                    text: qsTr("%1 | ISO %2 | f/%3").arg(tile.cameraModel).arg(tile.iso)
-                                                     .arg(tile.aperture)
-                    color: appTheme.textColor
-                    font.family: appTheme.dataFontFamily
-                    font.pixelSize: tile.view.metadataFontSize
-                    font.weight: tile.view.dataFontWeight
-                    font.letterSpacing: tile.view.dataLetterSpacing
-                    elide: Text.ElideRight
-                }
-                Label {
-                    objectName: "justifiedThumbnailTile_date"
-                    width: parent.width
-                    text: tile.displayTags.length > 0
-                          ? qsTr("%1 | %2").arg(tile.captureDate).arg(tile.displayTags)
-                          : tile.captureDate
-                    color: appTheme.textMutedColor
-                    font.family: appTheme.dataFontFamily
-                    font.pixelSize: tile.view.metadataFontSize
-                    font.weight: tile.view.dataFontWeight
-                    font.letterSpacing: tile.view.dataLetterSpacing
-                    elide: Text.ElideRight
-                }
-                ThumbnailStarRating {
-                    id: tileStars
-                    objectName: "justifiedThumbnailTile_stars"
-                    photoId: tile.elementId
-                    rating: tile.rating
-                    interactive: tile.view.starsInteractive
-                    cardHovered: tile.isHovered
-                    hoveredStar: tile.isHovered ? tile.view.hoveredCardStar : 0
-                    pixelSize: tile.view.titleFontSize
+                        Column {
+                            id: detailsColumn
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            anchors.margins: appTheme.spaceSm
+                            spacing: 2
+
+                            Label {
+                                objectName: "justifiedThumbnailTile_camera"
+                                width: parent.width
+                                text: qsTr("%1 | ISO %2 | f/%3").arg(tile.cameraModel)
+                                                                  .arg(tile.iso)
+                                                                  .arg(tile.aperture)
+                                color: appTheme.textColor
+                                font.family: appTheme.dataFontFamily
+                                font.pixelSize: tile.view.metadataFontSize
+                                font.weight: tile.view.dataFontWeight
+                                font.letterSpacing: tile.view.dataLetterSpacing
+                                elide: Text.ElideRight
+                            }
+                            Label {
+                                objectName: "justifiedThumbnailTile_date"
+                                width: parent.width
+                                text: tile.displayTags.length > 0
+                                      ? qsTr("%1 | %2").arg(tile.captureDate)
+                                                        .arg(tile.displayTags)
+                                      : tile.captureDate
+                                color: appTheme.textMutedColor
+                                font.family: appTheme.dataFontFamily
+                                font.pixelSize: tile.view.metadataFontSize
+                                font.weight: tile.view.dataFontWeight
+                                font.letterSpacing: tile.view.dataLetterSpacing
+                                elide: Text.ElideRight
+                            }
+                            ThumbnailStarRating {
+                                id: tileStars
+                                objectName: "justifiedThumbnailTile_stars"
+                                photoId: tile.elementId
+                                rating: tile.rating
+                                interactive: tile.view.starsInteractive
+                                cardHovered: tile.isHovered
+                                hoveredStar: tile.isHovered ? tile.view.hoveredCardStar : 0
+                                pixelSize: tile.view.titleFontSize
+                            }
+                        }
+                    }
                 }
             }
         }

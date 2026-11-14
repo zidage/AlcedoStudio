@@ -31,12 +31,14 @@
 #endif
 
 #if defined(HAVE_OPENCL)
-#include <QOpenGLContext>
-#include <QOpenGLFunctions>
 #include <CL/cl.h>
 #include <CL/cl_gl.h>
 
+#include <QOpenGLContext>
+#include <QOpenGLFunctions>
+
 #include "opencl/opencl_context.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 #endif
 
 namespace alcedo::editor_rhi {
@@ -542,9 +544,10 @@ auto ProducerAcquireWritable(const WritableTargetLease& lease) -> bool {
         clEnqueueAcquireGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
                                   nullptr);
     if (error != CL_SUCCESS) {
-      qWarning("ProducerAcquireWritable: clEnqueueAcquireGLObjects failed: %d "
-               "(OpenCL/GL share group mismatch?)",
-               static_cast<int>(error));
+      qCWarning(alcedo::diag::gpuLog,
+                "ProducerAcquireWritable: clEnqueueAcquireGLObjects failed: %d "
+                "(OpenCL/GL share group mismatch?)",
+                static_cast<int>(error));
       return false;
     }
     return true;

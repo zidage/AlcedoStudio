@@ -6,6 +6,7 @@
 
 #include <array>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "decoders/processor/raw_color_context.hpp"
@@ -39,6 +40,9 @@ enum class ColorTransformError {
   InvalidWhitePoint,
   /// The Develop data references a DNG profile that no owner bound from the source file.
   UnboundDngProfile,
+  /// The Develop data references a DCP file that no owner bound from the DCP library, or whose
+  /// bound tables do not belong to the DNG profile of the source.
+  UnboundCameraProfileFile,
 };
 
 /**
@@ -52,6 +56,33 @@ struct ColorTransformResult {
   ColorTransformError   error  = ColorTransformError::MissingCameraMatrices;
   DevelopColorTransform transform{};
 };
+
+/**
+ * @brief The camera profile that the render uses for @p payload.
+ *
+ * This is the only reader of matrices and tables for the render:
+ * - no `camera_profile_file`: the import values of `camera_profile`;
+ * - bound reference: `ColorMatrix1/2`, `ForwardMatrix1/2`, and the two illuminant CCT values of the
+ *   DCP profile, and `AsShotNeutral` and `cam_mul` of `camera_profile`. The DNG profile is the
+ *   source tables of the reference for a source with an embedded DNG profile (the DCP tables with
+ *   the AnalogBalance, BaselineExposure, and CameraCalibration of the source; plan phase C6), and
+ *   the DCP tables with identity calibration otherwise.
+ *
+ * The result is a computed value; `camera_profile` keeps the import values.
+ * @throws std::runtime_error for an unbound reference, or for source tables that do not belong
+ *         to the DNG profile of `camera_profile` (DcpSourceTablesMatchSource), with the message
+ *         of @ref ColorTransformFailureMessage.
+ */
+[[nodiscard]] auto EffectiveCameraProfile(const DevelopPayload& payload) -> DevelopCameraProfile;
+
+/**
+ * @brief Solve `as_shot_cct` and `as_shot_tint` from the effective matrices and the as-shot
+ * neutral.
+ *
+ * Runs @ref ResolveDevelopColorTransform in As Shot mode. On failure (no usable matrices or
+ * neutral, or an unbound reference) the two values keep their numbers. Other fields never change.
+ */
+void               SolveDevelopAsShotWhiteBalance(DevelopPayload& payload);
 
 /**
  * @brief Copy import-time RAW camera matrices into Develop payload fields.
@@ -112,6 +143,15 @@ void BindRgbWorkingSpaceCameraProfile(DevelopPayload& payload);
     -> ColorTransformResult;
 
 [[nodiscard]] auto ColorTransformErrorMessage(ColorTransformError error) -> std::string_view;
+
+/**
+ * @brief Message for a failed @ref ResolveDevelopColorTransform of @p develop.
+ *
+ * For `UnboundCameraProfileFile` it names the profile and the camera model of the reference; for
+ * the other errors it equals @ref ColorTransformErrorMessage.
+ */
+[[nodiscard]] auto      ColorTransformFailureMessage(const DevelopPayload& develop,
+                                                     ColorTransformError   error) -> std::string;
 
 /**
  * @brief The colour temperature of the RAW white balance of @p develop: the light of scene light
@@ -184,5 +224,13 @@ struct WhiteBalanceTemperatureTint {
  */
 [[nodiscard]] auto BuildAp1Cat02WhiteBalanceMatrix(double cct, double tint)
     -> std::array<float, 9>;
+
+/**
+ * @brief XYZ D50 to linear AP1 (Bradford D50 to the AP1 white), row-major, column vectors.
+ *
+ * The value equals DevelopColorTransform::xyz_d50_to_ap1 of every resolved transform: the matrix
+ * does not depend on the camera. Computed once; thread-safe.
+ */
+[[nodiscard]] auto XyzD50ToAp1Matrix() -> const std::array<float, 9>&;
 
 }  // namespace alcedo

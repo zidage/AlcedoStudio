@@ -15,7 +15,6 @@
 #include <cmath>
 #include <fstream>
 #include <functional>
-#include <iostream>
 #include <json.hpp>
 #include <optional>
 #include <random>
@@ -546,14 +545,15 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
     try {
       nlohmann::json actual_summary = ComputeProjectDataSummary(*storage_);
       if (actual_summary != *expected_summary) {
-        std::cerr << "[Alcedo] Project data summary differs from saved metadata. "
-                     "This may indicate data changes since the project was saved.\n";
+        qCWarning(diag::projectLog).noquote()
+            << "Project data summary differs from saved metadata. This may indicate data "
+               "changes since the project was saved.";
       }
     } catch (const std::exception& e) {
-      std::cerr << "[Alcedo] Unable to compute project data summary for comparison: " << e.what()
-                << "\n";
+      qCWarning(diag::projectLog).noquote()
+          << "Unable to compute project data summary for comparison:" << e.what();
     } catch (...) {
-      std::cerr << "[Alcedo] Unable to compute project data summary for comparison.\n";
+      qCWarning(diag::projectLog) << "Unable to compute project data summary for comparison.";
     }
   }
 
@@ -563,8 +563,8 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
   try {
     storage_->GetImageStore().RemoveImagesWithoutFileBinding();
   } catch (const std::exception& e) {
-    std::cerr << "[Alcedo] Unable to remove Image rows without a library file: " << e.what()
-              << "\n";
+    qCWarning(diag::projectLog).noquote()
+        << "Unable to remove Image rows without a library file:" << e.what();
   }
 
   // Label assignment stores canonical label keys. Projects from older versions can hold the

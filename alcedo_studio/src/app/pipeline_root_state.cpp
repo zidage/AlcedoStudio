@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include "app/dcp_camera_profile_binding.hpp"
 #include "app/pipeline_history_applier.hpp"
 #include "app/source_dng_profile_binding.hpp"
 #include "edit/graph/develop_color_transform.hpp"
@@ -110,6 +111,11 @@ void BindRootCameraProfile(PipelineDocument&                            document
   if (raw_color_context.has_value()) {
     BindImportedCameraProfile(document, *raw_color_context);
   }
+  // After the import binding: the DCP binding solves the as-shot values again from the DCP
+  // matrices, and merges the DCP tables with the DNG profile that the import binding bound
+  // (phase C6). A document replayed from the root is already bound by its history apply; a
+  // checkpoint document holds the stored reference only.
+  BindDcpCameraProfile(document);
 }
 
 auto BuildDocumentFromRoot(const CommitGraph& graph, const LoadedRootState& root_state,

@@ -322,6 +322,10 @@ TEST_F(OpenClDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidate
   gpu_dag_test::VerifyCanonDngProfile<OpenClRenderDevice>("opencl");
 }
 
+TEST_F(OpenClDevelopFixture, DcpProfileMatchesScalarReference) {
+  gpu_dag_test::VerifyDcpCameraProfile<OpenClRenderDevice>("opencl");
+}
+
 TEST_F(OpenClDevelopFixture, ConvertedLinearDngRendersWarpAndPublishesCacheOutputAtFullResolution) {
   gpu_dag_test::VerifyCameraRgbFile<OpenClRenderDevice>("DSC04739_dng.dng", ImageType::DNG,
                                                         "opencl");

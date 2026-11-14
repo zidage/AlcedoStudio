@@ -8,6 +8,9 @@ import QtQuick.Effects
 // the file count fill in while the folder tree is read, so a large tree never
 // leaves the window without feedback. Import takes the scanned paths directly in
 // C++ (StartFolderImportAsUser); closing the dialog any other way cancels the scan.
+// openWithSources() is the Library drop of files and folders (issue #757): the
+// dropped files are imported whatever their type, the folder files follow the
+// type checkboxes, and the import goes to dropTargetFolderId.
 Popup {
     id: root
     objectName: "folderImportConfirmDialog"
@@ -22,6 +25,12 @@ Popup {
     readonly property int allowedFileCount: scan ? scan.allowedFileCount : 0
     readonly property var categoryCounts: scan ? scan.categoryCounts : [0, 0, 0, 0, 0, 0]
     readonly property int allowedCategories: scan ? scan.allowedCategories : 0
+    readonly property int droppedFileCount: scan ? scan.droppedFileCount : 0
+    // Folder ui id of the drop target collection; -1 for Import From Folder (the
+    // current collection).
+    property int dropTargetFolderId: -1
+    property string dropTargetName: ""
+    readonly property bool dropMode: dropTargetFolderId >= 0
     // ImportFileCategory order: Raw, Jpeg, Tiff, Png, OpenExr, Other.
     readonly property var categoryEntries: [
         { category: 0, label: qsTr("RAW") },
@@ -83,18 +92,31 @@ Popup {
 
     function openWith(folderUrl) {
         root._confirmed = false
+        root.dropTargetFolderId = -1
+        root.dropTargetName = ""
         root.open()
         if (root.scan)
             root.scan.Start(folderUrl)
     }
 
+    function openWithSources(urls, folderId, collectionName) {
+        root._confirmed = false
+        root.dropTargetFolderId = Math.max(0, Number(folderId))
+        root.dropTargetName = collectionName ? String(collectionName) : ""
+        root.open()
+        if (root.scan)
+            root.scan.StartSources(urls)
+    }
+
     function scanSummaryText() {
         if (root.scan && !root.scan.folderValid)
-            return qsTr("The folder could not be read.")
+            return root.dropMode ? qsTr("The dropped items could not be read.")
+                                 : qsTr("The folder could not be read.")
         if (root.scanning)
             return qsTr("Scanning folder... %1 file(s) found").arg(root.fileCount.toLocaleString(Qt.locale(), 'f', 0))
         if (root.fileCount === 0)
-            return qsTr("No files found in this folder.")
+            return root.dropMode ? qsTr("No files found in the dropped items.")
+                                 : qsTr("No files found in this folder.")
         return qsTr("%1 file(s) found").arg(root.fileCount.toLocaleString(Qt.locale(), 'f', 0))
     }
 
@@ -105,7 +127,12 @@ Popup {
         spacing: appTheme.spaceMd
 
         Label {
-            text: qsTr("Import From Folder")
+            objectName: "folderImportTitle"
+            Layout.fillWidth: true
+            elide: Text.ElideRight
+            text: root.dropMode && root.dropTargetName.length > 0
+                  ? qsTr("Import to %1").arg(root.dropTargetName)
+                  : qsTr("Import From Folder")
             font.family: root.theme ? root.theme.headlineFontFamily : appTheme.headlineFontFamily
             font.pixelSize: appTheme.fontSizeSection
             font.weight: appTheme.fontWeightHeading
@@ -194,6 +221,17 @@ Popup {
                 visible: root.scanFinished && root.fileCount > 0
                 wrapMode: Text.Wrap
                 text: qsTr("Files of other types are skipped.")
+                color: root.mutedColor
+                font.pixelSize: appTheme.fontSizeCaption
+            }
+
+            Label {
+                objectName: "folderImportDroppedSummary"
+                Layout.fillWidth: true
+                visible: root.droppedFileCount > 0
+                wrapMode: Text.Wrap
+                text: qsTr("%1 dropped file(s) are imported with every type.")
+                      .arg(root.droppedFileCount.toLocaleString(Qt.locale(), 'f', 0))
                 color: root.mutedColor
                 font.pixelSize: appTheme.fontSizeCaption
             }

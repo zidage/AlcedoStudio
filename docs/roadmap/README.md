@@ -17,6 +17,9 @@ use their own top-level category.
 - [CUDA DemosaicNet Performance Follow-up](alcedo_studio/raw-processing/demosaicnet/cuda_demosaicnet_performance_next.md)
 - [OpenCL NN Forward DemosaicNet Migration and Performance Recovery](alcedo_studio/raw-processing/demosaicnet/opencl_nn_forward_demosaicnet_plan.md)
 - [Metal MPSGraph DemosaicNet Plan](alcedo_studio/raw-processing/demosaicnet/metal_nn_forward_demosaicnet_plan.md)
+- [DCP Camera Profile Plan](alcedo_studio/raw-processing/dcp_camera_profile_plan.md): external DCP
+  profiles from a user folder; shipped behavior in [Embedded DNG color profiles](../dng_color_profiles.md)
+- [DCP Profile Tone Curve Study](alcedo_studio/raw-processing/dcp_profile_tone_curve_study.md)
 
 ## Alcedo Studio — Storage
 
@@ -55,6 +58,7 @@ use their own top-level category.
   (includes **Final locked identity model**: history owns HEAD; pipeline = params table; chain hash unit = one commit)
 - [UI Fuzz Automation Platform Plan](alcedo_studio/ui/ui_fuzz_automation_platform_plan.md)
 - [Global Search Redesign Plan](alcedo_studio/ui/global_search_redesign_plan.md)
+- [Windows Display ICC Color Management Plan](alcedo_studio/ui/windows_display_icc_color_management_plan.md)
 
 ## Alcedo Studio — Automation
 

@@ -45,33 +45,33 @@ static inline float3 ApplyOkLabContrast(float3 acescc, float contrast) {
   return LinearAp1ToAcescc(OkLabToLinearAp1(lab));
 }
 
-static inline float ExtrapolateCurve(float value, device const GradeAdjustmentParams& p, uint a,
-                                     uint b) {
-  const float x0 = p.values[a * 2];
-  const float y0 = p.values[a * 2 + 1];
-  const float x1 = p.values[b * 2];
-  const float y1 = p.values[b * 2 + 1];
-  return y0 + (value - x0) * (y1 - y0) / max(x1 - x0, 1.0e-6f);
-}
-
+// Tone Curve spline (edit/operators/models/tone_curve_spline.hpp; CPU reference
+// EvaluateToneCurveSpline). values[0..15]: x of the control points; [16..31]: y; [32..47]: slope.
+// Monotone cubic Hermite between the points, straight along the end slope outside them.
 static inline float ApplyCurve(float value, device const GradeAdjustmentParams& p) {
-  if (p.count < 2) {
+  const uint n = p.count;
+  if (n < 2) {
     return value;
   }
-  if (value <= p.values[0]) {
-    return ExtrapolateCurve(value, p, 0, 1);
+  device const float* xs = p.values;
+  device const float* ys = p.values + 16;
+  device const float* ms = p.values + 32;
+  if (value <= xs[0]) {
+    return ys[0] + ms[0] * (value - xs[0]);
   }
-  for (uint i = 1; i < p.count; ++i) {
-    const float x1 = p.values[i * 2];
-    if (value <= x1) {
-      const float x0 = p.values[(i - 1) * 2];
-      const float y0 = p.values[(i - 1) * 2 + 1];
-      const float y1 = p.values[i * 2 + 1];
-      const float t  = (value - x0) / max(x1 - x0, 1.0e-6f);
-      return y0 + t * (y1 - y0);
-    }
+  if (value >= xs[n - 1]) {
+    return ys[n - 1] + ms[n - 1] * (value - xs[n - 1]);
   }
-  return ExtrapolateCurve(value, p, p.count - 2, p.count - 1);
+  uint i = 0;
+  while (i + 2 < n && value >= xs[i + 1]) {
+    ++i;
+  }
+  const float h  = xs[i + 1] - xs[i];
+  const float t  = (value - xs[i]) / h;
+  const float dy = ys[i + 1] - ys[i];
+  const float d  = dy / h;
+  const float u  = 1.0f - t;
+  return ys[i] + t * dy + h * t * u * (u * (ms[i] - d) - t * (ms[i + 1] - d));
 }
 
 // Tone color wheels (edit/operators/models/color_wheel_tone.hpp). values[0..2]: Offset as an ACEScc
@@ -205,9 +205,12 @@ static inline float3 ApplyAdjustment(float3 c, device const GradeAdjustmentParam
     c.y *= gain;
     c.z *= gain;
   } else if (behavior == 7u) {
-    c.x = ApplyCurve(c.x, p);
-    c.y = ApplyCurve(c.y, p);
-    c.z = ApplyCurve(c.z, p);
+    // The Curve slot has four records (CurveGradeRuntimeParams): the RGB curve, then the red,
+    // green, and blue curves. count 0 leaves the channel unchanged.
+    device const GradeAdjustmentParams* curves = &p;
+    c.x = ApplyCurve(ApplyCurve(c.x, curves[0]), curves[1]);
+    c.y = ApplyCurve(ApplyCurve(c.y, curves[0]), curves[2]);
+    c.z = ApplyCurve(ApplyCurve(c.z, curves[0]), curves[3]);
   } else if (behavior == 8u) {
     c = ApplyHls(c, p);
   } else if (behavior == 9u || behavior == 10u) {
@@ -294,6 +297,67 @@ kernel void primary_grade_pointwise(texture2d<float, access::read> src [[texture
     adjusted = float4(original.xyz + (adjusted.xyz - original.xyz) * mix, original.w);
   }
   dst.write(adjusted, gid);
+}
+
+struct CurveInputHistogramDispatch {
+  uint  width;
+  uint  step;
+  uint  sampled_width;
+  uint  sample_count;
+  uint  command_count;
+  float local_reference;
+  uint  pad[2];
+};
+
+// Bin of one ACEScc value on the curve axis: CurveInputHistogramBin (curve_input_histogram.hpp).
+static inline uint CurveInputHistogramBin(float value) {
+  return uint(fmin(fmax(value * 256.0f, 0.0f), 255.0f));
+}
+
+// Histogram of the curve input (issue #888). Each thread takes samples of the grid
+// (x, y) = (column * step, row * step), applies the adjustments before the Curve, and adds the
+// three bins to the threadgroup counts; each threadgroup then adds its counts to @p counts (red
+// bins 0..255, green 256..511, blue 512..767).
+kernel void primary_grade_curve_input_histogram(
+    texture2d<float, access::read> src [[texture(0)]],
+    device const uchar* parameter_base [[buffer(0)]],
+    device const uint* commands [[buffer(1)]],
+    constant CurveInputHistogramDispatch& dispatch [[buffer(2)]],
+    device const float4* lmt_lut [[buffer(3)]],
+    device atomic_uint* counts [[buffer(4)]],
+    uint thread_index [[thread_index_in_threadgroup]],
+    uint threads_per_group [[threads_per_threadgroup]],
+    uint global_index [[thread_position_in_grid]],
+    uint grid_size [[threads_per_grid]]) {
+  threadgroup atomic_uint group_counts[768];
+  for (uint i = thread_index; i < 768u; i += threads_per_group) {
+    atomic_store_explicit(&group_counts[i], 0u, memory_order_relaxed);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint sample = global_index; sample < dispatch.sample_count; sample += grid_size) {
+    const uint2  gid    = uint2((sample % dispatch.sampled_width) * dispatch.step,
+                                (sample / dispatch.sampled_width) * dispatch.step);
+    const float4 source = src.read(gid);
+    float3       c      = source.xyz;
+    const uint   pixel_index = gid.y * dispatch.width + gid.x;
+    for (uint i = 0; i < dispatch.command_count; ++i) {
+      c = ApplyAdjustment(c, LoadParams(parameter_base, commands[i]), pixel_index,
+                          dispatch.local_reference, lmt_lut, 0u);
+    }
+    atomic_fetch_add_explicit(&group_counts[CurveInputHistogramBin(c.x)], 1u,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&group_counts[256u + CurveInputHistogramBin(c.y)], 1u,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&group_counts[512u + CurveInputHistogramBin(c.z)], 1u,
+                              memory_order_relaxed);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint i = thread_index; i < 768u; i += threads_per_group) {
+    const uint count = atomic_load_explicit(&group_counts[i], memory_order_relaxed);
+    if (count != 0u) {
+      atomic_fetch_add_explicit(&counts[i], count, memory_order_relaxed);
+    }
+  }
 }
 
 kernel void primary_grade_mix(texture2d<float, access::read> source [[texture(0)]],

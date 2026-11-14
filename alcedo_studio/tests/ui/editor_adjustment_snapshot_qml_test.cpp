@@ -10,6 +10,8 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QList>
+#include <QPointF>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -26,6 +28,8 @@
 #include <variant>
 
 #include "app/editor_panel_projection.hpp"
+#include "edit/operators/models/curve_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
@@ -268,6 +272,112 @@ TEST(EditorAdjustmentSnapshotQmlTest, LookHlsLoadsCatalogUiValuesAndRanges) {
   EXPECT_EQ(range("lookHlsLightnessSlider"), (std::pair{-100.0, 100.0}));
   EXPECT_EQ(range("lookHlsChromaSlider"), (std::pair{-100.0, 100.0}));
   EXPECT_EQ(range("lookHlsSmoothnessSlider"), (std::pair{1.0, 180.0}));
+}
+
+TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveSectionLoadsFourCurvesAndMarksTheChangedChannels) {
+  alcedo::EditorPanelCurveValue curve;
+  curve.points = {{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}};
+  curve.red    = {{0.0f, 0.1f}, {1.0f, 1.0f}};
+  curve.green  = {{0.0f, 0.0f}, {1.0f, 1.0f}};
+  curve.blue   = {{0.0f, 0.0f}, {0.3f, 0.2f}, {1.0f, 0.9f}};
+  alcedo::EditorPanelProjection projection;
+  projection.session_generation = 1;
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = "curve";
+  field.value     = curve;
+  projection.fields.push_back(std::move(field));
+
+  SnapshotSession              session(alcedo::ui::PanelProjectionToVariantMap(projection), 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* model = harness.root()->findChild<QObject*>(QStringLiteral("toneCurveModel"));
+  ASSERT_NE(model, nullptr);
+  EXPECT_EQ(model->property("channel").toInt(), 0);
+  EXPECT_EQ(model->property("pointCount").toInt(), 3);
+  EXPECT_EQ(model->property("channelModified").toList(), (QVariantList{true, true, false, true}));
+  EXPECT_EQ(model->property("blueLine").value<QList<QPointF>>().size(), 514);
+  EXPECT_EQ(session.submitCount(), 0);
+
+  // The channel selector marks the curves that are not the identity. The segments come from a
+  // Repeater, whose items are not QObject children, so the search walks the item tree.
+  auto* selector =
+      harness.root()->findChild<QQuickItem*>(QStringLiteral("toneCurveChannelSelector"));
+  ASSERT_NE(selector, nullptr);
+  const auto find_item = [](QQuickItem* parent, const QString& name, auto& self) -> QQuickItem* {
+    for (QQuickItem* child : parent->childItems()) {
+      if (child->objectName() == name) {
+        return child;
+      }
+      if (QQuickItem* found = self(child, name, self)) {
+        return found;
+      }
+    }
+    return nullptr;
+  };
+  const auto mark_visible = [&](const char* channel) {
+    auto* mark = find_item(
+        selector, QStringLiteral("toneCurveChannelMark_%1").arg(QString::fromLatin1(channel)),
+        find_item);
+    EXPECT_NE(mark, nullptr) << channel;
+    return mark != nullptr && mark->isVisible();
+  };
+  EXPECT_TRUE(mark_visible("rgb"));
+  EXPECT_TRUE(mark_visible("red"));
+  EXPECT_FALSE(mark_visible("green"));
+  EXPECT_TRUE(mark_visible("blue"));
+
+  // The section shows the plot pane with the curve line of the selected channel.
+  auto* curve_line = harness.root()->findChild<QObject*>(QStringLiteral("toneCurveLine"));
+  ASSERT_NE(curve_line, nullptr);
+  // 513 steps of x; the interior point of the RGB curve is at a step (x 0.5).
+  EXPECT_EQ(curve_line->property("points").value<QList<QPointF>>().size(), 513);
+  EXPECT_EQ(harness.root()->findChild<QObject*>(QStringLiteral("editorToneCurveItem")), nullptr);
+}
+
+TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurveAndAppliesOne) {
+  // A document with the Film-like RGB curve (the RAW import look) and a custom red curve.
+  const auto* film_like = alcedo::FindToneCurvePreset("film_like");
+  ASSERT_NE(film_like, nullptr);
+  alcedo::EditorPanelCurveValue curve;
+  curve.points = film_like->PointList();
+  curve.red    = {{0.0f, 0.1f}, {0.5f, 0.45f}, {1.0f, 1.0f}};
+  curve.green  = alcedo::IdentityCurvePoints();
+  curve.blue   = alcedo::IdentityCurvePoints();
+  alcedo::EditorPanelProjection projection;
+  projection.session_generation = 1;
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = "curve";
+  field.value     = curve;
+  projection.fields.push_back(std::move(field));
+
+  SnapshotSession              session(alcedo::ui::PanelProjectionToVariantMap(projection), 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model  = harness.root()->findChild<QObject*>(QStringLiteral("toneCurveModel"));
+  auto* button = harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePresetButton"));
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(button, nullptr);
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Film-like"));
+
+  model->setProperty("channel", 1);
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Custom"));
+
+  // The menu item applies its preset to the selected curve: one settled write.
+  auto* item = harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePreset_kodak_2383"));
+  ASSERT_NE(item, nullptr);
+  EXPECT_FALSE(item->property("checked").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(item, "triggered"));
+  EXPECT_EQ(session.submitCount(), 1);
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Kodak 2383"));
+  EXPECT_TRUE(item->property("checked").toBool());
+
+  model->setProperty("channel", 0);
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Film-like"));
+  auto* film_item =
+      harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePreset_film_like"));
+  ASSERT_NE(film_item, nullptr);
+  EXPECT_TRUE(film_item->property("checked").toBool());
 }
 
 }  // namespace

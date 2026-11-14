@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QObject>
+#include <QWindow>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -14,6 +15,7 @@ class QQmlEngine;
 
 #include "app/ai_model_package_service.hpp"
 #include "app/ai_provider_profile.hpp"
+#include "app/camera_profile_library_service.hpp"
 #include "app/download_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/lut_library_service.hpp"
@@ -39,6 +41,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
 #include "ui/alcedo_main/album_backend/library_view_preferences.hpp"
+#include "ui/alcedo_main/album_backend/log_folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_preview_controller.hpp"
@@ -74,6 +77,9 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(alcedo::UpdateService* updates READ updates CONSTANT)
   Q_PROPERTY(alcedo::LutLibraryService* lutLibrary READ lut_library CONSTANT)
   Q_PROPERTY(alcedo::LutPackageService* lutPackages READ lut_packages CONSTANT)
+  /// DCP library folder and its scans (Settings > LUTs and Color Management).
+  Q_PROPERTY(
+      alcedo::CameraProfileLibraryService* cameraProfiles READ camera_profiles CONSTANT)
   /// Signed AI model package feed and the AI Mask model set install (AI Models plan, AM1).
   Q_PROPERTY(alcedo::AiModelPackageService* aiModelPackages READ ai_model_packages CONSTANT)
   /// LUT browser rows over lutLibrary; one instance shared by every LUT surface (plan 6.4).
@@ -95,6 +101,8 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(EditorBehaviorPreferences* editorBehavior READ editor_behavior CONSTANT)
   /// Library view settings (the layout of the ungrouped Library grid).
   Q_PROPERTY(LibraryViewPreferences* libraryView READ library_view CONSTANT)
+  /// The Open Log Folder action of Settings > About.
+  Q_PROPERTY(LogFolderController* logFolder READ log_folder CONSTANT)
   /// Project open and create launch state and requests.
   Q_PROPERTY(ProjectLaunchCoordinator* projectLaunch READ project_launch CONSTANT)
   /// Application quit decision and the editor finalize sequence of a window or project close.
@@ -155,6 +163,9 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto updates() -> alcedo::UpdateService* { return updates_.get(); }
   [[nodiscard]] auto lut_library() -> alcedo::LutLibraryService* { return lut_library_.get(); }
   [[nodiscard]] auto lut_packages() -> alcedo::LutPackageService* { return lut_packages_.get(); }
+  [[nodiscard]] auto camera_profiles() -> alcedo::CameraProfileLibraryService* {
+    return camera_profiles_.get();
+  }
   [[nodiscard]] auto ai_model_packages() -> alcedo::AiModelPackageService* {
     return ai_model_packages_.get();
   }
@@ -181,6 +192,7 @@ class ApplicationModuleHost final : public QObject {
     return editor_behavior_.get();
   }
   [[nodiscard]] auto library_view() -> LibraryViewPreferences* { return library_view_.get(); }
+  [[nodiscard]] auto log_folder() -> LogFolderController* { return log_folder_.get(); }
   [[nodiscard]] auto project_launch() -> ProjectLaunchCoordinator* { return project_launch_.get(); }
   [[nodiscard]] auto application_close() -> ApplicationCloseCoordinator* {
     return application_close_.get();
@@ -214,6 +226,11 @@ class ApplicationModuleHost final : public QObject {
   /// Safe to call once per engine; the engine takes ownership of the provider.
   void AttachQmlEngine(QQmlEngine* engine);
 
+  /// The comparison view, the LUT previews (Windows display ICC plan, W5), and the thumbnails of
+  /// the grid, the filmstrip, and the search results (W6) convert to the display destination of
+  /// @p window, the main window. Call once after the QML root loads.
+  void               AttachDisplayWindow(QWindow* window);
+
  private:
   void RecordConstruction(const char* type_name, const void* object);
   void RecordDestruction(const char* type_name, const void* object);
@@ -221,9 +238,9 @@ class ApplicationModuleHost final : public QObject {
   /// Removes the runtime workspace that ShutdownModules recorded in
   /// pending_workspace_removal_. Called by the destructor after ProjectModule (the last owner
   /// of the project services and their DuckDB file) is destroyed, because Windows cannot
-  /// delete an open file. A failure is written with qWarning (path and OS error), followed by
-  /// one qWarning per file that still cannot be removed (on Windows with the processes that
-  /// hold it). It is not retried. Clears pending_workspace_removal_.
+  /// delete an open file. A failure is written with qCWarning(projectLog) (path and OS error),
+  /// followed by one qCWarning(projectLog) per file that still cannot be removed (on Windows with
+  /// the processes that hold it). It is not retried. Clears pending_workspace_removal_.
   void RemovePendingWorkspace();
 
   // Owned in construction dependency order. Destroyed in reverse.
@@ -235,6 +252,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<alcedo::UpdateService>               updates_;
   std::unique_ptr<alcedo::LutLibraryService>           lut_library_;
   std::unique_ptr<alcedo::LutPackageService>           lut_packages_;
+  std::unique_ptr<alcedo::CameraProfileLibraryService> camera_profiles_;
   std::unique_ptr<ProjectModule>                       project_;
   std::unique_ptr<LibraryModule>                       library_;
   std::unique_ptr<FolderController>                    folders_;
@@ -262,6 +280,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<WorkspaceRouter>                     workspace_router_;
   std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
   std::unique_ptr<LibraryViewPreferences>              library_view_;
+  std::unique_ptr<LogFolderController>                 log_folder_;
   std::unique_ptr<ProjectLaunchCoordinator>            project_launch_;
   std::unique_ptr<ApplicationCloseCoordinator>         application_close_;
   std::unique_ptr<LibraryMutationOperations>           library_mutations_;

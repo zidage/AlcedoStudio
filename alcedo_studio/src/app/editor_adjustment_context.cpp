@@ -55,7 +55,7 @@ auto IsDrtPostField(std::string_view field) -> bool {
 
 auto IsDevelopField(std::string_view field) -> bool {
   return field == "raw_decode" || field == "lens_calib" || field == "color_temp" ||
-         field == "input_profile" || field == "crop_rotate";
+         field == "input_profile" || field == "camera_profile_file" || field == "crop_rotate";
 }
 
 auto IsColorGradeField(std::string_view field) -> bool {
@@ -109,10 +109,16 @@ auto ReadEditorImageExifDisplay(const ExifDisplayMetaData& metadata) -> EditorIm
 }
 
 auto ReadEditorImageExifDisplay(const Image& image) -> EditorImageExifDisplay {
-  if (!image.has_exif_display_.load()) {
-    return {};
+  EditorImageExifDisplay display;
+  if (image.has_exif_display_.load()) {
+    display = ReadEditorImageExifDisplay(image.exif_display_);
   }
-  return ReadEditorImageExifDisplay(image.exif_display_);
+  if (image.HasRawColorContext()) {
+    const auto& context  = image.GetRawColorContext();
+    display.camera_make  = context.camera_make_;
+    display.camera_model = context.camera_model_;
+  }
+  return display;
 }
 
 namespace {
@@ -288,7 +294,8 @@ auto CompleteSelectedNodeParameterTarget(const PipelineDocument& document,
     return target;
   }
   if (target.field_key == "raw_decode" || target.field_key == "lens_calib" ||
-      target.field_key == "color_temp" || target.field_key == "input_profile") {
+      target.field_key == "color_temp" || target.field_key == "input_profile" ||
+      target.field_key == "camera_profile_file") {
     const auto* develop = document.Develop();
     if (develop == nullptr || develop->Id() != selected_node_id) {
       SetError(error, "Develop node is missing: " + std::string(selected_node_id.Value()));

@@ -27,8 +27,10 @@
 #include "app/film_stock_presentation.hpp"
 #include "automation/automation_protocol.hpp"
 #include "edit/graph/film_print_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "edit/runtime/film/film_stock_bundle.hpp"
 #include "ui/alcedo_main/automation/automation_command_registry.hpp"
+#include "ui/alcedo_main/automation/automation_curve_commands.hpp"
 #include "ui/alcedo_main/automation/automation_film_commands.hpp"
 
 namespace alcedo::automation {
@@ -239,6 +241,34 @@ TEST(AutomationEditorCommandsTest, FilmListFiltersByListBrandAndQuery) {
                        QJsonObject{{"list", "print"}, {"brand", "Kodak"}, {"query", "paper"}})),
       (QStringList{QStringLiteral("kodak_endura_premier"), QStringLiteral("kodak_portra_endura"),
                    QStringLiteral("kodak_supra_endura")}));
+}
+
+// curve.presets (issue #891) -----------------------------------------------------------------
+
+TEST(AutomationEditorCommandsTest, CurvePresetsListsThePresetsWithTheirPointsAndEditorValue) {
+  AutomationCommandRegistry registry;
+  QString                   error;
+  ASSERT_TRUE(RegisterAutomationCurveCommands(registry, &error)) << error.toStdString();
+  const auto responses = Dispatch(registry, QStringLiteral("curve.presets"), QJsonObject{});
+  ASSERT_EQ(responses.size(), 1U);
+  ASSERT_FALSE(responses[0].error.has_value()) << responses[0].error->message.toStdString();
+  const auto result  = responses[0].result.toObject();
+  const auto presets = result.value("presets").toArray();
+  const auto data    = ToneCurvePresets();
+  ASSERT_EQ(static_cast<std::size_t>(presets.size()), data.size());
+  EXPECT_EQ(result.value("total").toInt(), presets.size());
+  for (qsizetype i = 0; i < presets.size(); ++i) {
+    const auto preset = presets.at(i).toObject();
+    const auto id     = preset.value("id").toString();
+    EXPECT_EQ(id.toStdString(), data[static_cast<std::size_t>(i)].id);
+    EXPECT_EQ(preset.value("name").toString().toStdString(),
+              data[static_cast<std::size_t>(i)].display_name);
+    EXPECT_EQ(static_cast<std::size_t>(preset.value("points").toArray().size()),
+              data[static_cast<std::size_t>(i)].points.size());
+    EXPECT_EQ(preset.value("editor_value").toObject(), (QJsonObject{{"points", id}}));
+  }
+  EXPECT_EQ(presets.at(4).toObject().value("id").toString(), QStringLiteral("film_like"));
+  EXPECT_EQ(presets.at(4).toObject().value("group").toString(), QStringLiteral("Rendering"));
 }
 
 TEST(AutomationEditorCommandsTest, FilmListRejectsAnUnknownList) {

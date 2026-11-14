@@ -15,12 +15,14 @@
 
 #include <QColor>
 #include <QSize>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <string>
@@ -865,6 +867,288 @@ TEST_F(ViewportCoverageCompositeTest, ShaderLoadFailureReportsDisplayError) {
                   UniformsFor(photo, kTint), &production);
   EXPECT_EQ(production, ViewportCompositeOutcome::Drawn) << pass_.LastError();
   EXPECT_TRUE(pass_.LastError().empty());
+}
+
+// Windows display ICC plan W3: the display table is the last step of the composite. The tables of
+// these tests are synthetic and non-linear, so that trilinear sampling differs from the node
+// function between nodes; the expected values are the table nodes and a host trilinear sample.
+
+using DisplayColor = std::array<double, 3>;
+
+/// A table of @p edge nodes whose node at coordinate (r, g, b) is @p function(r, g, b).
+template <class Function>
+auto MakeDisplayTable(int edge, float input_exponent, Function function)
+    -> std::shared_ptr<const DisplayTransformLut> {
+  auto lut            = std::make_shared<DisplayTransformLut>();
+  lut->edge           = edge;
+  lut->input_exponent = input_exponent;
+  lut->rgba.reserve(static_cast<std::size_t>(edge) * edge * edge * 4);
+  for (int b = 0; b < edge; ++b) {
+    for (int g = 0; g < edge; ++g) {
+      for (int r = 0; r < edge; ++r) {
+        const auto node = function(static_cast<double>(r) / (edge - 1),
+                                   static_cast<double>(g) / (edge - 1),
+                                   static_cast<double>(b) / (edge - 1));
+        for (const double value : node) {
+          lut->rgba.push_back(static_cast<float>(value));
+        }
+        lut->rgba.push_back(1.0f);
+      }
+    }
+  }
+  return lut;
+}
+
+/// A non-linear display conversion with channel crosstalk, inside [0, 1].
+auto CalibrationLikeTable(int edge, float input_exponent = 1.0f)
+    -> std::shared_ptr<const DisplayTransformLut> {
+  return MakeDisplayTable(edge, input_exponent, [](double r, double g, double b) {
+    return DisplayColor{0.7 * r * r + 0.2 * g + 0.1 * b, 0.1 * r + 0.8 * std::pow(g, 1.5) + 0.1 * b,
+                        0.05 * r + 0.15 * g + 0.8 * std::sqrt(b)};
+  });
+}
+
+auto TableNode(const DisplayTransformLut& lut, int r, int g, int b) -> DisplayColor {
+  const auto i = ((static_cast<std::size_t>(b) * lut.edge + g) * lut.edge + r) * 4;
+  return {lut.rgba[i], lut.rgba[i + 1], lut.rgba[i + 2]};
+}
+
+/// Host trilinear sample of @p lut at the code value @p rgb, as the shader samples it.
+auto SampleDisplayTable(const DisplayTransformLut& lut, DisplayColor rgb) -> DisplayColor {
+  std::array<int, 3>    base{};
+  std::array<double, 3> fraction{};
+  for (int c = 0; c < 3; ++c) {
+    const double coordinate =
+        std::pow(std::clamp(rgb[c], 0.0, 1.0), static_cast<double>(lut.input_exponent)) *
+        (lut.edge - 1);
+    base[c]     = std::min(static_cast<int>(std::floor(coordinate)), lut.edge - 2);
+    fraction[c] = coordinate - base[c];
+  }
+  DisplayColor result{};
+  for (int corner = 0; corner < 8; ++corner) {
+    const int    dr     = corner & 1;
+    const int    dg     = (corner >> 1) & 1;
+    const int    db     = (corner >> 2) & 1;
+    const double weight = (dr ? fraction[0] : 1.0 - fraction[0]) *
+                          (dg ? fraction[1] : 1.0 - fraction[1]) *
+                          (db ? fraction[2] : 1.0 - fraction[2]);
+    const auto   node   = TableNode(lut, base[0] + dr, base[1] + dg, base[2] + db);
+    for (int c = 0; c < 3; ++c) {
+      result[c] += weight * node[c];
+    }
+  }
+  return result;
+}
+
+class ViewportDisplayTableTest : public ViewportCoverageCompositeTest {
+ protected:
+  /// Draw an RGBA32F photo of @p rgba 1:1 without coverage.
+  auto DrawPhoto(int width, int height, const std::vector<float>& rgba,
+                 ViewportCompositeOutcome* outcome = nullptr) -> std::vector<float> {
+    auto*                   texture = Upload(width, height, rgba);
+    ViewportCompositeLayout layout;
+    layout.target_size = QSize(width, height);
+    layout.primary     = {width, height, FramePresentationMode::FullFrame, {}};
+    return Composite(QSize(width, height), {texture, nullptr, nullptr},
+                     BuildViewportCompositeUniforms(layout), outcome);
+  }
+
+  /// A photo whose pixel (g * edge + r, b) has the code value of node (r, g, b) of an @p edge
+  /// table, mapped through @p code.
+  template <class Code>
+  static auto NodeColorPhoto(int edge, Code code) -> std::vector<float> {
+    std::vector<float> rgba;
+    rgba.reserve(static_cast<std::size_t>(edge) * edge * edge * 4);
+    for (int b = 0; b < edge; ++b) {
+      for (int g = 0; g < edge; ++g) {
+        for (int r = 0; r < edge; ++r) {
+          rgba.push_back(code(static_cast<float>(r) / (edge - 1)));
+          rgba.push_back(code(static_cast<float>(g) / (edge - 1)));
+          rgba.push_back(code(static_cast<float>(b) / (edge - 1)));
+          rgba.push_back(1.0f);
+        }
+      }
+    }
+    return rgba;
+  }
+
+  /// Compare the drawn node-color photo of @p edge nodes with the nodes of @p lut at
+  /// @p stride * index.
+  static void ExpectNodeValues(const std::vector<float>& output, int edge,
+                               const DisplayTransformLut& lut, int stride, double tolerance) {
+    ASSERT_EQ(output.size(), static_cast<std::size_t>(edge) * edge * edge * 4);
+    int failures = 0;
+    for (int b = 0; b < edge && failures < 8; ++b) {
+      for (int g = 0; g < edge && failures < 8; ++g) {
+        for (int r = 0; r < edge && failures < 8; ++r) {
+          const auto i        = ((static_cast<std::size_t>(b) * edge + g) * edge + r) * 4;
+          const auto expected = TableNode(lut, r * stride, g * stride, b * stride);
+          bool       ok       = output[i + 3] == 1.0f;
+          for (int c = 0; c < 3; ++c) {
+            ok = ok && std::abs(output[i + c] - expected[c]) <= tolerance;
+          }
+          if (!ok) {
+            ADD_FAILURE() << "node (" << r << ", " << g << ", " << b << ") drawn ("
+                          << output[i] << ", " << output[i + 1] << ", " << output[i + 2] << ", "
+                          << output[i + 3] << "), table (" << expected[0] << ", " << expected[1]
+                          << ", " << expected[2] << ")";
+            ++failures;
+          }
+        }
+      }
+    }
+  }
+};
+
+TEST_F(ViewportDisplayTableTest, DisplayTableConvertsThePhotoAtNodeColors) {
+  constexpr int edge  = 9;
+  const auto    table = CalibrationLikeTable(edge);
+  pass_.SetDisplayTransform(table);
+  ViewportCompositeOutcome outcome = ViewportCompositeOutcome::Failed;
+  const auto output = DrawPhoto(edge * edge, edge, NodeColorPhoto(edge, [](float c) { return c; }),
+                                &outcome);
+  ASSERT_EQ(outcome, ViewportCompositeOutcome::Drawn) << pass_.LastError();
+  ExpectNodeValues(output, edge, *table, 1, 1e-4);
+}
+
+TEST_F(ViewportDisplayTableTest, DisplayTableInterpolatesBetweenNodes) {
+  const auto table = CalibrationLikeTable(kDisplayTransformLutEdge);
+  pass_.SetDisplayTransform(table);
+  constexpr int      width  = 64;
+  constexpr int      height = 32;
+  std::vector<float> rgba;
+  std::uint32_t      state = 0x9E3779B9u;
+  for (int i = 0; i < width * height; ++i) {
+    for (int c = 0; c < 3; ++c) {
+      state = state * 1664525u + 1013904223u;
+      rgba.push_back(static_cast<float>(state >> 8) / static_cast<float>(1u << 24));
+    }
+    rgba.push_back(1.0f);
+  }
+  const auto output = DrawPhoto(width, height, rgba);
+  ASSERT_EQ(output.size(), rgba.size());
+  int    failures   = 0;
+  double max_error  = 0.0;
+  double max_change = 0.0;
+  for (std::size_t i = 0; i < output.size() / 4 && failures < 8; ++i) {
+    const auto expected =
+        SampleDisplayTable(*table, {rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]});
+    for (int c = 0; c < 3; ++c) {
+      const double error = std::abs(output[i * 4 + c] - expected[c]);
+      max_error          = std::max(max_error, error);
+      max_change         = std::max(max_change, std::abs(expected[c] - rgba[i * 4 + c]));
+      if (error > 1e-3) {
+        ADD_FAILURE() << "pixel " << i << " channel " << c << " = " << output[i * 4 + c]
+                      << ", host trilinear sample " << expected[c];
+        ++failures;
+      }
+    }
+  }
+  std::cout << "largest difference to the host trilinear sample: " << max_error << "\n";
+  EXPECT_GT(max_change, 0.1) << "the table must change the photo";
+}
+
+TEST_F(ViewportDisplayTableTest, DisplayTableConvertsTheCoverageTint) {
+  const auto                       pixels = MakeDiscPixels(28.0, 24.0);
+  const MaskCoverageDisplayRequest request{MakePhotoGeometry(1.0f), false, 1.0f};
+  ASSERT_EQ(Present(Candidate(pixels), request, Identity(131)), MaskCoveragePublication::Published);
+  ASSERT_TRUE(Consume());
+  const auto coverage_texels = ReadBack(layer_.Texture());
+  const auto extent          = request.geometry.render_extent;
+  const auto table           = CalibrationLikeTable(kDisplayTransformLutEdge);
+  pass_.SetDisplayTransform(table);
+
+  std::vector<float> photo_rgba(static_cast<std::size_t>(extent.width) * extent.height * 4);
+  for (std::size_t i = 0; i < photo_rgba.size() / 4; ++i) {
+    photo_rgba[i * 4]     = 0.25f + 0.5f * static_cast<float>(i % extent.width) / extent.width;
+    photo_rgba[i * 4 + 1] = 0.6f;
+    photo_rgba[i * 4 + 2] = 0.35f;
+    photo_rgba[i * 4 + 3] = 1.0f;
+  }
+  ImportedPhoto photo;
+  photo.texture =
+      Upload(static_cast<int>(extent.width), static_cast<int>(extent.height), photo_rgba);
+  photo.width       = static_cast<int>(extent.width);
+  photo.height      = static_cast<int>(extent.height);
+  photo.geometry    = request.geometry;
+  const auto output = CompositeFor(photo, kTint);
+  ASSERT_EQ(output.size(), photo_rgba.size());
+
+  int covered = 0, failures = 0;
+  for (std::size_t i = 0; i < output.size() / 4 && failures < 8; ++i) {
+    const auto tinted = ExpectedComposite(PhotoPixel(photo_rgba, i), coverage_texels[i * 4], kTint);
+    const auto expected = SampleDisplayTable(*table, {tinted[0], tinted[1], tinted[2]});
+    if (coverage_texels[i * 4] > 0.5f) {
+      ++covered;
+    }
+    for (int c = 0; c < 3; ++c) {
+      if (std::abs(output[i * 4 + c] - expected[c]) > 1e-3) {
+        ADD_FAILURE() << "pixel " << i << " (coverage " << coverage_texels[i * 4] << ") channel "
+                      << c << " = " << output[i * 4 + c] << ", expected " << expected[c];
+        ++failures;
+      }
+    }
+  }
+  EXPECT_GT(covered, 100);
+}
+
+TEST_F(ViewportDisplayTableTest, NoDisplayTableKeepsPhotoValues) {
+  constexpr int                  width   = 24;
+  constexpr int                  height  = 8;
+  constexpr std::array<float, 6> kValues = {-0.75f, 0.0f, 0.5f, 1.0f, 2.5f, 16.0f};
+  std::vector<float>             rgba(static_cast<std::size_t>(width) * height * 4);
+  for (std::size_t i = 0; i < rgba.size() / 4; ++i) {
+    rgba[i * 4]     = kValues[i % kValues.size()];
+    rgba[i * 4 + 1] = kValues[(i + 2) % kValues.size()];
+    rgba[i * 4 + 2] = -kValues[(i + 4) % kValues.size()];
+    rgba[i * 4 + 3] = 0.5f;
+  }
+  pass_.SetDisplayTransform(CalibrationLikeTable(9));
+  const auto converted = DrawPhoto(width, height, rgba);
+  ASSERT_EQ(converted.size(), rgba.size());
+  for (std::size_t i = 0; i < converted.size() / 4; ++i) {
+    for (int c = 0; c < 3; ++c) {
+      ASSERT_GE(converted[i * 4 + c], 0.0f) << "a table value is inside [0, 1]";
+      ASSERT_LE(converted[i * 4 + c], 1.0f) << "a table value is inside [0, 1]";
+    }
+    EXPECT_EQ(converted[i * 4 + 3], 0.5f) << "the table keeps the photo alpha";
+  }
+
+  pass_.SetDisplayTransform(nullptr);
+  ViewportCompositeOutcome outcome = ViewportCompositeOutcome::Failed;
+  const auto               output  = DrawPhoto(width, height, rgba, &outcome);
+  ASSERT_EQ(outcome, ViewportCompositeOutcome::Drawn) << pass_.LastError();
+  ASSERT_EQ(output.size(), rgba.size());
+  for (std::size_t i = 0; i < output.size(); ++i) {
+    // Equal values: the Metal draw returns +0 for a -0 texel, so the sign of zero is not compared.
+    ASSERT_EQ(output[i], rgba[i]) << "value " << i;
+  }
+}
+
+TEST_F(ViewportDisplayTableTest, ReplacedDisplayTableIsUploaded) {
+  // The 5 node coordinates j / 4 are the coordinates 2j / 8 of the 9-node table.
+  constexpr int edge   = 5;
+  const auto    photo  = NodeColorPhoto(edge, [](float c) { return c; });
+  const auto    first  = CalibrationLikeTable(9);
+  const auto    second = MakeDisplayTable(edge, 1.0f, [](double r, double g, double b) {
+    return DisplayColor{1.0 - 0.6 * b, 0.3 + 0.5 * r * g, 0.9 * g * g};
+  });
+  pass_.SetDisplayTransform(first);
+  ExpectNodeValues(DrawPhoto(edge * edge, edge, photo), edge, *first, 2, 1e-4);
+  pass_.SetDisplayTransform(second);
+  ExpectNodeValues(DrawPhoto(edge * edge, edge, photo), edge, *second, 1, 1e-4);
+  pass_.SetDisplayTransform(first);
+  ExpectNodeValues(DrawPhoto(edge * edge, edge, photo), edge, *first, 2, 1e-4);
+}
+
+TEST_F(ViewportDisplayTableTest, LinearEncodingTableUsesInputExponent) {
+  constexpr int edge  = 9;
+  const auto    table = CalibrationLikeTable(edge, 1.0f / 2.2f);
+  pass_.SetDisplayTransform(table);
+  // The linear code value c ^ 2.2 has the table coordinate c.
+  const auto output = DrawPhoto(edge * edge, edge,
+                                NodeColorPhoto(edge, [](float c) { return std::pow(c, 2.2f); }));
+  ExpectNodeValues(output, edge, *table, 1, 1e-4);
 }
 
 }  // namespace

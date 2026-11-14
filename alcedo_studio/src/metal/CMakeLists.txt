@@ -412,6 +412,7 @@ if(ALCEDO_METAL_ENABLED)
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_tile.h"
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_negative.h"
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
+            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/profile_tone_gpu_math.h"
             "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
         LINK_AIR "${METAL_FILM_PRINT_AIR}" "${METAL_FILM_GRAIN_POST_AIR}"
     )

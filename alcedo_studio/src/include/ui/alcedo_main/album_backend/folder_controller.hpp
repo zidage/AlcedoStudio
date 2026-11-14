@@ -55,6 +55,12 @@ class FolderController final : public QObject {
   [[nodiscard]] auto CurrentFolderElementId() const -> std::optional<sl_element_id_t>;
   [[nodiscard]] auto FolderElementIdForUiId(uint folderUiId) const
       -> std::optional<sl_element_id_t>;
+  /// Library path of the folder row @p folderUiId (0 = the root collection), or nothing when no
+  /// loaded row has that id.
+  [[nodiscard]] auto FolderFsPathForUiId(uint folderUiId) const
+      -> std::optional<std::filesystem::path> {
+    return TryGetPathForUiId(folderUiId);
+  }
 
   Q_INVOKABLE void SelectFolder(uint folderUiId);
   /// Creates a folder inside the current folder.

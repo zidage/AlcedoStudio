@@ -583,7 +583,7 @@ void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& pla
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
     throw std::runtime_error(std::string("ExecuteMetalCameraColor: ") +
-                             std::string(ColorTransformErrorMessage(resolved.error)));
+                             ColorTransformFailureMessage(develop_params, resolved.error));
   }
   auto* input = workspace.Images().Find(plan.geometry_output);
   if (input == nullptr || input->Empty()) {
@@ -608,7 +608,7 @@ void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& pla
   arena.UploadDirty(device.CommandContext());
   const auto binding        = arena.Binding(key);
   auto*      command_buffer = CommandBuffer(device);
-  const auto table_data = PackDngProfileGpuData(develop_params.camera_profile, resolved.transform);
+  const auto table_data     = PackDngProfileGpuData(develop_params, resolved.transform);
   auto&      tables =
       UploadDngProfileGpuData(workspace, develop->Id(), table_data, device.CommandContext());
   DispatchCameraColor(command_buffer, input->Texture(), output.Texture(), arena.DeviceBuffer(),

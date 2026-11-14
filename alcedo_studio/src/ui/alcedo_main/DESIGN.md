@@ -10,7 +10,8 @@ Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `DialogActionButton.qml`, `IconButton.qml`, `SegmentedCardSwitcher.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
 `AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
-`ThemeSwitch.qml`, `SkeletonBlock.qml`, `AlertBadge.qml`
+`ThemeSwitch.qml`, `SkeletonBlock.qml`, `StaggeredGridLoader.qml`,
+`StaggeredGridMark.qml`, `AlertBadge.qml`
 
 Per-file decisions: `docs/VI/README.md`. That catalog specializes this global
 system for individual QML files and is updated with each approved visual change.
@@ -49,6 +50,7 @@ Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checkl
 | UI caption | `uiFontFamily` | `fontSizeCaption` (11) | `fontWeightRegular` | `lineHeightCaption` (14) | Secondary chrome |
 | Headline | `headlineFontFamily` | `fontSizeHeadline` (22) | `fontWeightHeading` | `lineHeightHeadline` (28) | Empty-state titles |
 | Settings card title | `headlineFontFamily` | `fontSizeSection` (14) | DemiBold | 1.1 | Title of a `PackageCard` (Settings > LUTs, Settings > AI Models) and of the folder tiles of those pages. Below it, after a `spaceSm` gap, one sentence in `uiFontFamily` + `fontSizeBody` muted text says what the package or model does; no list and no version text there (a Pill shows the version). A GitHub button beside the title opens the project of the package when it has one. Do not use a display size: a model name must stay on one line in the two-column page. |
+| Display count | `headlineFontFamily` | `fontSizeDisplay` (72) | ExtraLight | 1 | The one large number of a Settings bento count tile (`CountTile`): LUT total, photo count, the version of About. |
 | Data / numeric | `headlineFontFamily` (Manrope) with `font.features: { "tnum": 1 }` | body to display | DemiBold for inline counts, ExtraLight for display counts | matching | Counts, sizes, revisions, progress values, and remaining times. `dataFontFamily` (IBM Plex Sans) is retired page by page: a new or changed surface uses Manrope. Counts use the digit grouping of the locale (`DataFormat.grouped`); see "Settings bento pages" for large counts. |
 | Mono | `monoFontFamily` | body/caption | regular | matching | Minigit history/Versions data (commit hashes, before/after delta lines) and the adjustment-header EXIF tokens. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, crop degrees, or the selected node display name. |
 
@@ -438,13 +440,16 @@ wordmark and the small import progress ring.
 | Collections tree | File-browser rows of `collectionRowHeight`: `collectionIndentStep` indent per level, a `▸`/`▾` disclosure glyph in `textMutedColor` (the Library section-header glyphs), then the name in `fontSizeTitle` `textColor`. No folder icon. Names elide (uniform fixed-height rows). The root row (all images) has no disclosure glyph and aligns with the top-level collections. The photo count of the collection sits right-aligned after the name in `dataFontFamily` `fontSizeCaption` `textMutedColor`, with locale digit grouping; the root row counts the whole project. A row shows no count before the first count read and while its name field is open (issue #733) |
 | Selected collection row | Quiet neutral well: `controlHoveredFillColor` with `controlRadiusSmall` corners; the name keeps `textColor` and turns `fontWeightStrong`; the photo count brightens from `textMutedColor` to `textColor` (user request 2026-11-07: the dark selected ink read dimmer than the idle count); the glyph stays `textMutedColor`. This is the per-file exception to the bright `editorListSelectedFillColor` well (user request 2026-11-07: the bright well was too heavy in the dense tree). No side stripe. Hover is the darker `hoverColor` wash |
 | Collection drop target (drag to move) | `hoverColor` wash with a 1 px `textMutedColor` outline; the dragged name follows the pointer on a `bgBaseColor` label with a 1 px `dividerColor` outline. Rows that cannot take the folder (its own subtree, its current parent) show no outline |
+| Collection drop target (file drop to import) | The same row style as the drag to move, on the row under a drag of local files and folders from the system file manager (issue #757). The draft row and the row being renamed show no outline. Every Library file drop answers Copy, so the file manager never deletes the dropped files |
+| Library grid file drop overlay | Over the grid while local files and folders are dragged onto it: `colBgDeep` at alpha 0.78 with `controlRadiusSmall` corners and a 1 px `textMutedColor` outline; centered `import.svg` (28 px) in `textColor` above "Import to" and the current collection name in `fontSizeSection` `fontWeightHeading`. No explanatory text |
 | New-collection and rename name field | Inline in the tree row: a plain `TextInput` (no Controls `TextField`, so no style-provided floating label or underline) in a `collectionRowHeight` - 4 high `bgBaseColor` box with `controlRadiusSmall` corners; 1 px `dividerColor` border, `textMutedColor` on focus; placeholder in `textMutedColor` inside the box; text selection `textMutedColor` (alpha 0.6) with `textColor` text. The "Add to" filter field uses the same construction |
 | Grid zoom slider | `textColor` fill and handle on the `bgBaseColor` track; the handle has no border |
 | Inspector resize handle | `textMutedColor` on hover and drag |
 | Album Inspector sections (`InspectorSection.qml`) | Every field of the Library Overview (By Capture Date, By Import Time, By Edit Time, By Camera Model, By Labels, By Custom Label, By Rating, By Lens, Search Filter) is one rounded card: `bgBaseColor` fill, 1 px `cardBorderColor`, `panelRadius` corners, `spaceMd` from the panel edges, `spaceSm` between the cards. The header and, when the section is expanded, its content sit inside the same card; a collapsed section is the 36 px header alone. In the header: the fold glyph `▾`/`▸` in `textMutedColor` at the left (the Collections tree glyphs; empty for a section that does not fold), the title in title case (`uiFontFamily`, `fontSizeBody`, `fontWeightStrong`, `textColor`, no upper-case transform), and the sort ascending, sort descending, and Group actions (`InspectorFieldActions`) at the right with `spaceXs` between them. The title elides at the right; the actions stay on the title row at the minimum inspector width (300 px) in every UI language. Only when the header cannot hold the glyph, a 56 px title, and the actions do the actions move to a second header row, together at the right. A click on the header outside the actions folds the section with the fold rules of "Motion": the card height follows the clipped content, the content fades with the same progress, and the `▸` glyph turns 90 degrees to point down (`motionFoldOpenMs` / `motionFoldCloseMs`, `motionEasing`; `reduceMotion` makes it a cut); the date content stays loaded until the close ends. The content has `spaceMd` side and bottom padding. Controls inside the card keep their contrast against the `bgBaseColor` fill: chips and day tiles use `controlFillColor` (hover `controlHoveredFillColor`) with a 1 px `cardBorderColor`, the "+N more" and "Show less" chips are transparent with a 1 px `controlBorderColor`, the lens row hover is `controlFillColor`, and the calendar/activity switch track and the search field are `bgCanvasColor`. The Search Filter card shows the query text directly, without a nested box (user decisions 2026-11-09, issue #766: the sections had no visible boundaries, the actions spread across a second row, then rounded cards that extend over the expanded content, consistent with the other panel cards) |
 | Album Inspector value search (By Camera Model, By Labels, By Lens) | First row of the section content: a plain `TextInput` in a `collectionRowHeight` hairline box (`bgCanvasColor`, sunken against the card; `controlRadiusSmall`, 1 px `dividerColor` border, `textMutedColor` on focus), a 12 px `search.svg` in `textMutedColor` at the left, the "Search" placeholder in `textMutedColor`, and a `×` that clears the text once there is text (Escape also clears). Typing filters the values of that section (case-insensitive, matches inside the value) and shows every match without the preview limit; the selected value stays in the list, first when it does not match. The field never changes the library query. The field is hidden when the section has no values |
 | By Custom Label (`ColorLabelFilterChips.qml`) | The section between By Labels and By Rating. Its content is one chip per color label code in code order (Red to Gray), always present, then "Deleted". A chip is 38 px high with fully round ends, like the By Labels chips: `controlFillColor` fill (hover `controlHoveredFillColor`), 1 px `cardBorderColor`; inside, a 10 px dot of the code color (`appTheme.colorLabelColors`; a 12 px `trash.svg` in `textMutedColor` for Deleted), the user name of the code (`colorLabelNames`, 11 px `fontWeight` 600, `textColor`), and the match-set count in `dataFontFamily` with tabular figures in `textMutedColor`. Counts below 10,000 use the digit grouping of the locale; larger counts use the short form (12.8K, 102K, 1.25M; 1.28万 in Chinese). The chip of the active filter is the `editorListSelectedFillColor` well with `editorListSelectedInkColor` text; the dot keeps its color. A click toggles the filter (`colorLabel` with the code, or `deleted`). The header action is one pencil (`edit.svg`) in the `InspectorFieldActions` action style; it opens Settings > Language / Theme scrolled to Library > Color Labels. The section has no sort or Group actions, because a photo can have several codes (issue #772) |
-| Library marks control (`LibraryMarksControl.qml`) | One card above the button row of the Library inspector on the Album and Image tabs (hidden on the Export tab): `bgBaseColor` fill, 1 px `cardBorderColor`, `panelRadius` corners, `spaceMd` side padding. Three 40 px rows with a 1 px `dividerColor` hairline between them; each row starts with its name (Rating, Label, Delete) in a 64 px column, `fontSizeCaption`, `textMutedColor`. Rating: five 18 px stars in the rating filter inks; when the selected photos have different ratings, all stars are hollow and "Mixed" (`textMutedColor`) follows them; a click sets that rating on every selected photo, and a click on the star of the common rating clears it. Label: the seven codes as 18 px circles, 8 px apart: filled with the code color when all selected photos have the code, a 1.5 px ring of the code color with an 8 by 2 px dash in its center when some have it, the ring alone when none has it; hover draws a 1 px `textMutedColor` ring 3 px outside the circle; the tooltip is the user name of the code. A click on a code that all photos have removes it from all; otherwise it adds it to all; the other codes of each photo stay. Delete: a 28 px neutral button "Mark" (the secondary button fill and border of the inspector buttons); when all selected photos have the Delete mark it is the light filled "Marked" (`filledActionFill`, `filledActionInk`), and a click clears the mark. The control shows each change at once, with the library cards. It is enabled under the conditions of "Add to Export Queue" while `interactionPolicy.canChangeStateAsUser` is true; disabled, the stars and circles are at 45% opacity (issue #772) |
+| Inspector footer (`LibraryWorkspace.qml`) | The marks control and the button row (`LibraryInspectorActions.qml`) sit inside the Inspector panel, below the scrolling pages, with the inset of the Album section cards: 10 px page margin plus `spaceMd` at the sides and the bottom, `spaceSm` above the footer and between the marks card and the button row. So the marks card, the buttons, and the section cards have one width, and the panel is one surface from the tabs to the button (user decision 2026-11-11: the marks card had the card fill but stood outside the panel at the full panel width). The buttons are 44 px high. The Export tab hides the marks card; the Export button takes its place in the same footer |
+| Library marks control (`LibraryMarksControl.qml`) | One card above the button row in the Inspector footer on the Album and Image tabs (hidden on the Export tab): `bgBaseColor` fill, 1 px `cardBorderColor`, `panelRadius` corners, `spaceMd` side padding. Three 40 px rows with a 1 px `dividerColor` hairline between them; each row starts with its name (Rating, Label, Delete) in a 64 px column, `fontSizeCaption`, `textMutedColor`. Rating: five 18 px stars in the rating filter inks; when the selected photos have different ratings, all stars are hollow and "Mixed" (`textMutedColor`) follows them; a click sets that rating on every selected photo, and a click on the star of the common rating clears it. Label: the seven codes as 18 px circles, 8 px apart: filled with the code color when all selected photos have the code, a 1.5 px ring of the code color with an 8 by 2 px dash in its center when some have it, the ring alone when none has it; hover draws a 1 px `textMutedColor` ring 3 px outside the circle; the tooltip is the user name of the code. A click on a code that all photos have removes it from all; otherwise it adds it to all; the other codes of each photo stay. Delete: a 28 px neutral button "Mark" (the secondary button fill and border of the inspector buttons); when all selected photos have the Delete mark it is the light filled "Marked" (`filledActionFill`, `filledActionInk`), and a click clears the mark. The control shows each change at once, with the library cards. It is enabled under the conditions of "Add to Export Queue" while `interactionPolicy.canChangeStateAsUser` is true; disabled, the stars and circles are at 45% opacity (issue #772) |
 | Inspector stats cards (date calendar, By Camera Model, By Labels, By Lens) | Neutral bars (`textMutedColor`) and rank dots (`textColor`, then `textMutedColor`). The selected chip, row, or day tile is the `editorListSelectedFillColor` well with `editorListSelectedInkColor` text. Hover follows the section card rules above (a `controlFillColor` step) |
 | Rating filter and photo Inspector rating | Filled stars `textColor`, hover preview `textMutedColor`, other stars `ratingStarEmptyColor` |
 | Active search filter row | No marker dot; the row text names the filter |
@@ -509,8 +514,10 @@ edit state and the rating. The shared parts are `ThumbnailEditMark.qml` and
   that point at the same height on the screen. Cards that leave the view move
   to their new place and fade out; cards that enter fade in. A step during the
   animation starts from the drawn rectangles of that moment. The thumbnail of a
-  new tier replaces the shown one when it is ready. The grouped view uses the
-  same rules (260 ms).
+  larger tier replaces the shown one when it is ready. A card that already shows
+  a thumbnail larger than a smaller new tier keeps it and its pin, and requests
+  no render (`ThumbnailTier.js`); a card without a thumbnail requests the new
+  tier. The grouped view uses the same rules (260 ms).
 
 ### Library justified rows
 
@@ -537,6 +544,24 @@ always use the classic cells.
 - **Marks and selection:** the edit mark chip, the missing-source mark, and the
   Delete mark sit on the photo as on the cards. Selection is the 2 px
   `textColor` outline around the photo.
+- **New result:** a result that replaces the shown one (a filter, the search, a
+  collection) shows from its first photo, as in the classic grid (#841).
+
+### Library delegate cost (#836)
+
+A scroll or a zoom at the smallest level shows about 200 photos at once, so the
+Library keeps the work per photo small:
+
+- **Reuse:** a justified tile is a slot of `JustifiedLayoutModel`; a scroll gives
+  the slot of a photo that leaves to a photo that enters. The classic grid reuses
+  its cards (`reuseItems`). A reused delegate pins its new photo once, after the
+  model has written every role of the change.
+- **Parts made when shown:** the hover details of a tile (made on the first
+  hover), the text of a thumbnail problem, and the classic caption of the shown
+  zoom level (none at 14 columns, one line at 8 and 11, three lines at 2 to 6;
+  made between frames).
+- **Thumbnail state:** a delegate reads the thumbnail URL and state from the
+  roles of its model row.
 
 ### Library sort, group, and sections
 
@@ -553,6 +578,45 @@ The sort and Group icons are the user-provided Tabler `sort-ascending`,
 upstream 2 px stroke and drawn at `iconOpticalSizeCompact`.
 Selected actions use the monochrome list well (`editorListSelectedFillColor` /
 `editorListSelectedInkColor`). Per-file details: `docs/VI/README.md`.
+
+### Library loading
+
+A Library read that replaces the shown result (a collection switch, an Inspector
+filter, the search, a sort or group change) shows `StaggeredGridLoader.qml`. The
+loader appears `libraryLoadingRevealDelayMs` after the read starts, so a fast read
+draws no frame of it. A read that changes the shown result in place (a rating
+write, an import into the shown collection) keeps the grid as it is and shows no
+loader. The C++ side reports the first kind through `LibraryModule.queryReplacing`.
+
+| State | Surface |
+| --- | --- |
+| No result shown (collection switch) | Placeholder grid: `bgBaseColor` cards at the column count, gap, card proportion, and radius of the classic photo grid at the current zoom level. A `textColor` wave at 10 % runs along the diagonals, top left to bottom right, 1600 ms per pass. The empty state ("No Photos Yet") stays hidden until the read publishes |
+| Previous result shown (filter or search change) | The previous grid dims to 30 % over `motionFoldOpenMs`; a 72 px `bgPanelColor` card with a `glassStrokeColor` hairline stands at its centre and holds a 36 px `StaggeredGridMark` |
+| One photo loading (a card, a justified tile, an Editor filmstrip card) | A `StaggeredGridMark` at the centre of the photo area until the thumbnail is ready: 27 px on Library cards and tiles, `iconOpticalSize` on filmstrip cards |
+| Read failed | The previous result stays; the query row shows the error in `dangerColor` with Retry |
+
+`StaggeredGridMark.qml` is the compact 3 x 3 staggered grid. Each tile rests at 75 %
+size and 15 % wave level and grows to full size and full `textColor` as the wave
+passes, `loadingWaveCycleMs` per pass. Its spacing is the mark width / 9 and its
+tile radius the mark width / 18, both rounded, so one mark serves every size.
+
+A dense grid shows a mark on every loading card, so a mark is one `ShaderEffect`
+quad: `qml/shaders/staggered_grid_mark.frag` draws the nine tiles. Every mark reads
+one shared clock, `appTheme.loadingWavePhase`, which advances every
+`loadingWaveFrameMs` while at least one mark shows. All marks pulse together, and
+the window repaints at the clock rate instead of the display rate.
+
+The loaders draw no Material `BusyIndicator` and no spinner. Under `reduceMotion`
+the wave stops and every tile draws at its rest level.
+
+| Parameter | Value | Meaning |
+| --- | --- | --- |
+| `libraryLoadingRevealDelayMs` | 150 ms | Time from the start of a replacing read to the first loader frame |
+| Placeholder wave strength | 10 % | Opacity of `textColor` over a placeholder card at the crest of the wave |
+| Compact mark wave strength | 85 % | Opacity of `textColor` over a compact tile at the crest of the wave |
+| `loadingWaveCycleMs` | 1200 ms | One pass of the compact mark wave |
+| `loadingWaveFrameMs` | 33 ms | Interval of the shared mark clock (about 30 updates per second) |
+| Stale result opacity | 30 % | Opacity of the previous grid while the replacing read runs |
 
 ### Library color labels
 
@@ -788,6 +852,82 @@ inside the rounded corners, and a `plotPadding` of `spaceSm - spaceXs`. One
   end does not clip.
 - **Waveform.** The density image fills the same plot rectangle. The guide
   lines are the three horizontal level lines at 25, 50, and 75 percent.
+
+### Plot pane
+
+`PlotPane` is the reusable plot item of editor plots (the Tone Curve section is
+its first user). It holds a view of the data (zoom and pan inside the data
+limits), insets around the plot rectangle for labels, and an ordered list of
+layers: the first layer draws at the bottom. Each layer has its own colors and
+sizes as properties; bind them to the tokens below.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `plotSurfaceColor` | `bgBaseColor` | Plot rectangle fill (`PlotPane.surfaceColor`) and the break across a cut histogram peak |
+| `plotGridColor` | `bgBaseColor` to `textMutedColor` at 22 percent | Ordinary grid lines |
+| `plotGridStrongColor` | `bgBaseColor` to `textMutedColor` at 55 percent | Strong grid line (for example 18% grey on the curve axis) |
+| `plotLabelColor` | `textMutedColor` | Tick labels in the insets |
+| `plotLineColor` | `textColor` | Data line (the curve) |
+| `plotReferenceLineColor` | `bgBaseColor` to `textMutedColor` at 70 percent | Reference lines (the dashed identity line) |
+| `plotHandleColor` | `textColor` | Handle ring; fill of the selected handle |
+| `plotHandleOutlineColor` | `bgDeepColor` at alpha 200 | Dark disc behind a handle, so it reads over the histogram |
+| `plotGridLineWidth` | 1 px | Grid line width |
+| `plotLineWidth` | 1.25 px | Data line and histogram edge width |
+| `plotHandleRadius` | 3.5 px | Handle radius: 7 px rings |
+| `plotHandleRingWidth` | 1.25 px | Handle ring width |
+| `plotHandleOutlineWidth` | 1 px | Width of the dark outline around a handle |
+| `plotHitRadius` | 8 px | Pointer distance that hits a handle or a line |
+
+- **Layers.** `PlotGridLayer` (lines at ticks, labels under and left of the
+  plot), `PlotHistogramLayer` (the scope histogram look: additive channel
+  fills with a 1.25 px edge, `scopeHistogram*Color` tints, one channel in its
+  own tint when the layer shows one channel), `PlotPolylineLayer` (solid or
+  dashed line), and `PlotHandleLayer` (rings; the selected handle is a filled
+  disc; a hovered or pressed handle grows by 1 px). Widths are the visible
+  width with the antialiased edge included.
+- **Input.** A handle follows the pointer 1:1. Ctrl + wheel zooms at the
+  pointer; the plain wheel scrolls the panel. A drag in an empty area moves a
+  zoomed view. Cursors: pointing hand over a handle or a line, closed hand
+  while dragging, open hand over an empty area of a zoomed view.
+
+### Tone Curve section
+
+The Tone Curve section of the Tone panel (`EditorToneCurveSection.qml`) is a
+`CollapsibleSection` with the header actions Histogram (toggle,
+`histogram.svg`), Fit (toggle, `fit-range.svg`), and Reset (`reset.svg`), all
+`IconActionButton` compact; a selected toggle uses the selected fill. There is
+no caption sentence.
+
+- **Row 1.** Channel selector `RGB`, `R`, `G`, `B` (`SegmentedCardSwitcher`).
+  A segment of a curve that is not the identity shows a `plotChannelMarkSize`
+  dot before its title, in the ink color of the segment. The user asked for
+  this dot in #890; it is the only status dot of the editor panels.
+- **Plot.** A square `PlotPane` with `plotSurfaceColor`. Grid every 2 EV from
+  18% grey with the strong line at 18% grey; signed EV labels under the plot
+  only (`fontSizeCaption`, `plotLabelColor`). The histogram of the curve input
+  is behind the curves. The dashed identity line uses
+  `plotReferenceLineColor`, 4 px dashes with 4 px gaps. The curve of the
+  selected channel is 1.25 px in `plotLineColor` (RGB) or its channel color;
+  the curves of the other channels that are not the identity show in their
+  colors at `plotInactiveLineOpacity`. Handles are the plot pane handles.
+- **Pointer.** Over the plot, a 1 px vertical line in `plotPointerLineColor`
+  follows the pointer, and `In` and `Out` with their EV values show at the top
+  left of the plot in `fontSizeCaption` (`plotLabelColor` names,
+  `textColor` values).
+- **Row 2.** `In` and `Out` fields of the selected point: a plain `TextInput`
+  in a hairline box (`bgBaseColor`, `controlRadiusSmall`, 1 px `dividerColor`,
+  `textMutedColor` border on focus), 4 decimals, each followed by its EV value
+  in `textMutedColor`.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `plotChannelRedColor` | `#E86666` to `textColor` at 12 percent | Red curve |
+| `plotChannelGreenColor` | `#74C266` to `textColor` at 12 percent | Green curve |
+| `plotChannelBlueColor` | `#66A0E8` to `textColor` at 12 percent | Blue curve |
+| `plotPointerLineColor` | `bgBaseColor` to `textMutedColor` at 45 percent | Vertical line at the pointer |
+| `plotInactiveLineOpacity` | 0.4 | Opacity of the curves of the other channels |
+| `plotCurveHitRadius` | 6 px | Pointer distance that adds a point on the curve line |
+| `plotChannelMarkSize` | 4 px | Dot of a changed channel in the channel selector |
 
 ---
 
@@ -1316,7 +1456,8 @@ Visible strings are product language only. Ban developer placeholders such as
 
 Quiet desktop language. No bounce, overshoot, perpetual animation, or input
 blocking. Session identity is never recreated by a fold. The one approved
-perpetual animation is the `SkeletonBlock` content placeholder (table below).
+perpetual animations are the `SkeletonBlock` content placeholder and the
+`StaggeredGridLoader` Library loading grid (table below).
 
 | Token | Value | Use |
 | --- | --- | --- |
@@ -1335,6 +1476,7 @@ perpetual animation is the `SkeletonBlock` content placeholder (table below).
 | Workspace + adjustment thumbs | Slide on `x` (OutBack, land scale pulse) | Documented capsule exception to “no overshoot” for mechanical feel |
 | Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
 | Content placeholder (`SkeletonBlock`) | A `hoverColor` band moves on `x` from left to right inside the clipped `bgBaseColor` block, `skeletonCycleMs` per sweep, `Easing.InOutSine`, repeated while the content loads | Approved exception to "no perpetual animation", for content placeholders only. The band stops when the block is invisible. Under `reduceMotion` the band does not run and the block is static |
+| Library loading grid (`StaggeredGridLoader`) | A `textColor` wave runs along the tile diagonals, top left to bottom right. Placeholder grid: one GUI-thread `NumberAnimation` drives every tile, opacity wave, 1600 ms per pass. Compact mark (`StaggeredGridMark`): one shader quad per mark on the shared `loadingWavePhase` clock (`loadingWaveFrameMs` ticks), opacity and scale wave, `loadingWaveCycleMs` per pass | Approved exception to "no perpetual animation", for Library loading and photo loading marks only (Spacing "Library loading"). The wave stops when the loader is invisible. Under `reduceMotion` every tile is static at its rest level |
 | Project loading overlay | Snap on immediately; after load, hold `motionFadeMs` then fade out `motionFoldCloseMs` | No fade-in — that flashed the empty library after Welcome closed |
 | Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
 | Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`. macOS keeps the system traffic lights over the leading side of the full-width toolbar and hides the title-bar surface with `Qt.ExpandedClientAreaHint` + `Qt.NoTitleBarBackgroundHint`; toolbar content reserves that leading region. Other platforms use Qt frameless behavior plus drawn caption buttons. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
@@ -1408,11 +1550,42 @@ are not a valid target.
 
 ## Settings bento pages
 
-Settings > LUTs, Settings > AI Models, and Settings > Local Content Recognition use `BentoTile`
-surfaces with the page margins 26 px (top) and 34 px (sides) and `spaceMd` between tiles.
+Settings > LUTs, Settings > AI Models, Settings > Local Content Recognition, and Settings > About
+use `BentoTile` surfaces with the page margins 26 px (top) and 34 px (sides) and `spaceMd`
+between tiles.
+
+**Settings type scale** (#824). Every `Text` and `Label` of `SettingDialog.qml` and the
+Settings pages uses an `appTheme` size token (11, 12, 13, 14, 22, and `fontSizeDisplay` 72 for
+the count tile) and a weight of 600 or less; `SettingsAboutQmlTest` checks every page.
+
+| Text | Size | Weight |
+| --- | --- | --- |
+| Dialog title ("Setting") and page title | `fontSizeHeadline` (Manrope) | `fontWeightStrong` |
+| Section and tile titles | `fontSizeSection` | `fontWeightStrong` |
+| Navigation item | `fontSizeTitle` | `fontWeightRegular`; selected `fontWeightStrong` |
+| Row name | `fontSizeTitle` | `fontWeightStrong` |
+| Values, descriptions, lists | `fontSizeBody` | `fontWeightRegular` |
+| Buttons (`DialogActionButton`) | `fontSizeSection` | `fontWeightStrong` |
+
+The dialog chrome is neutral: the selected navigation item is a `textColor` wash at 0.08 (rows
+36 px, icons 16 px), the header is 72 px, and Done is the light `DialogActionButton` (34 px) in a
+64 px footer. The Alcedo Studio wordmark on About is the one exception to the weight limit: it
+is the wordmark of the welcome dialog (`headlineFontFamily`, `fontSizeHeadline`,
+`fontWeightHeading`, "Alcedo" in `accentColor`).
+
+**About** (`AboutPage.qml`): row 1 is the wordmark tile (copyright and license as muted name and
+value rows; Sponsor, GitHub, and Docs with `heart.svg`, `github.svg`, and `book.svg`, Docs as the
+light button) beside a `CountTile` with the version and the build. Row 2 holds the rows Logs
+(Open Log Folder, the only log control of Settings), AI model download statement (View), and
+Third-party licenses (View all opens a two-column list in the tile). Row 3 lists the
+acknowledgements and components of README.md "Acknowledgments": the subject on one line in
+`fontSizeBody` (236 px column) and its source links in muted Manrope `fontSizeBody` with
+`↗`, then the trademark notice. `SettingsAboutQmlTest` fails when a README link is missing.
 
 - **Count tile** (`CountTile.qml`, 190 px wide): the name in muted Manrope `fontSizeSection`
-  Medium, the count in Manrope 72 px ExtraLight with tabular figures, centered. A page that can
+  Medium, the count in Manrope `fontSizeDisplay` (72) ExtraLight with tabular figures, centered.
+  `valueText` shows a text in place of the count and `detailText` a line below it (About:
+  the version and the build). A page that can
   hold 10,000 or more items sets `compactLargeCounts`: the count then shows at most three
   significant digits, truncated (12.8K, 102K, 1.25M; in Chinese 1.28万, 10.2万, 1.23亿), and the
   exact grouped count stands below it in muted Manrope `fontSizeBody`.
@@ -1444,7 +1617,7 @@ surfaces with the page margins 26 px (top) and 34 px (sides) and `spaceMd` betwe
 | --- | --- |
 | `IconActionButton.qml` | Structural SVG action (Item root, true square chrome): hit/optical/source, tooltip, a11y, hover, focus, selected fill; SVG tint via `ColorImage` (same as `Button.icon.color`) |
 | `CollapsibleSection.qml` | Folding group shell with shared motion driver |
-| `DialogActionButton.qml` | Text dialog actions (46 px floor; wrapped labels grow the button); kinds `normal`, `light` (main action of a neutral surface), `accent`, `danger`, `warning` |
+| `DialogActionButton.qml` | Text dialog actions (46 px floor; wrapped labels grow the button; `fontWeightStrong`); kinds `normal`, `light` (main action of a neutral surface), `accent`, `danger`, `warning`; optional `iconSource` (16 px monochrome SVG before the text, tinted with the text color) |
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
 | `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive |
 | `AdjustmentSlider.qml` | Shared numeric slider + field bound to `EditorAdjustmentValueModel` |
@@ -1460,6 +1633,8 @@ surfaces with the page margins 26 px (top) and 34 px (sides) and `spaceMd` betwe
 | `AppMenuSeparator.qml` | Shared 1 px menu group divider |
 | `AlertBadge.qml` | Warning and error message: wrapped white caption text on an `alertBadgeFillColor` badge; hidden while empty |
 | `SkeletonBlock.qml` | Content placeholder: `bgBaseColor` block with the moving `hoverColor` band (Motion); `animated: false` draws a static tile |
+| `StaggeredGridLoader.qml` | Library loading: a grid of rounded tiles with a diagonal wave (Motion, "Library loading"); `rows: 0` fills the height as a placeholder grid, a fixed 3 x 3 grid with `scaleDepth` is the compact mark |
+| `StaggeredGridMark.qml` | The compact 3 x 3 staggered grid as one shader quad on the shared `appTheme.loadingWavePhase` clock: the loading mark of a photo (Library card, justified tile, Editor filmstrip card) and of the Library over a kept result |
 
 ---
 

@@ -31,6 +31,9 @@ Item {
     // shows it; a click on the glyph pins it and does not fold the section.
     property string infoText: ""
     property string infoObjectName: "collapsibleSectionInfoHint"
+    // Optional actions at the right end of the header (for example toggles and a reset). A click
+    // on an action does not fold the section.
+    property Component headerActions: null
 
     // ── Fold driver (test-visible) ──────────────────────────────────────────
     property real foldProgress: expanded ? 1 : 0
@@ -142,9 +145,7 @@ Item {
                     id: headerRow
                     anchors.fill: parent
                     anchors.leftMargin: appTheme.spaceSm
-                    anchors.rightMargin: headerInfo.visible
-                                         ? appTheme.spaceSm * 2 + headerInfo.width
-                                         : appTheme.spaceSm
+                    anchors.rightMargin: parent.width - headerTrailingEdge.x + appTheme.spaceSm
                     spacing: appTheme.spaceSm
 
                     // Chevron affordance (canvas keeps asset set small).
@@ -190,16 +191,39 @@ Item {
                     }
                 }
 
-                // The fold area ends at the info glyph, so a click on the glyph only pins it.
+                // The fold area ends at the header actions and the info glyph, so a click on them
+                // does not fold the section.
                 MouseArea {
                     id: headerMouse
                     anchors.left: parent.left
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
-                    anchors.right: headerInfo.visible ? headerInfo.left : parent.right
+                    anchors.right: headerTrailingEdge.left
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.toggle()
+                }
+
+                // Left edge of the trailing items: the header actions, else the info glyph, else
+                // the right end of the header.
+                Item {
+                    id: headerTrailingEdge
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 0
+                    x: headerActionsLoader.active
+                       ? headerActionsLoader.x
+                       : (headerInfo.visible ? headerInfo.x : header.width)
+                }
+
+                Loader {
+                    id: headerActionsLoader
+                    objectName: "collapsibleSectionHeaderActions"
+                    anchors.right: headerInfo.visible ? headerInfo.left : parent.right
+                    anchors.rightMargin: appTheme.spaceXs
+                    anchors.verticalCenter: parent.verticalCenter
+                    active: root.headerActions !== null
+                    sourceComponent: root.headerActions
                 }
 
                 EditorInfoHint {

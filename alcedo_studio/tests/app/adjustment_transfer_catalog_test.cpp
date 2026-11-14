@@ -35,8 +35,10 @@
 #include "edit/mask/mask_id.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -553,6 +555,37 @@ TEST(AdjustmentTransferCatalogTest, LutItemSummaryAppendsNonDefaultEncodings) {
   lmt(document).SetCubePath("");
   lmt(document).SetEncodings("acescc", "rec2100_pq1000");
   EXPECT_EQ(lut_value(document), "None, ACEScc (AP1) \xE2\x86\x92 Rec.2100 PQ (1000 nits)");
+}
+
+// TC2: the Tone Curve row names the RGB point count and each channel curve that is not the
+// identity, because the transfer copies the four curves.
+TEST(AdjustmentTransferCatalogTest, CurveItemSummaryNamesTheChannelCurves) {
+  const auto curve_value = [](const PipelineDocument& document) -> std::string {
+    std::string error;
+    const auto  nodes = AdjustmentTransferCatalogService::BuildNodeDescriptors(document, &error);
+    EXPECT_TRUE(nodes.has_value()) << error;
+    if (!nodes.has_value() || nodes->size() < 2) return {};
+    for (const auto* item : ItemsOfKind(nodes->at(1), AdjustmentTransferItemKind::Adjustment)) {
+      if (item->type == type_ids::Curve()) return item->display_value;
+    }
+    ADD_FAILURE() << "the primary grade has no Tone Curve item";
+    return {};
+  };
+  auto  document = CreateDefaultPipelineDocument();
+  auto& curve =
+      dynamic_cast<CurveModel&>(*document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  // A RAW import document carries the Film-like RGB curve and identity channel curves (#891).
+  const auto* film_like = FindToneCurvePreset(kFilmLikeToneCurvePresetId);
+  ASSERT_NE(film_like, nullptr);
+  EXPECT_EQ(curve_value(document), std::to_string(film_like->points.size()) + " points");
+
+  CurveUpdate update;
+  update.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.3f, 0.2f}, {0.7f, 0.8f}, {1.0f, 1.0f}};
+  update.red    = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}};
+  update.blue   = std::vector<CurvePoint>{{0.0f, 0.1f}, {0.2f, 0.2f}, {0.6f, 0.5f}, {0.8f, 0.8f},
+                                          {1.0f, 0.9f}};
+  curve.ApplyUpdate(update);
+  EXPECT_EQ(curve_value(document), "4 points, R 3, B 5");
 }
 
 }  // namespace alcedo

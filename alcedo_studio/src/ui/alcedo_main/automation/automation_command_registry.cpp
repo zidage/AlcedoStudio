@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "ui/alcedo_main/automation/automation_json_schema.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::automation {
 namespace {
@@ -228,8 +229,8 @@ void AutomationCommandRegistry::Dispatch(const AutomationRequest& request,
     spec.handler(request.params, std::move(reply));
   } catch (const std::exception& exception) {
     // The reply was destroyed during stack unwinding and sent the dropped-request error.
-    qWarning().noquote() << "automation command" << request.method
-                         << "threw an exception:" << exception.what();
+    qCWarning(alcedo::diag::automationLog).noquote()
+        << "automation command" << request.method << "threw an exception:" << exception.what();
   }
 }
 

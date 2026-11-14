@@ -1,5 +1,6 @@
 use std::env;
 use std::net::IpAddr;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct AppConfig {
@@ -10,6 +11,9 @@ pub struct AppConfig {
     pub max_message_bytes: usize,
     /// Devices and idle unload times of the CLIP encoders (`service::encoder_residency`).
     pub residency: EncoderResidencyConfig,
+    /// The log file of this process (`--log-file`): the host passes the session file in its log
+    /// directory. `None` writes the log to stderr only.
+    pub log_file: Option<PathBuf>,
 }
 
 /// Where each CLIP encoder loads and how long it stays loaded after its last request.
@@ -117,6 +121,9 @@ impl AppConfig {
                     config.residency.vision_idle_unload_seconds =
                         parse_next(&mut args, "--vision-idle-unload-seconds")?
                 }
+                "--log-file" => {
+                    config.log_file = Some(PathBuf::from(next_value(&mut args, "--log-file")?))
+                }
                 "--help" | "-h" => anyhow::bail!("{}", Self::usage()),
                 other => anyhow::bail!("unknown argument {other:?}\n{}", Self::usage()),
             }
@@ -146,6 +153,7 @@ impl AppConfig {
                 batch_wait_ms: parse_env("ALCEDO_MIND_BATCH_WAIT_MS", 25)?,
             },
             residency: EncoderResidencyConfig::default(),
+            log_file: None,
         })
     }
 
@@ -178,6 +186,13 @@ impl AppConfig {
         if self.max_message_bytes == 0 {
             anyhow::bail!("max-message-bytes must be greater than zero");
         }
+        if self
+            .log_file
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            anyhow::bail!("log-file must not be empty");
+        }
         if self.residency.text_device.trim().is_empty() {
             anyhow::bail!("text-device must not be empty");
         }
@@ -206,7 +221,7 @@ impl AppConfig {
     }
 
     fn usage() -> &'static str {
-        "usage: alcedo_mind [--host HOST] [--allow-remote-bind] [--port PORT] [--model-root PATH] [--model-id ID] [--revision REV] [--hf-endpoint URL] [--device auto|cpu|directml[:N]|coreml[:MODE]] [--no-download] [--allow-download] [--batch-cap N] [--batch-wait-ms N] [--max-message-bytes N] [--text-device DEVICE] [--vision-device DEVICE] [--text-idle-unload-seconds N] [--vision-idle-unload-seconds N]"
+        "usage: alcedo_mind [--host HOST] [--allow-remote-bind] [--port PORT] [--model-root PATH] [--model-id ID] [--revision REV] [--hf-endpoint URL] [--device auto|cpu|directml[:N]|coreml[:MODE]] [--no-download] [--allow-download] [--batch-cap N] [--batch-wait-ms N] [--max-message-bytes N] [--text-device DEVICE] [--vision-device DEVICE] [--text-idle-unload-seconds N] [--vision-idle-unload-seconds N] [--log-file PATH]"
     }
 }
 
@@ -321,6 +336,26 @@ mod tests {
 
         let config = AppConfig::from_args(["--model-id", "repo/model:s2"]).expect("config");
         assert!(config.semantic.has_model());
+    }
+
+    #[test]
+    fn parses_log_file_and_leaves_it_unset_without_the_argument() {
+        let config =
+            AppConfig::from_args(["--log-file", "C:/logs/alcedo_20261111_101500_7_mind.log"])
+                .expect("config should parse");
+        assert_eq!(
+            config.log_file,
+            Some(PathBuf::from("C:/logs/alcedo_20261111_101500_7_mind.log"))
+        );
+
+        let config = AppConfig::from_args(Vec::<String>::new()).expect("config should parse");
+        assert_eq!(config.log_file, None);
+
+        let err = AppConfig::from_args(["--log-file", ""]).expect_err("empty log-file rejected");
+        assert!(
+            err.to_string().contains("log-file must not be empty"),
+            "{err}"
+        );
     }
 
     #[test]

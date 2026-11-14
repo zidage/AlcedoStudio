@@ -8,6 +8,8 @@
 #include <exception>
 #include <utility>
 
+#include "utils/diagnostics/app_logging.hpp"
+
 namespace alcedo::ui {
 
 void EditorSessionPipelinePort::SetServices(EditorSessionPipelineMappers services) {
@@ -83,8 +85,9 @@ void EditorSessionPipelinePort::ReturnLeaseToService(alcedo::PipelineMgmtService
   try {
     service.ReleaseEditorLease(element_id);
   } catch (const std::exception& ex) {
-    qWarning("Editor lease of image %llu: element pipeline JSON was not written: %s",
-             static_cast<unsigned long long>(element_id), ex.what());
+    qCWarning(alcedo::diag::editorLog,
+              "Editor lease of image %llu: element pipeline JSON was not written: %s",
+              static_cast<unsigned long long>(element_id), ex.what());
   }
 }
 

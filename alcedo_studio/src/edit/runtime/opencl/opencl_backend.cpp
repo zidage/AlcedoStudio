@@ -27,6 +27,7 @@
 #include "opencl/opencl_kernel_cache.hpp"
 #include "opencl/opencl_program_library.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
 namespace {
@@ -277,7 +278,7 @@ void OpenClBackend::Buffer::Reset() noexcept {
   if (native_ != nullptr) {
     if (owner_ != nullptr) {
       owner_->UnregisterBuffer(native_);
-      owner_->NoteFree();
+      owner_->NoteFree(bytes_);
     }
     clReleaseMemObject(native_);
     NoteOpenClReleaseMemObject();
@@ -341,7 +342,7 @@ auto OpenClBackend::Texture2D::operator=(Texture2D&& other) noexcept -> Texture2
 void OpenClBackend::Texture2D::Reset() noexcept {
   if (native_ != nullptr) {
     if (owner_ != nullptr) {
-      owner_->NoteFree();
+      owner_->NoteFree(bytes_);
     }
     clReleaseMemObject(native_);
     NoteOpenClReleaseMemObject();
@@ -457,30 +458,57 @@ void OpenClBackend::FlushQueue() {
   ++flush_count_;
 }
 
+void OpenClBackend::NoteMalloc(std::size_t bytes, const char* operation) {
+  ++malloc_count_;
+  live_bytes_ += bytes;
+  ++live_allocations_;
+  if (!first_allocation_logged_) {
+    first_allocation_logged_ = true;
+    if (log::IsEnabled(log::Level::Info, log::Category::GpuPool)) {
+      auto&             context = OpenClContext::Instance();
+      const std::string device  = context.IsInitialized() ? context.Capabilities().vendor + " " +
+                                                               context.Capabilities().name
+                                                          : std::string("opencl:uninitialized");
+      gpu_memory_log::FirstAllocation(kName, device, bytes, QueryDeviceMemory());
+    }
+  }
+  ALCEDO_LOG_DEBUG(GpuPool) << "opencl.alloc op=" << operation << " bytes=" << bytes
+                            << " live_bytes=" << live_bytes_
+                            << " live_allocations=" << live_allocations_;
+}
+
+void OpenClBackend::ThrowAllocationFailure(const char* operation, std::size_t bytes,
+                                           const std::string& message) const {
+  gpu_memory_log::AllocationFailed(kName, operation, bytes, QueryDeviceMemory(), AllocationTotals(),
+                                   message);
+  throw std::runtime_error(message);
+}
+
 auto OpenClBackend::CreateBuffer(std::size_t bytes) -> Buffer {
   if (bytes == 0) {
     return {};
   }
-  const auto max_slab = MaxSlabBytes();
+  constexpr const char* kOperation = "OpenClBackend::CreateBuffer";
+  const auto            max_slab   = MaxSlabBytes();
   if (bytes > max_slab) {
     std::ostringstream message;
-    message << "OpenClBackend::CreateBuffer: size " << bytes
-            << " exceeds device max allocation " << max_slab;
-    throw std::runtime_error(message.str());
+    message << kOperation << ": size " << bytes << " exceeds device max allocation " << max_slab;
+    ThrowAllocationFailure(kOperation, bytes, message.str());
   }
   cl_int error  = CL_SUCCESS;
   cl_mem native = clCreateBuffer(context_, CL_MEM_READ_WRITE, bytes, nullptr, &error);
   if (error != CL_SUCCESS) {
     std::ostringstream message;
-    message << "OpenClBackend::CreateBuffer: OpenCL error " << error << " size=" << bytes
+    message << kOperation << ": OpenCL error " << error << " size=" << bytes
             << " max_alloc=" << max_slab;
-    throw std::runtime_error(message.str());
+    ThrowAllocationFailure(kOperation, bytes, message.str());
   }
   if (native == nullptr) {
-    throw std::runtime_error("OpenClBackend::CreateBuffer: clCreateBuffer returned null");
+    ThrowAllocationFailure(kOperation, bytes,
+                           "OpenClBackend::CreateBuffer: clCreateBuffer returned null");
   }
   NoteOpenClCreateBuffer();
-  NoteBufferCreate();
+  NoteBufferCreate(bytes);
   const auto address = next_virtual_address_;
   next_virtual_address_ += (bytes + 255u) & ~std::uint64_t{255};
   live_buffers_.push_back(LiveBuffer{native, address, bytes});
@@ -496,22 +524,28 @@ auto OpenClBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, T
   if (ConsumeInjectedFailure(allocations_before_failure_)) {
     throw std::runtime_error("OpenClBackend::CreateTexture2D: injected failure");
   }
+  constexpr const char* kOperation = "OpenClBackend::CreateTexture2D";
   if (max_image_width_ > 0 && (width > max_image_width_ || height > max_image_height_)) {
     std::ostringstream message;
-    message << "OpenClBackend::CreateTexture2D: " << width << "x" << height
-            << " exceeds device IMAGE2D max " << max_image_width_ << "x" << max_image_height_;
-    throw std::runtime_error(message.str());
+    message << kOperation << ": " << width << "x" << height << " exceeds device IMAGE2D max "
+            << max_image_width_ << "x" << max_image_height_;
+    ThrowAllocationFailure(kOperation, bytes, message.str());
   }
   const auto    image_format = ImageFormatFor(format);
   cl_image_desc desc         = MakeImageDesc(width, height);
   cl_int        error        = CL_SUCCESS;
   cl_mem native = clCreateImage(context_, CL_MEM_READ_WRITE, &image_format, &desc, nullptr, &error);
-  CheckOpenCl(error, "OpenClBackend::CreateTexture2D");
+  if (error != CL_SUCCESS) {
+    std::ostringstream message;
+    message << kOperation << ": OpenCL error " << error << " size=" << width << "x" << height;
+    ThrowAllocationFailure(kOperation, bytes, message.str());
+  }
   if (native == nullptr) {
-    throw std::runtime_error("OpenClBackend::CreateTexture2D: clCreateImage returned null");
+    ThrowAllocationFailure(kOperation, bytes,
+                           "OpenClBackend::CreateTexture2D: clCreateImage returned null");
   }
   NoteOpenClCreateImage();
-  NoteTextureCreate();
+  NoteTextureCreate(bytes);
   return Texture2D{this, native, bytes, width, height, format, next_resource_id_++};
 }
 

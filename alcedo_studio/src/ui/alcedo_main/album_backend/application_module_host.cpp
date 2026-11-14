@@ -26,26 +26,28 @@
 
 #include "app/editor_adjustment_context.hpp"
 #include "app/editor_pending_input.hpp"
+#include "app/editor_session_bootstrap.hpp"
 #include "app/image_pool_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "image/image.hpp"
-#include "app/editor_session_bootstrap.hpp"
+#include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/display_profile_readout.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
-#include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_mask_asset_port.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
-#include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
-#include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/justified_layout_model.hpp"
 #include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -83,8 +85,8 @@ auto WatchProjectServices(const ProjectModule* project) -> ProjectServiceWatch {
 void ReportSurvivingProjectServices(const ProjectServiceWatch& watch) {
   const auto report = [](const char* name, long use_count) {
     if (use_count > 0) {
-      qWarning().noquote() << "Project service outlived ProjectModule:" << name
-                           << "use_count=" << use_count;
+      qCWarning(alcedo::diag::appLog).noquote()
+          << "Project service outlived ProjectModule:" << name << "use_count=" << use_count;
     }
   };
   report("ProjectService", watch.project_.use_count());
@@ -111,6 +113,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   alcedo::ui::RegisterJustifiedLayoutQmlType();
   alcedo::ui::RegisterEditorHistoryQmlTypes();
   alcedo::ui::RegisterEditorNodeQmlTypes();
+  alcedo::ui::RegisterDisplayProfileReadoutQmlType();
   background_tasks_ = std::make_unique<BackgroundTaskController>();
   RecordConstruction("BackgroundTaskController", background_tasks_.get());
   interaction_policy_ =
@@ -146,6 +149,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
         std::make_unique<alcedo::LutPackageService>(std::move(lut_package_options), *lut_library_);
   }
   RecordConstruction("LutPackageService", lut_packages_.get());
+  // Reads the DCP folder setting and starts the first scan on its worker (DCP plan C2).
+  camera_profiles_ = std::make_unique<alcedo::CameraProfileLibraryService>();
+  RecordConstruction("CameraProfileLibraryService", camera_profiles_.get());
+  camera_profiles_->Start();
   project_ = std::make_unique<ProjectModule>(this);
   RecordConstruction("ProjectModule", project_.get());
   // Every project's editor, thumbnail, and export executors resolve LUT references through
@@ -482,6 +489,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("EditorBehaviorPreferences", editor_behavior_.get());
   library_view_ = std::make_unique<LibraryViewPreferences>(this);
   RecordConstruction("LibraryViewPreferences", library_view_.get());
+  log_folder_ = std::make_unique<LogFolderController>(this);
+  RecordConstruction("LogFolderController", log_folder_.get());
   project_launch_ = std::make_unique<ProjectLaunchCoordinator>(project_.get(), this);
   RecordConstruction("ProjectLaunchCoordinator", project_launch_.get());
   project_launch_->SetInteractionPolicy(interaction_policy_.get());
@@ -663,6 +672,9 @@ void ApplicationModuleHost::ShutdownModules() {
     if (lut_library_) {
       lut_library_->Shutdown();
     }
+    if (camera_profiles_) {
+      camera_profiles_->Shutdown();
+    }
     if (search_) {
       search_->CancelSearchRequests();
       search_->CancelSearchPreviewThumbnails();
@@ -734,6 +746,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(library_mutations_, "LibraryMutationOperations");
   destroy(application_close_, "ApplicationCloseCoordinator");
   destroy(project_launch_, "ProjectLaunchCoordinator");
+  destroy(log_folder_, "LogFolderController");
   destroy(library_view_, "LibraryViewPreferences");
   destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");
@@ -772,6 +785,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(project_, "ProjectModule");
   ReportSurvivingProjectServices(project_services);
   RemovePendingWorkspace();
+  destroy(camera_profiles_, "CameraProfileLibraryService");
   destroy(lut_packages_, "LutPackageService");
   destroy(lut_library_, "LutLibraryService");
   destroy(updates_, "UpdateService");
@@ -827,6 +841,18 @@ void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
   // QQmlEngine takes ownership of the provider.
   engine->addImageProvider(QString::fromUtf8(kThumbnailImageProviderId),
                            new ThumbnailImageProvider(std::move(store)));
+}
+
+void ApplicationModuleHost::AttachDisplayWindow(QWindow* window) {
+  if (editor_comparison_) {
+    editor_comparison_->SetDisplayWindow(window);
+  }
+  if (lut_preview_) {
+    lut_preview_->SetDisplayWindow(window);
+  }
+  if (library_) {
+    library_->SetDisplayWindow(window);
+  }
 }
 
 void ApplicationModuleHost::RecordConstruction(const char* type_name, const void* object) {

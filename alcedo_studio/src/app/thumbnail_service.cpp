@@ -28,6 +28,7 @@
 #include "concurrency/thread_pool.hpp"
 #include "edit/input/raster_input_loader.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/runtime/drt_display.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
@@ -160,11 +161,14 @@ struct RenditionRequest {
   image_id_t                image_id   = 0;
   ThumbnailResolution       resolution = ThumbnailResolution::k1024;
   std::function<bool()>     canceled;
-  /// Takes the RGBA8 display buffer. Returns the guard that now owns it, or null when the
-  /// requester no longer wants it; only an owned buffer is written to the disk cache.
-  std::function<std::shared_ptr<ThumbnailGuard>(std::unique_ptr<ImageBuffer>)> on_pixels;
-  std::function<void(ThumbnailRequestStatus, std::string)>                     on_failure;
-  std::atomic<bool>                                                            finished{false};
+  /// Takes the RGBA8 display buffer and the output encoding of its pixels. Returns the guard that
+  /// now owns it, or null when the requester no longer wants it; only an owned buffer is written
+  /// to the disk cache.
+  std::function<std::shared_ptr<ThumbnailGuard>(std::unique_ptr<ImageBuffer>,
+                                                const ViewerDisplayConfig&)>
+                                                           on_pixels;
+  std::function<void(ThumbnailRequestStatus, std::string)> on_failure;
+  std::atomic<bool>                                        finished{false};
 
   [[nodiscard]] auto IsCanceled() const -> bool {
     try {
@@ -174,11 +178,12 @@ struct RenditionRequest {
     }
   }
 
-  auto DeliverPixels(std::unique_ptr<ImageBuffer> pixels) -> std::shared_ptr<ThumbnailGuard> {
+  auto DeliverPixels(std::unique_ptr<ImageBuffer> pixels, const ViewerDisplayConfig& encoding)
+      -> std::shared_ptr<ThumbnailGuard> {
     if (finished.exchange(true)) {
       return nullptr;
     }
-    return on_pixels ? on_pixels(std::move(pixels)) : nullptr;
+    return on_pixels ? on_pixels(std::move(pixels), encoding) : nullptr;
   }
 
   void Fail(ThumbnailRequestStatus status, std::string message) {
@@ -201,6 +206,14 @@ struct RenditionRequest {
 };
 
 }  // namespace
+
+auto ThumbnailEncodingOf(const PipelineGraphSnapshot& snapshot) -> ViewerDisplayConfig {
+  // The same rule as the renderer for a request without an output color override.
+  if (const auto* drt = snapshot.Document().Drt()) {
+    return ViewerDisplayConfigFromDrt(drt->Params().Params());
+  }
+  return {};
+}
 
 struct ThumbnailService::State {
   static constexpr size_t default_cache_size_ = 64;
@@ -407,7 +420,9 @@ void ThumbnailService::State::LookUpRendition(const std::shared_ptr<State>&     
     }
     if (disk_buffer && disk_buffer->cpu_data_valid_) {
       if (auto display = MakeDisplayCacheThumbnailBuffer(*disk_buffer)) {
-        (void)request->DeliverPixels(std::move(display));
+        // The entry was rendered from the history that the key names, so its pixels have the
+        // encoding of this snapshot. The codec stores the code values without a color change.
+        (void)request->DeliverPixels(std::move(display), ThumbnailEncodingOf(*snapshot));
         return;
       }
     }
@@ -485,6 +500,7 @@ void ThumbnailService::State::ScheduleRenditionRender(
   task.options_.is_callback_              = true;
   task.options_.is_seq_callback_          = false;
   task.cancel_requested_                  = [request] { return request->IsCanceled(); };
+  const ViewerDisplayConfig encoding      = ThumbnailEncodingOf(*snapshot);
   task.snapshot_                          = std::move(snapshot);
   task.prepared_input_                    = std::move(source);
 
@@ -495,7 +511,7 @@ void ThumbnailService::State::ScheduleRenditionRender(
     return true;
   };
 
-  task.callback_ = [st, request, disk_key](ImageBuffer& result) {
+  task.callback_ = [st, request, disk_key, encoding](ImageBuffer& result) {
     if (request->IsCanceled()) {
       return;
     }
@@ -503,7 +519,7 @@ void ThumbnailService::State::ScheduleRenditionRender(
     if (!display) {
       return;
     }
-    const auto guard = request->DeliverPixels(std::move(display));
+    const auto guard = request->DeliverPixels(std::move(display), encoding);
     if (guard && guard->thumbnail_buffer_ && disk_key.has_value()) {
       try {
         std::shared_ptr<ImageBuffer> pixels(guard, guard->thumbnail_buffer_.get());
@@ -639,7 +655,8 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
   request->canceled   = generation_changed;
 
   request->on_pixels  = [st, cache_key, generation_changed](
-                           std::unique_ptr<ImageBuffer> pixels) -> std::shared_ptr<ThumbnailGuard> {
+                           std::unique_ptr<ImageBuffer> pixels,
+                           const ViewerDisplayConfig& encoding) -> std::shared_ptr<ThumbnailGuard> {
     std::shared_ptr<ThumbnailGuard>     published;
     std::vector<State::PendingCallback> callbacks;
     {
@@ -656,6 +673,7 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
 
       published                    = std::make_shared<ThumbnailGuard>();
       published->thumbnail_buffer_ = std::move(pixels);
+      published->encoding          = encoding;
       published->pin_count_        = static_cast<int>(std::max<size_t>(1, callbacks.size()));
       auto evicted = st->thumbnail_cache_.RecordAccess_WithEvict(cache_key, cache_key);
       HandleEvict(*st, evicted);

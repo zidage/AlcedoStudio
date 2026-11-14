@@ -633,7 +633,8 @@ auto RegisterAutomationEditorCatalogCommand(AutomationCommandRegistry& registry,
       "shown decimals. An object field lists its properties (number range, boolean, string, or "
       "option list, or a list of numbers) and its default object; a write may give some of the "
       "properties. A model field (curve, lut) takes its Model JSON, described in model_shape; a "
-      "write gives the complete value. A Kelvin "
+      "lut write gives the complete value, and a curve write gives one or more of its four "
+      "curves. A Kelvin "
       "property also has its slider position scale (ui_slider), and odt lists the valid "
       "encoding_eotf values of each encoding_space. A value outside the range or the option "
       "list is rejected; it is not clamped.");

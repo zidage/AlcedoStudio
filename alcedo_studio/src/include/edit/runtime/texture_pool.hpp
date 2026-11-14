@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "edit/runtime/texture_format.hpp"
-#include "gpu/gpu_pool_trace.hpp"
+#include "gpu/gpu_device_memory.hpp"
 
 namespace alcedo {
 
@@ -132,6 +132,7 @@ class TexturePool {
     }
     entries_.push_back(std::move(entry));
     NoteNewAllocation(bytes);
+    NoteSlotGrowth();
     return TakeLease(entries_.back());
   }
 
@@ -275,8 +276,6 @@ class TexturePool {
     }
   }
 
-  void DumpToStderr(const char* reason) const { (void)reason; }
-
  private:
   friend class ResourceLease<Backend>;
 
@@ -364,6 +363,22 @@ class TexturePool {
     ++allocation_count_;
     if (used_bytes_ > peak_used_bytes_) {
       peak_used_bytes_ = used_bytes_;
+    }
+    ALCEDO_LOG_DEBUG(GpuPool) << "texture_pool.alloc backend=" << GpuBackendName<Backend>()
+                              << " bytes=" << bytes << " used_bytes=" << used_bytes_
+                              << " slots=" << entries_.size();
+  }
+
+  /// The slot count is the capacity of the pool; a vacant slot is reused before a new one is
+  /// added. A new slot count that is a power of two writes an Info line, so a pool of N slots
+  /// writes about log2(N) lines; the other slot additions are Debug detail.
+  void NoteSlotGrowth() {
+    const auto slot_count = entries_.size();
+    if ((slot_count & (slot_count - 1)) == 0) {
+      ALCEDO_LOG_INFO(GpuPool) << "gpu.pool.grow backend=" << GpuBackendName<Backend>()
+                               << " pool=texture_pool old_slots=" << slot_count - 1
+                               << " new_slots=" << slot_count << " used_bytes=" << used_bytes_
+                               << " peak_used_bytes=" << peak_used_bytes_;
     }
   }
 

@@ -51,6 +51,7 @@ Dialog {
     // Category indices used by callers outside this dialog.
     readonly property int colorLabelsCategory: 0
     readonly property int updatesCategory: 6
+    // LUTs and Color Management: the LUT library and the DCP camera profile folder.
     readonly property int lutCategory: 8
     readonly property int aiModelsCategory: 9
     readonly property int aboutCategory: 10
@@ -206,7 +207,7 @@ Dialog {
             return qsTr("Keyboard")
         }
         if (currentCategory === lutCategory) {
-            return qsTr("LUTs")
+            return qsTr("LUTs and Color Management")
         }
         if (currentCategory === aiModelsCategory) {
             return qsTr("AI Models")
@@ -423,10 +424,10 @@ Dialog {
                         Label {
                             Layout.fillWidth: true
                             text: qsTr("Setting")
-                            color: dialog.primaryAccent
+                            color: dialog.textColor
                             font.family: dialog.headlineFontFamily
-                            font.pixelSize: 26
-                            font.weight: 800
+                            font.pixelSize: appTheme.fontSizeHeadline
+                            font.weight: appTheme.fontWeightStrong
                             wrapMode: Text.Wrap
                         }
 
@@ -442,7 +443,7 @@ Dialog {
                             ColumnLayout {
                                 id: categoryNavColumn
                                 width: categoryNavScroll.availableWidth
-                                spacing: 8
+                                spacing: 2
 
                                 // Instantiator, not Repeater: the Repeater's
                                 // delegate-model never completes under an
@@ -460,7 +461,7 @@ Dialog {
                                         { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
                                         { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
                                         { label: qsTr("Keyboard"), icon: "qrc:/panel_icons/keyboard.svg" },
-                                        { label: qsTr("LUTs"), icon: "qrc:/panel_icons/lut-cube.svg" },
+                                        { label: qsTr("LUTs and Color Management"), icon: "qrc:/panel_icons/lut-cube.svg" },
                                         { label: qsTr("AI Models"), icon: "qrc:/panel_icons/sparkles.svg" },
                                         { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
                                     ]
@@ -475,26 +476,27 @@ Dialog {
 
                                         objectName: "settingsNavItem:" + index
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: Math.max(48, categoryNavRow.implicitHeight
-                                                                         + appTheme.spaceMd)
+                                        Layout.preferredHeight: Math.max(36, categoryNavRow.implicitHeight
+                                                                         + appTheme.spaceSm)
                                         radius: 6
+                                        // Neutral selection: a light wash of the text color.
                                         color: dialog.currentCategory === index
-                                               ? Qt.rgba(dialog.primaryAccent.r, dialog.primaryAccent.g, dialog.primaryAccent.b, 0.22)
+                                               ? Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.08)
                                                : (categoryMouse.containsMouse ? dialog.hoverColor : "transparent")
 
                                         RowLayout {
                                             id: categoryNavRow
                                             anchors.fill: parent
-                                            anchors.leftMargin: 12
-                                            anchors.rightMargin: 12
-                                            spacing: 12
+                                            anchors.leftMargin: 10
+                                            anchors.rightMargin: 10
+                                            spacing: 10
 
                                             Image {
-                                                Layout.preferredWidth: 20
-                                                Layout.preferredHeight: 20
+                                                Layout.preferredWidth: 16
+                                                Layout.preferredHeight: 16
                                                 source: modelData.icon
-                                                sourceSize.width: 20
-                                                sourceSize.height: 20
+                                                sourceSize.width: 32
+                                                sourceSize.height: 32
                                                 asynchronous: true
                                                 opacity: dialog.currentCategory === index ? 0.95 : 0.72
                                             }
@@ -503,8 +505,11 @@ Dialog {
                                                 Layout.fillWidth: true
                                                 text: modelData.label
                                                 color: dialog.currentCategory === index ? dialog.textColor : dialog.mutedTextColor
-                                                font.pixelSize: 15
-                                                font.weight: dialog.currentCategory === index ? 700 : 500
+                                                font.family: appTheme.uiFontFamily
+                                                font.pixelSize: appTheme.fontSizeTitle
+                                                font.weight: dialog.currentCategory === index
+                                                             ? appTheme.fontWeightStrong
+                                                             : appTheme.fontWeightRegular
                                                 wrapMode: Text.Wrap
                                             }
 
@@ -544,7 +549,7 @@ Dialog {
 
                     Item {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: Math.max(96, pageHeaderColumn.implicitHeight
+                        Layout.preferredHeight: Math.max(72, pageHeaderColumn.implicitHeight
                                                          + appTheme.spaceMd)
 
                         ColumnLayout {
@@ -566,8 +571,8 @@ Dialog {
                                     text: dialog.currentPageTitle()
                                     color: dialog.textColor
                                     font.family: dialog.headlineFontFamily
-                                    font.pixelSize: 34
-                                    font.weight: 800
+                                    font.pixelSize: appTheme.fontSizeHeadline
+                                    font.weight: appTheme.fontWeightStrong
                                     wrapMode: Text.Wrap
                                 }
 
@@ -631,8 +636,8 @@ Dialog {
                                             Layout.preferredWidth: 160
                                             text: qsTr("Language")
                                             color: dialog.textColor
-                                            font.pixelSize: 15
-                                            font.weight: 600
+                                            font.pixelSize: appTheme.fontSizeTitle
+                                            font.weight: appTheme.fontWeightStrong
                                         }
 
                                         AdjustmentCombo {
@@ -664,8 +669,8 @@ Dialog {
                                             Layout.preferredWidth: 160
                                             text: qsTr("Theme")
                                             color: dialog.textColor
-                                            font.pixelSize: 15
-                                            font.weight: 600
+                                            font.pixelSize: appTheme.fontSizeTitle
+                                            font.weight: appTheme.fontWeightStrong
                                         }
 
                                         AdjustmentCombo {
@@ -702,8 +707,8 @@ Dialog {
                                                 Layout.preferredWidth: 160
                                                 text: qsTr("Photo layout")
                                                 color: dialog.textColor
-                                                font.pixelSize: 15
-                                                font.weight: 600
+                                                font.pixelSize: appTheme.fontSizeTitle
+                                                font.weight: appTheme.fontWeightStrong
                                                 wrapMode: Text.Wrap
                                             }
 
@@ -723,8 +728,8 @@ Dialog {
                                             text: qsTr("Classic grid shows each photo in a card of the same size, with its details below it. Justified rows show the photos in rows of one height that fill the width; each photo keeps its shape, and its details and rating show when the pointer is on it. Grouped photos always use the classic grid.")
                                             wrapMode: Text.WordWrap
                                             color: dialog.mutedTextColor
-                                            font.pixelSize: 12
-                                            font.weight: 500
+                                            font.pixelSize: appTheme.fontSizeBody
+                                            font.weight: appTheme.fontWeightRegular
                                             lineHeight: 1.25
                                         }
 
@@ -741,8 +746,8 @@ Dialog {
                                                 Layout.topMargin: 8
                                                 text: qsTr("Color Labels")
                                                 color: dialog.textColor
-                                                font.pixelSize: 15
-                                                font.weight: 600
+                                                font.pixelSize: appTheme.fontSizeTitle
+                                                font.weight: appTheme.fontWeightStrong
                                                 wrapMode: Text.Wrap
                                             }
 
@@ -795,8 +800,8 @@ Dialog {
                                                 Layout.preferredWidth: 160
                                                 text: qsTr("Adding a Mask on a locked node")
                                                 color: dialog.textColor
-                                                font.pixelSize: 15
-                                                font.weight: 600
+                                                font.pixelSize: appTheme.fontSizeTitle
+                                                font.weight: appTheme.fontWeightStrong
                                                 wrapMode: Text.Wrap
                                             }
 
@@ -816,8 +821,8 @@ Dialog {
                                             text: qsTr("The default adjustment node applies Alcedo's default adjustments, so it is locked. A Mask drawn on it also limits those defaults to the masked area. Layers you add yourself are not locked and are never affected by this setting.")
                                             wrapMode: Text.WordWrap
                                             color: dialog.mutedTextColor
-                                            font.pixelSize: 12
-                                            font.weight: 500
+                                            font.pixelSize: appTheme.fontSizeBody
+                                            font.weight: appTheme.fontWeightRegular
                                             lineHeight: 1.25
                                         }
                                     }
@@ -925,8 +930,8 @@ Dialog {
                                                 Layout.preferredWidth: 160
                                                 text: qsTr("Backend")
                                                 color: dialog.textColor
-                                                font.pixelSize: 15
-                                                font.weight: 600
+                                                font.pixelSize: appTheme.fontSizeTitle
+                                                font.weight: appTheme.fontWeightStrong
                                             }
 
                                             AdjustmentCombo {
@@ -947,8 +952,8 @@ Dialog {
                                             text: qsTr("Restart Alcedo yourself to apply this backend change.")
                                             wrapMode: Text.WordWrap
                                             color: dialog.mutedTextColor
-                                            font.pixelSize: 12
-                                            font.weight: 500
+                                            font.pixelSize: appTheme.fontSizeBody
+                                            font.weight: appTheme.fontWeightRegular
                                             lineHeight: 1.25
                                         }
 
@@ -959,8 +964,8 @@ Dialog {
                                             text: appModules.project.acceleratorWarning
                                             wrapMode: Text.WordWrap
                                             color: dialog.dangerColor
-                                            font.pixelSize: 12
-                                            font.weight: 500
+                                            font.pixelSize: appTheme.fontSizeBody
+                                            font.weight: appTheme.fontWeightRegular
                                             lineHeight: 1.25
                                         }
                                     }
@@ -1015,6 +1020,7 @@ Dialog {
                                 width: lutScroll.availableWidth
                                 library: appModules.lutLibrary
                                 packageService: appModules.lutPackages
+                                cameraProfiles: appModules.cameraProfiles
                                 textColor: dialog.textColor
                                 mutedTextColor: dialog.mutedTextColor
                                 dividerColor: dialog.dividerColor
@@ -1047,15 +1053,7 @@ Dialog {
                             AboutPage {
                                 Layout.fillWidth: true
                                 updateService: appModules.updates
-                                primaryAccent: dialog.primaryAccent
-                                secondaryAccent: dialog.secondaryAccent
-                                textColor: dialog.textColor
-                                mutedTextColor: dialog.mutedTextColor
-                                canvasColor: dialog.canvasColor
-                                panelColor: dialog.panelColor
-                                dividerColor: dialog.dividerColor
-                                dangerColor: dialog.dangerColor
-                                headlineFontFamily: dialog.headlineFontFamily
+                                logFolder: appModules.logFolder
                             }
                         }
                     }
@@ -1068,7 +1066,7 @@ Dialog {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 82
+                        Layout.preferredHeight: 64
                         Layout.leftMargin: 34
                         Layout.rightMargin: 34
                         spacing: 16
@@ -1077,37 +1075,16 @@ Dialog {
                             Layout.fillWidth: true
                         }
 
-                        Button {
+                        // The main action of the dialog: the light button of neutral surfaces.
+                        DialogActionButton {
                             id: applyButton
-                            Layout.preferredWidth: 168
-                            Layout.preferredHeight: 48
+                            objectName: "settingsDoneButton"
+                            kind: "light"
+                            buttonWidth: Math.max(120, implicitContentWidth + 36)
+                            buttonHeight: 34
                             text: qsTr("Done")
                             enabled: dialog.canCompleteSettings
-                            font.pixelSize: 15
-                            font.weight: 800
                             onClicked: dialog.applySettings()
-                            contentItem: Text {
-                                text: applyButton.text
-                                font: applyButton.font
-                                color: "#FFFFFF"
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                elide: Text.ElideRight
-                            }
-                            background: Rectangle {
-                                radius: 10
-                                color: applyButton.down
-                                       ? Qt.darker(dialog.primaryAccent, 1.16)
-                                       : (applyButton.hovered
-                                          ? Qt.lighter(dialog.primaryAccent, 1.06)
-                                          : dialog.primaryAccent)
-                                border.width: 1
-                                border.color: Qt.rgba(dialog.secondaryAccent.r,
-                                                      dialog.secondaryAccent.g,
-                                                      dialog.secondaryAccent.b,
-                                                      0.18)
-                                opacity: applyButton.enabled ? 1.0 : 0.45
-                            }
                         }
                     }
                 }
@@ -1127,8 +1104,8 @@ Dialog {
             Layout.fillWidth: true
             text: title
             color: textColor
-            font.pixelSize: 18
-            font.weight: 800
+            font.pixelSize: appTheme.fontSizeSection
+            font.weight: appTheme.fontWeightStrong
         }
 
         Rectangle {
@@ -1212,8 +1189,8 @@ Dialog {
                 text: "i"
                 color: infoMouse.containsMouse ? badge.accentColor : badge.mutedTextColor
                 font.family: badge.dataFontFamily
-                font.pixelSize: 14
-                font.weight: 800
+                font.pixelSize: appTheme.fontSizeSection
+                font.weight: appTheme.fontWeightStrong
             }
         }
 
@@ -1240,8 +1217,8 @@ Dialog {
                 width: Math.max(236, badge.toolTipWidth - 24)
                 text: badge.text
                 color: badge.textColor
-                font.pixelSize: 13
-                font.weight: 500
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightRegular
                 wrapMode: Text.WordWrap
                 lineHeight: 1.22
             }

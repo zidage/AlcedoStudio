@@ -26,6 +26,8 @@ Item {
     // Optional explanation of the setting: an "i" glyph after the field shows it.
     property string infoText: ""
     property string infoObjectName: "adjustmentComboInfoHint"
+    // The current entry names something that cannot apply: the field text uses dangerColor.
+    property bool warning: false
 
     implicitHeight: comboRow.implicitHeight
     Layout.fillWidth: true
@@ -104,7 +106,8 @@ Item {
                 bottomPadding: appTheme.spaceXs
                 text: combo.displayText
                 font.pixelSize: appTheme.fontSizeBody
-                color: combo.enabled ? root.colText : root.colMuted
+                color: root.warning ? appTheme.dangerColor
+                                    : (combo.enabled ? root.colText : root.colMuted)
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.WordWrap
             }

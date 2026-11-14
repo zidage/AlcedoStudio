@@ -4,513 +4,326 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// About page for the settings dialog. Hosted as the last StackLayout child
-// inside SettingDialog.qml. Identity, links, and licenses only — software
-// updates live in UpdatesSettingsPanel.qml.
+// Settings > About, laid out as bento tiles like Settings > Local Content Recognition (#824).
+// Hosted as the last StackLayout child of SettingDialog.qml, inside its ScrollView.
+// - Row 1: the Alcedo Studio wordmark of the main window with the copyright and the license,
+//   the Sponsor, GitHub, and Docs buttons, and the Version tile (CountTile) with the build.
+// - Row 2: Open Log Folder (the only log control of Settings), the AI model download statement
+//   (read-only), and the third-party licenses, which open as a list in the same tile.
+// - Row 3: the acknowledgements and components of README.md "Acknowledgments", one row per
+//   subject with its source links, and the trademark notice. AboutAcknowledgementsTest checks
+//   that every link of that README section is on this page.
+// Software updates live in UpdatesSettingsPanel.qml.
 ColumnLayout {
     id: page
+    objectName: "aboutPage"
 
-    property string appVersion: appTheme.appVersion
-    property color primaryAccent: appTheme.accentColor
-    property color secondaryAccent: appTheme.accentSecondaryColor
-    property color textColor: appTheme.textColor
-    property color mutedTextColor: appTheme.textMutedColor
-    property color canvasColor: appTheme.bgBaseColor
-    property color panelColor: appTheme.cardSurfaceColor
-    property color dividerColor: appTheme.cardBorderColor
-    property color dangerColor: appTheme.dangerColor
-    property string headlineFontFamily: appTheme.headlineFontFamily
     property var updateService: null
-    readonly property string uiFontFamily: appTheme.uiFontFamily
-    readonly property string dataFontFamily: appTheme.dataFontFamily
-
+    // LogFolderController (appModules.logFolder): opens the log directory in the file manager.
+    property var logFolder: null
     // Collapsed by default so the long license list is not front and center.
     property bool licensesExpanded: false
 
+    readonly property string appVersion: appTheme.appVersion
     readonly property string docsUrl: "https://zidage.github.io/AlcedoStudio_docs/"
     readonly property string repoUrl: "https://github.com/zidage/AlcedoStudio"
     readonly property string sponsorUrl: "https://github.com/zidage/AlcedoStudio/discussions/44"
 
+    // README.md "Acknowledgments": one entry per subject. `detail` is shown in parentheses after
+    // the link name.
+    readonly property var acknowledgements: [
+        { subject: qsTr("Film simulation LUTs"), links: [
+            { name: "JanLohse/spectral_film_lut", url: "https://github.com/JanLohse/spectral_film_lut" },
+            { name: "andreavolpato/spektrafilm", url: "https://github.com/andreavolpato/spektrafilm" } ] },
+        { subject: qsTr("Film Print spectral simulation"), links: [
+            { name: "andreavolpato/spektrafilm", url: "https://github.com/andreavolpato/spektrafilm" },
+            { name: "DhaliwalX/fotufilm-engine", url: "https://github.com/DhaliwalX/fotufilm-engine" } ] },
+        { subject: qsTr("Film Print film data"), links: [
+            { name: "spectral_film_lut", url: "https://github.com/JanLohse/spectral_film_lut" },
+            { name: "fotufilm Astia 100F", detail: "CC BY-SA 4.0",
+              url: "https://github.com/DhaliwalX/fotufilm-engine" } ] },
+        { subject: qsTr("AI Mask point, path, and box selection"), links: [
+            { name: "SAM 2.1", detail: "Hiera tiny", url: "https://github.com/facebookresearch/sam2" } ] },
+        { subject: qsTr("AI Mask Subject matting"), links: [
+            { name: "S3OD", url: "https://github.com/KupynOrest/s3od" },
+            { name: "s3od-synth weights", url: "https://huggingface.co/okupyn/s3od-synth" },
+            { name: "DINOv3", url: "https://github.com/facebookresearch/dinov3" } ] },
+        { subject: qsTr("Camera color matrices"), links: [
+            { name: "rawtoaces-data", url: "https://github.com/AcademySoftwareFoundation/rawtoaces-data" } ] },
+        { subject: qsTr("Neural demosaicing"), links: [
+            { name: "mgharbi/demosaicnet", url: "https://github.com/mgharbi/demosaicnet" },
+            { name: "Gharbi et al., 2016", url: "https://groups.csail.mit.edu/graphics/demosaicnet/" } ] },
+        { subject: qsTr("Inpaint-opposed highlight reconstruction"), links: [
+            { name: "darktable",
+              url: "https://github.com/darktable-org/darktable/blob/master/src/iop/hlreconstruct/opposed.c" },
+            { name: "RawTherapee",
+              url: "https://github.com/RawTherapee/RawTherapee/blob/dev/rtengine/hilite_recon.cc" } ] },
+        { subject: qsTr("RCD demosaicing"), links: [
+            { name: "LuisSR/RCD-Demosaicing", url: "https://github.com/LuisSR/RCD-Demosaicing" } ] },
+        { subject: qsTr("OpenDRT"), links: [
+            { name: "jedypod/open-display-transform",
+              url: "https://github.com/jedypod/open-display-transform" } ] },
+        { subject: qsTr("ACES 2.0 output transforms"), links: [
+            { name: "aces-aswf/aces-core", url: "https://github.com/aces-aswf/aces-core" } ] },
+        { subject: qsTr("Film grain"), links: [
+            { name: "Realistic Film Grain Rendering", detail: "IPOL 2017",
+              url: "https://doi.org/10.5201/ipol.2017.192" } ] }
+    ]
+
+    // The last bullet of README.md "Acknowledgments": the libraries by role.
+    readonly property var components: [
+        { subject: qsTr("RAW decoding"), links: [ { name: "LibRaw", url: "https://www.libraw.org/" } ] },
+        { subject: qsTr("Lens correction"), links: [ { name: "Lensfun", url: "https://lensfun.github.io/" } ] },
+        { subject: qsTr("Metadata"), links: [ { name: "Exiv2", url: "https://exiv2.org/" } ] },
+        { subject: qsTr("Image IO"), links: [
+            { name: "OpenImageIO", url: "https://github.com/AcademySoftwareFoundation/OpenImageIO" },
+            { name: "OpenCV", url: "https://opencv.org/" } ] },
+        { subject: qsTr("Color management"), links: [
+            { name: "OpenColorIO", url: "https://opencolorio.org/" } ] },
+        { subject: qsTr("Catalog database"), links: [ { name: "DuckDB", url: "https://duckdb.org/" } ] },
+        { subject: qsTr("UI"), links: [
+            { name: "Qt", url: "https://www.qt.io/" },
+            { name: "QuickQanava", url: "https://github.com/cneben/QuickQanava" } ] }
+    ]
+
     width: parent ? parent.width : implicitWidth
-    spacing: appTheme.spaceXl
+    spacing: appTheme.spaceMd
 
     function openUrl(url) {
         Qt.openUrlExternally(url)
     }
 
-    // 1. Welcome hero — the first thing on the page. Guides the user to the
-    // documentation (the tutorial for this software), the GitHub repository,
-    // and the donation page.
-    Rectangle {
+    // ── Bento row 1: identity + version ───────────────────────────────────
+    RowLayout {
         Layout.fillWidth: true
         Layout.topMargin: 26
         Layout.leftMargin: 34
         Layout.rightMargin: 34
-        Layout.preferredHeight: heroInner.implicitHeight + 44
-        radius: appTheme.panelRadius
-        color: appTheme.cardSurfaceColor
-        border.width: 1
-        border.color: appTheme.accentSecondaryColor
+        spacing: appTheme.spaceMd
 
-        RowLayout {
-            id: heroInner
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.margins: 22
-            spacing: 18
-
-            Image {
-                Layout.preferredWidth: appTheme.iconButtonHitSizeCompact
-                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-                Layout.alignment: Qt.AlignTop
-                source: "qrc:/panel_icons/aperture.svg"
-                sourceSize.width: appTheme.iconSourceSize
-                sourceSize.height: appTheme.iconSourceSize
-                asynchronous: true
-                opacity: 0.95
-            }
+        BentoTile {
+            objectName: "aboutIdentityTile"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentHeight: identityColumn.implicitHeight
 
             ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 6
+                id: identityColumn
+                anchors.fill: parent
+                spacing: 0
 
-                Label {
-                    Layout.fillWidth: true
-                    text: qsTr("Welcome to Alcedo Studio")
-                    color: page.textColor
-                    font.family: page.headlineFontFamily
-                    font.pixelSize: appTheme.fontSizeHeadline
-                    font.weight: appTheme.fontWeightHeading
-                    wrapMode: Text.WordWrap
+                // The wordmark of the main window and the welcome dialog: the brand mark keeps
+                // its heading weight (the one text above 600 on the Settings pages).
+                Row {
+                    objectName: "aboutWordmark"
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: qsTr("Alcedo Studio")
+
+                    Label {
+                        text: qsTr("Alcedo")
+                        color: appTheme.accentColor
+                        font.family: appTheme.headlineFontFamily
+                        font.pixelSize: appTheme.fontSizeHeadline
+                        font.weight: appTheme.fontWeightHeading
+                        Accessible.ignored: true
+                    }
+                    Label {
+                        text: " "
+                        font.family: appTheme.headlineFontFamily
+                        font.pixelSize: appTheme.fontSizeHeadline
+                        Accessible.ignored: true
+                    }
+                    Label {
+                        text: qsTr("Studio")
+                        color: appTheme.textColor
+                        font.family: appTheme.headlineFontFamily
+                        font.pixelSize: appTheme.fontSizeHeadline
+                        font.weight: appTheme.fontWeightHeading
+                        Accessible.ignored: true
+                    }
                 }
 
-                Label {
+                GridLayout {
                     Layout.fillWidth: true
-                    text: qsTr("The documentation walks you through importing, editing, and managing your photos step by step. Follow development on GitHub, and if Alcedo Studio is useful to you, consider supporting it with a donation.")
-                    color: page.mutedTextColor
-                    font.family: page.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeBody
-                    font.weight: appTheme.fontWeightRegular
-                    wrapMode: Text.WordWrap
-                    lineHeight: 1.3
+                    Layout.topMargin: 14
+                    columns: 2
+                    columnSpacing: appTheme.spaceLg
+                    rowSpacing: 6
+
+                    MetaKey { text: qsTr("Copyright") }
+                    MetaValue {
+                        objectName: "aboutCopyrightLabel"
+                        text: "© 2026 Yurun Zi"
+                    }
+                    MetaKey { text: qsTr("License") }
+                    MetaValue {
+                        objectName: "aboutLicenseLabel"
+                        text: qsTr("GPL-3.0-only, with an additional permission under GPLv3 section 7 for combining and distributing the required NVIDIA CUDA components.")
+                    }
                 }
 
-                Flow {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 8
-                    spacing: 10
+                Item {
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: appTheme.spaceLg
+                }
 
-                    HeroButton {
-                        objectName: "aboutDocsButton"
-                        text: qsTr("Open documentation")
-                        primary: true
-                        onClicked: page.openUrl(page.docsUrl)
-                    }
+                RowLayout {
+                    Layout.alignment: Qt.AlignRight
+                    spacing: appTheme.spaceSm
 
-                    HeroButton {
-                        objectName: "aboutGitHubButton"
-                        text: qsTr("Open GitHub")
-                        onClicked: page.openUrl(page.repoUrl)
-                    }
-
-                    HeroButton {
+                    DialogActionButton {
                         objectName: "aboutSponsorButton"
+                        buttonWidth: Math.max(96, implicitContentWidth + 32)
+                        buttonHeight: 34
+                        iconSource: "qrc:/panel_icons/heart.svg"
                         text: qsTr("Sponsor")
                         onClicked: page.openUrl(page.sponsorUrl)
                     }
-                }
-            }
-        }
-    }
-
-    // 2. About — version, copyright, license.
-    SettingsSection {
-        Layout.fillWidth: true
-        Layout.leftMargin: 34
-        Layout.rightMargin: 34
-        title: qsTr("About")
-        textColor: page.textColor
-        mutedTextColor: page.mutedTextColor
-        dividerColor: page.dividerColor
-
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 10
-
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("Alcedo Studio")
-                color: page.textColor
-                font.family: page.headlineFontFamily
-                font.pixelSize: 22
-                font.weight: 800
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("An open-source RAW photo editor and digital asset management (DAM) project, built for a lightweight, high-performance, industry-compatible photography workflow.")
-                color: page.mutedTextColor
-                font.pixelSize: 13
-                font.weight: 500
-                wrapMode: Text.WordWrap
-                lineHeight: 1.3
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 16
-
-                Label {
-                    Layout.preferredWidth: 120
-                    text: qsTr("Version")
-                    color: page.mutedTextColor
-                    font.pixelSize: 14
-                    font.weight: 600
-                }
-
-                Label {
-                    objectName: "aboutVersionLabel"
-                    Layout.fillWidth: true
-                    text: page.updateService
-                          ? page.updateService.currentVersion
-                          : (page.appVersion.length > 0 ? page.appVersion : qsTr("Unavailable"))
-                    color: page.textColor
-                    font.family: page.dataFontFamily
-                    font.pixelSize: 15
-                    font.weight: 700
-                }
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("Copyright © 2026 Yurun Zi")
-                color: page.textColor
-                font.pixelSize: 14
-                font.weight: 600
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("Licensed under GPL-3.0-only, with an additional permission under GPLv3 section 7 for combining and distributing the required NVIDIA CUDA components.")
-                color: page.mutedTextColor
-                font.pixelSize: 12
-                font.weight: 500
-                wrapMode: Text.WordWrap
-                lineHeight: 1.3
-            }
-        }
-    }
-
-    // 3. Links — repo + documentation.
-    SettingsSection {
-        Layout.fillWidth: true
-        Layout.leftMargin: 34
-        Layout.rightMargin: 34
-        title: qsTr("Links")
-        textColor: page.textColor
-        mutedTextColor: page.mutedTextColor
-        dividerColor: page.dividerColor
-
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 10
-
-            LinkRow {
-                Layout.fillWidth: true
-                labelText: qsTr("Documentation (tutorial)")
-                subtitle: page.docsUrl
-                accent: page.primaryAccent
-                textColor: page.textColor
-                mutedTextColor: page.mutedTextColor
-                dividerColor: page.dividerColor
-                dataFontFamily: page.dataFontFamily
-                onActivated: page.openUrl(page.docsUrl)
-            }
-
-            LinkRow {
-                Layout.fillWidth: true
-                labelText: qsTr("GitHub repository")
-                subtitle: page.repoUrl
-                accent: page.primaryAccent
-                textColor: page.textColor
-                mutedTextColor: page.mutedTextColor
-                dividerColor: page.dividerColor
-                dataFontFamily: page.dataFontFamily
-                onActivated: page.openUrl(page.repoUrl)
-            }
-        }
-    }
-
-    // 4. Acknowledgements — verbatim from README.md.
-    SettingsSection {
-        Layout.fillWidth: true
-        Layout.leftMargin: 34
-        Layout.rightMargin: 34
-        title: qsTr("Acknowledgements")
-        textColor: page.textColor
-        mutedTextColor: page.mutedTextColor
-        dividerColor: page.dividerColor
-
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 10
-
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("Alcedo Studio builds on research, open-source implementations, and community data from the wider imaging ecosystem:")
-                color: page.mutedTextColor
-                font.pixelSize: 13
-                font.weight: 500
-                wrapMode: Text.WordWrap
-                lineHeight: 1.3
-            }
-
-            LinkRow {
-                Layout.fillWidth: true
-                labelText: qsTr("Film-emulation LUTs — JanLohse/spectral_film_lut")
-                subtitle: "https://github.com/JanLohse/spectral_film_lut"
-                accent: page.primaryAccent
-                textColor: page.textColor
-                mutedTextColor: page.mutedTextColor
-                dividerColor: page.dividerColor
-                dataFontFamily: page.dataFontFamily
-                onActivated: page.openUrl("https://github.com/JanLohse/spectral_film_lut")
-            }
-
-            LinkRow {
-                Layout.fillWidth: true
-                labelText: qsTr("Camera color matrices — AcademySoftwareFoundation/rawtoaces-data")
-                subtitle: "https://github.com/AcademySoftwareFoundation/rawtoaces-data"
-                accent: page.primaryAccent
-                textColor: page.textColor
-                mutedTextColor: page.mutedTextColor
-                dividerColor: page.dividerColor
-                dataFontFamily: page.dataFontFamily
-                onActivated: page.openUrl("https://github.com/AcademySoftwareFoundation/rawtoaces-data")
-            }
-
-            LinkRow {
-                Layout.fillWidth: true
-                labelText: qsTr("Highlight reconstruction — RawTherapee hilite_recon.cc")
-                subtitle: "https://github.com/RawTherapee/RawTherapee/blob/dev/rtengine/hilite_recon.cc"
-                accent: page.primaryAccent
-                textColor: page.textColor
-                mutedTextColor: page.mutedTextColor
-                dividerColor: page.dividerColor
-                dataFontFamily: page.dataFontFamily
-                onActivated: page.openUrl("https://github.com/RawTherapee/RawTherapee/blob/dev/rtengine/hilite_recon.cc")
-            }
-
-            LinkRow {
-                Layout.fillWidth: true
-                labelText: qsTr("RCD demosaic — LuisSR/RCD-Demosaicing")
-                subtitle: "https://github.com/LuisSR/RCD-Demosaicing"
-                accent: page.primaryAccent
-                textColor: page.textColor
-                mutedTextColor: page.mutedTextColor
-                dividerColor: page.dividerColor
-                dataFontFamily: page.dataFontFamily
-                onActivated: page.openUrl("https://github.com/LuisSR/RCD-Demosaicing")
-            }
-
-            LinkRow {
-                Layout.fillWidth: true
-                labelText: qsTr("OpenDRT — jedypod/open-display-transform")
-                subtitle: "https://github.com/jedypod/open-display-transform/blob/main/display-transforms/opendrt/OpenDRT.dctl"
-                accent: page.primaryAccent
-                textColor: page.textColor
-                mutedTextColor: page.mutedTextColor
-                dividerColor: page.dividerColor
-                dataFontFamily: page.dataFontFamily
-                onActivated: page.openUrl("https://github.com/jedypod/open-display-transform/blob/main/display-transforms/opendrt/OpenDRT.dctl")
-            }
-
-            LinkRow {
-                Layout.fillWidth: true
-                labelText: qsTr("ACES 2.0 — aces-aswf/aces-core")
-                subtitle: "https://github.com/aces-aswf/aces-core"
-                accent: page.primaryAccent
-                textColor: page.textColor
-                mutedTextColor: page.mutedTextColor
-                dividerColor: page.dividerColor
-                dataFontFamily: page.dataFontFamily
-                onActivated: page.openUrl("https://github.com/aces-aswf/aces-core")
-            }
-
-            LinkRow {
-                Layout.fillWidth: true
-                labelText: qsTr("Film grain renderer — Newson, Faraj, Galerne, Delon (IPOL 2017)")
-                subtitle: "https://doi.org/10.5201/ipol.2017.192"
-                accent: page.primaryAccent
-                textColor: page.textColor
-                mutedTextColor: page.mutedTextColor
-                dividerColor: page.dividerColor
-                dataFontFamily: page.dataFontFamily
-                onActivated: page.openUrl("https://doi.org/10.5201/ipol.2017.192")
-            }
-        }
-    }
-
-    // AI models: the download statement of the external AI models (AI Models plan, section 4),
-    // read-only. Settings > AI Models still shows it for acceptance before the first download.
-    SettingsSection {
-        Layout.fillWidth: true
-        Layout.leftMargin: 34
-        Layout.rightMargin: 34
-        title: qsTr("AI models")
-        textColor: page.textColor
-        mutedTextColor: page.mutedTextColor
-        dividerColor: page.dividerColor
-
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 10
-
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("Alcedo Studio downloads the AI models of Settings > AI Models to this computer. Each model has its own license.")
-                color: page.mutedTextColor
-                font.pixelSize: 13
-                font.weight: 500
-                wrapMode: Text.WordWrap
-                lineHeight: 1.3
-            }
-
-            LinkRow {
-                objectName: "aboutAiModelStatementLink"
-                Layout.fillWidth: true
-                labelText: qsTr("AI model download statement")
-                subtitle: qsTr("Licenses and training data of the AI models")
-                accent: page.primaryAccent
-                textColor: page.textColor
-                mutedTextColor: page.mutedTextColor
-                dividerColor: page.dividerColor
-                dataFontFamily: page.uiFontFamily
-                onActivated: aiModelStatement.openReadOnly()
-            }
-        }
-    }
-
-    AiModelDownloadStatementDialog {
-        id: aiModelStatement
-        objectName: "aboutAiModelStatementDialog"
-    }
-
-    // 5. Third-party licenses — the long one. Collapsible "View all" so it is
-    // not front and center; collapsed by default. The list is baked in from the
-    // third_party_licenses/ folder (distinct libraries, with combined license
-    // notes where a library ships several license files).
-    SettingsSection {
-        Layout.fillWidth: true
-        Layout.leftMargin: 34
-        Layout.rightMargin: 34
-        Layout.bottomMargin: 26
-        title: qsTr("Third-party licenses")
-        textColor: page.textColor
-        mutedTextColor: page.mutedTextColor
-        dividerColor: page.dividerColor
-
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 10
-
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("This software bundles open-source third-party libraries. Their licenses are reproduced in the third_party_licenses/ folder of the source tree; the summary below lists each library and its license.")
-                color: page.mutedTextColor
-                font.pixelSize: 13
-                font.weight: 500
-                wrapMode: Text.WordWrap
-                lineHeight: 1.3
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 44
-                radius: 10
-                color: licensesToggleMouse.containsMouse
-                       ? appTheme.buttonHoveredFillColor
-                       : appTheme.buttonIdleFillColor
-                border.width: 1
-                border.color: appTheme.cardBorderColor
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 14
-                    anchors.rightMargin: 14
-                    spacing: 8
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: page.licensesExpanded
-                              ? qsTr("Collapse")
-                              : qsTr("View all %1 licenses").arg(licenseModel.count)
-                        color: page.primaryAccent
-                        font.pixelSize: 14
-                        font.weight: 700
+                    DialogActionButton {
+                        objectName: "aboutGitHubButton"
+                        buttonWidth: Math.max(96, implicitContentWidth + 32)
+                        buttonHeight: 34
+                        iconSource: "qrc:/panel_icons/github.svg"
+                        text: qsTr("GitHub")
+                        onClicked: page.openUrl(page.repoUrl)
                     }
-
-                    Label {
-                        text: page.licensesExpanded ? "▲" : "▼"
-                        color: page.primaryAccent
-                        font.pixelSize: 14
-                        font.weight: 700
+                    DialogActionButton {
+                        objectName: "aboutDocsButton"
+                        kind: "light"
+                        buttonWidth: Math.max(96, implicitContentWidth + 32)
+                        buttonHeight: 34
+                        iconSource: "qrc:/panel_icons/book.svg"
+                        text: qsTr("Docs")
+                        onClicked: page.openUrl(page.docsUrl)
                     }
                 }
+            }
+        }
 
-                MouseArea {
-                    id: licensesToggleMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
+        CountTile {
+            objectName: "aboutVersionTile"
+            Layout.fillHeight: true
+            label: qsTr("Version")
+            valueText: page.appVersion.length > 0 ? page.appVersion : qsTr("Unavailable")
+            detailText: page.updateService
+                        ? qsTr("Build %1").arg(page.updateService.currentBuild)
+                        : ""
+            countLabel.objectName: "aboutVersionLabel"
+            exactCountLabel.objectName: "aboutBuildLabel"
+        }
+    }
+
+    // ── Bento row 2: log folder, statement, licenses ──────────────────────
+    BentoTile {
+        objectName: "aboutResourcesTile"
+        Layout.fillWidth: true
+        Layout.leftMargin: 34
+        Layout.rightMargin: 34
+        contentHeight: resourcesColumn.implicitHeight
+
+        ColumnLayout {
+            id: resourcesColumn
+            anchors.fill: parent
+            spacing: 0
+
+            SettingRow {
+                label: qsTr("Logs")
+
+                DialogActionButton {
+                    objectName: "aboutOpenLogFolderButton"
+                    buttonWidth: Math.max(96, implicitContentWidth + 36)
+                    buttonHeight: 34
+                    text: qsTr("Open Log Folder")
+                    enabled: page.logFolder !== null
+                    onClicked: page.logFolder.openLogFolder()
+                }
+            }
+
+            Divider {}
+
+            // AI models: the download statement of the external AI models (AI Models plan,
+            // section 4), read-only. Settings > AI Models still shows it for acceptance before
+            // the first download.
+            SettingRow {
+                label: qsTr("AI model download statement")
+
+                DialogActionButton {
+                    objectName: "aboutAiModelStatementLink"
+                    buttonWidth: Math.max(96, implicitContentWidth + 36)
+                    buttonHeight: 34
+                    text: qsTr("View")
+                    onClicked: aiModelStatement.openReadOnly()
+                }
+            }
+
+            Divider {}
+
+            // The list is baked in from the third_party_licenses/ folder (distinct libraries, with
+            // combined license notes where a library ships several license files).
+            SettingRow {
+                label: qsTr("Third-party licenses")
+
+                DialogActionButton {
+                    objectName: "aboutLicensesToggle"
+                    buttonWidth: Math.max(96, implicitContentWidth + 36)
+                    buttonHeight: 34
+                    text: page.licensesExpanded ? qsTr("Collapse") : qsTr("View all")
                     onClicked: page.licensesExpanded = !page.licensesExpanded
                 }
             }
 
-            ColumnLayout {
+            GridLayout {
+                objectName: "aboutLicenseList"
                 Layout.fillWidth: true
                 visible: page.licensesExpanded
-                spacing: 8
+                columns: 2
+                columnSpacing: 24
+                rowSpacing: 0
 
                 Repeater {
                     model: licenseModel
 
-                    delegate: Rectangle {
+                    delegate: Item {
+                        id: licenseEntry
+
                         required property string name
                         required property string license
 
                         Layout.fillWidth: true
-                        Layout.preferredHeight: Math.max(40, licenseRow.implicitHeight
-                                                         + appTheme.spaceSm)
-                        radius: 8
-                        color: appTheme.bgBaseColor
-                        border.width: 1
-                        border.color: appTheme.cardBorderColor
+                        Layout.preferredWidth: 100
+                        implicitHeight: licenseRow.implicitHeight + 14
 
                         RowLayout {
                             id: licenseRow
-                            anchors.fill: parent
-                            anchors.leftMargin: 14
-                            anchors.rightMargin: 14
-                            spacing: 12
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: appTheme.spaceMd
 
                             Label {
                                 Layout.fillWidth: true
-                                text: name
-                                color: page.textColor
-                                font.pixelSize: 13
-                                font.weight: 600
-                                wrapMode: Text.Wrap
+                                text: licenseEntry.name
+                                color: appTheme.textColor
+                                font.family: appTheme.uiFontFamily
+                                font.pixelSize: appTheme.fontSizeBody
+                                font.weight: appTheme.fontWeightRegular
+                                elide: Text.ElideRight
                             }
-
                             Label {
-                                text: license
-                                color: page.mutedTextColor
-                                font.family: page.dataFontFamily
-                                font.pixelSize: 12
-                                font.weight: 600
+                                text: licenseEntry.license
+                                color: appTheme.textMutedColor
+                                font.family: appTheme.headlineFontFamily
+                                font.pixelSize: appTheme.fontSizeBody
+                                font.weight: appTheme.fontWeightRegular
                             }
+                        }
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            height: 1
+                            color: appTheme.dividerColor
                         }
                     }
                 }
@@ -518,7 +331,64 @@ ColumnLayout {
         }
     }
 
+    // ── Bento row 3: acknowledgements ─────────────────────────────────────
+    BentoTile {
+        objectName: "aboutAcknowledgementsTile"
+        Layout.fillWidth: true
+        Layout.leftMargin: 34
+        Layout.rightMargin: 34
+        Layout.bottomMargin: 26
+        contentHeight: acknowledgementsColumn.implicitHeight
+
+        ColumnLayout {
+            id: acknowledgementsColumn
+            anchors.fill: parent
+            spacing: 0
+
+            TileTitle { text: qsTr("Acknowledgements") }
+
+            Repeater {
+                model: page.acknowledgements
+
+                delegate: AcknowledgementRow {}
+            }
+
+            TileTitle {
+                Layout.topMargin: 18
+                text: qsTr("Components")
+            }
+
+            Repeater {
+                model: page.components
+
+                delegate: AcknowledgementRow {}
+            }
+
+            Divider {
+                Layout.topMargin: appTheme.spaceMd
+            }
+
+            Label {
+                objectName: "aboutTrademarkNotice"
+                Layout.fillWidth: true
+                Layout.topMargin: appTheme.spaceMd
+                text: qsTr("ACES is a trademark of the Academy of Motion Picture Arts and Sciences (A.M.P.A.S.). Alcedo Studio is an independent project and is not affiliated with, certified, or endorsed by A.M.P.A.S., Academy Software Foundation, Jed Smith, or any other upstream authors mentioned above. These names are used solely to identify the respective technologies. Film stock names such as Kodak and Fujifilm are trademarks of their owners and identify the films that Film Print simulates.")
+                color: appTheme.textMutedColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeBody
+                font.weight: appTheme.fontWeightRegular
+                wrapMode: Text.WordWrap
+                lineHeight: 1.3
+            }
+        }
+    }
+
     Item { Layout.fillHeight: true }
+
+    AiModelDownloadStatementDialog {
+        id: aiModelStatement
+        objectName: "aboutAiModelStatementDialog"
+    }
 
     ListModel {
         id: licenseModel
@@ -552,136 +422,152 @@ ColumnLayout {
         ListElement { name: "xxHash (Yann Collet)"; license: "BSD-2-Clause" }
     }
 
-    component HeroButton: Button {
-        id: heroButton
-
-        property bool primary: false
-
-        implicitHeight: appTheme.iconButtonHitSizeCompact
-        leftPadding: 18
-        rightPadding: 18
-        font.family: page.uiFontFamily
+    component TileTitle: Label {
+        Layout.fillWidth: true
+        Layout.bottomMargin: 6
+        color: appTheme.textColor
+        font.family: appTheme.headlineFontFamily
         font.pixelSize: appTheme.fontSizeSection
-        font.weight: appTheme.fontWeightHeading
-
-        contentItem: Label {
-            text: heroButton.text
-            color: heroButton.primary ? "#FFFFFF" : page.textColor
-            font: heroButton.font
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-
-        background: Rectangle {
-            radius: appTheme.controlRadius
-            color: heroButton.primary
-                   ? (heroButton.down
-                      ? Qt.darker(page.primaryAccent, 1.16)
-                      : (heroButton.hovered ? Qt.lighter(page.primaryAccent, 1.06)
-                                            : page.primaryAccent))
-                   : (heroButton.down
-                      ? appTheme.buttonPressedFillColor
-                      : (heroButton.hovered ? appTheme.buttonHoveredFillColor
-                                            : appTheme.buttonIdleFillColor))
-            border.width: 1
-            border.color: heroButton.primary
-                          ? Qt.rgba(page.secondaryAccent.r, page.secondaryAccent.g,
-                                    page.secondaryAccent.b, 0.18)
-                          : appTheme.cardBorderColor
-        }
+        font.weight: appTheme.fontWeightStrong
+        elide: Text.ElideRight
     }
 
-    component SettingsSection: ColumnLayout {
-        id: section
+    component MetaKey: Label {
+        color: appTheme.textMutedColor
+        font.family: appTheme.uiFontFamily
+        font.pixelSize: appTheme.fontSizeBody
+        font.weight: appTheme.fontWeightRegular
+        Layout.alignment: Qt.AlignTop
+    }
 
-        property string title: ""
-        property color textColor: appTheme.textColor
-        property color mutedTextColor: appTheme.textMutedColor
-        property color dividerColor: appTheme.dividerColor
+    component MetaValue: Label {
+        Layout.fillWidth: true
+        color: appTheme.textColor
+        font.family: appTheme.uiFontFamily
+        font.pixelSize: appTheme.fontSizeBody
+        font.weight: appTheme.fontWeightRegular
+        wrapMode: Text.WordWrap
+        lineHeight: 1.2
+    }
 
-        spacing: 14
+    // A row of the resources tile: the name at the left, the control at the right.
+    component SettingRow: RowLayout {
+        id: settingRow
+
+        property string label: ""
+
+        Layout.fillWidth: true
+        Layout.topMargin: appTheme.spaceSm
+        Layout.bottomMargin: appTheme.spaceSm
+        spacing: appTheme.spaceLg
 
         Label {
             Layout.fillWidth: true
-            text: section.title
-            color: section.textColor
+            text: settingRow.label
+            color: appTheme.textColor
             font.family: appTheme.uiFontFamily
-            font.pixelSize: appTheme.fontSizeSection
-            font.weight: appTheme.fontWeightHeading
-        }
-
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
-            color: section.dividerColor
+            font.pixelSize: appTheme.fontSizeTitle
+            font.weight: appTheme.fontWeightStrong
+            elide: Text.ElideRight
         }
     }
 
-    component LinkRow: Rectangle {
-        id: row
+    component Divider: Rectangle {
+        Layout.fillWidth: true
+        implicitHeight: 1
+        color: appTheme.dividerColor
+    }
 
-        property string labelText: ""
-        property string subtitle: ""
-        property color accent: appTheme.accentColor
-        property color textColor: appTheme.textColor
-        property color mutedTextColor: appTheme.textMutedColor
-        property color dividerColor: appTheme.dividerColor
-        property string dataFontFamily: appTheme.dataFontFamily
+    // One subject of the acknowledgements: the subject at the left (one line), its source links
+    // at the right. A link opens its URL; the line above every row but the first divides them.
+    component AcknowledgementRow: Item {
+        id: ackRow
 
-        signal activated()
+        required property int index
+        required property var modelData
 
         Layout.fillWidth: true
-        Layout.preferredHeight: rowInner.implicitHeight + 18
-        radius: 10
-        color: linkMouse.containsMouse
-               ? appTheme.buttonHoveredFillColor
-               : appTheme.buttonIdleFillColor
-        border.width: 1
-        border.color: row.dividerColor
+        implicitHeight: ackLayout.implicitHeight + 16
+
+        Rectangle {
+            visible: ackRow.index > 0
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 1
+            color: appTheme.dividerColor
+        }
 
         RowLayout {
-            id: rowInner
+            id: ackLayout
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            anchors.leftMargin: 14
-            anchors.rightMargin: 14
-            spacing: 12
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 2
-
-                Label {
-                    Layout.fillWidth: true
-                    text: row.labelText
-                    color: linkMouse.containsMouse ? row.accent : row.textColor
-                    font.pixelSize: 14
-                    font.weight: 600
-                    wrapMode: Text.WordWrap
-                    lineHeight: 1.25
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    visible: row.subtitle.length > 0
-                    text: row.subtitle
-                    color: row.mutedTextColor
-                    font.family: row.dataFontFamily
-                    font.pixelSize: 12
-                    font.weight: 500
-                    wrapMode: Text.Wrap
-                }
-            }
+            spacing: appTheme.spaceMd
 
             Label {
-                Layout.preferredWidth: 18
-                text: "↗"
-                color: row.mutedTextColor
-                font.pixelSize: 14
-                font.weight: 700
-                horizontalAlignment: Text.AlignRight
-                opacity: linkMouse.containsMouse ? 1.0 : 0.5
+                Layout.preferredWidth: 236
+                Layout.alignment: Qt.AlignTop
+                text: ackRow.modelData.subject
+                color: appTheme.textColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeBody
+                font.weight: appTheme.fontWeightRegular
+                elide: Text.ElideRight
+            }
+
+            Flow {
+                Layout.fillWidth: true
+                spacing: appTheme.spaceMd
+
+                Repeater {
+                    model: ackRow.modelData.links
+
+                    delegate: SourceLink {}
+                }
+            }
+        }
+    }
+
+    component SourceLink: Item {
+        id: link
+
+        required property var modelData
+        readonly property string detail: modelData.detail !== undefined ? modelData.detail : ""
+        readonly property color inkColor: linkMouse.containsMouse ? appTheme.textColor
+                                                                  : appTheme.textMutedColor
+
+        implicitWidth: linkRow.implicitWidth
+        implicitHeight: linkRow.implicitHeight
+        Accessible.role: Accessible.Link
+        Accessible.name: modelData.name
+
+        Row {
+            id: linkRow
+
+            Label {
+                text: link.modelData.name
+                color: link.inkColor
+                font.family: appTheme.headlineFontFamily
+                font.pixelSize: appTheme.fontSizeBody
+                font.weight: appTheme.fontWeightRegular
+                font.underline: linkMouse.containsMouse
+            }
+            Label {
+                visible: link.detail.length > 0
+                text: " (" + link.detail + ")"
+                color: link.inkColor
+                opacity: 0.6
+                font.family: appTheme.headlineFontFamily
+                font.pixelSize: appTheme.fontSizeBody
+                font.weight: appTheme.fontWeightRegular
+            }
+            Label {
+                text: " ↗"
+                color: link.inkColor
+                font.family: appTheme.headlineFontFamily
+                font.pixelSize: appTheme.fontSizeBody
+                font.weight: appTheme.fontWeightRegular
             }
         }
 
@@ -690,7 +576,7 @@ ColumnLayout {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: row.activated()
+            onClicked: page.openUrl(link.modelData.url)
         }
     }
 }

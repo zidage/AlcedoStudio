@@ -4,13 +4,13 @@
 
 #include "app/source_dng_profile_binding.hpp"
 
-#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
 
 #include "image/dng_color_profile_cache.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
 
@@ -41,10 +41,10 @@ auto LoadSourceDngColorProfile(Storage& storage, sl_element_id_t id,
                              " has no DNG profile: " + source.string());
   }
   if (profile->fingerprint != *reference.Fingerprint()) {
-    std::cerr << "[Alcedo] DNG profile of element " << id << " changed in the source file ("
-              << DngColorProfileFingerprintToText(*reference.Fingerprint()) << " -> "
-              << DngColorProfileFingerprintToText(profile->fingerprint)
-              << "); the source file profile is used.\n";
+    ALCEDO_LOG_INFO(Decode) << "DNG profile of element " << id << " changed in the source file ("
+                            << DngColorProfileFingerprintToText(*reference.Fingerprint()) << " -> "
+                            << DngColorProfileFingerprintToText(profile->fingerprint)
+                            << "); the source file profile is used.";
   }
   return profile;
 }

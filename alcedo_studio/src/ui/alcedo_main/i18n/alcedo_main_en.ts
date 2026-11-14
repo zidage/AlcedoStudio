@@ -3419,6 +3419,22 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorCameraProfileSection</name>
+    <message>
+        <location filename="../qml/EditorCameraProfileSection.qml" line="+59"/>
+        <source>Camera Profile</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Set a DCP folder in Settings &gt; LUTs and Color Management.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The DCP folder has no profile of this camera.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>EditorRawDecodePanel</name>
     <message>
         <location filename="../qml/EditorRawDecodePanel.qml" line="+35"/>
@@ -6435,6 +6451,19 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <location line="-12"/>
         <source>Alcedo Studio will close and install the update.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::EditorCameraProfileListModel</name>
+    <message>
+        <location filename="../album_backend/editor_camera_profile_list_model.cpp" line="+155"/>
+        <source>Embedded</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Built-in</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

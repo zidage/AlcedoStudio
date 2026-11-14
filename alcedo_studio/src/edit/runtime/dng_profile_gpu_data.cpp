@@ -39,16 +39,25 @@ auto PackDngProfileGpuData(const DevelopCameraProfile&  profile,
     }
   }
   append(dng.look_table, 7);
-  const cv::Matx33d prophoto_to_xyz(.7976749, .1351917, .0313534, .2880402, .7118741, .0000857, 0,
-                                    0, .8252100);
-  cv::Matx33d       xyz_to_ap1;
-  for (int i = 0; i < 9; ++i) xyz_to_ap1.val[i] = transform.xyz_d50_to_ap1[i];
-  const auto prophoto_to_ap1 = xyz_to_ap1 * prophoto_to_xyz;
+  const auto prophoto_to_ap1 = ProPhotoToAp1(transform.xyz_d50_to_ap1);
   const auto ap1_to_prophoto = prophoto_to_ap1.inv();
   for (int i = 0; i < 9; ++i) {
     result[12 + i] = static_cast<float>(ap1_to_prophoto.val[i]);
     result[21 + i] = static_cast<float>(prophoto_to_ap1.val[i]);
   }
   return result;
+}
+
+auto ProPhotoToAp1(const std::array<float, 9>& xyz_d50_to_ap1) -> cv::Matx33d {
+  const cv::Matx33d prophoto_to_xyz(.7976749, .1351917, .0313534, .2880402, .7118741, .0000857, 0,
+                                    0, .8252100);
+  cv::Matx33d       xyz_to_ap1;
+  for (int i = 0; i < 9; ++i) xyz_to_ap1.val[i] = xyz_d50_to_ap1[i];
+  return xyz_to_ap1 * prophoto_to_xyz;
+}
+
+auto PackDngProfileGpuData(const DevelopPayload& develop, const DevelopColorTransform& transform)
+    -> std::vector<float> {
+  return PackDngProfileGpuData(EffectiveCameraProfile(develop), transform);
 }
 }  // namespace alcedo

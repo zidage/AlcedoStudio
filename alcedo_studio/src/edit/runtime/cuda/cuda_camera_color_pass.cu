@@ -67,7 +67,7 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
     throw std::runtime_error(std::string("ExecuteCudaCameraColor: ") +
-                             std::string(ColorTransformErrorMessage(resolved.error)));
+                             ColorTransformFailureMessage(develop_params, resolved.error));
   }
 
   auto* input = workspace.Images().Find(plan.geometry_output);
@@ -90,7 +90,7 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
   auto& context = device.CommandContext();
   arena.UploadDirty(context);
 
-  const auto table_data = PackDngProfileGpuData(develop_params.camera_profile, resolved.transform);
+  const auto table_data = PackDngProfileGpuData(develop_params, resolved.transform);
   auto&      tables     = UploadDngProfileGpuData(workspace, develop->Id(), table_data, context);
   const auto              binding = arena.Binding(key);
   const std::uint32_t     pixels  = width * height;

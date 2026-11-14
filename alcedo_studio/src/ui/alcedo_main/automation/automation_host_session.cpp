@@ -14,6 +14,7 @@
 #include "automation/automation_session_file.hpp"
 #include "ui/alcedo_main/automation/automation_adjustment_commands.hpp"
 #include "ui/alcedo_main/automation/automation_control_commands.hpp"
+#include "ui/alcedo_main/automation/automation_curve_commands.hpp"
 #include "ui/alcedo_main/automation/automation_editor_commands.hpp"
 #include "ui/alcedo_main/automation/automation_export_commands.hpp"
 #include "ui/alcedo_main/automation/automation_film_commands.hpp"
@@ -25,6 +26,7 @@
 #include "ui/alcedo_main/automation/automation_search_commands.hpp"
 #include "ui/alcedo_main/automation/automation_session_commands.hpp"
 #include "ui/alcedo_main/automation/automation_task_commands.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::automation {
 namespace {
@@ -116,7 +118,8 @@ auto AutomationHostSession::Start(QString* error) -> bool {
     if (session_file_written_ && !host_->project()->ProjectLoading()) {
       QString rewrite_error;
       if (!WriteSessionFile(&rewrite_error)) {
-        qWarning().noquote() << "automation.session.file.rewrite.failed" << rewrite_error;
+        qCWarning(alcedo::diag::automationLog).noquote()
+            << "automation.session.file.rewrite.failed" << rewrite_error;
       }
     }
   });
@@ -167,6 +170,7 @@ auto AutomationHostSession::RegisterCommands(QString* error) -> bool {
          RegisterAutomationLabelCommands(registry_, host_, error) &&
          RegisterAutomationLutCommands(registry_, host_, error) &&
          RegisterAutomationFilmCommands(registry_, error) &&
+         RegisterAutomationCurveCommands(registry_, error) &&
          RegisterAutomationEditorCommands(registry_, host_, error) &&
          RegisterAutomationVersionCommands(registry_, host_, error) &&
          RegisterAutomationRenderCommands(registry_, host_, error) &&

@@ -16,6 +16,8 @@
 #include "color/color_encoding_catalog.hpp"
 #include "color/color_encoding_math.h"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/curve_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 
 namespace alcedo {
 
@@ -171,15 +173,17 @@ void ValidateDocumentShape(const nlohmann::json& json) {
 }
 
 void ApplyDefaultPipelineLook(ColorGradeNodeModel& grade) {
-  auto* exposure   = grade.FindAdjustmentByType(type_ids::Exposure());
-  auto* contrast   = grade.FindAdjustmentByType(type_ids::Contrast());
+  auto*       exposure   = grade.FindAdjustmentByType(type_ids::Exposure());
   auto* saturation = grade.FindAdjustmentByType(type_ids::Saturation());
-  if (exposure == nullptr || contrast == nullptr || saturation == nullptr) {
-    throw std::logic_error("Default Color Grade is missing exposure, contrast, or saturation");
+  auto*       curve      = dynamic_cast<CurveModel*>(grade.FindAdjustmentByType(type_ids::Curve()));
+  const auto* preset     = FindToneCurvePreset(kDefaultPipelineToneCurvePresetId);
+  if (exposure == nullptr || saturation == nullptr || curve == nullptr || preset == nullptr) {
+    throw std::logic_error("Default Color Grade is missing exposure, saturation, or curve");
   }
   exposure->LoadJson({{"exposure_ev", kDefaultPipelineExposureEv}});
-  contrast->LoadJson({{"contrast", kDefaultPipelineContrast}});
   saturation->LoadJson({{"saturation", kDefaultPipelineSaturation}});
+  // The Film-like curve carries the contrast of the look; the Contrast slider stays at 0.
+  curve->SetPoints(preset->PointList());
 }
 
 }  // namespace

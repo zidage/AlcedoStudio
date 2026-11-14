@@ -12,7 +12,6 @@ prost = "0.14"
 prost-types = "0.14"
 tonic-prost = "0.14"
 tracing = "0.1"
-tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 anyhow = "1"
 image = "0.25.10"

@@ -21,6 +21,7 @@
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/runtime/compiled_mask_stack.hpp"
+#include "edit/runtime/profile_tone_stage.hpp"
 
 namespace alcedo {
 namespace {
@@ -125,6 +126,18 @@ auto MixCameraColorParams(ContentHash& hash, const DevelopPayload& params) -> vo
   }
   hash.MixF64(profile.color_matrix_1_cct);
   hash.MixF64(profile.color_matrix_2_cct);
+  // The fingerprint covers the complete DCP content. Without a reference nothing is mixed, so the
+  // keys of a document without a DCP selection stay as before.
+  if (params.camera_profile_file.has_value()) {
+    hash.MixText("camera_profile_file");
+    hash.MixU64(params.camera_profile_file->fingerprint);
+    // The merged tables of a DNG source also hold its calibration, which the DNG fingerprint
+    // does not cover.
+    if (const auto& tables = params.camera_profile_file->source_tables; tables) {
+      hash.MixText("source_tables");
+      hash.MixU64(tables->fingerprint);
+    }
+  }
 }
 
 /**
@@ -646,6 +659,14 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
       drt.MixKey(keys.film_print_table);
       drt.MixU32(kFilmPrintImplementationVersion);
     }
+  }
+  // The profile tone stage reads the curve of the Develop reference, which the scene key holds as
+  // the profile fingerprint only. A document without the stage mixes nothing, so its key stays.
+  if (const auto stage = ResolveProfileToneStage(document); stage.has_value()) {
+    drt.MixText("profile_tone");
+    drt.MixU64(stage->curve->fingerprint);
+    drt.MixU32(static_cast<std::uint32_t>(stage->method));
+    drt.MixU32(kProfileToneImplementationVersion);
   }
   if (plan.output_color_override.has_value()) {
     drt.MixU32(static_cast<std::uint32_t>(plan.output_color_override->encoding_space));

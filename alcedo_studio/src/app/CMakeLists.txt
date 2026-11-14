@@ -126,6 +126,15 @@ def_library(LutPackageManifest
     PRIVATE_DEPS DetachedSignature
 )
 
+# DCP library folder setting and scans (dcp_camera_profile_plan.md, C2). The index and the loaded
+# profiles live in DcpProfileLibrary (Image); this service owns only the QSettings folder path.
+def_library(CameraProfileLibraryService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/camera_profile_library_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/camera_profile_library_service.hpp"
+    PUBLIC_DEPS Image Qt6::Core ThreadPool
+)
+
 # Owner of the local LUT library: root choice, inventory, favorites, import,
 # and root migration (lut_library_and_package_management_plan.md, L2).
 # Package extraction and activation (L3) run as a library operation. The published state is
@@ -143,7 +152,7 @@ def_library(LutLibraryService
         "${ALCEDO_INCLUDE_ROOT}/app/lut_library_service.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_package_install.hpp"
     PUBLIC_DEPS LutMetadata EditLutResources Qt6::Core ThreadPool
-    PRIVATE_DEPS ColorEncodingCatalog JSON Qt6::Gui PackageArchive
+    PRIVATE_DEPS ColorEncodingCatalog JSON Qt6::Gui PackageArchive AppDiagnostics
 )
 
 # Signed LUT package feed check, per-package status, and download (L3).
@@ -593,12 +602,22 @@ def_library(VersionNameRules
         "${ALCEDO_INCLUDE_ROOT}/app/version_name_rules.hpp"
 )
 
+# Resolution of the Develop camera_profile_file reference through the DCP library
+# (dcp_camera_profile_plan.md, C4): the selection write, history replay, and document binding.
+def_library(DcpCameraProfileBinding
+    SOURCES
+        "${ALCEDO_APP_ROOT}/dcp_camera_profile_binding.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/dcp_camera_profile_binding.hpp"
+    PUBLIC_DEPS EditGraph Image
+)
+
 def_library(EditorParameterWrite
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_parameter_write.cpp"
         "${ALCEDO_APP_ROOT}/editor_parameter_write_parse.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_write.hpp"
     PUBLIC_DEPS EditGraph JSON
+    PRIVATE_DEPS DcpCameraProfileBinding
 )
 
 def_library(EditorPipelineCommandService
@@ -606,6 +625,7 @@ def_library(EditorPipelineCommandService
         "${ALCEDO_APP_ROOT}/editor_pipeline_command_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_pipeline_command_service.hpp"
     PUBLIC_DEPS EditGraph JSON EditorParameterWrite
+    PRIVATE_DEPS DcpCameraProfileBinding
 )
 
 def_library(EditorPanelProjection
@@ -641,7 +661,8 @@ def_library(PipelineHistoryApplier
                 EditMaskCore
 )
 
-target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorAdjustmentPipeline)
+target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorAdjustmentPipeline
+    DcpCameraProfileBinding)
 
 def_library(EditorMaskCreationController
     SOURCES

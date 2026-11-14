@@ -22,16 +22,24 @@ namespace alcedo::ui {
  *        the window of the photos whose tiles are near the viewport.
  *
  * @details The model lays out the photos of `source` with JustifiedRowLayout (row height
- * `rowHeight`, view width `viewWidth`). Its rows are the photos of the window: the photos of the
- * layout rows that intersect `[viewportY - overscan, viewportY + viewportHeight + overscan]`.
- * Row `i` of this model is photo `firstIndex + i` of the source. Each row has every role of the
- * source photo, plus `photoIndex` and the tile rectangle (`tileX`, `tileY`, `tileWidth`,
- * `tileHeight`) in layout coordinates.
+ * `rowHeight`, view width `viewWidth`). The window is the photos of the layout rows that
+ * intersect `[viewportY - overscan, viewportY + viewportHeight + overscan]`: source photos
+ * `[firstIndex, firstIndex + count)`.
  *
- * When the viewport or the layout moves the window, photos that stay keep their rows: the model
- * removes and inserts rows at the ends of the window only, and a view keeps the delegates of the
- * photos that stay. Rows inserted into or removed from the source inside the window are
- * inserted or removed here. A source reset resets this model.
+ * The rows of this model are tile slots, so that a view keeps its delegates while the window
+ * moves (slotOfIndex). A photo keeps its slot while it stays in the window; a photo that enters
+ * the window takes an empty slot, the lowest first, and the model appends slots only when no
+ * slot is empty. A slot has every role of its source photo, plus `photoIndex` and the tile
+ * rectangle (`tileX`, `tileY`, `tileWidth`, `tileHeight`) in layout coordinates. An empty slot
+ * has `photoIndex` -1, a null tile rectangle, and the role values of a default AlbumItem.
+ *
+ * A slot whose photo changes gets every role (dataChanged); a photo that stays gets nothing on a
+ * scroll and the tile roles on a layout change. A source insert or remove changes the photo of
+ * every index after it, so every slot with a photo gets every role. After a layout or source
+ * change that leaves fewer than half of the slots in use, the model removes the slots from
+ * `count` on; a photo of a removed slot moves to an empty kept slot. A source reset resets this
+ * model and moves the viewport to the top (viewportReset), so the new result shows from its
+ * first photo, as a GridView shows a reset model.
  *
  * The layout reads the `aspectRatio` role of each source photo. A change of that role lays out
  * the rows from the row of the photo. Appended pages lay out the last row and the rows after it.
@@ -129,6 +137,8 @@ class JustifiedLayoutModel : public QAbstractListModel {
   [[nodiscard]] Q_INVOKABLE int          indexAt(qreal x, qreal y) const;
   /// Source photo whose tile is nearest to the layout point; -1 without tiles.
   [[nodiscard]] Q_INVOKABLE int          nearestIndex(qreal x, qreal y) const;
+  /// Slot (row of this model) of source photo @p index; -1 when the photo is not in the window.
+  [[nodiscard]] Q_INVOKABLE int          slotOfIndex(int index) const;
   /// Source photos whose tiles intersect the layout rectangle, in order.
   [[nodiscard]] Q_INVOKABLE QVariantList indicesInRect(qreal x, qreal y, qreal width,
                                                        qreal height) const;
@@ -146,17 +156,29 @@ class JustifiedLayoutModel : public QAbstractListModel {
   void viewportChanged();
   void tilesChanged();
   void windowChanged();
+  /// A source reset moved viewportY to 0; the view moves its content position there.
+  void viewportReset();
 
  private:
+  /// What changed before a window update.
+  enum class WindowChange {
+    kViewport,  ///< The viewport moved; the tiles and the photo of each index are the same.
+    kTiles,   ///< The tiles moved (geometry or aspect ratio); the photo of each index is the same.
+    kPhotos,  ///< Source rows were inserted or removed: an index can name another photo.
+  };
+
   [[nodiscard]] auto thumbnailModel() const -> AlbumThumbnailModel*;
   [[nodiscard]] auto AspectRatioAt(int source_row) const -> double;
   [[nodiscard]] auto AspectRatios(int first, int last) const -> std::vector<double>;
   void               ApplyGeometry(const JustifiedLayoutGeometry& geometry);
   /// Rows of the window for the current layout and viewport.
   [[nodiscard]] auto WantedWindow() const -> JustifiedRowLayout::IndexRange;
-  /// Move the window to WantedWindow with inserts and removes at its ends, then notify the tile
-  /// roles of every row when the tiles changed.
-  void               UpdateWindow(bool tiles_changed);
+  /// Move the window to WantedWindow, give the photos that enter it a slot, and notify the slots
+  /// whose photo or tile changed.
+  void               UpdateWindow(WindowChange change);
+  /// Put the photos of WantedWindow in slots 0 to window_count_ - 1, in order, with no other
+  /// slot (a new source or a source reset).
+  void               PlaceWindowInOrder();
   void               OnSourceReset();
   void               OnSourceRowsInserted(const QModelIndex& parent, int first, int last);
   void               OnSourceRowsRemoved(const QModelIndex& parent, int first, int last);
@@ -173,6 +195,10 @@ class JustifiedLayoutModel : public QAbstractListModel {
   /// Window: source rows [first_, first_ + window_count_).
   int                                  first_           = 0;
   int                                  window_count_    = 0;
+  /// Photo of each slot (row of this model); -1 for an empty slot. At least window_count_ slots.
+  std::vector<int>                     slot_photo_;
+  /// Slot of each photo of the window: window_slot_[p - first_] for photo p.
+  std::vector<int>                     window_slot_;
   int                                  tiles_revision_  = 0;
 };
 

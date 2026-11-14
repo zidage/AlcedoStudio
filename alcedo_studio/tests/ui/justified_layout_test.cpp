@@ -250,23 +250,103 @@ TEST_F(JustifiedLayoutModelTest, WindowHoldsTheRowsNearTheViewportAndForwardsPho
   EXPECT_DOUBLE_EQ(model_.contentHeight(), layout.LoadedHeight());
 }
 
-TEST_F(JustifiedLayoutModelTest, ScrollMovesTheWindowEndsWithoutAReset) {
+/// Every photo of the window is in slot photo % rowCount, and every other slot is empty.
+void ExpectSlotsHoldTheWindow(const JustifiedLayoutModel& model) {
+  ASSERT_GE(model.rowCount(), model.count());
+  int shown = 0;
+  for (int slot = 0; slot < model.rowCount(); ++slot) {
+    const int photo = model.data(model.index(slot, 0), JustifiedLayoutModel::PhotoIndex).toInt();
+    if (photo < 0) {
+      continue;
+    }
+    ++shown;
+    EXPECT_GE(photo, model.firstIndex());
+    EXPECT_LT(photo, model.firstIndex() + model.count());
+    EXPECT_EQ(model.slotOfIndex(photo), slot);
+  }
+  EXPECT_EQ(shown, model.count());
+}
+
+// Issue 836: a scroll gives the slots of the photos that leave to the photos that enter; a photo
+// that stays keeps its slot and its delegate gets no notification.
+TEST_F(JustifiedLayoutModelTest, ScrollKeepsTheSlotOfAPhotoThatStays) {
   source_.resetModel(Items(MixedAspectRatios(300)), 300);
   QSignalSpy  resets(&model_, &QAbstractItemModel::modelReset);
-  QSignalSpy  inserted(&model_, &QAbstractItemModel::rowsInserted);
   QSignalSpy  removed(&model_, &QAbstractItemModel::rowsRemoved);
+  QSignalSpy  changed(&model_, &QAbstractItemModel::dataChanged);
 
   const auto& rows = model_.layout().rows();
   ASSERT_GT(rows.size(), 4U);
+  const int  stays        = rows[1].first;
+  const int  stay_slot    = model_.slotOfIndex(stays);
+  const auto stay_element = model_.data(model_.index(stay_slot, 0), AlbumThumbnailModel::ElementId);
+  ASSERT_GE(stay_slot, 0);
   // One row down: the first row leaves, a new row enters at the end.
   model_.setViewportY(rows[1].top);
   EXPECT_EQ(resets.count(), 0);
-  EXPECT_GE(removed.count(), 1);
-  EXPECT_GE(inserted.count(), 1);
+  EXPECT_EQ(removed.count(), 0);
   EXPECT_EQ(model_.firstIndex(), rows[1].first);
-  // The photo at the top of the window is the first photo of row 1.
-  EXPECT_EQ(model_.data(model_.index(0, 0), JustifiedLayoutModel::PhotoIndex).toInt(),
-            rows[1].first);
+  EXPECT_EQ(model_.slotOfIndex(rows[0].first), -1);
+  EXPECT_EQ(model_.slotOfIndex(stays), stay_slot);
+  EXPECT_EQ(model_.data(model_.index(stay_slot, 0), AlbumThumbnailModel::ElementId), stay_element);
+  ASSERT_GE(changed.count(), 1);
+  for (const auto& arguments : changed) {
+    const int top    = arguments.at(0).value<QModelIndex>().row();
+    const int bottom = arguments.at(1).value<QModelIndex>().row();
+    EXPECT_FALSE(top <= stay_slot && stay_slot <= bottom) << top << ".." << bottom;
+  }
+  ExpectSlotsHoldTheWindow(model_);
+}
+
+// Issue 836: a window with fewer photos than slots leaves slots empty; an empty slot has no
+// photo, a null tile, and typed role values, so that its delegate stays valid.
+TEST_F(JustifiedLayoutModelTest, EmptySlotHasNoPhotoAndTheValuesOfADefaultItem) {
+  source_.resetModel(Items(MixedAspectRatios(300)), 300);
+  const int slot_total = model_.rowCount();
+  model_.setViewportHeight(150);
+  EXPECT_EQ(model_.rowCount(), slot_total);
+  ASSERT_LT(model_.count(), slot_total);
+  ExpectSlotsHoldTheWindow(model_);
+  int empty = -1;
+  for (int slot = 0; slot < model_.rowCount() && empty < 0; ++slot) {
+    if (model_.data(model_.index(slot, 0), JustifiedLayoutModel::PhotoIndex).toInt() < 0) {
+      empty = slot;
+    }
+  }
+  ASSERT_GE(empty, 0);
+  const auto index = model_.index(empty, 0);
+  EXPECT_DOUBLE_EQ(model_.data(index, JustifiedLayoutModel::TileWidth).toDouble(), 0.0);
+  const auto element = model_.data(index, AlbumThumbnailModel::ElementId);
+  EXPECT_TRUE(element.metaType() == QMetaType::fromType<uint>());
+  EXPECT_EQ(element.toUInt(), 0U);
+  EXPECT_TRUE(model_.data(index, AlbumThumbnailModel::ThumbUrl).metaType() ==
+              QMetaType::fromType<QString>());
+}
+
+// Issue 836: a layout change that leaves fewer than half of the slots in use removes the extra
+// slots; a scroll never removes slots.
+TEST_F(JustifiedLayoutModelTest, LayoutChangeShrinksTheSlotsToTheWindow) {
+  source_.resetModel(Items(MixedAspectRatios(300)), 300);
+  model_.setGeometry(kWidth, 60, kSpacing, kCaption);
+  const int        many = model_.rowCount();
+  std::vector<int> slot_before;
+  for (int photo = 0; photo < model_.firstIndex() + model_.count(); ++photo) {
+    slot_before.push_back(model_.slotOfIndex(photo));
+  }
+  QSignalSpy removed(&model_, &QAbstractItemModel::rowsRemoved);
+  model_.setGeometry(kWidth, 400, kSpacing, kCaption);
+  ASSERT_LT(model_.count(), many / 2);
+  EXPECT_EQ(removed.count(), 1);
+  EXPECT_EQ(model_.rowCount(), model_.count());
+  ExpectSlotsHoldTheWindow(model_);
+  // A photo that stays in a kept slot keeps it; only photos of removed slots move.
+  for (int photo = model_.firstIndex(); photo < model_.firstIndex() + model_.count(); ++photo) {
+    const int before =
+        photo < static_cast<int>(slot_before.size()) ? slot_before[static_cast<size_t>(photo)] : -1;
+    if (before >= 0 && before < model_.rowCount()) {
+      EXPECT_EQ(model_.slotOfIndex(photo), before) << "photo " << photo;
+    }
+  }
 }
 
 TEST_F(JustifiedLayoutModelTest, AnchoredZoomKeepsThePointOfTheAnchorTileAtItsViewportHeight) {
@@ -287,12 +367,13 @@ TEST_F(JustifiedLayoutModelTest, AnchoredZoomKeepsThePointOfTheAnchorTileAtItsVi
   EXPECT_GE(model_.firstIndex() + model_.count() - 1, anchor);
 }
 
-TEST_F(JustifiedLayoutModelTest, SourceInsertInsideTheWindowInsertsRowsAndKeepsTheOthers) {
+// A source insert inside the window: every index after it names the next photo, so each slot
+// shows the photo of its index, with no reset.
+TEST_F(JustifiedLayoutModelTest, SourceInsertInsideTheWindowShowsThePhotoOfEachIndex) {
   source_.resetModel(Items(MixedAspectRatios(100)), 100);
   const int  count_before = model_.count();
-  const auto third        = model_.data(model_.index(2, 0), AlbumThumbnailModel::ElementId);
+  const auto third        = source_.data(source_.index(2, 0), AlbumThumbnailModel::ElementId);
   QSignalSpy resets(&model_, &QAbstractItemModel::modelReset);
-  QSignalSpy inserted(&model_, &QAbstractItemModel::rowsInserted);
 
   // Photos 1 and 2 stay; a new photo goes before the old third photo.
   std::vector<sl_element_id_t>                   order;
@@ -306,12 +387,14 @@ TEST_F(JustifiedLayoutModelTest, SourceInsertInsideTheWindowInsertsRowsAndKeepsT
   source_.applyOrder(order, added, 101, false);
 
   EXPECT_EQ(resets.count(), 0);
-  ASSERT_GE(inserted.count(), 1);
-  EXPECT_EQ(inserted.first().at(1).toInt(), 2);
-  EXPECT_EQ(model_.data(model_.index(2, 0), AlbumThumbnailModel::ElementId).toUInt(), 500U);
-  EXPECT_EQ(model_.data(model_.index(3, 0), AlbumThumbnailModel::ElementId), third);
+  const auto element_at = [&](int photo) {
+    return model_.data(model_.index(model_.slotOfIndex(photo), 0), AlbumThumbnailModel::ElementId);
+  };
+  EXPECT_EQ(element_at(2).toUInt(), 500U);
+  EXPECT_EQ(element_at(3), third);
   EXPECT_GE(model_.count(), count_before - 8);
   EXPECT_EQ(model_.layout().ItemCount(), 101);
+  ExpectSlotsHoldTheWindow(model_);
 }
 
 TEST_F(JustifiedLayoutModelTest, AppendedPageExtendsTheLayoutAndTheEstimate) {

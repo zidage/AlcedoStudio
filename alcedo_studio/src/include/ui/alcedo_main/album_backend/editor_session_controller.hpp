@@ -23,6 +23,7 @@
 #include "app/editor_history_types.hpp"
 #include "app/editor_mask_coverage_preview.hpp"
 #include "app/editor_node_graph_projection.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_pending_input.hpp"
 #include "app/editor_session_types.hpp"
 #include "app/mask_thumbnail_service.hpp"
@@ -31,6 +32,7 @@
 #include "edit/mask/mask_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
+#include "ui/alcedo_main/album_backend/editor_curve_histogram_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_operation_publisher.hpp"
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
@@ -123,6 +125,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// the image EXIF carries no lens maker/model. Same lifetime as exifLineText.
   Q_PROPERTY(QString exifLensMake READ exif_lens_make NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifLensModel READ exif_lens_model NOTIFY ImageExifChanged)
+  /// Camera identity of the image RAW color context, for the DCP match of the Camera Profile
+  /// section. Empty for an image without one (a raster image). Same lifetime as exifLineText.
+  Q_PROPERTY(QString cameraMake READ camera_make NOTIFY ImageExifChanged)
+  Q_PROPERTY(QString cameraModel READ camera_model NOTIFY ImageExifChanged)
   // Left tool rail page: empty string = collapsed; "history", "versions", "nodes",
   // "maskgroups", or "luts" (LUT browser) = expanded. Survives workspace round-trips within the
   // process (not persisted across application restart).
@@ -131,6 +137,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY
                  PresentationBindingChanged)
   Q_PROPERTY(EditorScopeController* scopeController READ scope_controller CONSTANT)
+  // Histogram of the Curve input of a Color Grade (issue #888); the Tone Curve section binds it.
+  Q_PROPERTY(
+      EditorCurveHistogramController* curveHistogram READ curve_histogram_controller CONSTANT)
   Q_PROPERTY(EditorMaskCreationAdapter* maskCreation READ mask_creation CONSTANT)
   // Phase 5D: the render coordinator has in-flight or pending work for this
   // session. QML binds a busy indicator to it. Reflects backend render_busy()
@@ -207,6 +216,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString    exif_focal_text() const { return exif_focal_text_; }
   [[nodiscard]] QString    exif_lens_make() const { return exif_lens_make_; }
   [[nodiscard]] QString    exif_lens_model() const { return exif_lens_model_; }
+  [[nodiscard]] QString    camera_make() const { return camera_make_; }
+  [[nodiscard]] QString    camera_model() const { return camera_model_; }
   [[nodiscard]] QString    editor_tool_panel_page() const { return editor_tool_panel_page_; }
   [[nodiscard]] qulonglong session_generation() const;
   [[nodiscard]] qulonglong history_revision() const;
@@ -434,6 +445,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] auto scope_controller() const -> EditorScopeController* {
     return scope_controller_.get();
   }
+  [[nodiscard]] auto curve_histogram_controller() const -> EditorCurveHistogramController* {
+    return curve_histogram_controller_.get();
+  }
   [[nodiscard]] auto mask_creation() const -> EditorMaskCreationAdapter* {
     return mask_creation_.get();
   }
@@ -509,7 +523,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     SyncIdentityFromBackend();
   void                     RefreshImageExifDisplay();
   void                     ApplyExifRowText(const alcedo::EditorExifRowText& text);
-  void                     ApplyExifLensIdentity(const alcedo::EditorImageExifDisplay& display);
+  void                     ApplyImageIdentity(const alcedo::EditorImageExifDisplay& display);
   /// Enqueue @p patch (std::nullopt means the write was rejected before enqueueing, for
   /// @p rejection) and keep the viewport's interactive present loop in step with @p settled.
   auto EnqueueAdjustmentPatch(std::optional<alcedo::EditorAdjustmentPatch> patch, bool settled,
@@ -553,6 +567,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void OnBackendSessionResult(const alcedo::EditorSessionResult& result);
   void SetActiveAdjustmentPanel(const QString& panel, bool request_view);
   void SyncMaskAdjustmentPanel();
+  /// Show the request of the curve histogram owner on the backend, or hide it (issue #888).
+  void ApplyCurveHistogramRequest();
+  /// Grade of the curve input histogram: the node of the `curve` field of @p projection, or none.
+  void SyncCurveHistogramGrade(const alcedo::EditorPanelProjection& projection);
   /// Show the Compare page while the backend comparison is open, and restore the panel that was
   /// active before it when the comparison closes.
   void SyncComparisonAdjustmentPanel();
@@ -619,6 +637,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                 exif_focal_text_    = QString::fromUtf8("\xE2\x80\x94");
   QString                 exif_lens_make_;
   QString                 exif_lens_model_;
+  QString                 camera_make_;
+  QString                 camera_model_;
   QPointer<QObject>       presentation_viewport_;
   // Set once by BindHeadlessPresentationSink before the first render; read by render workers.
   alcedo::IFrameSink*     headless_presentation_sink_ = nullptr;
@@ -631,6 +651,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Presents the coverage preview again when the viewport dropped it with its QRhi resources.
   QMetaObject::Connection mask_coverage_lost_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
+  std::unique_ptr<EditorCurveHistogramController> curve_histogram_controller_;
   std::unique_ptr<EditorMaskCreationAdapter>     mask_creation_;
   std::shared_ptr<alcedo::MaskThumbnailService>  mask_thumbnail_service_;
 };

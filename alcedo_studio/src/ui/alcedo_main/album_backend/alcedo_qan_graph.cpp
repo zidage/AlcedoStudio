@@ -28,6 +28,7 @@
 #include "qanPortItem.h"
 #include "qanStyle.h"
 #include "ui/alcedo_main/app_theme.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -1345,9 +1346,10 @@ void AlcedoQanGraph::ConfigureGraphPolicy() {
               Qt::UniqueConnection);
   const auto right_clicked = connect(graph_.data(), &qan::Graph::nodeRightClicked, this,
                                      &AlcedoQanGraph::OnGraphNodeRightClicked, Qt::UniqueConnection);
-  qWarning()
-      << "[MaskRow] graph signals connected clicked=" << static_cast<bool>(clicked)
-      << "rightClicked=" << static_cast<bool>(right_clicked) << "graph=" << graph_.data();
+  qCDebug(alcedo::diag::maskLog) << "[MaskRow] graph signals connected clicked="
+                                 << static_cast<bool>(clicked)
+                                 << "rightClicked=" << static_cast<bool>(right_clicked)
+                                 << "graph=" << graph_.data();
   ConfigureConnector();
 }
 
@@ -1586,8 +1588,8 @@ auto AlcedoQanGraph::maskDeleteContainsItemPosition(QObject* node_item, qreal x,
 
 void AlcedoQanGraph::logMaskRow(const QString& where, const QString& node_id, const QString& mask_id,
                                 bool right_button) const {
-  qWarning() << "[MaskRow]" << where << "node=" << node_id << "mask=" << mask_id
-             << "right=" << right_button;
+  qCDebug(alcedo::diag::maskLog) << "[MaskRow]" << where << "node=" << node_id << "mask=" << mask_id
+                                 << "right=" << right_button;
 }
 
 void AlcedoQanGraph::HandleNodeItemPress(qan::Node* node, QPointF local_pos, bool right_button) {
@@ -1597,7 +1599,7 @@ void AlcedoQanGraph::HandleNodeItemPress(qan::Node* node, QPointF local_pos, boo
     return;
   }
   if (node == nullptr || node->getItem() == nullptr) {
-    qWarning()
+    qCDebug(alcedo::diag::maskLog)
         << "[MaskRow] HandleNodeItemPress abort no node/item right=" << right_button;
     return;
   }
@@ -1609,14 +1611,13 @@ void AlcedoQanGraph::HandleNodeItemPress(qan::Node* node, QPointF local_pos, boo
   const auto mask_id = row->property("maskId").toString();
   const auto node_id = NodeIdStringForItem(item);
   if (mask_id.isEmpty()) {
-    qWarning()
-        << "[MaskRow] HandleNodeItemPress empty maskId node=" << node_id;
+    qCDebug(alcedo::diag::maskLog) << "[MaskRow] HandleNodeItemPress empty maskId node=" << node_id;
     return;
   }
   const bool on_delete = !right_button && MaskDeleteButtonContains(row, item->mapToScene(local_pos));
-  qWarning()
-      << "[MaskRow] HandleNodeItemPress hit node=" << node_id << "mask=" << mask_id
-      << "delete=" << on_delete << "right=" << right_button << "pos=" << local_pos;
+  qCDebug(alcedo::diag::maskLog) << "[MaskRow] HandleNodeItemPress hit node=" << node_id
+                                 << "mask=" << mask_id << "delete=" << on_delete
+                                 << "right=" << right_button << "pos=" << local_pos;
   if (on_delete) {
     OnMaskDeleteRequested(node_id, mask_id);
     return;
@@ -1669,13 +1670,15 @@ void AlcedoQanGraph::OnDrawerOpenChanged() {
 }
 
 void AlcedoQanGraph::OnMaskSelected(const QString& node_id, const QString& mask_id) {
-  qWarning() << "[MaskRow] emit maskRowSelected node=" << node_id << "mask=" << mask_id;
+  qCDebug(alcedo::diag::maskLog) << "[MaskRow] emit maskRowSelected node=" << node_id
+                                 << "mask=" << mask_id;
   emit MaskRowSelected(node_id, mask_id);
   emit maskRowSelected(node_id, mask_id);
 }
 
 void AlcedoQanGraph::OnMaskDeleteRequested(const QString& node_id, const QString& mask_id) {
-  qWarning() << "[MaskRow] emit maskRowDeleteRequested node=" << node_id << "mask=" << mask_id;
+  qCDebug(alcedo::diag::maskLog) << "[MaskRow] emit maskRowDeleteRequested node=" << node_id
+                                 << "mask=" << mask_id;
   emit MaskRowDeleteRequested(node_id, mask_id);
   emit maskRowDeleteRequested(node_id, mask_id);
 }

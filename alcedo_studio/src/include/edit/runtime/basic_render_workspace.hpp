@@ -28,7 +28,7 @@
 #include "edit/runtime/runtime_revision.hpp"
 #include "edit/runtime/scene_work_image_pair.hpp"
 #include "edit/runtime/texture_pool.hpp"
-#include "gpu/gpu_pool_trace.hpp"
+#include "gpu/gpu_device_memory.hpp"
 #include "gpu/transient_buffer_arena.hpp"
 #include "utils/diagnostics/preview_performance_record.hpp"
 

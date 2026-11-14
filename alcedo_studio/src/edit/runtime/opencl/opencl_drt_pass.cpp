@@ -70,9 +70,12 @@ void DispatchDrt(OpenClRenderDevice& device, const OpenClBackend::Texture2D& sou
   device.Workspace().Device().TrackKernelEvent(device.CommandContext(), event);
 }
 
+/// @p profile_tone is the buffer of the profile tone stage, or null without the stage. The kernel
+/// then reads no stage buffer, and the parameter buffer fills its argument.
 void DispatchDrtScene(OpenClRenderDevice& device, const FrameSceneBinding& source,
                       const FrameSceneBinding& destination, const OpenClBackend::Buffer& parameters,
-                      std::uint32_t parameter_offset, std::uint32_t width, std::uint32_t height) {
+                      std::uint32_t parameter_offset, const OpenClBackend::Buffer* profile_tone,
+                      std::uint32_t width, std::uint32_t height) {
   if (parameters.Empty()) {
     throw std::runtime_error("ExecuteOpenClDrt: parameter buffer is empty");
   }
@@ -90,6 +93,12 @@ void DispatchDrtScene(OpenClRenderDevice& device, const FrameSceneBinding& sourc
   CheckOpenCl(clSetKernelArg(kernel, 7, sizeof(cl_uint), &offset), "ExecuteOpenClDrt: offset");
   CheckOpenCl(clSetKernelArg(kernel, 8, sizeof(width), &width), "ExecuteOpenClDrt: width");
   CheckOpenCl(clSetKernelArg(kernel, 9, sizeof(height), &height), "ExecuteOpenClDrt: height");
+  cl_mem profile_tone_buffer = profile_tone != nullptr ? profile_tone->Native() : parameter_buffer;
+  const cl_int profile_tone_enabled = profile_tone != nullptr ? 1 : 0;
+  CheckOpenCl(clSetKernelArg(kernel, 10, sizeof(cl_mem), &profile_tone_buffer),
+              "ExecuteOpenClDrt: profile tone");
+  CheckOpenCl(clSetKernelArg(kernel, 11, sizeof(cl_int), &profile_tone_enabled),
+              "ExecuteOpenClDrt: profile tone enabled");
   const std::size_t local[2]  = {16, 16};
   const std::size_t global[2] = {((static_cast<std::size_t>(width) + 15) / 16) * 16,
                                  ((static_cast<std::size_t>(height) + 15) / 16) * 16};
@@ -192,11 +201,13 @@ struct OpenClDrtOps {
 
   static void DispatchDisplayTransform(OpenClRenderDevice& device, const FrameSceneBinding& scene,
                                        const FrameSceneBinding& display, const NodeId& drt_id,
+                                       const OpenClBackend::Buffer* profile_tone,
                                        std::uint32_t width, std::uint32_t height) {
     auto&                  arena   = device.Workspace().Parameters();
     const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
     const auto&            binding = arena.Binding(key);
-    DispatchDrtScene(device, scene, display, arena.DeviceBuffer(), binding.offset, width, height);
+    DispatchDrtScene(device, scene, display, arena.DeviceBuffer(), binding.offset, profile_tone,
+                     width, height);
   }
 
   static void DispatchFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan,

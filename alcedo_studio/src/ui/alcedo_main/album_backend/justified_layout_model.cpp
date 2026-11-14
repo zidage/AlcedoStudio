@@ -9,6 +9,8 @@
 #include <QVariantMap>
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <vector>
 
 namespace alcedo::ui {
 namespace {
@@ -23,19 +25,26 @@ auto             Finite(qreal value) -> qreal { return std::isfinite(value) ? va
 JustifiedLayoutModel::JustifiedLayoutModel(QObject* parent) : QAbstractListModel(parent) {}
 
 int JustifiedLayoutModel::rowCount(const QModelIndex& parent) const {
-  return parent.isValid() ? 0 : window_count_;
+  return parent.isValid() ? 0 : static_cast<int>(slot_photo_.size());
+}
+
+int JustifiedLayoutModel::slotOfIndex(int index) const {
+  if (index < first_ || index >= first_ + window_count_) {
+    return -1;
+  }
+  return window_slot_[static_cast<size_t>(index - first_)];
 }
 
 QVariant JustifiedLayoutModel::data(const QModelIndex& index, int role) const {
-  if (!index.isValid() || index.row() < 0 || index.row() >= window_count_) {
+  if (!index.isValid() || index.row() < 0 || index.row() >= rowCount()) {
     return {};
   }
-  const int source_row = first_ + index.row();
+  const int source_row = slot_photo_[static_cast<size_t>(index.row())];
   if (role == PhotoIndex) {
     return source_row;
   }
   if (role == TileX || role == TileY || role == TileWidth || role == TileHeight) {
-    const auto tile = layout_.TileRect(source_row);
+    const auto tile = source_row >= 0 ? layout_.TileRect(source_row) : std::nullopt;
     if (!tile.has_value()) {
       return 0.0;
     }
@@ -51,7 +60,15 @@ QVariant JustifiedLayoutModel::data(const QModelIndex& index, int role) const {
     }
   }
   auto* model = thumbnailModel();
-  return model ? model->data(model->index(source_row, 0), role) : QVariant{};
+  if (!model) {
+    return {};
+  }
+  if (source_row < 0) {
+    // An empty slot: typed values, so that the required properties of its delegate stay valid.
+    static const AlbumItem kEmptyItem{};
+    return model->roleValue(kEmptyItem, role);
+  }
+  return model->data(model->index(source_row, 0), role);
 }
 
 QHash<int, QByteArray> JustifiedLayoutModel::roleNames() const {
@@ -96,9 +113,7 @@ void JustifiedLayoutModel::setSource(QObject* source) {
     };
   }
   layout_.Reset(model ? AspectRatios(0, model->count() - 1) : std::vector<double>{});
-  const auto wanted = WantedWindow();
-  first_            = wanted.first;
-  window_count_     = std::max(0, wanted.last - wanted.first + 1);
+  PlaceWindowInOrder();
   endResetModel();
   ++tiles_revision_;
   emit sourceChanged();
@@ -132,7 +147,7 @@ void JustifiedLayoutModel::ApplyGeometry(const JustifiedLayoutGeometry& geometry
   }
   geometry_ = geometry;
   emit geometryChanged();
-  UpdateWindow(true);
+  UpdateWindow(WindowChange::kTiles);
 }
 
 void JustifiedLayoutModel::setViewWidth(qreal value) {
@@ -187,7 +202,7 @@ qreal JustifiedLayoutModel::setGeometryAnchored(qreal viewWidth, qreal rowHeight
     viewport_y_ = y;
     emit viewportChanged();
   }
-  UpdateWindow(tiles_changed);
+  UpdateWindow(tiles_changed ? WindowChange::kTiles : WindowChange::kViewport);
   return viewport_y_;
 }
 
@@ -198,7 +213,7 @@ void JustifiedLayoutModel::setViewportY(qreal value) {
   }
   viewport_y_ = value;
   emit viewportChanged();
-  UpdateWindow(false);
+  UpdateWindow(WindowChange::kViewport);
 }
 
 void JustifiedLayoutModel::setViewportHeight(qreal value) {
@@ -208,7 +223,7 @@ void JustifiedLayoutModel::setViewportHeight(qreal value) {
   }
   viewport_height_ = value;
   emit viewportChanged();
-  UpdateWindow(false);
+  UpdateWindow(WindowChange::kViewport);
 }
 
 void JustifiedLayoutModel::setOverscan(qreal value) {
@@ -218,7 +233,7 @@ void JustifiedLayoutModel::setOverscan(qreal value) {
   }
   overscan_ = value;
   emit viewportChanged();
-  UpdateWindow(false);
+  UpdateWindow(WindowChange::kViewport);
 }
 
 auto JustifiedLayoutModel::contentHeight() const -> qreal {
@@ -237,120 +252,159 @@ auto JustifiedLayoutModel::WantedWindow() const -> JustifiedRowLayout::IndexRang
                                 viewport_y_ + viewport_height_ + overscan_);
 }
 
-void JustifiedLayoutModel::UpdateWindow(bool tiles_changed) {
-  const auto wanted     = WantedWindow();
-  const int  new_first  = wanted.first;
-  const int  new_count  = std::max(0, wanted.last - wanted.first + 1);
-  const int  old_first  = first_;
-  const int  old_count  = window_count_;
-  const int  new_end    = new_first + new_count;
-  const auto remove_all = [this]() {
-    if (window_count_ > 0) {
-      beginRemoveRows(QModelIndex(), 0, window_count_ - 1);
-      window_count_ = 0;
-      endRemoveRows();
+void JustifiedLayoutModel::PlaceWindowInOrder() {
+  const auto wanted = WantedWindow();
+  window_count_     = std::max(0, wanted.last - wanted.first + 1);
+  first_            = window_count_ > 0 ? wanted.first : 0;
+  slot_photo_.resize(static_cast<size_t>(window_count_));
+  window_slot_.resize(static_cast<size_t>(window_count_));
+  for (int i = 0; i < window_count_; ++i) {
+    slot_photo_[static_cast<size_t>(i)]  = first_ + i;
+    window_slot_[static_cast<size_t>(i)] = i;
+  }
+}
+
+void JustifiedLayoutModel::UpdateWindow(WindowChange change) {
+  const auto wanted    = WantedWindow();
+  const int  new_count = std::max(0, wanted.last - wanted.first + 1);
+  const int  new_first = new_count > 0 ? wanted.first : 0;
+  const int  old_first = first_;
+  const int  old_count = window_count_;
+  const int  old_slots = rowCount();
+  const auto finish    = [&]() {
+    if (old_first != first_ || old_count != window_count_) {
+      emit windowChanged();
+    }
+    if (change != WindowChange::kViewport) {
+      ++tiles_revision_;
+      emit tilesChanged();
     }
   };
 
-  if (new_count == 0) {
-    remove_all();
-  } else if (window_count_ == 0 || new_first >= first_ + window_count_ || new_end <= first_) {
-    remove_all();
-    beginInsertRows(QModelIndex(), 0, new_count - 1);
+  // A layout or source change that leaves fewer than half of the slots in use removes the slots
+  // from new_count on; a photo in a removed slot moves to a kept one.
+  const bool shrink        = change != WindowChange::kViewport && new_count < old_slots / 2;
+  const int  kept_slots    = shrink ? new_count : old_slots;
+  const auto in_new_window = [&](int photo) {
+    return photo >= new_first && photo < new_first + new_count;
+  };
+  // A photo that leaves (or whose slot is removed) empties its slot; a photo that stays keeps it.
+  std::vector<char> photo_changed(static_cast<size_t>(old_slots), 0);
+  std::vector<int>  next_window_slot(static_cast<size_t>(new_count), -1);
+  for (int photo = old_first; photo < old_first + old_count; ++photo) {
+    const int slot = window_slot_[static_cast<size_t>(photo - old_first)];
+    if (in_new_window(photo) && slot < kept_slots) {
+      next_window_slot[static_cast<size_t>(photo - new_first)] = slot;
+    } else {
+      slot_photo_[static_cast<size_t>(slot)]   = -1;
+      photo_changed[static_cast<size_t>(slot)] = 1;
+    }
+  }
+  // A photo without a slot takes the lowest empty kept slot, or a new slot after the last one.
+  std::vector<int> empty_slots;
+  for (int slot = 0; slot < kept_slots; ++slot) {
+    if (slot_photo_[static_cast<size_t>(slot)] < 0) {
+      empty_slots.push_back(slot);
+    }
+  }
+  size_t           next_empty = 0;
+  std::vector<int> appended;
+  for (int photo = new_first; photo < new_first + new_count; ++photo) {
+    auto& slot = next_window_slot[static_cast<size_t>(photo - new_first)];
+    if (slot >= 0) {
+      continue;
+    }
+    if (next_empty < empty_slots.size()) {
+      slot                                     = empty_slots[next_empty++];
+      slot_photo_[static_cast<size_t>(slot)]   = photo;
+      photo_changed[static_cast<size_t>(slot)] = 1;
+    } else {
+      slot = old_slots + static_cast<int>(appended.size());
+      appended.push_back(photo);
+    }
+  }
+  const auto set_window = [&]() {
     first_        = new_first;
     window_count_ = new_count;
+    window_slot_  = std::move(next_window_slot);
+    slot_photo_.resize(static_cast<size_t>(kept_slots));
+    slot_photo_.insert(slot_photo_.end(), appended.begin(), appended.end());
+  };
+  if (kept_slots < old_slots) {
+    beginRemoveRows(QModelIndex(), kept_slots, old_slots - 1);
+    set_window();
+    endRemoveRows();
+  } else if (!appended.empty()) {
+    beginInsertRows(QModelIndex(), old_slots, old_slots + static_cast<int>(appended.size()) - 1);
+    set_window();
     endInsertRows();
   } else {
-    // The windows overlap: the photos in both keep their rows.
-    if (new_first > first_) {
-      const int k = new_first - first_;
-      beginRemoveRows(QModelIndex(), 0, k - 1);
-      first_ += k;
-      window_count_ -= k;
-      endRemoveRows();
-    }
-    if (new_end < first_ + window_count_) {
-      beginRemoveRows(QModelIndex(), new_end - first_, window_count_ - 1);
-      window_count_ = new_end - first_;
-      endRemoveRows();
-    }
-    if (new_first < first_) {
-      const int k = first_ - new_first;
-      beginInsertRows(QModelIndex(), 0, k - 1);
-      first_ = new_first;
-      window_count_ += k;
-      endInsertRows();
-    }
-    if (new_end > first_ + window_count_) {
-      beginInsertRows(QModelIndex(), window_count_, new_end - first_ - 1);
-      window_count_ = new_end - first_;
-      endInsertRows();
-    }
+    set_window();
   }
 
-  if (tiles_changed && window_count_ > 0) {
-    emit dataChanged(index(0, 0), index(window_count_ - 1, 0), kTileRoles);
+  // Slots that existed before and stay: every role when the photo of the slot changed (or an
+  // index can name another photo), the tile roles when only the tiles moved, nothing otherwise.
+  // Runs of slots with the same notification share one dataChanged.
+  enum class Notify { kNone, kTiles, kAll };
+  const auto notify_of = [&](int slot) {
+    const bool has_photo = slot_photo_[static_cast<size_t>(slot)] >= 0;
+    if (photo_changed[static_cast<size_t>(slot)] != 0 ||
+        (change == WindowChange::kPhotos && has_photo)) {
+      return Notify::kAll;
+    }
+    return change == WindowChange::kTiles && has_photo ? Notify::kTiles : Notify::kNone;
+  };
+  const int notified  = std::min(old_slots, kept_slots);
+  int       run_first = 0;
+  Notify    run       = Notify::kNone;
+  for (int slot = 0; slot <= notified; ++slot) {
+    const Notify notify = slot < notified ? notify_of(slot) : Notify::kNone;
+    if (slot < notified && notify == run) {
+      continue;
+    }
+    if (run != Notify::kNone && slot > run_first) {
+      emit dataChanged(index(run_first, 0), index(slot - 1, 0),
+                       run == Notify::kTiles ? kTileRoles : QList<int>{});
+    }
+    run_first = slot;
+    run       = notify;
   }
-  if (old_first != first_ || old_count != window_count_) {
-    emit windowChanged();
-  }
-  if (tiles_changed) {
-    ++tiles_revision_;
-    emit tilesChanged();
-  }
+  finish();
 }
 
 void JustifiedLayoutModel::OnSourceReset() {
   auto* model = thumbnailModel();
   layout_.Reset(model ? AspectRatios(0, model->count() - 1) : std::vector<double>{});
-  const auto wanted = WantedWindow();
-  first_            = wanted.first;
-  window_count_     = std::max(0, wanted.last - wanted.first + 1);
+  // A reset installs another result (a filter, a search, a collection), which shows from its
+  // first photo. The old viewport can lie below the end of a shorter result, where the window
+  // has no photo.
+  const bool viewport_moved = viewport_y_ != 0.0;
+  viewport_y_               = 0.0;
+  PlaceWindowInOrder();
   endResetModel();
   ++tiles_revision_;
   emit tilesChanged();
   emit windowChanged();
+  if (viewport_moved) {
+    emit viewportChanged();
+    emit viewportReset();
+  }
 }
 
 void JustifiedLayoutModel::OnSourceRowsInserted(const QModelIndex& parent, int first, int last) {
   if (parent.isValid() || last < first) {
     return;
   }
-  const int n = last - first + 1;
-  if (window_count_ > 0) {
-    if (first <= first_) {
-      // Photos before the window: the rows keep their photos.
-      first_ += n;
-    } else if (first < first_ + window_count_) {
-      beginInsertRows(QModelIndex(), first - first_, last - first_);
-      window_count_ += n;
-      endInsertRows();
-    }
-  }
   layout_.Insert(first, AspectRatios(first, last));
-  UpdateWindow(true);
+  UpdateWindow(WindowChange::kPhotos);
 }
 
 void JustifiedLayoutModel::OnSourceRowsRemoved(const QModelIndex& parent, int first, int last) {
   if (parent.isValid() || last < first) {
     return;
   }
-  const int n = last - first + 1;
-  if (window_count_ > 0) {
-    const int end = first_ + window_count_;
-    if (last < first_) {
-      first_ -= n;
-    } else if (first < end) {
-      const int removed_first = std::max(first, first_);
-      const int removed_last  = std::min(last, end - 1);
-      beginRemoveRows(QModelIndex(), removed_first - first_, removed_last - first_);
-      window_count_ -= removed_last - removed_first + 1;
-      first_ -= std::max(0, first_ - first);
-      endRemoveRows();
-    }
-  }
-  layout_.Remove(first, n);
-  UpdateWindow(true);
+  layout_.Remove(first, last - first + 1);
+  UpdateWindow(WindowChange::kPhotos);
 }
 
 void JustifiedLayoutModel::OnSourceDataChanged(const QModelIndex& top_left,
@@ -367,13 +421,28 @@ void JustifiedLayoutModel::OnSourceDataChanged(const QModelIndex& top_left,
       tiles_changed = layout_.SetAspectRatio(row, AspectRatioAt(row)) || tiles_changed;
     }
   }
+  // The slots of the photos of the window in the range, by runs of consecutive slots.
   const int forwarded_first = std::max(first, first_);
   const int forwarded_last  = std::min(last, first_ + window_count_ - 1);
-  if (window_count_ > 0 && forwarded_first <= forwarded_last) {
-    emit dataChanged(index(forwarded_first - first_, 0), index(forwarded_last - first_, 0), roles);
+  int       run_first       = -1;
+  int       run_last        = -1;
+  for (int photo = forwarded_first; photo <= forwarded_last; ++photo) {
+    const int slot = window_slot_[static_cast<size_t>(photo - first_)];
+    if (run_first >= 0 && slot == run_last + 1) {
+      run_last = slot;
+      continue;
+    }
+    if (run_first >= 0) {
+      emit dataChanged(index(run_first, 0), index(run_last, 0), roles);
+    }
+    run_first = slot;
+    run_last  = slot;
+  }
+  if (run_first >= 0) {
+    emit dataChanged(index(run_first, 0), index(run_last, 0), roles);
   }
   if (tiles_changed) {
-    UpdateWindow(true);
+    UpdateWindow(WindowChange::kTiles);
   }
 }
 

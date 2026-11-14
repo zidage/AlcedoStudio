@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "gpu/gpu_pool_trace.hpp"
+#include "gpu/gpu_device_memory.hpp"
 #include "gpu/transient_allocation_policy.hpp"
 
 namespace alcedo {
@@ -150,7 +150,7 @@ class TransientBufferArena {
     }
 
     const auto slab_bytes = SlabBytesForRequest(bytes, alignment);
-    AppendSlab(slab_bytes);
+    AppendSlab(slab_bytes, "append");
     ++grow_count_;
     if (void* placed = TryAllocateIn(slabs_.back(), bytes, alignment)) {
       NoteAllocation(bytes);
@@ -418,7 +418,9 @@ class TransientBufferArena {
     }
   }
 
-  void AppendSlab(std::size_t bytes) {
+  /// @p reason is `append` (Allocate found no slab with room) or `reserve`. Capacity above the
+  /// earlier peak is a pool growth (Info); a slab that restores an earlier capacity is Debug.
+  void AppendSlab(std::size_t bytes, const char* reason) {
     const auto max_transient = QueryMaxTransientBytes();
     const auto current        = capacity_bytes();
     if (bytes > max_transient || current > max_transient - bytes) {
@@ -429,6 +431,16 @@ class TransientBufferArena {
       throw std::runtime_error("TransientBufferArena::Allocate: backend is missing");
     }
     slabs_.push_back(SlabEntry{backend_->CreateSlab(bytes), bytes, 0});
+    const auto capacity = current + bytes;
+    if (capacity > peak_capacity_bytes_) {
+      gpu_memory_log::PoolGrowth(GpuBackendName<Backend>(), "transient_arena", reason,
+                                 peak_capacity_bytes_, capacity, slabs_.size());
+      peak_capacity_bytes_ = capacity;
+    } else {
+      ALCEDO_LOG_DEBUG(GpuPool) << "transient_arena.slab backend=" << GpuBackendName<Backend>()
+                                << " reason=" << reason << " slab_bytes=" << bytes
+                                << " capacity=" << capacity << " slabs=" << slabs_.size();
+    }
   }
 
   void EnsureCapacity(std::size_t bytes) {
@@ -444,7 +456,7 @@ class TransientBufferArena {
     }
     const auto max_slab = QueryMaxSlabBytes();
     if (bytes <= max_slab) {
-      AppendSlab(bytes);
+      AppendSlab(bytes, "reserve");
       return;
     }
     // Larger than one slab: do not pre-split into max-slab chunks. A remainder
@@ -501,6 +513,8 @@ class TransientBufferArena {
     padding_bytes_       = other.padding_bytes_;
     largest_allocation_ = other.largest_allocation_;
     grow_count_          = other.grow_count_;
+    peak_capacity_bytes_       = other.peak_capacity_bytes_;
+    other.peak_capacity_bytes_ = 0;
     other.requested_bytes_     = 0;
     other.padding_bytes_       = 0;
     other.largest_allocation_ = 0;
@@ -515,6 +529,8 @@ class TransientBufferArena {
   std::size_t                 padding_bytes_      = 0;
   std::size_t                 largest_allocation_ = 0;
   std::size_t                 grow_count_         = 0;
+  /// The largest capacity of this arena so far. A growth past it is a pool growth event.
+  std::size_t                 peak_capacity_bytes_ = 0;
 };
 
 }  // namespace alcedo

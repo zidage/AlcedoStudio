@@ -507,6 +507,36 @@ ApplicationWindow {
         appDialogs.openBackgroundTasksDialog()
     }
 
+    // ── Library file drop (issue #757) ──────────────────────────────────────
+    // A drop of files and folders from the system file manager imports into one collection
+    // with the rules of the Import buttons. The grid drops into the current collection, a
+    // Collections row into its own collection.
+
+    // True when the Library may take a file drop now: a project is open, no import runs, no
+    // dialog is open, and no agent holds control.
+    readonly property bool fileDropImportAllowed: root.backendInteractive
+        && !appModules.importExport.importRunning
+        && appModules.interactionPolicy.canChangeStateAsUser
+        && !appDialogs.anyDialogOpened()
+
+    // Collection name for the drop overlay and the folder dialog title.
+    function collectionDisplayName(folderId) {
+        if (Number(folderId) === 0) {
+            return qsTr("All Photos")
+        }
+        const rows = appModules.folders ? appModules.folders.folders : []
+        for (let i = 0; i < rows.length; ++i) {
+            if (Number(rows[i].folderId) === Number(folderId)) {
+                return String(rows[i].name)
+            }
+        }
+        return ""
+    }
+
+    function importDroppedUrls(urls, folderId) {
+        appDialogs.importDroppedUrls(urls, Number(folderId), root.collectionDisplayName(folderId))
+    }
+
     function openLutImportDialog() {
         appDialogs.openLutImportDialog()
     }
@@ -710,8 +740,12 @@ ApplicationWindow {
                     theme: root
                     host: root
                     backendInteractive: root.backendInteractive
+                    fileDropEnabled: root.fileDropImportAllowed
                     onImportRequested: root.importDialog.open()
                     onImportFromFolderRequested: root.importFolderDialog.open()
+                    onFilesDropped: function(urls, folderId) {
+                        root.importDroppedUrls(urls, folderId)
+                    }
                     onSearchRequested: root.globalSearchDialog.openFromCollection()
                     onBackgroundTasksRequested: root.openBackgroundTasksDialog()
                 }
