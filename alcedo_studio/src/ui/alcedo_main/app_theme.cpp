@@ -1425,6 +1425,7 @@ void AppTheme::setReduceMotion(bool enabled) {
   emit ReduceMotionChanged();
 }
 
+auto AppTheme::fontSizeMicro() const -> int { return 10; }
 auto AppTheme::fontSizeCaption() const -> int { return 11; }
 auto AppTheme::fontSizeBody() const -> int { return 12; }
 auto AppTheme::fontSizeTitle() const -> int { return 13; }

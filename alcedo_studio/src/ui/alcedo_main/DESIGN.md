@@ -48,6 +48,7 @@ Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checkl
 | UI title | `uiFontFamily` | `fontSizeTitle` (13) | `fontWeightStrong` | `lineHeightTitle` (18) | Panel subtitles |
 | UI section | `uiFontFamily` | `fontSizeSection` (14) | `fontWeightHeading` (700) | `lineHeightSection` (20) | Panel titles |
 | UI caption | `uiFontFamily` | `fontSizeCaption` (11) | `fontWeightRegular` | `lineHeightCaption` (14) | Secondary chrome |
+| Dense data | `uiFontFamily` or `dataFontFamily` | `fontSizeMicro` (10) | `fontWeightRegular` | natural | Text of dense data controls: plot axis labels, the readout and the values around a plot, the titles of a crowded segmented switcher (Tone Curve section, #903) |
 | Headline | `headlineFontFamily` | `fontSizeHeadline` (22) | `fontWeightHeading` | `lineHeightHeadline` (28) | Empty-state titles |
 | Settings card title | `headlineFontFamily` | `fontSizeSection` (14) | DemiBold | 1.1 | Title of a `PackageCard` (Settings > LUTs, Settings > AI Models) and of the folder tiles of those pages. Below it, after a `spaceSm` gap, one sentence in `uiFontFamily` + `fontSizeBody` muted text says what the package or model does; no list and no version text there (a Pill shows the version). A GitHub button beside the title opens the project of the package when it has one. Do not use a display size: a model name must stay on one line in the two-column page. |
 | Display count | `headlineFontFamily` | `fontSizeDisplay` (72) | ExtraLight | 1 | The one large number of a Settings bento count tile (`CountTile`): LUT total, photo count, the version of About. |
@@ -900,13 +901,17 @@ The Tone Curve section of the Tone panel (`EditorToneCurveSection.qml`) is a
 `IconActionButton` compact; a selected toggle uses the selected fill. There is
 no caption sentence.
 
-- **Row 1.** Channel selector `RGB`, `R`, `G`, `B` (`SegmentedCardSwitcher`).
+- **Row 1.** Channel selector `RGB`, `R`, `G`, `B` (`SegmentedCardSwitcher`)
+  with `fontSizeMicro` titles; the RGB segment has stretch 1.6, so its title
+  and dot fit beside the one-letter segments (#903).
   A segment of a curve that is not the identity shows a `plotChannelMarkSize`
   dot before its title, in the ink color of the segment. The user asked for
   this dot in #890; it is the only status dot of the editor panels.
 - **Plot.** A square `PlotPane` with `plotSurfaceColor`. Grid every 2 EV from
   18% grey with the strong line at 18% grey; signed EV labels under the plot
-  only (`fontSizeCaption`, `plotLabelColor`). The histogram of the curve input
+  only (`fontSizeMicro`, `plotLabelColor`). The plot has a left and a right
+  inset of half the width of `+10`, so the labels at both ends of the X axis
+  show in full (#903). The histogram of the curve input
   is a quiet background behind the curves: its fills at
   `plotHistogramFillOpacity` and its edges at `plotHistogramEdgeOpacity`, so
   the curve, the handles, the strong grid line, and the identity line are the
@@ -918,12 +923,14 @@ no caption sentence.
   colors at `plotInactiveLineOpacity`. Handles are the plot pane handles.
 - **Pointer.** Over the plot, a 1 px vertical line in `plotPointerLineColor`
   follows the pointer, and `In` and `Out` with their EV values show at the top
-  left of the plot in `fontSizeCaption` (`plotLabelColor` names,
+  left of the plot in `fontSizeMicro` (`plotLabelColor` names,
   `textColor` values).
 - **Row 2.** `In` and `Out` fields of the selected point: a plain `TextInput`
   in a hairline box (`bgBaseColor`, `controlRadiusSmall`, 1 px `dividerColor`,
-  `textMutedColor` border on focus), 4 decimals, each followed by its EV value
-  in `textMutedColor`.
+  `textMutedColor` border on focus), 4 decimals in `fontSizeBody`, each
+  followed by its EV value in `fontSizeMicro` `textMutedColor`. The names
+  `In` and `Out` are `fontSizeMicro`. At the default editor panel width the
+  section shows all its text in full, with no elision and no clipping (#903).
 
 | Token | Value | Use |
 | --- | --- | --- |
@@ -1627,7 +1634,7 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | `CollapsibleSection.qml` | Folding group shell with shared motion driver |
 | `DialogActionButton.qml` | Text dialog actions (46 px floor; wrapped labels grow the button; `fontWeightStrong`); kinds `normal`, `light` (main action of a neutral surface), `accent`, `danger`, `warning`; optional `iconSource` (16 px monochrome SVG before the text, tinted with the text color) |
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
-| `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive |
+| `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive; per-entry `stretch` (default 1) sets the width share of a segment; `titlePixelSize` (default `fontSizeBody`) sets the title size |
 | `AdjustmentSlider.qml` | Shared numeric slider + field bound to `EditorAdjustmentValueModel` |
 | `ThemedProgressBar.qml` | Shared determinate / indeterminate progress track (Background Tasks, Export, Settings tiles); detail text in Manrope with tabular figures |
 | `BentoTile.qml` | Settings bento surface (radius 14, `cardSurfaceColor`, `cardBorderColor`, 22 px padding) |
