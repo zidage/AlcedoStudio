@@ -422,19 +422,36 @@ Dialog {
                 wrapMode: Text.WordWrap
             }
 
-            SegmentedCardSwitcher {
-                objectName: "adjustmentTransferPasteDestination"
+            ColumnLayout {
                 visible: !dialog.copyMode
                 Layout.fillWidth: true
                 Layout.leftMargin: appTheme.spaceLg
                 Layout.rightMargin: appTheme.spaceLg
-                entries: [
-                    { label: qsTr("New root-relative Version"), value: "paste" },
-                    { label: qsTr("Current Version"), value: "current" }
-                ]
-                currentValue: dialog.pasteStrategy
-                focusOutlineColor: appTheme.textColor
-                onSelected: function(index, value) { dialog.pasteStrategy = value }
+                spacing: appTheme.spaceXs
+
+                Label {
+                    objectName: "adjustmentTransferPasteDestinationLabel"
+                    Layout.fillWidth: true
+                    text: qsTr("Paste to")
+                    color: appTheme.textMutedColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeBody
+                    font.weight: appTheme.fontWeightStrong
+                    wrapMode: Text.Wrap
+                }
+
+                SegmentedCardSwitcher {
+                    objectName: "adjustmentTransferPasteDestination"
+                    Layout.fillWidth: true
+                    entries: [
+                        { label: qsTr("Root"), value: "paste",
+                          toolTip: qsTr("Creates a new version from root.") },
+                        { label: qsTr("Current State"), value: "current" }
+                    ]
+                    currentValue: dialog.pasteStrategy
+                    focusOutlineColor: appTheme.textColor
+                    onSelected: function(index, value) { dialog.pasteStrategy = value }
+                }
             }
 
             // ── Footer bar ───────────────────────────────────────────────────

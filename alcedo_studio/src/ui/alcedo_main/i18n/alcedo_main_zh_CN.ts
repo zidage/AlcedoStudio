@@ -365,12 +365,20 @@
 <context>
     <name>AdjustmentTransferDialog</name>
     <message>
-        <source>New root-relative Version</source>
-        <translation>新建基于根状态的版本</translation>
+        <source>Paste to</source>
+        <translation>粘贴到</translation>
     </message>
     <message>
-        <source>Current Version</source>
-        <translation>当前版本</translation>
+        <source>Root</source>
+        <translation>根状态</translation>
+    </message>
+    <message>
+        <source>Current State</source>
+        <translation>当前状态</translation>
+    </message>
+    <message>
+        <source>Creates a new version from root.</source>
+        <translation>从根状态创建一个新版本。</translation>
     </message>
     <message>
         <location filename="../qml/AdjustmentTransferDialog.qml" line="+70"/>

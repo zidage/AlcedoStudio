@@ -98,8 +98,12 @@ Rectangle {
                 activeFocusOnTab: segmentEnabled
                 Accessible.role: Accessible.RadioButton
                 Accessible.name: modelData ? String(modelData.label || "") : ""
+                Accessible.description: modelData ? String(modelData.toolTip || "") : ""
                 Accessible.checkable: true
                 Accessible.checked: sel
+                ToolTip.text: Accessible.description
+                ToolTip.visible: segmentEnabled && (hovered || activeFocus)
+                                 && ToolTip.text.length > 0
                 radius: Math.max(2, root.trackRadius - 2)
                 opacity: segmentEnabled ? 1.0 : 0.38
                 color: sel ? root.selectedFillColor

@@ -111,9 +111,11 @@ Review the panel at 260 px, 320 px, and 460 px widths in both themes:
 - The footer holds only the fixed `Cancel` and mode action
   (`Copy Adjustments` / `Paste Adjustments`) `DialogActionButton`s. No numeric
   summaries, counts, or dynamic action labels.
-- Paste mode shows a `SegmentedCardSwitcher` above the footer. Its choices are
-  `New root-relative Version` and `Current Version`. The selected choice applies
-  to every target. It uses the shared monochrome track and selection tokens.
+- Paste mode shows the left-aligned `Paste to` label above a `SegmentedCardSwitcher`
+  with `Root` and `Current State` choices. The Root tooltip says
+  `Creates a new version from root.` and is also its accessible description.
+  The selected choice applies to every target. The selector uses the shared
+  monochrome track and selection tokens.
   Keyboard focus uses a `textColor` outline. Reopening Paste keeps the last choice.
 - All enabled action-button text stays white; the primary action keeps the
   documented accent CTA fill. Never pair a blue or accent fill with dark text.
