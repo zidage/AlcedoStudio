@@ -54,6 +54,7 @@
 #include "film_grain_colour_statistics.hpp"
 #include "gpu/transient_buffer_arena.hpp"
 #include "oklab_contrast_reference.hpp"
+#include "tone_zone_reference.hpp"
 #include "opencl/opencl_runtime.hpp"
 #include "tone_curve_test_curves.hpp"
 
@@ -239,16 +240,12 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
     c.r            = out[0];
     c.g            = out[1];
     c.b            = out[2];
-  } else if (behavior == AdjustmentBehavior::White) {
-    const float gain = 1.0f + std::max(value, 0.0f) * 0.005f;
-    c.r *= gain;
-    c.g *= gain;
-    c.b *= gain;
-  } else if (behavior == AdjustmentBehavior::Black) {
-    const float offset = value * 0.001f;
-    c.r += offset;
-    c.g += offset;
-    c.b += offset;
+  } else if (behavior == AdjustmentBehavior::White || behavior == AdjustmentBehavior::Black) {
+    const auto out = tone_zone_reference::ApplyAcescc({c.r, c.g, c.b}, value,
+                                                      behavior == AdjustmentBehavior::White);
+    c.r            = out[0];
+    c.g            = out[1];
+    c.b            = out[2];
   } else if (behavior == AdjustmentBehavior::Curve) {
     // p is the first of the four records of the Curve slot, as in the kernel.
     tone_curve_test::ApplyPackedCurveSlot(c, &p);
@@ -1402,7 +1399,8 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance
   ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance()).SetTemperature(4300.0f);
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(0.5f);
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(40.0f);
-  ModelByType<WhiteModel>(type_ids::White()).SetValue(12.0f);
+  ModelByType<WhiteModel>(type_ids::White()).SetValue(60.0f);
+  ModelByType<BlackModel>(type_ids::Black()).SetValue(-45.0f);
   ModelByType<SaturationModel>(type_ids::Saturation()).SetValue(1.2f);
   // Every tone wheel, so that the kernel matches the CPU reference for each operation.
   ColorWheelUpdate        wheels;

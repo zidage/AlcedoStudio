@@ -93,6 +93,39 @@ __device__ auto ApplyOkLabContrast(const float3& acescc, float contrast) -> floa
   return LinearAp1ToAcescc(OkLabToLinearAp1(lab));
 }
 
+// Whites and Blacks move the bright and the dark tones by an exposure shift that the pixel's ACEScc
+// luma selects. x is stops from 18% grey (the AP1 luma weights add to 1, so a uniform ACEScc
+// offset of d / 17.52 moves x by exactly d stops). Whites works above grey, Blacks below it:
+//   - The zone runs from grey (no shift) to kToneZoneWidthEv = 3 stops from grey (the full shift
+//     s). Between them the weight is smoothstep(t), t = x / 3, so the curve leaves grey with
+//     slope 1. Past the zone every tone moves by s.
+//   - s = value * 0.03 stops: +/-100 is +/-3 stops. The shift never exceeds |s|.
+//   - Whites above 0 and Blacks below 0 push tones away from grey: x + s * smoothstep(x / 3),
+//     slope >= 1. The other direction is the exact inverse of that curve, so it pulls tones
+//     toward grey with a slope in (0, 1] (Newton solve). +v and -v undo each other.
+// Blacks is Whites mirrored about grey: shift_b(x, s) = -shift_w(-x, -s).
+constexpr float kToneZoneWidthEv   = 3.0f;
+constexpr float kToneZoneEvPerUnit = 0.03f;
+
+__device__ auto ToneZoneShiftEv(float x, float s) -> float {
+  if (x <= 0.0f || s == 0.0f) return 0.0f;
+  const float w = kToneZoneWidthEv;
+  if (s > 0.0f) {
+    const float t = fminf(x / w, 1.0f);
+    return s * t * t * (3.0f - 2.0f * t);
+  }
+  const float a = -s;
+  if (x >= w + a) return -a;
+  // Solve w * t + a * t^2 * (3 - 2t) = x for t in [0, 1]; the derivative is >= w.
+  float t = x / (w + a);
+  for (int i = 0; i < 5; ++i) {
+    const float f  = w * t + a * t * t * (3.0f - 2.0f * t) - x;
+    const float fp = w + 6.0f * a * t * (1.0f - t);
+    t              = fminf(fmaxf(t - f / fp, 0.0f), 1.0f);
+  }
+  return w * t - x;
+}
+
 // Tone Curve spline (edit/operators/models/tone_curve_spline.hpp; CPU reference
 // EvaluateToneCurveSpline). values[0..15]: x of the control points; [16..31]: y; [32..47]: slope.
 // Monotone cubic Hermite between the points, straight along the end slope outside them.
@@ -252,13 +285,15 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, const f
     c.z += offset;
   } else if (behavior == CudaAdjustmentBehavior::Contrast && value != 0.0f) {
     c = ApplyOkLabContrast(c, value);
-  } else if (behavior == CudaAdjustmentBehavior::White) {
-    const float gain = 1.0f + fmaxf(value, 0.0f) * 0.005f;
-    c.x *= gain;
-    c.y *= gain;
-    c.z *= gain;
-  } else if (behavior == CudaAdjustmentBehavior::Black) {
-    const float offset = value * 0.001f;
+  } else if ((behavior == CudaAdjustmentBehavior::White ||
+              behavior == CudaAdjustmentBehavior::Black) &&
+             value != 0.0f) {
+    const float x = (Luma(c) - CE_ACESCC_MIDDLE_GREY) * CE_ACESCC_B;
+    const float s = value * kToneZoneEvPerUnit;
+    const float shift_ev = behavior == CudaAdjustmentBehavior::White
+                               ? ToneZoneShiftEv(x, s)
+                               : -ToneZoneShiftEv(-x, -s);
+    const float offset = shift_ev / CE_ACESCC_B;
     c.x += offset;
     c.y += offset;
     c.z += offset;

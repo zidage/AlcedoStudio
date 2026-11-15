@@ -38,6 +38,27 @@ static inline float3 ApplyOkLabContrast(float3 acescc, float contrast) {
   return LinearAp1ToAcescc(OkLabToLinearAp1(lab));
 }
 
+// Whites and Blacks: an exposure shift chosen by the ACEScc luma (stops x from 18% grey), with
+// a 3-stop zone from grey and +/-3 stops at +/-100. Same math as ToneZoneShiftEv in
+// cuda_primary_grade_pass.cu (documented there) and tests/edit/runtime/tone_zone_reference.hpp.
+static inline float ToneZoneShiftEv(float x, float s) {
+  if (x <= 0.0f || s == 0.0f) return 0.0f;
+  const float w = 3.0f;
+  if (s > 0.0f) {
+    const float t = min(x / w, 1.0f);
+    return s * t * t * (3.0f - 2.0f * t);
+  }
+  const float a = -s;
+  if (x >= w + a) return -a;
+  float t = x / (w + a);
+  for (int i = 0; i < 5; ++i) {
+    const float f  = w * t + a * t * t * (3.0f - 2.0f * t) - x;
+    const float fp = w + 6.0f * a * t * (1.0f - t);
+    t              = clamp(t - f / fp, 0.0f, 1.0f);
+  }
+  return w * t - x;
+}
+
 // Tone Curve spline (edit/operators/models/tone_curve_spline.hpp; CPU reference
 // EvaluateToneCurveSpline). values[0..15]: x of the control points; [16..31]: y; [32..47]: slope.
 // Monotone cubic Hermite between the points, straight along the end slope outside them.
@@ -179,13 +200,12 @@ static inline float3 ApplyAdjustment(float3 c, __global const GradeAdjustmentPar
     c.z += offset;
   } else if (behavior == 2u && value != 0.0f) {
     c = ApplyOkLabContrast(c, value);
-  } else if (behavior == 3u) {
-    const float gain = 1.0f + max(value, 0.0f) * 0.005f;
-    c.x *= gain;
-    c.y *= gain;
-    c.z *= gain;
-  } else if (behavior == 4u) {
-    const float offset = value * 0.001f;
+  } else if ((behavior == 3u || behavior == 4u) && value != 0.0f) {
+    // 3: Whites, 4: Blacks (Whites mirrored about grey).
+    const float x        = (Luma(c) - CE_ACESCC_MIDDLE_GREY) * CE_ACESCC_B;
+    const float s        = value * 0.03f;
+    const float shift_ev = behavior == 3u ? ToneZoneShiftEv(x, s) : -ToneZoneShiftEv(-x, -s);
+    const float offset   = shift_ev / CE_ACESCC_B;
     c.x += offset;
     c.y += offset;
     c.z += offset;
