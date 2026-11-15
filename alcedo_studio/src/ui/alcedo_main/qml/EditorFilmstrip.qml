@@ -64,6 +64,9 @@ Item {
     property bool _listHadFocus: false
     property bool _restoringScroll: false
     property int _pendingRevealIndex: -1
+    // Keyboard target whose delegate row is not in the ListView yet; revealed
+    // with ListView.Contain once the row arrives.
+    property int _pendingContainIndex: -1
     property bool _heightResizing: false
     property bool _rebindingModel: false
     property int _listRevision: 0
@@ -168,6 +171,16 @@ Item {
             return
         }
 
+        if (_pendingContainIndex >= 0) {
+            if (_pendingContainIndex >= filmstripListView.count) {
+                return
+            }
+            const index = _pendingContainIndex
+            _pendingContainIndex = -1
+            root.revealIndexIfHidden(index)
+            return
+        }
+
         const maxX = Math.max(0, filmstripListView.contentWidth - filmstripListView.width)
         const savedX = Math.max(0, root.savedFilmstripScroll())
         _restoringScroll = true
@@ -235,6 +248,24 @@ Item {
         selectionAnchorIndex = target
         _pendingRevealIndex = target
         scheduleScrollRestore()
+    }
+
+    // Scrolls the strip by the smallest amount that shows the whole tile: a
+    // visible tile keeps contentX, a tile past the right edge lands at the
+    // right edge, and a tile before the left edge lands at the left edge.
+    function revealIndexIfHidden(index) {
+        const target = Number(index)
+        if (!filmstripListView || target < 0 || target >= totalCount) {
+            return
+        }
+        if (target >= filmstripListView.count) {
+            _pendingContainIndex = target
+            scheduleScrollRestore()
+            return
+        }
+        _pendingContainIndex = -1
+        filmstripListView.positionViewAtIndex(target, ListView.Contain)
+        root.storeFilmstripScroll()
     }
 
     function applyFilmstripScrollTarget() {
@@ -359,7 +390,9 @@ Item {
         updateSelectionAnchor(index)
     }
 
-    function handleIndexSelection(index, modifiers, activate) {
+    // reveal: keyboard moves pass true so the focused tile stays on screen. A
+    // mouse click targets a tile the user already sees, so it keeps contentX.
+    function handleIndexSelection(index, modifiers, activate, reveal) {
         if (!selectionEnabled || index < 0 || index >= totalCount) {
             return
         }
@@ -370,6 +403,9 @@ Item {
 
         focusCurrentIndex(index)
         filmstripListView.forceActiveFocus()
+        if (reveal === true) {
+            root.revealIndexIfHidden(index)
+        }
         const shift = (modifiers & Qt.ShiftModifier) !== 0
         const control = (modifiers & Qt.ControlModifier) !== 0
         if (shift) {
@@ -386,9 +422,10 @@ Item {
         if (activate) {
             root.activateImage(index)
         } else {
-            // Selection from this filmstrip must not move contentX. Only
-            // cross-view requests (Library → applyFilmstripScrollTarget) may
-            // scroll the strip so the peer can find the new image.
+            // Selection from this filmstrip never puts the tile at the
+            // beginning; only keyboard moves scroll, and only by the reveal
+            // above. Library-originated requests go through
+            // applyFilmstripScrollTarget.
             root.notifyImageInteraction(item, index)
         }
     }
@@ -427,14 +464,14 @@ Item {
             return
         }
         const nextIndex = Math.max(0, Math.min(totalCount - 1, focusIndex + delta))
-        root.handleIndexSelection(nextIndex, modifiers || 0, false)
+        root.handleIndexSelection(nextIndex, modifiers || 0, false, true)
     }
 
     function activateAdjacentImage(delta) {
         // Left/Right open the adjacent image and move the selection with it, so
         // the editing tile is also the only selected tile. Out-of-range indices
         // are inert.
-        root.handleIndexSelection(focusIndex + delta, Qt.NoModifier, true)
+        root.handleIndexSelection(focusIndex + delta, Qt.NoModifier, true, true)
     }
 
     function activateFocused() {
@@ -477,9 +514,9 @@ Item {
         }
     }
     onSelectedIndexChanged: {
-        // Update focus/label only. Do not scroll: open/selection from this
-        // strip (or keyboard) must leave contentX alone. Library-originated
-        // reveals go through applyFilmstripScrollTarget instead.
+        // Update focus/label only. Keyboard moves reveal their tile in
+        // handleIndexSelection; Library-originated reveals go through
+        // applyFilmstripScrollTarget.
         refreshCurrentFileName()
         if (selectedIndex >= 0) {
             focusIndex = selectedIndex
@@ -919,10 +956,11 @@ Item {
                         root.moveFocus(event.key === Qt.Key_Left ? -1 : 1, event.modifiers)
                         event.accepted = true
                     } else if (event.key === Qt.Key_Home) {
-                        root.handleIndexSelection(0, event.modifiers, false)
+                        root.handleIndexSelection(0, event.modifiers, false, true)
                         event.accepted = true
                     } else if (event.key === Qt.Key_End) {
-                        root.handleIndexSelection(root.totalCount - 1, event.modifiers, false)
+                        root.handleIndexSelection(root.totalCount - 1, event.modifiers, false,
+                                                  true)
                         event.accepted = true
                     } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
                                || event.key === Qt.Key_Space) {
@@ -1071,7 +1109,7 @@ Item {
                                                                   | Qt.ControlModifier)) !== 0
                                 root.handleIndexSelection(thumbnailDelegate.index,
                                                           mouse.modifiers,
-                                                          !hasSelectionModifier)
+                                                          !hasSelectionModifier, false)
                             } else if (mouse.button === Qt.RightButton) {
                                 const p = thumbnailMouse.mapToItem(null, mouse.x, mouse.y)
                                 root.requestContextMenuForIndex(thumbnailDelegate.index, p.x, p.y)
