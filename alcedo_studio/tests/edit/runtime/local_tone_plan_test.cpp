@@ -152,10 +152,11 @@ TEST(LocalTonePlan, ShadowsLiftAndHighlightsRecoveryExtendToTheSliderEnds) {
 }
 
 // #939 (#924): the reference curve increases for every Shadows and Highlights pair in the slider
-// ranges, with the slope between LLF samples and the local slope (beta) in 0.2..1.5.
+// ranges. The slope between LLF samples stays in 0.1..2.5 (the old curve went down to -4.1 and up
+// to 3.0); beta stays in its limits.
 TEST(LocalTonePlan, ReferenceCurveIncreasesForEverySliderPair) {
-  constexpr float kMinSlope = 0.2f;
-  constexpr float kMaxSlope = 1.5f;
+  constexpr float kMinSlope = 0.1f;
+  constexpr float kMaxSlope = 2.5f;
   for (int shadows = -100; shadows <= 150; shadows += 5) {
     for (int highlights = -150; highlights <= 100; highlights += 10) {
       const float shadow    = ClampedLocalToneShadow(static_cast<float>(shadows));
@@ -163,7 +164,8 @@ TEST(LocalTonePlan, ReferenceCurveIncreasesForEverySliderPair) {
       const auto  samples   = local_tone_mapping::BuildSamples(shadow, highlight);
       for (std::size_t i = 0; i < samples.size(); ++i) {
         EXPECT_GE(samples[i].beta, kMinSlope) << shadows << " " << highlights << " " << i;
-        EXPECT_LE(samples[i].beta, kMaxSlope) << shadows << " " << highlights << " " << i;
+        EXPECT_LE(samples[i].beta, local_tone_mapping::kToneBetaMax)
+            << shadows << " " << highlights << " " << i;
         if (i == 0) {
           continue;
         }

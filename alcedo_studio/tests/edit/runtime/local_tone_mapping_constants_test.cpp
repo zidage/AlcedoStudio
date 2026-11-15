@@ -110,25 +110,34 @@ TEST(LocalToneMappingConstantsMatchRuntime, DetailAlphaAndToneBetaStayBounded) {
   }
 }
 
-// #939: the Shadows lift is the integral of a bounded slope reduction. Values from the prototype
-// study (Shadows slider +25, +50, +100, +150; lift in EV at the relative EV in the header row).
-TEST(LocalToneMappingConstantsMatchRuntime, ShadowLiftMatchesThePrototypeCurve) {
-  const float ev[] = {-9.0f, -7.0f, -5.5f, -4.3f, -3.0f, -2.0f, -1.0f, 0.0f};
+// #939: the Shadows lift is the integral of a bounded slope reduction, and the black anchor brings
+// it back to 0 at the darkest level. Lift in EV for Shadows +25, +50, +100, +150 at the relative EV
+// in the header row (the old curve gave 1.51 / 3.02 / 4.54 EV at -4.3 EV for +50 / +100 / +150).
+TEST(LocalToneMappingConstantsMatchRuntime, ShadowLiftKeepsBlackAndLiftsTheShadowBand) {
+  const float ev[] = {-9.5f, -9.0f, -8.0f, -7.0f, -5.0f, -4.3f, -3.0f, -2.0f, -1.0f, 0.0f};
   struct Row {
     float slider;
-    float lift[8];
+    float lift[10];
     float min_slope;
   };
   const Row rows[] = {
-      {25.0f, {0.04f, 0.87f, 1.08f, 0.92f, 0.61f, 0.38f, 0.15f, 0.02f}, 0.77f},
-      {50.0f, {1.09f, 1.99f, 1.95f, 1.55f, 1.03f, 0.64f, 0.25f, 0.03f}, 0.61f},
-      {100.0f, {3.14f, 3.56f, 2.96f, 2.27f, 1.52f, 0.94f, 0.37f, 0.04f}, 0.42f},
-      {150.0f, {4.71f, 4.39f, 3.40f, 2.61f, 1.74f, 1.08f, 0.43f, 0.05f}, 0.34f},
+      {25.0f,
+       {0.0f, 0.006f, 0.124f, 0.409f, 0.800f, 0.751f, 0.550f, 0.393f, 0.236f, 0.093f},
+       0.84f},
+      {50.0f,
+       {0.0f, 0.012f, 0.247f, 0.817f, 1.599f, 1.502f, 1.099f, 0.785f, 0.471f, 0.186f},
+       0.69f},
+      {100.0f,
+       {0.0f, 0.023f, 0.482f, 1.594f, 3.121f, 2.930f, 2.144f, 1.531f, 0.919f, 0.363f},
+       0.39f},
+      {150.0f,
+       {0.0f, 0.030f, 0.622f, 2.058f, 4.030f, 3.784f, 2.769f, 1.978f, 1.187f, 0.469f},
+       0.21f},
   };
   for (const auto& row : rows) {
     const float amount = row.slider * tone::kHighlightStrengthScale / 80.0f;
-    for (int i = 0; i < 8; ++i) {
-      EXPECT_NEAR(tone::ShadowLiftEv(ev[i], amount), row.lift[i], 0.006f)
+    for (int i = 0; i < 10; ++i) {
+      EXPECT_NEAR(tone::ShadowLiftEv(ev[i], amount), row.lift[i], 0.002f)
           << row.slider << " at " << ev[i] << " EV";
     }
     // Slope of output EV against input EV, measured on a 0.01 EV grid.
@@ -137,15 +146,35 @@ TEST(LocalToneMappingConstantsMatchRuntime, ShadowLiftMatchesThePrototypeCurve) 
       const float slope =
           1.0f + (tone::ShadowLiftEv(x + 0.01f, amount) - tone::ShadowLiftEv(x, amount)) / 0.01f;
       min_slope = std::min(min_slope, slope);
-      EXPECT_LE(slope, 1.0f + tone::kLiftBlackAnchorExcess + 1.0e-3f) << row.slider << " " << x;
+      EXPECT_LE(slope, 2.7f) << row.slider << " " << x;
     }
-    EXPECT_NEAR(min_slope, row.min_slope, 0.006f) << row.slider;
+    EXPECT_NEAR(min_slope, row.min_slope, 0.01f) << row.slider;
     EXPECT_GT(min_slope, 1.0f - tone::kLiftSlopeReductionMax) << row.slider;
+    // Below the black anchor end the lift is 0: black keeps its level.
+    EXPECT_NEAR(tone::ShadowLiftEv(tone::kLiftBlackAnchorEndEv - 0.3f, amount), 0.0f, 1.0e-5f)
+        << row.slider;
   }
 
   EXPECT_FLOAT_EQ(tone::ShadowLiftEv(-4.3f, 0.0f), 0.0f);
   EXPECT_FLOAT_EQ(tone::ShadowLiftEv(-4.3f, -1.0f), 0.0f);
   EXPECT_FLOAT_EQ(tone::ShadowLiftEv(8.0f, tone::kShadowLiftAmountLimit), 0.0f);
+}
+
+// #939: the Highlights curve applies to the output of the Shadows curve. With Shadows at 0 the
+// Highlights curve applies to the input level.
+TEST(LocalToneMappingConstantsMatchRuntime, HighlightsApplyToTheShadowsCurveOutput) {
+  for (float rel = -6.0f; rel <= 8.0f; rel += 0.5f) {
+    const float l        = tone::kAcesccMiddleGray + rel * tone::kAcesccCodePerEv;
+    const float recovery = l - 1.0f * tone::kHighlightStrengthScale *
+                                   tone::HighlightProfileEv(rel) * tone::kAcesccCodePerEv;
+    EXPECT_NEAR(tone::ApplyReferenceCurve(l, 0.0f, 1.0f), recovery, 1.0e-6f) << rel;
+
+    const float lifted = rel + tone::ShadowLiftEv(rel, 1.0f);
+    const float both   = tone::kAcesccMiddleGray +
+                       (lifted - tone::kHighlightStrengthScale * tone::HighlightProfileEv(lifted)) *
+                           tone::kAcesccCodePerEv;
+    EXPECT_NEAR(tone::ApplyReferenceCurve(l, 1.0f, 1.0f), both, 1.0e-5f) << rel;
+  }
 }
 
 TEST(LocalToneMappingConstantsMatchRuntime, CacheKeysTrackAmountsFlagsAndRoi) {
