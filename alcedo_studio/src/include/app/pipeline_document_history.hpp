@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "app/editor_adjustment_types.hpp"
@@ -155,7 +156,8 @@ void AppendSetParameterChange(PipelineEditBatch& batch, const EditorParameterTar
                                              std::string after_name) -> PipelineEditBatch;
 
 [[nodiscard]] auto MakeSetNodeEnabledBatch(const NodeId& node_id, PipelineEditNodeKind node_kind,
-                                           bool before_enabled, bool after_enabled)
+                                           bool before_enabled, bool after_enabled,
+                                           std::string_view node_display_name = {})
     -> PipelineEditBatch;
 
 [[nodiscard]] auto MakeSetNodeMixBatch(const NodeId& node_id, float before_mix, float after_mix)

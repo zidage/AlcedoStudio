@@ -4275,8 +4275,8 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
     <message>
         <location line="+3"/>
-        <source>disabled</source>
-        <translation>已禁用</translation>
+        <source>hidden</source>
+        <translation>已隐藏</translation>
     </message>
     <message>
         <location line="+3"/>
@@ -4317,6 +4317,14 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <location line="+70"/>
         <source>No masks</source>
         <translation>暂无蒙版</translation>
+    </message>
+    <message>
+        <source>Hide %1</source>
+        <translation>隐藏%1</translation>
+    </message>
+    <message>
+        <source>Show %1</source>
+        <translation>显示%1</translation>
     </message>
 </context>
 <context>
@@ -4374,14 +4382,12 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <translation>已反相</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Turn off Invert for %1</source>
-        <translation>取消反相%1</translation>
+        <source>Combine mode: Add</source>
+        <translation>合并方式：添加</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Invert %1</source>
-        <translation>反相%1</translation>
+        <source>Add</source>
+        <translation>添加</translation>
     </message>
 </context>
 <context>
@@ -8758,6 +8764,14 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+5"/>
         <source>Only a Color Grade has editable deletion protection</source>
         <translation>只有色彩分级具有可编辑的删除保护</translation>
+    </message>
+    <message>
+        <source>Finish the node graph before showing or hiding a Color Grade</source>
+        <translation>请先完成节点图，再显示或隐藏色彩分级</translation>
+    </message>
+    <message>
+        <source>Only a Color Grade can be shown or hidden</source>
+        <translation>只有色彩分级可以显示或隐藏</translation>
     </message>
     <message>
         <location line="+20"/>

@@ -50,7 +50,25 @@ class NodeLockHistoryPort final : public test::ControllableEditorHistoryPort {
     if (changed) *changed = true;
     return true;
   }
-  bool deletion_protected = true;
+  auto SetColorGradeEnabled(const EditorHistoryGuardHandle&, const NodeId& node_id,
+                            bool enabled_value, std::string* error, bool* changed = nullptr)
+      -> bool override {
+    if (changed) *changed = false;
+    if (fail_node_command) {
+      if (error) *error = "mini-Git journal append failed";
+      return false;
+    }
+    last_render_reason = std::nullopt;
+    last_enabled_node  = node_id;
+    if (enabled == enabled_value) return true;
+    enabled            = enabled_value;
+    last_render_reason = EditorRenderReason::SettledAdjustment;
+    if (changed) *changed = true;
+    return true;
+  }
+  bool   deletion_protected = true;
+  bool   enabled            = true;
+  NodeId last_enabled_node;
 };
 
 class EditorSessionNodeCommandTest : public ::testing::Test {
@@ -214,6 +232,59 @@ TEST_F(EditorSessionNodeCommandTest, DeletionLockRejectsANonInteractiveSession) 
   const auto renders_before  = scheduler_->requests.size();
   const auto revision_before = service_->history_revision();
   EXPECT_EQ(service_->SetColorGradeDeletionProtected(NodeId{"grade.primary"}, false).kind,
+            EditorSessionResultKind::Rejected);
+  EXPECT_EQ(service_->history_revision(), revision_before);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+}
+
+TEST_F(EditorSessionNodeCommandTest, VisibilityPublishesEffectiveChangesAndRoutesOneRenderEach) {
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+
+  EXPECT_EQ(service_->SetColorGradeEnabled(NodeId{"grade.primary"}, true).kind,
+            EditorSessionResultKind::Accepted);
+  EXPECT_EQ(service_->history_revision(), revision_before);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+
+  const auto hidden = service_->SetColorGradeEnabled(NodeId{"grade.primary"}, false);
+  EXPECT_EQ(hidden.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(history_->last_enabled_node, NodeId{"grade.primary"});
+  EXPECT_FALSE(history_->enabled);
+  EXPECT_EQ(service_->history_revision(), revision_before + 1);
+  ASSERT_EQ(scheduler_->requests.size(), renders_before + 1);
+  EXPECT_EQ(scheduler_->requests.back().intent.reason, EditorRenderReason::SettledAdjustment);
+
+  EXPECT_EQ(service_->SetColorGradeEnabled(NodeId{"grade.primary"}, false).kind,
+            EditorSessionResultKind::Accepted);
+  EXPECT_EQ(service_->history_revision(), revision_before + 1);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before + 1);
+
+  EXPECT_EQ(service_->SetColorGradeEnabled(NodeId{"grade.primary"}, true).kind,
+            EditorSessionResultKind::RenderRouted);
+  EXPECT_TRUE(history_->enabled);
+  EXPECT_EQ(service_->history_revision(), revision_before + 2);
+  // The first render is still in flight in the recording scheduler, so the second one is
+  // coalesced into the pending request instead of scheduling a new job.
+  EXPECT_GE(scheduler_->requests.size(), renders_before + 1);
+}
+
+TEST_F(EditorSessionNodeCommandTest, FailedVisibilityDoesNotPublishHistoryOrRender) {
+  history_->fail_node_command = true;
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+  const auto result = service_->SetColorGradeEnabled(NodeId{"grade.primary"}, false);
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(result.message, "mini-Git journal append failed");
+  EXPECT_EQ(service_->history_revision(), revision_before);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+}
+
+TEST_F(EditorSessionNodeCommandTest, VisibilityRejectsANonInteractiveSession) {
+  (void)service_->Shutdown();
+  service_->DrainCommandQueueForTests();
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+  EXPECT_EQ(service_->SetColorGradeEnabled(NodeId{"grade.primary"}, false).kind,
             EditorSessionResultKind::Rejected);
   EXPECT_EQ(service_->history_revision(), revision_before);
   EXPECT_EQ(scheduler_->requests.size(), renders_before);

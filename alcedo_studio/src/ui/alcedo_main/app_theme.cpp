@@ -1040,9 +1040,15 @@ auto AppTheme::graphMaskDrawerHeaderHeight() const -> int { return 28; }
 
 auto AppTheme::graphMaskRowHeight() const -> int { return 28; }
 
-auto AppTheme::maskGroupPreviewSize() const -> int { return 40; }
+auto AppTheme::maskGroupPreviewSize() const -> int { return 28; }
 
-auto AppTheme::maskGroupMaskPreviewSize() const -> int { return 32; }
+auto AppTheme::maskGroupMaskPreviewSize() const -> int { return 24; }
+
+auto AppTheme::layerIconHitSize() const -> int { return 24; }
+
+auto AppTheme::layerIconGlyphSize() const -> int { return 15; }
+
+auto AppTheme::layerHiddenContentOpacity() const -> qreal { return 0.35; }
 
 auto AppTheme::graphPortSize() const -> int { return 8; }
 

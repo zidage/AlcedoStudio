@@ -51,7 +51,7 @@ const QMap<QString, int>& ExpectedContextMessageCounts() {
       {QStringLiteral("EditorAiMaskPanel"), 40},
       {QStringLiteral("EditorEndpointNodeDelegate"), 2},
       {QStringLiteral("EditorGeometryPanel"), 14},
-      {QStringLiteral("EditorMaskGroupDelegate"), 16},
+      {QStringLiteral("EditorMaskGroupDelegate"), 18},
       {QStringLiteral("EditorMaskGroupMaskRow"), 12},
       {QStringLiteral("EditorMaskGroupsPanel"), 10},
       {QStringLiteral("EditorMasksContextPanel"), 29},
@@ -66,12 +66,12 @@ const QMap<QString, int>& ExpectedContextMessageCounts() {
       {QStringLiteral("InspectorToggleButton"), 4},
       {QStringLiteral("TopToolbar"), 8},
       {QStringLiteral("alcedo::ui::EditorAiMaskTool"), 22},
-      {QStringLiteral("alcedo::ui::EditorNodeController"), 24},
+      {QStringLiteral("alcedo::ui::EditorNodeController"), 26},
   };
   return counts;
 }
 
-constexpr int kExpectedTargetMessageTotal = 300;
+constexpr int kExpectedTargetMessageTotal = 304;
 
 /// Parses a Qt TS catalog into context -> messages. Numerus translations keep
 /// their combined <numerusform> text so placeholder checks stay meaningful.

@@ -2063,11 +2063,11 @@ TEST_F(EditorNodesPanelQmlTest, MaskPanelConfirmFinishesMaskEditAndReturnsToPrio
   EXPECT_EQ(controller_.active_adjustment_panel(), QStringLiteral("lut"));
 }
 
-// Issue 544: the Mask Groups row Invert button inverts that row's Mask with one click and a
-// second click returns it, without a change of selection. AI Masks have the same button.
-TEST_F(EditorNodesPanelQmlTest, MaskGroupRowInvertButtonTogglesItsMask) {
+// Issue #930: the Mask row strip shows a passive "+" combine slot (Add is the only mode) where
+// the Invert button was. It carries an accessible state, issues no Mask command, and does not
+// select the row. Invert stays on the Mask panel checkbox.
+TEST_F(EditorNodesPanelQmlTest, MaskGroupRowShowsPassiveAddCombineSlotInsteadOfInvert) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  const NodeId grade_id{"grade.primary"};
   backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
   backend_.AddMaskToPrimaryGrade(grade_mask_test::MakeAiSegmentationMask(MaskId{"mask.ai"}));
   OpenMaskGroupsPage();
@@ -2078,41 +2078,140 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupRowInvertButtonTogglesItsMask) {
     return VisualMaskRow(Find(QStringLiteral("editorMaskGroupsPageBody")),
                          QStringLiteral("editorMaskGroupMaskRow"), mask_id);
   };
-  const auto invert_button = [&](const QString& mask_id) {
-    return FindVisualItem(group_row(mask_id), QStringLiteral("editorMaskGroupMaskInvertButton"));
-  };
-  const auto stored_invert = [&](const MaskId& mask_id) {
-    const auto* grade =
-        dynamic_cast<const ColorGradeNodeModel*>(backend_.document()->Graph().FindNode(grade_id));
-    const auto* mask = grade == nullptr ? nullptr : grade->FindMask(mask_id);
-    return mask != nullptr && mask->invert;
-  };
   ASSERT_TRUE(WaitFor([&] {
-    auto* button = invert_button(QStringLiteral("mask.ai"));
-    return button != nullptr && button->isVisible() &&
-           invert_button(QStringLiteral("mask.radial")) != nullptr;
+    auto* ai = group_row(QStringLiteral("mask.ai"));
+    auto* radial = group_row(QStringLiteral("mask.radial"));
+    return ai != nullptr && radial != nullptr && ai->width() > 0.0 && radial->width() > 0.0;
   })) << warnings_.join('\n').toStdString();
 
+  const auto commands_before = backend_.mask_commands().size();
   for (const auto& mask_text : {QStringLiteral("mask.ai"), QStringLiteral("mask.radial")}) {
-    const MaskId mask_id{mask_text.toStdString()};
-    for (const bool expected : {true, false}) {
-      Click(window_, invert_button(mask_text));
-      ASSERT_NE(LastMaskCommand(), nullptr);
-      EXPECT_EQ(LastMaskCommand()->kind, EditorMaskCreationCommandKind::ToggleMaskInvert);
-      EXPECT_EQ(LastMaskCommand()->node_id, grade_id);
-      EXPECT_EQ(LastMaskCommand()->mask_id, mask_id);
-      backend_.CompleteMaskCommands();
-      ProcessEvents();
-      EXPECT_EQ(stored_invert(mask_id), expected);
-      EXPECT_TRUE(WaitFor([&] {
-        auto* row = group_row(mask_text);
-        return row != nullptr && row->property("maskInverted").toBool() == expected;
-      })) << mask_text.toStdString()
-          << " row does not show invert=" << expected;
-    }
+    auto* row = group_row(mask_text);
+    ASSERT_NE(row, nullptr);
+    EXPECT_EQ(FindVisualItem(row, QStringLiteral("editorMaskGroupMaskInvertButton")), nullptr)
+        << mask_text.toStdString();
+    auto* combine = FindVisualItem(row, QStringLiteral("editorMaskGroupMaskCombineMode"));
+    ASSERT_NE(combine, nullptr) << mask_text.toStdString();
+    EXPECT_TRUE(combine->isVisible());
+    EXPECT_EQ(AttachedName(combine), QStringLiteral("Combine mode: Add"));
+    Click(window_, combine);
   }
-  EXPECT_TRUE(backend_.ai_mask_edit_open_requests().empty());
+  EXPECT_EQ(backend_.mask_commands().size(), commands_before);
   EXPECT_TRUE(MaskAdapter()->selected_mask_id().isEmpty());
+  EXPECT_TRUE(backend_.ai_mask_edit_open_requests().empty());
+}
+
+// Issue #930: any AI Mask turns the group preview into the AI lettermark; the AI Mask row shows
+// the same tile in its own well, and other rows keep their regular well.
+TEST_F(EditorNodesPanelQmlTest, MaskGroupWithAiMaskShowsTheAiPreviewTile) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
+  OpenMaskGroupsPage();
+  auto* body = Find(QStringLiteral("editorMaskGroupsPageBody"));
+  ASSERT_NE(body, nullptr);
+  const auto group_child = [&](const QString& object_name) {
+    return FindVisualItem(Find(QStringLiteral("editorMaskGroupsPageBody")), object_name);
+  };
+  ASSERT_TRUE(WaitFor([&] {
+    auto* preview = group_child(QStringLiteral("editorMaskGroupPreview"));
+    return preview != nullptr && preview->isVisible();
+  })) << warnings_.join('\n').toStdString();
+  auto* ai_tile = group_child(QStringLiteral("editorMaskGroupPreviewAiTile"));
+  ASSERT_NE(ai_tile, nullptr);
+  EXPECT_FALSE(ai_tile->isVisible());
+
+  backend_.AddMaskToPrimaryGrade(grade_mask_test::MakeAiSegmentationMask(MaskId{"mask.ai"}));
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_TRUE(nodes->refreshFromSession());
+  ASSERT_TRUE(WaitFor([&] {
+    auto* tile = group_child(QStringLiteral("editorMaskGroupPreviewAiTile"));
+    auto* preview = group_child(QStringLiteral("editorMaskGroupPreview"));
+    return tile != nullptr && tile->isVisible() && preview != nullptr && !preview->isVisible();
+  })) << warnings_.join('\n').toStdString();
+
+  const auto row_tile = [&](const QString& mask_id) {
+    auto* row = VisualMaskRow(Find(QStringLiteral("editorMaskGroupsPageBody")),
+                              QStringLiteral("editorMaskGroupMaskRow"), mask_id);
+    return FindVisualItem(row, QStringLiteral("editorMaskGroupMaskPreviewAiTile"));
+  };
+  ASSERT_TRUE(WaitFor([&] {
+    auto* tile = row_tile(QStringLiteral("mask.ai"));
+    return tile != nullptr && tile->isVisible();
+  }));
+  auto* radial_tile = row_tile(QStringLiteral("mask.radial"));
+  ASSERT_NE(radial_tile, nullptr);
+  EXPECT_FALSE(radial_tile->isVisible());
+}
+
+// Issue #930: the group visibility slot hides the Color Grade through the session and dims the
+// row; a second click shows it again. Hidden keeps the parameters, Masks, and backbone place.
+TEST_F(EditorNodesPanelQmlTest, MaskGroupVisibilityButtonHidesAndShowsTheColorGrade) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  const NodeId grade_id{"grade.primary"};
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return nodes->has_snapshot(); }));
+  const auto delegate = [this] {
+    return FindVisualItem(Find(QStringLiteral("editorMaskGroupsPageBody")),
+                          QStringLiteral("editorMaskGroupDelegate"));
+  };
+  const auto child = [&](const QString& object_name) {
+    return FindVisualItem(delegate(), object_name);
+  };
+  const auto stored_enabled = [&] {
+    const auto* grade =
+        dynamic_cast<const ColorGradeNodeModel*>(backend_.document()->Graph().FindNode(grade_id));
+    return grade != nullptr && grade->Enabled();
+  };
+  const auto backbone_size_before = backend_.document()->Graph().ImageBackboneNodeIds().size();
+  ASSERT_TRUE(WaitFor([&] {
+    auto* button = child(QStringLiteral("editorMaskGroupVisibilityButton"));
+    return button != nullptr && button->isVisible() && button->isEnabled() &&
+           button->width() > 0.0;
+  })) << warnings_.join('\n').toStdString();
+  EXPECT_EQ(AttachedName(child(QStringLiteral("editorMaskGroupVisibilityButton"))),
+            QStringLiteral("Hide Color Grade 1"));
+
+  Click(window_, child(QStringLiteral("editorMaskGroupVisibilityButton")));
+  EXPECT_EQ(backend_.visibility_grade_count(), 1);
+  EXPECT_EQ(backend_.last_visibility_node_id(), grade_id);
+  EXPECT_FALSE(backend_.last_visibility_value());
+  EXPECT_FALSE(stored_enabled());
+  EXPECT_EQ(backend_.document()->Graph().ImageBackboneNodeIds().size(), backbone_size_before);
+  ASSERT_TRUE(WaitFor([&] {
+    auto* row = delegate();
+    return row != nullptr && row->property("groupEnabled").toBool() == false;
+  }));
+  auto* slot = child(QStringLiteral("editorMaskGroupPreviewSlot"));
+  ASSERT_NE(slot, nullptr);
+  EXPECT_LT(slot->opacity(), 0.5);
+  auto* name = child(QStringLiteral("editorMaskGroupName"));
+  ASSERT_NE(name, nullptr);
+  EXPECT_EQ(name->property("color").value<QColor>(),
+            delegate()->property("mutedColor").value<QColor>());
+  auto* button = child(QStringLiteral("editorMaskGroupVisibilityButton"));
+  ASSERT_NE(button, nullptr);
+  EXPECT_EQ(AttachedName(button), QStringLiteral("Show Color Grade 1"));
+  EXPECT_TRUE(button->property("iconSrc").toString().endsWith(QStringLiteral("eye-off.svg")));
+  EXPECT_TRUE(AttachedName(child(QStringLiteral("editorMaskGroupHeader")))
+                  .contains(QStringLiteral("hidden")));
+  EXPECT_NE(VisualMaskRow(Find(QStringLiteral("editorMaskGroupsPageBody")),
+                          QStringLiteral("editorMaskGroupMaskRow"), QStringLiteral("mask.radial")),
+            nullptr);
+
+  Click(window_, child(QStringLiteral("editorMaskGroupVisibilityButton")));
+  EXPECT_EQ(backend_.visibility_grade_count(), 2);
+  EXPECT_TRUE(backend_.last_visibility_value());
+  EXPECT_TRUE(stored_enabled());
+  ASSERT_TRUE(WaitFor([&] {
+    auto* row = delegate();
+    auto* preview_slot = child(QStringLiteral("editorMaskGroupPreviewSlot"));
+    return row != nullptr && row->property("groupEnabled").toBool() &&
+           preview_slot != nullptr && preview_slot->opacity() > 0.99;
+  }));
 }
 
 // Issue #545: with the Layers panel closed the viewport is wide. On an 8183x5455 photograph the
@@ -3020,6 +3119,10 @@ TEST_F(EditorNodesPanelQmlTest,
   auto* lock = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupLockButton"));
   ASSERT_NE(lock, nullptr);
   EXPECT_EQ(AttachedName(lock), QStringLiteral("解锁Color Grade 1"));
+  auto* visibility =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupVisibilityButton"));
+  ASSERT_NE(visibility, nullptr);
+  EXPECT_EQ(AttachedName(visibility), QStringLiteral("隐藏Color Grade 1"));
 
   auto* remove = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
   ASSERT_NE(remove, nullptr);
@@ -3044,6 +3147,9 @@ TEST_F(EditorNodesPanelQmlTest,
   auto* row_delete = row->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskDeleteButton"));
   ASSERT_NE(row_delete, nullptr);
   EXPECT_EQ(AttachedName(row_delete), QStringLiteral("删除Mask"));
+  auto* combine = row->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskCombineMode"));
+  ASSERT_NE(combine, nullptr);
+  EXPECT_EQ(AttachedName(combine), QStringLiteral("合并方式：添加"));
 
   // No accessible phrase may carry banned separators or the unapproved
   // Mask Group wording anywhere on the page.

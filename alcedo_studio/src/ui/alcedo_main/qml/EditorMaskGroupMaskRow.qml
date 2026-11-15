@@ -4,8 +4,13 @@ import QtQuick.Controls.impl
 import QtQuick.Layouts
 
 // One Mask row inside an EditorMaskGroupDelegate body. The row carries its own
-// (NodeId, MaskId): selection, Invert, and delete commands target this Mask even
-// when another Mask is currently selected for editing.
+// (NodeId, MaskId): selection and delete commands target this Mask even when
+// another Mask is currently selected for editing.
+//
+// Icon strip slots: combine mode, delete. The combine slot shows how this Mask
+// joins the group coverage. Add is the only mode today, so the slot is a
+// passive "+" glyph; a later Subtract mode turns it into a toggle. Invert lives
+// on the Mask panel checkbox.
 // Selection follows docs/VI/README.md: the row keeps its fill, text, and SVG
 // colors and changes only its neutral outer outline.
 Item {
@@ -20,7 +25,7 @@ Item {
     property bool maskInverted: false
     property real opacityValue: 1.0
     property bool selected: false
-    // Row commands (Invert, delete) share the group admission rule: the session
+    // Row commands (delete) share the group admission rule: the session
     // must be editable, no node command may be in flight, and no incomplete
     // draft may own the graph.
     property bool actionsEnabled: true
@@ -34,7 +39,6 @@ Item {
     property string maskThumbUrl: ""
 
     signal clicked()
-    signal invertClicked()
     signal deleteClicked()
     signal navigateUp()
     signal navigateDown()
@@ -63,12 +67,13 @@ Item {
         }
         return ""
     }
+    readonly property bool isAiMask: root.sourceKind === "aiSegmentation"
     readonly property int opacityPercent: Math.round(root.opacityValue * 100)
     readonly property color inkColor: root.maskEnabled ? root.textColor : root.mutedColor
     readonly property color iconTint: root.mutedColor
 
     implicitWidth: 240
-    implicitHeight: Math.max(appTheme.iconButtonHitSizeCompact,
+    implicitHeight: Math.max(appTheme.layerIconHitSize,
                              appTheme.maskGroupMaskPreviewSize + appTheme.spaceXs * 2,
                              maskTextColumn.implicitHeight + appTheme.spaceXs * 2)
     height: implicitHeight
@@ -150,13 +155,23 @@ Item {
         anchors.rightMargin: appTheme.spaceXs
         spacing: appTheme.spaceSm
 
-        // Preview well: NM9.3 shows the Mask type glyph as an honest
-        // placeholder; the NM9.4 coverage thumbnail lands in the same slot.
+        // Preview well: an AI Mask shows the AI lettermark; other kinds show
+        // the type glyph until the coverage thumbnail lands in the same slot.
+        EditorAiMaskTile {
+            objectName: "editorMaskGroupMaskPreviewAiTile"
+            Layout.preferredWidth: appTheme.maskGroupMaskPreviewSize
+            Layout.preferredHeight: appTheme.maskGroupMaskPreviewSize
+            Layout.alignment: Qt.AlignVCenter
+            visible: root.isAiMask
+            inkColor: root.textColor
+        }
+
         Rectangle {
             objectName: "editorMaskGroupMaskPreview"
             Layout.preferredWidth: appTheme.maskGroupMaskPreviewSize
             Layout.preferredHeight: appTheme.maskGroupMaskPreviewSize
             Layout.alignment: Qt.AlignVCenter
+            visible: !root.isAiMask
             radius: appTheme.controlRadiusSmall
             color: appTheme.bgBaseColor
             border.width: 1
@@ -223,60 +238,61 @@ Item {
             }
         }
 
-        // One-click Invert: the Mask covers the area it did not cover; a second
-        // click returns it. Works for every Mask source kind, AI Masks included.
-        Item {
-            Layout.preferredWidth: appTheme.iconButtonHitSizeCompact
-            Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+        Row {
+            id: iconStrip
+            objectName: "editorMaskGroupMaskIconStrip"
             Layout.alignment: Qt.AlignVCenter
+            spacing: 0
 
-            IconActionButton {
-                id: invertButton
-                objectName: "editorMaskGroupMaskInvertButton"
-                anchors.fill: parent
-                compact: true
-                stretchInLayout: true
-                enabled: root.actionsEnabled
-                selected: root.maskInverted
-                iconSrc: "qrc:/panel_icons/mask-invert.svg"
-                iconColorDefault: root.maskInverted ? root.textColor : root.mutedColor
-                iconColorMuted: root.mutedColor
-                fillIdle: "transparent"
-                fillHover: root.hoverColor
-                fillPressed: appTheme.buttonPressedFillColor
-                focusRingColor: root.inkColor
-                actionName: root.maskInverted
-                            ? qsTr("Turn off Invert for %1").arg(root.rowName)
-                            : qsTr("Invert %1").arg(root.rowName)
-                toolTipText: enabled ? actionName : root.actionsDisabledReason
-                focusOnPointerPress: false
-                onClicked: root.invertClicked()
+            // Combine mode slot. Add is the only mode, so the glyph is passive:
+            // it reads as state and keeps the slot for a later Subtract toggle.
+            Item {
+                id: combineSlot
+                objectName: "editorMaskGroupMaskCombineMode"
+                width: appTheme.layerIconHitSize
+                height: appTheme.layerIconHitSize
+                Accessible.role: Accessible.StaticText
+                Accessible.name: qsTr("Combine mode: Add")
+
+                ColorImage {
+                    anchors.centerIn: parent
+                    width: appTheme.layerIconGlyphSize
+                    height: appTheme.layerIconGlyphSize
+                    source: "qrc:/panel_icons/plus.svg"
+                    sourceSize.width: appTheme.layerIconGlyphSize
+                    sourceSize.height: appTheme.layerIconGlyphSize
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    color: root.mutedColor
+                }
+
+                HoverHandler {
+                    id: combineHover
+                }
+
+                ToolTip.visible: combineHover.hovered
+                ToolTip.text: qsTr("Add")
+                ToolTip.delay: 400
             }
-        }
 
-        Item {
-            Layout.preferredWidth: appTheme.iconButtonHitSizeCompact
-            Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-            Layout.alignment: Qt.AlignVCenter
+            Item {
+                width: appTheme.layerIconHitSize
+                height: appTheme.layerIconHitSize
 
-            IconActionButton {
-                id: deleteButton
-                objectName: "editorMaskGroupMaskDeleteButton"
-                anchors.fill: parent
-                compact: true
-                stretchInLayout: true
-                enabled: root.actionsEnabled
-                iconSrc: "qrc:/panel_icons/trash.svg"
-                iconColorDefault: root.mutedColor
-                iconColorMuted: root.mutedColor
-                fillIdle: "transparent"
-                fillHover: root.hoverColor
-                fillPressed: appTheme.buttonPressedFillColor
-                focusRingColor: root.inkColor
-                actionName: qsTr("Delete %1").arg(root.rowName)
-                toolTipText: enabled ? actionName : root.actionsDisabledReason
-                focusOnPointerPress: false
-                onClicked: root.deleteClicked()
+                EditorLayerIconButton {
+                    id: deleteButton
+                    objectName: "editorMaskGroupMaskDeleteButton"
+                    anchors.fill: parent
+                    enabled: root.actionsEnabled
+                    iconSrc: "qrc:/panel_icons/trash.svg"
+                    activeColor: root.textColor
+                    idleColor: root.mutedColor
+                    hoverColor: root.hoverColor
+                    focusRingColor: root.inkColor
+                    actionName: qsTr("Delete %1").arg(root.rowName)
+                    disabledReason: root.actionsDisabledReason
+                    onClicked: root.deleteClicked()
+                }
             }
         }
     }
@@ -284,10 +300,9 @@ Item {
     MouseArea {
         id: rowMouse
         anchors.fill: parent
-        // Keep the Invert and delete hit targets exclusive: a press on them
-        // must not also select the row.
-        anchors.rightMargin: appTheme.iconButtonHitSizeCompact * 2 + appTheme.spaceXs
-                             + appTheme.spaceSm * 2
+        // Keep the icon strip exclusive: a press on its slots must not also
+        // select the row.
+        anchors.rightMargin: iconStrip.width + appTheme.spaceXs
         hoverEnabled: true
         preventStealing: true
         cursorShape: Qt.PointingHandCursor

@@ -671,7 +671,8 @@ auto EditorHistoryMutation::RemoveColorGradeAndBridge(const alcedo::EditorHistor
 
 auto EditorHistoryMutation::SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard,
                                                  const alcedo::NodeId& node_id, bool enabled,
-                                                 std::string* error) -> bool {
+                                                 std::string* error, bool* changed) -> bool {
+  if (changed) *changed = false;
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
   if (!state->history) {
@@ -684,9 +685,15 @@ auto EditorHistoryMutation::SetColorGradeEnabled(const alcedo::EditorHistoryGuar
     if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
     return false;
   }
+  if (grade->Enabled() == enabled) {
+    state_.RecordPublishedRenderReason(std::nullopt);
+    return true;
+  }
   auto batch = MakeSetNodeEnabledBatch(node_id, PipelineEditNodeKind::ColorGrade, grade->Enabled(),
-                                       enabled);
-  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
+                                       enabled, grade->DisplayName());
+  if (!PublishAppliedTypedBatch(*state, state_, batch, false, error)) return false;
+  if (changed) *changed = true;
+  return true;
 }
 
 auto EditorHistoryMutation::SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard,
