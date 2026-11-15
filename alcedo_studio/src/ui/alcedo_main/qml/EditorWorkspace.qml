@@ -334,9 +334,9 @@ Item {
                         visible: root.hasImage
                                  && editorInteraction.cropOverlayVisible
                                  && editorInteraction.overlayGeometryValid
-                        x: Math.min(Math.max(0, editorInteraction.rotateHandleItemPos.x + 10),
+                        x: Math.min(Math.max(0, editorInteraction.angleBadgeItemPos.x + 10),
                                     Math.max(0, parent.width - width - 4))
-                        y: Math.min(Math.max(0, editorInteraction.rotateHandleItemPos.y - height * 0.5),
+                        y: Math.min(Math.max(0, editorInteraction.angleBadgeItemPos.y - height * 0.5),
                                     Math.max(0, parent.height - height - 4))
                         width: cropAngleLabel.implicitWidth + 14
                         height: cropAngleLabel.implicitHeight + 10
@@ -411,7 +411,7 @@ Item {
                         enabled: root.viewportInputEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
                         // HoverHandler owns the platform cursor (Item has no cursorShape).
-                        // BitmapCursor marks the Crop rotate handle: EditorOverlayItem
+                        // BitmapCursor marks the Crop rotate zones: EditorOverlayItem
                         // shows that bitmap cursor, so it is not applied here.
                         // The AI Mask tool draws its own cursor in aiMaskInputOverlay.
                         cursorShape: root.aiMaskOwnsLeftButton

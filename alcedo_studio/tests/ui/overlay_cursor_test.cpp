@@ -86,21 +86,22 @@ TEST(OverlayCursorTest, CropHitCursorFollowsRotatedCornersAndEdges) {
   EXPECT_EQ(CropGeometry::CursorForCropHit(hit), OverlayCursor::ResizeDiagonalUp);
 
   CropHitTestResult rotate;
-  rotate.rotate_handle_hit = true;
+  rotate.rotate_hit = true;
   EXPECT_EQ(CropGeometry::CursorForCropHit(rotate), OverlayCursor::Rotate);
   CropHitTestResult inside;
   inside.inside_crop = true;
   EXPECT_EQ(CropGeometry::CursorForCropHit(inside), OverlayCursor::Move);
 }
 
-TEST(OverlayCursorTest, CropRotateHandleShowsBitmapCursorOnOverlayItem) {
+TEST(OverlayCursorTest, CropRotateZoneShowsBitmapCursorOnOverlayItem) {
   editor_rhi::EditorInteractionController controller;
   ConfigureCrop(controller, 0.0f);
   editor_rhi::EditorOverlayItem overlay;
   overlay.setInteraction(&controller);
 
-  const QPointF handle = controller.rotateHandleItemPos();
-  controller.handleHoverMove(handle.x(), handle.y());
+  // Outside the top-right corner, past the edge bands.
+  const QPointF zone = CropCornersItem(controller)[1] + QPointF(30.0, -30.0);
+  controller.handleHoverMove(zone.x(), zone.y());
   ASSERT_TRUE(controller.hasCustomCursor());
   EXPECT_EQ(controller.cursorShape(), static_cast<int>(kOverlayRotateCursorShape));
   EXPECT_EQ(overlay.cursor().shape(), Qt::BitmapCursor);

@@ -28,17 +28,14 @@ struct OverlaySceneGeometry {
   // Outer then inner crop border strokes as triangle lists.
   std::vector<QPointF> border_outer_triangles;
   std::vector<QPointF> border_inner_triangles;
-  // Edge grip strokes (outer thick, inner thin).
+  // Edge grip and corner bracket strokes (outer thick, inner thin).
   std::vector<QPointF> grip_outer_triangles;
   std::vector<QPointF> grip_inner_triangles;
   // Rule-of-thirds dashed strokes.
   std::vector<QPointF> grid_triangles;
-  // Rotate stem strokes.
-  std::vector<QPointF> stem_outer_triangles;
-  std::vector<QPointF> stem_inner_triangles;
-  // Handle discs: dark outline ring + white fill as triangle fans expanded.
-  std::vector<QPointF> handle_outline_triangles;
-  std::vector<QPointF> handle_fill_triangles;
+  // Fine grid inside the frame while a rotate drag is active (thirds lines excluded).
+  std::vector<QPointF> fine_grid_triangles;
+  // Corner brackets drawn (one per frame corner).
   int handle_count = 0;
   // Detail ROI bounds stroke.
   std::vector<QPointF> detail_roi_triangles;
@@ -194,7 +191,7 @@ class EditorOverlayItem : public QQuickItem {
   void rebuildSceneGeometry();
   void rebuildMaskSceneGeometry();
   // Item cursor wins over the viewport HoverHandler while a Mask handle, or
-  // the Crop rotate handle, is hovered or dragged; unset hands the cursor
+  // a Crop rotate zone, is hovered or dragged; unset hands the cursor
   // back to the viewport.
   void applyOverlayCursor();
   void bindInteraction(EditorInteractionController* controller);

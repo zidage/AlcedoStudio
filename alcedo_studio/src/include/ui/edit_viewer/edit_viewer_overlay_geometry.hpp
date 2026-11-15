@@ -31,6 +31,8 @@ struct EditViewerOverlaySnapshot {
   // overlay drawing may show a guide rectangle independent of crop handles.
   bool                  detail_roi_visible = false;
   QRectF                detail_roi_uv      = QRectF(0.0, 0.0, 1.0, 1.0);
+  // A crop rotate drag is changing the angle: the overlay adds the fine rotation grid.
+  bool                  crop_rotation_active = false;
 };
 
 struct CropOverlayWidgetGeometry {
@@ -38,8 +40,9 @@ struct CropOverlayWidgetGeometry {
   bool                   image_rect_valid    = false;
   std::array<QPointF, 4> crop_corners_widget{};
   bool                   crop_corners_valid  = false;
-  QPointF                rotate_stem_widget{};
-  QPointF                rotate_handle_widget{};
+  // Anchor of the crop angle badge (CropGeometry::CropAngleBadgeWidgetPoint).
+  QPointF                angle_badge_widget{};
+  bool                   crop_rotation_active = false;
   std::array<QPointF, 4> detail_roi_corners_widget{};
   bool                   detail_roi_valid    = false;
 };
@@ -51,7 +54,7 @@ enum class EditViewerOverlayHitKind {
   InsideCrop,
   Edge,
   Corner,
-  RotateHandle,
+  RotateZone,
 };
 
 struct EditViewerOverlayHover {
