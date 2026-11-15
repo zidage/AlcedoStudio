@@ -208,44 +208,84 @@ inline auto RelativeEv(float log_intensity) -> float {
   return (log_intensity - kAcesccMiddleGray) / kAcesccCodePerEv;
 }
 
+// Shadows lift as a bounded slope reduction (#939). The lift at level ev is the integral of the
+// slope reduction w from ev up to the top of the shadow zone, so the curve increases for every
+// amount. w stays in 0..kLiftSlopeReductionMax; more Shadows first raises w toward that limit,
+// then moves the lower end of the zone down. Below the zone the black anchor adds a bounded slope
+// that returns the darkest tones toward their input level.
+
+/// Largest slope reduction; the slope of the Shadows lift stays above 1 minus this value.
+constexpr float kLiftSlopeReductionMax  = 0.74f;
+/// Slope reduction per unit of amount at small amounts.
+constexpr float kLiftSlopeReductionGain = 0.60f;
+/// Relative EV where the slope reduction starts.
+constexpr float kLiftZoneTopHighEv      = 0.75f;
+/// Relative EV where the slope reduction reaches its peak.
+constexpr float kLiftZoneTopLowEv       = -1.5f;
+/// Relative EV where the slope reduction starts to fade, at amount 0.
+constexpr float kLiftZoneFadeHighEv     = -3.5f;
+/// Distance in EV that the fade moves down per unit of amount.
+constexpr float kLiftZoneFadeDeepenEv   = 1.1f;
+/// Width in EV of the fade.
+constexpr float kLiftZoneFadeWidthEv    = 2.0f;
+/// Largest slope added below the zone (black anchor); the curve slope stays below 1 plus this.
+constexpr float kLiftBlackAnchorExcess  = 0.5f;
+/// Lower end of the black anchor, just above the first LLF sample (-9.87 EV).
+constexpr float kLiftBlackAnchorEndEv   = -9.5f;
+
+/**
+ * @brief Integral from @p relative_ev to infinity of a ramp that is 0 above @p high_ev, 1 below
+ * @p low_ev, and a smoothstep between.
+ */
+inline auto RampIntegral(float relative_ev, float high_ev, float low_ev) -> float {
+  const float width = high_ev - low_ev;
+  const float t     = std::clamp((high_ev - relative_ev) / width, 0.0f, 1.0f);
+  const float t3    = t * t * t;
+  return width * (t3 - 0.5f * t3 * t) + std::max(low_ev - relative_ev, 0.0f);
+}
+
+/** @brief Shadows lift in EV at @p relative_ev; 0 for amounts at or below 0. */
+inline auto ShadowLiftEv(float relative_ev, float shadow_amount) -> float {
+  // The black anchor divides by the room below the zone; the amount limit keeps that room open.
+  const float amount = std::clamp(shadow_amount, 0.0f, kShadowLiftAmountLimit);
+  if (amount <= 0.0f) {
+    return 0.0f;
+  }
+  const float peak = kLiftSlopeReductionMax *
+                     (1.0f - std::exp(-amount * kLiftSlopeReductionGain / kLiftSlopeReductionMax));
+  const float fade_high = kLiftZoneFadeHighEv - kLiftZoneFadeDeepenEv * amount;
+  const float fade_low  = fade_high - kLiftZoneFadeWidthEv;
+  const float lift      = peak * (RampIntegral(relative_ev, kLiftZoneTopHighEv, kLiftZoneTopLowEv) -
+                             RampIntegral(relative_ev, fade_high, fade_low));
+
+  const float span      = fade_low - kLiftBlackAnchorEndEv;
+  const float ramp      = std::min(1.0f, 0.5f * span);
+  const float plateau   = peak * (0.5f * (kLiftZoneTopHighEv - kLiftZoneTopLowEv) +
+                                (kLiftZoneTopLowEv - fade_high) + 0.5f * kLiftZoneFadeWidthEv);
+  const float excess    = std::min(kLiftBlackAnchorExcess, plateau / (span - ramp));
+  return lift -
+         excess * (RampIntegral(relative_ev, fade_low, fade_low - ramp) -
+                   RampIntegral(relative_ev, kLiftBlackAnchorEndEv + ramp, kLiftBlackAnchorEndEv));
+}
+
 inline auto ApplyReferenceCurve(float reference_l, float shadow_amount, float highlight_amount)
     -> float {
   const float relative_ev   = RelativeEv(reference_l);
-  const float shadow_lift   = std::max(shadow_amount, 0.0f) * ShadowProfileEv(relative_ev);
+  const float shadow_lift   = ShadowLiftEv(relative_ev, shadow_amount);
   const float shadow_darken = std::max(-shadow_amount, 0.0f) * 0.55f * ShadowProfileEv(relative_ev);
   const float highlight_reduce =
       std::max(highlight_amount, 0.0f) * kHighlightStrengthScale * HighlightProfileEv(relative_ev);
   const float highlight_boost =
       std::max(-highlight_amount, 0.0f) * 0.65f * HighlightProfileEv(relative_ev);
-  const float practical_dark =
-      Smoothstep(-5.85f, -3.95f, relative_ev) * (1.0f - Smoothstep(-3.20f, -1.65f, relative_ev));
-  const float fill_plateau = Smoothstep(-5.55f, -3.30f, relative_ev) *
-                             (1.0f - 0.45f * Smoothstep(-2.65f, -0.20f, relative_ev));
-  const float deep_toe_fill =
-      shadow_lift * (1.0f - Smoothstep(-7.35f, -4.95f, relative_ev)) * 0.28f;
-  const float shadow_fill_lift =
-      shadow_lift * (0.62f * practical_dark + 0.14f * fill_plateau) + deep_toe_fill;
-  const float lifted_relative_ev = relative_ev + 0.24f * (shadow_lift + 0.84f * shadow_fill_lift);
-  const float combo_shadow_rollback =
-      ((shadow_lift > 1.0e-6f && highlight_reduce > 1.0e-6f) ? 1.0f : 0.0f) * shadow_fill_lift *
-      Smoothstep(-2.00f, -0.60f, lifted_relative_ev) *
-      (1.0f - Smoothstep(0.10f, 1.30f, lifted_relative_ev)) * 1.08f;
-  const float combo_low_mid_darken = std::min(shadow_lift + shadow_fill_lift, highlight_reduce) *
-                                     Smoothstep(-2.45f, -0.90f, lifted_relative_ev) *
-                                     (1.0f - Smoothstep(0.50f, 1.95f, lifted_relative_ev)) * 1.30f;
-  const float delta_ev = shadow_lift + shadow_fill_lift - combo_shadow_rollback - shadow_darken -
-                         highlight_reduce - combo_low_mid_darken + highlight_boost;
+  const float delta_ev = shadow_lift - shadow_darken - highlight_reduce + highlight_boost;
   return reference_l + delta_ev * kAcesccCodePerEv;
 }
 
 inline auto DetailAlpha(float reference_l, float shadow_amount, float highlight_amount) -> float {
+  (void)reference_l;
+  (void)shadow_amount;
   (void)highlight_amount;
-  const float relative_ev = RelativeEv(reference_l);
-  const float deep_shadow = 1.0f - Smoothstep(-5.7f, -4.1f, relative_ev);
-  const float mid_shadow =
-      Smoothstep(-5.0f, -3.6f, relative_ev) * (1.0f - Smoothstep(-2.4f, -1.0f, relative_ev));
-  const float lift_amount = std::max(shadow_amount, 0.0f);
-  return 1.0f + 0.40f * lift_amount * deep_shadow - 0.14f * lift_amount * mid_shadow;
+  return 1.0f;
 }
 
 inline auto ToneBeta(float reference_l, float shadow_amount, float highlight_amount) -> float {

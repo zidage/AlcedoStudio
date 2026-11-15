@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -99,17 +100,52 @@ TEST(LocalToneMappingConstantsMatchRuntime, ReferenceCurvePreservesExpectedToneD
 }
 
 TEST(LocalToneMappingConstantsMatchRuntime, DetailAlphaAndToneBetaStayBounded) {
-  const float deep_shadow = tone::kAcesccMiddleGray - 6.0f * tone::kAcesccCodePerEv;
-  const float mid_shadow  = tone::kAcesccMiddleGray - 2.0f * tone::kAcesccCodePerEv;
-
-  EXPECT_GT(tone::DetailAlpha(deep_shadow, 1.0f, 0.0f), 1.0f);
-  EXPECT_LT(tone::DetailAlpha(mid_shadow, 1.0f, 0.0f), 1.0f);
-
   for (float l = tone::kGammaMinL; l <= tone::kGammaMaxL; l += 0.11f) {
+    EXPECT_FLOAT_EQ(tone::DetailAlpha(l, 1.0f, 0.0f), 1.0f);
+    EXPECT_FLOAT_EQ(tone::DetailAlpha(l, tone::kShadowLiftAmountLimit, 1.0f), 1.0f);
+
     const float beta = tone::ToneBeta(l, 1.0f, 1.0f);
     EXPECT_GE(beta, tone::kToneBetaMin);
     EXPECT_LE(beta, tone::kToneBetaMax);
   }
+}
+
+// #939: the Shadows lift is the integral of a bounded slope reduction. Values from the prototype
+// study (Shadows slider +25, +50, +100, +150; lift in EV at the relative EV in the header row).
+TEST(LocalToneMappingConstantsMatchRuntime, ShadowLiftMatchesThePrototypeCurve) {
+  const float ev[] = {-9.0f, -7.0f, -5.5f, -4.3f, -3.0f, -2.0f, -1.0f, 0.0f};
+  struct Row {
+    float slider;
+    float lift[8];
+    float min_slope;
+  };
+  const Row rows[] = {
+      {25.0f, {0.04f, 0.87f, 1.08f, 0.92f, 0.61f, 0.38f, 0.15f, 0.02f}, 0.77f},
+      {50.0f, {1.09f, 1.99f, 1.95f, 1.55f, 1.03f, 0.64f, 0.25f, 0.03f}, 0.61f},
+      {100.0f, {3.14f, 3.56f, 2.96f, 2.27f, 1.52f, 0.94f, 0.37f, 0.04f}, 0.42f},
+      {150.0f, {4.71f, 4.39f, 3.40f, 2.61f, 1.74f, 1.08f, 0.43f, 0.05f}, 0.34f},
+  };
+  for (const auto& row : rows) {
+    const float amount = row.slider * tone::kHighlightStrengthScale / 80.0f;
+    for (int i = 0; i < 8; ++i) {
+      EXPECT_NEAR(tone::ShadowLiftEv(ev[i], amount), row.lift[i], 0.006f)
+          << row.slider << " at " << ev[i] << " EV";
+    }
+    // Slope of output EV against input EV, measured on a 0.01 EV grid.
+    float min_slope = 2.0f;
+    for (float x = -9.87f; x < 13.4f; x += 0.01f) {
+      const float slope =
+          1.0f + (tone::ShadowLiftEv(x + 0.01f, amount) - tone::ShadowLiftEv(x, amount)) / 0.01f;
+      min_slope = std::min(min_slope, slope);
+      EXPECT_LE(slope, 1.0f + tone::kLiftBlackAnchorExcess + 1.0e-3f) << row.slider << " " << x;
+    }
+    EXPECT_NEAR(min_slope, row.min_slope, 0.006f) << row.slider;
+    EXPECT_GT(min_slope, 1.0f - tone::kLiftSlopeReductionMax) << row.slider;
+  }
+
+  EXPECT_FLOAT_EQ(tone::ShadowLiftEv(-4.3f, 0.0f), 0.0f);
+  EXPECT_FLOAT_EQ(tone::ShadowLiftEv(-4.3f, -1.0f), 0.0f);
+  EXPECT_FLOAT_EQ(tone::ShadowLiftEv(8.0f, tone::kShadowLiftAmountLimit), 0.0f);
 }
 
 TEST(LocalToneMappingConstantsMatchRuntime, CacheKeysTrackAmountsFlagsAndRoi) {
