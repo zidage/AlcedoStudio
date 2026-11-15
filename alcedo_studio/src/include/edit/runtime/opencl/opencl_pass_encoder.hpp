@@ -97,9 +97,10 @@ template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::PrimaryColorGrade> {
   static auto Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
                      const PreparedRawInput& prepared, const PipelineDocument& document,
-                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene)
-      -> FrameSceneBinding {
-    return ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade, scene)
+                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene,
+                     CurveInputHistogramRecord* histogram = nullptr) -> FrameSceneBinding {
+    return ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade, scene,
+                                     histogram)
         .output_binding;
   }
 };

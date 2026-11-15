@@ -205,6 +205,7 @@ add_executable(EditorSessionHistoryPortTest
 target_include_directories(EditorSessionHistoryPortTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorSessionHistoryPortTest
+  ProfileToneCurve
   AdjustmentTransferService
   AiMaskAnalysisImage
   LutPreviewImage
@@ -321,6 +322,7 @@ alcedo_register_test_target(EditorComparisonServiceTest ui)
 add_executable(EditorMaskCoveragePreviewTest
     ${ALCEDO_TEST_ROOT}/app/editor_mask_coverage_preview_test.cpp
     ${ALCEDO_TEST_ROOT}/app/editor_mask_range_coverage_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/editor_curve_input_histogram_test.cpp
     ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
 target_include_directories(EditorMaskCoveragePreviewTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
@@ -523,6 +525,8 @@ def_ui_test(AlbumBackendLibraryMarksTest album_backend_library_marks_test.cpp)
 alcedo_register_test_target(AlbumBackendLibraryMarksTest ui)
 
 def_ui_test(AlbumBackendThumbnailTest album_backend_thumbnail_test.cpp)
+# display_destination_test_support.hpp builds the P3 test profile with LittleCMS.
+target_link_libraries(AlbumBackendThumbnailTest PRIVATE lcms2::lcms2)
 alcedo_register_test_target(AlbumBackendThumbnailTest ui)
 
 def_ui_test(AlbumBackendStatsFilterTest album_backend_stats_filter_test.cpp)
@@ -1120,6 +1124,39 @@ alcedo_ui_gtest_discover_tests(LibraryColorLabelSettingsQmlTest
 )
 alcedo_register_test_target(LibraryColorLabelSettingsQmlTest ui)
 
+# Settings > Default Behavior > RAW Import (#920) on the production SettingDialog and module host:
+# the rows follow the section model, the preview takes no input, and Done writes the look.
+add_executable(RawImportLookSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/raw_import_look_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(RawImportLookSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(RawImportLookSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        RawImportLookSettings
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(RawImportLookSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(RawImportLookSettingsQmlTest
+    TEST_PREFIX "RawImportLookSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;settings;import_look"
+)
+alcedo_register_test_target(RawImportLookSettingsQmlTest ui)
+
 # Settings > About and the Settings type scale (#824) on the production SettingDialog and module
 # host: Open Log Folder with a file-manager stand-in, theme type tokens on every page, and the
 # README acknowledgement links on About.
@@ -1605,6 +1642,31 @@ alcedo_ui_gtest_discover_tests(EditorNodeSelectionLayoutTest
     PROPERTIES LABELS "editor_nodes;workspace_qml")
 alcedo_register_test_target(EditorNodeSelectionLayoutTest ui)
 
+# The RAW Import section model of Settings (#920): stored look, pending edits, apply as setters and
+# key removals, rejected values, and the curve line of each Tone Curve preset.
+add_executable(RawImportLookSettingsModelTest
+    ${ALCEDO_TEST_ROOT}/ui/raw_import_look_settings_model_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(RawImportLookSettingsModelTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(RawImportLookSettingsModelTest
+    PRIVATE
+        AlbumBackendLib
+        RawImportLookSettings
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(RawImportLookSettingsModelTest
+    TEST_PREFIX "RawImportLookSettingsModelTest."
+    PROPERTIES LABELS "settings;import_look")
+alcedo_register_test_target(RawImportLookSettingsModelTest ui)
+
 add_executable(MaskThumbnailCoordinatorTest
     ${ALCEDO_TEST_ROOT}/ui/mask_thumbnail_coordinator_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
@@ -1712,6 +1774,55 @@ alcedo_ui_gtest_discover_tests(EditorScopeControllerTest
     PROPERTIES LABELS "workspace_qml;editor_scope")
 alcedo_register_test_target(EditorScopeControllerTest ui)
 
+# Tone Curve TC3 (issue #888): request, identity filter, and thread hand-off of the owner of the
+# curve input histogram.
+add_executable(EditorCurveHistogramControllerTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_curve_histogram_controller_test.cpp
+)
+target_include_directories(EditorCurveHistogramControllerTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorCurveHistogramControllerTest
+    PRIVATE
+        AlcedoInProcessTestMain
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+)
+alcedo_ui_gtest_discover_tests(EditorCurveHistogramControllerTest
+    TEST_PREFIX "EditorCurveHistogramControllerTest."
+    PROPERTIES LABELS "workspace_qml;editor_tone_curve")
+alcedo_register_test_target(EditorCurveHistogramControllerTest ui)
+
+# Tone Curve TC4 (issue #889): view transform, layer geometry, hit test, input routing, and
+# painting of the reusable plot pane.
+# The test has its own main: the painting tests need the native platform plugin (the offscreen
+# plugin gives the software scene graph). They never show a window.
+add_executable(EditorPlotPaneTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_plot_pane_test.cpp
+)
+target_include_directories(EditorPlotPaneTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorPlotPaneTest
+    PRIVATE
+        EditorPlotPane
+        # BuildScopeHistogramRenderData gives the histogram layer its display heights.
+        EditScope
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Quick
+        Qt6::Test
+)
+alcedo_ui_gtest_discover_tests(EditorPlotPaneTest
+    TEST_PREFIX "EditorPlotPaneTest."
+    PROPERTIES LABELS "workspace_qml;editor_tone_curve")
+alcedo_register_test_target(EditorPlotPaneTest ui)
+
 # Histogram plot painting: additive channel overlap, clip markers, and the break across a cut peak.
 add_executable(EditorScopeItemPaintTest
     ${ALCEDO_TEST_ROOT}/ui/editor_scope_item_paint_test.cpp
@@ -1808,6 +1919,7 @@ target_include_directories(EditorComparisonImageProviderTest
 target_link_libraries(EditorComparisonImageProviderTest
     PRIVATE
         AlbumBackendLib
+        lcms2::lcms2
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -1868,6 +1980,7 @@ target_include_directories(EditorComparisonControllerTest
 target_link_libraries(EditorComparisonControllerTest
     PRIVATE
         AlbumBackendLib
+        lcms2::lcms2
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -2384,6 +2497,90 @@ if(ALCEDO_METAL_ENABLED)
 endif()
 alcedo_register_test_target(MaskCoveragePresentationTest ui)
 
+# Windows display ICC plan W1: the display table and the 8-bit image conversion with LittleCMS.
+add_executable(DisplayColorTransformTest
+    ${ALCEDO_TEST_ROOT}/ui/display_color_transform_test.cpp
+)
+target_include_directories(DisplayColorTransformTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DisplayColorTransformTest
+    PRIVATE DisplayColorTransform lcms2::lcms2 GTest::gtest_main Qt6::Gui)
+alcedo_ui_gtest_discover_tests(DisplayColorTransformTest
+    TEST_PREFIX "DisplayColorTransformTest."
+    PROPERTIES LABELS "editor_rhi;display_output")
+alcedo_register_test_target(DisplayColorTransformTest ui)
+
+# W2: the destination rules, the monitor state change detection, and the window object on the Qt
+# offscreen platform.
+add_executable(WindowDisplayDestinationTest
+    ${ALCEDO_TEST_ROOT}/ui/window_display_destination_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(WindowDisplayDestinationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(WindowDisplayDestinationTest
+    PRIVATE
+        WindowDisplayDestination
+        lcms2::lcms2
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(WindowDisplayDestinationTest
+    TEST_PREFIX "WindowDisplayDestinationTest."
+    PROPERTIES LABELS "editor_rhi;display_output")
+alcedo_register_test_target(WindowDisplayDestinationTest ui)
+
+# W2: the Windows color system query on the monitors of the test machine.
+if(WIN32)
+    add_executable(MonitorColorProfileTest
+        ${ALCEDO_TEST_ROOT}/ui/monitor_color_profile_test.cpp
+    )
+    target_include_directories(MonitorColorProfileTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+    target_link_libraries(MonitorColorProfileTest
+        PRIVATE WindowDisplayDestination GTest::gtest_main user32)
+    alcedo_ui_gtest_discover_tests(MonitorColorProfileTest
+        TEST_PREFIX "MonitorColorProfileTest."
+        PROPERTIES LABELS "editor_rhi;display_output")
+    alcedo_register_test_target(MonitorColorProfileTest ui)
+
+    # W4: the Display profile tile of Settings > LUTs and Color Management (a Windows-only tile)
+    # with monitor states given to the window destination of the tile.
+    add_executable(DisplayProfileTileQmlTest
+        ${ALCEDO_TEST_ROOT}/ui/display_profile_tile_qml_test.cpp
+        ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    )
+    target_include_directories(DisplayProfileTileQmlTest
+        PUBLIC ${ALCEDO_INCLUDE_DIR}
+        PRIVATE ${ALCEDO_TEST_DIR}
+    )
+    target_link_libraries(DisplayProfileTileQmlTest
+        PRIVATE
+            DisplayProfileReadout
+            AppTheme
+            ColorEncodingCatalog
+            lcms2::lcms2
+            GTest::gtest
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Test
+            Qt6::Qml
+            Qt6::Quick
+            Qt6::QuickControls2
+            Qt6::Widgets
+    )
+    target_compile_definitions(DisplayProfileTileQmlTest
+        PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+    )
+    alcedo_ui_gtest_discover_tests(DisplayProfileTileQmlTest
+        TEST_PREFIX "DisplayProfileTileQmlTest."
+        PROPERTIES LABELS "workspace_qml;display_output")
+    alcedo_register_test_target(DisplayProfileTileQmlTest ui)
+endif()
+
 # SM8.6: the one viewport composite of the photo and the Mask coverage, on the real QRhi and coverage
 # channel of each backend (one process per backend, as MaskCoveragePresentationTest).
 add_executable(ViewportCoverageCompositeTest
@@ -2656,27 +2853,6 @@ target_link_libraries(EditorToneCurveModelTest
 alcedo_ui_gtest_discover_tests(EditorToneCurveModelTest TEST_PREFIX "EditorToneCurveModelTest.")
 alcedo_register_test_target(EditorToneCurveModelTest ui)
 
-# Phase 6B: pure tone-curve scene geometry (no QQuickWindow / GPU).
-add_executable(EditorToneCurveGeometryTest
-    ${ALCEDO_TEST_ROOT}/ui/editor_tone_curve_geometry_test.cpp
-)
-target_include_directories(EditorToneCurveGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorToneCurveGeometryTest
-  PRIVATE
-    AlcedoInProcessTestMain
-    AlbumBackendLib
-    GTest::gtest
-    JSON
-    Qt6::Core
-    Qt6::Gui
-    Qt6::Qml
-    Qt6::Quick
-    Qt6::Test
-    Qt6::Widgets
-)
-alcedo_ui_gtest_discover_tests(EditorToneCurveGeometryTest TEST_PREFIX "EditorToneCurveGeometryTest.")
-alcedo_register_test_target(EditorToneCurveGeometryTest ui)
-
 # Phase 6D: Look panel typed models (WB / HSL / CDL / LUT) — no QML/GPU.
 add_executable(EditorLookModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_look_model_test.cpp
@@ -2710,6 +2886,7 @@ target_include_directories(LutLibraryModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${AL
 target_link_libraries(LutLibraryModelTest
   PRIVATE
     AlbumBackendLib
+    lcms2::lcms2
     EditRuntime
     GTest::gtest
     JSON

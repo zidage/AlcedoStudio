@@ -135,6 +135,16 @@ def_library(CameraProfileLibraryService
     PUBLIC_DEPS Image Qt6::Core ThreadPool
 )
 
+# RAW import look in the application QSettings (#918). Import reads it through
+# RawImportLookSource; the default document factory sees only the RawImportLook value.
+def_library(RawImportLookSettings
+    SOURCES
+        "${ALCEDO_APP_ROOT}/raw_import_look_settings.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/raw_import_look_settings.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/raw_import_look_source.hpp"
+    PUBLIC_DEPS EditGraph Qt6::Core
+)
+
 # Owner of the local LUT library: root choice, inventory, favorites, import,
 # and root migration (lut_library_and_package_management_plan.md, L2).
 # Package extraction and activation (L3) run as a library operation. The published state is
@@ -617,7 +627,7 @@ def_library(EditorPipelineCommandService
         "${ALCEDO_APP_ROOT}/editor_pipeline_command_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_pipeline_command_service.hpp"
     PUBLIC_DEPS EditGraph JSON EditorParameterWrite
-    PRIVATE_DEPS DcpCameraProfileBinding
+    PRIVATE_DEPS DcpCameraProfileBinding ProfileToneCurve
 )
 
 def_library(EditorPanelProjection
@@ -737,6 +747,7 @@ target_link_libraries(EditorSessionService PUBLIC EditorWorkingDocument)
 
 def_library(ImportService
     SOURCES "${ALCEDO_APP_ROOT}/import_service.cpp"
+            "${ALCEDO_INCLUDE_ROOT}/app/raw_import_look_source.hpp"
     # Import creates each image's history root through InitializeImageRoot on the
     # PipelineMgmtService injected at construction; it constructs no executor.
     PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService

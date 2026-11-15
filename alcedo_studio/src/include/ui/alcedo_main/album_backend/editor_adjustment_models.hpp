@@ -9,6 +9,7 @@
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
+#include <optional>
 
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 
@@ -123,6 +124,11 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
                  defaultValueChanged)
   Q_PROPERTY(double minimum READ minimum WRITE setMinimum NOTIFY minimumChanged)
   Q_PROPERTY(double maximum READ maximum WRITE setMaximum NOTIFY maximumChanged)
+  /// Rail range of the slider inside [minimum, maximum]: a rail drag stays in it, typing
+  /// reaches [minimum, maximum]. It follows [minimum, maximum] until set (the catalog entry of
+  /// fieldKey sets it).
+  Q_PROPERTY(double railMinimum READ railMinimum WRITE setRailMinimum NOTIFY railRangeChanged)
+  Q_PROPERTY(double railMaximum READ railMaximum WRITE setRailMaximum NOTIFY railRangeChanged)
   Q_PROPERTY(double step READ step WRITE setStep NOTIFY stepChanged)
   Q_PROPERTY(int precision READ precision WRITE setPrecision NOTIFY precisionChanged)
   Q_PROPERTY(QString suffix READ suffix WRITE setSuffix NOTIFY suffixChanged)
@@ -143,6 +149,11 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   void setMinimum(double v);
   [[nodiscard]] double maximum() const { return maximum_; }
   void setMaximum(double v);
+  /// The set rail bound, or minimum / maximum while unset, limited to [minimum, maximum].
+  [[nodiscard]] double railMinimum() const;
+  void setRailMinimum(double v);
+  [[nodiscard]] double railMaximum() const;
+  void setRailMaximum(double v);
   [[nodiscard]] double step() const { return step_; }
   void setStep(double v);
   [[nodiscard]] int precision() const { return precision_; }
@@ -185,6 +196,7 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   void defaultValueChanged();
   void minimumChanged();
   void maximumChanged();
+  void railRangeChanged();
   void stepChanged();
   void precisionChanged();
   void suffixChanged();
@@ -219,6 +231,8 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   double defaultValue_ = 0.0;
   double minimum_ = 0.0;
   double maximum_ = 1.0;
+  std::optional<double> railMinimum_;
+  std::optional<double> railMaximum_;
   double step_ = 0.01;
   int precision_ = 2;
   QString suffix_;

@@ -37,6 +37,7 @@
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "grade_owned_mask_support.hpp"
@@ -75,8 +76,22 @@ void LoadVersionOneNeutralColorWheels(PipelineDocument& document) {
   EXPECT_TRUE(wheels->IsDefault());
 }
 
+/// Sets the RAW import look of the code before #891 on the default Color Grade of @p document:
+/// contrast 15 and the identity RGB curve (the Film-like curve replaced it). The stored files of
+/// this test were written with that look.
+void ApplyImportLookBeforeFilmLike(PipelineDocument& document) {
+  auto* grade = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  grade->FindAdjustmentByType(type_ids::Contrast())
+      ->LoadJson({{"contrast", kImportLookContrastBeforeFilmLike}});
+  auto* curve = dynamic_cast<CurveModel*>(grade->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  curve->SetPoints(IdentityCurvePoints());
+}
+
 auto MultiGradeDocument() -> PipelineDocument {
   auto document = CreateDefaultPipelineDocument();
+  ApplyImportLookBeforeFilmLike(document);
   EXPECT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.look"}).empty());
   grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
   return document;
@@ -113,6 +128,7 @@ auto MakeFilmGrainHistoryCase(std::string_view name) -> FilmGrainHistoryCase {
   FilmGrainHistoryCase result;
   result.raw_json = nlohmann::json{{"CameraModel", "RootStateCamera"}};
   auto document   = CreateDefaultPipelineDocument();
+  ApplyImportLookBeforeFilmLike(document);
   gpu_dag_test::EnsureTestCameraProfile(document);
   std::string error;
   if (name == "film_print") {
@@ -233,6 +249,7 @@ TEST(PipelineDocumentCheckpointFormat,
   // a bound camera profile, element 42. The same RAW document must encode to the same bytes, keep
   // its root id, and never gain the Develop "input" key. Its color wheels are version 1 JSON.
   auto document = CreateDefaultPipelineDocument();
+  ApplyImportLookBeforeFilmLike(document);
   gpu_dag_test::EnsureTestCameraProfile(document);
   LoadVersionOneNeutralColorWheels(document);
   const auto raw_json   = nlohmann::json{{"CameraModel", "RootStateCamera"}};
@@ -266,6 +283,52 @@ TEST(PipelineDocumentCheckpointFormat,
 }
 
 TEST(PipelineDocumentCheckpointFormat,
+     ExistingCurveRootDocumentsSerializeByteIdenticalAfterChannelCurves) {
+  // curve_root_before_channel_curves.json is raw_root_before_raster_input.json (the default
+  // document with a bound camera profile, element 42) with a four-point RGB curve, in the Curve
+  // JSON of the code before the red, green, and blue curves: {"points": [...]} only. The same
+  // document must encode to the same bytes (so it keeps its root id), read identity channel
+  // curves, and never gain the channel keys (tone_curve_editor_plan.md, TC2).
+  auto document = CreateDefaultPipelineDocument();
+  ApplyImportLookBeforeFilmLike(document);
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  LoadVersionOneNeutralColorWheels(document);
+  auto* curve =
+      dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  const std::vector<CurvePoint> rgb{{0.0f, 0.0f}, {0.25f, 0.18f}, {0.6f, 0.7f}, {1.0f, 1.0f}};
+  curve->SetPoints(rgb);
+  const auto raw_json   = nlohmann::json{{"CameraModel", "RootStateCamera"}};
+  const auto root_bytes = LoadExpectedBytes("curve_root_before_channel_curves.json");
+  // The stored root has the HLS defaults of its time; the default document has others (#553).
+  // Load the stored HLS params so that this test compares the curve only.
+  const auto stored_grade =
+      nlohmann::json::parse(root_bytes).at("pipeline_document").at("nodes").at(1);
+  ASSERT_EQ(stored_grade.at("id"), "grade.primary");
+  for (const auto& adjustment : stored_grade.at("adjustments")) {
+    if (adjustment.at("id") == "grade.primary.hls") {
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Hls())->LoadJson(
+          adjustment.at("params"));
+    }
+  }
+  EXPECT_EQ(EncodePipelineRootState(42, document, raw_json).dump(), root_bytes);
+
+  const auto root = DecodePipelineRootState(nlohmann::json::parse(root_bytes));
+  EXPECT_EQ(EncodePipelineRootState(root.element_id, root.document, root.raw_color_context).dump(),
+            root_bytes);
+  EXPECT_EQ(ComputeRootId(42, root.document, root.raw_color_context),
+            ComputeRootId(42, document, raw_json));
+  const auto* restored = dynamic_cast<const CurveModel*>(
+      root.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(restored->Points(), rgb);
+  for (const auto channel : {CurveChannel::Red, CurveChannel::Green, CurveChannel::Blue}) {
+    EXPECT_EQ(restored->ChannelPoints(channel), IdentityCurvePoints()) << CurveChannelKey(channel);
+    EXPECT_FALSE(restored->ToJson().contains(std::string{CurveChannelKey(channel)}));
+  }
+}
+
+TEST(PipelineDocumentCheckpointFormat,
      ExistingLmtRootDocumentsSerializeByteIdenticalAfterEncodingChange) {
   // lmt_root_before_lut_encoding.json and lmt_checkpoint_before_lut_encoding.json were written by
   // the document code of 8f8e71220, before LMT input and output encodings existed: the default
@@ -274,6 +337,7 @@ TEST(PipelineDocumentCheckpointFormat,
   // ACEScc, and never gain the encoding keys (lut_color_encoding_plan.md, section 6.1). Its color
   // wheels are version 1 JSON.
   auto document = CreateDefaultPipelineDocument();
+  ApplyImportLookBeforeFilmLike(document);
   gpu_dag_test::EnsureTestCameraProfile(document);
   LoadVersionOneNeutralColorWheels(document);
   auto* lmt =

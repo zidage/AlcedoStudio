@@ -35,6 +35,12 @@ using PropertyType = EditorParameterPropertyType;
 using json         = nlohmann::json;
 
 constexpr EditorScalarUiRange kSignedPercentRange{-100.0, 100.0, 0.0, 1.0, 0};
+/// Exposure: the rail covers +-5 EV; typing reaches +-10 EV.
+constexpr EditorScalarUiRange kExposureRange{-10.0, 10.0, 0.0, 0.01, 2, -5.0, 5.0};
+/// Shadows and Highlights: the rail covers +-100. Typing extends the lift of Shadows to +150 and
+/// the recovery of Highlights to -150 (ShadowsTraits / HighlightsTraits, local tone limits).
+constexpr EditorScalarUiRange kShadowsRange{-100.0, 150.0, 0.0, 1.0, 0, -100.0, 100.0};
+constexpr EditorScalarUiRange kHighlightsRange{-150.0, 100.0, 0.0, 1.0, 0, -100.0, 100.0};
 constexpr EditorScalarUiRange kPercentRange{0.0, 100.0, 0.0, 1.0, 0};
 /// Film Grain: 100 % is the datasheet granularity of the film (decision U3).
 constexpr EditorScalarUiRange kFilmGrainRange{0.0, 200.0, 0.0, 1.0, 0};
@@ -1384,12 +1390,18 @@ auto ColorWheelValidate(const json& ui_value, std::string* error) -> bool {
 // ---------------------------------------------------------------------------------------------
 // curve and lut: the UI value is the Model JSON.
 
+/// The reset value has the four curves, because a curve write leaves a curve that it does not
+/// have as it is.
 auto CurveUiDefault() -> json {
-  json points = json::array();
-  for (const auto& point : CurvePayload{}.points) {
-    points.push_back({{"x", static_cast<double>(point.x)}, {"y", static_cast<double>(point.y)}});
+  json result = json::object();
+  for (const auto channel : kCurveChannels) {
+    json points = json::array();
+    for (const auto& point : IdentityCurvePoints()) {
+      points.push_back({{"x", static_cast<double>(point.x)}, {"y", static_cast<double>(point.y)}});
+    }
+    result[std::string{CurveChannelKey(channel)}] = std::move(points);
   }
-  return {{"points", std::move(points)}};
+  return result;
 }
 
 auto CurveModelToUi(const json& model_json, std::string* error) -> std::optional<json> {
@@ -1558,13 +1570,13 @@ auto ModelEntry(std::string_view field, std::string_view alias, EditorAdjustment
 auto Table() -> const std::array<EditorParameterCatalogEntry, 25>& {
   static const std::array<EditorParameterCatalogEntry, 25> entries = {
       Scalar("exposure", {}, EditorAdjustmentField::Exposure, "tone", "exposure_ev",
-             Conversion::Identity, EditorScalarUiRange{-10.0, 10.0, 0.0, 0.01, 2}),
+             Conversion::Identity, kExposureRange),
       Scalar("contrast", {}, EditorAdjustmentField::Contrast, "tone", "contrast",
              Conversion::Identity, kSignedPercentRange),
       Scalar("highlights", {}, EditorAdjustmentField::Highlights, "tone", "highlights",
-             Conversion::Identity, kSignedPercentRange),
+             Conversion::Identity, kHighlightsRange),
       Scalar("shadows", {}, EditorAdjustmentField::Shadows, "tone", "shadows",
-             Conversion::Identity, kSignedPercentRange),
+             Conversion::Identity, kShadowsRange),
       Scalar("white", "whites", EditorAdjustmentField::Whites, "tone", "white",
              Conversion::Identity, kSignedPercentRange),
       Scalar("black", "blacks", EditorAdjustmentField::Blacks, "tone", "black",
@@ -1612,8 +1624,14 @@ auto Table() -> const std::array<EditorParameterCatalogEntry, 25>& {
                                &ColorWheelUiToModel, nullptr),
                    &ColorWheelValidate),
       ModelEntry("curve", {}, EditorAdjustmentField::Curve, "tone",
-                 "{\"points\": [{\"x\": number, \"y\": number}, ...]}: at least two control "
-                 "points in the unit square",
+                 "{\"points\": [{\"x\": number, \"y\": number}, ...], \"red\": [...], "
+                 "\"green\": [...], \"blue\": [...]}: the RGB curve (points) and the red, green, "
+                 "and blue curves, each 2 to 16 control points in the unit square with x "
+                 "strictly increasing. A write needs one or more of the four keys and leaves "
+                 "the other curves as they are; in a write, the value of a key can be the id of "
+                 "a Tone Curve preset (curve.presets), which writes the points of the preset. "
+                 "The render applies the RGB curve to each channel, then the curve of the "
+                 "channel",
                  &CurveUiDefault, &CurveModelToUi),
       ModelEntry("lut", "ocio_lmt", EditorAdjustmentField::Lut, "lut",
                  "{\"cube_path\": string} or a tagged {\"reference\": object}, and optional "

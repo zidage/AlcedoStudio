@@ -2221,6 +2221,34 @@ Alcedo 将改用 %1。</translation>
     </message>
 </context>
 <context>
+    <name>DisplayProfileTile</name>
+    <message>
+        <location filename="../qml/DisplayProfileTile.qml" line="+27"/>
+        <source>Applied</source>
+        <translation>已应用</translation>
+    </message>
+    <message>
+        <source>Managed by Windows</source>
+        <translation>由 Windows 管理</translation>
+    </message>
+    <message>
+        <source>No profile, sRGB</source>
+        <translation>无配置文件，按 sRGB</translation>
+    </message>
+    <message>
+        <source>Not applied</source>
+        <translation>未应用</translation>
+    </message>
+    <message>
+        <source>No monitor</source>
+        <translation>无显示器</translation>
+    </message>
+    <message>
+        <source>Display profile</source>
+        <translation>显示器配置文件</translation>
+    </message>
+</context>
+<context>
     <name>CacheSettingsPanel</name>
     <message>
         <location filename="../qml/CacheSettingsPanel.qml" line="+75"/>
@@ -4994,6 +5022,53 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <location line="+1"/>
         <source>Select an image to view scopes</source>
         <translation>选择图像以查看示波器</translation>
+    </message>
+</context>
+<context>
+    <name>EditorToneCurveSection</name>
+    <message>
+        <source>Tone Curve</source>
+        <translation>色调曲线</translation>
+    </message>
+    <message>
+        <source>Histogram</source>
+        <translation>直方图</translation>
+    </message>
+    <message>
+        <source>Fit to photo range</source>
+        <translation>适配照片范围</translation>
+    </message>
+    <message>
+        <source>In</source>
+        <translation>输入</translation>
+    </message>
+    <message>
+        <source>Out</source>
+        <translation>输出</translation>
+    </message>
+    <message>
+        <source>Custom</source>
+        <translation>自定义</translation>
+    </message>
+    <message>
+        <source>Linear</source>
+        <translation>线性</translation>
+    </message>
+    <message>
+        <source>Soft Contrast</source>
+        <translation>柔和对比度</translation>
+    </message>
+    <message>
+        <source>Medium Contrast</source>
+        <translation>中等对比度</translation>
+    </message>
+    <message>
+        <source>Strong Contrast</source>
+        <translation>强对比度</translation>
+    </message>
+    <message>
+        <source>Cl. Digit</source>
+        <translation>经典数码</translation>
     </message>
 </context>
 <context>
@@ -9524,6 +9599,144 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>About %1 h %2 min remaining</source>
         <translation>剩余约 %1 小时 %2 分钟</translation>
+    </message>
+</context>
+<context>
+    <name>RawImportLookSettingsSection</name>
+    <message>
+        <source>RAW Import</source>
+        <translation>RAW 导入</translation>
+    </message>
+    <message>
+        <source>Exposure</source>
+        <translation>曝光</translation>
+    </message>
+    <message>
+        <source>Saturation</source>
+        <translation>饱和度</translation>
+    </message>
+    <message>
+        <source>Tone Curve</source>
+        <translation>色调曲线</translation>
+    </message>
+    <message>
+        <source>Display Transform</source>
+        <translation>显示变换</translation>
+    </message>
+    <message>
+        <source>OpenDRT Look</source>
+        <translation>OpenDRT 外观</translation>
+    </message>
+    <message>
+        <source>Lens Correction</source>
+        <translation>镜头校正</translation>
+    </message>
+    <message>
+        <source>Restore Defaults</source>
+        <translation>恢复默认</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::RawImportLookSettingsModel</name>
+    <message>
+        <source>Linear</source>
+        <translation>线性</translation>
+    </message>
+    <message>
+        <source>Soft Contrast</source>
+        <translation>柔和对比度</translation>
+    </message>
+    <message>
+        <source>Medium Contrast</source>
+        <translation>中等对比度</translation>
+    </message>
+    <message>
+        <source>Strong Contrast</source>
+        <translation>强对比度</translation>
+    </message>
+    <message>
+        <source>Cl. Digit</source>
+        <translation>经典数码</translation>
+    </message>
+    <message>
+        <source>Kodak 2383</source>
+        <translation>Kodak 2383</translation>
+    </message>
+    <message>
+        <source>Velvia 50</source>
+        <translation>Velvia 50</translation>
+    </message>
+    <message>
+        <source>Ektachrome E100</source>
+        <translation>Ektachrome E100</translation>
+    </message>
+    <message>
+        <source>Contrast</source>
+        <translation>对比度</translation>
+    </message>
+    <message>
+        <source>Rendering</source>
+        <translation>渲染</translation>
+    </message>
+    <message>
+        <source>Film</source>
+        <translation>胶片</translation>
+    </message>
+    <message>
+        <source>ACES 2.0</source>
+        <translation>ACES 2.0</translation>
+    </message>
+    <message>
+        <source>OpenDRT</source>
+        <translation>OpenDRT</translation>
+    </message>
+    <message>
+        <source>Standard</source>
+        <translation>标准</translation>
+    </message>
+    <message>
+        <source>Arriba</source>
+        <translation>Arriba</translation>
+    </message>
+    <message>
+        <source>Sylvan</source>
+        <translation>Sylvan</translation>
+    </message>
+    <message>
+        <source>Colorful</source>
+        <translation>多彩</translation>
+    </message>
+    <message>
+        <source>Aery</source>
+        <translation>Aery</translation>
+    </message>
+    <message>
+        <source>Dystopic</source>
+        <translation>Dystopic</translation>
+    </message>
+    <message>
+        <source>Umbra</source>
+        <translation>Umbra</translation>
+    </message>
+    <message>
+        <source>Exposure must be from -10 to +10 EV.</source>
+        <translation>曝光必须在 -10 到 +10 EV 之间。</translation>
+    </message>
+    <message>
+        <source>Saturation must be from -100 to +100.</source>
+        <translation>饱和度必须在 -100 到 +100 之间。</translation>
+    </message>
+    <message>
+        <source>No Tone Curve preset has the id %1.</source>
+        <translation>没有 ID 为 %1 的色调曲线预设。</translation>
+    </message>
+    <message>
+        <source>The display transform must be ACES 2.0 or OpenDRT.</source>
+        <translation>显示变换必须是 ACES 2.0 或 OpenDRT。</translation>
+    </message>
+    <message>
+        <source>No OpenDRT look preset has the id %1.</source>
+        <translation>没有 ID 为 %1 的 OpenDRT 外观预设。</translation>
     </message>
 </context>
 </TS>

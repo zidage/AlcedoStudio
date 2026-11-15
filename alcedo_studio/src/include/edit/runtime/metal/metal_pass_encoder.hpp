@@ -77,9 +77,9 @@ template <>
 struct PassEncoder<MetalBackend, GpuPassKind::PrimaryColorGrade> {
   static auto Encode(MetalRenderDevice& device, const ExecutionPlan& plan,
                      const PreparedRawInput& input, const PipelineDocument& document,
-                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene)
-      -> FrameSceneBinding {
-    return ExecuteMetalPrimaryGrade(device, plan, input, document, compiled_grade, scene)
+                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene,
+                     CurveInputHistogramRecord* histogram = nullptr) -> FrameSceneBinding {
+    return ExecuteMetalPrimaryGrade(device, plan, input, document, compiled_grade, scene, histogram)
         .output_binding;
   }
 };

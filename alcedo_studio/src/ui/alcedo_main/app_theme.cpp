@@ -1118,6 +1118,73 @@ auto AppTheme::scopeHistogramBlueColor() const -> QColor {
 
 auto AppTheme::scopeMarkerColor() const -> QColor { return textColor(); }
 
+auto AppTheme::plotSurfaceColor() const -> QColor { return bgBaseColor(); }
+
+auto AppTheme::plotGridColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.22);
+}
+
+auto AppTheme::plotGridStrongColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.55);
+}
+
+auto AppTheme::plotLabelColor() const -> QColor { return textMutedColor(); }
+
+auto AppTheme::plotLineColor() const -> QColor { return textColor(); }
+
+auto AppTheme::plotReferenceLineColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.70);
+}
+
+auto AppTheme::plotHandleColor() const -> QColor { return textColor(); }
+
+auto AppTheme::plotHandleOutlineColor() const -> QColor {
+  // Dark halo around a handle, so a ring reads over the histogram and the line under it.
+  return WithAlpha(bgDeepColor(), 200);
+}
+
+auto AppTheme::plotGridLineWidth() const -> qreal { return 1.0; }
+
+auto AppTheme::plotLineWidth() const -> qreal { return 1.25; }
+
+auto AppTheme::plotHandleRadius() const -> qreal { return 3.5; }
+
+auto AppTheme::plotHandleRingWidth() const -> qreal { return 1.25; }
+
+auto AppTheme::plotHandleOutlineWidth() const -> qreal { return 1.0; }
+
+auto AppTheme::plotHitRadius() const -> qreal { return 8.0; }
+
+// Curves of the color channels: stronger than the histogram tints, so a line reads over its own
+// channel of the histogram.
+auto AppTheme::plotChannelRedColor() const -> QColor {
+  return Blend(QColor(0xE8, 0x66, 0x66), textColor(), 0.12);
+}
+
+auto AppTheme::plotChannelGreenColor() const -> QColor {
+  return Blend(QColor(0x74, 0xC2, 0x66), textColor(), 0.12);
+}
+
+auto AppTheme::plotChannelBlueColor() const -> QColor {
+  return Blend(QColor(0x66, 0xA0, 0xE8), textColor(), 0.12);
+}
+
+auto AppTheme::plotPointerLineColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.45);
+}
+
+auto AppTheme::plotInactiveLineOpacity() const -> qreal { return 0.4; }
+
+// The curve histogram is a quiet background: on plotSurfaceColor its neutral fill and its channel
+// edges stay darker than the 18% grey grid line and the identity line (#902).
+auto AppTheme::plotHistogramFillOpacity() const -> qreal { return 0.5; }
+
+auto AppTheme::plotHistogramEdgeOpacity() const -> qreal { return 0.4; }
+
+auto AppTheme::plotCurveHitRadius() const -> qreal { return 6.0; }
+
+auto AppTheme::plotChannelMarkSize() const -> qreal { return 4.0; }
+
 auto AppTheme::dateGraphLevel0Color() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.22);
 }
@@ -1358,6 +1425,7 @@ void AppTheme::setReduceMotion(bool enabled) {
   emit ReduceMotionChanged();
 }
 
+auto AppTheme::fontSizeMicro() const -> int { return 10; }
 auto AppTheme::fontSizeCaption() const -> int { return 11; }
 auto AppTheme::fontSizeBody() const -> int { return 12; }
 auto AppTheme::fontSizeTitle() const -> int { return 13; }

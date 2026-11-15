@@ -114,6 +114,8 @@ auto MakeEditorRenderDesc(const alcedo::EditorRenderRequest& request) -> alcedo:
   desc.document_geometry_ = intent.geometry_overlay_only
                                 ? alcedo::DocumentGeometryUse::RotatedUncroppedSource
                                 : alcedo::DocumentGeometryUse::ApplyCropAndRotation;
+  // PipelineTask::MakeApplyRequest keeps it only for a render of the whole frame.
+  desc.curve_input_histogram_                  = intent.curve_input_histogram;
   return desc;
 }
 

@@ -14,6 +14,7 @@
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
@@ -54,6 +55,10 @@ struct RenderDesc {
   // role (Mask ranges D9, D10). An interactive render copies both into PipelineApplyRequest.
   std::optional<MaskCoverageProbe> mask_coverage_probe_;
   IMaskCoverageSink*               mask_coverage_sink_ = nullptr;
+  // Editor frames only: the Color Grade whose curve input the frame also counts (issue #888).
+  // Only an interactive render of the whole edit frame copies it into PipelineApplyRequest; a
+  // viewport region and a Detail patch render without it.
+  std::optional<CurveInputHistogramRequest> curve_input_histogram_;
 };
 
 struct TaskOptions {

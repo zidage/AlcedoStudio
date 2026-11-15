@@ -5,9 +5,11 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <span>
 #include <stdexcept>
+#include <type_traits>
 
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
@@ -19,9 +21,9 @@ namespace alcedo {
 /**
  * @brief Bind or refresh one Grade GPU slot from typed Model fields.
  *
- * Packs @ref MakeGradeRuntimeParams only when the slot is missing or holds values from
- * another Model revision than @p model's. Writes the packed GPU layout into the existing
- * ParameterArena and records the revision there. Reads the Model only; the caller uploads with
+ * Packs @ref MakeGradeRuntimeParams (@ref MakeCurveGradeRuntimeParams for Curve, four records)
+ * only when the slot is missing or holds values from another Model revision than @p model's.
+ * Writes the packed GPU layout into the existing ParameterArena and records the revision there. Reads the Model only; the caller uploads with
  * @ref ParameterArena::UploadDirty.
  *
  * @return true when the slot was packed in this call.
@@ -36,20 +38,27 @@ auto BindOrRefreshGradeRuntimeSlot(ParameterArena<Backend>& arena, const Paramet
     return false;
   }
 
-  const auto packed = MakeGradeRuntimeParams(model, behavior);
-  if (missing) {
-    const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
-                                      kGradeRuntimeParamBytes};
-    arena.BindSlot(key, kGradeRuntimeParamBytes, std::span{&field, 1});
+  // The argument packs before the slot is bound, so a packing error leaves no slot.
+  const auto bind_and_write = [&](const auto& packed) {
+    if (missing) {
+      constexpr auto bytes = static_cast<std::uint32_t>(sizeof(std::decay_t<decltype(packed)>));
+      const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0, bytes};
+      arena.BindSlot(key, bytes, std::span{&field, 1});
+    }
+    arena.WritePackedSlot(key, packed, revision);
+  };
+  if (behavior == AdjustmentBehavior::Curve) {
+    bind_and_write(MakeCurveGradeRuntimeParams(model));
+  } else {
+    bind_and_write(MakeGradeRuntimeParams(model, behavior));
   }
-  arena.WritePackedSlot(key, packed, revision);
   return true;
 }
 
 /**
  * @brief Read values[0] from a packed Grade slot in the arena host mirror.
  *
- * Used for LLF slider gating and Metal neighborhood enable checks after the slot
+ * Used for the LLF slider check and Metal neighborhood enable checks after the slot
  * has been bound or refreshed. Does not read the Model or allocate a DTO.
  */
 template <class Backend>

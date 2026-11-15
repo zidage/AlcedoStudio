@@ -31,11 +31,11 @@
 #include "ui/alcedo_main/album_backend/editor_lut_encoding_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_parameter_catalog_adapter.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_item.hpp"
-#include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_preview_controller.hpp"
+#include "ui/alcedo_main/plot_pane/plot_pane.hpp"
 
 namespace alcedo::ui {
 
@@ -210,6 +210,7 @@ void EditorAdjustmentValueModel::setMinimum(double v) {
   }
   minimum_ = v;
   emit minimumChanged();
+  emit railRangeChanged();
   applyCompleteRange();
 }
 
@@ -219,7 +220,32 @@ void EditorAdjustmentValueModel::setMaximum(double v) {
   }
   maximum_ = v;
   emit maximumChanged();
+  emit railRangeChanged();
   applyCompleteRange();
+}
+
+double EditorAdjustmentValueModel::railMinimum() const {
+  return std::clamp(railMinimum_.value_or(minimum_), minimum_, std::max(minimum_, maximum_));
+}
+
+void EditorAdjustmentValueModel::setRailMinimum(double v) {
+  if (railMinimum_ == v) {
+    return;
+  }
+  railMinimum_ = v;
+  emit railRangeChanged();
+}
+
+double EditorAdjustmentValueModel::railMaximum() const {
+  return std::clamp(railMaximum_.value_or(maximum_), minimum_, std::max(minimum_, maximum_));
+}
+
+void EditorAdjustmentValueModel::setRailMaximum(double v) {
+  if (railMaximum_ == v) {
+    return;
+  }
+  railMaximum_ = v;
+  emit railRangeChanged();
 }
 
 void EditorAdjustmentValueModel::setStep(double v) {
@@ -366,6 +392,8 @@ void EditorAdjustmentValueModel::applyCatalogEntry() {
     setMinimum(entry->range.minimum);
     setMaximum(entry->range.maximum);
   }
+  setRailMinimum(entry->range.rail_minimum);
+  setRailMaximum(entry->range.rail_maximum);
   setDefaultValue(entry->range.default_value);
   setStep(entry->range.step);
   setPrecision(entry->range.decimals);
@@ -557,7 +585,6 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorAdjustmentEnumModel>("Alcedo.Main", 1, 0, "EditorAdjustmentEnumModel");
   qmlRegisterType<EditorAdjustmentToggleModel>("Alcedo.Main", 1, 0, "EditorAdjustmentToggleModel");
   qmlRegisterType<EditorToneCurveModel>("Alcedo.Main", 1, 0, "EditorToneCurveModel");
-  qmlRegisterType<EditorToneCurveItem>("Alcedo.Main", 1, 0, "EditorToneCurveItem");
   qmlRegisterType<EditorColorTempModel>("Alcedo.Main", 1, 0, "EditorColorTempModel");
   qmlRegisterType<EditorGradeWhiteBalanceModel>("Alcedo.Main", 1, 0,
                                                 "EditorGradeWhiteBalanceModel");
@@ -575,6 +602,7 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorCameraProfileListModel>("Alcedo.Main", 1, 0,
                                                 "EditorCameraProfileListModel");
   EditorScopeItem::RegisterQmlType();
+  PlotPane::RegisterQmlTypes();
 }
 
 }  // namespace alcedo::ui

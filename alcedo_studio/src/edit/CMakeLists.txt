@@ -81,6 +81,8 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/models/lut_reference.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/parameter_revision.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/sharpen_model.cpp
+    ${ALCEDO_SRC_ROOT}/edit/operators/models/tone_curve_spline.cpp
+    ${ALCEDO_SRC_ROOT}/edit/operators/models/tone_curve_presets.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/adjustment_ownership.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/color_grade_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_color_transform.cpp
@@ -125,8 +127,6 @@ set(EDIT_RUNTIME_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/grade_schedule.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/drt_post_schedule.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/dng_profile_gpu_data.cpp
-    ${ALCEDO_SRC_ROOT}/edit/runtime/profile_tone_reference.cpp
-    ${ALCEDO_SRC_ROOT}/edit/runtime/profile_tone_stage.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/execution_plan.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/raster_develop_params.cpp
@@ -147,6 +147,15 @@ def_library(EditRuntimeDrt
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces2_reference_runtime.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/open_drt_runtime.cpp
     PUBLIC_DEPS EditGraph ColorEncodingCatalog ${ALCEDO_OPENCV_CORE_DEPS}
+)
+
+# The ProfileToneCurve of a DCP profile as points of the RGB curve (#911): the neutral responses of
+# the DRT methods and the fit. The editor command service writes the points; no GPU pass reads them.
+def_library(ProfileToneCurve
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/edit/runtime/profile_tone_reference.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/profile_tone_curve_import.cpp
+    PUBLIC_DEPS EditGraph EditRuntimeDrt Image
 )
 
 # Lens calibration shared by the CUDA, OpenCL, and Metal Develop passes: the Lensfun resolver and the

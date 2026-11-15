@@ -25,7 +25,12 @@ constexpr float kBaseSigmaR               = 0.07545252f;
 constexpr float kGammaStepScale           = 1.35f;
 constexpr float kMinSampleStep            = 0.045f;
 constexpr float kHighlightStrengthScale   = 1.5f;
+/// Limit of the shadow darken and highlight boost amounts (Shadows below 0, Highlights above 0).
 constexpr float kBackendAmountLimit       = 1.5f;
+/// Shadow lift amount at the Shadows slider maximum, +150 (ScaledLocalToneShadow).
+constexpr float kShadowLiftAmountLimit    = 150.0f * kHighlightStrengthScale / 80.0f;
+/// Highlight recovery amount at the Highlights slider minimum, -150 (ScaledLocalToneHighlight).
+constexpr float kHighlightRecoveryAmountLimit = 150.0f * kHighlightStrengthScale / 100.0f;
 constexpr float kAcesccMiddleGray         = CE_ACESCC_MIDDLE_GREY;
 constexpr float kAcesccCodePerEv          = CE_ACESCC_CODE_PER_STOP;
 constexpr float kToneBetaEps              = 0.035f;

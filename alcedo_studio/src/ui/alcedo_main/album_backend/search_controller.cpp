@@ -842,7 +842,7 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
                   if (image_store) {
                     thumb_url = image_store->Put(static_cast<sl_element_id_t>(elementId),
                                                  static_cast<uint32_t>(key.resolution),
-                                                 std::move(scaled));
+                                                 std::move(scaled), guard->encoding);
                   }
                 }
               }
@@ -932,6 +932,31 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
                                        CurrentExceptionText("Unknown thumbnail request error."));
     emit searchPreviewThumbnailUpdated(elementId, QString{}, false, false,
                                        CurrentExceptionText("Unknown thumbnail request error."));
+  }
+}
+
+void SearchController::RepublishSearchPreviewThumbnails() {
+  if (library_ == nullptr) {
+    return;
+  }
+  const auto store = library_->thumbs().image_store();
+  for (auto& [key, thumb_url] : search_preview_pinned_thumbnails_) {
+    const QString current =
+        store->CurrentUrl(key.element_id, static_cast<uint32_t>(key.resolution));
+    if (!current.isEmpty()) {
+      thumb_url = current;
+    }
+  }
+  // RequestSearchPreviewThumbnail emits the URL of the library row or of the pin, and requests
+  // nothing while a render of the key is on the way.
+  std::vector<std::pair<ThumbnailCacheKey, image_id_t>> visible(
+      search_preview_visible_thumbnails_.begin(), search_preview_visible_thumbnails_.end());
+  for (const auto& [key, image_id] : visible) {
+    if (search_preview_thumbnail_requests_.contains(key)) {
+      continue;
+    }
+    RequestSearchPreviewThumbnail(static_cast<uint>(key.element_id), static_cast<uint>(image_id),
+                                  static_cast<uint>(key.resolution));
   }
 }
 

@@ -23,17 +23,20 @@
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/operators/models/tone_curve_spline.hpp"
 
 namespace alcedo {
 namespace {
 
-constexpr std::size_t   kMaxCurvePoints           = 8;
+constexpr std::size_t   kCurvePointCapacity       = tone_curve::kMaxControlPoints;
 constexpr float         kHalationSigma            = 7.0f;
 constexpr float         kHalationStrengthScale    = 2.0f;
 constexpr float         kHalationRedshift[3]      = {1.0f, 0.05f, 0.02f};
 constexpr float         kClarityNeighborhoodSigma = 15.0f;
 constexpr std::uint32_t kSharpenMaxRadius         = 15U;
 constexpr std::uint32_t kClarityMaxRadius         = 60U;
+static_assert(3 * kCurvePointCapacity * sizeof(float) == sizeof(GradeAdjustmentParams::values),
+              "The Curve slot holds x, y, and slope of every control point");
 
 void BuildGaussianWeights(float sigma, std::uint32_t max_radius, GradeNeighborParams& result) {
   if (!(sigma > 0.0f)) {
@@ -187,16 +190,8 @@ auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior beha
             return packed;
           });
     case AdjustmentBehavior::Curve:
-      return RequireModel<CurveModel>(model).Read([behavior](const CurvePayload& payload) {
-        GradeAdjustmentParams packed;
-        packed.behavior = static_cast<std::uint32_t>(behavior);
-        packed.count = static_cast<std::uint32_t>(std::min(payload.points.size(), kMaxCurvePoints));
-        for (std::uint32_t i = 0; i < packed.count; ++i) {
-          packed.values[i * 2]     = payload.points[i].x;
-          packed.values[i * 2 + 1] = payload.points[i].y;
-        }
-        return packed;
-      });
+      throw std::runtime_error(
+          "Primary grade: the Curve slot has four records; use MakeCurveGradeRuntimeParams");
     case AdjustmentBehavior::Hls:
       return RequireModel<HlsModel>(model).Read([behavior](const HlsPayload& payload) {
         GradeAdjustmentParams packed;
@@ -251,6 +246,30 @@ auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior beha
     default:
       throw std::runtime_error("Primary grade: adjustment behavior is not supported");
   }
+}
+
+auto MakeCurveGradeRuntimeParams(const IOperatorModel& model) -> CurveGradeRuntimeParams {
+  return RequireModel<CurveModel>(model).Read([](const CurvePayload& payload) {
+    // Layout read by ApplyCurve in the CUDA, OpenCL, and Metal grade kernels: one record for each
+    // curve in CurveChannel order, x in values[0..15], y in values[16..31], slope in
+    // values[32..47].
+    CurveGradeRuntimeParams records;
+    for (std::size_t index = 0; index < kCurveChannels.size(); ++index) {
+      const auto channel = kCurveChannels[index];
+      auto&      packed  = records[index];
+      packed.behavior    = static_cast<std::uint32_t>(AdjustmentBehavior::Curve);
+      const auto& points = CurveChannelPoints(payload, channel);
+      if (channel != CurveChannel::Rgb && IsIdentityCurve(points)) {
+        continue;  // count 0: the kernel leaves the channel unchanged.
+      }
+      const auto spline = tone_curve::SolveToneCurveSpline(points);
+      packed.count      = spline.count;
+      std::copy(spline.x.begin(), spline.x.end(), packed.values);
+      std::copy(spline.y.begin(), spline.y.end(), packed.values + kCurvePointCapacity);
+      std::copy(spline.slope.begin(), spline.slope.end(), packed.values + 2 * kCurvePointCapacity);
+    }
+    return records;
+  });
 }
 
 auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior behavior,

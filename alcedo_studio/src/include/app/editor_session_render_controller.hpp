@@ -15,6 +15,7 @@
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -71,6 +72,13 @@ class EditorSessionRenderController final {
    *        thread-safe. Empty source: no probe.
    */
   void SetMaskCoverageProbeSource(std::function<std::optional<MaskCoverageProbe>()> source);
+  /**
+   * @brief Curve input histogram request that every new render intent carries (issue #888).
+   *        nullopt: intents carry none, so no render counts a histogram. Any thread.
+   */
+  void SetCurveInputHistogramRequest(std::optional<CurveInputHistogramRequest> request);
+  [[nodiscard]] auto curve_input_histogram_request() const
+      -> std::optional<CurveInputHistogramRequest>;
   /// The viewport was minimized/hidden (true) or shown again (false). On resume,
   /// frames the sink refused while suspended are routed again for the current
   /// state: the first frame of a loading image, else a QualityBase refresh, and
@@ -203,6 +211,8 @@ class EditorSessionRenderController final {
   std::atomic<bool>                                    geometry_overlay_active_{false};
   mutable std::mutex                                   probe_source_mutex_;
   std::function<std::optional<MaskCoverageProbe>()>    probe_source_;
+  /// Guarded by probe_source_mutex_.
+  std::optional<CurveInputHistogramRequest>            curve_input_histogram_;
   /// Set one suspension reason and route the refused frames when no reason is left.
   void SetSuspension(bool EditorSessionRenderController::* reason, bool suspended,
                      const EditorSessionIdentity& identity, ImageLoadRequestId image_load_request,

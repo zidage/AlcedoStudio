@@ -12,6 +12,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/basic_render_workspace.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/plan_executor.hpp"
@@ -141,19 +142,23 @@ class BasicRenderDevice {
 
   /**
    * @brief Run the compiled DAG. Skips published content keys. No image-processing substitute.
+   *
+   * @param histogram When not null, the Grade with its `grade_id` also records the histogram of
+   *        its curve input (PlanExecutor::Execute).
    */
   [[nodiscard]] auto Execute(
       const ExecutionPlan& plan, const PreparedRawInput& input, const PipelineDocument& document,
       bool                              publish_on_success = true,
       TransientAllocationPolicy         transient_policy = TransientAllocationPolicy::SessionPacked,
       ResultPersistenceScope            persistence = ResultPersistenceScope::AllCurrentResults,
-      MaskCoverageProbeRecord<Backend>* probe       = nullptr) -> GraphValueId {
+      MaskCoverageProbeRecord<Backend>* probe       = nullptr,
+      CurveInputHistogramRecord*        histogram   = nullptr) -> GraphValueId {
     // Backends with an isolated submission stream (OpenCL dedicated queue)
     // bind it to this thread for the encode so shared helpers that resolve a
     // queue through the global context land on the render-local stream.
     auto queue_scope = EnterThreadQueueScope();
     return PlanExecutor<Backend>::Execute(*this, plan, input, document, publish_on_success,
-                                          transient_policy, persistence, probe);
+                                          transient_policy, persistence, probe, histogram);
   }
 
  private:

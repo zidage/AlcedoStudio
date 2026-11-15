@@ -12,9 +12,10 @@ auto CudaRenderDevice::Execute(const ExecutionPlan& plan, const PreparedRawInput
                                const PipelineDocument& document, bool publish_on_success,
                                TransientAllocationPolicy             transient_policy,
                                ResultPersistenceScope                persistence,
-                               MaskCoverageProbeRecord<CudaBackend>* probe) -> GraphValueId {
+                               MaskCoverageProbeRecord<CudaBackend>* probe,
+                               CurveInputHistogramRecord*            histogram) -> GraphValueId {
   return PlanExecutor<CudaBackend>::Execute(*this, plan, input, document, publish_on_success,
-                                            transient_policy, persistence, probe);
+                                            transient_policy, persistence, probe, histogram);
 }
 
 }  // namespace alcedo

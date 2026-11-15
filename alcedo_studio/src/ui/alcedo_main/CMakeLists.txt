@@ -50,6 +50,58 @@ def_library(EditorViewerLogic
         EditGeometry
 )
 
+# Conversion of display-encoded photo pixels to a monitor ICC profile
+# (docs/roadmap/alcedo_studio/ui/windows_display_icc_color_management_plan.md, W1).
+def_library(DisplayColorTransform
+    SOURCES
+        "${ALCEDO_UI_ROOT}/edit_viewer/display_color_transform.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/display_color_transform.hpp"
+    PUBLIC_DEPS
+        Qt6::Gui
+        opencv_core
+        ColorEncodingCatalog
+    PRIVATE_DEPS
+        lcms2::lcms2
+)
+
+# The monitor profile of a window and the destination of its photo surfaces (W2). The monitor
+# query exists on Windows only; elsewhere the destination is NoWindow.
+set(WINDOW_DISPLAY_DESTINATION_SRCS
+    "${ALCEDO_UI_ROOT}/edit_viewer/window_display_destination.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/window_display_destination.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/monitor_color_profile.hpp"
+)
+if(WIN32)
+    list(APPEND WINDOW_DISPLAY_DESTINATION_SRCS
+        "${ALCEDO_UI_ROOT}/edit_viewer/monitor_color_profile_win.cpp"
+    )
+endif()
+def_library(WindowDisplayDestination
+    SOURCES ${WINDOW_DISPLAY_DESTINATION_SRCS}
+    PUBLIC_DEPS
+        Qt6::Core
+        Qt6::Gui
+        DisplayColorTransform
+    PRIVATE_DEPS
+        AppDiagnostics
+)
+if(WIN32)
+    # MonitorFromWindow / QueryDisplayConfig (user32), CreateDCW / GetICMProfileW (gdi32).
+    target_link_libraries(WindowDisplayDestination PRIVATE user32 gdi32)
+endif()
+
+# The data of the Display profile tile of Settings > LUTs and Color Management (W4).
+def_library(DisplayProfileReadout
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/display_profile_readout.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/display_profile_readout.hpp"
+    PUBLIC_DEPS
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        WindowDisplayDestination
+)
+
 def_library(BackgroundTaskController
     SOURCES
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/background_task_controller.cpp"
@@ -70,6 +122,35 @@ def_library(AiModelDownloadTaskPublisher
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/ai_model_download_task_publisher.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/ai_model_download_task_publisher.hpp"
     PUBLIC_DEPS AiModelPackageService BackgroundTaskController Qt6::Core
+)
+
+# Reusable plot pane: view transform, ordered layers, and pointer and key routing
+# (docs/roadmap/alcedo_studio/edit/tone_curve_editor_plan.md, TC4). The layers draw with the
+# antialiased triangle primitives of EditorViewerLogic.
+def_library(EditorPlotPane
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_view_transform.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_primitives.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_layer.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_grid_layer.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_histogram_layer.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_polyline_layer.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_handle_layer.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_pane.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_view_transform.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_primitives.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_layer.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_grid_layer.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_histogram_layer.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_polyline_layer.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_handle_layer.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_pane.hpp"
+    PUBLIC_DEPS
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        EditorViewerLogic
 )
 
 add_library(AlbumBackendLib STATIC
@@ -108,6 +189,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_ai_mask_tool.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_panel_presentation.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_curve_histogram_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_item.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_operation_publisher.cpp"
@@ -124,7 +206,6 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lens_catalog_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_camera_profile_list_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_tone_curve_model.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_tone_curve_item.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_color_temp_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_grade_white_balance_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_hls_model.cpp"
@@ -165,6 +246,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/export_recipe_builder.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_behavior_preferences.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_view_preferences.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/raw_import_look_settings_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/log_folder_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_dialog_model.cpp"
@@ -214,6 +296,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_curve_histogram_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_scope_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_scope_item.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_history_operation_publisher.hpp"
@@ -230,7 +313,6 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_camera_profile_list_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_grade_white_balance_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_hls_model.hpp"
@@ -265,6 +347,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/workspace_router.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_behavior_preferences.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/library_view_preferences.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/raw_import_look_settings_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/log_folder_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_dialog_model.hpp"
@@ -286,7 +369,10 @@ target_link_libraries(AlbumBackendLib
         UiLocalization
         BackgroundTaskController
         AgentControlOwner
+        DisplayProfileReadout
         EditorRhiViewport
+        # The Tone Curve plot and the curve histogram owner (a PlotHistogramSource).
+        EditorPlotPane
         # The editor scope controller and item analyze the presented frame through EditScope.
         EditScope
         Qt6::Quick
@@ -294,6 +380,8 @@ target_link_libraries(AlbumBackendLib
         Qt6::QuickControls2
         ProjectService
         ImportService
+        # Import defaults settings: the look of RAW history roots (#918).
+        RawImportLookSettings
         ExportService
         PipelineMgmtService
         AdjustmentTransferService
@@ -418,6 +506,8 @@ def_library(AutomationHostLib
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_search_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/lut_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_lut_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/curve_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_curve_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/film_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_film_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/editor_commands.cpp"
@@ -741,6 +831,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferItemPane.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SettingDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ColorLabelNamesEditor.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/RawImportLookSettingsSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/KeyboardSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ShortcutCaptureField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeDialog.qml"
@@ -757,6 +848,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdatesSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LutSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CameraProfileFolderTile.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/DisplayProfileTile.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelsSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelDownloadStatementDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/PackageCard.qml"
@@ -841,7 +933,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentStack.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentHeader.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LockedNodeMaskPromptDialog.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMonoSlider.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDragSlider.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorCameraProfileSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSliders.qml"
@@ -853,6 +945,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAiMaskPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorScopePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorTonePanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorToneCurveSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLookPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLutBrowserPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLutResultCard.qml"
@@ -876,6 +969,8 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupDelegate.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupMaskRow.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentSlider.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AlcedoSlider.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LoadingSpinner.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentToggle.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentCombo.qml"

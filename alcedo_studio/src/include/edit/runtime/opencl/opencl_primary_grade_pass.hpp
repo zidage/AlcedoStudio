@@ -10,6 +10,7 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
@@ -37,22 +38,28 @@ struct OpenClPrimaryGradeResult {
  * and mix. Mix reads this Grade's scene input. Disabled and zero-mix Grades alias
  * the input onto the logical output. Parameters live in ParameterArena; failures
  * throw. No CPU substitute.
+ *
+ * @param histogram When not null, the Grade also records the histogram of its curve input
+ *        (GradeExecutor::Execute, issue #888).
  */
 [[nodiscard]] auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                                             const PreparedRawInput&  prepared,
-                                             const PipelineDocument&  document,
-                                             const CompiledGradeNode& compiled_grade,
-                                             const FrameSceneBinding& scene)
+                                             const PreparedRawInput&    prepared,
+                                             const PipelineDocument&    document,
+                                             const CompiledGradeNode&   compiled_grade,
+                                             const FrameSceneBinding&   scene,
+                                             CurveInputHistogramRecord* histogram = nullptr)
     -> OpenClPrimaryGradeResult;
 
 /**
  * @brief Encode every compiled Color Grade in backbone order.
  *
+ * @param histogram When not null, the Grade with its `grade_id` records its curve input histogram.
  * @return The last Grade result. @throws std::runtime_error when the plan has no Color Grade.
  */
 [[nodiscard]] auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                                             const PreparedRawInput& prepared,
-                                             const PipelineDocument& document)
+                                             const PreparedRawInput&    prepared,
+                                             const PipelineDocument&    document,
+                                             CurveInputHistogramRecord* histogram = nullptr)
     -> OpenClPrimaryGradeResult;
 
 }  // namespace alcedo

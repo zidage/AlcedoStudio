@@ -1,0 +1,25 @@
+<!--
+  Source: Lucide Icons (https://lucide.dev/icons/scan) - scan
+  License: ISC (https://lucide.dev/license)
+  Category: Editor / Tone Curve section
+  Icon name: scan (four corners of a frame)
+  Added: 2026-11-13 for the Fit toggle of the Tone Curve section (#890): the plot view changes
+         between the full curve range and the usual range of a photo. Stroke-width 1.5, the
+         panel_icons convention.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="white"
+  stroke-width="1.5"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+  <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+  <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+  <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+</svg>

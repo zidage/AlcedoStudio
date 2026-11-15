@@ -14,6 +14,7 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/develop_color_transform.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/dng_color_profile.hpp"
@@ -86,7 +87,12 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
   EXPECT_FLOAT_EQ(saturation->ToJson().at("saturation").get<float>(), kDefaultPipelineSaturation);
   const auto* contrast = persisted.PrimaryGrade()->FindAdjustmentByType(type_ids::Contrast());
   ASSERT_NE(contrast, nullptr);
-  EXPECT_FLOAT_EQ(contrast->ToJson().at("contrast").get<float>(), kDefaultPipelineContrast);
+  EXPECT_FLOAT_EQ(contrast->ToJson().at("contrast").get<float>(), 0.0f);
+  // The RAW import look has the Film-like RGB curve (#891).
+  const auto* curve = persisted.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve());
+  ASSERT_NE(curve, nullptr);
+  EXPECT_EQ(curve->ToJson().at("points").size(),
+            FindToneCurvePreset(kDefaultPipelineToneCurvePresetId)->points.size());
   EXPECT_EQ(expected.camera_profile.dng_profile, raw.dng_profile_);
   EXPECT_TRUE(expected.camera_profile.color_matrices_valid);
   // A document read from project data holds an unbound profile reference and does not render.

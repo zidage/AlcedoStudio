@@ -333,8 +333,8 @@ auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeMod
     compiled.mask_output = compiled.mask_stack->union_output;
   }
 
-  // Fixed stage order: Basic Tone + Color pointwise stage, then the Local
-  // Laplacian stage. Stored document order never selects execution order.
+  // Fixed stage order: Basic Tone pointwise stage, the Local Laplacian stage, then the
+  // Color pointwise stage. Stored document order never selects execution order.
   std::vector<OperatorTypeId> document_types;
   document_types.reserve(grade.AdjustmentCount());
   for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {

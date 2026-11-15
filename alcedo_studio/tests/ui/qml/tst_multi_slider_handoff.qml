@@ -73,13 +73,13 @@ Item {
             }
 
             function satHandle() {
-                var h = findChild(satLoader.item, "adjustmentSliderHandle")
+                var h = findChild(satLoader.item, "adjustmentSliderRail")
                 if (!h)
                     fail("sat handle missing")
                 return h
             }
             function vibHandle() {
-                var h = findChild(vibLoader.item, "adjustmentSliderHandle")
+                var h = findChild(vibLoader.item, "adjustmentSliderRail")
                 if (!h)
                     fail("vib handle missing")
                 return h

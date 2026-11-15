@@ -90,6 +90,7 @@ auto EditorSessionRenderController::MakeRenderIntent(const EditorRenderCommand& 
     if (probe_source_) {
       intent.mask_coverage_probe = probe_source_();
     }
+    intent.curve_input_histogram = curve_input_histogram_;
   }
   FillRenderIntentDefaults(intent);
   return intent;
@@ -103,6 +104,18 @@ void EditorSessionRenderController::SetMaskCoverageProbeSource(
     std::function<std::optional<MaskCoverageProbe>()> source) {
   std::scoped_lock lock(probe_source_mutex_);
   probe_source_ = std::move(source);
+}
+
+void EditorSessionRenderController::SetCurveInputHistogramRequest(
+    std::optional<CurveInputHistogramRequest> request) {
+  std::scoped_lock lock(probe_source_mutex_);
+  curve_input_histogram_ = std::move(request);
+}
+
+auto EditorSessionRenderController::curve_input_histogram_request() const
+    -> std::optional<CurveInputHistogramRequest> {
+  std::scoped_lock lock(probe_source_mutex_);
+  return curve_input_histogram_;
 }
 
 void EditorSessionRenderController::SetPresentationSuspended(

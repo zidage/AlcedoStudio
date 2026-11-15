@@ -9,7 +9,7 @@ Implementation source of truth: `AppTheme` (`app_theme.hpp` / `app_theme.cpp`)
 Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `DialogActionButton.qml`, `IconButton.qml`, `SegmentedCardSwitcher.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
-`AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
+`AdjustmentSlider.qml`, `AlcedoSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
 `ThemeSwitch.qml`, `SkeletonBlock.qml`, `StaggeredGridLoader.qml`,
 `StaggeredGridMark.qml`, `AlertBadge.qml`
 
@@ -48,6 +48,7 @@ Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checkl
 | UI title | `uiFontFamily` | `fontSizeTitle` (13) | `fontWeightStrong` | `lineHeightTitle` (18) | Panel subtitles |
 | UI section | `uiFontFamily` | `fontSizeSection` (14) | `fontWeightHeading` (700) | `lineHeightSection` (20) | Panel titles |
 | UI caption | `uiFontFamily` | `fontSizeCaption` (11) | `fontWeightRegular` | `lineHeightCaption` (14) | Secondary chrome |
+| Dense data | `uiFontFamily` or `dataFontFamily` | `fontSizeMicro` (10) | `fontWeightRegular` | natural | Text of dense data controls: plot axis labels, the readout and the values around a plot, the titles of a crowded segmented switcher (Tone Curve section, #903) |
 | Headline | `headlineFontFamily` | `fontSizeHeadline` (22) | `fontWeightHeading` | `lineHeightHeadline` (28) | Empty-state titles |
 | Settings card title | `headlineFontFamily` | `fontSizeSection` (14) | DemiBold | 1.1 | Title of a `PackageCard` (Settings > LUTs, Settings > AI Models) and of the folder tiles of those pages. Below it, after a `spaceSm` gap, one sentence in `uiFontFamily` + `fontSizeBody` muted text says what the package or model does; no list and no version text there (a Pill shows the version). A GitHub button beside the title opens the project of the package when it has one. Do not use a display size: a model name must stay on one line in the two-column page. |
 | Display count | `headlineFontFamily` | `fontSizeDisplay` (72) | ExtraLight | 1 | The one large number of a Settings bento count tile (`CountTile`): LUT total, photo count, the version of About. |
@@ -443,7 +444,7 @@ wordmark and the small import progress ring.
 | Collection drop target (file drop to import) | The same row style as the drag to move, on the row under a drag of local files and folders from the system file manager (issue #757). The draft row and the row being renamed show no outline. Every Library file drop answers Copy, so the file manager never deletes the dropped files |
 | Library grid file drop overlay | Over the grid while local files and folders are dragged onto it: `colBgDeep` at alpha 0.78 with `controlRadiusSmall` corners and a 1 px `textMutedColor` outline; centered `import.svg` (28 px) in `textColor` above "Import to" and the current collection name in `fontSizeSection` `fontWeightHeading`. No explanatory text |
 | New-collection and rename name field | Inline in the tree row: a plain `TextInput` (no Controls `TextField`, so no style-provided floating label or underline) in a `collectionRowHeight` - 4 high `bgBaseColor` box with `controlRadiusSmall` corners; 1 px `dividerColor` border, `textMutedColor` on focus; placeholder in `textMutedColor` inside the box; text selection `textMutedColor` (alpha 0.6) with `textColor` text. The "Add to" filter field uses the same construction |
-| Grid zoom slider | `textColor` fill and handle on the `bgBaseColor` track; the handle has no border |
+| Grid zoom slider | `AlcedoSlider` without a value field: the right end shows the largest photos; a double-click returns to the default zoom |
 | Inspector resize handle | `textMutedColor` on hover and drag |
 | Album Inspector sections (`InspectorSection.qml`) | Every field of the Library Overview (By Capture Date, By Import Time, By Edit Time, By Camera Model, By Labels, By Custom Label, By Rating, By Lens, Search Filter) is one rounded card: `bgBaseColor` fill, 1 px `cardBorderColor`, `panelRadius` corners, `spaceMd` from the panel edges, `spaceSm` between the cards. The header and, when the section is expanded, its content sit inside the same card; a collapsed section is the 36 px header alone. In the header: the fold glyph `▾`/`▸` in `textMutedColor` at the left (the Collections tree glyphs; empty for a section that does not fold), the title in title case (`uiFontFamily`, `fontSizeBody`, `fontWeightStrong`, `textColor`, no upper-case transform), and the sort ascending, sort descending, and Group actions (`InspectorFieldActions`) at the right with `spaceXs` between them. The title elides at the right; the actions stay on the title row at the minimum inspector width (300 px) in every UI language. Only when the header cannot hold the glyph, a 56 px title, and the actions do the actions move to a second header row, together at the right. A click on the header outside the actions folds the section with the fold rules of "Motion": the card height follows the clipped content, the content fades with the same progress, and the `▸` glyph turns 90 degrees to point down (`motionFoldOpenMs` / `motionFoldCloseMs`, `motionEasing`; `reduceMotion` makes it a cut); the date content stays loaded until the close ends. The content has `spaceMd` side and bottom padding. Controls inside the card keep their contrast against the `bgBaseColor` fill: chips and day tiles use `controlFillColor` (hover `controlHoveredFillColor`) with a 1 px `cardBorderColor`, the "+N more" and "Show less" chips are transparent with a 1 px `controlBorderColor`, the lens row hover is `controlFillColor`, and the calendar/activity switch track and the search field are `bgCanvasColor`. The Search Filter card shows the query text directly, without a nested box (user decisions 2026-11-09, issue #766: the sections had no visible boundaries, the actions spread across a second row, then rounded cards that extend over the expanded content, consistent with the other panel cards) |
 | Album Inspector value search (By Camera Model, By Labels, By Lens) | First row of the section content: a plain `TextInput` in a `collectionRowHeight` hairline box (`bgCanvasColor`, sunken against the card; `controlRadiusSmall`, 1 px `dividerColor` border, `textMutedColor` on focus), a 12 px `search.svg` in `textMutedColor` at the left, the "Search" placeholder in `textMutedColor`, and a `×` that clears the text once there is text (Escape also clears). Typing filters the values of that section (case-insensitive, matches inside the value) and shows every match without the preview limit; the selected value stays in the list, first when it does not match. The field never changes the library query. The field is hidden when the section has no values |
@@ -852,6 +853,96 @@ inside the rounded corners, and a `plotPadding` of `spaceSm - spaceXs`. One
   end does not clip.
 - **Waveform.** The density image fills the same plot rectangle. The guide
   lines are the three horizontal level lines at 25, 50, and 75 percent.
+
+### Plot pane
+
+`PlotPane` is the reusable plot item of editor plots (the Tone Curve section is
+its first user). It holds a view of the data (zoom and pan inside the data
+limits), insets around the plot rectangle for labels, and an ordered list of
+layers: the first layer draws at the bottom. Each layer has its own colors and
+sizes as properties; bind them to the tokens below.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `plotSurfaceColor` | `bgBaseColor` | Plot rectangle fill (`PlotPane.surfaceColor`) and the break across a cut histogram peak |
+| `plotGridColor` | `bgBaseColor` to `textMutedColor` at 22 percent | Ordinary grid lines |
+| `plotGridStrongColor` | `bgBaseColor` to `textMutedColor` at 55 percent | Strong grid line (for example 18% grey on the curve axis) |
+| `plotLabelColor` | `textMutedColor` | Tick labels in the insets |
+| `plotLineColor` | `textColor` | Data line (the curve) |
+| `plotReferenceLineColor` | `bgBaseColor` to `textMutedColor` at 70 percent | Reference lines (the dashed identity line) |
+| `plotHandleColor` | `textColor` | Handle ring; fill of the selected handle |
+| `plotHandleOutlineColor` | `bgDeepColor` at alpha 200 | Dark disc behind a handle, so it reads over the histogram |
+| `plotGridLineWidth` | 1 px | Grid line width |
+| `plotLineWidth` | 1.25 px | Data line and histogram edge width |
+| `plotHandleRadius` | 3.5 px | Handle radius: 7 px rings |
+| `plotHandleRingWidth` | 1.25 px | Handle ring width |
+| `plotHandleOutlineWidth` | 1 px | Width of the dark outline around a handle |
+| `plotHitRadius` | 8 px | Pointer distance that hits a handle or a line |
+
+- **Layers.** `PlotGridLayer` (lines at ticks, labels under and left of the
+  plot), `PlotHistogramLayer` (the scope histogram look: additive channel
+  fills with a 1.25 px edge, `scopeHistogram*Color` tints, one channel in its
+  own tint when the layer shows one channel; `fillOpacity` and `edgeOpacity`
+  scale the light that the fills and the edges add, 1 by default),
+  `PlotPolylineLayer` (solid or
+  dashed line), and `PlotHandleLayer` (rings; the selected handle is a filled
+  disc; a hovered or pressed handle grows by 1 px). Widths are the visible
+  width with the antialiased edge included.
+- **Input.** A handle follows the pointer 1:1. Ctrl + wheel zooms at the
+  pointer; the plain wheel scrolls the panel. A drag in an empty area moves a
+  zoomed view. Cursors: pointing hand over a handle or a line, closed hand
+  while dragging, open hand over an empty area of a zoomed view.
+
+### Tone Curve section
+
+The Tone Curve section of the Tone panel (`EditorToneCurveSection.qml`) is a
+`CollapsibleSection` with the header actions Histogram (toggle,
+`histogram.svg`), Fit (toggle, `fit-range.svg`), and Reset (`reset.svg`), all
+`IconActionButton` compact; a selected toggle uses the selected fill. There is
+no caption sentence.
+
+- **Row 1.** Channel selector `RGB`, `R`, `G`, `B` (`SegmentedCardSwitcher`)
+  with `fontSizeMicro` titles; the RGB segment has stretch 1.6, so its title
+  and dot fit beside the one-letter segments (#903).
+  A segment of a curve that is not the identity shows a `plotChannelMarkSize`
+  dot before its title, in the ink color of the segment. The user asked for
+  this dot in #890; it is the only status dot of the editor panels.
+- **Plot.** A square `PlotPane` with `plotSurfaceColor`. Grid every 2 EV from
+  18% grey with the strong line at 18% grey; signed EV labels under the plot
+  only (`fontSizeMicro`, `plotLabelColor`). The plot has a left and a right
+  inset of half the width of `+10`, so the labels at both ends of the X axis
+  show in full (#903). The histogram of the curve input
+  is a quiet background behind the curves: its fills at
+  `plotHistogramFillOpacity` and its edges at `plotHistogramEdgeOpacity`, so
+  the curve, the handles, the strong grid line, and the identity line are the
+  strongest marks (#902). The Scopes histogram keeps its full strength. The
+  dashed identity line uses
+  `plotReferenceLineColor`, 4 px dashes with 4 px gaps. The curve of the
+  selected channel is 1.25 px in `plotLineColor` (RGB) or its channel color;
+  the curves of the other channels that are not the identity show in their
+  colors at `plotInactiveLineOpacity`. Handles are the plot pane handles.
+- **Pointer.** Over the plot, a 1 px vertical line in `plotPointerLineColor`
+  follows the pointer, and `In` and `Out` with their EV values show at the top
+  left of the plot in `fontSizeMicro` (`plotLabelColor` names,
+  `textColor` values).
+- **Row 2.** `In` and `Out` fields of the selected point: a plain `TextInput`
+  in a hairline box (`bgBaseColor`, `controlRadiusSmall`, 1 px `dividerColor`,
+  `textMutedColor` border on focus), 4 decimals in `fontSizeBody`, each
+  followed by its EV value in `fontSizeMicro` `textMutedColor`. The names
+  `In` and `Out` are `fontSizeMicro`. At the default editor panel width the
+  section shows all its text in full, with no elision and no clipping (#903).
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `plotChannelRedColor` | `#E86666` to `textColor` at 12 percent | Red curve |
+| `plotChannelGreenColor` | `#74C266` to `textColor` at 12 percent | Green curve |
+| `plotChannelBlueColor` | `#66A0E8` to `textColor` at 12 percent | Blue curve |
+| `plotPointerLineColor` | `bgBaseColor` to `textMutedColor` at 45 percent | Vertical line at the pointer |
+| `plotInactiveLineOpacity` | 0.4 | Opacity of the curves of the other channels |
+| `plotHistogramFillOpacity` | 0.5 | Scale of the light that the curve histogram fills add |
+| `plotHistogramEdgeOpacity` | 0.4 | Scale of the light that the curve histogram edges add |
+| `plotCurveHitRadius` | 6 px | Pointer distance that adds a point on the curve line |
+| `plotChannelMarkSize` | 4 px | Dot of a changed channel in the channel selector |
 
 ---
 
@@ -1540,11 +1631,14 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | Component | Responsibility |
 | --- | --- |
 | `IconActionButton.qml` | Structural SVG action (Item root, true square chrome): hit/optical/source, tooltip, a11y, hover, focus, selected fill; SVG tint via `ColorImage` (same as `Button.icon.color`) |
-| `CollapsibleSection.qml` | Folding group shell with shared motion driver |
+| `CollapsibleSection.qml` | Folding group shell with shared motion driver. The body insets its content by `spaceSm` on every side and adds those insets to `bodyContentHeight`, so a caller passes the height of its content column |
 | `DialogActionButton.qml` | Text dialog actions (46 px floor; wrapped labels grow the button; `fontWeightStrong`); kinds `normal`, `light` (main action of a neutral surface), `accent`, `danger`, `warning`; optional `iconSource` (16 px monochrome SVG before the text, tinted with the text color) |
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
-| `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive |
-| `AdjustmentSlider.qml` | Shared numeric slider + field bound to `EditorAdjustmentValueModel` |
+| `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive; per-entry `stretch` (default 1) sets the width share of a segment; `titlePixelSize` (default `fontSizeBody`) sets the title size |
+| `AdjustmentSlider.qml` | `AlcedoSlider` (stacked) bound to `EditorAdjustmentValueModel`: rail drag and value drag are `beginDrag` / `updateDrag` / `finishDrag`, arrow keys `editValue`, a typed value `editValue` + `commitImmediately`, text that is not a number `setInvalid`, double-click `reset`. The rail covers `minimum`..`maximum`; `railMinimum`..`railMaximum` of the model (catalog `rail_minimum` / `rail_maximum`) are the soft limits |
+| `EditorDragSlider.qml` | `AlcedoSlider` (stacked) for owners that take each edit as begin, update, finish calls (White Balance, Color Wheels Master, Selective Color, Mask fields); a typed value or an arrow key step is one begin, update, finish |
+| `AlcedoSlider.qml` | Shared numeric slider (#922): recessed 18 px rail with a 6 x 12 px handle inset 2 px (the handle stays inside the rail), fill from the origin, 1 px mark at the app default, and a value field (data font, tabular figures; muted at the default) that drags (1 px = 1 step, Shift x10) and edits on click. The rail covers the hard range; the extra zones outside the soft range are always hatched (dark tint, 1 px diagonal lines, 1 px line at the soft limit). A rail drag holds at a soft limit for `softDetent` (10 px) of pointer travel, then enters the extra zone, and holds again on the way back; typing, value drag, and arrow keys pass the soft limits without a hold. A double-click on the label or the rail resets; there is no reset button. Layouts `inline` and `stacked`; `showValue: false` drops the value field (Library grid zoom). A gradient rail (White Balance, Selective Color) draws the gradient at 70 % and no fill. Every numeric slider of the app uses it (#922). Soft limits narrower than the accepted range: Exposure +-5 EV (rail +-10 EV), Highlights and Shadows +-100, with an extra zone to -150 for the Highlights recovery and to +150 for the Shadows lift. Selective Color rails follow the selected hue (the swatch color, HSL 100 % / 50 %): Hue Shift shows the hue that each shift gives (a positive shift raises the hue; the Grade kernels turn the hue by 2.25 x the value, so the rail runs from the selected hue -67.5 degrees at -30 to +67.5 degrees at +30), Lightness runs from 10 % to 90 % lightness, Chroma from grey to full saturation |
+| `LoadingSpinner.qml` | Busy mark: a 270 degree arc (muted text color, round caps) turned by a GUI-thread RotationAnimation (900 ms per turn; still under `reduceMotion`). Use it instead of the Material `BusyIndicator`, whose render-thread animator requests a render-only frame on every vsync and halves the GUI frame rate while it runs. The editor render marks use it |
 | `ThemedProgressBar.qml` | Shared determinate / indeterminate progress track (Background Tasks, Export, Settings tiles); detail text in Manrope with tabular figures |
 | `BentoTile.qml` | Settings bento surface (radius 14, `cardSurfaceColor`, `cardBorderColor`, 22 px padding) |
 | `CountTile.qml` | Bento tile with one large count; optional short form for large counts with the exact count below |

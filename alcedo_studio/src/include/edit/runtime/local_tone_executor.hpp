@@ -60,7 +60,7 @@ class LocalToneExecutor {
   using Device = typename Ops::Device;
 
   /**
-   * @brief Build or bind canonical LLF planes from the Grade's post-tone/color pixels.
+   * @brief Build or bind canonical LLF planes from the Grade's post-Basic Tone pixels.
    *
    * Does not write scene RGBA. ApplyMix consumes the returned planes in this Grade
    * encode only. Failures throw before Ops::PersistCanonical.

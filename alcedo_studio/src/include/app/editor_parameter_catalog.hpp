@@ -22,7 +22,8 @@ enum class EditorParameterValueKind {
   /// An object of named properties in panel units. A write may give some of the properties.
   Object,
   /// The Model JSON that ParseEditorParameterWrite accepts: the UI shape is the Model shape. A
-  /// write gives the complete value. The entry describes the shape in `model_shape`.
+  /// lut write gives the complete value; a curve write gives one or more of its four curves. The
+  /// entry describes the shape in `model_shape`.
   Model,
 };
 
@@ -44,6 +45,11 @@ struct EditorScalarUiRange {
   double step          = 1.0;
   /// Decimal places that the panel shows.
   int    decimals      = 0;
+  /// Rail range of the panel slider, inside [minimum, maximum]. A drag on the rail stays in
+  /// it; a typed value, a drag on the value field, and the arrow keys reach [minimum, maximum].
+  /// A field without a narrower rail keeps the full range.
+  double rail_minimum  = minimum;
+  double rail_maximum  = maximum;
 };
 
 /// Value type of one property of an object field.

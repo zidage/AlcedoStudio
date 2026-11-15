@@ -13,7 +13,10 @@
 #include <QCoreApplication>
 #include <QHash>
 #include <QString>
+#include <QTemporaryDir>
+#include <QWindow>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <string>
@@ -21,6 +24,7 @@
 #include <variant>
 #include <vector>
 
+#include "display_destination_test_support.hpp"
 #include "edit/operators/models/lut_reference.hpp"
 #include "image/image_buffer.hpp"
 
@@ -79,6 +83,7 @@ class FakeLutPreviewSource final : public LutPreviewSource {
           cv::Mat(4, 6, CV_32FC4, cv::Scalar(0.5f, 0.25f, 1.0f, 1.0f)));
       result.image.geometry.render_extent         = {6, 4};
       result.image.geometry.full_reference_extent = {60, 40};
+      result.image.display                        = render_encoding;
     }
     auto completion = std::move(renders.at(index).completion);
     completion(std::move(result));
@@ -97,6 +102,8 @@ class FakeLutPreviewSource final : public LutPreviewSource {
   std::vector<Render>       renders;
   bool                      refuse             = false;
   bool                      viewport_rendering = false;
+  /// Output encoding of the completed renders.
+  ViewerDisplayConfig       render_encoding{};
 };
 
 class LutPreviewControllerTest : public ::testing::Test {
@@ -294,6 +301,67 @@ TEST_F(LutPreviewControllerTest, RefusedOrRejectedRenderStartsAgainAfterTheNextR
   ASSERT_EQ(source_.renders.size(), 2u);
   source_.Complete(1, EditorLutPreviewStatus::Completed);
   EXPECT_FALSE(Url(QStringLiteral("a")).isEmpty());
+}
+
+// Windows display ICC plan, W5: the store keeps the preview pixels and their encoding; the provider
+// converts them to the destination of the main window, and a new destination renders nothing.
+TEST_F(LutPreviewControllerTest, PreviewIsConvertedToTheDestination) {
+  QWindow window;
+  window.resize(64, 48);
+  controller_.SetDisplayWindow(&window);
+  source_.render_encoding =
+      ViewerDisplayConfig{ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::SRGB_PIECEWISE};
+  Watch(QStringLiteral("a"));
+  source_.Complete(0, EditorLutPreviewStatus::Completed);
+  const auto display_id_of = [this](const QString& entry_id) {
+    std::uint64_t display_id = 0;
+    EXPECT_TRUE(LutPreviewImageStore::ParseProviderId(Url(entry_id).section(QLatin1Char('/'), -1),
+                                                      &display_id));
+    return display_id;
+  };
+  LutPreviewImageProvider provider(store_);
+  const auto              provider_id = [this](const QString& entry_id) {
+    return Url(entry_id).section(QLatin1Char('/'), -1);
+  };
+
+  // The window has no monitor (offscreen): the tile shows the source pixels.
+  const QImage source = store_->Get(display_id_of(QStringLiteral("a")));
+  ASSERT_FALSE(source.isNull());
+  EXPECT_EQ(provider.requestImage(provider_id(QStringLiteral("a")), nullptr, {}), source);
+
+  // The window moves to a monitor with a P3 profile.
+  QTemporaryDir dir;
+  ASSERT_TRUE(dir.isValid());
+  const auto profile_path =
+      std::filesystem::path(dir.filePath(QStringLiteral("p3.icc")).toStdWString());
+  const auto p3_bytes = alcedo::test::P3DisplayProfileBytes();
+  alcedo::test::WriteProfileFile(profile_path, p3_bytes);
+  const QString url_before      = Url(QStringLiteral("a"));
+  const int     revision_before = controller_.revision();
+  WindowDisplayDestination::ForWindow(&window)->ApplyMonitorReading(
+      alcedo::test::MonitorWithProfile(profile_path));
+
+  EXPECT_NE(Url(QStringLiteral("a")), url_before) << "the tile requests the new conversion";
+  EXPECT_NE(controller_.revision(), revision_before);
+  EXPECT_EQ(source_.renders.size(), 1u) << "a new destination renders nothing";
+  EXPECT_EQ(store_->size(), 1u) << "the old display id is released";
+  EXPECT_EQ(store_->Get(display_id_of(QStringLiteral("a"))), source)
+      << "the store keeps the source pixels";
+  const QImage shown = provider.requestImage(provider_id(QStringLiteral("a")), nullptr, {});
+  EXPECT_EQ(shown, alcedo::test::ExpectedDisplayImage(source, source_.render_encoding, p3_bytes));
+  EXPECT_NE(shown, source);
+
+  // A preview shown after the change is converted too.
+  Watch(QStringLiteral("b"));
+  source_.Complete(1, EditorLutPreviewStatus::Completed);
+  EXPECT_EQ(provider.requestImage(provider_id(QStringLiteral("b")), nullptr, {}),
+            alcedo::test::ExpectedDisplayImage(store_->Get(display_id_of(QStringLiteral("b"))),
+                                               source_.render_encoding, p3_bytes));
+
+  // The window leaves its monitor: no conversion.
+  WindowDisplayDestination::ForWindow(&window)->ApplyMonitorReading(std::nullopt);
+  EXPECT_EQ(provider.requestImage(provider_id(QStringLiteral("a")), nullptr, {}), source);
+  controller_.SetDisplayWindow(nullptr);
 }
 
 }  // namespace

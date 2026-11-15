@@ -1,7 +1,7 @@
 # Linux OpenCL port verification
 
 This update applies the [review of PR #87](https://github.com/zidage/AlcedoStudio/pull/87#pullrequestreview-4967460386)
-to the current GPU graph renderer. The upstream base is `e7251164`.
+to the current GPU graph renderer. The upstream base is `63b2963f` (updated on 2026-11-15).
 
 ## Processing and presentation
 
@@ -59,3 +59,18 @@ Intel Arc B390 GPU. All CMake build commands use four parallel jobs.
   the GPU scope image, and reject an incompatible presentation target.
 
 The full test suite was not run. Windows and macOS builds were not run in this Linux environment.
+
+## Upstream merge validation (2026-11-15)
+
+Merged upstream `63b2963f` and resolved the viewport scheduling conflict. Frame publication
+uses the upstream GUI-thread update path. Linux host uploads still request an update after
+publication; the obsolete render-thread update connection stays removed. The upstream display
+color transform integration is retained.
+
+- Full `alcedo_main` and the focused test targets built with four jobs.
+- 48 focused tests passed: viewport suspension and host-frame state (7), GPU-only device
+  selection (3), backend/lease fixtures (10), display color transforms (10), native Wayland
+  shared coverage (7), native Wayland host-upload coverage (7), and GPU photo presentation (4).
+- Two isolated Wayland launches closed normally during OpenCL kernel preparation, with exit
+  status 0.
+- The full test suite and Windows/macOS builds were not run for this merge.

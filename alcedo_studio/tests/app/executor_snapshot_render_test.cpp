@@ -42,8 +42,10 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/renderer.hpp"
@@ -398,6 +400,97 @@ TEST_F(ExecutorSnapshotRenderTest, InteractiveRendersOfOneLineageReuseSourceAndP
   const auto binding = InteractiveBinding(*executor);
   ASSERT_TRUE(binding.has_value());
   EXPECT_EQ(binding->lineage, second->Lineage());
+}
+
+/// Sink that keeps every curve input histogram it receives.
+class RecordingHistogramSink final : public ICurveInputHistogramSink {
+ public:
+  void PublishCurveInputHistogram(CurveInputHistogram histogram) override {
+    std::lock_guard lock(mutex);
+    received.push_back(std::move(histogram));
+  }
+  auto Take() -> std::vector<CurveInputHistogram> {
+    std::lock_guard lock(mutex);
+    return std::exchange(received, {});
+  }
+
+  std::mutex                       mutex;
+  std::vector<CurveInputHistogram> received;
+};
+
+// Issue #888: an interactive render with a curve input histogram request gives the sink the
+// counts of the requested Grade with the identity of its frame. A curve edit leaves the counts
+// as they are and an Exposure edit changes them. A request for a Grade that the plan does not
+// have gives a histogram without counts, and a render without a request counts nothing.
+TEST_F(ExecutorSnapshotRenderTest, InteractiveRenderGivesTheCurveInputHistogramToItsSink) {
+  ProjectService project(db_path_, meta_path_);
+  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto           loaded    = Load(project, pipelines, LinearDngPath());
+  ASSERT_TRUE(loaded.source.has_value());
+  auto       executor = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
+  auto       sink     = std::make_shared<RecordingHistogramSink>();
+  const auto grade_id = loaded.source->Document().PrimaryGrade()->Id();
+
+  const auto render   = [&](const NodeId& requested) -> std::vector<CurveInputHistogram> {
+    auto request                               = MakeRequest(executor, RenderCases().front());
+    request.submission.metadata.image_identity = 77;
+    request.submission.metadata.session_epoch  = 5;
+    request.submission.metadata.presentation_request_id = 9;
+    if (!requested.Empty()) {
+      request.curve_input_histogram = CurveInputHistogramRequest{requested, sink};
+    }
+    const auto snapshot = loaded.source->Freeze();
+    EXPECT_FALSE(RenderPixels(*executor, *snapshot, loaded.input, request).empty());
+    return sink->Take();
+  };
+  const auto counts_of = [](const std::vector<CurveInputHistogram>& received) {
+    return received.size() == 1U ? received.front().counts : std::vector<std::uint32_t>{};
+  };
+
+  const auto before = RendererStats(*executor, ExecutorRole::Interactive);
+  const auto first  = render(grade_id);
+  ASSERT_EQ(first.size(), 1U);
+  const auto& histogram = first.front();
+  EXPECT_EQ(histogram.grade_id, grade_id);
+  EXPECT_EQ(histogram.image_identity, 77U);
+  EXPECT_EQ(histogram.session_epoch, 5U);
+  EXPECT_EQ(histogram.presentation_request_id, 9U);
+  ASSERT_TRUE(histogram.Evaluated());
+  ASSERT_EQ(histogram.counts.size(), kCurveInputHistogramValueCount);
+  EXPECT_GT(histogram.sample_count, 0U);
+  for (std::uint32_t channel = 0; channel < kCurveInputHistogramChannelCount; ++channel) {
+    std::uint64_t total = 0;
+    for (std::uint32_t bin = 0; bin < kCurveInputHistogramBins; ++bin) {
+      total += histogram.counts[channel * kCurveInputHistogramBins + bin];
+    }
+    EXPECT_EQ(total, histogram.sample_count) << "channel " << channel;
+  }
+  EXPECT_EQ(RendererStats(*executor, ExecutorRole::Interactive).pass.curve_input_histogram_execute,
+            before.pass.curve_input_histogram_execute + 1);
+
+  auto* curve = dynamic_cast<CurveModel*>(
+      loaded.source->Document().PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  CurveUpdate s_curve;
+  s_curve.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.3f, 0.2f}, {0.7f, 0.85f}, {1.0f, 1.0f}};
+  curve->ApplyUpdate(s_curve);
+  EXPECT_EQ(counts_of(render(grade_id)), histogram.counts) << "a curve edit changed the histogram";
+
+  RaiseExposure(loaded.source->Document(), 1.0f);
+  ASSERT_FALSE(HasFatalFailure());
+  const auto exposed = counts_of(render(grade_id));
+  ASSERT_EQ(exposed.size(), kCurveInputHistogramValueCount);
+  EXPECT_NE(exposed, histogram.counts);
+
+  const auto missing = render(NodeId{"grade.missing"});
+  ASSERT_EQ(missing.size(), 1U);
+  EXPECT_EQ(missing.front().grade_id, NodeId{"grade.missing"});
+  EXPECT_FALSE(missing.front().Evaluated());
+
+  const auto counted = RendererStats(*executor, ExecutorRole::Interactive);
+  EXPECT_TRUE(render(NodeId{}).empty());
+  EXPECT_EQ(RendererStats(*executor, ExecutorRole::Interactive).pass.curve_input_histogram_execute,
+            counted.pass.curve_input_histogram_execute);
 }
 
 // A snapshot of another lineage (reload, Version checkout, paste rebuild) releases every resource

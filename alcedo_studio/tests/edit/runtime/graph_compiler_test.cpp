@@ -36,6 +36,20 @@
 namespace alcedo {
 namespace {
 
+/// Stage layout of a complete Grade (issue #900): Basic Tone (5), Local Tone (2), Color (6).
+void ExpectBasicToneLocalToneColorStages(const CompiledGradeNode& compiled) {
+  ASSERT_EQ(compiled.stages.size(), 3U);
+  EXPECT_EQ(compiled.stages[0].kind, CompiledGradeStageKind::Pointwise);
+  EXPECT_EQ(compiled.stages[0].begin, 0U);
+  EXPECT_EQ(compiled.stages[0].count, 5U);
+  EXPECT_EQ(compiled.stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
+  EXPECT_EQ(compiled.stages[1].begin, 5U);
+  EXPECT_EQ(compiled.stages[1].count, 2U);
+  EXPECT_EQ(compiled.stages[2].kind, CompiledGradeStageKind::Pointwise);
+  EXPECT_EQ(compiled.stages[2].begin, 7U);
+  EXPECT_EQ(compiled.stages[2].count, 6U);
+}
+
 TEST(GpuDagGraphCompiler, GraphCompilerKeepsDecodeOutsidePlanAndAddsCameraToAp1BeforeGrade) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
@@ -99,7 +113,7 @@ TEST(GpuDagGraphCompiler, HighlightFlagDoesNotChangePassList) {
   EXPECT_TRUE(plan.Contains(GpuPassKind::CfaClamp));
 }
 
-TEST(GpuDagGraphCompiler, ColorGradeCompilesBasicToneAndColorBeforeLocalTone) {
+TEST(GpuDagGraphCompiler, ColorGradeCompilesLocalToneBetweenBasicToneAndColor) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
@@ -113,18 +127,14 @@ TEST(GpuDagGraphCompiler, ColorGradeCompilesBasicToneAndColorBeforeLocalTone) {
   ASSERT_EQ(grade_plan->adjustments.size(), compile_order.size());
   for (std::size_t index = 0; index < compile_order.size(); ++index) {
     EXPECT_EQ(grade_plan->adjustments[index].type, compile_order[index]) << "index " << index;
-    const auto expected = index + 2 < compile_order.size()
-                              ? CompiledAdjustmentAlgorithm::Pointwise
-                              : CompiledAdjustmentAlgorithm::LocalLaplacian;
+    const auto expected = index == 5U || index == 6U ? CompiledAdjustmentAlgorithm::LocalLaplacian
+                                                     : CompiledAdjustmentAlgorithm::Pointwise;
     EXPECT_EQ(grade_plan->adjustments[index].algorithm, expected) << "index " << index;
   }
-  ASSERT_EQ(grade_plan->stages.size(), 2U);
-  EXPECT_EQ(grade_plan->stages[0].kind, CompiledGradeStageKind::Pointwise);
-  EXPECT_EQ(grade_plan->stages[0].begin, 0U);
-  EXPECT_EQ(grade_plan->stages[0].count, 11U);
-  EXPECT_EQ(grade_plan->stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
-  EXPECT_EQ(grade_plan->stages[1].begin, 11U);
-  EXPECT_EQ(grade_plan->stages[1].count, 2U);
+  EXPECT_EQ(compile_order[5], type_ids::Shadows());
+  EXPECT_EQ(compile_order[6], type_ids::Highlights());
+  EXPECT_EQ(compile_order[7], type_ids::Curve());
+  ExpectBasicToneLocalToneColorStages(*grade_plan);
   ASSERT_EQ(plan.drt.post_adjustments.size(), 4U);
   EXPECT_EQ(plan.drt.post_adjustments[0].type, type_ids::Clarity());
   EXPECT_EQ(plan.drt.post_adjustments[1].type, type_ids::Sharpen());
@@ -144,7 +154,7 @@ TEST(GpuDagGraphCompiler, StoredAdjustmentOrderDoesNotChangeCompiledGradeOrder) 
   auto* grade   = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
   // Shadows, Saturation, and Exposure stored before/after each other in an order
-  // that differs from the fixed Basic Tone + Color -> Local Tone sequence.
+  // that differs from the fixed Basic Tone -> Local Tone -> Color sequence.
   grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.shadows"}, 0);
   grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.saturation"}, 0);
   grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.exposure"}, 12);
@@ -161,12 +171,9 @@ TEST(GpuDagGraphCompiler, StoredAdjustmentOrderDoesNotChangeCompiledGradeOrder) 
   for (std::size_t index = 0; index < compile_order.size(); ++index) {
     EXPECT_EQ(grade_plan->adjustments[index].type, compile_order[index]) << "index " << index;
   }
-  ASSERT_EQ(grade_plan->stages.size(), 2U);
-  EXPECT_EQ(grade_plan->stages[0].kind, CompiledGradeStageKind::Pointwise);
-  EXPECT_EQ(grade_plan->stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
+  ExpectBasicToneLocalToneColorStages(*grade_plan);
   // Parameter identity follows the instance id, not the stored position.
-  EXPECT_EQ(grade_plan->adjustments[11].instance_id,
-            AdjustmentInstanceId{"grade.primary.shadows"});
+  EXPECT_EQ(grade_plan->adjustments[5].instance_id, AdjustmentInstanceId{"grade.primary.shadows"});
   EXPECT_EQ(grade_plan->adjustments[1].instance_id,
             AdjustmentInstanceId{"grade.primary.exposure"});
 }
@@ -764,13 +771,7 @@ TEST(GpuDagGraphCompiler, ReopenedAndExportedDocumentUseTheSameGradeOrder) {
     for (std::size_t index = 0; index < compile_order.size(); ++index) {
       EXPECT_EQ(compiled.adjustments[index].type, compile_order[index]) << "index " << index;
     }
-    ASSERT_EQ(compiled.stages.size(), 2U);
-    EXPECT_EQ(compiled.stages[0].kind, CompiledGradeStageKind::Pointwise);
-    EXPECT_EQ(compiled.stages[0].begin, 0U);
-    EXPECT_EQ(compiled.stages[0].count, 11U);
-    EXPECT_EQ(compiled.stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
-    EXPECT_EQ(compiled.stages[1].begin, 11U);
-    EXPECT_EQ(compiled.stages[1].count, 2U);
+    ExpectBasicToneLocalToneColorStages(compiled);
   };
   ASSERT_NE(interactive.FirstGrade(), nullptr);
   expect_fixed_order(*interactive.FirstGrade());

@@ -27,11 +27,13 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../support/storage_test_access.hpp"
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_service.hpp"
 #include "edit/graph/develop_color_transform.hpp"
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/commit_graph.hpp"
@@ -45,11 +47,10 @@
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
 #include "utils/clock/time_provider.hpp"
-#include "support/test_temp_directory.hpp"
-#include "../support/storage_test_access.hpp"
 #ifdef HAVE_METAL
 #include "image/metal_image.hpp"
 #endif
@@ -181,6 +182,42 @@ static void PersistExposureEv(PipelineMgmtService& pipelines, sl_element_id_t el
   change.after_enabled                 = true;
   batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
   batch.presentation_key               = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+
+  CommitGraph graph  = *base.graph_;
+  auto        commit = EditCommit::MakePipelineEdit(graph.GetRootId(),
+                                                    graph.GetActiveVersionRef().head_commit_hash, batch);
+  const auto  head   = commit.GetCommitHash();
+  ASSERT_TRUE(graph.InsertCommit(std::move(commit)));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), head);
+  ASSERT_NE(pipelines.PersistHistory(base, graph), nullptr);
+}
+
+/// Set the output encoding of the DRT node of @p element_id with one commit on its stored history,
+/// as the editor's "odt" field does. @p space and @p eotf are the stored names ("p3_d65",
+/// "gamma_2_2").
+static void PersistDrtEncoding(PipelineMgmtService& pipelines, sl_element_id_t element_id,
+                               const std::string& space, const std::string& eotf) {
+  auto        base    = pipelines.LoadHistorySnapshot(element_id);
+  const auto  current = pipelines.AcquireCommittedSnapshot(element_id);
+  const auto* drt     = current->Document().Drt();
+  ASSERT_NE(drt, nullptr);
+  nlohmann::json before   = drt->Params().OutputTransformJson();
+  nlohmann::json after    = before;
+  after["encoding_space"] = space;
+  after["encoding_eotf"]  = eotf;
+
+  PipelineEditBatch  batch;
+  SetParameterChange change;
+  change.target.owner_kind = PipelineParameterOwnerKind::DrtPost;
+  change.target.node_id    = drt->Id();
+  change.target.field_key  = "odt";
+  change.before_value      = std::move(before);
+  change.after_value       = std::move(after);
+  change.before_enabled    = true;
+  change.after_enabled     = true;
+  batch.operation_kind     = PipelineEditOperationKind::SetParameter;
+  batch.presentation_key   = "history.operation.set_parameter";
   batch.changes.push_back(std::move(change));
 
   CommitGraph graph  = *base.graph_;
@@ -1333,6 +1370,75 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
   }
 
   std::filesystem::remove_all(cache_root, cleanup_ec);
+}
+
+// Windows display ICC plan, W6: the image provider converts each thumbnail from its encoding, so
+// the service reports the DRT encoding of the committed snapshot from both delivery paths.
+TEST_F(ThumbnailServiceTests, DeliveredThumbnailReportsTheDrtEncoding) {
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
+  if (!std::filesystem::exists(raw_path)) {
+    GTEST_SKIP() << "Sample RAW file is missing: " << raw_path.string();
+  }
+  const auto        cache_root = temp_dir_ / "thumbnail_cache";
+
+  ProjectService    project(db_path_, meta_path_);
+  auto              img_pool         = project.GetImagePoolService();
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(project.GetSleeveService(), img_pool, import_pipelines);
+  auto              import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> final_result;
+  auto                       final_result_future = final_result.get_future();
+  import_job->on_finished_                       = [&final_result](const ImportResult& result) {
+    final_result.set_value(result);
+  };
+  import_job = import_service.ImportToFolder({raw_path}, L"", {}, import_job);
+  ASSERT_NE(import_job, nullptr);
+  ASSERT_EQ(final_result_future.wait_for(60s), std::future_status::ready);
+  ASSERT_EQ(final_result_future.get().imported_, 1u);
+  const auto snapshot = import_job->import_log_->Snapshot();
+  ASSERT_EQ(snapshot.created_.size(), 1u);
+  import_service.SyncImports(snapshot, L"");
+  project.GetSleeveService()->Sync();
+  project.GetImagePoolService()->SyncWithStorage();
+  project.SaveProject(meta_path_);
+  const auto element_id = snapshot.created_.front().element_id_;
+  const auto image_id   = snapshot.created_.front().image_id_;
+
+  {
+    PipelineMgmtService pipelines(project.GetStorage());
+    PersistDrtEncoding(pipelines, element_id, "p3_d65", "gamma_2_2");
+  }
+  const ThumbnailCacheKey key{element_id, ThumbnailResolution::k256};
+
+  // Render path: a new disk cache misses.
+  {
+    auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service,
+                                       project.GetStorage(), project.GetProjectUUID(), cache_root);
+    const auto       guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
+                                                  ThumbnailResolution::k256);
+    ASSERT_NE(guard, nullptr);
+    ASSERT_NE(guard->thumbnail_buffer_, nullptr);
+    EXPECT_EQ(thumbnail_service.GetDiskCacheStats().hit_count, 0u);
+    EXPECT_EQ(guard->encoding.encoding_space, ColorUtils::ColorSpace::P3_D65);
+    EXPECT_EQ(guard->encoding.encoding_eotf, ColorUtils::EOTF::GAMMA_2_2);
+    thumbnail_service.ReleaseThumbnail(key);
+  }
+
+  // Disk cache path: a new service with the same cache root reads the entry of that history.
+  {
+    auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service,
+                                       project.GetStorage(), project.GetProjectUUID(), cache_root);
+    const auto       guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
+                                                  ThumbnailResolution::k256);
+    ASSERT_NE(guard, nullptr);
+    ASSERT_NE(guard->thumbnail_buffer_, nullptr);
+    EXPECT_EQ(thumbnail_service.GetDiskCacheStats().hit_count, 1u);
+    EXPECT_EQ(guard->encoding.encoding_space, ColorUtils::ColorSpace::P3_D65);
+    EXPECT_EQ(guard->encoding.encoding_eotf, ColorUtils::EOTF::GAMMA_2_2);
+    thumbnail_service.ReleaseThumbnail(key);
+  }
 }
 
 TEST_F(ThumbnailServiceTests, DISABLED_PipelineRestoredFromDBGeneratesCorrectThumbnail) {

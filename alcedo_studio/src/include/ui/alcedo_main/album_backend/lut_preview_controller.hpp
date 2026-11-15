@@ -10,6 +10,7 @@
 #include <QPointer>
 #include <QSet>
 #include <QString>
+#include <QWindow>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -103,6 +104,14 @@ class LutPreviewController : public QObject {
   void                SetSource(LutPreviewSource* source);
   /// Replace the display store (tests); the default is SharedLutPreviewImageStore().
   void                SetImageStore(std::shared_ptr<LutPreviewImageStore> store);
+  /**
+   * @brief Convert the previews to the display destination of @p window.
+   *
+   * Follows WindowDisplayDestination::DestinationChanged of @p window: a new destination goes to
+   * the store, and each shown preview gets a new URL; nothing renders again. Null converts
+   * nothing.
+   */
+  void                SetDisplayWindow(QWindow* window);
 
   [[nodiscard]] auto  revision() const -> int { return revision_; }
 
@@ -131,11 +140,18 @@ class LutPreviewController : public QObject {
   void revisionChanged();
 
  private:
+  /// One rendered preview: SDR pixels and their output encoding.
+  struct RenderedPreview {
+    QImage              image;
+    ViewerDisplayConfig encoding{};
+  };
+
   /// The preview that one entry shows now.
   struct ShownPreview {
-    QString       key;
-    std::uint64_t display_id = 0;
-    QString       url;
+    QString         key;
+    std::uint64_t   display_id = 0;
+    QString         url;
+    RenderedPreview preview;
   };
 
   /// The render in flight.
@@ -150,7 +166,7 @@ class LutPreviewController : public QObject {
       -> std::optional<QString>;
   /// Show the cached preview of @p entry_id, or queue its render.
   void RefreshEntry(const QString& entry_id);
-  void Show(const QString& entry_id, const QString& key, const QImage& image);
+  void Show(const QString& entry_id, const QString& key, const RenderedPreview& preview);
   void Hide(const QString& entry_id, bool notify);
   void Enqueue(const QString& entry_id);
   /// Start the next render when none is in flight and the viewport is idle.
@@ -158,9 +174,11 @@ class LutPreviewController : public QObject {
   /// Submit the render of the preview in flight.
   void SubmitRender(const QString& entry_id, const QString& key, EditorLutWrite write);
   void OnRendered(const QString& entry_id, const QString& key, EditorLutPreviewResult result);
-  [[nodiscard]] auto                    CachedImage(const QString& key) -> std::optional<QImage>;
-  void                                  CachePut(const QString& key, QImage image);
-  void                                  BumpRevision();
+  [[nodiscard]] auto CachedImage(const QString& key) -> std::optional<RenderedPreview>;
+  void               CachePut(const QString& key, RenderedPreview preview);
+  void               BumpRevision();
+  /// Give the store the destination of the display window, and each shown preview a new URL.
+  void               ApplyDisplayDestination();
 
   QPointer<EditorSessionController>     session_;
   QPointer<alcedo::LutLibraryService>   library_;
@@ -173,14 +191,18 @@ class LutPreviewController : public QObject {
   std::deque<QString>                   pending_;
   std::optional<InFlight>               in_flight_;
   /// LRU of rendered previews; the front is the most recently used.
-  std::list<std::pair<QString, QImage>> lru_;
-  QHash<QString, std::list<std::pair<QString, QImage>>::iterator> lru_index_;
+  std::list<std::pair<QString, RenderedPreview>>                           lru_;
+  QHash<QString, std::list<std::pair<QString, RenderedPreview>>::iterator> lru_index_;
   /// Keys whose render failed; they are not rendered again for this photo.
   QSet<QString>                                                   failed_;
   QHash<QString, ShownPreview>                                    shown_;
   std::uint64_t                                                   next_display_id_ = 1;
   std::uint64_t                                                   render_count_    = 0;
   int                                                             revision_        = 0;
+
+  /// The destination of the display window; null without a window.
+  QPointer<WindowDisplayDestination> display_source_;
+  QMetaObject::Connection            display_connection_;
 };
 
 }  // namespace alcedo::ui

@@ -13,6 +13,7 @@
 #include "edit/runtime/basic_render_workspace.hpp"
 #include "edit/runtime/cuda/cuda_backend.hpp"
 #include "edit/runtime/cuda/cuda_display_to_ap1_pass.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/mask_coverage_probe_record.hpp"
@@ -116,13 +117,17 @@ class CudaRenderDevice {
    * submit. Product present paths pass false and call @ref PublishResults after the sink
    * succeeds. Reports and rethrows failures after cancelling the incomplete submission.
    * There is no CPU image-processing fallback.
+   *
+   * @param histogram When not null, the Grade with its `grade_id` also records the histogram of
+   *        its curve input (PlanExecutor::Execute).
    */
   [[nodiscard]] auto Execute(
       const ExecutionPlan& plan, const PreparedRawInput& input, const PipelineDocument& document,
-      bool                      publish_on_success = true,
-      TransientAllocationPolicy transient_policy   = TransientAllocationPolicy::SessionPacked,
-      ResultPersistenceScope    persistence        = ResultPersistenceScope::AllCurrentResults,
-      MaskCoverageProbeRecord<CudaBackend>* probe  = nullptr) -> GraphValueId;
+      bool                      publish_on_success    = true,
+      TransientAllocationPolicy transient_policy      = TransientAllocationPolicy::SessionPacked,
+      ResultPersistenceScope    persistence           = ResultPersistenceScope::AllCurrentResults,
+      MaskCoverageProbeRecord<CudaBackend>* probe     = nullptr,
+      CurveInputHistogramRecord*            histogram = nullptr) -> GraphValueId;
 
  private:
   CudaRenderWorkspace                              workspace_;

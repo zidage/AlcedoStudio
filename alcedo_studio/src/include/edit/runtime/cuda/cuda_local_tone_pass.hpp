@@ -29,7 +29,7 @@ struct CudaLocalToneResult {
  * ROI samples it through MakeLlfSamplingPlan instead of rebuilding the pyramids.
  *
  * Source versus result reuse is decided by @ref LocalToneExecutor. Pyramid
- * scratch is transient. @p adjusted is the post-tone/color image, @p working is
+ * scratch is transient. @p adjusted is the post-Basic Tone image, @p working is
  * the destination work member, and @p original is the Grade input used by Mix.
  * working may alias adjusted. Slider values use the persisted [-100, 100] UI
  * scale. Throws on missing resources, invalid geometry, or CUDA failure.

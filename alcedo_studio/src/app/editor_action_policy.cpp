@@ -262,6 +262,8 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::PresentMaskCoverageAgain:
     case EditorSessionCommandKind::ShowMaskRangeCoverage:
     case EditorSessionCommandKind::HideMaskRangeCoverage:
+    case EditorSessionCommandKind::ShowCurveInputHistogram:
+    case EditorSessionCommandKind::HideCurveInputHistogram:
       return std::nullopt;
     case EditorSessionCommandKind::SetPresentationTarget:
     case EditorSessionCommandKind::SetPresentationSize:

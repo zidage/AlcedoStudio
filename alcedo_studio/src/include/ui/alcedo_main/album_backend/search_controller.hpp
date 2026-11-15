@@ -170,6 +170,15 @@ class SearchController final : public QObject {
   Q_INVOKABLE void SetSearchPreviewThumbnailVisible(uint elementId, uint imageId, bool visible,
                                                     uint maxEdge = 192);
   Q_INVOKABLE void CancelSearchPreviewThumbnails();
+  /**
+   * @brief Publish the current URL of each shown search preview again.
+   *
+   * LibraryModule calls it after the thumbnail store has a new display destination: a preview
+   * that a library row shows gets the new URL of the row, and a preview pinned by this controller
+   * gets the new revision of its stored tier. A preview whose render is on the way is published
+   * by that render. Renders nothing.
+   */
+  void                     RepublishSearchPreviewThumbnails();
 
   /// Clear the active search without querying, and drop an apply that is still on the worker.
   void ClearSearchState(bool emitSignal = true);

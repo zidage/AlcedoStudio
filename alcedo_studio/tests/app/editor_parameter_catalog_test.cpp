@@ -37,7 +37,9 @@
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/color_wheel_tone.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "ui/alcedo_main/editor_support/modules/hls_math.hpp"
 
 namespace alcedo {
@@ -140,7 +142,7 @@ TEST(EditorParameterCatalogTest, ScalarRangesMatchPreviousPanelSliders) {
   };
   const Case cases[] = {
       {"exposure", "tone", -10.0, 10.0, 0.01, 2},  {"contrast", "tone", -100.0, 100.0, 1.0, 0},
-      {"highlights", "tone", -100.0, 100.0, 1.0, 0}, {"shadows", "tone", -100.0, 100.0, 1.0, 0},
+      {"highlights", "tone", -150.0, 100.0, 1.0, 0}, {"shadows", "tone", -100.0, 150.0, 1.0, 0},
       {"white", "tone", -100.0, 100.0, 1.0, 0},      {"black", "tone", -100.0, 100.0, 1.0, 0},
       {"saturation", "look", -100.0, 100.0, 1.0, 0}, {"vibrance", "look", -100.0, 100.0, 1.0, 0},
       {"diffusion", "post", 0.0, 100.0, 1.0, 0},     {"clarity", "post", -100.0, 100.0, 1.0, 0},
@@ -156,6 +158,40 @@ TEST(EditorParameterCatalogTest, ScalarRangesMatchPreviousPanelSliders) {
     EXPECT_DOUBLE_EQ(entry->range.default_value, 0.0) << test_case.field;
     EXPECT_DOUBLE_EQ(entry->range.step, test_case.step) << test_case.field;
     EXPECT_EQ(entry->range.decimals, test_case.decimals) << test_case.field;
+  }
+}
+
+// #922: Exposure, Highlights, and Shadows have a rail narrower than the accepted range (typing
+// reaches +-10 EV, Highlights -150, Shadows +150). Every other field has its rail on the full
+// range.
+TEST(EditorParameterCatalogTest, ExposureHighlightsAndShadowsHaveANarrowerRail) {
+  struct Case {
+    const char* field;
+    double      rail_minimum;
+    double      rail_maximum;
+  };
+  const Case narrower[] = {
+      {"exposure", -5.0, 5.0}, {"highlights", -100.0, 100.0}, {"shadows", -100.0, 100.0}};
+  for (const auto& entry : EditorParameterCatalog::Entries()) {
+    if (entry.kind != EditorParameterValueKind::Scalar) {
+      continue;
+    }
+    const auto* match = std::find_if(std::begin(narrower), std::end(narrower),
+                                     [&](const Case& c) { return entry.field == c.field; });
+    if (match == std::end(narrower)) {
+      EXPECT_DOUBLE_EQ(entry.range.rail_minimum, entry.range.minimum) << entry.field;
+      EXPECT_DOUBLE_EQ(entry.range.rail_maximum, entry.range.maximum) << entry.field;
+      continue;
+    }
+    EXPECT_DOUBLE_EQ(entry.range.rail_minimum, match->rail_minimum) << entry.field;
+    EXPECT_DOUBLE_EQ(entry.range.rail_maximum, match->rail_maximum) << entry.field;
+    EXPECT_GE(entry.range.rail_minimum, entry.range.minimum) << entry.field;
+    EXPECT_LE(entry.range.rail_maximum, entry.range.maximum) << entry.field;
+    EXPECT_LT(entry.range.rail_maximum - entry.range.rail_minimum,
+              entry.range.maximum - entry.range.minimum)
+        << entry.field;
+    EXPECT_GE(entry.range.default_value, entry.range.rail_minimum) << entry.field;
+    EXPECT_LE(entry.range.default_value, entry.range.rail_maximum) << entry.field;
   }
 }
 
@@ -1478,6 +1514,194 @@ TEST(EditorParameterCatalogTest, CurvePointsOutsideTheUnitSquareOrOutOfOrderAreR
                   &error)
                   .has_value())
       << error;
+}
+
+TEST(EditorParameterCatalogTest, CurveWriteAcceptsSixteenPointsAndRejectsSeventeen) {
+  const auto evenly_spaced = [](int count) {
+    nlohmann::json points = nlohmann::json::array();
+    for (int i = 0; i < count; ++i) {
+      const double x = static_cast<double>(i) / static_cast<double>(count - 1);
+      points.push_back({{"x", x}, {"y", x}});
+    }
+    return nlohmann::json{{"curve", {{"points", std::move(points)}}}};
+  };
+  std::string error;
+  const auto  sixteen = ParseEditorParameterWrite("curve", evenly_spaced(16), &error);
+  ASSERT_TRUE(sixteen.has_value()) << error;
+  const auto* write = std::get_if<EditorCurveWrite>(&*sixteen);
+  ASSERT_NE(write, nullptr);
+  ASSERT_TRUE(write->points.has_value());
+  EXPECT_EQ(write->points->size(), 16U);
+
+  EXPECT_FALSE(ParseEditorParameterWrite("curve", evenly_spaced(17), &error).has_value());
+  EXPECT_EQ(error, "curve.points must contain at most 16 points");
+}
+
+TEST(EditorParameterCatalogTest, CurveWriteWithPointsOnlyLeavesTheChannelCurvesAsTheyAre) {
+  // The alcedo-cli form from before the channel curves: {"curve":{"size":N,"points":[...]}}.
+  const nlohmann::json params = {
+      {"curve",
+       {{"size", 3},
+        {"points", {{{"x", 0.0}, {"y", 0.0}}, {{"x", 0.5}, {"y", 0.6}}, {{"x", 1.0}, {"y", 1.0}}}}}}};
+  std::string error;
+  const auto  parsed = ParseEditorParameterWrite("curve", params, &error);
+  ASSERT_TRUE(parsed.has_value()) << error;
+  const auto* write = std::get_if<EditorCurveWrite>(&*parsed);
+  ASSERT_NE(write, nullptr);
+  ASSERT_TRUE(write->points.has_value());
+  EXPECT_EQ(write->points->size(), 3U);
+  EXPECT_FALSE(write->red.has_value());
+  EXPECT_FALSE(write->green.has_value());
+  EXPECT_FALSE(write->blue.has_value());
+
+  CurveModel  model;
+  CurveUpdate blue;
+  blue.blue = std::vector<CurvePoint>{{0.0f, 0.1f}, {1.0f, 0.9f}};
+  model.ApplyUpdate(blue);
+  model.ApplyUpdate(*write);
+  EXPECT_EQ(model.Points().size(), 3U);
+  EXPECT_EQ(model.ChannelPoints(CurveChannel::Blue), *blue.blue);
+}
+
+TEST(EditorParameterCatalogTest, CurveWriteWithOneChannelKeySetsOnlyThatCurve) {
+  std::string error;
+  const auto  parsed = ParseEditorParameterWrite(
+      "curve", {{"curve", {{"blue", {{{"x", 0.0}, {"y", 0.1}}, {{"x", 1.0}, {"y", 0.9}}}}}}},
+      &error);
+  ASSERT_TRUE(parsed.has_value()) << error;
+  const auto* write = std::get_if<EditorCurveWrite>(&*parsed);
+  ASSERT_NE(write, nullptr);
+  EXPECT_FALSE(write->points.has_value());
+  EXPECT_FALSE(write->red.has_value());
+  EXPECT_FALSE(write->green.has_value());
+  ASSERT_TRUE(write->blue.has_value());
+  EXPECT_EQ(*write->blue, (std::vector<CurvePoint>{{0.0f, 0.1f}, {1.0f, 0.9f}}));
+
+  CurveModel  model;
+  CurveUpdate rgb;
+  rgb.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.4f, 0.5f}, {1.0f, 1.0f}};
+  model.ApplyUpdate(rgb);
+  model.ApplyUpdate(*write);
+  EXPECT_EQ(model.Points(), *rgb.points);
+  EXPECT_EQ(model.ChannelPoints(CurveChannel::Blue), *write->blue);
+}
+
+TEST(EditorParameterCatalogTest, CurveWriteRejectsUnknownKeysAndInvalidChannelPointsWithNamedErrors) {
+  std::string error;
+  EXPECT_FALSE(ParseEditorParameterWrite(
+                   "curve",
+                   {{"curve", {{"alpha", {{{"x", 0.0}, {"y", 0.0}}, {{"x", 1.0}, {"y", 1.0}}}}}}},
+                   &error)
+                   .has_value());
+  EXPECT_EQ(error, "Unknown parameter: curve.alpha");
+
+  EXPECT_FALSE(ParseEditorParameterWrite("curve", {{"curve", nlohmann::json::object()}}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "curve requires points, red, green, or blue");
+
+  EXPECT_FALSE(ParseEditorParameterWrite(
+                   "curve", {{"curve", {{"red", {{{"x", 0.0}, {"y", 0.0}}, {{"x", 1.2}, {"y", 1.0}}}}}}},
+                   &error)
+                   .has_value());
+  EXPECT_EQ(error, "curve.red[1].x must be in [0, 1]");
+
+  EXPECT_FALSE(
+      ParseEditorParameterWrite("curve", {{"curve", {{"green", {{{"x", 0.0}, {"y", 0.0}}}}}}}, &error)
+          .has_value());
+  EXPECT_EQ(error, "curve.green must contain at least two points");
+
+  // size counts the RGB points only.
+  EXPECT_FALSE(ParseEditorParameterWrite(
+                   "curve",
+                   {{"curve",
+                     {{"size", 2}, {"blue", {{{"x", 0.0}, {"y", 0.0}}, {{"x", 1.0}, {"y", 1.0}}}}}}},
+                   &error)
+                   .has_value());
+  EXPECT_EQ(error, "curve.size must match curve.points");
+}
+
+TEST(EditorParameterCatalogTest, EachToneCurvePresetPassesTheCurveWrite) {
+  // The points of each preset as a point list, the shape that the panel writes.
+  for (const auto& preset : ToneCurvePresets()) {
+    nlohmann::json points = nlohmann::json::array();
+    for (const auto& point : preset.points) {
+      points.push_back({{"x", point.x}, {"y", point.y}});
+    }
+    std::string error;
+    const auto  parsed =
+        ParseEditorParameterWrite("curve", {{"curve", {{"red", std::move(points)}}}}, &error);
+    ASSERT_TRUE(parsed.has_value()) << preset.id << ": " << error;
+    EXPECT_EQ(*std::get_if<EditorCurveWrite>(&*parsed)->red, preset.PointList()) << preset.id;
+  }
+}
+
+TEST(EditorParameterCatalogTest, CurveWriteAppliesAPresetById) {
+  std::string error;
+  const auto  parsed = ParseEditorParameterWrite(
+      "curve", {{"curve", {{"points", "cl_digital"}, {"blue", "kodak_2383"}}}}, &error);
+  ASSERT_TRUE(parsed.has_value()) << error;
+  const auto* write = std::get_if<EditorCurveWrite>(&*parsed);
+  ASSERT_NE(write, nullptr);
+  ASSERT_TRUE(write->points.has_value());
+  EXPECT_EQ(*write->points, FindToneCurvePreset("cl_digital")->PointList());
+  EXPECT_FALSE(write->red.has_value());
+  ASSERT_TRUE(write->blue.has_value());
+  EXPECT_EQ(*write->blue, FindToneCurvePreset("kodak_2383")->PointList());
+
+  // An id that names no preset applies Cl. Digit: film_like, the id before #914, and any other.
+  const auto cl_digital = FindToneCurvePreset(kClDigitalToneCurvePresetId)->PointList();
+  for (const auto* id : {"film_like", "filmic", "velvia"}) {
+    const auto fallback = ParseEditorParameterWrite("curve", {{"curve", {{"green", id}}}}, &error);
+    ASSERT_TRUE(fallback.has_value()) << id << ": " << error;
+    const auto* green = std::get_if<EditorCurveWrite>(&*fallback);
+    ASSERT_NE(green, nullptr);
+    ASSERT_TRUE(green->green.has_value()) << id;
+    EXPECT_EQ(*green->green, cl_digital) << id;
+  }
+  // A stored value holds points only.
+  EXPECT_FALSE(ParseEditorParameterValue("curve", {{"points", "cl_digital"}}, &error).has_value());
+}
+
+TEST(EditorParameterCatalogTest, CurveValueWithoutAChannelKeyReadsThatChannelAsIdentity) {
+  // A complete stored value (history replay) is the Model JSON, which omits an identity channel
+  // curve: the value sets that channel to the identity.
+  std::string error;
+  const auto  parsed = ParseEditorParameterValue(
+      "curve", {{"points", {{{"x", 0.0}, {"y", 0.0}}, {{"x", 1.0}, {"y", 1.0}}}}}, &error);
+  ASSERT_TRUE(parsed.has_value()) << error;
+  const auto* write = std::get_if<EditorCurveWrite>(&*parsed);
+  ASSERT_NE(write, nullptr);
+  for (const auto channel : kCurveChannels) {
+    ASSERT_TRUE(write->Channel(channel).has_value()) << CurveChannelKey(channel);
+    EXPECT_EQ(*write->Channel(channel), IdentityCurvePoints()) << CurveChannelKey(channel);
+  }
+  EXPECT_FALSE(ParseEditorParameterValue(
+                   "curve", {{"blue", {{{"x", 0.0}, {"y", 0.0}}, {{"x", 1.0}, {"y", 1.0}}}}}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "curve.points is required");
+}
+
+TEST(EditorParameterCatalogTest, CurveResetValueResetsTheFourCurves) {
+  const auto* entry = EditorParameterCatalog::Find("curve");
+  ASSERT_NE(entry, nullptr);
+  const auto reset = EditorParameterCatalog::UiDefault(*entry);
+  for (const auto channel : kCurveChannels) {
+    EXPECT_TRUE(reset.contains(std::string{CurveChannelKey(channel)})) << CurveChannelKey(channel);
+  }
+  std::string error;
+  const auto  model_json =
+      EditorParameterCatalog::ToModelJson("curve", reset, nlohmann::json{}, &error);
+  ASSERT_TRUE(model_json.has_value()) << error;
+  const auto parsed = ParseEditorParameterWrite("curve", *model_json, &error);
+  ASSERT_TRUE(parsed.has_value()) << error;
+
+  CurveModel  model;
+  CurveUpdate edited;
+  edited.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.4f, 0.5f}, {1.0f, 1.0f}};
+  edited.red    = std::vector<CurvePoint>{{0.0f, 0.1f}, {1.0f, 0.9f}};
+  model.ApplyUpdate(edited);
+  model.ApplyUpdate(std::get<EditorCurveWrite>(*parsed));
+  EXPECT_TRUE(model.IsDefault());
 }
 
 TEST(EditorParameterCatalogTest, CurveAndLutUseTheModelShape) {

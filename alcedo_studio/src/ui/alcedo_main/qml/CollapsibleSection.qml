@@ -25,12 +25,16 @@ Item {
     property color mutedColor: appTheme.textMutedColor
     property color hoverColor: appTheme.hoverColor
     property color accentColor: appTheme.accentColor
-    // Optional default body height when the loader content has no implicit size.
+    // Height of the body content. The body adds its spaceSm insets on every side, so a caller
+    // passes the height of its content column (plus that column's own margins).
     property real bodyContentHeight: 120
     // Optional explanation of the section. When set, an "i" glyph at the right end of the header
     // shows it; a click on the glyph pins it and does not fold the section.
     property string infoText: ""
     property string infoObjectName: "collapsibleSectionInfoHint"
+    // Optional actions at the right end of the header (for example toggles and a reset). A click
+    // on an action does not fold the section.
+    property Component headerActions: null
 
     // ── Fold driver (test-visible) ──────────────────────────────────────────
     property real foldProgress: expanded ? 1 : 0
@@ -41,7 +45,8 @@ Item {
     readonly property real headerHeight: appTheme.iconButtonHitSizeCompact
     readonly property real headerBlockHeight: Math.max(
         headerHeight, headerRow.implicitHeight + appTheme.spaceXs)
-    readonly property real bodyHeight: Math.max(0, bodyContentHeight) * foldProgress
+    readonly property real bodyHeight: (Math.max(0, bodyContentHeight) + 2 * appTheme.spaceSm)
+                                       * foldProgress
     readonly property real sectionHeight: headerBlockHeight + bodyHeight
 
     // Children of CollapsibleSection { ... } must land in the body slot, not as
@@ -142,9 +147,7 @@ Item {
                     id: headerRow
                     anchors.fill: parent
                     anchors.leftMargin: appTheme.spaceSm
-                    anchors.rightMargin: headerInfo.visible
-                                         ? appTheme.spaceSm * 2 + headerInfo.width
-                                         : appTheme.spaceSm
+                    anchors.rightMargin: parent.width - headerTrailingEdge.x + appTheme.spaceSm
                     spacing: appTheme.spaceSm
 
                     // Chevron affordance (canvas keeps asset set small).
@@ -190,16 +193,39 @@ Item {
                     }
                 }
 
-                // The fold area ends at the info glyph, so a click on the glyph only pins it.
+                // The fold area ends at the header actions and the info glyph, so a click on them
+                // does not fold the section.
                 MouseArea {
                     id: headerMouse
                     anchors.left: parent.left
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
-                    anchors.right: headerInfo.visible ? headerInfo.left : parent.right
+                    anchors.right: headerTrailingEdge.left
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.toggle()
+                }
+
+                // Left edge of the trailing items: the header actions, else the info glyph, else
+                // the right end of the header.
+                Item {
+                    id: headerTrailingEdge
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 0
+                    x: headerActionsLoader.active
+                       ? headerActionsLoader.x
+                       : (headerInfo.visible ? headerInfo.x : header.width)
+                }
+
+                Loader {
+                    id: headerActionsLoader
+                    objectName: "collapsibleSectionHeaderActions"
+                    anchors.right: headerInfo.visible ? headerInfo.left : parent.right
+                    anchors.rightMargin: appTheme.spaceXs
+                    anchors.verticalCenter: parent.verticalCenter
+                    active: root.headerActions !== null
+                    sourceComponent: root.headerActions
                 }
 
                 EditorInfoHint {

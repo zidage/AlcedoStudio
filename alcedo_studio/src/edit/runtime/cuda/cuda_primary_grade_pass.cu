@@ -93,29 +93,58 @@ __device__ auto ApplyOkLabContrast(const float3& acescc, float contrast) -> floa
   return LinearAp1ToAcescc(OkLabToLinearAp1(lab));
 }
 
-__device__ auto ExtrapolateCurve(float value, const CudaAdjustmentParams& p, std::uint32_t a,
-                                 std::uint32_t b) -> float {
-  const float x0 = p.values[a * 2];
-  const float y0 = p.values[a * 2 + 1];
-  const float x1 = p.values[b * 2];
-  const float y1 = p.values[b * 2 + 1];
-  return y0 + (value - x0) * (y1 - y0) / fmaxf(x1 - x0, 1.0e-6f);
+// Whites and Blacks move the bright and the dark tones by an exposure shift that the pixel's ACEScc
+// luma selects. x is stops from 18% grey (the AP1 luma weights add to 1, so a uniform ACEScc
+// offset of d / 17.52 moves x by exactly d stops). Whites works above grey, Blacks below it:
+//   - The zone runs from grey (no shift) to kToneZoneWidthEv = 3 stops from grey (the full shift
+//     s). Between them the weight is smoothstep(t), t = x / 3, so the curve leaves grey with
+//     slope 1. Past the zone every tone moves by s.
+//   - s = value * 0.03 stops: +/-100 is +/-3 stops. The shift never exceeds |s|.
+//   - Whites above 0 and Blacks below 0 push tones away from grey: x + s * smoothstep(x / 3),
+//     slope >= 1. The other direction is the exact inverse of that curve, so it pulls tones
+//     toward grey with a slope in (0, 1] (Newton solve). +v and -v undo each other.
+// Blacks is Whites mirrored about grey: shift_b(x, s) = -shift_w(-x, -s).
+constexpr float kToneZoneWidthEv   = 3.0f;
+constexpr float kToneZoneEvPerUnit = 0.03f;
+
+__device__ auto ToneZoneShiftEv(float x, float s) -> float {
+  if (x <= 0.0f || s == 0.0f) return 0.0f;
+  const float w = kToneZoneWidthEv;
+  if (s > 0.0f) {
+    const float t = fminf(x / w, 1.0f);
+    return s * t * t * (3.0f - 2.0f * t);
+  }
+  const float a = -s;
+  if (x >= w + a) return -a;
+  // Solve w * t + a * t^2 * (3 - 2t) = x for t in [0, 1]; the derivative is >= w.
+  float t = x / (w + a);
+  for (int i = 0; i < 5; ++i) {
+    const float f  = w * t + a * t * t * (3.0f - 2.0f * t) - x;
+    const float fp = w + 6.0f * a * t * (1.0f - t);
+    t              = fminf(fmaxf(t - f / fp, 0.0f), 1.0f);
+  }
+  return w * t - x;
 }
 
+// Tone Curve spline (edit/operators/models/tone_curve_spline.hpp; CPU reference
+// EvaluateToneCurveSpline). values[0..15]: x of the control points; [16..31]: y; [32..47]: slope.
+// Monotone cubic Hermite between the points, straight along the end slope outside them.
 __device__ auto ApplyCurve(float value, const CudaAdjustmentParams& p) -> float {
-  if (p.count < 2) return value;
-  if (value <= p.values[0]) return ExtrapolateCurve(value, p, 0, 1);
-  for (std::uint32_t i = 1; i < p.count; ++i) {
-    const float x1 = p.values[i * 2];
-    if (value <= x1) {
-      const float x0 = p.values[(i - 1) * 2];
-      const float y0 = p.values[(i - 1) * 2 + 1];
-      const float y1 = p.values[i * 2 + 1];
-      const float t  = (value - x0) / fmaxf(x1 - x0, 1.0e-6f);
-      return y0 + t * (y1 - y0);
-    }
-  }
-  return ExtrapolateCurve(value, p, p.count - 2, p.count - 1);
+  const std::uint32_t n = p.count;
+  if (n < 2) return value;
+  const float* xs = p.values;
+  const float* ys = p.values + 16;
+  const float* ms = p.values + 32;
+  if (value <= xs[0]) return ys[0] + ms[0] * (value - xs[0]);
+  if (value >= xs[n - 1]) return ys[n - 1] + ms[n - 1] * (value - xs[n - 1]);
+  std::uint32_t i = 0;
+  while (i + 2 < n && value >= xs[i + 1]) ++i;
+  const float h  = xs[i + 1] - xs[i];
+  const float t  = (value - xs[i]) / h;
+  const float dy = ys[i + 1] - ys[i];
+  const float d  = dy / h;
+  const float u  = 1.0f - t;
+  return ys[i] + t * dy + h * t * u * (u * (ms[i] - d) - t * (ms[i + 1] - d));
 }
 
 // Tone color wheels (edit/operators/models/color_wheel_tone.hpp). values[0..2]: Offset as an ACEScc
@@ -171,17 +200,19 @@ __device__ auto ApplyHls(float3 c, const CudaAdjustmentParams& p) -> float3 {
   if (fabsf(adj_h) <= 1.0e-6f && fabsf(adj_l) <= 1.0e-6f && fabsf(chroma_adj) <= 1.0e-6f) {
     return c;
   }
-  const float  hue_shift    = adj_h * 2.25f * 0.017453292519943295f;
-  const float  lightness    = adj_l * 1.125f;
-  const float  chroma_scale = exp2f(chroma_adj * 2.25f * (chroma_adj >= 0.0f ? 4.5f : 3.25f));
-  const float  luma         = Luma(c) + lightness;
-  const float  i            = 0.596f * c.x - 0.274f * c.y - 0.322f * c.z;
-  const float  q            = 0.211f * c.x - 0.523f * c.y + 0.312f * c.z;
-  const float  rotated_i    = (i * cosf(hue_shift) - q * sinf(hue_shift)) * chroma_scale;
-  const float  rotated_q    = (i * sinf(hue_shift) + q * cosf(hue_shift)) * chroma_scale;
-  return make_float3(luma + 0.956f * rotated_i + 0.621f * rotated_q,
-                     luma - 0.272f * rotated_i - 0.647f * rotated_q,
-                     luma - 1.106f * rotated_i + 1.703f * rotated_q);
+  // Hue Shift and Chroma rotate and scale the YIQ chroma (I, Q); Lightness adds to every channel.
+  // Only the change of I and Q goes back to RGB, so zero adjustments leave the color exact. A
+  // positive Hue Shift raises the hue (red toward yellow): it lowers the YIQ angle.
+  const float hue_shift    = -adj_h * 2.25f * 0.017453292519943295f;
+  const float lightness    = adj_l * 1.125f;
+  const float chroma_scale = exp2f(chroma_adj * 2.25f * (chroma_adj >= 0.0f ? 4.5f : 3.25f));
+  const float i            = 0.596f * c.x - 0.274f * c.y - 0.322f * c.z;
+  const float q            = 0.211f * c.x - 0.523f * c.y + 0.312f * c.z;
+  const float di = (i * cosf(hue_shift) - q * sinf(hue_shift)) * chroma_scale - i;
+  const float dq = (i * sinf(hue_shift) + q * cosf(hue_shift)) * chroma_scale - q;
+  return make_float3(c.x + lightness + 0.956f * di + 0.621f * dq,
+                     c.y + lightness - 0.272f * di - 0.647f * dq,
+                     c.z + lightness - 1.106f * di + 1.703f * dq);
 }
 
 __device__ auto LutIndex(std::uint32_t edge, std::uint32_t x, std::uint32_t y, std::uint32_t z)
@@ -254,20 +285,25 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, const f
     c.z += offset;
   } else if (behavior == CudaAdjustmentBehavior::Contrast && value != 0.0f) {
     c = ApplyOkLabContrast(c, value);
-  } else if (behavior == CudaAdjustmentBehavior::White) {
-    const float gain = 1.0f + fmaxf(value, 0.0f) * 0.005f;
-    c.x *= gain;
-    c.y *= gain;
-    c.z *= gain;
-  } else if (behavior == CudaAdjustmentBehavior::Black) {
-    const float offset = value * 0.001f;
+  } else if ((behavior == CudaAdjustmentBehavior::White ||
+              behavior == CudaAdjustmentBehavior::Black) &&
+             value != 0.0f) {
+    const float x = (Luma(c) - CE_ACESCC_MIDDLE_GREY) * CE_ACESCC_B;
+    const float s = value * kToneZoneEvPerUnit;
+    const float shift_ev = behavior == CudaAdjustmentBehavior::White
+                               ? ToneZoneShiftEv(x, s)
+                               : -ToneZoneShiftEv(-x, -s);
+    const float offset = shift_ev / CE_ACESCC_B;
     c.x += offset;
     c.y += offset;
     c.z += offset;
   } else if (behavior == CudaAdjustmentBehavior::Curve) {
-    c.x = ApplyCurve(c.x, p);
-    c.y = ApplyCurve(c.y, p);
-    c.z = ApplyCurve(c.z, p);
+    // The Curve slot has four records (CurveGradeRuntimeParams): the RGB curve, then the red,
+    // green, and blue curves. count 0 leaves the channel unchanged.
+    const CudaAdjustmentParams* curves = &p;
+    c.x = ApplyCurve(ApplyCurve(c.x, curves[0]), curves[1]);
+    c.y = ApplyCurve(ApplyCurve(c.y, curves[0]), curves[2]);
+    c.z = ApplyCurve(ApplyCurve(c.z, curves[0]), curves[3]);
   } else if (behavior == CudaAdjustmentBehavior::Hls) {
     c = ApplyHls(c, p);
   } else if (behavior == CudaAdjustmentBehavior::Saturation ||
@@ -341,6 +377,48 @@ __global__ void PrimaryGradeKernel(const float4* input, float4* output, std::uin
   output[index] = MixGradePixel(mix_source[index], adjusted, grade_mix, mask, index);
 }
 
+// Bin of one ACEScc value on the curve axis: CurveInputHistogramBin (curve_input_histogram.hpp).
+__device__ auto CurveInputHistogramBinOf(float value) -> std::uint32_t {
+  return static_cast<std::uint32_t>(fminf(fmaxf(value * 256.0f, 0.0f), 255.0f));
+}
+
+// Histogram of the curve input (issue #888). Each thread takes samples of the grid
+// (x, y) = (column * step, row * step), applies the adjustments before the Curve, and adds the
+// three bins to the block counts in shared memory; each block then adds its counts to @p counts.
+__global__ void CurveInputHistogramKernel(const float4* input, std::uint32_t width,
+                                          std::uint32_t step, std::uint32_t sampled_width,
+                                          std::uint32_t                sample_count,
+                                          const unsigned char*         parameter_base,
+                                          const CudaAdjustmentCommand* commands,
+                                          std::uint32_t command_count, unsigned int* counts) {
+  __shared__ unsigned int block_counts[kCurveInputHistogramValueCount];
+  for (std::uint32_t i = threadIdx.x; i < kCurveInputHistogramValueCount; i += blockDim.x) {
+    block_counts[i] = 0U;
+  }
+  __syncthreads();
+  for (std::uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x; sample < sample_count;
+       sample += gridDim.x * blockDim.x) {
+    const std::uint32_t x      = (sample % sampled_width) * step;
+    const std::uint32_t y      = (sample / sampled_width) * step;
+    const float4        source = input[y * width + x];
+    float3              c      = make_float3(source.x, source.y, source.z);
+    for (std::uint32_t i = 0; i < command_count; ++i) {
+      const auto* params = reinterpret_cast<const CudaAdjustmentParams*>(
+          parameter_base + commands[i].parameter_offset);
+      c = ApplyAdjustment(c, *params, nullptr, 0U);
+    }
+    atomicAdd(&block_counts[CurveInputHistogramBinOf(c.x)], 1U);
+    atomicAdd(&block_counts[kCurveInputHistogramBins + CurveInputHistogramBinOf(c.y)], 1U);
+    atomicAdd(&block_counts[2U * kCurveInputHistogramBins + CurveInputHistogramBinOf(c.z)], 1U);
+  }
+  __syncthreads();
+  for (std::uint32_t i = threadIdx.x; i < kCurveInputHistogramValueCount; i += blockDim.x) {
+    if (block_counts[i] != 0U) {
+      atomicAdd(&counts[i], block_counts[i]);
+    }
+  }
+}
+
 auto MaskPointer(CudaRenderDevice& device, const GraphValueId* mask_id, std::uint32_t width,
                  std::uint32_t height) -> const std::uint8_t* {
   if (mask_id == nullptr) {
@@ -361,12 +439,15 @@ void LaunchPointwise(CudaRenderDevice& device, const FrameSceneBinding& src,
                      std::uint32_t width, std::uint32_t height) {
   auto& workspace = device.Workspace();
   auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
-  if (commands == nullptr || command_count == 0) {
+  if (commands == nullptr && command_count != 0U) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: missing fused command buffer");
   }
   const auto  pixels = width * height;
+  // A mix without commands (GradeExecutor, issue #900) reads no command.
   const auto* device_commands =
-      static_cast<const CudaAdjustmentCommand*>(commands->DevicePointer());
+      commands == nullptr
+          ? nullptr
+          : static_cast<const CudaAdjustmentCommand*>(commands->DevicePointer()) + command_start;
   const auto* parameter_base =
       static_cast<const unsigned char*>(workspace.Parameters().DeviceBuffer().DevicePointer());
   auto&       src_tex = CudaSceneTexture(device, src);
@@ -378,9 +459,9 @@ void LaunchPointwise(CudaRenderDevice& device, const FrameSceneBinding& src,
   constexpr std::uint32_t block = 256;
   PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
       static_cast<const float4*>(src_tex.DevicePointer()),
-      static_cast<float4*>(dst_tex.DevicePointer()), pixels, parameter_base,
-      device_commands + command_start, command_count, static_cast<const float4*>(lut.device_pointer),
-      lut.edge_size, mix_ptr, mix, MaskPointer(device, mask_id, width, height));
+      static_cast<float4*>(dst_tex.DevicePointer()), pixels, parameter_base, device_commands,
+      command_count, static_cast<const float4*>(lut.device_pointer), lut.edge_size, mix_ptr, mix,
+      MaskPointer(device, mask_id, width, height));
 }
 
 struct CudaGradeOps {
@@ -447,6 +528,33 @@ struct CudaGradeOps {
                     mask_id, width, height);
   }
 
+  static void DispatchCurveInputHistogram(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                          const CudaBackend::Buffer& commands,
+                                          std::uint32_t command_count, CudaBackend::Buffer& counts,
+                                          std::uint32_t width, std::uint32_t height,
+                                          std::uint32_t step) {
+    const auto sampled_width = CurveInputHistogramSampledLength(width, step);
+    const auto sample_count  = static_cast<std::uint32_t>(
+        static_cast<std::uint64_t>(sampled_width) * CurveInputHistogramSampledLength(height, step));
+    if (sample_count == 0U) {
+      return;
+    }
+    constexpr std::uint32_t kBlock     = 256;
+    constexpr std::uint32_t kMaxBlocks = 128;
+    const auto  blocks = std::min<std::uint32_t>((sample_count + kBlock - 1) / kBlock, kMaxBlocks);
+    const auto* parameter_base = static_cast<const unsigned char*>(
+        device.Workspace().Parameters().DeviceBuffer().DevicePointer());
+    CurveInputHistogramKernel<<<blocks, kBlock, 0, device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(CudaSceneTexture(device, src).DevicePointer()), width, step,
+        sampled_width, sample_count, parameter_base,
+        static_cast<const CudaAdjustmentCommand*>(commands.DevicePointer()), command_count,
+        static_cast<unsigned int*>(counts.DevicePointer()));
+    if (::cudaGetLastError() != cudaSuccess) {
+      throw std::runtime_error(
+          "ExecuteCudaPrimaryGrade: curve input histogram kernel launch failed");
+    }
+  }
+
   static auto AcquireHorizontalScratch(CudaRenderDevice& device, std::uint32_t width,
                                        std::uint32_t height) -> HorizontalScratch {
     return AcquireCudaScratch(device.Workspace(), width, height);
@@ -499,9 +607,10 @@ struct CudaGradeOps {
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
                              const PreparedRawInput& prepared, const PipelineDocument& document,
                              const CompiledGradeNode& compiled_grade_node,
-                             const FrameSceneBinding& scene) -> CudaPrimaryGradeResult {
+                             const FrameSceneBinding& scene, CurveInputHistogramRecord* histogram)
+    -> CudaPrimaryGradeResult {
   const auto executed = GradeExecutor<CudaGradeOps>::Execute(device, plan, prepared, document,
-                                                             compiled_grade_node, scene);
+                                                             compiled_grade_node, scene, histogram);
   CudaPrimaryGradeResult result;
   result.output                                 = executed.output;
   result.output_binding                         = executed.output_binding;
@@ -516,8 +625,8 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
 }
 
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
-                             const PreparedRawInput& prepared, const PipelineDocument& document)
-    -> CudaPrimaryGradeResult {
+                             const PreparedRawInput& prepared, const PipelineDocument& document,
+                             CurveInputHistogramRecord* histogram) -> CudaPrimaryGradeResult {
   if (plan.grade_nodes.empty()) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: plan has no Color Grade");
   }
@@ -527,7 +636,10 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   FrameSceneBinding scene = FrameSceneBinding::CachedImage(plan.develop_output);
   CudaPrimaryGradeResult last{};
   for (const auto& compiled_grade : plan.grade_nodes) {
-    last  = ExecuteCudaPrimaryGrade(device, plan, prepared, document, compiled_grade, scene);
+    auto* grade_histogram =
+        histogram != nullptr && histogram->grade_id == compiled_grade.node_id ? histogram : nullptr;
+    last  = ExecuteCudaPrimaryGrade(device, plan, prepared, document, compiled_grade, scene,
+                                    grade_histogram);
     scene = last.output_binding;
   }
   return last;

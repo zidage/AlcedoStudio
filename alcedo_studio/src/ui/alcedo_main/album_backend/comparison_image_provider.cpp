@@ -27,23 +27,32 @@ auto ConvertSide(const RenderedPipelineImage& rendered, const char* side_name)
 
 }  // namespace
 
-auto ComparisonImageStore::MakeUrl(std::uint64_t operation_id, ComparisonSide side) -> QString {
-  return QStringLiteral("image://%1/%2/%3")
+auto ComparisonImageStore::MakeUrl(std::uint64_t operation_id, ComparisonSide side,
+                                   std::uint64_t destination_revision) -> QString {
+  return QStringLiteral("image://%1/%2/%3/%4")
       .arg(QLatin1String(kComparisonImageProviderId))
       .arg(operation_id)
-      .arg(SideName(side));
+      .arg(SideName(side))
+      .arg(destination_revision);
 }
 
 auto ComparisonImageStore::ParseProviderId(const QString& id, std::uint64_t* operation_id,
                                            ComparisonSide* side) -> bool {
   const QStringList parts = id.split(QLatin1Char('/'));
-  if (parts.size() != 2) {
+  if (parts.size() != 2 && parts.size() != 3) {
     return false;
   }
   bool       ok     = false;
   const auto parsed = parts[0].toULongLong(&ok);
   if (!ok || parsed == 0) {
     return false;
+  }
+  if (parts.size() == 3) {
+    // The destination revision is for the QML image cache only.
+    (void)parts[2].toULongLong(&ok);
+    if (!ok) {
+      return false;
+    }
   }
   ComparisonSide parsed_side = ComparisonSide::A;
   if (parts[1] == SideName(ComparisonSide::A)) {
@@ -62,24 +71,45 @@ auto ComparisonImageStore::ParseProviderId(const QString& id, std::uint64_t* ope
   return true;
 }
 
-auto ComparisonImageStore::PublishPair(std::uint64_t operation_id, QImage a, QImage b) -> PairUrls {
+auto ComparisonImageStore::PublishPair(std::uint64_t operation_id, QImage a,
+                                       const ViewerDisplayConfig& a_encoding, QImage b,
+                                       const ViewerDisplayConfig& b_encoding) -> PairUrls {
   if (operation_id == 0) {
     throw std::invalid_argument("Comparison pair needs a comparison operation id.");
   }
   if (a.isNull() || b.isNull()) {
     throw std::invalid_argument("Comparison pair needs two images.");
   }
-  QImage released_a;
-  QImage released_b;
+  QImage        released_a;
+  QImage        released_b;
+  std::uint64_t revision = 0;
   {
     std::lock_guard lock(mutex_);
     operation_id_ = operation_id;
     released_a    = std::exchange(a_, std::move(a));
     released_b    = std::exchange(b_, std::move(b));
+    a_encoding_   = a_encoding;
+    b_encoding_   = b_encoding;
+    revision      = destination_revision_;
   }
   // The previous images are released outside the lock.
-  return PairUrls{MakeUrl(operation_id, ComparisonSide::A),
-                  MakeUrl(operation_id, ComparisonSide::B)};
+  return PairUrls{MakeUrl(operation_id, ComparisonSide::A, revision),
+                  MakeUrl(operation_id, ComparisonSide::B, revision)};
+}
+
+auto ComparisonImageStore::SetDestination(std::shared_ptr<const DisplayDestination> destination)
+    -> std::optional<PairUrls> {
+  std::lock_guard lock(mutex_);
+  if (converter_.Destination() == destination) {
+    return std::nullopt;
+  }
+  converter_.SetDestination(std::move(destination));
+  ++destination_revision_;
+  if (operation_id_ == 0) {
+    return std::nullopt;
+  }
+  return PairUrls{MakeUrl(operation_id_, ComparisonSide::A, destination_revision_),
+                  MakeUrl(operation_id_, ComparisonSide::B, destination_revision_)};
 }
 
 void ComparisonImageStore::Clear() {
@@ -101,6 +131,22 @@ auto ComparisonImageStore::Get(std::uint64_t operation_id, ComparisonSide side) 
   return side == ComparisonSide::A ? a_ : b_;
 }
 
+auto ComparisonImageStore::GetForDisplay(std::uint64_t operation_id, ComparisonSide side) const
+    -> QImage {
+  QImage              image;
+  ViewerDisplayConfig encoding{};
+  {
+    std::lock_guard lock(mutex_);
+    if (operation_id == 0 || operation_id != operation_id_) {
+      return {};
+    }
+    image    = side == ComparisonSide::A ? a_ : b_;
+    encoding = side == ComparisonSide::A ? a_encoding_ : b_encoding_;
+  }
+  // The conversion runs outside the lock: the GUI thread can publish meanwhile.
+  return converter_.Convert(image, encoding);
+}
+
 auto ComparisonImageStore::ImageCount() const -> int {
   std::lock_guard lock(mutex_);
   return (a_.isNull() ? 0 : 1) + (b_.isNull() ? 0 : 1);
@@ -115,7 +161,7 @@ QImage ComparisonImageProvider::requestImage(const QString& id, QSize* size,
   ComparisonSide side         = ComparisonSide::A;
   QImage         image;
   if (store_ && ComparisonImageStore::ParseProviderId(id, &operation_id, &side)) {
-    image = store_->Get(operation_id, side);
+    image = store_->GetForDisplay(operation_id, side);
   }
   if (size != nullptr) {
     *size = image.size();
@@ -146,8 +192,8 @@ auto PublishComparisonPair(ComparisonImageStore& store, std::uint64_t operation_
   if (a_image.placement.reference_extent != b_image.placement.reference_extent) {
     throw std::invalid_argument("Comparison images have different reference extents.");
   }
-  const auto urls =
-      store.PublishPair(operation_id, std::move(a_image.image), std::move(b_image.image));
+  const auto urls = store.PublishPair(operation_id, std::move(a_image.image), a.display,
+                                      std::move(b_image.image), b.display);
   return ComparisonPairPublication{operation_id, urls.a, urls.b, a_image.placement,
                                    b_image.placement};
 }

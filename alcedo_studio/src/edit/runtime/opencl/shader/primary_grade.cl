@@ -38,33 +38,54 @@ static inline float3 ApplyOkLabContrast(float3 acescc, float contrast) {
   return LinearAp1ToAcescc(OkLabToLinearAp1(lab));
 }
 
-static inline float ExtrapolateCurve(float value, __global const GradeAdjustmentParams* p, uint a,
-                                     uint b) {
-  const float x0 = p->values[a * 2];
-  const float y0 = p->values[a * 2 + 1];
-  const float x1 = p->values[b * 2];
-  const float y1 = p->values[b * 2 + 1];
-  return y0 + (value - x0) * (y1 - y0) / max(x1 - x0, 1.0e-6f);
+// Whites and Blacks: an exposure shift chosen by the ACEScc luma (stops x from 18% grey), with
+// a 3-stop zone from grey and +/-3 stops at +/-100. Same math as ToneZoneShiftEv in
+// cuda_primary_grade_pass.cu (documented there) and tests/edit/runtime/tone_zone_reference.hpp.
+static inline float ToneZoneShiftEv(float x, float s) {
+  if (x <= 0.0f || s == 0.0f) return 0.0f;
+  const float w = 3.0f;
+  if (s > 0.0f) {
+    const float t = min(x / w, 1.0f);
+    return s * t * t * (3.0f - 2.0f * t);
+  }
+  const float a = -s;
+  if (x >= w + a) return -a;
+  float t = x / (w + a);
+  for (int i = 0; i < 5; ++i) {
+    const float f  = w * t + a * t * t * (3.0f - 2.0f * t) - x;
+    const float fp = w + 6.0f * a * t * (1.0f - t);
+    t              = clamp(t - f / fp, 0.0f, 1.0f);
+  }
+  return w * t - x;
 }
 
+// Tone Curve spline (edit/operators/models/tone_curve_spline.hpp; CPU reference
+// EvaluateToneCurveSpline). values[0..15]: x of the control points; [16..31]: y; [32..47]: slope.
+// Monotone cubic Hermite between the points, straight along the end slope outside them.
 static inline float ApplyCurve(float value, __global const GradeAdjustmentParams* p) {
-  if (p->count < 2u) {
+  const uint n = p->count;
+  if (n < 2u) {
     return value;
   }
-  if (value <= p->values[0]) {
-    return ExtrapolateCurve(value, p, 0u, 1u);
+  __global const float* xs = p->values;
+  __global const float* ys = p->values + 16;
+  __global const float* ms = p->values + 32;
+  if (value <= xs[0]) {
+    return ys[0] + ms[0] * (value - xs[0]);
   }
-  for (uint i = 1u; i < p->count; ++i) {
-    const float x1 = p->values[i * 2u];
-    if (value <= x1) {
-      const float x0 = p->values[(i - 1u) * 2u];
-      const float y0 = p->values[(i - 1u) * 2u + 1u];
-      const float y1 = p->values[i * 2u + 1u];
-      const float t  = (value - x0) / max(x1 - x0, 1.0e-6f);
-      return y0 + t * (y1 - y0);
-    }
+  if (value >= xs[n - 1u]) {
+    return ys[n - 1u] + ms[n - 1u] * (value - xs[n - 1u]);
   }
-  return ExtrapolateCurve(value, p, p->count - 2u, p->count - 1u);
+  uint i = 0u;
+  while (i + 2u < n && value >= xs[i + 1u]) {
+    ++i;
+  }
+  const float h  = xs[i + 1u] - xs[i];
+  const float t  = (value - xs[i]) / h;
+  const float dy = ys[i + 1u] - ys[i];
+  const float d  = dy / h;
+  const float u  = 1.0f - t;
+  return ys[i] + t * dy + h * t * u * (u * (ms[i] - d) - t * (ms[i + 1u] - d));
 }
 
 // Tone color wheels (edit/operators/models/color_wheel_tone.hpp). values[0..2]: Offset as an ACEScc
@@ -119,15 +140,18 @@ static inline float3 ApplyHls(float3 c, __global const GradeAdjustmentParams* p)
   const float adj_l = sum_l * inv_weight;
   const float adj_s = sum_s * inv_weight;
   if (fabs(adj_h) <= 1.0e-6f && fabs(adj_l) <= 1.0e-6f && fabs(adj_s) <= 1.0e-6f) return c;
-  const float angle = adj_h * 2.25f * 0.017453292519943295f;
+  // Hue Shift and Chroma rotate and scale the YIQ chroma (I, Q); Lightness adds to every channel.
+  // Only the change of I and Q goes back to RGB, so zero adjustments leave the color exact. A
+  // positive Hue Shift raises the hue (red toward yellow): it lowers the YIQ angle.
+  const float angle = -adj_h * 2.25f * 0.017453292519943295f;
   const float scale = exp2(adj_s * 2.25f * (adj_s >= 0.0f ? 4.5f : 3.25f));
-  const float luma  = Luma(c) + adj_l * 1.125f;
+  const float lift  = adj_l * 1.125f;
   const float i     = 0.596f * c.x - 0.274f * c.y - 0.322f * c.z;
   const float q     = 0.211f * c.x - 0.523f * c.y + 0.312f * c.z;
-  const float ri    = (i * cos(angle) - q * sin(angle)) * scale;
-  const float rq    = (i * sin(angle) + q * cos(angle)) * scale;
-  return (float3)(luma + 0.956f * ri + 0.621f * rq, luma - 0.272f * ri - 0.647f * rq,
-                  luma - 1.106f * ri + 1.703f * rq);
+  const float di    = (i * cos(angle) - q * sin(angle)) * scale - i;
+  const float dq    = (i * sin(angle) + q * cos(angle)) * scale - q;
+  return (float3)(c.x + lift + 0.956f * di + 0.621f * dq, c.y + lift - 0.272f * di - 0.647f * dq,
+                  c.z + lift - 1.106f * di + 1.703f * dq);
 }
 
 static inline uint LutIndex(uint edge, uint x, uint y, uint z) { return (z * edge + y) * edge + x; }
@@ -176,20 +200,21 @@ static inline float3 ApplyAdjustment(float3 c, __global const GradeAdjustmentPar
     c.z += offset;
   } else if (behavior == 2u && value != 0.0f) {
     c = ApplyOkLabContrast(c, value);
-  } else if (behavior == 3u) {
-    const float gain = 1.0f + max(value, 0.0f) * 0.005f;
-    c.x *= gain;
-    c.y *= gain;
-    c.z *= gain;
-  } else if (behavior == 4u) {
-    const float offset = value * 0.001f;
+  } else if ((behavior == 3u || behavior == 4u) && value != 0.0f) {
+    // 3: Whites, 4: Blacks (Whites mirrored about grey).
+    const float x        = (Luma(c) - CE_ACESCC_MIDDLE_GREY) * CE_ACESCC_B;
+    const float s        = value * 0.03f;
+    const float shift_ev = behavior == 3u ? ToneZoneShiftEv(x, s) : -ToneZoneShiftEv(-x, -s);
+    const float offset   = shift_ev / CE_ACESCC_B;
     c.x += offset;
     c.y += offset;
     c.z += offset;
   } else if (behavior == 7u) {
-    c.x = ApplyCurve(c.x, p);
-    c.y = ApplyCurve(c.y, p);
-    c.z = ApplyCurve(c.z, p);
+    // The Curve slot has four records (CurveGradeRuntimeParams): the RGB curve, then the red,
+    // green, and blue curves. count 0 leaves the channel unchanged.
+    c.x = ApplyCurve(ApplyCurve(c.x, p), p + 1);
+    c.y = ApplyCurve(ApplyCurve(c.y, p), p + 2);
+    c.z = ApplyCurve(ApplyCurve(c.z, p), p + 3);
   } else if (behavior == 8u) {
     c = ApplyHls(c, p);
   } else if (behavior == 9u || behavior == 10u) {
@@ -301,6 +326,49 @@ static inline void SceneWriteRgba(write_only image2d_t image, __global float4* b
     return;
   }
   write_imagef(image, gid, value);
+}
+
+// Bin of one ACEScc value on the curve axis: CurveInputHistogramBin (curve_input_histogram.hpp).
+static inline uint CurveInputHistogramBin(float value) {
+  return (uint)fmin(fmax(value * 256.0f, 0.0f), 255.0f);
+}
+
+// Histogram of the curve input (issue #888). Each work item takes samples of the grid
+// (x, y) = (column * step, row * step), applies the adjustments before the Curve, and adds the
+// three bins to the work-group counts in local memory; each work group then adds its counts to
+// @p counts (red bins 0..255, green 256..511, blue 512..767).
+__kernel void primary_grade_curve_input_histogram(
+    __read_only image2d_t src_image, __global const float4* src_buffer, int src_is_buffer,
+    uint width, uint step, uint sampled_width, uint sample_count,
+    __global const uchar* parameter_base, __global const uint* commands, uint command_count,
+    __global const float4* lut, __global uint* counts) {
+  __local uint group_counts[768];
+  for (uint i = (uint)get_local_id(0); i < 768u; i += (uint)get_local_size(0)) {
+    group_counts[i] = 0u;
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (uint sample = (uint)get_global_id(0); sample < sample_count;
+       sample += (uint)get_global_size(0)) {
+    const int2   gid    = (int2)((int)((sample % sampled_width) * step),
+                                 (int)((sample / sampled_width) * step));
+    const float4 source = SceneReadRgba(src_image, src_buffer, src_is_buffer, gid, width);
+    float3       c      = source.xyz;
+    for (uint i = 0u; i < command_count; ++i) {
+      __global const GradeAdjustmentParams* params =
+          (__global const GradeAdjustmentParams*)(parameter_base + commands[i]);
+      c = ApplyAdjustment(c, params, lut, 0u);
+    }
+    atomic_inc(&group_counts[CurveInputHistogramBin(c.x)]);
+    atomic_inc(&group_counts[256u + CurveInputHistogramBin(c.y)]);
+    atomic_inc(&group_counts[512u + CurveInputHistogramBin(c.z)]);
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (uint i = (uint)get_local_id(0); i < 768u; i += (uint)get_local_size(0)) {
+    const uint count = group_counts[i];
+    if (count != 0u) {
+      atomic_add(&counts[i], count);
+    }
+  }
 }
 
 __kernel void primary_grade_pointwise_scene_rgba32f(

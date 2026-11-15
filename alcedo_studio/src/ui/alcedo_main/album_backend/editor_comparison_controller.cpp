@@ -271,6 +271,33 @@ void EditorComparisonController::ClearPair() {
   }
 }
 
+void EditorComparisonController::SetDisplayWindow(QWindow* window) {
+  QObject::disconnect(display_connection_);
+  display_source_ = window != nullptr ? WindowDisplayDestination::ForWindow(window) : nullptr;
+  if (display_source_ != nullptr) {
+    display_connection_ = connect(display_source_, &WindowDisplayDestination::DestinationChanged,
+                                  this, &EditorComparisonController::ApplyDisplayDestination);
+  }
+  ApplyDisplayDestination();
+}
+
+void EditorComparisonController::ApplyDisplayDestination() {
+  if (!store_) {
+    return;
+  }
+  const auto urls =
+      store_->SetDestination(display_source_ != nullptr ? display_source_->Destination() : nullptr);
+  if (!urls.has_value() || !pair_.isValid()) {
+    return;
+  }
+  // The stored pixels stay; the new URLs make QML request the new conversion.
+  auto pair = pair_.toMap();
+  pair.insert(QStringLiteral("aSource"), urls->a);
+  pair.insert(QStringLiteral("bSource"), urls->b);
+  pair_ = pair;
+  emit PairChanged();
+}
+
 void EditorComparisonController::ResetViewOptions() {
   display_mode_     = QStringLiteral("divider");
   orientation_      = QStringLiteral("horizontal");

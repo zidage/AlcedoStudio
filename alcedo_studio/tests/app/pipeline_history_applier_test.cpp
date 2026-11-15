@@ -35,6 +35,7 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
@@ -201,6 +202,70 @@ TEST(PipelineHistoryApplierTest, FilmFormatRoundTripsWithoutEnteringOdtHistoryJs
   EXPECT_FALSE(odt_json.contains("film_format")) << odt_json.dump();
   RoundTripOwner(&document, *odt, {{"method", "film_print"}});
   EXPECT_EQ(document.Drt()->Params().FilmFormat(), FilmFormat::Film16mm);
+}
+
+TEST(PipelineHistoryApplierTest, UndoOfABlueCurveEditRestoresTheEarlierBlueCurveAndKeepsTheRgbCurve) {
+  // The Model JSON omits an identity channel curve, so the stored value of the first blue edit
+  // has no "blue" key. Undo must still set the blue curve back to the identity.
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  auto        target = CompleteCurrentPanelParameterTarget(document, "curve", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  auto* curve =
+      dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  ASSERT_TRUE(ApplyEditorParameterPatch(
+      document, *target,
+      {{"curve", {{"points", {{{"x", 0.0}, {"y", 0.0}}, {{"x", 0.5}, {"y", 0.6}}, {{"x", 1.0}, {"y", 1.0}}}}}}},
+      &error))
+      << error;
+  const auto rgb = curve->Points();
+
+  std::vector<std::string>       states{CanonicalPipelineDocumentJson(document)};
+  std::vector<PipelineEditBatch> batches;
+  const auto edit_blue = [&](const nlohmann::json& blue) {
+    nlohmann::json before;
+    ASSERT_TRUE(ReadEditorParameterJson(document, *target, &before, &error)) << error;
+    ASSERT_TRUE(ApplyEditorParameterPatch(document, *target, {{"curve", {{"blue", blue}}}}, &error))
+        << error;
+    nlohmann::json after;
+    ASSERT_TRUE(ReadEditorParameterJson(document, *target, &after, &error)) << error;
+    batches.push_back(MakeSetParameterBatch(*target, before, after, true, true, "Tone Curve"));
+    states.push_back(CanonicalPipelineDocumentJson(document));
+  };
+  const nlohmann::json first_blue  = {{{"x", 0.0}, {"y", 0.1}}, {{"x", 1.0}, {"y", 0.9}}};
+  const nlohmann::json second_blue = {
+      {{"x", 0.0}, {"y", 0.0}}, {{"x", 0.4}, {"y", 0.3}}, {{"x", 1.0}, {"y", 1.0}}};
+  edit_blue(first_blue);
+  edit_blue(second_blue);
+  ASSERT_EQ(batches.size(), 2U);
+  EXPECT_EQ(curve->ChannelPoints(CurveChannel::Blue).size(), 3U);
+
+  // Undo the second edit: the first blue curve comes back; the RGB curve does not change.
+  ASSERT_TRUE(
+      ApplyPipelineEditBatch(document, batches[1], PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_EQ(CanonicalPipelineDocumentJson(document), states[1]);
+  EXPECT_EQ(curve->ChannelPoints(CurveChannel::Blue),
+            (std::vector<CurvePoint>{{0.0f, 0.1f}, {1.0f, 0.9f}}));
+  EXPECT_EQ(curve->Points(), rgb);
+
+  // Undo the first edit: the stored value has no "blue" key, and the blue curve is the identity.
+  ASSERT_TRUE(
+      ApplyPipelineEditBatch(document, batches[0], PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_EQ(CanonicalPipelineDocumentJson(document), states[0]);
+  EXPECT_EQ(curve->ChannelPoints(CurveChannel::Blue), IdentityCurvePoints());
+  EXPECT_EQ(curve->Points(), rgb);
+
+  // Redo both edits.
+  for (std::size_t step = 0; step < batches.size(); ++step) {
+    ASSERT_TRUE(ApplyPipelineEditBatch(document, batches[step], PipelineEditApplyDirection::Forward,
+                                       &error))
+        << error;
+    EXPECT_EQ(CanonicalPipelineDocumentJson(document), states[step + 1]) << "redo " << step;
+  }
+  EXPECT_EQ(curve->Points(), rgb);
 }
 
 TEST(PipelineHistoryApplierTest, NegativeScanChangesUndoAndRedoToEachStoredValue) {

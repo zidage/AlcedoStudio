@@ -17,6 +17,7 @@
 #include "app/thumbnail_service.hpp"
 #include "type/type.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
+#include "ui/edit_viewer/window_display_destination.hpp"
 
 namespace alcedo::ui {
 
@@ -48,6 +49,17 @@ class ThumbnailManager {
 
   /// Drop a store entry only when the library grid/filmstrip is not pinning that key.
   void ReleaseStoreImageIfUnpinned(const ThumbnailCacheKey& key);
+
+  /**
+   * @brief Convert the thumbnails to @p destination and give each loaded row its new URL.
+   *
+   * The store keeps its source pixels and gives each entry a new revision; each pinned row that
+   * shows a stored tier gets the new URL of that tier through UpdateThumbnailState (the library
+   * model and LibraryModule::ThumbnailUpdated). Nothing renders again. An equal destination
+   * changes nothing. Null converts nothing.
+   * @thread The GUI thread.
+   */
+  void               SetDisplayDestination(std::shared_ptr<const DisplayDestination> destination);
 
   [[nodiscard]] auto image_store() -> std::shared_ptr<ThumbnailImageStore> { return image_store_; }
   [[nodiscard]] auto image_store() const -> std::shared_ptr<ThumbnailImageStore> {

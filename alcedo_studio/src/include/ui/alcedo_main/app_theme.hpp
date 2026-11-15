@@ -154,6 +154,9 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int motionEasing READ motionEasing CONSTANT)
   Q_PROPERTY(int backgroundTaskAutoCollapseMs READ backgroundTaskAutoCollapseMs CONSTANT)
   Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY ReduceMotionChanged)
+  /// Text of dense data controls, smaller than fontSizeCaption: plot axis labels, the readout and
+  /// the values around a plot, and the titles of a crowded segmented switcher.
+  Q_PROPERTY(int fontSizeMicro READ fontSizeMicro CONSTANT)
   Q_PROPERTY(int fontSizeCaption READ fontSizeCaption CONSTANT)
   Q_PROPERTY(int fontSizeBody READ fontSizeBody CONSTANT)
   Q_PROPERTY(int fontSizeTitle READ fontSizeTitle CONSTANT)
@@ -218,6 +221,32 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor scopeHistogramGreenColor READ scopeHistogramGreenColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramBlueColor READ scopeHistogramBlueColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeMarkerColor READ scopeMarkerColor NOTIFY ThemeChanged)
+  // Plot pane (PlotPane and its layers). Colors follow the active theme; sizes are logical px.
+  // See DESIGN.md "Plot pane".
+  Q_PROPERTY(QColor plotSurfaceColor READ plotSurfaceColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotGridColor READ plotGridColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotGridStrongColor READ plotGridStrongColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotLabelColor READ plotLabelColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotLineColor READ plotLineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotReferenceLineColor READ plotReferenceLineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotHandleColor READ plotHandleColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotHandleOutlineColor READ plotHandleOutlineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(qreal plotGridLineWidth READ plotGridLineWidth CONSTANT)
+  Q_PROPERTY(qreal plotLineWidth READ plotLineWidth CONSTANT)
+  Q_PROPERTY(qreal plotHandleRadius READ plotHandleRadius CONSTANT)
+  Q_PROPERTY(qreal plotHandleRingWidth READ plotHandleRingWidth CONSTANT)
+  Q_PROPERTY(qreal plotHandleOutlineWidth READ plotHandleOutlineWidth CONSTANT)
+  Q_PROPERTY(qreal plotHitRadius READ plotHitRadius CONSTANT)
+  // Tone Curve section (DESIGN.md "Tone Curve section").
+  Q_PROPERTY(QColor plotChannelRedColor READ plotChannelRedColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotChannelGreenColor READ plotChannelGreenColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotChannelBlueColor READ plotChannelBlueColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotPointerLineColor READ plotPointerLineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(qreal plotInactiveLineOpacity READ plotInactiveLineOpacity CONSTANT)
+  Q_PROPERTY(qreal plotHistogramFillOpacity READ plotHistogramFillOpacity CONSTANT)
+  Q_PROPERTY(qreal plotHistogramEdgeOpacity READ plotHistogramEdgeOpacity CONSTANT)
+  Q_PROPERTY(qreal plotCurveHitRadius READ plotCurveHitRadius CONSTANT)
+  Q_PROPERTY(qreal plotChannelMarkSize READ plotChannelMarkSize CONSTANT)
   // Nodes graph canvas and node-card geometry. Colors follow the active theme;
   // sizes are logical px. See DESIGN.md "Nodes panel and graph nodes".
   Q_PROPERTY(QColor graphCanvasColor READ graphCanvasColor NOTIFY ThemeChanged)
@@ -436,6 +465,7 @@ class AppTheme final : public QObject {
   auto        backgroundTaskAutoCollapseMs() const -> int;
   auto        reduceMotion() const -> bool;
   void        setReduceMotion(bool enabled);
+  auto        fontSizeMicro() const -> int;
   auto        fontSizeCaption() const -> int;
   auto        fontSizeBody() const -> int;
   auto        fontSizeTitle() const -> int;
@@ -476,6 +506,29 @@ class AppTheme final : public QObject {
   auto scopeHistogramGreenColor() const -> QColor;
   auto scopeHistogramBlueColor() const -> QColor;
   auto scopeMarkerColor() const -> QColor;
+  auto plotSurfaceColor() const -> QColor;
+  auto plotGridColor() const -> QColor;
+  auto plotGridStrongColor() const -> QColor;
+  auto plotLabelColor() const -> QColor;
+  auto plotLineColor() const -> QColor;
+  auto plotReferenceLineColor() const -> QColor;
+  auto plotHandleColor() const -> QColor;
+  auto plotHandleOutlineColor() const -> QColor;
+  auto plotGridLineWidth() const -> qreal;
+  auto plotLineWidth() const -> qreal;
+  auto plotHandleRadius() const -> qreal;
+  auto plotHandleRingWidth() const -> qreal;
+  auto plotHandleOutlineWidth() const -> qreal;
+  auto plotHitRadius() const -> qreal;
+  auto plotChannelRedColor() const -> QColor;
+  auto plotChannelGreenColor() const -> QColor;
+  auto plotChannelBlueColor() const -> QColor;
+  auto plotPointerLineColor() const -> QColor;
+  auto plotInactiveLineOpacity() const -> qreal;
+  auto plotHistogramFillOpacity() const -> qreal;
+  auto plotHistogramEdgeOpacity() const -> qreal;
+  auto plotCurveHitRadius() const -> qreal;
+  auto plotChannelMarkSize() const -> qreal;
   auto graphCanvasColor() const -> QColor;
   auto graphEdgeColor() const -> QColor;
   auto graphCandidateEdgeColor() const -> QColor;

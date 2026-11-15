@@ -221,9 +221,11 @@ TEST(EditorPendingInputTest, OpenSequenceHoldsIndependentTypedWritesUntilMovedOn
   EditorPendingInputQueue queue;
   ASSERT_TRUE(queue.AdmitFieldChange(TestIdentity(), MakePatch("exposure", 0.4f)).accepted);
   ASSERT_TRUE(queue.AdmitFieldChange(TestIdentity(),
-                                     TypedPatch("curve", EditorCurveWrite{{{0.0f, 0.0f},
-                                                                           {0.5f, 0.6f},
-                                                                           {1.0f, 1.0f}}}))
+                                     TypedPatch("curve", EditorCurveWrite{.points = std::vector<
+                                                                              CurvePoint>{
+                                                                              {0.0f, 0.0f},
+                                                                              {0.5f, 0.6f},
+                                                                              {1.0f, 1.0f}}}))
                   .accepted);
   ASSERT_TRUE(
       queue

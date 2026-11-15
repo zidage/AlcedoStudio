@@ -32,6 +32,11 @@ class EditorParameterCatalogAdapter : public QObject {
   /// The `editor.catalog` form of property @p name of object field @p field, or an empty map.
   Q_INVOKABLE QVariantMap  propertySpec(const QString& field, const QString& name) const;
 
+  /// Position on the Kelvin white balance rail (EditorParameterSliderScale::KelvinPivot) of
+  /// @p kelvin, and the Kelvin value of rail @p position.
+  Q_INVOKABLE int    kelvinToSliderPosition(double kelvin) const;
+  Q_INVOKABLE double sliderPositionToKelvin(int position) const;
+
   /// The `{value, label}` choices of option property @p name of @p field, in menu order.
   Q_INVOKABLE QVariantList options(const QString& field, const QString& name) const;
 

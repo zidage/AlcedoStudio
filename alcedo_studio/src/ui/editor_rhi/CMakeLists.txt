@@ -88,6 +88,8 @@ def_library(EditorRhiViewport
     PUBLIC_DEPS
         EditorRhiContracts
         EditorViewerLogic
+        DisplayColorTransform
+        WindowDisplayDestination
         Qt6::Core
         Qt6::Gui
         Qt6::GuiPrivate

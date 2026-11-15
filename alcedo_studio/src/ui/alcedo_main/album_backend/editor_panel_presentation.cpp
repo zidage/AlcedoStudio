@@ -9,6 +9,7 @@
 #include <QVariantList>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 namespace alcedo::ui {
 namespace {
@@ -63,16 +64,22 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           map.insert(QStringLiteral("input_encoding"), String(value.input_encoding));
           map.insert(QStringLiteral("output_encoding"), String(value.output_encoding));
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelCurveValue>) {
-          QVariantList points;
-          points.reserve(static_cast<int>(value.points.size()));
-          for (const auto& point : value.points) {
-            QVariantMap row;
-            row.insert(QStringLiteral("x"), point.x);
-            row.insert(QStringLiteral("y"), point.y);
-            points.push_back(row);
-          }
+          const auto point_list = [](const std::vector<alcedo::CurvePoint>& curve_points) {
+            QVariantList points;
+            points.reserve(static_cast<int>(curve_points.size()));
+            for (const auto& point : curve_points) {
+              QVariantMap row;
+              row.insert(QStringLiteral("x"), point.x);
+              row.insert(QStringLiteral("y"), point.y);
+              points.push_back(row);
+            }
+            return points;
+          };
           QVariantMap curve;
-          curve.insert(QStringLiteral("points"), points);
+          curve.insert(QStringLiteral("points"), point_list(value.points));
+          curve.insert(QStringLiteral("red"), point_list(value.red));
+          curve.insert(QStringLiteral("green"), point_list(value.green));
+          curve.insert(QStringLiteral("blue"), point_list(value.blue));
           map.insert(QStringLiteral("curve"), curve);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelHlsValue>) {
           QVariantList table;

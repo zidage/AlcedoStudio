@@ -299,7 +299,9 @@ Item {
                     // pass, or detail patch). Bound to EditorSessionController.
                     // renderBusy, which reflects coordinator diagnostics — never
                     // a pipeline task object (D6).
-                    BusyIndicator {
+                    // LoadingSpinner, not BusyIndicator: a render-thread animator halves the
+                    // GUI frame rate while it runs (every slider drag shows these marks).
+                    LoadingSpinner {
                         objectName: "editorRenderBusyIndicator"
                         anchors.centerIn: parent
                         visible: root.hasImage
@@ -311,7 +313,7 @@ Item {
                         z: 3
                     }
 
-                    BusyIndicator {
+                    LoadingSpinner {
                         objectName: "editorAdjustmentRenderBusyIndicator"
                         anchors.top: parent.top
                         anchors.right: parent.right

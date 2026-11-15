@@ -57,16 +57,23 @@ auto ThumbnailImageStore::ParseProviderId(const QString& id, sl_element_id_t* el
   return true;
 }
 
-auto ThumbnailImageStore::Put(sl_element_id_t element_id, uint32_t max_edge, QImage image)
-    -> QString {
+auto ThumbnailImageStore::Put(sl_element_id_t element_id, uint32_t max_edge, QImage image,
+                              const ViewerDisplayConfig& encoding) -> QString {
   if (element_id == 0 || max_edge == 0 || image.isNull()) {
     return {};
+  }
+  // The display conversion reads RGBA8888. The producers give RGBA8888 (MatRgba32fToQImageCopy,
+  // then a smooth scale that keeps the format); for another format of an opaque thumbnail this
+  // conversion keeps every code value.
+  if (image.format() != QImage::Format_RGBA8888) {
+    image.convertTo(QImage::Format_RGBA8888);
   }
 
   const quint64 revision = next_revision_.fetch_add(1, std::memory_order_relaxed);
   {
     std::lock_guard lock(mutex_);
-    images_[Key{element_id, max_edge}] = Entry{.image = std::move(image), .revision = revision};
+    images_[Key{element_id, max_edge}] =
+        Entry{.image = std::move(image), .encoding = encoding, .revision = revision};
   }
   return MakeUrl(element_id, max_edge, revision);
 }
@@ -92,13 +99,51 @@ void ThumbnailImageStore::Clear() {
   images_.clear();
 }
 
-auto ThumbnailImageStore::Get(sl_element_id_t element_id, uint32_t max_edge) const -> QImage {
+auto ThumbnailImageStore::FindEntry(sl_element_id_t element_id, uint32_t max_edge) const
+    -> std::optional<Entry> {
   std::lock_guard lock(mutex_);
   const auto      it = images_.find(Key{element_id, max_edge});
   if (it == images_.end()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+auto ThumbnailImageStore::Get(sl_element_id_t element_id, uint32_t max_edge) const -> QImage {
+  const auto entry = FindEntry(element_id, max_edge);
+  return entry.has_value() ? entry->image : QImage{};
+}
+
+auto ThumbnailImageStore::Encoding(sl_element_id_t element_id, uint32_t max_edge) const
+    -> std::optional<ViewerDisplayConfig> {
+  const auto entry = FindEntry(element_id, max_edge);
+  if (!entry.has_value()) {
+    return std::nullopt;
+  }
+  return entry->encoding;
+}
+
+auto ThumbnailImageStore::GetForDisplay(sl_element_id_t element_id, uint32_t max_edge) const
+    -> QImage {
+  const auto entry = FindEntry(element_id, max_edge);
+  if (!entry.has_value()) {
     return {};
   }
-  return it->second.image;
+  // The conversion runs outside the lock: the producers can put and remove meanwhile.
+  return converter_.Convert(entry->image, entry->encoding);
+}
+
+void ThumbnailImageStore::SetDestination(std::shared_ptr<const DisplayDestination> destination) {
+  converter_.SetDestination(std::move(destination));
+  std::lock_guard lock(mutex_);
+  for (auto& [key, entry] : images_) {
+    (void)key;
+    entry.revision = next_revision_.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+auto ThumbnailImageStore::Destination() const -> std::shared_ptr<const DisplayDestination> {
+  return converter_.Destination();
 }
 
 auto ThumbnailImageStore::CurrentUrl(sl_element_id_t element_id, uint32_t max_edge) const
@@ -124,6 +169,22 @@ auto ThumbnailImageStore::GetByProviderId(const QString& id) const -> QImage {
   return Get(element_id, max_edge);
 }
 
+auto ThumbnailImageStore::GetForDisplayByProviderId(const QString& id) const -> QImage {
+  sl_element_id_t element_id = 0;
+  uint32_t        max_edge   = 0;
+  if (!ParseProviderId(id, &element_id, &max_edge, nullptr)) {
+    return {};
+  }
+  return GetForDisplay(element_id, max_edge);
+}
+
+auto ThumbnailImageStore::ParseUrl(const QString& url, sl_element_id_t* element_id,
+                                   uint32_t* max_edge, quint64* revision) -> bool {
+  const QString prefix = ProviderUrlPrefix();
+  return url.startsWith(prefix) &&
+         ParseProviderId(url.mid(prefix.size()), element_id, max_edge, revision);
+}
+
 auto ThumbnailImageStore::ResolveUrl(const QString& url) const -> QImage {
   const QString prefix = ProviderUrlPrefix();
   if (!url.startsWith(prefix)) {
@@ -141,7 +202,7 @@ QImage ThumbnailImageProvider::requestImage(const QString& id, QSize* size,
     return {};
   }
 
-  QImage image = store_->GetByProviderId(id);
+  QImage image = store_->GetForDisplayByProviderId(id);
   if (image.isNull()) {
     return {};
   }

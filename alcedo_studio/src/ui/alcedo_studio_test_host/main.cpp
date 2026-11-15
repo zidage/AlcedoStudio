@@ -287,6 +287,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);
+  app_modules.AttachDisplayWindow(window);
   // Optional diagnostic capture for the complete UI. Signal timestamps are
   // confined to the render thread; completed request records use the existing
   // background diagnostic writer and never write files from the input handler.

@@ -148,8 +148,13 @@ auto PackAllGradeSlots(const PipelineDocument& document) -> std::size_t {
       if (!behavior.has_value()) {
         continue;
       }
-      const auto params = MakeGradeRuntimeParams(model, *behavior);
-      static_cast<void>(params);
+      if (*behavior == AdjustmentBehavior::Curve) {
+        const auto records = MakeCurveGradeRuntimeParams(model);
+        static_cast<void>(records);
+      } else {
+        const auto params = MakeGradeRuntimeParams(model, *behavior);
+        static_cast<void>(params);
+      }
       ++packed;
     }
   }

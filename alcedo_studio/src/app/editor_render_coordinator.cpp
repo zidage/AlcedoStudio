@@ -50,6 +50,8 @@ auto ReasonLabel(const EditorRenderReason reason) -> const char* {
       return "ComparisonClosed";
     case EditorRenderReason::MaskCoverageProbeChanged:
       return "MaskCoverageProbeChanged";
+    case EditorRenderReason::CurveInputHistogramRequested:
+      return "CurveInputHistogramRequested";
   }
   return "?";
 }

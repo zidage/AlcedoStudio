@@ -21,18 +21,23 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "color/color_encoding_math.h"
+#include "curve_input_histogram_test_support.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/film_format.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_tone.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/operators/models/tone_curve_spline.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_mapping.hpp"
@@ -45,6 +50,8 @@
 #include "film_grain_colour_statistics.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 #include "oklab_contrast_reference.hpp"
+#include "tone_zone_reference.hpp"
+#include "tone_curve_test_curves.hpp"
 
 namespace alcedo {
 namespace {
@@ -86,35 +93,6 @@ auto Download(MetalRenderDevice& device, const GraphValueId& id) -> std::vector<
 
 auto Luma(const Rgba& c) -> float { return 0.272229f * c.r + 0.674082f * c.g + 0.053689f * c.b; }
 
-auto ExtrapolateCurve(float value, const GradeAdjustmentParams& p, std::uint32_t a, std::uint32_t b)
-    -> float {
-  const float x0 = p.values[a * 2];
-  const float y0 = p.values[a * 2 + 1];
-  const float x1 = p.values[b * 2];
-  const float y1 = p.values[b * 2 + 1];
-  return y0 + (value - x0) * (y1 - y0) / std::max(x1 - x0, 1.0e-6f);
-}
-
-auto ApplyCurve(float value, const GradeAdjustmentParams& p) -> float {
-  if (p.count < 2) {
-    return value;
-  }
-  if (value <= p.values[0]) {
-    return ExtrapolateCurve(value, p, 0, 1);
-  }
-  for (std::uint32_t i = 1; i < p.count; ++i) {
-    const float x1 = p.values[i * 2];
-    if (value <= x1) {
-      const float x0 = p.values[(i - 1) * 2];
-      const float y0 = p.values[(i - 1) * 2 + 1];
-      const float y1 = p.values[i * 2 + 1];
-      const float t  = (value - x0) / std::max(x1 - x0, 1.0e-6f);
-      return y0 + t * (y1 - y0);
-    }
-  }
-  return ExtrapolateCurve(value, p, p.count - 2, p.count - 1);
-}
-
 auto ApplyHls(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   const float maximum = std::max(c.r, std::max(c.g, c.b));
   const float minimum = std::min(c.r, std::min(c.g, c.b));
@@ -150,15 +128,17 @@ auto ApplyHls(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   const float adj_s = sum_s / sum_weight;
   if (std::fabs(adj_h) <= 1.0e-6f && std::fabs(adj_l) <= 1.0e-6f && std::fabs(adj_s) <= 1.0e-6f)
     return c;
-  const float     angle = adj_h * 2.25f * 0.017453292519943295f;
+  // A positive Hue Shift lowers the YIQ angle (raises the hue); only the change of I and Q goes
+  // back to RGB.
+  const float     angle = -adj_h * 2.25f * 0.017453292519943295f;
   const float     scale = std::exp2(adj_s * 2.25f * (adj_s >= 0.0f ? 4.5f : 3.25f));
-  const float     luma  = Luma(c) + adj_l * 1.125f;
+  const float     lift  = adj_l * 1.125f;
   const float     i     = 0.596f * c.r - 0.274f * c.g - 0.322f * c.b;
   const float     q     = 0.211f * c.r - 0.523f * c.g + 0.312f * c.b;
-  const float     ri    = (i * std::cos(angle) - q * std::sin(angle)) * scale;
-  const float     rq    = (i * std::sin(angle) + q * std::cos(angle)) * scale;
-  return {luma + 0.956f * ri + 0.621f * rq, luma - 0.272f * ri - 0.647f * rq,
-          luma - 1.106f * ri + 1.703f * rq, c.a};
+  const float     di    = (i * std::cos(angle) - q * std::sin(angle)) * scale - i;
+  const float     dq    = (i * std::sin(angle) + q * std::cos(angle)) * scale - q;
+  return {c.r + lift + 0.956f * di + 0.621f * dq, c.g + lift - 0.272f * di - 0.647f * dq,
+          c.b + lift - 1.106f * di + 1.703f * dq, c.a};
 }
 
 auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pixel_index) -> Rgba {
@@ -183,16 +163,12 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pi
     c.r            = out[0];
     c.g            = out[1];
     c.b            = out[2];
-  } else if (behavior == AdjustmentBehavior::White) {
-    const float gain = 1.0f + std::max(value, 0.0f) * 0.005f;
-    c.r *= gain;
-    c.g *= gain;
-    c.b *= gain;
-  } else if (behavior == AdjustmentBehavior::Black) {
-    const float offset = value * 0.001f;
-    c.r += offset;
-    c.g += offset;
-    c.b += offset;
+  } else if (behavior == AdjustmentBehavior::White || behavior == AdjustmentBehavior::Black) {
+    const auto out = tone_zone_reference::ApplyAcescc({c.r, c.g, c.b}, value,
+                                                      behavior == AdjustmentBehavior::White);
+    c.r            = out[0];
+    c.g            = out[1];
+    c.b            = out[2];
   } else if (behavior == AdjustmentBehavior::Clarity) {
     const float l      = Luma(c);
     float       weight = 1.0f - std::min(l / std::max(local_tone_mapping::kAcesccMiddleGray, 1.0e-4f),
@@ -203,9 +179,8 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pi
     c.g *= gain;
     c.b *= gain;
   } else if (behavior == AdjustmentBehavior::Curve) {
-    c.r = ApplyCurve(c.r, p);
-    c.g = ApplyCurve(c.g, p);
-    c.b = ApplyCurve(c.b, p);
+    // p is the first of the four records of the Curve slot, as in the kernel.
+    tone_curve_test::ApplyPackedCurveSlot(c, &p);
   } else if (behavior == AdjustmentBehavior::Hls) {
     c = ApplyHls(c, p);
   } else if (behavior == AdjustmentBehavior::Saturation ||
@@ -282,6 +257,13 @@ void ResetProductLookToIdentity(PipelineDocument& document) {
   exposure->SetValue(0.0f);
   saturation->SetValue(1.0f);
   contrast->SetValue(0.0f);
+  // The default look carries the Film-like curve (#898).
+  auto* curve =
+      dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  CurveUpdate identity;
+  identity.points = IdentityCurvePoints();
+  curve->ApplyUpdate(identity);
 }
 
 auto MakeNeighborhoodPlane(std::uint32_t width, std::uint32_t height, float surroundings,
@@ -348,6 +330,48 @@ class MetalGradeFixture : public ::testing::Test {
     return result;
   }
 
+  /// Render through Color Grade with @p record; return the grade input. The grade output goes to
+  /// last_grade_pixels_ and the grade result to last_histogram_result_.
+  auto RenderWithHistogramRecord(CurveInputHistogramRecord& record) -> std::vector<Rgba> {
+    device_.BeginRender();
+    ExecuteMetalDevelop(device_, plan_, prepared_, document_);
+    ExecuteMetalGeometryResample(device_, plan_);
+    ExecuteMetalCameraColor(device_, plan_, document_);
+    last_histogram_result_ =
+        ExecuteMetalPrimaryGrade(device_, plan_, prepared_, document_, &record);
+    device_.EndRender();
+    device_.WaitIdle();
+    last_grade_pixels_ = DownloadBinding(last_histogram_result_.output_binding);
+    return Download(device_, plan_.develop_output);
+  }
+
+  /// Remove the Color adjustments (Curve through LMT) of the primary Grade and recompile, so the
+  /// Local Laplacian stage is the last write of the Grade.
+  void RemoveColorAdjustments() {
+    auto* grade = document_.PrimaryGrade();
+    ASSERT_NE(grade, nullptr);
+    for (const auto& type : ColorGradeCompileOrder()) {
+      if (ColorGradeCompileGroupOf(type) != ColorGradeCompileGroup::Color) {
+        continue;
+      }
+      const auto* id = grade->FindAdjustmentIdByType(type);
+      ASSERT_NE(id, nullptr) << type.Text();
+      grade->RemoveAdjustment(AdjustmentInstanceId{*id});
+    }
+    plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
+  }
+
+  /// Counts of the curve input histogram of the primary Grade from one render; @p input receives
+  /// the grade input of that render.
+  auto RenderCurveInputHistogram(std::vector<Rgba>& input) -> std::vector<std::uint32_t> {
+    CurveInputHistogramRecord record{document_.PrimaryGrade()->Id()};
+    input              = RenderWithHistogramRecord(record);
+    const auto& extent = plan_.geometry.render_extent;
+    EXPECT_TRUE(record.recorded);
+    EXPECT_EQ(record.sample_count, CurveInputHistogramSampleCount(extent.width, extent.height));
+    return ReadCurveInputHistogramCounts(device_, record.grade_id);
+  }
+
   auto RenderThroughDrtPost() -> MetalDrtResult {
     device_.BeginRender();
     ExecuteMetalDevelop(device_, plan_, prepared_, document_);
@@ -393,7 +417,8 @@ class MetalGradeFixture : public ::testing::Test {
   PreparedRawInput  prepared_;
   PipelineDocument  document_;
   ExecutionPlan     plan_;
-  MetalRenderDevice device_;
+  MetalRenderDevice       device_;
+  MetalPrimaryGradeResult last_histogram_result_{};
   std::vector<Rgba> last_grade_pixels_;
   std::vector<Rgba> last_display_base_pixels_;
   std::vector<Rgba> last_display_post_pixels_;
@@ -441,6 +466,171 @@ TEST_F(MetalGradeFixture, MetalContrastMatchesOkLabLightnessReferenceForEveryPix
           << contrast << " @ " << i;
     }
   }
+}
+
+TEST_F(MetalGradeFixture, MetalCurveMatchesSplineReferenceForThreeAndSixteenPoints) {
+  (void)RenderGrade();
+  const auto develop = Download(device_, plan_.develop_output);
+  ASSERT_FALSE(develop.empty());
+  const auto range = tone_curve_test::RgbValueRange(develop);
+  auto&      curve = ModelByType<CurveModel>(type_ids::Curve());
+  for (const std::size_t count : {std::size_t{3}, std::size_t{16}}) {
+    curve.SetPoints(tone_curve_test::LiftedMidtonePoints(count, range.low, range.high));
+    const auto spline = tone_curve::SolveToneCurveSpline(curve.Points());
+    (void)RenderGrade();
+    ASSERT_EQ(last_grade_pixels_.size(), develop.size());
+    EXPECT_LT(tone_curve_test::MaxCurveError(develop, last_grade_pixels_, spline),
+              tone_curve_test::kGpuCurveTolerance)
+        << count << " points";
+  }
+}
+
+TEST_F(MetalGradeFixture, MetalChannelCurvesMatchSplineReferenceForRedAloneAndRgbWithBlue) {
+  (void)RenderGrade();
+  const auto develop = Download(device_, plan_.develop_output);
+  ASSERT_FALSE(develop.empty());
+  const auto range = tone_curve_test::RgbValueRange(develop);
+  auto&      curve = ModelByType<CurveModel>(type_ids::Curve());
+
+  // A red curve alone: the green and blue channels stay as they are.
+  CurveUpdate red_alone;
+  red_alone.red = tone_curve_test::LiftedMidtonePoints(5, range.low, range.high);
+  curve.ApplyUpdate(red_alone);
+  (void)RenderGrade();
+  ASSERT_EQ(last_grade_pixels_.size(), develop.size());
+  EXPECT_LT(tone_curve_test::MaxCurveSetError(develop, last_grade_pixels_,
+                                              tone_curve_test::SolveCurveSplines(curve)),
+            tone_curve_test::kGpuCurveTolerance)
+      << "red curve alone";
+
+  // The RGB curve together with a blue curve: blue gets the RGB curve, then the blue curve.
+  CurveUpdate rgb_with_blue;
+  rgb_with_blue.red    = IdentityCurvePoints();
+  rgb_with_blue.points = tone_curve_test::LiftedMidtonePoints(4, range.low, range.high);
+  rgb_with_blue.blue   = tone_curve_test::LiftedMidtonePoints(6, range.low, range.high, -0.15f);
+  curve.ApplyUpdate(rgb_with_blue);
+  (void)RenderGrade();
+  ASSERT_EQ(last_grade_pixels_.size(), develop.size());
+  EXPECT_LT(tone_curve_test::MaxCurveSetError(develop, last_grade_pixels_,
+                                              tone_curve_test::SolveCurveSplines(curve)),
+            tone_curve_test::kGpuCurveTolerance)
+      << "RGB curve with a blue curve";
+}
+
+TEST_F(MetalGradeFixture, MetalCurveInputHistogramCountsTheGradeInputOnTheCurveAxis) {
+  // A curve that is not the identity: the histogram counts the curve input, not its output.
+  auto&       curve = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate s_curve;
+  s_curve.points = tone_curve_test::LiftedMidtonePoints(5, 0.1f, 0.9f);
+  curve.ApplyUpdate(s_curve);
+
+  std::vector<Rgba> input;
+  const auto        counts = RenderCurveInputHistogram(input);
+  const auto&       extent = plan_.geometry.render_extent;
+  ASSERT_FALSE(input.empty());
+  EXPECT_EQ(counts, curve_histogram_test::ReferenceCounts(input, extent.width, extent.height));
+  EXPECT_EQ(device_.PassStats().curve_input_histogram_execute, 1U);
+}
+
+TEST_F(MetalGradeFixture, MetalCurveInputHistogramSamplesEveryStepPixelsOfALargeInput) {
+  constexpr std::uint32_t width  = 2100;
+  constexpr std::uint32_t height = 5;
+  prepared_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(width, height),
+                                            gpu_dag_test::FullSensor(width, height));
+  plan_     = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
+  ASSERT_EQ(plan_.geometry.render_extent.width, width);
+  ASSERT_EQ(plan_.geometry.render_extent.height, height);
+  ASSERT_EQ(CurveInputHistogramSampleStep(width, height), 3U);
+
+  std::vector<Rgba> input;
+  const auto        counts = RenderCurveInputHistogram(input);
+  EXPECT_EQ(counts, curve_histogram_test::ReferenceCounts(input, width, height));
+}
+
+TEST_F(MetalGradeFixture, MetalCurveInputHistogramIgnoresCurveEditsAndFollowsExposure) {
+  std::vector<Rgba> input;
+  const auto        identity_curve = RenderCurveInputHistogram(input);
+  const auto&       extent         = plan_.geometry.render_extent;
+
+  auto&             curve          = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate       edit;
+  edit.points = tone_curve_test::LiftedMidtonePoints(6, 0.05f, 0.95f, -0.25f);
+  edit.blue   = tone_curve_test::LiftedMidtonePoints(4, 0.2f, 0.8f);
+  curve.ApplyUpdate(edit);
+  std::vector<Rgba> unused;
+  EXPECT_EQ(RenderCurveInputHistogram(unused), identity_curve)
+      << "a curve edit changed the histogram";
+
+  ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
+  const auto exposed = RenderCurveInputHistogram(unused);
+  EXPECT_NE(exposed, identity_curve);
+  curve_histogram_test::ExpectCountsOfShiftedPixels(exposed, input, extent.width, extent.height,
+                                                    1.0f / CE_ACESCC_B, "Exposure +1");
+}
+
+TEST_F(MetalGradeFixture, MetalCurveInputHistogramCountsTheLocalToneOutput) {
+  // Issue #900: Shadows runs before the Curve, so the curve input is the LLF output. With the
+  // Color adjustments neutral, the Grade output is that image.
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(60.0f);
+  (void)RenderGrade();
+  const auto  local_tone_output = last_grade_pixels_;
+  const auto& extent            = plan_.geometry.render_extent;
+
+  auto&       curve             = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate s_curve;
+  s_curve.points = tone_curve_test::LiftedMidtonePoints(5, 0.1f, 0.9f);
+  curve.ApplyUpdate(s_curve);
+  std::vector<Rgba> input;
+  const auto        counts = RenderCurveInputHistogram(input);
+  ASSERT_NE(curve_histogram_test::ReferenceCounts(local_tone_output, extent.width, extent.height),
+            curve_histogram_test::ReferenceCounts(input, extent.width, extent.height))
+      << "Shadows must change the bins of this input";
+  curve_histogram_test::ExpectCountsOfShiftedPixels(counts, local_tone_output, extent.width,
+                                                    extent.height, 0.0f, "Shadows 60");
+}
+
+TEST_F(MetalGradeFixture, MetalCurveInputHistogramOfAFinalLocalToneStageReadsItBeforeTheMix) {
+  RemoveColorAdjustments();
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(60.0f);
+  (void)RenderGrade();
+  const auto        full   = last_grade_pixels_;
+  const auto&       extent = plan_.geometry.render_extent;
+  std::vector<Rgba> input;
+  const auto        full_mix = RenderCurveInputHistogram(input);
+  EXPECT_EQ(full_mix, curve_histogram_test::ReferenceCounts(full, extent.width, extent.height));
+
+  document_.PrimaryGrade()->SetMix(0.5f);
+  (void)RenderGrade();
+  const auto        plain = last_grade_pixels_;
+  std::vector<Rgba> unused;
+  EXPECT_EQ(RenderCurveInputHistogram(unused), full_mix) << "the mix changed the curve input";
+
+  // The histogram render writes the unmixed LLF output and mixes in a pass without commands.
+  // Basic Tone, then the mix pass without commands.
+  EXPECT_EQ(last_histogram_result_.pointwise_dispatch_count, 2U);
+  ASSERT_EQ(last_grade_pixels_.size(), plain.size());
+  ASSERT_EQ(input.size(), plain.size());
+  for (std::size_t i = 0; i < plain.size(); ++i) {
+    for (const auto channel : {&Rgba::r, &Rgba::g, &Rgba::b}) {
+      EXPECT_NEAR(last_grade_pixels_[i].*channel, plain[i].*channel, 1.0e-5f) << "pixel " << i;
+      EXPECT_NEAR(plain[i].*channel, 0.5f * (input[i].*channel + full[i].*channel), 1.0e-5f)
+          << "pixel " << i;
+    }
+  }
+}
+
+TEST_F(MetalGradeFixture, MetalRenderWithoutAHistogramRequestRecordsNoHistogram) {
+  (void)RenderGrade();
+  EXPECT_EQ(device_.PassStats().curve_input_histogram_execute, 0U);
+  EXPECT_EQ(device_.Workspace().Values().Find(
+                CurveInputHistogramCountsId(document_.PrimaryGrade()->Id())),
+            nullptr);
+
+  // A request for a Grade that the plan does not have records nothing.
+  CurveInputHistogramRecord missing{NodeId{"grade.missing"}};
+  (void)RenderWithHistogramRecord(missing);
+  EXPECT_FALSE(missing.recorded);
+  EXPECT_EQ(device_.PassStats().curve_input_histogram_execute, 0U);
 }
 
 TEST_F(MetalGradeFixture, MetalHlsHueAdjustmentChangesGradePixels) {
@@ -786,7 +976,8 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) 
   ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance()).SetTemperature(4300.0f);
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(0.5f);
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(40.0f);
-  ModelByType<WhiteModel>(type_ids::White()).SetValue(12.0f);
+  ModelByType<WhiteModel>(type_ids::White()).SetValue(60.0f);
+  ModelByType<BlackModel>(type_ids::Black()).SetValue(-45.0f);
   ModelByType<SaturationModel>(type_ids::Saturation()).SetValue(1.2f);
   const auto result = RenderGrade();
   const auto input  = Download(device_, plan_.develop_output);
@@ -794,7 +985,9 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) 
   ASSERT_EQ(input.size(), output.size());
   ASSERT_FALSE(input.empty());
 
+  // The records as the grade pass packs them, and the first record of each slot.
   std::vector<GradeAdjustmentParams> params;
+  std::vector<std::size_t>           slot_starts;
   auto*                              grade = document_.PrimaryGrade();
   ASSERT_NE(plan_.FirstGrade(), nullptr);
   for (const auto& compiled : plan_.FirstGrade()->adjustments) {
@@ -808,14 +1001,14 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) 
         MakeGradeRuntimeParams(*model, *behavior).values[0] == 0.0f) {
       continue;
     }
-    params.push_back(MakeGradeRuntimeParams(*model, *behavior));
+    slot_starts.push_back(tone_curve_test::AppendGradeSlotRecords(params, *model, *behavior));
   }
 
   float max_err = 0.0f;
   for (std::size_t i = 0; i < input.size(); ++i) {
     Rgba cpu = input[i];
-    for (const auto& p : params) {
-      cpu = CpuApplyAdjustment(cpu, p, static_cast<std::uint32_t>(i));
+    for (const auto start : slot_starts) {
+      cpu = CpuApplyAdjustment(cpu, params[start], static_cast<std::uint32_t>(i));
     }
     max_err = std::max(max_err, std::fabs(cpu.r - output[i].r));
     max_err = std::max(max_err, std::fabs(cpu.g - output[i].g));

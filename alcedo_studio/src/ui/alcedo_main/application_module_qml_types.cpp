@@ -62,6 +62,8 @@ void RegisterApplicationModuleTypes() {
       "Alcedo.Main", 1, 0, "EditorMaskCreationAdapter", "Owned by EditorSessionController");
   qmlRegisterUncreatableType<EditorScopeController>("Alcedo.Main", 1, 0, "EditorScopeController",
                                                     "Owned by EditorSessionController");
+  qmlRegisterUncreatableType<EditorCurveHistogramController>(
+      "Alcedo.Main", 1, 0, "EditorCurveHistogramController", "Owned by EditorSessionController");
   qmlRegisterUncreatableType<WorkspaceRouter>("Alcedo.Main", 1, 0, "WorkspaceRouter",
                                               "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorBehaviorPreferences>(

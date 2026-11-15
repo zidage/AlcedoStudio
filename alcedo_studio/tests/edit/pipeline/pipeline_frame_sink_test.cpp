@@ -10,10 +10,12 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
 #include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "image/image_buffer.hpp"
@@ -189,6 +191,58 @@ TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesFrozenRequestRegionInsteadOfCh
   EXPECT_EQ(request.geometry.resolution.max_edge, 3008U);
   EXPECT_NEAR(request.geometry.view.visible_rect_in_edit_space.x, 316.0f / 903.0f, 1.0e-5f);
   EXPECT_EQ(request.geometry.view.viewport_extent.width, 3008U);
+}
+
+// Issue #888: the curve input histogram describes the whole image, so only a render of the whole
+// edit frame carries it.
+TEST_F(PipelineFrameSinkTest, CurveInputHistogramRidesOnlyOnRendersOfTheWholeFrame) {
+  class UnusedHistogramSink final : public ICurveInputHistogramSink {
+   public:
+    void PublishCurveInputHistogram(CurveInputHistogram /*histogram*/) override {}
+  };
+  auto          exec = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
+  MockFrameSink sink;
+  exec->AttachFrameSink(&sink);
+  const CurveInputHistogramRequest histogram{NodeId{"grade.primary"},
+                                             std::make_shared<UnusedHistogramSink>()};
+  const ViewportRenderRegion       whole_frame{.x_                = 0,
+                                               .y_                = 0,
+                                               .scale_x_          = 1.0f,
+                                               .scale_y_          = 1.0f,
+                                               .reference_width_  = 6000,
+                                               .reference_height_ = 4000,
+                                               .target_width_     = 1200,
+                                               .target_height_    = 800};
+  const ViewportRenderRegion       region{.x_                = 1200,
+                                          .y_                = 600,
+                                          .scale_x_          = 0.25f,
+                                          .scale_y_          = 0.2f,
+                                          .reference_width_  = 6000,
+                                          .reference_height_ = 4000,
+                                          .target_width_     = 1800,
+                                          .target_height_    = 1200};
+  const auto request_of = [&](RenderType type, std::optional<ViewportRenderRegion> view) {
+    PipelineTask task;
+    task.pipeline_executor_                           = exec;
+    task.options_.render_desc_.render_type_           = type;
+    task.options_.render_desc_.use_viewport_region_   = view.has_value();
+    task.options_.render_desc_.viewport_region_       = view;
+    task.options_.render_desc_.curve_input_histogram_ = histogram;
+    return task.MakeApplyRequest().curve_input_histogram;
+  };
+
+  EXPECT_EQ(request_of(RenderType::FAST_PREVIEW, whole_frame), histogram);
+  EXPECT_EQ(request_of(RenderType::QUALITY_BASE_PREVIEW, std::nullopt), histogram);
+  EXPECT_EQ(request_of(RenderType::DETAIL_ROI_PREVIEW, whole_frame), histogram);
+  EXPECT_FALSE(request_of(RenderType::FAST_PREVIEW, region).has_value()) << "viewport region";
+  EXPECT_FALSE(request_of(RenderType::DETAIL_ROI_PREVIEW, region).has_value()) << "Detail patch";
+  EXPECT_FALSE(request_of(RenderType::THUMBNAIL, std::nullopt).has_value()) << "batch render";
+
+  // A frame without a request carries none.
+  PipelineTask plain;
+  plain.pipeline_executor_                 = exec;
+  plain.options_.render_desc_.render_type_ = RenderType::QUALITY_BASE_PREVIEW;
+  EXPECT_FALSE(plain.MakeApplyRequest().curve_input_histogram.has_value());
 }
 
 TEST_F(PipelineFrameSinkTest, QualityBaseRequestDoesNotCarryViewportGeometry) {

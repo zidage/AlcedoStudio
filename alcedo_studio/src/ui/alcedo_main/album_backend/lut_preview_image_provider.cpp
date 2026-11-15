@@ -27,13 +27,14 @@ auto LutPreviewImageStore::ParseProviderId(const QString& id, std::uint64_t* dis
   return true;
 }
 
-auto LutPreviewImageStore::Put(std::uint64_t display_id, QImage image) -> QString {
+auto LutPreviewImageStore::Put(std::uint64_t display_id, QImage image,
+                               const ViewerDisplayConfig& encoding) -> QString {
   if (display_id == 0 || image.isNull()) {
     return {};
   }
   {
     std::scoped_lock lock(mutex_);
-    images_[display_id] = std::move(image);
+    images_[display_id] = Entry{std::move(image), encoding};
   }
   return MakeUrl(display_id);
 }
@@ -46,7 +47,29 @@ void LutPreviewImageStore::Remove(std::uint64_t display_id) {
 auto LutPreviewImageStore::Get(std::uint64_t display_id) const -> QImage {
   std::scoped_lock lock(mutex_);
   const auto       found = images_.find(display_id);
-  return found == images_.end() ? QImage{} : found->second;
+  return found == images_.end() ? QImage{} : found->second.image;
+}
+
+auto LutPreviewImageStore::GetForDisplay(std::uint64_t display_id) const -> QImage {
+  Entry entry;
+  {
+    std::scoped_lock lock(mutex_);
+    const auto       found = images_.find(display_id);
+    if (found == images_.end()) {
+      return {};
+    }
+    entry = found->second;
+  }
+  // The conversion runs outside the lock: the GUI thread can put and remove meanwhile.
+  return converter_.Convert(entry.image, entry.encoding);
+}
+
+void LutPreviewImageStore::SetDestination(std::shared_ptr<const DisplayDestination> destination) {
+  converter_.SetDestination(std::move(destination));
+}
+
+auto LutPreviewImageStore::Destination() const -> std::shared_ptr<const DisplayDestination> {
+  return converter_.Destination();
 }
 
 auto LutPreviewImageStore::size() const -> std::size_t {
@@ -62,7 +85,7 @@ QImage LutPreviewImageProvider::requestImage(const QString& id, QSize* size,
   std::uint64_t display_id = 0;
   QImage        image;
   if (store_ && LutPreviewImageStore::ParseProviderId(id, &display_id)) {
-    image = store_->Get(display_id);
+    image = store_->GetForDisplay(display_id);
   }
   if (size != nullptr) {
     *size = image.size();
