@@ -324,18 +324,28 @@ auto ScheduleImagesAndWait(EditorSessionRenderSchedulerPort& scheduler,
   return result.get();
 }
 
-/// Release the GPU resources of @p scheduler for an export and wait for the release result.
-auto ReleaseForExportAndWait(EditorSessionRenderSchedulerPort& scheduler)
+/// Release the GPU resources of @p scheduler for @p holder and wait for the release result.
+auto ReleaseForHolderAndWait(EditorSessionRenderSchedulerPort& scheduler,
+                             EditorGpuReleaseHolder holder, bool* first = nullptr)
     -> std::optional<EditorGpuResourceRelease> {
-  auto done   = std::make_shared<std::promise<EditorGpuResourceRelease>>();
-  auto result = done->get_future();
-  scheduler.ReleaseGpuResourcesForExport(
-      [done](EditorGpuResourceRelease release) { done->set_value(std::move(release)); });
+  auto       done     = std::make_shared<std::promise<EditorGpuResourceRelease>>();
+  auto       result   = done->get_future();
+  const bool acquired = scheduler.AcquireGpuResourceRelease(
+      holder, [done](EditorGpuResourceRelease release) { done->set_value(std::move(release)); });
+  if (first != nullptr) {
+    *first = acquired;
+  }
   if (result.wait_for(kFrameTimeout) != std::future_status::ready) {
     ADD_FAILURE() << "The GPU resource release did not complete";
     return std::nullopt;
   }
   return result.get();
+}
+
+/// Release the GPU resources of @p scheduler for an export and wait for the release result.
+auto ReleaseForExportAndWait(EditorSessionRenderSchedulerPort& scheduler)
+    -> std::optional<EditorGpuResourceRelease> {
+  return ReleaseForHolderAndWait(scheduler, EditorGpuReleaseHolder::Export);
 }
 
 /// Image job of the bound fixture image 22 / 11 for @p snapshots.
@@ -807,7 +817,7 @@ TEST(EditorSessionRenderSchedulerPortTest, ExportReleaseRefusesFramesAndImageJob
   // No frame created the executor, so it held no GPU memory.
   EXPECT_EQ(release->device_bytes_before, 0u);
   EXPECT_EQ(release->device_bytes_after, 0u);
-  EXPECT_TRUE(scheduler->gpu_resources_released_for_export());
+  EXPECT_TRUE(scheduler->gpu_resources_released());
 
   const auto refused = ScheduleAndWait(*scheduler, MakeRequest(92, 52));
   ASSERT_TRUE(refused.has_value());
@@ -827,9 +837,58 @@ TEST(EditorSessionRenderSchedulerPortTest, ExportReleaseRefusesFramesAndImageJob
   ASSERT_TRUE(scheduler->session_context().has_value());
   EXPECT_EQ(scheduler->session_context()->element_id, 22u);
 
-  scheduler->ResumeGpuResourcesAfterExport();
-  EXPECT_FALSE(scheduler->gpu_resources_released_for_export());
+  EXPECT_TRUE(scheduler->EndGpuResourceRelease(EditorGpuReleaseHolder::Export));
+  EXPECT_FALSE(scheduler->gpu_resources_released());
   const auto resumed = ScheduleAndWait(*scheduler, MakeRequest(93, 52));
+  ASSERT_TRUE(resumed.has_value());
+  // The fixture has no image bytes, so the render fails, but the port no longer refuses it.
+  EXPECT_FALSE(alcedo::IsPresentationSuspendedMessage(resumed->message)) << resumed->message;
+  EXPECT_EQ(executor->GetFrameSink(), &sink);
+}
+
+// An export and semantic generation hold the release together: the editor renders again only
+// after both ended, in either order. Ending a holder that holds nothing changes nothing.
+TEST(EditorSessionRenderSchedulerPortTest, TwoReleaseHoldersKeepFramesRefusedUntilBothEnd) {
+  HeldImage held;
+  auto      scheduler = MakeSchedulerHoldingImage(held);
+  ASSERT_TRUE(held.lease.has_value()) << held.error;
+  RecordingFrameSink sink;
+  scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
+  scheduler->InstallSessionContext(MakeReadyContext(53, 22, 11));
+
+  bool       first = false;
+  const auto release =
+      ReleaseForHolderAndWait(*scheduler, EditorGpuReleaseHolder::SemanticGeneration, &first);
+  ASSERT_TRUE(release.has_value());
+  EXPECT_TRUE(release->success) << release->error;
+  EXPECT_TRUE(first);
+  const auto second = ReleaseForHolderAndWait(*scheduler, EditorGpuReleaseHolder::Export, &first);
+  ASSERT_TRUE(second.has_value());
+  EXPECT_TRUE(second->success) << second->error;
+  // The editor was already released for semantic generation.
+  EXPECT_FALSE(first);
+
+  const auto both = ScheduleAndWait(*scheduler, MakeRequest(94, 53));
+  ASSERT_TRUE(both.has_value());
+  EXPECT_TRUE(alcedo::IsPresentationSuspendedMessage(both->message)) << both->message;
+  EXPECT_NE(both->message.find("export and semantic generation"), std::string::npos)
+      << both->message;
+
+  // The export ends first: semantic generation still holds the GPU.
+  EXPECT_FALSE(scheduler->EndGpuResourceRelease(EditorGpuReleaseHolder::Export));
+  EXPECT_FALSE(scheduler->EndGpuResourceRelease(EditorGpuReleaseHolder::Export));
+  EXPECT_TRUE(scheduler->gpu_resources_released());
+  const auto one = ScheduleAndWait(*scheduler, MakeRequest(95, 53));
+  ASSERT_TRUE(one.has_value());
+  EXPECT_TRUE(alcedo::IsPresentationSuspendedMessage(one->message)) << one->message;
+  EXPECT_EQ(one->message.find("export"), std::string::npos) << one->message;
+  const auto executor = scheduler->interactive_executor();
+  ASSERT_NE(executor, nullptr);
+  EXPECT_EQ(executor->GetFrameSink(), nullptr);
+
+  EXPECT_TRUE(scheduler->EndGpuResourceRelease(EditorGpuReleaseHolder::SemanticGeneration));
+  EXPECT_FALSE(scheduler->gpu_resources_released());
+  const auto resumed = ScheduleAndWait(*scheduler, MakeRequest(96, 53));
   ASSERT_TRUE(resumed.has_value());
   // The fixture has no image bytes, so the render fails, but the port no longer refuses it.
   EXPECT_FALSE(alcedo::IsPresentationSuspendedMessage(resumed->message)) << resumed->message;
@@ -1329,7 +1388,7 @@ TEST_F(EditorSessionRenderSchedulerPortGpuTest,
   EXPECT_EQ(export_bytes, release->device_bytes_after);
   EXPECT_EQ(InteractiveCudaBinding(*executor), std::nullopt);
 
-  scheduler_->ResumeGpuResourcesAfterExport();
+  EXPECT_TRUE(scheduler_->EndGpuResourceRelease(EditorGpuReleaseHolder::Export));
   const cv::Mat resumed_pixels = RenderFrame(722);
   ASSERT_EQ(resumed_pixels.size(), retained_pixels.size());
   EXPECT_LT(cv::norm(resumed_pixels, retained_pixels, cv::NORM_INF), 2e-5);
@@ -2113,7 +2172,7 @@ TEST_F(EditorSessionRenderSchedulerPortGpuTest,
                    .has_value());
   EXPECT_TRUE(alcedo::IsPresentationSuspendedMessage(error)) << error;
 
-  scheduler_->ResumeGpuResourcesAfterExport();
+  EXPECT_TRUE(scheduler_->EndGpuResourceRelease(EditorGpuReleaseHolder::Export));
   const auto failed = ScheduleMaskCoverageAndWait(*scheduler_, UniformCandidateRequest(922, 50));
   ASSERT_TRUE(failed.has_value());
   EXPECT_EQ(failed->status, alcedo::EditorMaskCoverageJobStatus::Failed);

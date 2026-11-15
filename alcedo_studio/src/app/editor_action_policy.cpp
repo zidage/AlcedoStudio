@@ -270,7 +270,7 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::SetPresentationSize:
     case EditorSessionCommandKind::SetGeometryOverlay:
     case EditorSessionCommandKind::SetPresentationSuspended:
-    case EditorSessionCommandKind::SetSuspendedForExport:
+    case EditorSessionCommandKind::SetSuspendedForGpuRelease:
     case EditorSessionCommandKind::SetAdjustmentProjectionNode:
       return std::nullopt;
   }

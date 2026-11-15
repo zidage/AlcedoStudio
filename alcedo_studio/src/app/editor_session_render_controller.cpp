@@ -130,17 +130,16 @@ auto EditorSessionRenderController::presentation_suspended() const -> bool {
   return presentation_suspended_;
 }
 
-void EditorSessionRenderController::SetSuspendedForExport(bool suspended,
-                                                          const EditorSessionIdentity& identity,
-                                                          ImageLoadRequestId image_load_request,
-                                                          EditorSessionState state) {
-  SetSuspension(&EditorSessionRenderController::suspended_for_export_, suspended, identity,
+void EditorSessionRenderController::SetSuspendedForGpuRelease(
+    bool suspended, const EditorSessionIdentity& identity, ImageLoadRequestId image_load_request,
+    EditorSessionState state) {
+  SetSuspension(&EditorSessionRenderController::suspended_for_gpu_release_, suspended, identity,
                 image_load_request, state);
 }
 
-auto EditorSessionRenderController::suspended_for_export() const -> bool {
+auto EditorSessionRenderController::suspended_for_gpu_release() const -> bool {
   std::scoped_lock lock(mutex_);
-  return suspended_for_export_;
+  return suspended_for_gpu_release_;
 }
 
 void EditorSessionRenderController::SetSuspension(bool EditorSessionRenderController::* reason,
@@ -154,7 +153,7 @@ void EditorSessionRenderController::SetSuspension(bool EditorSessionRenderContro
       return;
     }
     this->*reason = suspended;
-    if (presentation_suspended_ || suspended_for_export_) {
+    if (presentation_suspended_ || suspended_for_gpu_release_) {
       return;
     }
     suspended_refresh_routed_ = false;
@@ -185,9 +184,9 @@ void EditorSessionRenderController::NoteSuspendedPresentation(
     } else {
       suspended_full_frame_ = true;
     }
-    // The viewport came back (or the export ended) before this refusal reached the
+    // The viewport came back (or the GPU release ended) before this refusal reached the
     // owner: the resume found nothing to refresh, so this result routes it.
-    if (!presentation_suspended_ && !suspended_for_export_ && !suspended_refresh_routed_) {
+    if (!presentation_suspended_ && !suspended_for_gpu_release_ && !suspended_refresh_routed_) {
       route_now = true;
     }
   }

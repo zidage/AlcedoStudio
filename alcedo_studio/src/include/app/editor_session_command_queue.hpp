@@ -67,7 +67,7 @@ enum class EditorSessionCommandKind : std::uint8_t {
   /// The bound viewport was suspended (minimized/hidden) or resumed.
   SetPresentationSuspended,
   /// An export released the editor GPU resources, or ended.
-  SetSuspendedForExport,
+  SetSuspendedForGpuRelease,
   SetAdjustmentProjectionNode,
   RenameColorGrade,
   SetColorGradeDeletionProtected,
@@ -168,8 +168,8 @@ struct EditorSessionCommand {
   bool                                    geometry_overlay_active = false;
   /// SetPresentationSuspended only.
   bool                                    presentation_suspended  = false;
-  /// SetSuspendedForExport only.
-  bool                                    suspended_for_export    = false;
+  /// SetSuspendedForGpuRelease only.
+  bool                                    suspended_for_gpu_release = false;
   NodeId                                  node_id;
   /// Desired deletion-only protection for SetColorGradeDeletionProtected.
   bool                                    deletion_protected = false;
