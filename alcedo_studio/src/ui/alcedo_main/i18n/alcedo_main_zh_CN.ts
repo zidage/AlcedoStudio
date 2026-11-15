@@ -4326,6 +4326,14 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <source>Show %1</source>
         <translation>显示%1</translation>
     </message>
+    <message>
+        <source>detached</source>
+        <translation>已断开</translation>
+    </message>
+    <message>
+        <source>Detached</source>
+        <translation>已断开</translation>
+    </message>
 </context>
 <context>
     <name>EditorMaskGroupMaskRow</name>
@@ -8772,6 +8780,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>Only a Color Grade can be shown or hidden</source>
         <translation>只有色彩分级可以显示或隐藏</translation>
+    </message>
+    <message>
+        <source>Connect the Mask Group in Nodes before moving it</source>
+        <translation>请先在节点页连接该图层（蒙版组），再移动它</translation>
     </message>
     <message>
         <location line="+20"/>

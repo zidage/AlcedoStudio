@@ -68,12 +68,43 @@ TEST(GpuDagModelGraph, DefaultDocumentSatisfiesImageBackbone) {
   EXPECT_EQ(path[2], NodeId{"drt"});
 }
 
-TEST(GpuDagModelGraph, ValidateImageBackboneRejectsColorGradeOffTheImageBackbone) {
+TEST(GpuDagModelGraph, DetachedColorGradeWithNoEdgeIsValidAndOffTheBackbone) {
   auto document = CreateDefaultPipelineDocument();
   document.Graph().AddNode(ColorGradeNodeModel::MakeDefault(NodeId{"grade.off"}));
+  EXPECT_TRUE(document.Graph().Validate().empty());
+  EXPECT_TRUE(document.Graph().ValidateImageBackbone().empty());
+  EXPECT_TRUE(document.Graph().IsDetachedColorGrade(NodeId{"grade.off"}));
+  EXPECT_FALSE(document.Graph().IsDetachedColorGrade(NodeId{"grade.primary"}));
+  EXPECT_FALSE(document.Graph().IsDetachedColorGrade(NodeId{"develop"}));
+  EXPECT_EQ(document.Graph().DetachedColorGradeNodeIds(), std::vector<NodeId>{NodeId{"grade.off"}});
+  EXPECT_EQ(document.Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.primary"}, NodeId{"drt"}}));
+}
+
+TEST(GpuDagModelGraph, HalfConnectedColorGradesStayInvalid) {
+  auto document = CreateDefaultPipelineDocument();
+  document.Graph().AddNode(ColorGradeNodeModel::MakeDefault(NodeId{"grade.half"}));
+  // grade.primary keeps only its incoming edge; grade.half gets only an outgoing edge.
+  document.Graph().Disconnect(NodeId{"grade.primary"}, PortId{"image"}, NodeId{"drt"},
+                              PortId{"image"});
+  document.Graph().Connect(NodeId{"grade.half"}, PortId{"image"}, NodeId{"drt"}, PortId{"image"});
+  EXPECT_FALSE(document.Graph().IsDetachedColorGrade(NodeId{"grade.half"}));
+  EXPECT_FALSE(document.Graph().IsDetachedColorGrade(NodeId{"grade.primary"}));
+  EXPECT_TRUE(document.Graph().DetachedColorGradeNodeIds().empty());
   EXPECT_TRUE(HasCode(document.Graph().Validate(), GraphValidationCode::MissingRequiredInput));
-  const auto errors = document.Graph().ValidateImageBackbone();
-  EXPECT_TRUE(HasCode(errors, GraphValidationCode::ColorGradeNotOnImageBackbone));
+  EXPECT_TRUE(HasCode(document.Graph().ValidateImageBackbone(),
+                      GraphValidationCode::BrokenImageBackbone));
+}
+
+TEST(GpuDagModelGraph, ConnectedColorGradeOffTheBackboneIsReported) {
+  auto document = CreateDefaultPipelineDocument();
+  document.Graph().AddNode(ColorGradeNodeModel::MakeDefault(NodeId{"grade.loop"}));
+  // An edge on the node itself keeps it off the Develop-to-DRT path without detaching it.
+  document.Graph().Connect(NodeId{"grade.loop"}, PortId{"image"}, NodeId{"grade.loop"},
+                           PortId{"image"});
+  EXPECT_FALSE(document.Graph().IsDetachedColorGrade(NodeId{"grade.loop"}));
+  EXPECT_TRUE(HasCode(document.Graph().ValidateImageBackbone(),
+                      GraphValidationCode::ColorGradeNotOnImageBackbone));
 }
 
 TEST(GpuDagModelGraph, ValidateImageBackboneRejectsSceneImageFanOut) {

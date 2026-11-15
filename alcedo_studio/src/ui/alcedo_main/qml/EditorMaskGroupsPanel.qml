@@ -29,6 +29,16 @@ Item {
                                                               : null
 
     property var groupsModel: []
+    // Backbone groups come first in groupsModel; detached groups follow.
+    readonly property int backboneGroupCount: {
+        var count = 0
+        for (var i = 0; i < root.groupsModel.length; ++i) {
+            if (root.groupsModel[i].detached !== true) {
+                ++count
+            }
+        }
+        return count
+    }
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -436,7 +446,7 @@ Item {
 
             Repeater {
                 objectName: "editorMaskGroupsDraftLocateRepeater"
-                model: root.nodeController ? root.nodeController.detachedDraftNodeIds : []
+                model: root.nodeController ? root.nodeController.unfinishedDraftNodeIds : []
 
                 IconActionButton {
                     objectName: "editorMaskGroupsDraftLocateButton"
@@ -561,7 +571,9 @@ Item {
                     groupPointerIndex = -1
                     groupDragSourceIndex = -1
                     groupDragSlot = -1
-                    var count = root.groupsModel.length
+                    // Detached groups sit below the backbone groups and are
+                    // outside the execution order, so a drop clamps above them.
+                    var count = root.backboneGroupCount
                     var target = slot > source ? slot - 1 : slot
                     target = Math.max(0, Math.min(count - 1, target))
                     if (target !== source && String(nodeId).length > 0) {
@@ -622,6 +634,10 @@ Item {
                                  ? String(modelData.displayName) : ""
                     groupEnabled: modelData.enabled !== undefined ? modelData.enabled === true
                                                                   : true
+                    detached: modelData.detached === true
+                    showDetachedCaption: detached
+                                         && (index === 0
+                                             || root.groupsModel[index - 1].detached !== true)
                     deletionProtected: modelData.deletionProtected === true
                     masks: modelData.masks !== undefined && modelData.masks !== null
                            ? modelData.masks : []
@@ -637,7 +653,8 @@ Item {
                               : true
                     actionsEnabled: root.structureEditable
                     actionsDisabledReason: root.structureDisabledReason
-                    reorderEnabled: root.structureEditable && root.groupsModel.length > 1
+                    reorderEnabled: root.structureEditable && !detached
+                                    && root.backboneGroupCount > 1
                     textColor: root.colText
                     mutedColor: root.colMuted
                     hoverColor: appTheme.hoverColor

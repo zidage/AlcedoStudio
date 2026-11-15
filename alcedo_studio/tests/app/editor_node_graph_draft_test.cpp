@@ -83,7 +83,8 @@ TEST(EditorNodeGraphDraft, AddInsertsOneDisconnectedGradeWithoutConsumingTheProd
   const auto* ptr = &draft;
   auto        add = draft.AddColorGrade(NodeId{"grade.extra"});
   ASSERT_TRUE(add.succeeded);
-  EXPECT_FALSE(add.submission_valid);
+  // A Color Grade without any edge is detached, which is a valid document state.
+  EXPECT_TRUE(add.submission_valid);
   EXPECT_FALSE(add.delta_empty);
   EXPECT_EQ(&draft, ptr);
   EXPECT_EQ(draft.Nodes().size(), 4u);
@@ -111,7 +112,9 @@ TEST(EditorNodeGraphDraft, ExclusivePortConnectReplacesOnlyTheRequestedPorts) {
 
   auto second = draft.Connect(NodeId{"grade.d"}, NodeId{"drt"});
   ASSERT_TRUE(second.succeeded);
-  EXPECT_FALSE(second.submission_valid);
+  // grade.primary lost both edges: it is detached and the draft is complete.
+  EXPECT_TRUE(second.submission_valid);
+  EXPECT_TRUE(draft.UnfinishedNodeIds().empty());
   bool primary_on_path = false;
   for (const auto& edge : draft.Edges()) {
     if (edge.source_node_id == NodeId{"grade.primary"} ||
@@ -128,10 +131,13 @@ TEST(EditorNodeGraphDraft, ReconnectingTheDetachedGradeMakesTheDraftSubmittable)
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"grade.d"}, NodeId{"drt"}).succeeded);
-  ASSERT_FALSE(draft.SubmissionValid());
+  // grade.primary is detached here, which is complete.
+  ASSERT_TRUE(draft.SubmissionValid());
 
   auto reconnect = draft.Connect(NodeId{"grade.d"}, NodeId{"grade.primary"});
   ASSERT_TRUE(reconnect.succeeded);
+  // grade.primary now has only its incoming edge: half connected.
+  EXPECT_FALSE(reconnect.submission_valid);
   auto finish = draft.Connect(NodeId{"grade.primary"}, NodeId{"drt"});
   ASSERT_TRUE(finish.succeeded);
   EXPECT_TRUE(finish.submission_valid);
@@ -141,14 +147,15 @@ TEST(EditorNodeGraphDraft, ReconnectingTheDetachedGradeMakesTheDraftSubmittable)
   EXPECT_TRUE(change.removed_nodes.empty());
 }
 
-TEST(EditorNodeGraphDraft, DeletingTheDetachedGradeMakesThePathValid) {
+TEST(EditorNodeGraphDraft, DeletingTheBypassedDetachedGradeKeepsThePathValid) {
   auto document = CreateDefaultPipelineDocument();
   document.PrimaryGrade()->SetDeletionProtected(false);
   auto draft    = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"grade.d"}, NodeId{"drt"}).succeeded);
-  ASSERT_FALSE(draft.SubmissionValid());
+  // grade.primary is bypassed and detached, which is complete.
+  ASSERT_TRUE(draft.SubmissionValid());
   auto remove = draft.RemoveColorGrade(document, NodeId{"grade.primary"});
   ASSERT_TRUE(remove.succeeded);
   EXPECT_TRUE(remove.submission_valid);
@@ -283,6 +290,8 @@ TEST(EditorNodeGraphDraft, RejectedConnectRetainsCachedSubmissionValidity) {
   auto draft    = EditorNodeGraphDraft::FromDocument(document);
   draft.ResetWorkStats();
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
+  // grade.primary keeps only its outgoing edge: half connected.
+  ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"grade.d"}).succeeded);
   EXPECT_FALSE(draft.SubmissionValid());
   const auto traversals = draft.work_stats().validity_traversals;
   EXPECT_GE(traversals, 1);
@@ -332,36 +341,73 @@ TEST(EditorNodeGraphDraft, ThirtyTwoGradeGraphRepeatedConnectStaysBounded) {
   EXPECT_LT(draft.work_stats().edge_entry_copies, 400);
 }
 
-TEST(EditorNodeGraphDraft, DetachedNodeIdsIsEmptyForACompleteDraft) {
+TEST(EditorNodeGraphDraft, UnfinishedNodeIdsIsEmptyForACompleteDraft) {
   auto document = DocumentWithGrades(3, 0);
   auto draft    = EditorNodeGraphDraft::FromDocument(document);
   EXPECT_TRUE(draft.SubmissionValid());
-  EXPECT_TRUE(draft.DetachedNodeIds().empty());
+  EXPECT_TRUE(draft.UnfinishedNodeIds().empty());
 }
 
-TEST(EditorNodeGraphDraft, DetachedNodeIdsListsNodesOutsideTheImagePath) {
+TEST(EditorNodeGraphDraft, UnfinishedNodeIdsListsHalfConnectedNodesAndSkipsDetachedGrades) {
   auto document = CreateDefaultPipelineDocument();
   auto draft    = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.new"}).succeeded);
 
-  auto detached = draft.DetachedNodeIds();
-  ASSERT_EQ(detached.size(), 1u);
-  EXPECT_EQ(detached[0], NodeId{"grade.new"});
-
-  // Wiring the new node between Develop and grade.primary leaves grade.primary
-  // and DRT past the break: both are unconnected in the draft.
-  ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"grade.new"}).succeeded);
-  detached = draft.DetachedNodeIds();
-  ASSERT_EQ(detached.size(), 2u);
-  EXPECT_EQ(detached[0], NodeId{"grade.primary"});
-  EXPECT_EQ(detached[1], NodeId{"drt"});
-
-  // Completing the chain reconnects every node; the draft is submittable and
-  // reports no detached nodes.
-  ASSERT_TRUE(draft.Connect(NodeId{"grade.new"}, NodeId{"grade.primary"}).succeeded);
-  ASSERT_TRUE(draft.Connect(NodeId{"grade.primary"}, NodeId{"drt"}).succeeded);
+  // A detached Color Grade is complete: nothing to locate.
   EXPECT_TRUE(draft.SubmissionValid());
-  EXPECT_TRUE(draft.DetachedNodeIds().empty());
+  EXPECT_TRUE(draft.UnfinishedNodeIds().empty());
+
+  // Wiring the new node after Develop leaves grade.primary and DRT past the break.
+  ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"grade.new"}).succeeded);
+  auto unfinished = draft.UnfinishedNodeIds();
+  ASSERT_EQ(unfinished.size(), 2u);
+  EXPECT_EQ(unfinished[0], NodeId{"grade.primary"});
+  EXPECT_EQ(unfinished[1], NodeId{"drt"});
+
+  // Completing the chain reconnects every node; the draft is submittable.
+  ASSERT_TRUE(draft.Connect(NodeId{"grade.new"}, NodeId{"grade.primary"}).succeeded);
+  EXPECT_TRUE(draft.SubmissionValid());
+  EXPECT_TRUE(draft.UnfinishedNodeIds().empty());
+}
+
+TEST(EditorNodeGraphDraft, DetachAndReconnectRoundTripKeepsParametersAndMasks) {
+  auto  document = DocumentWithGrades(3, 0);
+  auto* grade =
+      dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.g0"}));
+  ASSERT_NE(grade, nullptr);
+  grade->AddMask(MakeMask("mask.kept", 0.4f), 0);
+  grade->SetMix(0.25f);
+  const auto grade_json = grade->ToJson();
+  const auto backbone   = document.Graph().ImageBackboneNodeIds();
+  ASSERT_EQ(backbone.size(), 5u);
+  const auto before_g0 = backbone[1];
+  const auto after_g0  = backbone[3];
+  ASSERT_EQ(backbone[2], NodeId{"grade.g0"});
+
+  // Wiring the neighbours together detaches grade.g0 in one exclusive-port connect.
+  auto detach_draft = EditorNodeGraphDraft::FromDocument(document);
+  const auto detach = detach_draft.Connect(before_g0, after_g0);
+  ASSERT_TRUE(detach.succeeded);
+  EXPECT_TRUE(detach.submission_valid);
+  ASSERT_TRUE(ApplyNodeGraphTopologyChange(document, detach_draft.MakeChange(),
+                                           PipelineEditApplyDirection::Forward).empty());
+  ASSERT_TRUE(document.Graph().IsDetachedColorGrade(NodeId{"grade.g0"}));
+  EXPECT_TRUE(document.Graph().ValidateImageBackbone().empty());
+
+  auto reconnect_draft = EditorNodeGraphDraft::FromDocument(document);
+  ASSERT_TRUE(reconnect_draft.SubmissionValid());
+  ASSERT_TRUE(reconnect_draft.Connect(before_g0, NodeId{"grade.g0"}).succeeded);
+  EXPECT_FALSE(reconnect_draft.SubmissionValid());
+  ASSERT_TRUE(reconnect_draft.Connect(NodeId{"grade.g0"}, after_g0).succeeded);
+  ASSERT_TRUE(reconnect_draft.SubmissionValid());
+  ASSERT_TRUE(ApplyNodeGraphTopologyChange(document, reconnect_draft.MakeChange(),
+                                           PipelineEditApplyDirection::Forward).empty());
+
+  EXPECT_EQ(document.Graph().ImageBackboneNodeIds(), backbone);
+  const auto* restored =
+      dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.g0"}));
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(restored->ToJson(), grade_json);
 }
 
 TEST(EditorNodeGraphDraft, LiveDeletionProtectionPreservesDraftAndPriorReversal) {
@@ -392,7 +438,8 @@ TEST(EditorNodeGraphDraft, LiveDeletionProtectionPreservesDraftAndPriorReversal)
     EXPECT_EQ(draft.Nodes(), nodes_before);
     EXPECT_EQ(draft.Edges(), edges_before);
     EXPECT_EQ(draft.NextColorGradeNameNumber(), counter_before);
-    EXPECT_FALSE(draft.SubmissionValid());
+    // The transient grade is detached, so the cached validity stays complete.
+    EXPECT_TRUE(draft.SubmissionValid());
     EXPECT_TRUE(draft.MakeChange().removed_nodes.empty());
     // Rejection must not overwrite the previous successful operation's reversal.
     draft.RestoreLastMutation();

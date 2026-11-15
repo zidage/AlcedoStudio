@@ -999,6 +999,12 @@ auto EditorSessionController::SubmitSetColorGradeEnabled(const alcedo::NodeId& n
   if (const QString refusal = UserStateChangeRefusalText(); !refusal.isEmpty()) {
     return RejectedResult(refusal);
   }
+  return RequestSetColorGradeEnabled(node_id, enabled);
+}
+
+auto EditorSessionController::RequestSetColorGradeEnabled(const alcedo::NodeId& node_id,
+                                                          bool                  enabled)
+    -> alcedo::EditorSessionResult {
   if (!session_backend_) {
     alcedo::EditorSessionResult result;
     result.kind    = alcedo::EditorSessionResultKind::Rejected;
