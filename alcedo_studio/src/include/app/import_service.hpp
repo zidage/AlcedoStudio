@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "app/raw_import_look_source.hpp"
 #include "app/sleeve_service.hpp"
 #include "concurrency/thread_pool.hpp"
 #include "image_pool_service.hpp"
@@ -157,16 +158,31 @@ class ImportService {
 class ImportServiceImpl final : public ImportService {
  public:
   ImportServiceImpl() = delete;
+  /// Import with the product Default RAW import look (@ref ProductDefaultRawImportLookSource).
   /// @throws std::invalid_argument when @p pipeline_service is null: every imported image gets
   ///         its history root at import, and only the pipeline service can create it.
   ImportServiceImpl(std::shared_ptr<SleeveServiceImpl>   fs_service,
                     std::shared_ptr<ImagePoolService>    image_pool_service,
                     std::shared_ptr<PipelineMgmtService> pipeline_service)
+      : ImportServiceImpl(std::move(fs_service), std::move(image_pool_service),
+                          std::move(pipeline_service),
+                          std::make_shared<const ProductDefaultRawImportLookSource>()) {}
+  /// @param raw_import_look_source Source of the look of each RAW history root, read once at the
+  ///        start of each import.
+  /// @throws std::invalid_argument when @p pipeline_service or @p raw_import_look_source is null.
+  ImportServiceImpl(std::shared_ptr<SleeveServiceImpl>          fs_service,
+                    std::shared_ptr<ImagePoolService>           image_pool_service,
+                    std::shared_ptr<PipelineMgmtService>        pipeline_service,
+                    std::shared_ptr<const RawImportLookSource> raw_import_look_source)
       : fs_service_(std::move(fs_service)),
         image_pool_service_(std::move(image_pool_service)),
-        pipeline_service_(std::move(pipeline_service)) {
+        pipeline_service_(std::move(pipeline_service)),
+        raw_import_look_source_(std::move(raw_import_look_source)) {
     if (!pipeline_service_) {
       throw std::invalid_argument("ImportServiceImpl: pipeline service is required");
+    }
+    if (!raw_import_look_source_) {
+      throw std::invalid_argument("ImportServiceImpl: RAW import look source is required");
     }
   }
 
@@ -180,6 +196,12 @@ class ImportServiceImpl final : public ImportService {
   /// the image's history root after metadata extraction succeeds.
   std::shared_ptr<PipelineMgmtService> pipeline_service_ = nullptr;
 
+ private:
+  /// Look of the RAW history roots (#918): settings in the application, the product Default in
+  /// tests and tools. ImportToFolder reads it once per import, on the caller's thread.
+  std::shared_ptr<const RawImportLookSource> raw_import_look_source_ = nullptr;
+
+ public:
   /// Metadata workers: open RAW headers, read the HDR probe bytes and encode history roots.
   /// The work is short file reads plus CPU, so it scales with the logical core count.
   ThreadPool thread_pool_{std::max<size_t>(8, std::thread::hardware_concurrency())};
@@ -206,6 +228,7 @@ class ImportServiceImpl final : public ImportService {
                                    const std::shared_ptr<ImportLog>&      import_log,
                                    const std::shared_ptr<ImportProgress>& progress,
                                    ImportCategoryMask                     allowed_categories,
-                                   const ImportPathSet&                   any_category_paths);
+                                   const ImportPathSet&                   any_category_paths,
+                                   const std::shared_ptr<const RawImportLook>& raw_import_look);
 };
 };  // namespace alcedo

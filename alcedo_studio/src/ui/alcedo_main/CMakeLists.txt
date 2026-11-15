@@ -378,6 +378,8 @@ target_link_libraries(AlbumBackendLib
         Qt6::QuickControls2
         ProjectService
         ImportService
+        # Import defaults settings: the look of RAW history roots (#918).
+        RawImportLookSettings
         ExportService
         PipelineMgmtService
         AdjustmentTransferService

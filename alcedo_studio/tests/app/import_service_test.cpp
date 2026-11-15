@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -16,6 +17,11 @@
 
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "app/raw_import_look_source.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "import_test_fixation.hpp"
 #include "type/type.hpp"
 
@@ -762,6 +768,61 @@ TEST_F(ImportServiceTests, ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoin
 
   EXPECT_TRUE(unsynced_after_sync.empty());
   EXPECT_TRUE(modified_after_sync.empty());
+}
+
+namespace {
+
+/// A RAW import look that differs from the product Default in every value (#918).
+class CustomRawImportLookSource final : public RawImportLookSource {
+ public:
+  [[nodiscard]] auto Read() const -> RawImportLook override {
+    ++reads_;
+    RawImportLook look;
+    look.exposure_ev          = 0.25f;
+    look.saturation           = 1.15f;
+    look.tone_curve_preset_id = "medium_contrast";
+    look.drt_method           = DrtMethod::Aces20;
+    look.open_drt_look_preset = "colorful";
+    look.lens_correction      = true;
+    return look;
+  }
+  mutable std::atomic<int> reads_{0};
+};
+
+}  // namespace
+
+TEST_F(ImportServiceTests, RawImportRootTakesTheLookOfTheSourceReadOncePerImport) {
+  ProjectService project(db_path_, meta_path_);
+  auto           pipeline = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto           source   = std::make_shared<CustomRawImportLookSource>();
+  std::unique_ptr<ImportService> import_service = std::make_unique<ImportServiceImpl>(
+      project.GetSleeveService(), project.GetImagePoolService(), pipeline, source);
+
+  std::vector<image_path_t> paths;
+  paths.push_back(TEST_IMG_PATH "/raw/airplane/_DSC1704.NEF");
+  auto                       import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> final_result;
+  auto                       final_result_future = final_result.get_future();
+  import_job->on_finished_ = [&final_result](const ImportResult& result) {
+    final_result.set_value(result);
+  };
+  import_job = import_service->ImportToFolder(paths, L"", {}, import_job);
+  ASSERT_NE(import_job, nullptr);
+  ASSERT_EQ(final_result_future.get().imported_, 1u);
+  EXPECT_EQ(source->reads_.load(), 1);
+
+  const auto snapshot = import_job->import_log_->Snapshot();
+  import_service->SyncImports(snapshot, L"");
+  ASSERT_EQ(snapshot.created_.size(), 1u);
+
+  const auto history = pipeline->LoadHistorySnapshot(snapshot.created_.front().element_id_);
+  ASSERT_NE(history.root_, nullptr);
+  const auto expected = CreateDefaultPipelineDocument(source->Read());
+  // Develop of the stored root also holds the RAW color context of the file; the grade and the
+  // DRT hold only the look.
+  EXPECT_EQ(history.root_->document.PrimaryGrade()->ToJson(), expected.PrimaryGrade()->ToJson());
+  EXPECT_EQ(history.root_->document.Drt()->ToJson(), expected.Drt()->ToJson());
+  EXPECT_TRUE(history.root_->document.Develop()->Params().LensEnabled());
 }
 
 };  // namespace alcedo

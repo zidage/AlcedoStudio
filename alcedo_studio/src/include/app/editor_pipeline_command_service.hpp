@@ -67,15 +67,19 @@ inline constexpr float kFilmPrintEntrySaturation = 1.0f;
  *
  * The negative and the print already give the colour of this method, so the saturation of the
  * RAW import look stays out of it (lab U80). The rule applies only when @p odt_before has another
- * method and @p odt_after has `film_print`, and only while the saturation is still
- * @ref kDefaultPipelineSaturation. A value that the user selected stays.
+ * method and @p odt_after has `film_print`, and only while the saturation still equals the
+ * saturation of Color Grade 1 of @p root_document (the import look of the image, #918) and that
+ * saturation is not @ref kFilmPrintEntrySaturation. A value that the user selected stays.
  *
+ * @param document Live document after the edit.
+ * @param root_document History root of the image.
  * @param odt_before Output transform JSON before the edit.
  * @param odt_after Output transform JSON after the edit.
  * @return The target to write @ref kFilmPrintEntrySaturation to, or nullopt when the rule does not
  *         apply.
  */
 [[nodiscard]] auto FilmPrintEntrySaturationTarget(const PipelineDocument& document,
+                                                  const PipelineDocument& root_document,
                                                   const nlohmann::json&   odt_before,
                                                   const nlohmann::json&   odt_after)
     -> std::optional<EditorParameterTarget>;
@@ -83,15 +87,16 @@ inline constexpr float kFilmPrintEntrySaturation = 1.0f;
 /**
  * @brief Default Grade curve that an `odt` edit resets when it turns on the film print.
  *
- * The Cl. Digit curve of the RAW import look (@ref kDefaultPipelineToneCurvePresetId) is the
- * Adobe tone on top of ACES 2.0; the negative and the print give the tone of the film print. The
- * rule applies on the entry of @ref FilmPrintEntrySaturationTarget, and only while the RGB curve
- * still has the points of the preset. The write sets the RGB curve to the identity; the channel
- * curves stay.
+ * The RGB curve of the RAW import look (Cl. Digit in the product Default) is a tone on top of the
+ * digital display transform; the negative and the print give the tone of the film print. The rule
+ * applies on the entry of @ref FilmPrintEntrySaturationTarget, and only while the RGB curve still
+ * has the points of the RGB curve of Color Grade 1 of @p root_document and those points are not
+ * the identity. The write sets the RGB curve to the identity; the channel curves stay.
  *
  * @return The `curve` target, or nullopt when the rule does not apply.
  */
 [[nodiscard]] auto FilmPrintEntryCurveTarget(const PipelineDocument& document,
+                                             const PipelineDocument& root_document,
                                              const nlohmann::json&   odt_before,
                                              const nlohmann::json&   odt_after)
     -> std::optional<EditorParameterTarget>;
@@ -121,17 +126,20 @@ struct EditorEntryResetWrite {
  *   it held. The profile curve and LookTable carry the camera's contrast and color, so the RAW
  *   import look stays out of them: contrast goes to @ref kProfileToneEntryContrast while it still
  *   equals @ref kImportLookContrastBeforeFilmLike (a document imported before #891), and
- *   saturation to @ref kProfileToneEntrySaturation while it still equals
- *   @ref kDefaultPipelineSaturation. Exposure is never written (the anchor of study section 3.3).
+ *   saturation to @ref kProfileToneEntrySaturation while it still equals the saturation of the
+ *   import look (Color Grade 1 of @p root_document) and that saturation is not
+ *   @ref kProfileToneEntrySaturation. Exposure is never written (the anchor of study section 3.3).
  * - Change (another profile curve or another method): the RGB curve takes the new points while it
  *   still has the points before.
  * - Exit (a followed curve before, none after): while the RGB curve still has the points before,
- *   it goes back to the RAW import look: the Cl. Digit preset, or the identity on Film Print.
+ *   it goes back to the RAW import look: the RGB curve of Color Grade 1 of @p root_document, or
+ *   the identity on Film Print.
  *
  * A curve that the user edited stays in a change and an exit. The channel curves always stay. A
  * document without `grade.primary` gets no write.
  *
  * @param document Live document after the edit; its Develop reference is bound by the write.
+ * @param root_document History root of the image: its Color Grade 1 holds the import look.
  * @param reference_before The Develop reference before the edit, bound when its identity is in
  *        the DCP library; an unbound reference followed no curve.
  * @param method_before The DRT method before the edit.
@@ -139,7 +147,7 @@ struct EditorEntryResetWrite {
  *         not change.
  */
 [[nodiscard]] auto ProfileToneCurveWrites(
-    const PipelineDocument&                        document,
+    const PipelineDocument& document, const PipelineDocument& root_document,
     const std::optional<DevelopCameraProfileFile>& reference_before, DrtMethod method_before)
     -> std::vector<EditorEntryResetWrite>;
 
@@ -151,13 +159,16 @@ struct EditorEntryResetWrite {
  *
  * The caller applies them in the history batch of the edit, so one Undo restores them with it.
  * @param document Live document after the edit.
+ * @param root_document History root of the image: the rules compare against its import look.
  * @param before Model JSON of the edited field before the edit.
  * @param after Model JSON of the edited field after the edit.
  * @return The writes; empty for another field or when no rule applies.
  * @throws std::exception when @p before holds a malformed `camera_profile_file` reference.
  */
-[[nodiscard]] auto EntryResetWrites(const PipelineDocument& document, std::string_view field_key,
-                                    const nlohmann::json& before, const nlohmann::json& after)
+[[nodiscard]] auto EntryResetWrites(const PipelineDocument& document,
+                                    const PipelineDocument& root_document,
+                                    std::string_view field_key, const nlohmann::json& before,
+                                    const nlohmann::json& after)
     -> std::vector<EditorEntryResetWrite>;
 
 /**

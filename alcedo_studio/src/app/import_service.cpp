@@ -35,12 +35,12 @@ auto IsRootImportDestination(const image_path_t& dest) -> bool {
 }
 
 /// Encode the immutable history root of a newly imported image on a private default document.
-/// A raster image gets the raster default document, which holds its color description in the
-/// Develop `input` object and has no RAW color context. No executor: nothing renders the
-/// document before its root exists.
+/// A RAW image gets the default document with @p raw_import_look. A raster image gets the raster
+/// default document, which holds its color description in the Develop `input` object and has no
+/// RAW color context. No executor: nothing renders the document before its root exists.
 auto EncodeImportedImageRoot(const PipelineMgmtService& pipeline_service,
-                             sl_element_id_t element_id, const std::shared_ptr<Image>& image)
-    -> EncodedImageRoot {
+                             sl_element_id_t element_id, const std::shared_ptr<Image>& image,
+                             const RawImportLook& raw_import_look) -> EncodedImageRoot {
   if (image && image->HasRasterColorDescription()) {
     return pipeline_service.EncodeImageRoot(
         element_id, CreateDefaultRasterPipelineDocument(image->GetRasterColorDescription()),
@@ -48,7 +48,8 @@ auto EncodeImportedImageRoot(const PipelineMgmtService& pipeline_service,
   }
   const RawRuntimeColorContext* ctx_ptr =
       image && image->HasRawColorContext() ? &image->GetRawColorContext() : nullptr;
-  return pipeline_service.EncodeImageRoot(element_id, CreateDefaultPipelineDocument(), ctx_ptr);
+  return pipeline_service.EncodeImageRoot(
+      element_id, CreateDefaultPipelineDocument(raw_import_look), ctx_ptr);
 }
 
 /// Number of encoded roots committed in one storage transaction. A commit flushes the DuckDB
@@ -232,10 +233,16 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
     return job;
   }
 
+  // One look for the whole import: a settings change while the import runs reaches the next
+  // import, so the images of one import share one root look. The metadata tasks share this
+  // immutable value until the last of them finishes.
+  auto raw_import_look = std::make_shared<const RawImportLook>(raw_import_look_source_->Read());
   submission_thread_.Submit([this, paths, dest, job, import_log, progress_ptr,
                              allowed   = options.allowed_categories_,
-                             any_paths = options.any_category_paths_]() {
-    CreatePlaceholdersAndSubmit(paths, dest, job, import_log, progress_ptr, allowed, any_paths);
+                             any_paths = options.any_category_paths_,
+                             raw_import_look = std::move(raw_import_look)]() {
+    CreatePlaceholdersAndSubmit(paths, dest, job, import_log, progress_ptr, allowed, any_paths,
+                                raw_import_look);
   });
   return job;
 }
@@ -244,7 +251,8 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     const std::vector<image_path_t>& paths, const image_path_t& dest,
     const std::shared_ptr<ImportJob>& job, const std::shared_ptr<ImportLog>& import_log,
     const std::shared_ptr<ImportProgress>& progress_ptr, ImportCategoryMask allowed_categories,
-    const ImportPathSet& any_category_paths) {
+    const ImportPathSet&                        any_category_paths,
+    const std::shared_ptr<const RawImportLook>& raw_import_look) {
   // TODO: Use sleeve service to interact with FS
   // The current implementation is a temporary solution
   auto       root_writer     = std::make_shared<ImportRootBatchWriter>();
@@ -342,7 +350,8 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     // The placeholder loop queues files much faster than the pool reads them, so a cancel
     // usually finds most tasks still queued: each one checks the job before reading its file.
     thread_pool_.Submit([image_handler_ptr, progress_ptr, job, import_log, element_id,
-                         pipeline_service, root_writer, file_categories, raw_extension]() {
+                         pipeline_service, root_writer, file_categories, raw_extension,
+                         raw_import_look]() {
       auto image_ptr = image_handler_ptr ? image_handler_ptr->Get() : nullptr;
       std::vector<ImportRootBatchWriter::PendingRoot> full_batch;
       bool                                            encoded     = false;
@@ -362,7 +371,8 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
                                                  file_categories);
           full_batch =
               root_writer->Add(image_ptr->image_id_, raw_extension,
-                               EncodeImportedImageRoot(*pipeline_service, element_id, image_ptr));
+                               EncodeImportedImageRoot(*pipeline_service, element_id, image_ptr,
+                                                       *raw_import_look));
           encoded = true;
         } catch (const MetadataExtractionError& e) {
           unsupported = e.code() == ImportErrorCode::UNSUPPORTED_FORMAT;

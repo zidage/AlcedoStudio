@@ -41,6 +41,17 @@ gtest_discover_tests(CameraProfileLibraryServiceTest TEST_PREFIX "CameraProfileL
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(CameraProfileLibraryServiceTest app ci_core)
 
+# RAW import look in QSettings (#918).
+add_executable(RawImportLookSettingsTest
+    ${ALCEDO_TEST_ROOT}/app/raw_import_look_settings_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
+target_include_directories(RawImportLookSettingsTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+    ${ALCEDO_TEST_ROOT})
+target_link_libraries(RawImportLookSettingsTest PRIVATE RawImportLookSettings GTest::gtest)
+gtest_discover_tests(RawImportLookSettingsTest TEST_PREFIX "RawImportLookSettingsTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(RawImportLookSettingsTest app ci_core)
+
 add_executable(LutPackageServiceTest
     ${ALCEDO_TEST_ROOT}/app/lut_package_service_test.cpp
     ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
