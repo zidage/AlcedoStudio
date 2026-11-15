@@ -1124,6 +1124,39 @@ alcedo_ui_gtest_discover_tests(LibraryColorLabelSettingsQmlTest
 )
 alcedo_register_test_target(LibraryColorLabelSettingsQmlTest ui)
 
+# Settings > Default Behavior > RAW Import (#920) on the production SettingDialog and module host:
+# the rows follow the section model, the preview takes no input, and Done writes the look.
+add_executable(RawImportLookSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/raw_import_look_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(RawImportLookSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(RawImportLookSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        RawImportLookSettings
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(RawImportLookSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(RawImportLookSettingsQmlTest
+    TEST_PREFIX "RawImportLookSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;settings;import_look"
+)
+alcedo_register_test_target(RawImportLookSettingsQmlTest ui)
+
 # Settings > About and the Settings type scale (#824) on the production SettingDialog and module
 # host: Open Log Folder with a file-manager stand-in, theme type tokens on every page, and the
 # README acknowledgement links on About.
@@ -1608,6 +1641,31 @@ alcedo_ui_gtest_discover_tests(EditorNodeSelectionLayoutTest
     TEST_PREFIX "EditorNodeSelectionLayoutTest."
     PROPERTIES LABELS "editor_nodes;workspace_qml")
 alcedo_register_test_target(EditorNodeSelectionLayoutTest ui)
+
+# The RAW Import section model of Settings (#920): stored look, pending edits, apply as setters and
+# key removals, rejected values, and the curve line of each Tone Curve preset.
+add_executable(RawImportLookSettingsModelTest
+    ${ALCEDO_TEST_ROOT}/ui/raw_import_look_settings_model_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(RawImportLookSettingsModelTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(RawImportLookSettingsModelTest
+    PRIVATE
+        AlbumBackendLib
+        RawImportLookSettings
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(RawImportLookSettingsModelTest
+    TEST_PREFIX "RawImportLookSettingsModelTest."
+    PROPERTIES LABELS "settings;import_look")
+alcedo_register_test_target(RawImportLookSettingsModelTest ui)
 
 add_executable(MaskThumbnailCoordinatorTest
     ${ALCEDO_TEST_ROOT}/ui/mask_thumbnail_coordinator_test.cpp

@@ -489,6 +489,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("EditorBehaviorPreferences", editor_behavior_.get());
   library_view_ = std::make_unique<LibraryViewPreferences>(this);
   RecordConstruction("LibraryViewPreferences", library_view_.get());
+  // The application QSettings, which the import service of project_handler.cpp reads.
+  raw_import_look_ = std::make_unique<RawImportLookSettingsModel>(QString{}, this);
+  RecordConstruction("RawImportLookSettingsModel", raw_import_look_.get());
   log_folder_ = std::make_unique<LogFolderController>(this);
   RecordConstruction("LogFolderController", log_folder_.get());
   project_launch_ = std::make_unique<ProjectLaunchCoordinator>(project_.get(), this);
@@ -747,6 +750,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(application_close_, "ApplicationCloseCoordinator");
   destroy(project_launch_, "ProjectLaunchCoordinator");
   destroy(log_folder_, "LogFolderController");
+  destroy(raw_import_look_, "RawImportLookSettingsModel");
   destroy(library_view_, "LibraryViewPreferences");
   destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");

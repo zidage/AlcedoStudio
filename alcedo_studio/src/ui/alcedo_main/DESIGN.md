@@ -9,7 +9,7 @@ Implementation source of truth: `AppTheme` (`app_theme.hpp` / `app_theme.cpp`)
 Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `DialogActionButton.qml`, `IconButton.qml`, `SegmentedCardSwitcher.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
-`AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
+`AdjustmentSlider.qml`, `AlcedoSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
 `ThemeSwitch.qml`, `SkeletonBlock.qml`, `StaggeredGridLoader.qml`,
 `StaggeredGridMark.qml`, `AlertBadge.qml`
 
@@ -1636,6 +1636,7 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
 | `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive; per-entry `stretch` (default 1) sets the width share of a segment; `titlePixelSize` (default `fontSizeBody`) sets the title size |
 | `AdjustmentSlider.qml` | Shared numeric slider + field bound to `EditorAdjustmentValueModel` |
+| `AlcedoSlider.qml` | Shared numeric slider (#922): recessed 18 px rail with a 6 x 12 px handle inset 2 px (the handle stays inside the rail), fill from the origin, 1 px mark at the app default, and a value field (data font, tabular figures; muted at the default) that drags (1 px = 1 step, Shift x10) and edits on click. The rail covers the soft range; typing, value drag, and arrow keys reach the hard range, and the fill end is hatched beyond the soft range. A double-click on the label or the rail resets; there is no reset button. Layouts `inline` and `stacked`. Used by Settings > RAW Import; #922 moves the other sliders to it |
 | `ThemedProgressBar.qml` | Shared determinate / indeterminate progress track (Background Tasks, Export, Settings tiles); detail text in Manrope with tabular figures |
 | `BentoTile.qml` | Settings bento surface (radius 14, `cardSurfaceColor`, `cardBorderColor`, 22 px padding) |
 | `CountTile.qml` | Bento tile with one large count; optional short form for large counts with the exact count below |
