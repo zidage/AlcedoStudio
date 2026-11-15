@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QColor>
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QFont>
@@ -19,6 +20,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlError>
+#include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -27,6 +29,7 @@
 #include <QTest>
 #include <QVariantMap>
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -281,6 +284,149 @@ TEST(EditorAdjustmentSnapshotQmlTest, LookHlsLoadsCatalogUiValuesAndRanges) {
   EXPECT_EQ(range("lookHlsLightnessSlider"), (std::pair{-100.0, 100.0}));
   EXPECT_EQ(range("lookHlsChromaSlider"), (std::pair{-100.0, 100.0}));
   EXPECT_EQ(range("lookHlsSmoothnessSlider"), (std::pair{1.0, 180.0}));
+}
+
+// #922: Shadows takes +150 and Highlights -150 past their +-100 soft limits; the rail shows the
+// extra zone on that side only.
+TEST(EditorAdjustmentSnapshotQmlTest, ToneShadowsAndHighlightsTakeTheExtendedValues) {
+  SnapshotSession              session(QVariantMap{}, 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  struct Case {
+    const char* slider;
+    const char* field;
+    double      typed;
+    bool        extra_low;
+    bool        extra_high;
+  };
+  for (const Case& c : {Case{"toneShadowsSlider", "shadows", 150.0, false, true},
+                        Case{"toneHighlightsSlider", "highlights", -150.0, true, false}}) {
+    auto* slider = harness.root()->findChild<QObject*>(QString::fromLatin1(c.slider));
+    ASSERT_NE(slider, nullptr) << c.slider;
+    EXPECT_DOUBLE_EQ(slider->property("softFrom").toDouble(), -100.0) << c.slider;
+    EXPECT_DOUBLE_EQ(slider->property("softTo").toDouble(), 100.0) << c.slider;
+    auto* rail = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
+    ASSERT_NE(rail, nullptr) << c.slider;
+    // The extra zones are Repeater delegates: look them up in the item tree.
+    const auto zone_visible = [rail](const char* name) {
+      for (QQuickItem* child : rail->childItems()) {
+        if (child->objectName() == QLatin1String(name)) return child->isVisible();
+      }
+      ADD_FAILURE() << "no " << name;
+      return false;
+    };
+    EXPECT_EQ(zone_visible("adjustmentSliderExtraLow"), c.extra_low) << c.slider;
+    EXPECT_EQ(zone_visible("adjustmentSliderExtraHigh"), c.extra_high) << c.slider;
+
+    // A typed value: the field emits valueEntered with the value limited to [from, to].
+    ASSERT_TRUE(QMetaObject::invokeMethod(slider, "valueEntered", Q_ARG(double, c.typed)));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(session.lastScalarField(), QString::fromLatin1(c.field));
+    EXPECT_FLOAT_EQ(session.lastScalarValue(), static_cast<float>(c.typed)) << c.slider;
+    EXPECT_DOUBLE_EQ(slider->property("value").toDouble(), c.typed) << c.slider;
+    EXPECT_TRUE(slider->property("beyondSoftRange").toBool()) << c.slider;
+  }
+}
+
+// Every expanded card holds its whole content: the section body adds its insets to the height of
+// the content column, so the last control (Tone Blacks, Selective Color Hue Smoothness) is not
+// cut by the card below.
+TEST(EditorAdjustmentSnapshotQmlTest, ExpandedCardsHoldTheirWholeContent) {
+  SnapshotSession              session(QVariantMap{}, 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  const auto body_of = [](QQuickItem* item) -> QQuickItem* {
+    for (QQuickItem* parent = item; parent != nullptr; parent = parent->parentItem()) {
+      if (parent->objectName() == QLatin1String("collapsibleSectionBody")) {
+        return parent;
+      }
+    }
+    return nullptr;
+  };
+  for (const char* name : {"toneBlacksSlider", "lookHlsSmoothnessSlider"}) {
+    auto* slider = harness.root()->findChild<QQuickItem*>(QString::fromLatin1(name));
+    ASSERT_NE(slider, nullptr) << name;
+    auto* body = body_of(slider);
+    ASSERT_NE(body, nullptr) << name;
+    const QPointF bottom = slider->mapToItem(body, QPointF(0, slider->height()));
+    EXPECT_LE(bottom.y() + 4.0, body->height())
+        << name << " ends at " << bottom.y() << " in a body of " << body->height();
+  }
+
+  int checked = 0;
+  for (auto* body : harness.root()->findChildren<QQuickItem*>(
+           QStringLiteral("collapsibleSectionBody"))) {
+    auto* section = body->parentItem();
+    while (section != nullptr && !section->property("foldProgress").isValid()) {
+      section = section->parentItem();
+    }
+    if (section == nullptr || section->property("foldProgress").toReal() < 0.999) {
+      continue;
+    }
+    auto* content = body->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionBodyContent"));
+    ASSERT_NE(content, nullptr);
+    for (QQuickItem* column : content->childItems()) {
+      // Cards of the panels that are not shown keep their layout, so they count too.
+      if (column->height() <= 0.0) {
+        continue;
+      }
+      const QPointF bottom = column->mapToItem(body, QPointF(0, column->height()));
+      EXPECT_LE(bottom.y(), body->height() + 0.5) << section->objectName().toStdString();
+      ++checked;
+    }
+  }
+  EXPECT_GT(checked, 5);
+}
+
+// #922: the Selective Color rails show the selected hue: Hue Shift its hue band, Lightness dark
+// to light, Chroma grey to full color. A new hue selection recolors them.
+TEST(EditorAdjustmentSnapshotQmlTest, LookHlsRailsFollowTheSelectedHue) {
+  SnapshotSession              session(QVariantMap{}, 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model = harness.root()->findChild<QObject*>(QStringLiteral("lookHlsModel"));
+  ASSERT_NE(model, nullptr);
+
+  const auto stop_color = [&](const char* slider_name, int stop) -> QColor {
+    auto* slider = harness.root()->findChild<QObject*>(QString::fromLatin1(slider_name));
+    EXPECT_NE(slider, nullptr) << slider_name;
+    if (slider == nullptr) {
+      return {};
+    }
+    QQmlExpression expression(qmlContext(slider), slider,
+                              QStringLiteral("railGradient.stops[%1].color").arg(stop));
+    const QVariant color = expression.evaluate();
+    EXPECT_FALSE(expression.hasError()) << expression.error().toString().toStdString();
+    return color.value<QColor>();
+  };
+  const auto hsl = [](double hue, double saturation, double lightness) {
+    return QColor::fromHslF(static_cast<float>(hue / 360.0), static_cast<float>(saturation),
+                            static_cast<float>(lightness));
+  };
+  const auto expect_near = [](const QColor& actual, const QColor& expected, const char* what) {
+    EXPECT_NEAR(actual.redF(), expected.redF(), 0.01) << what;
+    EXPECT_NEAR(actual.greenF(), expected.greenF(), 0.01) << what;
+    EXPECT_NEAR(actual.blueF(), expected.blueF(), 0.01) << what;
+  };
+
+  for (const int index : {2, 5}) {
+    ASSERT_TRUE(QMetaObject::invokeMethod(model, "selectHueIndex", Q_ARG(int, index)));
+    QCoreApplication::processEvents();
+    const double hue = model->property("targetHue").toDouble();
+    // A positive Hue Shift raises the hue; the kernels turn the hue by 2.25 x the value, so the
+    // -30 .. +30 rail runs from the hue -67.5 to +67.5 degrees.
+    expect_near(stop_color("lookHlsHueShiftSlider", 0),
+                hsl(std::fmod(hue - 67.5 + 360.0, 360.0), 1, 0.5), "hue shift left end");
+    expect_near(stop_color("lookHlsHueShiftSlider", 2), hsl(hue, 1, 0.5), "hue shift center");
+    expect_near(stop_color("lookHlsHueShiftSlider", 4), hsl(std::fmod(hue + 67.5, 360.0), 1, 0.5),
+                "hue shift right end");
+    expect_near(stop_color("lookHlsLightnessSlider", 0), hsl(hue, 1, 0.1), "lightness left end");
+    expect_near(stop_color("lookHlsLightnessSlider", 2), hsl(hue, 1, 0.9), "lightness right end");
+    expect_near(stop_color("lookHlsChromaSlider", 0), hsl(hue, 0, 0.5), "chroma left end");
+    expect_near(stop_color("lookHlsChromaSlider", 2), hsl(hue, 1, 0.5), "chroma right end");
+  }
 }
 
 TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveSectionLoadsFourCurvesAndMarksTheChangedChannels) {

@@ -24,23 +24,28 @@ Item {
     readonly property color colCardBorder: theme ? theme.colCardBorder : appTheme.cardBorderColor
     readonly property color colBase: theme ? theme.colBgBase : appTheme.bgBaseColor
     readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
-    // Monochrome slider chrome (shared with AdjustmentSlider).
-    readonly property color colTrack: "#2C2D2F"
     readonly property color colFill: "#D8D4CD"
-    readonly property color colHandle: "#F5F1EA"
-    readonly property color colHandleBorder: "#1A1B1C"
-    readonly property int handleSize: 22
-    readonly property int sliderRowHeight: 32
     // Slider ranges of the HLS and color wheel controls, in UI units.
     readonly property var hlsHueShiftSpec: parameterCatalog.propertySpec("hls", "hue_shift")
+    /// The Grade kernels (ApplyHls in primary_grade.cl / .metal / cuda_primary_grade_pass.cu)
+    /// turn the YIQ chroma by 2.25 x the Hue Shift value: +30 moves the hue by about 65 degrees.
+    readonly property real hlsHueShiftAngleScale: 2.25
     readonly property var hlsLightnessSpec: parameterCatalog.propertySpec("hls", "lightness")
     readonly property var hlsChromaSpec: parameterCatalog.propertySpec("hls", "chroma")
     readonly property var hlsSmoothnessSpec: parameterCatalog.propertySpec("hls", "hue_smoothness")
+    readonly property var hlsDefault: parameterCatalog.uiDefault("hls")
     readonly property var cdlMasterSpec: parameterCatalog.propertySpec("color_wheel", "lift_master")
 
     EditorParameterCatalog {
         id: parameterCatalog
         objectName: "lookParameterCatalog"
+    }
+
+    /// Selective Color rail color: the selected hue turned by @p hueOffset degrees, at HSL
+    /// @p saturation and @p lightness. The hue swatches are hsl(hue, 1, 0.5).
+    function hlsRailColor(hueOffset, saturation, lightness) {
+        const hue = ((hlsModel.targetHue + hueOffset) % 360 + 360) % 360
+        return Qt.hsla(hue / 360, saturation, lightness, 1)
     }
 
     function wireEnabled() {
@@ -186,233 +191,6 @@ Item {
         }
     }
 
-    // Generic monochrome slider for Look-only controls (CCT/tint/HSL/master).
-    // Owns its value during press (no model→value binding fight). Double-click
-    // without movement resets. Locks lookScroll while pressed. Pointer drag uses
-    // the same relative mapping as AdjustmentSlider (pointerGain).
-    component MonoSlider: Slider {
-        id: mono
-        property var gradientStops: null
-        property var onBegin: function () {}
-        property var onUpdate: function (v) {}
-        property var onFinish: function () {}
-        property var onReset: function () {}
-        // External load value; applied only when not pressed.
-        property real externalValue: 0
-        /// Full-track mouse travel maps to this fraction of the value range.
-        property real pointerGain: 1.0
-
-        property bool _pointerMoved: false
-        property real _pressValue: 0
-        property real _pressLocalX: 0
-        property double _lastClickMs: 0
-        property bool _scrollLocked: false
-        property bool _handleDragging: false
-
-        from: 0
-        to: 1
-        stepSize: 1
-        live: true
-        touchDragThreshold: 0
-        snapMode: Slider.SnapAlways
-        padding: 0
-        leftPadding: 0
-        rightPadding: 0
-        topPadding: 0
-        bottomPadding: 0
-        // Controls.Slider absolute seek is disabled; MouseArea owns pointer drag.
-        hoverEnabled: false
-        Layout.fillWidth: true
-        Layout.preferredHeight: root.sliderRowHeight
-        implicitHeight: root.sliderRowHeight
-        // Seed once via Component.onCompleted / externalValue — do not bind
-        // `value: externalValue` permanently (that fights continuous drag and
-        // can leave the handle stale after reset once the binding is broken).
-        Component.onCompleted: value = externalValue
-
-        onExternalValueChanged: {
-            if (!_handleDragging)
-                value = externalValue
-        }
-
-        function lockScroll(lock) {
-            if (!lookScroll)
-                return
-            if (lock) {
-                if (!_scrollLocked) {
-                    lookScroll.beginInputLock()
-                    _scrollLocked = true
-                }
-            } else if (_scrollLocked) {
-                lookScroll.endInputLock()
-                _scrollLocked = false
-            }
-        }
-
-        function syncFromExternal() {
-            value = externalValue
-        }
-
-        function handleCenterX() {
-            return mono.leftPadding
-                    + mono.visualPosition * (mono.availableWidth - root.handleSize)
-                    + root.handleSize * 0.5
-        }
-
-        function isNearHandle(localX) {
-            return Math.abs(localX - handleCenterX())
-                    <= Math.max(root.handleSize * 0.5 + 12, 16)
-        }
-
-        function valueFromDragDelta(localX) {
-            var trackW = Math.max(1e-6, mono.availableWidth - root.handleSize)
-            var dx = localX - mono._pressLocalX
-            var range = mono.to - mono.from
-            var v = mono._pressValue + (dx / trackW) * range * mono.pointerGain
-            if (mono.stepSize > 0)
-                v = Math.round(v / mono.stepSize) * mono.stepSize
-            return Math.max(mono.from, Math.min(mono.to, v))
-        }
-
-        function finishPointerPress() {
-            var now = Date.now()
-            var isDouble = !_pointerMoved
-                    && (now - _lastClickMs) < 350
-                    && Math.abs(value - _pressValue) <= Math.max(stepSize * 0.5, 1e-9)
-            _lastClickMs = now
-            lockScroll(false)
-            if (isDouble && enabled) {
-                onReset()
-                syncFromExternal()
-            } else if (_handleDragging) {
-                onFinish()
-                syncFromExternal()
-            }
-            _handleDragging = false
-        }
-
-        background: Rectangle {
-            readonly property real edge: root.handleSize * 0.5
-            x: mono.leftPadding + edge
-            y: mono.topPadding + mono.availableHeight / 2 - height / 2
-            width: Math.max(0, mono.availableWidth - root.handleSize)
-            height: 6
-            radius: 3
-            color: root.colTrack
-            border.width: mono.gradientStops ? 1 : 0
-            border.color: root.colCardBorder
-            gradient: mono.gradientStops
-
-            Rectangle {
-                visible: mono.gradientStops === null
-                x: 0
-                y: 0
-                width: mono.visualPosition * parent.width
-                height: parent.height
-                radius: 3
-                color: root.colFill
-            }
-        }
-        handle: Rectangle {
-            x: mono.leftPadding + mono.visualPosition * (mono.availableWidth - width)
-            y: mono.topPadding + mono.availableHeight / 2 - height / 2
-            width: root.handleSize
-            height: root.handleSize
-            radius: width / 2
-            color: root.colHandle
-            border.width: 1
-            border.color: root.colHandleBorder
-        }
-
-        MouseArea {
-            anchors.fill: parent
-            enabled: mono.enabled
-            preventStealing: true
-            hoverEnabled: false
-            acceptedButtons: Qt.LeftButton
-            cursorShape: mono._handleDragging ? Qt.ClosedHandCursor : Qt.ArrowCursor
-
-            onPressed: function (mouse) {
-                mono._pointerMoved = false
-                mono._pressValue = mono.value
-                mono._pressLocalX = mouse.x
-                mono.lockScroll(true)
-                if (mono.isNearHandle(mouse.x)) {
-                    mono._handleDragging = true
-                    mono.onBegin()
-                } else {
-                    mono._handleDragging = false
-                }
-                mouse.accepted = true
-            }
-            onPositionChanged: function (mouse) {
-                if (!mono._handleDragging)
-                    return
-                mono._pointerMoved = true
-                var v = mono.valueFromDragDelta(mouse.x)
-                mono.value = v
-                mono.onUpdate(v)
-            }
-            onReleased: function (/*mouse*/) {
-                mono.finishPointerPress()
-            }
-            onCanceled: {
-                if (mono._handleDragging)
-                    mono.onFinish()
-                mono._handleDragging = false
-                mono.lockScroll(false)
-            }
-        }
-    }
-
-    component MonoSliderRow: ColumnLayout {
-        id: row
-        property string title: ""
-        property string valueText: ""
-        property real from: 0
-        property real to: 100
-        property real value: 0
-        property var gradientStops: null
-        property bool rowEnabled: true
-        property var onBegin: function () {}
-        property var onUpdate: function (v) {}
-        property var onFinish: function () {}
-        property var onReset: function () {}
-
-        Layout.fillWidth: true
-        spacing: 2
-
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(16, lookRowTitle.implicitHeight)
-            spacing: 8
-            Text {
-                id: lookRowTitle
-                Layout.fillWidth: true
-                text: row.title
-                color: root.colText
-                font.pixelSize: appTheme.fontSizeCaption
-                wrapMode: Text.Wrap
-            }
-            Text {
-                text: row.valueText
-                color: root.colMuted
-                font.pixelSize: appTheme.fontSizeCaption
-            }
-        }
-        MonoSlider {
-            from: row.from
-            to: row.to
-            externalValue: row.value
-            enabled: row.rowEnabled
-            gradientStops: row.gradientStops
-            onBegin: function () { row.onBegin() }
-            onUpdate: function (v) { row.onUpdate(v) }
-            onFinish: function () { row.onFinish() }
-            onReset: function () { row.onReset() }
-        }
-    }
-
     // Master value of one wheel, in stops.
     component MasterSlider: ColumnLayout {
         id: masterRoot
@@ -421,32 +199,24 @@ Item {
         Layout.fillWidth: true
         spacing: 2
 
-        RowLayout {
-            Layout.alignment: Qt.AlignHCenter
-            spacing: appTheme.spaceXs
-            Text {
-                text: qsTr("Master")
-                color: root.colMuted
-                font.pixelSize: appTheme.fontSizeCaption
-            }
-            EditorInfoHint {
-                text: qsTr("Changes the brightness of this tonal range, in stops (EV).")
-            }
-        }
-        MonoSlider {
+        EditorDragSlider {
+            objectName: "lookCdlMasterSlider_" + masterRoot.wheelRole
+            partName: "lookCdlMaster"
+            label: qsTr("Master")
+            infoText: qsTr("Changes the brightness of this tonal range, in stops (EV).")
+            valueFieldWidth: 52
+            spacing: 6
             from: root.cdlMasterSpec.ui_min
             to: root.cdlMasterSpec.ui_max
             stepSize: root.cdlMasterSpec.ui_step
-            externalValue: masterRoot.value
+            precision: root.cdlMasterSpec.ui_decimals
+            defaultValue: 0
+            value: masterRoot.value
             enabled: root.controlsEnabled
-            onBegin: function () { cdlModel.beginMasterDrag(masterRoot.wheelRole) }
-            onUpdate: function (v) { cdlModel.updateMasterDrag(masterRoot.wheelRole, v) }
-            onFinish: function () { cdlModel.finishMasterDrag() }
-            onReset: function () {
-                cdlModel.beginMasterDrag(masterRoot.wheelRole)
-                cdlModel.updateMasterDrag(masterRoot.wheelRole, 0)
-                cdlModel.finishMasterDrag()
-            }
+            flickable: lookScroll
+            beginEdit: function () { cdlModel.beginMasterDrag(masterRoot.wheelRole) }
+            updateEdit: function (v) { cdlModel.updateMasterDrag(masterRoot.wheelRole, v) }
+            finishEdit: function () { cdlModel.finishMasterDrag() }
         }
     }
 
@@ -623,6 +393,8 @@ Item {
                         temperature: gradeWhiteBalanceModel.temperature
                         temperatureSliderPos: gradeWhiteBalanceModel.temperatureSliderPos
                         tint: gradeWhiteBalanceModel.tint
+                        temperatureDefault: gradeWhiteBalanceModel.defaultTemperature
+                        tintDefault: gradeWhiteBalanceModel.defaultTint
                         onTemperatureDragBegin: gradeWhiteBalanceModel.beginTemperatureDrag()
                         onTemperatureDragUpdate: function (pos) {
                             gradeWhiteBalanceModel.updateTemperatureSliderDrag(pos)
@@ -696,57 +468,100 @@ Item {
                         }
                     }
 
-                    MonoSliderRow {
+                    // The rails show what each slider does to the selected hue: the hue
+                    // that each Hue Shift gives (a positive shift raises the hue, red
+                    // toward yellow), dark to light for Lightness, grey to full color for
+                    // Chroma.
+                    EditorDragSlider {
                         objectName: "lookHlsHueShiftSlider"
-                        title: qsTr("Hue Shift")
-                        valueText: Math.round(hlsModel.hueShift) + "°"
+                        partName: "lookHlsHueShift"
+                        label: qsTr("Hue Shift")
                         from: root.hlsHueShiftSpec.ui_min
                         to: root.hlsHueShiftSpec.ui_max
+                        stepSize: root.hlsHueShiftSpec.ui_step
+                        precision: root.hlsHueShiftSpec.ui_decimals
+                        suffix: "°"
+                        defaultValue: 0
                         value: hlsModel.hueShift
-                        rowEnabled: root.controlsEnabled
-                        onBegin: function () { hlsModel.beginHueShiftDrag() }
-                        onUpdate: function (v) { hlsModel.updateHueShiftDrag(v) }
-                        onFinish: function () { hlsModel.finishHueShiftDrag() }
-                        onReset: function () { hlsModel.resetActiveField("hueShift") }
+                        enabled: root.controlsEnabled
+                        flickable: lookScroll
+                        railGradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_min * root.hlsHueShiftAngleScale, 1.0, 0.5) }
+                            GradientStop { position: 0.25; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_min / 2 * root.hlsHueShiftAngleScale, 1.0, 0.5) }
+                            GradientStop { position: 0.5; color: root.hlsRailColor(0, 1.0, 0.5) }
+                            GradientStop { position: 0.75; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_max / 2 * root.hlsHueShiftAngleScale, 1.0, 0.5) }
+                            GradientStop { position: 1.0; color: root.hlsRailColor(root.hlsHueShiftSpec.ui_max * root.hlsHueShiftAngleScale, 1.0, 0.5) }
+                        }
+                        beginEdit: function () { hlsModel.beginHueShiftDrag() }
+                        updateEdit: function (v) { hlsModel.updateHueShiftDrag(v) }
+                        finishEdit: function () { hlsModel.finishHueShiftDrag() }
+                        resetEdit: function () { hlsModel.resetActiveField("hueShift") }
                     }
-                    MonoSliderRow {
+                    EditorDragSlider {
                         objectName: "lookHlsLightnessSlider"
-                        title: qsTr("Lightness")
-                        valueText: String(Math.round(hlsModel.lightness))
+                        partName: "lookHlsLightness"
+                        label: qsTr("Lightness")
                         from: root.hlsLightnessSpec.ui_min
                         to: root.hlsLightnessSpec.ui_max
+                        stepSize: root.hlsLightnessSpec.ui_step
+                        precision: root.hlsLightnessSpec.ui_decimals
+                        defaultValue: 0
                         value: hlsModel.lightness
-                        rowEnabled: root.controlsEnabled
-                        onBegin: function () { hlsModel.beginLightnessDrag() }
-                        onUpdate: function (v) { hlsModel.updateLightnessDrag(v) }
-                        onFinish: function () { hlsModel.finishLightnessDrag() }
-                        onReset: function () { hlsModel.resetActiveField("lightness") }
+                        enabled: root.controlsEnabled
+                        flickable: lookScroll
+                        railGradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: root.hlsRailColor(0, 1.0, 0.1) }
+                            GradientStop { position: 0.5; color: root.hlsRailColor(0, 1.0, 0.5) }
+                            GradientStop { position: 1.0; color: root.hlsRailColor(0, 1.0, 0.9) }
+                        }
+                        beginEdit: function () { hlsModel.beginLightnessDrag() }
+                        updateEdit: function (v) { hlsModel.updateLightnessDrag(v) }
+                        finishEdit: function () { hlsModel.finishLightnessDrag() }
+                        resetEdit: function () { hlsModel.resetActiveField("lightness") }
                     }
-                    MonoSliderRow {
+                    EditorDragSlider {
                         objectName: "lookHlsChromaSlider"
-                        title: qsTr("Chroma")
-                        valueText: String(Math.round(hlsModel.chroma))
+                        partName: "lookHlsChroma"
+                        label: qsTr("Chroma")
                         from: root.hlsChromaSpec.ui_min
                         to: root.hlsChromaSpec.ui_max
+                        stepSize: root.hlsChromaSpec.ui_step
+                        precision: root.hlsChromaSpec.ui_decimals
+                        defaultValue: 0
                         value: hlsModel.chroma
-                        rowEnabled: root.controlsEnabled
-                        onBegin: function () { hlsModel.beginChromaDrag() }
-                        onUpdate: function (v) { hlsModel.updateChromaDrag(v) }
-                        onFinish: function () { hlsModel.finishChromaDrag() }
-                        onReset: function () { hlsModel.resetActiveField("chroma") }
+                        enabled: root.controlsEnabled
+                        flickable: lookScroll
+                        railGradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: root.hlsRailColor(0, 0.0, 0.5) }
+                            GradientStop { position: 0.5; color: root.hlsRailColor(0, 0.55, 0.5) }
+                            GradientStop { position: 1.0; color: root.hlsRailColor(0, 1.0, 0.5) }
+                        }
+                        beginEdit: function () { hlsModel.beginChromaDrag() }
+                        updateEdit: function (v) { hlsModel.updateChromaDrag(v) }
+                        finishEdit: function () { hlsModel.finishChromaDrag() }
+                        resetEdit: function () { hlsModel.resetActiveField("chroma") }
                     }
-                    MonoSliderRow {
+                    EditorDragSlider {
                         objectName: "lookHlsSmoothnessSlider"
-                        title: qsTr("Hue Smoothness")
-                        valueText: Math.round(hlsModel.hueSmoothness) + "°"
+                        partName: "lookHlsSmoothness"
+                        label: qsTr("Hue Smoothness")
                         from: root.hlsSmoothnessSpec.ui_min
                         to: root.hlsSmoothnessSpec.ui_max
+                        stepSize: root.hlsSmoothnessSpec.ui_step
+                        precision: root.hlsSmoothnessSpec.ui_decimals
+                        suffix: "°"
+                        defaultValue: root.hlsDefault.hue_smoothness
+                                      ? root.hlsDefault.hue_smoothness[0] : from
                         value: hlsModel.hueSmoothness
-                        rowEnabled: root.controlsEnabled
-                        onBegin: function () { hlsModel.beginHueSmoothnessDrag() }
-                        onUpdate: function (v) { hlsModel.updateHueSmoothnessDrag(v) }
-                        onFinish: function () { hlsModel.finishHueSmoothnessDrag() }
-                        onReset: function () { hlsModel.resetActiveField("hueSmoothness") }
+                        enabled: root.controlsEnabled
+                        flickable: lookScroll
+                        beginEdit: function () { hlsModel.beginHueSmoothnessDrag() }
+                        updateEdit: function (v) { hlsModel.updateHueSmoothnessDrag(v) }
+                        finishEdit: function () { hlsModel.finishHueSmoothnessDrag() }
+                        resetEdit: function () { hlsModel.resetActiveField("hueSmoothness") }
                     }
                 }
             }

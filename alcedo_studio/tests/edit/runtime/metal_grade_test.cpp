@@ -127,15 +127,17 @@ auto ApplyHls(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   const float adj_s = sum_s / sum_weight;
   if (std::fabs(adj_h) <= 1.0e-6f && std::fabs(adj_l) <= 1.0e-6f && std::fabs(adj_s) <= 1.0e-6f)
     return c;
-  const float     angle = adj_h * 2.25f * 0.017453292519943295f;
+  // A positive Hue Shift lowers the YIQ angle (raises the hue); only the change of I and Q goes
+  // back to RGB.
+  const float     angle = -adj_h * 2.25f * 0.017453292519943295f;
   const float     scale = std::exp2(adj_s * 2.25f * (adj_s >= 0.0f ? 4.5f : 3.25f));
-  const float     luma  = Luma(c) + adj_l * 1.125f;
+  const float     lift  = adj_l * 1.125f;
   const float     i     = 0.596f * c.r - 0.274f * c.g - 0.322f * c.b;
   const float     q     = 0.211f * c.r - 0.523f * c.g + 0.312f * c.b;
-  const float     ri    = (i * std::cos(angle) - q * std::sin(angle)) * scale;
-  const float     rq    = (i * std::sin(angle) + q * std::cos(angle)) * scale;
-  return {luma + 0.956f * ri + 0.621f * rq, luma - 0.272f * ri - 0.647f * rq,
-          luma - 1.106f * ri + 1.703f * rq, c.a};
+  const float     di    = (i * std::cos(angle) - q * std::sin(angle)) * scale - i;
+  const float     dq    = (i * std::sin(angle) + q * std::cos(angle)) * scale - q;
+  return {c.r + lift + 0.956f * di + 0.621f * dq, c.g + lift - 0.272f * di - 0.647f * dq,
+          c.b + lift - 1.106f * di + 1.703f * dq, c.a};
 }
 
 auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pixel_index) -> Rgba {

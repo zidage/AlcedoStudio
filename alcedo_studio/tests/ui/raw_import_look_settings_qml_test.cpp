@@ -160,8 +160,8 @@ TEST_F(RawImportLookSettingsQmlTest, RowsFollowTheModelAndDoneWritesTheLook) {
   EXPECT_FALSE(saturation_slider->property("modified").toBool());
   EXPECT_EQ(item("rawImportExposureSliderValueText")->property("text").toString(), "+2.00");
 
-  // An edit outside the hard range is clamped to it; beyond the soft range (+-5 EV) the handle
-  // stays inside the rail at its end.
+  // An edit outside the hard range is clamped to it; the rail covers the hard range, and the
+  // handle at +10 EV stays inside the rail at its end.
   QMetaObject::invokeMethod(exposure_slider, "edit", Q_ARG(QVariant, 12.0));
   ProcessEvents(200);
   EXPECT_DOUBLE_EQ(model()->exposure_ev(), 10.0);

@@ -210,6 +210,7 @@ void EditorAdjustmentValueModel::setMinimum(double v) {
   }
   minimum_ = v;
   emit minimumChanged();
+  emit railRangeChanged();
   applyCompleteRange();
 }
 
@@ -219,7 +220,32 @@ void EditorAdjustmentValueModel::setMaximum(double v) {
   }
   maximum_ = v;
   emit maximumChanged();
+  emit railRangeChanged();
   applyCompleteRange();
+}
+
+double EditorAdjustmentValueModel::railMinimum() const {
+  return std::clamp(railMinimum_.value_or(minimum_), minimum_, std::max(minimum_, maximum_));
+}
+
+void EditorAdjustmentValueModel::setRailMinimum(double v) {
+  if (railMinimum_ == v) {
+    return;
+  }
+  railMinimum_ = v;
+  emit railRangeChanged();
+}
+
+double EditorAdjustmentValueModel::railMaximum() const {
+  return std::clamp(railMaximum_.value_or(maximum_), minimum_, std::max(minimum_, maximum_));
+}
+
+void EditorAdjustmentValueModel::setRailMaximum(double v) {
+  if (railMaximum_ == v) {
+    return;
+  }
+  railMaximum_ = v;
+  emit railRangeChanged();
 }
 
 void EditorAdjustmentValueModel::setStep(double v) {
@@ -366,6 +392,8 @@ void EditorAdjustmentValueModel::applyCatalogEntry() {
     setMinimum(entry->range.minimum);
     setMaximum(entry->range.maximum);
   }
+  setRailMinimum(entry->range.rail_minimum);
+  setRailMaximum(entry->range.rail_maximum);
   setDefaultValue(entry->range.default_value);
   setStep(entry->range.step);
   setPrecision(entry->range.decimals);

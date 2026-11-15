@@ -106,6 +106,8 @@ Item {
                 temperature: colorTempModel.cct
                 temperatureSliderPos: colorTempModel.cctSliderPos
                 tint: colorTempModel.tint
+                temperatureDefault: colorTempModel.asShotCct
+                tintDefault: colorTempModel.asShotTint
                 onTemperatureDragBegin: colorTempModel.beginCctDrag()
                 onTemperatureDragUpdate: function (pos) { colorTempModel.updateCctSliderDrag(pos) }
                 onTemperatureDragFinish: colorTempModel.finishCctDrag()

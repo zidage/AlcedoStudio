@@ -309,9 +309,7 @@ class EditorViewportItem : public QQuickRhiItem {
   auto updateDisplayTransform(const ViewerDisplayConfig& config) -> bool;
 
   std::shared_ptr<DirectPresentQueue> present_queue_;
-  // Shared so the render-thread presentation-opportunity arm can hold the sink
-  // alive for the duration of one emission; `frameSink()` still returns the
-  // raw pointer to pipeline code.
+  // `frameSink()` returns the raw pointer to pipeline code.
   std::shared_ptr<DirectFrameSink>    frame_sink_;
   // Coverage presentation channel (SM8.5). The queue outlives the sink that writes into it.
   std::shared_ptr<DirectPresentQueue>                   coverage_queue_;
@@ -321,11 +319,6 @@ class EditorViewportItem : public QQuickRhiItem {
   std::shared_ptr<ViewportMaskCoverageSink>             detail_coverage_sink_;
   // GUI thread only; read by the renderer in synchronize().
   MaskCoverageDisplayStyle                              mask_coverage_style_{};
-  /// Render-thread handoff for prompt Ready-frame consumption. createRenderer
-  /// publishes the active renderer; its destructor clears the slot with CAS so
-  /// a stale arm never dereferences a dead renderer. Read on the render thread
-  /// inside QQuickWindow::beforeRendering.
-  std::shared_ptr<std::atomic<EditorViewportRenderer*>> consume_arm_;
   mutable std::mutex                  mutex_;
   ViewerViewState                     view_state_{};
   ViewerDisplayConfig                 display_config_{};
@@ -355,7 +348,6 @@ class EditorViewportItem : public QQuickRhiItem {
   QMetaObject::Connection    display_destination_connection_;
   QMetaObject::Connection    scene_graph_invalidated_connection_;
   QMetaObject::Connection    scene_graph_initialized_connection_;
-  QMetaObject::Connection    before_rendering_connection_;
   QMetaObject::Connection    after_rendering_connection_;
   QMetaObject::Connection    frame_swapped_connection_;
   QMetaObject::Connection    after_frame_end_connection_;
