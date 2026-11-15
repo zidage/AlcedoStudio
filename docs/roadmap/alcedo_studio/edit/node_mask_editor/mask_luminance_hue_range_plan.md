@@ -103,7 +103,7 @@ Paths are relative to `alcedo_studio/src/`.
 | D9 | The overlay is a render request option (`MaskCoverageProbe{grade_id, mask_id}`), presentation state only. It does not change the photo DAG key, exported pixels, scopes, or history (SM8 C10). |
 | D10 | The probe publishes for the base render and for the detail ROI render, so the zoomed overlay has the detail resolution. The composite gets a detail coverage binding selected with the same ROI test as the detail photo. |
 | D11 | One coverage source at a time (SM8 C8): selecting the range probe clears an AI candidate/committed preview and the reverse. While the AI Mask tool edits a new candidate, its range bars are enabled (#604, replaces the earlier rule that disabled them): the ranges are kept by the AI Mask edit, the probe of the candidate covers the candidate, and Confirm writes them with the new Mask; see section 11. MR4 (user decision): during the AI Mask edit of a stored Mask, the probe of that Mask covers the candidate and its ranges are editable; see the MR4 completion record. |
-| D12 | Overlay visibility: shown while a range handle is dragged, and while the "Show selection" toggle of the range section is on. Starting any adjustment input hides it (master plan 10.4). |
+| D12 | Overlay visibility: shown while a range handle is dragged, and while the "Show selection" toggle of the range section is on. The toggle turns on each time a Mask becomes the range target outside an AI Mask edit (#944); turned off by the user or by an adjustment input, it stays off for that Mask until another Mask is the target. Starting any adjustment input hides it (master plan 10.4). |
 
 ## 4. Model and persistence (MR1)
 
