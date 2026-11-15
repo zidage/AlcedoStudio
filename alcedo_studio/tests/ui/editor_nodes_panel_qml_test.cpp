@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include "app/ai_sidecar_runtime_service.hpp"
 #include "app/editor_node_graph_projection.hpp"
@@ -1472,6 +1474,74 @@ TEST_F(EditorNodesPanelQmlTest, FirstNodesLoaderShowsDefaultGraphDelegates) {
   ASSERT_NE(view, nullptr);
   EXPECT_TRUE(view->isVisible());
   EXPECT_LT(loader_ms, 100);
+}
+
+TEST_F(EditorNodesPanelQmlTest, ManualConnectKeepsEveryNodePosition) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  WaitUntilGraphReady();
+  auto* nodes   = Controller();
+  auto* layout  = LayoutStore();
+  auto* adapter = Adapter();
+  ASSERT_NE(layout, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  // The added grade is staged below DRT.
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto extra = nodes->selected_node_id();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(extra) != nullptr, 2000);
+  ProcessEvents();
+  const std::vector<NodeId> ids{NodeId{"develop"}, NodeId{"grade.primary"}, extra, NodeId{"drt"}};
+  std::vector<std::optional<QPointF>> before;
+  for (const auto& id : ids) {
+    before.push_back(layout->NodePosition(id));
+    ASSERT_TRUE(before.back().has_value());
+  }
+
+  // Wire it in after grade.primary: Develop -> primary -> extra -> DRT. The staged card is
+  // below DRT; before the fix the overlap pass pushed DRT below it.
+  const auto extra_id = nodes->selected_node_id_string();
+  ASSERT_TRUE(nodes->requestConnect(QStringLiteral("grade.primary"), extra_id));
+  ASSERT_TRUE(nodes->requestConnect(extra_id, QStringLiteral("drt")));
+  ASSERT_FALSE(nodes->incomplete_draft());
+  ASSERT_EQ(backend_.document()->Graph().ImageBackboneNodeIds(), ids);
+  ProcessEvents();
+  QCoreApplication::processEvents();
+
+  for (std::size_t i = 0; i < ids.size(); ++i) {
+    EXPECT_EQ(layout->NodePosition(ids[i]), before[i]) << ids[i].Value();
+  }
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupMoveRestacksTheCardsInChainOrder) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.b"});
+  OpenNodesPage();
+  WaitUntilGraphReady();
+  auto* nodes   = Controller();
+  auto* layout  = LayoutStore();
+  auto* adapter = Adapter();
+  ASSERT_NE(layout, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.b"}) != nullptr, 2000);
+  ProcessEvents();
+  const auto primary_before = layout->NodePosition(NodeId{"grade.primary"});
+  const auto b_before       = layout->NodePosition(NodeId{"grade.b"});
+  ASSERT_TRUE(primary_before.has_value());
+  ASSERT_TRUE(b_before.has_value());
+  ASSERT_LT(primary_before->y(), b_before->y());
+
+  // Layer order [grade.b, grade.primary] -> [grade.primary, grade.b]: primary moves downstream.
+  ASSERT_TRUE(nodes->moveMaskGroupToIndex(QStringLiteral("grade.primary"), 0));
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->backbone_node_ids().size() == 4 &&
+                               nodes->backbone_node_ids()[1] == QStringLiteral("grade.b"),
+                           2000);
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(layout->NodePosition(NodeId{"grade.primary"})->y() >
+                               layout->NodePosition(NodeId{"grade.b"})->y(),
+                           2000);
+  EXPECT_GT(layout->NodePosition(NodeId{"grade.primary"})->y(),
+            layout->NodePosition(NodeId{"grade.b"})->y());
 }
 
 TEST_F(EditorNodesPanelQmlTest, AddColorGradeAppearsWithoutReplacingQanTopology) {

@@ -443,6 +443,14 @@ class EditorNodeController : public QObject {
   /// push stored positions and drawer state to the adapter. Runs after a
   /// projection apply and on every layout-store change (drawer folds, drags) so
   /// a taller node never leaves its drawer rows under the next card.
+  /**
+   * @brief Fill missing node positions and push the stored positions to the adapter.
+   *
+   * The vertical overlap pass (EditorNodeLayoutStore::ResolveVerticalOverlaps)
+   * runs only when restack_layout_on_next_apply_ is set: after a Mask Groups
+   * structure command, a drawer fold, or a Mask count increase. A manual
+   * Nodes-page connect, add, or delete keeps every position the user gave.
+   */
   void               ApplyLayoutToAdapter();
   void               SyncLayoutKey();
   void               PersistSavedSelection();
@@ -502,6 +510,9 @@ class EditorNodeController : public QObject {
   bool                                          command_active_            = false;
   bool                                          projection_apply_queued_   = false;
   bool                                          applying_layout_           = false;
+  /// Set by layer (Mask Groups) structure commands and card height growth; consumed by
+  /// the next ApplyLayoutToAdapter.
+  bool                                          restack_layout_on_next_apply_ = false;
   quint64                                       session_generation_        = 0;
   quint64                                       observed_history_revision_ = 0;
   quint64                                       projection_revision_       = 0;

@@ -62,6 +62,20 @@ auto SameProjectionContent(const EditorNodeGraphSnapshot& lhs, const EditorNodeG
   return lhs.nodes == rhs.nodes && lhs.edges == rhs.edges;
 }
 
+/// True when a node of @p next has more Masks than the same node in @p previous: its card
+/// grows and may cover the card below it.
+auto AnyMaskCountGrew(const EditorNodeGraphSnapshot& previous, const EditorNodeGraphSnapshot& next)
+    -> bool {
+  for (const auto& node : next.nodes) {
+    const auto it = std::find_if(previous.nodes.begin(), previous.nodes.end(),
+                                 [&](const auto& old) { return old.node_id == node.node_id; });
+    if (it != previous.nodes.end() && node.masks.size() > it->masks.size()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// QML-facing key for one Mask source category. Shared by the node-card Mask
 /// rows and the Mask Groups sub-rows.
 [[nodiscard]] auto MaskSourceKindKey(alcedo::MaskSourceKind source_kind) -> QString {
@@ -527,6 +541,9 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   } else {
     ++projection_revision_;
   }
+  if (!generation_changed && AnyMaskCountGrew(snapshot_, snapshot)) {
+    restack_layout_on_next_apply_ = true;
+  }
   snapshot.session_generation = session_generation_;
   snapshot_                   = std::move(snapshot);
   has_snapshot_               = true;
@@ -614,13 +631,18 @@ void EditorNodeController::ApplyLayoutToAdapter() {
   }
   applying_layout_  = true;
   const auto finish = qScopeGuard([this] { applying_layout_ = false; });
+  const bool restack = std::exchange(restack_layout_on_next_apply_, false);
   if (draft_ != nullptr) {
     const auto view = draft_->CurrentSnapshot();
     layout->EnsureDefaultPositions(view);
-    layout->ResolveVerticalOverlaps(view);
+    if (restack) {
+      layout->ResolveVerticalOverlaps(view);
+    }
   } else {
     layout->EnsureDefaultPositions(snapshot_);
-    layout->ResolveVerticalOverlaps(snapshot_);
+    if (restack) {
+      layout->ResolveVerticalOverlaps(snapshot_);
+    }
   }
   for (const auto& node : ActiveNodes()) {
     const auto id = NodeIdToQString(node.node_id);
@@ -730,8 +752,10 @@ void EditorNodeController::set_layout_store(QObject* store) {
   layout_store_            = layout;
   if (layout_store_ != nullptr) {
     layout_store_connection_ =
-        connect(layout_store_.data(), &EditorNodeLayoutStore::NodeHeightChanged, this,
-                &EditorNodeController::ApplyLayoutToAdapter);
+        connect(layout_store_.data(), &EditorNodeLayoutStore::NodeHeightChanged, this, [this] {
+          restack_layout_on_next_apply_ = true;
+          ApplyLayoutToAdapter();
+        });
   }
   emit LayoutStoreChanged();
   SyncLayoutKey();
@@ -1371,8 +1395,10 @@ bool EditorNodeController::insertMaskGroupAtTop() {
   const NodeId new_id{"grade." + uuid};
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  const auto result       = session_->SubmitInsertColorGradeAtTop(new_id, predecessor);
+  restack_layout_on_next_apply_ = true;
+  const auto result             = session_->SubmitInsertColorGradeAtTop(new_id, predecessor);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    restack_layout_on_next_apply_ = false;
     SetLastError(QString::fromStdString(result.message));
     return false;
   }
@@ -1431,10 +1457,12 @@ bool EditorNodeController::removeMaskGroup(const QString& node_id) {
   if (mask_thumbnails_ != nullptr) {
     mask_thumbnails_->invalidateNode(node_id);
   }
+  restack_layout_on_next_apply_ = true;
   const auto result = detached_removal.has_value()
                           ? session_->SubmitNodeGraphTopologyEdit(std::move(*detached_removal))
                           : session_->SubmitRemoveColorGradeAndBridge(id);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    restack_layout_on_next_apply_ = false;
     SetLastError(QString::fromStdString(result.message));
     const auto document = session_->pipeline_document();
     if (document) {
@@ -1531,8 +1559,11 @@ bool EditorNodeController::moveMaskGroupToIndex(const QString& node_id, int targ
 
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  const auto result       = session_->SubmitNodeGraphTopologyEdit(move_draft.MakeChange());
+  // A layer reorder restacks the cards in the new chain order.
+  restack_layout_on_next_apply_ = true;
+  const auto result = session_->SubmitNodeGraphTopologyEdit(move_draft.MakeChange());
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    restack_layout_on_next_apply_ = false;
     SetLastError(QString::fromStdString(result.message));
     return false;
   }
