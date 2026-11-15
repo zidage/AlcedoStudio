@@ -358,6 +358,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Route deletion-only metadata through the backend; rejects when no session is available.
   auto SubmitSetColorGradeDeletionProtected(const alcedo::NodeId& node_id, bool deletion_protected)
       -> alcedo::EditorSessionResult;
+  /// Route one show/hide change through the backend; a change renders.
+  auto SubmitSetColorGradeEnabled(const alcedo::NodeId& node_id, bool enabled)
+      -> alcedo::EditorSessionResult;
   /** Route one net topology delta through the active session backend. */
   auto SubmitNodeGraphTopologyEdit(const alcedo::NodeGraphTopologyChange& change)
       -> alcedo::EditorSessionResult;

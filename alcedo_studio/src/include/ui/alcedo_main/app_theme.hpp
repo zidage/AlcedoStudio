@@ -269,6 +269,9 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int graphMaskRowHeight READ graphMaskRowHeight CONSTANT)
   Q_PROPERTY(int maskGroupPreviewSize READ maskGroupPreviewSize CONSTANT)
   Q_PROPERTY(int maskGroupMaskPreviewSize READ maskGroupMaskPreviewSize CONSTANT)
+  Q_PROPERTY(int layerIconHitSize READ layerIconHitSize CONSTANT)
+  Q_PROPERTY(int layerIconGlyphSize READ layerIconGlyphSize CONSTANT)
+  Q_PROPERTY(qreal layerHiddenContentOpacity READ layerHiddenContentOpacity CONSTANT)
   Q_PROPERTY(int graphPortSize READ graphPortSize CONSTANT)
   Q_PROPERTY(int graphPortHitSize READ graphPortHitSize CONSTANT)
   Q_PROPERTY(int graphEdgeWidth READ graphEdgeWidth CONSTANT)
@@ -548,6 +551,12 @@ class AppTheme final : public QObject {
   auto graphMaskRowHeight() const -> int;
   auto maskGroupPreviewSize() const -> int;
   auto maskGroupMaskPreviewSize() const -> int;
+  /// Hit square of one icon in the shared layer icon strip (Mask Groups rows, node cards).
+  auto layerIconHitSize() const -> int;
+  /// Painted glyph size inside a layer icon strip slot.
+  auto layerIconGlyphSize() const -> int;
+  /// Preview opacity of a hidden Color Grade in the Mask Groups panel.
+  auto layerHiddenContentOpacity() const -> qreal;
   auto graphPortSize() const -> int;
   auto graphPortHitSize() const -> int;
   auto graphEdgeWidth() const -> int;

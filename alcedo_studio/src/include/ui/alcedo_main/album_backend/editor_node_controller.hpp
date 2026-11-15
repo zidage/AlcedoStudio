@@ -241,6 +241,13 @@ class EditorNodeController : public QObject {
    */
   Q_INVOKABLE bool setColorGradeDeletionProtected(const QString& node_id, bool deletion_protected);
   /**
+   * @brief Show or hide one Color Grade through session history; a change renders.
+   *
+   * A hidden Color Grade keeps its parameters, Masks, and edges.
+   * @return false for endpoints, unfinished drafts, or history failure.
+   */
+  Q_INVOKABLE bool setColorGradeEnabled(const QString& node_id, bool enabled);
+  /**
    * @brief Remove one Color Grade from the draft. Does not bridge neighbors.
    */
   Q_INVOKABLE bool deleteColorGrade(const QString& node_id);

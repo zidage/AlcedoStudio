@@ -550,6 +550,17 @@ class IEditorSessionBackend {
     result.message  = "Color Grade deletion protection is not supported by this backend";
     return result;
   }
+  /// Show or hide one Color Grade as one history commit that renders; equal values are
+  /// no-ops. Default rejects.
+  virtual auto SetColorGradeEnabled(const NodeId& /*node_id*/, bool /*enabled*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade visibility is not supported by this backend";
+    return result;
+  }
   /// Apply one net node-graph topology delta as one history commit. Default rejects.
   virtual auto EditNodeGraph(NodeGraphTopologyChange /*change*/) -> EditorSessionResult {
     EditorSessionResult result;
@@ -1090,6 +1101,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// Queue a metadata-only deletion-lock command against the active history session.
   auto SetColorGradeDeletionProtected(const NodeId& node_id, bool deletion_protected)
       -> EditorSessionResult override;
+  /// Queue a show/hide command against the active history session; a change renders.
+  auto SetColorGradeEnabled(const NodeId& node_id, bool enabled) -> EditorSessionResult override;
   auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override;
   auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_predecessor_id)
       -> EditorSessionResult override;

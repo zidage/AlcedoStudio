@@ -297,15 +297,6 @@ Item {
         // An AI Mask row only selects the Mask; "Edit AI Mask" opens its edit (#564).
     }
 
-    // One click inverts the row's Mask without changing the selection; the
-    // owner toggles the stored value, so a second click returns it.
-    function toggleMaskInvert(nodeId, maskId) {
-        if (!root.maskCreation || String(maskId).length === 0) {
-            return
-        }
-        root.maskCreation.toggleMaskInvert(nodeId, maskId)
-    }
-
     function removeMaskFromGroup(nodeId, maskId) {
         if (!root.maskCreation || String(maskId).length === 0) {
             return
@@ -319,6 +310,15 @@ Item {
             return
         }
         root.nodeController.setColorGradeDeletionProtected(nodeId, locked)
+    }
+
+    // A hidden Color Grade keeps its parameters, Masks, and place on the
+    // backbone; the next render leaves its effect out.
+    function setGroupVisible(nodeId, visible) {
+        if (!root.nodeController) {
+            return
+        }
+        root.nodeController.setColorGradeEnabled(nodeId, visible)
     }
 
     function removeGroup(nodeId) {
@@ -654,6 +654,7 @@ Item {
                             root.nodeLayoutStore.setDrawerOpen(nodeId, nextExpanded)
                         }
                     }
+                    onVisibilityClicked: root.setGroupVisible(nodeId, !groupEnabled)
                     onLockClicked: root.toggleGroupLock(nodeId, !deletionProtected)
                     onDeleteClicked: root.removeGroup(nodeId)
                     onReorderDragStarted: groupsList.beginGroupDrag(index)
@@ -672,9 +673,6 @@ Item {
                     }
                     onMaskClicked: function (maskIndex) {
                         root.selectMaskFromGroup(nodeId, root.maskIdAt(index, maskIndex))
-                    }
-                    onMaskInvertClicked: function (maskIndex) {
-                        root.toggleMaskInvert(nodeId, root.maskIdAt(index, maskIndex))
                     }
                     onMaskDeleteClicked: function (maskIndex) {
                         root.removeMaskFromGroup(nodeId, root.maskIdAt(index, maskIndex))

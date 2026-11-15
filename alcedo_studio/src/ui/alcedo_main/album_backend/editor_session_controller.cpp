@@ -993,6 +993,22 @@ auto EditorSessionController::SubmitSetColorGradeDeletionProtected(
   return session_backend_->SetColorGradeDeletionProtected(node_id, deletion_protected);
 }
 
+auto EditorSessionController::SubmitSetColorGradeEnabled(const alcedo::NodeId& node_id,
+                                                         bool enabled)
+    -> alcedo::EditorSessionResult {
+  if (const QString refusal = UserStateChangeRefusalText(); !refusal.isEmpty()) {
+    return RejectedResult(refusal);
+  }
+  if (!session_backend_) {
+    alcedo::EditorSessionResult result;
+    result.kind    = alcedo::EditorSessionResultKind::Rejected;
+    result.state   = session_state();
+    result.message = "Editor session backend is unavailable";
+    return result;
+  }
+  return session_backend_->SetColorGradeEnabled(node_id, enabled);
+}
+
 auto EditorSessionController::SubmitNodeGraphTopologyEdit(
     const alcedo::NodeGraphTopologyChange& change) -> alcedo::EditorSessionResult {
   if (const QString refusal = UserStateChangeRefusalText(); !refusal.isEmpty()) {

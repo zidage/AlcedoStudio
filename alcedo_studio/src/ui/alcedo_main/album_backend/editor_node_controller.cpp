@@ -1144,6 +1144,28 @@ bool EditorNodeController::setColorGradeDeletionProtected(const QString& node_id
   return true;
 }
 
+bool EditorNodeController::setColorGradeEnabled(const QString& node_id, bool enabled) {
+  if (!ValidateCommandState()) return false;
+  if (draft_ != nullptr) {
+    SetLastError(tr("Finish the node graph before showing or hiding a Color Grade"));
+    return false;
+  }
+  const auto id = NodeIdFromQString(node_id);
+  if (!IsColorGrade(id)) {
+    SetLastError(tr("Only a Color Grade can be shown or hidden"));
+    return false;
+  }
+  SetCommandActive(true);
+  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  const auto result       = session_->SubmitSetColorGradeEnabled(id, enabled);
+  if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    SetLastError(QString::fromStdString(result.message));
+    return false;
+  }
+  refreshFromSession();
+  return true;
+}
+
 bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   if (!ValidateCommandState()) {
     return false;
