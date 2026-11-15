@@ -2134,8 +2134,9 @@ auto EditorSessionService::PublishTypedNodeHistorySuccess(std::string message)
     EditorRenderCommand render_command;
     render_command.reason       = *reason;
     render_command.operation_id = current_operation_id_;
-    render_.RouteInitialRender(render_command, result.identity,
-                               lifecycle_.active_image_load_request());
+    // The request id lets a waiter (an automation command) wait for the frame of the commit.
+    result.render_request_id    = render_.RouteInitialRender(
+        render_command, result.identity, lifecycle_.active_image_load_request());
   }
   BumpHistoryRevision();
   return Emit(std::move(result));

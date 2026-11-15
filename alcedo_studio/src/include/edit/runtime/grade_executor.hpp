@@ -149,7 +149,8 @@ class GradeExecutor {
     const auto height = Ops::BindingHeight(device, scene);
     const auto dest   = DestinationWorkMember(scene);
     const auto dest_binding = FrameSceneBinding::WorkImage(dest);
-    const float mix = grade->Enabled() ? grade->Mix() : 0.0f;
+    // Only visible Color Grades compile (GraphCompiler skips hidden ones).
+    const float mix = grade->Mix();
     const bool  needs_mix = !schedule.skip_final_mix;
     const GraphValueId* mask_id =
         compiled_grade.mask_stack.has_value() ? &compiled_grade.mask_output : nullptr;

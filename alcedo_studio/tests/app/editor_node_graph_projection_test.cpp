@@ -208,13 +208,49 @@ TEST(EditorNodeGraphProjection, MaskGroupsReportGradeEnabledState) {
   EXPECT_FALSE(snapshot.groups[0].enabled);
 }
 
-TEST(EditorNodeGraphProjection, MaskGroupsOmitDetachedGrades) {
+TEST(EditorNodeGraphProjection, MaskGroupsListDetachedGradesAfterBackboneGroups) {
   auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
   document.Graph().AddNode(CreateCleanColorGradeNode(NodeId{"grade.detached"}));
 
   const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document);
-  ASSERT_EQ(snapshot.groups.size(), 1u);
-  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.primary"});
+  ASSERT_EQ(snapshot.groups.size(), 3u);
+  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.b"});
+  EXPECT_FALSE(snapshot.groups[0].detached);
+  EXPECT_EQ(snapshot.groups[1].node_id, NodeId{"grade.primary"});
+  EXPECT_FALSE(snapshot.groups[1].detached);
+  EXPECT_EQ(snapshot.groups[2].node_id, NodeId{"grade.detached"});
+  EXPECT_TRUE(snapshot.groups[2].detached);
+}
+
+TEST(EditorNodeGraphProjection, SnapshotListsDetachedGradesAfterTheBackboneWithFlags) {
+  auto document = CreateDefaultPipelineDocument();
+  document.Graph().AddNode(CreateCleanColorGradeNode(NodeId{"grade.detached"}));
+  ASSERT_TRUE(SetColorGradeEnabled(document, NodeId{"grade.primary"}, false).empty());
+
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 4);
+  ASSERT_EQ(snapshot.nodes.size(), 4u);
+  EXPECT_EQ(snapshot.nodes[0].node_id, NodeId{"develop"});
+  EXPECT_EQ(snapshot.nodes[1].node_id, NodeId{"grade.primary"});
+  EXPECT_TRUE(snapshot.nodes[1].hidden);
+  EXPECT_FALSE(snapshot.nodes[1].detached);
+  EXPECT_EQ(snapshot.nodes[2].node_id, NodeId{"drt"});
+  EXPECT_FALSE(snapshot.nodes[2].detached);
+  EXPECT_EQ(snapshot.nodes[3].node_id, NodeId{"grade.detached"});
+  EXPECT_TRUE(snapshot.nodes[3].detached);
+  EXPECT_FALSE(snapshot.nodes[3].hidden);
+  // Detached grades have no edge; the backbone edges are unchanged.
+  ASSERT_EQ(snapshot.edges.size(), 2u);
+}
+
+TEST(EditorNodeGraphProjection, HiddenStateIsPartOfTheNodeProjection) {
+  auto       document = CreateDefaultPipelineDocument();
+  const auto visible  = EditorNodeGraphProjection::Build(document, 1);
+  ASSERT_TRUE(SetColorGradeEnabled(document, NodeId{"grade.primary"}, false).empty());
+  const auto hidden = EditorNodeGraphProjection::Build(document, 1);
+  EXPECT_NE(hidden.nodes[1], visible.nodes[1]);
+  EXPECT_TRUE(hidden.nodes[1].hidden);
+  EXPECT_EQ(hidden.edges, visible.edges);
 }
 
 TEST(EditorNodeGraphProjection, MaskGroupParameterEditsDoNotRebuildGroupRows) {

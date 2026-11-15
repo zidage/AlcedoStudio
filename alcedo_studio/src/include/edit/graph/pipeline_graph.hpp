@@ -60,7 +60,9 @@ using TopologyDeltaStepHook = std::function<void(std::string_view step, std::siz
  *
  * Does not own GPU resources. @ref Validate reports endpoint, port-type, fan-in, and
  * cycle errors. @ref ValidateImageBackbone additionally requires a unique Develop to
- * DRT scene-image path that visits every Color Grade. Product graph edits go through
+ * DRT scene-image path that visits every Color Grade that has a scene-image edge. A
+ * detached Color Grade (no edge at all, @ref IsDetachedColorGrade) stays in the graph
+ * outside that path and outside the execution plan. Product graph edits go through
  * pipeline graph commands; this type does not expose a mutable node container.
  *
  * Nodes are held as `shared_ptr<const INodeModel>` so that @ref PipelineDocument::Freeze can
@@ -121,15 +123,32 @@ class PipelineGraph {
                           std::vector<std::shared_ptr<const INodeModel>>* discarded_nodes = nullptr)
       -> std::vector<GraphValidationError>;
 
+  /**
+   * @brief Endpoint, port, fan-in, required-input, and cycle rules.
+   *
+   * A detached Color Grade (@ref IsDetachedColorGrade) is exempt from the
+   * required-input rule; a Color Grade with only one scene-image edge is not.
+   */
   [[nodiscard]] auto Validate() const -> std::vector<GraphValidationError>;
   /**
    * @brief Scene-image backbone rules on top of @ref Validate.
    *
    * Rejects scene-image fan-out, a path that does not run Develop to DRT, Color
-   * Grades off that path, and non-image node types on the path. Color Grade has
-   * no Mask graph port. Does not replace @ref Validate.
+   * Grades off that path that still have a scene-image edge (half connected), and
+   * non-image node types on the path. A detached Color Grade is valid. Color Grade
+   * has no Mask graph port. Does not replace @ref Validate.
    */
   [[nodiscard]] auto ValidateImageBackbone() const -> std::vector<GraphValidationError>;
+  /**
+   * @brief True when @p id is a Color Grade with no incident edge.
+   *
+   * Color Grade ports are scene-image ports only, so no incident edge means no
+   * scene-image edge at either end. Such a node keeps its parameters and Masks in
+   * the document and is unreachable from Develop.
+   */
+  [[nodiscard]] auto IsDetachedColorGrade(const NodeId& id) const -> bool;
+  /// Detached Color Grades in node storage order.
+  [[nodiscard]] auto DetachedColorGradeNodeIds() const -> std::vector<NodeId>;
   /**
    * @brief Develop through Color Grades to DRT along unique scene-image edges.
    * @return Empty when the unique backbone cannot be walked.

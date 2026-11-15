@@ -41,6 +41,15 @@ auto AutomationEditorCatalogFields() -> QJsonArray;
                                                      ui::ApplicationModuleHost* host,
                                                      QString* error = nullptr) -> bool;
 
+/// Registers `nodes.list` and `nodes.set_visibility`. The list reads the Color Grades of the
+/// current pipeline document of the open image; the visibility write calls the show/hide command
+/// of EditorSessionController that the Mask Groups panel uses and answers after its commit and
+/// frame. @p host must outlive every dispatch. Returns false and writes @p error when a
+/// registration fails.
+[[nodiscard]] auto RegisterAutomationNodeCommands(AutomationCommandRegistry& registry,
+                                                  ui::ApplicationModuleHost* host,
+                                                  QString* error = nullptr) -> bool;
+
 /// Registers `render.preview`: the imported root and the working values of the open image as
 /// PNG files, rendered through the editor image render port. @p host must outlive every
 /// dispatch. Returns false and writes @p error when the registration fails.

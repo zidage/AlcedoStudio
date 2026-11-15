@@ -513,6 +513,7 @@ def_library(AutomationHostLib
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/editor_commands.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/render_commands.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/version_commands.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/node_commands.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/adjustment_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_adjustment_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/automation_editor_operation.cpp"

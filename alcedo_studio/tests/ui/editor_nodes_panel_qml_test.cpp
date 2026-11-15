@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include "app/ai_sidecar_runtime_service.hpp"
 #include "app/editor_node_graph_projection.hpp"
@@ -579,7 +581,8 @@ TEST_F(EditorNodesPanelQmlTest, CtrlPlusAddsTheNextCleanColorGrade) {
   QTest::keyClick(window_, Qt::Key_Plus, Qt::ControlModifier);
   ProcessEvents();
 
-  EXPECT_EQ(backend_.edit_node_graph_count(), 0);
+  // The added grade is detached, a complete graph: it commits at once.
+  EXPECT_EQ(backend_.edit_node_graph_count(), 1);
   EXPECT_EQ(nodes->selected_node_name(), QStringLiteral("Color Grade 2"));
   auto* adapter = Adapter();
   ASSERT_NE(adapter, nullptr);
@@ -1116,14 +1119,23 @@ TEST_F(EditorNodesPanelQmlTest, OrdinaryDraftEditsDoNotReplaceQanTopology) {
   ASSERT_NE(adapter, nullptr);
   QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
   ProcessEvents();
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto extra = nodes->selected_node_id();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(extra) != nullptr, 2000);
+  ProcessEvents();
   const auto applies  = nodes->completed_projection_apply_count();
   const auto replaces = adapter->topology_replace_count();
-  ASSERT_TRUE(nodes->addCleanColorGrade());
-  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(nodes->selected_node_id()) != nullptr, 2000);
+  // Wiring the detached grade after Develop is a draft edit: grade.primary is half connected.
+  ASSERT_TRUE(nodes->requestConnect(QStringLiteral("develop"),
+                                    QString::fromUtf8(extra.Value().data(),
+                                                      static_cast<int>(extra.Value().size()))));
+  ASSERT_TRUE(nodes->incomplete_draft());
+  ProcessEvents();
   EXPECT_EQ(nodes->completed_projection_apply_count(), applies);
   EXPECT_EQ(adapter->topology_replace_count(), replaces);
-  EXPECT_EQ(nodes->snapshot().nodes.size(), 3u);
+  EXPECT_EQ(nodes->snapshot().nodes.size(), 4u);
   EXPECT_EQ(nodes->ActiveNodes().size(), 4u);
+  EXPECT_NE(nodes->ActiveEdges(), nodes->snapshot().edges);
 }
 
 TEST_F(EditorNodesPanelQmlTest, CloseWithQueuedApplyThenReopenRestoresOnce) {
@@ -1464,7 +1476,75 @@ TEST_F(EditorNodesPanelQmlTest, FirstNodesLoaderShowsDefaultGraphDelegates) {
   EXPECT_LT(loader_ms, 100);
 }
 
-TEST_F(EditorNodesPanelQmlTest, AddColorGradeShowsPendingWithoutReplacingQanTopology) {
+TEST_F(EditorNodesPanelQmlTest, ManualConnectKeepsEveryNodePosition) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  WaitUntilGraphReady();
+  auto* nodes   = Controller();
+  auto* layout  = LayoutStore();
+  auto* adapter = Adapter();
+  ASSERT_NE(layout, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  // The added grade is staged below DRT.
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto extra = nodes->selected_node_id();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(extra) != nullptr, 2000);
+  ProcessEvents();
+  const std::vector<NodeId> ids{NodeId{"develop"}, NodeId{"grade.primary"}, extra, NodeId{"drt"}};
+  std::vector<std::optional<QPointF>> before;
+  for (const auto& id : ids) {
+    before.push_back(layout->NodePosition(id));
+    ASSERT_TRUE(before.back().has_value());
+  }
+
+  // Wire it in after grade.primary: Develop -> primary -> extra -> DRT. The staged card is
+  // below DRT; before the fix the overlap pass pushed DRT below it.
+  const auto extra_id = nodes->selected_node_id_string();
+  ASSERT_TRUE(nodes->requestConnect(QStringLiteral("grade.primary"), extra_id));
+  ASSERT_TRUE(nodes->requestConnect(extra_id, QStringLiteral("drt")));
+  ASSERT_FALSE(nodes->incomplete_draft());
+  ASSERT_EQ(backend_.document()->Graph().ImageBackboneNodeIds(), ids);
+  ProcessEvents();
+  QCoreApplication::processEvents();
+
+  for (std::size_t i = 0; i < ids.size(); ++i) {
+    EXPECT_EQ(layout->NodePosition(ids[i]), before[i]) << ids[i].Value();
+  }
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupMoveRestacksTheCardsInChainOrder) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.b"});
+  OpenNodesPage();
+  WaitUntilGraphReady();
+  auto* nodes   = Controller();
+  auto* layout  = LayoutStore();
+  auto* adapter = Adapter();
+  ASSERT_NE(layout, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.b"}) != nullptr, 2000);
+  ProcessEvents();
+  const auto primary_before = layout->NodePosition(NodeId{"grade.primary"});
+  const auto b_before       = layout->NodePosition(NodeId{"grade.b"});
+  ASSERT_TRUE(primary_before.has_value());
+  ASSERT_TRUE(b_before.has_value());
+  ASSERT_LT(primary_before->y(), b_before->y());
+
+  // Layer order [grade.b, grade.primary] -> [grade.primary, grade.b]: primary moves downstream.
+  ASSERT_TRUE(nodes->moveMaskGroupToIndex(QStringLiteral("grade.primary"), 0));
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->backbone_node_ids().size() == 4 &&
+                               nodes->backbone_node_ids()[1] == QStringLiteral("grade.b"),
+                           2000);
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(layout->NodePosition(NodeId{"grade.primary"})->y() >
+                               layout->NodePosition(NodeId{"grade.b"})->y(),
+                           2000);
+  EXPECT_GT(layout->NodePosition(NodeId{"grade.primary"})->y(),
+            layout->NodePosition(NodeId{"grade.b"})->y());
+}
+
+TEST_F(EditorNodesPanelQmlTest, AddColorGradeAppearsWithoutReplacingQanTopology) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenNodesPage();
   auto* nodes   = Controller();
@@ -1480,7 +1560,8 @@ TEST_F(EditorNodesPanelQmlTest, AddColorGradeShowsPendingWithoutReplacingQanTopo
   const auto add_ms = static_cast<int>(timer.elapsed());
   RecordProperty("add_color_grade_feedback_ms", add_ms);
   EXPECT_EQ(adapter->topology_replace_count(), replace_count);
-  EXPECT_TRUE(nodes->incomplete_draft());
+  EXPECT_FALSE(nodes->incomplete_draft());
+  EXPECT_EQ(backend_.edit_node_graph_count(), 1);
   EXPECT_LT(add_ms, 100);
 }
 
@@ -1803,6 +1884,8 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupsDisableStructureActionsDuringIncomplet
   ASSERT_NE(nodes, nullptr);
   QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
   ASSERT_TRUE(nodes->addCleanColorGrade());
+  // Wiring the detached grade after Develop leaves grade.primary half connected.
+  ASSERT_TRUE(nodes->requestConnect(QStringLiteral("develop"), nodes->selected_node_id_string()));
   ASSERT_TRUE(nodes->incomplete_draft());
   ProcessEvents();
 
@@ -1818,6 +1901,42 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupsDisableStructureActionsDuringIncomplet
   auto* remove = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
   ASSERT_NE(remove, nullptr);
   EXPECT_FALSE(remove->isEnabled());
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupsListDetachedGroupsUnderACaptionWithoutReorder) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.b"});
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto detached_id = nodes->selected_node_id_string();
+  ASSERT_FALSE(nodes->incomplete_draft());
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 3, 2000);
+
+  auto* primary  = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  auto* second   = MaskGroupDelegateFor(QStringLiteral("grade.b"));
+  auto* detached = MaskGroupDelegateFor(detached_id);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(second, nullptr);
+  ASSERT_NE(detached, nullptr);
+  EXPECT_FALSE(primary->property("detached").toBool());
+  EXPECT_TRUE(primary->property("reorderEnabled").toBool());
+  EXPECT_TRUE(detached->property("detached").toBool());
+  EXPECT_TRUE(detached->property("showDetachedCaption").toBool());
+  EXPECT_FALSE(detached->property("reorderEnabled").toBool());
+  EXPECT_TRUE(detached->property("contentDimmed").toBool());
+  EXPECT_GT(detached->y(), primary->y());
+  auto* caption =
+      detached->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDetachedCaption"));
+  ASSERT_NE(caption, nullptr);
+  EXPECT_TRUE(caption->isVisible());
+  EXPECT_EQ(caption->property("text").toString(), QStringLiteral("Detached"));
+  auto* primary_caption =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDetachedCaption"));
+  ASSERT_NE(primary_caption, nullptr);
+  EXPECT_FALSE(primary_caption->isVisible());
 }
 
 TEST_F(EditorNodesPanelQmlTest, MaskGroupsRestoreScrollAndExpansionAcrossLoaderTeardown) {

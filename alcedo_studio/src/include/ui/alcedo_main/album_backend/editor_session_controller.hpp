@@ -358,8 +358,14 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Route deletion-only metadata through the backend; rejects when no session is available.
   auto SubmitSetColorGradeDeletionProtected(const alcedo::NodeId& node_id, bool deletion_protected)
       -> alcedo::EditorSessionResult;
-  /// Route one show/hide change through the backend; a change renders.
+  /// Route one show/hide change through the backend; a change renders. Rejects while an agent
+  /// holds control.
   auto SubmitSetColorGradeEnabled(const alcedo::NodeId& node_id, bool enabled)
+      -> alcedo::EditorSessionResult;
+  /// The show/hide change of SubmitSetColorGradeEnabled for the agent commands: the same
+  /// backend command, without the agent control refusal of the user adapters. Its operation_id
+  /// identifies the command.
+  auto RequestSetColorGradeEnabled(const alcedo::NodeId& node_id, bool enabled)
       -> alcedo::EditorSessionResult;
   /** Route one net topology delta through the active session backend. */
   auto SubmitNodeGraphTopologyEdit(const alcedo::NodeGraphTopologyChange& change)

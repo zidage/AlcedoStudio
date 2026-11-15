@@ -6,7 +6,9 @@ import QtQuick.Layouts
 // One Mask Group row inside EditorMaskGroupsPanel: chevron, composite preview
 // slot, group name, and the layer icon strip (visibility, lock, delete). A
 // hidden group dims its name and preview; the Color Grade stays on the
-// backbone with its parameters and Masks. Expanded state comes
+// backbone with its parameters and Masks. A detached group (no scene-image
+// edge, outside the render) gets the same dimmed content, a "Detached" caption
+// above the first detached row, and no reorder drag. Expanded state comes
 // from EditorNodeLayoutStore.drawerOpen(nodeId) — the same "Masks expanded"
 // bit the Nodes drawer reads, so both projections agree.
 //
@@ -38,6 +40,9 @@ Item {
     property string nodeId: ""
     property string displayName: ""
     property bool groupEnabled: true
+    property bool detached: false
+    // True on the first detached row; the caption separates detached groups.
+    property bool showDetachedCaption: false
     property bool deletionProtected: false
     property var masks: []
     property bool selected: false
@@ -93,12 +98,18 @@ Item {
                                              + appTheme.spaceXs * 2,
                                              groupName.implicitHeight
                                              + appTheme.spaceXs * 2)
+    readonly property real detachedCaptionHeight: root.showDetachedCaption
+                                                  ? detachedCaption.implicitHeight
+                                                    + appTheme.spaceXs
+                                                  : 0
+    // Name and preview ink: dimmed for a hidden or detached group.
+    readonly property bool contentDimmed: !root.groupEnabled || root.detached
     readonly property real bodyContentHeight: maskList.implicitHeight + appTheme.spaceXs
     readonly property real bodyHeight: Math.max(0, bodyContentHeight) * foldProgress
     readonly property color headerInkColor: root.textColor
     // A hidden group keeps full chrome ink (chevron, focus ring) and dims only
     // its own content: name and preview.
-    readonly property color nameInkColor: root.groupEnabled ? root.textColor : root.mutedColor
+    readonly property color nameInkColor: root.contentDimmed ? root.mutedColor : root.textColor
     readonly property string deleteDisabledReason: {
         if (!root.actionsEnabled) {
             return root.actionsDisabledReason
@@ -113,11 +124,12 @@ Item {
                                           && cardMouse.mouseY < root.headerHeight
     // Card position in ListView content coordinates while dragging; the panel
     // resolves it to the nearest insertion slot between group rows.
-    readonly property real dragContentY: root.y + dragBody.y + root.headerHeight / 2
+    readonly property real dragContentY: root.y + root.detachedCaptionHeight + dragBody.y
+                                         + root.headerHeight / 2
     property bool _dragMoved: false
 
     implicitWidth: 260
-    implicitHeight: headerHeight + bodyHeight + appTheme.spaceXs
+    implicitHeight: detachedCaptionHeight + headerHeight + bodyHeight + appTheme.spaceXs
     height: implicitHeight
     // Unclipped while dragging so the card can travel across sibling rows.
     clip: !root.dragging
@@ -227,11 +239,28 @@ Item {
     // travels on Y. The delegate slot itself does not move, so sibling
     // midpoints stay stable for the panel's drop-slot resolution. Do not
     // anchors.fill this item — MouseArea.drag cannot move an anchored target.
+    Label {
+        id: detachedCaption
+        objectName: "editorMaskGroupDetachedCaption"
+        visible: root.showDetachedCaption
+        width: parent.width
+        leftPadding: appTheme.spaceXs
+        text: qsTr("Detached")
+        color: root.mutedColor
+        elide: Text.ElideRight
+        font.family: appTheme.uiFontFamily
+        font.pixelSize: appTheme.fontSizeCaption
+        Accessible.role: Accessible.StaticText
+        Accessible.name: text
+    }
+
     Item {
         id: dragBody
         objectName: "editorMaskGroupDragBody"
         width: parent.width
-        height: parent.height
+        height: parent.height - root.detachedCaptionHeight
+        // The caption row sits above the card; the drag offset stays relative to the card.
+        transform: Translate { y: root.detachedCaptionHeight }
         opacity: root.dragging ? 0.94 : 1.0
 
         onYChanged: {
@@ -337,6 +366,9 @@ Item {
                     }
                     if (!root.groupEnabled) {
                         parts.push(qsTr("hidden"))
+                    }
+                    if (root.detached) {
+                        parts.push(qsTr("detached"))
                     }
                     if (root.selected) {
                         parts.push(qsTr("selected"))
@@ -471,7 +503,7 @@ Item {
                         Layout.preferredWidth: appTheme.maskGroupPreviewSize
                         Layout.preferredHeight: appTheme.maskGroupPreviewSize
                         Layout.alignment: Qt.AlignVCenter
-                        opacity: root.groupEnabled ? 1.0 : appTheme.layerHiddenContentOpacity
+                        opacity: root.contentDimmed ? appTheme.layerHiddenContentOpacity : 1.0
                         Accessible.ignored: true
 
                         EditorAiMaskTile {

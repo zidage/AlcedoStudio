@@ -160,14 +160,15 @@ class EditorNodeGraphDraft {
   [[nodiscard]] auto NodeJson(const NodeId& node_id) const -> const nlohmann::json*;
 
   /**
-   * @brief NodeIds not reachable on the draft's Develop-to-DRT image path.
+   * @brief NodeIds that keep the draft incomplete.
    *
    * Walks image-port edges from Develop until DRT or a break; every stored
-   * node outside the walked path is returned in @ref nodes_ order. While the
-   * draft is incomplete this lists the nodes the Mask Groups "locate in Nodes"
-   * action can point at. A complete draft returns an empty list.
+   * node outside the walked path is returned in @ref nodes_ order, except a
+   * detached Color Grade (no edge at either end), which is a valid document
+   * state. These are the nodes the Mask Groups "locate in Nodes" action points
+   * at. A complete draft returns an empty list.
    */
-  [[nodiscard]] auto DetachedNodeIds() const -> std::vector<NodeId>;
+  [[nodiscard]] auto UnfinishedNodeIds() const -> std::vector<NodeId>;
 
   /**
    * @brief Value snapshot of the current draft graph, including detached nodes.
@@ -207,6 +208,8 @@ class EditorNodeGraphDraft {
     std::map<std::string, std::optional<PipelineSceneEdge>>    prior_connected;
   };
 
+  /// Color Grade with neither an incoming nor an outgoing draft edge.
+  [[nodiscard]] auto IsDetachedColorGrade(const EditorNodeProjection& node) const -> bool;
   void BeginReversal();
   void RebuildIndexes();
   auto AdmitConnect(const NodeId& source_id, const NodeId& destination_id, std::string* error,
