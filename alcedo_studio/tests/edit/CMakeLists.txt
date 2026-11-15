@@ -147,6 +147,15 @@ gtest_discover_tests(OkLabContrastReferenceTest TEST_PREFIX "OkLabContrastRefere
     PROPERTIES LABELS "ci_core_flow;edit;runtime")
 alcedo_register_test_target(OkLabContrastReferenceTest edit)
 
+# Color Grade Whites and Blacks: host reference math (3-stop tone zones from grey) that the CUDA,
+# Metal, and OpenCL grade tests compare against.
+add_executable(ToneZoneReferenceTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/tone_zone_reference_test.cpp)
+target_link_libraries(ToneZoneReferenceTest PRIVATE GTest::gtest_main)
+gtest_discover_tests(ToneZoneReferenceTest TEST_PREFIX "ToneZoneReferenceTest."
+    PROPERTIES LABELS "ci_core_flow;edit;runtime")
+alcedo_register_test_target(ToneZoneReferenceTest edit)
+
 # Develop lens resolution: LensCalibrationResolver against stored pre-G10.6 LensCalibOp parameters
 # for CI RAW fixtures, catalog lens identity, DNG warp, and database failure.
 add_executable(LensCalibDevelopResolveTest

@@ -46,6 +46,7 @@
 #include "film_grain_colour_statistics.hpp"
 #include "oklab_contrast_reference.hpp"
 #include "tone_curve_test_curves.hpp"
+#include "tone_zone_reference.hpp"
 
 namespace alcedo {
 namespace {
@@ -617,6 +618,26 @@ TEST_F(CudaPrimaryGradeFixture, CudaContrastMatchesOkLabLightnessReferenceForEve
                     {output[i].r, output[i].g, output[i].b}, expected),
                 kContrastRelativeLinearTolerance)
           << contrast << " @ " << i;
+    }
+  }
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaWhitesAndBlacksMatchToneZoneReferenceForEveryPixel) {
+  for (const bool whites : {true, false}) {
+    for (const float value : {-100.0f, -35.0f, 35.0f, 100.0f}) {
+      ModelByType<WhiteModel>(type_ids::White()).SetValue(whites ? value : 0.0f);
+      ModelByType<BlackModel>(type_ids::Black()).SetValue(whites ? 0.0f : value);
+      const auto output = Download(Render().output);
+      const auto input  = Download(plan_.develop_output);
+      ASSERT_EQ(input.size(), output.size());
+      ASSERT_FALSE(output.empty());
+      for (std::size_t i = 0; i < input.size(); ++i) {
+        const auto expected =
+            tone_zone_reference::ApplyAcescc({input[i].r, input[i].g, input[i].b}, value, whites);
+        ASSERT_NEAR(output[i].r, expected[0], 2.0e-5f) << value << " @ " << i;
+        ASSERT_NEAR(output[i].g, expected[1], 2.0e-5f) << value << " @ " << i;
+        ASSERT_NEAR(output[i].b, expected[2], 2.0e-5f) << value << " @ " << i;
+      }
     }
   }
 }
