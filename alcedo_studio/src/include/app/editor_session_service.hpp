@@ -280,10 +280,10 @@ class IEditorSessionBackend {
   /// The bound viewport was minimized/hidden (true) or shown again (false). Frames refused
   /// while suspended are rendered again on resume. Backends without a viewport may ignore it.
   virtual void SetPresentationSuspended(bool /*suspended*/) {}
-  /// An export released the editor GPU resources (true) or ended (false). Frames the render port
-  /// refused meanwhile are rendered again when it ends. Backends without a GPU renderer may
-  /// ignore it.
-  virtual void SetSuspendedForExport(bool /*suspended*/) {}
+  /// The editor GPU resources were released for an export or semantic generation (true), or the
+  /// last holder of that release ended (false). Frames the render port refused meanwhile are
+  /// rendered again when it ends. Backends without a GPU renderer may ignore it.
+  virtual void SetSuspendedForGpuRelease(bool /*suspended*/) {}
   /**
    * @brief Reproject load-only panel values from @p node_id.
    *
@@ -1020,7 +1020,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   void SetPresentationSize(int width, int height) override;
   void SetGeometryOverlayActive(bool active) override;
   void SetPresentationSuspended(bool suspended) override;
-  void SetSuspendedForExport(bool suspended) override;
+  void SetSuspendedForGpuRelease(bool suspended) override;
 
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;

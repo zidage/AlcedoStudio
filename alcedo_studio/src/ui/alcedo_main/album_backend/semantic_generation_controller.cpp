@@ -159,6 +159,11 @@ SemanticGenerationController::SemanticGenerationController(
           [this](const QString& profileId) { OnModelRemoved(profileId); });
 }
 
+void SemanticGenerationController::SetEditorGpuResourceRelease(
+    EditorGpuResourceReleaseHooks hooks) {
+  editor_gpu_release_ = std::move(hooks);
+}
+
 void SemanticGenerationController::BindCollaborators(NikonHeRecoveryController* nikon) {
   nikon_ = nikon;
 }
@@ -508,9 +513,9 @@ void SemanticGenerationController::CancelGeneration() {
   if (!running_) {
     return;
   }
-  // Boot phase: the interactive sidecar boot is still running (job_ is null).
-  // Flag the cancel so the boot-failure path finishes the task as Canceled, and
-  // ask the runtime to abort at its next poll checkpoint.
+  // Start phase: the editor GPU release or the interactive sidecar boot is still running (job_ is
+  // null). Flag the cancel so the start ends after the release, or the boot-failure path finishes
+  // the task as Canceled, and ask the runtime to abort the boot at its next poll checkpoint.
   start_canceled_ = true;
   auto project = project_->handler().project();
   auto runtime = project ? project->GetAiSidecarRuntimeService() : nullptr;
@@ -699,6 +704,7 @@ void SemanticGenerationController::StartGenerationForItems(
   pending_items_  = std::move(items);
   prompt_pending_ = false;
   running_        = true;
+  start_canceled_ = false;
   embedded_       = 0;
   skipped_        = 0;
   failed_         = 0;
@@ -724,45 +730,72 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
   auto project   = project_->handler().project();
   auto pipelines = project_->handler().pipeline_service();
   if (!project || !pipelines) {
-    running_ = false;
-    pending_items_.clear();
-    status_text_ = PL_TEXT("Semantic generation is unavailable without an open project.");
-    status_->SetTaskState(status_text_, 0, false);
-    RefreshAlbumSummary();
-    emit StateChanged();
+    EndStart(PL_TEXT("Semantic generation is unavailable without an open project."), false);
     return;
   }
 
   auto runtime = project->GetAiSidecarRuntimeService();
   if (!runtime) {
-    running_ = false;
-    pending_items_.clear();
-    status_text_ = PL_TEXT("Semantic runtime service is unavailable.");
-    status_->SetTaskState(status_text_, 0, false);
-    RefreshAlbumSummary();
-    emit StateChanged();
+    EndStart(PL_TEXT("Semantic runtime service is unavailable."), false);
     return;
   }
   sidecar_lease_ = runtime->AcquireLease();
   if (!sidecar_lease_) {
-    running_ = false;
-    pending_items_.clear();
-    status_text_ = PL_TEXT("Semantic runtime service is unavailable.");
-    status_->SetTaskState(status_text_, 0, false);
-    RefreshAlbumSummary();
-    emit StateChanged();
+    EndStart(PL_TEXT("Semantic runtime service is unavailable."), false);
     return;
   }
   if (model_download_->FindProfile(ActiveModelProfileId()) == nullptr) {
-    running_ = false;
-    pending_items_.clear();
-    sidecar_lease_.reset();
-    status_text_ = PL_TEXT("Activate an AI model in Settings before generating labels.");
-    status_->SetTaskState(status_text_, 0, false);
-    RefreshAlbumSummary();
-    emit StateChanged();
+    EndStart(PL_TEXT("Activate an AI model in Settings before generating labels."), false);
     return;
   }
+  if (!editor_gpu_release_.release) {
+    ContinueAfterEditorGpuRelease(forceRegenerate, true, {});
+    return;
+  }
+  // The editor keeps the GPU resources of the open image; the sidecar model and the committed-state
+  // renders of the job allocate only after the editor released them.
+  editor_gpu_released_ = true;
+  QPointer<SemanticGenerationController> self(this);
+  editor_gpu_release_.release([self, forceRegenerate](bool success, std::string error) {
+    if (!self) {
+      return;
+    }
+    QMetaObject::invokeMethod(
+        self,
+        [self, forceRegenerate, success, error = std::move(error)]() {
+          if (self) {
+            self->ContinueAfterEditorGpuRelease(forceRegenerate, success, error);
+          }
+        },
+        Qt::QueuedConnection);
+  });
+}
+
+void SemanticGenerationController::ContinueAfterEditorGpuRelease(bool               forceRegenerate,
+                                                                 bool               released,
+                                                                 const std::string& error) {
+  if (!running_) {
+    ResumeEditorGpu();
+    return;
+  }
+  if (!released) {
+    EndStart(PL_TEXT("Releasing the editor GPU resources failed: %1", QString::fromStdString(error)),
+             false);
+    return;
+  }
+  if (start_canceled_) {
+    EndStart(PL_TEXT("Semantic generation canceled."), true);
+    return;
+  }
+  // The project can close while the release runs.
+  auto project   = project_->handler().project();
+  auto pipelines = project_->handler().pipeline_service();
+  auto runtime   = project ? project->GetAiSidecarRuntimeService() : nullptr;
+  if (!project || !pipelines || !runtime) {
+    EndStart(PL_TEXT("Semantic generation is unavailable without an open project."), false);
+    return;
+  }
+
   AiSidecarRuntimeOptions runtime_options = RuntimeOptionsForCurrentSidecarSnapshot(true);
   auto                    runtime_status  = runtime->Status();
   if (runtime_status.state != AiSidecarRuntimeState::kReady ||
@@ -777,36 +810,16 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
     if (background_task_id_.isEmpty()) {
       background_task_id_ = RegisterBackgroundTask();
     }
-    start_canceled_ = false;
     if (!runtime->StartAndWaitInteractive(runtime_options)) {
-      running_ = false;
-      pending_items_.clear();
-      sidecar_lease_.reset();
       if (start_canceled_) {
-        start_canceled_ = false;
-        status_text_ = PL_TEXT("Semantic generation canceled.");
-        if (!background_task_id_.isEmpty()) {
-          background_tasks_->FinishTask(background_task_id_,
-                                               BackgroundTaskState::Canceled,
-                                               status_text_.Render());
-          background_task_id_.clear();
-        }
-      } else {
-        runtime_status        = runtime->Status();
-        const QString message = QString::fromStdString(runtime_status.message);
-        status_text_ = message.isEmpty()
-                           ? PL_TEXT("Semantic runtime failed to start.")
-                           : PL_TEXT("Semantic runtime failed to start: %1", message);
-        if (!background_task_id_.isEmpty()) {
-          background_tasks_->FinishTask(background_task_id_,
-                                               BackgroundTaskState::Failed,
-                                               status_text_.Render());
-          background_task_id_.clear();
-        }
+        EndStart(PL_TEXT("Semantic generation canceled."), true);
+        return;
       }
-      status_->SetTaskState(status_text_, 0, false);
-      RefreshAlbumSummary();
-      emit StateChanged();
+      runtime_status        = runtime->Status();
+      const QString message = QString::fromStdString(runtime_status.message);
+      EndStart(message.isEmpty() ? PL_TEXT("Semantic runtime failed to start.")
+                                 : PL_TEXT("Semantic runtime failed to start: %1", message),
+               false);
       return;
     }
 
@@ -814,21 +827,10 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
     if (runtime_status.state != AiSidecarRuntimeState::kReady ||
         !runtime_status.model_info.has_value()) {
       const QString message = QString::fromStdString(runtime_status.message);
-      running_              = false;
-      pending_items_.clear();
-      sidecar_lease_.reset();
-      status_text_ = message.isEmpty()
-                         ? PL_TEXT("Semantic runtime did not report model information.")
-                         : PL_TEXT("Semantic runtime is not ready: %1", message);
-      if (!background_task_id_.isEmpty()) {
-        background_tasks_->FinishTask(background_task_id_,
-                                             BackgroundTaskState::Failed,
-                                             status_text_.Render());
-        background_task_id_.clear();
-      }
-      status_->SetTaskState(status_text_, 0, false);
-      RefreshAlbumSummary();
-      emit StateChanged();
+      EndStart(message.isEmpty()
+                   ? PL_TEXT("Semantic runtime did not report model information.")
+                   : PL_TEXT("Semantic runtime is not ready: %1", message),
+               false);
       return;
     }
   }
@@ -836,7 +838,7 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
   auto&             storage        = *project->GetStorage();
   const std::string model_key      = SemanticModelKeyFromInfo(*runtime_status.model_info);
   const auto        label_language = ModelLabelLanguage(*runtime_status.model_info);
-  std::string       error;
+  std::string       registration_error;
   if (!storage.GetSemanticModelRegistry().UpsertModel(
           SemanticModelRecord{
               .model_key_     = model_key,
@@ -849,20 +851,10 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
               .supported_text_languages_json_ = SemanticSupportedTextLanguagesJson(label_language),
               .prompt_config_hash_            = SemanticPromptConfigHashForLanguage(label_language),
               .active_                        = true},
-          &error)) {
-    running_ = false;
-    pending_items_.clear();
-    sidecar_lease_.reset();
-    status_text_ =
-        PL_TEXT("Semantic model registration failed: %1", QString::fromUtf8(error.c_str()));
-    if (!background_task_id_.isEmpty()) {
-      background_tasks_->FinishTask(background_task_id_, BackgroundTaskState::Failed,
-                                           status_text_.Render());
-      background_task_id_.clear();
-    }
-    status_->SetTaskState(status_text_, 0, false);
-    RefreshAlbumSummary();
-    emit StateChanged();
+          &registration_error)) {
+    EndStart(PL_TEXT("Semantic model registration failed: %1",
+                     QString::fromStdString(registration_error)),
+             false);
     return;
   }
 
@@ -975,6 +967,8 @@ void SemanticGenerationController::UpdateProgress(const SemanticGenerationProgre
 void SemanticGenerationController::Finish(std::vector<SemanticGenerationItemResult> results) {
   running_ = false;
   job_.reset();
+  // The job ended its input service and embedding requests: the editor renders again.
+  ResumeEditorGpu();
   pending_items_.clear();
   prompt_pending_ = false;
 
@@ -1069,6 +1063,30 @@ void SemanticGenerationController::UpdateRemainingTimeEstimate(
   remaining_seconds_ =
       static_cast<int>(std::min(std::ceil(static_cast<double>(remaining) / rate),
                                 static_cast<double>(std::numeric_limits<int>::max())));
+}
+
+void SemanticGenerationController::EndStart(i18n::LocalizedText status, bool canceled) {
+  running_        = false;
+  start_canceled_ = false;
+  pending_items_.clear();
+  sidecar_lease_.reset();
+  ResumeEditorGpu();
+  status_text_ = std::move(status);
+  if (!background_task_id_.isEmpty()) {
+    background_tasks_->FinishTask(
+        background_task_id_, canceled ? BackgroundTaskState::Canceled : BackgroundTaskState::Failed,
+        status_text_.Render());
+    background_task_id_.clear();
+  }
+  status_->SetTaskState(status_text_, 0, false);
+  RefreshAlbumSummary();
+  emit StateChanged();
+}
+
+void SemanticGenerationController::ResumeEditorGpu() {
+  if (std::exchange(editor_gpu_released_, false) && editor_gpu_release_.resume) {
+    editor_gpu_release_.resume();
+  }
 }
 
 void SemanticGenerationController::ClearPrompt() {

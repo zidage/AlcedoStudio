@@ -7,7 +7,8 @@
 ///
 /// Install, cancel, and remove run ModelDownloadController through the real DownloadService
 /// with an aria2 stand-in that answers its JSON-RPC calls. Activation runs
-/// SemanticGenerationController of ApplicationModuleHost against an open project.
+/// SemanticGenerationController of ApplicationModuleHost against an open project. The editor GPU
+/// release of a generation start runs the same controller with a recording release hook.
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -82,7 +83,8 @@ class ScopedTestEnvironment final {
     QCoreApplication::setOrganizationName(QStringLiteral("AlcedoTests"));
     QCoreApplication::setApplicationName(QStringLiteral("ClipModelInstallActivationTest"));
     for (const char* name :
-         {"ALCEDO_ARIA2C_BINARY", "ALCEDO_FAKE_ARIA2_SOURCE_DIR", "ALCEDO_FAKE_ARIA2_HOLD"}) {
+         {"ALCEDO_ARIA2C_BINARY", "ALCEDO_FAKE_ARIA2_SOURCE_DIR", "ALCEDO_FAKE_ARIA2_HOLD",
+          "ALCEDO_MIND_BINARY"}) {
       saved_env_.push_back({name, qgetenv(name)});
     }
   }
@@ -488,6 +490,107 @@ TEST_F(ClipModelActivationTest, RemovingActiveModelLeavesProjectWithoutActiveMod
   EXPECT_TRUE(
       host_->project()->handler().project()->GetStorage()->GetSemanticModelRegistry().HasModel(
           ModelKey(kProfileId)));
+}
+
+// ── Editor GPU release around a generation start ───────────────────────────
+
+/// Release hook that records its calls. `complete` answers the pending release; with
+/// `answer_at_once` the release answers inside the call.
+struct RecordingEditorGpuRelease {
+  int                                              release_calls = 0;
+  int                                              resume_calls  = 0;
+  bool                                             answer_at_once = true;
+  bool                                             answer_success = true;
+  std::string                                      answer_error;
+  EditorGpuResourceReleaseHooks::ReleaseCompletion pending;
+
+  auto Hooks() -> EditorGpuResourceReleaseHooks {
+    return EditorGpuResourceReleaseHooks{
+        .release =
+            [this](EditorGpuResourceReleaseHooks::ReleaseCompletion on_released) {
+              ++release_calls;
+              if (answer_at_once) {
+                on_released(answer_success, answer_error);
+              } else {
+                pending = std::move(on_released);
+              }
+            },
+        .resume = [this] { ++resume_calls; },
+    };
+  }
+};
+
+class SemanticGenerationEditorGpuReleaseTest : public ClipModelActivationTest {
+ protected:
+  void SetUp() override {
+    ClipModelActivationTest::SetUp();
+    ASSERT_TRUE(CreateTestProject(*host_));
+    InstallStubProfile(kProfileId);
+    CacheLabelPrototypes(kProfileId);
+    ASSERT_TRUE(Semantic().ActivateModel(QString::fromLatin1(kProfileId)));
+    ASSERT_TRUE(WaitUntil([&] { return !Semantic().ModelActivationRunning(); }));
+    Semantic().SetEditorGpuResourceRelease(release_.Hooks());
+  }
+
+  /// Start a generation of one image through the import prompt. The release runs after the
+  /// start delay, so the generation reports running first.
+  void StartGeneration() {
+    Semantic().QueuePrompt({SemanticGenerationItem{.element_id = 1, .image_id = 1}});
+    Semantic().StartPendingGeneration(false);
+    ASSERT_TRUE(Semantic().Running());
+  }
+
+  RecordingEditorGpuRelease release_;
+};
+
+TEST_F(SemanticGenerationEditorGpuReleaseTest, CancelDuringTheReleaseEndsBeforeTheSidecarBoot) {
+  release_.answer_at_once = false;
+  StartGeneration();
+  ASSERT_TRUE(WaitUntil([&] { return release_.release_calls == 1; }));
+  EXPECT_EQ(release_.resume_calls, 0);
+
+  Semantic().CancelGeneration();
+  ProcessEvents(50);
+  // The start waits for the release before it ends.
+  EXPECT_TRUE(Semantic().Running());
+  EXPECT_EQ(release_.resume_calls, 0);
+
+  release_.pending(true, {});
+  ASSERT_TRUE(WaitUntil([&] { return !Semantic().Running(); }));
+  EXPECT_EQ(release_.release_calls, 1);
+  EXPECT_EQ(release_.resume_calls, 1);
+  EXPECT_EQ(Semantic().StatusText(), QStringLiteral("Semantic generation canceled."));
+  const auto runtime = host_->project()->handler().project()->GetAiSidecarRuntimeService();
+  ASSERT_NE(runtime, nullptr);
+  EXPECT_FALSE(runtime->IsRunning());
+}
+
+TEST_F(SemanticGenerationEditorGpuReleaseTest, FailedSidecarStartResumesTheEditorOnce) {
+  qputenv("ALCEDO_MIND_BINARY", PathToQString(temp_dir_ / "missing_alcedo_mind").toLocal8Bit());
+  StartGeneration();
+  ASSERT_TRUE(WaitUntil([&] { return !Semantic().Running(); }));
+  EXPECT_EQ(release_.release_calls, 1);
+  EXPECT_EQ(release_.resume_calls, 1);
+  EXPECT_TRUE(Semantic().StatusText().startsWith(QStringLiteral("Semantic runtime failed to start")))
+      << Semantic().StatusText().toStdString();
+  EXPECT_TRUE(Semantic().BackgroundTaskId().isEmpty());
+
+  // The next generation releases and resumes again.
+  StartGeneration();
+  ASSERT_TRUE(WaitUntil([&] { return !Semantic().Running(); }));
+  EXPECT_EQ(release_.release_calls, 2);
+  EXPECT_EQ(release_.resume_calls, 2);
+}
+
+TEST_F(SemanticGenerationEditorGpuReleaseTest, ReleaseFailureEndsTheGenerationWithTheError) {
+  release_.answer_success = false;
+  release_.answer_error   = "device lost";
+  StartGeneration();
+  ASSERT_TRUE(WaitUntil([&] { return !Semantic().Running(); }));
+  EXPECT_EQ(release_.release_calls, 1);
+  EXPECT_EQ(release_.resume_calls, 1);
+  EXPECT_EQ(Semantic().StatusText(),
+            QStringLiteral("Releasing the editor GPU resources failed: device lost"));
 }
 
 }  // namespace

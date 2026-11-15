@@ -552,9 +552,9 @@ TEST_F(EditorSessionRenderControllerTest, EditRefusedDuringExportRendersOnceWhen
   auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
   ASSERT_NE(sched, nullptr);
 
-  render_->SetSuspendedForExport(true, lifecycle_->identity(),
-                                 lifecycle_->active_image_load_request(), lifecycle_->state());
-  EXPECT_TRUE(render_->suspended_for_export());
+  render_->SetSuspendedForGpuRelease(true, lifecycle_->identity(),
+                                     lifecycle_->active_image_load_request(), lifecycle_->state());
+  EXPECT_TRUE(render_->suspended_for_gpu_release());
   EditorRenderCommand settled;
   settled.reason = EditorRenderReason::SettledAdjustment;
   const auto edit_request_id =
@@ -572,9 +572,9 @@ TEST_F(EditorSessionRenderControllerTest, EditRefusedDuringExportRendersOnceWhen
     return event.kind == EditorRenderEventKind::RenderFailed;
   }));
 
-  render_->SetSuspendedForExport(false, lifecycle_->identity(),
-                                 lifecycle_->active_image_load_request(), lifecycle_->state());
-  EXPECT_FALSE(render_->suspended_for_export());
+  render_->SetSuspendedForGpuRelease(false, lifecycle_->identity(),
+                                     lifecycle_->active_image_load_request(), lifecycle_->state());
+  EXPECT_FALSE(render_->suspended_for_gpu_release());
   ASSERT_EQ(sched->scheduled().size(), scheduled_before + 1u);
   EXPECT_EQ(sched->scheduled().back().intent.frame_role, FrameRole::QualityBase);
 }
@@ -588,8 +588,8 @@ TEST_F(EditorSessionRenderControllerTest, ExportEndWhileMinimizedWaitsForTheRest
 
   render_->SetPresentationSuspended(true, lifecycle_->identity(),
                                     lifecycle_->active_image_load_request(), lifecycle_->state());
-  render_->SetSuspendedForExport(true, lifecycle_->identity(),
-                                 lifecycle_->active_image_load_request(), lifecycle_->state());
+  render_->SetSuspendedForGpuRelease(true, lifecycle_->identity(),
+                                     lifecycle_->active_image_load_request(), lifecycle_->state());
   EditorRenderCommand settled;
   settled.reason = EditorRenderReason::SettledAdjustment;
   const auto edit_request_id =
@@ -600,8 +600,8 @@ TEST_F(EditorSessionRenderControllerTest, ExportEndWhileMinimizedWaitsForTheRest
   const auto scheduled_before = sched->scheduled().size();
 
   // The export ended, but the window is still minimized: the viewport would refuse the frame.
-  render_->SetSuspendedForExport(false, lifecycle_->identity(),
-                                 lifecycle_->active_image_load_request(), lifecycle_->state());
+  render_->SetSuspendedForGpuRelease(false, lifecycle_->identity(),
+                                     lifecycle_->active_image_load_request(), lifecycle_->state());
   EXPECT_EQ(sched->scheduled().size(), scheduled_before);
 
   render_->SetPresentationSuspended(false, lifecycle_->identity(),

@@ -34,9 +34,6 @@ using alcedo::diag::editorPresentLog;
 
 namespace {
 
-constexpr const char* kExportRunningMessage =
-    "An export is running; the editor renders again when it ends";
-
 auto RenderTypeForIntent(const alcedo::EditorRenderIntent& intent) -> alcedo::RenderType {
   switch (intent.quality) {
     case alcedo::EditorRenderQuality::Detail:
@@ -236,18 +233,21 @@ void EditorSessionRenderSchedulerPort::ClearSessionContext() {
   EnsurePipelineScheduler()->ScheduleWork([executor] { executor->ReleaseBinding(); });
 }
 
-void EditorSessionRenderSchedulerPort::ReleaseGpuResourcesForExport(
-    EditorGpuResourceReleaseCompletion on_released) {
+auto EditorSessionRenderSchedulerPort::AcquireGpuResourceRelease(
+    EditorGpuReleaseHolder holder, EditorGpuResourceReleaseCompletion on_released) -> bool {
   std::shared_ptr<alcedo::PipelineExecutor> executor;
+  bool                                      first = false;
   {
     std::scoped_lock lock(mutex_);
-    released_for_export_ = true;
-    executor             = executor_;
+    first = GpuReleasedMessageLocked().empty();
+    gpu_release_holders_[static_cast<std::size_t>(holder)] = true;
+    executor                                               = executor_;
   }
-  // The single worker runs this after the frame or image job in flight; every later one reads
-  // released_for_export_ on the worker and renders nothing.
+  // The single worker runs this after the frame or job in flight; every later one reads the
+  // holders on the worker and renders nothing.
   EnsurePipelineScheduler()->ScheduleWork(
-      [executor = std::move(executor), on_released = std::move(on_released)] {
+      [executor = std::move(executor), on_released = std::move(on_released),
+       holder_name = QString::fromUtf8(EditorGpuReleaseHolderName(holder))] {
         EditorGpuResourceRelease release;
         try {
           if (executor) {
@@ -263,28 +263,65 @@ void EditorSessionRenderSchedulerPort::ReleaseGpuResourcesForExport(
         }
         if (release.success) {
           qCInfo(editorPresentLog).noquote()
-              << QStringLiteral("editor GPU resources released for export: %1 -> %2 bytes")
+              << QStringLiteral("editor GPU resources released for %1: %2 -> %3 bytes")
+                     .arg(holder_name)
                      .arg(release.device_bytes_before)
                      .arg(release.device_bytes_after);
         } else {
           qCWarning(editorPresentLog).noquote()
-              << QStringLiteral("editor GPU resource release for export failed: %1")
-                     .arg(QString::fromStdString(release.error));
+              << QStringLiteral("editor GPU resource release for %1 failed: %2")
+                     .arg(holder_name, QString::fromStdString(release.error));
         }
         if (on_released) {
           on_released(std::move(release));
         }
       });
+  return first;
 }
 
-void EditorSessionRenderSchedulerPort::ResumeGpuResourcesAfterExport() {
-  std::scoped_lock lock(mutex_);
-  released_for_export_ = false;
+auto EditorSessionRenderSchedulerPort::EndGpuResourceRelease(EditorGpuReleaseHolder holder)
+    -> bool {
+  bool last = false;
+  {
+    std::scoped_lock lock(mutex_);
+    if (!std::exchange(gpu_release_holders_[static_cast<std::size_t>(holder)], false)) {
+      return false;
+    }
+    last = GpuReleasedMessageLocked().empty();
+  }
+  qCInfo(editorPresentLog).noquote()
+      << QStringLiteral("editor GPU resource release for %1 ended; %2")
+             .arg(QString::fromUtf8(EditorGpuReleaseHolderName(holder)),
+                  last ? QStringLiteral("the editor renders again")
+                       : QStringLiteral("another holder keeps it released"));
+  return last;
 }
 
-auto EditorSessionRenderSchedulerPort::gpu_resources_released_for_export() const -> bool {
+auto EditorSessionRenderSchedulerPort::gpu_resources_released() const -> bool {
+  return !GpuReleasedMessage().empty();
+}
+
+auto EditorSessionRenderSchedulerPort::GpuReleasedMessageLocked() const -> std::string {
+  std::string holders;
+  for (std::size_t index = 0; index < gpu_release_holders_.size(); ++index) {
+    if (!gpu_release_holders_[index]) {
+      continue;
+    }
+    if (!holders.empty()) {
+      holders += " and ";
+    }
+    holders += EditorGpuReleaseHolderName(static_cast<EditorGpuReleaseHolder>(index));
+  }
+  if (holders.empty()) {
+    return {};
+  }
+  return "the editor GPU resources are released for " + holders +
+         "; the editor renders again when the release ends";
+}
+
+auto EditorSessionRenderSchedulerPort::GpuReleasedMessage() const -> std::string {
   std::scoped_lock lock(mutex_);
-  return released_for_export_;
+  return GpuReleasedMessageLocked();
 }
 
 void EditorSessionRenderSchedulerPort::InstallSessionContext(EditorRenderSessionContext context) {
@@ -647,10 +684,9 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     // when the viewport item is replaced.
     task.prepare_ = [this, sink, stale_detail_coverage](alcedo::PipelineTask& prepared_task) {
       // Read on the worker, which orders it against the release work item: a frame that runs
-      // after ReleaseGpuResourcesForExport allocates nothing while the export renders.
-      if (gpu_resources_released_for_export()) {
-        throw std::runtime_error(std::string(alcedo::kPresentationSuspendedMessage) +
-                                 "an export is running");
+      // after AcquireGpuResourceRelease allocates nothing while a holder holds the GPU.
+      if (const auto released = GpuReleasedMessage(); !released.empty()) {
+        throw std::runtime_error(std::string(alcedo::kPresentationSuspendedMessage) + released);
       }
       auto& executor = *prepared_task.pipeline_executor_;
       if (executor.GetFrameSink() != sink) {
@@ -732,8 +768,8 @@ auto EditorSessionRenderSchedulerPort::ScheduleImages(
     if (shutting_down_) {
       return reject("The editor render port is shutting down");
     }
-    if (released_for_export_) {
-      return reject(kExportRunningMessage);
+    if (auto released = GpuReleasedMessageLocked(); !released.empty()) {
+      return reject(std::move(released));
     }
     // An image job renders the image the session bound; it never binds another one.
     if (!session_context_ || !ContextMatches(*session_context_, request.image_load_request_id.value,
@@ -805,10 +841,10 @@ void EditorSessionRenderSchedulerPort::RunImageJob(
     alcedo::EditorImageRenderCompletion         on_complete) {
   alcedo::EditorImageRenderResult result;
   try {
-    // An export that started after this job was accepted released the executor; the job must
+    // A release that started after this job was accepted released the executor; the job must
     // not allocate it again.
-    if (gpu_resources_released_for_export()) {
-      throw std::runtime_error(kExportRunningMessage);
+    if (auto released = GpuReleasedMessage(); !released.empty()) {
+      throw std::runtime_error(std::move(released));
     }
     alcedo::FramePreviewMetadata metadata;
     metadata.image_identity       = static_cast<std::uint64_t>(request.image_id);
@@ -904,8 +940,8 @@ auto EditorSessionRenderSchedulerPort::ScheduleMaskCoverage(
     if (shutting_down_) {
       return reject("The editor render port is shutting down");
     }
-    if (released_for_export_) {
-      return reject(std::string(alcedo::kPresentationSuspendedMessage) + kExportRunningMessage);
+    if (const auto released = GpuReleasedMessageLocked(); !released.empty()) {
+      return reject(std::string(alcedo::kPresentationSuspendedMessage) + released);
     }
     if (mask_coverage_job_) {
       return reject("Another coverage job is running");
@@ -957,11 +993,10 @@ void EditorSessionRenderSchedulerPort::RunMaskCoverageJob(
     const alcedo::EditorMaskCoverageJobCompletion& on_complete) {
   alcedo::EditorMaskCoverageJobResult result;
   try {
-    // An export that started after this job was accepted released the executor; the job must
+    // A release that started after this job was accepted released the executor; the job must
     // not allocate it again.
-    if (gpu_resources_released_for_export()) {
-      throw std::runtime_error(std::string(alcedo::kPresentationSuspendedMessage) +
-                               kExportRunningMessage);
+    if (const auto released = GpuReleasedMessage(); !released.empty()) {
+      throw std::runtime_error(std::string(alcedo::kPresentationSuspendedMessage) + released);
     }
     const alcedo::MaskCoverageFrameIdentity identity{
         .request_id     = request.request_id,

@@ -2595,24 +2595,25 @@ void EditorSessionService::SetPresentationSuspended(bool suspended) {
                                    lifecycle_.active_image_load_request(), lifecycle_.state());
 }
 
-void EditorSessionService::SetSuspendedForExport(bool suspended) {
+void EditorSessionService::SetSuspendedForGpuRelease(bool suspended) {
   if (!InOwnerReduction()) {
     EditorSessionCommand command;
-    command.kind                 = EditorSessionCommandKind::SetSuspendedForExport;
-    command.suspended_for_export = suspended;
+    command.kind                      = EditorSessionCommandKind::SetSuspendedForGpuRelease;
+    command.suspended_for_gpu_release = suspended;
     (void)SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-      SetSuspendedForExport(queued.suspended_for_export);
+      SetSuspendedForGpuRelease(queued.suspended_for_gpu_release);
       EditorSessionResult accepted;
       accepted.kind     = EditorSessionResultKind::Accepted;
       accepted.state    = lifecycle_.state();
       accepted.identity = lifecycle_.identity();
-      accepted.message  = queued.suspended_for_export ? "Rendering suspended for export"
-                                                      : "Rendering resumed after export";
+      accepted.message  = queued.suspended_for_gpu_release
+                              ? "Rendering suspended while the GPU resources are released"
+                              : "Rendering resumed after the GPU resource release";
       return accepted;
     });
     return;
   }
-  render_.SetSuspendedForExport(suspended, lifecycle_.identity(),
+  render_.SetSuspendedForGpuRelease(suspended, lifecycle_.identity(),
                                 lifecycle_.active_image_load_request(), lifecycle_.state());
 }
 

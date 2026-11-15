@@ -22,6 +22,7 @@
 #include "app/import_service.hpp"
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
+#include "ui/alcedo_main/album_backend/editor_gpu_resource_release.hpp"
 #include "ui/alcedo_main/album_backend/folder_import_scan_model.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
@@ -36,20 +37,6 @@ class ProjectModule;
 class SemanticGenerationController;
 class StatsEngine;
 class IUiStatusSink;
-
-/**
- * @brief Return path of the GPU resources another renderer releases so an export can use them.
- *
- * `release_before_export` runs on the GUI thread after the export queue is built and before the
- * export renders. It calls its completion once, on any thread, with the real error when the
- * release failed. `resume_after_export` runs on the GUI thread once when that export ends:
- * completed, every image failed, or the release failed.
- */
-struct ExportGpuResourceRelease {
-  using ReleaseCompletion = std::function<void(bool success, std::string error)>;
-  std::function<void(ReleaseCompletion)> release_before_export;
-  std::function<void()>                  resume_after_export;
-};
 
 /// Handles file import and image export workflows.
 class ImportExportHandler final : public QObject {
@@ -103,7 +90,10 @@ class ImportExportHandler final : public QObject {
   /// StartFolderImportAsUser, StartFolderImportToFolderAsUser). Null refuses nothing.
   void                    SetInteractionPolicy(InteractionPolicyController* interaction_policy);
   /// The editor GPU resources each export releases before it renders. Empty releases nothing.
-  void                    SetExportGpuResourceRelease(ExportGpuResourceRelease release);
+  /// Editor GPU release of the export holder. `release` runs after the export queue is built and
+  /// before the export renders; `resume` runs once when that export ends: completed, every image
+  /// failed, or the release failed.
+  void                    SetExportGpuResourceRelease(EditorGpuResourceReleaseHooks release);
 
   /// The user import of the Import Images dialog into the current folder: the regular files of
   /// @p fileUrlsOrPaths, every import category allowed. Refused while an automation agent holds
@@ -302,7 +292,7 @@ class ImportExportHandler final : public QObject {
   FolderController* folders_              = nullptr;
   IUiStatusSink*    status_               = nullptr;
   InteractionPolicyController* interaction_policy_ = nullptr;
-  ExportGpuResourceRelease      export_gpu_resource_release_;
+  EditorGpuResourceReleaseHooks export_gpu_resource_release_;
   /// The running export released the editor GPU resources; FinishExport returns them.
   bool                          export_gpu_resources_released_ = false;
   StatsEngine*                  stats_    = nullptr;
