@@ -2,19 +2,29 @@
 
 Date: 2026-11-15
 
+Revised: 2026-11-16
+
 Status: design proposal for discussion; not approved or implemented.
 
 Source reviewed: `feature/batch-paste-version-choice` at `e32a3993`.
 
 ## 1. Whole design
 
-A **shared source** owns an ordered group of Color Grade nodes. Images use
-references to its published revisions. Each image keeps its own Develop,
-geometry, DRT/Post, and local Grades outside the group.
+A **shared group** is an ordered list of Color Grade nodes stored once as a
+**shared source**, S. Each participating photo has a link to S in a tracking
+**Version**, an alternative edit of that photo. A **revision** is one saved
+state of S, including its node order and settings.
 
-Sharing creates one new tracking Version in each participating image, including
-the source image. Previous Versions remain unchanged. Later updates add commits
-to tracking Versions, not more named Versions.
+Creating a group creates a tracking Version in the source photo. Sharing it
+creates a tracking Version in each target photo. Both operations start from the
+photo's **root**, its stored initial editing state. They preserve that photo's
+root Develop, geometry, and DRT/Post settings. They do not inherit edits from
+its previously active Version or write into that Version.
+
+Previous Versions remain available. Later synchronization updates the tracking
+Versions without creating more named Versions. Users can add local Grades
+outside the shared group or change image-specific settings in a tracking Version.
+Those edits stay local.
 
 ```text
 Shared source S: r1 [X, Y] -> r2 [X exposure +1, Y] -> r3 [Y, X exposure +1]
@@ -30,34 +40,51 @@ drafts, Push operations, or source branches to merge.
 
 ## 2. Create and edit a group
 
-1. In A, select complete Color Grade nodes in their pipeline order.
-2. Choose **Share Color Grades**, select B and C, name the source, and choose
-   Automatic or Manual. Automatic is the default.
-3. Review the sequence and affected images, then confirm **Create Links**.
-4. Create S and make a new tracking Version active in A, B, and C. Keep the
-   library selection.
+1. In A's Nodes panel, select complete Color Grade nodes. Right-click and choose
+   **Create Shared Color Grades**. The app keeps their pipeline order.
+2. Name S and choose A's mode: Automatic or Manual. Automatic is the default.
+   On confirmation, the app creates S and a tracking Version from A's root,
+   then makes that Version active.
+3. The app remembers S for the next sharing action, like a copied item for Paste.
+4. In the Library view or editor filmstrip, select target photos B and C.
+   Right-click and choose **Share Color Grades**.
+5. Review S and the targets. Choose Automatic or Manual for the new target links;
+   Automatic is the default. Confirm sharing. The app creates and activates a
+   tracking Version from each target's root, using the same latest published
+   revision of S for the batch. Keep the photo selection after completion.
 
-Creation starts from each image's root Develop, geometry, and DRT/Post. Only
-selected Grades enter the shared group. Other current edits remain in the
-previous Versions. State this in the dialog before confirmation. Do not match
-or combine the group with existing target Grades.
+Before either confirmation, explain that unselected edits remain in the previous
+Versions. There is no current-Version destination. Disable Share Color Grades
+until the app has a source to share. It remembers the most recently created
+source and reuses it for later target selections. Sharing links to that source;
+it does not create a new source for each target. Each link's mode can later change
+independently.
 
 The Nodes panel shows an expandable group boundary. Its header shows the name,
-mode, affected-image count, and actions. Automatic editing displays **Editing
-shared group: 3 images**. Manual status shows **Up to date** or **Update
-available**. Local adjustment panels remain editable in either mode.
+mode, linked-photo count, and actions. While editing, show the number of photos
+with Automatic links that will change: **Changes affect 2 photos** in the
+example above. Manual status shows **Up to date** or **Update available**.
+Panels for local Grades and image-specific settings remain editable in either
+mode. Shared-node controls are read-only in Manual mode.
 
 | Action inside an Automatic group | Shared result |
 | --- | --- |
 | Edit a Grade's values, enabled state, mix, name, or supported Masks | Publish the changed group. |
 | Reorder X and Y | Publish the new order. |
-| Add Color Grade | Insert after the selected child, or at the end if none is selected. |
+| Right-click a child and choose Insert Before Selected Node | Insert a shared Grade immediately before that child, including before the first child. |
+| Right-click a child and choose Insert After Selected Node | Insert a shared Grade immediately after that child, including after the last child. |
+| Right-click an empty group and choose Insert Node | Insert the first shared Grade. |
 | Delete X | Remove X from the group. |
-| Delete every child | Keep an empty group that passes its input through. |
+| Delete every child | Keep an empty linked group that leaves the image unchanged at that point in the pipeline. |
 
 Adding local Grades before or after the group, moving the whole group, and
-editing image-specific settings affect only that Version. A child cannot be
-dragged across the group boundary. Use **Make Independent** to separate it.
+editing image-specific settings affect only that Version. A node cannot be
+dragged across the group boundary. **Make Independent** converts the whole group
+to local nodes; those nodes can then move separately.
+In a nonempty group, insert shared Grades only through the child context-menu
+actions. In an empty group, right-click the group and choose **Insert Node**.
+This creates its first Grade and publishes the change to Automatic followers.
+Manual groups remain read-only until Resume Automatic or Make Independent.
 
 Use existing AppTheme controls and keyboard access. Loading disables the affected
 actions. An error states its cause and keeps the last valid state.
@@ -72,35 +99,38 @@ actions. An error states its cause and keeps the last valid state.
 | Resume Automatic | Adopt the latest revision and enable future automatic updates. |
 | Edit a Manual group | Choose Resume Automatic or Make Independent first. |
 
-For example, B's slider drag previews only in B. Release publishes r2. Automatic
-A and B adopt r2. Manual C keeps r1. This behavior requires no branch comparison,
-unpublished draft storage, or conflict dialog.
+Starting with A, B, and C at r1, B's slider drag previews only in B. Release
+publishes r2. Automatic A and B update to r2. Manual C keeps r1. No branch
+comparison, unpublished draft storage, or conflict dialog is needed.
 
-The source owner serializes publications. A settled edit means one completed
-input sequence, such as slider release. Inactive tracking Versions also receive
-updates when their policy is Automatic. Ordinary Versions and historical commits
-do not change. A is not a permanent owner: deleting A does not delete S.
+Each completed shared edit saves a new revision. Inactive tracking Versions also
+update when their mode is Automatic. Ordinary independent Versions and old
+history entries do not change. Deleting A does not delete S.
 
 ## 4. History and Undo
 
-Keep rendering state separate from tracking policy:
+The app records each image edit as a **commit**, a history entry that can be
+replayed. Keep the recorded image state separate from its tracking policy:
 
-- An image commit stores an exact source revision. Rendering, replay, and history
-  preview resolve that revision; they never substitute the current source head.
+- Each linked group in the recorded image state refers to an exact source
+  revision. Rendering, replay, and history preview use that revision, not the
+  source's latest revision.
 - Each Automatic adoption creates a small image commit that changes the revision
   reference. This keeps existing image history authoritative.
 - Automatic/Manual is mutable tracking policy for a Version's group instance.
   The image history owner stores it alongside the Version reference. It is not
   part of the immutable rendering state.
 
-**Image Undo/Redo** uses the existing image history. Before moving its head,
-pause that Version's tracking policies in the same transaction. Show
-**Manual: history navigation paused synchronization**. Redo stays paused.
-References restored by Undo are also Manual. **Resume Automatic** explicitly
-returns them to the latest source revision.
+**Image Undo/Redo** uses the existing image history. When it moves to a different
+history entry, switch that Version's group links to Manual in the same
+transaction. This includes Undo of a local edit. Show **Manual: history
+navigation paused synchronization**. Redo stays Manual. A link restored by Undo
+also starts in Manual mode. **Resume Automatic** updates the selected link to
+the latest revision and enables future updates.
 
-Thus Undo in B can restore B to r1 without changing S or A. Merely previewing an
-old history entry changes neither the head nor the tracking policy.
+Thus Undo immediately after a shared edit restores B's previous image state
+without reversing the edit in S or A. Merely previewing an old history entry
+changes neither the current history position nor the tracking policy.
 
 **Restore Shared Revision** is a separate source-history action. Selecting r1
 publishes its contents as a new source revision. Show the affected Automatic
@@ -112,13 +142,14 @@ maintain a second Undo/Redo stack.
 
 | Action | Result |
 | --- | --- |
-| Remove from This Version | Remove only the current reference. |
+| Remove from This Photo | Remove the group from this photo's active Version. Other Versions of the same photo keep their links. |
 | Make Independent | Replace the reference with local nodes at the same position, preserving displayed values and order. Assign new local IDs. |
-| Remove from All Linked Versions | After showing affected images and Versions, remove all current references in one operation, including Manual references. |
+| Remove from All Linked Photos | Show affected photos and Versions, then remove the group from every linked Version, including inactive Versions and Manual links. |
 
-Local removal behaves like unlinking a hard link. Global removal is an explicit
-batch operation. Retain source revisions while any live or historical reference
-needs them. Source node IDs remain stable across published revisions.
+Local removal behaves like unlinking a hard link. Global removal changes each
+linked Version's current state in one operation; it does not erase old history
+entries. Retain source revisions while any Version, history entry, or running
+export needs them. Source node IDs remain stable across published revisions.
 
 Removal and Make Independent are recorded in image history. Image Undo can
 restore that Version's reference in Manual mode. Global removal does not add a
@@ -144,6 +175,7 @@ old results; readers use their models without creating another editable source.
 A proposed `SharedGradeService` owns source operations for one project.
 `PipelineMgmtService` owns image commits and tracking policies. The UI calls
 these services. Storage obtains a connection at the operation boundary.
+The source service processes shared edits one at a time.
 
 ```text
 Completed shared edit -> source owner -> validate affected Versions
@@ -200,13 +232,22 @@ and `ui/alcedo_main` for group controls. Before implementation, reread
 
 1. Parameter, order, insertion, and removal edits reach all Automatic followers.
 2. Manual C keeps r1 after A publishes r2. Pull adopts r2 without enabling editing.
-3. Image Undo/Redo pauses tracking and preserves replay after reopen.
+3. Image Undo/Redo pauses that Version's links, including when undoing a local
+   edit. Reopen preserves the chosen history entry and Manual mode.
 4. Restoring shared r1 publishes a new revision and leaves Manual pins unchanged.
-5. Local removal leaves other links intact. Global removal is atomic; historical
-   references remain readable and local Undo restores a paused link.
+5. Local removal leaves other Versions intact. Global removal includes inactive
+   and Manual links and is atomic. Historical references remain readable; image
+   Undo restores a Manual link.
 6. A failed DB transaction changes no heads or policies.
 7. Export honors different target revisions throughout a concurrent source edit.
 8. Unsupported Masks fail before creating any source or tracking Version.
+9. Create Shared Color Grades in A, then Share Color Grades to selected Library
+   or filmstrip targets. Each operation creates root-based Versions and preserves
+   previous Versions. Target selection remains unchanged. No current-Version
+   destination is available.
+10. Child context menus insert before the first or after the last node.
+    Right-clicking an empty Automatic group offers Insert Node and publishes
+    its first Grade to Automatic followers.
 
 Related specifications:
 
