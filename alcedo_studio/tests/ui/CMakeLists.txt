@@ -897,8 +897,9 @@ alcedo_ui_gtest_discover_tests(EditorFilmstripQmlTest
 )
 alcedo_register_test_target(EditorFilmstripQmlTest ui)
 
-# Issue 442: the editor closes its open image when the accepted, filtered
-# Library list no longer contains it (ImageActionsController list sync).
+# Issue 442 and 957: the editor checks its open image against the accepted, filtered
+# Library list and keeps it in the filmstrip slot of an image outside the list
+# (ImageActionsController list sync).
 add_executable(EditorLibraryListSyncQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_library_list_sync_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
@@ -926,6 +927,36 @@ alcedo_ui_gtest_discover_tests(EditorLibraryListSyncQmlTest
     PROPERTIES LABELS "workspace_qml;editor_filmstrip"
 )
 alcedo_register_test_target(EditorLibraryListSyncQmlTest ui)
+
+# Issue 957: the image context menu of the Library grid and the editor filmstrip targets the
+# whole selection when it holds the clicked image, and the clicked image alone otherwise.
+add_executable(ImageContextMenuTargetsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/image_context_menu_targets_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(ImageContextMenuTargetsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ImageContextMenuTargetsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
+)
+target_compile_definitions(ImageContextMenuTargetsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(ImageContextMenuTargetsQmlTest
+    TEST_PREFIX "ImageContextMenuTargetsQmlTest."
+    PROPERTIES LABELS "workspace_qml;editor_filmstrip"
+)
+alcedo_register_test_target(ImageContextMenuTargetsQmlTest ui)
 
 # Production QML handlers whose C++ signal starts with an upper-case letter (delete and rating
 # results, export end, accelerator preparation), driven through C++ fakes with the production
