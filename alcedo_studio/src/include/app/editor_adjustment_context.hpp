@@ -56,6 +56,9 @@ struct EditorImageExifDisplay {
   /// file the model already follows UniqueCameraModel. Empty without a RAW color context.
   std::string                        camera_make;
   std::string                        camera_model;
+  /// File name of the image (`Image::image_name_`), the name that the Library rows show. The
+  /// editor filmstrip shows it for an open image that the current Library list does not hold.
+  std::wstring                       file_name;
 };
 
 /// UTF-8 em dash used when a header EXIF field is missing or invalid.

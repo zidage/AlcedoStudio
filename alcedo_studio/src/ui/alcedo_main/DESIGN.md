@@ -357,6 +357,17 @@ default height is 168 px (`EditorFilmstrip.minExpandedHeight`,
 `kFilmstripExpandedHeightMin`), which gives a slot of about 100 px. There
 is no separate rating badge.
 
+**Open image outside the list (#957):** the open image always has one filmstrip
+position. After a collection, filter, or search change, the editor keeps the
+open image. When the new list holds it, its tile in the list is the editing
+tile. When the list does not hold it, the strip shows it in a separate slot at
+the left edge, before the list: one editing tile (2 px `textColor` ring, file
+name from the session), then a 1 px `dividerColor` line, then the list. The
+slot does not scroll with the list, has no selected state and no context menu,
+and shows no rating. Keyboard focus starts on the slot, so Right opens the
+first image of the list. The slot ends when the editor opens another image,
+closes the image, or a later list holds the image.
+
 **Monochrome segmented controls (family):** four chrome sites share one language:
 
 | Site | Track | Sliding / selected well | Active glyph / label |

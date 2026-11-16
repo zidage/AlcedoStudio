@@ -25,14 +25,14 @@ LibraryMutationOperations::LibraryMutationOperations(
   }
 }
 
-auto LibraryMutationOperations::ResolveTargets(const QVariantMap& clickedItem,
-                                               bool includeSelection) const -> QVariantList {
-  if (includeSelection && selection_ != nullptr && selection_->SelectedCount() > 0) {
-    return selection_->SelectedItems();
-  }
+auto LibraryMutationOperations::ResolveTargets(const QVariantMap& clickedItem) const
+    -> QVariantList {
   const uint element_id = clickedItem.value(QStringLiteral("elementId")).toUInt();
   if (element_id == 0) {
     return {};
+  }
+  if (selection_ != nullptr && selection_->IsSelected(element_id)) {
+    return selection_->SelectedItems();
   }
   const uint file_id   = clickedItem.value(QStringLiteral("fileId")).toUInt();
   uint       folder_id = clickedItem.value(QStringLiteral("folderId")).toUInt();

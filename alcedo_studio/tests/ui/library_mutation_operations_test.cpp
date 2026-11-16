@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QList>
 #include <QSignalSpy>
 #include <algorithm>
 #include <chrono>
@@ -166,7 +167,7 @@ TEST_F(LibraryMutationOperationsTest, DeleteOpenEditorImageClosesEditorImage) {
   LibraryMutationOperations operations(host.images(), host.library()->selection(), host.folders(),
                                        &editor, &router);
   EXPECT_EQ(operations.DeleteScope(), QStringLiteral("project"));
-  const QVariantList targets = operations.ResolveTargets(QVariantMap{}, true);
+  const QVariantList targets = operations.ResolveTargets(row);
   ASSERT_EQ(targets.size(), 1);
   const QVariantMap result = DeleteAndWait(operations, targets);
 
@@ -195,7 +196,7 @@ TEST_F(LibraryMutationOperationsTest, DeleteOpenImageInEditorWorkspaceShowsEmpty
 
   LibraryMutationOperations operations(host.images(), host.library()->selection(), host.folders(),
                                        &editor, &router);
-  const QVariantMap result = DeleteAndWait(operations, operations.ResolveTargets(row, true));
+  const QVariantMap         result = DeleteAndWait(operations, operations.ResolveTargets(row));
 
   EXPECT_EQ(result.value(QStringLiteral("deletedCount")).toInt(), 1);
   EXPECT_EQ(router.workspace(), QStringLiteral("editor"));
@@ -241,20 +242,35 @@ TEST_F(LibraryMutationOperationsTest, SingleRatingUsesDirectPathAndRejectsOutOfR
   EXPECT_EQ(result.value(QStringLiteral("rating")).toInt(), 2);
 }
 
-TEST_F(LibraryMutationOperationsTest, ResolveTargetsUsesSelectionOnlyWhenAsked) {
+// Issue 957: a menu on a selected image acts on the whole selection, from the Library grid and
+// from the editor filmstrip alike. A menu on an image outside the selection acts on that image
+// alone and never on the hidden selection.
+TEST_F(LibraryMutationOperationsTest, ResolveTargetsUsesSelectionWhenItHoldsClickedImage) {
   ApplicationModuleHost      host;
   LibraryMutationOperations* operations = host.library_mutations();
-  const QVariantMap clicked{{QStringLiteral("elementId"), 9u}, {QStringLiteral("imageId"), 90u}};
-  host.library()->selection()->SetImageSelected(4, 40, QStringLiteral("d.arw"), false, true);
+  LibrarySelection*          selection  = host.library()->selection();
+  selection->SetImageSelected(4, 40, QStringLiteral("d.arw"), false, true);
+  selection->SetImageSelected(5, 50, QStringLiteral("e.arw"), false, true);
+  selection->SetImageSelected(6, 60, QStringLiteral("f.arw"), false, true);
 
-  const QVariantList with_selection = operations->ResolveTargets(clicked, true);
-  ASSERT_EQ(with_selection.size(), 1);
-  EXPECT_EQ(with_selection.front().toMap().value(QStringLiteral("elementId")).toUInt(), 4u);
-  const QVariantList clicked_only = operations->ResolveTargets(clicked, false);
+  const QVariantMap  selected_clicked{{QStringLiteral("elementId"), 5u},
+                                      {QStringLiteral("imageId"), 50u}};
+  const QVariantList with_selection = operations->ResolveTargets(selected_clicked);
+  ASSERT_EQ(with_selection.size(), 3);
+  QList<uint> element_ids;
+  for (const QVariant& target : with_selection) {
+    element_ids.push_back(target.toMap().value(QStringLiteral("elementId")).toUInt());
+  }
+  std::sort(element_ids.begin(), element_ids.end());
+  EXPECT_EQ(element_ids, (QList<uint>{4u, 5u, 6u}));
+
+  const QVariantMap  unselected_clicked{{QStringLiteral("elementId"), 9u},
+                                        {QStringLiteral("imageId"), 90u}};
+  const QVariantList clicked_only = operations->ResolveTargets(unselected_clicked);
   ASSERT_EQ(clicked_only.size(), 1);
   EXPECT_EQ(clicked_only.front().toMap().value(QStringLiteral("elementId")).toUInt(), 9u);
   EXPECT_EQ(clicked_only.front().toMap().value(QStringLiteral("fileId")).toUInt(), 9u);
-  EXPECT_TRUE(operations->ResolveTargets(QVariantMap{}, false).isEmpty());
+  EXPECT_TRUE(operations->ResolveTargets(QVariantMap{}).isEmpty());
 }
 
 }  // namespace

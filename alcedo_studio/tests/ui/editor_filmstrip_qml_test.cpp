@@ -9,6 +9,7 @@
 #include <QEventLoop>
 #include <QHash>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQuickItem>
@@ -23,6 +24,7 @@
 #include <QVariantMap>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -152,6 +154,7 @@ class FilmstripSession final : public QObject {
   Q_PROPERTY(int elementId READ elementId WRITE setElementId NOTIFY elementIdChanged)
   Q_PROPERTY(int imageId READ imageId WRITE setImageId NOTIFY imageIdChanged)
   Q_PROPERTY(bool hasImage READ hasImage CONSTANT)
+  Q_PROPERTY(QString imageFileName READ imageFileName CONSTANT)
   Q_PROPERTY(
       QString sessionState READ sessionState WRITE setSessionState NOTIFY sessionStateChanged)
   Q_PROPERTY(bool renderBusy READ renderBusy WRITE setRenderBusy NOTIFY renderBusyChanged)
@@ -166,6 +169,7 @@ class FilmstripSession final : public QObject {
   [[nodiscard]] int         elementId() const { return element_id_; }
   [[nodiscard]] int         imageId() const { return image_id_; }
   [[nodiscard]] bool        hasImage() const { return true; }
+  [[nodiscard]] QString     imageFileName() const { return QStringLiteral("outside.arw"); }
   [[nodiscard]] QString     sessionState() const { return session_state_; }
   [[nodiscard]] bool        renderBusy() const { return render_busy_; }
   [[nodiscard]] bool        canDiscardCurrentCommit() const { return can_discard_; }
@@ -1167,6 +1171,70 @@ TEST(EditorFilmstripQmlTest, ContextMenuRequestCarriesClickedRowAndScenePoint) {
   EXPECT_EQ(payload.value(QStringLiteral("imageId")).toInt(), 2001);
   EXPECT_DOUBLE_EQ(payload.value(QStringLiteral("sceneX")).toDouble(), 96.0);
   EXPECT_DOUBLE_EQ(payload.value(QStringLiteral("sceneY")).toDouble(), 24.0);
+}
+
+// Issue 957: the open image that the current Library list does not hold (a collection or
+// filter change while it is open) has its own slot before the list, with its own thumbnail
+// pin. A switch to an image of the list ends the slot and releases the pin.
+TEST(EditorFilmstripQmlTest, OpenImageOutsideListHasItsOwnSlotUntilAnotherImageOpens) {
+  // A one-pixel PNG: the slot thumbnail loads without an image provider.
+  const QString kOnePixelPngUrl = QStringLiteral(
+      "data:image/png;base64,"
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJg"
+      "gg==");
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+
+  auto* filmstrip = harness.filmstrip();
+  ASSERT_NE(filmstrip, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(harness.list() != nullptr, 2000);
+  auto* slot =
+      harness.window_->findChild<QQuickItem*>(QStringLiteral("editorFilmstripOutsideListSlot"));
+  ASSERT_NE(slot, nullptr);
+  EXPECT_FALSE(slot->isVisible());
+
+  // ImageActionsController.editorOutsideListImage, read through the host (Main).
+  QQmlComponent host_component(&harness.engine_);
+  host_component.setData(
+      QByteArrayLiteral("import QtQuick\n"
+                        "QtObject { property var editorOutsideListImage: null }"),
+      QUrl(QStringLiteral("file:///FilmstripHost.qml")));
+  std::unique_ptr<QObject> host(host_component.create());
+  ASSERT_NE(host, nullptr) << host_component.errorString().toStdString();
+  filmstrip->setProperty("host", QVariant::fromValue<QObject*>(host.get()));
+
+  // The session shows an image that the list does not hold.
+  harness.session_.setElementId(5000);
+  harness.session_.setImageId(6000);
+  host->setProperty("editorOutsideListImage", QVariantMap{{QStringLiteral("elementId"), 5000},
+                                                          {QStringLiteral("imageId"), 6000}});
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(slot->isVisible(), 2000);
+  EXPECT_TRUE(harness.library_.isPinned(5000));
+  EXPECT_EQ(filmstrip->property("currentFileName").toString(), QStringLiteral("outside.arw"));
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), -1);
+  // The list starts after the slot.
+  EXPECT_GT(harness.list()->x(), slot->x() + slot->width());
+
+  auto* card = slot->findChild<QQuickItem*>(QStringLiteral("editorFilmstripTileCard"));
+  ASSERT_NE(card, nullptr);
+  EXPECT_TRUE(card->property("editing").toBool());
+  EXPECT_EQ(card->property("fileName").toString(), QStringLiteral("outside.arw"));
+  emit harness.library_.thumbnailUpdated(5000, kOnePixelPngUrl, false, false, QString{});
+  ProcessEvents();
+  EXPECT_EQ(card->property("liveThumbUrl").toString(), kOnePixelPngUrl);
+
+  // Right opens the first image of the list; the slot ends with the switch.
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(filmstrip, "activateAdjacentImage", Q_ARG(QVariant, QVariant(1))));
+  ProcessEvents();
+  EXPECT_EQ(harness.router_.lastElementId(), 1000);
+  EXPECT_EQ(harness.session_.elementId(), 1000);
+  QTRY_VERIFY_WITH_TIMEOUT(!slot->isVisible(), 2000);
+  EXPECT_FALSE(harness.library_.isPinned(5000));
+  EXPECT_EQ(filmstrip->property("currentFileName").toString(), QStringLiteral("film_0.arw"));
+  filmstrip->setProperty("host", QVariant::fromValue<QObject*>(nullptr));
+  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
 TEST(EditorFilmstripQmlTest, SelectedTileShowsSavingAndRenderBadgesWhileSessionBusy) {
