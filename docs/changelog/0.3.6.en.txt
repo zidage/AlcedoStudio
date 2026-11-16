@@ -1,0 +1,85 @@
+Alcedo Studio 0.3.6
+
+Before you upgrade
+------------------
+- Shadows, Highlights, Whites, and Blacks use new tone math, Shadows and
+  Highlights now apply before the Tone Curve, and the Tone Curve renders the
+  smooth curve that the panel draws. Photos edited in earlier versions with
+  these controls can look different when you open them.
+- New RAW imports use a new default look (see below). Photos that are already
+  in a project keep their current settings.
+
+New
+---
+- Tone Curve: edit the RGB curve and separate red, green, and blue curves on a
+  new plot that shows the histogram of the curve input and stop marks from
+  middle grey. Points follow the pointer directly; a right click removes a
+  point. Eight presets: Linear, Soft, Medium, and Strong Contrast, Cl. Digit,
+  and curves sampled from Kodak 2383, Velvia 50, and Ektachrome E100.
+- Default look: new RAW imports use the Cl. Digit curve, a classic digital
+  tone shaped after the RawTherapee default curve, for a brighter and less
+  flat first view. In Settings > Default Behavior > RAW Import, choose the
+  exposure, saturation, Tone Curve preset, display transform, and lens
+  correction that new RAW imports receive. Each row has its own reset.
+- Camera profiles (DCP): set a DCP folder in Settings > LUTs and Color
+  Management. The Camera Profile section of the RAW panel matches the profiles
+  in that folder to the camera, and the tone curve of the selected profile
+  loads into the Tone Curve for further adjustment. DNG files keep their own
+  calibration with a profile. Bring your own DCP files, for example the
+  CameraProfiles folder of a Lightroom Classic installation or profiles from
+  Adobe DNG Converter. The processing differs from Adobe Camera Raw and the
+  camera, so the result can look different from theirs.
+- Windows color management: the editor, the comparison view, LUT previews, and
+  the Library, filmstrip, and search thumbnails convert to the ICC profile of
+  the monitor that shows them. Settings > LUTs and Color Management shows the
+  profile in use.
+- Sliders: every slider has a new design with the handle inside the rail, a
+  value field for typing, and double-click reset. Exposure drags from -5 to
+  +5 EV and accepts -10 to +10 EV. Highlights accepts down to -150 and Shadows
+  up to +150 for scenes with high contrast. The Selective Color rails show the
+  colors of the selected hue.
+- Shadows and tone zones: the Shadows lift has a new curve that keeps black,
+  so strong lifts no longer turn the shadows grey or brighter than the
+  midtones. Whites and Blacks change only their own side of middle grey, by up
+  to 3 stops, and negative Whites values now darken highlights.
+- Library layout: Justified rows show the photos in rows of one height that
+  keep each photo's shape, with camera, exposure, date, labels, and rating on
+  hover. Zoom keeps the photos in view in place. Switch between Justified rows
+  and Classic grid in Settings > Language / Theme.
+- Color labels and the Delete mark: give photos one or more of seven color
+  labels and mark photos for deletion. Name the labels in Settings > Library >
+  Color Labels, filter by them with By Custom Label, and set labels, the Delete
+  mark, and ratings for the whole selection in the Inspector. alcedo-cli reads
+  and writes color labels and the Delete mark.
+- Library speed: scrolling and zooming large libraries is much faster. In a
+  2,943-photo test library, one scroll step in Justified rows takes 4.6 ms
+  instead of 72 ms, and cached thumbnails return in 3 ms after a zoom instead
+  of 263 ms. AI labels are generated about 16 times faster from the camera
+  previews, and the editor frees its GPU memory while labels are generated.
+- Library tools: drag files or folders onto the Library or onto a collection
+  to import them. Inspector overview sections fold, and Camera, Labels, and
+  Lens have a search field. Add to Export Queue opens the Export tab.
+- Layers: hide a Color Grade layer with the eye button on its row; hidden
+  layers skip processing. A Color Grade without connections stays in the
+  document. Show selection in the Mask panel starts on for each Mask.
+- Crop: rotate from the zones outside the frame corners, and a finer grid
+  appears while you rotate. Drags near the frame edges resize the frame.
+- Lens correction: Auto mode now finds the built-in lens of the Fujifilm
+  GFX100RF, Ricoh GR III, and Ricoh GR IIIx.
+- Logs: Settings > About opens the log folder. The AI process writes its log
+  to the same folder, and old log sessions are removed.
+
+Fixed
+-----
+- Selection: a filter or search change removes the photos it hides from the
+  selection, so Delete, ratings, labels, and Paste Adjustments act only on
+  photos in the current list. The filmstrip menu acts on every selected photo,
+  and a right click on a photo outside the selection acts on that photo alone.
+  The editor keeps the open photo when the collection or filter changes.
+- Export queue: a photo exported once can be queued again and shows as Queued
+  until its next export.
+- Filmstrip: arrow keys, Home, and End keep the focused photo in view.
+- Library: Ctrl + wheel forward shows fewer, larger photos.
+- Tone Curve: every label of the section shows in full.
+- alcedo-cli: render.preview writes the root image with its own Develop
+  settings, so Lens Correction shows as a change.
