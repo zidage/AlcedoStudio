@@ -176,8 +176,9 @@ Item {
     function exportStatusForRow(statusKey, summaryRow) {
         if (summaryRow === true)
             return ""
+        // Rows outside the current export run have no status key: they wait for the next export.
         if (!statusKey)
-            return root.exportBusy ? "running" : "queued"
+            return "queued"
         const map = appModules.importExport.exportItemStatuses
         const value = map ? map[statusKey] : ""
         if (!value || value.length === 0)

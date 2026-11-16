@@ -21,17 +21,20 @@ namespace alcedo::ui {
 /// Owned by ApplicationModuleHost. GUI thread only.
 ///
 /// - One entry for each element id. Adding an element that is in the queue replaces its entry
-///   and keeps its position.
-/// - An entry leaves the queue when the running export reports it as succeeded or failed
-///   (ImportExportHandler::exportItemStatuses), when its element is deleted, and when the
-///   project changes.
+///   and keeps its position and its export run.
+/// - An entry joins an export run when the run starts while the entry is in the queue and the
+///   run has a status for the entry (ImportExportHandler::exportItemStatuses). Only the entries
+///   of the current run show a run status; every other entry is queued for the next export.
+/// - An entry leaves the queue when its run reports it as succeeded or failed, when its element
+///   is deleted, and when the project changes.
 class ExportQueue final : public QObject {
   Q_OBJECT
   Q_PROPERTY(int count READ Count NOTIFY QueueChanged)
   /// Entry maps (elementId, imageId, fileName, isHdr) keyed by the element id as text.
   Q_PROPERTY(QVariantMap entriesById READ EntriesById NOTIFY QueueChanged)
   /// One row (statusKey, summaryRow, label, isHdr) for each entry; sorted by file name when the
-  /// queue has at most 200 entries, in queue order otherwise.
+  /// queue has at most 200 entries, in queue order otherwise. statusKey is the
+  /// exportItemStatuses key of an entry of the current export run, and empty for the others.
   Q_PROPERTY(QVariantList previewRows READ PreviewRows NOTIFY QueueChanged)
   Q_PROPERTY(bool hasHdrItems READ HasHdrItems NOTIFY QueueChanged)
 
@@ -41,6 +44,8 @@ class ExportQueue final : public QObject {
     image_id_t      image_id   = 0;
     QString         file_name;
     bool            is_hdr = false;
+    /// The export run (ImportExportHandler::ExportRunId) of the entry; 0 until a run takes it.
+    quint64         run_id = 0;
   };
 
   /// The sort limit of previewRows.
@@ -66,15 +71,19 @@ class ExportQueue final : public QObject {
   /// The export targets (elementId, imageId, isHdr) of the entries, in queue order.
   Q_INVOKABLE QVariantList Targets() const;
 
+  /// Applies the export state of ImportExportHandler: when @p run_id is a new run, the entries
+  /// with a status in @p statuses join it; then the entries of the run whose status is
+  /// succeeded or failed leave the queue. Called on ImportExportHandler::ExportStateChanged.
+  void                     ApplyExportState(quint64 run_id, const QVariantMap& statuses);
+
  signals:
   void QueueChanged();
 
  private:
-  /// Removes the entries whose export status is succeeded or failed.
-  void                          RemoveFinishedEntries();
-
   QPointer<ImportExportHandler> import_export_;
   std::vector<Entry>            entries_;
+  /// The run id of the last ApplyExportState.
+  quint64                       current_run_id_ = 0;
 };
 
 }  // namespace alcedo::ui
