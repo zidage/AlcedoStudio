@@ -103,32 +103,6 @@ function(alcedo_runtime_source_is_dest_local source_path dest_dir out_var)
   set(${out_var} "${_alcedo_is_local}" PARENT_SCOPE)
 endfunction()
 
-# GET_RUNTIME_DEPENDENCIES still searches the executable directory even when
-# that directory is omitted from DIRECTORIES. A leftover first-party DLL there
-# (RawProcessorOp, Operators, ...) is then copied onto itself with
-# ONLY_IF_DIFFERENT, leaving STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139).
-function(alcedo_runtime_refresh_first_party_dlls dest_dir)
-  alcedo_runtime_find_build_root("${dest_dir}" _alcedo_build_root)
-  if("${_alcedo_build_root}" STREQUAL "")
-    return()
-  endif()
-  foreach(_alcedo_product_dir IN ITEMS decoders edit image opencl utils)
-    file(GLOB _alcedo_product_dlls
-      LIST_DIRECTORIES false
-      "${_alcedo_build_root}/alcedo_studio/src/${_alcedo_product_dir}/*.dll"
-    )
-    foreach(_alcedo_product_dll IN LISTS _alcedo_product_dlls)
-      get_filename_component(_alcedo_dll_name "${_alcedo_product_dll}" NAME)
-      if(_alcedo_dll_name STREQUAL "lensfun.dll")
-        continue()
-      endif()
-      if(EXISTS "${dest_dir}/${_alcedo_dll_name}")
-        alcedo_runtime_copy_dll("${_alcedo_product_dll}" "${dest_dir}")
-      endif()
-    endforeach()
-  endforeach()
-endfunction()
-
 if(DEFINED ALCEDO_RUNTIME_DLLS AND NOT "${ALCEDO_RUNTIME_DLLS}" STREQUAL "")
   string(REPLACE "," ";" _alcedo_runtime_dlls "${ALCEDO_RUNTIME_DLLS}")
   foreach(_alcedo_runtime_dll IN LISTS _alcedo_runtime_dlls)
@@ -171,6 +145,16 @@ if(DEFINED ALCEDO_RUNTIME_EXECUTABLE AND EXISTS "${ALCEDO_RUNTIME_EXECUTABLE}")
   )
 
   foreach(_alcedo_runtime_dll IN LISTS _alcedo_resolved_runtime_dlls)
+    # The dependency scanner can select an old copy beside the executable. Refresh only
+    # DLLs in this executable's dependency graph; unrelated products may still be linking.
+    alcedo_runtime_find_build_root("${ALCEDO_RUNTIME_DEST}" _alcedo_build_root)
+    get_filename_component(_alcedo_dll_name "${_alcedo_runtime_dll}" NAME)
+    alcedo_runtime_find_first_party_dll(
+      "${_alcedo_build_root}" "${_alcedo_dll_name}" _alcedo_product_dll)
+    if(NOT "${_alcedo_product_dll}" STREQUAL "")
+      alcedo_runtime_copy_dll("${_alcedo_product_dll}" "${ALCEDO_RUNTIME_DEST}")
+      continue()
+    endif()
     alcedo_runtime_source_is_dest_local(
       "${_alcedo_runtime_dll}"
       "${ALCEDO_RUNTIME_DEST}"
@@ -233,5 +217,4 @@ if(DEFINED ALCEDO_RUNTIME_EXECUTABLE AND EXISTS "${ALCEDO_RUNTIME_EXECUTABLE}")
   endif()
 endif()
 
-alcedo_runtime_refresh_first_party_dlls("${ALCEDO_RUNTIME_DEST}")
 alcedo_runtime_install_submodule_lensfun("${ALCEDO_RUNTIME_DEST}")
