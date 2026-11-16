@@ -79,10 +79,14 @@ Item {
     onMaskCreationChanged: bindMaskOverlay()
     readonly property var renderDiagnostics: editorSession ? editorSession.renderDiagnostics : ({})
     readonly property string inflightRenderReason: renderDiagnostics.inflightReason || ""
+    // Edits of the shown photo use the small corner indicator; Mask edits and the Mask range
+    // coverage are edits of the shown photo too (#944).
     readonly property bool adjustmentRenderBusy: editorSession
                                                  && editorSession.renderBusy
                                                  && (inflightRenderReason === "InteractiveAdjustment"
-                                                     || inflightRenderReason === "SettledAdjustment")
+                                                     || inflightRenderReason === "SettledAdjustment"
+                                                     || inflightRenderReason === "SettledMaskEdit"
+                                                     || inflightRenderReason === "MaskCoverageProbeChanged")
     readonly property int focusedElementId: workspaceRouter ? Number(workspaceRouter.elementId) : 0
     readonly property int focusedImageId: workspaceRouter ? Number(workspaceRouter.imageId) : 0
 
