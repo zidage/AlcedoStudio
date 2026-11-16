@@ -2063,6 +2063,10 @@ Alcedo 将改用 %1。</translation>
         <source>Labels and Marks</source>
         <translation>标签与标记</translation>
     </message>
+    <message>
+        <source>Ratings</source>
+        <translation>评分</translation>
+    </message>
 </context>
 <context>
     <name>BackgroundTasksDialog</name>
@@ -2194,6 +2198,10 @@ Alcedo 将改用 %1。</translation>
     <message>
         <source>Other Tasks</source>
         <translation>其他任务</translation>
+    </message>
+    <message>
+        <source>Ratings</source>
+        <translation>评分</translation>
     </message>
 </context>
 <context>
@@ -2556,6 +2564,14 @@ Original source files on disk will be kept.</source>
         <location line="+25"/>
         <source>Add Gradient Mask</source>
         <translation>添加渐变蒙版</translation>
+    </message>
+    <message>
+        <source>Edit AI Mask</source>
+        <translation>编辑 AI 蒙版</translation>
+    </message>
+    <message>
+        <source>Add AI Mask</source>
+        <translation>添加 AI 蒙版</translation>
     </message>
 </context>
 <context>
@@ -3578,7 +3594,7 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+300"/>
         <source> | Rating %1/5</source>
-        <translation type="unfinished"></translation>
+        <translation> | 评分 %1/5</translation>
     </message>
     <message>
         <location line="-227"/>
@@ -3604,12 +3620,12 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="-293"/>
         <source>Editing %1</source>
-        <translation type="unfinished"></translation>
+        <translation>正在编辑 %1</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>No image selected</source>
-        <translation type="unfinished"></translation>
+        <translation>未选择图像</translation>
     </message>
     <message>
         <location line="+294"/>
@@ -3619,7 +3635,7 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+1"/>
         <source>Selected image</source>
-        <translation type="unfinished"></translation>
+        <translation>所选图像</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -3639,6 +3655,10 @@ Original source files on disk will be kept.</source>
     <message>
         <source>Edited</source>
         <translation>已编辑</translation>
+    </message>
+    <message>
+        <source>Current image, not in this list</source>
+        <translation>当前图像，不在此列表中</translation>
     </message>
 </context>
 <context>
@@ -3735,6 +3755,14 @@ Original source files on disk will be kept.</source>
         <location line="+78"/>
         <source>Reset crop and rotation</source>
         <translation>重置裁剪和旋转</translation>
+    </message>
+    <message>
+        <source>Source %1 × %2 (aspect %3)</source>
+        <translation>原图 %1 × %2（宽高比 %3）</translation>
+    </message>
+    <message>
+        <source>Source size is available after the image is shown.</source>
+        <translation>显示图像后可查看原图尺寸。</translation>
     </message>
 </context>
 <context>
@@ -6351,6 +6379,27 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
 </context>
 <context>
+    <name>JustifiedThumbnailTile</name>
+    <message>
+        <source>Source file was moved or deleted</source>
+        <translation>源文件已被移动或删除</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation>未评分</translation>
+    </message>
+    <message>
+        <source>Edited</source>
+        <translation>已编辑</translation>
+    </message>
+</context>
+<context>
     <name>KeyboardSettingsPanel</name>
     <message>
         <location filename="../qml/KeyboardSettingsPanel.qml" line="+56"/>
@@ -6556,6 +6605,13 @@ Refresh the library afterwards; they are listed under the User category. Import 
     <message>
         <source>Show larger photos</source>
         <translation>显示更大的照片</translation>
+    </message>
+</context>
+<context>
+    <name>LoadingSpinner</name>
+    <message>
+        <source>Loading</source>
+        <translation>正在加载</translation>
     </message>
 </context>
 <context>
@@ -7863,6 +7919,26 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>The AI model runs on this computer, and no photo is uploaded. The labeling speed depends on the CPU, the GPU, and the disk.</source>
         <translation>AI 模型在本机运行，照片不会上传。标注速度取决于 CPU、GPU 和磁盘。</translation>
+    </message>
+    <message>
+        <source>Library</source>
+        <translation>图库</translation>
+    </message>
+    <message>
+        <source>Photo layout</source>
+        <translation>照片布局</translation>
+    </message>
+    <message>
+        <source>Classic grid</source>
+        <translation>经典网格</translation>
+    </message>
+    <message>
+        <source>Justified rows</source>
+        <translation>自适应行</translation>
+    </message>
+    <message>
+        <source>Classic grid shows each photo in a card of the same size, with its details below it. Justified rows show the photos in rows of one height that fill the width; each photo keeps its shape, and its details and rating show when the pointer is on it. Grouped photos always use the classic grid.</source>
+        <translation>经典网格以相同大小的卡片显示每张照片，详细信息位于照片下方。自适应行将照片排成等高的行并铺满宽度，每张照片保持原始比例，鼠标悬停时显示详细信息和星级。分组显示的照片始终使用经典网格。</translation>
     </message>
 </context>
 <context>
