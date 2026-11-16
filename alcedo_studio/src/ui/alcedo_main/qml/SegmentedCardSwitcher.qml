@@ -12,7 +12,7 @@ import QtQuick.Layouts
 //
 // Per-entry disable: an entry may set `enabled: false` so unsupported choices
 // stay visible but non-interactive (e.g. bit depth locked by export format).
-// Root `enabled` remains the master gate for the whole track.
+// Root `enabled` controls input for the whole track.
 //
 // Per-entry width: segments share the track equally. An entry may set `stretch` (default 1) to
 // take that many shares, for example a long title among one-letter titles.
@@ -44,6 +44,7 @@ Rectangle {
     property color hoverColor: appTheme.hoverColor
     property color selectedFillColor: appTheme.editorListSelectedFillColor
     property color selectedInkColor: appTheme.editorListSelectedInkColor
+    property color focusOutlineColor: appTheme.accentColor
 
     // Optional small mark before each title (for example a film swatch). The
     // component reads `entry` (the segment entry) and `selected` from its Loader.
@@ -89,7 +90,7 @@ Rectangle {
 
                 // Per-entry disable: entries may set `enabled: false` (e.g. bit
                 // depths unsupported by the current export format). Root.enabled
-                // remains the master gate for the whole track.
+                // controls input for the whole track.
                 readonly property bool segmentEnabled: {
                     if (!root.enabled)
                         return false
@@ -123,14 +124,18 @@ Rectangle {
                 activeFocusOnTab: segmentEnabled
                 Accessible.role: Accessible.RadioButton
                 Accessible.name: modelData ? String(modelData.label || "") : ""
+                Accessible.description: modelData ? String(modelData.toolTip || "") : ""
                 Accessible.checkable: true
                 Accessible.checked: sel
+                ToolTip.text: Accessible.description
+                ToolTip.visible: segmentEnabled && (hovered || activeFocus)
+                                 && ToolTip.text.length > 0
                 radius: Math.max(2, root.trackRadius - 2)
                 opacity: segmentEnabled ? 1.0 : 0.38
                 color: sel ? root.selectedFillColor
                            : (hovered && segmentEnabled ? root.hoverColor : "transparent")
                 border.width: activeFocus ? 1 : 0
-                border.color: appTheme.accentColor
+                border.color: root.focusOutlineColor
 
                 Keys.onPressed: function(event) {
                     if (segmentEnabled && (event.key === Qt.Key_Space

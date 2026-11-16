@@ -217,6 +217,22 @@
 <context>
     <name>AdjustmentTransferDialog</name>
     <message>
+        <source>Paste to</source>
+        <translation>Paste to</translation>
+    </message>
+    <message>
+        <source>Root</source>
+        <translation>Root</translation>
+    </message>
+    <message>
+        <source>Current State</source>
+        <translation>Current State</translation>
+    </message>
+    <message>
+        <source>Creates a new version from root.</source>
+        <translation>Creates a new version from root.</translation>
+    </message>
+    <message>
         <location filename="../qml/AdjustmentTransferDialog.qml" line="+70"/>
         <source>Other</source>
         <translation type="unfinished"></translation>

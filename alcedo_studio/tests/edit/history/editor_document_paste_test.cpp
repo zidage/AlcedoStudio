@@ -160,6 +160,29 @@ TEST_F(EditorDocumentPasteTest, PasteCreatesOneRootRelativeVersionAndOneTypedCom
   EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), pasted_document);
 }
 
+TEST_F(EditorDocumentPasteTest, CurrentPasteKeepsVersionAndUndoRedoRestoreExactDocument) {
+  std::string error;
+  const auto  handle = history_.Acquire(77, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto version       = Graph()->GetActiveVersionId();
+  const auto version_count = Graph()->GetAllVersionRefs().size();
+  const auto before        = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
+  alcedo::AdjustmentPasteResult result;
+  ASSERT_TRUE(history_.PasteLiveCurrentVersion(handle, test::MakeExposureTransferPackage(-0.75),
+                                               &result, &error))
+      << error;
+  EXPECT_TRUE(result.pasted);
+  EXPECT_EQ(Graph()->GetActiveVersionId(), version);
+  EXPECT_EQ(Graph()->GetAllVersionRefs().size(), version_count);
+  EXPECT_EQ(Graph()->CommitCount(), 1u);
+  const auto pasted = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
+  EXPECT_NE(pasted, before);
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), before);
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), pasted);
+}
+
 TEST_F(EditorDocumentPasteTest, PasteWithoutSourceDefaultEstablishesFirstGradeAsDefault) {
   std::string error;
   const auto  handle = history_.Acquire(77, &error);
@@ -263,6 +286,11 @@ TEST_F(EditorDocumentPasteTest, FailedPasteWalAppendCreatesNoVersionCommitHeadMo
   alcedo::AdjustmentPasteResult paste_result;
   EXPECT_FALSE(history_.PasteLiveRootRelativeVersion(
       handle, test::MakeExposureTransferPackage(1.25), "WAL fail", &paste_result, &error));
+  EXPECT_FALSE(paste_result.pasted);
+  EXPECT_FALSE(error.empty());
+  error.clear();
+  EXPECT_FALSE(history_.PasteLiveCurrentVersion(handle, test::MakeExposureTransferPackage(1.25),
+                                                &paste_result, &error));
   EXPECT_FALSE(paste_result.pasted);
   EXPECT_FALSE(error.empty());
   EXPECT_EQ(Graph()->GetActiveVersionId(), prior_version);

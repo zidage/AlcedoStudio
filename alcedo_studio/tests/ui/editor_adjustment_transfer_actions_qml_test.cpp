@@ -312,6 +312,19 @@ TEST(EditorAdjustmentTransferActionsQmlTest, UnknownStrategyIsNotDispatched) {
   EXPECT_EQ(harness.transfer_fake.paste_call_count(), 0);
 }
 
+TEST(EditorAdjustmentTransferActionsQmlTest, CurrentVersionChoiceIsPassedToEveryTarget) {
+  EditorAdjustmentTransferActionsQmlHarness harness;
+  ASSERT_NE(harness.window, nullptr) << harness.warnings.join('\n').toStdString();
+  ASSERT_NE(harness.actions(), nullptr);
+  harness.dialog()->setProperty("pasteStrategy", QStringLiteral("current"));
+  InvokeNoArg(harness.actions(), "requestPasteAdjustments");
+  EXPECT_EQ(harness.dialog()->property("pasteStrategy").toString(), QStringLiteral("current"));
+  InvokeStrategy(harness.actions(), QStringLiteral("current"));
+  EXPECT_EQ(harness.transfer_fake.paste_call_count(), 1);
+  EXPECT_EQ(harness.transfer_fake.last_strategy(), QStringLiteral("current"));
+  EXPECT_EQ(harness.transfer_fake.last_targets(), (QVariantList{101, 102}));
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test
 

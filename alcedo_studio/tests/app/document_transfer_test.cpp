@@ -108,6 +108,114 @@ TEST(DocumentTransferTest, CaptureIncludesDevelopFieldsAndGeometryButNotHistory)
   EXPECT_EQ(package.color_grades_.front().source_node_id, NodeId{"grade.primary"});
 }
 
+TEST(DocumentTransferTest, CurrentPastePreservesUncopiedValuesAndInverseRestoresDocument) {
+  auto target = test::DocumentWithExposureEv(0.5);
+  test::PatchDocumentField(&target, test::ColorGradeFieldTarget("contrast"), {{"contrast", 0.4}});
+  target.Geometry().SetRotationDegrees(27.0f);
+  target.PrimaryGrade()->SetEnabled(false);
+  target.PrimaryGrade()->SetMix(0.35f);
+  grade_mask_test::AddRadialMask(target, MaskId{"mask.target"});
+  const auto                  before = CanonicalPipelineDocumentJson(target);
+  auto                        source = test::DocumentWithExposureEv(-0.75);
+  AdjustmentTransferSelection selection;
+  selection.nodes.push_back(
+      {source.DefaultGradeId(),
+       {{AdjustmentTransferItemKind::Adjustment,
+         *source.PrimaryGrade()->FindAdjustmentIdByType(type_ids::Exposure())}}});
+  const auto package = AdjustmentTransferPackageBuilder::Build(source, selection);
+  const auto batch   = DocumentTransferPlanner::PlanOntoCurrent(package, target);
+  ASSERT_TRUE(batch);
+  std::string error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(target, *batch, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  nlohmann::json value;
+  ASSERT_TRUE(
+      ReadEditorParameterJson(target, test::ColorGradeFieldTarget("exposure"), &value, &error));
+  EXPECT_DOUBLE_EQ(value.at("exposure_ev").get<double>(), -0.75);
+  // Change only the expected field back: every other serialized value must still match.
+  test::PatchDocumentField(&target, test::ColorGradeFieldTarget("exposure"),
+                           {{"exposure_ev", 0.5}});
+  EXPECT_EQ(CanonicalPipelineDocumentJson(target), before);
+  test::PatchDocumentField(&target, test::ColorGradeFieldTarget("exposure"),
+                           {{"exposure_ev", -0.75}});
+  EXPECT_FALSE(DocumentTransferPlanner::PlanOntoCurrent(package, target).has_value());
+  ASSERT_TRUE(ApplyPipelineEditBatch(target, *batch, PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_EQ(CanonicalPipelineDocumentJson(target), before);
+}
+
+TEST(DocumentTransferTest, CurrentPasteKeepsOtherGradesAndMatchesNamesWithoutReplacingIdentities) {
+  auto       target    = test::DocumentWithExposureEv(0.25);
+  auto       source    = test::DocumentWithExposureEv(-0.75);
+  const auto add_grade = [](PipelineDocument& document, const char* id, const char* name) {
+    auto grade = ColorGradeNodeModel::MakeClean(NodeId{id});
+    grade->SetDisplayName(name);
+    const auto grades   = ColorGradesOnImageBackbone(document);
+    const auto previous = grades.back()->Id();
+    const auto errors   = InsertColorGradeFromJson(
+        document, grade->ToJson(), {previous, PortId{"image"}, NodeId{id}, PortId{"image"}},
+        {NodeId{id}, PortId{"image"}, document.Drt()->Id(), PortId{"image"}});
+    ASSERT_TRUE(errors.empty());
+  };
+  add_grade(target, "grade.target", "Shared look");
+  add_grade(target, "grade.untouched", "Target only");
+  add_grade(source, "grade.source", "Shared look");
+  add_grade(source, "grade.new", "New look");
+  test::PatchDocumentField(&source, test::ColorGradeFieldTarget("exposure", "grade.source"),
+                           {{"exposure_ev", 1.25}});
+  const auto                  before = CanonicalPipelineDocumentJson(target);
+  AdjustmentTransferSelection selection;
+  for (const auto* grade : ColorGradesOnImageBackbone(source)) {
+    selection.nodes.push_back({grade->Id(),
+                               {{AdjustmentTransferItemKind::Adjustment,
+                                 *grade->FindAdjustmentIdByType(type_ids::Exposure())}}});
+  }
+  const auto package = AdjustmentTransferPackageBuilder::Build(source, selection);
+  const auto batch   = DocumentTransferPlanner::PlanOntoCurrent(package, target);
+  ASSERT_TRUE(batch);
+  std::string error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(target, *batch, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  const auto grades = ColorGradesOnImageBackbone(target);
+  ASSERT_EQ(grades.size(), 4u);
+  EXPECT_EQ(grades[0]->Id(), NodeId{"grade.primary"});
+  EXPECT_EQ(grades[1]->Id(), NodeId{"grade.target"});
+  EXPECT_EQ(grades[2]->Id(), NodeId{"grade.untouched"});
+  EXPECT_EQ(grades[3]->DisplayName(), "New look");
+  nlohmann::json value;
+  ASSERT_TRUE(ReadEditorParameterJson(
+      target, test::ColorGradeFieldTarget("exposure", "grade.target"), &value, &error));
+  EXPECT_DOUBLE_EQ(value.at("exposure_ev").get<double>(), 1.25);
+  ASSERT_TRUE(ApplyPipelineEditBatch(target, *batch, PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_EQ(CanonicalPipelineDocumentJson(target), before);
+}
+
+TEST(DocumentTransferTest, CurrentPasteReplacesOnlySelectedMaskSetAndUndoRestoresItsIdentities) {
+  auto target = test::DocumentWithExposureEv(0.25);
+  grade_mask_test::AddRadialMask(target, MaskId{"mask.target"});
+  target.PrimaryGrade()->AddMask(grade_mask_test::MakeAiSegmentationMask(MaskId{"mask.ai"}), 1);
+  auto source = test::DocumentWithExposureEv(-0.75);
+  grade_mask_test::AddLinearGradientMask(source, MaskId{"mask.source"});
+  AdjustmentTransferSelection selection;
+  selection.nodes.push_back(
+      {source.DefaultGradeId(), {{AdjustmentTransferItemKind::Masks, std::nullopt}}});
+  const auto before = CanonicalPipelineDocumentJson(target);
+  const auto batch  = DocumentTransferPlanner::PlanOntoCurrent(
+      AdjustmentTransferPackageBuilder::Build(source, selection), target);
+  ASSERT_TRUE(batch);
+  std::string error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(target, *batch, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  ASSERT_EQ(target.PrimaryGrade()->MaskCount(), 2u);
+  EXPECT_EQ(target.PrimaryGrade()->MaskAt(0).id, MaskId{"mask.ai"});
+  EXPECT_NE(target.PrimaryGrade()->MaskAt(1).id, MaskId{"mask.target"});
+  EXPECT_NE(target.PrimaryGrade()->MaskAt(1).id, MaskId{"mask.source"});
+  ASSERT_TRUE(ApplyPipelineEditBatch(target, *batch, PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_EQ(CanonicalPipelineDocumentJson(target), before);
+}
+
 TEST(DocumentTransferTest, ImportRejectsOperatorListPackages) {
   const nlohmann::json json = {{"operators", nlohmann::json::array({nlohmann::json::object()})},
                                {"schema", std::string{kAdjustmentTransferSchema}}};

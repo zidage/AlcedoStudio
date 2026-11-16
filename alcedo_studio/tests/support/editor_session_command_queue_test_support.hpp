@@ -223,6 +223,24 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
     return FakeEditorHistoryPort::CheckoutVersion(guard, version_id, error);
   }
 
+  auto PasteLiveCurrentVersion(const EditorHistoryGuardHandle&,
+                               const AdjustmentTransferPackage& package,
+                               AdjustmentPasteResult* result, std::string* error,
+                               std::optional<EditCommitAttribution>) -> bool override {
+    if (package.Empty()) {
+      if (error) *error = "Adjustment transfer package is empty";
+      return false;
+    }
+    record("current_version_pasted");
+    dirty_journal = true;
+    if (result) {
+      result->pasted           = true;
+      result->prior_version_id = Hash128{0x11111111ULL, 0x22222222ULL};
+      result->new_version_id   = result->prior_version_id;
+    }
+    return true;
+  }
+
   auto PasteLiveRootRelativeVersion(const EditorHistoryGuardHandle&  guard,
                                     const AdjustmentTransferPackage& package,
                                     std::string /*version_display_name*/,

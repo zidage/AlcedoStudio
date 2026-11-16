@@ -93,7 +93,7 @@ class AdjustmentTransferController final : public QObject {
    * @brief Paste the copied package onto @p targetEntries.
    *
    * The image open in the editor pastes through the editor session queue, so
-   * its Versions panel shows the new Version. Every other target pastes on a
+   * its history and adjustment panels show the result. Every other target pastes on a
    * worker thread; @ref PasteFinished reports that result. Returns
    * `{success, message?, pending}` without waiting for the worker. A user action: refused
    * while an automation agent holds control.

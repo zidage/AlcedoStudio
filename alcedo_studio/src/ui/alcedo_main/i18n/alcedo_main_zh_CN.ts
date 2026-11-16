@@ -365,6 +365,22 @@
 <context>
     <name>AdjustmentTransferDialog</name>
     <message>
+        <source>Paste to</source>
+        <translation>粘贴到</translation>
+    </message>
+    <message>
+        <source>Root</source>
+        <translation>根状态</translation>
+    </message>
+    <message>
+        <source>Current State</source>
+        <translation>当前状态</translation>
+    </message>
+    <message>
+        <source>Creates a new version from root.</source>
+        <translation>从根状态创建一个新版本。</translation>
+    </message>
+    <message>
         <location filename="../qml/AdjustmentTransferDialog.qml" line="+70"/>
         <source>Other</source>
         <translation>其他</translation>

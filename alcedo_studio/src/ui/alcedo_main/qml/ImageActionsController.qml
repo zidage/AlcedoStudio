@@ -27,7 +27,7 @@ Item {
     property var focusedImageInspection: ({ success: false, tiles: [] })
     // Where the shared image menu was last opened from ("library" |
     // "editor-filmstrip"). The editor filmstrip shows the shared Library
-    // selection, but its menu always targets exactly the clicked image.
+    // selection. Paste uses that selection; the other filmstrip actions target the clicked image.
     property string menuOrigin: "library"
     property bool _pendingEditorLibraryListSync: false
     property bool _pendingEditorLibraryListReveal: false
@@ -180,7 +180,7 @@ Item {
             imageId: Number(clickedItem.imageId),
             fileName: clickedItem.fileName ? clickedItem.fileName : qsTr("(unnamed)")
         }
-        root.pendingAdjustmentPasteTargets = targets
+        root.pendingAdjustmentPasteTargets = appModules.libraryMutations.ResolveTargets(clickedItem, true)
         imageContextMenu.openAt(sceneX, sceneY)
     }
 

@@ -27,7 +27,7 @@ class ProjectModule;
 /**
  * @brief Owns multi-target Paste apply work for Adjustment Transfer.
  *
- * Applies one copied package as a root-relative Version per target through the
+ * Applies one copied package to the chosen Version destination per target through the
  * existing history owner, persists each successful target, then refreshes HDR
  * metadata and thumbnails for applied targets only. One target's failure never
  * hides another target's result; every failure is reported.
@@ -46,11 +46,12 @@ class AdjustmentTransferApplyCoordinator final : public QObject {
   ~AdjustmentTransferApplyCoordinator() override = default;
 
   /**
-   * @brief Paste @p package as one new root-relative Version on each target and
+   * @brief Paste @p package into the chosen destination on each target and
    *        wait for the result on the calling thread.
    *
    * The result map reports `appliedCount`, `unchangedCount`, `failureCount`,
    * an `appliedIds` list, and a `failures` list of `{elementId, message}` rows.
+   * @p mode selects a new root-relative Version or one edit on the current Version.
    * @p attribution is the author of each Paste commit; nullopt is the user. A target that fails
    * package validation, rebuild, or persistence is restored to its prior graph
    * and receives no metadata or thumbnail refresh.
@@ -58,7 +59,9 @@ class AdjustmentTransferApplyCoordinator final : public QObject {
   [[nodiscard]] auto ApplyToTargets(
       const alcedo::AdjustmentTransferPackage& package,
       const std::vector<sl_element_id_t>& target_ids, const QString& version_display_name,
-      std::optional<alcedo::EditCommitAttribution> attribution = std::nullopt) -> QVariantMap;
+      std::optional<alcedo::EditCommitAttribution> attribution = std::nullopt,
+      alcedo::AdjustmentPasteMode mode = alcedo::AdjustmentPasteMode::NewRootRelativeVersion)
+      -> QVariantMap;
 
   /**
    * @brief Start the same Paste on a worker thread and return immediately.
@@ -75,10 +78,11 @@ class AdjustmentTransferApplyCoordinator final : public QObject {
    * @return false with @p error when another Paste is running or the pipeline
    *         service is unavailable; nothing starts in that case.
    */
-  auto StartApplyToTargets(const alcedo::AdjustmentTransferPackage& package,
-                           std::vector<sl_element_id_t>             target_ids,
-                           const QString& version_display_name, QString* error,
-                           std::optional<alcedo::EditCommitAttribution> attribution = std::nullopt)
+  auto StartApplyToTargets(
+      const alcedo::AdjustmentTransferPackage& package, std::vector<sl_element_id_t> target_ids,
+      const QString& version_display_name, QString* error,
+      std::optional<alcedo::EditCommitAttribution> attribution = std::nullopt,
+      alcedo::AdjustmentPasteMode mode = alcedo::AdjustmentPasteMode::NewRootRelativeVersion)
       -> bool;
 
   [[nodiscard]] bool running() const { return running_; }
@@ -119,7 +123,8 @@ class AdjustmentTransferApplyCoordinator final : public QObject {
       alcedo::PipelineMgmtService&             pipeline_service,
       const alcedo::AdjustmentTransferPackage& package,
       const std::vector<sl_element_id_t>& target_ids, const std::string& version_display_name,
-      const std::optional<alcedo::EditCommitAttribution>& attribution) -> TargetApplyOutcome;
+      const std::optional<alcedo::EditCommitAttribution>& attribution,
+      alcedo::AdjustmentPasteMode                         mode) -> TargetApplyOutcome;
 
   /// Owner-thread completion: HDR flag, thumbnail refresh, and the result map.
   auto           FinishApply(const TargetApplyOutcome& outcome) -> QVariantMap;

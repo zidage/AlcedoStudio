@@ -8,11 +8,13 @@
 #include <QPointer>
 #include <QVariantList>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
 #include "app/adjustment_transfer_service.hpp"
 #include "app/document_transfer_planner.hpp"
+#include "app/pipeline_root_state.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
@@ -46,20 +48,22 @@ AdjustmentTransferApplyCoordinator::AdjustmentTransferApplyCoordinator(
 auto AdjustmentTransferApplyCoordinator::ApplyToTargets(
     const alcedo::AdjustmentTransferPackage& package,
     const std::vector<sl_element_id_t>& target_ids, const QString& version_display_name,
-    std::optional<alcedo::EditCommitAttribution> attribution) -> QVariantMap {
+    std::optional<alcedo::EditCommitAttribution> attribution, alcedo::AdjustmentPasteMode mode)
+    -> QVariantMap {
   auto pipeline_service = project_->handler().pipeline_service();
   if (!pipeline_service) {
     return ErrorResult(Tr("Pipeline service is unavailable."));
   }
   const auto outcome = ApplyPackageToTargets(*pipeline_service, package, target_ids,
-                                             version_display_name.toStdString(), attribution);
+                                             version_display_name.toStdString(), attribution, mode);
   return FinishApply(outcome);
 }
 
 auto AdjustmentTransferApplyCoordinator::StartApplyToTargets(
     const alcedo::AdjustmentTransferPackage& package, std::vector<sl_element_id_t> target_ids,
     const QString& version_display_name, QString* error,
-    std::optional<alcedo::EditCommitAttribution> attribution) -> bool {
+    std::optional<alcedo::EditCommitAttribution> attribution, alcedo::AdjustmentPasteMode mode)
+    -> bool {
   if (running_) {
     if (error != nullptr) *error = Tr("Adjustments are already being pasted.");
     return false;
@@ -98,9 +102,9 @@ auto AdjustmentTransferApplyCoordinator::StartApplyToTargets(
   QPointer<AdjustmentTransferApplyCoordinator> self(this);
   std::thread([self, pipeline_service = std::move(pipeline_service), package,
                target_ids = std::move(target_ids), name = version_display_name.toStdString(),
-               attribution = std::move(attribution)]() mutable {
+               attribution = std::move(attribution), mode]() mutable {
     auto outcome = std::make_shared<TargetApplyOutcome>(
-        ApplyPackageToTargets(*pipeline_service, package, target_ids, name, attribution));
+        ApplyPackageToTargets(*pipeline_service, package, target_ids, name, attribution, mode));
     QMetaObject::invokeMethod(
         self.data(),
         [self, outcome]() {
@@ -131,7 +135,8 @@ auto AdjustmentTransferApplyCoordinator::StartApplyToTargets(
 auto AdjustmentTransferApplyCoordinator::ApplyPackageToTargets(
     alcedo::PipelineMgmtService& pipeline_service, const alcedo::AdjustmentTransferPackage& package,
     const std::vector<sl_element_id_t>& target_ids, const std::string& version_display_name,
-    const std::optional<alcedo::EditCommitAttribution>& attribution) -> TargetApplyOutcome {
+    const std::optional<alcedo::EditCommitAttribution>& attribution,
+    alcedo::AdjustmentPasteMode                         mode) -> TargetApplyOutcome {
   TargetApplyOutcome outcome;
   auto&              result = outcome.result_;
   for (sl_element_id_t element_id : target_ids) {
@@ -146,8 +151,22 @@ auto AdjustmentTransferApplyCoordinator::ApplyPackageToTargets(
       CommitGraph                          graph = *base.graph_;
       // A root-relative Paste creates both immutable commits and a named Version.
       alcedo::DocumentTransferPasteOptions options;
-      auto paste_result = alcedo::AdjustmentTransferService::PasteAsRootRelativeVersion(
-          graph, base.root_->document, package, version_display_name, options, attribution);
+      alcedo::AdjustmentPasteResult        paste_result;
+      if (mode == alcedo::AdjustmentPasteMode::CurrentVersion) {
+        std::string error;
+        const auto  current = alcedo::BuildDocumentFromRoot(
+            graph, *base.root_, graph.GetActiveVersionRef().head_commit_hash, &error);
+        if (!current) throw std::runtime_error(error);
+        paste_result = alcedo::AdjustmentTransferService::PasteIntoCurrentVersion(
+            graph, *current, package, options, attribution);
+      } else {
+        paste_result = alcedo::AdjustmentTransferService::PasteAsRootRelativeVersion(
+            graph, base.root_->document, package, version_display_name, options, attribution);
+      }
+      if (paste_result.unchanged) {
+        result.unchanged_ids_.push_back(element_id);
+        continue;
+      }
       if (!paste_result.pasted) {
         result.failures_.push_back({element_id, paste_result.error});
         continue;

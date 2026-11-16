@@ -20,8 +20,11 @@
 
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_service.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "support/document_transfer_test_support.hpp"
 #include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_apply_coordinator.hpp"
@@ -92,16 +95,16 @@ class AdjustmentTransferControllerTest : public ApplicationModuleHostTestFixture
     ApplicationModuleHostTestFixture::TearDown();
   }
 
-  auto LoadSeededBackend(ApplicationModuleHost& backend, std::size_t image_count = 2)
+  auto LoadPopulatedBackend(ApplicationModuleHost& backend, std::size_t image_count = 2)
       -> std::optional<PopulatedProject> {
-    auto seeded = CreatePopulatedPackedProject(temp_dir_, {}, image_count);
-    if (!seeded.has_value()) {
+    auto populated = CreatePopulatedPackedProject(temp_dir_, {}, image_count);
+    if (!populated.has_value()) {
       return std::nullopt;
     }
-    if (!LoadPackedProject(backend, seeded->packed_path_)) {
+    if (!LoadPackedProject(backend, populated->packed_path_)) {
       return std::nullopt;
     }
-    return seeded;
+    return populated;
   }
 };
 
@@ -112,10 +115,10 @@ class AdjustmentTransferControllerTest : public ApplicationModuleHostTestFixture
 
 TEST_F(AdjustmentTransferControllerTest, CopyDoesNotSaveOrRenderSourceImage) {
   ApplicationModuleHost backend;
-  auto                  seeded = LoadSeededBackend(backend, 2);
-  ASSERT_TRUE(seeded.has_value());
-  ASSERT_GE(seeded->images_.size(), 2u);
-  const auto source   = seeded->images_.front();
+  auto                  populated = LoadPopulatedBackend(backend, 2);
+  ASSERT_TRUE(populated.has_value());
+  ASSERT_GE(populated->images_.size(), 2u);
+  const auto source   = populated->images_.front();
 
   auto*      transfer = backend.adjustment_transfer();
   ASSERT_NE(transfer, nullptr);
@@ -152,11 +155,76 @@ TEST_F(AdjustmentTransferControllerTest, CopyDoesNotSaveOrRenderSourceImage) {
   ExpectSourceHistoryUnchanged(before, after);
 }
 
+class AdjustmentTransferPasteModeTest : public AdjustmentTransferControllerTest,
+                                        public ::testing::WithParamInterface<const char*> {};
+
+TEST_P(AdjustmentTransferPasteModeTest, OnePasteAppliesChosenModeToAllTargetsAndKeepsSelection) {
+  const auto            strategy = QString::fromUtf8(GetParam());
+  ApplicationModuleHost backend;
+  auto                  populated = LoadPopulatedBackend(backend, 3);
+  ASSERT_TRUE(populated);
+  auto*      transfer = backend.adjustment_transfer();
+  auto       service  = backend.project()->handler().pipeline_service();
+  const auto source   = populated->images_.at(0);
+  ASSERT_EQ(transfer->apply_coordinator()
+                ->ApplyToTargets(alcedo::test::MakeExposureTransferPackage(-0.75),
+                                 {source.file_id_}, QStringLiteral("Source"))
+                .value("appliedCount")
+                .toInt(),
+            1);
+  ASSERT_TRUE(transfer->PrepareCopy(source.file_id_).value("success").toBool());
+  const auto  source_document = service->AcquireCommittedSnapshot(source.file_id_);
+  const auto* grade           = source_document->Document().PrimaryGrade();
+  auto*       model           = transfer->dialog_model();
+  model->ClearAll();
+  model->SetItemChecked(
+      QString::fromStdString(std::string{grade->Id().Value()}),
+      QStringLiteral("adj:") + QString::fromStdString(std::string{
+                                   grade->FindAdjustmentIdByType(type_ids::Exposure())->Value()}),
+      true);
+  ASSERT_TRUE(transfer->CommitCopy().value("success").toBool());
+  QVariantList targets;
+  for (std::size_t index = 1; index < populated->images_.size(); ++index) {
+    const auto& image = populated->images_[index];
+    targets.push_back(QVariantMap{{"elementId", static_cast<uint>(image.file_id_)},
+                                  {"imageId", static_cast<uint>(image.image_id_)}});
+  }
+  backend.library()->selection()->Replace(targets);
+  const auto selected = backend.library()->selection()->SelectedItems();
+  QSignalSpy finished(transfer, &AdjustmentTransferController::PasteFinished);
+  ASSERT_TRUE(transfer->Paste(targets, strategy).value("success").toBool());
+  ASSERT_TRUE(finished.wait(60000));
+  EXPECT_EQ(finished.front().front().toMap().value("appliedCount").toInt(), 2);
+  EXPECT_EQ(backend.library()->selection()->SelectedItems(), selected);
+  for (std::size_t index = 1; index < populated->images_.size(); ++index) {
+    const auto id      = populated->images_[index].file_id_;
+    const auto history = service->LoadHistorySnapshot(id);
+    EXPECT_EQ(history.graph_->GetAllVersionRefs().size(), strategy == "paste" ? 2u : 1u);
+    const auto document = service->AcquireCommittedSnapshot(id);
+    auto target = CompleteCurrentPanelParameterTarget(document->Document(), "exposure", nullptr);
+    ASSERT_TRUE(target);
+    nlohmann::json value;
+    std::string    error;
+    ASSERT_TRUE(ReadEditorParameterJson(document->Document(), *target, &value, &error)) << error;
+    EXPECT_DOUBLE_EQ(value.at("exposure_ev").get<double>(), -0.75);
+  }
+  finished.clear();
+  ASSERT_TRUE(transfer->Paste(targets, strategy).value("success").toBool());
+  ASSERT_TRUE(finished.wait(60000));
+  const auto repeated = finished.front().front().toMap();
+  EXPECT_EQ(repeated.value("failureCount").toInt(), 0);
+  EXPECT_EQ(repeated.value(strategy == "paste" ? "appliedCount" : "unchangedCount").toInt(), 2);
+  EXPECT_EQ(backend.library()->selection()->SelectedItems(), selected);
+}
+
+INSTANTIATE_TEST_SUITE_P(VersionDestinations, AdjustmentTransferPasteModeTest,
+                         ::testing::Values("paste", "current"));
+
 TEST_F(AdjustmentTransferControllerTest, CopyFailureKeepsPriorPackage) {
   ApplicationModuleHost backend;
-  auto                  seeded = LoadSeededBackend(backend, 1);
-  ASSERT_TRUE(seeded.has_value());
-  const auto source   = seeded->images_.front();
+  auto                  populated = LoadPopulatedBackend(backend, 1);
+  ASSERT_TRUE(populated.has_value());
+  const auto source   = populated->images_.front();
 
   auto*      transfer = backend.adjustment_transfer();
   ASSERT_TRUE(transfer->PrepareCopy(static_cast<uint>(source.file_id_)).value("success").toBool());
@@ -182,9 +250,9 @@ TEST_F(AdjustmentTransferControllerTest, CopyFailureKeepsPriorPackage) {
 
 TEST_F(AdjustmentTransferControllerTest, ControllerNoLongerOwnsTransferRowFormatting) {
   ApplicationModuleHost backend;
-  auto                  seeded = LoadSeededBackend(backend, 1);
-  ASSERT_TRUE(seeded.has_value());
-  const auto source   = seeded->images_.front();
+  auto                  populated = LoadPopulatedBackend(backend, 1);
+  ASSERT_TRUE(populated.has_value());
+  const auto source   = populated->images_.front();
 
   auto*      transfer = backend.adjustment_transfer();
   ASSERT_TRUE(transfer->PrepareCopy(static_cast<uint>(source.file_id_)).value("success").toBool());
@@ -209,10 +277,10 @@ TEST_F(AdjustmentTransferControllerTest, ControllerNoLongerOwnsTransferRowFormat
 
 TEST_F(AdjustmentTransferControllerTest, MultiTargetCoordinatorRefreshesOnlySuccessfulTargets) {
   ApplicationModuleHost backend;
-  auto                  seeded = LoadSeededBackend(backend, 2);
-  ASSERT_TRUE(seeded.has_value());
-  const auto source   = seeded->images_.at(0);
-  const auto target   = seeded->images_.at(1);
+  auto                  populated = LoadPopulatedBackend(backend, 2);
+  ASSERT_TRUE(populated.has_value());
+  const auto source   = populated->images_.at(0);
+  const auto target   = populated->images_.at(1);
 
   auto*      transfer = backend.adjustment_transfer();
   ASSERT_TRUE(transfer->PrepareCopy(static_cast<uint>(source.file_id_)).value("success").toBool());

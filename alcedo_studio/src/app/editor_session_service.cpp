@@ -792,8 +792,8 @@ auto EditorSessionService::RemoveVersion(const version_ref_id_t& version_id)
 
 auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& package,
                                             std::string                      version_display_name,
-                                            std::optional<EditCommitAttribution> attribution)
-    -> EditorSessionResult {
+                                            std::optional<EditCommitAttribution> attribution,
+                                            AdjustmentPasteMode mode) -> EditorSessionResult {
   if (attribution.has_value() && !IsStorableEditCommitAttribution(*attribution)) {
     return Reject("Paste attribution author is not agent");
   }
@@ -801,10 +801,12 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
     EditorSessionCommand command;
     command.kind             = EditorSessionCommandKind::ApplyPaste;
     command.transfer_package = package;
+    command.paste_mode       = mode;
     command.text             = std::move(version_display_name);
     command.attribution      = std::move(attribution);
     return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-      return PasteAdjustments(queued.transfer_package, queued.text, queued.attribution);
+      return PasteAdjustments(queued.transfer_package, queued.text, queued.attribution,
+                              queued.paste_mode);
     });
   }
   if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
@@ -812,9 +814,15 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
   }
   AdjustmentPasteResult paste_result;
   std::string           error;
-  if (!dependencies_.history->PasteLiveRootRelativeVersion(
-          lifecycle_.history_guard(), package, std::move(version_display_name), &paste_result,
-          &error, std::move(attribution))) {
+  if (!SettlePendingInputForBoundary(&error)) return Reject(std::move(error));
+  const bool pasted =
+      mode == AdjustmentPasteMode::CurrentVersion
+          ? dependencies_.history->PasteLiveCurrentVersion(
+                lifecycle_.history_guard(), package, &paste_result, &error, std::move(attribution))
+          : dependencies_.history->PasteLiveRootRelativeVersion(
+                lifecycle_.history_guard(), package, std::move(version_display_name), &paste_result,
+                &error, std::move(attribution));
+  if (!pasted) {
     return Reject(error.empty() ? "Editor Paste failed" : std::move(error));
   }
 

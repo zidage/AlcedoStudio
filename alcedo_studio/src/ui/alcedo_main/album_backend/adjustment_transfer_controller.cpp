@@ -205,10 +205,12 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
   if (!copied_package_.has_value()) {
     return ErrorResult(Tr("No copied adjustments."));
   }
-  const bool merge_strategy = strategy != QStringLiteral("paste");
-  if (merge_strategy) {
-    return ErrorResult(Tr("Pipeline merge is not supported."));
+  if (strategy != QStringLiteral("paste") && strategy != QStringLiteral("current")) {
+    return ErrorResult(Tr("Unknown Paste destination."));
   }
+  const auto mode    = strategy == QStringLiteral("current")
+                           ? alcedo::AdjustmentPasteMode::CurrentVersion
+                           : alcedo::AdjustmentPasteMode::NewRootRelativeVersion;
 
   const auto targets = import_export_->CollectExportTargets(targetEntries);
   auto       ids     = MakeTargetIds(targets);
@@ -226,8 +228,8 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
     const auto found     = std::find(ids.begin(), ids.end(), editor_id);
     if (found != ids.end()) {
       ids.erase(found);
-      const auto session_result = SessionResultMap(
-          editor_session_->PasteAdjustmentPackage(*copied_package_, Tr("Pasted Adjustments")));
+      const auto session_result = SessionResultMap(editor_session_->PasteAdjustmentPackage(
+          *copied_package_, Tr("Pasted Adjustments"), mode));
       editor_pasted  = session_result.value("success").toBool();
       editor_message = session_result.value("message").toString();
       if (!editor_pasted && ids.empty()) {
@@ -242,8 +244,8 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
   }
 
   QString error;
-  if (!apply_coordinator_->StartApplyToTargets(*copied_package_, std::move(ids),
-                                               Tr("Pasted Adjustments"), &error)) {
+  if (!apply_coordinator_->StartApplyToTargets(
+          *copied_package_, std::move(ids), Tr("Pasted Adjustments"), &error, std::nullopt, mode)) {
     return ErrorResult(error);
   }
   QVariantMap result = SuccessResult(Tr("Pasting adjustments…"));

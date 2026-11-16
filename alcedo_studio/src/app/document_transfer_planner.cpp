@@ -19,6 +19,7 @@
 #include "app/pipeline_history_applier.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/film_format.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
@@ -482,6 +483,119 @@ auto CountingTransferIdentitySource::NextStrokeId() -> StrokeId {
 
 void SetDocumentTransferIdentitySourceForTesting(TransferIdentitySource* source) {
   g_identity_for_testing = source;
+}
+
+auto DocumentTransferPlanner::PlanOntoCurrent(const AdjustmentTransferPackage&    package,
+                                              const PipelineDocument&             document,
+                                              const DocumentTransferPasteOptions& options)
+    -> std::optional<PipelineEditBatch> {
+  ValidateDocumentTransfer(package);
+  if (document.Develop() == nullptr || document.Drt() == nullptr) {
+    Fail("Paste target must contain Develop and DRT");
+  }
+  DefaultTransferIdentitySource owned_identity;
+  auto* identity = options.identity_source ? options.identity_source : g_identity_for_testing;
+  auto& source   = identity ? *identity : owned_identity;
+  auto  occupied = OccupiedIdentities(document);
+  CollectSourceIdentities(package, &occupied);
+  const auto                      grades = ColorGradesOnImageBackbone(document);
+  std::set<NodeId>                matched;
+  std::vector<PipelineEditChange> changes;
+  AppendDevelopParameterChanges(document, package.develop_, &changes);
+  NodeId predecessor = grades.empty() ? document.Develop()->Id() : grades.back()->Id();
+
+  for (const auto& incoming : package.color_grades_) {
+    const ColorGradeNodeModel* target = nullptr;
+    const bool source_default         = incoming.source_node_id == package.default_grade_id_;
+    for (const auto* grade : grades) {
+      if (!matched.contains(grade->Id()) &&
+          (source_default ? grade->Id() == document.DefaultGradeId()
+                          : grade->Id() != document.DefaultGradeId() &&
+                                grade->Id() == incoming.source_node_id)) {
+        target = grade;
+        break;
+      }
+    }
+    if (!target && !source_default) {
+      for (const auto* grade : grades) {
+        if (grade->Id() != document.DefaultGradeId() && !matched.contains(grade->Id()) &&
+            grade->DisplayName() == incoming.display_name) {
+          target = grade;
+          break;
+        }
+      }
+    }
+    if (!target) {
+      if (source_default) Fail("Paste target has no default Color Grade");
+      auto                remapped = RemapGradeEntry(incoming, source, &occupied, false, nullptr);
+      const auto          id       = remapped.value.source_node_id;
+      AddColorGradeChange change;
+      change.node_id        = id;
+      change.node           = std::move(remapped.node);
+      change.predecessor_id = predecessor;
+      change.successor_id   = document.Drt()->Id();
+      change.incoming_edge  = {predecessor, ImagePort(), id, ImagePort()};
+      change.outgoing_edge  = {id, ImagePort(), document.Drt()->Id(), ImagePort()};
+      change.before_next_color_grade_name_number = document.NextColorGradeNameNumber();
+      change.after_next_color_grade_name_number  = document.NextColorGradeNameNumber();
+      changes.emplace_back(std::move(change));
+      predecessor = id;
+      continue;
+    }
+    matched.insert(target->Id());
+    if (incoming.enabled && *incoming.enabled != target->Enabled()) {
+      changes.emplace_back(SetNodeEnabledChange{target->Id(), PipelineEditNodeKind::ColorGrade,
+                                                target->Enabled(), *incoming.enabled});
+    }
+    if (incoming.mix && *incoming.mix != target->Mix()) {
+      changes.emplace_back(SetNodeMixChange{target->Id(), target->Mix(), *incoming.mix});
+    }
+    for (const auto& adjustment : incoming.adjustments) {
+      const auto* id = target->FindAdjustmentIdByType(adjustment.type);
+      if (!id) Fail("Paste target is missing adjustment " + std::string{adjustment.type.Text()});
+      EditorParameterTarget parameter;
+      parameter.owner_kind             = EditorParameterOwnerKind::ColorGrade;
+      parameter.node_id                = target->Id();
+      parameter.adjustment_instance_id = *id;
+      parameter.field_key = adjustment.type == type_ids::Cat02WhiteBalance() ? "grade_white_balance"
+                            : adjustment.type == type_ids::Lmt()
+                                ? "lut"
+                                : AdjustmentInstanceSuffix(adjustment.type);
+      AppendParameterChange(document, parameter, adjustment.params, &changes);
+    }
+    if (incoming.masks) {
+      std::uint32_t retained = 0;
+      for (std::size_t index = target->Masks().size(); index > 0; --index) {
+        const auto& mask = target->MaskAt(index - 1);
+        if (GetMaskSourceKind(mask.source) == MaskSourceKind::AiSegmentation) {
+          ++retained;
+        } else {
+          changes.emplace_back(RemoveMaskChange{target->Id(), mask.id, MaskModelToJson(mask),
+                                                static_cast<std::uint32_t>(index - 1)});
+        }
+      }
+      // Transferred Masks need independent identities, even when source and target are one image.
+      for (auto mask : *incoming.masks) {
+        mask.id = source.NextMaskId();
+        RejectCollision(std::string{mask.id.Value()}, occupied, "MaskId");
+        occupied.insert(std::string{mask.id.Value()});
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+        if (auto* brush = std::get_if<BrushMaskSource>(&mask.source)) {
+          for (auto& stroke : brush->strokes) {
+            stroke.id = source.NextStrokeId();
+            RejectCollision(std::string{stroke.id.Value()}, occupied, "StrokeId");
+            occupied.insert(std::string{stroke.id.Value()});
+          }
+        }
+#endif
+        changes.emplace_back(
+            AddMaskChange{target->Id(), mask.id, MaskModelToJson(mask), retained++});
+      }
+    }
+  }
+  AppendDrtParameterChanges(document, package.drt_post_, &changes);
+  if (changes.empty()) return std::nullopt;
+  return MakePasteBatch(std::move(changes));
 }
 
 auto DocumentTransferPlanner::Plan(const AdjustmentTransferPackage&    package,
