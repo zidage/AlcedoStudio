@@ -213,6 +213,9 @@ class ImportExportHandler final : public QObject {
   }
   [[nodiscard]] auto ExportItemStatuses() const -> QVariantMap { return export_item_statuses_; }
   [[nodiscard]] auto export_item_statuses() const -> QVariantMap { return export_item_statuses_; }
+  /// The number of the export run that ExportItemStatuses describes: 0 before the first run,
+  /// then a new number each time a run fills ExportItemStatuses with its queued photos.
+  [[nodiscard]] auto ExportRunId() const -> quint64 { return export_run_id_; }
   [[nodiscard]] int  ExportTotal() const { return export_total_; }
   [[nodiscard]] int  export_total() const { return export_total_; }
   [[nodiscard]] int  ExportCompleted() const { return export_completed_; }
@@ -328,7 +331,8 @@ class ImportExportHandler final : public QObject {
   i18n::LocalizedText           export_status_text_{};
   i18n::LocalizedText           export_error_summary_text_{};
   QVariantMap                   export_item_statuses_{};
-  int                           export_total_            = 0;
+  quint64                       export_run_id_           = 0;
+  int                           export_total_           = 0;
   int                           export_completed_        = 0;
   int                           export_succeeded_        = 0;
   int                           export_failed_           = 0;

@@ -574,6 +574,7 @@ void ImportExportHandler::StartExportWithRecipeOptionsForTargets(
   }
 
   export_item_statuses_.clear();
+  ++export_run_id_;
   for (const auto& [elementId, imageId] : queue_result.queued_targets_) {
     export_item_statuses_.insert(ExportStatusKey(elementId, imageId), QStringLiteral("queued"));
   }
