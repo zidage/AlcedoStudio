@@ -15,15 +15,20 @@ A **shared group** is an ordered list of Color Grade nodes stored once as a
 **Version**, an alternative edit of that photo. A **revision** is one saved
 state of S, including its node order and settings.
 
+S has one shared history cursor. Each photo Version has its own local history
+cursor. Auto Sync links follow S's cursor; they do not copy its edits into their
+local histories.
+
 Creating a group creates a tracking Version in the source photo. Sharing it
 creates a tracking Version in each target photo. Both operations start from the
 photo's **root**, its stored initial editing state. They preserve that photo's
 root Develop, geometry, and DRT/Post settings. They do not inherit edits from
 its previously active Version or write into that Version.
 
-Previous Versions remain available. Later synchronization updates the tracking
-Versions without creating more named Versions. Users can add local Grades
-outside the shared group or change image-specific settings in a tracking Version.
+Previous Versions remain available. Later synchronization changes the shared
+state shown by tracking Versions without creating local commits or more named
+Versions. Users can add local Grades outside the shared group or change
+image-specific settings in a tracking Version.
 Those edits stay local.
 
 ```text
@@ -34,10 +39,10 @@ Image B: Develop B -> [S at r3] -> DRT B
 Image C: Develop C -> [S at r1] -> DRT C   (Manual Updates; newer revision available)
 ```
 
-**Auto Sync** allows shared-node editing, publishes completed edits, and receives
-published revisions automatically. **Manual Updates** keeps a published revision
-until the user chooses **Update to Latest**. Its shared nodes are read-only.
-There are no private drafts, Push operations, or source branches to merge.
+**Auto Sync** allows shared-node editing and follows shared edits, Undo, and
+Redo. **Manual Updates** holds a fixed revision until **Update to Latest**.
+Its shared nodes are read-only. There are no private drafts, Push operations,
+or branch-merging workflows.
 
 ## 2. Create and edit a group
 
@@ -51,8 +56,8 @@ There are no private drafts, Push operations, or source branches to merge.
    Right-click and choose **Share Color Grades**.
 5. Review S and the targets. Choose Auto Sync or Manual Updates for the new links;
    Auto Sync is the default. Confirm sharing. The app creates and activates a
-   tracking Version from each target's root, using the same latest published
-   revision of S for the batch. Keep the photo selection after completion.
+   tracking Version from each target's root, using S's current shared cursor
+   for the batch. Keep the photo selection after completion.
 
 Before either confirmation, explain that unselected edits remain in the previous
 Versions. There is no current-Version destination. Disable Share Color Grades
@@ -81,14 +86,10 @@ actions in Manual Updates mode. Keep enough empty space inside the group for
 its menu to remain accessible, including when collapsed.
 Keyboard context-menu access uses the focused group or node with the same scope.
 
-| Action inside an Auto Sync group | Shared result |
-| --- | --- |
-| Edit a Grade's values, enabled state, mix, name, or supported Masks | Publish the changed group. |
-| Right-click a child and choose Insert Before Selected Node | Insert a shared Grade immediately before that child, including before the first child. |
-| Right-click a child and choose Insert After Selected Node | Insert a shared Grade immediately after that child, including after the last child. |
-| Right-click a node and choose Move Earlier or Move Later | Swap it with the previous or next node and publish the new order. Disable the action when no such neighbor exists. |
-| Right-click a node and choose Delete Node | Remove that node from the group. |
-| Delete every child | Keep an empty linked group that leaves the image unchanged at that point in the pipeline. |
+Node insertion works before the first or after the last node. Move Earlier and
+Move Later swap the node with its neighbor; disable unavailable directions.
+Deleting the last node keeps an empty group that leaves the image unchanged.
+All node edits in Auto Sync mode change the shared contents.
 
 Adding local Grades before or after the group, moving the whole group, and
 editing image-specific settings affect only that Version. A node cannot be
@@ -102,21 +103,23 @@ to Auto Sync links.
 Groups in Manual Updates mode remain read-only. Choose Auto Sync to edit the
 shared source, or Make Independent to edit a local copy.
 
-Use existing AppTheme controls and keyboard access. Loading disables the affected
-actions. An error states its cause and keeps the last valid state.
+Use AppTheme controls and keyboard access. Disable affected actions while loading.
+Errors state their cause and keep the last valid state.
 
 ## 3. Synchronization rules
 
 | Action | Exact behavior |
 | --- | --- |
-| Edit in Auto Sync mode | Preview input locally. On completion, publish one source revision and update all Auto Sync links. |
-| Select Manual Updates in the group menu | Keep the currently adopted revision. Shared controls become read-only. |
-| Update to Latest | Adopt the latest published revision. Stay in Manual Updates mode. Disable this action when already up to date. |
-| Select Auto Sync in the group menu | Adopt the latest revision, enable shared-node editing, and receive future updates automatically. |
+| Edit in Auto Sync mode | Preview input locally. On completion, publish one source revision and advance the shared cursor. All Auto Sync links show it. |
+| Select Manual Updates in the group menu | Hold the revision currently shown. Shared controls become read-only. Record this mode change in local history. |
+| Update to Latest | Hold the revision at S's current cursor. Stay in Manual Updates mode. Record the change in local history. Disable this action when already up to date. |
+| Select Auto Sync in the group menu | Follow S's current cursor and enable shared-node editing. Record the mode change in local history. |
 | Edit a group in Manual Updates mode | Choose Auto Sync or Make Independent first. |
 
-In Auto Sync mode, publish each completed edit automatically. There is no
-**Publish** button or separate Apply step. Completion means:
+In Auto Sync mode, publish each completed edit to the group's contents
+automatically. There is no **Publish** button or separate Apply step. Mode
+changes and other local operations do not create source revisions. Completion
+means:
 
 | Edit type | Completion point |
 | --- | --- |
@@ -125,55 +128,97 @@ In Auto Sync mode, publish each completed edit automatically. There is no
 | Checkbox, menu choice, or keyboard value step | Immediately after the control accepts the change. |
 | Node insertion, deletion, or reordering | Immediately after the complete operation passes validation. Publish the whole operation, not an intermediate sequence. |
 
-Each completed edit that changes the group creates one source revision and
-updates all Auto Sync links. Invalid input, cancelled edits, and unchanged final
+Each completed shared edit that changes the group creates one source revision
+and advances its cursor. Invalid input, cancelled edits, and unchanged final
 values create no revision. Cancelling an edit restores its committed preview.
 Confirming with Enter and then leaving the field must not publish twice.
 
-Starting with A, B, and C at r1, B's slider drag previews only in B. Release
-publishes r2. A and B use Auto Sync and update to r2. C uses Manual Updates and
-keeps r1. No branch comparison, unpublished draft storage, or conflict dialog
-is needed.
+Starting at r1, B's slider drag previews locally. Release publishes r2. Auto Sync
+A and B show r2; C in Manual Updates keeps r1.
 
 Inactive tracking Versions also update when their mode is Auto Sync. Ordinary
 independent Versions and old history entries do not change. Deleting A does not
 delete S.
 
+"Latest" means the revision at S's current cursor, not the furthest revision
+ever created. After shared Undo, Update to Latest can therefore select an older
+revision. A Manual Updates link stays fixed unless its user requests an update.
+
 If every link uses Manual Updates, normal shared-node editing is disabled
 everywhere. Select Auto Sync on one photo to edit the source. Other photos keep
 their revisions until their users choose Update to Latest or Auto Sync.
 
-## 4. History and Undo
+## 4. Separate cursors and combined history
 
-The app records each image edit as a **commit**, a history entry that can be
-replayed. Keep the recorded image state separate from its tracking policy:
+| History | Edits it owns | Cursor scope |
+| --- | --- | --- |
+| Shared source S | Shared node values, Masks, names, insertion, deletion, and order | One cursor used by all Auto Sync links, across all photos and Versions. |
+| Photo Version | Local Grades, Develop, geometry, DRT/Post, group placement, linking/removal, mode changes, and Update to Latest | One local cursor for that Version. |
 
-- Each linked group in the recorded image state refers to an exact source
-  revision. Rendering, replay, and history preview use that revision, not the
-  source's latest revision.
-- Each Auto Sync update creates a small image commit that changes the revision
-  reference. This keeps existing image history authoritative.
-- The mode, Auto Sync or Manual Updates, is mutable tracking policy for a
-  Version's group instance. The image history owner stores it alongside the
-  Version reference. It is not part of the immutable rendering state.
+Shared Undo moves S's cursor to the previous revision. Shared Redo moves it
+forward along its active Redo path. Both update every Auto Sync link, including
+inactive Versions. Neither creates a revision or changes a photo's local cursor.
+Manual Updates links remain fixed.
 
-**Image Undo/Redo** uses the existing image history. When it moves to a different
-history entry, switch that Version's group links to Manual Updates in the same
-transaction. This includes Undo of a local edit. Show **Manual Updates** as the
-mode and explain that history navigation paused synchronization. Redo keeps this
-mode. A link restored by Undo also starts in Manual Updates mode. Selecting
-**Auto Sync** in the group menu updates the link to the latest revision and
-enables future updates.
+Local Undo/Redo moves only the current Version's local cursor. It does not move
+S's cursor. Undo of a node edit never changes sync mode. Undo of an explicit
+mode change restores that mode change's previous state, as a local operation.
 
-Thus Undo immediately after a shared edit restores B's previous image state
-without reversing the edit in S or A. Merely previewing an old history entry
-changes neither the current history position nor the tracking policy.
+### Combined view and keyboard routing
 
-**Restore Shared Revision** is a separate source-history action. Selecting r1
-publishes its contents as a new source revision. Show the affected Auto Sync
-links before confirmation. Manual Updates links keep their revisions. This action
-restores a complete known group; it does not selectively reverse old edits or
-maintain a second Undo/Redo stack.
+The History panel combines local entries with references to linked source entries,
+including edits from other photos. Rows identify their owner and applied/Redo
+state. Showing a shared edit creates no local history entry.
+
+Persist a unique, increasing project-wide edit order with each completed edit.
+Do not compare wall-clock times or unrelated revision numbers.
+
+Ctrl+Z and the existing Redo shortcut/menu route automatically:
+
+1. **Undo:** consider the last applied local edit and the last applied edit in
+   each currently linked Auto Sync source. Choose the greatest edit order and
+   move only that owner's cursor backward.
+2. **Redo:** consider the next edit on each eligible history's Redo path.
+   Choose the smallest edit order and move only that owner's cursor forward.
+3. Recompute candidates after every cursor or link change, including changes
+   made from another photo. Count the same source only once in a photo's view.
+4. Exclude shared histories reached only through Manual Updates links. Their
+   displayed source entries are read-only. Local mode and update actions remain
+   eligible. Initial states have no Undo step. Disable actions with no eligible step.
+
+Node selection does not choose the cursor. Menu/tooltip labels name the next
+action, such as **Undo Shared Contrast (2 photos)** or **Undo Local Curve**.
+Text-field Undo still handles unconfirmed text; routing applies to completed edits.
+
+Example, with A and B in Auto Sync:
+
+| Edit order | Action | History owner |
+| --- | --- | --- |
+| 1 | Change X's exposure from A | S |
+| 2 | Add a local curve in A | A's Version |
+| 3 | Change Y's contrast from B | S |
+
+Three Undo actions in A undo shared edit 3 for both photos, then local edit 2
+only in A, then shared edit 1 for both photos. Redo applies 1, 2, then 3.
+If another photo already moved S's cursor, A uses that new position for its
+next shortcut. Undo does not search for the current user's last shared edit.
+
+Cursor moves are not new edit entries. A new edit replaces only its owner's
+active Redo path. A local edit cannot erase shared Redo, or vice versa. Keep
+older revisions while links, historical states, or exports still need them;
+retaining those revisions does not expose a branch-merging workflow.
+
+### Live state and historical state
+
+A live photo uses its local cursor plus each Auto Sync source's current cursor
+or each Manual Updates link's fixed revision. One photo commit alone therefore
+does not describe its complete live rendering state.
+
+A frozen state records the local commit and exact source revision IDs. Local
+entries retain those IDs for historical replay, not to rewind live sources.
+A shared-entry preview uses current local state with the selected source revision.
+Preview moves no cursor and changes no mode. Comparison and export use fixed
+revision references too.
 
 ## 5. Local and global removal
 
@@ -186,15 +231,15 @@ nodes. They act on the group link, not the node that was last selected.
 | Make Independent | Replace the reference with local nodes at the same position, preserving displayed values and order. Assign new local IDs. |
 | Remove from All Linked Photos | Show affected photos and Versions, then remove the group from every linked Version, including inactive Versions and links in Manual Updates mode. |
 
-Local removal behaves like unlinking a hard link. Global removal changes each
-linked Version's current state in one operation; it does not erase old history
-entries. Retain source revisions while any Version, history entry, or running
-export needs them. Source node IDs remain stable across published revisions.
+Local removal behaves like unlinking a hard link. Global removal changes linked
+Versions, not old history entries. Retain source revisions needed by Versions,
+history, or running exports. Source node IDs remain stable.
 
-Removal and Make Independent are recorded in image history. Image Undo can
-restore that Version's reference in Manual Updates mode. Global removal does
-not add a separate all-images Undo system. Users can restore individual
-references through image history. Old commits retain their original contents.
+Removal and Make Independent are local history operations. Undo restores the
+link's prior mode: Auto Sync follows S's current cursor; Manual Updates restores
+its fixed revision. It never rewinds S. Global removal writes a local removal
+step in each affected Version atomically. Undo from one photo restores only its
+own link; there is no separate all-photos Undo stack.
 
 ## 6. Data ownership and publication
 
@@ -202,39 +247,50 @@ Proposed records:
 
 | Record | Owned data |
 | --- | --- |
-| `SharedGradeSource` | `source_id`, `name`, `head_revision_id`. |
-| `SharedGradeRevision` | `revision_id`, `source_id`, `parent_revision_id`, immutable `grade_chain_json`. Reuse Color Grade serialization. |
-| Group reference in image document/history | `instance_id`, `source_id`, exact `revision_id`; the image graph owns placement. |
-| Tracking policy owned with Version refs | `(version_id, instance_id, mode)`. Controls future adoption, not historical rendering. |
+| `SharedGradeSource` | `source_id`, `name`, `current_revision_id`, and active Redo-path tip. Owns the shared cursor. |
+| `SharedGradeRevision` | `revision_id`, `source_id`, `parent_revision_id`, `edit_order`, immutable `grade_chain_json`. Reuse Color Grade serialization. |
+| Group link in local document/history | `instance_id`, `source_id`, `mode`, and a fixed revision for Manual Updates. The image graph owns placement. Auto Sync resolves the source cursor. |
+| Photo Version history | Local commits, local cursor and active Redo path, edit order, and exact observed source revision IDs for historical replay. |
 
-DuckDB stores each revision's contents once. Image commits store reference
-changes. Runtime node identity combines the group instance ID and source node
-ID. Names never establish identity. Immutable revisions are necessary to retain
-old results; readers use their models without creating another editable source.
+DuckDB stores each source revision once. Live Auto Sync updates write no
+per-photo adoption commits. Runtime identity combines the group instance ID and
+source node ID. Names never establish identity. Immutable revisions retain old
+results. Historical and export references contain IDs, not editable copies of S.
 
 A proposed `SharedGradeService` owns source operations for one project.
-`PipelineMgmtService` owns image commits and tracking policies. The UI calls
-these services. Storage obtains a connection at the operation boundary.
-The source service processes shared edits one at a time.
+`PipelineMgmtService` owns local commits, cursors, and link modes. The UI calls
+these services. `PipelineMgmtService` routes Undo/Redo through the source owner
+when the chosen edit is shared. Storage obtains a connection at the operation
+boundary. The source service processes shared edits one at a time.
 
 ```text
-Completed shared edit -> source owner -> validate affected Versions
-  -> one DB transaction: new revision + source head + Auto Sync reference-change commits
-  -> publish committed state -> invalidate affected previews/thumbnails
+Completed shared edit -> source owner -> validate group
+  -> one DB transaction: edit order + new revision + shared cursor/Redo path
+  -> publish committed state -> refresh linked history views and previews/thumbnails
   -> render visible images at existing quality
 ```
 
+Undo/Redo uses the same owner path but persists only cursor movement; it allocates
+no edit order or revision. The local path writes only local edits or cursor moves.
+Local operations capture required source references through the source owner.
+Select routing candidates and move the chosen cursor in the same serialized
+project history operation. Allocate edit order in the committing transaction.
+
+Render and checkpoint identity must include the local commit and resolved source
+revision IDs. A shared cursor move invalidates affected cached results even when
+the photo's local cursor did not move. Independent Versions keep their existing
+single-history behavior.
+
 Use the open image's existing editor queue to settle pending input before an
-update. Validate creation, adoption, restoration, and removal before mutation.
-On persistence failure, keep all affected heads and policies unchanged.
-Restore the initiating preview to its committed revision.
+update. Validate before mutation. On persistence failure, leave affected edits,
+cursors, modes, and Redo paths unchanged. Restore any initiating preview.
 After a crash, reopen reconstructs committed state. Rendering failure reports
 the real error without changing backend or quality.
 
-An export batch captures each target's exact resolved revision references when
-the batch starts. Keep those immutable revisions alive until completion. Honor
-Manual Updates links and historical selections: targets can use different
-revisions of S. Never replace them with one source-head revision for the batch.
+An export batch captures each target's local cursor and exact source revisions
+in one consistent read when the batch starts. Keep them alive until completion.
+Honor Manual Updates links and historical selections: targets can use different
+revisions of S. Do not replace those choices with S's current cursor.
 
 ## 7. Masks and compatibility
 
@@ -255,48 +311,41 @@ registration are excluded.
 
 ## 8. Integration and acceptance
 
-[PR #917's maintainer response](https://github.com/zidage/AlcedoStudio/pull/917#issuecomment-6880215213)
-proposes explicit tracking for [issue #764](https://github.com/zidage/AlcedoStudio/issues/764).
-This proposal supplies identity and ordering without matching unrelated chains.
-A one-node group also supports individual-node sharing.
+[PR #917](https://github.com/zidage/AlcedoStudio/pull/917#issuecomment-6880215213)
+proposes explicit tracking for [#764](https://github.com/zidage/AlcedoStudio/issues/764).
+Shared groups supply identity and order; a one-node group supports individual sharing.
 
 Ordinary Paste remaps identities. This branch's
 `DocumentTransferPlanner::PlanOntoCurrent` matches Grades by identity or name;
 shared synchronization must not use that path. Proposed records and
 `SharedGradeService` do not exist yet.
 
-Extend `alcedo_studio/src/edit/graph` for references and traversal, `edit/history`
-for reference changes, `app` for source ownership, `storage` for transactions,
-and `ui/alcedo_main` for group controls. Before implementation, reread
-`AGENTS.md` and applicable skills. Verify these behaviors through owner tests:
+Under `alcedo_studio/src/`, extend `edit/graph` for references, `edit/history` for
+cursors/routing, `app` for ownership/cache identity, `storage` for transactions,
+and `ui/alcedo_main` for controls. Reread `AGENTS.md` and applicable skills before
+implementation. Required owner-test assertions:
 
-1. Parameter, order, insertion, and removal edits reach all Auto Sync links.
-2. C in Manual Updates mode keeps r1 after A publishes r2. Update to Latest
-   adopts r2 without enabling editing or changing C's mode.
-3. Image Undo/Redo pauses that Version's links, including when undoing a local
-   edit. Reopen preserves the chosen history entry and Manual Updates mode.
-4. Restoring shared r1 publishes a new revision and leaves Manual Updates links unchanged.
-5. Local removal leaves other Versions intact. Global removal includes inactive
-   links in Manual Updates mode and is atomic. Historical references remain
-   readable; image Undo restores a link in Manual Updates mode.
-6. A failed DB transaction changes no heads or policies.
-7. Export honors different target revisions throughout a concurrent source edit.
-8. Unsupported Masks fail before creating any source or tracking Version.
-9. Create Shared Color Grades in A, then Share Color Grades to selected Library
-   or filmstrip targets. Each operation creates root-based Versions and preserves
-   previous Versions. Target selection remains unchanged. No current-Version
-   destination is available.
-10. Node context menus insert before/after, delete, and move nodes earlier/later.
-    They contain no group-removal or mode actions. Group background menus offer
-    group actions and no individual-node actions. Only an empty Auto Sync group
-    also offers Insert Node, which publishes its first Grade to followers.
-11. Drag previews remain local until release. Valid text edits publish on Enter
-    or leaving the field; accepted control and node operations publish immediately.
-    Each changed edit publishes once without a Publish button. Invalid, cancelled,
-    and unchanged edits publish nothing.
-12. If all links use Manual Updates, shared-node editing stays disabled until
-    one link switches to Auto Sync. Other links keep their revisions until
-    Update to Latest or switching to Auto Sync.
+1. Completed node edits reach all Auto Sync links. Invalid, cancelled, or unchanged
+   edits publish nothing. Each completion publishes once without a Publish button.
+2. Manual Updates stays fixed through shared edits/Undo/Redo. Update to Latest
+   uses S's cursor, even after Undo, without enabling editing.
+3. The example routes Undo as 3, 2, 1 and Redo as 1, 2, 3. Shared steps affect
+   all Auto Sync links without new revisions/local commits. Local steps stay local.
+4. B's shared cursor move changes A's next candidate. Multiple links to S count
+   once. Manual Updates links cannot route shared steps.
+5. Local removal preserves other Versions. Global removal is atomic and includes
+   inactive/Manual Updates links. Local Undo restores the prior link mode only.
+6. Write failure changes no edits, cursors, modes, or Redo paths. Reopen preserves
+   cursors and Redo. New edits replace only their owner's Redo path.
+7. Frozen preview/export states survive later cursor changes. Preview moves no
+   cursor. Shared movement refreshes caches without changing local history.
+8. Unsupported Masks fail before creation. Retained historical revisions stay readable.
+9. Source creation and Library/filmstrip sharing always create Versions from root,
+   preserve previous Versions, and keep target selection.
+10. Group/node menus keep their separate scopes. Empty Auto Sync groups allow
+    Insert Node. Manual Updates disables node-changing actions.
+11. With all links in Manual Updates, shared editing stays disabled until one
+    switches to Auto Sync. Other fixed links do not change.
 
 Related specifications:
 
