@@ -388,10 +388,10 @@ TEST(EditViewerLogicTests, CropGeometryHitTestPrefersCornersOverEdges) {
   const auto hit = CropGeometry::HitTestWidgetGeometry(*corners, (*corners)[0]);
   EXPECT_EQ(hit.corner_index, 0);
   EXPECT_EQ(hit.edge, CropEdge::None);
-  EXPECT_FALSE(hit.rotate_handle_hit);
+  EXPECT_FALSE(hit.rotate_hit);
 }
 
-TEST(EditViewerLogicTests, OverlayGeometryBuildsCropCornersAndRotateHandleAtMultipleDpr) {
+TEST(EditViewerLogicTests, OverlayGeometryBuildsCropCornersAndAngleBadgeAtMultipleDpr) {
   for (const float dpr : {1.0f, 1.5f, 2.0f}) {
     EditViewerOverlaySnapshot snapshot;
     snapshot.widget_info = {800, 600, dpr};
@@ -415,7 +415,8 @@ TEST(EditViewerLogicTests, OverlayGeometryBuildsCropCornersAndRotateHandleAtMult
       EXPECT_GE(corner.y(), -1.0);
       EXPECT_LE(corner.y(), 601.0);
     }
-    EXPECT_NE(geometry.rotate_stem_widget, geometry.rotate_handle_widget);
+    // The angle badge sits outside the top edge.
+    EXPECT_LT(geometry.angle_badge_widget.y(), geometry.crop_corners_widget[0].y());
 
     // Round-trip a corner through UV to prove coordinate space stability at this DPR.
     const auto uv = ViewportMapper::WidgetPointToImageUv(
@@ -466,11 +467,10 @@ TEST(EditViewerLogicTests, OverlayGeometryCropCornersStayInsideImageForAllViewpo
       EXPECT_LE(corner.y(), geometry.image_rect.bottom() + 1.0) << c.name;
     }
 
-    // Rotate handle is offset outside the crop edge.
-    const auto center = CropGeometry::CropCenterWidgetPoint(geometry.crop_corners_widget);
-    const auto stem_to_handle = geometry.rotate_handle_widget - geometry.rotate_stem_widget;
-    EXPECT_GT(QPointF::dotProduct(stem_to_handle, stem_to_handle), 1.0) << c.name;
-    EXPECT_NE(geometry.rotate_handle_widget, center) << c.name;
+    // The angle badge anchor is outside the crop frame.
+    EXPECT_FALSE(
+        CropGeometry::IsPointInsideQuad(geometry.crop_corners_widget, geometry.angle_badge_widget))
+        << c.name;
   }
 }
 

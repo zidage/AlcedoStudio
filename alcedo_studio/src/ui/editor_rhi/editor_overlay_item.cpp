@@ -229,40 +229,6 @@ void AppendDashedStroke(std::vector<QPointF>& tris, const QPointF& a, const QPoi
   }
 }
 
-void AppendFilledDisc(std::vector<QPointF>& tris, const QPointF& center, float radius, int segments) {
-  if (radius <= 0.0f || segments < 3) {
-    return;
-  }
-  for (int i = 0; i < segments; ++i) {
-    const float a0 = (static_cast<float>(i) / static_cast<float>(segments)) * 6.28318530718f;
-    const float a1 = (static_cast<float>(i + 1) / static_cast<float>(segments)) * 6.28318530718f;
-    tris.push_back(center);
-    tris.push_back(QPointF(center.x() + std::cos(a0) * radius, center.y() + std::sin(a0) * radius));
-    tris.push_back(QPointF(center.x() + std::cos(a1) * radius, center.y() + std::sin(a1) * radius));
-  }
-}
-
-void AppendRing(std::vector<QPointF>& tris, const QPointF& center, float inner_r, float outer_r,
-                int segments) {
-  if (outer_r <= inner_r || segments < 3) {
-    return;
-  }
-  for (int i = 0; i < segments; ++i) {
-    const float a0 = (static_cast<float>(i) / static_cast<float>(segments)) * 6.28318530718f;
-    const float a1 = (static_cast<float>(i + 1) / static_cast<float>(segments)) * 6.28318530718f;
-    const QPointF o0(center.x() + std::cos(a0) * outer_r, center.y() + std::sin(a0) * outer_r);
-    const QPointF o1(center.x() + std::cos(a1) * outer_r, center.y() + std::sin(a1) * outer_r);
-    const QPointF i0(center.x() + std::cos(a0) * inner_r, center.y() + std::sin(a0) * inner_r);
-    const QPointF i1(center.x() + std::cos(a1) * inner_r, center.y() + std::sin(a1) * inner_r);
-    tris.push_back(o0);
-    tris.push_back(i0);
-    tris.push_back(i1);
-    tris.push_back(o0);
-    tris.push_back(i1);
-    tris.push_back(o1);
-  }
-}
-
 void FillColoredGeometry(QSGGeometry* geometry, const std::vector<QPointF>& points,
                          const QColor& color) {
   geometry->allocate(static_cast<int>(points.size()));
@@ -403,23 +369,56 @@ auto BuildOverlaySceneGeometry(const CropOverlayWidgetGeometry& geometry, bool c
         1.0f, kDash, kGap);
   }
 
-  AppendStrokeSegment(scene.stem_outer_triangles, geometry.rotate_stem_widget,
-                      geometry.rotate_handle_widget, 2.4f, true);
-  AppendStrokeSegment(scene.stem_inner_triangles, geometry.rotate_stem_widget,
-                      geometry.rotate_handle_widget, 1.1f, true);
-
-  constexpr int kHandleSegs = 16;
-  for (const auto& corner : geometry.crop_corners_widget) {
-    const float r = CropGeometry::kCropCornerDrawRadiusPx;
-    AppendRing(scene.handle_outline_triangles, corner, r, r + 1.2f, kHandleSegs);
-    AppendFilledDisc(scene.handle_fill_triangles, corner, r, kHandleSegs);
-    ++scene.handle_count;
+  // Fine grid while a rotate drag is active: about kCropFineGridSpacingPx cells, each third
+  // split evenly so the thirds lines stay on the grid. Thirds lines stay dashed above.
+  if (geometry.crop_rotation_active) {
+    const auto& c        = geometry.crop_corners_widget;
+    const auto  side_len = [](const QPointF& a, const QPointF& b) {
+      return static_cast<float>(std::hypot(b.x() - a.x(), b.y() - a.y()));
+    };
+    const auto per_third = [](float length) {
+      return std::max(
+          2, static_cast<int>(std::lround(length / (3.0f * CropGeometry::kCropFineGridSpacingPx))));
+    };
+    const int split_x = per_third(side_len(c[0], c[1]));
+    const int split_y = per_third(side_len(c[0], c[3]));
+    const int lines_x = 3 * split_x;
+    const int lines_y = 3 * split_y;
+    for (int i = 1; i < lines_x; ++i) {
+      if (i % split_x == 0) {
+        continue;
+      }
+      const float t = static_cast<float>(i) / static_cast<float>(lines_x);
+      AppendThickLine(scene.fine_grid_triangles, CropGeometry::LerpPoint(c[0], c[1], t),
+                      CropGeometry::LerpPoint(c[3], c[2], t), 1.0f);
+    }
+    for (int i = 1; i < lines_y; ++i) {
+      if (i % split_y == 0) {
+        continue;
+      }
+      const float t = static_cast<float>(i) / static_cast<float>(lines_y);
+      AppendThickLine(scene.fine_grid_triangles, CropGeometry::LerpPoint(c[0], c[3], t),
+                      CropGeometry::LerpPoint(c[1], c[2], t), 1.0f);
+    }
   }
-  {
-    const float r = CropGeometry::kCropRotateHandleDrawRadiusPx;
-    AppendRing(scene.handle_outline_triangles, geometry.rotate_handle_widget, r, r + 1.2f,
-               kHandleSegs);
-    AppendFilledDisc(scene.handle_fill_triangles, geometry.rotate_handle_widget, r, kHandleSegs);
+
+  // Corner brackets: an L along both edges at each corner, in the edge grip style.
+  for (size_t i = 0; i < geometry.crop_corners_widget.size(); ++i) {
+    const auto&   c      = geometry.crop_corners_widget;
+    const QPointF corner = c[i];
+    const QPointF next   = c[(i + 1) % c.size()];
+    const QPointF prev   = c[(i + c.size() - 1) % c.size()];
+    for (const QPointF& toward : {next, prev}) {
+      const QPointF edge   = toward - corner;
+      const float   length = static_cast<float>(std::hypot(edge.x(), edge.y()));
+      if (length <= 1e-4f) {
+        continue;
+      }
+      const float   arm = std::min(CropGeometry::kCropCornerBracketLengthPx, length * 0.25f);
+      const QPointF end = corner + (edge * (arm / length));
+      AppendStrokeSegment(scene.grip_outer_triangles, corner, end, 5.0f, true);
+      AppendStrokeSegment(scene.grip_inner_triangles, corner, end, 2.4f, true);
+    }
     ++scene.handle_count;
   }
 
@@ -434,10 +433,7 @@ struct EditorOverlayItem::OverlayRootNode : public QSGNode {
   QSGGeometryNode* grip_outer_node = nullptr;
   QSGGeometryNode* grip_inner_node = nullptr;
   QSGGeometryNode* grid_node = nullptr;
-  QSGGeometryNode* stem_outer_node = nullptr;
-  QSGGeometryNode* stem_inner_node = nullptr;
-  QSGGeometryNode* handle_outline_node = nullptr;
-  QSGGeometryNode* handle_fill_node = nullptr;
+  QSGGeometryNode* fine_grid_node = nullptr;
   QSGGeometryNode* detail_roi_node = nullptr;
   QSGGeometryNode* mask_handle_outline_node = nullptr;
   QSGGeometryNode* mask_handle_fill_node = nullptr;
@@ -555,7 +551,7 @@ void EditorOverlayItem::setMaskOverlayDisplay(MaskOverlayDisplay display) {
 
 void EditorOverlayItem::applyOverlayCursor() {
   OverlayCursor next = MaskOverlayCursorForDisplay(mask_display_);
-  // Crop reports its rotate handle through the Qt::CursorShape channel with a
+  // Crop reports its rotate zones through the Qt::CursorShape channel with a
   // marker shape; the bitmap cursor is shown here.
   if (next == OverlayCursor::None && interaction_ != nullptr &&
       interaction_->hasCustomCursor() &&
@@ -730,14 +726,8 @@ auto EditorOverlayItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*)
                      QColor(28, 28, 28, 235), creates);
   UpsertTriangleNode(root, root->grid_node, scene.grid_triangles, QColor(255, 255, 255, 135),
                      creates);
-  UpsertTriangleNode(root, root->stem_outer_node, scene.stem_outer_triangles,
-                     QColor(255, 255, 255, 220), creates);
-  UpsertTriangleNode(root, root->stem_inner_node, scene.stem_inner_triangles,
-                     QColor(25, 25, 25, 220), creates);
-  UpsertTriangleNode(root, root->handle_outline_node, scene.handle_outline_triangles,
-                     QColor(28, 28, 28, 230), creates);
-  UpsertTriangleNode(root, root->handle_fill_node, scene.handle_fill_triangles,
-                     QColor(255, 255, 255, 245), creates);
+  UpsertTriangleNode(root, root->fine_grid_node, scene.fine_grid_triangles,
+                     QColor(255, 255, 255, 60), creates);
   UpsertTriangleNode(root, root->detail_roi_node, scene.detail_roi_triangles,
                      QColor(120, 200, 255, 200), creates);
 
