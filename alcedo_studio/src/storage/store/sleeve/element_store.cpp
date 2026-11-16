@@ -630,6 +630,16 @@ auto ReadAlbumQueryFromMatchSet(duckorm::Connection conn, const AlbumQueryOption
     out.occurrence_file_ids_ = ReadFileIds(conn, query);
   }
 
+  if (read.read_match_file_ids_) {
+    auto query = duckorm::clause::select_query(
+        std::vector{expr::raw("s.file_id")},
+        expr::raw(std::format("FROM {} s", kMatchSetTable)));
+    query.append(duckorm::clause::order_by(std::vector<duckorm::OrderTerm>{
+        {expr::raw("s.file_id"), duckorm::OrderDirection::kAscending,
+         duckorm::NullPlacement::kLast}}));
+    out.match_file_ids_ = ReadFileIds(conn, query);
+  }
+
   if (read.read_statistics_) {
     FolderStatsView statistics;
     ReadMatchSetBuckets(conn, statistics, !options.local_day_time_zone_.empty());
