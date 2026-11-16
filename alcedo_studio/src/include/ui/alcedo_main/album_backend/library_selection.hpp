@@ -24,6 +24,10 @@ namespace alcedo::ui {
 /// one value, so a selection of tens of thousands of photos costs one counter update per change.
 /// Actions read the complete set through SelectedItems. Every change that leaves the selection
 /// as it was emits no SelectionChanged.
+///
+/// The selection holds only photos of the accepted library result: LibraryModule prunes it when
+/// it accepts a refresh (a filter, search, scope, or content change), so a batch action never
+/// reaches a photo that the list does not show.
 class LibrarySelection final : public QObject {
   Q_OBJECT
   Q_PROPERTY(int selectedCount READ SelectedCount NOTIFY SelectionChanged)

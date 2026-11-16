@@ -643,6 +643,29 @@ TEST_F(AlbumQueryTest, OccurrenceFileIdsFollowThePageOrderWithOneEntryPerOccurre
   EXPECT_TRUE(ReadAll(project, AlbumQueryOptions{}).occurrence_file_ids_.empty());
 }
 
+// Issue #958: the match ids are the unique files of the result in ascending id order, whatever
+// the sort and the groups, so the Library can test whether a selected photo is in the result
+// with a binary search.
+TEST_F(AlbumQueryTest, MatchFileIdsAreTheUniqueResultFilesInIdOrder) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  const auto options = AlbumQueryOptions{.sort_field_     = AlbumSortField::kCaptureTime,
+                                         .sort_direction_ = SortDirection::kDescending,
+                                         .group_field_    = AlbumGroupField::kCameraModel};
+  const auto result  = Store(project).ReadAlbumQuery(
+      0, std::nullopt, options, kActiveModel,
+      AlbumQueryRead{.limit_ = 0, .read_occurrence_file_ids_ = true, .read_match_file_ids_ = true});
+  std::vector<sl_element_id_t> expected = result.occurrence_file_ids_;
+  std::sort(expected.begin(), expected.end());
+  expected.erase(std::unique(expected.begin(), expected.end()), expected.end());
+  // The shown order is not the id order, and the match ids still are.
+  EXPECT_NE(result.occurrence_file_ids_, expected);
+  EXPECT_EQ(result.match_file_ids_, expected);
+  EXPECT_EQ(static_cast<int64_t>(result.match_file_ids_.size()), result.unique_file_count_);
+  // Without the option the result has no match ids.
+  EXPECT_TRUE(ReadAll(project, AlbumQueryOptions{}).match_file_ids_.empty());
+}
+
 TEST_F(AlbumQueryTest, ImportDayFilterUsesLocalMidnightBoundaries) {
   ProjectService                                            project(db_path_, meta_path_);
   // America/New_York: 2026-06-10 is an ordinary EDT day (UTC-4, starts 04:00 UTC); 2026-03-08

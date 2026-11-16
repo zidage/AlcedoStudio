@@ -269,6 +269,11 @@ void LibraryModule::SelectAllInCurrentView() {
             SetQueryError(error);
             return;
           }
+          if (refresh_in_flight_) {
+            // A refresh started after this read: its result may hide some of these photos.
+            RunAfterRefresh([this]() { SelectAllInCurrentView(); });
+            return;
+          }
           selection_.Replace(std::move(images));
         },
         Qt::QueuedConnection);
@@ -754,6 +759,8 @@ void LibraryModule::SubmitPendingRefresh() {
     query_worker_->Invalidate(SearchRequestKind::kSelectAll);
     query_worker_->Invalidate(SearchRequestKind::kStatistics);
     ResetThumbnailWindow();
+    // No list: no photo stays selected for a batch action.
+    selection_.Clear();
     if (stats_) {
       stats_->ClearStats();
     }
@@ -778,8 +785,12 @@ void LibraryModule::SubmitPendingRefresh() {
               input->search_.filter_.has_value() || input->search_.semantic_query_.has_value()
           ? kSearchMetadataPageSize
           : kAlbumMetadataPageSize);
-  input->read_      = AlbumQueryRead{
-           .offset_ = 0, .limit_ = input->page_size_, .read_groups_ = true, .read_statistics_ = true};
+  // The match ids keep the selection inside the accepted result (PruneSelectionToResult).
+  input->read_ = AlbumQueryRead{.offset_              = 0,
+                                .limit_               = input->page_size_,
+                                .read_groups_         = true,
+                                .read_statistics_     = true,
+                                .read_match_file_ids_ = true};
   input->browse_         = std::move(browse);
   input->filter_service_ = proj->GetSleeveFilterService();
   input->image_pool_     = proj->GetImagePoolService();
@@ -806,7 +817,8 @@ void LibraryModule::SubmitPendingRefresh() {
                                   .limit_                    = 0,
                                   .read_groups_              = true,
                                   .read_statistics_          = true,
-                                  .read_occurrence_file_ids_ = true};
+                                  .read_occurrence_file_ids_ = true,
+                                  .read_match_file_ids_      = true};
   } else if (!std::exchange(unpublished_replace_, true) &&
              requested_kind == RefreshKind::kInPlace) {
     // A content refresh that must replace (a pending presentation or search change): the
@@ -983,7 +995,20 @@ void LibraryModule::PublishRefresh(const LibraryQueryInput& input, LibraryQueryO
     requested_begin_ = 0;
     requested_end_   = static_cast<int64_t>(page_ids.size());
   }
+  PruneSelectionToResult(result.match_file_ids_);
   FinishRefresh(output, search_changed);
+}
+
+void LibraryModule::PruneSelectionToResult(const std::vector<sl_element_id_t>& match_file_ids) {
+  // The selection holds only photos that the shown list holds, so a batch action (Delete,
+  // Paste, Rating, marks, Add to) never reaches a photo that a filter or a search hides.
+  std::vector<sl_element_id_t> hidden;
+  for (const auto element_id : selection_.SelectedElementIds()) {
+    if (!std::binary_search(match_file_ids.begin(), match_file_ids.end(), element_id)) {
+      hidden.push_back(element_id);
+    }
+  }
+  selection_.Prune(hidden);
 }
 
 auto LibraryModule::PlanInPlaceChange(const LibraryQueryInput&  input,
@@ -1168,6 +1193,7 @@ void LibraryModule::ApplyInPlaceChange(const LibraryQueryInput& input, LibraryQu
 
   emit LibraryChangeApplied();
   emit libraryChangeApplied();
+  PruneSelectionToResult(result.match_file_ids_);
   FinishRefresh(output, false);
   ContinuePaging();
 }

@@ -425,6 +425,9 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   void               FailRefresh(const QString& error);
   /// Finish an accepted refresh: counts, statistics, and the deferred actions.
   void               FinishRefresh(const LibraryQueryOutput& output, bool search_changed);
+  /// Remove from the selection every photo that the accepted result does not hold.
+  /// @p match_file_ids: the unique file ids of the result, ascending (read_match_file_ids_).
+  void               PruneSelectionToResult(const std::vector<sl_element_id_t>& match_file_ids);
   void SaveThumbnailDiskCacheSettings();
   /// Release the pins and empty the grid model, the sections, and the counts.
   void               ResetThumbnailWindow();

@@ -148,6 +148,9 @@ struct AlbumQueryRead {
   /// Read the file id of every occurrence in occurrence order (AlbumQueryResult::
   /// occurrence_file_ids_), in the same transaction as the counts and the groups.
   bool    read_occurrence_file_ids_ = false;
+  /// Read the unique file ids of the result in ascending id order (AlbumQueryResult::
+  /// match_file_ids_), in the same transaction as the counts and the groups.
+  bool    read_match_file_ids_      = false;
 };
 
 /// Result of ElementStore::ReadAlbumQuery: counts, the requested groups and statistics, and one
@@ -164,6 +167,9 @@ struct AlbumQueryResult {
   /// several label groups is listed once per group). Empty unless
   /// AlbumQueryRead::read_occurrence_file_ids_.
   std::vector<sl_element_id_t>      occurrence_file_ids_{};
+  /// Unique file ids of the result in ascending id order, for a membership test with
+  /// std::binary_search. Empty unless AlbumQueryRead::read_match_file_ids_.
+  std::vector<sl_element_id_t>      match_file_ids_{};
 };
 
 /// Position of one file's occurrence in the ordered occurrence stream.
