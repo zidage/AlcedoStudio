@@ -47,7 +47,8 @@ struct EditorImageExifDisplay {
   std::optional<float>               aperture;
   std::optional<float>               focal_mm;
   /// RAW lens identity used by the Lens Calibration auto-detect control.
-  /// These are not header tokens; empty means the EXIF field is missing.
+  /// These are not header tokens; empty means the EXIF field is missing. For a fixed-lens camera
+  /// without a lens name, the editor host fills in the Lensfun profile of the built-in lens.
   std::string                        lens_make;
   std::string                        lens_model;
   /// Camera identity of the image RAW color context (`RawRuntimeColorContext::camera_make_` and

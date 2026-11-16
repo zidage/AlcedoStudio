@@ -53,7 +53,8 @@ struct LensCorrectionSettings {
 enum class LensProfileStatus {
   Resolved,             ///< At least one correction applies.
   NoCorrectionApplies,  ///< The profile matched, but no requested correction is available.
-  MissingLensIdentity,  ///< No lens model or no positive focal length.
+  /// No positive focal length, or no lens model on a camera without a built-in lens.
+  MissingLensIdentity,
   DatabaseUnavailable,  ///< No Lensfun database directory could be found or loaded.
   LensNotInDatabase,    ///< The database has no profile for the lens.
 };
@@ -74,8 +75,18 @@ struct LensProfileResolution {
   std::string        matched_lens_model_ = {};
 };
 
+/// Maker and model strings of one Lensfun lens profile.
+struct LensProfileName {
+  std::string maker_ = {};
+  std::string model_ = {};
+};
+
 /**
  * @brief Resolves Lensfun coefficients into @ref LensCalibGpuParams for the lens kernels.
+ *
+ * The lens name selects the profile. A fixed-lens camera (a Lensfun camera whose mount name starts
+ * with a lower-case letter) whose RAW names no lens, or a lens that no profile matches, uses the
+ * profile of its built-in lens.
  *
  * The resolver owns the process-wide Lensfun database cache. The cache holds one loaded database
  * directory and reloads it when a call names a different directory; a mutex serializes the load.
@@ -124,6 +135,22 @@ class LensCalibrationResolver {
   static void               BindImageExtent(const LensInputMeta&         matched_meta,
                                             const std::filesystem::path& database_path,
                                             LensCalibGpuParams& params, int width, int height);
+
+  /// Load the database named by @p database_path into the cache, so that later calls find it
+  /// loaded. Blocks while it loads; a failed load leaves the cache empty.
+  static void               PreloadDatabase(const std::filesystem::path& database_path);
+
+  /**
+   * @brief Profile of the built-in lens of the camera in @p meta.
+   *
+   * Uses the camera maker and model, and the focal length and aperture to order several profiles
+   * on the camera mount. Returns @c std::nullopt for a camera with interchangeable lenses, a
+   * camera that the database does not list, or a database that does not load. Loads the database
+   * named by @p database_path on first use, as @ref ResolveProfile does.
+   */
+  [[nodiscard]] static auto FixedLensProfile(const LensInputMeta&         meta,
+                                             const std::filesystem::path& database_path)
+      -> std::optional<LensProfileName>;
 
   /// First existing Lensfun database directory of the default search, or an empty path.
   [[nodiscard]] static auto DefaultDatabasePath() -> std::filesystem::path;

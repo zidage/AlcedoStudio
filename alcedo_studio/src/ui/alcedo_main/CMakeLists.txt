@@ -471,6 +471,8 @@ target_link_libraries(AlcedoQanGraph
 # The editor shell is QML-only. Widgets remains private to the album backend for
 # the native project and Nikon recovery file dialogs.
 target_link_libraries(AlbumBackendLib PRIVATE Qt6::Widgets)
+# The editor names the built-in lens profile of a fixed-lens camera for Lens Correction Auto (#960).
+target_link_libraries(AlbumBackendLib PRIVATE EditRuntimeLens)
 target_link_libraries(AlbumBackendLib PUBLIC AlcedoQanGraph)
 
 # Automation command surface: JSON-RPC command registry, schema validation, the local socket
