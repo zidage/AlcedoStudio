@@ -530,4 +530,135 @@ TEST(LensCalibDevelopResolve, Rw2EmbeddedJpegLensNameResolvesProfileWithoutUserS
   EXPECT_TRUE(runtime.has_value());
 }
 
+namespace {
+
+/// A shot of a camera whose RAW writes no lens name, as the RAW color context reports it.
+auto NamelessLensShot(const char* camera_maker, const char* camera_model, float focal_length_mm,
+                      float aperture_f_number) -> LensInputMeta {
+  LensInputMeta meta;
+  meta.cam_maker_         = camera_maker;
+  meta.cam_model_         = camera_model;
+  meta.focal_length_mm_   = focal_length_mm;
+  meta.aperture_f_number_ = aperture_f_number;
+  meta.distance_m_        = 10.0f;
+  return meta;
+}
+
+}  // namespace
+
+// Issue #960: a fixed-lens camera writes no lens name; the camera names its built-in lens.
+TEST(LensCalibDevelopResolve, FixedLensCameraWithoutLensNameResolvesBuiltInLensProfile) {
+  const auto gfx = LensCalibrationResolver::ResolveProfile(
+      NamelessLensShot("Fujifilm", "GFX100RF", 35.0f, 7.1f), AllCorrectionsSettings(), false);
+  ASSERT_EQ(gfx.status_, LensProfileStatus::Resolved);
+  EXPECT_EQ(gfx.matched_lens_maker_, "Fujifilm");
+  EXPECT_EQ(gfx.matched_lens_model_, "GFX100RF & compatibles (Standard)");
+  EXPECT_EQ(gfx.params_.apply_distortion, 1);
+  EXPECT_EQ(gfx.params_.distortion_model,
+            static_cast<std::int32_t>(LensCalibDistortionModel::PTLENS));
+
+  const auto gr3x = LensCalibrationResolver::ResolveProfile(
+      NamelessLensShot("Ricoh", "GR IIIx", 26.1f, 5.0f), AllCorrectionsSettings(), false);
+  ASSERT_EQ(gr3x.status_, LensProfileStatus::Resolved);
+  EXPECT_EQ(gr3x.matched_lens_model_, "Ricoh GR IIIx & compatibles");
+  EXPECT_EQ(gr3x.params_.apply_distortion, 1);
+  EXPECT_EQ(gr3x.params_.apply_vignetting, 1);
+
+  const auto gr3 = LensCalibrationResolver::ResolveProfile(
+      NamelessLensShot("Ricoh", "GR III", 18.3f, 2.8f), AllCorrectionsSettings(), false);
+  ASSERT_EQ(gr3.status_, LensProfileStatus::Resolved);
+  EXPECT_EQ(gr3.matched_lens_model_, "Ricoh GR III & compatibles + GW-4");
+  EXPECT_EQ(gr3.params_.apply_distortion, 1);
+  EXPECT_EQ(gr3.params_.apply_tca, 1);
+  EXPECT_EQ(gr3.params_.apply_vignetting, 1);
+
+  // The EXIF names, which the Lensfun entry lists first, select the same camera.
+  const auto gr3x_exif = LensCalibrationResolver::ResolveProfile(
+      NamelessLensShot("RICOH IMAGING COMPANY, LTD.", "RICOH GR IIIx", 26.1f, 5.0f),
+      AllCorrectionsSettings(), false);
+  ASSERT_EQ(gr3x_exif.status_, LensProfileStatus::Resolved);
+  EXPECT_EQ(gr3x_exif.matched_lens_model_, "Ricoh GR IIIx & compatibles");
+}
+
+TEST(LensCalibDevelopResolve, FixedLensCameraWithUnknownLensNameResolvesBuiltInLensProfile) {
+  auto meta        = NamelessLensShot("Fujifilm", "GFX100RF", 35.0f, 7.1f);
+  meta.lens_model_ = "GF 35mm F4";
+  const auto result =
+      LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), false);
+  ASSERT_EQ(result.status_, LensProfileStatus::Resolved);
+  EXPECT_EQ(result.matched_lens_model_, "GFX100RF & compatibles (Standard)");
+}
+
+TEST(LensCalibDevelopResolve, InterchangeableLensCameraWithoutLensNameHasNoLensIdentity) {
+  EXPECT_EQ(
+      LensCalibrationResolver::ResolveProfile(NamelessLensShot("Fujifilm", "GFX100S", 35.0f, 4.0f),
+                                              AllCorrectionsSettings(), false)
+          .status_,
+      LensProfileStatus::MissingLensIdentity);
+  EXPECT_EQ(LensCalibrationResolver::ResolveProfile(
+                NamelessLensShot("Sony", "ILCE-7M4", 50.0f, 1.4f), AllCorrectionsSettings(), false)
+                .status_,
+            LensProfileStatus::MissingLensIdentity);
+}
+
+TEST(LensCalibDevelopResolve, FixedLensProfileNamesOnlyBuiltInLenses) {
+  const auto gfx = LensCalibrationResolver::FixedLensProfile(
+      NamelessLensShot("Fujifilm", "GFX100RF", 35.0f, 7.1f), LensDatabasePath());
+  ASSERT_TRUE(gfx.has_value());
+  EXPECT_EQ(gfx->maker_, "Fujifilm");
+  EXPECT_EQ(gfx->model_, "GFX100RF & compatibles (Standard)");
+
+  EXPECT_FALSE(LensCalibrationResolver::FixedLensProfile(
+                   NamelessLensShot("Fujifilm", "GFX100S", 35.0f, 4.0f), LensDatabasePath())
+                   .has_value());
+  EXPECT_FALSE(LensCalibrationResolver::FixedLensProfile(NamelessLensShot("", "", 35.0f, 4.0f),
+                                                         LensDatabasePath())
+                   .has_value());
+}
+
+// Issue #960: the camera maker and model that the RAW loader reports reach the Lensfun camera, so
+// Develop corrects these files in Auto mode without a lens selection.
+TEST(LensCalibDevelopResolve, FixedLensCameraRawsResolveProfileWithoutUserSelection) {
+  struct Sample {
+    const char* path;
+    const char* expected_profile_model;
+  };
+  const Sample samples[] = {
+      {"raw/camera/fuji/gfx100rf/4169961381.raf", "GFX100RF & compatibles (Standard)"},
+      {"raw/camera/ricoh/gr3/R0000948.DNG", "Ricoh GR IIIx & compatibles"},
+  };
+  std::size_t checked = 0;
+  for (const auto& sample : samples) {
+    const auto sample_path = std::filesystem::path(TEST_IMG_PATH) / sample.path;
+    if (!std::filesystem::exists(sample_path)) {
+      continue;
+    }
+    ++checked;
+    const auto prepared = RawInputLoader::LoadEncoded(ReadBytes(sample_path), DecodeRes::EIGHTH);
+    EXPECT_TRUE(prepared.color_context.lens_model_.empty()) << sample.path;
+
+    LensInputMeta meta;
+    meta.cam_maker_         = prepared.color_context.camera_make_;
+    meta.cam_model_         = prepared.color_context.camera_model_;
+    meta.focal_length_mm_   = prepared.color_context.focal_length_mm_;
+    meta.aperture_f_number_ = prepared.color_context.aperture_f_number_;
+    const auto profile =
+        LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), false);
+    ASSERT_EQ(profile.status_, LensProfileStatus::Resolved)
+        << sample.path << " camera \"" << meta.cam_maker_ << "\" / \"" << meta.cam_model_ << "\"";
+    EXPECT_EQ(profile.matched_lens_model_, sample.expected_profile_model) << sample.path;
+
+    DevelopPayload payload;
+    payload.lens_enabled         = true;
+    payload.lens_profile_db_path = LensDatabasePath();
+    const auto runtime           = LensCalibrationResolver::Resolve(
+        payload, prepared.color_context, prepared.CompileSource().develop_output_extent,
+        prepared.dng_warp_rectilinear.has_value());
+    EXPECT_TRUE(runtime.has_value()) << sample.path;
+  }
+  if (checked == 0) {
+    GTEST_SKIP() << "No fixed-lens camera sample under " << TEST_IMG_PATH;
+  }
+}
+
 }  // namespace alcedo

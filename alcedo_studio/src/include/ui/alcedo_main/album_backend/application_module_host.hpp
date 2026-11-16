@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 
 class QQmlEngine;
 
@@ -296,6 +297,8 @@ class ApplicationModuleHost final : public QObject {
   bool                                                 shutting_down_ = false;
   // Runtime workspace of the loaded project at shutdown; the destructor removes it.
   std::filesystem::path                                pending_workspace_removal_{};
+  // Loads the Lensfun database off the UI thread at startup (#960); the destructor joins it.
+  std::thread                                          lensfun_preload_{};
 };
 
 }  // namespace alcedo::ui

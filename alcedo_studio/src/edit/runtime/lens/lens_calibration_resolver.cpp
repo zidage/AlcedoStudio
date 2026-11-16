@@ -427,32 +427,111 @@ auto RankLensCandidate(const lfLens* lens, const LensInputMeta& input)
           RangeFit(input.aperture_f_number_, lens->MinAperture, lens->MaxAperture, 0.1f)};
 }
 
-auto FindBestLens(const lfDatabase* db, const lfCamera* camera, const LensInputMeta& input)
-    -> const lfLens* {
-  if (!db || input.lens_model_.empty()) {
-    return nullptr;
-  }
-
-  const char*    lens_maker = input.lens_maker_.empty() ? nullptr : input.lens_maker_.c_str();
-  constexpr int  flags      = LF_SEARCH_SORT_AND_UNIQUIFY | LF_SEARCH_LOOSE;
-  const lfLens** lenses =
-      lf_db_find_lenses(db, camera, lens_maker, input.lens_model_.c_str(), flags);
+/// Best entry of a Lensfun search result by @ref RankLensCandidate; frees @p lenses.
+auto TakeBestRankedLens(const lfLens** lenses, const LensInputMeta& input) -> const lfLens* {
   if (!lenses) {
     return nullptr;
   }
-
   const lfLens*             best      = lenses[0];
-  std::tuple<int, int, int> best_rank = RankLensCandidate(best, input);
-  for (int i = 1; lenses[i] != nullptr; ++i) {
+  std::tuple<int, int, int> best_rank =
+      best ? RankLensCandidate(best, input) : std::tuple<int, int, int>{};
+  for (int i = 1; best != nullptr && lenses[i] != nullptr; ++i) {
     const auto rank = RankLensCandidate(lenses[i], input);
     if (rank > best_rank) {
       best_rank = rank;
       best      = lenses[i];
     }
   }
-
   lf_free((void*)lenses);
   return best;
+}
+
+auto FindBestLens(const lfDatabase* db, const lfCamera* camera, const LensInputMeta& input)
+    -> const lfLens* {
+  if (!db || input.lens_model_.empty()) {
+    return nullptr;
+  }
+
+  const char*   lens_maker = input.lens_maker_.empty() ? nullptr : input.lens_maker_.c_str();
+  constexpr int flags      = LF_SEARCH_SORT_AND_UNIQUIFY | LF_SEARCH_LOOSE;
+  return TakeBestRankedLens(
+      lf_db_find_lenses(db, camera, lens_maker, input.lens_model_.c_str(), flags), input);
+}
+
+/**
+ * @brief True when @p camera has a built-in lens.
+ *
+ * The Lensfun database names the mount of a fixed-lens camera with a lower-case first letter
+ * (`fujiGFX100RF`, `ricohGRIIIx`) and an interchangeable mount with an upper-case first letter
+ * (`Fujifilm G`, `Sony E`).
+ */
+auto HasFixedLens(const lfCamera* camera) -> bool {
+  return camera != nullptr && camera->Mount != nullptr &&
+         std::islower(static_cast<unsigned char>(camera->Mount[0])) != 0;
+}
+
+/// Lensfun word-match score of a camera whose maker and model both equal a database name.
+constexpr int kExactMakerAndModelScore = 200;
+
+/**
+ * @brief Lensfun camera with a built-in lens named by @p maker and @p model, or null.
+ *
+ * The exact Lensfun search compares only the first name of a camera entry, which follows the EXIF
+ * name ("Ricoh Imaging Company, Ltd." / "Ricoh GR IIIx"). The RAW loader reports the LibRaw names
+ * ("Ricoh" / "GR IIIx"), which the entries list as English names. When the exact search finds no
+ * camera, a word search over all names accepts a camera whose maker and model words both match.
+ */
+auto FindFixedLensCamera(const lfDatabase* db, const std::string& maker, const std::string& model)
+    -> const lfCamera* {
+  if (const lfCamera* exact = FindBestCamera(db, maker, model)) {
+    return HasFixedLens(exact) ? exact : nullptr;
+  }
+  if (!db || maker.empty() || model.empty()) {
+    return nullptr;
+  }
+  const lfCamera** cameras = lf_db_find_cameras_ext(db, maker.c_str(), model.c_str(), 0);
+  if (!cameras) {
+    return nullptr;
+  }
+  // The search result is sorted by score, best first.
+  const lfCamera* best =
+      (cameras[0] && cameras[0]->Score >= kExactMakerAndModelScore) ? cameras[0] : nullptr;
+  lf_free((void*)cameras);
+  return HasFixedLens(best) ? best : nullptr;
+}
+
+/// Profile of the built-in lens of a fixed-lens @p camera: the best ranked profile on its mount.
+auto FindFixedLens(const lfDatabase* db, const lfCamera* camera, const LensInputMeta& input)
+    -> const lfLens* {
+  if (!db || !HasFixedLens(camera)) {
+    return nullptr;
+  }
+  return TakeBestRankedLens(
+      lf_db_find_lenses(db, camera, nullptr, nullptr, LF_SEARCH_SORT_AND_UNIQUIFY), input);
+}
+
+/// Matched Lensfun camera and lens of one shot. @c camera_ can be null when @c lens_ is not.
+struct ShotLens {
+  const lfCamera* camera_ = nullptr;
+  const lfLens*   lens_   = nullptr;
+};
+
+/**
+ * @brief Camera and lens profile for the lens that took the shot.
+ *
+ * The lens name decides first. A fixed-lens camera whose RAW names no lens, or names one that no
+ * profile matches, gets the profile of its built-in lens (issue #960).
+ */
+auto FindShotLens(const lfDatabase* db, const LensInputMeta& input) -> ShotLens {
+  const lfCamera* camera = FindBestCamera(db, input.cam_maker_, input.cam_model_);
+  if (const lfLens* named = FindBestLens(db, camera, input)) {
+    return {camera, named};
+  }
+  const lfCamera* fixed_camera = FindFixedLensCamera(db, input.cam_maker_, input.cam_model_);
+  if (const lfLens* built_in = FindFixedLens(db, fixed_camera, input)) {
+    return {fixed_camera, built_in};
+  }
+  return {camera, nullptr};
 }
 
 auto ResolveScaleFromModifier(const lfLens* lens, float focal_mm, float crop_factor, int width,
@@ -509,8 +588,7 @@ auto ResolveScaleForImageSize(const LensInputMeta& meta, const std::filesystem::
     return params.resolved_scale;
   }
 
-  const lfCamera* camera = FindBestCamera(db, meta.cam_maker_, meta.cam_model_);
-  const lfLens*   lens   = FindBestLens(db, camera, meta);
+  const lfLens* lens = FindShotLens(db, meta).lens_;
   if (!lens) {
     return params.resolved_scale;
   }
@@ -572,7 +650,8 @@ auto LensCalibrationResolver::ResolveProfile(const LensInputMeta&          meta,
                                              const LensCorrectionSettings& settings,
                                              bool dng_geometry_applied) -> LensProfileResolution {
   LensProfileResolution result;
-  if (meta.lens_model_.empty() || !IsFinitePositive(meta.focal_length_mm_)) {
+  if (!IsFinitePositive(meta.focal_length_mm_) ||
+      (meta.lens_model_.empty() && meta.cam_model_.empty())) {
     result.status_ = LensProfileStatus::MissingLensIdentity;
     return result;
   }
@@ -584,10 +663,11 @@ auto LensCalibrationResolver::ResolveProfile(const LensInputMeta&          meta,
     return result;
   }
 
-  const lfCamera* camera = FindBestCamera(db, meta.cam_maker_, meta.cam_model_);
-  const lfLens*   lens   = FindBestLens(db, camera, meta);
+  const auto [camera, lens] = FindShotLens(db, meta);
   if (!lens) {
-    result.status_ = LensProfileStatus::LensNotInDatabase;
+    // Without a lens name only the camera can name the lens, and only when the lens is built in.
+    result.status_ = meta.lens_model_.empty() ? LensProfileStatus::MissingLensIdentity
+                                              : LensProfileStatus::LensNotInDatabase;
     return result;
   }
 
@@ -799,6 +879,28 @@ void LensCalibrationResolver::BindImageExtent(const LensInputMeta&         match
       static_cast<float>((extent_w * 0.5 + min_size * 0.5 * params.lens_center_x) * norm_scale);
   params.center_y =
       static_cast<float>((extent_h * 0.5 + min_size * 0.5 * params.lens_center_y) * norm_scale);
+}
+
+void LensCalibrationResolver::PreloadDatabase(const std::filesystem::path& database_path) {
+  (void)GetLensfunDb(ResolveDbRootPath(database_path));
+}
+
+auto LensCalibrationResolver::FixedLensProfile(const LensInputMeta&         meta,
+                                               const std::filesystem::path& database_path)
+    -> std::optional<LensProfileName> {
+  if (meta.cam_model_.empty()) {
+    return std::nullopt;
+  }
+  lfDatabase* db = GetLensfunDb(ResolveDbRootPath(database_path));
+  if (!db) {
+    return std::nullopt;
+  }
+  const lfLens* lens =
+      FindFixedLens(db, FindFixedLensCamera(db, meta.cam_maker_, meta.cam_model_), meta);
+  if (!lens) {
+    return std::nullopt;
+  }
+  return LensProfileName{lens->Maker ? lens->Maker : "", lens->Model ? lens->Model : ""};
 }
 
 auto LensCalibrationResolver::DefaultDatabasePath() -> std::filesystem::path {

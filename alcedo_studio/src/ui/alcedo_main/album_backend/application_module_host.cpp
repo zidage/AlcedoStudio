@@ -30,6 +30,8 @@
 #include "app/image_pool_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/runtime/lens/lens_calibration_resolver.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/display_profile_readout.hpp"
@@ -400,10 +402,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     if (!pool) {
       return {};
     }
+    alcedo::EditorImageExifDisplay display;
     try {
-      return pool->Read<alcedo::EditorImageExifDisplay>(
-          static_cast<std::uint32_t>(image_id),
-          [](const std::shared_ptr<alcedo::Image>& image) {
+      display = pool->Read<alcedo::EditorImageExifDisplay>(
+          static_cast<std::uint32_t>(image_id), [](const std::shared_ptr<alcedo::Image>& image) {
             if (!image) {
               return alcedo::EditorImageExifDisplay{};
             }
@@ -412,6 +414,25 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     } catch (const std::exception&) {
       return {};
     }
+    // A fixed-lens camera (GFX100RF, Ricoh GR III) writes no lens name. Lens Correction then uses
+    // the profile of the built-in lens (#960), so Auto names that profile too.
+    if (display.lens_model.empty() && !display.camera_model.empty()) {
+      alcedo::LensInputMeta meta;
+      meta.cam_maker_         = display.camera_make;
+      meta.cam_model_         = display.camera_model;
+      meta.focal_length_mm_   = display.focal_mm.value_or(0.0f);
+      meta.aperture_f_number_ = display.aperture.value_or(0.0f);
+      if (const auto profile = alcedo::LensCalibrationResolver::FixedLensProfile(
+              meta, alcedo::DevelopPayload{}.lens_profile_db_path)) {
+        display.lens_make  = profile->maker_;
+        display.lens_model = profile->model_;
+      }
+    }
+    return display;
+  });
+  // The reader above runs on the UI thread; load the Lensfun database here so it does not.
+  lensfun_preload_ = std::thread([] {
+    alcedo::LensCalibrationResolver::PreloadDatabase(alcedo::DevelopPayload{}.lens_profile_db_path);
   });
   adjustment_transfer_->SetEditorSession(editor_session_.get());
   connect(adjustment_transfer_.get(), &AdjustmentTransferController::PackageChanged,
@@ -736,6 +757,9 @@ void ApplicationModuleHost::ShutdownModules() {
 }
 
 ApplicationModuleHost::~ApplicationModuleHost() {
+  if (lensfun_preload_.joinable()) {
+    lensfun_preload_.join();
+  }
   ShutdownModules();
   // The session-owner worker calls the observers that EditorSessionController installed, and a
   // callback it already copied still runs after the controller clears its observer slots. The
