@@ -38,7 +38,7 @@ https://github.com/user-attachments/assets/ae0d9773-220e-4901-90f6-1989f58b0462
 ## Key Features
 
 - **Scene-Referred Node-Based Color Pipeline**  
-  Operates entirely in a 32-bit floating-point scene-linear space. Edits are structured as an intuitive node graph: a `Develop` node handles RAW decoding and color space transforms, followed by arbitrary `Color Grade` nodes with dedicated masks. The final picture is formed by the built-in ACES 2.0 or OpenDRT output transform, or by the spectral Film Print simulation.
+  Keeps the full range of the RAW file in 32-bit floating point from decoding to the display transform. Edits are structured as an intuitive node graph: a `Develop` node handles RAW decoding and color space transforms into a scene-referred AP1 image, followed by arbitrary `Color Grade` nodes with dedicated masks that grade in ACEScc, a logarithmic encoding of the same scene values. The final picture is formed by the built-in ACES 2.0 or OpenDRT output transform, or by the spectral Film Print simulation.
 
 - **DAG-Based GPU Pipeline**  
   Edits are evaluated as a directed acyclic graph (DAG) in full 32-bit floating-point precision on native CUDA/OpenCL (Windows) and Metal (macOS). Each node and mask caches its output, so moving a slider only recalculates what comes after it rather than reprocessing the entire image. The preview updates in real time while dragging and settles to full quality on release. Zooming in only computes the visible region at 1:1 detail, eliminating the need to wait for offline proxies.
