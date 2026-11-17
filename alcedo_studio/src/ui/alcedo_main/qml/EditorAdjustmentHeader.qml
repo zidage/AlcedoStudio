@@ -42,6 +42,14 @@ Item {
     readonly property color colIcon: appTheme.iconColor
     readonly property color colIconMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
 
+    // A Radial / Gradient button is on only while its tool waits for the first
+    // drag. A drawn Mask in edit keeps the same toolKind; another click on the
+    // button then starts the next Mask of that kind.
+    function isArmedMaskTool(kind) {
+        return !!(root.maskCreation && root.maskCreation.creating === true
+                  && String(root.maskCreation.toolKind || "") === kind)
+    }
+
     function beginMaskTool(kind) {
         if (kind === "aiSegmentation") {
             if (root.aiMaskTool)
@@ -226,8 +234,7 @@ Item {
                     compact: true
                     enabled: root.controlsEnabled
                              && root.selectedNodeKind === "colorGrade"
-                    selected: root.maskCreation
-                              && String(root.maskCreation.toolKind || "") === "radial"
+                    selected: root.isArmedMaskTool("radial")
                     iconSrc: "qrc:/mask_icons/radial-add.svg"
                     actionName: qsTr("Add Radial Mask")
                     iconColorDefault: root.colIcon
@@ -251,8 +258,7 @@ Item {
                     compact: true
                     enabled: root.controlsEnabled
                              && root.selectedNodeKind === "colorGrade"
-                    selected: root.maskCreation
-                              && String(root.maskCreation.toolKind || "") === "linear"
+                    selected: root.isArmedMaskTool("linear")
                     iconSrc: "qrc:/mask_icons/gradient-add.svg"
                     actionName: qsTr("Add Gradient Mask")
                     iconColorDefault: root.colIcon
