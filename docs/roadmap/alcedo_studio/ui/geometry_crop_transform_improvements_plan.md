@@ -2,10 +2,10 @@
 
 Date: 2026-11-14
 
-Revised: 2026-11-17
+Revised: 2026-11-18
 
-Status: UI layout approved from the standalone QML preview. Product implementation has not started.
-The numerical and persistence design below remains an implementation proposal.
+Status: UI layout approved from the standalone QML preview. F1 is complete.
+The later numerical design and new geometry fields remain proposals.
 
 Parent: Standalone extension to the editor workspace roadmap.
 
@@ -14,7 +14,7 @@ Implementation base and revision audit: upstream `main`, `d587167860c03aaf338fa2
 This base includes PR #943 at `f599ab8c9ed3a51d73babbd57c33cd2700cc6a5a`.
 Source inspection and upstream test reports do not supply local execution evidence.
 
-Implementation branch: `feature/geometry-crop-transform`.
+Implementation branch for F1: `feature/geometry-crop-transform-f1`.
 Design branch: `docs/geometry-crop-transform-improvements`.
 Tracking issues: [manual transforms, composition guides, and aspect controls #954](https://github.com/zidage/AlcedoStudio/issues/954)
 and [whole-image orientation #459](https://github.com/zidage/AlcedoStudio/issues/459).
@@ -608,7 +608,7 @@ Reread `AGENTS.md`, `CONTRIBUTING.md`, and the applicable skills before each PR.
 Use `alcedo-qml-ui`, `alcedo-msvc-cmake`, and `opencl-program-registry` where their scopes apply.
 Review and merge one row per PR. Base each PR on the preceding merged work in the order shown.
 The dependency column records the work each PR needs. The review order also keeps shared files
-and format revisions easy to review. All implementation rows have planned status.
+and format revisions easy to review. See each PR's completion record for its status.
 
 | PR | Result | Main owners | Required prior PRs | Expected changed lines | Review scope |
 | --- | --- | --- | --- | ---: | --- |
@@ -669,8 +669,9 @@ accepted revision set limited to the formats already supported.
 **Success and failure**
 
 Project or transfer open → stored version and bytes checked → current document published.
-A future version, a nested mismatch, or invalid canonical data returns the existing load error
-before active state changes.
+An unsupported project version, invalid immutable root, or invalid transfer stops that load.
+A checkpoint decoder rejects a revision mismatch or noncanonical document before publication.
+The existing history loader reconstructs an unusable checkpoint from the verified root and commits.
 
 **Verification and exit**
 
@@ -680,7 +681,74 @@ Add `AcceptedProjectKeepsCanonicalRootBytesAndCommitHash`,
 Build `ProjectCompatibilityTest`, `PipelineDocumentCheckpointTest`,
 `EditorMiniGitMaterializerTest`, and `DocumentTransferTest`. Compare current written bytes against
 the same fixture on the base revision. Verify that replay, reopen, and transfer retain their current behavior.
-Completion record pending. Use Section 9.
+
+#### F1 completion record (2026-11-18)
+
+**Status** Implemented on `feature/geometry-crop-transform-f1` from `a993eaa5`.
+
+**Implementation** `PipelineDocument` keeps the stored revision and uses it to select the geometry
+reader. Roots and checkpoints use that revision in their metadata. Root hashing uses the same
+revision. The transfer reader validates the source revision before reading the selected fields.
+Transfer packages carry selected fields and a source revision. They contain no nested document.
+Project open and save already use the shared project metadata limits. F1 keeps those values and
+the current document encoding. The application moves the validated root into the history owner.
+
+**Primary success chain**
+
+```text
+Project open -> project metadata check -> immutable root decoder
+  -> PipelineDocument::FromJson -> stored revision selects the crop and rotation reader
+  -> canonical document comparison -> root hash check -> history load
+  -> matching checkpoint or replay of verified commits -> committed document
+
+Transfer import -> schema and source revision checks -> selected fields -> validated package
+```
+
+**Primary failure chain**
+
+```text
+Invalid root revision, mismatched revision, or noncanonical document -> root rejected
+  -> history load error before publication
+Invalid checkpoint -> checkpoint rejected -> existing history reconstruction from root and commits
+Unsupported transfer revision -> import or paste validation error -> no Version or commit added
+```
+
+**Verification**
+
+| Required result | Observed result |
+| --- | --- |
+| Canonical root bytes and commit hash after project reopen | `AcceptedProjectKeepsCanonicalRootBytesAndCommitHash` passed. The packed project kept its stored root bytes, root ID, commit hashes, and committed document after save and reopen. |
+| Revision checks before using a nested document | `CheckpointRejectsMismatchedNestedDocumentVersion`, `DocumentRejectsFutureAndOutOfRangeVersions`, and `RootRejectsOutOfRangeDeclaredDocumentVersion` passed. |
+| Canonical bytes before history uses a document | `RootAndCheckpointRejectNoncanonicalStoredGeometry` passed. The document, root, and checkpoint writers matched the committed current-format byte fixtures. |
+| Transfer rejection and unchanged target | `TransferRejectsUnsupportedDocumentWithoutApplyingChanges` and `ImportRejectsFutureAndOutOfRangeDocumentVersion` passed. The target document and its Version and commit state kept their prior values. |
+| Replay of saved history | All 17 `EditorMiniGitMaterializerTest` cases passed. All six `ProjectCompatibilityTest` cases passed, including the render comparison. |
+
+Windows Release with MSVC 14.44 and CUDA 12.8. Build and discovery passed.
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target ProjectCompatibilityTest PipelineDocumentCheckpointTest EditorMiniGitMaterializerTest DocumentTransferTest --parallel 4
+$pattern = '^(ProjectCompatibilityTest|PipelineDocumentCheckpointTest|EditorMiniGitMaterializerTest|DocumentTransferTest)\.'
+ctest --test-dir build/release -N -R $pattern
+ctest --test-dir build/release -R $pattern --output-on-failure --no-tests=error -j 1
+```
+
+The targeted run recorded 85 passes, four failures, and zero skips out of 89. A rebuild from the
+exact base sources ran the two affected suites and recorded 56 passes and the same four failures
+out of 60. All 60 shared results matched. The failing assertions reported identical
+serialized values and hashes in both builds. The three historical fixture failures are
+tracked in [#553](https://github.com/zidage/AlcedoStudio/issues/553). The transfer key assertion
+is tracked in [#484](https://github.com/zidage/AlcedoStudio/issues/484) and
+[#554](https://github.com/zidage/AlcedoStudio/issues/554).
+
+The commit review moved root ID verification into the decoder. It reuses the bytes from the
+canonical document check and validates the graph once. The decoder checks the stored element ID
+before converting it to 32 bits. The review added cases for a hash mismatch and an element ID
+that would truncate to the saved owner. The targeted results above precede these review edits.
+The commit request did not run a build or tests.
+
+The production files each contain fewer than 700 lines. The existing transfer test file has
+1,173 lines after adding two version tests. A future split can put package serialization and
+validation tests in a separate source file from paste planning and application tests.
 
 ### F2. Shared crop-editing shortcut scope
 

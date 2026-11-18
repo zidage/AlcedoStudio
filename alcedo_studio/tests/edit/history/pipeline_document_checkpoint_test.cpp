@@ -25,6 +25,7 @@
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/film_format.hpp"
+#include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/commit_clock_test_access.hpp"
@@ -221,13 +222,24 @@ TEST(PipelineDocumentCheckpointFormat, FullDocumentExpectedSerializedWithGradesA
 
 TEST(PipelineDocumentCheckpointFormat, RootExpectedSerializedBindsOwnerDocumentAndDevelopIdentity) {
   const auto document = MultiGradeDocument();
-  const auto encoded =
-      EncodePipelineRootState(42, document, nlohmann::json{{"CameraModel", "RootStateCamera"}});
+  const nlohmann::json raw_color_context{{"CameraModel", "RootStateCamera"}};
+  const auto           encoded = EncodePipelineRootState(42, document, raw_color_context);
   EXPECT_EQ(encoded.dump(), LoadExpectedBytes("pipeline_root.json"));
-  const auto decoded = DecodePipelineRootState(encoded);
+  const auto root_id = ComputeRootId(42, document, raw_color_context);
+  const auto decoded = DecodePipelineRootState(encoded, root_id);
   EXPECT_EQ(decoded.element_id, 42u);
-  EXPECT_EQ(ComputeRootId(42, decoded.document, decoded.raw_color_context),
-            ComputeRootId(42, document, nlohmann::json{{"CameraModel", "RootStateCamera"}}));
+  EXPECT_EQ(ComputeRootId(42, decoded.document, decoded.raw_color_context), root_id);
+}
+
+TEST(PipelineDocumentCheckpointFormat, RootRejectsCanonicalContentWithDifferentHash) {
+  const auto           document = MultiGradeDocument();
+  const nlohmann::json raw_color_context{{"CameraModel", "RootStateCamera"}};
+  auto                 stored  = EncodePipelineRootState(42, document, raw_color_context);
+  const auto           root_id = ComputeRootId(42, document, raw_color_context);
+
+  stored.at("raw_color_context").at("CameraModel") = "OtherCamera";
+  EXPECT_EQ(DecodePipelineRootState(stored).element_id, 42u);
+  EXPECT_THROW((void)DecodePipelineRootState(stored, root_id), std::runtime_error);
 }
 
 TEST(PipelineDocumentCheckpointFormat, CheckpointExpectedSerializedCarriesRootHeadChainAndDocument) {
@@ -609,6 +621,57 @@ TEST(PipelineDocumentCheckpointFormat, OldDocumentFormatIsRejectedWithoutConvers
   auto json = CreateDefaultPipelineDocument().ToJson();
   json["format_version"] = 3;
   EXPECT_THROW((void)PipelineDocument::FromJson(json), std::runtime_error);
+}
+
+TEST(PipelineDocumentCheckpointFormat, DocumentRejectsFutureAndOutOfRangeVersions) {
+  auto                    stored  = CreateDefaultPipelineDocument().ToJson();
+  constexpr std::uint64_t version = kPipelineDocumentFormatVersion;
+  for (const auto invalid_version : {version + 1, version + (std::uint64_t{1} << 32)}) {
+    SCOPED_TRACE(invalid_version);
+    stored["format_version"] = invalid_version;
+    EXPECT_THROW((void)PipelineDocument::FromJson(stored), std::runtime_error);
+  }
+}
+
+TEST(PipelineDocumentCheckpointFormat, CheckpointRejectsMismatchedNestedDocumentVersion) {
+  auto stored = nlohmann::json::parse(LoadExpectedBytes("pipeline_checkpoint.json"));
+  stored["pipeline_document_format_version"] = kPipelineDocumentFormatVersion + 1;
+  try {
+    (void)DecodePipelineDocumentCheckpoint(stored);
+    ADD_FAILURE() << "The checkpoint's declared revision disagrees with the document";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string_view{error.what()}.find("Nested pipeline document format_version"),
+              std::string_view::npos);
+  }
+}
+
+TEST(PipelineDocumentCheckpointFormat, RootRejectsOutOfRangeDeclaredDocumentVersion) {
+  auto stored = nlohmann::json::parse(LoadExpectedBytes("pipeline_root.json"));
+  stored["pipeline_document_format_version"] =
+      (std::uint64_t{1} << 32) + kPipelineDocumentFormatVersion;
+  EXPECT_THROW((void)DecodePipelineRootState(stored), std::runtime_error);
+}
+
+TEST(PipelineDocumentCheckpointFormat, RootRejectsElementIdThatWouldTruncateToItsOwner) {
+  auto       stored     = nlohmann::json::parse(LoadExpectedBytes("pipeline_root.json"));
+  const auto element_id = stored.at("element_id").get<std::uint64_t>();
+  ASSERT_EQ(DecodePipelineRootState(stored).element_id, element_id);
+  stored["element_id"]  = (std::uint64_t{1} << 32) + element_id;
+  EXPECT_THROW((void)DecodePipelineRootState(stored), std::runtime_error);
+}
+
+TEST(PipelineDocumentCheckpointFormat, RootAndCheckpointRejectNoncanonicalStoredGeometry) {
+  auto root       = nlohmann::json::parse(LoadExpectedBytes("pipeline_root.json"));
+  auto checkpoint = nlohmann::json::parse(LoadExpectedBytes("pipeline_checkpoint.json"));
+  for (auto* stored : {&root, &checkpoint}) {
+    auto& document_json = stored->at("pipeline_document");
+    ASSERT_EQ(document_json.at("geometry").erase("aspect_preset"), 1u);
+    // A direct read accepts the default, but a persisted record must contain the canonical bytes.
+    const auto document = PipelineDocument::FromJson(document_json);
+    EXPECT_EQ(document.Geometry().AspectPreset(), ImageGeometryModel::kFreeAspectPreset);
+  }
+  EXPECT_THROW((void)DecodePipelineRootState(root), std::runtime_error);
+  EXPECT_THROW((void)DecodePipelineDocumentCheckpoint(checkpoint), std::runtime_error);
 }
 
 TEST(PipelineDocumentCheckpointFormat, OldRootAndCheckpointFormatVersionsAreRejected) {

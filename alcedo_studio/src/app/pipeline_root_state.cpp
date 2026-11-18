@@ -34,15 +34,12 @@ void ValidateProductDocument(const PipelineDocument& document, sl_element_id_t i
 auto TryDecodeRootState(const nlohmann::json& encoded, sl_element_id_t element_id,
                         const root_id_t& expected_root_id) -> std::optional<LoadedRootState> {
   try {
-    const auto root = DecodePipelineRootState(encoded);
+    auto root = DecodePipelineRootState(encoded, expected_root_id);
     if (root.element_id != element_id) {
       return std::nullopt;
     }
-    if (ComputeRootId(root.element_id, root.document, root.raw_color_context) != expected_root_id) {
-      return std::nullopt;
-    }
     LoadedRootState loaded;
-    loaded.document = ClonePipelineDocument(root.document);
+    loaded.document = std::move(root.document);
     if (root.raw_color_context.has_value()) {
       RawRuntimeColorContext context;
       if (!RawColorContextFromJson(*root.raw_color_context, context)) {

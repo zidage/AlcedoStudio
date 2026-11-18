@@ -11,10 +11,12 @@
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <variant>
 
 #include "app/adjustment_transfer_package_builder.hpp"
+#include "app/adjustment_transfer_service.hpp"
 #include "app/document_transfer_planner.hpp"
 #include "app/editor_parameter_write.hpp"
 #include "app/editor_pipeline_command_service.hpp"
@@ -29,6 +31,7 @@
 #include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/pipeline_history_format.hpp"
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
@@ -120,6 +123,36 @@ TEST(DocumentTransferTest, ExportImportRoundTripPreservesFingerprint) {
   const auto imported = ImportDocumentTransfer(exported);
   EXPECT_EQ(imported.fingerprint_, original.fingerprint_);
   EXPECT_EQ(ExportDocumentTransfer(imported).dump(), exported.dump());
+}
+
+TEST(DocumentTransferTest, ImportRejectsFutureAndOutOfRangeDocumentVersion) {
+  auto encoded = ExportDocumentTransfer(test::MakeDefaultDocumentTransferPackage());
+  encoded.erase("fingerprint");  // The revision check must also protect packages without a hash.
+  constexpr std::uint64_t version = kPipelineDocumentFormatVersion;
+  for (const auto invalid_version : {version + 1, version + (std::uint64_t{1} << 32)}) {
+    SCOPED_TRACE(invalid_version);
+    encoded["document_format_version"] = invalid_version;
+    EXPECT_THROW((void)AdjustmentTransferService::ImportPackage(encoded), std::runtime_error);
+  }
+}
+
+TEST(DocumentTransferTest, TransferRejectsUnsupportedDocumentWithoutApplyingChanges) {
+  auto package                     = test::MakeExposureTransferPackage(1.5);
+  package.document_format_version_ = kPipelineDocumentFormatVersion + 1;
+  const auto target                = CreateDefaultPipelineDocument();
+  const auto target_bytes          = target.ToJson().dump();
+  auto       graph                 = CommitGraph::CreateEmpty(1);
+  const auto version_id            = graph.GetActiveVersionId();
+
+  const auto result =
+      AdjustmentTransferService::PasteAsRootRelativeVersion(graph, target, package, "Rejected");
+  EXPECT_FALSE(result.pasted);
+  EXPECT_EQ(result.error, "unsupported transfer document_format_version");
+  EXPECT_EQ(graph.GetActiveVersionId(), version_id);
+  EXPECT_EQ(graph.GetAllVersionRefs().size(), 1u);
+  EXPECT_FALSE(graph.GetActiveVersionRef().head_commit_hash.has_value());
+  EXPECT_EQ(graph.CommitCount(), 0u);
+  EXPECT_EQ(target.ToJson().dump(), target_bytes);
 }
 
 TEST(DocumentTransferTest, ImportRejectsMissingOrInvalidProtectionAndDefaultIdentity) {
