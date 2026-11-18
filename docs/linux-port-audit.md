@@ -3,6 +3,22 @@
 This update applies the [review of PR #87](https://github.com/zidage/AlcedoStudio/pull/87#pullrequestreview-4967460386)
 to the current GPU graph renderer. The upstream base is `63b2963f` (updated on 2026-11-15).
 
+## Apple standard-library compatibility (2026-11-18)
+
+The [macOS arm64 CI build](https://github.com/zidage/AlcedoStudio/actions/runs/43701960570/job/134231508167)
+failed because Xcode 16.4's standard library has no `std::jthread` declaration.
+The project module now owns a `std::thread` and joins it explicitly during destruction,
+before its fields and QObject are destroyed. A failed preparation attempt also joins the
+previous worker before starting another attempt. Kernel preparation did not use a stop token,
+so the worker still runs to completion before its owner is destroyed.
+
+Local Clang/libc++ checks with `jthread` declarations disabled reproduce the old header's
+failure and compile both the updated header and project-module implementation. These checks
+do not replace a build with the CI runner's Apple SDK.
+
+WSL E2E validation remains incomplete. The recorded GPU presentation checks below ran on
+native Linux and Wayland; they are not WSL interoperation results.
+
 ## Processing and presentation
 
 - Linux selects the OpenCL GPU backend. There is no CPU editor backend or CPU preset.

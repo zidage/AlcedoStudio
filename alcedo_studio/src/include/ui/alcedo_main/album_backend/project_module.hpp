@@ -71,7 +71,7 @@ class ProjectModule final : public QObject, public IUiStatusSink {
 
  public:
   explicit ProjectModule(QObject* parent = nullptr);
-  ~ProjectModule() override = default;
+  ~ProjectModule() override;
 
   void               SetLifecycleHooks(ProjectLifecycleHooks hooks);
 
@@ -231,7 +231,7 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   bool                         task_cancel_visible_ = false;
   // Join kernel preparation before this module and the process OpenCL library
   // are destroyed. Closing the window can occur while clBuildProgram is active.
-  std::jthread                               opencl_preparation_thread_;
+  std::thread opencl_preparation_thread_;
 };
 
 }  // namespace alcedo::ui
