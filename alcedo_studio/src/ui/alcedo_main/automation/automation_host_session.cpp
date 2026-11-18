@@ -173,6 +173,7 @@ auto AutomationHostSession::RegisterCommands(QString* error) -> bool {
          RegisterAutomationCurveCommands(registry_, error) &&
          RegisterAutomationEditorCommands(registry_, host_, error) &&
          RegisterAutomationVersionCommands(registry_, host_, error) &&
+         RegisterAutomationNodeCommands(registry_, host_, error) &&
          RegisterAutomationRenderCommands(registry_, host_, error) &&
          RegisterAutomationAdjustmentCommands(registry_, host_, options_.host_mode, error);
 }

@@ -411,7 +411,7 @@ auto PipelineGraph::Validate() const -> std::vector<GraphValidationError> {
     for (const auto& port : node->InputPorts()) {
       const std::string key = std::string{node->Id().Value()} + "/" + std::string{port.id.Value()};
       const int         count = incoming_count[key];
-      if (port.required && count == 0) {
+      if (port.required && count == 0 && !IsDetachedColorGrade(node->Id())) {
         errors.push_back({GraphValidationCode::MissingRequiredInput,
                           "Missing required input: " + key});
       }
@@ -452,6 +452,26 @@ auto PipelineGraph::Validate() const -> std::vector<GraphValidationError> {
     errors.push_back({GraphValidationCode::Cycle, "PipelineGraph contains a cycle"});
   }
   return errors;
+}
+
+auto PipelineGraph::IsDetachedColorGrade(const NodeId& id) const -> bool {
+  const auto* node = FindNode(id);
+  if (node == nullptr || node->Type() != type_ids::ColorGradeNode()) {
+    return false;
+  }
+  return std::none_of(edges_.begin(), edges_.end(), [&](const GraphEdge& edge) {
+    return edge.from_node == id || edge.to_node == id;
+  });
+}
+
+auto PipelineGraph::DetachedColorGradeNodeIds() const -> std::vector<NodeId> {
+  std::vector<NodeId> ids;
+  for (const auto& node : nodes_) {
+    if (IsDetachedColorGrade(node->Id())) {
+      ids.push_back(node->Id());
+    }
+  }
+  return ids;
 }
 
 auto PipelineGraph::ImageBackboneNodeIds() const -> std::vector<NodeId> {
@@ -575,7 +595,8 @@ auto PipelineGraph::ValidateImageBackbone() const -> std::vector<GraphValidation
     if (node->Type() != type_ids::ColorGradeNode()) {
       continue;
     }
-    if (!on_path.contains(std::string{node->Id().Value()})) {
+    if (!on_path.contains(std::string{node->Id().Value()}) &&
+        !IsDetachedColorGrade(node->Id())) {
       errors.push_back({GraphValidationCode::ColorGradeNotOnImageBackbone,
                         "Color Grade is not on the image backbone: " +
                             std::string{node->Id().Value()}});

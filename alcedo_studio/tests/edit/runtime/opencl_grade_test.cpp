@@ -43,6 +43,7 @@
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_plan.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
 #include "edit/runtime/opencl/opencl_drt_pass.hpp"
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
@@ -53,6 +54,7 @@
 #include "film_grain_colour_statistics.hpp"
 #include "gpu/transient_buffer_arena.hpp"
 #include "oklab_contrast_reference.hpp"
+#include "tone_zone_reference.hpp"
 #include "opencl/opencl_runtime.hpp"
 #include "tone_curve_test_curves.hpp"
 
@@ -203,15 +205,17 @@ auto ApplyHls(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   const float adj_s = sum_s / sum_weight;
   if (std::fabs(adj_h) <= 1.0e-6f && std::fabs(adj_l) <= 1.0e-6f && std::fabs(adj_s) <= 1.0e-6f)
     return c;
-  const float     angle = adj_h * 2.25f * 0.017453292519943295f;
+  // A positive Hue Shift lowers the YIQ angle (raises the hue); only the change of I and Q goes
+  // back to RGB.
+  const float     angle = -adj_h * 2.25f * 0.017453292519943295f;
   const float     scale = std::exp2(adj_s * 2.25f * (adj_s >= 0.0f ? 4.5f : 3.25f));
-  const float     luma  = Luma(c) + adj_l * 1.125f;
+  const float     lift  = adj_l * 1.125f;
   const float     i     = 0.596f * c.r - 0.274f * c.g - 0.322f * c.b;
   const float     q     = 0.211f * c.r - 0.523f * c.g + 0.312f * c.b;
-  const float     ri    = (i * std::cos(angle) - q * std::sin(angle)) * scale;
-  const float     rq    = (i * std::sin(angle) + q * std::cos(angle)) * scale;
-  return {luma + 0.956f * ri + 0.621f * rq, luma - 0.272f * ri - 0.647f * rq,
-          luma - 1.106f * ri + 1.703f * rq, c.a};
+  const float     di    = (i * std::cos(angle) - q * std::sin(angle)) * scale - i;
+  const float     dq    = (i * std::sin(angle) + q * std::cos(angle)) * scale - q;
+  return {c.r + lift + 0.956f * di + 0.621f * dq, c.g + lift - 0.272f * di - 0.647f * dq,
+          c.b + lift - 1.106f * di + 1.703f * dq, c.a};
 }
 
 auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
@@ -236,16 +240,12 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
     c.r            = out[0];
     c.g            = out[1];
     c.b            = out[2];
-  } else if (behavior == AdjustmentBehavior::White) {
-    const float gain = 1.0f + std::max(value, 0.0f) * 0.005f;
-    c.r *= gain;
-    c.g *= gain;
-    c.b *= gain;
-  } else if (behavior == AdjustmentBehavior::Black) {
-    const float offset = value * 0.001f;
-    c.r += offset;
-    c.g += offset;
-    c.b += offset;
+  } else if (behavior == AdjustmentBehavior::White || behavior == AdjustmentBehavior::Black) {
+    const auto out = tone_zone_reference::ApplyAcescc({c.r, c.g, c.b}, value,
+                                                      behavior == AdjustmentBehavior::White);
+    c.r            = out[0];
+    c.g            = out[1];
+    c.b            = out[2];
   } else if (behavior == AdjustmentBehavior::Curve) {
     // p is the first of the four records of the Curve slot, as in the kernel.
     tone_curve_test::ApplyPackedCurveSlot(c, &p);
@@ -426,12 +426,8 @@ auto CpuApplyLlf(const std::vector<Rgba>& input, int width, int height, float sh
   }
   auto        source = CpuBuildPyramid(source_base);
 
-  const float shadow_amount =
-      std::clamp(shadows_slider * local_tone_mapping::kHighlightStrengthScale / 80.0f,
-                 -local_tone_mapping::kBackendAmountLimit, local_tone_mapping::kBackendAmountLimit);
-  const float highlight_amount =
-      std::clamp(-highlights_slider * local_tone_mapping::kHighlightStrengthScale / 100.0f,
-                 -local_tone_mapping::kBackendAmountLimit, local_tone_mapping::kBackendAmountLimit);
+  const float shadow_amount    = ClampedLocalToneShadow(shadows_slider);
+  const float highlight_amount = ClampedLocalToneHighlight(highlights_slider);
   const float sigma       = local_tone_mapping::SigmaR(shadow_amount, highlight_amount);
   const auto  samples     = local_tone_mapping::BuildSamples(shadow_amount, highlight_amount);
 
@@ -581,6 +577,13 @@ void ResetProductLookToIdentity(PipelineDocument& document) {
   exposure->SetValue(0.0f);
   saturation->SetValue(1.0f);
   contrast->SetValue(0.0f);
+  // The default look carries the Film-like curve (#898).
+  auto* curve =
+      dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  CurveUpdate identity;
+  identity.points = IdentityCurvePoints();
+  curve->ApplyUpdate(identity);
 }
 
 auto DownloadR32f(OpenClRenderDevice& device, const GraphValueId& id) -> std::vector<float> {
@@ -669,17 +672,36 @@ class OpenClGradeFixture : public ::testing::Test {
     return result;
   }
 
-  /// Render through Color Grade with @p record; keep the grade input in last_develop_pixels_.
-  void RenderWithHistogramRecord(CurveInputHistogramRecord& record) {
+  /// Render through Color Grade with @p record; keep the grade input in last_develop_pixels_ and
+  /// the grade output in last_output_pixels_.
+  auto RenderWithHistogramRecord(CurveInputHistogramRecord& record) -> OpenClPrimaryGradeResult {
     device_->BeginRender();
     ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
     ExecuteOpenClGeometryResample(*device_, plan_);
     ExecuteOpenClCameraColor(*device_, plan_, document_);
-    (void)ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_, &record);
+    const auto result = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_, &record);
     device_->EndRender();
     device_->WaitIdle();
     last_develop_pixels_ = Download(*device_, plan_.develop_output);
+    last_output_pixels_  = DownloadBinding(*device_, result.output_binding);
     device_->PublishResults();
+    return result;
+  }
+
+  /// Remove the Color adjustments (Curve through LMT) of the primary Grade and recompile, so the
+  /// Local Laplacian stage is the last write of the Grade.
+  void RemoveColorAdjustments() {
+    auto* grade = document_.PrimaryGrade();
+    ASSERT_NE(grade, nullptr);
+    for (const auto& type : ColorGradeCompileOrder()) {
+      if (ColorGradeCompileGroupOf(type) != ColorGradeCompileGroup::Color) {
+        continue;
+      }
+      const auto* id = grade->FindAdjustmentIdByType(type);
+      ASSERT_NE(id, nullptr) << type.Text();
+      grade->RemoveAdjustment(AdjustmentInstanceId{*id});
+    }
+    plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
   /// Counts of the curve input histogram of the primary Grade from one render.
@@ -889,6 +911,58 @@ TEST_F(OpenClGradeFixture, OpenClCurveInputHistogramIgnoresCurveEditsAndFollowsE
                                                     1.0f / CE_ACESCC_B, "Exposure +1");
 }
 
+TEST_F(OpenClGradeFixture, OpenClCurveInputHistogramCountsTheLocalToneOutput) {
+  // Issue #900: Shadows runs before the Curve, so the curve input is the LLF output. With the
+  // Color adjustments neutral, the Grade output is that image.
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(60.0f);
+  (void)RenderGrade();
+  const auto  local_tone_output = last_output_pixels_;
+  const auto& extent            = plan_.geometry.render_extent;
+
+  auto&       curve             = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate s_curve;
+  s_curve.points = tone_curve_test::LiftedMidtonePoints(5, 0.1f, 0.9f);
+  curve.ApplyUpdate(s_curve);
+  const auto counts = RenderCurveInputHistogram();
+  ASSERT_NE(
+      curve_histogram_test::ReferenceCounts(local_tone_output, extent.width, extent.height),
+      curve_histogram_test::ReferenceCounts(last_develop_pixels_, extent.width, extent.height))
+      << "Shadows must change the bins of this input";
+  curve_histogram_test::ExpectCountsOfShiftedPixels(counts, local_tone_output, extent.width,
+                                                    extent.height, 0.0f, "Shadows 60");
+}
+
+TEST_F(OpenClGradeFixture, OpenClCurveInputHistogramOfAFinalLocalToneStageReadsItBeforeTheMix) {
+  RemoveColorAdjustments();
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(60.0f);
+  (void)RenderGrade();
+  const auto  full     = last_output_pixels_;
+  const auto  input    = last_develop_pixels_;
+  const auto& extent   = plan_.geometry.render_extent;
+  const auto  full_mix = RenderCurveInputHistogram();
+  EXPECT_EQ(full_mix, curve_histogram_test::ReferenceCounts(full, extent.width, extent.height));
+
+  document_.PrimaryGrade()->SetMix(0.5f);
+  (void)RenderGrade();
+  const auto plain = last_output_pixels_;
+  EXPECT_EQ(RenderCurveInputHistogram(), full_mix) << "the mix changed the curve input";
+
+  // The histogram render writes the unmixed LLF output and mixes in a pass without commands.
+  CurveInputHistogramRecord record{document_.PrimaryGrade()->Id()};
+  const auto                result = RenderWithHistogramRecord(record);
+  EXPECT_EQ(result.local_tone_pass_count, 1U);
+  EXPECT_EQ(result.pointwise_dispatch_count, 2U);
+  ASSERT_EQ(last_output_pixels_.size(), plain.size());
+  ASSERT_EQ(input.size(), plain.size());
+  for (std::size_t i = 0; i < plain.size(); ++i) {
+    for (const auto channel : {&Rgba::r, &Rgba::g, &Rgba::b}) {
+      EXPECT_NEAR(last_output_pixels_[i].*channel, plain[i].*channel, 1.0e-5f) << "pixel " << i;
+      EXPECT_NEAR(plain[i].*channel, 0.5f * (input[i].*channel + full[i].*channel), 1.0e-5f)
+          << "pixel " << i;
+    }
+  }
+}
+
 TEST_F(OpenClGradeFixture, OpenClRenderWithoutAHistogramRequestRecordsNoHistogram) {
   (void)RenderGrade();
   EXPECT_EQ(device_->PassStats().curve_input_histogram_execute, 0U);
@@ -928,12 +1002,81 @@ TEST_F(OpenClGradeFixture, OpenClHlsHueAdjustmentChangesGradePixels) {
   EXPECT_TRUE(changed);
 }
 
-TEST_F(OpenClGradeFixture, OpenClPointwiseAdjustmentsFuseIntoOnePassBeforeLlf) {
+// A Hue Shift just above zero changes the pixels by about as much as the shift: the YIQ round
+// trip adds no luma offset (it once added up to 0.02 ACEScc to saturated colors).
+TEST_F(OpenClGradeFixture, OpenClHlsSmallHueShiftChangesThePixelsByLittle) {
+  (void)RenderGrade();
+  const auto identity = last_output_pixels_;
+  auto&      hls      = ModelByType<HlsModel>(type_ids::Hls());
+  auto       table    = hls.AdjustmentTable();
+  table[0].h          = 0.01f;
+  HlsUpdate update;
+  update.hls_adj_table = table;
+  hls.ApplyUpdate(update);
+
+  (void)RenderGrade();
+  const auto& adjusted = last_output_pixels_;
+  ASSERT_EQ(identity.size(), adjusted.size());
+  float max_err = 0.0f;
+  for (std::size_t i = 0; i < identity.size(); ++i) {
+    max_err = std::max(max_err, std::fabs(identity[i].r - adjusted[i].r));
+    max_err = std::max(max_err, std::fabs(identity[i].g - adjusted[i].g));
+    max_err = std::max(max_err, std::fabs(identity[i].b - adjusted[i].b));
+  }
+  EXPECT_LT(max_err, 1.0e-3f);
+}
+
+// A positive Hue Shift of the red bin raises the hue of red pixels (red toward yellow).
+TEST_F(OpenClGradeFixture, OpenClHlsPositiveHueShiftRaisesTheHue) {
+  const auto hue_of = [](const Rgba& c, float* chroma) {
+    const float maximum = std::max(c.r, std::max(c.g, c.b));
+    const float minimum = std::min(c.r, std::min(c.g, c.b));
+    *chroma             = maximum - minimum;
+    if (*chroma <= 1.0e-6f) return 0.0f;
+    float hue = 0.0f;
+    if (maximum == c.r) {
+      hue = 60.0f * std::fmod((c.g - c.b) / *chroma, 6.0f);
+    } else if (maximum == c.g) {
+      hue = 60.0f * ((c.b - c.r) / *chroma + 2.0f);
+    } else {
+      hue = 60.0f * ((c.r - c.g) / *chroma + 4.0f);
+    }
+    return hue < 0.0f ? hue + 360.0f : hue;
+  };
+  (void)RenderGrade();
+  const auto identity = last_output_pixels_;
+  auto&      hls      = ModelByType<HlsModel>(type_ids::Hls());
+  auto       table    = hls.AdjustmentTable();
+  table[0].h          = 10.0f;
+  HlsUpdate update;
+  update.hls_adj_table = table;
+  hls.ApplyUpdate(update);
+
+  (void)RenderGrade();
+  const auto& adjusted = last_output_pixels_;
+  ASSERT_EQ(identity.size(), adjusted.size());
+  int red_pixels = 0;
+  for (std::size_t i = 0; i < identity.size(); ++i) {
+    float      chroma = 0.0f;
+    const auto before = hue_of(identity[i], &chroma);
+    if (chroma < 0.05f || (before > 20.0f && before < 340.0f)) continue;
+    float      after_chroma = 0.0f;
+    const auto after        = hue_of(adjusted[i], &after_chroma);
+    float      change       = after - before;
+    if (change > 180.0f) change -= 360.0f;
+    if (change < -180.0f) change += 360.0f;
+    EXPECT_GT(change, 5.0f) << "pixel " << i << " hue " << before << " -> " << after;
+    ++red_pixels;
+  }
+  EXPECT_GT(red_pixels, 0);
+}
+
+TEST_F(OpenClGradeFixture, OpenClLlfSplitsBasicToneAndColorIntoTwoPointwisePasses) {
   const auto identity = RenderGrade();
   EXPECT_EQ(identity.pointwise_dispatch_count, 1U);
   ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(25.0f);
   const auto with_llf = RenderGrade();
-  EXPECT_EQ(with_llf.pointwise_dispatch_count, 1U);
+  EXPECT_EQ(with_llf.pointwise_dispatch_count, 2U);
   EXPECT_EQ(with_llf.local_tone_pass_count, 1U);
 }
 
@@ -1256,7 +1399,8 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance
   ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance()).SetTemperature(4300.0f);
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(0.5f);
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(40.0f);
-  ModelByType<WhiteModel>(type_ids::White()).SetValue(12.0f);
+  ModelByType<WhiteModel>(type_ids::White()).SetValue(60.0f);
+  ModelByType<BlackModel>(type_ids::Black()).SetValue(-45.0f);
   ModelByType<SaturationModel>(type_ids::Saturation()).SetValue(1.2f);
   // Every tone wheel, so that the kernel matches the CPU reference for each operation.
   ColorWheelUpdate        wheels;

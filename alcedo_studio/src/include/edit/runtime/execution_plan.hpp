@@ -192,11 +192,12 @@ struct CompiledDrtNode {
  * @brief Compiled grade stage-order and fusion rules carried by every static plan.
  *
  * Bumped when the compiled Color Grade stage order or pass fusion rules change so a
- * plan compiled under earlier rules never matches a new lookup. Version 1 compiles
- * Basic Tone + Color as one Pointwise stage before the Local Laplacian stage; Mix
- * remains the implicit final write.
+ * plan compiled under earlier rules never matches a new lookup. Version 1 compiled
+ * Basic Tone + Color as one Pointwise stage before the Local Laplacian stage. Version 2
+ * compiles Basic Tone as a Pointwise stage, then the Local Laplacian stage, then Color as
+ * a second Pointwise stage (issue #900). Mix remains the implicit final write.
  */
-inline constexpr std::uint32_t kGradeCompileAlgorithmVersion = 1;
+inline constexpr std::uint32_t kGradeCompileAlgorithmVersion = 2;
 
 /**
  * @brief Identity of a static compiled plan. Parameter values and viewport are omitted.

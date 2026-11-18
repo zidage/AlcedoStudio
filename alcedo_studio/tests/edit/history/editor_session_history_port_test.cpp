@@ -1384,6 +1384,20 @@ TEST(EditorHistoryCommitPresentationTest, TypedGraphOperationsUseSavedNamesAndKe
   EXPECT_EQ(remove_pres.display_name.toStdString(), "Delete Color Grade");
   EXPECT_EQ(remove_pres.delta_text.toStdString(), "Color Grade 2");
 
+  EditorHistoryCommit hide;
+  hide.presentation_key  = PresentationKeyForOperation(PipelineEditOperationKind::SetNodeEnabled);
+  hide.node_display_name = "Sky";
+  hide.before_value_json = "true";
+  hide.after_value_json  = "false";
+  const auto hide_pres   = PresentEditorHistoryCommit(hide);
+  EXPECT_EQ(hide_pres.display_name.toStdString(), "Hide Color Grade");
+  EXPECT_EQ(hide_pres.delta_text.toStdString(), "Sky");
+
+  EditorHistoryCommit show = hide;
+  show.before_value_json = "false";
+  show.after_value_json  = "true";
+  EXPECT_EQ(PresentEditorHistoryCommit(show).display_name.toStdString(), "Show Color Grade");
+
   EditorHistoryCommit exposure;
   exposure.field_key         = "exposure";
   exposure.presentation_key  = PresentationKeyForOperation(PipelineEditOperationKind::SetParameter);

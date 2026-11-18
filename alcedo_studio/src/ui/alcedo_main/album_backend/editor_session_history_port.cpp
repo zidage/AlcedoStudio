@@ -154,9 +154,10 @@ auto EditorSessionHistoryPort::RemoveColorGradeAndBridge(
 
 auto EditorSessionHistoryPort::SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard,
                                                     const alcedo::NodeId& node_id, bool enabled,
-                                                    std::string* error) -> bool {
+                                                    std::string* error, bool* changed) -> bool {
   std::scoped_lock lock(mutex_);
-  return PublishAfterWrite(guard, mutation_->SetColorGradeEnabled(guard, node_id, enabled, error));
+  return PublishAfterWrite(guard,
+                           mutation_->SetColorGradeEnabled(guard, node_id, enabled, error, changed));
 }
 
 auto EditorSessionHistoryPort::SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard,

@@ -342,6 +342,31 @@ TEST(EditorPanelProjectionTest, ProjectsToneLookLutRawOdtAndGeometryFromExplicit
   EXPECT_EQ(lens_adapter->panel_id, "raw");
 }
 
+// #922: a Shadows lift of +150 and a Highlights recovery of -150 reach the document and the
+// panel projection unchanged; a value past them is limited to them.
+TEST(EditorPanelProjectionTest, ShadowsPlus150AndHighlightsMinus150ReachTheProjection) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("shadows"),
+                                        {{"shadows", 150.0}}, &error))
+      << error;
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("highlights"),
+                                        {{"highlights", -150.0}}, &error))
+      << error;
+
+  EditorPanelProjection projection;
+  ASSERT_TRUE(ProjectCurrentPanelFields(document, 1, &projection, &error)) << error;
+  EXPECT_FLOAT_EQ(*ScalarOf(projection, "shadows"), 150.0f);
+  EXPECT_FLOAT_EQ(*ScalarOf(projection, "highlights"), -150.0f);
+
+  ShadowsModel shadows;
+  shadows.SetValue(180.0f);
+  EXPECT_FLOAT_EQ(shadows.Value(), 150.0f);
+  HighlightsModel highlights;
+  highlights.SetValue(-180.0f);
+  EXPECT_FLOAT_EQ(highlights.Value(), -150.0f);
+}
+
 TEST(EditorPanelProjectionTest, ReadsNamedInstanceNotFirstOperatorOfType) {
   auto document = CreateDefaultPipelineDocument();
   auto* primary = dynamic_cast<ExposureModel*>(

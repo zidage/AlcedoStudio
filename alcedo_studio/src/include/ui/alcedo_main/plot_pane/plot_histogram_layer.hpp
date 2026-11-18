@@ -52,6 +52,8 @@ class PlotHistogramLayer : public PlotLayer {
   Q_PROPERTY(QColor blueColor READ blue_color WRITE set_blue_color NOTIFY styleChanged)
   Q_PROPERTY(QColor cutColor READ cut_color WRITE set_cut_color NOTIFY styleChanged)
   Q_PROPERTY(qreal edgeWidth READ edge_width WRITE set_edge_width NOTIFY styleChanged)
+  Q_PROPERTY(qreal fillOpacity READ fill_opacity WRITE set_fill_opacity NOTIFY styleChanged)
+  Q_PROPERTY(qreal edgeOpacity READ edge_opacity WRITE set_edge_opacity NOTIFY styleChanged)
 
  public:
   /// Channels that the layer draws: all three, or one in its own tint.
@@ -82,6 +84,11 @@ class PlotHistogramLayer : public PlotLayer {
   void               set_cut_color(const QColor& color);
   [[nodiscard]] auto edge_width() const -> qreal { return edge_width_; }
   void               set_edge_width(qreal width);
+  /// Scale in [0, 1] of the light that the fills and the edges add; 1 is the scope look.
+  [[nodiscard]] auto fill_opacity() const -> qreal { return fill_opacity_; }
+  void               set_fill_opacity(qreal opacity);
+  [[nodiscard]] auto edge_opacity() const -> qreal { return edge_opacity_; }
+  void               set_edge_opacity(qreal opacity);
 
   /// Item x of the center of @p bin of a histogram of @p bins bins.
   [[nodiscard]] auto BinItemX(const PlotViewTransform& view, int bin, int bins) const -> double;
@@ -115,6 +122,8 @@ class PlotHistogramLayer : public PlotLayer {
   QColor                  blue_color_   = QColor(0x9D, 0xC0, 0xE4);
   QColor                  cut_color_    = QColor(0x16, 0x16, 0x16);
   qreal                   edge_width_   = 1.25;
+  qreal                   fill_opacity_ = 1.0;
+  qreal                   edge_opacity_ = 1.0;
 };
 
 }  // namespace alcedo::ui

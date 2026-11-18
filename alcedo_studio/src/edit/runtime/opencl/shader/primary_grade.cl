@@ -38,6 +38,27 @@ static inline float3 ApplyOkLabContrast(float3 acescc, float contrast) {
   return LinearAp1ToAcescc(OkLabToLinearAp1(lab));
 }
 
+// Whites and Blacks: an exposure shift chosen by the ACEScc luma (stops x from 18% grey), with
+// a 3-stop zone from grey and +/-3 stops at +/-100. Same math as ToneZoneShiftEv in
+// cuda_primary_grade_pass.cu (documented there) and tests/edit/runtime/tone_zone_reference.hpp.
+static inline float ToneZoneShiftEv(float x, float s) {
+  if (x <= 0.0f || s == 0.0f) return 0.0f;
+  const float w = 3.0f;
+  if (s > 0.0f) {
+    const float t = min(x / w, 1.0f);
+    return s * t * t * (3.0f - 2.0f * t);
+  }
+  const float a = -s;
+  if (x >= w + a) return -a;
+  float t = x / (w + a);
+  for (int i = 0; i < 5; ++i) {
+    const float f  = w * t + a * t * t * (3.0f - 2.0f * t) - x;
+    const float fp = w + 6.0f * a * t * (1.0f - t);
+    t              = clamp(t - f / fp, 0.0f, 1.0f);
+  }
+  return w * t - x;
+}
+
 // Tone Curve spline (edit/operators/models/tone_curve_spline.hpp; CPU reference
 // EvaluateToneCurveSpline). values[0..15]: x of the control points; [16..31]: y; [32..47]: slope.
 // Monotone cubic Hermite between the points, straight along the end slope outside them.
@@ -119,15 +140,18 @@ static inline float3 ApplyHls(float3 c, __global const GradeAdjustmentParams* p)
   const float adj_l = sum_l * inv_weight;
   const float adj_s = sum_s * inv_weight;
   if (fabs(adj_h) <= 1.0e-6f && fabs(adj_l) <= 1.0e-6f && fabs(adj_s) <= 1.0e-6f) return c;
-  const float angle = adj_h * 2.25f * 0.017453292519943295f;
+  // Hue Shift and Chroma rotate and scale the YIQ chroma (I, Q); Lightness adds to every channel.
+  // Only the change of I and Q goes back to RGB, so zero adjustments leave the color exact. A
+  // positive Hue Shift raises the hue (red toward yellow): it lowers the YIQ angle.
+  const float angle = -adj_h * 2.25f * 0.017453292519943295f;
   const float scale = exp2(adj_s * 2.25f * (adj_s >= 0.0f ? 4.5f : 3.25f));
-  const float luma  = Luma(c) + adj_l * 1.125f;
+  const float lift  = adj_l * 1.125f;
   const float i     = 0.596f * c.x - 0.274f * c.y - 0.322f * c.z;
   const float q     = 0.211f * c.x - 0.523f * c.y + 0.312f * c.z;
-  const float ri    = (i * cos(angle) - q * sin(angle)) * scale;
-  const float rq    = (i * sin(angle) + q * cos(angle)) * scale;
-  return (float3)(luma + 0.956f * ri + 0.621f * rq, luma - 0.272f * ri - 0.647f * rq,
-                  luma - 1.106f * ri + 1.703f * rq);
+  const float di    = (i * cos(angle) - q * sin(angle)) * scale - i;
+  const float dq    = (i * sin(angle) + q * cos(angle)) * scale - q;
+  return (float3)(c.x + lift + 0.956f * di + 0.621f * dq, c.y + lift - 0.272f * di - 0.647f * dq,
+                  c.z + lift - 1.106f * di + 1.703f * dq);
 }
 
 static inline uint LutIndex(uint edge, uint x, uint y, uint z) { return (z * edge + y) * edge + x; }
@@ -176,13 +200,12 @@ static inline float3 ApplyAdjustment(float3 c, __global const GradeAdjustmentPar
     c.z += offset;
   } else if (behavior == 2u && value != 0.0f) {
     c = ApplyOkLabContrast(c, value);
-  } else if (behavior == 3u) {
-    const float gain = 1.0f + max(value, 0.0f) * 0.005f;
-    c.x *= gain;
-    c.y *= gain;
-    c.z *= gain;
-  } else if (behavior == 4u) {
-    const float offset = value * 0.001f;
+  } else if ((behavior == 3u || behavior == 4u) && value != 0.0f) {
+    // 3: Whites, 4: Blacks (Whites mirrored about grey).
+    const float x        = (Luma(c) - CE_ACESCC_MIDDLE_GREY) * CE_ACESCC_B;
+    const float s        = value * 0.03f;
+    const float shift_ev = behavior == 3u ? ToneZoneShiftEv(x, s) : -ToneZoneShiftEv(-x, -s);
+    const float offset   = shift_ev / CE_ACESCC_B;
     c.x += offset;
     c.y += offset;
     c.z += offset;

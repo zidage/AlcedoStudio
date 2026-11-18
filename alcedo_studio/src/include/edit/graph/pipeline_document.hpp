@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -184,28 +185,85 @@ class PipelineDocument {
 inline constexpr float kDefaultPipelineExposureEv = 1.5f;
 /// Product Default saturation multiplier (legacy UI +30 → 1 + 30/100).
 inline constexpr float kDefaultPipelineSaturation = 1.3f;
-/// Product Default RGB curve: the Tone Curve preset `film_like` (tone_curve_presets.hpp), the
-/// shape of the Adobe default tone curve on top of the ACES 2.0 display transform (#891).
-inline constexpr std::string_view kDefaultPipelineToneCurvePresetId = "film_like";
+/// Product Default RGB curve: the Tone Curve preset `cl_digital` (Cl. Digit,
+/// tone_curve_presets.hpp), one S curve placed by hand on top of the ACES 2.0 display transform
+/// (#914; Film-like before).
+inline constexpr std::string_view kDefaultPipelineToneCurvePresetId = "cl_digital";
 /**
  * Contrast slider value of the RAW import look before the Film-like curve (OkLab lightness S
  * curve, slope 2^(15/100) at mid grey). Documents imported before #891 keep it; the entry resets of
  * the profile tone stage still read it. The look of a new document has contrast 0.
  */
 inline constexpr float            kImportLookContrastBeforeFilmLike = 15.0f;
+/// Product Default DRT method of a RAW document.
+inline constexpr DrtMethod        kDefaultPipelineDrtMethod         = DrtMethod::OpenDrt;
+/// Product Default OpenDRT look preset of a RAW document.
+inline constexpr std::string_view kDefaultPipelineOpenDrtLookPreset = "standard";
+/// Product Default lens correction switch (Develop `lens_enabled`) of a RAW document.
+inline constexpr bool             kDefaultPipelineLensCorrection    = false;
+
+/// Exposure range of the RAW import look, in EV: the range of the editor Exposure slider.
+inline constexpr float            kRawImportLookMinExposureEv       = -10.0f;
+inline constexpr float            kRawImportLookMaxExposureEv       = 10.0f;
+/// Saturation multiplier range of the RAW import look: the editor Saturation slider -100 to +100.
+inline constexpr float            kRawImportLookMinSaturation       = 0.0f;
+inline constexpr float            kRawImportLookMaxSaturation       = 2.0f;
+
+/// OpenDRT look presets that the RAW import look can select: the named presets of the editor
+/// Display Transform menu (`custom` reads the detailed parameters, which the import look keeps at
+/// their defaults).
+[[nodiscard]] auto RawImportOpenDrtLookPresets() -> std::span<const std::string_view>;
 
 /**
- * @brief Three-node product Default: Develop -> Primary Color Grade -> DRT.
+ * @brief The values of a RAW document that the user can choose for new imports (#918).
  *
- * The primary Color Grade is @ref ColorGradeNodeModel::MakeDefault with
- * @ref kDefaultPipelineExposureEv, @ref kDefaultPipelineSaturation, and the RGB curve of
- * @ref kDefaultPipelineToneCurvePresetId applied in this factory; contrast stays 0, because the
- * curve carries the contrast of the look. The editor sliders and the curve Reset go to the
- * catalog identity values (0 EV, the identity curve), not to this look. Does not require legacy
- * stage remirror.
+ * The default member values are the product Default of @ref CreateDefaultPipelineDocument. A
+ * document built from a value-initialized RawImportLook has the same JSON as the product Default.
+ * The values are plain data; the application reads them from its settings through
+ * `RawImportLookSource` (app layer) and passes them to @ref CreateDefaultPipelineDocument.
+ */
+struct RawImportLook {
+  /// Exposure of Color Grade 1, in EV.
+  float       exposure_ev          = kDefaultPipelineExposureEv;
+  /// Saturation multiplier of Color Grade 1 (editor value +30 is 1.3).
+  float       saturation           = kDefaultPipelineSaturation;
+  /// Id of the Tone Curve preset (@ref ToneCurvePresets) whose points become the RGB curve.
+  std::string tone_curve_preset_id = std::string{kDefaultPipelineToneCurvePresetId};
+  /// DRT method: @ref DrtMethod::Aces20 or @ref DrtMethod::OpenDrt.
+  DrtMethod   drt_method           = kDefaultPipelineDrtMethod;
+  /// OpenDRT look preset, one of @ref RawImportOpenDrtLookPresets. The DRT stores it for both
+  /// methods, so a later switch to OpenDRT in the editor starts from it.
+  std::string open_drt_look_preset = std::string{kDefaultPipelineOpenDrtLookPreset};
+  /// Develop `lens_enabled`.
+  bool        lens_correction      = kDefaultPipelineLensCorrection;
+
+  friend auto operator==(const RawImportLook&, const RawImportLook&) -> bool = default;
+};
+
+/**
+ * @brief Check every value of @p look against the ranges and lists above.
+ * @return An empty string when @p look is valid, else a message that names the first bad value.
+ */
+[[nodiscard]] auto DescribeRawImportLookError(const RawImportLook& look) -> std::string;
+
+/**
+ * @brief Three-node product Default: Develop -> Primary Color Grade -> DRT, with the RAW import
+ *        look of @p look.
  *
+ * The primary Color Grade is @ref ColorGradeNodeModel::MakeDefault with the exposure, the
+ * saturation, and the RGB curve of the Tone Curve preset of @p look; contrast stays 0, because the
+ * curve carries the contrast of the look. The DRT is @ref DrtNodeModel::MakeDefault with the method
+ * and OpenDRT look preset of @p look, and Develop has `lens_enabled` of @p look. The editor
+ * sliders and the curve Reset go to the catalog identity values (0 EV, the identity curve), not to
+ * this look.
+ *
+ * @throws std::invalid_argument when @ref DescribeRawImportLookError rejects @p look.
  * @return A document that satisfies graph Validate and ValidateImageBackbone.
  */
+[[nodiscard]] auto CreateDefaultPipelineDocument(const RawImportLook& look) -> PipelineDocument;
+
+/// @ref CreateDefaultPipelineDocument with the product Default look (a value-initialized
+/// @ref RawImportLook).
 [[nodiscard]] auto CreateDefaultPipelineDocument() -> PipelineDocument;
 
 /**

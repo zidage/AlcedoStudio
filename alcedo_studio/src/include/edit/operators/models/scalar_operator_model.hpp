@@ -128,7 +128,8 @@ struct ShadowsTraits {
   static constexpr std::string_view kInstanceSuffix = "shadows";
   static constexpr float            kDefault        = 0.0f;
   static constexpr float            kMin            = -100.0f;
-  static constexpr float            kMax            = 100.0f;
+  /// Above +100 the lift continues to kShadowLiftAmountLimit (#922).
+  static constexpr float            kMax            = 150.0f;
 };
 
 struct HighlightsTraits {
@@ -139,7 +140,8 @@ struct HighlightsTraits {
   static constexpr std::string_view kDisplayName    = "Highlights";
   static constexpr std::string_view kInstanceSuffix = "highlights";
   static constexpr float            kDefault        = 0.0f;
-  static constexpr float            kMin            = -100.0f;
+  /// Below -100 the recovery continues to kHighlightRecoveryAmountLimit (#922).
+  static constexpr float            kMin            = -150.0f;
   static constexpr float            kMax            = 100.0f;
 };
 

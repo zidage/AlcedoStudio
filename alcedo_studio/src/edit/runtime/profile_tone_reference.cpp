@@ -9,14 +9,11 @@
 #include <algorithm>
 #include <cmath>
 #include <mutex>
-#include <opencv2/core.hpp>
 #include <stdexcept>
 #include <string>
 
 #include "color/color_encoding_catalog.hpp"
-#include "edit/graph/develop_color_transform.hpp"
 #include "edit/runtime/aces2_reference_math.h"
-#include "edit/runtime/dng_profile_gpu_data.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
 
 namespace alcedo {
@@ -69,11 +66,6 @@ auto DefaultOpenDrtParams() -> ColorUtils::OpenDRTParams {
         "contrast enabled, creative white other than D65, or a display other than Rec.709)");
   }
   return p;
-}
-
-auto Apply(const std::array<float, 9>& m, const std::array<float, 3>& v) -> std::array<float, 3> {
-  return {m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
-          m[6] * v[0] + m[7] * v[1] + m[8] * v[2]};
 }
 
 }  // namespace
@@ -155,38 +147,10 @@ auto ProfileToneNeutralResponse::Inverse(float display) const -> float {
   return inverse_table_[index] * (1.0f - fract) + inverse_table_[index + 1] * fract;
 }
 
-auto ProfileToneStageMatrices() -> const ProfileToneMatrices& {
-  static const ProfileToneMatrices matrices = [] {
-    const cv::Matx33d   prophoto_to_ap1 = ProPhotoToAp1(XyzD50ToAp1Matrix());
-    const cv::Matx33d   ap1_to_prophoto = prophoto_to_ap1.inv();
-    ProfileToneMatrices result;
-    for (int i = 0; i < 9; ++i) {
-      result.ap1_to_prophoto[i] = static_cast<float>(ap1_to_prophoto.val[i]);
-      result.prophoto_to_ap1[i] = static_cast<float>(prophoto_to_ap1.val[i]);
-    }
-    return result;
-  }();
-  return matrices;
-}
-
 auto ProfileToneHighlightShoulder(float x) -> float {
-  // Float, in the order of ProfileToneHighlight: above raw white the curve output lies where the
-  // inverse table is steep, so the host and the GPU form keep the same rounding.
   constexpr float k = kProfileToneHighlightKnee;
   if (x <= k) return std::max(x, 0.0f);
   return 1.0f - (1.0f - k) * (1.0f - k) / (x + 1.0f - 2.0f * k);
-}
-
-auto ApplyProfileToneStageReference(const DngToneCurve&               curve,
-                                    const ProfileToneNeutralResponse& response,
-                                    const std::array<float, 3>&       ap1) -> std::array<float, 3> {
-  const auto& matrices = ProfileToneStageMatrices();
-  const float anchor   = std::exp2(-kProfileToneExposureAnchorEv);
-  auto        prophoto = Apply(matrices.ap1_to_prophoto, ap1);
-  for (float& channel : prophoto) channel = ProfileToneHighlightShoulder(channel * anchor);
-  ApplyDngBaselineRgbTone(curve, prophoto);
-  for (float& channel : prophoto) channel = response.Inverse(channel);
-  return Apply(matrices.prophoto_to_ap1, prophoto);
 }
 
 }  // namespace alcedo

@@ -25,7 +25,8 @@ Item {
     property color mutedColor: appTheme.textMutedColor
     property color hoverColor: appTheme.hoverColor
     property color accentColor: appTheme.accentColor
-    // Optional default body height when the loader content has no implicit size.
+    // Height of the body content. The body adds its spaceSm insets on every side, so a caller
+    // passes the height of its content column (plus that column's own margins).
     property real bodyContentHeight: 120
     // Optional explanation of the section. When set, an "i" glyph at the right end of the header
     // shows it; a click on the glyph pins it and does not fold the section.
@@ -44,7 +45,8 @@ Item {
     readonly property real headerHeight: appTheme.iconButtonHitSizeCompact
     readonly property real headerBlockHeight: Math.max(
         headerHeight, headerRow.implicitHeight + appTheme.spaceXs)
-    readonly property real bodyHeight: Math.max(0, bodyContentHeight) * foldProgress
+    readonly property real bodyHeight: (Math.max(0, bodyContentHeight) + 2 * appTheme.spaceSm)
+                                       * foldProgress
     readonly property real sectionHeight: headerBlockHeight + bodyHeight
 
     // Children of CollapsibleSection { ... } must land in the body slot, not as

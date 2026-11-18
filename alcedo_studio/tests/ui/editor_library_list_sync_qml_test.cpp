@@ -2,11 +2,11 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// The editor follows the filtered Library list (ImageActionsController.qml). When the accepted
-// list does not contain the open image, the editor closes it through the router's empty-editor
-// route (WorkspaceRouter::openEditor(0, 0) -> EditorSessionController::Open(0, 0), a persisted
-// session close). The close waits for the same save check as an image switch
-// (actions.canSelectImage) and for the accepted library query.
+// The editor follows the filtered Library list (ImageActionsController.qml). The open image
+// always stays open. When the accepted list does not contain it, the controller publishes it as
+// editorOutsideListImage, and the filmstrip shows it in its own slot before the list. The slot
+// ends when the editor opens another image or a later check finds the image in the list. The
+// check waits for the accepted library query.
 //
 // Issue 747: the check runs no database read on the GUI thread. A photo outside the loaded rows
 // is found with LibraryModule::RequestEditorListPosition on the query worker; the fake library
@@ -357,6 +357,14 @@ class EditorLibraryListSyncHarness {
     ProcessEvents();
   }
 
+  // ImageActionsController.editorOutsideListImage: { elementId, imageId }, or an empty map.
+  [[nodiscard]] auto OutsideListImage() const -> QVariantMap {
+    return controller_->property("editorOutsideListImage").toMap();
+  }
+  [[nodiscard]] auto OutsideListElementId() const -> uint {
+    return OutsideListImage().value(QStringLiteral("elementId")).toUInt();
+  }
+
   // Members are destroyed in reverse order: the QML objects go before the engine, and the
   // engine before the C++ fakes that the QML objects reference.
   FakeSession              session_;
@@ -380,35 +388,73 @@ class EditorLibraryListSyncHarness {
   }
 };
 
-TEST(EditorLibraryListSyncQmlTest, FilterThatRemovesOpenImageClosesItAfterSaveCheck) {
+// Issue 957: a collection or filter change while the image is open keeps it open, in the
+// filmstrip slot of an image outside the list. A later list that holds it ends the slot.
+TEST(EditorLibraryListSyncQmlTest, FilterThatRemovesOpenImageKeepsItInOutsideListSlot) {
   EditorLibraryListSyncHarness harness;
   ASSERT_NE(harness.controller_, nullptr) << harness.warnings_.join('\n').toStdString();
 
-  // The save check refuses an image switch (for example, a commit is still being written).
-  harness.session_.fakeActions().SetCanSelectImage(false);
   harness.SetFilteredList({1000, 1002});
   harness.RequestSync();
   // The open image is not a loaded row: the check asks the query worker.
   EXPECT_EQ(harness.library_.requestCount(), 1);
   EXPECT_EQ(harness.library_.lastRequestFileId(), 1001u);
+  EXPECT_TRUE(harness.OutsideListImage().isEmpty());
   harness.library_.Answer(-1);
   ProcessEvents();
   EXPECT_EQ(harness.router_.openCount(), 0);
   EXPECT_EQ(harness.session_.elementId(), 1001u);
+  EXPECT_EQ(harness.session_.imageId(), 2001u);
+  EXPECT_EQ(harness.OutsideListElementId(), 1001u);
+  EXPECT_EQ(harness.OutsideListImage().value(QStringLiteral("imageId")).toUInt(), 2001u);
 
-  // The session admits the switch again: the pending close runs once, to the empty editor,
-  // with the answer that it already has.
-  harness.session_.fakeActions().SetCanSelectImage(true);
-  ProcessEvents();
+  // The list holds the image again: its tile in the list replaces the slot.
+  harness.SetFilteredList({1000, 1001, 1002});
+  harness.RequestSync();
   EXPECT_EQ(harness.library_.requestCount(), 1);
-  EXPECT_EQ(harness.router_.openCount(), 1);
-  EXPECT_EQ(harness.router_.lastElementId(), 0);
-  EXPECT_EQ(harness.session_.elementId(), 0u);
-  EXPECT_EQ(harness.session_.imageId(), 0u);
+  EXPECT_TRUE(harness.OutsideListImage().isEmpty());
+  EXPECT_EQ(harness.router_.openCount(), 0);
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
-TEST(EditorLibraryListSyncQmlTest, CloseWaitsForAcceptedLibraryQuery) {
+// The slot belongs to the open image only: a switch to another image ends it, and so does the
+// empty editor.
+TEST(EditorLibraryListSyncQmlTest, SwitchToAnotherImageEndsOutsideListSlot) {
+  EditorLibraryListSyncHarness harness;
+  ASSERT_NE(harness.controller_, nullptr) << harness.warnings_.join('\n').toStdString();
+
+  harness.SetFilteredList({1000, 1002});
+  harness.RequestSync();
+  harness.library_.Answer(-1);
+  ProcessEvents();
+  ASSERT_EQ(harness.OutsideListElementId(), 1001u);
+
+  // The router publishes the switch before the queued session Switch runs: the slot stays
+  // while the session still shows the image.
+  harness.session_.SetQueued(true);
+  harness.router_.openEditor(1002, 2002);
+  ProcessEvents();
+  EXPECT_EQ(harness.session_.elementId(), 1001u);
+  EXPECT_EQ(harness.OutsideListElementId(), 1001u);
+  harness.session_.CompleteQueuedOpen();
+  ProcessEvents();
+  EXPECT_EQ(harness.session_.elementId(), 1002u);
+  EXPECT_TRUE(harness.OutsideListImage().isEmpty());
+
+  // A second filter change leaves the new image outside the list; the empty editor ends it.
+  harness.session_.SetQueued(false);
+  harness.SetFilteredList({1000});
+  harness.RequestSync();
+  harness.library_.Answer(-1);
+  ProcessEvents();
+  ASSERT_EQ(harness.OutsideListElementId(), 1002u);
+  harness.router_.ShowEmptyEditor();
+  ProcessEvents();
+  EXPECT_TRUE(harness.OutsideListImage().isEmpty());
+  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+}
+
+TEST(EditorLibraryListSyncQmlTest, OutsideListCheckWaitsForAcceptedLibraryQuery) {
   EditorLibraryListSyncHarness harness;
   ASSERT_NE(harness.controller_, nullptr) << harness.warnings_.join('\n').toStdString();
 
@@ -418,6 +464,8 @@ TEST(EditorLibraryListSyncQmlTest, CloseWaitsForAcceptedLibraryQuery) {
   EXPECT_EQ(harness.router_.openCount(), 0);
   EXPECT_EQ(harness.library_.requestCount(), 0);
 
+  EXPECT_TRUE(harness.OutsideListImage().isEmpty());
+
   // The new result without the open image is accepted.
   harness.SetFilteredList({1000});
   harness.library_.SetQueryUpdating(false);
@@ -425,8 +473,9 @@ TEST(EditorLibraryListSyncQmlTest, CloseWaitsForAcceptedLibraryQuery) {
   EXPECT_EQ(harness.library_.requestCount(), 1);
   harness.library_.Answer(-1);
   ProcessEvents();
-  EXPECT_EQ(harness.router_.openCount(), 1);
-  EXPECT_EQ(harness.session_.elementId(), 0u);
+  EXPECT_EQ(harness.router_.openCount(), 0);
+  EXPECT_EQ(harness.session_.elementId(), 1001u);
+  EXPECT_EQ(harness.OutsideListElementId(), 1001u);
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
@@ -441,12 +490,13 @@ TEST(EditorLibraryListSyncQmlTest, OpenImageInFilteredListStaysOpenAndIsRevealed
   EXPECT_EQ(harness.router_.openCount(), 0);
   EXPECT_EQ(harness.session_.elementId(), 1001u);
   EXPECT_EQ(harness.host_->property("filmstripRevealCount").toInt(), 1);
+  EXPECT_TRUE(harness.OutsideListImage().isEmpty());
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
-// Issue 442 item 1: the Library filter changed while the editor was hidden. The return to the
-// editor checks the open image and closes it.
-TEST(EditorLibraryListSyncQmlTest, ReturnToEditorClosesImageThatLibraryFilterRemoved) {
+// The Library collection or filter changed while the editor was hidden. The return to the
+// editor checks the open image and keeps it in the slot of an image outside the list.
+TEST(EditorLibraryListSyncQmlTest, ReturnToEditorKeepsImageThatLibraryFilterRemovedInSlot) {
   EditorLibraryListSyncHarness harness;
   ASSERT_NE(harness.controller_, nullptr) << harness.warnings_.join('\n').toStdString();
 
@@ -463,9 +513,9 @@ TEST(EditorLibraryListSyncQmlTest, ReturnToEditorClosesImageThatLibraryFilterRem
   EXPECT_EQ(harness.router_.openCount(), 0);
   harness.library_.Answer(-1);
   ProcessEvents();
-  EXPECT_EQ(harness.router_.openCount(), 1);
-  EXPECT_EQ(harness.router_.lastElementId(), 0);
-  EXPECT_EQ(harness.session_.elementId(), 0u);
+  EXPECT_EQ(harness.router_.openCount(), 0);
+  EXPECT_EQ(harness.session_.elementId(), 1001u);
+  EXPECT_EQ(harness.OutsideListElementId(), 1001u);
   // The return does not scroll the filmstrip; it keeps its own position.
   EXPECT_EQ(harness.host_->property("filmstripRevealCount").toInt(), 0);
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
@@ -562,7 +612,7 @@ TEST(EditorLibraryListSyncQmlTest, EmptyEditorDoesNotOpenAnImageAfterFilterChang
 
 // A stats filter, search, or collection change in the editor: the accepted library result alone
 // starts the check, with no other request.
-TEST(EditorLibraryListSyncQmlTest, AcceptedQueryInEditorClosesFilteredOutImage) {
+TEST(EditorLibraryListSyncQmlTest, AcceptedQueryInEditorKeepsFilteredOutImageInSlot) {
   EditorLibraryListSyncHarness harness;
   ASSERT_NE(harness.controller_, nullptr) << harness.warnings_.join('\n').toStdString();
 
@@ -574,14 +624,15 @@ TEST(EditorLibraryListSyncQmlTest, AcceptedQueryInEditorClosesFilteredOutImage) 
   ASSERT_EQ(harness.library_.requestCount(), 1);
   harness.library_.Answer(-1);
   ProcessEvents();
-  EXPECT_EQ(harness.router_.openCount(), 1);
-  EXPECT_EQ(harness.router_.lastElementId(), 0);
-  EXPECT_EQ(harness.session_.elementId(), 0u);
+  EXPECT_EQ(harness.router_.openCount(), 0);
+  EXPECT_EQ(harness.session_.elementId(), 1001u);
+  EXPECT_EQ(harness.OutsideListElementId(), 1001u);
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
 // The toolbar return with the last photo that the session still has open routes to it at once;
-// the check then closes it when the list does not hold it.
+// the check then keeps it in the slot of an image outside the list when the list does not hold
+// it.
 TEST(EditorLibraryListSyncQmlTest, ToolbarReturnWithOpenImageRoutesToItAndChecksOnWorker) {
   EditorLibraryListSyncHarness harness;
   ASSERT_NE(harness.controller_, nullptr) << harness.warnings_.join('\n').toStdString();
@@ -595,9 +646,9 @@ TEST(EditorLibraryListSyncQmlTest, ToolbarReturnWithOpenImageRoutesToItAndChecks
   ASSERT_EQ(harness.library_.requestCount(), 1);
   harness.library_.Answer(-1);
   ProcessEvents();
-  EXPECT_EQ(harness.router_.openCount(), 2);
-  EXPECT_EQ(harness.router_.lastElementId(), 0);
-  EXPECT_EQ(harness.session_.elementId(), 0u);
+  EXPECT_EQ(harness.router_.openCount(), 1);
+  EXPECT_EQ(harness.session_.elementId(), 1001u);
+  EXPECT_EQ(harness.OutsideListElementId(), 1001u);
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
@@ -620,6 +671,7 @@ TEST(EditorLibraryListSyncQmlTest, ToolbarReturnOpensClosedLastImageOnlyWhenList
   ProcessEvents();
   EXPECT_EQ(harness.router_.openCount(), 1);
   EXPECT_EQ(harness.session_.elementId(), 0u);
+  EXPECT_TRUE(harness.OutsideListImage().isEmpty());
 
   harness.router_.openLibrary();
   ProcessEvents();

@@ -82,7 +82,8 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                                  const alcedo::NodeId& node_id, std::string* error)
       -> bool override;
   auto SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
-                            bool enabled, std::string* error) -> bool;
+                            bool enabled, std::string* error, bool* changed = nullptr)
+      -> bool override;
   auto SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                         float mix, std::string* error) -> bool;
   auto AddMask(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,

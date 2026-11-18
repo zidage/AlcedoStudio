@@ -9,6 +9,10 @@ OpenCL, and Metal (2026-11-12, section 8; Metal with C7). Phase T3 #864 is imple
 three camera makes). The highlight shoulder of section 6.6 replaces the clip at raw white
 (2026-11-12, after the user saw clipped highlights at a high exposure). Tracking issue #851.
 
+Update 2026-11-13 (#911): the profile curve reaches the render as points of the RGB curve of the
+Tone Curve, and the stage at the DRT entry is removed (section 11). Sections 6.1 to 6.5 and the T2
+render describe the stage as it was; the neutral responses, the shoulder `H`, and the anchor stay.
+
 Parent: [DCP Camera Profile Plan](dcp_camera_profile_plan.md). This study replaces decision P-5 of
 that plan ("`ProfileToneCurve` is read past and not applied") with the profile tone stage of
 section 6.
@@ -154,6 +158,8 @@ exactly and keeps the DRT for gamut mapping, HDR output, and its look controls.
 ---
 
 ## 6. Design: the profile tone stage
+
+Section 11 replaces the stage with points of the RGB curve (#911).
 
 ### 6.1 Definition
 
@@ -716,7 +722,7 @@ DrtPostExecutor::Execute -> ResolveProfileToneStage -> PackProfileToneGpuData
 | `C` | Profile tone curve as a spline table | display light | 4097 entries on `[0, 1]` | DNG SDK |
 | `H` | Highlight shoulder at the curve input, per ProPhoto channel | ACR scale (raw white 1) | identity to `k`, then `1 - (1 - k)^2 / (v + 1 - 2k)`, limit 1 | Section 6.6 |
 | `kProfileToneHighlightKnee`, `PROFILE_TONE_HIGHLIGHT_KNEE` | Knee `k` of `H` | ACR scale | 0.5, one stop below raw white | Section 6.6 |
-| `kProfileToneImplementationVersion` | Version of the stage pixel rules in the DRT display key, mixed only while the stage runs | integer | 2 (the shoulder) | Section 8 |
+| `kProfileToneImplementationVersion` | Version of the stage pixel rules in the DRT display key, mixed only while the stage ran; removed with the stage | integer | 2 (the shoulder) | Section 8, section 11.5 |
 | `R_C` | Baseline RGB tone with `C` | display light | per pixel | DNG SDK `RefBaselineRGBTone` |
 | `N_m` | Neutral response of DRT method `m`, default parameters, SDR reference | display light relative to peak | per method | Alcedo DRT |
 | `N_m^-1` | Inverse of `N_m`, held at the peak | relative scene light | 4097 entries on `d^(1/2.4)` | Inferred |
@@ -724,17 +730,152 @@ DrtPostExecutor::Execute -> ResolveProfileToneStage -> PackProfileToneGpuData
 | ACES 2.0 scene value at the SDR peak | `r_hit` at 100 nits | relative scene light | 128 | OpenColorIO ToneScaleParams |
 | ACES 2.0 scene 0.18 at 100 nits | Mid grey rendering | display light | 0.100 | OpenColorIO ToneScaleParams |
 | `profile_tone` | Key of `camera_profile_file`; written only as `false` | boolean | default true | Section 6.3 |
-| `kProfileToneEntryContrast` | Contrast of Color Grade 1 after a profile tone entry | slider value | 0 (catalog identity) | User decision, section 6.5 |
+| `kProfileToneEntryContrast` | Contrast of Color Grade 1 after a profile tone entry (section 11.3) | slider value | 0 (catalog identity) | User decision, section 6.5 |
 | `kProfileToneEntrySaturation` | Saturation of Color Grade 1 after a profile tone entry | multiplier | 1.0, as `kFilmPrintEntrySaturation` | User decision, section 6.5 |
 | `kImportLookContrastBeforeFilmLike` | Contrast of the RAW import look | slider value | 15 | `pipeline_document.hpp` |
 | `kDefaultPipelineSaturation` | Saturation of the RAW import look | multiplier | 1.3 | `pipeline_document.hpp` |
 | `DngToneCurve` | Immutable curve value with its own fingerprint | value type | per profile | Section 6.3 |
 | `kMaxDngToneCurvePoints` | Largest point count of a curve that the reader accepts | points | 4096 | T1 choice; user folder maximum 256 |
 | `kProfileToneInverseTableEntries` | Entries of the `N_m^-1` table | entries | 4097 | Section 6.3 |
-| `PROFILE_TONE_GPU_FLOATS` | Size of the stage buffer: two matrices, anchor scale, inverse exponent, `C` table, `N_m^-1` table | floats | 8214 | T2, `profile_tone_gpu_math.h` |
-| `DevelopDirty::ProfileTone` | Develop dirty field of a change of `profile_tone` alone; invalidates the display result only | bit | `1 << 5` | T2 |
+| `PROFILE_TONE_GPU_FLOATS` | Size of the stage buffer: two matrices, anchor scale, inverse exponent, `C` table, `N_m^-1` table; archived with the stage | floats | 8214 | T2, `profile_tone_gpu_math.h` |
+| `DevelopDirty::ProfileTone` | Develop dirty field of a change of `profile_tone` alone; invalidates no result since #911 (the display result before) | bit | `1 << 5` | T2, section 11.3 |
 | `tn_off` | OpenDRT scene offset; `-tn_off` is the OpenDRT scene value at black | relative scene light | 0.005 | OpenDRT Standard look |
 | Surround divisor | OpenDRT divides the contrast by it for the average surround of Rec.709 gamma 2.2 | factor | 1.1 | `open_drt_runtime.cpp` |
 | OpenDRT scene 0.18 at 100 nits | Mid grey rendering of the OpenDRT defaults | display light | 0.124 | T1 measurement |
 | OpenDRT scene value at the SDR peak | Scene value at which `N_OpenDRT` reaches display light 1 | relative scene light | 117.62 | T1 measurement |
 | Raw white | Sensor saturation after black subtraction | relative scene light | 1.0 before the default exposure | Alcedo RAW scale |
+
+## 11. The profile curve as points of the RGB curve (#911)
+
+Date: 2026-11-13. Issue [#911](https://github.com/zidage/AlcedoStudio/issues/911), part of the
+Tone Curve tracking issue [#885](https://github.com/zidage/AlcedoStudio/issues/885).
+
+User request (2026-11-13): with the profile curve on, the app's own tone curve must give way; the
+better form is to load the profile curve into the Tone Curve panel and to drop the stage before
+the DRT. The stage of sections 6.1 to 6.4 rendered a second, hidden tone curve: the RGB curve of
+Color Grade 1 stayed in the panel and stacked on top of it unless it still had the Film-like
+points.
+
+### 11.1 Definition
+
+Symbols (section 11.6 lists each with its value):
+
+- `x`: curve input of the Tone Curve on its ACEScc axis, `v(x)` its scene value.
+- `E_a`, `H`, `C`, `N_m`, `N_m^-1`: as in section 6.1.
+- `y_t(x)`: target output of the RGB curve.
+
+```
+y_t(x) = ACEScc(N_m^-1(C(H(v(x) * 2^-E_a))))
+```
+
+This is the neutral axis of the stage of section 6.1: on a neutral, `M` and `M^-1` cancel and the
+baseline RGB tone applies `C` to each channel. The RGB curve of Color Grade 1 renders `y_t`
+through the DRT, so a neutral renders `C(H(v))` within the fit error, as the stage did.
+
+Colors differ. The RGB curve applies one curve per channel on ACEScc AP1; the stage applied the
+DNG SDK baseline RGB tone on ProPhoto, which keeps the hue of the middle channel. The CIEDE2000
+record of section 8 measures the cost (section 11.4).
+
+### 11.2 Fit
+
+`FitProfileToneCurve` (`edit/runtime/profile_tone_curve_import.hpp`) fits at most 16 points of the
+Tone Curve spline (TC1: monotone Hermite) to `y_t`:
+
+1. Start: (0, `y_t(0)`), or (`x_0`, 0) where `y_t` reaches 0 when `y_t(0) < 0` (the black clip),
+   and (1, `y_t(1)`).
+2. Pattern search: each inner point moves along x and y in steps from 0.008 down to 0.00025 while
+   that lowers the largest error; y stays strictly between its neighbours, x keeps the spacing of
+   0.02 (1/3 stop). A start point in the black clip moves along y = 0.
+3. While the error is above the goal and the curve has fewer than 16 points: a point goes in at
+   the sample of the largest error, all points go back onto the target, and step 2 runs again.
+4. The best point set of the steps is rounded to 5 decimals.
+
+The error is the largest difference of CIE L* of display light (relative to the peak) over 1025
+samples of the axis; the goal is 0.2 L*, about 0.5 of an 8-bit code at 18% grey. 8-bit codes with
+gamma 2.2 overstate the deep shadows: a curve output of 0 renders above black on OpenDRT (its scene
+offset), while a profile renders true black there. In codes that floor reads as several codes on
+the survey below (section 11.4), in L* well under 1.
+
+`ProfileToneCurvePoints` keeps one fit per curve fingerprint and DRT method in the process.
+
+Finding during the work: the first form kept the refined y values when it added a point. On Sony
+ILCA-77M2 Camera Portrait with OpenDRT, the search had set five neighbouring points to the same y,
+and every later point between them was held to that flat run: 8.9 L* at -2.3 EV. Putting the points
+back on the target before each search and keeping y strictly between the neighbours brings that
+curve to 0.17 L*.
+
+### 11.3 Rules
+
+The RGB curve of Color Grade 1 follows the profile curve while the Develop reference is bound, its
+profile has `ProfileToneCurve`, `profile_tone` (the Tone Curve switch) is on, and the DRT method is
+ACES 2.0 or OpenDRT. `ProfileToneCurveWrites` in `app/editor_pipeline_command_service.cpp` returns
+the writes of a settled edit of `camera_profile_file` or of the DRT method (`odt`); the history
+commit adds them to the batch of the edit, so one Undo restores all of them.
+
+| Edit | Followed curve before and after | Writes |
+| --- | --- | --- |
+| Profile selection, switch on, change from Film Print | none, then one | RGB curve = fitted points (whatever it held); contrast 15 -> 0 and saturation 1.3 -> 1.0 of section 6.5 |
+| Another profile, ACES 2.0 <-> OpenDRT | one, then another | RGB curve = new points while it still has the points before |
+| Switch off, default entry, change to Film Print | one, then none | RGB curve = Film-like (identity on Film Print) while it still has the points before |
+| Any other | unchanged | none |
+
+A curve that the user edited stays in a change and an exit. The channel curves always stay.
+Exposure is never written (the anchor of section 3.3). A document without `grade.primary` gets no
+write. `profile_tone` keeps its key and meaning in the document (written only as `false`); no
+render reads it, so `DevelopDirty::ProfileTone` invalidates no result.
+
+### 11.4 Results
+
+Survey of the user folder (`ProfileToneCurveImportFolderTest`, `ALCEDO_DCP_FOLDER`, debug build):
+
+2445 files, 1390 distinct curves; each curve fitted for both methods.
+
+| Method | L* median | L* p95 | L* max | Codes median | Codes p95 | Codes max | Points median | At 16 points | Time per curve |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ACES 2.0 | 0.199 | 0.409 | 0.830 | 0.75 | 1.52 | 5.90 | 14 | 310 | 294 ms |
+| OpenDRT | 0.201 | 0.406 | 0.785 | 1.18 | 3.68 | 7.20 | 14 | 300 | 306 ms |
+
+Codes are 8-bit, gamma 2.2, for comparison with the preset study; their maxima sit in the deep
+shadows (section 11.2). The largest L* errors: Nikon D40 Camera Vivid (0.83 at -1.4 EV, ACES 2.0)
+and Sony DSC-RX100M7 Camera Clear (0.79 at -0.6 EV, OpenDRT). `y_t(0)` has a median of 0.129 on
+ACES 2.0: the curves of the folder lift the deepest shadows above the bottom of the axis, as the
+profile renders them. On OpenDRT the median curve starts in the black clip (y = 0). The time is a
+debug build; the editor fits a curve once per process and method.
+
+CIEDE2000 against the SDK-style rendering (record of section 8, camera-like curve of
+`ProfileToneReferenceTest`, ACES 2.0, Default document after the entry reset, 175 patches):
+
+| Form | Mean | p95 | Max |
+| --- | ---: | ---: | ---: |
+| Profile tone stage (T2, archived) | 1.73 | 4.47 | 6.72 |
+| Imported RGB curve (#911) | 1.65 | 4.19 | 7.94 |
+| Full ACES 2.0 inverse (A4) | 0.00 | 0.00 | 0.00 |
+
+The per-channel curve costs no more color accuracy than the stage on average; its largest error is
+1.2 higher. Its neutral patches stay within 0.32.
+
+### 11.5 Removed
+
+- The stage at the DRT entry on CUDA, OpenCL, and Metal, its GPU buffer, and its term of the DRT
+  display key (`kProfileToneImplementationVersion`). Whole files went to
+  `alcedo_studio/deprecated/profile_tone_stage/` with a README.
+- `ApplyProfileToneStageReference` and `ProfileToneStageMatrices`; the CIEDE2000 record keeps a
+  copy of the stage in the test.
+- Section 6.5's identity reset of a Film-like curve on entry: the entry writes the fitted points.
+
+The neutral responses, the highlight shoulder `H`, and the exposure anchor stay
+(`edit/runtime/profile_tone_reference.hpp`, library `ProfileToneCurve`).
+
+### 11.6 Parameters
+
+| Symbol or parameter | Meaning | Unit | Value | Source |
+| --- | --- | --- | --- | --- |
+| `x` | Curve input of the Tone Curve | ACEScc | 0 to 1 | Alcedo |
+| `y_t` | Target output of the RGB curve | ACEScc | per `x` | Section 11.1 |
+| `kProfileToneCurveFitGoalLightness` | Error at which the fit stops adding points | CIE L* | 0.2 | Creative; about 0.5 code at 18% grey |
+| `kProfileToneCurveMinSpacing` | Smallest x step between fitted points | ACEScc | 0.02 (1/3 stop) | Creative, as the preset study |
+| `kProfileToneCurveFitSamples` | Samples of the fit error | samples | 1025 | Inferred |
+| `kProfileToneCurveDigits` | Decimals of a fitted coordinate | digits | 5 | As the preset study |
+| Search steps | Steps of the pattern search | ACEScc | 0.008 to 0.00025, halving | Inferred |
+| Points | Largest number of fitted points | points | 16 | Tone Curve limit (TC1) |
+| One L* | About a just noticeable difference | CIE L* | 1 | Data (CIE 1976) |

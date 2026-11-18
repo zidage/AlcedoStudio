@@ -48,6 +48,7 @@ auto EditorNodeGraphProjection::ProjectNode(const INodeModel& node) -> EditorNod
     throw std::invalid_argument("Color Grade type has an invalid model");
   }
   projected.deletion_protected = grade->DeletionProtected();
+  projected.hidden             = !grade->Enabled();
   projected.masks.reserve(grade->MaskCount());
   for (const auto& mask : grade->Masks()) {
     projected.masks.push_back({mask.id, GetMaskSourceKind(mask.source)});
@@ -62,9 +63,11 @@ auto EditorNodeGraphProjection::Build(const PipelineDocument& document,
     throw std::invalid_argument("EditorNodeGraphProjection requires a valid image backbone");
   }
 
+  const auto detached = document.Graph().DetachedColorGradeNodeIds();
+
   EditorNodeGraphSnapshot snapshot;
   snapshot.session_generation = session_generation;
-  snapshot.nodes.reserve(backbone.size());
+  snapshot.nodes.reserve(backbone.size() + detached.size());
 
   for (const auto& node_id : backbone) {
     const auto* node = document.Graph().FindNode(node_id);
@@ -75,7 +78,13 @@ auto EditorNodeGraphProjection::Build(const PipelineDocument& document,
 
     snapshot.nodes.push_back(ProjectNode(*node));
   }
+  for (const auto& node_id : detached) {
+    auto projected     = ProjectNode(*document.Graph().FindNode(node_id));
+    projected.detached = true;
+    snapshot.nodes.push_back(std::move(projected));
+  }
 
+  // A detached Color Grade has no edge, so the backbone holds every edge endpoint.
   snapshot.edges.reserve(document.Graph().Edges().size());
   for (const auto& edge : document.Graph().Edges()) {
     if (!ContainsNode(backbone, edge.from_node) || !ContainsNode(backbone, edge.to_node)) {
@@ -94,12 +103,16 @@ auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document
     throw std::invalid_argument("EditorMaskGroupProjection requires a valid image backbone");
   }
 
-  EditorMaskGroupSnapshot snapshot;
-  snapshot.groups.reserve(backbone.size());
+  // Downstream-first backbone order, then detached groups in storage order.
+  std::vector<NodeId> group_ids(backbone.rbegin(), backbone.rend());
+  const auto          detached = document.Graph().DetachedColorGradeNodeIds();
+  group_ids.insert(group_ids.end(), detached.begin(), detached.end());
 
-  for (auto it = backbone.rbegin(); it != backbone.rend(); ++it) {
-    const auto& node_id = *it;
-    const auto* node    = document.Graph().FindNode(node_id);
+  EditorMaskGroupSnapshot snapshot;
+  snapshot.groups.reserve(group_ids.size());
+
+  for (const auto& node_id : group_ids) {
+    const auto* node = document.Graph().FindNode(node_id);
     if (node == nullptr) {
       throw std::invalid_argument(
           "EditorMaskGroupProjection image backbone contains an unknown node");
@@ -115,6 +128,7 @@ auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document
     group.node_id            = node_id;
     group.display_name       = std::string{node->DisplayName()};
     group.enabled            = grade->Enabled();
+    group.detached           = !ContainsNode(backbone, node_id);
     group.deletion_protected = grade->DeletionProtected();
     group.masks.reserve(grade->MaskCount());
     for (const auto& mask : grade->Masks()) {

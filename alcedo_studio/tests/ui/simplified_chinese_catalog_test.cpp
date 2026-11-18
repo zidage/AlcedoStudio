@@ -46,12 +46,12 @@ const QMap<QString, int>& ExpectedContextMessageCounts() {
       {QStringLiteral("AdjustmentTransferNodePane"), 4},
       {QStringLiteral("AdjustmentTransferVersionPane"), 4},
       {QStringLiteral("CollectionsPanel"), 19},
-      {QStringLiteral("EditorAdjustmentHeader"), 2},
+      {QStringLiteral("EditorAdjustmentHeader"), 4},
       {QStringLiteral("EditorAdjustmentStack"), 11},
       {QStringLiteral("EditorAiMaskPanel"), 40},
       {QStringLiteral("EditorEndpointNodeDelegate"), 2},
-      {QStringLiteral("EditorGeometryPanel"), 14},
-      {QStringLiteral("EditorMaskGroupDelegate"), 16},
+      {QStringLiteral("EditorGeometryPanel"), 16},
+      {QStringLiteral("EditorMaskGroupDelegate"), 20},
       {QStringLiteral("EditorMaskGroupMaskRow"), 12},
       {QStringLiteral("EditorMaskGroupsPanel"), 10},
       {QStringLiteral("EditorMasksContextPanel"), 29},
@@ -66,12 +66,12 @@ const QMap<QString, int>& ExpectedContextMessageCounts() {
       {QStringLiteral("InspectorToggleButton"), 4},
       {QStringLiteral("TopToolbar"), 8},
       {QStringLiteral("alcedo::ui::EditorAiMaskTool"), 22},
-      {QStringLiteral("alcedo::ui::EditorNodeController"), 24},
+      {QStringLiteral("alcedo::ui::EditorNodeController"), 27},
   };
   return counts;
 }
 
-constexpr int kExpectedTargetMessageTotal = 300;
+constexpr int kExpectedTargetMessageTotal = 311;
 
 /// Parses a Qt TS catalog into context -> messages. Numerus translations keep
 /// their combined <numerusform> text so placeholder checks stay meaningful.
@@ -459,6 +459,29 @@ TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheColorLabelNames) 
   EXPECT_EQ(QCoreApplication::translate("LibraryMarksControl", "Mixed"), QStringLiteral("混合"));
   EXPECT_EQ(QCoreApplication::translate("LibraryMarksControl", "Mark"), QStringLiteral("标记"));
   EXPECT_EQ(QCoreApplication::translate("LibraryMarksControl", "Marked"), QStringLiteral("已标记"));
+
+  ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
+}
+
+TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheLibraryLayoutSettingAndTile) {
+  const QString qm_path = QStringLiteral(ALCEDO_ZH_CN_QM_FILE);
+  QTranslator   translator;
+  ASSERT_TRUE(translator.load(qm_path)) << "QTranslator failed to load " << qm_path.toStdString();
+  ASSERT_TRUE(QCoreApplication::installTranslator(&translator));
+
+  // Settings > Language / Theme > Library (#965).
+  EXPECT_EQ(QCoreApplication::translate("SettingDialog", "Library"), QStringLiteral("图库"));
+  EXPECT_EQ(QCoreApplication::translate("SettingDialog", "Photo layout"),
+            QStringLiteral("照片布局"));
+  EXPECT_EQ(QCoreApplication::translate("SettingDialog", "Classic grid"),
+            QStringLiteral("经典网格"));
+  EXPECT_EQ(QCoreApplication::translate("SettingDialog", "Justified rows"),
+            QStringLiteral("自适应行"));
+  // The Justified rows tile.
+  EXPECT_EQ(QCoreApplication::translate("JustifiedThumbnailTile", "Unrated"),
+            QStringLiteral("未评分"));
+  EXPECT_EQ(QCoreApplication::translate("JustifiedThumbnailTile", "%n star(s)", nullptr, 3),
+            QStringLiteral("3 星"));
 
   ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
 }

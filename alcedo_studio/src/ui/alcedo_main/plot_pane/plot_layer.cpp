@@ -46,6 +46,10 @@ auto PlotLayer::PointerDoubleClick(const PlotViewTransform&, const PlotPointerEv
   return false;
 }
 
+auto PlotLayer::PointerRightClick(const PlotViewTransform&, const PlotPointerEvent&) -> bool {
+  return false;
+}
+
 auto PlotLayer::Hover(const PlotViewTransform&, const PlotPointerEvent&) -> bool { return false; }
 
 void PlotLayer::HoverLeave() {}

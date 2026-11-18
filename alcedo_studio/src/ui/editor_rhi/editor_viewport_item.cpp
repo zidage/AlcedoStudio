@@ -42,7 +42,6 @@ EditorViewportItem::EditorViewportItem(QQuickItem* parent)
   coverage_sink_ = std::make_shared<ViewportMaskCoverageSink>(this, coverage_queue_);
   detail_coverage_sink_ = std::make_shared<ViewportMaskCoverageSink>(
       this, detail_coverage_queue_, LeaseFrameLayer::DetailMaskCoverage);
-  consume_arm_ = std::make_shared<std::atomic<EditorViewportRenderer*>>(nullptr);
   connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow* window) {
     attachWindow(window);
     if (window && isVisible() && window->visibility() != QWindow::Hidden &&
@@ -434,10 +433,7 @@ auto EditorViewportItem::createRenderer() -> QQuickRhiItemRenderer* {
           "[EditorPresent] creating QQuickRhiItem renderer image=%llu epoch=%llu",
           static_cast<unsigned long long>(imageIdentity()),
           static_cast<unsigned long long>(sessionEpoch()));
-  auto* renderer = new EditorViewportRenderer();
-  renderer->SetConsumeArmSlot(consume_arm_);
-  consume_arm_->store(renderer, std::memory_order_release);
-  return renderer;
+  return new EditorViewportRenderer();
 }
 
 void EditorViewportItem::attachWindow(QQuickWindow* window) {
@@ -490,32 +486,12 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
         applyDisplayConfig();
       },
       Qt::QueuedConnection);
-  // Arm prompt Ready-frame consumption at a render-thread presentation
-  // opportunity. This connection is registered while no QQuickRhiItemNode
-  // exists yet, so it runs before the node's own beforeRendering→render
-  // slot: when a Ready frame waits, update() arms the node's pending flag
-  // and the same render pass consumes it — no GUI update() or scene-graph
-  // synchronization required. Captures shared state only, so an emission
-  // racing item destruction touches no item members.
-  before_rendering_connection_ = connect(
-      attached_window_, &QQuickWindow::beforeRendering, this,
-      [queue = present_queue_, sink = frame_sink_, coverage_queue = coverage_queue_,
-       coverage_sink = coverage_sink_, detail_queue = detail_coverage_queue_,
-       detail_sink = detail_coverage_sink_, arm = consume_arm_] {
-        const bool ready = (queue && queue->HasReadyFrame()) ||
-                           (sink && sink->HasPendingImportedFrame()) ||
-                           (coverage_queue && coverage_queue->HasReadyFrame()) ||
-                           (coverage_sink && coverage_sink->HasPendingMetalCoverage()) ||
-                           (detail_queue && detail_queue->HasReadyFrame()) ||
-                           (detail_sink && detail_sink->HasPendingMetalCoverage());
-        if (!ready) {
-          return;
-        }
-        if (auto* renderer = arm->load(std::memory_order_acquire)) {
-          renderer->ArmForPresent();
-        }
-      },
-      Qt::DirectConnection);
+  // Ready frames reach the renderer through the GUI thread only: every producer calls
+  // requestPresentUpdate() after it publishes a frame, and update() puts the frame in the next
+  // synchronized window frame. Do not request window frames from the render thread
+  // (QQuickRhiItemRenderer::update() there): each such request adds a render-thread-only frame
+  // whose vsync the next GUI synchronization waits out, which halved the GUI frame rate during
+  // slider drags (two vsyncs per GUI frame).
   // afterRendering runs on the render thread (threaded loop). Queue the
   // continue onto the GUI thread so QQuickItem::update() stays thread-safe.
   // Present can wait for vsync while that queued request is processed.
@@ -543,7 +519,6 @@ void EditorViewportItem::detachWindow(bool reset_display) {
   QObject::disconnect(display_destination_connection_);
   QObject::disconnect(scene_graph_invalidated_connection_);
   QObject::disconnect(scene_graph_initialized_connection_);
-  QObject::disconnect(before_rendering_connection_);
   QObject::disconnect(after_rendering_connection_);
   QObject::disconnect(frame_swapped_connection_);
   QObject::disconnect(after_frame_end_connection_);
@@ -552,7 +527,6 @@ void EditorViewportItem::detachWindow(bool reset_display) {
   display_destination_connection_     = {};
   scene_graph_invalidated_connection_ = {};
   scene_graph_initialized_connection_ = {};
-  before_rendering_connection_        = {};
   after_rendering_connection_         = {};
   frame_swapped_connection_           = {};
   after_frame_end_connection_         = {};

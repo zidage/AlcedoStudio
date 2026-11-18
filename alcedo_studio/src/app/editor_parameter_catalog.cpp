@@ -35,6 +35,12 @@ using PropertyType = EditorParameterPropertyType;
 using json         = nlohmann::json;
 
 constexpr EditorScalarUiRange kSignedPercentRange{-100.0, 100.0, 0.0, 1.0, 0};
+/// Exposure: the rail covers +-5 EV; typing reaches +-10 EV.
+constexpr EditorScalarUiRange kExposureRange{-10.0, 10.0, 0.0, 0.01, 2, -5.0, 5.0};
+/// Shadows and Highlights: the rail covers +-100. Typing extends the lift of Shadows to +150 and
+/// the recovery of Highlights to -150 (ShadowsTraits / HighlightsTraits, local tone limits).
+constexpr EditorScalarUiRange kShadowsRange{-100.0, 150.0, 0.0, 1.0, 0, -100.0, 100.0};
+constexpr EditorScalarUiRange kHighlightsRange{-150.0, 100.0, 0.0, 1.0, 0, -100.0, 100.0};
 constexpr EditorScalarUiRange kPercentRange{0.0, 100.0, 0.0, 1.0, 0};
 /// Film Grain: 100 % is the datasheet granularity of the film (decision U3).
 constexpr EditorScalarUiRange kFilmGrainRange{0.0, 200.0, 0.0, 1.0, 0};
@@ -1564,13 +1570,13 @@ auto ModelEntry(std::string_view field, std::string_view alias, EditorAdjustment
 auto Table() -> const std::array<EditorParameterCatalogEntry, 25>& {
   static const std::array<EditorParameterCatalogEntry, 25> entries = {
       Scalar("exposure", {}, EditorAdjustmentField::Exposure, "tone", "exposure_ev",
-             Conversion::Identity, EditorScalarUiRange{-10.0, 10.0, 0.0, 0.01, 2}),
+             Conversion::Identity, kExposureRange),
       Scalar("contrast", {}, EditorAdjustmentField::Contrast, "tone", "contrast",
              Conversion::Identity, kSignedPercentRange),
       Scalar("highlights", {}, EditorAdjustmentField::Highlights, "tone", "highlights",
-             Conversion::Identity, kSignedPercentRange),
+             Conversion::Identity, kHighlightsRange),
       Scalar("shadows", {}, EditorAdjustmentField::Shadows, "tone", "shadows",
-             Conversion::Identity, kSignedPercentRange),
+             Conversion::Identity, kShadowsRange),
       Scalar("white", "whites", EditorAdjustmentField::Whites, "tone", "white",
              Conversion::Identity, kSignedPercentRange),
       Scalar("black", "blacks", EditorAdjustmentField::Blacks, "tone", "black",

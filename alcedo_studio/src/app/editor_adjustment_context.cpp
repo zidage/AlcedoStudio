@@ -110,6 +110,7 @@ auto ReadEditorImageExifDisplay(const ExifDisplayMetaData& metadata) -> EditorIm
 
 auto ReadEditorImageExifDisplay(const Image& image) -> EditorImageExifDisplay {
   EditorImageExifDisplay display;
+  display.file_name = image.image_name_;
   if (image.has_exif_display_.load()) {
     display = ReadEditorImageExifDisplay(image.exif_display_);
   }

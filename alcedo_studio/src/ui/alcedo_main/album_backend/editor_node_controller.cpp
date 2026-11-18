@@ -12,6 +12,7 @@
 #include <QVariantMap>
 #include <algorithm>
 #include <exception>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -59,6 +60,20 @@ auto SameTopology(const EditorNodeGraphSnapshot& lhs, const EditorNodeGraphSnaps
 auto SameProjectionContent(const EditorNodeGraphSnapshot& lhs, const EditorNodeGraphSnapshot& rhs)
     -> bool {
   return lhs.nodes == rhs.nodes && lhs.edges == rhs.edges;
+}
+
+/// True when a node of @p next has more Masks than the same node in @p previous: its card
+/// grows and may cover the card below it.
+auto AnyMaskCountGrew(const EditorNodeGraphSnapshot& previous, const EditorNodeGraphSnapshot& next)
+    -> bool {
+  for (const auto& node : next.nodes) {
+    const auto it = std::find_if(previous.nodes.begin(), previous.nodes.end(),
+                                 [&](const auto& old) { return old.node_id == node.node_id; });
+    if (it != previous.nodes.end() && node.masks.size() > it->masks.size()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /// QML-facing key for one Mask source category. Shared by the node-card Mask
@@ -238,6 +253,14 @@ auto EditorNodeController::ActiveEdges() const -> const std::vector<EditorNodeEd
   return snapshot_.edges;
 }
 
+auto EditorNodeController::CommittedBackboneNodes() const
+    -> std::span<const EditorNodeProjection> {
+  const auto end = std::find_if(snapshot_.nodes.begin(), snapshot_.nodes.end(),
+                                [](const auto& node) { return node.detached; });
+  return {snapshot_.nodes.data(),
+          static_cast<std::size_t>(std::distance(snapshot_.nodes.begin(), end))};
+}
+
 auto EditorNodeController::ContainsNode(const NodeId& node_id) const -> bool {
   return NodeFor(node_id) != nullptr;
 }
@@ -394,6 +417,9 @@ auto EditorNodeController::backbone_node_ids() const -> QStringList {
   const auto& nodes = ActiveNodes();
   ids.reserve(static_cast<qsizetype>(nodes.size()));
   for (const auto& node : nodes) {
+    if (node.detached) {
+      continue;
+    }
     ids.push_back(NodeIdToQString(node.node_id));
   }
   return ids;
@@ -515,6 +541,9 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   } else {
     ++projection_revision_;
   }
+  if (!generation_changed && AnyMaskCountGrew(snapshot_, snapshot)) {
+    restack_layout_on_next_apply_ = true;
+  }
   snapshot.session_generation = session_generation_;
   snapshot_                   = std::move(snapshot);
   has_snapshot_               = true;
@@ -602,13 +631,18 @@ void EditorNodeController::ApplyLayoutToAdapter() {
   }
   applying_layout_  = true;
   const auto finish = qScopeGuard([this] { applying_layout_ = false; });
+  const bool restack = std::exchange(restack_layout_on_next_apply_, false);
   if (draft_ != nullptr) {
     const auto view = draft_->CurrentSnapshot();
     layout->EnsureDefaultPositions(view);
-    layout->ResolveVerticalOverlaps(view);
+    if (restack) {
+      layout->ResolveVerticalOverlaps(view);
+    }
   } else {
     layout->EnsureDefaultPositions(snapshot_);
-    layout->ResolveVerticalOverlaps(snapshot_);
+    if (restack) {
+      layout->ResolveVerticalOverlaps(snapshot_);
+    }
   }
   for (const auto& node : ActiveNodes()) {
     const auto id = NodeIdToQString(node.node_id);
@@ -718,8 +752,10 @@ void EditorNodeController::set_layout_store(QObject* store) {
   layout_store_            = layout;
   if (layout_store_ != nullptr) {
     layout_store_connection_ =
-        connect(layout_store_.data(), &EditorNodeLayoutStore::NodeHeightChanged, this,
-                &EditorNodeController::ApplyLayoutToAdapter);
+        connect(layout_store_.data(), &EditorNodeLayoutStore::NodeHeightChanged, this, [this] {
+          restack_layout_on_next_apply_ = true;
+          ApplyLayoutToAdapter();
+        });
   }
   emit LayoutStoreChanged();
   SyncLayoutKey();
@@ -1144,6 +1180,28 @@ bool EditorNodeController::setColorGradeDeletionProtected(const QString& node_id
   return true;
 }
 
+bool EditorNodeController::setColorGradeEnabled(const QString& node_id, bool enabled) {
+  if (!ValidateCommandState()) return false;
+  if (draft_ != nullptr) {
+    SetLastError(tr("Finish the node graph before showing or hiding a Color Grade"));
+    return false;
+  }
+  const auto id = NodeIdFromQString(node_id);
+  if (!IsColorGrade(id)) {
+    SetLastError(tr("Only a Color Grade can be shown or hidden"));
+    return false;
+  }
+  SetCommandActive(true);
+  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  const auto result       = session_->SubmitSetColorGradeEnabled(id, enabled);
+  if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    SetLastError(QString::fromStdString(result.message));
+    return false;
+  }
+  refreshFromSession();
+  return true;
+}
+
 bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   if (!ValidateCommandState()) {
     return false;
@@ -1326,19 +1384,21 @@ bool EditorNodeController::insertMaskGroupAtTop() {
     SetLastError(tr("Finish the node graph before changing Mask Groups"));
     return false;
   }
-  if (snapshot_.nodes.size() < 2 ||
-      snapshot_.nodes.front().node_kind != alcedo::EditorNodeKind::Develop ||
-      snapshot_.nodes.back().node_kind != alcedo::EditorNodeKind::Drt) {
+  const auto backbone = CommittedBackboneNodes();
+  if (backbone.size() < 2 || backbone.front().node_kind != alcedo::EditorNodeKind::Develop ||
+      backbone.back().node_kind != alcedo::EditorNodeKind::Drt) {
     SetLastError(tr("The node graph has no editable Mask Groups"));
     return false;
   }
-  const auto   predecessor = snapshot_.nodes[snapshot_.nodes.size() - 2].node_id;
+  const auto   predecessor = backbone[backbone.size() - 2].node_id;
   const auto   uuid = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower().toStdString();
   const NodeId new_id{"grade." + uuid};
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  const auto result       = session_->SubmitInsertColorGradeAtTop(new_id, predecessor);
+  restack_layout_on_next_apply_ = true;
+  const auto result             = session_->SubmitInsertColorGradeAtTop(new_id, predecessor);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    restack_layout_on_next_apply_ = false;
     SetLastError(QString::fromStdString(result.message));
     return false;
   }
@@ -1371,14 +1431,38 @@ bool EditorNodeController::removeMaskGroup(const QString& node_id) {
   const int index = IndexOf(id);
   if (index >= 0 && index + 1 < static_cast<int>(snapshot_.nodes.size())) {
     successor = snapshot_.nodes[static_cast<std::size_t>(index + 1)].node_id;
+  } else if (index > 0) {
+    successor = snapshot_.nodes[static_cast<std::size_t>(index - 1)].node_id;
+  }
+  // A detached group has no neighbors to bridge: it leaves through the same
+  // topology delta a Nodes-page delete stores.
+  const bool detached = NodeFor(id)->detached;
+  std::optional<alcedo::NodeGraphTopologyChange> detached_removal;
+  if (detached) {
+    const auto document = session_->pipeline_document();
+    if (!document) {
+      SetLastError(tr("No editable node graph is available"));
+      return false;
+    }
+    auto       remove_draft = alcedo::EditorNodeGraphDraft::FromDocument(*document);
+    const auto mutation     = remove_draft.RemoveColorGrade(*document, id);
+    if (!mutation.succeeded) {
+      SetLastError(PresentNodeGraphDraftMutation(mutation));
+      return false;
+    }
+    detached_removal = remove_draft.MakeChange();
   }
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
   if (mask_thumbnails_ != nullptr) {
     mask_thumbnails_->invalidateNode(node_id);
   }
-  const auto result = session_->SubmitRemoveColorGradeAndBridge(id);
+  restack_layout_on_next_apply_ = true;
+  const auto result = detached_removal.has_value()
+                          ? session_->SubmitNodeGraphTopologyEdit(std::move(*detached_removal))
+                          : session_->SubmitRemoveColorGradeAndBridge(id);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    restack_layout_on_next_apply_ = false;
     SetLastError(QString::fromStdString(result.message));
     const auto document = session_->pipeline_document();
     if (document) {
@@ -1406,18 +1490,23 @@ bool EditorNodeController::moveMaskGroupToIndex(const QString& node_id, int targ
     SetLastError(tr("Only a Color Grade Mask Group can be moved"));
     return false;
   }
-  if (snapshot_.nodes.size() < 2 ||
-      snapshot_.nodes.front().node_kind != alcedo::EditorNodeKind::Develop ||
-      snapshot_.nodes.back().node_kind != alcedo::EditorNodeKind::Drt) {
+  if (NodeFor(id)->detached) {
+    SetLastError(tr("Connect the Mask Group in Nodes before moving it"));
+    return false;
+  }
+  const auto backbone = CommittedBackboneNodes();
+  if (backbone.size() < 2 || backbone.front().node_kind != alcedo::EditorNodeKind::Develop ||
+      backbone.back().node_kind != alcedo::EditorNodeKind::Drt) {
     SetLastError(tr("The node graph has no editable Mask Groups"));
     return false;
   }
-  // Color Grades in downstream-first order — the same order the Mask Groups
-  // panel displays, so the drop index maps directly onto this list.
+  // Backbone Color Grades in downstream-first order: the same order the Mask
+  // Groups panel displays above its detached groups, so the drop index maps
+  // directly onto this list. Detached groups are outside the order.
   std::vector<NodeId> groups;
-  groups.reserve(snapshot_.nodes.size());
+  groups.reserve(backbone.size());
   int source = -1;
-  for (auto it = snapshot_.nodes.rbegin(); it != snapshot_.nodes.rend(); ++it) {
+  for (auto it = backbone.rbegin(); it != backbone.rend(); ++it) {
     if (it->node_kind != alcedo::EditorNodeKind::ColorGrade) {
       continue;
     }
@@ -1451,9 +1540,9 @@ bool EditorNodeController::moveMaskGroupToIndex(const QString& node_id, int targ
   // the same edit representation and owner path used by connector edits.
   std::vector<NodeId> reordered_backbone;
   reordered_backbone.reserve(groups.size() + 2);
-  reordered_backbone.push_back(snapshot_.nodes.front().node_id);
+  reordered_backbone.push_back(backbone.front().node_id);
   reordered_backbone.insert(reordered_backbone.end(), groups.rbegin(), groups.rend());
-  reordered_backbone.push_back(snapshot_.nodes.back().node_id);
+  reordered_backbone.push_back(backbone.back().node_id);
 
   auto move_draft = alcedo::EditorNodeGraphDraft::FromDocument(*document);
   for (std::size_t i = 1; i < reordered_backbone.size(); ++i) {
@@ -1470,8 +1559,11 @@ bool EditorNodeController::moveMaskGroupToIndex(const QString& node_id, int targ
 
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  const auto result       = session_->SubmitNodeGraphTopologyEdit(move_draft.MakeChange());
+  // A layer reorder restacks the cards in the new chain order.
+  restack_layout_on_next_apply_ = true;
+  const auto result = session_->SubmitNodeGraphTopologyEdit(move_draft.MakeChange());
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    restack_layout_on_next_apply_ = false;
     SetLastError(QString::fromStdString(result.message));
     return false;
   }
@@ -1494,12 +1586,12 @@ bool EditorNodeController::locateNodeInGraph(const QString& node_id) {
   return true;
 }
 
-auto EditorNodeController::detached_draft_node_ids() const -> QStringList {
+auto EditorNodeController::unfinished_draft_node_ids() const -> QStringList {
   QStringList ids;
   if (draft_ == nullptr) {
     return ids;
   }
-  for (const auto& node_id : draft_->DetachedNodeIds()) {
+  for (const auto& node_id : draft_->UnfinishedNodeIds()) {
     ids.push_back(NodeIdToQString(node_id));
   }
   return ids;
@@ -1517,6 +1609,7 @@ auto EditorNodeController::mask_groups() const -> QVariantList {
     row.insert(QStringLiteral("nodeId"), NodeIdToQString(group.node_id));
     row.insert(QStringLiteral("displayName"), QString::fromStdString(group.display_name));
     row.insert(QStringLiteral("enabled"), group.enabled);
+    row.insert(QStringLiteral("detached"), group.detached);
     row.insert(QStringLiteral("deletionProtected"), group.deletion_protected);
     QVariantList masks;
     masks.reserve(static_cast<qsizetype>(group.masks.size()));

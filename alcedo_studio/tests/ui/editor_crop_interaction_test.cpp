@@ -17,8 +17,10 @@
 #include <QSignalSpy>
 #include <QTest>
 #include <Qt>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 
 #include "edit/geometry/crop_frame.hpp"
 #include "edit/geometry/render_geometry_resolver.hpp"
@@ -26,6 +28,7 @@
 #include "ui/edit_viewer/crop_interaction_controller.hpp"
 #include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
+#include "ui/editor_rhi/editor_overlay_item.hpp"
 
 namespace alcedo::editor_rhi {
 namespace {
@@ -76,7 +79,162 @@ auto MakeIdentityMapping(const ViewportWidgetInfo& widget, int width, int height
   return mapping;
 }
 
+// Opens the crop tool on an unrotated 400x300 Geometry panel frame in an 800x600 viewport
+// with the crop at (0.2, 0.2, 0.6, 0.6): widget corners (160, 120) to (640, 480).
+void OpenInsetCrop(EditorInteractionController& controller) {
+  controller.setViewportMetrics(800, 600, 1.0);
+  PresentGeometryPanelFrame(controller, 400, 300, 0.0f);
+  OpenCropTool(controller);
+  controller.setCropRectNormalized(QRectF(0.2, 0.2, 0.6, 0.6));
+}
+
+void Drag(EditorInteractionController& controller, const QPointF& from,
+          std::initializer_list<QPointF> moves) {
+  controller.handlePress(from.x(), from.y(), static_cast<int>(Qt::LeftButton));
+  QPointF last = from;
+  for (const QPointF& move : moves) {
+    controller.handleMove(move.x(), move.y(), static_cast<int>(Qt::LeftButton));
+    last = move;
+  }
+  controller.handleRelease(last.x(), last.y(), static_cast<int>(Qt::LeftButton));
+}
+
+// The point at @p radius from @p center in the direction of @p degrees (item space, y-down).
+auto PointOnCircle(const QPointF& center, double radius, double degrees) -> QPointF {
+  const double radians = degrees * 3.14159265358979323846 / 180.0;
+  return center + QPointF(radius * std::cos(radians), radius * std::sin(radians));
+}
+
 }  // namespace
+
+TEST(EditorCropInteractionTest, HitTestSeparatesEdgeBandsFromCornerRotateZones) {
+  const std::array<QPointF, 4> square{QPointF(100, 100), QPointF(300, 100), QPointF(300, 300),
+                                      QPointF(100, 300)};
+  const auto                   hit = [&](double x, double y) {
+    return CropGeometry::HitTestWidgetGeometry(square, QPointF(x, y));
+  };
+
+  EXPECT_EQ(hit(100, 100).corner_index, 0);
+  // The top edge band reaches 18 px outside and 10 px inside.
+  EXPECT_EQ(hit(200, 84).edge, CropEdge::Top);
+  EXPECT_EQ(hit(200, 108).edge, CropEdge::Top);
+  EXPECT_FALSE(hit(200, 84).rotate_hit);
+  // Above the middle of an edge there is no rotate zone (the old handle spot is 28 px out).
+  EXPECT_EQ(hit(200, 72).edge, CropEdge::None);
+  EXPECT_FALSE(hit(200, 72).rotate_hit);
+  EXPECT_FALSE(hit(200, 40).rotate_hit);
+  // Outside a corner, and beside a corner past the edge band, is a rotate zone.
+  EXPECT_TRUE(hit(320, 80).rotate_hit);
+  EXPECT_TRUE(hit(330, 110).rotate_hit);
+  EXPECT_FALSE(hit(400, 0).rotate_hit);
+  // Inside the frame there are no frame controls.
+  const auto inside = hit(200, 200);
+  EXPECT_EQ(inside.corner_index, -1);
+  EXPECT_EQ(inside.edge, CropEdge::None);
+  EXPECT_FALSE(inside.rotate_hit);
+}
+
+TEST(EditorCropInteractionTest, DragFromAboveTheTopEdgeResizesAndNeverRotates) {
+  // #942: a drag that starts a little above the top edge grip must move the top edge.
+  EditorInteractionController controller;
+  OpenInsetCrop(controller);
+  const QPointF top_mid(400.0, 120.0);
+
+  Drag(controller, top_mid + QPointF(0.0, -16.0),
+       {top_mid + QPointF(1.0, 20.0), top_mid + QPointF(-2.0, 80.0)});
+
+  EXPECT_FLOAT_EQ(controller.cropRotationDegrees(), 0.0f);
+  const QRectF rect = controller.cropRectNormalized();
+  // 96 item px down at 2 item px per source px is 48 source px, 0.16 of the height.
+  EXPECT_NEAR(rect.top(), 0.36, 2e-3);
+  EXPECT_NEAR(rect.bottom(), 0.8, 1e-4);
+  EXPECT_NEAR(rect.left(), 0.2, 1e-4);
+  EXPECT_NEAR(rect.width(), 0.6, 1e-4);
+
+  // At the old rotate handle position (28 px out) the drag does not rotate either.
+  OpenInsetCrop(controller);
+  Drag(controller, QPointF(400.0, 92.0), {QPointF(402.0, 150.0), QPointF(398.0, 200.0)});
+  EXPECT_FLOAT_EQ(controller.cropRotationDegrees(), 0.0f);
+}
+
+TEST(EditorCropInteractionTest, RotationDragHoldsNearTheCenterAndNeverFlips) {
+  EditorInteractionController controller;
+  OpenInsetCrop(controller);
+  const QPointF center(400.0, 300.0);
+  const QPointF zone(670.0, 90.0);
+
+  controller.handlePress(zone.x(), zone.y(), static_cast<int>(Qt::LeftButton));
+  controller.handleMove(500.0, 200.0, static_cast<int>(Qt::LeftButton));
+  const float after_first = controller.cropRotationDegrees();
+  EXPECT_GT(std::abs(after_first), 1.0f);
+  // Into the center and out on the other side: the old handle math turned this into
+  // about 180 degrees. Near the center the angle holds; leaving it re-anchors.
+  controller.handleMove(center.x() + 10.0, center.y(), static_cast<int>(Qt::LeftButton));
+  controller.handleMove(center.x() - 100.0, center.y() + 120.0, static_cast<int>(Qt::LeftButton));
+  controller.handleRelease(center.x() - 100.0, center.y() + 120.0,
+                           static_cast<int>(Qt::LeftButton));
+
+  EXPECT_NEAR(controller.cropRotationDegrees(), after_first, 1e-3f);
+}
+
+TEST(EditorCropInteractionTest, RotationDragIsLimitedTo45DegreesPerDrag) {
+  EditorInteractionController controller;
+  OpenInsetCrop(controller);
+  const QPointF center(400.0, 300.0);
+  const double  radius = 342.0;
+  const double  start  = -37.87;
+
+  controller.handlePress(PointOnCircle(center, radius, start).x(),
+                         PointOnCircle(center, radius, start).y(),
+                         static_cast<int>(Qt::LeftButton));
+  // Swing 120 degrees in 10-degree steps.
+  for (int step = 1; step <= 12; ++step) {
+    const QPointF p = PointOnCircle(center, radius, start - (10.0 * step));
+    controller.handleMove(p.x(), p.y(), static_cast<int>(Qt::LeftButton));
+  }
+  EXPECT_NEAR(std::abs(controller.cropRotationDegrees()), CropGeometry::kCropRotateMaxDragDegrees,
+              1e-3f);
+  // Turning back reduces the angle at once.
+  const QPointF back = PointOnCircle(center, radius, start - 110.0);
+  controller.handleMove(back.x(), back.y(), static_cast<int>(Qt::LeftButton));
+  EXPECT_NEAR(std::abs(controller.cropRotationDegrees()),
+              CropGeometry::kCropRotateMaxDragDegrees - 10.0f, 0.05f);
+  controller.handleRelease(back.x(), back.y(), static_cast<int>(Qt::LeftButton));
+}
+
+TEST(EditorCropInteractionTest, RotationDragStartsAfterTravelSnapsToZeroAndShowsTheFineGrid) {
+  EditorInteractionController controller;
+  OpenInsetCrop(controller);
+  const QPointF center(400.0, 300.0);
+  const QPointF zone(670.0, 90.0);
+  const QPointF radial = (zone - center) / std::hypot(zone.x() - center.x(), zone.y() - center.y());
+  const QPointF perpendicular(-radial.y(), radial.x());
+  QSignalSpy    edited(&controller, &EditorInteractionController::cropFrameEdited);
+
+  controller.handlePress(zone.x(), zone.y(), static_cast<int>(Qt::LeftButton));
+  // Less than the start travel: nothing changes and no grid.
+  const QPointF small = zone + (perpendicular * 2.0);
+  controller.handleMove(small.x(), small.y(), static_cast<int>(Qt::LeftButton));
+  EXPECT_EQ(edited.count(), 0);
+  EXPECT_FALSE(controller.overlayGeometry().crop_rotation_active);
+
+  // About 0.2 degrees: the drag starts, the angle snaps to 0, and the fine grid is drawn.
+  const QPointF nearly_level = zone + (radial * 4.0) + (perpendicular * 1.2);
+  controller.handleMove(nearly_level.x(), nearly_level.y(), static_cast<int>(Qt::LeftButton));
+  EXPECT_FLOAT_EQ(controller.cropRotationDegrees(), 0.0f);
+  const auto rotating = controller.overlayGeometry();
+  EXPECT_TRUE(rotating.crop_rotation_active);
+  EXPECT_FALSE(BuildOverlaySceneGeometry(rotating, true).fine_grid_triangles.empty());
+
+  const QPointF turned = zone + (perpendicular * 30.0);
+  controller.handleMove(turned.x(), turned.y(), static_cast<int>(Qt::LeftButton));
+  EXPECT_GT(std::abs(controller.cropRotationDegrees()), 1.0f);
+
+  controller.handleRelease(turned.x(), turned.y(), static_cast<int>(Qt::LeftButton));
+  const auto released = controller.overlayGeometry();
+  EXPECT_FALSE(released.crop_rotation_active);
+  EXPECT_TRUE(BuildOverlaySceneGeometry(released, true).fine_grid_triangles.empty());
+}
 
 TEST(EditorCropInteractionTest, AspectLockedBoxPreservesPixelRatio) {
   const QRectF box = CropGeometry::MakeAspectLockedBoxFromDiagonal(QPointF(80.0, 60.0),
@@ -246,14 +404,15 @@ TEST(EditorCropInteractionTest, RotationDragShrinksFrameToStayInsideSource) {
   controller.setViewportMetrics(800, 600, 1.0);
   PresentGeometryPanelFrame(controller, 400, 300, 0.0f);
   OpenCropTool(controller);
+  controller.setCropRectNormalized(QRectF(0.2, 0.2, 0.6, 0.6));
 
-  const QPointF handle = controller.rotateHandleItemPos();
-  const auto    center = CropGeometry::CropCenterWidgetPoint(
-      controller.overlayGeometry().crop_corners_widget);
-  // Swing the handle about the frame center.
-  const QPointF target = center + QPointF(60.0, -(center.y() - handle.y()));
+  const auto    corners = controller.overlayGeometry().crop_corners_widget;
+  const auto    center  = CropGeometry::CropCenterWidgetPoint(corners);
+  // Press in the rotate zone outside the top-right corner and swing it about the center.
+  const QPointF zone    = corners[1] + QPointF(30.0, -30.0);
+  const QPointF target  = center + QPointF(zone.x() - center.x() + 60.0, zone.y() - center.y());
   QSignalSpy    edited(&controller, &EditorInteractionController::cropFrameEdited);
-  controller.handlePress(handle.x(), handle.y(), static_cast<int>(Qt::LeftButton));
+  controller.handlePress(zone.x(), zone.y(), static_cast<int>(Qt::LeftButton));
   controller.handleMove(target.x(), target.y(), static_cast<int>(Qt::LeftButton));
   controller.handleRelease(target.x(), target.y(), static_cast<int>(Qt::LeftButton));
 

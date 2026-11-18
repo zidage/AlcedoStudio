@@ -6,8 +6,10 @@
 #include "edit/runtime/local_tone_executor.hpp"
 #include "edit/runtime/local_tone_plan.hpp"
 
+#include <cmath>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -105,6 +107,75 @@ TEST(LocalTonePlan, QualityBaseBypassIgnoresCacheAndDoesNotPersist) {
   EXPECT_EQ(decision.action, LocalToneAction::RebuildSourceAndResult);
   EXPECT_TRUE(decision.write_canonical_reference);
   EXPECT_FALSE(decision.persist_canonical);
+}
+
+// #922: Shadows lifts further up to +150 and Highlights recovers further down to -150; the
+// darken and boost sides keep their limit, and the Shadows 80..100 range is no longer clamped.
+TEST(LocalTonePlan, ShadowsLiftAndHighlightsRecoveryExtendToTheSliderEnds) {
+  EXPECT_FLOAT_EQ(ClampedLocalToneShadow(150.0f), local_tone_mapping::kShadowLiftAmountLimit);
+  EXPECT_FLOAT_EQ(ClampedLocalToneShadow(150.0f), 150.0f * 1.5f / 80.0f);
+  EXPECT_GT(ClampedLocalToneShadow(150.0f), ClampedLocalToneShadow(100.0f));
+  EXPECT_GT(ClampedLocalToneShadow(100.0f), ClampedLocalToneShadow(80.0f));
+  EXPECT_FLOAT_EQ(ClampedLocalToneShadow(200.0f), local_tone_mapping::kShadowLiftAmountLimit);
+  EXPECT_FLOAT_EQ(ClampedLocalToneShadow(-100.0f), -local_tone_mapping::kBackendAmountLimit);
+
+  EXPECT_FLOAT_EQ(ClampedLocalToneHighlight(-150.0f),
+                  local_tone_mapping::kHighlightRecoveryAmountLimit);
+  EXPECT_FLOAT_EQ(ClampedLocalToneHighlight(-150.0f), 150.0f * 1.5f / 100.0f);
+  EXPECT_GT(ClampedLocalToneHighlight(-150.0f), ClampedLocalToneHighlight(-100.0f));
+  EXPECT_FLOAT_EQ(ClampedLocalToneHighlight(-100.0f), 1.5f);
+  EXPECT_FLOAT_EQ(ClampedLocalToneHighlight(100.0f), -local_tone_mapping::kBackendAmountLimit);
+
+  // The extended amounts keep the samples finite with the slope (beta) in its limits.
+  for (const auto& [shadow, highlight] :
+       {std::pair{local_tone_mapping::kShadowLiftAmountLimit, 0.0f},
+        std::pair{0.0f, local_tone_mapping::kHighlightRecoveryAmountLimit},
+        std::pair{local_tone_mapping::kShadowLiftAmountLimit,
+                  local_tone_mapping::kHighlightRecoveryAmountLimit}}) {
+    for (const auto& sample : local_tone_mapping::BuildSamples(shadow, highlight)) {
+      EXPECT_TRUE(std::isfinite(sample.target)) << shadow << " " << highlight;
+      EXPECT_GE(sample.beta, local_tone_mapping::kToneBetaMin) << shadow << " " << highlight;
+      EXPECT_LE(sample.beta, local_tone_mapping::kToneBetaMax) << shadow << " " << highlight;
+    }
+  }
+  // Shadows lift at +150 and Highlights recovery at -150 keep the reference curve increasing.
+  for (const auto& [shadow, highlight] :
+       {std::pair{local_tone_mapping::kShadowLiftAmountLimit, 0.0f},
+        std::pair{0.0f, local_tone_mapping::kHighlightRecoveryAmountLimit},
+        std::pair{local_tone_mapping::kShadowLiftAmountLimit,
+                  local_tone_mapping::kHighlightRecoveryAmountLimit}}) {
+    const auto samples = local_tone_mapping::BuildSamples(shadow, highlight);
+    for (std::size_t i = 1; i < samples.size(); ++i) {
+      EXPECT_GT(samples[i].target, samples[i - 1].target) << shadow << " " << highlight << " " << i;
+    }
+  }
+}
+
+// #939 (#924): the reference curve increases for every Shadows and Highlights pair in the slider
+// ranges. The slope between LLF samples stays in 0.1..2.5 (the old curve went down to -4.1 and up
+// to 3.0); beta stays in its limits.
+TEST(LocalTonePlan, ReferenceCurveIncreasesForEverySliderPair) {
+  constexpr float kMinSlope = 0.1f;
+  constexpr float kMaxSlope = 2.5f;
+  for (int shadows = -100; shadows <= 150; shadows += 5) {
+    for (int highlights = -150; highlights <= 100; highlights += 10) {
+      const float shadow    = ClampedLocalToneShadow(static_cast<float>(shadows));
+      const float highlight = ClampedLocalToneHighlight(static_cast<float>(highlights));
+      const auto  samples   = local_tone_mapping::BuildSamples(shadow, highlight);
+      for (std::size_t i = 0; i < samples.size(); ++i) {
+        EXPECT_GE(samples[i].beta, kMinSlope) << shadows << " " << highlights << " " << i;
+        EXPECT_LE(samples[i].beta, local_tone_mapping::kToneBetaMax)
+            << shadows << " " << highlights << " " << i;
+        if (i == 0) {
+          continue;
+        }
+        const float slope =
+            (samples[i].target - samples[i - 1].target) / (samples[i].gamma - samples[i - 1].gamma);
+        EXPECT_GE(slope, kMinSlope) << shadows << " " << highlights << " " << i;
+        EXPECT_LE(slope, kMaxSlope) << shadows << " " << highlights << " " << i;
+      }
+    }
+  }
 }
 
 TEST(LocalTonePlan, EquivalentLookupsProduceIdenticalTraces) {

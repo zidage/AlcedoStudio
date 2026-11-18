@@ -1195,7 +1195,7 @@ Item {
                 mutedColor: root.colMuted
                 hoverColor: root.colHover
                 accentColor: root.colAccent
-                bodyContentHeight: styleBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+                bodyContentHeight: styleBody.implicitHeight + 2 * appTheme.spaceXs
 
                 ColumnLayout {
                     id: styleBody
@@ -1263,7 +1263,7 @@ Item {
                 mutedColor: root.colMuted
                 hoverColor: root.colHover
                 accentColor: root.colAccent
-                bodyContentHeight: printSettingBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+                bodyContentHeight: printSettingBody.implicitHeight + 2 * appTheme.spaceXs
 
                 ColumnLayout {
                     id: printSettingBody
@@ -1321,7 +1321,7 @@ Item {
                 mutedColor: root.colMuted
                 hoverColor: root.colHover
                 accentColor: root.colAccent
-                bodyContentHeight: scanBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+                bodyContentHeight: scanBody.implicitHeight + 2 * appTheme.spaceXs
 
                 ColumnLayout {
                     id: scanBody
@@ -1413,7 +1413,7 @@ Item {
                 mutedColor: root.colMuted
                 hoverColor: root.colHover
                 accentColor: root.colAccent
-                bodyContentHeight: scannerBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+                bodyContentHeight: scannerBody.implicitHeight + 2 * appTheme.spaceXs
 
                 ColumnLayout {
                     id: scannerBody
@@ -1478,7 +1478,7 @@ Item {
                 mutedColor: root.colMuted
                 hoverColor: root.colHover
                 accentColor: root.colAccent
-                bodyContentHeight: scanOpenDrtBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+                bodyContentHeight: scanOpenDrtBody.implicitHeight + 2 * appTheme.spaceXs
 
                 ColumnLayout {
                     id: scanOpenDrtBody
@@ -1527,7 +1527,7 @@ Item {
                 mutedColor: root.colMuted
                 hoverColor: root.colHover
                 accentColor: root.colAccent
-                bodyContentHeight: ceBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+                bodyContentHeight: ceBody.implicitHeight + 2 * appTheme.spaceXs
 
                 ColumnLayout {
                     id: ceBody

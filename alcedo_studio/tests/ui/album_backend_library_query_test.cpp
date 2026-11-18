@@ -772,6 +772,106 @@ TEST_F(LibraryQueryTests, SelectAllDuringRefreshSelectsTheRefreshedResult) {
             (std::vector<sl_element_id_t>{std::min(id[4], id[5]), std::max(id[4], id[5])}));
 }
 
+auto TargetIds(const QVariantList& targets) -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> ids;
+  for (const auto& target : targets) {
+    ids.push_back(target.toMap().value(QStringLiteral("elementId")).toUInt());
+  }
+  std::sort(ids.begin(), ids.end());
+  return ids;
+}
+
+auto Sorted(std::vector<sl_element_id_t> ids) -> std::vector<sl_element_id_t> {
+  std::sort(ids.begin(), ids.end());
+  return ids;
+}
+
+// Issue #958: a filter or a search that hides selected photos removes them from the selection
+// when the Library accepts the new result, so Delete, Paste, Rating, and the marks act only on
+// the photos of the current list. Removing the filter again does not select them again.
+TEST_F(LibraryQueryTests, FilterAndSearchRemoveHiddenPhotosFromTheSelection) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*       module     = backend.library();
+  auto*       selection  = module->selection();
+  auto*       operations = backend.library_mutations();
+  const auto& id         = library.ids();
+  const auto& images     = library.image_ids();
+  const auto  select     = [&](std::size_t index) {
+    selection->SetImageSelected(id[index], images[index], {}, false, true);
+  };
+  const auto clicked = [&](std::size_t index) {
+    return QVariantMap{{QStringLiteral("elementId"), static_cast<uint>(id[index])},
+                       {QStringLiteral("imageId"), static_cast<uint>(images[index])}};
+  };
+
+  // Canon R5 (3 stars), Nikon Z8 (3 stars), Sony A7 (5 stars).
+  select(0);
+  select(2);
+  select(4);
+  ASSERT_EQ(TargetIds(operations->ResolveTargets(clicked(4))), Sorted({id[0], id[2], id[4]}));
+
+  // The rating filter keeps only the Sony photo of the selection: the menu on it targets it
+  // alone, and so do Delete and Paste, which read the same targets.
+  backend.stats()->ToggleStatsFilter(QStringLiteral("rating"), QStringLiteral("5"));
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_EQ(module->TotalCount(), 2);
+  EXPECT_EQ(selection->SelectedElementIds(), std::vector<sl_element_id_t>{id[4]});
+  EXPECT_EQ(TargetIds(operations->ResolveTargets(clicked(4))),
+            std::vector<sl_element_id_t>{id[4]});
+  EXPECT_EQ(TargetIds(selection->SelectedItems()), std::vector<sl_element_id_t>{id[4]});
+
+  backend.stats()->ClearStatsFilter();
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_EQ(module->TotalCount(), 6);
+  EXPECT_EQ(selection->SelectedElementIds(), std::vector<sl_element_id_t>{id[4]});
+
+  // A search that hides selected photos removes them too.
+  select(0);
+  select(1);
+  backend.search()->ApplyFuzzySearch(QStringLiteral("Canon"));
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_EQ(module->TotalCount(), 2);
+  EXPECT_EQ(selection->SelectedElementIds(), Sorted({id[0], id[1]}));
+
+  // A rating write that moves a selected photo out of the rating filter removes it as well.
+  backend.search()->ClearSearchState();
+  module->RequestLibraryRefresh();
+  ASSERT_TRUE(Settle(backend));
+  backend.stats()->ToggleStatsFilter(QStringLiteral("rating"), QStringLiteral("5"));
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(selection->SelectedElementIds(), std::vector<sl_element_id_t>{id[1]});
+  ASSERT_TRUE(backend.images()
+                  ->SetImageRating(id[1], images[1], 2)
+                  .value(QStringLiteral("success"))
+                  .toBool());
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_TRUE(WaitUntil([&]() { return selection->SelectedCount() == 0; }));
+}
+
+// Issue #958: a Select All read of the old result that completes after a filter refresh started
+// waits for the refreshed result, so it never selects the photos that the filter hides.
+TEST_F(LibraryQueryTests, SelectAllReadOfTheOldResultSelectsTheRefreshedResult) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*       module = backend.library();
+  const auto& id     = library.ids();
+
+  WorkerHold hold(library.browse());
+  hold.ArmNext();
+  module->SelectAllInCurrentView();  // the id read is held on the worker
+  ASSERT_TRUE(hold.WaitHeld());
+  backend.stats()->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Sony A7"));
+  ProcessEvents(50);  // the filter refresh is submitted while the Select All read is held
+  hold.Release();
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_TRUE(WaitUntil([&]() { return module->selection()->SelectedCount() > 0; }));
+  ProcessEvents(100);
+  EXPECT_EQ(module->selection()->SelectedElementIds(), Sorted({id[4], id[5]}));
+}
+
 TEST_F(LibraryQueryTests, LastVisibleOccurrenceReleasesThumbnailPin) {
   ApplicationModuleHost backend;
   LoadedLibrary         library;

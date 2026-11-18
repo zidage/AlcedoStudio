@@ -59,15 +59,34 @@ enum class AdjustmentParameterOwner : std::uint8_t {
 [[nodiscard]] auto DrtPostAdjustmentTypes() -> std::array<OperatorTypeId, 4>;
 
 /**
- * @brief Fixed Color Grade execution order: Basic Tone, Color, then Local Tone.
+ * @brief Fixed Color Grade execution order: Basic Tone, Local Tone, then Color.
  *
  * Basic Tone keeps CAT02 White Balance, Exposure, Contrast, White, Black order.
- * Color keeps Curve, HLS, Saturation, Vibrance, ColorWheel, LMT order.
  * Shadows/Highlights form the Local Tone group compiled into the LLF stage.
+ * Color keeps Curve, HLS, Saturation, Vibrance, ColorWheel, LMT order.
  * The GraphCompiler orders every supported Grade this way; stored document
- * order selects parameter identity only, never execution order.
+ * order selects parameter identity only, never execution order. Issue #900 moved
+ * Local Tone before the Curve, so Shadows and Highlights act on the basic tone
+ * result and the Curve shapes their output.
  */
 [[nodiscard]] auto ColorGradeCompileOrder() -> std::array<OperatorTypeId, 13>;
+
+/** @brief Stage group of a Color Grade adjustment in @ref ColorGradeCompileOrder. */
+enum class ColorGradeCompileGroup : std::uint8_t {
+  /// White Balance, Exposure, Contrast, Whites, Blacks: the pointwise stage before the LLF.
+  BasicTone,
+  /// Shadows and Highlights: the LLF stage.
+  LocalTone,
+  /// Curve through LMT, and any type outside the Color Grade catalog: after the LLF.
+  Color,
+};
+
+/**
+ * @brief Group of @p type in @ref ColorGradeCompileOrder.
+ *
+ * A type outside the Color Grade catalog ranks last and is in the Color group.
+ */
+[[nodiscard]] auto ColorGradeCompileGroupOf(const OperatorTypeId& type) -> ColorGradeCompileGroup;
 
 /**
  * @brief 0-based rank of @p type in @ref ColorGradeCompileOrder.

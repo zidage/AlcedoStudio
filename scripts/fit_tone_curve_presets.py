@@ -2,21 +2,22 @@
 # Copyright 2026 Yurun Zi
 # SPDX-License-Identifier: GPL-3.0-only
 # Additional permission under GPLv3 section 7 applies; see the LICENSE file.
-"""Fit the control points of the Tone Curve presets (issue #891).
+"""Control points of the Tone Curve presets (issues #891, #914).
 
-Evidence script of docs/roadmap/alcedo_studio/edit/tone_curve_preset_study.md. For each preset
-it builds the source tone, the fit target on the curve axis, and at most 16 control points of the
-product spline, and it reports the fit error.
+Evidence script of docs/roadmap/alcedo_studio/edit/tone_curve_preset_study.md. For each fitted
+preset it builds the source tone, the fit target on the curve axis, and at most 16 control points
+of the product spline, and it reports the fit error.
 
-Sources:
-  - Film-like: the ACR3 default tone curve of the DNG SDK, the 1025-entry table that RawTherapee
-    uses for an Adobe profile without a tone curve (rtengine/dcp.cc). Pass the file with
-    --acr-source; without it the script downloads the pinned commit below.
-  - Filmic: darktable filmic rgb (src/iop/filmicrgb.c, pinned commit below) with its default
-    parameters, ported here (spline version 3, fourth-order toe and shoulder).
+Fit sources:
   - Kodak 2383, Velvia 50, Ektachrome E100: the neutral tone of the film print point stages. The
     script runs ToneCurvePresetFilmSourceTest (--film-test) and reads its lines.
   - Soft, Medium, and Strong contrast: S curves around 18% grey on the curve axis.
+
+Cl. Digit is placed by hand (issue #914): one S curve with a few points on the EV axis
+(HAND_PRESETS). The script converts the points to the curve axis and reports the display codes it
+gives through ACES 2.0 next to the ACR3 default tone curve of the DNG SDK, the 1025-entry table
+that RawTherapee uses for an Adobe profile without a tone curve (rtengine/dcp.cc). Pass that file
+with --acr-source; without it the script downloads the pinned commit below.
 
 Usage:
   python -I scripts/fit_tone_curve_presets.py \
@@ -46,7 +47,6 @@ import survey_dcp_tone_curves as aces  # noqa: E402
 RAWTHERAPEE_COMMIT = "64c2d90a3248c7ad41842d9162368858b61aac6a"
 RAWTHERAPEE_DCP_URL = (
     f"https://raw.githubusercontent.com/RawTherapee/RawTherapee/{RAWTHERAPEE_COMMIT}/rtengine/dcp.cc")
-DARKTABLE_COMMIT = "f30f439fd801eef58047bc417644e66939b3f3b7"
 
 # Product Default Color Grade exposure (kDefaultPipelineExposureEv): Alcedo +1.5 EV is ACR 0 EV
 # (dcp_profile_tone_curve_study.md, section 3.3).
@@ -64,6 +64,15 @@ FILM_FIRST_EV, FILM_STEP_EV, FILM_COUNT = -12.0, 0.0625, 385
 # Contrast shapes: slope at 18% grey on the curve axis, and the width of the S in stops.
 CONTRAST_SHAPES = {"soft_contrast": 1.15, "medium_contrast": 1.3, "strong_contrast": 1.5}
 CONTRAST_WIDTH_STOPS = 3.0
+# Presets placed by hand (#914): inner points as (input, output) in EV from 18% grey on the curve
+# axis. The curve also has the end points (0, 0) and (1, AXIS_AT_PEAK). Cl. Digit: one S
+# with a convex toe below the identity line, the steepest slope between +2 and +4 EV, and a
+# concave shoulder that reaches the display peak at x = 1.
+HAND_PRESETS = {
+    "cl_digital": [(-4.0, -4.7), (0.0, 0.0), (2.0, 2.8), (4.0, 6.1), (6.5, 8.3)],
+}
+HAND_TABLE_EVS = tuple(float(ev) for ev in range(-7, 11))
+SLOPE_STEPS = 1024            # slope samples of the shape report on the curve axis
 
 PRESETS = [
     # id, display name, group, source kind
@@ -71,8 +80,7 @@ PRESETS = [
     ("soft_contrast", "Soft Contrast", "Contrast", "contrast"),
     ("medium_contrast", "Medium Contrast", "Contrast", "contrast"),
     ("strong_contrast", "Strong Contrast", "Contrast", "contrast"),
-    ("film_like", "Film-like", "Rendering", "acr"),
-    ("filmic", "Filmic", "Rendering", "filmic"),
+    ("cl_digital", "Cl. Digit", "Rendering", "hand"),
     ("kodak_2383", "Kodak 2383", "Film", "film"),
     ("fuji_velvia_50", "Velvia 50", "Film", "film"),
     ("kodak_ektachrome_e100", "Ektachrome E100", "Film", "film"),
@@ -204,50 +212,6 @@ def acr_source(table):
     return tone
 
 
-def filmic_source():
-    """darktable filmic rgb v6 defaults: grey 18.45 %, black -8 EV, white +4 EV, contrast 1,
-    latitude 0.01 %, balance 0, hardness 4, target black 0.01517634 %, white 100 %,
-    fourth-order toe and shoulder, spline version 3."""
-    grey_source, black_ev, white_ev = 0.1845, -8.0, 4.0
-    hardness, contrast_param, latitude = 4.0, 1.0, 0.01 / 100.0
-    safety = 0.01
-    grey_display = 0.1845 ** (1.0 / hardness)
-    dynamic_range = white_ev - black_ev
-    black_log, grey_log, white_log = 0.0, abs(black_ev) / dynamic_range, 1.0
-    black_display = (0.01517634 / 100.0) ** (1.0 / hardness)
-    white_display = (100.0 / 100.0) ** (1.0 / hardness)
-    slope = contrast_param * dynamic_range / 8.0
-    min_contrast = max(1.0, (white_display - grey_display) / (white_log - grey_log),
-                       (grey_display - black_display) / (grey_log - black_log)) + safety
-    contrast = slope / (hardness * grey_display ** (hardness - 1.0))
-    contrast = min(max(contrast, min_contrast), 100.0)
-    intercept = grey_display - contrast * grey_log
-    xmin = (black_display + safety * (white_display - black_display) - intercept) / contrast
-    xmax = (white_display - safety * (white_display - black_display) - intercept) / contrast
-    toe_log = max((1.0 - latitude) * grey_log + latitude * xmin, xmin)
-    shoulder_log = min((1.0 - latitude) * grey_log + latitude * xmax, xmax)
-    toe_display = toe_log * contrast + intercept
-    shoulder_display = shoulder_log * contrast + intercept
-    tl, sl = toe_log, shoulder_log
-    toe = np.linalg.solve(np.array([
-        [0, 0, 0, 0, 1], [0, 0, 0, 1, 0], [tl ** 4, tl ** 3, tl ** 2, tl, 1],
-        [4 * tl ** 3, 3 * tl ** 2, 2 * tl, 1, 0], [12 * tl ** 2, 6 * tl, 2, 0, 0]]),
-        np.array([black_display, 0, toe_display, contrast, 0]))
-    shoulder = np.linalg.solve(np.array([
-        [1, 1, 1, 1, 1], [4, 3, 2, 1, 0], [sl ** 4, sl ** 3, sl ** 2, sl, 1],
-        [4 * sl ** 3, 3 * sl ** 2, 2 * sl, 1, 0], [12 * sl ** 2, 6 * sl, 2, 0, 0]]),
-        np.array([white_display, 0, shoulder_display, contrast, 0]))
-
-    def tone(scene):
-        scene = np.maximum(np.asarray(scene, dtype=float), 1e-30)
-        x = np.clip((np.log2(scene / grey_source) - black_ev) / dynamic_range, 0.0, 1.0)
-        y = np.where(x < toe_log, np.polyval(toe, x),
-                     np.where(x > shoulder_log, np.polyval(shoulder, x),
-                              intercept + contrast * x))
-        return np.clip(y, 0.0, 1.0) ** hardness
-    return tone
-
-
 def read_film_tones(test: Path) -> dict[str, np.ndarray]:
     result = subprocess.run([str(test), "--gtest_filter=ToneCurvePresetFilmSourceTest.*"],
                             capture_output=True, text=True, check=False)
@@ -330,6 +294,10 @@ def target_from_axis(curve) -> Target:
     return Target(curve, display)
 
 
+# Curve output at which N reaches the display peak: the end point of Cl. Digit.
+AXIS_AT_PEAK = float(acescc_from_linear(np.array([SCENE_AT_PEAK]))[0])
+
+
 class Fit:
     def __init__(self, target: Target):
         self.target = target
@@ -378,7 +346,8 @@ class Fit:
 
     def refine(self, points):
         """Move the inner points (not grey) to lower the largest code error."""
-        fixed = {0, len(points) - 1, points.index(next(p for p in points if p[0] == AXIS_GREY))}
+        grey = next(i for i, p in enumerate(points) if abs(p[0] - AXIS_GREY) < 1e-5)
+        fixed = {0, len(points) - 1, grey}
         free = [i for i in range(len(points)) if i not in fixed]
         if not free:
             return points
@@ -422,9 +391,7 @@ def rounded(points):
     return out
 
 
-def fit_preset(target: Target):
-    fit = Fit(target)
-    points = fit.start()
+def fit_points(fit: Fit, points):
     best = None
     while True:
         refined = rounded(fit.refine(points))
@@ -433,8 +400,58 @@ def fit_preset(target: Target):
             best = (refined, error)
         if error <= FIT_GOAL_CODES or len(points) >= MAX_POINTS:
             break
-        points = fit.insert_worst(fit.refine(points))
-    return fit, best[0], best[1]
+        grown = fit.insert_worst(fit.refine(points))
+        if len(grown) == len(points):
+            break
+        points = grown
+    return best
+
+
+def fit_preset(target: Target):
+    fit = Fit(target)
+    points, error = fit_points(fit, fit.start())
+    return fit, points, error
+
+
+# ---------------------------------------------------------------------------------------------
+# Presets placed by hand (#914)
+
+
+def hand_points(ev_points):
+    """Curve axis points of a hand preset: the inner (input, output) EV pairs from 18% grey, with
+    the end points (0, 0) and (1, AXIS_AT_PEAK)."""
+    inner = [(round(AXIS_GREY + a * AXIS_STOP, DIGITS), round(AXIS_GREY + b * AXIS_STOP, DIGITS))
+             for a, b in ev_points]
+    return [(0.0, 0.0)] + inner + [(1.0, round(AXIS_AT_PEAK, DIGITS))]
+
+
+def rendered_codes(points, xs):
+    values = evaluate_spline(solve_spline(points), xs).astype(float)
+    return code(neutral_response(np.maximum(linear_from_acescc(values), 0.0)))
+
+
+class Shape:
+    """Shape report of a hand preset: the slope of the product spline over SLOPE_STEPS steps of
+    the axis, the inflection (the steepest step), and how far the slope goes against an S shape:
+    below the inflection, the largest fall from the steepest slope so far; above it, the largest
+    rise over the flattest slope so far. The first segment dips by a few hundredths: the spline
+    takes the end slope from the end segment, so a steeper next segment pulls the middle of the
+    first segment below it."""
+
+    def __init__(self, points):
+        xs = np.linspace(0.0, 1.0, SLOPE_STEPS + 1)
+        ys = evaluate_spline(solve_spline(points), xs).astype(float)
+        slope = np.diff(ys) / np.diff(xs)
+        peak = int(np.argmax(slope))
+        self.inflection_x = float(xs[peak])
+        self.steepest = float(slope[peak])
+        self.start_slope, self.end_slope = float(slope[0]), float(slope[-1])
+        self.grey_slope = float(slope[int(AXIS_GREY * SLOPE_STEPS)])
+        rising, falling = slope[:peak + 1], slope[peak:]
+        self.fall_below_inflection = float(np.max(np.maximum.accumulate(rising) - rising))
+        self.rise_above_inflection = float(np.max(falling - np.minimum.accumulate(falling)))
+        shadows = (xs > 0.0) & (xs < AXIS_GREY)
+        self.largest_shadow_lift = float(np.max(ys[shadows] - xs[shadows]))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -490,29 +507,34 @@ def svg_plot(path: Path, title: str, x_label: str, y_label: str, series, x_range
     path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
-def write_figures(out: Path, preset_id: str, name: str, fit: Fit, points):
+def write_figures(out: Path, preset_id: str, name: str, points, fit: Fit | None = None,
+                  reference=None):
+    """Curve axis and neutral axis figures of a preset. A fitted preset draws its fit target and
+    source tone; a hand preset draws `reference` (display light on the axis) on the neutral axis."""
     out.mkdir(parents=True, exist_ok=True)
-    grid = fit.grid
+    grid = np.linspace(0.0, 1.0, DENSE)
     ev = (grid - AXIS_GREY) / AXIS_STOP
-    fitted = evaluate_spline(solve_spline(points), grid).astype(float)
+    curve = evaluate_spline(solve_spline(points), grid).astype(float)
     ev_ticks = [(AXIS_GREY + e * AXIS_STOP, f"{e:+d}" if e else "0") for e in range(-6, 11, 2)]
     axis_ticks = [(v / 4, f"{v / 4:.2f}") for v in range(0, 5)]
+    curve_series = [(grid, fit.target_curve, "#888", "4 3", "fit target")] if fit else []
+    curve_series += [(grid, curve, "#1f5fbf", "", "fitted curve" if fit else "curve"),
+                     (grid, grid, "#cccccc", "2 3", "identity")]
     svg_plot(out / f"{preset_id}_curve.svg", f"{name}: curve axis (ACEScc)",
-             "curve input, EV from 18% grey", "curve output",
-             [(grid, fit.target_curve, "#888", "4 3", "fit target"),
-              (grid, fitted, "#1f5fbf", "", "fitted curve"),
-              (grid, grid, "#cccccc", "2 3", "identity")],
+             "curve input, EV from 18% grey", "curve output", curve_series,
              (0.0, 1.0), (0.0, 1.0), points=points, x_ticks=ev_ticks, y_ticks=axis_ticks)
-    source = code(fit.target.display(grid))
-    final = code(fit.rendered(points, grid))
     linear = code(neutral_response(np.maximum(linear_from_acescc(grid), 0.0)))
     code_ticks = [(v, f"{v}") for v in range(0, 256, 51)]
+    if fit:
+        neutral_series = [(ev, code(fit.target.display(grid)), "#888", "4 3", "source tone")]
+    else:
+        neutral_series = [(ev, code(reference(grid)), "#d9a441", "2 2",
+                           "ACR3 default tone curve (reference)")]
+    neutral_series += [(ev, rendered_codes(points, grid), "#c0392b", "", "with the preset"),
+                       (ev, linear, "#bbbbbb", "2 3", "Linear (ACES 2.0 only)")]
     svg_plot(out / f"{preset_id}_neutral.svg", f"{name}: neutral axis through ACES 2.0",
              "scene exposure at the curve input, EV from 18% grey",
-             "display code (8 bit, gamma 2.2)",
-             [(ev, source, "#888", "4 3", "source tone"),
-              (ev, final, "#c0392b", "", "with the preset"),
-              (ev, linear, "#bbbbbb", "2 3", "Linear (ACES 2.0 only)")],
+             "display code (8 bit, gamma 2.2)", neutral_series,
              (-7.5, 10.5), (0, 255), x_ticks=[(e, f"{e:+d}" if e else "0") for e in range(-6, 11, 2)],
              y_ticks=code_ticks)
 
@@ -526,7 +548,7 @@ def write_points_inc(path: Path, results):
              "//  SPDX-License-Identifier: GPL-3.0-only",
              "//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.",
              "",
-             "// Control points of the fitted Tone Curve presets, written by",
+             "// Control points of the Tone Curve presets, written by",
              "// scripts/fit_tone_curve_presets.py (tone_curve_preset_study.md). Do not edit.",
              "// clang-format off",
              ""]
@@ -534,7 +556,7 @@ def write_points_inc(path: Path, results):
         if preset_id == "linear":
             continue
         body = ", ".join(f"{{{x:.{DIGITS}f}f, {y:.{DIGITS}f}f}}" for x, y in points)
-        lines.append(f"// Fit error {error:.2f} codes.")
+        lines.append("// Placed by hand." if error is None else f"// Fit error {error:.2f} codes.")
         lines.append(f"inline constexpr std::array<CurvePoint, {len(points)}> "
                      f"{cpp_name(preset_id)}{{{{{body}}}}};")
     lines.append("// clang-format on")
@@ -585,9 +607,9 @@ def write_study_header(path: Path, results, fits, film_tones):
               "/// Samples of the curve axis: x = i / (kAxisSampleCount - 1).",
               f"inline constexpr int kAxisSampleCount = {STUDY_SAMPLES};",
               "",
-              "/// The study of one preset: the largest error of its fit in 8-bit display codes",
+              "/// The study of one fitted preset: the largest error of its fit in 8-bit display codes",
               "/// (gamma 2.2), and the display light (relative to the 100 nit peak) of the source",
-              "/// tone at each axis sample through ACES 2.0.",
+              "/// tone at each axis sample through ACES 2.0. Presets placed by hand have no entry.",
               "struct PresetStudy {",
               "  std::string_view                     preset_id;",
               "  double                               fit_error_codes;",
@@ -621,29 +643,54 @@ def main() -> None:
     args = parser.parse_args()
 
     film_tones = read_film_tones(args.film_test)
-    sources = {"acr": acr_source(load_acr_table(args.acr_source)), "filmic": filmic_source()}
-    results, fits = [], {}
+    acr = acr_source(load_acr_table(args.acr_source))
+    acr_reference = target_from_source(acr, grey_exposure(acr)).display
+    results, fits, hands = [], {}, {}
     for preset_id, name, group, kind in PRESETS:
         if kind == "identity":
             results.append((preset_id, name, group, [(0.0, 0.0), (1.0, 1.0)], 0.0, 0.0))
+            continue
+        if kind == "hand":
+            points = hand_points(HAND_PRESETS[preset_id])
+            shape = Shape(points)
+            hands[preset_id] = (points, shape)
+            print(f"{preset_id:24s} {len(points):2d} points  placed by hand  steepest slope "
+                  f"{shape.steepest:.3f} at {(shape.inflection_x - AXIS_GREY) / AXIS_STOP:+.2f} EV, "
+                  f"slope {shape.start_slope:.3f} at x = 0, {shape.grey_slope:.3f} at grey, "
+                  f"{shape.end_slope:.3f} at x = 1, against the S: slope falls "
+                  f"{shape.fall_below_inflection:.3f} below the inflection, rises "
+                  f"{shape.rise_above_inflection:.3f} above it, "
+                  f"largest lift over the identity below grey {shape.largest_shadow_lift:+.5f}",
+                  flush=True)
+            results.append((preset_id, name, group, points, None, 0.0))
             continue
         shift = 0.0
         if kind == "contrast":
             target = target_from_axis(contrast_shape(CONTRAST_SHAPES[preset_id]))
         else:
-            tone = sources[kind] if kind != "film" else film_source(film_tones[preset_id])
-            shift = grey_exposure(tone)
-            target = target_from_source(tone, shift)
+            shift = grey_exposure(film_source(film_tones[preset_id]))
+            target = target_from_source(film_source(film_tones[preset_id]), shift)
         fit, points, error = fit_preset(target)
-        fits[preset_id] = fit
-        results.append((preset_id, name, group, points, error, shift))
         print(f"{preset_id:24s} {len(points):2d} points  error {error:5.2f} codes  "
               f"grey exposure {shift:+.3f} EV", flush=True)
+        fits[preset_id] = fit
+        results.append((preset_id, name, group, points, error, shift))
 
     print("\n| Preset | Points | Fit error (codes) | Grey exposure (EV) |")
     print("| --- | ---: | ---: | ---: |")
     for preset_id, name, _group, points, error, shift in results:
-        print(f"| {name} | {len(points)} | {error:.2f} | {shift:+.3f} |")
+        error_text = "by hand" if error is None else f"{error:.2f}"
+        print(f"| {name} | {len(points)} | {error_text} | {shift:+.3f} |")
+    print("\nDisplay codes of a neutral at the curve input, EV from 18% grey:\n")
+    print("| Preset | Form | " + " | ".join(f"{ev:+g}" for ev in HAND_TABLE_EVS) + " |")
+    print("| --- | --- | " + " | ".join("---:" for _ in HAND_TABLE_EVS) + " |")
+    xs = np.array([AXIS_GREY + ev * AXIS_STOP for ev in HAND_TABLE_EVS])
+    linear = code(neutral_response(np.maximum(linear_from_acescc(xs), 0.0)))
+    for preset_id, (points, _shape) in hands.items():
+        name = next(r[1] for r in results if r[0] == preset_id)
+        for form, row in (("preset", rendered_codes(points, xs)), ("Linear (ACES 2.0)", linear),
+                          ("ACR3 default tone curve", code(acr_reference(xs)))):
+            print(f"| {name} | {form} | " + " | ".join(f"{v:.1f}" for v in row) + " |")
     print()
     for preset_id, name, _group, points, _error, _shift in results:
         print(f"{preset_id}: " + ", ".join(f"({x:.{DIGITS}f}, {y:.{DIGITS}f})" for x, y in points))
@@ -652,7 +699,9 @@ def main() -> None:
         figures = ROOT / "docs" / "roadmap" / "alcedo_studio" / "edit" / "tone_curve_preset_study"
         for preset_id, name, _group, points, _error, _shift in results:
             if preset_id in fits:
-                write_figures(figures, preset_id, name, fits[preset_id], points)
+                write_figures(figures, preset_id, name, points, fit=fits[preset_id])
+            elif preset_id in hands:
+                write_figures(figures, preset_id, name, points, reference=acr_reference)
         write_points_inc(ROOT / "alcedo_studio" / "src" / "edit" / "operators" / "models" /
                          "tone_curve_preset_points.inc", results)
         write_study_header(ROOT / "alcedo_studio" / "tests" / "edit" / "runtime" /

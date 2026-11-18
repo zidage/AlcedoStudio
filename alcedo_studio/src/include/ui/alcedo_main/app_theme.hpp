@@ -154,6 +154,9 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int motionEasing READ motionEasing CONSTANT)
   Q_PROPERTY(int backgroundTaskAutoCollapseMs READ backgroundTaskAutoCollapseMs CONSTANT)
   Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY ReduceMotionChanged)
+  /// Text of dense data controls, smaller than fontSizeCaption: plot axis labels, the readout and
+  /// the values around a plot, and the titles of a crowded segmented switcher.
+  Q_PROPERTY(int fontSizeMicro READ fontSizeMicro CONSTANT)
   Q_PROPERTY(int fontSizeCaption READ fontSizeCaption CONSTANT)
   Q_PROPERTY(int fontSizeBody READ fontSizeBody CONSTANT)
   Q_PROPERTY(int fontSizeTitle READ fontSizeTitle CONSTANT)
@@ -240,6 +243,8 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor plotChannelBlueColor READ plotChannelBlueColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor plotPointerLineColor READ plotPointerLineColor NOTIFY ThemeChanged)
   Q_PROPERTY(qreal plotInactiveLineOpacity READ plotInactiveLineOpacity CONSTANT)
+  Q_PROPERTY(qreal plotHistogramFillOpacity READ plotHistogramFillOpacity CONSTANT)
+  Q_PROPERTY(qreal plotHistogramEdgeOpacity READ plotHistogramEdgeOpacity CONSTANT)
   Q_PROPERTY(qreal plotCurveHitRadius READ plotCurveHitRadius CONSTANT)
   Q_PROPERTY(qreal plotChannelMarkSize READ plotChannelMarkSize CONSTANT)
   // Nodes graph canvas and node-card geometry. Colors follow the active theme;
@@ -264,6 +269,9 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int graphMaskRowHeight READ graphMaskRowHeight CONSTANT)
   Q_PROPERTY(int maskGroupPreviewSize READ maskGroupPreviewSize CONSTANT)
   Q_PROPERTY(int maskGroupMaskPreviewSize READ maskGroupMaskPreviewSize CONSTANT)
+  Q_PROPERTY(int layerIconHitSize READ layerIconHitSize CONSTANT)
+  Q_PROPERTY(int layerIconGlyphSize READ layerIconGlyphSize CONSTANT)
+  Q_PROPERTY(qreal layerHiddenContentOpacity READ layerHiddenContentOpacity CONSTANT)
   Q_PROPERTY(int graphPortSize READ graphPortSize CONSTANT)
   Q_PROPERTY(int graphPortHitSize READ graphPortHitSize CONSTANT)
   Q_PROPERTY(int graphEdgeWidth READ graphEdgeWidth CONSTANT)
@@ -460,6 +468,7 @@ class AppTheme final : public QObject {
   auto        backgroundTaskAutoCollapseMs() const -> int;
   auto        reduceMotion() const -> bool;
   void        setReduceMotion(bool enabled);
+  auto        fontSizeMicro() const -> int;
   auto        fontSizeCaption() const -> int;
   auto        fontSizeBody() const -> int;
   auto        fontSizeTitle() const -> int;
@@ -519,6 +528,8 @@ class AppTheme final : public QObject {
   auto plotChannelBlueColor() const -> QColor;
   auto plotPointerLineColor() const -> QColor;
   auto plotInactiveLineOpacity() const -> qreal;
+  auto plotHistogramFillOpacity() const -> qreal;
+  auto plotHistogramEdgeOpacity() const -> qreal;
   auto plotCurveHitRadius() const -> qreal;
   auto plotChannelMarkSize() const -> qreal;
   auto graphCanvasColor() const -> QColor;
@@ -540,6 +551,12 @@ class AppTheme final : public QObject {
   auto graphMaskRowHeight() const -> int;
   auto maskGroupPreviewSize() const -> int;
   auto maskGroupMaskPreviewSize() const -> int;
+  /// Hit square of one icon in the shared layer icon strip (Mask Groups rows, node cards).
+  auto layerIconHitSize() const -> int;
+  /// Painted glyph size inside a layer icon strip slot.
+  auto layerIconGlyphSize() const -> int;
+  /// Preview opacity of a hidden Color Grade in the Mask Groups panel.
+  auto layerHiddenContentOpacity() const -> qreal;
   auto graphPortSize() const -> int;
   auto graphPortHitSize() const -> int;
   auto graphEdgeWidth() const -> int;

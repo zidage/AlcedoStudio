@@ -14,6 +14,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -35,6 +36,20 @@
 
 namespace alcedo {
 namespace {
+
+/// Stage layout of a complete Grade (issue #900): Basic Tone (5), Local Tone (2), Color (6).
+void ExpectBasicToneLocalToneColorStages(const CompiledGradeNode& compiled) {
+  ASSERT_EQ(compiled.stages.size(), 3U);
+  EXPECT_EQ(compiled.stages[0].kind, CompiledGradeStageKind::Pointwise);
+  EXPECT_EQ(compiled.stages[0].begin, 0U);
+  EXPECT_EQ(compiled.stages[0].count, 5U);
+  EXPECT_EQ(compiled.stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
+  EXPECT_EQ(compiled.stages[1].begin, 5U);
+  EXPECT_EQ(compiled.stages[1].count, 2U);
+  EXPECT_EQ(compiled.stages[2].kind, CompiledGradeStageKind::Pointwise);
+  EXPECT_EQ(compiled.stages[2].begin, 7U);
+  EXPECT_EQ(compiled.stages[2].count, 6U);
+}
 
 TEST(GpuDagGraphCompiler, GraphCompilerKeepsDecodeOutsidePlanAndAddsCameraToAp1BeforeGrade) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
@@ -99,7 +114,7 @@ TEST(GpuDagGraphCompiler, HighlightFlagDoesNotChangePassList) {
   EXPECT_TRUE(plan.Contains(GpuPassKind::CfaClamp));
 }
 
-TEST(GpuDagGraphCompiler, ColorGradeCompilesBasicToneAndColorBeforeLocalTone) {
+TEST(GpuDagGraphCompiler, ColorGradeCompilesLocalToneBetweenBasicToneAndColor) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
@@ -113,18 +128,14 @@ TEST(GpuDagGraphCompiler, ColorGradeCompilesBasicToneAndColorBeforeLocalTone) {
   ASSERT_EQ(grade_plan->adjustments.size(), compile_order.size());
   for (std::size_t index = 0; index < compile_order.size(); ++index) {
     EXPECT_EQ(grade_plan->adjustments[index].type, compile_order[index]) << "index " << index;
-    const auto expected = index + 2 < compile_order.size()
-                              ? CompiledAdjustmentAlgorithm::Pointwise
-                              : CompiledAdjustmentAlgorithm::LocalLaplacian;
+    const auto expected = index == 5U || index == 6U ? CompiledAdjustmentAlgorithm::LocalLaplacian
+                                                     : CompiledAdjustmentAlgorithm::Pointwise;
     EXPECT_EQ(grade_plan->adjustments[index].algorithm, expected) << "index " << index;
   }
-  ASSERT_EQ(grade_plan->stages.size(), 2U);
-  EXPECT_EQ(grade_plan->stages[0].kind, CompiledGradeStageKind::Pointwise);
-  EXPECT_EQ(grade_plan->stages[0].begin, 0U);
-  EXPECT_EQ(grade_plan->stages[0].count, 11U);
-  EXPECT_EQ(grade_plan->stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
-  EXPECT_EQ(grade_plan->stages[1].begin, 11U);
-  EXPECT_EQ(grade_plan->stages[1].count, 2U);
+  EXPECT_EQ(compile_order[5], type_ids::Shadows());
+  EXPECT_EQ(compile_order[6], type_ids::Highlights());
+  EXPECT_EQ(compile_order[7], type_ids::Curve());
+  ExpectBasicToneLocalToneColorStages(*grade_plan);
   ASSERT_EQ(plan.drt.post_adjustments.size(), 4U);
   EXPECT_EQ(plan.drt.post_adjustments[0].type, type_ids::Clarity());
   EXPECT_EQ(plan.drt.post_adjustments[1].type, type_ids::Sharpen());
@@ -144,7 +155,7 @@ TEST(GpuDagGraphCompiler, StoredAdjustmentOrderDoesNotChangeCompiledGradeOrder) 
   auto* grade   = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
   // Shadows, Saturation, and Exposure stored before/after each other in an order
-  // that differs from the fixed Basic Tone + Color -> Local Tone sequence.
+  // that differs from the fixed Basic Tone -> Local Tone -> Color sequence.
   grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.shadows"}, 0);
   grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.saturation"}, 0);
   grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.exposure"}, 12);
@@ -161,12 +172,9 @@ TEST(GpuDagGraphCompiler, StoredAdjustmentOrderDoesNotChangeCompiledGradeOrder) 
   for (std::size_t index = 0; index < compile_order.size(); ++index) {
     EXPECT_EQ(grade_plan->adjustments[index].type, compile_order[index]) << "index " << index;
   }
-  ASSERT_EQ(grade_plan->stages.size(), 2U);
-  EXPECT_EQ(grade_plan->stages[0].kind, CompiledGradeStageKind::Pointwise);
-  EXPECT_EQ(grade_plan->stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
+  ExpectBasicToneLocalToneColorStages(*grade_plan);
   // Parameter identity follows the instance id, not the stored position.
-  EXPECT_EQ(grade_plan->adjustments[11].instance_id,
-            AdjustmentInstanceId{"grade.primary.shadows"});
+  EXPECT_EQ(grade_plan->adjustments[5].instance_id, AdjustmentInstanceId{"grade.primary.shadows"});
   EXPECT_EQ(grade_plan->adjustments[1].instance_id,
             AdjustmentInstanceId{"grade.primary.exposure"});
 }
@@ -764,13 +772,7 @@ TEST(GpuDagGraphCompiler, ReopenedAndExportedDocumentUseTheSameGradeOrder) {
     for (std::size_t index = 0; index < compile_order.size(); ++index) {
       EXPECT_EQ(compiled.adjustments[index].type, compile_order[index]) << "index " << index;
     }
-    ASSERT_EQ(compiled.stages.size(), 2U);
-    EXPECT_EQ(compiled.stages[0].kind, CompiledGradeStageKind::Pointwise);
-    EXPECT_EQ(compiled.stages[0].begin, 0U);
-    EXPECT_EQ(compiled.stages[0].count, 11U);
-    EXPECT_EQ(compiled.stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
-    EXPECT_EQ(compiled.stages[1].begin, 11U);
-    EXPECT_EQ(compiled.stages[1].count, 2U);
+    ExpectBasicToneLocalToneColorStages(compiled);
   };
   ASSERT_NE(interactive.FirstGrade(), nullptr);
   expect_fixed_order(*interactive.FirstGrade());
@@ -780,6 +782,132 @@ TEST(GpuDagGraphCompiler, ReopenedAndExportedDocumentUseTheSameGradeOrder) {
   expect_fixed_order(*reopened.FirstGrade());
   EXPECT_EQ(exported.static_key, interactive.static_key);
   EXPECT_EQ(reopened.static_key, interactive.static_key);
+}
+
+auto MutableGrade(PipelineDocument& document, std::string_view id) -> ColorGradeNodeModel* {
+  return dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(id));
+}
+
+/// Develop -> grade.primary (two radial Masks) -> grade.b -> DRT.
+auto TwoGradesWithMaskedPrimary() -> PipelineDocument {
+  auto document = CreateDefaultPipelineDocument();
+  EXPECT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  AddSortedRadialPair(document);
+  return document;
+}
+
+TEST(GpuDagGraphCompiler, HiddenColorGradeCompilesNoGradePassAndNoMaskStack) {
+  auto       document = TwoGradesWithMaskedPrimary();
+  const auto visible  = GraphCompiler::CompileStatic(document, DirectRgbSource());
+  ASSERT_EQ(visible.grade_nodes.size(), 2U);
+  ASSERT_TRUE(visible.Contains(GpuPassKind::MaskEvaluate));
+
+  MutableGrade(document, "grade.primary")->SetEnabled(false);
+  EXPECT_TRUE(GraphCompiler::NeedsRecompile(visible, document, DirectRgbSource()));
+  const auto hidden = GraphCompiler::CompileStatic(document, DirectRgbSource());
+
+  ASSERT_EQ(hidden.grade_nodes.size(), 1U);
+  EXPECT_EQ(hidden.grade_nodes.front().node_id, NodeId{"grade.b"});
+  EXPECT_EQ(hidden.FindGrade(NodeId{"grade.primary"}), nullptr);
+  EXPECT_EQ(hidden.grade_nodes.front().scene_input, hidden.develop_output);
+  EXPECT_EQ(hidden.SceneInputForDrt(), hidden.grade_nodes.front().scene_output);
+  EXPECT_FALSE(hidden.Contains(GpuPassKind::MaskEvaluate));
+  EXPECT_FALSE(hidden.Contains(GpuPassKind::MaskUnion));
+  const auto grades = hidden.PassesOfKind(GpuPassKind::PrimaryColorGrade);
+  ASSERT_EQ(grades.size(), 1U);
+  EXPECT_EQ(grades.front()->owner, NodeId{"grade.b"});
+  for (const auto& pass : hidden.passes) {
+    EXPECT_NE(pass.owner, NodeId{"grade.primary"}) << GpuPassKindName(pass.kind);
+  }
+  // The document keeps its edges: the hidden grade stays on the backbone.
+  EXPECT_EQ(document.Graph().ImageBackboneNodeIds().size(), 4U);
+}
+
+TEST(GpuDagGraphCompiler, HiddenGradePlanAndKeysMatchThePlanWithTheGradeRemoved) {
+  const auto prepared = MakeRgbPrepared();
+  auto       hidden   = TwoGradesWithMaskedPrimary();
+  MutableGrade(hidden, "grade.primary")->SetEnabled(false);
+  auto removed = TwoGradesWithMaskedPrimary();
+  ASSERT_TRUE(RemoveColorGradeAndBridge(removed, NodeId{"grade.primary"}).empty());
+
+  const auto hidden_plan  = GraphCompiler::Compile(hidden, prepared.CompileSource(), RenderRequest{});
+  const auto removed_plan = GraphCompiler::Compile(removed, prepared.CompileSource(), RenderRequest{});
+  ASSERT_EQ(hidden_plan.passes.size(), removed_plan.passes.size());
+  for (std::size_t index = 0; index < hidden_plan.passes.size(); ++index) {
+    EXPECT_EQ(hidden_plan.passes[index].kind, removed_plan.passes[index].kind) << index;
+    EXPECT_EQ(hidden_plan.passes[index].owner, removed_plan.passes[index].owner) << index;
+  }
+  ASSERT_EQ(hidden_plan.grade_nodes.size(), removed_plan.grade_nodes.size());
+  EXPECT_EQ(hidden_plan.grade_nodes.front().node_id, removed_plan.grade_nodes.front().node_id);
+  EXPECT_EQ(hidden_plan.SceneInputForDrt(), removed_plan.SceneInputForDrt());
+
+  // The hidden grade contributes nothing to the derived-image identity.
+  const auto hidden_keys  = BuildFrameResultContentKeys(hidden_plan, prepared, hidden);
+  const auto removed_keys = BuildFrameResultContentKeys(removed_plan, prepared, removed);
+  EXPECT_EQ(hidden_keys.primary_grade, removed_keys.primary_grade);
+  EXPECT_EQ(hidden_keys.drt_display, removed_keys.drt_display);
+  EXPECT_EQ(hidden_keys.values, removed_keys.values);
+  EXPECT_TRUE(hidden_keys.mask.Empty());
+}
+
+TEST(GpuDagGraphCompiler, ParameterEditOnHiddenGradeKeepsPlanAndDownstreamKeys) {
+  const auto prepared = MakeRgbPrepared();
+  auto       document = TwoGradesWithMaskedPrimary();
+  auto*      grade    = MutableGrade(document, "grade.primary");
+  grade->SetEnabled(false);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto keys = BuildFrameResultContentKeys(plan, prepared, document);
+
+  auto* shadows = dynamic_cast<ShadowsModel*>(grade->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(60.0f);
+  grade->SetMaskEnabled(MaskId{"mask.a"}, false);
+
+  EXPECT_FALSE(GraphCompiler::NeedsRecompile(plan, document, prepared.CompileSource()));
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.primary_grade, keys.primary_grade);
+  EXPECT_EQ(edited.drt_display, keys.drt_display);
+  EXPECT_EQ(edited.values, keys.values);
+}
+
+TEST(GpuDagGraphCompiler, StoredDisabledGradeFromAnOlderProjectCompilesHidden) {
+  auto json  = TwoGradesWithMaskedPrimary().ToJson();
+  bool found = false;
+  for (auto& node : json.at("nodes")) {
+    if (node.value("id", std::string{}) == "grade.primary") {
+      ASSERT_TRUE(node.contains("enabled"));
+      node["enabled"] = false;
+      found           = true;
+    }
+  }
+  ASSERT_TRUE(found);
+  const auto document = PipelineDocument::FromJson(json);
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode("grade.primary"));
+  ASSERT_NE(grade, nullptr);
+  EXPECT_FALSE(grade->Enabled());
+
+  const auto plan = GraphCompiler::CompileStatic(document, DirectRgbSource());
+  ASSERT_EQ(plan.grade_nodes.size(), 1U);
+  EXPECT_EQ(plan.grade_nodes.front().node_id, NodeId{"grade.b"});
+  EXPECT_FALSE(plan.Contains(GpuPassKind::MaskEvaluate));
+}
+
+TEST(GpuDagGraphCompiler, DetachedColorGradeStaysOutOfThePlan) {
+  auto document = CreateDefaultPipelineDocument();
+  document.Graph().AddNode(ColorGradeNodeModel::MakeDefault(NodeId{"grade.detached"}));
+  ASSERT_TRUE(document.Graph().IsDetachedColorGrade(NodeId{"grade.detached"}));
+  const auto reference = GraphCompiler::CompileStatic(CreateDefaultPipelineDocument(),
+                                                      DirectRgbSource());
+
+  const auto plan = GraphCompiler::CompileStatic(document, DirectRgbSource());
+  ASSERT_EQ(plan.grade_nodes.size(), 1U);
+  EXPECT_EQ(plan.grade_nodes.front().node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(plan.FindGrade(NodeId{"grade.detached"}), nullptr);
+  ASSERT_EQ(plan.passes.size(), reference.passes.size());
+  for (const auto& pass : plan.passes) {
+    EXPECT_NE(pass.owner, NodeId{"grade.detached"}) << GpuPassKindName(pass.kind);
+  }
 }
 
 }  // namespace

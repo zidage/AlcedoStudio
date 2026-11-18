@@ -45,6 +45,11 @@ struct EditorScalarUiRange {
   double step          = 1.0;
   /// Decimal places that the panel shows.
   int    decimals      = 0;
+  /// Rail range of the panel slider, inside [minimum, maximum]. A drag on the rail stays in
+  /// it; a typed value, a drag on the value field, and the arrow keys reach [minimum, maximum].
+  /// A field without a narrower rail keeps the full range.
+  double rail_minimum  = minimum;
+  double rail_maximum  = maximum;
 };
 
 /// Value type of one property of an object field.

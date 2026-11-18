@@ -5,9 +5,13 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <limits>
+#include <stdexcept>
 #include <string>
 
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -100,7 +104,7 @@ TEST(GpuDagModelGraph, DefaultPrimaryGradeUsesFullMixAndNoMask) {
 }
 
 TEST(GpuDagModelGraph,
-     DefaultPipelineDocumentBakesOnePointFiveEvSaturationOnePointThreeAndTheFilmLikeCurve) {
+     DefaultPipelineDocumentBakesOnePointFiveEvSaturationOnePointThreeAndTheClDigitalCurve) {
   const auto document = CreateDefaultPipelineDocument();
   const auto* grade   = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
@@ -124,10 +128,10 @@ TEST(GpuDagModelGraph,
   const auto* curve =
       dynamic_cast<const CurveModel*>(grade->FindAdjustmentByType(type_ids::Curve()));
   ASSERT_NE(curve, nullptr);
-  const auto* film_like = FindToneCurvePreset("film_like");
-  ASSERT_NE(film_like, nullptr);
-  EXPECT_EQ(kDefaultPipelineToneCurvePresetId, "film_like");
-  EXPECT_EQ(curve->Points(), film_like->PointList());
+  const auto* cl_digital = FindToneCurvePreset("cl_digital");
+  ASSERT_NE(cl_digital, nullptr);
+  EXPECT_EQ(kDefaultPipelineToneCurvePresetId, "cl_digital");
+  EXPECT_EQ(curve->Points(), cl_digital->PointList());
   for (const auto channel : {CurveChannel::Red, CurveChannel::Green, CurveChannel::Blue}) {
     EXPECT_TRUE(IsIdentityCurve(curve->ChannelPoints(channel)));
   }
@@ -226,6 +230,96 @@ TEST(GpuDagModelGraph, MaskProtectionFlagDoesNotBlockOwningGradeDeletion) {
   EXPECT_EQ(grade->MaskContentRevision(mask.id), revision);
   EXPECT_EQ(grade->MixRevision(), mix_revision);
   EXPECT_EQ(document.TopologyRevision(), topology_revision);
+}
+
+TEST(GpuDagModelGraph, DefaultPipelineDocumentHasOpenDrtStandardAndLensCorrectionOff) {
+  const auto document = CreateDefaultPipelineDocument();
+  ASSERT_NE(document.Drt(), nullptr);
+  ASSERT_NE(document.Develop(), nullptr);
+  EXPECT_EQ(document.Drt()->Params().Method(), DrtMethod::OpenDrt);
+  EXPECT_EQ(document.Drt()->Params().LookPreset(), "standard");
+  EXPECT_FALSE(document.Develop()->Params().LensEnabled());
+}
+
+// #918: with the product Default look, Develop and the DRT keep the JSON of their default Models,
+// as before the factory wrote the look into them.
+TEST(GpuDagModelGraph, ProductDefaultLookKeepsTheDevelopAndDrtModelDefaultJson) {
+  const auto document = CreateDefaultPipelineDocument();
+  EXPECT_EQ(document.Develop()->ToJson(), DevelopNodeModel(NodeId{"develop"}).ToJson());
+  EXPECT_EQ(document.Drt()->ToJson(), DrtNodeModel::MakeDefault(NodeId{"drt"})->ToJson());
+}
+
+// #918: a value-initialized RawImportLook is the product Default, so a RAW import with untouched
+// settings writes the same root JSON (and root id) as before the settings existed.
+TEST(GpuDagModelGraph, ValueInitializedRawImportLookBuildsTheProductDefaultJson) {
+  EXPECT_EQ(CreateDefaultPipelineDocument(RawImportLook{}).ToJson(),
+            CreateDefaultPipelineDocument().ToJson());
+  EXPECT_TRUE(DescribeRawImportLookError(RawImportLook{}).empty());
+}
+
+TEST(GpuDagModelGraph, RawImportLookWritesEachValueIntoTheDefaultDocument) {
+  RawImportLook look;
+  look.exposure_ev          = 0.75f;
+  look.saturation           = 1.1f;
+  look.tone_curve_preset_id = "strong_contrast";
+  look.drt_method           = DrtMethod::Aces20;
+  look.open_drt_look_preset = "arriba";
+  look.lens_correction      = true;
+  const auto  document      = CreateDefaultPipelineDocument(look);
+
+  const auto* grade         = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  const auto* exposure =
+      dynamic_cast<const ExposureModel*>(grade->FindAdjustmentByType(type_ids::Exposure()));
+  const auto* saturation =
+      dynamic_cast<const SaturationModel*>(grade->FindAdjustmentByType(type_ids::Saturation()));
+  const auto* contrast =
+      dynamic_cast<const ContrastModel*>(grade->FindAdjustmentByType(type_ids::Contrast()));
+  const auto* curve =
+      dynamic_cast<const CurveModel*>(grade->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(exposure, nullptr);
+  ASSERT_NE(saturation, nullptr);
+  ASSERT_NE(contrast, nullptr);
+  ASSERT_NE(curve, nullptr);
+  EXPECT_FLOAT_EQ(exposure->Value(), 0.75f);
+  EXPECT_FLOAT_EQ(saturation->Value(), 1.1f);
+  EXPECT_FLOAT_EQ(contrast->Value(), 0.0f);
+  EXPECT_EQ(curve->Points(), FindToneCurvePreset("strong_contrast")->PointList());
+
+  EXPECT_EQ(document.Drt()->Params().Method(), DrtMethod::Aces20);
+  EXPECT_EQ(document.Drt()->Params().LookPreset(), "arriba");
+  EXPECT_TRUE(document.Develop()->Params().LensEnabled());
+  EXPECT_TRUE(document.Graph().Validate().empty());
+  EXPECT_TRUE(document.Graph().ValidateImageBackbone().empty());
+}
+
+TEST(GpuDagModelGraph, RawImportLookOutsideTheRangesIsRejected) {
+  const auto rejected = [](void (*change)(RawImportLook&)) {
+    RawImportLook look;
+    change(look);
+    EXPECT_FALSE(DescribeRawImportLookError(look).empty());
+    EXPECT_THROW((void)CreateDefaultPipelineDocument(look), std::invalid_argument);
+  };
+  rejected([](RawImportLook& look) { look.exposure_ev = 10.5f; });
+  rejected([](RawImportLook& look) { look.exposure_ev = std::numeric_limits<float>::quiet_NaN(); });
+  rejected([](RawImportLook& look) { look.saturation = -0.1f; });
+  rejected([](RawImportLook& look) { look.saturation = 2.1f; });
+  rejected([](RawImportLook& look) { look.tone_curve_preset_id = "filmic"; });
+  rejected([](RawImportLook& look) { look.drt_method = DrtMethod::FilmPrint; });
+  rejected([](RawImportLook& look) { look.open_drt_look_preset = "custom"; });
+
+  RawImportLook limits;
+  limits.exposure_ev = kRawImportLookMinExposureEv;
+  limits.saturation  = kRawImportLookMaxSaturation;
+  EXPECT_TRUE(DescribeRawImportLookError(limits).empty());
+}
+
+TEST(GpuDagModelGraph, EveryRawImportOpenDrtLookPresetBuildsADocument) {
+  for (const auto preset : RawImportOpenDrtLookPresets()) {
+    RawImportLook look;
+    look.open_drt_look_preset = std::string{preset};
+    EXPECT_EQ(CreateDefaultPipelineDocument(look).Drt()->Params().LookPreset(), preset);
+  }
 }
 
 }  // namespace alcedo

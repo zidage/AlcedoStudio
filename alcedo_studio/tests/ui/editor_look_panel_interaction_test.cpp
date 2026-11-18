@@ -496,7 +496,7 @@ TEST(EditorLookPanelInteractionTest, DoubleClickOnAdjustmentSliderResetsValue) {
 
   auto* sliderRoot = window->findChild<QQuickItem*>(QStringLiteral("testSlider"));
   ASSERT_NE(sliderRoot, nullptr);
-  auto* handle = sliderRoot->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  auto* handle = sliderRoot->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
   ASSERT_NE(handle, nullptr);
 
   const QPoint pos = MapToWindow(handle, 0.5, 0.5);
@@ -789,7 +789,7 @@ TEST(EditorLookPanelInteractionTest, VerticalSliderDragDoesNotScrollParentFlicka
   ProcessEvents(80);
 
   auto* scroller = window->findChild<QQuickItem*>(QStringLiteral("scroller"));
-  auto* handle   = window->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  auto* handle   = window->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
   ASSERT_NE(scroller, nullptr);
   ASSERT_NE(handle, nullptr);
 
@@ -1195,7 +1195,7 @@ TEST(EditorLookPanelInteractionTest, AdjustmentSliderDoubleClickKeepsEventLoopRe
   ASSERT_TRUE(QTest::qWaitForWindowExposed(window));
   ProcessEvents(80);
 
-  auto* handle = window->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  auto* handle = window->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
   ASSERT_NE(handle, nullptr);
   const QPoint pos = MapToWindow(handle, 0.5, 0.5);
   QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, pos);
@@ -1428,7 +1428,7 @@ TEST(EditorLookPanelInteractionTest,
           if (!item) {
             return;
           }
-          if (item->objectName() == QLatin1String("adjustmentSliderHandle") &&
+          if (item->objectName() == QLatin1String("adjustmentSliderRail") &&
               item->width() > 1.0 && item->height() > 1.0) {
             loaded.push_back(item);
           }
@@ -1452,12 +1452,12 @@ TEST(EditorLookPanelInteractionTest,
     QMetaObject::invokeMethod(winObj, "loadFromSnapshotEcho");
   };
 
-  auto* satHandle = window->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  auto* satHandle = window->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
   // Two sliders share the same handle objectName — find by walking parents.
   QList<QQuickItem*>               handles;
   std::function<void(QQuickItem*)> collect = [&](QQuickItem* item) {
     if (!item) return;
-    if (item->objectName() == QLatin1String("adjustmentSliderHandle")) {
+    if (item->objectName() == QLatin1String("adjustmentSliderRail")) {
       handles.push_back(item);
     }
     for (QQuickItem* c : item->childItems()) collect(c);

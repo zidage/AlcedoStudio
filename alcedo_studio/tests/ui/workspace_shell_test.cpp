@@ -2513,7 +2513,8 @@ TEST_F(WorkspaceShellTests, AdjustmentSectionFoldDriverPreservesPanelSelection) 
   ASSERT_TRUE(
       QMetaObject::invokeMethod(group, "driveFoldProgress", Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents(10);
-  EXPECT_NEAR(group->height(), header_h + body_content_h, 1.5);
+  // The body adds its spaceSm (8 px) insets above and below the content.
+  EXPECT_NEAR(group->height(), header_h + body_content_h + 16.0, 1.5);
 
   ASSERT_TRUE(
       QMetaObject::invokeMethod(group, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));

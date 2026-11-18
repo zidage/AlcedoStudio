@@ -2,16 +2,20 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Tone Curve presets (#891, tone_curve_preset_study.md): the point rules, 18% grey, monotony, and
-// the neutral axis that the render gives with each preset against the source tone of the study.
+// Tone Curve presets (#891, tone_curve_preset_study.md): the point rules, 18% grey, monotony, the
+// neutral axis that the render gives with each fitted preset against the source tone of the
+// study, and the S shape of Cl. Digit, placed by hand (#914).
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <iterator>
 #include <set>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "color/color_encoding_math.h"
@@ -33,6 +37,15 @@ constexpr float  kPanelPointSpacing    = 0.001f;
 /// Allowance of the rendered axis over the recorded fit error: float evaluation and the product
 /// neutral response against the tone scale of the study.
 constexpr double kRenderAllowanceCodes = 0.05;
+/// Largest number of points of Cl. Digit, as the auto-matched curve of RawTherapee.
+constexpr std::size_t kClDigitalMaxPoints   = 8;
+/// Curve output at which ACES 2.0 reaches the display peak: the end point of Cl. Digit.
+constexpr float       kAxisAtPeak           = 0.95434f;
+/// Slope steps of the S shape check on the curve axis.
+constexpr int         kSlopeSteps           = 1024;
+/// How far the slope may go against the S: the end segments take their end slope from the
+/// segment itself, so their middle dips about 0.05 below it (study, section 4).
+constexpr double      kSlopeAgainstS        = 0.06;
 
 auto             Code(double display) -> double {
   return 255.0 * std::pow(std::clamp(display, 0.0, 1.0), 1.0 / 2.2);
@@ -46,9 +59,9 @@ auto AxisSample(int index) -> float {
   return static_cast<float>(index) / static_cast<float>(tone_curve_study::kAxisSampleCount - 1);
 }
 
-TEST(ToneCurvePresetTest, MenuListsTheNinePresetsWithUniqueIds) {
+TEST(ToneCurvePresetTest, MenuListsTheEightPresetsWithUniqueIds) {
   const auto presets = ToneCurvePresets();
-  ASSERT_EQ(presets.size(), 9U);
+  ASSERT_EQ(presets.size(), 8U);
   std::set<std::string> ids;
   for (const auto& preset : presets) {
     EXPECT_TRUE(ids.insert(std::string{preset.id}).second) << preset.id;
@@ -58,8 +71,22 @@ TEST(ToneCurvePresetTest, MenuListsTheNinePresetsWithUniqueIds) {
   EXPECT_EQ(presets.front().id, "linear");
   EXPECT_EQ(presets.front().PointList(), IdentityCurvePoints());
   EXPECT_EQ(FindToneCurvePreset("no_such_preset"), nullptr);
-  ASSERT_NE(FindToneCurvePreset(kFilmLikeToneCurvePresetId), nullptr);
-  EXPECT_EQ(FindToneCurvePreset(kFilmLikeToneCurvePresetId)->display_name, "Film-like");
+  ASSERT_NE(FindToneCurvePreset(kClDigitalToneCurvePresetId), nullptr);
+  EXPECT_EQ(FindToneCurvePreset(kClDigitalToneCurvePresetId)->display_name, "Cl. Digit");
+  // #914: Filmic gave nearly the same curve as Cl. Digit and left the menu.
+  EXPECT_EQ(FindToneCurvePreset("filmic"), nullptr);
+}
+
+TEST(ToneCurvePresetTest, ResolveGivesThePresetOfAnIdAndClDigitalForAnyOtherId) {
+  for (const auto& preset : ToneCurvePresets()) {
+    EXPECT_EQ(&ResolveToneCurvePreset(preset.id), &preset) << preset.id;
+  }
+  // film_like was the id of Cl. Digit until #914; filmic left the menu in #914.
+  const auto* cl_digital = FindToneCurvePreset(kClDigitalToneCurvePresetId);
+  for (const std::string_view id : {"film_like", "filmic", "no_such_preset", ""}) {
+    EXPECT_EQ(&ResolveToneCurvePreset(id), cl_digital) << id;
+    EXPECT_EQ(FindToneCurvePreset(id), nullptr) << id;
+  }
 }
 
 TEST(ToneCurvePresetTest, EachPresetHasTwoToSixteenPointsWithRisingXInTheUnitSquare) {
@@ -107,6 +134,68 @@ TEST(ToneCurvePresetTest, MatchFindsThePresetOfExactlyItsPoints) {
   }
 }
 
+TEST(ToneCurvePresetTest, ClDigitalIsOneSCurveWithTheShadowsBelowTheIdentity) {
+  // #914: a few points placed by hand on the EV axis. From (0, 0) the slope rises to one
+  // inflection above 18% grey (a convex toe: the shadows stay at or below the identity line) and
+  // falls from there to the display peak at x = 1 (a concave shoulder).
+  const auto* preset = FindToneCurvePreset(kClDigitalToneCurvePresetId);
+  ASSERT_NE(preset, nullptr);
+  EXPECT_LE(preset->points.size(), kClDigitalMaxPoints);
+  EXPECT_EQ(preset->points.front(), (CurvePoint{0.0f, 0.0f}));
+  EXPECT_EQ(preset->points.back(), (CurvePoint{1.0f, kAxisAtPeak}));
+
+  const auto          spline = Solve(*preset);
+  std::vector<double> slopes;
+  float               previous = tone_curve::EvaluateToneCurveSpline(spline, 0.0f);
+  for (int i = 1; i <= kSlopeSteps; ++i) {
+    const float x     = static_cast<float>(i) / kSlopeSteps;
+    const float value = tone_curve::EvaluateToneCurveSpline(spline, x);
+    if (x < kAxisGrey) {
+      EXPECT_LE(value, x) << "x " << x;
+    }
+    slopes.push_back(static_cast<double>(value - previous) * kSlopeSteps);
+    previous = value;
+  }
+  const auto   steepest        = std::ranges::max_element(slopes);
+  const auto   inflection      = std::distance(slopes.begin(), steepest);
+  const double inflection_x    = static_cast<double>(inflection) / kSlopeSteps;
+  double       steepest_so_far = slopes.front();
+  double       fall_below      = 0.0;
+  for (auto it = slopes.begin(); it != steepest; ++it) {
+    steepest_so_far = std::max(steepest_so_far, *it);
+    fall_below      = std::max(fall_below, steepest_so_far - *it);
+  }
+  double flattest_so_far = *steepest;
+  double rise_above      = 0.0;
+  for (auto it = steepest; it != slopes.end(); ++it) {
+    flattest_so_far = std::min(flattest_so_far, *it);
+    rise_above      = std::max(rise_above, *it - flattest_so_far);
+  }
+  std::cout << "cl_digital: inflection at x " << inflection_x << ", slope " << *steepest
+            << "; slope falls " << fall_below << " below it, rises " << rise_above << " above it\n";
+  EXPECT_GT(inflection_x, kAxisGrey);
+  EXPECT_GT(slopes[static_cast<std::size_t>(kAxisGrey * kSlopeSteps)], 1.0);
+  EXPECT_LT(fall_below, kSlopeAgainstS);
+  EXPECT_LT(rise_above, kSlopeAgainstS);
+}
+
+TEST(ToneCurvePresetTest, ClDigitalCurveIsRecognizedNowAndInEachEarlierFit) {
+  const auto* cl_digital = FindToneCurvePreset(kClDigitalToneCurvePresetId);
+  ASSERT_NE(cl_digital, nullptr);
+  EXPECT_TRUE(IsClDigitalToneCurve(cl_digital->points));
+  for (const auto earlier : ClDigitalToneCurveEarlierPoints()) {
+    EXPECT_TRUE(IsClDigitalToneCurve(earlier));
+    EXPECT_FALSE(std::ranges::equal(earlier, cl_digital->points));
+    // The menu shows the earlier points as a custom curve.
+    EXPECT_EQ(MatchToneCurvePreset(earlier), nullptr);
+    std::vector<CurvePoint> moved{earlier.begin(), earlier.end()};
+    moved.back().y -= 1e-4f;
+    EXPECT_FALSE(IsClDigitalToneCurve(moved));
+  }
+  EXPECT_FALSE(IsClDigitalToneCurve(FindToneCurvePreset("medium_contrast")->points));
+  EXPECT_FALSE(IsClDigitalToneCurve(IdentityCurvePoints()));
+}
+
 TEST(ToneCurvePresetTest, StudyToneScaleIsTheProductAces2NeutralResponse) {
   // The study fits against the ACES 2.0 SDR tone scale; the render uses the neutral response of
   // the ACES 2.0 output transform.
@@ -125,7 +214,8 @@ TEST(ToneCurvePresetTest, RenderedNeutralAxisAgreesWithTheStudySourceToneWithinT
   // The grade stage applies the curve on the ACEScc axis and ACES 2.0 renders the result: the
   // display light of a neutral at each axis sample, against the source tone of the study.
   const auto response = ProfileToneNeutralResponse::Resolve(DrtMethod::Aces20);
-  ASSERT_EQ(tone_curve_study::kPresetStudies.size(), ToneCurvePresets().size() - 1);
+  // Linear and Cl. Digit have no fit.
+  ASSERT_EQ(tone_curve_study::kPresetStudies.size(), ToneCurvePresets().size() - 2);
   for (const auto& study : tone_curve_study::kPresetStudies) {
     SCOPED_TRACE(std::string{study.preset_id});
     const auto* preset = FindToneCurvePreset(study.preset_id);

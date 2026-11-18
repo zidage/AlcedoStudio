@@ -73,12 +73,10 @@ auto EditViewerOverlayGeometry::Build(const EditViewerOverlaySnapshot& snapshot)
   if (!crop_corners.has_value()) {
     return geometry;
   }
-  geometry.crop_corners_widget = *crop_corners;
-  geometry.crop_corners_valid = true;
-  const auto handle_points =
-      CropGeometry::CropRotateHandleWidgetPoint(geometry.crop_corners_widget);
-  geometry.rotate_stem_widget   = handle_points.first;
-  geometry.rotate_handle_widget = handle_points.second;
+  geometry.crop_corners_widget  = *crop_corners;
+  geometry.crop_corners_valid   = true;
+  geometry.angle_badge_widget   = CropGeometry::CropAngleBadgeWidgetPoint(*crop_corners);
+  geometry.crop_rotation_active = snapshot.crop_rotation_active;
   return geometry;
 }
 
@@ -93,26 +91,20 @@ auto EditViewerOverlayGeometry::ComputeHover(const EditViewerOverlaySnapshot& sn
   const auto [zoom, pan] = ResolveZoomPan(snapshot);
   hover.image_uv = ViewportMapper::WidgetPointToImageUv(event_pos, snapshot.widget_info,
                                                         snapshot.image_info, zoom, pan);
-  hover.inside_image = hover.image_uv.has_value();
-  if (!hover.inside_image) {
-    hover.kind = EditViewerOverlayHitKind::OutsideImage;
-    return hover;
-  }
+  hover.inside_image     = hover.image_uv.has_value();
 
   const auto& crop_state = snapshot.viewer_state.crop_overlay;
-  if (!crop_state.tool_enabled || !crop_state.overlay_visible) {
-    hover.kind = EditViewerOverlayHitKind::BlankInImage;
-    return hover;
-  }
-
-  if (geometry.crop_corners_valid) {
+  const bool  crop_tool  = crop_state.tool_enabled && crop_state.overlay_visible;
+  // Frame controls reach past the photograph (outer edge bands, corner rotate zones), so the
+  // crop hit test runs before the outside-image check.
+  if (crop_tool && geometry.crop_corners_valid) {
     hover.crop_hit = CropGeometry::HitTestWidgetGeometry(geometry.crop_corners_widget, event_pos);
     hover.crop_hit.inside_crop =
         CropGeometry::IsPointInsideQuad(geometry.crop_corners_widget, event_pos);
 
     const auto cursor = OverlayCursorShape(CropGeometry::CursorForCropHit(hover.crop_hit));
-    if (hover.crop_hit.rotate_handle_hit) {
-      hover.kind   = EditViewerOverlayHitKind::RotateHandle;
+    if (hover.crop_hit.rotate_hit) {
+      hover.kind   = EditViewerOverlayHitKind::RotateZone;
       hover.cursor = cursor;
       return hover;
     }
@@ -126,13 +118,21 @@ auto EditViewerOverlayGeometry::ComputeHover(const EditViewerOverlaySnapshot& sn
       hover.cursor = cursor;
       return hover;
     }
-    if (hover.crop_hit.inside_crop) {
+    if (hover.crop_hit.inside_crop && hover.inside_image) {
       hover.kind   = EditViewerOverlayHitKind::InsideCrop;
       hover.cursor = cursor;
       return hover;
     }
   }
 
+  if (!hover.inside_image) {
+    hover.kind = EditViewerOverlayHitKind::OutsideImage;
+    return hover;
+  }
+  if (!crop_tool) {
+    hover.kind = EditViewerOverlayHitKind::BlankInImage;
+    return hover;
+  }
   hover.kind   = EditViewerOverlayHitKind::BlankInImage;
   hover.cursor = Qt::CrossCursor;
   return hover;

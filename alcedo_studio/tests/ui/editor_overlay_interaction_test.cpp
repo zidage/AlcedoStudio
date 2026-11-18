@@ -460,10 +460,11 @@ TEST(EditorOverlayInteractionTest, OverlaySceneGeometryBuildsMaskBorderGridAndHa
   EXPECT_FALSE(scene.border_outer_triangles.empty());
   EXPECT_FALSE(scene.border_inner_triangles.empty());
   EXPECT_FALSE(scene.grid_triangles.empty());
-  EXPECT_FALSE(scene.stem_outer_triangles.empty());
-  EXPECT_EQ(scene.handle_count, 5);
-  EXPECT_FALSE(scene.handle_fill_triangles.empty());
-  EXPECT_FALSE(scene.handle_outline_triangles.empty());
+  // Four corner brackets and four edge grips; the fine grid is only drawn during rotation.
+  EXPECT_EQ(scene.handle_count, 4);
+  EXPECT_FALSE(scene.grip_outer_triangles.empty());
+  EXPECT_FALSE(scene.grip_inner_triangles.empty());
+  EXPECT_TRUE(scene.fine_grid_triangles.empty());
   EXPECT_FALSE(scene.detail_roi_triangles.empty());
 }
 
@@ -488,7 +489,7 @@ TEST(EditorOverlayInteractionTest, OverlaySceneGeometryKeepsCropFrameInsideImage
     const auto scene = BuildOverlaySceneGeometry(geometry, true);
     EXPECT_TRUE(scene.has_crop) << c.name;
     EXPECT_GE(scene.mask_triangles.size(), 6u) << c.name;
-    EXPECT_EQ(scene.handle_count, 5) << c.name;
+    EXPECT_EQ(scene.handle_count, 4) << c.name;
 
     // Crop center must NOT be covered by the dim mask.
     const QPointF crop_center = CropGeometry::CropCenterWidgetPoint(geometry.crop_corners_widget);

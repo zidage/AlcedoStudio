@@ -20,9 +20,11 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
-#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_plan.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 #include "metal/compute_pipeline_cache.hpp"
@@ -147,6 +149,13 @@ void ResetProductLookToIdentity(PipelineDocument& document) {
   exposure->SetValue(0.0f);
   saturation->SetValue(1.0f);
   contrast->SetValue(0.0f);
+  // The default look carries the Film-like curve (#898).
+  auto* curve =
+      dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  CurveUpdate identity;
+  identity.points = IdentityCurvePoints();
+  curve->ApplyUpdate(identity);
 }
 
 auto AcesccEncode(float value) -> float {
@@ -297,8 +306,8 @@ auto CpuApplyLlf(const std::vector<Rgba>& input, std::uint32_t width, std::uint3
         heights[static_cast<std::size_t>(level)]);
   }
 
-  const float shadow_amount    = std::clamp(shadows_slider * 1.5f / 80.0f, -1.5f, 1.5f);
-  const float highlight_amount = std::clamp(-highlights_slider * 1.5f / 100.0f, -1.5f, 1.5f);
+  const float shadow_amount    = ClampedLocalToneShadow(shadows_slider);
+  const float highlight_amount = ClampedLocalToneHighlight(highlights_slider);
   const float sigma            = local_tone_mapping::SigmaR(shadow_amount, highlight_amount);
   const auto  samples          = local_tone_mapping::BuildSamples(shadow_amount, highlight_amount);
   auto        remap_delta      = [](float delta, float sample_sigma, float alpha, float beta) {

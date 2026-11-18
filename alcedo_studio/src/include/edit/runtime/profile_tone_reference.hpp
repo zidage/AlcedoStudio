@@ -3,7 +3,6 @@
 // Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <memory>
 #include <span>
@@ -13,13 +12,13 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 #include "edit/runtime/drt/aces2_reference_runtime.hpp"
-#include "image/dng_tone_curve.hpp"
 
-// Host reference of the profile tone stage (dcp_profile_tone_curve_study.md, section 6.1, phase
-// T1). The stage expresses the `ProfileToneCurve` of a DCP profile through the inverse of the
-// neutral response of the active DRT, so that the DRT renders a neutral as the profile curve does.
-// The GPU backends of phase T2 compute the stage; the host builds the tables and keeps this scalar
-// reference for the tests.
+// The neutral responses of the display transforms and the highlight shoulder of the profile tone
+// curve (dcp_profile_tone_curve_study.md, sections 6.1 and 6.6, phase T1). The `ProfileToneCurve`
+// of a DCP profile reaches the render as points of the RGB curve of the Tone Curve
+// (profile_tone_curve_import.hpp, #911): the points express the profile curve through the inverse
+// of the neutral response of the active DRT, so that the DRT renders a neutral as the profile curve
+// does.
 
 namespace alcedo {
 
@@ -31,11 +30,13 @@ inline constexpr float       kProfileToneReferencePeakNits    = 100.0f;
 inline constexpr std::size_t kProfileToneInverseTableEntries  = 4097;
 /// Exponent of the inverse table coordinate: entry i holds `N^-1((i / 4096)^2.4)`.
 inline constexpr float       kProfileToneInverseTableExponent = 2.4f;
-/// Knee `k` of the highlight shoulder at the curve input, ACR scale: one stop below raw white.
+/// Knee `k` of the highlight shoulder at the input of the profile curve, ACR scale: one stop below
+/// raw white.
 inline constexpr float       kProfileToneHighlightKnee        = 0.5f;
 
 /**
- * @brief The highlight shoulder `H` at the curve input (study section 6.6), ACR scale.
+ * @brief The highlight shoulder `H` at the input of the profile curve (study section 6.6), ACR
+ *        scale.
  *
  * 0 below 0; identity up to @ref kProfileToneHighlightKnee `k`; above it
  * `1 - (1 - k)^2 / (x + 1 - 2k)`, with slope 1 at the knee and a limit of 1. Raw white maps to
@@ -93,25 +94,5 @@ class ProfileToneNeutralResponse {
   float                                        scene_at_peak_  = 0.0f;
   float                                        scene_at_black_ = 0.0f;
 };
-
-/**
- * @brief The profile tone stage for one AP1 pixel at the DRT entry (study section 6.1).
- *
- * `p = H(M * x * 2^-E_a)` per channel in linear ProPhoto (D50), `d = R_C(p)` with the DNG SDK
- * baseline RGB tone, `s = N_m^-1(d)` per channel, and `M^-1 * s` back to AP1. `M` is the
- * AP1-to-ProPhoto matrix of the camera pass (ProPhotoToAp1 with XyzD50ToAp1Matrix).
- */
-[[nodiscard]] auto ApplyProfileToneStageReference(const DngToneCurve&               curve,
-                                                  const ProfileToneNeutralResponse& response,
-                                                  const std::array<float, 3>&       ap1)
-    -> std::array<float, 3>;
-
-/// Linear AP1 to linear ProPhoto (D50) and back, the matrix pair `M`, `M^-1` of the stage.
-/// Row-major, column vectors, float as the GPU applies them.
-struct ProfileToneMatrices {
-  std::array<float, 9> ap1_to_prophoto{};
-  std::array<float, 9> prophoto_to_ap1{};
-};
-[[nodiscard]] auto ProfileToneStageMatrices() -> const ProfileToneMatrices&;
 
 }  // namespace alcedo
