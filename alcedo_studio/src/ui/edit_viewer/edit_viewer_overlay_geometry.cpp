@@ -5,6 +5,8 @@
 #include "ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 
 #include "ui/edit_viewer/crop_interaction_controller.hpp"
 
@@ -19,6 +21,24 @@ auto ResolveZoomPan(const EditViewerOverlaySnapshot& snapshot) -> std::pair<floa
     pan  = QVector2D(0.0f, 0.0f);
   }
   return {zoom, pan};
+}
+
+/// Order the mapped crop corners from the displayed top left for the angle badge.
+/// Resize hit tests retain the stored corner indices.
+auto DisplayedCropCorners(const std::array<QPointF, 4>& corners, FrameOrientation orientation)
+    -> std::array<QPointF, 4> {
+  constexpr std::array<std::array<std::size_t, 4>, 8> kStoredCornerAtDisplayedCorner{{
+      {0, 1, 2, 3},  // Identity
+      {3, 0, 1, 2},  // Rotate90Clockwise
+      {2, 3, 0, 1},  // Rotate180
+      {1, 2, 3, 0},  // Rotate90Counterclockwise
+      {1, 0, 3, 2},  // FlipHorizontal
+      {3, 2, 1, 0},  // FlipVertical
+      {0, 3, 2, 1},  // Transpose
+      {2, 1, 0, 3},  // Transverse
+  }};
+  const auto& order = kStoredCornerAtDisplayedCorner.at(static_cast<std::size_t>(orientation));
+  return {corners[order[0]], corners[order[1]], corners[order[2]], corners[order[3]]};
 }
 
 }  // namespace
@@ -75,7 +95,8 @@ auto EditViewerOverlayGeometry::Build(const EditViewerOverlaySnapshot& snapshot)
   }
   geometry.crop_corners_widget  = *crop_corners;
   geometry.crop_corners_valid   = true;
-  geometry.angle_badge_widget   = CropGeometry::CropAngleBadgeWidgetPoint(*crop_corners);
+  geometry.angle_badge_widget   = CropGeometry::CropAngleBadgeWidgetPoint(
+      DisplayedCropCorners(*crop_corners, snapshot.mapping.geometry.orientation));
   geometry.crop_rotation_active = snapshot.crop_rotation_active;
   return geometry;
 }

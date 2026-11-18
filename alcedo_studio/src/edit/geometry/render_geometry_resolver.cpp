@@ -146,6 +146,32 @@ void FillGpuData(ResolvedRenderGeometry& geometry) {
   geometry.gpu_data.filter         = static_cast<std::uint32_t>(geometry.filter);
 }
 
+/// Map the framed canvas edges [0, width] x [0, height] to their oriented coordinates.
+/// Using edge coordinates maps every half-integer pixel center to another pixel center.
+auto FrameOrientationTransform(FrameOrientation orientation, Extent2D extent) -> Matrix3x3 {
+  const auto width  = static_cast<float>(extent.width);
+  const auto height = static_cast<float>(extent.height);
+  switch (orientation) {
+    case FrameOrientation::Identity:
+      return Matrix3x3::Identity();
+    case FrameOrientation::Rotate90Clockwise:
+      return Matrix3x3{{0, -1, height, 1, 0, 0, 0, 0, 1}};
+    case FrameOrientation::Rotate180:
+      return Matrix3x3{{-1, 0, width, 0, -1, height, 0, 0, 1}};
+    case FrameOrientation::Rotate90Counterclockwise:
+      return Matrix3x3{{0, 1, 0, -1, 0, width, 0, 0, 1}};
+    case FrameOrientation::FlipHorizontal:
+      return Matrix3x3{{-1, 0, width, 0, 1, 0, 0, 0, 1}};
+    case FrameOrientation::FlipVertical:
+      return Matrix3x3{{1, 0, 0, 0, -1, height, 0, 0, 1}};
+    case FrameOrientation::Transpose:
+      return Matrix3x3{{0, 1, 0, 1, 0, 0, 0, 0, 1}};
+    case FrameOrientation::Transverse:
+      return Matrix3x3{{0, -1, height, -1, 0, width, 0, 0, 1}};
+  }
+  throw std::runtime_error("ResolveRenderGeometry: invalid frame orientation");
+}
+
 }  // namespace
 
 auto ResolveRenderGeometry(const SourceGeometry& source, const ImageGeometryParams& image,
@@ -213,6 +239,15 @@ auto ResolveRenderGeometry(const SourceGeometry& source, const ImageGeometryPara
         Matrix3x3::Translate(static_cast<float>(geometry.edit_extent.width) * 0.5f,
                              static_cast<float>(geometry.edit_extent.height) * 0.5f) *
         Matrix3x3::Scale(sx, sy) * centered;
+  }
+
+  geometry.orientation = image.orientation;
+  if (image.orientation != FrameOrientation::Identity) {
+    const auto orient          = FrameOrientationTransform(image.orientation, geometry.edit_extent);
+    geometry.reference_to_edit = orient * geometry.reference_to_edit;
+    if (orient.m[0] == 0.0f) {
+      std::swap(geometry.edit_extent.width, geometry.edit_extent.height);
+    }
   }
 
   const float edit_w   = static_cast<float>(geometry.edit_extent.width);

@@ -58,8 +58,8 @@ class CropInteractionController {
  public:
   CropInteractionController() = default;
 
-  /// Widget-space crop corners, clockwise from the output's top-left. Empty when @p mapping
-  /// cannot map the crop (no presented frame yet).
+  /// Widget-space corners in stored crop order, starting at the top-left before orientation.
+  /// Empty when @p mapping cannot map the crop.
   [[nodiscard]] static auto CropCornersWidget(const CropOverlayState&    crop,
                                               const MaskEditViewMapping& mapping)
       -> std::optional<std::array<QPointF, 4>>;

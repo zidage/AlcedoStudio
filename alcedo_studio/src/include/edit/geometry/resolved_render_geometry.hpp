@@ -26,7 +26,7 @@ struct GpuRenderGeometry {
 };
 
 /**
- * @brief Single rounding result for crop, rotation, view, and dynamic resolution.
+ * @brief Single rounding result for crop, straightening, orientation, view, and resolution.
  *
  * Image, raster-mask UV, and LLF must read this object. They must not re-round.
  */
@@ -48,6 +48,8 @@ struct ResolvedRenderGeometry {
 
   TextureFilter     filter = TextureFilter::Bilinear;
   GpuRenderGeometry gpu_data{};
+  /// Orientation already included in edit_extent and the reference-to-edit mapping.
+  FrameOrientation  orientation = FrameOrientation::Identity;
 };
 
 /**
