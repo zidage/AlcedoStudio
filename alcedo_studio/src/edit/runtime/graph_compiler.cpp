@@ -151,6 +151,8 @@ auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
     hash              = MixText(hash, node->Type().Text());
     const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
     if (grade != nullptr) {
+      // Hidden Color Grades leave the plan, so visibility is plan structure.
+      hash = MixU64(hash, grade->Enabled() ? 1 : 0);
       hash = MixU64(hash, grade->AdjustmentCount());
       std::vector<OperatorTypeId> grade_types;
       grade_types.reserve(grade->AdjustmentCount());
@@ -315,11 +317,14 @@ auto CompileGradeOwnedMaskStack(const ColorGradeNodeModel& grade, GraphValueId s
   return stack;
 }
 
+/// @p backbone_input is the document value on the incoming edge (the previous backbone node,
+/// hidden or not); @p scene_input is the compiled value the grade reads (the last visible one).
 auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeModel& grade,
-                       GraphValueId scene_input, const DevelopCompileSource& source,
-                       ExecutionPlan& plan) -> CompiledGradeNode {
+                       const GraphValueId& backbone_input, GraphValueId scene_input,
+                       const DevelopCompileSource& source, ExecutionPlan& plan)
+    -> CompiledGradeNode {
   const auto incoming = SceneImageIncoming(document, grade.Id());
-  if (incoming != scene_input) {
+  if (incoming != backbone_input) {
     throw std::runtime_error(
         "GraphCompiler: Color Grade scene input does not follow the image backbone");
   }
@@ -333,8 +338,8 @@ auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeMod
     compiled.mask_output = compiled.mask_stack->union_output;
   }
 
-  // Fixed stage order: Basic Tone + Color pointwise stage, then the Local
-  // Laplacian stage. Stored document order never selects execution order.
+  // Fixed stage order: Basic Tone pointwise stage, the Local Laplacian stage, then the
+  // Color pointwise stage. Stored document order never selects execution order.
   std::vector<OperatorTypeId> document_types;
   document_types.reserve(grade.AdjustmentCount());
   for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
@@ -497,7 +502,8 @@ auto GraphCompiler::CompileStatic(const PipelineDocument&     document,
 
   CompileDevelopPasses(plan, develop->Id(), plan.source);
 
-  GraphValueId scene = plan.develop_output;
+  GraphValueId scene          = plan.develop_output;
+  GraphValueId backbone_value = plan.develop_output;
   for (const auto& id : document.Graph().ImageBackboneNodeIds()) {
     const auto* node = document.Graph().FindNode(id);
     if (node == nullptr) {
@@ -507,7 +513,14 @@ auto GraphCompiler::CompileStatic(const PipelineDocument&     document,
     if (grade == nullptr) {
       continue;
     }
-    auto compiled = CompileColorGrade(document, *grade, scene, plan.source, plan);
+    const auto document_input = backbone_value;
+    backbone_value            = GraphValueId{grade->Id(), PortId{"image"}};
+    // A hidden Color Grade compiles to nothing: no grade pass, no Mask stack, no Mask
+    // evaluation. The last visible scene value flows on to the next node.
+    if (!grade->Enabled()) {
+      continue;
+    }
+    auto compiled = CompileColorGrade(document, *grade, document_input, scene, plan.source, plan);
     scene         = compiled.scene_output;
     plan.grade_nodes.push_back(std::move(compiled));
   }

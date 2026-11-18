@@ -83,7 +83,8 @@ class EditorMaskCreationAdapter : public QObject {
   Q_PROPERTY(qreal maskHueMinChroma READ mask_hue_min_chroma NOTIFY maskRangeChanged)
   /// Bounds and defaults of the Softness and saturation threshold controls, in model units.
   Q_PROPERTY(QVariantMap rangeParameterLimits READ range_parameter_limits CONSTANT)
-  /// The "Show selection" toggle: the range coverage of the target Mask stays shown.
+  /// The "Show selection" toggle: the range coverage of the target Mask stays shown. It turns on
+  /// each time a Mask becomes the range target outside an AI Mask edit (#944).
   Q_PROPERTY(bool maskRangeCoverageVisible READ mask_range_coverage_visible NOTIFY maskRangeChanged)
   /// Smallest handle distance of the bars, a little above the stored-range minimum widths.
   Q_PROPERTY(qreal luminanceRangeMinimumWidth READ luminance_range_minimum_width CONSTANT)

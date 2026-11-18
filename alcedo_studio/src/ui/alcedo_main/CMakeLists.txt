@@ -251,6 +251,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_behavior_preferences.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/import_behavior_preferences.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_view_preferences.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/raw_import_look_settings_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/log_folder_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_dialog_model.cpp"
@@ -352,6 +353,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_behavior_preferences.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/import_behavior_preferences.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/library_view_preferences.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/raw_import_look_settings_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/log_folder_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_dialog_model.hpp"
@@ -385,6 +387,8 @@ target_link_libraries(AlbumBackendLib
         ProjectService
         ProjectMaintenanceService
         ImportService
+        # Import defaults settings: the look of RAW history roots (#918).
+        RawImportLookSettings
         ExportService
         PipelineMgmtService
         AdjustmentTransferService
@@ -474,6 +478,8 @@ target_link_libraries(AlcedoQanGraph
 # The editor shell is QML-only. Widgets remains private to the album backend for
 # the native project and Nikon recovery file dialogs.
 target_link_libraries(AlbumBackendLib PRIVATE Qt6::Widgets)
+# The editor names the built-in lens profile of a fixed-lens camera for Lens Correction Auto (#960).
+target_link_libraries(AlbumBackendLib PRIVATE EditRuntimeLens)
 target_link_libraries(AlbumBackendLib PUBLIC AlcedoQanGraph)
 
 # Automation command surface: JSON-RPC command registry, schema validation, the local socket
@@ -517,6 +523,7 @@ def_library(AutomationHostLib
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/editor_commands.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/render_commands.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/version_commands.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/node_commands.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/adjustment_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_adjustment_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/automation_editor_operation.cpp"
@@ -835,6 +842,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferItemPane.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SettingDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ColorLabelNamesEditor.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/RawImportLookSettingsSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/KeyboardSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ShortcutCaptureField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeDialog.qml"
@@ -937,7 +945,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentStack.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentHeader.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LockedNodeMaskPromptDialog.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMonoSlider.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDragSlider.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorCameraProfileSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSliders.qml"
@@ -972,7 +980,11 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupDelegate.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupMaskRow.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLayerIconButton.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAiMaskTile.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentSlider.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AlcedoSlider.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LoadingSpinner.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentToggle.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentCombo.qml"

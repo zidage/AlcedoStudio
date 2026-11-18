@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +24,7 @@
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "type/type.hpp"
+#include "ui/alcedo_main/album_backend/editor_gpu_resource_release.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/mask_coverage_sink.hpp"
@@ -59,7 +61,7 @@ struct EditorRenderSessionContext {
 };
 
 /**
- * @brief Outcome of @ref EditorSessionRenderSchedulerPort::ReleaseGpuResourcesForExport.
+ * @brief Outcome of @ref EditorSessionRenderSchedulerPort::AcquireGpuResourceRelease.
  *
  * The byte counts are @ref alcedo::PipelineExecutor::DeviceResourceBytes of the editor executor
  * before and after the release; both are 0 when no frame has created the executor.
@@ -154,24 +156,35 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   void               Cancel(std::uint64_t scheduler_job_id) override;
 
   /**
-   * @brief Release the GPU resources of the editor executor so an export can allocate them.
+   * @brief Release the GPU resources of the editor executor for @p holder, so the work of that
+   *        holder (an export or semantic generation) can allocate them.
    *
-   * From this call until @ref ResumeGpuResourcesAfterExport, the worker refuses every frame with
-   * a message that starts with `kPresentationSuspendedMessage`, so the coordinator reports the
-   * frame as PresentationSuspended and the render controller routes it again after the resume.
-   * Image jobs are rejected. Then one work item on the editor worker releases the executor
-   * binding (published results, texture pool, transient and parameter arenas, neural demosaic
-   * workspace, and the prepared source). It runs after the frame or image job in flight, so the
-   * release never races a render. The bound session context, the history, and the edits stay.
+   * From this call until the last holder calls @ref EndGpuResourceRelease, the worker refuses
+   * every frame with a message that starts with `kPresentationSuspendedMessage`, so the
+   * coordinator reports the frame as PresentationSuspended and the render controller routes it
+   * again after the release ends. Image and coverage jobs are rejected. Then one work item on the
+   * editor worker releases the executor binding (published results, texture pool, transient and
+   * parameter arenas, neural demosaic workspace, and the prepared source). It runs after the frame
+   * or job in flight, so the release never races a render. The bound session context, the
+   * history, and the edits stay. A holder that acquires while another holds the release gets its
+   * own work item, which finds the binding already released.
    *
    * @p on_released runs once on the editor worker after the release, with the real error if it
    * failed.
+   *
+   * @return True when no holder held the release before this call: the editor stops rendering.
    */
-  void ReleaseGpuResourcesForExport(EditorGpuResourceReleaseCompletion on_released);
-  /// End the release of @ref ReleaseGpuResourcesForExport: the next frame binds the image again
-  /// and allocates its resources on the same executor.
-  void ResumeGpuResourcesAfterExport();
-  [[nodiscard]] auto gpu_resources_released_for_export() const -> bool;
+  auto AcquireGpuResourceRelease(EditorGpuReleaseHolder             holder,
+                                 EditorGpuResourceReleaseCompletion on_released) -> bool;
+  /**
+   * @brief End the release of @p holder. A holder that holds no release changes nothing.
+   *
+   * @return True when @p holder was the last holder: the next frame binds the image again and
+   *         allocates its resources on the same executor.
+   */
+  auto EndGpuResourceRelease(EditorGpuReleaseHolder holder) -> bool;
+  /// True while any holder holds the release.
+  [[nodiscard]] auto gpu_resources_released() const -> bool;
 
   /**
    * @brief Render the documents of @p request to host pixels on the editor executor, in order.
@@ -202,8 +215,8 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
    * frame created the executor, and that a coverage channel is bound; then queues one work item
    * on the editor worker. That item holds the executor render lock and runs
    * PipelineExecutor::PresentMaskCoverage with the device and the last presented photo frame
-   * geometry of the frames. While an export holds the GPU, the item fails with a message that
-   * starts with `kPresentationSuspendedMessage` and allocates nothing.
+   * geometry of the frames. While an export or semantic generation holds the GPU, the item
+   * fails with a message that starts with `kPresentationSuspendedMessage` and allocates nothing.
    *
    * Completion runs once on the worker after the render lock is released.
    */
@@ -269,6 +282,11 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
                    alcedo::EditorPipelineScheduleCompletion on_complete);
   [[nodiscard]] auto JobIsCancelled(const Job& job) const -> bool;
   /// Worker body of one image job: render each document under the executor render lock.
+  /// Refusal text while the GPU is released, naming the holders: "the editor GPU resources are
+  /// released for export; ...". Empty when no holder holds the release. Caller holds mutex_.
+  [[nodiscard]] auto GpuReleasedMessageLocked() const -> std::string;
+  /// @ref GpuReleasedMessageLocked under mutex_.
+  [[nodiscard]] auto GpuReleasedMessage() const -> std::string;
   void RunImageJob(std::uint64_t job_id, const std::shared_ptr<alcedo::PipelineExecutor>& executor,
                    const std::shared_ptr<alcedo::ImageBuffer>& input,
                    const alcedo::EditorImageRenderRequest&     request,
@@ -312,9 +330,10 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   std::uint64_t                              context_payload_load_count_ = 0;
   std::uint64_t                              sink_resolve_count_         = 0;
   bool                                       shutting_down_              = false;
-  /// Set from @ref ReleaseGpuResourcesForExport until @ref ResumeGpuResourcesAfterExport. The
-  /// worker reads it before each frame and image job, so no render allocates during an export.
-  bool                                       released_for_export_        = false;
+  /// The holders from @ref AcquireGpuResourceRelease until their @ref EndGpuResourceRelease,
+  /// indexed by EditorGpuReleaseHolder. The worker reads them before each frame and job, so no
+  /// render allocates while any holder holds the GPU.
+  std::array<bool, kEditorGpuReleaseHolderCount> gpu_release_holders_{};
 };
 
 }  // namespace alcedo::ui

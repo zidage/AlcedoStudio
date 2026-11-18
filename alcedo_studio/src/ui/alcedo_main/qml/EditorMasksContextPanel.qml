@@ -64,13 +64,6 @@ Item {
         Accessible.name: text
     }
 
-    component ParameterValue: Label {
-        Layout.fillWidth: true
-        color: root.colMuted
-        font.family: appTheme.dataFontFamily
-        font.pixelSize: appTheme.fontSizeCaption
-    }
-
     ColumnLayout {
         anchors.fill: parent
         spacing: appTheme.spaceSm
@@ -253,32 +246,23 @@ Item {
                         }
                     }
 
-                    ParameterLabel { visible: root.maskSelected; text: qsTr("Opacity") }
-                    EditorMonoSlider {
+                    EditorDragSlider {
                         objectName: "editorMasksOpacitySlider"
-                        Layout.fillWidth: true
+                        partName: "editorMasksOpacity"
                         visible: root.maskSelected
                         enabled: root.maskSelected
-                        accessibleName: qsTr("Mask opacity")
-                        from: 0; to: 100; stepSize: 1; pointerGain: 1
-                        rowHeight: 28; handleSize: 18
+                        label: qsTr("Opacity")
+                        from: 0
+                        to: 100
+                        stepSize: 1
+                        precision: 0
+                        suffix: "%"
+                        defaultValue: 100
                         flickable: maskScroll
-                        externalValue: root.maskCreation ? root.maskCreation.maskOpacityPercent : 100
-                        onBegin: function () { root.maskCreation.beginMaskOpacity() }
-                        onUpdate: function (v) { root.maskCreation.updateMaskOpacity(v) }
-                        onFinish: function () { root.maskCreation.finishAnalyticControl() }
-                        onReset: function () {
-                            root.maskCreation.beginMaskOpacity()
-                            root.maskCreation.updateMaskOpacity(100)
-                            root.maskCreation.finishAnalyticControl()
-                        }
-                    }
-                    ParameterValue {
-                        objectName: "editorMasksOpacityValue"
-                        visible: root.maskSelected
-                        text: qsTr("%1 percent").arg(Math.round(root.maskCreation
-                                                                ? root.maskCreation.maskOpacityPercent
-                                                                : 100))
+                        value: root.maskCreation ? root.maskCreation.maskOpacityPercent : 100
+                        beginEdit: function () { root.maskCreation.beginMaskOpacity() }
+                        updateEdit: function (v) { root.maskCreation.updateMaskOpacity(v) }
+                        finishEdit: function () { root.maskCreation.finishAnalyticControl() }
                     }
 
                     // Position: arrows nudge the focused Mask position through the
@@ -353,171 +337,118 @@ Item {
                         }
                     }
 
-                    ParameterLabel { visible: root.radialSelected; text: qsTr("Horizontal radius") }
-                    EditorMonoSlider {
+                    EditorDragSlider {
                         objectName: "editorMasksMajorRadiusSlider"
-                        Layout.fillWidth: true
+                        partName: "editorMasksMajorRadius"
                         visible: root.radialSelected
                         enabled: root.radialSelected
-                        accessibleName: qsTr("Mask horizontal radius")
-                        from: 0.1; to: 100; stepSize: 0.1; pointerGain: 1
-                        rowHeight: 28; handleSize: 18
+                        label: qsTr("Horizontal radius")
+                        from: 0.1
+                        to: 100
+                        stepSize: 0.1
+                        precision: 1
+                        suffix: "%"
+                        defaultValue: 50
                         flickable: maskScroll
-                        externalValue: root.maskCreation ? root.maskCreation.majorRadiusPercent : 0
-                        onBegin: function () { root.maskCreation.beginMajorRadius() }
-                        onUpdate: function (v) { root.maskCreation.updateMajorRadius(v) }
-                        onFinish: function () { root.maskCreation.finishAnalyticControl() }
-                        onReset: function () {
-                            root.maskCreation.beginMajorRadius()
-                            root.maskCreation.updateMajorRadius(50)
-                            root.maskCreation.finishAnalyticControl()
-                        }
-                    }
-                    ParameterValue {
-                        objectName: "editorMasksMajorRadiusValue"
-                        visible: root.radialSelected
-                        text: qsTr("%1 percent").arg(Number(root.maskCreation
-                                                             ? root.maskCreation.majorRadiusPercent : 0)
-                                                      .toFixed(1))
+                        value: root.maskCreation ? root.maskCreation.majorRadiusPercent : 0
+                        beginEdit: function () { root.maskCreation.beginMajorRadius() }
+                        updateEdit: function (v) { root.maskCreation.updateMajorRadius(v) }
+                        finishEdit: function () { root.maskCreation.finishAnalyticControl() }
                     }
 
-                    ParameterLabel { visible: root.radialSelected; text: qsTr("Vertical radius") }
-                    EditorMonoSlider {
+                    EditorDragSlider {
                         objectName: "editorMasksMinorRadiusSlider"
-                        Layout.fillWidth: true
+                        partName: "editorMasksMinorRadius"
                         visible: root.radialSelected
                         enabled: root.radialSelected
-                        accessibleName: qsTr("Mask vertical radius")
-                        from: 0.1; to: 100; stepSize: 0.1; pointerGain: 1
-                        rowHeight: 28; handleSize: 18
+                        label: qsTr("Vertical radius")
+                        from: 0.1
+                        to: 100
+                        stepSize: 0.1
+                        precision: 1
+                        suffix: "%"
+                        defaultValue: 50
                         flickable: maskScroll
-                        externalValue: root.maskCreation ? root.maskCreation.minorRadiusPercent : 0
-                        onBegin: function () { root.maskCreation.beginMinorRadius() }
-                        onUpdate: function (v) { root.maskCreation.updateMinorRadius(v) }
-                        onFinish: function () { root.maskCreation.finishAnalyticControl() }
-                        onReset: function () {
-                            root.maskCreation.beginMinorRadius()
-                            root.maskCreation.updateMinorRadius(50)
-                            root.maskCreation.finishAnalyticControl()
-                        }
-                    }
-                    ParameterValue {
-                        objectName: "editorMasksMinorRadiusValue"
-                        visible: root.radialSelected
-                        text: qsTr("%1 percent").arg(Number(root.maskCreation
-                                                             ? root.maskCreation.minorRadiusPercent : 0)
-                                                      .toFixed(1))
+                        value: root.maskCreation ? root.maskCreation.minorRadiusPercent : 0
+                        beginEdit: function () { root.maskCreation.beginMinorRadius() }
+                        updateEdit: function (v) { root.maskCreation.updateMinorRadius(v) }
+                        finishEdit: function () { root.maskCreation.finishAnalyticControl() }
                     }
 
-                    ParameterLabel { visible: root.analyticSelected; text: qsTr("Rotation") }
-                    EditorMonoSlider {
+                    EditorDragSlider {
                         objectName: "editorMasksRotationSlider"
-                        Layout.fillWidth: true
+                        partName: "editorMasksRotation"
                         visible: root.analyticSelected
                         enabled: root.analyticSelected
-                        accessibleName: qsTr("Mask rotation")
-                        from: -180; to: 180; stepSize: 0.5; pointerGain: 1
-                        rowHeight: 28; handleSize: 18
+                        label: qsTr("Rotation")
+                        from: -180
+                        to: 180
+                        stepSize: 0.5
+                        precision: 1
+                        suffix: "°"
+                        defaultValue: 0
                         flickable: maskScroll
-                        externalValue: root.maskCreation ? root.maskCreation.rotationDegrees : 0
-                        onBegin: function () { root.maskCreation.beginRotation() }
-                        onUpdate: function (v) { root.maskCreation.updateRotation(v) }
-                        onFinish: function () { root.maskCreation.finishAnalyticControl() }
-                        onReset: function () {
-                            root.maskCreation.beginRotation()
-                            root.maskCreation.updateRotation(0)
-                            root.maskCreation.finishAnalyticControl()
-                        }
-                    }
-                    ParameterValue {
-                        objectName: "editorMasksRotationValue"
-                        visible: root.analyticSelected
-                        text: qsTr("%1 degrees").arg(Number(root.maskCreation
-                                                             ? root.maskCreation.rotationDegrees : 0)
-                                                      .toFixed(1))
+                        value: root.maskCreation ? root.maskCreation.rotationDegrees : 0
+                        beginEdit: function () { root.maskCreation.beginRotation() }
+                        updateEdit: function (v) { root.maskCreation.updateRotation(v) }
+                        finishEdit: function () { root.maskCreation.finishAnalyticControl() }
                     }
 
-                    ParameterLabel { visible: root.radialSelected; text: qsTr("Inner feather") }
-                    EditorMonoSlider {
+                    EditorDragSlider {
                         objectName: "editorMasksInnerFeatherSlider"
-                        Layout.fillWidth: true
+                        partName: "editorMasksInnerFeather"
                         visible: root.radialSelected
                         enabled: root.radialSelected
-                        accessibleName: qsTr("Mask inner feather")
-                        from: 0; to: 100; stepSize: 1; pointerGain: 1
-                        rowHeight: 28; handleSize: 18
+                        label: qsTr("Inner feather")
+                        from: 0
+                        to: 100
+                        stepSize: 1
+                        precision: 0
+                        suffix: "%"
+                        defaultValue: 0
                         flickable: maskScroll
-                        externalValue: root.maskCreation ? root.maskCreation.innerFeatherPercent : 0
-                        onBegin: function () { root.maskCreation.beginInnerFeather() }
-                        onUpdate: function (v) { root.maskCreation.updateInnerFeather(v) }
-                        onFinish: function () { root.maskCreation.finishAnalyticControl() }
-                        onReset: function () {
-                            root.maskCreation.beginInnerFeather()
-                            root.maskCreation.updateInnerFeather(0)
-                            root.maskCreation.finishAnalyticControl()
-                        }
-                    }
-                    ParameterValue {
-                        objectName: "editorMasksInnerFeatherValue"
-                        visible: root.radialSelected
-                        text: qsTr("%1 percent").arg(Math.round(root.maskCreation
-                                                                ? root.maskCreation.innerFeatherPercent : 0))
+                        value: root.maskCreation ? root.maskCreation.innerFeatherPercent : 0
+                        beginEdit: function () { root.maskCreation.beginInnerFeather() }
+                        updateEdit: function (v) { root.maskCreation.updateInnerFeather(v) }
+                        finishEdit: function () { root.maskCreation.finishAnalyticControl() }
                     }
 
-                    ParameterLabel { visible: root.radialSelected; text: qsTr("Outer feather") }
-                    EditorMonoSlider {
+                    EditorDragSlider {
                         objectName: "editorMasksOuterFeatherSlider"
-                        Layout.fillWidth: true
+                        partName: "editorMasksOuterFeather"
                         visible: root.radialSelected
                         enabled: root.radialSelected
-                        accessibleName: qsTr("Mask outer feather")
-                        from: 0; to: 400; stepSize: 1; pointerGain: 1
-                        rowHeight: 28; handleSize: 18
+                        label: qsTr("Outer feather")
+                        from: 0
+                        to: 400
+                        stepSize: 1
+                        precision: 0
+                        suffix: "%"
+                        defaultValue: 0
                         flickable: maskScroll
-                        externalValue: root.maskCreation
-                                       ? Math.min(400, root.maskCreation.outerFeatherPercent) : 0
-                        onBegin: function () { root.maskCreation.beginOuterFeather() }
-                        onUpdate: function (v) { root.maskCreation.updateOuterFeather(v) }
-                        onFinish: function () { root.maskCreation.finishAnalyticControl() }
-                        onReset: function () {
-                            root.maskCreation.beginOuterFeather()
-                            root.maskCreation.updateOuterFeather(0)
-                            root.maskCreation.finishAnalyticControl()
-                        }
-                    }
-                    ParameterValue {
-                        objectName: "editorMasksOuterFeatherValue"
-                        visible: root.radialSelected
-                        text: qsTr("%1 percent").arg(Math.round(root.maskCreation
-                                                                ? root.maskCreation.outerFeatherPercent : 0))
+                        value: root.maskCreation ? Math.min(400, root.maskCreation.outerFeatherPercent) : 0
+                        beginEdit: function () { root.maskCreation.beginOuterFeather() }
+                        updateEdit: function (v) { root.maskCreation.updateOuterFeather(v) }
+                        finishEdit: function () { root.maskCreation.finishAnalyticControl() }
                     }
 
-                    ParameterLabel { visible: root.gradientSelected; text: qsTr("Transition width") }
-                    EditorMonoSlider {
+                    EditorDragSlider {
                         objectName: "editorMasksTransitionSlider"
-                        Layout.fillWidth: true
+                        partName: "editorMasksTransition"
                         visible: root.gradientSelected
                         enabled: root.gradientSelected
-                        accessibleName: qsTr("Mask transition width")
-                        from: 0.1; to: 200; stepSize: 0.1; pointerGain: 1
-                        rowHeight: 28; handleSize: 18
+                        label: qsTr("Transition width")
+                        from: 0.1
+                        to: 200
+                        stepSize: 0.1
+                        precision: 1
+                        suffix: "%"
+                        defaultValue: 20
                         flickable: maskScroll
-                        externalValue: root.maskCreation ? root.maskCreation.transitionPercent : 0
-                        onBegin: function () { root.maskCreation.beginTransition() }
-                        onUpdate: function (v) { root.maskCreation.updateTransition(v) }
-                        onFinish: function () { root.maskCreation.finishAnalyticControl() }
-                        onReset: function () {
-                            root.maskCreation.beginTransition()
-                            root.maskCreation.updateTransition(20)
-                            root.maskCreation.finishAnalyticControl()
-                        }
-                    }
-                    ParameterValue {
-                        objectName: "editorMasksTransitionValue"
-                        visible: root.gradientSelected
-                        text: qsTr("%1 percent").arg(Number(root.maskCreation
-                                                             ? root.maskCreation.transitionPercent : 0)
-                                                      .toFixed(1))
+                        value: root.maskCreation ? root.maskCreation.transitionPercent : 0
+                        beginEdit: function () { root.maskCreation.beginTransition() }
+                        updateEdit: function (v) { root.maskCreation.updateTransition(v) }
+                        finishEdit: function () { root.maskCreation.finishAnalyticControl() }
                     }
 
                     Item { Layout.fillHeight: true }

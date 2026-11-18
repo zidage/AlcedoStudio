@@ -62,6 +62,7 @@ class InProcessAutomationSession {
         RegisterAutomationCurveCommands(registry_, &error) &&
         RegisterAutomationEditorCommands(registry_, &host_, &error) &&
         RegisterAutomationVersionCommands(registry_, &host_, &error) &&
+        RegisterAutomationNodeCommands(registry_, &host_, &error) &&
         RegisterAutomationRenderCommands(registry_, &host_, &error) &&
         RegisterAutomationAdjustmentCommands(registry_, &host_, host_mode, &error);
     EXPECT_TRUE(registered) << error.toStdString();

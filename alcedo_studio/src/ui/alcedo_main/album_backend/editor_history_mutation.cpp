@@ -443,9 +443,15 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   std::vector<HistoryWorkingState::DocumentFieldEdit> recorded_fields{recorded};
   const auto restore_before = [&] { return RestoreDocumentFields(*state, recorded_fields, error); };
   // Entry resets of the RAW import look join this batch, so one Undo restores them with the edit.
+  // The rules compare against the import look in the history root of the image.
+  if (!state->root) {
+    if (error) *error = "Editor history root is unavailable for the entry resets";
+    (void)restore_before();
+    return false;
+  }
   std::vector<alcedo::EditorEntryResetWrite>          resets;
   try {
-    resets = EntryResetWrites(state->document->Document(), patch.field_key,
+    resets = EntryResetWrites(state->document->Document(), state->root->document, patch.field_key,
                               recorded.before_model_json, recorded.after_model_json);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
@@ -665,7 +671,8 @@ auto EditorHistoryMutation::RemoveColorGradeAndBridge(const alcedo::EditorHistor
 
 auto EditorHistoryMutation::SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard,
                                                  const alcedo::NodeId& node_id, bool enabled,
-                                                 std::string* error) -> bool {
+                                                 std::string* error, bool* changed) -> bool {
+  if (changed) *changed = false;
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
   if (!state->history) {
@@ -678,9 +685,15 @@ auto EditorHistoryMutation::SetColorGradeEnabled(const alcedo::EditorHistoryGuar
     if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
     return false;
   }
+  if (grade->Enabled() == enabled) {
+    state_.RecordPublishedRenderReason(std::nullopt);
+    return true;
+  }
   auto batch = MakeSetNodeEnabledBatch(node_id, PipelineEditNodeKind::ColorGrade, grade->Enabled(),
-                                       enabled);
-  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
+                                       enabled, grade->DisplayName());
+  if (!PublishAppliedTypedBatch(*state, state_, batch, false, error)) return false;
+  if (changed) *changed = true;
+  return true;
 }
 
 auto EditorHistoryMutation::SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard,

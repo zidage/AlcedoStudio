@@ -57,15 +57,21 @@ Item {
     // Keyboard focus without selection: a quiet neutral ring (DESIGN.md), never the accent.
     property color focusRingColor: appTheme.textMutedColor
 
+    // Dense strips (EditorLayerIconButton) paint a smaller glyph than the
+    // compact token; 0 keeps the shared optical and source sizes.
+    property int glyphSizeOverride: 0
+
     readonly property int hitSize: compact
                                    ? appTheme.iconButtonHitSizeCompact
                                    : appTheme.iconButtonHitSize
-    readonly property int opticalSize: compact
-                                       ? appTheme.iconOpticalSizeCompact
-                                       : appTheme.iconOpticalSize
-    readonly property int sourceSize: compact
-                                      ? appTheme.iconSourceSizeCompact
-                                      : appTheme.iconSourceSize
+    readonly property int opticalSize: glyphSizeOverride > 0
+                                       ? glyphSizeOverride
+                                       : (compact ? appTheme.iconOpticalSizeCompact
+                                                  : appTheme.iconOpticalSize)
+    readonly property int sourceSize: glyphSizeOverride > 0
+                                      ? glyphSizeOverride
+                                      : (compact ? appTheme.iconSourceSizeCompact
+                                                 : appTheme.iconSourceSize)
 
     // Effective square side: callers may still provide an explicit square;
     // otherwise the shared hit token owns pointer and keyboard geometry.

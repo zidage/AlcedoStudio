@@ -8,24 +8,35 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QColor>
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QFont>
+#include <QFontMetricsF>
+#include <QHoverEvent>
 #include <QList>
 #include <QPointF>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlError>
+#include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QRectF>
+#include <QSizeF>
+#include <QTest>
 #include <QVariantMap>
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "app/editor_panel_projection.hpp"
 #include "edit/operators/models/curve_model.hpp"
@@ -34,6 +45,7 @@
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/alcedo_main/plot_pane/plot_pane.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -55,8 +67,8 @@ class SnapshotSession final : public QObject, public IEditorAdjustmentSubmitter 
     if (const auto* scalar = std::get_if<alcedo::EditorScalarWrite>(&write)) {
       last_scalar_field_ = fieldKey;
       last_scalar_value_ = scalar->value;
-      last_settled_      = settled;
     }
+    last_settled_ = settled;
     ++submit_count_;
     return true;
   }
@@ -274,6 +286,149 @@ TEST(EditorAdjustmentSnapshotQmlTest, LookHlsLoadsCatalogUiValuesAndRanges) {
   EXPECT_EQ(range("lookHlsSmoothnessSlider"), (std::pair{1.0, 180.0}));
 }
 
+// #922: Shadows takes +150 and Highlights -150 past their +-100 soft limits; the rail shows the
+// extra zone on that side only.
+TEST(EditorAdjustmentSnapshotQmlTest, ToneShadowsAndHighlightsTakeTheExtendedValues) {
+  SnapshotSession              session(QVariantMap{}, 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  struct Case {
+    const char* slider;
+    const char* field;
+    double      typed;
+    bool        extra_low;
+    bool        extra_high;
+  };
+  for (const Case& c : {Case{"toneShadowsSlider", "shadows", 150.0, false, true},
+                        Case{"toneHighlightsSlider", "highlights", -150.0, true, false}}) {
+    auto* slider = harness.root()->findChild<QObject*>(QString::fromLatin1(c.slider));
+    ASSERT_NE(slider, nullptr) << c.slider;
+    EXPECT_DOUBLE_EQ(slider->property("softFrom").toDouble(), -100.0) << c.slider;
+    EXPECT_DOUBLE_EQ(slider->property("softTo").toDouble(), 100.0) << c.slider;
+    auto* rail = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderRail"));
+    ASSERT_NE(rail, nullptr) << c.slider;
+    // The extra zones are Repeater delegates: look them up in the item tree.
+    const auto zone_visible = [rail](const char* name) {
+      for (QQuickItem* child : rail->childItems()) {
+        if (child->objectName() == QLatin1String(name)) return child->isVisible();
+      }
+      ADD_FAILURE() << "no " << name;
+      return false;
+    };
+    EXPECT_EQ(zone_visible("adjustmentSliderExtraLow"), c.extra_low) << c.slider;
+    EXPECT_EQ(zone_visible("adjustmentSliderExtraHigh"), c.extra_high) << c.slider;
+
+    // A typed value: the field emits valueEntered with the value limited to [from, to].
+    ASSERT_TRUE(QMetaObject::invokeMethod(slider, "valueEntered", Q_ARG(double, c.typed)));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(session.lastScalarField(), QString::fromLatin1(c.field));
+    EXPECT_FLOAT_EQ(session.lastScalarValue(), static_cast<float>(c.typed)) << c.slider;
+    EXPECT_DOUBLE_EQ(slider->property("value").toDouble(), c.typed) << c.slider;
+    EXPECT_TRUE(slider->property("beyondSoftRange").toBool()) << c.slider;
+  }
+}
+
+// Every expanded card holds its whole content: the section body adds its insets to the height of
+// the content column, so the last control (Tone Blacks, Selective Color Hue Smoothness) is not
+// cut by the card below.
+TEST(EditorAdjustmentSnapshotQmlTest, ExpandedCardsHoldTheirWholeContent) {
+  SnapshotSession              session(QVariantMap{}, 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  const auto body_of = [](QQuickItem* item) -> QQuickItem* {
+    for (QQuickItem* parent = item; parent != nullptr; parent = parent->parentItem()) {
+      if (parent->objectName() == QLatin1String("collapsibleSectionBody")) {
+        return parent;
+      }
+    }
+    return nullptr;
+  };
+  for (const char* name : {"toneBlacksSlider", "lookHlsSmoothnessSlider"}) {
+    auto* slider = harness.root()->findChild<QQuickItem*>(QString::fromLatin1(name));
+    ASSERT_NE(slider, nullptr) << name;
+    auto* body = body_of(slider);
+    ASSERT_NE(body, nullptr) << name;
+    const QPointF bottom = slider->mapToItem(body, QPointF(0, slider->height()));
+    EXPECT_LE(bottom.y() + 4.0, body->height())
+        << name << " ends at " << bottom.y() << " in a body of " << body->height();
+  }
+
+  int checked = 0;
+  for (auto* body : harness.root()->findChildren<QQuickItem*>(
+           QStringLiteral("collapsibleSectionBody"))) {
+    auto* section = body->parentItem();
+    while (section != nullptr && !section->property("foldProgress").isValid()) {
+      section = section->parentItem();
+    }
+    if (section == nullptr || section->property("foldProgress").toReal() < 0.999) {
+      continue;
+    }
+    auto* content = body->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionBodyContent"));
+    ASSERT_NE(content, nullptr);
+    for (QQuickItem* column : content->childItems()) {
+      // Cards of the panels that are not shown keep their layout, so they count too.
+      if (column->height() <= 0.0) {
+        continue;
+      }
+      const QPointF bottom = column->mapToItem(body, QPointF(0, column->height()));
+      EXPECT_LE(bottom.y(), body->height() + 0.5) << section->objectName().toStdString();
+      ++checked;
+    }
+  }
+  EXPECT_GT(checked, 5);
+}
+
+// #922: the Selective Color rails show the selected hue: Hue Shift its hue band, Lightness dark
+// to light, Chroma grey to full color. A new hue selection recolors them.
+TEST(EditorAdjustmentSnapshotQmlTest, LookHlsRailsFollowTheSelectedHue) {
+  SnapshotSession              session(QVariantMap{}, 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model = harness.root()->findChild<QObject*>(QStringLiteral("lookHlsModel"));
+  ASSERT_NE(model, nullptr);
+
+  const auto stop_color = [&](const char* slider_name, int stop) -> QColor {
+    auto* slider = harness.root()->findChild<QObject*>(QString::fromLatin1(slider_name));
+    EXPECT_NE(slider, nullptr) << slider_name;
+    if (slider == nullptr) {
+      return {};
+    }
+    QQmlExpression expression(qmlContext(slider), slider,
+                              QStringLiteral("railGradient.stops[%1].color").arg(stop));
+    const QVariant color = expression.evaluate();
+    EXPECT_FALSE(expression.hasError()) << expression.error().toString().toStdString();
+    return color.value<QColor>();
+  };
+  const auto hsl = [](double hue, double saturation, double lightness) {
+    return QColor::fromHslF(static_cast<float>(hue / 360.0), static_cast<float>(saturation),
+                            static_cast<float>(lightness));
+  };
+  const auto expect_near = [](const QColor& actual, const QColor& expected, const char* what) {
+    EXPECT_NEAR(actual.redF(), expected.redF(), 0.01) << what;
+    EXPECT_NEAR(actual.greenF(), expected.greenF(), 0.01) << what;
+    EXPECT_NEAR(actual.blueF(), expected.blueF(), 0.01) << what;
+  };
+
+  for (const int index : {2, 5}) {
+    ASSERT_TRUE(QMetaObject::invokeMethod(model, "selectHueIndex", Q_ARG(int, index)));
+    QCoreApplication::processEvents();
+    const double hue = model->property("targetHue").toDouble();
+    // A positive Hue Shift raises the hue; the kernels turn the hue by 2.25 x the value, so the
+    // -30 .. +30 rail runs from the hue -67.5 to +67.5 degrees.
+    expect_near(stop_color("lookHlsHueShiftSlider", 0),
+                hsl(std::fmod(hue - 67.5 + 360.0, 360.0), 1, 0.5), "hue shift left end");
+    expect_near(stop_color("lookHlsHueShiftSlider", 2), hsl(hue, 1, 0.5), "hue shift center");
+    expect_near(stop_color("lookHlsHueShiftSlider", 4), hsl(std::fmod(hue + 67.5, 360.0), 1, 0.5),
+                "hue shift right end");
+    expect_near(stop_color("lookHlsLightnessSlider", 0), hsl(hue, 1, 0.1), "lightness left end");
+    expect_near(stop_color("lookHlsLightnessSlider", 2), hsl(hue, 1, 0.9), "lightness right end");
+    expect_near(stop_color("lookHlsChromaSlider", 0), hsl(hue, 0, 0.5), "chroma left end");
+    expect_near(stop_color("lookHlsChromaSlider", 2), hsl(hue, 1, 0.5), "chroma right end");
+  }
+}
+
 TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveSectionLoadsFourCurvesAndMarksTheChangedChannels) {
   alcedo::EditorPanelCurveValue curve;
   curve.points = {{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}};
@@ -336,11 +491,12 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveSectionLoadsFourCurvesAndMarksThe
 }
 
 TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurveAndAppliesOne) {
-  // A document with the Film-like RGB curve (the RAW import look) and a custom red curve.
-  const auto* film_like = alcedo::FindToneCurvePreset("film_like");
-  ASSERT_NE(film_like, nullptr);
+  // A document with the Cl. Digit RGB curve (the RAW import look) and a custom red
+  // curve.
+  const auto* cl_digital = alcedo::FindToneCurvePreset("cl_digital");
+  ASSERT_NE(cl_digital, nullptr);
   alcedo::EditorPanelCurveValue curve;
-  curve.points = film_like->PointList();
+  curve.points = cl_digital->PointList();
   curve.red    = {{0.0f, 0.1f}, {0.5f, 0.45f}, {1.0f, 1.0f}};
   curve.green  = alcedo::IdentityCurvePoints();
   curve.blue   = alcedo::IdentityCurvePoints();
@@ -358,7 +514,7 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurv
   auto* button = harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePresetButton"));
   ASSERT_NE(model, nullptr);
   ASSERT_NE(button, nullptr);
-  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Film-like"));
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Cl. Digit"));
 
   model->setProperty("channel", 1);
   EXPECT_EQ(button->property("text").toString(), QStringLiteral("Custom"));
@@ -373,11 +529,202 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurv
   EXPECT_TRUE(item->property("checked").toBool());
 
   model->setProperty("channel", 0);
-  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Film-like"));
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Cl. Digit"));
   auto* film_item =
-      harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePreset_film_like"));
+      harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePreset_cl_digital"));
   ASSERT_NE(film_item, nullptr);
   EXPECT_TRUE(film_item->property("checked").toBool());
+}
+
+TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveRightClickRemovesAnInteriorPointAndNoEndPoint) {
+  alcedo::EditorPanelCurveValue curve;
+  curve.points = {{0.0f, 0.0f},  {0.2f, 0.15f}, {0.4f, 0.4f},
+                  {0.6f, 0.65f}, {0.8f, 0.85f}, {1.0f, 1.0f}};
+  curve.red    = alcedo::IdentityCurvePoints();
+  curve.green  = alcedo::IdentityCurvePoints();
+  curve.blue   = alcedo::IdentityCurvePoints();
+  alcedo::EditorPanelProjection projection;
+  projection.session_generation = 1;
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = "curve";
+  field.value     = curve;
+  projection.fields.push_back(std::move(field));
+
+  SnapshotSession              session(alcedo::ui::PanelProjectionToVariantMap(projection), 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model = harness.root()->findChild<QObject*>(QStringLiteral("toneCurveModel"));
+  auto* pane  = harness.root()->findChild<PlotPane*>(QStringLiteral("toneCurvePlotPane"));
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(pane, nullptr);
+  QQuickWindow* window = pane->window();
+  ASSERT_NE(window, nullptr);
+  // The Tone Curve plot sits under the Tone sliders: a tall window shows it.
+  window->resize(500, 1600);
+  harness.root()->setSize(window->size());
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+  const auto points       = [&] { return model->property("points").value<QList<QPointF>>(); };
+  const auto point_count  = [&] { return model->property("pointCount").toInt(); };
+  // The window point of a data position of the plot. The loaded points are float, so the clicks
+  // go to the positions that the model holds.
+  const auto window_point = [&](const QPointF& data) {
+    const QPointF scene = pane->mapToScene(pane->mapFromData(data));
+    EXPECT_TRUE(QRectF(QPointF(0, 0), window->size()).contains(scene)) << "plot outside window";
+    return scene.toPoint();
+  };
+  const auto right_click = [&](const QPointF& data) {
+    QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, window_point(data));
+  };
+  ASSERT_EQ(point_count(), 6);
+  const QList<QPointF> loaded = points();
+
+  // A right click on an interior point removes it with one settled write: one undo step.
+  right_click(loaded[2]);
+  EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[1], loaded[3], loaded[4], loaded[5]}));
+  EXPECT_EQ(session.submitCount(), 1);
+  EXPECT_TRUE(session.lastSettled());
+  EXPECT_FALSE(model->property("dragActive").toBool());
+
+  // On an end point, on the curve between points, and on the plot away from the curve, the
+  // right click changes nothing and adds no point.
+  right_click(loaded[0]);
+  right_click(loaded[5]);
+  double on_curve = 0.0;
+  ASSERT_TRUE(QMetaObject::invokeMethod(model, "evaluate", Q_RETURN_ARG(double, on_curve),
+                                        Q_ARG(int, 0), Q_ARG(double, 0.5)));
+  right_click({0.5, on_curve});
+  right_click({0.3, 0.8});
+  EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[1], loaded[3], loaded[4], loaded[5]}));
+  EXPECT_EQ(session.submitCount(), 1);
+
+  // Two fast right clicks on a point remove that point only.
+  QTest::mouseDClick(window, Qt::RightButton, Qt::NoModifier, window_point(loaded[3]));
+  EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[1], loaded[4], loaded[5]}));
+  EXPECT_EQ(session.submitCount(), 2);
+
+  // The double click and the Delete key still remove a point.
+  QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, window_point(loaded[1]));
+  EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[4], loaded[5]}));
+  EXPECT_EQ(session.submitCount(), 3);
+  EXPECT_FALSE(model->property("dragActive").toBool());
+  QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, window_point(loaded[4]));
+  EXPECT_EQ(model->property("selectedIndex").toInt(), 1);
+  QTest::keyClick(window, Qt::Key_Delete);
+  EXPECT_EQ(points(), (QList<QPointF>{loaded[0], loaded[5]}));
+  EXPECT_EQ(session.submitCount(), 4);
+}
+
+// Every text item under @p item, at any depth.
+void CollectTextItems(QQuickItem* item, std::vector<QQuickItem*>& out) {
+  for (QQuickItem* child : item->childItems()) {
+    if (child->inherits("QQuickText") || child->inherits("QQuickTextInput")) {
+      out.push_back(child);
+    }
+    CollectTextItems(child, out);
+  }
+}
+
+TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveSectionShowsAllTextInFullAtTheDefaultPanelWidth) {
+  // Modified RGB and red curves show the modified dots. The selected end point at 1.0 has the
+  // longest EV texts of the fields (+10.27 EV).
+  alcedo::EditorPanelCurveValue curve;
+  curve.points = {{0.0f, 0.0f}, {0.06f, 0.03f}, {0.75f, 0.82f}, {1.0f, 1.0f}};
+  curve.red    = {{0.0f, 0.1f}, {1.0f, 1.0f}};
+  curve.green  = alcedo::IdentityCurvePoints();
+  curve.blue   = alcedo::IdentityCurvePoints();
+  alcedo::EditorPanelProjection projection;
+  projection.session_generation = 1;
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = "curve";
+  field.value     = curve;
+  projection.fields.push_back(std::move(field));
+
+  SnapshotSession              session(alcedo::ui::PanelProjectionToVariantMap(projection), 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  const AppTheme& theme = AppTheme::Instance();
+  auto*           model = harness.root()->findChild<QObject*>(QStringLiteral("toneCurveModel"));
+  auto* section = harness.root()->findChild<QQuickItem*>(QStringLiteral("editorToneCurveGroup"));
+  auto* pane    = harness.root()->findChild<PlotPane*>(QStringLiteral("toneCurvePlotPane"));
+  auto* grid    = harness.root()->findChild<QObject*>(QStringLiteral("toneCurveGridLayer"));
+  auto* selector =
+      harness.root()->findChild<QQuickItem*>(QStringLiteral("toneCurveChannelSelector"));
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(pane, nullptr);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(selector, nullptr);
+  QQuickWindow* window = pane->window();
+  ASSERT_NE(window, nullptr);
+
+  // The stack at the default editor panel width, tall enough to show the Tone Curve section.
+  window->resize(theme.editorSidePanelWidth(), 1600);
+  harness.root()->setSize(QSizeF(theme.editorSidePanelWidth(), 1600));
+  model->setProperty("selectedIndex", 3);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+  // The pointer over the plot shows the In and Out readout, here with long In and Out texts.
+  const QPointF hover_point = pane->mapFromData({0.99, 0.05});
+  QHoverEvent   hover(QEvent::HoverMove, hover_point, pane->mapToGlobal(hover_point), hover_point);
+  QCoreApplication::sendEvent(pane, &hover);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+  auto* readout = harness.root()->findChild<QQuickItem*>(QStringLiteral("toneCurvePointerReadout"));
+  ASSERT_NE(readout, nullptr);
+  ASSERT_TRUE(pane->property("pointerInside").toBool());
+  EXPECT_TRUE(readout->isVisible());
+  EXPECT_EQ(selector->property("titlePixelSize").toInt(), theme.fontSizeMicro());
+
+  // No visible text of the section is elided or reaches past the clip of the section.
+  const QRectF             section_rect(0.0, 0.0, section->width(), section->height());
+  std::vector<QQuickItem*> texts;
+  CollectTextItems(section, texts);
+  int checked = 0;
+  for (QQuickItem* text_item : texts) {
+    const QString text = text_item->property("text").toString();
+    if (!text_item->isVisible() || text.trimmed().isEmpty()) {
+      continue;
+    }
+    ++checked;
+    if (text_item->inherits("QQuickText")) {
+      EXPECT_FALSE(text_item->property("truncated").toBool()) << text.toStdString();
+    } else {
+      EXPECT_LE(text_item->property("contentWidth").toReal(), text_item->width() + 0.5)
+          << text.toStdString();
+    }
+    const QRectF content(0.0, 0.0, std::max(text_item->width(), text_item->implicitWidth()),
+                         std::max(text_item->height(), text_item->implicitHeight()));
+    const QRectF in_section = text_item->mapRectToItem(section, content);
+    EXPECT_TRUE(section_rect.adjusted(-0.5, -0.5, 0.5, 0.5).contains(in_section))
+        << text.toStdString() << " at " << in_section.x() << "," << in_section.y() << " "
+        << in_section.width() << "x" << in_section.height() << " in section "
+        << section_rect.width() << "x" << section_rect.height();
+  }
+  // The title, the channel titles, the preset name, the readout, and the two fields with their
+  // labels and EV texts.
+  EXPECT_GE(checked, 16);
+
+  // The EV labels under the plot show in full at both ends of the X axis.
+  const QFont font = grid->property("labelFont").value<QFont>();
+  EXPECT_EQ(font.pixelSize(), theme.fontSizeMicro());
+  const QFontMetricsF metrics(font);
+  const QRectF        plot = pane->property("plotRect").toRectF();
+  EXPECT_LE(plot.bottom() + grid->property("labelGap").toReal() + metrics.height(),
+            pane->height() + 0.5);
+  int labels = 0;
+  for (const QVariant& tick : grid->property("xTicks").toList()) {
+    const QVariantMap map   = tick.toMap();
+    const QString     label = map.value(QStringLiteral("label")).toString();
+    if (label.isEmpty()) {
+      continue;
+    }
+    ++labels;
+    const qreal x    = pane->mapFromData({map.value(QStringLiteral("value")).toDouble(), 0.0}).x();
+    const qreal half = 0.5 * metrics.horizontalAdvance(label);
+    EXPECT_GE(x - half, -0.5) << label.toStdString();
+    EXPECT_LE(x + half, pane->width() + 0.5) << label.toStdString();
+  }
+  EXPECT_GE(labels, 8);
+  EXPECT_TRUE(section_rect.contains(pane->mapRectToItem(section, pane->boundingRect())));
 }
 
 }  // namespace

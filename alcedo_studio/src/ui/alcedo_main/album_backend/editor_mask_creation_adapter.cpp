@@ -1531,9 +1531,15 @@ auto EditorMaskCreationAdapter::SyncRangeView() -> bool {
   }
   const bool retarget = view.target != range_view_.target || view.present != range_view_.present;
   range_view_         = view;
+  const bool has_target = range_view_.present && !range_view_.target.Empty();
+  if (retarget && has_target && !ai_mask_edit_open_ && mask_range_available()) {
+    // "Show selection" starts on for each new target Mask (#944). An AI Mask edit shows its own
+    // candidate coverage (D11), so its targets keep the toggle as it is.
+    range_coverage_requested_ = true;
+  }
   if (retarget && range_coverage_requested_) {
     // The toggle follows the target Mask; without one it turns off.
-    if (range_view_.present && !range_view_.target.Empty()) {
+    if (has_target) {
       ShowRangeCoverage(range_view_.target);
     } else {
       range_coverage_requested_ = false;

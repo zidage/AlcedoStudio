@@ -14,6 +14,9 @@ import QtQuick.Layouts
 // stay visible but non-interactive (e.g. bit depth locked by export format).
 // Root `enabled` remains the master gate for the whole track.
 //
+// Per-entry width: segments share the track equally. An entry may set `stretch` (default 1) to
+// take that many shares, for example a long title among one-letter titles.
+//
 // Tokens come from `appTheme`; callers can override the theme color properties
 // (e.g. editor panels pass their `theme`-derived colors) and geometry. The
 // caller owns the model: bind `entries` / `currentValue` / `currentIndex` and
@@ -30,6 +33,8 @@ Rectangle {
     property int segmentHeight: appTheme.iconButtonHitSizeCompact + appTheme.spaceSm
     property int trackInset: appTheme.spaceXs
     property real trackRadius: appTheme.controlRadiusSmall
+    // Pixel size of the segment titles; a crowded switcher sets appTheme.fontSizeMicro.
+    property int titlePixelSize: appTheme.fontSizeBody
 
     // Theme colors (default to appTheme tokens; editor panels override with
     // their `theme`-derived aliases so the switcher matches the panel family).
@@ -44,7 +49,21 @@ Rectangle {
     // component reads `entry` (the segment entry) and `selected` from its Loader.
     property Component segmentDecoration: null
 
+    // Track width that the segments share, and the sum of the entry stretches.
+    readonly property real segmentsWidth: Math.max(
+        0, cardRow.width - cardRow.spacing * Math.max(0, entries.length - 1))
+    readonly property real stretchTotal: {
+        var total = 0
+        for (var i = 0; i < entries.length; ++i)
+            total += stretchOf(entries[i])
+        return total
+    }
+
     signal selected(int index, string value)
+
+    function stretchOf(entry) {
+        return entry && entry.stretch !== undefined ? entry.stretch : 1
+    }
 
     implicitHeight: Math.max(segmentHeight, cardRow.implicitHeight) + 2 * trackInset
     implicitWidth: 200
@@ -91,8 +110,15 @@ Rectangle {
                 }
                 readonly property bool hovered: segMouse.containsMouse
 
+                // The share of the track width. Layout.horizontalStretchFactor does not apply
+                // here: the layout engine scales stretch by the preferred widths, and equal
+                // preferred widths give equal segments.
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.preferredWidth: root.stretchTotal > 0
+                                       ? root.segmentsWidth * root.stretchOf(modelData)
+                                         / root.stretchTotal
+                                       : 0
                 implicitHeight: segmentLabel.implicitHeight + appTheme.spaceSm
                 activeFocusOnTab: segmentEnabled
                 Accessible.role: Accessible.RadioButton
@@ -138,7 +164,7 @@ Rectangle {
                         text: segment.modelData ? segment.modelData.label : ""
                         color: segment.sel ? root.selectedInkColor : root.textColor
                         font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeBody
+                        font.pixelSize: root.titlePixelSize
                         font.weight: segment.sel ? appTheme.fontWeightStrong
                                                  : appTheme.fontWeightRegular
                         elide: Text.ElideRight
@@ -154,7 +180,7 @@ Rectangle {
                     text: modelData ? modelData.label : ""
                     color: sel ? root.selectedInkColor : root.textColor
                     font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeBody
+                    font.pixelSize: root.titlePixelSize
                     font.weight: sel ? appTheme.fontWeightStrong
                                       : appTheme.fontWeightRegular
                     wrapMode: Text.Wrap

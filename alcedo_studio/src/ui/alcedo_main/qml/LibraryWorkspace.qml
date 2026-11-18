@@ -393,39 +393,25 @@ RowLayout {
                             onClicked: root.gridZoomLevel = Math.min(7, root.gridZoomLevel + 1)
                         }
 
-                        Slider {
+                        // The rail position is 7 - zoom level, so the right end shows the
+                        // largest photos.
+                        AlcedoSlider {
                             id: zoomSlider
+                            objectName: "libraryGridZoomSlider"
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignVCenter
-                            from: 7
-                            to: 0
+                            showValue: false
+                            inlineHeight: appTheme.iconButtonHitSizeCompact
+                            from: 0
+                            to: 7
                             stepSize: 1
-                            value: root.gridZoomLevel
-                            onValueChanged: root.gridZoomLevel = Math.round(value)
-                            background: Rectangle {
-                                x: zoomSlider.leftPadding
-                                y: zoomSlider.topPadding + zoomSlider.availableHeight / 2 - height / 2
-                                implicitWidth: zoomSlider.availableWidth
-                                implicitHeight: 4
-                                width: zoomSlider.availableWidth
-                                height: implicitHeight
-                                radius: 2
-                                color: Qt.rgba(root.colBgBase.r, root.colBgBase.g, root.colBgBase.b, 0.98)
-                                Rectangle {
-                                    width: zoomSlider.visualPosition * parent.width
-                                    height: parent.height
-                                    color: appTheme.textColor
-                                    radius: 2
-                                }
-                            }
-                            handle: Rectangle {
-                                x: zoomSlider.leftPadding + zoomSlider.visualPosition * (zoomSlider.availableWidth - width)
-                                y: zoomSlider.topPadding + zoomSlider.availableHeight / 2 - height / 2
-                                implicitWidth: 14
-                                implicitHeight: 14
-                                radius: 7
-                                color: appTheme.textColor
-                            }
+                            precision: 0
+                            origin: 0
+                            value: 7 - root.gridZoomLevel
+                            defaultValue: 7 - root.defaultGridZoomLevel
+                            onValueEdited: function (v) { root.gridZoomLevel = 7 - Math.round(v) }
+                            onValueEntered: function (v) { root.gridZoomLevel = 7 - Math.round(v) }
+                            onResetRequested: root.gridZoomLevel = root.defaultGridZoomLevel
                         }
 
                         IconActionButton {

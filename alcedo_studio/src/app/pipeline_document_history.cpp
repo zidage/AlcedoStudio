@@ -312,13 +312,17 @@ auto MakeRenameColorGradeBatch(const NodeId& node_id, std::string before_name, s
 }
 
 auto MakeSetNodeEnabledBatch(const NodeId& node_id, PipelineEditNodeKind node_kind,
-                             bool before_enabled, bool after_enabled) -> PipelineEditBatch {
+                             bool before_enabled, bool after_enabled,
+                             std::string_view node_display_name) -> PipelineEditBatch {
   SetNodeEnabledChange change;
   change.node_id        = node_id;
   change.node_kind      = node_kind;
   change.before_enabled = before_enabled;
   change.after_enabled  = after_enabled;
   nlohmann::json args{{"node_id", std::string{node_id.Value()}}};
+  if (!node_display_name.empty()) {
+    args["node_display_name"] = std::string{node_display_name};
+  }
   return PipelineEditBatch::Make(PipelineEditOperationKind::SetNodeEnabled, {std::move(change)},
                                  PresentationKeyForOperation(PipelineEditOperationKind::SetNodeEnabled),
                                  std::move(args));

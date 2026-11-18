@@ -95,7 +95,7 @@ struct PlotPane::PaneRootNode : public QSGNode {
 
 PlotPane::PlotPane(QQuickItem* parent) : QQuickItem(parent) {
   setFlag(ItemHasContents, true);
-  setAcceptedMouseButtons(Qt::LeftButton);
+  setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton);
   setAcceptHoverEvents(true);
   setClip(true);
   setImplicitWidth(240);
@@ -566,7 +566,29 @@ void PlotPane::EndPointerGrab() {
   UpdateCursor();
 }
 
+void PlotPane::RightClick(QMouseEvent* event) {
+  if (grab_layer_ || panning_) {
+    // The right button does nothing during a left-button interaction; the pane keeps the press
+    // so the interaction keeps its grab.
+    event->accept();
+    return;
+  }
+  const auto pointer = MakePointerEvent(event->position(), event->button(), event->modifiers());
+  for (auto it = slots_.rbegin(); it != slots_.rend(); ++it) {
+    PlotLayer* layer = (*it)->layer;
+    if (IsInputLayer(layer) && layer->PointerRightClick(view_, pointer)) {
+      event->accept();
+      return;
+    }
+  }
+  event->ignore();
+}
+
 void PlotPane::mousePressEvent(QMouseEvent* event) {
+  if (isEnabled() && event->button() == Qt::RightButton) {
+    RightClick(event);
+    return;
+  }
   if (!isEnabled() || event->button() != Qt::LeftButton) {
     event->ignore();
     return;
@@ -628,10 +650,19 @@ void PlotPane::mouseReleaseEvent(QMouseEvent* event) {
 
 void PlotPane::mouseDoubleClickEvent(QMouseEvent* event) {
   if (!isEnabled() || event->button() != Qt::LeftButton) {
+    // The second press of two fast right clicks already came as a press: the double click after
+    // it does nothing more.
     event->ignore();
     return;
   }
   const auto pointer = MakePointerEvent(event->position(), event->button(), event->modifiers());
+  // The double click comes after the second press, which a layer may have taken as the start of
+  // an interaction. That interaction ends here, so the layer sees press, release, double click.
+  if (PlotLayer* layer = grab_layer_) {
+    grab_layer_ = nullptr;
+    layer->PointerRelease(view_, pointer);
+    EndPointerGrab();
+  }
   for (auto it = slots_.rbegin(); it != slots_.rend(); ++it) {
     PlotLayer* layer = (*it)->layer;
     if (IsInputLayer(layer) && layer->PointerDoubleClick(view_, pointer)) {

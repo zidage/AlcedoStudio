@@ -388,8 +388,8 @@ TEST(GraphImageCacheRetention, AlgorithmRevisionRejectsPreviouslyDerivedImages) 
   auto stale_key = harness.plan.static_key;
   stale_key.compile_algorithm_version = kGradeCompileAlgorithmVersion - 1;
   EXPECT_NE(stale_key, harness.plan.static_key);
-  EXPECT_EQ(kPrimaryGradeImplementationVersion, 6U);
-  EXPECT_EQ(kLlfReferenceImplementationVersion, 2U);
+  EXPECT_EQ(kPrimaryGradeImplementationVersion, 7U);
+  EXPECT_EQ(kLlfReferenceImplementationVersion, 3U);
 
   const auto needed = harness.invalidation.MakeImageRepresentation(
       harness.Grade(), {kRgba.width, kRgba.height}, kRgba.format);

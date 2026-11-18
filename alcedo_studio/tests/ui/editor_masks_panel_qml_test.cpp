@@ -390,14 +390,14 @@ TEST(EditorMasksPanelQmlTest, RangeParameterSlidersAreEnabledForAFullRange) {
        {"editorMaskLuminanceSoftness", "editorMaskHueSoftness", "editorMaskHueMinChroma"}) {
     auto* slider = FindVisualItem(range_shell, QString::fromLatin1(name));
     ASSERT_NE(slider, nullptr) << name;
-    auto* handle = FindVisualItem(slider, QStringLiteral("adjustmentSliderHandle"));
+    auto* handle = FindVisualItem(slider, QStringLiteral("adjustmentSliderRail"));
     ASSERT_NE(handle, nullptr) << name;
     EXPECT_TRUE(WaitFor([&] { return handle->isEnabled(); })) << name << " is disabled";
   }
   // Not while the range section is unavailable.
   harness.mask_creation()->setProperty("maskRangeAvailable", false);
   auto* slider = FindVisualItem(range_shell, QStringLiteral("editorMaskHueSoftness"));
-  auto* handle = FindVisualItem(slider, QStringLiteral("adjustmentSliderHandle"));
+  auto* handle = FindVisualItem(slider, QStringLiteral("adjustmentSliderRail"));
   EXPECT_TRUE(WaitFor([&] { return !handle->isEnabled(); }));
 }
 

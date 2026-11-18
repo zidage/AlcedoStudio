@@ -152,6 +152,16 @@ auto PlotHandleLayer::PointerDoubleClick(const PlotViewTransform& view,
   return true;
 }
 
+auto PlotHandleLayer::PointerRightClick(const PlotViewTransform& view,
+                                        const PlotPointerEvent&  event) -> bool {
+  const int index = HitTest(view, event.item);
+  if (index < 0) {
+    return false;
+  }
+  emit rightClicked(index);
+  return true;
+}
+
 auto PlotHandleLayer::Hover(const PlotViewTransform& view, const PlotPointerEvent& event) -> bool {
   const int index = HitTest(view, event.item);
   SetHoveredIndex(index);

@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -851,6 +852,45 @@ TEST_F(EditorDocumentHistoryTest, SameValueNodeLockPreservesHistoryAndClearsStal
   EXPECT_EQ(Graph()->CommitCount(), count);
   EXPECT_EQ(Head(), before_head);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
+}
+
+// Issue #930: hiding a Color Grade is one commit that renders, keeps the node on the backbone,
+// and round-trips through Undo/Redo; an equal value is a no-op that clears a stale render reason.
+TEST_F(EditorDocumentHistoryTest, NodeVisibilityHistoryRoundTripRendersAndSkipsEqualValues) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto count       = Graph()->CommitCount();
+  const auto grade_id    = alcedo::NodeId{"grade.primary"};
+  const auto before_head = Head();
+  bool       changed     = true;
+  ASSERT_TRUE(history_.SetColorGradeEnabled(handle, grade_id, true, &error, &changed)) << error;
+  EXPECT_FALSE(changed);
+  EXPECT_EQ(Graph()->CommitCount(), count);
+  EXPECT_EQ(Head(), before_head);
+  EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
+
+  ASSERT_TRUE(history_.SetColorGradeEnabled(handle, grade_id, false, &error, &changed)) << error;
+  EXPECT_TRUE(changed);
+  EXPECT_EQ(Graph()->CommitCount(), count + 1);
+  const auto* grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
+  EXPECT_FALSE(grade->Enabled());
+  const auto backbone = Working()->Document().Graph().ImageBackboneNodeIds();
+  EXPECT_NE(std::find(backbone.begin(), backbone.end(), grade_id), backbone.end());
+  ASSERT_TRUE(history_.LastPublishedRenderReason().has_value());
+  EXPECT_EQ(*history_.LastPublishedRenderReason(), alcedo::EditorRenderReason::SettledAdjustment);
+
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
+  EXPECT_TRUE(grade->Enabled());
+  EXPECT_TRUE(history_.LastPublishedRenderReason().has_value());
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
+  EXPECT_FALSE(grade->Enabled());
+  EXPECT_EQ(Graph()->CommitCount(), count + 1);
 }
 
 TEST_F(EditorDocumentHistoryTest, MaskCreationUndoRedoRestoresExactIdentity) {

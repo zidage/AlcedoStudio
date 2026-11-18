@@ -139,6 +139,16 @@ class IEditorHistoryPort {
     if (error) *error = "Color Grade deletion protection is not supported by this history port";
     return false;
   }
+  /// Show or hide one Color Grade as one history commit that publishes a render reason.
+  /// Equal values succeed without a commit and clear the render reason. @p changed reports
+  /// an effective commit, or false on no-op/failure. Default rejects.
+  virtual auto SetColorGradeEnabled(const EditorHistoryGuardHandle& /*guard*/,
+                                    const NodeId& /*node_id*/, bool /*enabled*/,
+                                    std::string* error, bool* changed = nullptr) -> bool {
+    if (changed) *changed = false;
+    if (error) *error = "Color Grade visibility is not supported by this history port";
+    return false;
+  }
   /// Insert one clean Color Grade at the top of the Mask Groups stack,
   /// directly before DRT/Post, as one typed history commit. The current
   /// predecessor of DRT/Post must equal @p expected_predecessor_id; a mismatch

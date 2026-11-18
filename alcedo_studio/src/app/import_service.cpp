@@ -43,15 +43,16 @@ struct PendingImport {
   std::future<PreparedImport>                          ready;
 };
 
-/// Encode on a private default document, without constructing an image executor.
+/// Encode on a private default document. Apply @p raw_import_look only to RAW roots.
 auto EncodeImportedImageRoot(const PipelineMgmtService& service, sl_element_id_t element,
-                             const std::shared_ptr<Image>& image) -> EncodedImageRoot {
+                             const std::shared_ptr<Image>& image,
+                             const RawImportLook& raw_import_look) -> EncodedImageRoot {
   if (image->HasRasterColorDescription()) {
     return service.EncodeImageRoot(
         element, CreateDefaultRasterPipelineDocument(image->GetRasterColorDescription()), nullptr);
   }
   return service.EncodeImageRoot(
-      element, CreateDefaultPipelineDocument(),
+      element, CreateDefaultPipelineDocument(raw_import_look),
       image->HasRawColorContext() ? &image->GetRawColorContext() : nullptr);
 }
 }  // namespace
@@ -77,14 +78,24 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
     if (job->on_finished_) job->on_finished_(result);
     return job;
   }
-  submission_thread_.Submit(
-      [this, paths, dest, options, job] { RunImport(paths, dest, options, job); });
+  try {
+    // Read on the caller's thread and share the immutable look across this import's workers.
+    auto raw_import_look = std::make_shared<const RawImportLook>(raw_import_look_source_->Read());
+    submission_thread_.Submit(
+        [this, paths, dest, options, job, raw_import_look = std::move(raw_import_look)] {
+          RunImport(paths, dest, options, job, raw_import_look);
+        });
+  } catch (...) {
+    active_.store(false);
+    throw;
+  }
   return job;
 }
 
 void ImportServiceImpl::RunImport(const std::vector<image_path_t>& paths, const image_path_t& dest,
-                                  const ImportOptions&              options,
-                                  const std::shared_ptr<ImportJob>& job) {
+                                  const ImportOptions& options,
+                                  const std::shared_ptr<ImportJob>& job,
+                                  const std::shared_ptr<const RawImportLook>& raw_import_look) {
   auto&           progress = *job->progress_;
   ImportResult    result;
   auto&           sources = fs_service_->GetStorage()->GetSourceFileStore();
@@ -305,7 +316,7 @@ void ImportServiceImpl::RunImport(const std::vector<image_path_t>& paths, const 
                                  ? kAllImportCategories
                                  : options.allowed_categories_;
         thread_pool_.Submit([this, pin = pending.pin, element = pending.element, path,
-                             allowed, promise, job] {
+                             allowed, promise, job, raw_import_look] {
           PreparedImport work;
           try {
             if (job->IsCancelled()) {
@@ -320,7 +331,8 @@ void ImportServiceImpl::RunImport(const std::vector<image_path_t>& paths, const 
                                     "Import canceled while reading metadata");
             }
             reader->Validate();
-            work.root   = EncodeImportedImageRoot(*pipeline_service_, element, image);
+            work.root = EncodeImportedImageRoot(*pipeline_service_, element, image,
+                                                *raw_import_look);
             work.reader = std::move(reader);
           } catch (const SourceReadError& error) {
             work.error   = error.code;

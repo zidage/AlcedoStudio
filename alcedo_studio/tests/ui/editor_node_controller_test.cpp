@@ -482,7 +482,17 @@ TEST(EditorNodeController, EmptySnapshotIsRejectedAndKeepsTheLiveProjection) {
   EXPECT_FALSE(controller.last_error().isEmpty());
 }
 
-TEST(EditorNodeController, AddCreatesDisconnectedDraftGradeWithoutAProductCommand) {
+/// Nodes-page Add commits a detached Color Grade. Wiring it after Develop leaves
+/// grade.primary half connected, which keeps an uncommitted draft open.
+auto AddAndStartWiringAfterDevelop(EditorNodeController& controller) -> NodeId {
+  EXPECT_TRUE(controller.addCleanColorGrade());
+  const auto extra = controller.selected_node_id();
+  EXPECT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
+  EXPECT_TRUE(controller.incomplete_draft());
+  return extra;
+}
+
+TEST(EditorNodeController, AddCommitsOneDetachedGradeOutsideTheBackbone) {
   DocumentSessionBackend backend;
   backend.SetGeneration(15);
   EditorSessionController session(&backend);
@@ -491,12 +501,20 @@ TEST(EditorNodeController, AddCreatesDisconnectedDraftGradeWithoutAProductComman
   controller.selectNode(QStringLiteral("grade.primary"));
 
   ASSERT_TRUE(controller.addCleanColorGrade());
-  EXPECT_EQ(backend.edit_node_graph_count(), 0);
-  EXPECT_EQ(backend.Document().NextColorGradeNameNumber(), 2u);
-  EXPECT_TRUE(controller.incomplete_draft());
-  EXPECT_EQ(controller.backbone_node_ids().size(), 4);
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  EXPECT_EQ(backend.Document().NextColorGradeNameNumber(), 3u);
+  EXPECT_FALSE(controller.incomplete_draft());
+  EXPECT_FALSE(controller.has_draft());
+  EXPECT_EQ(controller.backbone_node_ids().size(), 3);
+  ASSERT_EQ(controller.snapshot().nodes.size(), 4u);
+  EXPECT_TRUE(controller.snapshot().nodes.back().detached);
   EXPECT_EQ(controller.selected_node_name(), QStringLiteral("Color Grade 2"));
+  EXPECT_TRUE(backend.Document().Graph().IsDetachedColorGrade(controller.selected_node_id()));
   EXPECT_EQ(controller.ActiveEdges().size(), 2u);
+  const auto groups = controller.mask_group_snapshot().groups;
+  ASSERT_EQ(groups.size(), 2u);
+  EXPECT_FALSE(groups[0].detached);
+  EXPECT_TRUE(groups[1].detached);
 }
 
 TEST(EditorNodeController, AddPlacesTheDisconnectedGradeBelowTheBackbone) {
@@ -575,13 +593,19 @@ TEST(EditorNodeController, BackendFailurePreservesDocumentCounterProjectionAndSe
   controller.set_editor_session(&session);
   const auto before_ids      = controller.backbone_node_ids();
   const auto before_counter  = backend.Document().NextColorGradeNameNumber();
+  const auto before_json     = backend.Document().ToJson().dump();
   const auto before_selected = controller.selected_node_id();
 
-  ASSERT_TRUE(controller.addCleanColorGrade());
+  backend.SetFailCommands(true);
+  EXPECT_FALSE(controller.addCleanColorGrade());
+  EXPECT_EQ(controller.last_error(), QStringLiteral("mini-Git journal append failed"));
+  // The draft keeps the added grade so the user can retry; the document is unchanged.
+  EXPECT_TRUE(controller.has_draft());
+  EXPECT_EQ(controller.ActiveNodes().size(), controller.snapshot().nodes.size() + 1);
   EXPECT_EQ(controller.backbone_node_ids().size(), before_ids.size() + 1);
   EXPECT_EQ(backend.Document().NextColorGradeNameNumber(), before_counter);
+  EXPECT_EQ(backend.Document().ToJson().dump(), before_json);
   EXPECT_NE(controller.selected_node_id(), before_selected);
-  EXPECT_EQ(backend.edit_node_graph_count(), 0);
 }
 
 TEST(EditorNodeController, MissingDefaultColorGradeAfterRefreshClearsSelection) {
@@ -654,25 +678,26 @@ TEST(EditorNodeController, ActiveCommandRejectsNestedAddBeforeDraftMutation) {
   controller.set_editor_session(&session);
 
   ASSERT_TRUE(controller.addCleanColorGrade());
-  EXPECT_EQ(controller.backbone_node_ids().size(), 4);
-  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+  EXPECT_EQ(controller.snapshot().nodes.size(), 4u);
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
 }
 
-TEST(EditorNodeController, ExclusivePortConnectLeavesDetachedGradesWithoutSubmitting) {
+TEST(EditorNodeController, ExclusivePortConnectCommitsOnceTheBypassedGradeIsDetached) {
   DocumentSessionBackend backend;
   backend.SetGeneration(30);
   EditorSessionController session(&backend);
   EditorNodeController    controller;
   controller.set_editor_session(&session);
-  ASSERT_TRUE(controller.addCleanColorGrade());
-  const auto extra = controller.selected_node_id();
+  const auto extra = AddAndStartWiringAfterDevelop(controller);
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
 
-  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
-  EXPECT_EQ(backend.edit_node_graph_count(), 0);
-  EXPECT_TRUE(controller.incomplete_draft());
+  // grade.primary loses its last edge: it is detached and the draft commits.
   ASSERT_TRUE(controller.requestConnect(NodeIdToQString(extra), QStringLiteral("drt")));
-  EXPECT_EQ(backend.edit_node_graph_count(), 0);
-  EXPECT_TRUE(controller.incomplete_draft());
+  EXPECT_EQ(backend.edit_node_graph_count(), 2);
+  EXPECT_FALSE(controller.incomplete_draft());
+  EXPECT_TRUE(backend.Document().Graph().IsDetachedColorGrade(NodeId{"grade.primary"}));
+  EXPECT_EQ(backend.Document().Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, extra, NodeId{"drt"}}));
 }
 
 TEST(EditorNodeController, CompletingThePathSubmitsOneTopologyChange) {
@@ -681,12 +706,11 @@ TEST(EditorNodeController, CompletingThePathSubmitsOneTopologyChange) {
   EditorSessionController session(&backend);
   EditorNodeController    controller;
   controller.set_editor_session(&session);
-  ASSERT_TRUE(controller.addCleanColorGrade());
-  const auto extra = controller.selected_node_id();
-  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
+  const auto extra = AddAndStartWiringAfterDevelop(controller);
   ASSERT_TRUE(controller.requestConnect(NodeIdToQString(extra), QStringLiteral("grade.primary")));
   ASSERT_TRUE(controller.requestConnect(QStringLiteral("grade.primary"), QStringLiteral("drt")));
-  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  // One commit for the detached Add, one for wiring it into the backbone.
+  EXPECT_EQ(backend.edit_node_graph_count(), 2);
   EXPECT_FALSE(controller.incomplete_draft());
   EXPECT_EQ(backend.Document().Graph().FindNode(extra) != nullptr, true);
   EXPECT_EQ(backend.Document().NextColorGradeNameNumber(), 3u);
@@ -703,12 +727,10 @@ TEST(EditorNodeController, ProductTopologyCommitKeepsProjectionFailureVisible) {
   controller.set_editor_session(&session);
   controller.set_graph_adapter(&adapter);
 
-  ASSERT_TRUE(controller.addCleanColorGrade());
-  const auto extra = controller.selected_node_id();
-  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
+  const auto extra = AddAndStartWiringAfterDevelop(controller);
   ASSERT_TRUE(controller.requestConnect(NodeIdToQString(extra), QStringLiteral("grade.primary")));
 
-  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  EXPECT_EQ(backend.edit_node_graph_count(), 2);
   EXPECT_NE(backend.Document().Graph().FindNode(extra), nullptr);
   EXPECT_EQ(controller.snapshot().nodes.size(), 4u);
   EXPECT_FALSE(adapter.has_projection());
@@ -735,7 +757,8 @@ TEST(EditorNodeController, DevelopAndDrtRejectUnsupportedPortRoles) {
             QStringLiteral("Connections must go from an output port to an input port"));
   EXPECT_FALSE(controller.requestConnect(QStringLiteral("drt"), extra));
   EXPECT_EQ(controller.last_error(), QStringLiteral("DRT/Post has no outgoing image port"));
-  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+  // Only the detached Add committed.
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
 }
 
 TEST(EditorNodeController, SelfConnectLeavesTheDraftUnchanged) {
@@ -751,10 +774,26 @@ TEST(EditorNodeController, SelfConnectLeavesTheDraftUnchanged) {
   EXPECT_FALSE(controller.requestConnect(extra, extra));
   EXPECT_EQ(controller.last_error(), QStringLiteral("A node cannot connect to itself"));
   EXPECT_EQ(controller.ActiveEdges().size(), before);
-  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+  // Only the detached Add committed.
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
 }
 
 TEST(EditorNodeController, ReturningADraftToTheBaseExitsEditingWithoutACommit) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(35);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  const auto extra = AddAndStartWiringAfterDevelop(controller);
+  // Wiring Develop back to grade.primary returns the draft to the committed graph.
+  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), QStringLiteral("grade.primary")));
+  EXPECT_FALSE(controller.incomplete_draft());
+  EXPECT_FALSE(controller.has_draft());
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  EXPECT_TRUE(backend.Document().Graph().IsDetachedColorGrade(extra));
+}
+
+TEST(EditorNodeController, DeletingTheDetachedAddedGradeCommitsItsRemoval) {
   DocumentSessionBackend backend;
   backend.SetGeneration(35);
   EditorSessionController session(&backend);
@@ -764,8 +803,9 @@ TEST(EditorNodeController, ReturningADraftToTheBaseExitsEditingWithoutACommit) {
   const auto extra = controller.selected_node_id_string();
   ASSERT_TRUE(controller.deleteColorGrade(extra));
   EXPECT_FALSE(controller.incomplete_draft());
-  EXPECT_EQ(backend.edit_node_graph_count(), 0);
-  EXPECT_EQ(controller.backbone_node_ids().size(), 3);
+  EXPECT_EQ(backend.edit_node_graph_count(), 2);
+  EXPECT_EQ(controller.snapshot().nodes.size(), 3u);
+  EXPECT_EQ(backend.Document().Graph().FindNode(extra.toStdString()), nullptr);
 }
 
 TEST(EditorNodeController, OrdinaryDraftEditsDoNotCopyIntoTheCommittedSnapshot) {
@@ -774,14 +814,16 @@ TEST(EditorNodeController, OrdinaryDraftEditsDoNotCopyIntoTheCommittedSnapshot) 
   EditorSessionController session(&backend);
   EditorNodeController    controller;
   controller.set_editor_session(&session);
-  const auto committed_nodes = controller.snapshot().nodes.size();
-  const auto committed_edges = controller.snapshot().edges.size();
-  const auto applies_before  = controller.completed_projection_apply_count();
-
   ASSERT_TRUE(controller.addCleanColorGrade());
-  EXPECT_EQ(controller.snapshot().nodes.size(), committed_nodes);
-  EXPECT_EQ(controller.snapshot().edges.size(), committed_edges);
-  EXPECT_EQ(controller.ActiveNodes().size(), committed_nodes + 1);
+  const auto extra          = controller.selected_node_id();
+  const auto committed      = controller.snapshot();
+  const auto applies_before = controller.completed_projection_apply_count();
+
+  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
+  ASSERT_TRUE(controller.incomplete_draft());
+  EXPECT_EQ(controller.snapshot(), committed);
+  EXPECT_NE(controller.ActiveEdges(), committed.edges);
+  EXPECT_EQ(controller.ActiveNodes().size(), committed.nodes.size());
   EXPECT_EQ(controller.completed_projection_apply_count(), applies_before);
 }
 
@@ -1342,28 +1384,27 @@ TEST(EditorNodeController, MaskGroupCommandsRejectDraftEndpointsAndFailures) {
   controller.set_editor_session(&session);
 
   // Draft boundary: structural commands and the panel stay disabled.
-  ASSERT_TRUE(controller.addCleanColorGrade());
-  EXPECT_TRUE(controller.incomplete_draft());
+  const auto extra = AddAndStartWiringAfterDevelop(controller);
   EXPECT_FALSE(controller.can_edit_mask_group_structure());
   EXPECT_FALSE(controller.insertMaskGroupAtTop());
   EXPECT_FALSE(controller.removeMaskGroup(QStringLiteral("grade.primary")));
   EXPECT_EQ(backend.insert_grade_top_count(), 0);
   EXPECT_EQ(backend.remove_grade_count(), 0);
 
-  // Locate switches the tool panel to Nodes and selects the detached node.
-  const auto detached = controller.detached_draft_node_ids();
-  ASSERT_EQ(detached.size(), 1);
-  ASSERT_TRUE(controller.locateNodeInGraph(detached[0]));
+  // Locate switches the tool panel to Nodes and selects the unfinished node. The
+  // half-connected grade.primary and the DRT past the break keep the draft open.
+  const auto unfinished = controller.unfinished_draft_node_ids();
+  ASSERT_EQ(unfinished,
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("drt")}));
+  ASSERT_TRUE(controller.locateNodeInGraph(unfinished[0]));
   EXPECT_EQ(session.editor_tool_panel_page(), QStringLiteral("nodes"));
-  EXPECT_EQ(controller.selected_node_id_string(), detached[0]);
+  EXPECT_EQ(controller.selected_node_id_string(), unfinished[0]);
 
   // Completing the path re-enables structural commands. The grade.primary to
-  // drt edge is retained from the committed document, so the second connect
-  // already submits and discards the draft.
-  const auto extra = controller.selected_node_id();
-  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
+  // drt edge is retained from the committed document, so this connect already
+  // submits and discards the draft.
   ASSERT_TRUE(controller.requestConnect(NodeIdToQString(extra), QStringLiteral("grade.primary")));
-  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  EXPECT_EQ(backend.edit_node_graph_count(), 2);
   EXPECT_TRUE(controller.can_edit_mask_group_structure());
 
   // Endpoints and unknown ids are rejected before submission.
@@ -1387,10 +1428,11 @@ TEST(EditorNodeController, PanelSwitchKeepsTheIncompleteDraftAndCommittedGroups)
   EditorSessionController session(&backend);
   EditorNodeController    controller;
   controller.set_editor_session(&session);
-  const auto committed_groups = controller.mask_groups();
-  ASSERT_EQ(committed_groups.size(), 1);
-
   ASSERT_TRUE(controller.addCleanColorGrade());
+  const auto extra            = controller.selected_node_id();
+  const auto committed_groups = controller.mask_groups();
+  ASSERT_EQ(committed_groups.size(), 2);
+  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
   EXPECT_TRUE(controller.incomplete_draft());
 
   // Switching away and back does not discard the draft and does not republish
@@ -1398,9 +1440,9 @@ TEST(EditorNodeController, PanelSwitchKeepsTheIncompleteDraftAndCommittedGroups)
   session.set_editor_tool_panel_page(QStringLiteral("history"));
   session.set_editor_tool_panel_page(QStringLiteral("nodes"));
   EXPECT_TRUE(controller.incomplete_draft());
-  EXPECT_EQ(controller.detached_draft_node_ids().size(), 1);
+  EXPECT_EQ(controller.unfinished_draft_node_ids().size(), 2);
   EXPECT_EQ(controller.mask_groups(), committed_groups);
-  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
 }
 
 TEST(EditorNodeController, MoveMaskGroupToIndexMovesAcrossMultiplePositionsAndKeepsSelection) {
@@ -1524,22 +1566,26 @@ TEST(EditorNodeController, MoveMaskGroupToIndexRejectsEndpointsUnknownDraftAndFa
   EXPECT_FALSE(controller.moveMaskGroupToIndex(QStringLiteral("grade.missing"), 0));
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
 
-  // An uncommitted node-graph draft blocks reordering.
+  // A detached group stays outside the reorder.
   ASSERT_TRUE(controller.addCleanColorGrade());
+  const auto extra = controller.selected_node_id();
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  EXPECT_FALSE(controller.moveMaskGroupToIndex(NodeIdToQString(extra), 0));
+  EXPECT_EQ(controller.last_error(),
+            QStringLiteral("Connect the Mask Group in Nodes before moving it"));
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+
+  // An uncommitted node-graph draft blocks reordering.
+  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
   EXPECT_TRUE(controller.incomplete_draft());
   EXPECT_FALSE(controller.moveMaskGroupToIndex(QStringLiteral("grade.top"), 0));
   EXPECT_EQ(controller.last_error(),
             QStringLiteral("Finish the node graph before changing Mask Groups"));
-  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
 
   // Completing the draft re-enables reordering.
-  const auto detached = controller.detached_draft_node_ids();
-  ASSERT_EQ(detached.size(), 1);
-  ASSERT_TRUE(controller.locateNodeInGraph(detached[0]));
-  const auto extra = controller.selected_node_id();
-  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
   ASSERT_TRUE(controller.requestConnect(NodeIdToQString(extra), QStringLiteral("grade.top")));
-  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  EXPECT_EQ(backend.edit_node_graph_count(), 2);
   EXPECT_TRUE(controller.can_edit_mask_group_structure());
   ASSERT_EQ(backend.Document().Graph().ImageBackboneNodeIds().size(), backbone_before.size() + 1);
 
@@ -1549,7 +1595,7 @@ TEST(EditorNodeController, MoveMaskGroupToIndexRejectsEndpointsUnknownDraftAndFa
   EXPECT_FALSE(controller.moveMaskGroupToIndex(QStringLiteral("grade.top"), 0));
   EXPECT_EQ(controller.last_error(), QStringLiteral("mini-Git journal append failed"));
   EXPECT_EQ(backend.Document().ToJson().dump(), hash_before);
-  EXPECT_EQ(backend.edit_node_graph_count(), 2);
+  EXPECT_EQ(backend.edit_node_graph_count(), 3);
 }
 
 TEST(EditorNodeController, PlainNodeSelectionReplacesTheCurrentSelection) {

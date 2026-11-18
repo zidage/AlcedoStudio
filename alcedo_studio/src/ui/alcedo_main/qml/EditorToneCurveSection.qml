@@ -6,7 +6,8 @@ import Alcedo.Main 1.0
 // Tone Curve section of the Tone panel (#890): channel selector, the curve plot on PlotPane over
 // the histogram of the curve input, and the In and Out fields of the selected point. The plot
 // layers only report positions; EditorToneCurveModel moves the points and writes them (one settled
-// history entry per drag, key move sequence, field edit, removal, and reset).
+// history entry per drag, key move sequence, field edit, removal, and reset). A double click or a
+// right click on an interior point, or Delete / Backspace on the selected point, removes it.
 CollapsibleSection {
     id: section
     objectName: "editorToneCurveGroup"
@@ -32,7 +33,11 @@ CollapsibleSection {
     readonly property string presetId: model ? model.presetId : "linear"
     readonly property real axisGrey: model ? model.axisGrey : 0.4135
     readonly property real axisStop: model ? model.axisStop : 0.0571
-    readonly property int labelInset: appTheme.fontSizeCaption + appTheme.spaceSm
+    // Room under the plot for the EV labels.
+    readonly property int labelInset: appTheme.fontSizeMicro + appTheme.spaceSm
+    // Room at each side of the plot for half of the widest EV label, so a label centered on a tick
+    // at an end of the X axis shows in full.
+    readonly property int labelSideInset: Math.ceil(axisLabelMetrics.advanceWidth / 2)
     // Output of the selected curve at the pointer input.
     readonly property real pointerOutput: {
         if (!section.model || !pane.pointerInside)
@@ -41,7 +46,15 @@ CollapsibleSection {
         return section.model.evaluate(section.channel, pane.pointerPosition.x)
     }
 
-    bodyContentHeight: curveBody.implicitHeight + appTheme.spaceSm
+    // The body content margin and the curve body margin at the top and at the bottom.
+    bodyContentHeight: curveBody.implicitHeight + 2 * appTheme.spaceXs
+
+    TextMetrics {
+        id: axisLabelMetrics
+        font.family: appTheme.dataFontFamily
+        font.pixelSize: appTheme.fontSizeMicro
+        text: "+10"
+    }
 
     // Menu name of a preset id (EditorToneCurveModel.presets); Custom for an empty id.
     function presetLabel(id) {
@@ -51,8 +64,7 @@ CollapsibleSection {
         case "soft_contrast": return qsTr("Soft Contrast")
         case "medium_contrast": return qsTr("Medium Contrast")
         case "strong_contrast": return qsTr("Strong Contrast")
-        case "film_like": return qsTr("Film-like")
-        case "filmic": return qsTr("Filmic")
+        case "cl_digital": return qsTr("Cl. Digit")
         case "kodak_2383": return qsTr("Kodak 2383")
         case "fuji_velvia_50": return qsTr("Velvia 50")
         case "kodak_ektachrome_e100": return qsTr("Ektachrome E100")
@@ -179,8 +191,11 @@ CollapsibleSection {
                 Layout.preferredWidth: 0
                 Layout.horizontalStretchFactor: 1
                 enabled: section.controlsEnabled
+                titlePixelSize: appTheme.fontSizeMicro
+                // The RGB segment is wider than a one-letter segment, so the RGB title and its
+                // modified dot fit.
                 entries: [
-                    { label: qsTr("RGB"), value: "rgb", channel: 0 },
+                    { label: qsTr("RGB"), value: "rgb", channel: 0, stretch: 1.6 },
                     { label: qsTr("R"), value: "red", channel: 1 },
                     { label: qsTr("G"), value: "green", channel: 2 },
                     { label: qsTr("B"), value: "blue", channel: 3 }
@@ -288,13 +303,7 @@ CollapsibleSection {
                     }
                     AppMenuSeparator {}
                     PresetMenuItem {
-                        presetId: "film_like"
-                        text: section.presetLabel(presetId)
-                        checked: section.presetId === presetId
-                        onTriggered: section.applyPreset(presetId)
-                    }
-                    PresetMenuItem {
-                        presetId: "filmic"
+                        presetId: "cl_digital"
                         text: section.presetLabel(presetId)
                         checked: section.presetId === presetId
                         onTriggered: section.applyPreset(presetId)
@@ -326,7 +335,7 @@ CollapsibleSection {
             id: plotFrame
             Layout.fillWidth: true
             // Square plot rectangle with the EV labels under it.
-            Layout.preferredHeight: width + section.labelInset
+            Layout.preferredHeight: width - 2 * section.labelSideInset + section.labelInset
 
             PlotPane {
                 id: pane
@@ -334,6 +343,8 @@ CollapsibleSection {
                 anchors.fill: parent
                 enabled: section.controlsEnabled
                 limits: Qt.rect(0, 0, 1, 1)
+                insetLeft: section.labelSideInset
+                insetRight: section.labelSideInset
                 insetBottom: section.labelInset
                 backgroundColor: appTheme.cardSurfaceColor
                 surfaceColor: appTheme.plotSurfaceColor
@@ -344,13 +355,14 @@ CollapsibleSection {
                 }
 
                 PlotGridLayer {
+                    objectName: "toneCurveGridLayer"
                     xTicks: section.evTicks(true)
                     yTicks: section.evTicks(false)
                     color: appTheme.plotGridColor
                     strongColor: appTheme.plotGridStrongColor
                     labelColor: appTheme.plotLabelColor
                     labelFont.family: appTheme.dataFontFamily
-                    labelFont.pixelSize: appTheme.fontSizeCaption
+                    labelFont.pixelSize: appTheme.fontSizeMicro
                     lineWidth: appTheme.plotGridLineWidth
                 }
                 PlotHistogramLayer {
@@ -366,6 +378,8 @@ CollapsibleSection {
                     blueColor: appTheme.scopeHistogramBlueColor
                     cutColor: appTheme.plotSurfaceColor
                     edgeWidth: appTheme.plotLineWidth
+                    fillOpacity: appTheme.plotHistogramFillOpacity
+                    edgeOpacity: appTheme.plotHistogramEdgeOpacity
                 }
                 PlotPolylineLayer {
                     objectName: "toneCurveIdentityLine"
@@ -459,6 +473,11 @@ CollapsibleSection {
                         if (section.model)
                             section.model.removePoint(index)
                     }
+                    // The model keeps the end points.
+                    onRightClicked: function(index) {
+                        if (section.model)
+                            section.model.removePoint(index)
+                    }
                     onKeyPressed: function(index, key, modifiers) {
                         if (section.model)
                             section.model.handleKey(key, modifiers)
@@ -478,13 +497,13 @@ CollapsibleSection {
                     text: qsTr("In")
                     color: appTheme.plotLabelColor
                     font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
+                    font.pixelSize: appTheme.fontSizeMicro
                 }
                 Text {
                     text: section.evText(pane.pointerPosition.x)
                     color: appTheme.textColor
                     font.family: appTheme.dataFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
+                    font.pixelSize: appTheme.fontSizeMicro
                 }
                 Item {
                     width: appTheme.spaceXs
@@ -494,13 +513,13 @@ CollapsibleSection {
                     text: qsTr("Out")
                     color: appTheme.plotLabelColor
                     font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
+                    font.pixelSize: appTheme.fontSizeMicro
                 }
                 Text {
                     text: section.evText(section.pointerOutput)
                     color: appTheme.textColor
                     font.family: appTheme.dataFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
+                    font.pixelSize: appTheme.fontSizeMicro
                 }
             }
         }
@@ -566,7 +585,7 @@ CollapsibleSection {
             text: field.label
             color: appTheme.textMutedColor
             font.family: appTheme.uiFontFamily
-            font.pixelSize: appTheme.fontSizeCaption
+            font.pixelSize: appTheme.fontSizeMicro
         }
 
         Rectangle {
@@ -581,7 +600,7 @@ CollapsibleSection {
             TextMetrics {
                 id: fieldMetrics
                 font: input.font
-                text: "0.00000"
+                text: "0.0000"
             }
 
             TextInput {
@@ -622,7 +641,7 @@ CollapsibleSection {
             text: field.evText
             color: appTheme.textMutedColor
             font.family: appTheme.dataFontFamily
-            font.pixelSize: appTheme.fontSizeCaption
+            font.pixelSize: appTheme.fontSizeMicro
             elide: Text.ElideRight
         }
     }

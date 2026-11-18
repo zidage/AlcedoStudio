@@ -832,12 +832,29 @@ auto PresentGraphOperation(const alcedo::EditorHistoryCommit& commit)
       alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::RemoveColorGrade);
   const auto topology_key =
       alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::EditNodeGraph);
+  const auto enabled_key =
+      alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::SetNodeEnabled);
   if (commit.presentation_key != add_key && commit.presentation_key != rename_key &&
-      commit.presentation_key != remove_key && commit.presentation_key != topology_key) {
+      commit.presentation_key != remove_key && commit.presentation_key != topology_key &&
+      commit.presentation_key != enabled_key) {
     return std::nullopt;
   }
 
   EditorHistoryCommitPresentation out;
+  if (commit.presentation_key == enabled_key) {
+    bool shown = true;
+    try {
+      const auto parsed = nlohmann::json::parse(commit.after_value_json);
+      if (parsed.is_boolean()) shown = parsed.get<bool>();
+    } catch (...) {
+    }
+    out.display_name = shown ? QStringLiteral("Show Color Grade")
+                             : QStringLiteral("Hide Color Grade");
+    out.after_text   = QString::fromStdString(commit.node_display_name);
+    out.delta_text   = out.after_text;
+    out.icon_key     = QStringLiteral(":/history_icons/workflow.svg");
+    return out;
+  }
   const QString name = DisplayTextFromStoredJson(commit.after_value_json, commit.node_display_name);
   if (commit.presentation_key == add_key) {
     out.display_name = QStringLiteral("Add Color Grade");

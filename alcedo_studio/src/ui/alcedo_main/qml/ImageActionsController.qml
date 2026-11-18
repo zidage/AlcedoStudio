@@ -26,19 +26,27 @@ Item {
     property var focusedImageTarget: ({})
     property var focusedImageInspection: ({ success: false, tiles: [] })
     // Where the shared image menu was last opened from ("library" |
-    // "editor-filmstrip"). The editor filmstrip shows the shared Library
-    // selection, but its menu always targets exactly the clicked image.
+    // "editor-filmstrip"). Both resolve their targets with the same rule
+    // (LibraryMutationOperations::ResolveTargets): the whole selection when it
+    // holds the clicked image, otherwise the clicked image alone. Only Discard
+    // depends on the origin.
     property string menuOrigin: "library"
     property bool _pendingEditorLibraryListSync: false
     property bool _pendingEditorLibraryListReveal: false
     // The position read of the list check that runs on the query worker (0: none).
     property real _editorListRequestId: 0
     property int _editorListRequestElementId: 0
-    // Its answer, { elementId, row }, kept while the close waits for the save check.
+    // Its answer, { elementId, row }, kept until the check applies it.
     property var _editorListAnswer: null
     // The last photo that a return to the editor opens when the list holds it,
     // { elementId, imageId } (see openLastEditorImage).
     property var _pendingEditorReentry: null
+    // The open editor image when the current Library list does not hold it,
+    // { elementId, imageId }, or null. The editor keeps the image open, and the filmstrip
+    // shows it in its own slot before the list (EditorFilmstrip). The slot ends when the
+    // editor opens another image or closes, or when a later list check finds the image in
+    // the list.
+    property var editorOutsideListImage: null
     // The workspace of the previous route, to detect a return to the editor.
     property string _lastWorkspace: appModules.workspaceRouter
                                     ? String(appModules.workspaceRouter.workspace || "library")
@@ -153,9 +161,8 @@ Item {
         if (!clickedItem) {
             return
         }
-        const fromFilmstrip = origin === "editor-filmstrip"
-        root.menuOrigin = fromFilmstrip ? "editor-filmstrip" : "library"
-        const targets = appModules.libraryMutations.ResolveTargets(clickedItem, !fromFilmstrip)
+        root.menuOrigin = origin === "editor-filmstrip" ? "editor-filmstrip" : "library"
+        const targets = appModules.libraryMutations.ResolveTargets(clickedItem)
         if (!targets || targets.length === 0) {
             return
         }
@@ -236,8 +243,9 @@ Item {
     // Return to the editor from the toolbar with the last edited photo. The editor list check
     // decides on the query worker whether the photo is in the current Library list: no
     // database read runs on the GUI thread here.
-    // - The session still has the photo open, or its row is loaded: the editor shows it, and
-    //   the list check closes it when the list does not hold it.
+    // - The session still has the photo open, or its row is loaded: the editor shows it. When
+    //   the list does not hold it, the list check gives it the filmstrip slot of an image
+    //   outside the list (editorOutsideListImage).
     // - Otherwise the editor opens with no image, and the photo opens when the list check
     //   finds it in the list. A photo that the list does not hold is never loaded.
     function openLastEditorImage(elementId, imageId) {
@@ -380,29 +388,26 @@ Item {
             }
             row = Number(answer.row)
         }
-        const done = targetElementId > 0
-                ? root.applyEditorLibraryListSync(targetElementId, row,
-                                                  root._pendingEditorLibraryListReveal)
-                : root.applyEditorReentry(row)
-        if (!done) {
-            // The close waits for the save check; a change of canSelectImage or
-            // sessionState flushes again.
-            return
+        if (targetElementId > 0) {
+            root.applyEditorLibraryListSync(targetElementId, targetImageId, row,
+                                            root._pendingEditorLibraryListReveal)
+        } else {
+            root.applyEditorReentry(row)
         }
         root.finishEditorLibraryListSync()
     }
 
-    // After collection or filter changes, the editor must follow the same
-    // filtered library list the grid uses. Keep the open image when it is
-    // still in that list. When the list does not contain it, close it: the
-    // editor shows no image and releases the image's resources. The close is
-    // an image switch to no image, so it waits for the same save check as a
-    // filmstrip switch (actions.canSelectImage), and the session saves the
-    // image before it closes. Returns false when the close must wait.
+    // After a collection, filter, search, or sort change, the filmstrip follows the
+    // same list as the Library grid. The open image always stays open:
+    // - The list holds it: its tile in the list is the editing tile.
+    // - The list does not hold it: the filmstrip shows it in its own slot before the
+    //   list (editorOutsideListImage), so the open image always has one defined
+    //   filmstrip position. The slot ends when the editor opens another image.
     // row: the row of the route target in the list, -1 when the list does not hold it, or -2
-    // when the position read failed (the image stays open).
-    function applyEditorLibraryListSync(elementId, row, revealOpenImage) {
+    // when the position read failed (nothing changes).
+    function applyEditorLibraryListSync(elementId, imageId, row, revealOpenImage) {
         if (row >= 0) {
+            root.editorOutsideListImage = null
             if (revealOpenImage) {
                 const model = appModules.library ? appModules.library.thumbnailModel : null
                 const item = model && model.getItemAt ? model.getItemAt(row) : null
@@ -411,26 +416,30 @@ Item {
                     root.setFocusedImage(root.selectionItemFromThumbnailRow(item))
                 }
             }
-            return true
+            return
         }
-        if (row !== -1) {
-            return true
+        if (row === -1) {
+            root.editorOutsideListImage = { elementId: Number(elementId), imageId: Number(imageId) }
         }
+    }
 
+    // The slot of an image outside the list belongs to that open image only.
+    function releaseOutsideListImageIfReplaced() {
+        const outside = root.editorOutsideListImage
+        if (!outside) {
+            return
+        }
         const session = appModules.editorSession
-        if (session && session.actions && !Boolean(session.actions.canSelectImage)) {
-            return false
+        if (!session || !Boolean(session.hasImage)
+                || Number(session.elementId || 0) !== Number(outside.elementId)
+                || Number(session.imageId || 0) !== Number(outside.imageId)) {
+            root.editorOutsideListImage = null
         }
-        if (!appModules.workspaceRouter.openEditor(0, 0)) {
-            // Agent control refuses user image switches; the image stays open.
-            return true
-        }
-        root.setFocusedImage(null)
-        return true
     }
 
     // The return to the editor whose last photo was not open (openLastEditorImage): open it
-    // when the list holds it; otherwise the editor stays empty.
+    // when the list holds it; otherwise the editor stays empty. A photo that is not open is
+    // never loaded for the slot of an image outside the list.
     function applyEditorReentry(row) {
         const reentry = root._pendingEditorReentry
         root._pendingEditorReentry = null
@@ -438,23 +447,17 @@ Item {
             appModules.workspaceRouter.openEditor(Number(reentry.elementId),
                                                   Number(reentry.imageId))
         }
-        return true
     }
 
     // QML handlers run only for signals whose names start with a lower-case
-    // letter. The backend signals here (StateChanged, AvailabilityChanged,
-    // QueryStateChanged, RouteChanged) start with an upper-case letter, so these
+    // letter. The backend signals here (StateChanged, QueryStateChanged,
+    // RouteChanged) start with an upper-case letter, so these
     // Connections use the change handlers of the properties that they notify.
     Connections {
         target: appModules.editorSession
         ignoreUnknownSignals: true
         function onSessionStateChanged() { root.flushEditorLibraryListSync() }
-    }
-
-    Connections {
-        target: appModules.editorSession ? appModules.editorSession.actions : null
-        ignoreUnknownSignals: true
-        function onCanSelectImageChanged() { root.flushEditorLibraryListSync() }
+        function onElementIdChanged() { root.releaseOutsideListImageIfReplaced() }
     }
 
     // Every accepted library result (filter, search, collection, or sort

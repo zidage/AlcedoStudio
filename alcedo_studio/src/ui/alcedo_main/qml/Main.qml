@@ -290,6 +290,8 @@ ApplicationWindow {
     property alias pendingAdjustmentPasteTargets: imageActionsController.pendingAdjustmentPasteTargets
     property alias focusedImageTarget: imageActionsController.focusedImageTarget
     property alias focusedImageInspection: imageActionsController.focusedImageInspection
+    // The open editor image that the current Library list does not hold (EditorFilmstrip slot).
+    readonly property alias editorOutsideListImage: imageActionsController.editorOutsideListImage
 
     ImageActionsController {
         id: imageActionsController

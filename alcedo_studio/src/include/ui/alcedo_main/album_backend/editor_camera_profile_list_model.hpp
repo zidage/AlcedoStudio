@@ -44,7 +44,7 @@ namespace alcedo::ui {
  * file was removed after the scan), the model logs the reason and returns to the row of the stored
  * reference.
  *
- * The Tone Curve switch of the section (dcp_profile_tone_curve_study.md, section 6.4) reads
+ * The Tone Curve switch of the section (dcp_profile_tone_curve_study.md, section 11) reads
  * @ref toneCurveAvailable, @ref profileTone, and @ref filmPrintMethod, and submits its settled
  * write with @ref submitProfileTone.
  *
@@ -67,8 +67,8 @@ class EditorCameraProfileListModel : public EditorAdjustmentEnumModel {
   Q_PROPERTY(bool toneCurveAvailable READ toneCurveAvailable NOTIFY storedReferenceChanged)
   /// The stored `profile_tone` switch; false without a reference.
   Q_PROPERTY(bool profileTone READ profileTone NOTIFY storedReferenceChanged)
-  /// True when the DRT method of the loaded snapshot is Film Print, which runs no profile tone
-  /// stage (study section 6.2): the switch is disabled.
+  /// True when the DRT method of the loaded snapshot is Film Print, whose RGB curve follows no
+  /// profile curve (study section 11): the switch is disabled.
   Q_PROPERTY(bool filmPrintMethod READ filmPrintMethod NOTIFY filmPrintMethodChanged)
 
  public:

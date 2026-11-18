@@ -91,14 +91,17 @@ struct LocalToneDecisionTrace {
   return -slider * local_tone_mapping::kHighlightStrengthScale / 100.0f;
 }
 
+/// Shadows +150 lifts up to kShadowLiftAmountLimit; darkening stops at kBackendAmountLimit.
 [[nodiscard]] inline auto ClampedLocalToneShadow(float slider) -> float {
   return std::clamp(ScaledLocalToneShadow(slider), -local_tone_mapping::kBackendAmountLimit,
-                    local_tone_mapping::kBackendAmountLimit);
+                    local_tone_mapping::kShadowLiftAmountLimit);
 }
 
+/// Highlights -150 recovers up to kHighlightRecoveryAmountLimit; boosting stops at
+/// kBackendAmountLimit.
 [[nodiscard]] inline auto ClampedLocalToneHighlight(float slider) -> float {
   return std::clamp(ScaledLocalToneHighlight(slider), -local_tone_mapping::kBackendAmountLimit,
-                    local_tone_mapping::kBackendAmountLimit);
+                    local_tone_mapping::kHighlightRecoveryAmountLimit);
 }
 
 /**

@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include "app/ai_sidecar_runtime_service.hpp"
 #include "app/editor_node_graph_projection.hpp"
@@ -579,7 +581,8 @@ TEST_F(EditorNodesPanelQmlTest, CtrlPlusAddsTheNextCleanColorGrade) {
   QTest::keyClick(window_, Qt::Key_Plus, Qt::ControlModifier);
   ProcessEvents();
 
-  EXPECT_EQ(backend_.edit_node_graph_count(), 0);
+  // The added grade is detached, a complete graph: it commits at once.
+  EXPECT_EQ(backend_.edit_node_graph_count(), 1);
   EXPECT_EQ(nodes->selected_node_name(), QStringLiteral("Color Grade 2"));
   auto* adapter = Adapter();
   ASSERT_NE(adapter, nullptr);
@@ -1116,14 +1119,23 @@ TEST_F(EditorNodesPanelQmlTest, OrdinaryDraftEditsDoNotReplaceQanTopology) {
   ASSERT_NE(adapter, nullptr);
   QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
   ProcessEvents();
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto extra = nodes->selected_node_id();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(extra) != nullptr, 2000);
+  ProcessEvents();
   const auto applies  = nodes->completed_projection_apply_count();
   const auto replaces = adapter->topology_replace_count();
-  ASSERT_TRUE(nodes->addCleanColorGrade());
-  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(nodes->selected_node_id()) != nullptr, 2000);
+  // Wiring the detached grade after Develop is a draft edit: grade.primary is half connected.
+  ASSERT_TRUE(nodes->requestConnect(QStringLiteral("develop"),
+                                    QString::fromUtf8(extra.Value().data(),
+                                                      static_cast<int>(extra.Value().size()))));
+  ASSERT_TRUE(nodes->incomplete_draft());
+  ProcessEvents();
   EXPECT_EQ(nodes->completed_projection_apply_count(), applies);
   EXPECT_EQ(adapter->topology_replace_count(), replaces);
-  EXPECT_EQ(nodes->snapshot().nodes.size(), 3u);
+  EXPECT_EQ(nodes->snapshot().nodes.size(), 4u);
   EXPECT_EQ(nodes->ActiveNodes().size(), 4u);
+  EXPECT_NE(nodes->ActiveEdges(), nodes->snapshot().edges);
 }
 
 TEST_F(EditorNodesPanelQmlTest, CloseWithQueuedApplyThenReopenRestoresOnce) {
@@ -1464,7 +1476,75 @@ TEST_F(EditorNodesPanelQmlTest, FirstNodesLoaderShowsDefaultGraphDelegates) {
   EXPECT_LT(loader_ms, 100);
 }
 
-TEST_F(EditorNodesPanelQmlTest, AddColorGradeShowsPendingWithoutReplacingQanTopology) {
+TEST_F(EditorNodesPanelQmlTest, ManualConnectKeepsEveryNodePosition) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  WaitUntilGraphReady();
+  auto* nodes   = Controller();
+  auto* layout  = LayoutStore();
+  auto* adapter = Adapter();
+  ASSERT_NE(layout, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  // The added grade is staged below DRT.
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto extra = nodes->selected_node_id();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(extra) != nullptr, 2000);
+  ProcessEvents();
+  const std::vector<NodeId> ids{NodeId{"develop"}, NodeId{"grade.primary"}, extra, NodeId{"drt"}};
+  std::vector<std::optional<QPointF>> before;
+  for (const auto& id : ids) {
+    before.push_back(layout->NodePosition(id));
+    ASSERT_TRUE(before.back().has_value());
+  }
+
+  // Wire it in after grade.primary: Develop -> primary -> extra -> DRT. The staged card is
+  // below DRT; before the fix the overlap pass pushed DRT below it.
+  const auto extra_id = nodes->selected_node_id_string();
+  ASSERT_TRUE(nodes->requestConnect(QStringLiteral("grade.primary"), extra_id));
+  ASSERT_TRUE(nodes->requestConnect(extra_id, QStringLiteral("drt")));
+  ASSERT_FALSE(nodes->incomplete_draft());
+  ASSERT_EQ(backend_.document()->Graph().ImageBackboneNodeIds(), ids);
+  ProcessEvents();
+  QCoreApplication::processEvents();
+
+  for (std::size_t i = 0; i < ids.size(); ++i) {
+    EXPECT_EQ(layout->NodePosition(ids[i]), before[i]) << ids[i].Value();
+  }
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupMoveRestacksTheCardsInChainOrder) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.b"});
+  OpenNodesPage();
+  WaitUntilGraphReady();
+  auto* nodes   = Controller();
+  auto* layout  = LayoutStore();
+  auto* adapter = Adapter();
+  ASSERT_NE(layout, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.b"}) != nullptr, 2000);
+  ProcessEvents();
+  const auto primary_before = layout->NodePosition(NodeId{"grade.primary"});
+  const auto b_before       = layout->NodePosition(NodeId{"grade.b"});
+  ASSERT_TRUE(primary_before.has_value());
+  ASSERT_TRUE(b_before.has_value());
+  ASSERT_LT(primary_before->y(), b_before->y());
+
+  // Layer order [grade.b, grade.primary] -> [grade.primary, grade.b]: primary moves downstream.
+  ASSERT_TRUE(nodes->moveMaskGroupToIndex(QStringLiteral("grade.primary"), 0));
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->backbone_node_ids().size() == 4 &&
+                               nodes->backbone_node_ids()[1] == QStringLiteral("grade.b"),
+                           2000);
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(layout->NodePosition(NodeId{"grade.primary"})->y() >
+                               layout->NodePosition(NodeId{"grade.b"})->y(),
+                           2000);
+  EXPECT_GT(layout->NodePosition(NodeId{"grade.primary"})->y(),
+            layout->NodePosition(NodeId{"grade.b"})->y());
+}
+
+TEST_F(EditorNodesPanelQmlTest, AddColorGradeAppearsWithoutReplacingQanTopology) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenNodesPage();
   auto* nodes   = Controller();
@@ -1480,7 +1560,8 @@ TEST_F(EditorNodesPanelQmlTest, AddColorGradeShowsPendingWithoutReplacingQanTopo
   const auto add_ms = static_cast<int>(timer.elapsed());
   RecordProperty("add_color_grade_feedback_ms", add_ms);
   EXPECT_EQ(adapter->topology_replace_count(), replace_count);
-  EXPECT_TRUE(nodes->incomplete_draft());
+  EXPECT_FALSE(nodes->incomplete_draft());
+  EXPECT_EQ(backend_.edit_node_graph_count(), 1);
   EXPECT_LT(add_ms, 100);
 }
 
@@ -1803,6 +1884,8 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupsDisableStructureActionsDuringIncomplet
   ASSERT_NE(nodes, nullptr);
   QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
   ASSERT_TRUE(nodes->addCleanColorGrade());
+  // Wiring the detached grade after Develop leaves grade.primary half connected.
+  ASSERT_TRUE(nodes->requestConnect(QStringLiteral("develop"), nodes->selected_node_id_string()));
   ASSERT_TRUE(nodes->incomplete_draft());
   ProcessEvents();
 
@@ -1818,6 +1901,42 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupsDisableStructureActionsDuringIncomplet
   auto* remove = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
   ASSERT_NE(remove, nullptr);
   EXPECT_FALSE(remove->isEnabled());
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupsListDetachedGroupsUnderACaptionWithoutReorder) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.b"});
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto detached_id = nodes->selected_node_id_string();
+  ASSERT_FALSE(nodes->incomplete_draft());
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 3, 2000);
+
+  auto* primary  = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  auto* second   = MaskGroupDelegateFor(QStringLiteral("grade.b"));
+  auto* detached = MaskGroupDelegateFor(detached_id);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(second, nullptr);
+  ASSERT_NE(detached, nullptr);
+  EXPECT_FALSE(primary->property("detached").toBool());
+  EXPECT_TRUE(primary->property("reorderEnabled").toBool());
+  EXPECT_TRUE(detached->property("detached").toBool());
+  EXPECT_TRUE(detached->property("showDetachedCaption").toBool());
+  EXPECT_FALSE(detached->property("reorderEnabled").toBool());
+  EXPECT_TRUE(detached->property("contentDimmed").toBool());
+  EXPECT_GT(detached->y(), primary->y());
+  auto* caption =
+      detached->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDetachedCaption"));
+  ASSERT_NE(caption, nullptr);
+  EXPECT_TRUE(caption->isVisible());
+  EXPECT_EQ(caption->property("text").toString(), QStringLiteral("Detached"));
+  auto* primary_caption =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDetachedCaption"));
+  ASSERT_NE(primary_caption, nullptr);
+  EXPECT_FALSE(primary_caption->isVisible());
 }
 
 TEST_F(EditorNodesPanelQmlTest, MaskGroupsRestoreScrollAndExpansionAcrossLoaderTeardown) {
@@ -2063,11 +2182,11 @@ TEST_F(EditorNodesPanelQmlTest, MaskPanelConfirmFinishesMaskEditAndReturnsToPrio
   EXPECT_EQ(controller_.active_adjustment_panel(), QStringLiteral("lut"));
 }
 
-// Issue 544: the Mask Groups row Invert button inverts that row's Mask with one click and a
-// second click returns it, without a change of selection. AI Masks have the same button.
-TEST_F(EditorNodesPanelQmlTest, MaskGroupRowInvertButtonTogglesItsMask) {
+// Issue #930: the Mask row strip shows a passive "+" combine slot (Add is the only mode) where
+// the Invert button was. It carries an accessible state, issues no Mask command, and does not
+// select the row. Invert stays on the Mask panel checkbox.
+TEST_F(EditorNodesPanelQmlTest, MaskGroupRowShowsPassiveAddCombineSlotInsteadOfInvert) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  const NodeId grade_id{"grade.primary"};
   backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
   backend_.AddMaskToPrimaryGrade(grade_mask_test::MakeAiSegmentationMask(MaskId{"mask.ai"}));
   OpenMaskGroupsPage();
@@ -2078,41 +2197,140 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupRowInvertButtonTogglesItsMask) {
     return VisualMaskRow(Find(QStringLiteral("editorMaskGroupsPageBody")),
                          QStringLiteral("editorMaskGroupMaskRow"), mask_id);
   };
-  const auto invert_button = [&](const QString& mask_id) {
-    return FindVisualItem(group_row(mask_id), QStringLiteral("editorMaskGroupMaskInvertButton"));
-  };
-  const auto stored_invert = [&](const MaskId& mask_id) {
-    const auto* grade =
-        dynamic_cast<const ColorGradeNodeModel*>(backend_.document()->Graph().FindNode(grade_id));
-    const auto* mask = grade == nullptr ? nullptr : grade->FindMask(mask_id);
-    return mask != nullptr && mask->invert;
-  };
   ASSERT_TRUE(WaitFor([&] {
-    auto* button = invert_button(QStringLiteral("mask.ai"));
-    return button != nullptr && button->isVisible() &&
-           invert_button(QStringLiteral("mask.radial")) != nullptr;
+    auto* ai = group_row(QStringLiteral("mask.ai"));
+    auto* radial = group_row(QStringLiteral("mask.radial"));
+    return ai != nullptr && radial != nullptr && ai->width() > 0.0 && radial->width() > 0.0;
   })) << warnings_.join('\n').toStdString();
 
+  const auto commands_before = backend_.mask_commands().size();
   for (const auto& mask_text : {QStringLiteral("mask.ai"), QStringLiteral("mask.radial")}) {
-    const MaskId mask_id{mask_text.toStdString()};
-    for (const bool expected : {true, false}) {
-      Click(window_, invert_button(mask_text));
-      ASSERT_NE(LastMaskCommand(), nullptr);
-      EXPECT_EQ(LastMaskCommand()->kind, EditorMaskCreationCommandKind::ToggleMaskInvert);
-      EXPECT_EQ(LastMaskCommand()->node_id, grade_id);
-      EXPECT_EQ(LastMaskCommand()->mask_id, mask_id);
-      backend_.CompleteMaskCommands();
-      ProcessEvents();
-      EXPECT_EQ(stored_invert(mask_id), expected);
-      EXPECT_TRUE(WaitFor([&] {
-        auto* row = group_row(mask_text);
-        return row != nullptr && row->property("maskInverted").toBool() == expected;
-      })) << mask_text.toStdString()
-          << " row does not show invert=" << expected;
-    }
+    auto* row = group_row(mask_text);
+    ASSERT_NE(row, nullptr);
+    EXPECT_EQ(FindVisualItem(row, QStringLiteral("editorMaskGroupMaskInvertButton")), nullptr)
+        << mask_text.toStdString();
+    auto* combine = FindVisualItem(row, QStringLiteral("editorMaskGroupMaskCombineMode"));
+    ASSERT_NE(combine, nullptr) << mask_text.toStdString();
+    EXPECT_TRUE(combine->isVisible());
+    EXPECT_EQ(AttachedName(combine), QStringLiteral("Combine mode: Add"));
+    Click(window_, combine);
   }
-  EXPECT_TRUE(backend_.ai_mask_edit_open_requests().empty());
+  EXPECT_EQ(backend_.mask_commands().size(), commands_before);
   EXPECT_TRUE(MaskAdapter()->selected_mask_id().isEmpty());
+  EXPECT_TRUE(backend_.ai_mask_edit_open_requests().empty());
+}
+
+// Issue #930: any AI Mask turns the group preview into the AI lettermark; the AI Mask row shows
+// the same tile in its own well, and other rows keep their regular well.
+TEST_F(EditorNodesPanelQmlTest, MaskGroupWithAiMaskShowsTheAiPreviewTile) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
+  OpenMaskGroupsPage();
+  auto* body = Find(QStringLiteral("editorMaskGroupsPageBody"));
+  ASSERT_NE(body, nullptr);
+  const auto group_child = [&](const QString& object_name) {
+    return FindVisualItem(Find(QStringLiteral("editorMaskGroupsPageBody")), object_name);
+  };
+  ASSERT_TRUE(WaitFor([&] {
+    auto* preview = group_child(QStringLiteral("editorMaskGroupPreview"));
+    return preview != nullptr && preview->isVisible();
+  })) << warnings_.join('\n').toStdString();
+  auto* ai_tile = group_child(QStringLiteral("editorMaskGroupPreviewAiTile"));
+  ASSERT_NE(ai_tile, nullptr);
+  EXPECT_FALSE(ai_tile->isVisible());
+
+  backend_.AddMaskToPrimaryGrade(grade_mask_test::MakeAiSegmentationMask(MaskId{"mask.ai"}));
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_TRUE(nodes->refreshFromSession());
+  ASSERT_TRUE(WaitFor([&] {
+    auto* tile = group_child(QStringLiteral("editorMaskGroupPreviewAiTile"));
+    auto* preview = group_child(QStringLiteral("editorMaskGroupPreview"));
+    return tile != nullptr && tile->isVisible() && preview != nullptr && !preview->isVisible();
+  })) << warnings_.join('\n').toStdString();
+
+  const auto row_tile = [&](const QString& mask_id) {
+    auto* row = VisualMaskRow(Find(QStringLiteral("editorMaskGroupsPageBody")),
+                              QStringLiteral("editorMaskGroupMaskRow"), mask_id);
+    return FindVisualItem(row, QStringLiteral("editorMaskGroupMaskPreviewAiTile"));
+  };
+  ASSERT_TRUE(WaitFor([&] {
+    auto* tile = row_tile(QStringLiteral("mask.ai"));
+    return tile != nullptr && tile->isVisible();
+  }));
+  auto* radial_tile = row_tile(QStringLiteral("mask.radial"));
+  ASSERT_NE(radial_tile, nullptr);
+  EXPECT_FALSE(radial_tile->isVisible());
+}
+
+// Issue #930: the group visibility slot hides the Color Grade through the session and dims the
+// row; a second click shows it again. Hidden keeps the parameters, Masks, and backbone place.
+TEST_F(EditorNodesPanelQmlTest, MaskGroupVisibilityButtonHidesAndShowsTheColorGrade) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  const NodeId grade_id{"grade.primary"};
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return nodes->has_snapshot(); }));
+  const auto delegate = [this] {
+    return FindVisualItem(Find(QStringLiteral("editorMaskGroupsPageBody")),
+                          QStringLiteral("editorMaskGroupDelegate"));
+  };
+  const auto child = [&](const QString& object_name) {
+    return FindVisualItem(delegate(), object_name);
+  };
+  const auto stored_enabled = [&] {
+    const auto* grade =
+        dynamic_cast<const ColorGradeNodeModel*>(backend_.document()->Graph().FindNode(grade_id));
+    return grade != nullptr && grade->Enabled();
+  };
+  const auto backbone_size_before = backend_.document()->Graph().ImageBackboneNodeIds().size();
+  ASSERT_TRUE(WaitFor([&] {
+    auto* button = child(QStringLiteral("editorMaskGroupVisibilityButton"));
+    return button != nullptr && button->isVisible() && button->isEnabled() &&
+           button->width() > 0.0;
+  })) << warnings_.join('\n').toStdString();
+  EXPECT_EQ(AttachedName(child(QStringLiteral("editorMaskGroupVisibilityButton"))),
+            QStringLiteral("Hide Color Grade 1"));
+
+  Click(window_, child(QStringLiteral("editorMaskGroupVisibilityButton")));
+  EXPECT_EQ(backend_.visibility_grade_count(), 1);
+  EXPECT_EQ(backend_.last_visibility_node_id(), grade_id);
+  EXPECT_FALSE(backend_.last_visibility_value());
+  EXPECT_FALSE(stored_enabled());
+  EXPECT_EQ(backend_.document()->Graph().ImageBackboneNodeIds().size(), backbone_size_before);
+  ASSERT_TRUE(WaitFor([&] {
+    auto* row = delegate();
+    return row != nullptr && row->property("groupEnabled").toBool() == false;
+  }));
+  auto* slot = child(QStringLiteral("editorMaskGroupPreviewSlot"));
+  ASSERT_NE(slot, nullptr);
+  EXPECT_LT(slot->opacity(), 0.5);
+  auto* name = child(QStringLiteral("editorMaskGroupName"));
+  ASSERT_NE(name, nullptr);
+  EXPECT_EQ(name->property("color").value<QColor>(),
+            delegate()->property("mutedColor").value<QColor>());
+  auto* button = child(QStringLiteral("editorMaskGroupVisibilityButton"));
+  ASSERT_NE(button, nullptr);
+  EXPECT_EQ(AttachedName(button), QStringLiteral("Show Color Grade 1"));
+  EXPECT_TRUE(button->property("iconSrc").toString().endsWith(QStringLiteral("eye-off.svg")));
+  EXPECT_TRUE(AttachedName(child(QStringLiteral("editorMaskGroupHeader")))
+                  .contains(QStringLiteral("hidden")));
+  EXPECT_NE(VisualMaskRow(Find(QStringLiteral("editorMaskGroupsPageBody")),
+                          QStringLiteral("editorMaskGroupMaskRow"), QStringLiteral("mask.radial")),
+            nullptr);
+
+  Click(window_, child(QStringLiteral("editorMaskGroupVisibilityButton")));
+  EXPECT_EQ(backend_.visibility_grade_count(), 2);
+  EXPECT_TRUE(backend_.last_visibility_value());
+  EXPECT_TRUE(stored_enabled());
+  ASSERT_TRUE(WaitFor([&] {
+    auto* row = delegate();
+    auto* preview_slot = child(QStringLiteral("editorMaskGroupPreviewSlot"));
+    return row != nullptr && row->property("groupEnabled").toBool() &&
+           preview_slot != nullptr && preview_slot->opacity() > 0.99;
+  }));
 }
 
 // Issue #545: with the Layers panel closed the viewport is wide. On an 8183x5455 photograph the
@@ -3020,6 +3238,10 @@ TEST_F(EditorNodesPanelQmlTest,
   auto* lock = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupLockButton"));
   ASSERT_NE(lock, nullptr);
   EXPECT_EQ(AttachedName(lock), QStringLiteral("解锁Color Grade 1"));
+  auto* visibility =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupVisibilityButton"));
+  ASSERT_NE(visibility, nullptr);
+  EXPECT_EQ(AttachedName(visibility), QStringLiteral("隐藏Color Grade 1"));
 
   auto* remove = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
   ASSERT_NE(remove, nullptr);
@@ -3044,6 +3266,9 @@ TEST_F(EditorNodesPanelQmlTest,
   auto* row_delete = row->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskDeleteButton"));
   ASSERT_NE(row_delete, nullptr);
   EXPECT_EQ(AttachedName(row_delete), QStringLiteral("删除Mask"));
+  auto* combine = row->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskCombineMode"));
+  ASSERT_NE(combine, nullptr);
+  EXPECT_EQ(AttachedName(combine), QStringLiteral("合并方式：添加"));
 
   // No accessible phrase may carry banned separators or the unapproved
   // Mask Group wording anywhere on the page.

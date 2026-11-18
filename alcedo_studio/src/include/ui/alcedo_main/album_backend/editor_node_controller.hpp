@@ -12,6 +12,7 @@
 #include <QVariantList>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "app/editor_node_graph_draft.hpp"
@@ -68,8 +69,10 @@ class EditorNodeController : public QObject {
   Q_PROPERTY(bool incompleteDraft READ incomplete_draft NOTIFY DraftStateChanged)
   Q_PROPERTY(
       QString incompleteDraftInstruction READ incomplete_draft_instruction NOTIFY DraftStateChanged)
-  /// NodeIds outside the draft's Develop-to-DRT path; empty without a draft.
-  Q_PROPERTY(QStringList detachedDraftNodeIds READ detached_draft_node_ids NOTIFY DraftStateChanged)
+  /// Draft NodeIds that keep the draft incomplete (off the Develop-to-DRT path and not
+  /// a detached Color Grade); empty without a draft.
+  Q_PROPERTY(
+      QStringList unfinishedDraftNodeIds READ unfinished_draft_node_ids NOTIFY DraftStateChanged)
   /// Committed Mask Groups rows in backbone execution order. The panel is a
   /// read-only projection of the same document as the node graph.
   Q_PROPERTY(QVariantList maskGroups READ mask_groups NOTIFY MaskGroupsChanged)
@@ -241,6 +244,13 @@ class EditorNodeController : public QObject {
    */
   Q_INVOKABLE bool setColorGradeDeletionProtected(const QString& node_id, bool deletion_protected);
   /**
+   * @brief Show or hide one Color Grade through session history; a change renders.
+   *
+   * A hidden Color Grade keeps its parameters, Masks, and edges.
+   * @return false for endpoints, unfinished drafts, or history failure.
+   */
+  Q_INVOKABLE bool setColorGradeEnabled(const QString& node_id, bool enabled);
+  /**
    * @brief Remove one Color Grade from the draft. Does not bridge neighbors.
    */
   Q_INVOKABLE bool deleteColorGrade(const QString& node_id);
@@ -294,8 +304,8 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto incomplete_draft_instruction() const -> QString;
   /// True while an uncommitted node-graph draft exists (incomplete or failed submit).
   [[nodiscard]] auto has_draft() const -> bool { return draft_ != nullptr; }
-  /// Draft nodes outside the Develop-to-DRT path; empty without a draft.
-  [[nodiscard]] auto detached_draft_node_ids() const -> QStringList;
+  /// Draft nodes that keep the draft incomplete; empty without a draft.
+  [[nodiscard]] auto unfinished_draft_node_ids() const -> QStringList;
   /// Committed Mask Groups rows as QVariant maps for the panel. Empty without
   /// a snapshot. Read-only; structural edits go through insertMaskGroupAtTop /
   /// removeMaskGroup.
@@ -325,6 +335,13 @@ class EditorNodeController : public QObject {
    * snapshot. Does not copy the draft into snapshot_.
    */
   [[nodiscard]] auto ActiveNodes() const -> const std::vector<EditorNodeProjection>&;
+  /**
+   * @brief Committed Develop-to-DRT backbone nodes of the published snapshot.
+   *
+   * The snapshot lists the backbone first and the detached Color Grades after
+   * it, so this is the prefix before the first detached node.
+   */
+  [[nodiscard]] auto CommittedBackboneNodes() const -> std::span<const EditorNodeProjection>;
   [[nodiscard]] auto ActiveEdges() const -> const std::vector<EditorNodeEdgeProjection>&;
   /// Queued ApplyBoundGraph requests, including coalesced repeats.
   [[nodiscard]] auto queued_projection_apply_count() const -> int {
@@ -426,6 +443,14 @@ class EditorNodeController : public QObject {
   /// push stored positions and drawer state to the adapter. Runs after a
   /// projection apply and on every layout-store change (drawer folds, drags) so
   /// a taller node never leaves its drawer rows under the next card.
+  /**
+   * @brief Fill missing node positions and push the stored positions to the adapter.
+   *
+   * The vertical overlap pass (EditorNodeLayoutStore::ResolveVerticalOverlaps)
+   * runs only when restack_layout_on_next_apply_ is set: after a Mask Groups
+   * structure command, a drawer fold, or a Mask count increase. A manual
+   * Nodes-page connect, add, or delete keeps every position the user gave.
+   */
   void               ApplyLayoutToAdapter();
   void               SyncLayoutKey();
   void               PersistSavedSelection();
@@ -485,6 +510,9 @@ class EditorNodeController : public QObject {
   bool                                          command_active_            = false;
   bool                                          projection_apply_queued_   = false;
   bool                                          applying_layout_           = false;
+  /// Set by layer (Mask Groups) structure commands and card height growth; consumed by
+  /// the next ApplyLayoutToAdapter.
+  bool                                          restack_layout_on_next_apply_ = false;
   quint64                                       session_generation_        = 0;
   quint64                                       observed_history_revision_ = 0;
   quint64                                       projection_revision_       = 0;

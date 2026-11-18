@@ -17,6 +17,7 @@
 #include <QTemporaryDir>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -27,8 +28,10 @@
 
 #include "app/editor_session_types.hpp"
 #include "automation/automation_protocol.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/agent_control_owner.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
@@ -233,6 +236,49 @@ class AutomationGuiSessionTest : public ui::test::ApplicationModuleHostTestFixtu
   }
 
   auto          control() -> ui::AgentControlOwner* { return host_->agent_control(); }
+
+  /// The Color Grade entries of nodes.list.
+  auto ColorGrades() -> QJsonArray {
+    return Result(QStringLiteral("nodes.list")).value("color_grades").toArray();
+  }
+
+  /// Waits until the current document of the editor has a node with the id @p id.
+  auto WaitForNode(const NodeId& id) -> bool {
+    return WaitUntil(
+        [&] {
+          const auto document = host_->editor_session()->pipeline_document();
+          return document && document->Graph().FindNode(id) != nullptr;
+        },
+        std::chrono::seconds(60));
+  }
+
+  /// As the user: inserts the Color Grade @p top_id directly before the display transform, and
+  /// adds the Color Grade @p detached_id with no edge, as one topology commit each.
+  void AddTopAndDetachedColorGrades(const NodeId& top_id, const NodeId& detached_id) {
+    ui::EditorSessionController* editor   = host_->editor_session();
+    const auto                   document = editor->pipeline_document();
+    ASSERT_TRUE(document);
+    const std::vector<NodeId> backbone = document->Graph().ImageBackboneNodeIds();
+    ASSERT_GE(backbone.size(), 2U);
+    const auto inserted =
+        editor->SubmitInsertColorGradeAtTop(top_id, backbone[backbone.size() - 2]);
+    ASSERT_FALSE(EditorSessionResultIsFailure(inserted.kind)) << inserted.message;
+    ASSERT_TRUE(WaitForNode(top_id));
+
+    const auto after_insert = editor->pipeline_document();
+    auto       node         = CreateCleanColorGradeNode(detached_id);
+    node->SetDisplayName(DefaultColorGradeDisplayName(after_insert->NextColorGradeNameNumber()));
+    NodeGraphTopologyChange change;
+    change.before_next_color_grade_name_number = after_insert->NextColorGradeNameNumber();
+    change.after_next_color_grade_name_number  = change.before_next_color_grade_name_number + 1;
+    NodeGraphInsertedNode added;
+    added.node             = node->ToJson();
+    added.final_node_index = static_cast<std::uint32_t>(after_insert->Graph().NodeCount());
+    change.inserted_nodes.push_back(std::move(added));
+    const auto edited = editor->SubmitNodeGraphTopologyEdit(change);
+    ASSERT_FALSE(EditorSessionResultIsFailure(edited.kind)) << edited.message;
+    ASSERT_TRUE(WaitForNode(detached_id));
+  }
 
   QTemporaryDir session_dir_;
   std::unique_ptr<HeadlessFrameSink>     sink_;
@@ -562,6 +608,131 @@ TEST_F(AutomationGuiSessionTest, ScopesFollowTheCurrentImageThroughAgentControl)
 
   host_->workspace_router()->OpenEditor(second_element, second_image_id);
   EXPECT_TRUE(wait_for_snapshot(second_image_id, 0)) << "no scope after the user image switch";
+}
+
+// nodes.list lists the backbone Color Grades from Develop to the display transform with their
+// positions, then the detached Color Grade, with the hidden flag that the user set (#929).
+TEST_F(AutomationGuiSessionTest, NodeListShowsBackboneOrderThenDetachedGradesWithFlags) {
+  const QJsonArray initial = ColorGrades();
+  ASSERT_FALSE(initial.isEmpty());
+  for (qsizetype index = 0; index < initial.size(); ++index) {
+    const QJsonObject entry = initial.at(index).toObject();
+    EXPECT_EQ(entry.value("backbone_index").toInt(-1), static_cast<int>(index));
+    EXPECT_FALSE(entry.value("detached").toBool());
+    EXPECT_FALSE(entry.value("hidden").toBool());
+  }
+
+  const NodeId top_id{"grade.automation_top"};
+  const NodeId detached_id{"grade.automation_detached"};
+  ASSERT_NO_FATAL_FAILURE(AddTopAndDetachedColorGrades(top_id, detached_id));
+  const auto hidden =
+      host_->editor_session()->SubmitSetColorGradeEnabled(detached_id, /*enabled=*/false);
+  ASSERT_FALSE(EditorSessionResultIsFailure(hidden.kind)) << hidden.message;
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        const auto document = host_->editor_session()->pipeline_document();
+        const auto* grade   = dynamic_cast<const ColorGradeNodeModel*>(
+            document ? document->Graph().FindNode(detached_id) : nullptr);
+        return grade != nullptr && !grade->Enabled();
+      },
+      std::chrono::seconds(60)));
+
+  const QJsonArray grades = ColorGrades();
+  ASSERT_EQ(grades.size(), initial.size() + 2);
+  for (qsizetype index = 0; index < initial.size(); ++index) {
+    EXPECT_EQ(grades.at(index).toObject().value("node_id"),
+              initial.at(index).toObject().value("node_id"));
+  }
+  const QJsonObject top = grades.at(initial.size()).toObject();
+  EXPECT_EQ(top.value("node_id").toString(), QStringLiteral("grade.automation_top"));
+  EXPECT_EQ(top.value("backbone_index").toInt(-1), static_cast<int>(initial.size()));
+  EXPECT_FALSE(top.value("detached").toBool());
+  EXPECT_FALSE(top.value("hidden").toBool());
+  EXPECT_EQ(top.value("mask_count").toInt(-1), 0);
+
+  const QJsonObject detached = grades.at(initial.size() + 1).toObject();
+  EXPECT_EQ(detached.value("node_id").toString(), QStringLiteral("grade.automation_detached"));
+  EXPECT_TRUE(detached.value("backbone_index").isNull());
+  EXPECT_TRUE(detached.value("detached").toBool());
+  EXPECT_TRUE(detached.value("hidden").toBool());
+  EXPECT_FALSE(detached.value("deletion_protected").toBool());
+  EXPECT_FALSE(detached.value("name").toString().isEmpty());
+}
+
+// nodes.set_visibility hides and shows a Color Grade with one history commit each, the same
+// value makes no commit, and the result is the new state. The user adapter stays refused while
+// the agent holds control (#929).
+TEST_F(AutomationGuiSessionTest, SetVisibilityHidesThenShowsWithOneCommitEach) {
+  const auto document = host_->editor_session()->pipeline_document();
+  ASSERT_TRUE(document && document->PrimaryGrade() != nullptr);
+  const NodeId  grade_id = document->PrimaryGrade()->Id();
+  const QString grade    = QString::fromStdString(std::string(grade_id.Value()));
+  ASSERT_TRUE(Result(QStringLiteral("control.acquire"), QJsonObject{{"holder_name", "test-agent"}})
+                  .value("held")
+                  .toBool());
+  const auto commits = [&] { return host_->editor_session()->history_snapshot().commits.size(); };
+  const auto enabled = [&] {
+    const auto current = host_->editor_session()->pipeline_document();
+    return current && current->PrimaryGrade() != nullptr && current->PrimaryGrade()->Enabled();
+  };
+  const auto set_visibility = [&](bool visible) {
+    return Result(QStringLiteral("nodes.set_visibility"),
+                  QJsonObject{{"node_id", grade}, {"visible", visible}});
+  };
+
+  const std::size_t before = commits();
+  const QJsonObject hidden = set_visibility(false);
+  EXPECT_EQ(hidden.value("node_id").toString(), grade);
+  EXPECT_TRUE(hidden.value("hidden").toBool());
+  EXPECT_FALSE(hidden.value("detached").toBool());
+  EXPECT_GE(hidden.value("backbone_index").toInt(-1), 0);
+  EXPECT_EQ(commits(), before + 1);
+  EXPECT_FALSE(enabled());
+  EXPECT_TRUE(host_->editor_session()->history_snapshot().can_undo);
+
+  // The user adapter is refused while the agent holds control.
+  EXPECT_TRUE(EditorSessionResultIsFailure(
+      host_->editor_session()->SubmitSetColorGradeEnabled(grade_id, /*enabled=*/true).kind));
+
+  // The same value makes no commit and answers with the current state.
+  EXPECT_TRUE(set_visibility(false).value("hidden").toBool());
+  EXPECT_EQ(commits(), before + 1);
+
+  const QJsonObject shown = set_visibility(true);
+  EXPECT_FALSE(shown.value("hidden").toBool());
+  EXPECT_EQ(commits(), before + 2);
+  EXPECT_TRUE(enabled());
+  EXPECT_FALSE(Result(QStringLiteral("control.release")).value("held").toBool());
+}
+
+// nodes.set_visibility refuses an unknown id and a node that is not a Color Grade before any
+// commit, and needs agent control in a GUI session (#929).
+TEST_F(AutomationGuiSessionTest, SetVisibilityRejectsUnknownAndNonColorGradeIds) {
+  const auto  commits  = [&] { return host_->editor_session()->history_snapshot().commits.size(); };
+  const auto  document = host_->editor_session()->pipeline_document();
+  ASSERT_TRUE(document);
+  const auto backbone = document->Graph().ImageBackboneNodeIds();
+  ASSERT_FALSE(backbone.empty());
+  const QString develop = QString::fromStdString(std::string(backbone.front().Value()));
+  const std::size_t before = commits();
+
+  EXPECT_EQ(ErrorCode(QStringLiteral("nodes.set_visibility"),
+                      QJsonObject{{"node_id", develop}, {"visible", false}}),
+            static_cast<int>(AutomationErrorCode::ControlNotHeld));
+  ASSERT_TRUE(Result(QStringLiteral("control.acquire"), QJsonObject{{"holder_name", "test-agent"}})
+                  .value("held")
+                  .toBool());
+
+  for (const QString& id : {QStringLiteral("grade.missing"), develop}) {
+    const auto response = Call(QStringLiteral("nodes.set_visibility"),
+                               QJsonObject{{"node_id", id}, {"visible", false}});
+    ASSERT_TRUE(response.has_value() && response->error.has_value()) << id.toStdString();
+    EXPECT_EQ(response->error->code, AutomationErrorCode::InvalidParams) << id.toStdString();
+    EXPECT_EQ(response->error->data.toObject().value("pointer").toString(),
+              QStringLiteral("/node_id"));
+  }
+  EXPECT_EQ(commits(), before);
+  EXPECT_FALSE(Result(QStringLiteral("control.release")).value("held").toBool());
 }
 
 }  // namespace

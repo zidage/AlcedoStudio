@@ -147,8 +147,20 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
       if (pin.image_id_ == imageId) {
         pin.ref_count_++;
         const auto* item = library_.FindAlbumItem(elementId);
-        if (item != nullptr && item->thumb_url.isEmpty() && !item->thumb_loading &&
-            item->thumb_error_text.isEmpty()) {
+        if (item == nullptr) {
+          // No row carries the state of a photo outside the loaded rows: the new consumer gets
+          // the stored tier, or the render that is on the way publishes it.
+          const QString url =
+              image_store_->CurrentUrl(elementId, static_cast<uint32_t>(key.resolution));
+          if (!url.isEmpty()) {
+            library_.EmitThumbnailUpdated(static_cast<uint>(elementId), url, false, false,
+                                          QString{});
+          } else if (!thumbnail_active_flags_.contains(key)) {
+            RequestThumbnail(elementId, imageId, maxEdge);
+          }
+          return;
+        }
+        if (item->thumb_url.isEmpty() && !item->thumb_loading && item->thumb_error_text.isEmpty()) {
           RequestThumbnail(elementId, imageId, maxEdge);
         }
         return;
@@ -476,6 +488,12 @@ void ThumbnailManager::UpdateThumbnailState(sl_element_id_t elementId, const QSt
                                             const QString& errorText) {
   auto* item = library_.FindAlbumItem(elementId);
   if (!item) {
+    // A pinned photo outside the loaded rows, for example the open editor image that the current
+    // Library list does not hold: its consumer reads the state from ThumbnailUpdated alone.
+    if (IsThumbnailPinned(elementId)) {
+      library_.EmitThumbnailUpdated(static_cast<uint>(elementId), thumbUrl, loading, missingSource,
+                                    errorText);
+    }
     return;
   }
 

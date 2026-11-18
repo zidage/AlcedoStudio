@@ -353,6 +353,46 @@ TEST(EditorAdjustmentModelTest, CatalogFieldKeyAppliesCatalogRange) {
   EXPECT_DOUBLE_EQ(export_quality.maximum(), 1.0);
 }
 
+// #922: the catalog sets the rail of the slider; a value beyond the rail stays a valid value.
+TEST(EditorAdjustmentModelTest, CatalogFieldKeyAppliesTheRailRangeInsideTheFullRange) {
+  RecordingSubmitter         submitter;
+  EditorAdjustmentValueModel exposure;
+  exposure.setFieldKey(QStringLiteral("exposure"));
+  exposure.setSubmitter(&submitter);
+  EXPECT_DOUBLE_EQ(exposure.railMinimum(), -5.0);
+  EXPECT_DOUBLE_EQ(exposure.railMaximum(), 5.0);
+  exposure.editValue(8.0);
+  exposure.commitImmediately();
+  EXPECT_DOUBLE_EQ(exposure.value(), 8.0);
+  EXPECT_EQ(submitter.settledCount(), 1);
+
+  EditorAdjustmentValueModel shadows;
+  shadows.setFieldKey(QStringLiteral("shadows"));
+  EXPECT_DOUBLE_EQ(shadows.minimum(), -100.0);
+  EXPECT_DOUBLE_EQ(shadows.maximum(), 150.0);
+  EXPECT_DOUBLE_EQ(shadows.railMinimum(), -100.0);
+  EXPECT_DOUBLE_EQ(shadows.railMaximum(), 100.0);
+
+  EditorAdjustmentValueModel highlights;
+  highlights.setFieldKey(QStringLiteral("highlights"));
+  EXPECT_DOUBLE_EQ(highlights.minimum(), -150.0);
+  EXPECT_DOUBLE_EQ(highlights.maximum(), 100.0);
+  EXPECT_DOUBLE_EQ(highlights.railMinimum(), -100.0);
+  EXPECT_DOUBLE_EQ(highlights.railMaximum(), 100.0);
+
+  EditorAdjustmentValueModel contrast;
+  contrast.setFieldKey(QStringLiteral("contrast"));
+  EXPECT_DOUBLE_EQ(contrast.railMinimum(), -100.0);
+  EXPECT_DOUBLE_EQ(contrast.railMaximum(), 100.0);
+
+  // A field outside the catalog keeps its rail on the range that its panel sets.
+  EditorAdjustmentValueModel quality;
+  quality.setMinimum(1.0);
+  quality.setMaximum(100.0);
+  EXPECT_DOUBLE_EQ(quality.railMinimum(), 1.0);
+  EXPECT_DOUBLE_EQ(quality.railMaximum(), 100.0);
+}
+
 TEST(EditorAdjustmentModelTest, LoadFromSnapshotConvertsModelUnitsWithoutSubmit) {
   struct Case {
     const char* field;

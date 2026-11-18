@@ -1040,9 +1040,15 @@ auto AppTheme::graphMaskDrawerHeaderHeight() const -> int { return 28; }
 
 auto AppTheme::graphMaskRowHeight() const -> int { return 28; }
 
-auto AppTheme::maskGroupPreviewSize() const -> int { return 40; }
+auto AppTheme::maskGroupPreviewSize() const -> int { return 28; }
 
-auto AppTheme::maskGroupMaskPreviewSize() const -> int { return 32; }
+auto AppTheme::maskGroupMaskPreviewSize() const -> int { return 24; }
+
+auto AppTheme::layerIconHitSize() const -> int { return 24; }
+
+auto AppTheme::layerIconGlyphSize() const -> int { return 15; }
+
+auto AppTheme::layerHiddenContentOpacity() const -> qreal { return 0.35; }
 
 auto AppTheme::graphPortSize() const -> int { return 8; }
 
@@ -1174,6 +1180,12 @@ auto AppTheme::plotPointerLineColor() const -> QColor {
 }
 
 auto AppTheme::plotInactiveLineOpacity() const -> qreal { return 0.4; }
+
+// The curve histogram is a quiet background: on plotSurfaceColor its neutral fill and its channel
+// edges stay darker than the 18% grey grid line and the identity line (#902).
+auto AppTheme::plotHistogramFillOpacity() const -> qreal { return 0.5; }
+
+auto AppTheme::plotHistogramEdgeOpacity() const -> qreal { return 0.4; }
 
 auto AppTheme::plotCurveHitRadius() const -> qreal { return 6.0; }
 
@@ -1419,6 +1431,7 @@ void AppTheme::setReduceMotion(bool enabled) {
   emit ReduceMotionChanged();
 }
 
+auto AppTheme::fontSizeMicro() const -> int { return 10; }
 auto AppTheme::fontSizeCaption() const -> int { return 11; }
 auto AppTheme::fontSizeBody() const -> int { return 12; }
 auto AppTheme::fontSizeTitle() const -> int { return 13; }

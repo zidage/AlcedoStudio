@@ -8,7 +8,6 @@
 #include <QRectF>
 #include <Qt>
 #include <array>
-#include <utility>
 
 #include "edit/geometry/types.hpp"
 #include "ui/edit_viewer/overlay_cursor.hpp"
@@ -32,10 +31,12 @@ enum class CropEdge {
 };
 
 struct CropHitTestResult {
-  int      corner_index      = -1;
-  CropEdge edge              = CropEdge::None;
-  bool     rotate_handle_hit = false;
-  bool     inside_crop       = false;
+  int      corner_index = -1;
+  CropEdge edge         = CropEdge::None;
+  /// The point is in a rotate zone: outside the frame, near a corner (see
+  /// CropGeometry::HitTestWidgetGeometry).
+  bool     rotate_hit   = false;
+  bool     inside_crop  = false;
   /// Widget-space drag axis of the hit corner or edge: crop center to the
   /// corner, or to the edge midpoint. Zero when no corner or edge is hit.
   QPointF  resize_axis{};
@@ -53,15 +54,30 @@ struct CropHitTestResult {
  */
 class CropGeometry {
  public:
-  static constexpr float kCropMinSize                  = 1e-4f;
-  static constexpr float kCropCornerHitRadiusPx        = 12.0f;
-  static constexpr float kCropEdgeHitRadiusPx          = 10.0f;
-  static constexpr float kCropCornerDrawRadiusPx       = 4.0f;
-  static constexpr float kCropRotateHandleOffsetPx     = 28.0f;
-  static constexpr float kCropRotateHandleHitRadiusPx  = 14.0f;
-  static constexpr float kCropRotateHandleDrawRadiusPx = 5.0f;
+  static constexpr float kCropMinSize               = 1e-4f;
+  static constexpr float kCropCornerHitRadiusPx     = 14.0f;
+  /// Edge hit band: inside and outside distance from the edge line.
+  static constexpr float kCropEdgeHitInsidePx       = 10.0f;
+  static constexpr float kCropEdgeHitOutsidePx      = 18.0f;
+  /// Rotate zones: points outside the frame (and outside the edge bands) up to this
+  /// distance from a corner. The middle of each edge has no rotate zone.
+  static constexpr float kCropRotateZoneRadiusPx    = 84.0f;
+  /// Pointer travel before a rotate drag changes the angle.
+  static constexpr float kCropRotateStartPx         = 3.0f;
+  /// Closer to the frame center than this, a rotate drag holds its angle.
+  static constexpr float kCropRotateMinLeverPx      = 40.0f;
+  /// Largest angle change of one rotate drag.
+  static constexpr float kCropRotateMaxDragDegrees  = 45.0f;
+  /// Rotate drags snap to 0 degrees inside this distance.
+  static constexpr float kCropRotateSnapDegrees     = 0.3f;
+  /// Corner bracket arm length.
+  static constexpr float kCropCornerBracketLengthPx = 18.0f;
+  /// Approximate cell size of the fine grid drawn during a rotate drag.
+  static constexpr float kCropFineGridSpacingPx     = 28.0f;
+  /// Angle badge anchor: distance outside the top edge midpoint.
+  static constexpr float kCropAngleBadgeOffsetPx    = 28.0f;
   /// Smallest crop box side in frame-space (source) pixels while dragging.
-  static constexpr float kCropMinFramePixels           = 1.0f;
+  static constexpr float kCropMinFramePixels        = 1.0f;
 
   static auto            Clamp01(float value) -> float;
   static auto            NormalizeAngleDegrees(float angle_degrees) -> float;
@@ -100,11 +116,16 @@ class CropGeometry {
   static auto LerpPoint(const QPointF& a, const QPointF& b, float t) -> QPointF;
   static auto NormalizeVector(const QPointF& vector, const QPointF& fallback) -> QPointF;
   static auto CropCenterWidgetPoint(const std::array<QPointF, 4>& corners) -> QPointF;
-  static auto CropRotateHandleWidgetPoint(const std::array<QPointF, 4>& corners)
-      -> std::pair<QPointF, QPointF>;
+  /// Anchor of the angle badge: @ref kCropAngleBadgeOffsetPx outside the midpoint of the top
+  /// edge (the right edge for a portrait frame).
+  static auto CropAngleBadgeWidgetPoint(const std::array<QPointF, 4>& corners) -> QPointF;
   /// Cursor for @p hit: rotate, a resize along its drag axis, or move inside.
   static auto CursorForCropHit(const CropHitTestResult& hit) -> OverlayCursor;
   static auto OppositeCropCornerIndex(int corner_index) -> int;
+  /// Hit test of the frame controls, in this order: a corner (within
+  /// @ref kCropCornerHitRadiusPx), an edge (the band from @ref kCropEdgeHitInsidePx inside to
+  /// @ref kCropEdgeHitOutsidePx outside the edge), then a rotate zone (outside the frame,
+  /// within @ref kCropRotateZoneRadiusPx of a corner). `inside_crop` is left to the caller.
   static auto HitTestWidgetGeometry(const std::array<QPointF, 4>& corners_widget,
                                     const QPointF&                event_pos) -> CropHitTestResult;
 };
