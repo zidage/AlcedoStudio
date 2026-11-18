@@ -11,6 +11,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace alcedo {
@@ -317,6 +318,28 @@ TEST(GpuDagGeometry, ResolveRenderGeometryRejectsZeroExtent) {
   bad.render_scale = 0.0f;
   EXPECT_THROW(ResolveSimple(MakeSourceGeometry({10, 10}, {10, 10}), {}, {}, bad, {}),
                std::runtime_error);
+}
+
+TEST(GpuDagGeometry, OrientedRenderRejectsExtentsOutsideTheSignedPixelRange) {
+  constexpr auto oversized =
+      static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) + 1u;
+  const ImageGeometryParams image{.orientation = FrameOrientation::Rotate90Clockwise};
+  EXPECT_THROW(ResolveSimple(MakeSourceGeometry({5, 3}, {oversized, 3}), image),
+               std::runtime_error);
+  EXPECT_THROW(ResolveSimple(MakeSourceGeometry({5, 3}, {5, 3}), image, {},
+                             ResolutionRequest{.render_scale = 1.0e10f}),
+               std::runtime_error);
+}
+
+TEST(GpuDagGeometry, WideOrientedSamplingFootprintClampsToBothSourceExtents) {
+  const auto                source = MakeSourceGeometry({25, 15}, {50, 30});
+  const ImageGeometryParams image{.orientation = FrameOrientation::Transverse};
+  const ViewRequest         view{.visible_rect_in_edit_space = {0.25f, 0.25f, 0.50f, 0.50f}};
+  constexpr auto            radius = std::numeric_limits<float>::max();
+  const auto geometry = ResolveSimple(source, image, view, {},
+                                      SamplingFootprint{.radius_x = radius, .radius_y = radius});
+  EXPECT_EQ(geometry.required_decoded_region, (RectI{0, 0, 25, 15}));
+  EXPECT_EQ(geometry.required_reference_region, (RectI{0, 0, 50, 30}));
 }
 
 }  // namespace alcedo

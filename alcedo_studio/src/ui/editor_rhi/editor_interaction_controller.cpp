@@ -612,6 +612,7 @@ bool EditorInteractionController::isItemPointInsideImage(qreal x, qreal y) const
 void EditorInteractionController::setDisplayedMaskGeometry(const ResolvedRenderGeometry& geometry) {
   const auto& current = displayed_mask_geometry_;
   const bool  same =
+      current.orientation == geometry.orientation &&
       current.full_reference_extent == geometry.full_reference_extent &&
       current.render_extent == geometry.render_extent &&
       current.edit_extent == geometry.edit_extent &&
