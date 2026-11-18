@@ -52,6 +52,9 @@ class ElementMapper
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> ElementMapperParams;
   static auto ToParams(const std::shared_ptr<SleeveElement>& source) -> ElementMapperParams;
   static auto FromParams(ElementMapperParams&& param) -> std::shared_ptr<SleeveElement>;
+  /// Apply a database row to an existing identity. Validate ID, type, and name before mutation.
+  /// The caller owns synchronization; no child membership or image binding is changed here.
+  static void RestoreFields(SleeveElement& element, const ElementMapperParams& param);
 
   auto        GetElementById(const sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
   auto GetElementByName(const std::wstring& name) -> std::vector<std::shared_ptr<SleeveElement>>;

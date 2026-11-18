@@ -82,6 +82,7 @@ void NodeStorageHandler::GarbageCollect() {
 Storage::Storage(std::filesystem::path db_path)
     : database_(db_path),
       element_store_(database_),
+      photo_stack_store_(database_),
       image_store_(database_.GetConnectionGuard()),
       semantic_models_(database_),
       semantic_embeddings_(database_),
@@ -95,6 +96,8 @@ auto Storage::OpenSession() -> StorageSession { return StorageSession(database_)
 auto Storage::Maintenance() -> StorageMaintenance& { return maintenance_; }
 
 auto Storage::GetElementStore() -> ElementStore& { return element_store_; }
+
+auto Storage::GetPhotoStackStore() -> PhotoStackStore& { return photo_stack_store_; }
 
 auto Storage::GetImageStore() -> ImageStore& { return image_store_; }
 

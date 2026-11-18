@@ -9,10 +9,11 @@
 #include <mutex>
 #include <string>
 
-#include "app/album_browse_service.hpp"
 #include "app/ai_sidecar_runtime_service.hpp"
-#include "app/sleeve_service.hpp"
+#include "app/album_browse_service.hpp"
+#include "app/photo_stack_service.hpp"
 #include "app/sleeve_filter_service.hpp"
+#include "app/sleeve_service.hpp"
 #include "image_pool_service.hpp"
 #include "sleeve/storage.hpp"
 #include "type/type.hpp"
@@ -45,6 +46,10 @@ class ProjectService {
   }
   auto GetAlbumBrowseService() const -> std::shared_ptr<AlbumBrowseService> {
     return browse_service_;
+  }
+  /// Shared project command service. Outstanding callers keep the underlying storage alive.
+  auto GetPhotoStackService() const -> std::shared_ptr<PhotoStackService> {
+    return photo_stack_service_;
   }
   auto GetProjectPackageService() const -> std::shared_ptr<ProjectPackageService> {
     return package_service_;
@@ -82,6 +87,7 @@ class ProjectService {
   std::shared_ptr<ImagePoolService>      pool_service_;
   std::shared_ptr<SleeveFilterService>   filter_service_;
   std::shared_ptr<AlbumBrowseService>    browse_service_;
+  std::shared_ptr<PhotoStackService>               photo_stack_service_;
   std::shared_ptr<ProjectPackageService> package_service_;
   // A rating batch saves from a worker thread while the UI thread can also save.
   std::mutex                             save_project_mutex_;

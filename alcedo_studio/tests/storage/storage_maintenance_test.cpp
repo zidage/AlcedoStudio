@@ -11,6 +11,7 @@
 #include <duckdb.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -93,6 +94,8 @@ constexpr SummaryTableKey kSummaryTables[] = {
     {"Element", "id"},
     {"FolderContent", nullptr},
     {"FileImage", "file_id"},
+    {"PhotoStack", "stack_id"},
+    {"PhotoStackMember", "file_id"},
     {"ComboFolder", "combo_id"},
     {"Filter", "combo_id"},
     {"VersionRef", "version_id"},
@@ -190,6 +193,28 @@ TEST_F(StorageMaintenanceTest, DataSummaryCountsRowsOfEveryTable) {
   ASSERT_NE(folder_content, nullptr);
   EXPECT_EQ(folder_content->rows, 1);
   EXPECT_FALSE(folder_content->max_key.has_value());
+}
+
+TEST_F(StorageMaintenanceTest, DataSummaryIncludesBothStackTablesWithExactRowCounts) {
+  InsertRows();
+  RunSql(*storage_, "INSERT INTO Element (id, type) VALUES (12, 0)");
+  RunSql(*storage_, "INSERT INTO FileImage (file_id, image_id) VALUES (11, 5), (12, 9)");
+  const std::array<sl_element_id_t, 2> ids{11, 12};
+  const auto                           stack =
+      storage_->GetPhotoStackStore().CreateStack("ec991cd4-a527-4485-b38d-aa8b64aa1c08", ids, 11);
+  const auto  summary = storage_->Maintenance().ReadDataSummary();
+  const auto* stacks  = FindTable(summary, "PhotoStack");
+  const auto* members = FindTable(summary, "PhotoStackMember");
+  ASSERT_NE(stacks, nullptr);
+  ASSERT_NE(members, nullptr);
+  EXPECT_EQ(stacks->rows, 1);
+  EXPECT_EQ(stacks->min_key, 0);
+  EXPECT_EQ(stacks->max_key, 0);
+  EXPECT_EQ(members->rows, 2);
+  EXPECT_EQ(members->min_key, 11);
+  EXPECT_EQ(members->max_key, 12);
+  EXPECT_EQ(storage_->GetPhotoStackStore().ReadMemberIds(stack.stack_id),
+            (std::vector<sl_element_id_t>{11, 12}));
 }
 
 TEST_F(StorageMaintenanceTest, DataSummaryLeavesOutATableThatTheDatabaseDoesNotHave) {

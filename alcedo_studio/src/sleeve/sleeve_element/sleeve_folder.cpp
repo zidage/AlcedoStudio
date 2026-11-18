@@ -92,6 +92,33 @@ void SleeveFolder::RecordContentAdded(sl_element_id_t element_id) {
   }
 }
 
+void SleeveFolder::RestoreContents(
+    std::span<const sl_element_id_t>                                      child_ids,
+    const std::function<std::shared_ptr<SleeveElement>(sl_element_id_t)>& resolve) {
+  contents_.clear();
+  contents_.reserve(child_ids.size());
+  indicies_cache_.clear();
+  auto& children = indicies_cache_[default_filter_];
+  children.reserve(child_ids.size());
+  for (const auto id : child_ids) {
+    const auto child = resolve(id);
+    if (!child || child->element_id_ != id || child->sync_flag_ == SyncFlag::DELETED) {
+      throw std::runtime_error("SleeveFolder: Cannot restore an invalid child");
+    }
+    const auto [existing, inserted] = contents_.emplace(child->element_name_, id);
+    if (!inserted) {
+      if (existing->second != id) {
+        throw std::runtime_error("SleeveFolder: Name already exists in folder");
+      }
+      continue;
+    }
+    children.push_back(id);
+    pinned_ |= child->pinned_;
+  }
+  MarkContentSynced();
+  children_loaded_ = true;
+}
+
 void SleeveFolder::RecordContentRemoved(sl_element_id_t element_id) {
   if (content_added_since_sync_.erase(element_id) == 0) {
     content_removed_since_sync_.insert(element_id);

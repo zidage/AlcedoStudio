@@ -24,6 +24,7 @@ def_library(StorageQuery
 
 # Mappers
 set(MAPPER_SRCS
+    "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/photo_stack_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/element/file_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/element/folder_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/element/element_mapper.cpp"
@@ -47,6 +48,7 @@ def_library(SleeveMapper
 
 # Stores + Storage facade (no storage/service rank)
 set(STORAGE_SRCS
+    "${ALCEDO_SRC_ROOT}/storage/store/sleeve/photo_stack_store.cpp"
     "${ALCEDO_SRC_ROOT}/sleeve/storage.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/store_types.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/database.cpp"

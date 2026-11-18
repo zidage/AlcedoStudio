@@ -366,6 +366,7 @@ ProjectService::ProjectService(const std::filesystem::path& db_path,
     filter_service_ = std::make_shared<SleeveFilterService>(storage_);
     RegisterSemanticSearchProvider();
     browse_service_  = std::make_shared<AlbumBrowseService>(sleeve_service_, filter_service_);
+    photo_stack_service_ = std::make_shared<PhotoStackService>(storage_);
     package_service_ = std::make_shared<ProjectPackageService>();
 
     project_uuid_    = GenerateProjectUUID();
@@ -407,6 +408,7 @@ void ProjectService::StopAiSidecarRuntime() {
 }
 
 ProjectService::~ProjectService() {
+  photo_stack_service_.reset();
   package_service_.reset();
   StopAiSidecarRuntime();
   browse_service_.reset();
@@ -527,6 +529,8 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
 
   storage_ = std::make_shared<Storage>(db_path_);
 
+  storage_->GetPhotoStackStore().ValidateAll();
+
   // Older projects have HNSW indexes on the semantic embedding tables. Search no
   // longer uses them, and while one exists every embedding write needs the vss
   // extension. Drop them; when that fails, the project does not open.
@@ -585,6 +589,7 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
   filter_service_ = std::make_shared<SleeveFilterService>(storage_);
   RegisterSemanticSearchProvider();
   browse_service_  = std::make_shared<AlbumBrowseService>(sleeve_service_, filter_service_);
+  photo_stack_service_ = std::make_shared<PhotoStackService>(storage_);
   package_service_ = std::make_shared<ProjectPackageService>();
 }
 

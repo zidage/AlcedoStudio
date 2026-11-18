@@ -88,6 +88,7 @@ void Database::InitializeDB() {
   RunDdl(guard.conn_, ai_annotation_table_query);
   RunDdl(guard.conn_, commit_graph_table_query);
   RunDdl(guard.conn_, mask_asset_table_query);
+  RunDdl(guard.conn_, photo_stack_table_query);
   PopulateSemanticLabelQueries(guard.conn_);
   initialized_ = true;
 }

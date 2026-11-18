@@ -85,49 +85,53 @@ SleeveServiceImpl::SleeveServiceImpl(std::shared_ptr<Storage> storage_service,
 }
 
 auto SleeveServiceImpl::Sync() -> SyncResult {
+  std::lock_guard lock(fs_lock_);
+  return SyncLocked();
+}
+
+auto SleeveServiceImpl::SyncLocked() -> SyncResult {
+  if (!sync_restore_error_.empty()) {
+    return {false, 0, sync_restore_error_};
+  }
   SyncResult result{true, 0, ""};
+  std::vector<sl_element_id_t> affected_ids;
   try {
-    auto&      element_ctrl      = storage_->GetElementStore();
-    auto       modified_elements = fs_->GetModifiedElements();
-    auto       unsynced_elements = fs_->GetUnsyncedElements();
-    auto       garbage_elements  = fs_->GetDeletedElements();
-
-    const auto deleted_ids       = CollectIds(garbage_elements);
-    RemoveIdsFrom(unsynced_elements, deleted_ids);
-
-    auto       skip_modified_ids = deleted_ids;
-    const auto unsynced_ids      = CollectIds(unsynced_elements);
-    skip_modified_ids.insert(unsynced_ids.begin(), unsynced_ids.end());
-    RemoveIdsFrom(modified_elements, skip_modified_ids);
-
-    // Sync unsynced elements first, batched into a single transaction instead of
-    // one autocommit transaction per element.
-    for (auto& element : unsynced_elements) {
+    auto       modified  = fs_->GetModifiedElements();
+    auto       additions = fs_->GetUnsyncedElements();
+    auto       deletions = fs_->GetDeletedElements();
+    auto       affected  = CollectIds(modified);
+    const auto added     = CollectIds(additions);
+    const auto deleted   = CollectIds(deletions);
+    affected.insert(added.begin(), added.end());
+    affected.insert(deleted.begin(), deleted.end());
+    affected_ids.assign(affected.begin(), affected.end());
+    RemoveIdsFrom(additions, deleted);
+    auto skip_modified = deleted;
+    skip_modified.insert(added.begin(), added.end());
+    RemoveIdsFrom(modified, skip_modified);
+    for (const auto& element : additions) {
       LogSyncElement("Unsynced", element);
     }
-    element_ctrl.AddElements(unsynced_elements);
-    result.elements_synced_ += static_cast<uint32_t>(unsynced_elements.size());
-
-    // Then sync modified elements, also batched into a single transaction.
-    for (auto& element : modified_elements) {
+    for (const auto& element : modified) {
       LogSyncElement("Modified", element);
     }
-    element_ctrl.UpdateElements(modified_elements);
-    result.elements_synced_ += static_cast<uint32_t>(modified_elements.size());
-
-    // Finally, delete the deleted elements.
-    // TODO: This should be done periodically instead of every sync.
-    for (auto& element : garbage_elements) {
+    for (const auto& element : deletions) {
       LogSyncElement("Deleted", element);
     }
-    element_ctrl.RemoveElements(garbage_elements);
-    result.elements_synced_ += static_cast<uint32_t>(garbage_elements.size());
-    // Perform garbage collection in the storage
-    // The same goes to here, this should be done periodically
+    storage_->GetElementStore().ApplyElementChanges(additions, modified, deletions);
+    result.elements_synced_ =
+        static_cast<uint32_t>(additions.size() + modified.size() + deletions.size());
     fs_->GarbageCollect();
-  } catch (std::exception& e) {
+  } catch (const std::exception& error) {
     result.success_ = false;
-    result.message_ = e.what();
+    result.message_ = error.what();
+    try {
+      fs_->RestoreAfterFailedSync(affected_ids);
+    } catch (const std::exception& restore_error) {
+      sync_restore_error_ =
+          result.message_ + "\nFileSystem restoration failed: " + restore_error.what();
+      result.message_ = sync_restore_error_;
+    }
   }
   return result;
 }
@@ -267,8 +271,12 @@ auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,
     -> std::pair<std::shared_ptr<SleeveFile>, SyncResult> {
   std::lock_guard<std::mutex> lock(fs_lock_);
 
+  if (!sync_restore_error_.empty()) {
+    throw std::runtime_error(sync_restore_error_);
+  }
+
   auto       duplicated  = fs_->DuplicateFileToFolder(file_id, folder_id);
-  SyncResult sync_result = Sync();
+  SyncResult sync_result = SyncLocked();
   if (!duplicated || !sync_result.success_) {
     return {duplicated, sync_result};
   }

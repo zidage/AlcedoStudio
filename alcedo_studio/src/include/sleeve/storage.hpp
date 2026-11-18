@@ -18,6 +18,7 @@
 #include "storage/store/semantic/semantic_model_registry.hpp"
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/element_store.hpp"
+#include "storage/store/sleeve/photo_stack_store.hpp"
 #include "storage/store/storage_maintenance.hpp"
 #include "storage/store/storage_session.hpp"
 #include "type/type.hpp"
@@ -50,6 +51,7 @@ class Storage {
  private:
   Database                                                              database_;
   ElementStore                                                         element_store_;
+  PhotoStackStore                                                       photo_stack_store_;
   ImageStore                                                           image_store_;
   SemanticModelRegistry                                                 semantic_models_;
   SemanticEmbeddingStore                                                semantic_embeddings_;
@@ -76,6 +78,8 @@ class Storage {
   /// Diagnostics summary, package snapshot, and HNSW index removal (see StorageMaintenance).
   auto Maintenance() -> StorageMaintenance&;
   auto GetElementStore() -> ElementStore&;
+  /// Project-owned stack operations; callers never retain a connection or mutable membership.
+  auto GetPhotoStackStore() -> PhotoStackStore&;
   auto GetImageStore() -> ImageStore&;
   auto GetSemanticModelRegistry() -> SemanticModelRegistry&;
   auto GetSemanticEmbeddingStore() -> SemanticEmbeddingStore&;

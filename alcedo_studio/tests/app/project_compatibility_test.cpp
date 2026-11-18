@@ -26,6 +26,7 @@
 #include <string>
 #include <system_error>
 
+#include "../support/storage_test_access.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
@@ -37,13 +38,13 @@
 #include "image/color_label.hpp"
 #include "image/image.hpp"
 #include "json.hpp"
+#include "resources/compat/project_version_reader_011.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/project_compat_render.hpp"
 #include "support/storage_invariants.hpp"
 #include "support/test_temp_directory.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
-#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -357,7 +358,7 @@ constexpr const char* kEditStateRootIdsSql =
     "FROM ImageEditState;";
 
 // #769: a 0.10.0 project opens, gains the library mark columns with empty marks, keeps its root
-// ids, stores marks, and saves as 0.11.0.
+// ids, stores marks, and saves the current metadata version.
 TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds) {
   const test::TestTempDirectory temp_dir;
   TimeProvider::Refresh();
@@ -405,7 +406,9 @@ TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds
     project.SaveProject(meta_path);
   }
 
-  EXPECT_EQ(ReadProjectFileVersion(meta_path), "0.11.0");
+  EXPECT_EQ(ReadProjectFileVersion(meta_path), "0.12.0");
+  EXPECT_EQ(QueryDatabaseFileInt64(db_path, "SELECT COUNT(*) FROM PhotoStack"), 0);
+  EXPECT_EQ(QueryDatabaseFileInt64(db_path, "SELECT COUNT(*) FROM PhotoStackMember"), 0);
   EXPECT_EQ(QueryDatabaseFileInt64(db_path, kImageMarkColumnCountSql), 2);
   EXPECT_EQ(QueryDatabaseFileInt64(
                 db_path, "SELECT color_labels FROM Image WHERE id = " + std::to_string(image_id)),
@@ -431,5 +434,21 @@ TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds
   }
   std::filesystem::remove_all(workspace, ec);
 }
+TEST(ProjectCompatibilityTest, Version012MetadataIsRejectedByTheVersion011Reader) {
+  EXPECT_TRUE(test::version_011::ProjectVersionIsSupported("0.10.0"));
+  EXPECT_TRUE(test::version_011::ProjectVersionIsSupported("0.11.0"));
+  EXPECT_EQ(kProjectFileVersion, "0.12.0");
+  EXPECT_FALSE(test::version_011::ProjectVersionIsSupported(kProjectFileVersion));
+  EXPECT_EQ(kPackedProjectFormatVersion, 7);
+  EXPECT_EQ(kPipelineDocumentFormatVersion, 7);
+  EXPECT_EQ(kImageEditSchemaVersion, 5);
+  EXPECT_EQ(kCommitFormatVersion, 5);
+  EXPECT_EQ(kChainFormatVersion, 5);
+  EXPECT_EQ(kRootStateFormatVersion, 5);
+  EXPECT_EQ(kCheckpointStateFormatVersion, 5);
+  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 7);
+  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v7");
+}
+
 }  // namespace
 }  // namespace alcedo

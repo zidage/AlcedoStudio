@@ -11,6 +11,8 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -53,6 +55,9 @@ class SleeveServiceImpl final : public SleeveService {
 
   mutable std::mutex fs_lock_;  // Use a fat lock for now, but I have no plan to design a
                                 // fine-grained concurrency model for FS
+  std::string                     sync_restore_error_;
+  /// Sync while the calling Write or public Sync holds fs_lock_; retain restoration errors.
+  auto                            SyncLocked() -> SyncResult;
 
  public:
   SleeveServiceImpl() = delete;
@@ -63,6 +68,9 @@ class SleeveServiceImpl final : public SleeveService {
   template <typename TResult>
   auto Read(std::function<TResult(FileSystem&)> operation) -> TResult {
     std::lock_guard<std::mutex> lock(fs_lock_);
+    if (!sync_restore_error_.empty()) {
+      throw std::runtime_error(sync_restore_error_);
+    }
     if constexpr (std::is_void_v<TResult>) {
       operation(*fs_);
       return;
@@ -77,12 +85,16 @@ class SleeveServiceImpl final : public SleeveService {
                             std::pair<TResult, SyncResult>> {
     std::lock_guard<std::mutex> lock(fs_lock_);
 
+    if (!sync_restore_error_.empty()) {
+      throw std::runtime_error(sync_restore_error_);
+    }
+
     if constexpr (std::is_void_v<TResult>) {
       operation(*fs_);
-      return Sync();  // void: only return SyncResult
+      return SyncLocked();  // void: only return SyncResult
     } else {
       TResult    result      = operation(*fs_);
-      SyncResult sync_result = Sync();
+      SyncResult sync_result = SyncLocked();
       return {result, sync_result};
     }
   }
@@ -90,6 +102,9 @@ class SleeveServiceImpl final : public SleeveService {
   template <typename TResult>
   auto Write_NoSync(std::function<TResult(FileSystem&)> operation) -> TResult {
     std::lock_guard<std::mutex> lock(fs_lock_);
+    if (!sync_restore_error_.empty()) {
+      throw std::runtime_error(sync_restore_error_);
+    }
 
     if constexpr (std::is_void_v<TResult>) {
       operation(*fs_);
@@ -100,7 +115,8 @@ class SleeveServiceImpl final : public SleeveService {
     }
   }
 
-
+  /// Serialize a complete storage sync and owner restoration with Read and Write. A failed
+  /// restore retains an explicit service error; reopen the project before further operations.
   auto Sync() -> SyncResult override;
 
   auto GetCurrentID() const -> sl_element_id_t;
