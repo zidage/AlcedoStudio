@@ -52,6 +52,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   std::uint64_t         next_image_load_request_ = 0;
   PresentationSinkId    sink_id_                 = 0;
   int                   open_count               = 0;
+  int                   reload_count             = 0;
   int                   switch_count             = 0;
   int                   close_count              = 0;
   int                   persist_count            = 0;
@@ -103,6 +104,12 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     result.identity = identity_;
     NotifyChange();
     return result;
+  }
+
+  auto ReloadSource(sl_element_id_t element_id, image_id_t image_id)
+      -> EditorSessionResult override {
+    ++reload_count;
+    return Open(element_id, image_id);
   }
 
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
@@ -500,6 +507,42 @@ TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
   EXPECT_EQ(controller.session_state(), EditorSessionState::NoImage);
   EXPECT_EQ(backend.close_count, 1);
   EXPECT_TRUE(backend.last_close_persist);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SourceRefreshWaitsForLoadingAndRunsOnceOnTheSameImage) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
+  controller.Open(42, 84);
+  controller.NotifySourceChanged(42);
+  EXPECT_EQ(backend.reload_count, 0);
+  backend.SimulateFirstFrameReady();
+  EXPECT_EQ(backend.reload_count, 1);
+  EXPECT_EQ(backend.identity().element_id, 42);
+  EXPECT_EQ(backend.identity().image_id, 84);
+  backend.SimulateFirstFrameReady();
+  EXPECT_EQ(backend.reload_count, 1);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SourceRefreshForAnotherImageLeavesTheOpenSourceLoaded) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
+  controller.Open(42, 84);
+  backend.SimulateFirstFrameReady();
+  controller.NotifySourceChanged(43);
+  EXPECT_EQ(backend.reload_count, 0);
+  EXPECT_EQ(backend.open_count, 1);
+}
+
+TEST(EditorSessionControllerPhase5ATest, NavigationAwayClearsThePendingSourceRefresh) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
+  controller.Open(42, 84);
+  controller.NotifySourceChanged(42);
+  controller.Open(100, 200);
+  backend.SimulateFirstFrameReady();
+  EXPECT_EQ(backend.reload_count, 0);
+  EXPECT_EQ(controller.element_id(), 100);
+  EXPECT_EQ(controller.image_id(), 200);
 }
 
 TEST(EditorSessionControllerPhase5ATest, WorkspaceSwitchesImagesWithoutClosingTheFirstSession) {

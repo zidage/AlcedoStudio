@@ -25,6 +25,8 @@ use their own top-level category.
 
 - [duckorm Query Expression and Album Filter SQL Plan](alcedo_studio/storage/duckorm_query_expression_and_album_filter_sql_plan.md)
 - [Library Search Performance, Recall, and Project Size Plan](alcedo_studio/storage/library_search_and_project_size_plan.md)
+- [Import Duplicate Skipping Plan](alcedo_studio/storage/import_duplicate_skipping_plan.md)
+- [Import and Maintenance Coordination](alcedo_studio/storage/duplicate_image_cleanup_and_import_plan.md)
 
 ## Alcedo Studio — Image editing pipeline
 

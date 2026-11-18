@@ -6,6 +6,13 @@ def_library(TimeProvider
     SOURCES ${ALCEDO_SRC_ROOT}/utils/clock/time_provider.cpp
 )
 
+def_library(SourceImageFile
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/file/source_image_path.cpp
+        ${ALCEDO_SRC_ROOT}/utils/file/source_file_reader.cpp
+    PUBLIC_DEPS Qt6::Core
+)
+
 # Qt-free logging of the core libraries (utils/logging/log.hpp). On Windows it is a DLL: the CUDA
 # implementation libraries are DLLs too, and every module must share one handler and one set of
 # enabled levels. A static copy in each DLL would keep the default stderr handler there.

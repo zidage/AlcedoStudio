@@ -531,7 +531,7 @@ EditorSessionRenderSchedulerPort
   -> MarkSinkApplyStarted(sink, request_id)
   -> SetExecutorRenderParams -> BindFrameSubmission under render lock
   -> Apply -> NotifyFrameReady(bound submission)
-  -> DirectFrameSink latest_accepted gate -> DirectPresentQueue::NotifyReady
+  -> DirectFrameSink latest_accepted comparison -> DirectPresentQueue::NotifyReady
 ```
 
 **Primary failure call chain:**
@@ -567,19 +567,19 @@ Commands: build `--target PipelineSchedulerRequestIdTest EditorSessionRenderSche
 1. [x] 删除 `ui/editor_rhi/frame_presentation_broker.cpp`。
 2. [x] 删除 `include/ui/editor_rhi/frame_presentation_broker.hpp`。
 3. [x] 从 `ui/editor_rhi/CMakeLists.txt` 删除两项。
-4. [x] 删除 `editor_rhi_contracts_test.cpp` 中全部 `FramePresentationBrokerTest`。
+4. [x] 删除 `editor_presentation_test.cpp` 中全部 `FramePresentationBrokerTest`。
 5. [x] 不把它的 lease、target generation 或 accepted-generation 模型迁移到生产路径。
 6. [x] 需要的唯一旧帧规则直接实现于 `PipelineScheduler` 和实际 sink 的 request ID 比较。
 
 ##### Phase 4.11 completion record (2026-08-01)
 
-**Status:** complete — FramePresentationBroker removed from sources, CMake, and contracts tests
+**Status:** complete — FramePresentationBroker removed from sources, CMake, and presentation tests
 
 **Primary success call chain:**
 
 ```text
 GPU/CPU produce
-  -> DirectFrameSink request-id gate
+  -> DirectFrameSink request-ID comparison
   -> DirectPresentQueue resource slots
   -> EditorViewportRenderer consume by presentation_request_id
 ```
@@ -595,10 +595,11 @@ Broker API no longer linked
 
 | Required name / criterion | Target / binary | Result |
 | --- | --- | --- |
-| No `FramePresentationBrokerTest` suite | `EditorRhiContractsTest` | PASS 10/10 |
-| CMake `EDITOR_RHI_CONTRACT_SRCS` lacks broker | inspection | PASS |
+| No `FramePresentationBrokerTest` suite | `EditorPresentationTest` | PASS 10/10 |
+| CMake `EDITOR_PRESENTATION_SRCS` lacks broker | inspection | PASS |
 
-Commands: run `EditorRhiContractsTest_runtime/EditorRhiContractsTest.exe`
+Current command (target renamed after the recorded run):
+`EditorPresentationTest_runtime/EditorPresentationTest.exe`
 
 **Checklist / exit condition:** all 4.11 boxes checked; also deleted orphan `lease_frame_sink.*`
 

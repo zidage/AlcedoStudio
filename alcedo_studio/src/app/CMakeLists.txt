@@ -750,7 +750,7 @@ def_library(ImportService
             "${ALCEDO_INCLUDE_ROOT}/app/raw_import_look_source.hpp"
     # Import creates each image's history root through InitializeImageRoot on the
     # PipelineMgmtService injected at construction; it constructs no executor.
-    PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService
+    PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService SourceImageFile
 )
 
 def_library(ThumbnailService

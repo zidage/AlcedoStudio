@@ -534,19 +534,34 @@ auto EditorSessionService::FinishVersionNavigation(const NavigationOutcome& outc
 
 auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
     -> EditorSessionResult {
+  return OpenOrReload(element_id, image_id, false);
+}
+
+auto EditorSessionService::ReloadSource(sl_element_id_t element_id, image_id_t image_id)
+    -> EditorSessionResult {
+  return OpenOrReload(element_id, image_id, true);
+}
+
+auto EditorSessionService::OpenOrReload(sl_element_id_t element_id, image_id_t image_id,
+                                        bool reload_source) -> EditorSessionResult {
   if (!InOwnerReduction()) {
     EditorSessionCommand command;
-    command.kind       = EditorSessionCommandKind::OpenImage;
+    command.kind          = EditorSessionCommandKind::OpenImage;
     command.element_id = element_id;
-    command.image_id   = image_id;
+    command.image_id      = image_id;
+    command.reload_source = reload_source;
     return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-      return Open(queued.element_id, queued.image_id);
+      return OpenOrReload(queued.element_id, queued.image_id, queued.reload_source);
     });
+  }
+  if (reload_source &&
+      (!lifecycle_.has_image() || !lifecycle_.MatchesIdentity(element_id, image_id))) {
+    return Reject("Source reload does not match the open image");
   }
   AbortMaskCreation();
   (void)CloseComparisonOnOwner(false, std::nullopt);
   EndAiMaskWorkForImageChange();
-  const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, false);
+  const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, false, reload_source);
   if (outcome.rejected) {
     return Reject(outcome.message);
   }

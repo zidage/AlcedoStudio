@@ -20,6 +20,10 @@ enum class ImportErrorCode : uint8_t {
   UNSUPPORTED_NIKON_HE_RAW,
   /// The content is a supported type, but its category is not allowed by ImportOptions.
   EXCLUDED_TYPE,
+  SOURCE_CHANGED,
+  COMPARISON_FAILED,
+  BUSY,
+  RESTORATION_FAILED,
 };
 
 }  // namespace alcedo

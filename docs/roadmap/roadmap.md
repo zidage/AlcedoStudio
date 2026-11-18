@@ -35,6 +35,10 @@
 
 ## Still Planned
 
+- [ ] Skip duplicate imports by normalized full source path and byte size, with a
+      default-on preference in Settings > Default Behavior. Preserve edits and ratings when a source
+      changes size, refresh affected views, and accept undetected same-size changes; see the
+      [Import Duplicate Skipping Plan](alcedo_studio/storage/import_duplicate_skipping_plan.md).
 - [ ] Add the film print DRT method: spectral film and print tables on the host, then CUDA, Metal, and
       OpenCL passes; see the [Film Print DRT Plan](alcedo_studio/edit/film_print_drt_plan.md).
 - [ ] Fix the review findings of the executor ownership refactor, starting with history moves

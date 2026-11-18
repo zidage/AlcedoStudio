@@ -307,12 +307,14 @@ move with Cancel, the removal confirmation, and a removal error badge.
   `WelcomeProjectPreviewAdapter` and `recentProjects` and reports every action
   through a signal.
 - The items are declared in Tab order: Open Project…, New Project…, the right
-  column, the language selector, Quit. Do not reorder them for layout reasons;
+  column, the language selector, Settings, Quit. Do not reorder them for layout reasons;
   the footer is positioned with anchors.
 - `serviceMessage` shows only after the user starts an open or create action
   on the surface. The startup preview messages never show.
 - The language selector is a dark sunken `ComboBox` (`bgBaseColor`, 1 px
   `cardBorderColor`) with the monochrome selected well in its popup.
+- Settings uses the same compact quiet WelcomeActionButton as Quit. It opens the existing
+  Settings dialog above Welcome without entering a project. Closing Settings returns to Welcome.
 
 ### `WelcomeProjectOverview.qml`
 
@@ -606,7 +608,7 @@ image root, star overlay, editing tile ink).
 ### `ImportProgressOverlay.qml`
 
 - Ring and large count measure photos imported out of photos expected
-  (`importTotal - importFailed`); rejected files leave the expected total, so
+  (`importTotal - importFailed - importDuplicates`); rejected and duplicate files leave the expected total, so
   the total shrinks as the import runs.
 - The phase caption and the `ThemedProgressBar` below it measure files checked
   out of all files. Phases: `Preparing files... a of b`, `Reading photos... a of
@@ -615,6 +617,23 @@ image root, star overlay, editing tile ink).
   preparing and while saving; the progress track is indeterminate while saving.
 - Files that are not RAW are reported in a muted caption as skipped; only real
   failures use `dangerColor`. Cancel is hidden while saving.
+- Show confirmed duplicate skips in a separate muted body-text line. The RAW ring removes its
+  duplicate subset from the expected count. A duplicate never increases the failure count.
+- Match duplicate imports by normalized full source path and recorded file size. Import does
+  not hash source contents. Same-size content changes can remain undetected.
+- Count sources whose size changed as updates. Keep the existing entry, edits, ratings, and album
+  memberships. Show a completion notice and refresh affected thumbnails and the open editor source.
+- Nikon HE converted-file reimport uses the same duplicate count. Include skips in its progress
+  value and show the count in its wrapped completion caption.
+
+### `SettingDialog.qml` import defaults
+
+- Default Behavior contains an Import section with the shared ThemeCheckBox and wrapped help
+  text. Use the current SettingsSection text/divider colors and AppTheme spacing and body type.
+  Its horizontal section margins match Masks and the other Settings sections.
+- The checkbox edits a pending value. Apply persists it; Cancel and dismissal discard it.
+- Manual states: default on, saved off, changed pending value, Apply, Cancel, keyboard Tab and
+  Space, narrow width, no open project, Alcedo theme, and Classic theme.
 
 ### Manual review
 

@@ -401,13 +401,14 @@ auto PhotoInfoItem(ImagePoolService* image_pool, const SearchResultRow& row) -> 
 /// ImportExportHandler does not start it.
 void StartImportAndAnswer(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracker,
                           const std::vector<image_path_t>& paths, ImportCategoryMask allowed,
-                          AutomationReply& reply) {
+                          AutomationReply&    reply,
+                          std::optional<bool> skip_duplicates = std::nullopt) {
   if (paths.empty()) {
     // An import of zero supported files finishes with counts, not with an error.
     reply.SendResult(QJsonObject{{"task_id", tracker->RecordEmptyImport()}});
     return;
   }
-  host->import_export()->StartImportPaths(paths, false, allowed);
+  host->import_export()->StartImportPaths(paths, false, allowed, skip_duplicates);
   if (!host->import_export()->ImportRunning()) {
     SendAutomationOwnerError(reply, AutomationErrorCode::Rejected, host->project()->TaskStatus());
     return;
@@ -416,7 +417,8 @@ void StartImportAndAnswer(ui::ApplicationModuleHost* host, AutomationTaskTracker
 }
 
 void ImportFolder(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracker,
-                  const QString& folder, bool recursive, AutomationReply reply) {
+                  const QString& folder, bool recursive, AutomationReply reply,
+                  std::optional<bool> skip_duplicates) {
   if (!recursive) {
     std::vector<image_path_t> paths;
     const QFileInfoList       entries =
@@ -427,14 +429,15 @@ void ImportFolder(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracke
         paths.push_back(path);
       }
     }
-    StartImportAndAnswer(host, tracker, paths, kAllImportCategories, reply);
+    StartImportAndAnswer(host, tracker, paths, kAllImportCategories, reply, skip_duplicates);
     return;
   }
   // The recursive folder import of the GUI: the folder scan model, then StartFolderImport.
   ui::FolderImportScanModel* scan = host->import_export()->FolderScan();
   auto*                      wait = new AutomationCommandWait(std::move(reply), host);
   QObject::connect(
-      scan, &ui::FolderImportScanModel::ScanStateChanged, wait, [host, tracker, scan, wait]() {
+      scan, &ui::FolderImportScanModel::ScanStateChanged, wait,
+      [host, tracker, scan, wait, skip_duplicates]() {
         if (scan->Scanning()) {
           return;
         }
@@ -449,7 +452,9 @@ void ImportFolder(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracke
           wait->SendResult(QJsonObject{{"task_id", tracker->RecordEmptyImport()}});
           return;
         }
-        host->import_export()->StartFolderImport();
+        host->import_export()->StartImportPaths(
+            scan->TakeFilePaths(), false,
+            static_cast<ImportCategoryMask>(scan->AllowedCategories()), skip_duplicates);
         if (!host->import_export()->ImportRunning()) {
           wait->SendOwnerError(AutomationErrorCode::Rejected, host->project()->TaskStatus());
           return;
@@ -764,12 +769,25 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                             {"minItems", 1},
                             {"description", "Files to import."}}},
       {"folder", QJsonObject{{"type", "string"}, {"description", "A folder to import."}}},
+      {"skip_duplicates",
+       QJsonObject{
+           {"type", "boolean"},
+           {"description", "Override the saved duplicate-import preference for this request."}}},
       {"recursive", QJsonObject{{"type", "boolean"},
                                 {"default", true},
                                 {"description", "Include the subfolders of 'folder'."}}}});
   import_files.result_schema = AutomationObjectSchema(
       QJsonObject{{"task_id", QJsonObject{{"type", "string"}}}}, QJsonArray{"task_id"});
   import_files.handler = [host, tracker](const QJsonObject& params, AutomationReply reply) {
+    std::optional<bool> skip_duplicates;
+    if (params.contains("skip_duplicates")) {
+      if (!params.value("skip_duplicates").isBool()) {
+        SendAutomationParamError(reply, QStringLiteral("/skip_duplicates"),
+                                 QStringLiteral("must be a boolean"));
+        return;
+      }
+      skip_duplicates = params.value("skip_duplicates").toBool();
+    }
     const bool has_paths  = params.contains("paths");
     const bool has_folder = params.contains("folder");
     if (has_paths == has_folder) {
@@ -806,10 +824,11 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     }
     if (has_paths) {
       // The caller named these files, so every importable category is allowed.
-      StartImportAndAnswer(host, tracker, paths, kAllImportCategories, reply);
+      StartImportAndAnswer(host, tracker, paths, kAllImportCategories, reply, skip_duplicates);
       return;
     }
-    ImportFolder(host, tracker, folder, params.value("recursive").toBool(true), std::move(reply));
+    ImportFolder(host, tracker, folder, params.value("recursive").toBool(true), std::move(reply),
+                 skip_duplicates);
   };
   RegisterOrFail(registry, std::move(import_files), &ok, error);
 

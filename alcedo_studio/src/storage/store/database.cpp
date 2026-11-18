@@ -88,6 +88,12 @@ void Database::InitializeDB() {
   RunDdl(guard.conn_, ai_annotation_table_query);
   RunDdl(guard.conn_, commit_graph_table_query);
   RunDdl(guard.conn_, mask_asset_table_query);
+  RunDdl(guard.conn_, R"sql(
+    CREATE TABLE IF NOT EXISTS ImageSourceSize (
+      image_id BIGINT PRIMARY KEY,
+      byte_size UBIGINT NOT NULL
+    );
+  )sql");
   PopulateSemanticLabelQueries(guard.conn_);
   initialized_ = true;
 }

@@ -292,10 +292,19 @@ void NikonHeRecoveryController::HandleReimportFinished(const ImportResult& resul
     return;
   }
 
-  QString summary = QCoreApplication::translate(
-      ALCEDO_I18N_CONTEXT, "Converted Nikon HE files were reimported: %1 imported, %2 failed.")
-                        .arg(result.imported_)
+  QString summary = QCoreApplication::translate(ALCEDO_I18N_CONTEXT,
+                                                "Converted Nikon HE files were reimported: %1 "
+                                                "imported, %2 duplicates skipped, %3 failed.")
+                        .arg(result.imported_ + result.updated_)
+                        .arg(result.duplicates_)
                         .arg(result.failed_);
+  if (result.updated_ > 0) {
+    summary += QLatin1Char(' ') + PL_TEXT(
+                                      "%1 source file(s) changed size. Existing edits and ratings "
+                                      "now apply to the current files.",
+                                      result.updated_)
+                                      .Render();
+  }
   if (!completion_note_.trimmed().isEmpty()) {
     summary += QStringLiteral(" ") + completion_note_.trimmed();
   }

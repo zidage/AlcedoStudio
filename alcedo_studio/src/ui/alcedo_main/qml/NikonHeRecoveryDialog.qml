@@ -19,6 +19,7 @@ Popup {
     property bool recoveryBusy: false
     property bool showImportProgress: false
     property int importCompleted: 0
+    property int importDuplicates: 0
     property int importTotal: 0
     property int importFailed: 0
     property string recoveryPhase: ""
@@ -406,17 +407,20 @@ Popup {
                     Layout.fillWidth: true
                     from: 0
                     to: Math.max(1, root.importTotal)
-                    value: root.importCompleted + root.importFailed
+                    value: root.importCompleted + root.importDuplicates + root.importFailed
                 }
 
                 Label {
-                    text: qsTr("%1 / %2 converted files reimported, %3 failed")
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    text: qsTr("%1 / %2 converted files reimported, %3 duplicates skipped, %4 failed")
                           .arg(root.importCompleted)
                           .arg(root.importTotal)
+                          .arg(root.importDuplicates)
                           .arg(root.importFailed)
                     color: root.mutedTextColor
                     font.family: appTheme.dataFontFamily
-                    font.pixelSize: 12
+                    font.pixelSize: appTheme.fontSizeBody
                 }
             }
         }

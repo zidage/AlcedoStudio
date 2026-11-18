@@ -269,6 +269,12 @@ void EditorSessionController::SetMaskThumbnailService(
   mask_thumbnail_service_ = std::move(service);
 }
 
+void EditorSessionController::NotifySourceChanged(uint element_id) {
+  if (!session_backend_ || !has_image() || this->element_id() != element_id) return;
+  source_reload_pending_ = std::pair{element_id, image_id()};
+  SyncIdentityFromBackend();
+}
+
 void EditorSessionController::NotifyLutResourcesChanged() {
   if (!session_backend_ || !has_image() ||
       session_backend_->state() != alcedo::EditorSessionState::Interactive) {
@@ -508,6 +514,16 @@ void EditorSessionController::SyncIdentityFromBackend() {
   session_generation_ =
       static_cast<qulonglong>(session_backend_->active_image_load_request().value);
   session_state_ = session_backend_->state();
+  if (source_reload_pending_) {
+    if (source_reload_pending_->first != element_id_ ||
+        source_reload_pending_->second != image_id_) {
+      source_reload_pending_.reset();
+    } else if (session_state_ == alcedo::EditorSessionState::Interactive) {
+      const auto target = *source_reload_pending_;
+      source_reload_pending_.reset();
+      (void)session_backend_->ReloadSource(target.first, target.second);
+    }
+  }
   // active_ is workspace membership owned by Open/Close/Finalize, not by
   // backend NoImage vs Loading (empty editor remains active).
   RefreshImageExifDisplay();

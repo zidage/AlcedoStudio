@@ -2,7 +2,7 @@
 
 set(ALCEDO_EDITOR_RHI_ROOT "${ALCEDO_SRC_ROOT}/ui/editor_rhi")
 
-set(EDITOR_RHI_CONTRACT_SRCS
+set(EDITOR_PRESENTATION_SRCS
     "${ALCEDO_EDITOR_RHI_ROOT}/editor_backend.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/frame_presentation_lease.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/native_resource_counters.cpp"
@@ -23,18 +23,18 @@ if(WIN32 AND ALCEDO_CUDA_ENABLED)
     )
 endif()
 
-def_library(EditorRhiContracts
-    SOURCES ${EDITOR_RHI_CONTRACT_SRCS}
+def_library(EditorPresentation
+    SOURCES ${EDITOR_PRESENTATION_SRCS}
     PUBLIC_DEPS Qt6::Core AlcedoLog
 )
 if(ALCEDO_CUDA_ENABLED)
-    target_compile_definitions(EditorRhiContracts PUBLIC HAVE_CUDA)
+    target_compile_definitions(EditorPresentation PUBLIC HAVE_CUDA)
 endif()
 if(ALCEDO_OPENCL_ENABLED)
-    target_compile_definitions(EditorRhiContracts PUBLIC HAVE_OPENCL)
+    target_compile_definitions(EditorPresentation PUBLIC HAVE_OPENCL)
 endif()
 if(ALCEDO_METAL_ENABLED)
-    target_compile_definitions(EditorRhiContracts PUBLIC HAVE_METAL)
+    target_compile_definitions(EditorPresentation PUBLIC HAVE_METAL)
 endif()
 
 set(EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
@@ -86,7 +86,7 @@ endif()
 def_library(EditorRhiViewport
     SOURCES ${EDITOR_RHI_UNIFIED_VIEWPORT_SRCS}
     PUBLIC_DEPS
-        EditorRhiContracts
+        EditorPresentation
         EditorViewerLogic
         DisplayColorTransform
         WindowDisplayDestination
@@ -153,7 +153,7 @@ def_library(EditorRhiHarnessLib
         ${EDITOR_RHI_STARTUP_SRCS}
         ${EDITOR_RHI_HARNESS_VIEWPORT_SRCS}
     PUBLIC_DEPS
-        EditorRhiContracts
+        EditorPresentation
         Qt6::Core
         Qt6::Gui
         Qt6::GuiPrivate

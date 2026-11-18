@@ -1383,6 +1383,26 @@ Alcedo will use %1 instead.</translation>
         <source>The agent gave control back to you.</source>
         <translation type="unfinished">The agent gave control back to you.</translation>
     </message>
+    <message>
+        <source>Importing: %1 imported, %2 duplicates skipped, %3 failed</source>
+        <translation>Importing: %1 imported, %2 duplicates skipped, %3 failed</translation>
+    </message>
+    <message>
+        <source>Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 failed</source>
+        <translation>Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 failed</translation>
+    </message>
+    <message>
+        <source>Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 unsupported, %6 failed</source>
+        <translation>Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 unsupported, %6 failed</translation>
+    </message>
+    <message>
+        <source>Converted Nikon HE files were reimported: %1 imported, %2 duplicates skipped, %3 failed.</source>
+        <translation>Converted Nikon HE files were reimported: %1 imported, %2 duplicates skipped, %3 failed.</translation>
+    </message>
+    <message>
+        <source>%1 source file(s) changed size. Existing edits and ratings now apply to the current files.</source>
+        <translation>%1 source file(s) changed size. Existing edits and ratings now apply to the current files.</translation>
+    </message>
 </context>
 <context>
     <name>AgentSessionCard</name>
@@ -4693,6 +4713,10 @@ Original source files on disk will be kept.</source>
         <source>Other photos: %1 of %2 imported</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>%1 duplicates skipped</source>
+        <translation>%1 duplicates skipped</translation>
+    </message>
 </context>
 <context>
     <name>InspectorPanel</name>
@@ -5162,6 +5186,10 @@ Create a new layer above it and draw the Mask there?</source>
         <location line="-297"/>
         <source>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</source>
         <translation>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</translation>
+    </message>
+    <message>
+        <source>%1 / %2 converted files reimported, %3 duplicates skipped, %4 failed</source>
+        <translation>%1 / %2 converted files reimported, %3 duplicates skipped, %4 failed</translation>
     </message>
 </context>
 <context>
@@ -5684,6 +5712,18 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Saved AI Keys</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Import</source>
+        <translation>Import</translation>
+    </message>
+    <message>
+        <source>Skip duplicate imports</source>
+        <translation>Skip duplicate imports</translation>
+    </message>
+    <message>
+        <source>Skips repeated imports from the same source path. Files in different folders remain separate.</source>
+        <translation>Skips repeated imports from the same source path. Files in different folders remain separate.</translation>
+    </message>
 </context>
 <context>
     <name>ShellSignals</name>
@@ -6156,6 +6196,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location filename="../qml/WelcomeDialog.qml" line="669"/>
         <source>Quit</source>
         <translation>Quit</translation>
+    </message>
+    <message>
+        <source>Settings</source>
+        <translation>Settings</translation>
     </message>
 </context>
 <context>

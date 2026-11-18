@@ -119,7 +119,7 @@ TEST_F(ImportServiceTests, ImportSingleFileTest) {
   import_service->SyncImports(snapshot, L"");
 }
 
-TEST_F(ImportServiceTests, ImportInvalidFileTest) {
+TEST_F(ImportServiceTests, MissingFileReportsFailureWithoutCreatingAPlaceholder) {
   ProjectService                 project(db_path_, meta_path_);
   auto                           fs_service       = project.GetSleeveService();
 
@@ -161,7 +161,9 @@ TEST_F(ImportServiceTests, ImportInvalidFileTest) {
   auto snapshot = import_job->import_log_->Snapshot();
   EXPECT_EQ(snapshot.created_.size(), 0u);
   EXPECT_EQ(snapshot.metadata_ok_.size(), 0u);
-  EXPECT_EQ(snapshot.metadata_failed_.size(), 0u);
+  ASSERT_EQ(snapshot.metadata_failed_.size(), 1u);
+  EXPECT_EQ(snapshot.metadata_failed_.front().error_code_, ImportErrorCode::FILE_NOT_FOUND);
+  EXPECT_EQ(snapshot.metadata_failed_.front().source_path_, paths.front());
 
   EXPECT_NO_THROW(import_service->SyncImports(snapshot, L""));
 }
@@ -647,7 +649,7 @@ TEST_F(ImportServiceTests, ImportedElementNameMatchesFileName) {
       << "Image name should match the original image filename";
 }
 
-TEST_F(ImportServiceTests, ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoint) {
+TEST_F(ImportServiceTests, ImportToSubfolderPersistsMembershipsBeforeCompletion) {
   ProjectService                 project(db_path_, meta_path_);
   auto                           fs_service       = project.GetSleeveService();
   auto                           img_pool_service = project.GetImagePoolService();
@@ -706,6 +708,8 @@ TEST_F(ImportServiceTests, ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoin
         return fs.GetModifiedElements();
       });
 
+  EXPECT_TRUE(unsynced_before_sync.empty());
+  EXPECT_TRUE(modified_before_sync.empty());
   std::unordered_set<sl_element_id_t> unsynced_ids;
   for (const auto& element : unsynced_before_sync) {
     ASSERT_NE(element, nullptr);
@@ -732,8 +736,8 @@ TEST_F(ImportServiceTests, ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoin
       found_modified_folder = true;
     }
   }
-  EXPECT_TRUE(found_unsynced_file);
-  EXPECT_TRUE(found_modified_folder);
+  EXPECT_FALSE(found_unsynced_file);
+  EXPECT_FALSE(found_modified_folder);
 
   const auto snapshot = import_job->import_log_->Snapshot();
   import_service->SyncImports(snapshot, L"/Imports");
@@ -792,21 +796,23 @@ class CustomRawImportLookSource final : public RawImportLookSource {
 }  // namespace
 
 TEST_F(ImportServiceTests, RawImportRootTakesTheLookOfTheSourceReadOncePerImport) {
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "ci_rawfiles" /
+                        "Tag @ryanbreitkreutz - Free files from @signatureeditscoDSC00830.ARW";
+  ASSERT_TRUE(std::filesystem::is_regular_file(raw_path)) << raw_path;
+
   ProjectService project(db_path_, meta_path_);
   auto           pipeline = std::make_shared<PipelineMgmtService>(project.GetStorage());
   auto           source   = std::make_shared<CustomRawImportLookSource>();
   std::unique_ptr<ImportService> import_service = std::make_unique<ImportServiceImpl>(
       project.GetSleeveService(), project.GetImagePoolService(), pipeline, source);
 
-  std::vector<image_path_t> paths;
-  paths.push_back(TEST_IMG_PATH "/raw/airplane/_DSC1704.NEF");
   auto                       import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> final_result;
   auto                       final_result_future = final_result.get_future();
   import_job->on_finished_ = [&final_result](const ImportResult& result) {
     final_result.set_value(result);
   };
-  import_job = import_service->ImportToFolder(paths, L"", {}, import_job);
+  import_job = import_service->ImportToFolder({raw_path}, L"", {}, import_job);
   ASSERT_NE(import_job, nullptr);
   ASSERT_EQ(final_result_future.get().imported_, 1u);
   EXPECT_EQ(source->reads_.load(), 1);
