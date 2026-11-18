@@ -858,6 +858,38 @@ alcedo_ui_gtest_discover_tests(EditorWorkspaceSwitchQmlTest
 alcedo_register_test_target(EditorWorkspaceSwitchQmlTest ui)
 alcedo_link_quickqanava_qml(EditorWorkspaceSwitchQmlTest)
 
+add_executable(EditorWorkspaceCropShortcutQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_workspace_crop_shortcut_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/application_module_qml_types.cpp
+)
+target_include_directories(EditorWorkspaceCropShortcutQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorWorkspaceCropShortcutQmlTest
+    PRIVATE
+        AlbumBackendLib
+        AlcedoMainQml
+        AlcedoMainQmlplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
+)
+target_compile_definitions(EditorWorkspaceCropShortcutQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(EditorWorkspaceCropShortcutQmlTest
+    TEST_PREFIX "EditorWorkspaceCropShortcutQmlTest."
+    PROPERTIES LABELS "workspace_qml;keyboard_shortcuts")
+alcedo_register_test_target(EditorWorkspaceCropShortcutQmlTest ui)
+alcedo_link_quickqanava_qml(EditorWorkspaceCropShortcutQmlTest)
+
 # WorkspaceShellTest is retired: its monolithic workspace coverage accumulated
 # offscreen pointer/focus cases that cannot run reliably, so the suite is no
 # longer built or registered. Focused replacement coverage lives in the

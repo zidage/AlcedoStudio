@@ -72,6 +72,9 @@ class MainQmlTestFixture : public ApplicationModuleHostTestFixture {
   /// @return Owned loaded window; window may be null when QML failed to load.
   auto LoadMainWindow(bool create_project = true) -> std::unique_ptr<LoadedMainWindow>;
 
+  /// Load Main from the application QML module with an empty temp project.
+  auto LoadMainWindowFromModule() -> std::unique_ptr<LoadedMainWindow>;
+
   /// Load Main.qml after opening a packed project so serviceReady is true at init.
   auto LoadMainWindowWithPackedProject(const std::filesystem::path& packed_path)
       -> std::unique_ptr<LoadedMainWindow>;
@@ -89,7 +92,8 @@ class MainQmlTestFixture : public ApplicationModuleHostTestFixture {
   [[nodiscard]] auto interaction_policy(LoadedMainWindow& loaded) -> InteractionPolicyController*;
 
  private:
-  auto FinishLoad(std::unique_ptr<LoadedMainWindow> loaded) -> std::unique_ptr<LoadedMainWindow>;
+  auto FinishLoad(std::unique_ptr<LoadedMainWindow> loaded, bool from_module = false)
+      -> std::unique_ptr<LoadedMainWindow>;
 };
 
 }  // namespace alcedo::ui::test
