@@ -795,7 +795,8 @@ Item {
                                 // 1:1 (actual pixels). Pro-editor convention.
                                 editorInteraction.zoomToActualPixels()
                                 event.accepted = true
-                            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                            } else if (root.cropEditShortcutScope.length > 0
+                                       && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
                                 // Geometry: Enter leaves the panel for Tone.
                                 if (typeof adjustmentStack.returnFromGeometryToTone === "function"
                                         && adjustmentStack.returnFromGeometryToTone()) {
@@ -1044,6 +1045,11 @@ Item {
     // transient Mask mode finishes.
     readonly property bool maskEditScopeActive: !!(root.maskCreation
                                                  && root.maskCreation.maskControlsActive)
+    readonly property string cropEditShortcutScope: ShortcutRegistry.activeCropEditScope(
+        root.visible && root.enabled && root.editorEditControlsEnabled
+        && editorInteraction.cropToolEnabled,
+        root.maskEditScopeActive || root.aiMaskToolActive || root.comparisonActive,
+        root, root.Window.activeFocusItem)
 
     RegisteredShortcut {
         objectName: "maskFinishEditShortcut"
@@ -1085,9 +1091,7 @@ Item {
     // workspace so it still works when focus is on the right panel.
     Shortcut {
         sequences: [ "Return", "Enter" ]
-        enabled: root.editorEditControlsEnabled
-                 && root.editorSession
-                 && String(root.editorSession.activeAdjustmentPanel || "") === "geometry"
+        enabled: root.cropEditShortcutScope.length > 0
         onActivated: {
             if (typeof adjustmentStack.returnFromGeometryToTone === "function")
                 adjustmentStack.returnFromGeometryToTone()

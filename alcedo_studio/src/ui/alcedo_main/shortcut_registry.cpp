@@ -208,9 +208,7 @@ auto IsEditorLocalScope(const ShortcutScope& scope) -> bool {
 }
 
 /// Whether two scopes can own the active input path at the same time. The
-/// editor workspace stays active while one of its local surfaces or mask edit
-/// owns focus; the two workspace scopes and the local surfaces are mutually
-/// exclusive inside their own tier.
+/// editor workspace stays active while a local surface or editor tool owns focus.
 auto ScopesCanCoactivate(const ShortcutScope& first, const ShortcutScope& second) -> bool {
   if (first == second) {
     return true;
@@ -220,6 +218,13 @@ auto ScopesCanCoactivate(const ShortcutScope& first, const ShortcutScope& second
     return true;
   }
   const QString editor     = QLatin1String(shortcut_scope::kWorkspaceEditor);
+  const QLatin1String crop_edit(shortcut_scope::kEditorCropEdit);
+  if (first == crop_edit || second == crop_edit) {
+    // Crop remains active when an editor-local surface has focus. Mask edit,
+    // comparison, text entry, and shortcut capture leave the crop scope inactive.
+    const auto& other = first == crop_edit ? second : first;
+    return other == editor || IsEditorLocalScope(other);
+  }
   const QString mask_edit  = QLatin1String(shortcut_scope::kEditorMaskEdit);
   const QString comparison = QLatin1String(shortcut_scope::kEditorComparison);
   // Mask edit and the comparison are editor modes; each rides on top of the editor workspace
@@ -623,6 +628,23 @@ QString ShortcutRegistry::commandIdForKey(const QString& scope, int key, int mod
       if (stored_key == pressed_key && input.modifiers == pressed_modifiers) {
         return entry.spec.id;
       }
+    }
+  }
+  return {};
+}
+
+QString ShortcutRegistry::activeCropEditScope(bool crop_tool_enabled, bool exclusive_mode_active,
+                                              QQuickItem* workspace,
+                                              QQuickItem* active_focus) const {
+  if (!crop_tool_enabled || exclusive_mode_active || workspace == nullptr) {
+    return {};
+  }
+  for (auto* item = active_focus; item != nullptr; item = item->parentItem()) {
+    if (item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod)) {
+      return {};
+    }
+    if (item == workspace) {
+      return QLatin1String(shortcut_scope::kEditorCropEdit);
     }
   }
   return {};

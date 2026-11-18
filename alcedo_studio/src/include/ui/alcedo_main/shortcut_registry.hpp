@@ -9,6 +9,7 @@
 #include <QHash>
 #include <QKeySequence>
 #include <QList>
+#include <QQuickItem>
 #include <QSettings>
 #include <QString>
 #include <QStringList>
@@ -29,6 +30,7 @@ inline constexpr const char* kShortcutCapture  = "shortcut.capture";
 inline constexpr const char* kTextInput        = "text.input";
 inline constexpr const char* kEditorMaskEdit   = "editor.maskEdit";
 inline constexpr const char* kEditorComparison = "editor.comparison";
+inline constexpr const char* kEditorCropEdit   = "editor.cropEdit";
 inline constexpr const char* kEditorFilmstrip  = "editor.filmstrip";
 inline constexpr const char* kEditorVersions   = "editor.versions";
 inline constexpr const char* kEditorLut        = "editor.lut";
@@ -188,6 +190,10 @@ class ShortcutRegistry final : public QAbstractListModel {
   /// Resolves a key event to a command id inside one scope only. Returns an
   /// empty string when no command in that scope binds the key.
   Q_INVOKABLE QString     commandIdForKey(const QString& scope, int key, int modifiers) const;
+  /// Returns the crop scope only while the crop tool owns input in the editor workspace.
+  /// Mask edit and comparison suppress it. Text input and focus outside the editor keep their keys.
+  Q_INVOKABLE QString activeCropEditScope(bool crop_tool_enabled, bool exclusive_mode_active,
+                                          QQuickItem* workspace, QQuickItem* active_focus) const;
   /// Portable text of every effective binding, in binding order. Suitable for
   /// feeding Qt Quick Shortcut.sequences; use shortcutText()/decorateTooltip()
   /// for user-facing native text.
