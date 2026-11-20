@@ -131,6 +131,21 @@ if(WIN32)
     target_link_libraries(MountDirectoryWatcher PRIVATE user32)
 endif()
 
+# The scan triggers of the mounted folders (mounted_folder_plan.md, MF7): project open,
+# application activation, and the directory watcher.
+def_library(MountScanCoordinator
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/mount_scan_coordinator.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
+    PUBLIC_DEPS
+        Qt6::Core
+        BackgroundTaskController
+        MountDirectoryWatcher
+        MountService
+    PRIVATE_DEPS
+        UiLocalization
+)
+
 def_library(AgentControlOwner
     SOURCES
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/agent_control_owner.cpp"
@@ -391,6 +406,7 @@ target_link_libraries(AlbumBackendLib
         UiLocalization
         BackgroundTaskController
         AgentControlOwner
+        MountScanCoordinator
         DisplayProfileReadout
         EditorRhiViewport
         # The Tone Curve plot and the curve histogram owner (a PlotHistogramSource).

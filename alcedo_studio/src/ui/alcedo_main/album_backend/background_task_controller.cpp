@@ -320,6 +320,8 @@ auto BackgroundTaskController::KindToString(BackgroundTaskKind kind) -> QString 
       return QStringLiteral("imageDelete");
     case BackgroundTaskKind::AgentControl:
       return QStringLiteral("agentControl");
+    case BackgroundTaskKind::MountScan:
+      return QStringLiteral("mountScan");
   }
   return QStringLiteral("unknown");
 }

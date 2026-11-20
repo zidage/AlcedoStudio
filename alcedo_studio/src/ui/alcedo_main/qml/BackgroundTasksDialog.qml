@@ -123,6 +123,7 @@ Dialog {
         if (kind === "libraryMarkUpdate") return qsTr("Labels and Marks")
         if (kind === "imageDelete") return qsTr("Delete Images")
         if (kind === "agentControl") return qsTr("Agent")
+        if (kind === "mountScan") return qsTr("Folder Scan")
         return qsTr("Task")
     }
 

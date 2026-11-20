@@ -1232,6 +1232,54 @@
 <context>
     <name>Alcedo</name>
     <message>
+        <source>Reading the folder</source>
+        <translation>正在读取文件夹</translation>
+    </message>
+    <message>
+        <source>Importing %1 of %2 new photos</source>
+        <translation>正在导入新照片 %1/%2</translation>
+    </message>
+    <message>
+        <source>%1 new</source>
+        <translation>新增 %1</translation>
+    </message>
+    <message>
+        <source>%1 moved</source>
+        <translation>移动 %1</translation>
+    </message>
+    <message>
+        <source>%1 changed</source>
+        <translation>修改 %1</translation>
+    </message>
+    <message>
+        <source>%1 missing</source>
+        <translation>缺失 %1</translation>
+    </message>
+    <message>
+        <source>%1 returned</source>
+        <translation>找回 %1</translation>
+    </message>
+    <message>
+        <source>%1 not imported</source>
+        <translation>%1 张未导入</translation>
+    </message>
+    <message>
+        <source>No changes</source>
+        <translation>无变化</translation>
+    </message>
+    <message>
+        <source>, </source>
+        <translation>，</translation>
+    </message>
+    <message>
+        <source>Offline</source>
+        <translation>离线</translation>
+    </message>
+    <message>
+        <source>The changes could not be stored.</source>
+        <translation>无法保存这些变化。</translation>
+    </message>
+    <message>
         <source>The collection is no longer in the library.</source>
         <translation>该影集已不在图库中。</translation>
     </message>
@@ -1992,6 +2040,10 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>BackgroundTaskBar</name>
     <message>
+        <source>Folder Scan</source>
+        <translation>文件夹扫描</translation>
+    </message>
+    <message>
         <location filename="../qml/BackgroundTaskBar.qml" line="+65"/>
         <source>AI Analysis</source>
         <translation type="obsolete">AI 分析</translation>
@@ -2070,6 +2122,10 @@ Alcedo 将改用 %1。</translation>
 </context>
 <context>
     <name>BackgroundTasksDialog</name>
+    <message>
+        <source>Folder Scan</source>
+        <translation>文件夹扫描</translation>
+    </message>
     <message>
         <location filename="../qml/BackgroundTasksDialog.qml" line="+80"/>
         <source>Failed</source>
