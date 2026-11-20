@@ -8,8 +8,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <optional>
 
 #include "app/album_browse_service.hpp"
+#include "app/sleeve_error.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
@@ -604,7 +606,13 @@ uint FolderController::CreateFolderIn(uint parentFolderUiId, const QString& fold
     return 0;
   }
 
-  const auto created = browse->CreateFolder(parent_path.value(), name->toStdWString());
+  std::optional<AlbumFolderView> created;
+  try {
+    created = browse->CreateFolder(parent_path.value(), name->toStdWString());
+  } catch (const SleeveOperationError&) {
+    status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
+    return 0;
+  }
   if (!created.has_value()) {
     status_->SetTaskState(PL_TEXT("Failed to create folder."), 0, false);
     return 0;
@@ -649,6 +657,9 @@ bool FolderController::RenameFolder(uint folderUiId, const QString& newName) {
     case AlbumFolderEditStatus::InvalidTarget:
     case AlbumFolderEditStatus::Failed:
       status_->SetTaskState(PL_TEXT("Failed to rename folder."), 0, false);
+      return false;
+    case AlbumFolderEditStatus::StructureIsReadOnly:
+      status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
       return false;
   }
 
@@ -695,6 +706,9 @@ bool FolderController::MoveFolder(uint folderUiId, uint newParentFolderUiId) {
     case AlbumFolderEditStatus::Failed:
       status_->SetTaskState(PL_TEXT("Failed to move folder."), 0, false);
       return false;
+    case AlbumFolderEditStatus::StructureIsReadOnly:
+      status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
+      return false;
   }
 
   const bool save_ok = SaveProjectState();
@@ -722,8 +736,15 @@ void FolderController::DeleteFolder(uint folderUiId) {
   const bool deleted_holds_current = IsAtOrBelow(current_folder_path_, folder_path);
   const auto next_path = deleted_holds_current ? parent_path : current_folder_path_;
 
-  auto browse = project_->handler().project()->GetAlbumBrowseService();
-  if (!browse || !browse->DeleteFolder(folder_path)) {
+  auto       browse                = project_->handler().project()->GetAlbumBrowseService();
+  bool       deleted               = false;
+  try {
+    deleted = browse && browse->DeleteFolder(folder_path);
+  } catch (const SleeveOperationError&) {
+    status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
+    return;
+  }
+  if (!deleted) {
     status_->SetTaskState(PL_TEXT("Failed to delete folder."), 0, false);
     return;
   }

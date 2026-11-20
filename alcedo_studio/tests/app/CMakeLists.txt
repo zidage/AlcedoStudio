@@ -323,6 +323,15 @@ gtest_discover_tests(MountServiceTest TEST_PREFIX "MountServiceTest."
 alcedo_copy_duckdb_fts_extension(MountServiceTest)
 alcedo_register_test_target(MountServiceTest app)
 
+# Album operations on a mounted folder (mounted_folder_plan.md, MF5): the named refusal of the
+# sleeve service and a real project database.
+add_executable(AlbumBrowseServiceMountTest ${ALCEDO_TEST_ROOT}/app/album_browse_service_mount_test.cpp)
+target_include_directories(AlbumBrowseServiceMountTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(AlbumBrowseServiceMountTest PRIVATE ProjectService GTest::gtest_main)
+gtest_discover_tests(AlbumBrowseServiceMountTest TEST_PREFIX "AlbumBrowseServiceMountTest."
+  PROPERTIES LABELS "mounted_folder")
+alcedo_register_test_target(AlbumBrowseServiceMountTest app)
+
 add_executable(ImportServiceTest ${ALCEDO_TEST_ROOT}/app/import_service_test.cpp)
 target_include_directories(ImportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ImportServiceTest StorageInvariantsTestSupport ImportService ProjectService GTest::gtest_main)

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "app/mount_tree.hpp"
+#include "app/sleeve_error.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "sleeve/sleeve_filesystem.hpp"
@@ -104,12 +105,32 @@ class SleeveServiceImpl final : public SleeveService {
 
   auto Sync() -> SyncResult override;
 
+  /**
+   * @brief The one structure check: true when the user can change the structure of @p folder.
+   *
+   * It reads `mount_id_` of @p folder only (D6). A mounted folder has a value. The user
+   * operations below throw SleeveOperationError with kMountedFolderStructureIsReadOnly for a
+   * folder where this is false; the scan entry (the mounted folder group) does not use it.
+   */
+  [[nodiscard]] static auto CanEditFolderStructure(const SleeveElement& folder) -> bool;
+  /// Throws SleeveOperationError when the folder at @p folder_path is mounted. A path that names
+  /// no folder passes: the operation that follows reports it.
+  void                      CheckFolderStructureEditable(const std::filesystem::path& folder_path);
+
   auto GetCurrentID() const -> sl_element_id_t;
   auto ResolveElement(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;
   auto ResolveFolder(const std::filesystem::path& path) -> std::shared_ptr<SleeveFolder>;
   auto ResolveFile(const std::filesystem::path& path) -> std::shared_ptr<SleeveFile>;
   auto ListFolderEntries(const std::filesystem::path& folder_path)
       -> std::vector<std::shared_ptr<SleeveElement>>;
+  /** @name User operations
+   * Each checks its target before any change and throws SleeveOperationError (Mounted Folder
+   * Plan, MF5): a folder that gains, loses, or changes an element must pass
+   * CanEditFolderStructure; a file that leaves the library must be an ordinary file.
+   * MoveFolder checks the folder and the new parent. A mounted file links into an ordinary
+   * folder, and leaves an ordinary folder, like an ordinary file (D8).
+   */
+  ///@{
   auto CreateFolder(const std::filesystem::path& parent_path, const file_name_t& name)
       -> std::pair<std::shared_ptr<SleeveFolder>, SyncResult>;
   auto CreateFileInLibrary(const file_name_t& name)

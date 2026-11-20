@@ -217,6 +217,9 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
                                        const image_path_t& dest, const ImportOptions& options,
                                        std::shared_ptr<ImportJob> job)
     -> std::shared_ptr<ImportJob> {
+  // A mounted folder takes new files only from its directory (D7): refuse before any source
+  // file is read.
+  fs_service_->CheckFolderStructureEditable(dest);
   StartImport(
       paths,
       [dest](FileSystem&        fs, std::size_t,

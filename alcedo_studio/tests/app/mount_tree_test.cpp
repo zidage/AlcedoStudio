@@ -97,8 +97,12 @@ class MountTreeTest : public ::testing::Test {
     return id;
   }
 
+  /// Link through the tree, as a scan does: SleeveServiceImpl::LinkFileToFolder refuses a
+  /// mounted folder (MF5).
   void Link(sl_element_id_t file_id, sl_element_id_t folder_id) {
-    ASSERT_TRUE(sleeve_->LinkFileToFolder(file_id, folder_id).success_);
+    const auto sync = sleeve_->Write<void>(
+        [file_id, folder_id](FileSystem& fs) { fs.LinkFileToFolder(file_id, folder_id); });
+    ASSERT_TRUE(sync.success_) << sync.message_;
   }
 
   auto Element(sl_element_id_t id) -> std::shared_ptr<SleeveElement> {

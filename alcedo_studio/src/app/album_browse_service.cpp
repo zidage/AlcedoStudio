@@ -249,6 +249,8 @@ auto AlbumBrowseService::CreateFolder(const std::filesystem::path& parent_folder
       return std::nullopt;
     }
     return BuildFolderView(parent_folder_path, result.first);
+  } catch (const SleeveOperationError&) {
+    throw;
   } catch (...) {
     return std::nullopt;
   }
@@ -261,6 +263,8 @@ bool AlbumBrowseService::DeleteFolder(const std::filesystem::path& folder_path) 
 
   try {
     return sleeve_service_->DeletePath(folder_path).success_;
+  } catch (const SleeveOperationError&) {
+    throw;
   } catch (...) {
     return false;
   }
@@ -296,6 +300,9 @@ auto AlbumBrowseService::RenameFolder(const std::filesystem::path& folder_path,
     if (!sleeve_service_->RenameFolder(folder_path, new_name).success_) {
       return out;
     }
+  } catch (const SleeveOperationError&) {
+    out.status_ = AlbumFolderEditStatus::StructureIsReadOnly;
+    return out;
   } catch (...) {
     return out;
   }
@@ -343,6 +350,9 @@ auto AlbumBrowseService::MoveFolder(const std::filesystem::path& folder_path,
       }
     }
     out.folder_path_ = destination / folder->element_name_;
+  } catch (const SleeveOperationError&) {
+    out.status_ = AlbumFolderEditStatus::StructureIsReadOnly;
+    return out;
   } catch (...) {
     return out;
   }
@@ -383,6 +393,9 @@ auto AlbumBrowseService::DeleteFiles(const std::vector<std::filesystem::path>& f
         continue;
       }
       out.deleted_files_.push_back(view);
+    } catch (const SleeveOperationError& e) {
+      out.refusal_ = e.Code();
+      out.failed_paths_.push_back(path);
     } catch (...) {
       out.failed_paths_.push_back(path);
     }
@@ -424,6 +437,8 @@ auto AlbumBrowseService::DeleteFilesByElementIds(const std::vector<sl_element_id
         }
       }
     }
+  } catch (const SleeveOperationError& e) {
+    out.refusal_ = e.Code();
   } catch (...) {
   }
 
@@ -477,6 +492,8 @@ auto AlbumBrowseService::DeleteFilesInFolderByElementIds(
         }
       }
     }
+  } catch (const SleeveOperationError& e) {
+    out.refusal_ = e.Code();
   } catch (...) {
   }
 
@@ -538,6 +555,10 @@ auto AlbumBrowseService::LinkFilesToFolder(const std::vector<sl_element_id_t>& e
         continue;
       }
       out.deleted_files_.push_back(BuildFileView({}, file, target_folder_id));
+    } catch (const SleeveOperationError& e) {
+      // The target folder refuses every file: the request changes nothing.
+      out.refusal_ = e.Code();
+      out.failed_element_ids_.push_back(element_id);
     } catch (...) {
       out.failed_element_ids_.push_back(element_id);
     }
