@@ -1728,7 +1728,8 @@ RemoveMissingPhotos storage failure -> transaction rolls back -> StorageFailure 
 Phase / date / status: MF8 / 2026-11-20 / implemented, pull requests open, user check open
 Source revision and branch: a98d64098 (MF7, pull request #1003) + this phase, in three parts:
   feature/mount-missing-photos-service (#1004, service), feature/mount-library-panel (#1005,
-  Library with MF6), feature/mount-automation-commands (automation commands and documents);
+  Library with MF6), feature/mount-automation-commands (#1006, automation commands and
+  documents);
   CLI documents in zidage/alcedo-skills#28
 Actual changed modules: volume identity (ListVolumeMountPoints), mount directory listing
   (ReadMountDirectoryFile), MountService (RelocateRoot, volume search, LocateMissingFile,
@@ -1768,7 +1769,7 @@ Discovered / passed / failed / skipped counts: MountServiceTest 24/24/0/0 (1 dis
   AutomationLibraryCommandsTest 16/16/0/0; FolderControllerMountTest 6/6/0/0
 Manual verification: open (the user checks Locate Folder and Remove Missing Photos)
 Performance or resource evidence, if required: not required
-Evidence path: pull requests #1004, #1005, and the part C pull request; alcedo-skills#28
+Evidence path: pull requests #1004, #1005, and #1006; alcedo-skills#28
 Remaining defects or unavailable platforms: ListVolumeMountPoints was compiled and run on
   macOS and Linux (WSL) as single files; the full macOS and Linux builds were not run
 ```
