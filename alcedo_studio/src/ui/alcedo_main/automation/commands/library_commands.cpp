@@ -1514,6 +1514,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   };
   RegisterOrFail(registry, std::move(remove), &ok, error);
 
+  if (ok && !RegisterAutomationMountCommands(registry, host, error)) {
+    ok = false;
+  }
   return ok;
 }
 
