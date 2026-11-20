@@ -148,6 +148,9 @@ defines each term.
 Match order when several records or paths have one fingerprint: the same file name first, then
 the sorted relative path. The order is the same on every run.
 
+Adoption when several ordinary photos have the path of one file: the scan adopts the photo with
+the lowest element id. The other photos stay ordinary photos with their data.
+
 Folder rules: the scan creates a mounted folder for each directory that holds a supported image
 file at any depth. A mounted folder whose directory left the listing is removed after its
 elements moved or became missing. A missing photo keeps its home link in the nearest mounted
@@ -594,6 +597,7 @@ fingerprint error for a listed file -> the file is in no list -> unreadable_coun
 - `RecordWithNoFileAndNoMatchBecomesMissing`.
 - `MissingRecordWithFileAtItsPathReturns`.
 - `OrdinaryFileBelowTheRootIsAdopted`.
+- `LowestElementIdIsAdoptedWhenTwoOrdinaryFilesHaveOnePath`.
 - `ReachableRootWithZeroFilesMakesEachRecordMissing`.
 - `FolderOfAMissingPhotoStays`.
 
