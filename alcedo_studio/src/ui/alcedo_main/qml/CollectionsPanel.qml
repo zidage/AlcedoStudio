@@ -164,6 +164,9 @@ ColumnLayout {
         if (!current) {
             return
         }
+        if (Number(folderId) === currentFolderId) {
+            revealedElementId = Number(current.elementId)
+        }
         const next = Object.assign({}, expandedIds)
         let parent = byFolderId[String(Number(current.parentFolderId))]
         let guard = 0
@@ -177,6 +180,7 @@ ColumnLayout {
         recomputeShownRows()
         const index = indexOfFolder(folderId)
         if (index >= 0) {
+            folderList.forceLayout()
             folderList.positionViewAtIndex(index, ListView.Contain)
         }
     }
@@ -238,13 +242,52 @@ ColumnLayout {
                     row.name, row.mountId, row.mountOffline, row.mountMissingCount].join(":")
         }).join("|")
         if (signature !== rowsSignature) {
-            const keepY = folderList.contentY
+            // A new model resets the ListView. The row at the top of the view is kept: it is
+            // positioned again after the new rows and their shown state are laid out.
+            const anchor = treeScrollAnchor()
             rowsSignature = signature
             folderRows = rows
-            folderList.contentY = Math.max(0, Math.min(keepY,
-                folderList.contentHeight - folderList.height))
+            recomputeShownRows()
+            restoreTreeScrollAnchor(anchor)
+        } else {
+            recomputeShownRows()
         }
-        recomputeShownRows()
+    }
+
+    // The shown row at the top of the tree and the part of it above the view. A raw contentY
+    // does not survive a reset: the ListView estimates the positions of rows it has not
+    // created, and the hidden rows have height 0.
+    function treeScrollAnchor() {
+        const index = folderList.indexAt(1, folderList.contentY + 0.5)
+        const item = index >= 0 ? folderList.itemAtIndex(index) : null
+        return {
+            elementId: item && !folderRows[index].isDraft ? Number(folderRows[index].elementId)
+                                                          : -1,
+            offset: item ? folderList.contentY - item.y : 0,
+            y: folderList.contentY - folderList.originY
+        }
+    }
+
+    function restoreTreeScrollAnchor(anchor) {
+        folderList.forceLayout()
+        const index = anchor.elementId >= 0 ? indexOfElement(anchor.elementId) : -1
+        if (index < 0 || rowShown[index] !== true) {
+            // The top row is gone or hidden: the view keeps its distance from the top, within
+            // the height of the shown rows.
+            let shown = 0
+            for (let i = 0; i < rowShown.length; ++i) {
+                shown += rowShown[i] === true ? 1 : 0
+            }
+            const maxY = Math.max(0, shown * appTheme.collectionRowHeight - folderList.height)
+            folderList.contentY = folderList.originY + Math.max(0, Math.min(anchor.y, maxY))
+            return
+        }
+        // At the end of the tree the view stops at the boundary and takes no offset.
+        folderList.positionViewAtIndex(index, ListView.Beginning)
+        const item = folderList.itemAtIndex(index)
+        if (item && Math.abs(folderList.contentY - item.y) < 0.5) {
+            folderList.contentY = item.y + anchor.offset
+        }
     }
 
     // Indices of the shown, non-draft rows, top to bottom.
@@ -420,7 +463,14 @@ ColumnLayout {
         if (trimmed.length === 0 || trimmed === String(row.name)) {
             return
         }
-        foldersModule.RenameFolder(Number(row.folderId), trimmed)
+        const elementId = Number(row.elementId)
+        // The tree reloads inside RenameFolder; the renamed row may move in the sort order.
+        if (foldersModule.RenameFolder(Number(row.folderId), trimmed)) {
+            const renamedIndex = indexOfElement(elementId)
+            if (renamedIndex >= 0) {
+                revealFolder(folderRows[renamedIndex].folderId)
+            }
+        }
     }
 
     // ── Delete ──────────────────────────────────────────────────────────────
@@ -563,9 +613,18 @@ ColumnLayout {
     spacing: 12
     clip: true
 
+    // The tree scrolls only after a user action that targets a row: a selection (from the tree
+    // or from outside it), New Collection, a committed rename, a drag move, and the first rows
+    // of the panel. A reload the user did not start (mount scan, watcher, count refresh,
+    // import, delete) keeps the scroll position (issue #1007).
+    property bool revealOnNextRows: true
+
     Component.onCompleted: {
         rebuildFolderRows()
-        revealFolder(currentFolderId)
+        if (folderRows.length > 0) {
+            revealOnNextRows = false
+            revealFolder(currentFolderId)
+        }
     }
     onSortDescendingChanged: rebuildFolderRows()
     // React to the controller properties (NOTIFY FoldersChanged / FolderSelectionChanged).
@@ -574,11 +633,25 @@ ColumnLayout {
                                          ? foldersModule.folders : []
     onSourceFoldersChanged: {
         rebuildFolderRows()
-        revealFolder(currentFolderId)
+        if (folderRows.length === 0) {
+            // A closed project: the next project's rows are a first show again.
+            revealOnNextRows = true
+            revealedElementId = -1
+        } else if (revealOnNextRows) {
+            revealOnNextRows = false
+            revealFolder(currentFolderId)
+        }
     }
+    // A reload can give the selected folder a new ui id; the tree scrolls only when the selected
+    // folder itself changes.
+    property int revealedElementId: -1
     onCurrentFolderIdChanged: {
         rebuildFolderRows()
-        revealFolder(currentFolderId)
+        const row = rowForFolder(currentFolderId)
+        const elementId = row ? Number(row.elementId) : -1
+        if (elementId !== revealedElementId) {
+            revealFolder(currentFolderId)
+        }
     }
     onFileDropEnabledChanged: {
         if (!fileDropEnabled) {
