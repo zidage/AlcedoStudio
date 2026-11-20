@@ -1377,9 +1377,10 @@ Item {
             readonly property bool thumbnailErrorState: !thumbnailReady && !thumbnailLoadingState
                                                         && thumbPin.liveThumbErrorText.length > 0
             readonly property bool thumbnailProblemState: thumbnailMissingState || thumbnailErrorState
-            readonly property string thumbnailProblemText: thumbPin.liveThumbErrorText.length > 0
-                                                           ? thumbPin.liveThumbErrorText
-                                                           : qsTr("Source file was moved or deleted")
+            // A missing source shows one icon and no text; another problem shows its text.
+            readonly property bool thumbnailShowsErrorText: thumbnailErrorState
+                                                            && !thumbnailMissingState
+            readonly property string thumbnailProblemText: thumbPin.liveThumbErrorText
 
             ThumbnailPinBinding {
                 id: thumbPin
@@ -1573,7 +1574,7 @@ Item {
                     image: thumbImage
                     compact: root.columns >= 8
                     // Left of the problem dot (8 px margin, 18 px) when the source is missing.
-                    rightInset: cardDelegate.thumbnailProblemState ? 30 : editMark.inset
+                    rightInset: cardDelegate.thumbnailShowsErrorText ? 30 : editMark.inset
                     edited: isEdited
                     editedAt: cardDelegate.editedAt
                     versionName: editVersionName
@@ -1586,7 +1587,7 @@ Item {
                     width: 18
                     height: 18
                     radius: 9
-                    visible: cardDelegate.thumbnailProblemState
+                    visible: cardDelegate.thumbnailShowsErrorText
                     color: root.cardDangerTint
                     border.width: 1
                     border.color: root.cardDanger
@@ -1599,8 +1600,19 @@ Item {
                     sourceComponent: Component {
                         Column {
                             spacing: 2
+                            IconImage {
+                                objectName: "thumbnailMissingSourceIcon"
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                visible: !cardDelegate.thumbnailShowsErrorText
+                                width: root.columns >= 11 ? 18 : 24
+                                height: width
+                                sourceSize: Qt.size(width, height)
+                                source: "qrc:/panel_icons/photo-off.svg"
+                                color: appTheme.textMutedColor
+                            }
                             Label {
                                 anchors.horizontalCenter: parent.horizontalCenter
+                                visible: cardDelegate.thumbnailShowsErrorText
                                 text: "!"
                                 color: root.cardDanger
                                 font.family: appTheme.dataFontFamily
@@ -1609,6 +1621,7 @@ Item {
                             }
                             Label {
                                 width: parent.width
+                                visible: cardDelegate.thumbnailShowsErrorText
                                 text: cardDelegate.thumbnailProblemText
                                 color: root.cardDanger
                                 font.family: appTheme.dataFontFamily
@@ -1625,7 +1638,7 @@ Item {
                 HoverHandler {
                     id: thumbHover
                 }
-                ToolTip.visible: cardDelegate.thumbnailProblemState && thumbHover.hovered
+                ToolTip.visible: cardDelegate.thumbnailShowsErrorText && thumbHover.hovered
                 ToolTip.text: cardDelegate.thumbnailProblemText
                 ToolTip.delay: 150
             }

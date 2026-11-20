@@ -555,11 +555,14 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     if (folders_changed || MountScanChangedPhotos(result)) {
       library->RequestLibraryContentRefresh();
-      folders->RefreshImageCounts();
     }
+    // The count read also reads the mount states: an offline or relocated mount changes its
+    // rows with no photo change.
+    folders->RefreshImageCounts();
   };
   mount_scans_ = std::make_unique<MountScanCoordinator>(std::move(mount_scan_dependencies));
   RecordConstruction("MountScanCoordinator", mount_scans_.get());
+  folders_->BindMountScans(mount_scans_.get());
   if (auto* gui = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
     connect(gui, &QGuiApplication::applicationStateChanged, mount_scans_.get(),
             [scans = mount_scans_.get()](Qt::ApplicationState state) {

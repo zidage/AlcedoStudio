@@ -1004,9 +1004,8 @@ Item {
                                            && !outsideListSlot.thumbLoading
                                            && (outsideListSlot.thumbMissingSource
                                                || outsideListSlot.thumbErrorText.length > 0)
-                    thumbnailProblemText: outsideListSlot.thumbErrorText.length > 0
-                                          ? outsideListSlot.thumbErrorText
-                                          : qsTr("Source file was moved or deleted")
+                    thumbnailProblemText: outsideListSlot.thumbErrorText
+                    thumbnailMissingSource: outsideListSlot.thumbMissingSource
                     editing: true
                     saving: root.saving
                     renderBusy: root.renderBusy
@@ -1149,9 +1148,7 @@ Item {
                                                                     && !liveThumbLoading
                                                                     && (liveThumbMissingSource
                                                                         || liveThumbErrorText.length > 0)
-                    readonly property string thumbnailProblemText: liveThumbErrorText.length > 0
-                                                                   ? liveThumbErrorText
-                                                                   : qsTr("Source file was moved or deleted")
+                    readonly property string thumbnailProblemText: liveThumbErrorText
 
                     height: ListView.view ? ListView.view.height : 1
                     // The card fits a 3:2 photo slot to the height left above its
@@ -1226,6 +1223,7 @@ Item {
                         thumbnailReady: thumbnailDelegate.thumbnailReady
                         thumbnailProblemState: thumbnailDelegate.thumbnailProblemState
                         thumbnailProblemText: thumbnailDelegate.thumbnailProblemText
+                        thumbnailMissingSource: thumbnailDelegate.liveThumbMissingSource
                         editing: thumbnailDelegate.isEditing
                         selected: thumbnailDelegate.isLibrarySelected
                         hovered: thumbnailMouse.containsMouse

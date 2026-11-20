@@ -28,9 +28,11 @@
 namespace alcedo {
 
 struct AlbumFolderView {
-  sl_element_id_t       folder_id_ = 0;
-  file_name_t           folder_name_{};
-  std::filesystem::path folder_path_{};
+  sl_element_id_t           folder_id_ = 0;
+  file_name_t               folder_name_{};
+  std::filesystem::path     folder_path_{};
+  /// The mount of a mounted folder (`Element.mount_id`); empty for an ordinary folder.
+  std::optional<mount_id_t> mount_id_{};
 };
 
 enum class AlbumScopeType {

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Effects
 
 // One tile of the justified-rows layout of ThumbnailGridView (a delegate of its
@@ -73,9 +74,9 @@ Item {
     readonly property bool thumbnailErrorState: !thumbnailReady && !thumbnailLoadingState
                                                 && thumbPin.liveThumbErrorText.length > 0
     readonly property bool thumbnailProblemState: thumbnailMissingState || thumbnailErrorState
-    readonly property string thumbnailProblemText: thumbPin.liveThumbErrorText.length > 0
-                                                   ? thumbPin.liveThumbErrorText
-                                                   : qsTr("Source file was moved or deleted")
+    // A missing source shows one icon and no text; another problem shows its text.
+    readonly property bool thumbnailShowsErrorText: thumbnailErrorState && !thumbnailMissingState
+    readonly property string thumbnailProblemText: thumbPin.liveThumbErrorText
 
     x: tileX
     y: tileY
@@ -236,7 +237,7 @@ Item {
             id: editMark
             compact: tile.view.columns >= 8
             x: photoArea.width - width
-               - (tile.thumbnailProblemState ? 30 : editMark.inset)
+               - (tile.thumbnailShowsErrorText ? 30 : editMark.inset)
             y: editMark.inset
             edited: tile.isEdited
             editedAt: tile.editedAt
@@ -250,7 +251,7 @@ Item {
             width: 18
             height: 18
             radius: 9
-            visible: tile.thumbnailProblemState
+            visible: tile.thumbnailShowsErrorText
             color: appTheme.dangerTintColor
             border.width: 1
             border.color: appTheme.dangerColor
@@ -263,8 +264,18 @@ Item {
             sourceComponent: Component {
                 Column {
                     spacing: 2
+                    IconImage {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: !tile.thumbnailShowsErrorText
+                        width: tile.view.columns >= 11 ? 18 : 24
+                        height: width
+                        sourceSize: Qt.size(width, height)
+                        source: "qrc:/panel_icons/photo-off.svg"
+                        color: appTheme.textMutedColor
+                    }
                     Label {
                         anchors.horizontalCenter: parent.horizontalCenter
+                        visible: tile.thumbnailShowsErrorText
                         text: "!"
                         color: appTheme.dangerColor
                         font.family: appTheme.dataFontFamily
@@ -273,6 +284,7 @@ Item {
                     }
                     Label {
                         width: parent.width
+                        visible: tile.thumbnailShowsErrorText
                         text: tile.thumbnailProblemText
                         color: appTheme.dangerColor
                         font.family: appTheme.dataFontFamily

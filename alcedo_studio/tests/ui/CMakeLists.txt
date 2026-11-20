@@ -511,6 +511,10 @@ alcedo_register_test_target(ClipModelInstallActivationTest ui)
 def_ui_test(AlbumBackendFolderTest   album_backend_folder_test.cpp)
 alcedo_register_test_target(AlbumBackendFolderTest ui)
 
+# Mounted folder rows and commands of FolderController (mounted_folder_plan.md, MF6 and MF8).
+def_ui_test(FolderControllerMountTest   folder_controller_mount_test.cpp)
+alcedo_register_test_target(FolderControllerMountTest ui)
+
 def_ui_test(AlbumBackendImageDeleteTest album_backend_image_delete_test.cpp)
 alcedo_register_test_target(AlbumBackendImageDeleteTest ui)
 

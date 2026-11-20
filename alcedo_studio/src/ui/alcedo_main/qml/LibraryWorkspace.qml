@@ -499,12 +499,16 @@ RowLayout {
                     keys: ["text/uri-list"]
 
                     readonly property int targetFolderId: Number(appModules.folders.currentFolderId)
+                    // A mounted folder takes its files from its disk directory: no import, and
+                    // the refused drag shows the "not allowed" cursor.
+                    readonly property bool takesDrop: !!host && host.fileDropImportAllowed
+                                                      && !appModules.folders.currentFolderMounted
                     property var urls: []
 
                     // The action is always Copy: import reads the files in place, and a Move
                     // answer lets the file manager delete them.
                     onEntered: function(drag) {
-                        urls = host && host.fileDropImportAllowed ? FileDrop.localFileUrls(drag) : []
+                        urls = takesDrop ? FileDrop.localFileUrls(drag) : []
                         if (urls.length > 0) {
                             drag.accept(Qt.CopyAction)
                         } else {
@@ -515,7 +519,7 @@ RowLayout {
                     onDropped: function(drop) {
                         const dropped = urls.length > 0 ? urls : FileDrop.localFileUrls(drop)
                         urls = []
-                        if (!host || !host.fileDropImportAllowed || dropped.length === 0) {
+                        if (!takesDrop || dropped.length === 0) {
                             drop.accepted = false
                             return
                         }

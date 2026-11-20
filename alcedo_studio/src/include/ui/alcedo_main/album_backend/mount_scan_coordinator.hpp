@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -92,6 +93,16 @@ class MountScanClock {
   virtual void               StopAllTimers()                            = 0;
 };
 
+/// Called on the UI thread with the result of the scan that a RequestScan asked for. A request
+/// that the stop of the coordinator, a user cancel, or the removal of the mount ended gets a
+/// MountScanStatus::kCanceled result.
+using MountScanEndedCallback     = std::function<void(const MountScanResult&)>;
+
+/// Called on the UI thread when a mount operation ended: empty on success, else the exception of
+/// the operation (MountOperationError for a refusal). An operation that the stop of the
+/// coordinator dropped gets a std::runtime_error.
+using MountOperationDoneCallback = std::function<void(std::exception_ptr)>;
+
 /// QTimer and std::chrono::steady_clock.
 auto CreateSteadyMountScanClock() -> std::unique_ptr<MountScanClock>;
 
@@ -135,6 +146,11 @@ struct MountScanCoordinatorDependencies {
  * returned, or lost photos. An automatic scan that finds the mount offline shows only when the
  * mount was not offline before.
  *
+ * The mount operations of the Library and of automation (create, relocate, locate, remove,
+ * unmount; Mounted Folder Plan, MF6 and MF8) run on the same worker through RunMountOperation,
+ * one at a time, before the next queued scan. The UI thread never waits for the operation lock of
+ * MountService, which a scan holds for its whole length.
+ *
  * After each scan that read the listing, the coordinator registers the directories of the
  * listing with the watcher. A mount whose registration fails is "not watched"; the other
  * triggers still scan it.
@@ -164,9 +180,22 @@ class MountScanCoordinator final : public QObject {
    */
   void               Stop();
 
-  /// Request a scan of @p mount_id. No effect when the coordinator is not started or the mount
-  /// does not exist.
-  void               RequestScan(mount_id_t mount_id, MountScanTrigger trigger);
+  /**
+   * @brief Request a scan of @p mount_id.
+   * @param on_ended Optional; called with the result of the scan that runs for this request: the
+   *        next scan of the mount that starts after the call.
+   * @return false, with no call of @p on_ended, when the coordinator is not started or the mount
+   *         does not exist.
+   */
+  auto               RequestScan(mount_id_t mount_id, MountScanTrigger trigger,
+                                 MountScanEndedCallback on_ended = {}) -> bool;
+
+  /**
+   * @brief Run @p operation on the worker thread after the running scan or operation, before the
+   *        next queued scan, and call @p done on the UI thread with its outcome.
+   * @return false, with no call of @p done, when the coordinator is not started.
+   */
+  auto RunMountOperation(std::function<void()> operation, MountOperationDoneCallback done) -> bool;
 
   /// Read the mounts again (after a mount was created or removed). A removed mount loses its
   /// watch and its queued scan.
@@ -180,7 +209,7 @@ class MountScanCoordinator final : public QObject {
   [[nodiscard]] auto IsWatched(mount_id_t mount_id) const -> bool;
   /// True while a scan of @p mount_id runs.
   [[nodiscard]] auto IsScanRunning(mount_id_t mount_id) const -> bool;
-  /// True while a scan runs or waits to run.
+  /// True while a scan or a mount operation runs or waits to run.
   [[nodiscard]] auto HasPendingScans() const -> bool;
 
  private:
@@ -191,6 +220,18 @@ class MountScanCoordinator final : public QObject {
     std::optional<MountScanTrigger> scan_again;
     MountReachability               reachability = MountReachability::kNotScanned;
     bool                            watched      = false;
+    /// Callbacks of the requests for the next scan of the mount that starts.
+    std::vector<MountScanEndedCallback> on_next_scan_ended;
+  };
+
+  struct PendingOperation {
+    std::function<void()>      operation;
+    MountOperationDoneCallback done;
+  };
+
+  struct RunningOperation {
+    MountOperationDoneCallback done;
+    std::thread                worker;
   };
 
   struct RunningScan {
@@ -200,10 +241,14 @@ class MountScanCoordinator final : public QObject {
     std::thread                        worker;
     QString                            task_id;
     bool                               canceled_by_user = false;
+    std::vector<MountScanEndedCallback> on_ended;
   };
 
   void HandleDirectoryChanged(mount_id_t mount_id);
+  /// Start the next queued operation, else the next queued scan, when the worker is free.
   void StartNextScan();
+  void StartOperation(PendingOperation pending);
+  void HandleOperationEnded(quint64 generation, std::exception_ptr error);
   void HandleScanProgress(quint64 generation, mount_id_t mount_id,
                           const MountScanProgress& progress);
   void HandleScanEnded(quint64 generation, mount_id_t mount_id, const MountScanResult& result);
@@ -226,6 +271,8 @@ class MountScanCoordinator final : public QObject {
   std::unordered_map<mount_id_t, MountState>              mounts_;
   std::deque<mount_id_t>                                  queue_;
   std::optional<RunningScan>                              running_;
+  std::deque<PendingOperation>                            operations_;
+  std::optional<RunningOperation>                         running_operation_;
   /// Changes at each Start and Stop, so a queued call of an earlier run does nothing.
   quint64                                                 generation_ = 0;
   std::optional<MountScanClock::TimePoint>                inactive_since_;

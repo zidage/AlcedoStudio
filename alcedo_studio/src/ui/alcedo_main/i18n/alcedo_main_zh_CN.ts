@@ -1232,6 +1232,82 @@
 <context>
     <name>Alcedo</name>
     <message>
+        <source>The folder is inside a mounted folder or holds one.</source>
+        <translation>该文件夹位于已挂载的文件夹内，或包含已挂载的文件夹。</translation>
+    </message>
+    <message>
+        <source>A mounted folder cannot hold another mount.</source>
+        <translation>已挂载的文件夹内不能再挂载文件夹。</translation>
+    </message>
+    <message>
+        <source>The collection no longer exists.</source>
+        <translation>该收藏夹已不存在。</translation>
+    </message>
+    <message>
+        <source>The folder cannot be reached.</source>
+        <translation>无法访问该文件夹。</translation>
+    </message>
+    <message>
+        <source>The mounted folder no longer exists.</source>
+        <translation>该挂载文件夹已不存在。</translation>
+    </message>
+    <message>
+        <source>The change could not be stored.</source>
+        <translation>无法保存此更改。</translation>
+    </message>
+    <message>
+        <source>The photo is not missing.</source>
+        <translation>该照片未丢失。</translation>
+    </message>
+    <message>
+        <source>The file is outside the mounted folder.</source>
+        <translation>该文件不在挂载的文件夹内。</translation>
+    </message>
+    <message>
+        <source>The mounted folder does not show this file.</source>
+        <translation>挂载的文件夹不显示此文件。</translation>
+    </message>
+    <message>
+        <source>Another photo uses this file.</source>
+        <translation>另一张照片正在使用此文件。</translation>
+    </message>
+    <message>
+        <source>The file cannot be read.</source>
+        <translation>无法读取该文件。</translation>
+    </message>
+    <message>
+        <source>The collection is not a mounted folder.</source>
+        <translation>该收藏夹不是挂载的文件夹。</translation>
+    </message>
+    <message>
+        <source>Mounted folders are not available until the project is open.</source>
+        <translation>项目打开后才能使用挂载的文件夹。</translation>
+    </message>
+    <message>
+        <source>Cannot change a mounted folder while import is running.</source>
+        <translation>导入进行时无法更改挂载的文件夹。</translation>
+    </message>
+    <message>
+        <source>Folder mounted.</source>
+        <translation>文件夹已挂载。</translation>
+    </message>
+    <message>
+        <source>Folder unmounted.</source>
+        <translation>文件夹已取消挂载。</translation>
+    </message>
+    <message>
+        <source>Folder located.</source>
+        <translation>已重新定位文件夹。</translation>
+    </message>
+    <message>
+        <source>Removed %1 missing photos.</source>
+        <translation>已移除 %1 张丢失的照片。</translation>
+    </message>
+    <message>
+        <source>Photo located.</source>
+        <translation>已重新定位照片。</translation>
+    </message>
+    <message>
         <source>Reading the folder</source>
         <translation>正在读取文件夹</translation>
     </message>
@@ -1973,6 +2049,14 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>AppDialogs</name>
     <message>
+        <source>Locate Photo...</source>
+        <translation>定位照片...</translation>
+    </message>
+    <message>
+        <source>Locate Photo</source>
+        <translation>定位照片</translation>
+    </message>
+    <message>
         <location filename="../qml/AppDialogs.qml" line="+39"/>
         <source>Select Images</source>
         <translation>选择图像</translation>
@@ -2437,6 +2521,46 @@ Alcedo 将改用 %1。</translation>
 </context>
 <context>
     <name>CollectionsPanel</name>
+    <message>
+        <source>Mount Folder...</source>
+        <translation>挂载文件夹...</translation>
+    </message>
+    <message>
+        <source>Mount Folder</source>
+        <translation>挂载文件夹</translation>
+    </message>
+    <message>
+        <source>Synchronize</source>
+        <translation>同步</translation>
+    </message>
+    <message>
+        <source>Locate Folder...</source>
+        <translation>定位文件夹...</translation>
+    </message>
+    <message>
+        <source>Locate Folder</source>
+        <translation>定位文件夹</translation>
+    </message>
+    <message>
+        <source>Show in File Manager</source>
+        <translation>在文件管理器中显示</translation>
+    </message>
+    <message>
+        <source>Remove Missing Photos</source>
+        <translation>移除丢失的照片</translation>
+    </message>
+    <message>
+        <source>Unmount</source>
+        <translation>取消挂载</translation>
+    </message>
+    <message>
+        <source>Offline</source>
+        <translation>离线</translation>
+    </message>
+    <message>
+        <source>Remove %1 missing photos of &quot;%2&quot; from the project? Their edit history and Versions are removed.</source>
+        <translation>从项目中移除“%2”的 %1 张丢失的照片？它们的编辑历史和版本将被移除。</translation>
+    </message>
     <message>
         <location filename="../qml/CollectionsPanel.qml" line="+22"/>
         <source>Search</source>

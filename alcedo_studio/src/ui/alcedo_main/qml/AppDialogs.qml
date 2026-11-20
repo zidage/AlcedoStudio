@@ -193,6 +193,48 @@ Item {
         }]
     }
 
+    // Mounted folders (Mounted Folder Plan, section 2.3 and MF8). The reads name
+    // currentFolderMounted, whose MountStateChanged also announces each new mount state, so the
+    // bindings follow a scan.
+    function mountedPhotoActions() {
+        const folders = appModules.folders
+        const elementId = Number(host.pendingRatingTarget.elementId)
+        if (folders.currentFolderMounted === undefined || elementId <= 0
+                || !folders.IsMissingMountedPhoto(elementId)) {
+            return []
+        }
+        return [{ id: "locate-photo", label: qsTr("Locate Photo..."), enabled: true }]
+    }
+
+    // A mounted photo leaves the library only through Remove Missing Photos of its mount, and a
+    // mounted folder keeps its photos while their files are present.
+    function deleteKeepsMountedPhotos() {
+        const folders = appModules.folders
+        if (folders.currentFolderMounted === true) {
+            return true
+        }
+        if (Number(folders.currentFolderId) !== 0) {
+            return false
+        }
+        const ids = host.pendingDeleteTargets.map(function(target) {
+            return Number(target.elementId)
+        })
+        return folders.HoldsPresentMountedPhoto(ids)
+               || ids.some(function(id) { return folders.IsMissingMountedPhoto(id) })
+    }
+
+    FileDialog {
+        id: locatePhotoDialogObj
+        property int elementId: 0
+        title: qsTr("Locate Photo")
+        fileMode: FileDialog.OpenFile
+        nameFilters: [
+            qsTr("Supported images (%1)").arg(root.supportedImagePatterns),
+            qsTr("All Files (*)")
+        ]
+        onAccepted: appModules.folders.LocateMissingPhoto(elementId, selectedFile)
+    }
+
     ImageContextMenu {
         id: imageContextMenuObj
         ratingEnabled: Number(host.pendingRatingTarget.imageId) > 0
@@ -200,7 +242,7 @@ Item {
         collectionRows: appModules.folders.folders ? appModules.folders.folders : []
         currentCollectionId: Number(appModules.folders.currentFolderId)
         addToEnabled: host.pendingDeleteTargets.length > 0
-        actions: root.filmstripDiscardActions().concat([
+        actions: root.filmstripDiscardActions().concat(root.mountedPhotoActions()).concat([
             {
                 id: "copy-adjustments",
                 label: qsTr("Copy Adjustments"),
@@ -220,6 +262,7 @@ Item {
                 // as pendingDeleteReason.
                 enabled: host.pendingDeleteTargets.length > 0
                           && appModules.interactionPolicy.canDeletePendingTargets
+                          && !root.deleteKeepsMountedPhotos()
             }
         ])
         onRatingRequested: function(rating) {
@@ -233,6 +276,14 @@ Item {
                         && appModules.editorSession.canDiscardCurrentCommit === true) {
                     appModules.editorSession.Discard()
                 }
+                return
+            }
+            if (actionId === "locate-photo") {
+                const elementId = Number(host.pendingRatingTarget.elementId)
+                locatePhotoDialogObj.elementId = elementId
+                locatePhotoDialogObj.currentFolder =
+                    appModules.folders.MissingPhotoLocateFolder(elementId)
+                locatePhotoDialogObj.open()
                 return
             }
             if (actionId === "copy-adjustments") {

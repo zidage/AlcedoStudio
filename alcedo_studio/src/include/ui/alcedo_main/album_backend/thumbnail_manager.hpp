@@ -13,6 +13,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "app/thumbnail_service.hpp"
 #include "type/type.hpp"
@@ -46,6 +47,17 @@ class ThumbnailManager {
   [[nodiscard]] bool IsThumbnailPinned(sl_element_id_t elementId) const;
   void               RemoveThumbnailState(sl_element_id_t elementId, image_id_t imageId);
   void               ReleaseVisibleThumbnailPins();
+
+  /**
+   * @brief Take the mounted photos whose stored source state is missing (Mounted Folder Plan,
+   *        MF6). Their tiles show the missing state and request no render. A photo that leaves
+   *        the set is requested again in each pinned tier.
+   * @thread The GUI thread.
+   */
+  void               SetStoredMissingSources(std::unordered_set<sl_element_id_t> element_ids);
+  [[nodiscard]] auto IsStoredMissingSource(sl_element_id_t elementId) const -> bool {
+    return stored_missing_sources_.contains(elementId);
+  }
 
   /// Drop a store entry only when the library grid/filmstrip is not pinning that key.
   void ReleaseStoreImageIfUnpinned(const ThumbnailCacheKey& key);
@@ -91,6 +103,8 @@ class ThumbnailManager {
   std::shared_ptr<ThumbnailImageStore> image_store_{std::make_shared<ThumbnailImageStore>()};
   // TODO: Move pin ref-count tracking into ThumbnailService.
   std::unordered_map<ThumbnailCacheKey, PinnedThumbnailState> thumbnail_pins_{};
+  /// See SetStoredMissingSources.
+  std::unordered_set<sl_element_id_t>                          stored_missing_sources_{};
   /// Visible grouped-view occurrences: (group key, element id, tier edge).
   std::set<std::tuple<std::string, sl_element_id_t, uint32_t>> visible_occurrences_{};
   // Strategy B: active flags for in-flight thumbnail requests. A key leaves the map when its

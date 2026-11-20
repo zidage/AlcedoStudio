@@ -113,9 +113,11 @@ v  2026 Japan (link)           842      mount root, link icon
   icon.
 - The count of a mounted folder counts present and missing photos.
 - An offline mount shows a dimmed name and the label **Offline** in the count position.
-- The row menu of a mount root has: **Synchronize**, **Show in File Manager**, **Unmount**, and,
-  for an offline mount, **Locate Folder**. When the mount has missing photos, it also has
-  **Remove Missing Photos**.
+- The row menu of a mount root has, in this order: **Synchronize**, **Locate Folder...**,
+  **Show in File Manager**, a separator, **Remove Missing Photos**, a separator, and **Unmount**.
+  The items stay in place and are disabled when they do not apply (review of the MF8 mock,
+  2026-11-20): Synchronize and Show in File Manager for an offline mount, Locate Folder for a
+  mount that is online, Remove Missing Photos for a mount with no missing photo.
 - The row menu of a mounted folder below the root has: **Show in File Manager**.
 - **New Collection**, **Rename**, **Delete**, and row drag are disabled for a mounted row.
 - An ordinary row cannot be dropped on a mounted row.
@@ -131,9 +133,12 @@ no explanatory text.
 - A file drop on a mounted row or on the grid of a mounted folder shows the "not allowed" cursor.
   No import starts.
 - **Remove from Library** is disabled when the selection holds a mounted photo that is present.
-- A missing photo shows the current tile state "Source file was moved or deleted". Its ratings
-  and labels stay editable. The editor does not open it.
-- The menu of a missing photo has **Locate**.
+- A missing photo shows one icon on its tile (Tabler `photo-off`, `panel_icons/photo-off.svg`, in
+  `textMutedColor`) and no text (review of the MF8 mock, 2026-11-20). The rule applies to every
+  tile whose source is missing, mounted or ordinary: the grid, the justified rows, and the editor
+  filmstrip. Another thumbnail problem keeps its text. Its ratings and labels stay editable. The
+  editor does not open it.
+- The menu of a missing photo has **Locate Photo...**.
 
 ### 2.4 Scan rules
 
@@ -1392,6 +1397,31 @@ ScanMount returns Offline -> FinishTask(failed, "Offline") -> row shows Offline
 
 **Expected diff.** 1300 to 1800 lines.
 
+**Implementation decisions (2026-11-20, built with MF8 in the pull request of MF8 part B).**
+
+- The mount states of the rows come from the photo count read: the job on the library query
+  worker reads `MountService::ListMounts` with `ReadFolderImageCounts`, so the UI thread reads no
+  mount table. `MountSummary` carries the ids of the present and the missing photos of each mount.
+  Each scan end starts a count read, because an offline result changes the rows with no photo
+  change.
+- The row fields are `mountId` (0 for an ordinary row), `mountRoot`, `mountOffline`,
+  `mountMissingCount` (on the root row), and `structureEditable`. The plan field `mountRoot` (the
+  root path) is not a row field; Show in File Manager reads the path from the mount summary.
+- The mount commands run through `MountScanCoordinator::RunMountOperation` on the scan worker.
+  `MountService` holds its operation lock for the whole length of a scan, so a command on the UI
+  thread would wait for the scan. An operation runs after the running scan and before the queued
+  scans. `RequestScan` takes an optional callback with the result of the requested scan.
+- The stored missing state reaches the tiles through `ThumbnailManager::SetStoredMissingSources`:
+  a photo in the set shows the missing state and requests no render, so a cached thumbnail of a
+  file that is gone does not show. A photo that leaves the set renders again.
+- Remove from Library (the Delete item at the library root) is disabled when the selection holds
+  a mounted photo, present or missing: a present photo stays, and a missing photo leaves through
+  Remove Missing Photos. In a mounted folder, Remove from Album is disabled, because it would
+  remove the home link.
+- The editor open of a missing photo is not changed in this phase. The thumbnail state shows the
+  missing file before the open, and the editor reports the render failure as it does for an
+  ordinary missing file.
+
 **Completion record.** Section 13 template. Empty.
 
 ### MF7. Scan triggers
@@ -1633,6 +1663,11 @@ RemoveMissingPhotos storage failure -> transaction rolls back -> StorageFailure 
   first, and accepts a directory whose volume identity equals the record. The volume mount point
   itself is a candidate only for a mount of a whole volume. `ListVolumeMountPoints` lists the
   volumes; a test injects the list through the `MountService` constructor.
+- The Library commands: Locate Folder and Remove Missing Photos are items of the mount root
+  menu (section 2.2); Remove Missing Photos asks for confirmation in the delete dialog with the
+  count of the mount. Locate Photo... is an item of the image menu for a missing mounted photo; its
+  file dialog opens in the last directory of the photo (`Image.image_path`), else in the mount
+  root. A refusal shows its text in the status line.
 - `LocateMissingFile` applies the listing rules to the one file (`ReadMountDirectoryFile`): a file
   that a scan would not list is refused (`kFileIsNotListed`), so the next scan cannot report the
   located photo missing again. A directory that the last scan did not see gets its folders in the

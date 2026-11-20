@@ -59,12 +59,14 @@ struct AlbumItem {
 
 /// Folder entry in the sleeve tree.
 struct ExistingFolderEntry {
-  uint32_t              ui_id_      = 0;
-  sl_element_id_t       element_id_ = 0;
-  file_name_t           folder_name_{};
-  std::filesystem::path folder_path_{};
-  int                   depth_    = 0;
-  bool                  expanded_ = false;
+  uint32_t                  ui_id_      = 0;
+  sl_element_id_t           element_id_ = 0;
+  file_name_t               folder_name_{};
+  std::filesystem::path     folder_path_{};
+  int                       depth_    = 0;
+  bool                      expanded_ = false;
+  /// The mount of a mounted folder; empty for an ordinary folder.
+  std::optional<mount_id_t> mount_id_{};
 };
 
 /// UI-only display cache state. No filesystem or DB ownership.
