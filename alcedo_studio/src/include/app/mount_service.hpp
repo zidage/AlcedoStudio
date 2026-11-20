@@ -110,6 +110,11 @@ struct MountScanResult {
   std::size_t     failed_batch           = 0;
   /// The error text of a failed batch.
   std::string     error;
+  /// Each directory below the root directory that the listing of this scan found, as a relative
+  /// path, without the root itself. Empty for kOffline and for a listing that the stop request
+  /// ended. The directory watcher of the scan triggers registers these (Mounted Folder Plan,
+  /// MF7).
+  std::vector<std::wstring> listed_directories;
 };
 
 /// The progress of the new file batches of one scan.

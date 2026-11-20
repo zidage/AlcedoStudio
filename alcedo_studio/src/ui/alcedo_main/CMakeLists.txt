@@ -109,6 +109,28 @@ def_library(BackgroundTaskController
     PUBLIC_DEPS Qt6::Core
 )
 
+# The change notifications of the mounted directories (mounted_folder_plan.md, MF7, P11).
+set(MOUNT_DIRECTORY_WATCHER_SRCS
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/mount_directory_watcher_qt.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/mount_directory_watcher.hpp"
+)
+if(WIN32)
+    list(APPEND MOUNT_DIRECTORY_WATCHER_SRCS
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/mount_directory_watcher_win.cpp"
+    )
+endif()
+def_library(MountDirectoryWatcher
+    SOURCES ${MOUNT_DIRECTORY_WATCHER_SRCS}
+    PUBLIC_DEPS
+        Qt6::Core
+    PRIVATE_DEPS
+        UiLocalization
+)
+if(WIN32)
+    # The message-only window and the device notifications of the Windows watcher.
+    target_link_libraries(MountDirectoryWatcher PRIVATE user32)
+endif()
+
 def_library(AgentControlOwner
     SOURCES
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/agent_control_owner.cpp"
