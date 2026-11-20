@@ -1620,6 +1620,29 @@ RemoveMissingPhotos storage failure -> transaction rolls back -> StorageFailure 
 
 **Expected diff.** 1300 to 1800 lines.
 
+**Implementation decisions (2026-11-20).**
+
+- Write order of `RelocateRoot`: the `MountRoot` row, then `Image.image_path` through
+  `ImagePoolService`. The two owners have no common transaction. When the second write fails, the
+  next scan finds each file below the new root by its fingerprint (a move), so the relocation
+  completes. The opposite order would leave the mount at an unreachable root with the files below
+  the new one.
+- The volume search runs in `ScanMount` when the request sets `find_moved_volume`. The scan
+  coordinator sets it for the scan of the project open only, as the plan states. The search tries
+  each end of the old root path below each mount point of the recorded volume, the longest end
+  first, and accepts a directory whose volume identity equals the record. The volume mount point
+  itself is a candidate only for a mount of a whole volume. `ListVolumeMountPoints` lists the
+  volumes; a test injects the list through the `MountService` constructor.
+- `LocateMissingFile` applies the listing rules to the one file (`ReadMountDirectoryFile`): a file
+  that a scan would not list is refused (`kFileIsNotListed`), so the next scan cannot report the
+  located photo missing again. A directory that the last scan did not see gets its folders in the
+  same tree write.
+- `RemoveMissingPhotos` takes the pipeline and history removal as a callback
+  (`PipelineMgmtService::DeletePipelines` in production): `MountService` cannot link
+  `PipelineMgmtService`, which depends on `ProjectService`. The sleeve removal is
+  `SleeveServiceImpl::DeleteMissingMountedFiles`, which checks that each id is a missing photo of
+  the mount; the MF5 rule refuses the same files on the ordinary delete.
+
 **Completion record.** Section 13 template. Empty.
 
 ---

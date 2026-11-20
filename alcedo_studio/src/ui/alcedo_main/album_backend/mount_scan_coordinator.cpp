@@ -101,9 +101,11 @@ auto ProjectMountScanPort::ListMounts() -> std::vector<MountSummary> {
 
 auto ProjectMountScanPort::ScanMount(
     mount_id_t mount_id, const std::atomic<bool>& stop_requested,
-    const std::function<void(const MountScanProgress&)>& on_progress) -> MountScanResult {
+    const std::function<void(const MountScanProgress&)>& on_progress, bool find_moved_volume)
+    -> MountScanResult {
   MountScanRequest request;
   request.mount_id             = mount_id;
+  request.find_moved_volume    = find_moved_volume;
   request.importer             = importer_;
   request.stop_requested       = &stop_requested;
   request.invalidate_thumbnail = invalidate_thumbnail_;
@@ -342,18 +344,21 @@ void MountScanCoordinator::StartNextScan() {
     // The coordinator joins the worker before it is destroyed (Stop), so `this` outlives the
     // worker. Qt drops a queued call whose receiver is gone.
     running_->worker = std::thread(
-        [this, generation = generation_, mount_id, port = port_, stop = running_->stop_requested] {
+        [this, generation = generation_, mount_id, port = port_, stop = running_->stop_requested,
+         find_moved_volume = running_->trigger == MountScanTrigger::kProjectOpen] {
           MountScanResult result;
           try {
             result = port->ScanMount(
-                mount_id, *stop, [this, generation, mount_id](const MountScanProgress& progress) {
+                mount_id, *stop,
+                [this, generation, mount_id](const MountScanProgress& progress) {
                   QMetaObject::invokeMethod(
                       this,
                       [this, generation, mount_id, progress] {
                         HandleScanProgress(generation, mount_id, progress);
                       },
                       Qt::QueuedConnection);
-                });
+                },
+                find_moved_volume);
           } catch (const std::exception& e) {
             result        = {};
             result.status = MountScanStatus::kStorageFailure;
@@ -411,6 +416,9 @@ void MountScanCoordinator::HandleScanEnded(quint64 generation, mount_id_t mount_
   if (const auto it = mounts_.find(mount_id); it != mounts_.end()) {
     auto&      state    = it->second;
     const auto previous = state.reachability;
+    if (result.relocated_root.has_value()) {
+      state.root = *result.relocated_root;
+    }
     state.reachability  = result.status == MountScanStatus::kOffline ? MountReachability::kOffline
                                                                      : MountReachability::kOnline;
     ReportScanEnd(run, state, result, previous);

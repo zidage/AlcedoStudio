@@ -221,6 +221,37 @@ TEST(MountDirectoryListingTest, RelativePathOfAStoredPathHasTheListingForm) {
   EXPECT_EQ(MountRelativePathOf(root, stdfs::path(L"/volume/a.jpg")), std::nullopt);
 }
 
+TEST(MountDirectoryListingTest, OneFileReadGivesTheEntryOfTheListing) {
+  test::TestTempDirectory dir;
+  const auto              root = dir / "root";
+  WriteText(root / "sub" / "deep" / "g.tif", "tiff");
+  WriteText(root / "b.jpg", "jpeg!");
+  WriteText(root / "notes.txt", "text");
+  WriteText(root / ".hidden" / "c.dng", "hidden");
+  WriteText(dir / "outside.jpg", "outside");
+
+  // Locate of a missing photo (MF8) stores the values that a scan stores for the file.
+  const auto listing = ListMountDirectory(root);
+  ASSERT_EQ(listing.files.size(), 2u);
+  for (const auto& listed : listing.files) {
+    SCOPED_TRACE(listed.relative_path);
+    stdfs::path path = root;
+    for (const auto& element : stdfs::path(listed.relative_path)) {
+      path /= element;
+    }
+    const auto file = ReadMountDirectoryFile(root, path);
+    ASSERT_TRUE(file.has_value());
+    EXPECT_EQ(*file, listed);
+  }
+
+  EXPECT_FALSE(ReadMountDirectoryFile(root, root / "notes.txt").has_value());
+  EXPECT_FALSE(ReadMountDirectoryFile(root, root / ".hidden" / "c.dng").has_value());
+  EXPECT_FALSE(ReadMountDirectoryFile(root, root / "absent.jpg").has_value());
+  EXPECT_FALSE(ReadMountDirectoryFile(root, root / "sub").has_value());
+  EXPECT_FALSE(ReadMountDirectoryFile(root, root).has_value());
+  EXPECT_FALSE(ReadMountDirectoryFile(root, dir / "outside.jpg").has_value());
+}
+
 TEST(MountDirectoryListingTest, DirectoryLinkCycleEnds) {
   test::TestTempDirectory dir;
   const auto              root = dir / "root";

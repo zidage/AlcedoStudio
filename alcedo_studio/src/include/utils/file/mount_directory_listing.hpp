@@ -101,4 +101,19 @@ struct MountDirectoryListing {
                                        const std::filesystem::path& path)
     -> std::optional<std::wstring>;
 
+/**
+ * @brief The entry that ListMountDirectory(@p root) gives for the one file @p path.
+ *
+ * Locate of a missing photo uses it, so the located file gets the values that a scan stores
+ * (Mounted Folder Plan, MF8). The rules of the listing apply: below @p root, no element whose
+ * name starts with a period, no symbolic link or junction on the way, a regular file with an
+ * import category.
+ *
+ * @return std::nullopt when the listing of @p root does not list @p path, or when its
+ *         attributes cannot be read.
+ */
+[[nodiscard]] auto ReadMountDirectoryFile(const std::filesystem::path& root,
+                                          const std::filesystem::path& path)
+    -> std::optional<MountDirectoryFile>;
+
 }  // namespace alcedo

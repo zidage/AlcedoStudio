@@ -114,13 +114,14 @@ class ManualClock final : public MountScanClock {
 class ManualWatcher final : public MountDirectoryWatcher {
  public:
   void SetChangeCallback(ChangeCallback callback) override { on_change_ = std::move(callback); }
-  auto Watch(mount_id_t mount_id, const stdfs::path&, std::span<const std::wstring>)
+  auto Watch(mount_id_t mount_id, const stdfs::path& root, std::span<const std::wstring>)
       -> bool override {
     if (fail_registration_) {
       watched_.erase(mount_id);
       return false;
     }
     watched_.insert(mount_id);
+    watched_roots_[mount_id] = root;
     return true;
   }
   void Unwatch(mount_id_t mount_id) override { watched_.erase(mount_id); }
@@ -132,8 +133,9 @@ class ManualWatcher final : public MountDirectoryWatcher {
     }
   }
 
-  bool                 fail_registration_ = false;
-  std::set<mount_id_t> watched_;
+  bool                              fail_registration_ = false;
+  std::set<mount_id_t>              watched_;
+  std::map<mount_id_t, stdfs::path> watched_roots_;
 
  private:
   ChangeCallback on_change_;
@@ -147,11 +149,12 @@ class CountingScanPort final : public MountScanPort {
   auto ListMounts() -> std::vector<MountSummary> override { return mounts_; }
 
   auto ScanMount(mount_id_t mount_id, const std::atomic<bool>& stop_requested,
-                 const std::function<void(const MountScanProgress&)>& on_progress)
-      -> MountScanResult override {
+                 const std::function<void(const MountScanProgress&)>& on_progress,
+                 bool find_moved_volume) -> MountScanResult override {
     std::unique_lock lock(mutex_);
     ++scan_count_;
     scanned_.push_back(mount_id);
+    find_moved_volume_.push_back(find_moved_volume);
     const bool wait_at_gate = gate_closed_;
     if (wait_at_gate) {
       waiting_at_gate_ = true;
@@ -207,6 +210,11 @@ class CountingScanPort final : public MountScanPort {
     std::lock_guard lock(mutex_);
     return saw_stop_request_;
   }
+  /// MountScanRequest::find_moved_volume of each scan, in scan order.
+  auto FindMovedVolumeRequests() -> std::vector<bool> {
+    std::lock_guard lock(mutex_);
+    return find_moved_volume_;
+  }
 
  private:
   std::vector<MountSummary> mounts_;
@@ -217,6 +225,7 @@ class CountingScanPort final : public MountScanPort {
   bool                      saw_stop_request_ = false;
   int                       scan_count_       = 0;
   std::vector<mount_id_t>   scanned_;
+  std::vector<bool>         find_moved_volume_;
   MountScanResult           next_result_;
 };
 
@@ -291,6 +300,22 @@ TEST_F(MountScanCoordinatorTest, ProjectOpenScansEachMountAndWatchesIt) {
   EXPECT_TRUE(coordinator_->IsWatched(kMount));
   // A scan that changed nothing shows no task.
   EXPECT_TRUE(MountScanTasks(tasks_).empty());
+}
+
+TEST_F(MountScanCoordinatorTest, OnlyTheProjectOpenScanSearchesForAMovedVolume) {
+  StartAndWaitForTheOpenScan();
+  coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_EQ(port_->FindMovedVolumeRequests(), (std::vector<bool>{true, false}));
+}
+
+TEST_F(MountScanCoordinatorTest, RelocatedRootIsWatchedAtTheNewRoot) {
+  MountScanResult relocated;
+  relocated.relocated_root = temp_dir_ / "Card" / "Japan";
+  port_->SetNextResult(relocated);
+  StartAndWaitForTheOpenScan();
+  ASSERT_TRUE(coordinator_->IsWatched(kMount));
+  EXPECT_EQ(watcher_->watched_roots_.at(kMount), temp_dir_ / "Card" / "Japan");
 }
 
 TEST_F(MountScanCoordinatorTest, TenNotificationsInTwoSecondsStartOneScan) {

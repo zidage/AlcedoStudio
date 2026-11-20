@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include "utils/file/volume_identity.hpp"
 
@@ -28,6 +29,27 @@ auto ReadVolumeIdentity(const std::filesystem::path& directory) -> std::string {
     const char* text = [uuid UTF8String];
     return text == nullptr ? std::string{} : std::string(text);
   }
+}
+
+auto ListVolumeMountPoints() -> std::vector<VolumeMountPoint> {
+  std::vector<VolumeMountPoint> mount_points;
+  @autoreleasepool {
+    NSArray<NSURL*>* volumes = [[NSFileManager defaultManager]
+        mountedVolumeURLsIncludingResourceValuesForKeys:@[ NSURLVolumeUUIDStringKey ]
+                                                options:0];
+    for (NSURL* volume in volumes) {
+      NSString* uuid = nil;
+      if (![volume getResourceValue:&uuid forKey:NSURLVolumeUUIDStringKey error:nil] ||
+          ![uuid isKindOfClass:[NSString class]]) {
+        continue;
+      }
+      const char* identity = [uuid UTF8String];
+      const char* path     = [[volume path] fileSystemRepresentation];
+      if (identity == nullptr || path == nullptr) continue;
+      mount_points.push_back(VolumeMountPoint{std::string(identity), std::filesystem::path(path)});
+    }
+  }
+  return mount_points;
 }
 
 }  // namespace alcedo

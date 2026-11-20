@@ -12,6 +12,7 @@
 #include <string>
 
 #include "../support/test_temp_directory.hpp"
+#include "utils/file/mount_directory_listing.hpp"
 
 namespace alcedo {
 namespace {
@@ -32,6 +33,25 @@ TEST(VolumeIdentityTest, TwoDirectoriesOfOneVolumeHaveOneIdentity) {
   // The temporary directory is on the APFS data volume: a 36-character UUID.
   EXPECT_EQ(first.size(), 36u) << first;
 #endif
+}
+
+TEST(VolumeIdentityTest, MountPointListHoldsTheVolumeOfADirectory) {
+  test::TestTempDirectory dir;
+  const auto              identity = ReadVolumeIdentity(dir.Path());
+  if (identity.empty()) {
+    GTEST_SKIP() << "the volume of the temporary directory has no identity";
+  }
+
+  // The volume of the temporary directory is listed with a mount point that holds the directory
+  // (Mounted Folder Plan, MF8: the volume search of a mount that is offline).
+  const auto canonical = std::filesystem::canonical(dir.Path());
+  bool       found     = false;
+  for (const auto& volume : ListVolumeMountPoints()) {
+    if (volume.identity == identity && IsPathAtOrBelow(canonical, volume.mount_point)) {
+      found = true;
+    }
+  }
+  EXPECT_TRUE(found) << identity;
 }
 
 TEST(VolumeIdentityTest, MissingDirectoryHasEmptyIdentity) {

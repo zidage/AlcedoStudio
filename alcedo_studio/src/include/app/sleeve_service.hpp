@@ -172,6 +172,16 @@ class SleeveServiceImpl final : public SleeveService {
   /// See alcedo::RemoveMountTree. Throws like it, before the sync.
   auto RemoveMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id,
                        std::span<const sl_element_id_t> file_ids) -> SyncResult;
+  /**
+   * @brief Delete the missing photos @p file_ids of the mount @p mount_id from every folder
+   *        (Remove Missing Photos, MF8). FileSystem::DeleteFilesEverywhere without the rule of
+   *        MF5 that keeps a mounted photo in the library.
+   * @return The deleted files.
+   * @throws std::invalid_argument, before any change, when an id is not a live file of the
+   *         mount whose source record is missing.
+   */
+  auto DeleteMissingMountedFiles(mount_id_t mount_id, std::span<const sl_element_id_t> file_ids)
+      -> std::pair<std::vector<std::shared_ptr<SleeveFile>>, SyncResult>;
   ///@}
 
   auto GetStorage() -> std::shared_ptr<Storage> {

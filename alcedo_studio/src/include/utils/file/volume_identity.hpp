@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace alcedo {
 
@@ -27,5 +28,35 @@ namespace alcedo {
  *         identity or the directory does not exist. The function does not throw.
  */
 [[nodiscard]] auto ReadVolumeIdentity(const std::filesystem::path& directory) -> std::string;
+
+/// One mounted volume: its identity in the form of ReadVolumeIdentity and one path where it is
+/// mounted.
+struct VolumeMountPoint {
+  std::string           identity;
+  std::filesystem::path mount_point;
+
+  auto                  operator==(const VolumeMountPoint&) const -> bool = default;
+};
+
+/**
+ * @brief List the mounted volumes that have an identity, with each of their mount points.
+ *
+ * A mount whose root directory is unreachable searches this list for its recorded volume
+ * identity (Mounted Folder Plan, MF8). The source of the list:
+ *
+ * - Windows: each local volume of `FindFirstVolumeW` with each path of
+ *   `GetVolumePathNamesForVolumeNameW` (drive letters and mount folders), and each mapped
+ *   network drive with its share identity.
+ * - macOS: `mountedVolumeURLsIncludingResourceValuesForKeys` with `NSURLVolumeUUIDStringKey`.
+ * - Linux: each `/proc/self/mounts` entry whose device is a `/dev/disk/by-uuid` entry.
+ *
+ * A volume with two mount points has two entries. A volume without an identity has none.
+ *
+ * Thread safety: the function holds no state; any thread can call it. It reads the volume list
+ * of the system, so call it from a worker thread.
+ *
+ * @return The entries in the order of the system list. The function does not throw.
+ */
+[[nodiscard]] auto ListVolumeMountPoints() -> std::vector<VolumeMountPoint>;
 
 }  // namespace alcedo
