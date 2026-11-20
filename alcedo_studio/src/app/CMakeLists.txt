@@ -215,6 +215,7 @@ target_compile_definitions(AiModelPackageService PRIVATE
 def_library(FSService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_service.cpp"
+        "${ALCEDO_APP_ROOT}/mount_tree.cpp"
     PUBLIC_DEPS SleeveFS PipelineHistory
 )
 

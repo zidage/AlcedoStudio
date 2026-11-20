@@ -302,6 +302,15 @@ if(ALCEDO_CUDA_ENABLED)
   alcedo_register_test_target(EditorGeometryOverlayPipelineTest app)
 endif()
 
+# Sleeve operations of the mount scan (mounted_folder_plan.md, MF4): the tree of a mount through
+# SleeveServiceImpl and a real project database.
+add_executable(MountTreeTest ${ALCEDO_TEST_ROOT}/app/mount_tree_test.cpp)
+target_include_directories(MountTreeTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(MountTreeTest PRIVATE FSService GTest::gtest_main)
+gtest_discover_tests(MountTreeTest TEST_PREFIX "MountTreeTest."
+  PROPERTIES LABELS "mounted_folder")
+alcedo_register_test_target(MountTreeTest app)
+
 add_executable(ImportServiceTest ${ALCEDO_TEST_ROOT}/app/import_service_test.cpp)
 target_include_directories(ImportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ImportServiceTest StorageInvariantsTestSupport ImportService ProjectService GTest::gtest_main)
