@@ -213,6 +213,8 @@ auto FileSystem::DuplicateFileToFolder(sl_element_id_t file_id, sl_element_id_t 
   auto duplicated       = std::static_pointer_cast<SleeveFile>(source_file->Copy(id_gen_.GenerateID()));
   duplicated->element_name_ = duplicate_name;
   duplicated->image_id_ = source_file->image_id_;
+  // The duplicate is a new photo that no directory holds, so it is an ordinary element.
+  duplicated->mount_id_.reset();
   storage_[duplicated->element_id_] = duplicated;
   if (folder_id == 0) {
     folder->AddElementToMap(duplicated);

@@ -28,6 +28,7 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/mapper/duckorm/duckdb_select.hpp"
+#include "storage/mapper/mount/source_file_mapper.hpp"
 #include "storage/query/filter_compiler.hpp"
 #include "storage/query/stats_dimension.hpp"
 #include "storage/store/ai/ai_store.hpp"
@@ -809,7 +810,7 @@ auto ElementStore::GetFolderChildren(const sl_element_id_t folder_id)
   auto       children     = ElementMapper(guard.conn_)
                       .GetElementsByQuery(duckorm::SqlFragment{
                           "SELECT e.id, e.type, e.element_name, e.added_time, e.modified_time, "
-                          "e.ref_count FROM Element e JOIN FolderContent fc "
+                          "e.ref_count, e.mount_id FROM Element e JOIN FolderContent fc "
                           "ON fc.element_id = e.id WHERE fc.folder_id = ?",
                           folder_param.binds_});
   const auto bindings =
@@ -880,6 +881,7 @@ void ElementStore::RemoveElement(const std::shared_ptr<SleeveElement> element) {
     DeleteSemanticAndAiRowsForFiles(guard.conn_,
                                     std::span<const sl_element_id_t>(&file->element_id_, 1));
     PipelineMapper(guard.conn_).RemoveById(file->element_id_);
+    SourceFileMapper(guard.conn_).RemoveById(file->element_id_);
     FileMapper(guard.conn_).RemoveById(file->element_id_);
     FolderMapper(guard.conn_).RemoveContentById(file->element_id_);
   } else if (element->type_ == ElementType::FOLDER) {
@@ -922,6 +924,7 @@ void ElementStore::RemoveElements(std::span<const std::shared_ptr<SleeveElement>
   if (!file_ids.empty()) {
     DeleteSemanticAndAiRowsForFiles(guard.conn_, file_ids);
     PipelineMapper(guard.conn_).RemoveByIds(file_ids);
+    SourceFileMapper(guard.conn_).RemoveByIds(file_ids);
     FileMapper(guard.conn_).RemoveByIds(file_ids);
     folder_mapper.RemoveContentByIds(file_ids);
   }

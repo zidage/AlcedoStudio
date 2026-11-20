@@ -475,8 +475,9 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
     if (!project_pack::ProjectVersionIsSupported(file_version)) {
       throw std::runtime_error(
           "Incompatible project format: project file version '" + file_version +
-          "' is not supported (required " +
-          std::string(project_pack::kMinSupportedProjectFileVersion) + "). "
+          "' is not supported (supported " +
+          std::string(project_pack::kMinSupportedProjectFileVersion) + " to " +
+          std::string(project_pack::kMaxSupportedProjectFileVersion) + "). "
           "This build does not migrate older history, pipeline, or journal layouts.");
     }
   }

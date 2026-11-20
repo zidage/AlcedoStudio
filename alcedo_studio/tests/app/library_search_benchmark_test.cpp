@@ -343,7 +343,7 @@ void WriteOtherFolderFiles(Storage& storage, int64_t first_id, size_t count) {
   ExecuteBenchmarkSql(
       storage,
       std::format(
-          "INSERT INTO Element SELECT {0} + r, {3}, 'other_' || r, now(), now(), 1 "
+          "INSERT INTO Element SELECT {0} + r, {3}, 'other_' || r, now(), now(), 1, NULL "
           "FROM range({1}) t(r); "
           "INSERT INTO Image (id, file_name) SELECT {0} + r, 'other_' || r FROM range({1}) t(r); "
           "INSERT INTO FileImage SELECT {0} + r, {0} + r FROM range({1}) t(r); "

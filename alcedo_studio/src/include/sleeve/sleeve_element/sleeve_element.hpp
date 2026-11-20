@@ -34,6 +34,11 @@ class SleeveElement {
   uint32_t        ref_count_;
   bool            pinned_;
 
+  /// Id of the mount that holds this element (`Element.mount_id`). Empty for an ordinary
+  /// element. Copy() keeps the value, because a copy-on-write copy replaces the element at
+  /// the same path; FileSystem::DuplicateFileToFolder clears it on the new photo.
+  std::optional<mount_id_t> mount_id_;
+
   SyncFlag        sync_flag_ = SyncFlag::UNSYNC;
 
   explicit SleeveElement(sl_element_id_t id, file_name_t element_name);

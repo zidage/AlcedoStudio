@@ -21,6 +21,9 @@ namespace alcedo {
 #define sleeve_id_t     uint32_t
 #define sl_element_id_t uint32_t
 
+// Used in mounted folders: MountRoot.id and Element.mount_id
+#define mount_id_t      uint32_t
+
 // Used in filters
 #define filter_id_t     uint32_t
 
