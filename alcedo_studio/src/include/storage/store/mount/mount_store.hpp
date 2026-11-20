@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/store/database.hpp"
 #include "type/mount_records.hpp"
 #include "type/type.hpp"
@@ -97,7 +98,19 @@ class MountStore {
   /// Remove the source records of @p element_ids. An element without a record is skipped.
   void RemoveSourceFiles(std::span<const sl_element_id_t> element_ids);
 
+  /// The location of each file element whose `Element.mount_id` is @p mount_id, in ascending
+  /// element id order. A file without an image binding or Image row is absent.
+  auto ReadFileLocationsOfMount(mount_id_t mount_id) const -> std::vector<FileLocationRecord>;
+
+  /// The location of each ordinary file element (`Element.mount_id` is NULL), in ascending
+  /// element id order. The mount scan takes the adoption candidates from it.
+  auto ReadOrdinaryFileLocations() const -> std::vector<FileLocationRecord>;
+
  private:
+  /// The location of each file element that @p condition (on `Element e`) selects.
+  auto ReadFileLocations(const duckorm::SqlFragment& condition) const
+      -> std::vector<FileLocationRecord>;
+
   Database& database_;
 };
 

@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/mapper/mount/mount_root_mapper.hpp"
@@ -31,6 +32,15 @@ constexpr const char* kMountRootColumns =
 constexpr const char* kSourceFileColumns =
     "SELECT s.element_id, s.byte_size, s.modified_ns, s.fingerprint, s.fingerprint_version, "
     "s.state, s.missing_since FROM SourceFile s ";
+
+/// One row of MountStore::ReadFileLocations. `Image.image_path` has no NOT NULL constraint.
+struct FileLocationRow {
+  int64_t                    element_id = 0;
+  int64_t                    image_id   = 0;
+  std::optional<std::string> image_path;
+  using Columns = duckorm::RowColumns<&FileLocationRow::element_id, &FileLocationRow::image_id,
+                                      &FileLocationRow::image_path>;
+};
 
 /// `?` bound to @p text, or `NULL` when @p text is empty.
 auto NullableTextParam(const std::string& text) -> duckorm::SqlFragment {
@@ -219,6 +229,40 @@ void MountStore::RemoveSourceFiles(std::span<const sl_element_id_t> element_ids)
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   SourceFileMapper(guard.conn_).RemoveByIds(element_ids);
+}
+
+auto MountStore::ReadFileLocationsOfMount(mount_id_t mount_id) const
+    -> std::vector<FileLocationRecord> {
+  auto condition = expr::raw("e.mount_id = ");
+  condition.append(expr::param(static_cast<int64_t>(mount_id)));
+  return ReadFileLocations(condition);
+}
+
+auto MountStore::ReadOrdinaryFileLocations() const -> std::vector<FileLocationRecord> {
+  return ReadFileLocations(expr::raw("e.mount_id IS NULL"));
+}
+
+auto MountStore::ReadFileLocations(const duckorm::SqlFragment& condition) const
+    -> std::vector<FileLocationRecord> {
+  auto query = expr::raw(
+      std::format("SELECT e.id, fi.image_id, i.image_path FROM Element e "
+                  "JOIN FileImage fi ON fi.file_id = e.id JOIN Image i ON i.id = fi.image_id "
+                  "WHERE e.type = {} AND ",
+                  static_cast<uint32_t>(ElementType::FILE)));
+  query.append(condition);
+  query.append(expr::raw(" ORDER BY e.id"));
+
+  std::vector<FileLocationRecord> locations;
+  auto                            guard   = database_.GetConnectionGuard();
+  auto                            db_lock = guard.Lock();
+  for (auto& row : duckorm::query<FileLocationRow>(guard.conn_, query)) {
+    locations.push_back(FileLocationRecord{
+        .element_id = static_cast<sl_element_id_t>(row.element_id),
+        .image_id   = static_cast<image_id_t>(row.image_id),
+        .image_path = std::filesystem::path(conv::FromBytes(row.image_path.value_or(""))),
+    });
+  }
+  return locations;
 }
 
 }  // namespace alcedo

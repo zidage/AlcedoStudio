@@ -16,7 +16,15 @@
 
 #include "type/supported_file_type.hpp"
 
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <sys/stat.h>
 #endif
 
@@ -173,6 +181,65 @@ auto ListMountDirectory(const stdfs::path& root, const std::atomic<bool>* stop_r
             });
   std::sort(listing.unreadable_directories.begin(), listing.unreadable_directories.end());
   return listing;
+}
+
+namespace {
+
+/// The elements of @p path after `lexically_normal`, without the empty last element of a path
+/// that ends with a separator.
+auto NormalElements(const stdfs::path& path) -> std::vector<stdfs::path> {
+  std::vector<stdfs::path> elements;
+  for (const auto& element : path.lexically_normal()) {
+    if (!element.empty()) {
+      elements.push_back(element);
+    }
+  }
+  return elements;
+}
+
+auto SamePathElement(const stdfs::path& lhs, const stdfs::path& rhs) -> bool {
+#ifdef _WIN32
+  const auto& left  = lhs.native();
+  const auto& right = rhs.native();
+  return ::CompareStringOrdinal(left.c_str(), static_cast<int>(left.size()), right.c_str(),
+                                static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
+#else
+  return lhs == rhs;
+#endif
+}
+
+/// The number of elements of @p root when @p path starts with them, else empty.
+auto RootElementCount(const std::vector<stdfs::path>& path, const std::vector<stdfs::path>& root)
+    -> std::optional<std::size_t> {
+  if (root.empty() || path.size() < root.size()) {
+    return std::nullopt;
+  }
+  for (std::size_t index = 0; index < root.size(); ++index) {
+    if (!SamePathElement(path[index], root[index])) {
+      return std::nullopt;
+    }
+  }
+  return root.size();
+}
+
+}  // namespace
+
+auto IsPathAtOrBelow(const stdfs::path& path, const stdfs::path& root) -> bool {
+  return RootElementCount(NormalElements(path), NormalElements(root)).has_value();
+}
+
+auto MountRelativePathOf(const stdfs::path& root, const stdfs::path& path)
+    -> std::optional<std::wstring> {
+  const auto path_elements = NormalElements(path);
+  const auto count         = RootElementCount(path_elements, NormalElements(root));
+  if (!count.has_value() || *count == path_elements.size()) {
+    return std::nullopt;
+  }
+  std::wstring relative;
+  for (std::size_t index = *count; index < path_elements.size(); ++index) {
+    relative = JoinRelative(relative, NfcName(path_elements[index].wstring()));
+  }
+  return relative;
 }
 
 }  // namespace alcedo

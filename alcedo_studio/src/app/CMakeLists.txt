@@ -228,6 +228,16 @@ def_library(MountScanChangeList
     PUBLIC_DEPS SourceFileUtils
 )
 
+# Mounted folder service (mounted_folder_plan.md, MF4): create, scan, and remove mounts. New files
+# are imported through the MountFileImporter port (ImportServiceImpl), so this library does not
+# depend on ImportService, which depends on ProjectService through PipelineMgmtService.
+def_library(MountService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/mount_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mount_file_importer.hpp"
+    PUBLIC_DEPS FSService Storage ImagePoolService MountScanChangeList SourceFileUtils StrConv
+)
+
 def_library(SleeveFilterService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_filter_service.cpp"
@@ -407,7 +417,7 @@ def_library(ProjectService
         "${ALCEDO_APP_ROOT}/project_package_backend.cpp"
         "${ALCEDO_APP_ROOT}/project_package_service.cpp"
         "${ALCEDO_SRC_ROOT}/ui/alcedo_main/album_backend/path_utils.cpp"
-    PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService
+    PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService MountService
                 AiSidecarRuntimeService ModelDownloadService SemanticQueryEmbeddingCache
                 StrConv JSON xxHash stduuid EditMaskCore
     PRIVATE_DEPS

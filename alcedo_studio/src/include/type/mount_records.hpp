@@ -63,4 +63,14 @@ struct SourceFileRecord {
   auto                       operator==(const SourceFileRecord&) const -> bool = default;
 };
 
+/// The location of one file element: its image and `Image.image_path`. A read result of
+/// MountStore; the scan compares it with a listing.
+struct FileLocationRecord {
+  sl_element_id_t       element_id = 0;
+  image_id_t            image_id   = 0;
+  std::filesystem::path image_path;
+
+  auto                  operator==(const FileLocationRecord&) const -> bool = default;
+};
+
 }  // namespace alcedo

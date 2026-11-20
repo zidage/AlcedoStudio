@@ -191,6 +191,36 @@ TEST(MountDirectoryListingTest, NamesAreInNormalizationFormC) {
   EXPECT_EQ(RelativePaths(listing.files), (std::vector<std::wstring>{L"Café/é.dng"}));
 }
 
+// Mounted Folder Plan, MF4: the nested mount rule and the adoption input compare whole path
+// elements.
+TEST(MountDirectoryListingTest, PathAtOrBelowComparesWholeElements) {
+  const stdfs::path photos = stdfs::path(L"/volume/Photos");
+  EXPECT_TRUE(IsPathAtOrBelow(photos, photos));
+  EXPECT_TRUE(IsPathAtOrBelow(stdfs::path(L"/volume/Photos/"), photos));
+  EXPECT_TRUE(IsPathAtOrBelow(stdfs::path(L"/volume/Photos/Day1/a.jpg"), photos));
+  EXPECT_TRUE(IsPathAtOrBelow(stdfs::path(L"/volume/Photos/Day1/../Day2"), photos));
+  EXPECT_FALSE(IsPathAtOrBelow(stdfs::path(L"/volume/Photos2"), photos));
+  EXPECT_FALSE(IsPathAtOrBelow(stdfs::path(L"/volume/Photos2/a.jpg"), photos));
+  EXPECT_FALSE(IsPathAtOrBelow(stdfs::path(L"/volume"), photos));
+  EXPECT_FALSE(IsPathAtOrBelow(stdfs::path(L"/volume/Photos/.."), photos));
+#ifdef _WIN32
+  EXPECT_TRUE(IsPathAtOrBelow(stdfs::path(L"d:/photos/Day1"), stdfs::path(L"D:\\Photos")));
+#else
+  EXPECT_FALSE(IsPathAtOrBelow(stdfs::path(L"/volume/photos/Day1"), photos));
+#endif
+}
+
+TEST(MountDirectoryListingTest, RelativePathOfAStoredPathHasTheListingForm) {
+  const stdfs::path root = stdfs::path(L"/volume/Photos");
+  EXPECT_EQ(MountRelativePathOf(root, root / L"Day1" / L"a.jpg"), std::wstring(L"Day1/a.jpg"));
+  EXPECT_EQ(MountRelativePathOf(root, root / L"a.jpg"), std::wstring(L"a.jpg"));
+  // Names with a combining acute accent (normalization form D) give the NFC names of a listing.
+  EXPECT_EQ(MountRelativePathOf(root, root / L"Café" / L"é.dng"), std::wstring(L"Café/é.dng"));
+  EXPECT_EQ(MountRelativePathOf(root, root), std::nullopt);
+  EXPECT_EQ(MountRelativePathOf(root, stdfs::path(L"/volume/Photos2/a.jpg")), std::nullopt);
+  EXPECT_EQ(MountRelativePathOf(root, stdfs::path(L"/volume/a.jpg")), std::nullopt);
+}
+
 TEST(MountDirectoryListingTest, DirectoryLinkCycleEnds) {
   test::TestTempDirectory dir;
   const auto              root = dir / "root";

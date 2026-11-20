@@ -311,6 +311,18 @@ gtest_discover_tests(MountTreeTest TEST_PREFIX "MountTreeTest."
   PROPERTIES LABELS "mounted_folder")
 alcedo_register_test_target(MountTreeTest app)
 
+# Mounted folder service (mounted_folder_plan.md, MF4): real temporary directories and a real
+# project database.
+add_executable(MountServiceTest ${ALCEDO_TEST_ROOT}/app/mount_service_test.cpp)
+target_include_directories(MountServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(MountServiceTest
+  StorageInvariantsTestSupport MountService ImportService ProjectService PipelineMgmtService
+  OpenImageIO::OpenImageIO GTest::gtest_main)
+gtest_discover_tests(MountServiceTest TEST_PREFIX "MountServiceTest."
+  PROPERTIES LABELS "mounted_folder")
+alcedo_copy_duckdb_fts_extension(MountServiceTest)
+alcedo_register_test_target(MountServiceTest app)
+
 add_executable(ImportServiceTest ${ALCEDO_TEST_ROOT}/app/import_service_test.cpp)
 target_include_directories(ImportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ImportServiceTest StorageInvariantsTestSupport ImportService ProjectService GTest::gtest_main)

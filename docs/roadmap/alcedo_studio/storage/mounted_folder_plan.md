@@ -2,8 +2,8 @@
 
 Date: 2026-11-19
 
-Status: **in progress**. MF1 (#983) and MF2 (#984) are implemented. The other phases have no
-implementation evidence.
+Status: **in progress**. MF1 (#983), MF2 (#984), MF3 (#985), and MF4 (#986) are implemented. The
+other phases have no implementation evidence.
 
 Parent: [Roadmap](../../README.md).
 
@@ -366,7 +366,7 @@ stop request
 | MF1 #983 | Mount record, element mount id, source file record | Storage, sleeve element | none | 900 to 1300 | implemented |
 | MF2 #984 | Fingerprint, volume identity, directory listing | Source file utilities | none | 800 to 1200 | implemented |
 | MF3 #985 | Scan change list | Scan change list | MF1, MF2 | 900 to 1400 | implemented |
-| MF4 #986 | Mount service: create, scan, adopt, apply, unmount | Mount service, sleeve service | MF3 | 1400 to 1900 | planned |
+| MF4 #986 | Mount service: create, scan, adopt, apply, unmount | Mount service, sleeve service | MF3 | 1400 to 1900 | implemented |
 | MF5 #987 | Read-only structure | Sleeve service, import, automation | MF1 | 600 to 1000 | planned |
 | MF6 #988 | Library panel and thumbnail states | Library panel, folder controller | MF4, MF5 | 1300 to 1800 | planned |
 | MF7 #989 | Scan triggers | Scan coordinator | MF6 | 700 to 1100 | planned |
@@ -985,15 +985,162 @@ database:
 
 **Exit criteria.**
 
-- [ ] The tests pass in the debug build.
-- [ ] The second scan of an unchanged directory of 2 000 files calls the fingerprint function 0
-      times. The test records the count.
-- [ ] No code path of the service opens a user file for writing.
+- [x] The tests pass in the debug build.
+- [x] The second scan of an unchanged directory of 2 000 files calls the fingerprint function 0
+      times. The test asserts the count and records it as the gtest property
+      `second_scan_fingerprint_reads`.
+- [x] No code path of the service opens a user file for writing. The service opens a file only
+      through `ComputeSourceFileFingerprint` (shared read, MF2); the import reads metadata. Each
+      test scan compares the directory content before and after the scan.
 
 **Expected diff.** 1400 to 1900 lines. If the sleeve operations of step 3 pass 400 lines, move
-them to a separate pull request before the service.
+them to a separate pull request before the service. Actual: about 2 600 added lines, of which
+about 1 100 are tests. The sleeve operations are about 900 lines with their tests, so they are a
+separate pull request: (A) the #795 fix, the `FileSystem` operations, the mount tree, and
+`MountTreeTest`; (B), on top of (A), the service, the importer port, and `MountServiceTest`.
 
-**Completion record.** Section 13 template. Empty.
+**Decisions made during the work.** The plan did not specify these details, or a better approach
+appeared during the work. Each one agrees with the approved decisions.
+
+- Relative path of a mounted file. The library root holds each file under a name that no other
+  file has (`FileSystem::Create` appends `@`), so two files with one name in two directories
+  cannot both have the disk name as their element name. The relative path of a file therefore
+  comes from `Image.image_path` below the root directory (P2: the scan is its only writer). P3
+  applies to folders: a folder name is the directory name. A file element takes the disk name or
+  its first free form `name@`, `name@@`, ... (`FileSystem::RenameFile`); the element name is a
+  display name.
+- No shared transaction. Each store opens its own connection, so the tree (ElementStore through
+  `SleeveServiceImpl::Sync`), `Image.image_path` (ImagePoolService), and the source records
+  (MountStore) cannot share one transaction. Each batch writes them in this order: tree, then
+  `image_path`, then the source records. Each interrupted state is one that the next scan
+  completes:
+  - tree written, `image_path` not: the record is at the old path, so the file is moved again; a
+    placement that is already done changes nothing.
+  - tree and `image_path` written, source record not (or a new file with no record): the scan
+    reads a mounted file with no record as a record with zero values, so the file is changed in
+    place (its record is written) or missing. `MountServiceTest.FileWithoutASourceRecordGets
+    OneFromTheNextScan` drives this state.
+  This replaces the one transaction of steps 3 and 4 and the restore of step 8. A failed sync
+  keeps the changes in memory with their sync flags, and the next sync writes them (the model of
+  `SleeveServiceImpl`), so no reload of a loaded subtree is necessary and no issue was opened.
+- `CreateMount` writes the folder element, then the `MountRoot` row; when the row write fails,
+  the folder is removed again. `RemoveMount` syncs the tree, then removes the row; a removal
+  after an interrupted removal converts the stored files only.
+- Importer port. `ProjectService` owns `MountService`, and `ImportService` depends on
+  `ProjectService` through `PipelineMgmtService`. The scan therefore imports through
+  `MountFileImporter` (`app/mount_file_importer.hpp`), which `ImportServiceImpl` implements with
+  the import of `ImportToFolder` (one placement function for each import; `ImportToFolder` keeps
+  its behavior). The caller passes its import service in `MountScanRequest`, so a new file gets
+  the import defaults of the application.
+- Thumbnail invalidation. `ThumbnailService` is created by the user interface layer, so
+  `MountScanRequest::invalidate_thumbnail` is a callback. It runs after batch 1 for each file
+  that changed in place, moved, or returned (the tile of a returned photo showed the missing
+  state).
+- Offline state. `MountReachability` (`kNotScanned`, `kOnline`, `kOffline`) is held in memory by
+  `MountService`. It is not stored: no schema change; after a reopen a mount is `kNotScanned`
+  until its next scan.
+- Root directory. `CreateMount` stores `std::filesystem::canonical` of the directory (links
+  resolved, the real case on Windows). The nested check and the adoption input compare whole
+  path elements (`IsPathAtOrBelow`, `MountRelativePathOf` in `SourceFileUtils`), without case on
+  Windows; the names below the root keep their spelling.
+- Errors. `MountOperationError` holds a `MountError`: `kNestedMount`, `kParentIsMounted`,
+  `kDirectoryUnreachable`, and also `kParentIsNotAFolder`, `kUnknownMount`, `kStorageFailure`.
+  `ScanMount` returns `MountScanResult` with `kComplete`, `kOffline`, `kCanceled`, or
+  `kStorageFailure`, the failed batch number, the counts, and `fingerprint_read_count`.
+- `MountScanRequest::new_file_batch_size` (default 500) lets a test use small batches. The stop
+  request is read before each new file batch; `last_scan_at` is written only by a complete scan.
+- One mutex serializes `CreateMount`, `ScanMount`, and `RemoveMount`: MF6 calls them from the user
+  interface while a scan runs on a worker. `ListMounts` does not wait for a scan.
+- A missing record is written with `UpsertSourceFiles` and the stored values, so a file with no
+  record can become missing.
+- A new file that the import refuses has no element and no record; the next scan tries it again
+  (`import_failed_count`).
+- `FileSystem` operations added (the minimum set): `CreateFolderIn`, `RenameFile`,
+  `RemoveFolderFrom`; `Delete(id)` and `RemoveFolderFrom` share `ReleaseChildFolders`. The move of
+  a home link uses `UnlinkFileFromFolder` and `LinkFileToFolder`. The tree code is
+  `app/mount_tree` (`ReadMountTree`, `ApplyMountTreeChanges`, `CreateMountRootFolder`,
+  `RemoveMountTree`), with `SleeveServiceImpl` entry points of the same names.
+- A new directory whose name a mounted file of the same folder holds (`name@`) makes that file
+  take the next free name, so the folder keeps the directory name.
+- #795 is fixed here: a moved or adopted file element is a modified element, and its sync threw
+  on the `FileImage` row. `FileMapper::WriteBinding` updates the row, or inserts it when the file
+  has none.
+- Tests added to the plan list: `FailedBatchEndsTheScanAndTheNextScanCompletesIt` (an importer
+  that fails), `FileWithoutASourceRecordGetsOneFromTheNextScan`, `MountTreeTest` (9 cases),
+  `MountStoreTest.FileElementUpdateWritesItsFieldsAndKeepsOneImageBinding` (#795), and the two
+  path helper cases of `MountDirectoryListingTest`. The 2 000-file criterion is
+  `SecondScanOfAnUnchangedDirectoryReadsNoFile`.
+
+**Completion record.**
+
+```text
+Phase / date / status: MF4 / 2026-11-20 / implemented, pull requests open
+Source revision and branch: 3fb1652b5 (MF3, pull request #996) + this phase,
+  feature/mount-tree-operations (A), feature/mount-service (B, on A)
+Actual changed modules: element store (#795), sleeve file system (CreateFolderIn, RenameFile,
+  RemoveFolderFrom), mount tree (app/mount_tree, SleeveServiceImpl entry points), mount store
+  (file location reads), source file utilities (IsPathAtOrBelow, MountRelativePathOf), import
+  service (placement function, MountFileImporter), mount service (new library MountService),
+  project service (GetMountService), tests
+Implemented behavior: CreateMount (canonical root, D12, P4, volume identity, root folder with the
+  mount id, MountRoot row); ScanMount (listing, record read, change list, batch 1: folders,
+  moves, adoption, changes in place, returns, missing; batches of new files through the importer;
+  offline; stop request; storage failure with the batch number); RemoveMount (D11); ListMounts
+Explicitly unimplemented items: none of MF4. The structure check is MF5, the panel MF6, the
+  triggers MF7, locate and removal of missing photos MF8.
+Primary success call chain:
+  MountService::ScanMount -> ListMountDirectory (no lock)
+    -> MountScanRun::ReadRecords: SleeveServiceImpl::ReadMountTree (fs_lock_),
+       MountStore::ReadFileLocationsOfMount / ReadSourceFilesOfMount / ReadOrdinaryFileLocations
+       -> MountRelativePathOf
+    -> BuildMountScanChangeList (fingerprint: ComputeSourceFileFingerprint)
+    -> batch 1: SleeveServiceImpl::ApplyMountTreeChanges (fs_lock_: CreateFolderIn, PlaceFile:
+       Unlink/RenameFile/LinkFileToFolder, RemoveFolder) -> Sync
+       -> ImagePoolService::Write_NoSync (image_path, file name) -> SyncWithStorage
+       -> MountStore::UpsertSourceFiles -> invalidate_thumbnail
+    -> each 500 new files: MountFileImporter::ImportMountedFiles (ImportServiceImpl: StartImport
+       with the mount placement -> metadata and roots -> SyncImports) -> UpsertSourceFiles
+    -> MountStore::UpdateMountLastScanTime -> kComplete
+  MountService::CreateMount -> canonical -> parent and nested checks -> ReadVolumeIdentity
+    -> SleeveServiceImpl::CreateMountRootFolder -> MountStore::InsertMountRoot
+  MountService::RemoveMount -> SleeveServiceImpl::RemoveMountTree (mount id cleared, folders
+    deleted, files stay) -> MountStore::RemoveMountRoot
+Primary failure and restore call chain:
+  root unreachable -> kRootUnreachable -> kOffline, MountReachability::kOffline, no write
+  stop request -> before the next new file batch -> kCanceled; stored batches stay; no
+    last_scan_at; the next scan imports the files with no record
+  storage write fails -> exception in the batch -> kStorageFailure, failed_batch, error; the
+    earlier batches stay; the next scan computes the rest (write order above)
+  CreateMount: refused -> MountOperationError, nothing written; InsertMountRoot fails ->
+    RemoveMountTree of the new folder -> kStorageFailure
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target MountServiceTest MountTreeTest
+    MountStoreTest SourceFileUtilsTest MountScanChangeListTest SleeveServiceTest SleeveFSTest
+    ImportServiceTest ImportContentClassificationTest ProjectServiceTest
+    ProjectCompatibilityTest MapperCrtpRoundtripTest LibraryReferenceModelTest --parallel 8 -> 0
+  Each binary from its _runtime folder (build/tmp/mf4/final_run.ps1)
+  python scripts/check_storage_boundary.py -> no findings
+  Mutation check: the image_path write of batch 1 disabled -> MovedFileKeepsElementIdAndEdit
+    HistoryRootId and RenamedDirectoryKeepsEachElement fail; source restored
+Discovered / passed / failed / skipped counts:
+  MountServiceTest 16/16/0/0; MountTreeTest 9/9/0/0; MountStoreTest 15/15/0/0;
+  SourceFileUtilsTest 19/18/0/1 (SymbolicLinksToFilesAndDirectoriesAreAbsent: this account
+    cannot create a symbolic link); MountScanChangeListTest 21/21/0/0; SleeveServiceTest
+  27/27/0/0; SleeveFSTest 13/13/0/0; ImportServiceTest 15/15/0/0;
+  ImportContentClassificationTest 11/11/0/0; ProjectServiceTest 9/9/0/0;
+  ProjectCompatibilityTest 6/5/1/0; MapperCrtpRoundtripTest 9/9/0/0;
+  LibraryReferenceModelTest 5/5/0/0
+Manual verification: none required by MF4
+Performance or resource evidence, if required: the second scan of 2 000 unchanged files read 0
+  fingerprints. The whole 2 000-file test (2 000 JPEG writes, the import, two scans) ran in
+  about 74 s in the debug build.
+Evidence path: build/tmp/mf4/final_logs/
+Remaining defects or unavailable platforms:
+  ProjectWrittenByCurrentMainOpensAndRendersUnchanged: render hash of the Intel Iris Xe OpenCL
+    device (#993), as in MF1
+  ImagePoolService::Write locks its mutex twice (#811); the tests use Write_NoSync and a sync
+  macOS and Linux builds not run locally; the macOS CI job builds the libraries
+```
 
 ### MF5. Read-only structure of a mounted folder
 
