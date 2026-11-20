@@ -958,6 +958,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryWorkspace.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryInspectorActions.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryMarksControl.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryFolderSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ColorLabelFilterChips.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspace.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspaceNavigation.qml"

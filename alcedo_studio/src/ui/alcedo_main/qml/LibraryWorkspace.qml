@@ -5,6 +5,7 @@ import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
 import "FileDrop.js" as FileDrop
+import "CollectionTree.js" as CollectionTree
 
 // Extracted library/album surface. Layout and behavior match the former Main.qml body.
 Item {
@@ -38,6 +39,51 @@ Item {
     readonly property string dataFontFamily: theme ? theme.dataFontFamily : appTheme.dataFontFamily
     readonly property string headlineFontFamily: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
     readonly property int controlRadius: theme ? theme.controlRadius : 10
+
+    // ── Folder section (issue #1009) ──
+    // A search or a filter selects photos, so it hides the folder section.
+    readonly property bool libraryFilterActive:
+        appModules.search.activeSearchQuery.length > 0
+        || appModules.stats.statsFilterDate.length > 0
+        || appModules.stats.statsFilterImportDate.length > 0
+        || appModules.stats.statsFilterCamera.length > 0
+        || appModules.stats.statsFilterLens.length > 0
+        || appModules.stats.statsFilterLabel.length > 0
+        || appModules.stats.statsFilterRating.length > 0
+    // The direct child folders of the shown folder, in the order of the Collections tree. The
+    // library root shows none: the sidebar lists its top-level collections.
+    readonly property var folderSectionRows: {
+        const folders = appModules.folders
+        const current = folders ? Number(folders.currentFolderId) : 0
+        if (current === 0 || !appModules.project.serviceReady || root.libraryFilterActive) {
+            return []
+        }
+        return CollectionTree.orderRows(folders.folders, false).filter(function(row) {
+            return Number(row.folderId) !== 0 && Number(row.parentFolderId) === current
+        })
+    }
+    // A folder with child folders and no photo shows the folder section alone, in place of the
+    // empty state.
+    readonly property bool folderSectionAlone: folderSectionRows.length > 0
+                                               && appModules.library.shownCount === 0
+                                               && appModules.library.queryError.length === 0
+                                               && !libraryQueryReplacing
+
+    // A click on a folder tile shows that folder; the Collections tree selects and reveals it.
+    function showChildFolder(folderId) {
+        if (appModules.folders && appModules.interactionPolicy.canChangeStateAsUser) {
+            folderActivationGuardTimer.restart()
+            appModules.folders.SelectFolder(Number(folderId))
+        }
+    }
+
+    // A double click on a folder tile: the second click lands on the view of the child folder.
+    // For one double-click interval the photo area takes no click, so that click does not
+    // select or open the photo under the pointer.
+    Timer {
+        id: folderActivationGuardTimer
+        interval: Qt.styleHints.mouseDoubleClickInterval
+    }
 
     function secondaryButtonFill(enabled, hovered, pressed) {
         if (theme && theme.secondaryButtonFill) {
@@ -646,17 +692,52 @@ RowLayout {
                     }
                 }
 
+                MouseArea {
+                    objectName: "libraryFolderActivationGuard"
+                    anchors.fill: parent
+                    z: 10
+                    enabled: folderActivationGuardTimer.running
+                    visible: enabled
+                    acceptedButtons: Qt.AllButtons
+                }
+
+                // Folder with child folders and no photo: the folder section alone, in place
+                // of the empty state.
+                Flickable {
+                    id: folderSectionAloneView
+                    objectName: "libraryFolderSectionAloneView"
+                    anchors.fill: parent
+                    anchors.topMargin: contentViewLoader.anchors.topMargin
+                    visible: root.folderSectionAlone
+                    clip: true
+                    contentWidth: width
+                    contentHeight: folderSectionAlone.height
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                    readonly property var metrics: root.libraryLoadingGridMetrics(width)
+
+                    LibraryFolderSection {
+                        id: folderSectionAlone
+                        width: folderSectionAloneView.width
+                        folders: folderSectionAloneView.visible ? root.folderSectionRows : []
+                        photoCellWidth: Math.max(72, Math.floor(folderSectionAloneView.width
+                            / Math.max(1, folderSectionAloneView.metrics.cols)))
+                        compact: folderSectionAloneView.metrics.cols >= 8
+                        cellPadding: folderSectionAloneView.metrics.cols >= 11
+                                     ? 4 : (folderSectionAloneView.metrics.cols >= 8 ? 6 : 8)
+                        onFolderActivated: function(folderId) { root.showChildFolder(folderId) }
+                    }
+                }
+
                 Column {
-                    readonly property bool hasLibraryFilter:
-                        appModules.search.activeSearchQuery.length > 0
-                        || appModules.stats.statsFilterDate.length > 0
-                        || appModules.stats.statsFilterImportDate.length > 0
-                        || appModules.stats.statsFilterCamera.length > 0
-                        || appModules.stats.statsFilterLens.length > 0
-                        || appModules.stats.statsFilterLabel.length > 0
-                        || appModules.stats.statsFilterRating.length > 0
+                    objectName: "libraryEmptyState"
                     readonly property bool noMatchingPhotos: appModules.project.serviceReady
-                                                             && hasLibraryFilter
+                                                             && root.libraryFilterActive
+                    // A mounted folder takes its photos from its disk directory: no import text.
+                    readonly property bool importTextShown: !noMatchingPhotos
+                                                            && appModules.project.serviceReady
+                                                            && !appModules.folders.currentFolderMounted
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
@@ -666,6 +747,7 @@ RowLayout {
                     visible: appModules.library.shownCount === 0
                              && appModules.library.queryError.length === 0
                              && !root.libraryQueryReplacing
+                             && !root.folderSectionAlone
                     spacing: 8
                     Label {
                         text: parent.noMatchingPhotos ? qsTr("No Matching Photos")
@@ -676,6 +758,9 @@ RowLayout {
                         font.weight: 700
                     }
                     Label {
+                        objectName: "libraryEmptyStateDetail"
+                        visible: parent.noMatchingPhotos || parent.importTextShown
+                                 || !appModules.project.serviceReady
                         text: parent.noMatchingPhotos
                               ? qsTr("Change the filters or the search to show photos.")
                               : appModules.project.serviceReady
@@ -861,6 +946,8 @@ RowLayout {
                 }
             }
             exportQueueById: host.exportQueueById
+            folderSectionRows: root.folderSectionRows
+            onFolderActivated: function(folderId) { root.showChildFolder(folderId) }
             onZoomChanged: function(level) { root.gridZoomLevel = level }
             onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
                 host.selectionState.setImageSelected(elementId, imageId, fileName, isHdr, selected)
@@ -897,6 +984,8 @@ RowLayout {
             zoomAdjusting: zoomSlider.pressed
             geometryAnimating: root.geometryAnimating
             onZoomLevelChanged: root.gridZoomLevel = zoomLevel
+            folderSectionRows: root.folderSectionRows
+            onFolderActivated: function(folderId) { root.showChildFolder(folderId) }
             onContentYChanged: {
                 if (host) {
                     if (host.contentY !== undefined) {
