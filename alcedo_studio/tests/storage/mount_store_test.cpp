@@ -187,14 +187,37 @@ TEST_F(MountStoreTest, ElementMountIdSurvivesProjectReopen) {
   ASSERT_EQ(elements.GetFolderChildren(20).size(), 1u);
   EXPECT_EQ(elements.GetFolderChildren(20).front()->mount_id_, std::nullopt);
 
-  // An update writes the column with the other element fields. The update uses a folder: the
-  // update of a file element throws on its FileImage row (#795).
+  // An update writes the column with the other element fields.
   auto folder       = elements.GetElementById(20);
   folder->mount_id_ = 3;
   elements.UpdateElement(folder);
   Reopen();
   EXPECT_EQ(storage_->GetElementStore().GetElementById(20)->mount_id_,
             std::optional<mount_id_t>{3});
+}
+
+// #795: the update of a file element wrote its FileImage row with an upsert, which DuckDB refuses
+// on a table with no key.
+TEST_F(MountStoreTest, FileElementUpdateWritesItsFieldsAndKeepsOneImageBinding) {
+  AddFolderWithFiles(10, {11, 12}, std::nullopt);
+
+  auto& elements      = storage_->GetElementStore();
+  auto  file          = std::static_pointer_cast<SleeveFile>(elements.GetElementById(11));
+  file->element_name_ = L"IMG_0011_moved.ARW";
+  file->mount_id_     = 4;
+  elements.UpdateElements(std::vector<std::shared_ptr<SleeveElement>>{file});
+  Reopen();
+
+  const auto stored =
+      std::static_pointer_cast<SleeveFile>(storage_->GetElementStore().GetElementById(11));
+  EXPECT_EQ(stored->element_name_, L"IMG_0011_moved.ARW");
+  EXPECT_EQ(stored->mount_id_, std::optional<mount_id_t>{4});
+  // GetElementById reads the binding with FileMapper::GetFileById and gives the image id 0 unless
+  // the file has exactly one FileImage row.
+  EXPECT_EQ(stored->image_id_, 11u);
+  EXPECT_EQ(std::static_pointer_cast<SleeveFile>(storage_->GetElementStore().GetElementById(12))
+                ->image_id_,
+            12u);
 }
 
 TEST_F(MountStoreTest, SourceFileRecordSurvivesProjectReopenAndUpsertReplacesIt) {
