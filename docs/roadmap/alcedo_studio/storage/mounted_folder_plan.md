@@ -2,8 +2,8 @@
 
 Date: 2026-11-19
 
-Status: **in progress**. MF1 is implemented (#983). The other phases have no implementation
-evidence.
+Status: **in progress**. MF1 (#983) and MF2 (#984) are implemented. The other phases have no
+implementation evidence.
 
 Parent: [Roadmap](../../README.md).
 
@@ -364,7 +364,7 @@ stop request
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | MF1 #983 | Mount record, element mount id, source file record | Storage, sleeve element | none | 900 to 1300 | implemented |
-| MF2 #984 | Fingerprint, volume identity, directory listing | Source file utilities | none | 800 to 1200 | planned |
+| MF2 #984 | Fingerprint, volume identity, directory listing | Source file utilities | none | 800 to 1200 | implemented |
 | MF3 #985 | Scan change list | Scan change list | MF1, MF2 | 900 to 1400 | planned |
 | MF4 #986 | Mount service: create, scan, adopt, apply, unmount | Mount service, sleeve service | MF3 | 1400 to 1900 | planned |
 | MF5 #987 | Read-only structure | Sleeve service, import, automation | MF1 | 600 to 1000 | planned |
@@ -611,13 +611,122 @@ file locked by another process -> fingerprint error -> caller counts the file as
 
 **Exit criteria.**
 
-- [ ] The tests pass on Windows in the debug build.
-- [ ] The macOS and Linux sources compile in CI.
-- [ ] No function of this phase opens a file for writing.
+- [x] The tests pass on Windows in the debug build.
+- [x] The macOS and Linux sources compile. The repository has no Linux CI job, so the Linux
+      build ran in WSL (Arch Linux, GCC 16). The macOS build ran on an Apple Silicon Mac (Apple
+      clang 17). The macOS CI job builds and runs `SourceFileUtilsTest` through
+      `alcedo_tests_ci_core`.
+- [x] No function of this phase opens a file for writing. The fingerprint opens with
+      `GENERIC_READ` or `O_RDONLY`; the listing and the volume identity open no file.
 
-**Expected diff.** 800 to 1200 lines.
+**Expected diff.** 800 to 1200 lines. Actual: 1 314 added lines in 13 files, of which 571 are
+tests.
 
-**Completion record.** Section 13 template. Empty.
+**Decisions made during the work.** The plan did not specify these details. Each one agrees with
+the approved decisions.
+
+- File type rule: a listed file is a regular file whose extension has an import category
+  (`CategoryForPath` is not `ImportFileCategory::Other`): RAW, JPEG, TIFF, PNG, and OpenEXR. This
+  is the rule of the folder import (`FolderImportScanModel`, `library.import`). The plan named
+  `is_supported_file`, but that function accepts RAW extensions only and runs one `stat` for each
+  file.
+- The names of section 6.1 are kept. The functions are in the static library `SourceFileUtils`
+  (`utils/CMakeLists.txt`). Qt Core is a private dependency for the NFC conversion
+  (`QString::normalized`); the headers have no Qt include. A name with ASCII characters only is
+  not converted.
+- `MountDirectoryListing.status` replaces the reachable flag of section 5.2:
+  `kComplete`, `kRootUnreachable`, or `kStopped`. A stopped listing is empty, so a caller cannot
+  compare a part of a tree.
+- The stop request is `const std::atomic<bool>*` (null for no request), the type of the folder
+  import scan.
+- A relative path is `std::wstring` with `/`, the type of the element names (`file_name_t`). The
+  root directory is not in `directories`. `unreadable_directories` holds each directory that
+  could not be opened or that holds an entry whose type or attributes could not be read; an
+  empty path names the root.
+- The period rule applies to files too. This removes the macOS AppleDouble files (`._name.ARW`).
+- Skipped link types: `file_type::symlink` and the MSVC `file_type::junction`, read without a
+  follow of the link. Other reparse points (cloud placeholder files, deduplicated files) report
+  their target type and are listed.
+- `modified_ns`: on Windows the directory entry holds the size and the time from the directory
+  read; the MSVC file clock counts 100 ns ticks from 1601-01-01. On POSIX one `lstat` reads both
+  values, because the directory entry runs one `stat` for each value.
+- Fingerprint errors: `kCannotOpen`, `kReadFailed`, `kSizeChangedDuringRead`. A short read with
+  a different size after the read reports `kSizeChangedDuringRead`. The fingerprint opens the
+  file with the platform API and shares read, write, and delete access, so the user can rename or
+  delete the file in the file manager during a scan (D1). A standard stream on Windows does not
+  share delete access.
+- Volume identity on Windows: `GetVolumePathNameW`, then the volume GUID path for a local volume.
+  A network volume (`GetDriveTypeW` is `DRIVE_REMOTE`) gives `\\server\share` in lower case,
+  from the UNC path or from `WNetGetConnectionW` for a mapped drive. A mapped drive and its UNC
+  path thus have one identity.
+- Test target: one executable `SourceFileUtilsTest` with the three suites, labels `ci_core_flow`
+  and `mounted_folder`, categories `core` and `ci_core`.
+- Tests added to the plan list: `MissingFileOrDirectoryReportsCannotOpen`,
+  `ReadOnlyFileHasFingerprintAndKeepsItsModificationTime`,
+  `FileLockedByAnotherHandleReportsCannotOpen` (Windows),
+  `ModificationTimeIsNanosecondsSinceTheUnixEpoch`, `NamesAreInNormalizationFormC`,
+  `SymbolicLinksToFilesAndDirectoriesAreAbsent`, `StopRequestEndsTheListingWithNoEntries`,
+  `UnreadableSubdirectoryIsReportedAndTheRestIsListed` (POSIX),
+  `TenThousandFilesAreListedWhileNoFileCanBeOpened`, `MissingDirectoryHasEmptyIdentity`.
+- `DirectoryLinkCycleEnds` uses an NTFS junction on Windows, which needs no privilege, and a
+  symbolic link elsewhere. The 10 000-file test locks each file against every other open
+  (Windows: a handle with no share flags; POSIX: no read permission), and the listing still
+  returns each file with its byte size.
+
+**Completion record.**
+
+```text
+Phase / date / status: MF2 / 2026-11-20 / implemented, pull request open
+Source revision and branch: 0d1d37412 (MF1, pull request #994) + this phase,
+  feature/mount-source-file-utilities
+Actual changed modules: source file utilities (new library SourceFileUtils under utils/file),
+  utility tests (SourceFileUtilsTest)
+Implemented behavior: ComputeSourceFileFingerprint (version 1, XXH3-128 of the byte size, the
+  first 128 KiB, and the last 128 KiB; a file of 256 KiB or less in full); ReadVolumeIdentity
+  (Windows volume GUID path or network share, macOS volume UUID, Linux /dev/disk/by-uuid name;
+  empty when the volume has none); ListMountDirectory (directories and supported image files,
+  byte size and modification time, NFC names, sorted; no link, junction, or period entry; a named
+  status for an unreachable root and for a stop request)
+Explicitly unimplemented items: none of MF2. The comparison is MF3.
+Primary success call chain:
+  ListMountDirectory(root, stop) -> is_directory(root) -> explicit directory stack
+    -> directory_iterator -> symlink_status (no follow) -> CategoryForPath
+    -> ReadFileAttributes (cached entry on Windows, one lstat on POSIX) -> NfcName
+    -> sorted directories[] and files[](relative path, byte size, modified_ns), kComplete
+  ComputeSourceFileFingerprint(path) -> ReadOnlySourceFile (shared read) -> size
+    -> read head block and tail block -> size check -> Hash128::Compute
+    -> SourceFileFingerprint{hash, 1}
+  ReadVolumeIdentity(dir) -> GetVolumePathNameW -> GetVolumeNameForVolumeMountPointW
+    | NSURLVolumeUUIDStringKey | /dev/disk/by-uuid st_rdev == st_dev -> identity text
+Primary failure and restore call chain:
+  root removed or not a directory -> ListMountDirectory -> kRootUnreachable, empty lists
+    -> the caller makes no comparison (D5)
+  subdirectory cannot be opened -> unreadable_directories[] -> the rest of the tree is listed
+  stop request -> kStopped, empty lists
+  file locked or removed -> kCannotOpen; file shortened during the read ->
+    kSizeChangedDuringRead -> the caller counts the file as unreadable (MF3)
+  volume without identity or missing directory -> empty identity
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target SourceFileUtilsTest
+    --parallel 4 -> 0
+  ctest --test-dir build/debug -R "SourceFileFingerprintTest|MountDirectoryListingTest|
+    VolumeIdentityTest" -> 0
+  Linux (WSL alcedo-arch, GCC 16.2.1, Qt 6.12, gtest 1.18): g++ -std=c++20 -Wall -Wextra of
+    the three sources and the three test files -> 0; test binary -> 0
+  macOS (Apple clang 17, Homebrew Qt and xxHash, gtest of build/macos-debug): clang++ of the
+    sources, the .mm with -fobjc-arc, and the tests -> 0; test binary -> 0
+Discovered / passed / failed / skipped counts:
+  Windows debug: 17 / 16 / 0 / 1 (SymbolicLinksToFilesAndDirectoriesAreAbsent: this account
+    cannot create a symbolic link; the junction cycle test ran)
+  Linux: 17 / 17 / 0 / 0; macOS: 17 / 17 / 0 / 0
+Manual verification: none required by MF2
+Performance or resource evidence, if required: not required. The 10 000-file listing test ran in
+  7.9 s on Windows debug, most of it file creation and locks.
+Evidence path: build/tmp/mf2/ (removed at the end of the task)
+Remaining defects or unavailable platforms: no Linux CI job exists; the macOS CI result is on the
+  pull request. A network share, a mapped drive, and a Windows mount folder were not tested,
+  because the test account has no share and no second volume.
+```
 
 ### MF3. Scan change list
 

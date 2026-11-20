@@ -49,3 +49,14 @@ target_link_libraries(LutMetadataTest PRIVATE LutMetadata JSON GTest::gtest_main
 gtest_discover_tests(LutMetadataTest TEST_PREFIX "LutMetadataTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(LutMetadataTest core ci_core)
+
+# Mounted folder source file utilities (mounted_folder_plan.md, MF2): fingerprint, volume
+# identity, and directory listing on real temporary directories.
+add_executable(SourceFileUtilsTest
+    ${ALCEDO_TEST_ROOT}/utils/source_file_fingerprint_test.cpp
+    ${ALCEDO_TEST_ROOT}/utils/mount_directory_listing_test.cpp
+    ${ALCEDO_TEST_ROOT}/utils/volume_identity_test.cpp)
+target_include_directories(SourceFileUtilsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(SourceFileUtilsTest PRIVATE SourceFileUtils GTest::gtest_main)
+gtest_discover_tests(SourceFileUtilsTest PROPERTIES LABELS "ci_core_flow;mounted_folder")
+alcedo_register_test_target(SourceFileUtilsTest core ci_core)
