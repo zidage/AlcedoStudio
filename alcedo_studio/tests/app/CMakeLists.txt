@@ -10,6 +10,15 @@ gtest_discover_tests(UpdateManifestTest TEST_PREFIX "UpdateManifestTest."
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(UpdateManifestTest app ci_core)
 
+# Mounted folder scan change list (mounted_folder_plan.md, MF3): each rule of section 2.4 on a
+# fake directory listing and a fake fingerprint function.
+add_executable(MountScanChangeListTest ${ALCEDO_TEST_ROOT}/app/mount_scan_change_list_test.cpp)
+target_include_directories(MountScanChangeListTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(MountScanChangeListTest PRIVATE MountScanChangeList GTest::gtest_main)
+gtest_discover_tests(MountScanChangeListTest TEST_PREFIX "MountScanChangeListTest."
+    PROPERTIES LABELS "ci_core_flow;mounted_folder")
+alcedo_register_test_target(MountScanChangeListTest app ci_core)
+
 add_executable(LutPackageManifestTest ${ALCEDO_TEST_ROOT}/app/lut_package_manifest_test.cpp)
 target_include_directories(LutPackageManifestTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(LutPackageManifestTest PRIVATE LutPackageManifest

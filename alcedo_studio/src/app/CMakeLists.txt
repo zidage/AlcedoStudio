@@ -218,6 +218,15 @@ def_library(FSService
     PUBLIC_DEPS SleeveFS PipelineHistory
 )
 
+# Mounted folder scan change list (mounted_folder_plan.md, MF3): compares the records of one
+# mount with a directory listing. No storage, sleeve service, or Qt dependency.
+def_library(MountScanChangeList
+    SOURCES
+        "${ALCEDO_APP_ROOT}/mount_scan_change_list.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mount_scan_change_list.hpp"
+    PUBLIC_DEPS SourceFileUtils
+)
+
 def_library(SleeveFilterService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_filter_service.cpp"
