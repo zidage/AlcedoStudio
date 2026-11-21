@@ -10,11 +10,13 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -215,6 +217,95 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
                                        const image_path_t& dest, const ImportOptions& options,
                                        std::shared_ptr<ImportJob> job)
     -> std::shared_ptr<ImportJob> {
+  StartImport(
+      paths,
+      [dest](FileSystem&        fs, std::size_t,
+             const file_name_t& file_name) -> std::shared_ptr<SleeveElement> {
+        std::shared_ptr<SleeveElement> target;
+        if (!IsRootImportDestination(dest)) {
+          target = fs.Get(dest, false);
+          if (!target || target->type_ != ElementType::FOLDER) {
+            throw std::runtime_error("ImportService: import target is not a folder");
+          }
+        }
+        auto file = fs.CreateFileInLibrary(file_name);
+        if (target) {
+          fs.LinkFileToFolder(file->element_id_, target->element_id_);
+        }
+        return file;
+      },
+      options, job);
+  return job;
+}
+
+auto ImportServiceImpl::ImportMountedFiles(std::span<const MountFileImportRequest> requests)
+    -> std::vector<MountFileImportOutcome> {
+  std::vector<MountFileImportOutcome> outcomes(requests.size());
+  if (requests.empty()) {
+    return outcomes;
+  }
+  std::vector<image_path_t> paths;
+  paths.reserve(requests.size());
+  for (const auto& request : requests) {
+    paths.push_back(request.path);
+  }
+  std::vector<MountFileImportRequest> placements(requests.begin(), requests.end());
+
+  auto                                job = std::make_shared<ImportJob>();
+  std::promise<ImportResult>          finished;
+  auto                                finished_future = finished.get_future();
+  job->on_finished_ = [&finished](const ImportResult& result) { finished.set_value(result); };
+  StartImport(
+      paths,
+      [placements = std::move(placements)](
+          FileSystem& fs, std::size_t index,
+          const file_name_t& file_name) -> std::shared_ptr<SleeveElement> {
+        const auto& request = placements.at(index);
+        auto        file    = fs.CreateFileInLibrary(file_name);
+        file->mount_id_     = request.mount_id;
+        try {
+          fs.LinkFileToFolder(file->element_id_, request.home_folder_id);
+        } catch (...) {
+          fs.DeleteFileEverywhere(file->element_id_);
+          throw;
+        }
+        return file;
+      },
+      ImportOptions{}, job);
+  finished_future.wait();
+
+  const auto snapshot = job->import_log_->Snapshot();
+  SyncImports(snapshot, L"");
+
+  // SyncImports removed the element of each failed file; each other placeholder is stored.
+  std::unordered_map<image_path_t::string_type, std::string> failed;
+  for (const auto& entry : snapshot.metadata_failed_) {
+    failed.emplace(entry.source_path_.native(), entry.error_message_.empty()
+                                                    ? std::string("metadata read failed")
+                                                    : entry.error_message_);
+  }
+  std::unordered_map<image_path_t::string_type, sl_element_id_t> stored;
+  for (const auto& entry : snapshot.created_) {
+    if (!failed.contains(entry.source_path_.native())) {
+      stored.emplace(entry.source_path_.native(), entry.element_id_);
+    }
+  }
+  for (std::size_t index = 0; index < requests.size(); ++index) {
+    const auto& key = requests[index].path.native();
+    if (const auto it = stored.find(key); it != stored.end()) {
+      outcomes[index].element_id = it->second;
+    } else if (const auto failure = failed.find(key); failure != failed.end()) {
+      outcomes[index].error = failure->second;
+    } else {
+      outcomes[index].error = "the file is not a regular file, or its element was not created";
+    }
+  }
+  return outcomes;
+}
+
+void ImportServiceImpl::StartImport(const std::vector<image_path_t>& paths, FilePlacement placement,
+                                    const ImportOptions&              options,
+                                    const std::shared_ptr<ImportJob>& job) {
   auto import_log = std::make_shared<ImportLog>();
   if (job) {
     job->import_log_ = import_log;
@@ -230,25 +321,24 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
   if (paths.empty()) {
     // Immediately finish
     SetImportResult(job, ImportResult{});
-    return job;
+    return;
   }
 
   // One look for the whole import: a settings change while the import runs reaches the next
   // import, so the images of one import share one root look. The metadata tasks share this
   // immutable value until the last of them finishes.
   auto raw_import_look = std::make_shared<const RawImportLook>(raw_import_look_source_->Read());
-  submission_thread_.Submit([this, paths, dest, job, import_log, progress_ptr,
-                             allowed   = options.allowed_categories_,
-                             any_paths = options.any_category_paths_,
+  submission_thread_.Submit([this, paths, placement = std::move(placement), job, import_log,
+                             progress_ptr, allowed = options.allowed_categories_,
+                             any_paths       = options.any_category_paths_,
                              raw_import_look = std::move(raw_import_look)]() {
-    CreatePlaceholdersAndSubmit(paths, dest, job, import_log, progress_ptr, allowed, any_paths,
+    CreatePlaceholdersAndSubmit(paths, placement, job, import_log, progress_ptr, allowed, any_paths,
                                 raw_import_look);
   });
-  return job;
 }
 
 void ImportServiceImpl::CreatePlaceholdersAndSubmit(
-    const std::vector<image_path_t>& paths, const image_path_t& dest,
+    const std::vector<image_path_t>& paths, const FilePlacement& placement,
     const std::shared_ptr<ImportJob>& job, const std::shared_ptr<ImportLog>& import_log,
     const std::shared_ptr<ImportProgress>& progress_ptr, ImportCategoryMask allowed_categories,
     const ImportPathSet&                        any_category_paths,
@@ -268,6 +358,7 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     if (job && job->IsCancelled()) {
       break;
     }
+    const std::size_t file_index = files_reached;
     ++files_reached;
     const bool      raw_extension = IsRawExtension(image_path);
     // Validate that the path is a regular file. File-type detection is deferred
@@ -284,19 +375,8 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     std::shared_ptr<SleeveElement> element = nullptr;
     try {
       element = fs_service_->Write_NoSync<std::shared_ptr<SleeveElement>>(
-          [&dest, &file_name](FileSystem& fs) {
-            std::shared_ptr<SleeveElement> target;
-            if (!IsRootImportDestination(dest)) {
-              target = fs.Get(dest, false);
-              if (!target || target->type_ != ElementType::FOLDER) {
-                throw std::runtime_error("ImportService: import target is not a folder");
-              }
-            }
-            auto file = fs.CreateFileInLibrary(file_name);
-            if (target) {
-              fs.LinkFileToFolder(file->element_id_, target->element_id_);
-            }
-            return file;
+          [&placement, file_index, &file_name](FileSystem& fs) {
+            return placement(fs, file_index, file_name);
           });
     } catch (...) {
       CountFailedFile(*progress_ptr, raw_extension);

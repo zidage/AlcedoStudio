@@ -1,0 +1,516 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#include "app/mount_service.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <ctime>
+#include <exception>
+#include <format>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <system_error>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "app/mount_scan_change_list.hpp"
+#include "app/mount_tree.hpp"
+#include "image/image.hpp"
+#include "sleeve/sleeve_element/sleeve_element.hpp"
+#include "utils/clock/time_provider.hpp"
+#include "utils/file/mount_directory_listing.hpp"
+#include "utils/file/source_file_fingerprint.hpp"
+#include "utils/file/volume_identity.hpp"
+#include "utils/string/convert.hpp"
+
+namespace alcedo {
+namespace {
+
+namespace stdfs = std::filesystem;
+
+auto NowUtc() -> std::time_t { return std::chrono::system_clock::to_time_t(TimeProvider::Now()); }
+
+/// The parent directory of a relative path; empty for a file of the mount root.
+auto ParentDirectory(const std::wstring& relative_path) -> std::wstring {
+  const auto separator = relative_path.rfind(L'/');
+  return separator == std::wstring::npos ? std::wstring{} : relative_path.substr(0, separator);
+}
+
+auto LastName(const std::wstring& relative_path) -> std::wstring {
+  const auto separator = relative_path.rfind(L'/');
+  return separator == std::wstring::npos ? relative_path : relative_path.substr(separator + 1);
+}
+
+/// The root directory plus a relative path, with the separator of the platform.
+auto PathBelowRoot(const stdfs::path& root, const std::wstring& relative_path) -> stdfs::path {
+  stdfs::path path  = root;
+  std::size_t begin = 0;
+  while (true) {
+    const auto separator = relative_path.find(L'/', begin);
+    path /= relative_path.substr(
+        begin, separator == std::wstring::npos ? std::wstring::npos : separator - begin);
+    if (separator == std::wstring::npos) {
+      return path;
+    }
+    begin = separator + 1;
+  }
+}
+
+auto PresentRecord(sl_element_id_t element_id, const MountScanSourceValues& values)
+    -> SourceFileRecord {
+  SourceFileRecord record;
+  record.element_id          = element_id;
+  record.byte_size           = values.byte_size;
+  record.modified_ns         = values.modified_ns;
+  record.fingerprint         = values.fingerprint.hash;
+  record.fingerprint_version = values.fingerprint.version;
+  record.state               = SourceFileState::kPresent;
+  return record;
+}
+
+/// One stored mounted file of the scan: its image and its source record.
+struct ScannedFile {
+  image_id_t       image_id = 0;
+  /// The stored record, or a record with zero values when a batch stopped before the record was
+  /// written. A zero record matches no listed file, so the file is changed in place or missing.
+  SourceFileRecord source;
+};
+
+/**
+ * @brief One run of ScanMount for one mount: the record read, the comparison, and the batches.
+ *
+ * The run lives inside ScanMount and holds the point-in-time inputs of the scan. It changes the
+ * tree only through SleeveServiceImpl, `Image.image_path` only through ImagePoolService, and the
+ * source records only through MountStore.
+ */
+class MountScanRun {
+ public:
+  MountScanRun(Storage& storage, SleeveServiceImpl& sleeve_service,
+               ImagePoolService& image_pool_service, const MountRootRecord& mount,
+               const MountScanRequest& request, MountScanResult& result)
+      : mounts_(storage.GetMountStore()),
+        sleeve_service_(sleeve_service),
+        image_pool_service_(image_pool_service),
+        mount_(mount),
+        request_(request),
+        result_(result) {}
+
+  void Execute(const MountDirectoryListing& listing) {
+    const auto records = ReadRecords();
+    const auto changes =
+        BuildMountScanChangeList(records, listing, [this](const MountDirectoryFile& file) {
+          ++result_.fingerprint_read_count;
+          return ComputeSourceFileFingerprint(PathBelowRoot(mount_.root_path, file.relative_path));
+        });
+    result_.unchanged_count     = changes.unchanged_count;
+    result_.still_missing_count = changes.still_missing_count;
+    result_.unreadable_count    = changes.unreadable_count;
+    result_.unverified_count    = changes.unverified_count;
+    result_.deferred_count      = changes.deferred_count;
+
+    batch_                      = 1;
+    ApplyFirstBatch(changes);
+    ReportProgress(changes.new_files.size(), 0);
+    if (!ImportNewFiles(changes.new_files)) {
+      result_.status = MountScanStatus::kCanceled;
+      return;
+    }
+    mounts_.UpdateMountLastScanTime(mount_.id, NowUtc());
+    result_.status = MountScanStatus::kComplete;
+  }
+
+  [[nodiscard]] auto Batch() const -> std::size_t { return batch_; }
+
+ private:
+  /// The stored state of the mount in the form of the comparison (Mounted Folder Plan, MF3).
+  auto ReadRecords() -> MountScanRecords {
+    MountScanRecords records;
+    const auto       tree = sleeve_service_.ReadMountTree(mount_.root_folder_id, mount_.id);
+    for (const auto& folder : tree.folders) {
+      records.folders.push_back(MountScanFolderRecord{folder.folder_id, folder.relative_path});
+    }
+
+    std::unordered_map<sl_element_id_t, SourceFileRecord> sources;
+    for (auto& source : mounts_.ReadSourceFilesOfMount(mount_.id)) {
+      sources.emplace(source.element_id, std::move(source));
+    }
+    for (const auto& location : mounts_.ReadFileLocationsOfMount(mount_.id)) {
+      // `Image.image_path` is the location of the file (P2). A path that is not below the root
+      // (a stored state that the scan did not write) gets a key that no listed path has, so the
+      // file is moved or missing.
+      auto relative_path = MountRelativePathOf(mount_.root_path, location.image_path)
+                               .value_or(L"/" + location.image_path.generic_wstring());
+      SourceFileRecord source;
+      source.element_id = location.element_id;
+      if (const auto it = sources.find(location.element_id); it != sources.end()) {
+        source = it->second;
+      }
+      files_.emplace(location.element_id, ScannedFile{location.image_id, source});
+      records.files.push_back(
+          MountScanFileRecord{location.element_id, std::move(relative_path), std::move(source)});
+    }
+
+    for (const auto& location : mounts_.ReadOrdinaryFileLocations()) {
+      if (auto relative_path = MountRelativePathOf(mount_.root_path, location.image_path)) {
+        ordinary_images_.emplace(location.element_id, location.image_id);
+        records.ordinary_files.push_back(
+            MountScanOrdinaryFile{location.element_id, std::move(*relative_path)});
+      }
+    }
+    return records;
+  }
+
+  /// Folder changes, moved, adopted, changed, returned, and missing files: the tree, then
+  /// `Image.image_path`, then the source records.
+  void ApplyFirstBatch(const MountScanChangeList& changes) {
+    MountTreeChanges tree_changes;
+    tree_changes.mount_id       = mount_.id;
+    tree_changes.root_folder_id = mount_.root_folder_id;
+    tree_changes.folders_to_add = changes.folders_to_add;
+    for (const auto& folder : changes.folders_to_remove) {
+      tree_changes.folders_to_remove.push_back(folder.relative_path);
+    }
+    const auto place = [&tree_changes](sl_element_id_t file_id, const std::wstring& path) {
+      tree_changes.placements.push_back(
+          MountTreeFilePlacement{file_id, ParentDirectory(path), LastName(path)});
+    };
+    for (const auto& move : changes.moved) {
+      place(move.element_id, move.relative_path);
+    }
+    for (const auto& adoption : changes.adopted) {
+      place(adoption.element_id, adoption.relative_path);
+    }
+    for (const auto& returned : changes.returned) {
+      place(returned.element_id, returned.relative_path);
+    }
+    if (!tree_changes.folders_to_add.empty() || !tree_changes.placements.empty() ||
+        !tree_changes.folders_to_remove.empty()) {
+      RequireSynced(sleeve_service_.ApplyMountTreeChanges(tree_changes));
+    }
+
+    std::vector<std::pair<image_id_t, std::wstring>> locations;
+    for (const auto& move : changes.moved) {
+      locations.emplace_back(files_.at(move.element_id).image_id, move.relative_path);
+    }
+    for (const auto& adoption : changes.adopted) {
+      locations.emplace_back(ordinary_images_.at(adoption.element_id), adoption.relative_path);
+    }
+    WriteImageLocations(locations);
+
+    std::vector<SourceFileRecord> sources;
+    for (const auto& update : changes.changed_in_place) {
+      sources.push_back(PresentRecord(update.element_id, update.values));
+    }
+    for (const auto& update : changes.returned) {
+      sources.push_back(PresentRecord(update.element_id, update.values));
+    }
+    for (const auto& update : changes.adopted) {
+      sources.push_back(PresentRecord(update.element_id, update.values));
+    }
+    for (const auto& move : changes.moved) {
+      sources.push_back(PresentRecord(move.element_id, move.values));
+    }
+    const auto missing_since = NowUtc();
+    for (const auto& missing : changes.missing) {
+      auto record          = files_.at(missing.element_id).source;
+      record.state         = SourceFileState::kMissing;
+      record.missing_since = missing_since;
+      sources.push_back(std::move(record));
+    }
+    mounts_.UpsertSourceFiles(sources);
+
+    result_.moved_count            = changes.moved.size();
+    result_.adopted_count          = changes.adopted.size();
+    result_.changed_in_place_count = changes.changed_in_place.size();
+    result_.returned_count         = changes.returned.size();
+    result_.missing_count          = changes.missing.size();
+    result_.folders_added_count    = changes.folders_to_add.size();
+    result_.folders_removed_count  = changes.folders_to_remove.size();
+
+    if (request_.invalidate_thumbnail) {
+      for (const auto& update : changes.changed_in_place) {
+        request_.invalidate_thumbnail(update.element_id);
+      }
+      for (const auto& move : changes.moved) {
+        request_.invalidate_thumbnail(move.element_id);
+      }
+      for (const auto& update : changes.returned) {
+        request_.invalidate_thumbnail(update.element_id);
+      }
+    }
+  }
+
+  /// `Image.image_path` and the file name of each image of @p locations, in one pool sync.
+  void WriteImageLocations(const std::vector<std::pair<image_id_t, std::wstring>>& locations) {
+    if (locations.empty()) {
+      return;
+    }
+    for (const auto& [image_id, relative_path] : locations) {
+      auto path = PathBelowRoot(mount_.root_path, relative_path);
+      auto name = LastName(relative_path);
+      image_pool_service_.Write_NoSync<void>(image_id,
+                                             [&path, &name](const std::shared_ptr<Image>& image) {
+                                               image->image_path_ = path;
+                                               image->image_name_ = name;
+                                             });
+    }
+    const auto status = image_pool_service_.SyncWithStorage();
+    if (!status.failed_images_.empty()) {
+      const auto& failure = status.failed_images_.front();
+      throw std::runtime_error(std::format("MountService: the Image row {} was not written: {}",
+                                           failure.image_id_, failure.message_));
+    }
+  }
+
+  /// Import the new files in batches. Returns false when the stop request ended the scan.
+  auto ImportNewFiles(const std::vector<MountScanNewFile>& new_files) -> bool {
+    if (new_files.empty()) {
+      return true;
+    }
+    std::unordered_map<std::wstring, sl_element_id_t> folder_at{{L"", mount_.root_folder_id}};
+    for (const auto& folder :
+         sleeve_service_.ReadMountTree(mount_.root_folder_id, mount_.id).folders) {
+      folder_at.emplace(folder.relative_path, folder.folder_id);
+    }
+
+    const auto batch_size = std::max<std::size_t>(1, request_.new_file_batch_size);
+    for (std::size_t begin = 0; begin < new_files.size(); begin += batch_size) {
+      if (request_.stop_requested && request_.stop_requested->load()) {
+        return false;
+      }
+      ++batch_;
+      const auto                           end = std::min(new_files.size(), begin + batch_size);
+      std::vector<MountFileImportRequest>  requests;
+      std::vector<const MountScanNewFile*> files;
+      for (std::size_t index = begin; index < end; ++index) {
+        const auto& file   = new_files[index];
+        const auto  folder = folder_at.find(ParentDirectory(file.relative_path));
+        if (folder == folder_at.end()) {
+          ++result_.import_failed_count;
+          continue;
+        }
+        requests.push_back(MountFileImportRequest{
+            PathBelowRoot(mount_.root_path, file.relative_path), folder->second, mount_.id});
+        files.push_back(&file);
+      }
+
+      const auto                    outcomes = request_.importer->ImportMountedFiles(requests);
+      std::vector<SourceFileRecord> sources;
+      for (std::size_t index = 0; index < outcomes.size(); ++index) {
+        if (outcomes[index].element_id.has_value()) {
+          sources.push_back(PresentRecord(*outcomes[index].element_id, files[index]->values));
+        } else {
+          ++result_.import_failed_count;
+        }
+      }
+      mounts_.UpsertSourceFiles(sources);
+      result_.imported_count += sources.size();
+      ReportProgress(new_files.size(), end);
+    }
+    return true;
+  }
+
+  void ReportProgress(std::size_t total, std::size_t done) const {
+    if (request_.on_progress) {
+      request_.on_progress(MountScanProgress{total, done});
+    }
+  }
+
+  static void RequireSynced(const SyncResult& sync) {
+    if (!sync.success_) {
+      throw std::runtime_error("MountService: the sleeve tree was not written: " + sync.message_);
+    }
+  }
+
+  MountStore&                                      mounts_;
+  SleeveServiceImpl&                               sleeve_service_;
+  ImagePoolService&                                image_pool_service_;
+  const MountRootRecord&                           mount_;
+  const MountScanRequest&                          request_;
+  MountScanResult&                                 result_;
+  std::size_t                                      batch_ = 0;
+  std::unordered_map<sl_element_id_t, ScannedFile> files_;
+  std::unordered_map<sl_element_id_t, image_id_t>  ordinary_images_;
+};
+
+auto MountRootName(const stdfs::path& root) -> file_name_t {
+  if (auto name = root.filename().wstring(); !name.empty()) {
+    return name;
+  }
+  if (auto name = root.root_name().wstring(); !name.empty()) {
+    return name;
+  }
+  return root.wstring();
+}
+
+}  // namespace
+
+MountService::MountService(std::shared_ptr<Storage>           storage,
+                           std::shared_ptr<SleeveServiceImpl> sleeve_service,
+                           std::shared_ptr<ImagePoolService>  image_pool_service)
+    : storage_(std::move(storage)),
+      sleeve_service_(std::move(sleeve_service)),
+      image_pool_service_(std::move(image_pool_service)) {
+  if (!storage_ || !sleeve_service_ || !image_pool_service_) {
+    throw std::invalid_argument("MountService: storage, sleeve, and image pool are required");
+  }
+}
+
+auto MountService::CreateMount(sl_element_id_t              parent_folder_id,
+                               const std::filesystem::path& directory) -> mount_id_t {
+  std::lock_guard lock(operation_mutex_);
+
+  std::error_code ec;
+  const auto      root = stdfs::canonical(directory, ec);
+  if (ec || !stdfs::is_directory(root, ec) || ec) {
+    throw MountOperationError(MountError::kDirectoryUnreachable,
+                              std::format("MountService: '{}' is not a reachable directory",
+                                          conv::ToBytes(directory.wstring())));
+  }
+
+  std::shared_ptr<SleeveElement> parent;
+  try {
+    parent = sleeve_service_->Read<std::shared_ptr<SleeveElement>>(
+        [parent_folder_id](FileSystem& fs) { return fs.Get(parent_folder_id); });
+  } catch (const std::exception&) {
+  }
+  if (!parent || parent->type_ != ElementType::FOLDER || parent->sync_flag_ == SyncFlag::DELETED) {
+    throw MountOperationError(
+        MountError::kParentIsNotAFolder,
+        std::format("MountService: the element {} is not a folder", parent_folder_id));
+  }
+  if (parent->mount_id_.has_value()) {
+    throw MountOperationError(
+        MountError::kParentIsMounted,
+        std::format("MountService: the folder {} is a mounted folder", parent_folder_id));
+  }
+
+  auto& mounts = storage_->GetMountStore();
+  for (const auto& mount : mounts.ReadMountRoots()) {
+    if (IsPathAtOrBelow(root, mount.root_path) || IsPathAtOrBelow(mount.root_path, root)) {
+      throw MountOperationError(
+          MountError::kNestedMount,
+          std::format("MountService: '{}' is inside or contains the mounted directory '{}'",
+                      conv::ToBytes(root.wstring()), conv::ToBytes(mount.root_path.wstring())));
+    }
+  }
+
+  MountRootRecord record;
+  record.id              = mounts.ReadNextMountId();
+  record.volume_identity = ReadVolumeIdentity(root);
+  record.root_path       = root;
+
+  auto [folder, sync] =
+      sleeve_service_->CreateMountRootFolder(parent_folder_id, MountRootName(root), record.id);
+  record.root_folder_id = folder->element_id_;
+  std::string error     = sync.message_;
+  if (sync.success_) {
+    try {
+      mounts.InsertMountRoot(record);
+      SetReachability(record.id, MountReachability::kNotScanned);
+      return record.id;
+    } catch (const std::exception& e) {
+      error = e.what();
+    }
+  }
+  // Take the folder back, so a failed call leaves no mounted folder without a mount.
+  sleeve_service_->RemoveMountTree(record.root_folder_id, record.id, {});
+  throw MountOperationError(MountError::kStorageFailure,
+                            "MountService: the mount was not stored: " + error);
+}
+
+auto MountService::ScanMount(const MountScanRequest& request) -> MountScanResult {
+  if (request.importer == nullptr) {
+    throw std::invalid_argument("MountService: a scan needs an importer");
+  }
+  std::lock_guard lock(operation_mutex_);
+  const auto      mount = FindMount(request.mount_id);
+
+  MountScanResult result;
+  const auto      listing = ListMountDirectory(mount.root_path, request.stop_requested);
+  if (listing.status == MountDirectoryListingStatus::kRootUnreachable) {
+    SetReachability(mount.id, MountReachability::kOffline);
+    result.status = MountScanStatus::kOffline;
+    return result;
+  }
+  SetReachability(mount.id, MountReachability::kOnline);
+  if (listing.status == MountDirectoryListingStatus::kStopped) {
+    result.status = MountScanStatus::kCanceled;
+    return result;
+  }
+
+  MountScanRun run(*storage_, *sleeve_service_, *image_pool_service_, mount, request, result);
+  try {
+    run.Execute(listing);
+  } catch (const std::exception& e) {
+    result.status       = MountScanStatus::kStorageFailure;
+    result.failed_batch = run.Batch();
+    result.error        = e.what();
+  }
+  return result;
+}
+
+void MountService::RemoveMount(mount_id_t mount_id) {
+  std::lock_guard lock(operation_mutex_);
+  const auto      mount  = FindMount(mount_id);
+  auto&           mounts = storage_->GetMountStore();
+  try {
+    std::vector<sl_element_id_t> file_ids;
+    for (const auto& location : mounts.ReadFileLocationsOfMount(mount_id)) {
+      file_ids.push_back(location.element_id);
+    }
+    const auto sync = sleeve_service_->RemoveMountTree(mount.root_folder_id, mount_id, file_ids);
+    if (!sync.success_) {
+      throw std::runtime_error(sync.message_);
+    }
+    mounts.RemoveMountRoot(mount_id);
+  } catch (const std::exception& e) {
+    throw MountOperationError(
+        MountError::kStorageFailure,
+        std::format("MountService: the mount {} was not removed: {}", mount_id, e.what()));
+  }
+  std::lock_guard reachability_lock(reachability_mutex_);
+  reachability_.erase(mount_id);
+}
+
+auto MountService::ListMounts() const -> std::vector<MountSummary> {
+  auto&                     mounts = storage_->GetMountStore();
+  std::vector<MountSummary> summaries;
+  for (auto& record : mounts.ReadMountRoots()) {
+    MountSummary summary;
+    for (const auto& source : mounts.ReadSourceFilesOfMount(record.id)) {
+      ++(source.state == SourceFileState::kMissing ? summary.missing_count : summary.present_count);
+    }
+    {
+      std::lock_guard lock(reachability_mutex_);
+      if (const auto it = reachability_.find(record.id); it != reachability_.end()) {
+        summary.reachability = it->second;
+      }
+    }
+    summary.record = std::move(record);
+    summaries.push_back(std::move(summary));
+  }
+  return summaries;
+}
+
+auto MountService::FindMount(mount_id_t mount_id) const -> MountRootRecord {
+  for (auto& mount : storage_->GetMountStore().ReadMountRoots()) {
+    if (mount.id == mount_id) {
+      return mount;
+    }
+  }
+  throw MountOperationError(MountError::kUnknownMount,
+                            std::format("MountService: no mount has the id {}", mount_id));
+}
+
+void MountService::SetReachability(mount_id_t mount_id, MountReachability reachability) {
+  std::lock_guard lock(reachability_mutex_);
+  reachability_[mount_id] = reachability;
+}
+
+}  // namespace alcedo

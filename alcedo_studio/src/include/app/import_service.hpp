@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "app/mount_file_importer.hpp"
 #include "app/raw_import_look_source.hpp"
 #include "app/sleeve_service.hpp"
 #include "concurrency/thread_pool.hpp"
@@ -155,7 +156,7 @@ class ImportService {
   virtual void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) = 0;
 };
 
-class ImportServiceImpl final : public ImportService {
+class ImportServiceImpl final : public ImportService, public MountFileImporter {
  public:
   ImportServiceImpl() = delete;
   /// Import with the product Default RAW import look (@ref ProductDefaultRawImportLookSource).
@@ -222,13 +223,28 @@ class ImportServiceImpl final : public ImportService {
 
   void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) override;
 
+  /// The import of ImportToFolder for the new files of a mount scan: each file gets the mount id
+  /// and the home folder of its request. Waits for the import, then runs SyncImports.
+  auto ImportMountedFiles(std::span<const MountFileImportRequest> requests)
+      -> std::vector<MountFileImportOutcome> override;
+
  private:
-  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>& paths, const image_path_t& dest,
-                                   const std::shared_ptr<ImportJob>&      job,
-                                   const std::shared_ptr<ImportLog>&      import_log,
-                                   const std::shared_ptr<ImportProgress>& progress,
-                                   ImportCategoryMask                     allowed_categories,
-                                   const ImportPathSet&                   any_category_paths,
+  /// Creates the library element of the file @p index of an import, with the name @p file_name,
+  /// inside the lock of the sleeve service. Throws when the element cannot be created; the file
+  /// then counts as failed and leaves no element.
+  using FilePlacement = std::function<std::shared_ptr<SleeveElement>(
+      FileSystem& fs, std::size_t index, const file_name_t& file_name)>;
+
+  void StartImport(const std::vector<image_path_t>& paths, FilePlacement placement,
+                   const ImportOptions& options, const std::shared_ptr<ImportJob>& job);
+
+  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>&            paths,
+                                   const FilePlacement&                        placement,
+                                   const std::shared_ptr<ImportJob>&           job,
+                                   const std::shared_ptr<ImportLog>&           import_log,
+                                   const std::shared_ptr<ImportProgress>&      progress,
+                                   ImportCategoryMask                          allowed_categories,
+                                   const ImportPathSet&                        any_category_paths,
                                    const std::shared_ptr<const RawImportLook>& raw_import_look);
 };
 };  // namespace alcedo

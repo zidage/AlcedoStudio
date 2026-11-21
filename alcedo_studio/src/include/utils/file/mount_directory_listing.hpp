@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -75,5 +76,29 @@ struct MountDirectoryListing {
 [[nodiscard]] auto ListMountDirectory(const std::filesystem::path& root,
                                       const std::atomic<bool>*     stop_requested = nullptr)
     -> MountDirectoryListing;
+
+/**
+ * @brief True when @p path is @p root or a path below it.
+ *
+ * The comparison is lexical and reads no file system: both paths are normalized
+ * (`lexically_normal`, no empty last element) and compared element by element, so `D:/Photos2`
+ * is not below `D:/Photos`. Windows compares the elements without case (ordinal, like NTFS);
+ * the other platforms compare them exactly.
+ */
+[[nodiscard]] auto IsPathAtOrBelow(const std::filesystem::path& path,
+                                   const std::filesystem::path& root) -> bool;
+
+/**
+ * @brief The relative path of @p path below @p root in the form of a listing: the elements
+ *        after @p root joined with `/`, each name in Unicode NFC.
+ *
+ * The root elements compare as in IsPathAtOrBelow; the elements below the root keep their
+ * spelling. Reads no file system.
+ *
+ * @return std::nullopt when @p path is not strictly below @p root.
+ */
+[[nodiscard]] auto MountRelativePathOf(const std::filesystem::path& root,
+                                       const std::filesystem::path& path)
+    -> std::optional<std::wstring>;
 
 }  // namespace alcedo

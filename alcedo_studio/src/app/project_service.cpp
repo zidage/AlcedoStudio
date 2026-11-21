@@ -367,6 +367,7 @@ ProjectService::ProjectService(const std::filesystem::path& db_path,
     RegisterSemanticSearchProvider();
     browse_service_  = std::make_shared<AlbumBrowseService>(sleeve_service_, filter_service_);
     package_service_ = std::make_shared<ProjectPackageService>();
+    mount_service_   = std::make_shared<MountService>(storage_, sleeve_service_, pool_service_);
 
     project_uuid_    = GenerateProjectUUID();
   };
@@ -407,6 +408,7 @@ void ProjectService::StopAiSidecarRuntime() {
 }
 
 ProjectService::~ProjectService() {
+  mount_service_.reset();
   package_service_.reset();
   StopAiSidecarRuntime();
   browse_service_.reset();
@@ -587,6 +589,7 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
   RegisterSemanticSearchProvider();
   browse_service_  = std::make_shared<AlbumBrowseService>(sleeve_service_, filter_service_);
   package_service_ = std::make_shared<ProjectPackageService>();
+  mount_service_   = std::make_shared<MountService>(storage_, sleeve_service_, pool_service_);
 }
 
 void ProjectService::RecreateSleeveService(sl_element_id_t start_id) {
