@@ -8,14 +8,18 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStringList>
 #include <vector>
 
+#include "app/project_service.hpp"
+#include "app/sleeve_service.hpp"
 #include "automation/automation_protocol.hpp"
 #include "automation_in_process_session.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/application_module_host.hpp"
 
 namespace alcedo::automation {
 namespace {
@@ -572,6 +576,40 @@ TEST_F(AutomationLibraryCommandsTest, StatsBucketLabelsSelectTheirPhotoCounts) {
 
 // A failed read answers with the database message; the SQL text of the statement stays in the
 // log (#814).
+// A mounted folder takes its files only from its directory (mounted_folder_plan.md, MF5).
+TEST_F(AutomationLibraryCommandsTest, ImportWithMountedCurrentFolderReturnsTheNamedError) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "mounted_import"}})
+                   .isEmpty());
+  const auto project = session.host().project()->handler().project();
+  ASSERT_NE(project, nullptr);
+  auto [mount_root, sync] = project->GetSleeveService()->CreateMountRootFolder(0, L"Trip", 1);
+  ASSERT_TRUE(sync.success_) << sync.message_;
+  session.host().folders()->ReloadTree(L"/Trip");
+  ASSERT_EQ(session.host().folders()->CurrentFolderElementId(), mount_root->element_id_);
+
+  const QString raw_root = QStringLiteral(TEST_IMG_PATH) + QStringLiteral("/ci_rawfiles");
+  const QString file =
+      QDir(raw_root).entryInfoList(QDir::Files, QDir::Name).value(0).absoluteFilePath();
+  ASSERT_FALSE(file.isEmpty());
+  for (const QJsonObject& params : {QJsonObject{{"paths", QJsonArray{file}}},
+                                    QJsonObject{{"folder", raw_root}, {"recursive", false}}}) {
+    const auto response = session.Call(QStringLiteral("library.import"), params);
+    ASSERT_EQ(ErrorCode(response), AutomationErrorCode::Rejected);
+    EXPECT_EQ(response->error->data.toObject().value("error").toString(),
+              QStringLiteral("mounted_folder_structure_is_read_only"));
+  }
+
+  // No import started, and the project holds no photo.
+  EXPECT_EQ(
+      session.CallResult(QStringLiteral("tasks.wait"), QJsonObject{{"idle", true}}).value("idle"),
+      QJsonValue(true));
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(), 0);
+  EXPECT_TRUE(project->GetSleeveService()->ListFolderEntries(L"/Trip").empty());
+}
+
 TEST_F(AutomationLibraryCommandsTest, FailedReadAnswersWithTheDatabaseMessageWithoutSql) {
   InProcessAutomationSession session;
   ASSERT_FALSE(session

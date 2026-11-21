@@ -367,7 +367,7 @@ stop request
 | MF2 #984 | Fingerprint, volume identity, directory listing | Source file utilities | none | 800 to 1200 | implemented |
 | MF3 #985 | Scan change list | Scan change list | MF1, MF2 | 900 to 1400 | implemented |
 | MF4 #986 | Mount service: create, scan, adopt, apply, unmount | Mount service, sleeve service | MF3 | 1400 to 1900 | implemented |
-| MF5 #987 | Read-only structure | Sleeve service, import, automation | MF1 | 600 to 1000 | planned |
+| MF5 #987 | Read-only structure | Sleeve service, import, automation | MF1 | 600 to 1000 | implemented |
 | MF6 #988 | Library panel and thumbnail states | Library panel, folder controller | MF4, MF5 | 1300 to 1800 | planned |
 | MF7 #989 | Scan triggers | Scan coordinator | MF6 | 700 to 1100 | planned |
 | MF8 #990 | Missing photos, root relocation, automation commands | Mount service, panel, automation, documents | MF6 | 1300 to 1800 | planned |
@@ -1207,12 +1207,106 @@ SleeveServiceImpl::CreateFolder(mounted parent) -> MountedFolderStructureIsReadO
 
 **Exit criteria.**
 
-- [ ] Each operation in the list has one test.
-- [ ] The check exists in one function.
+- [x] Each operation in the list has one test. `EachStructureOperationOnAMountedFolderReturns
+      TheNamedError` has one case for each operation and reads the tree before, after, and after
+      a reopen.
+- [x] The check exists in one function: `SleeveServiceImpl::CanEditFolderStructure`.
 
-**Expected diff.** 600 to 1000 lines.
+**Expected diff.** 600 to 1000 lines. Actual: about 760 added lines, of which about 410 are
+tests.
 
-**Completion record.** Section 13 template. Empty.
+**Decisions made during the work.** The plan did not specify these details. Each one agrees with
+the approved decisions.
+
+- Errors. `SleeveOperationError` holds a `SleeveError` (`app/sleeve_error.hpp`, a small header so
+  that user interface headers do not include the sleeve service). A third code,
+  `kMountedPhotoIsMissing`, names the refusal of Remove from Library for a mounted photo whose
+  record is `missing`: the data rule accepts that removal only through `RemoveMissingPhotos`
+  (MF8), and `kMountedPhotoIsPresent` would name the wrong rule. `SleeveErrorName` gives the
+  stable names `mounted_folder_structure_is_read_only`, `mounted_photo_is_present`, and
+  `mounted_photo_is_missing`.
+- The folder checks read one field (`CanEditFolderStructure`). Remove from Library reads the
+  source record of each mounted file in the request; a mounted file with no record counts as
+  present, because a failed later batch of a scan can leave the record of an adopted file
+  unwritten (MF4 completion record).
+- A request with several files is refused as a whole when one file is refused, so the refusal
+  never leaves a partial change. `AlbumDeleteResult::refusal_` then holds the code, and each id
+  of the request is failed.
+- `DeletePath` follows `FileSystem::Delete`: a folder checks the folder, a file of the root checks
+  Remove from Library, and a file of another folder checks that folder (the home link).
+- `ImportToFolder` calls `CheckFolderStructureEditable(dest)` on the caller thread before
+  `StartImport`. A destination that names no folder passes, so `ImportToNonExistentDestination`
+  keeps its per-file failure.
+- Callers. `AlbumBrowseService::RenameFolder` and `MoveFolder` return the new status
+  `StructureIsReadOnly`; `CreateFolder` and `DeleteFolder` pass the `SleeveOperationError` on.
+  `FolderController` shows one status text for each. `ImageController` shows the text of the code
+  for a refused delete or link, and its result maps carry `refusal` with the error name.
+- Automation. `library.import` checks the current folder before it starts the import and answers
+  -32002 (rejected) with `data.error` set to the error name; `library.delete` answers the same
+  form from the `refusal` of `DeleteTargetsFinished`. The CLI reference of the alcedo-skills
+  repository is regenerated with the mount commands of MF8.
+- `MountTreeTest` links a file into a second mounted folder through the tree in its setup, as a
+  scan does; the user entry now refuses that link.
+- An ordinary folder that holds a mount root can still be deleted, and the delete removes the
+  mount tree with it. The check of D6 reads the target folder only, so the fix changes an
+  approved decision: #999.
+
+**Completion record.**
+
+```text
+Phase / date / status: MF5 / 2026-11-20 / implemented, pull request open
+Source revision and branch: b686ee193 (MF4, pull request #998) + this phase,
+  feature/mount-read-only-structure
+Actual changed modules: sleeve service (SleeveError, CanEditFolderStructure, the checks), import
+  service (ImportToFolder), album browse service (refusal result, edit status), folder and image
+  controllers (status texts, refusal in the result maps), automation library commands
+  (library.import, library.delete), tests
+Implemented behavior: the named error for new collection, rename, move (folder and destination),
+  delete, import, link, duplicate, and removal of the home link in a mounted folder; the named
+  error for Remove from Library of a mounted photo (present or missing); a mounted photo links
+  into and leaves an ordinary collection; library.import with a mounted current folder answers
+  -32002 with data.error; the scan entry (ApplyMountTreeChanges, CreateMountRootFolder,
+  RemoveMountTree) does not use the checks
+Explicitly unimplemented items: the disabled menu entries and the drop cursor (MF6); Remove
+  Missing Photos (MF8); the delete of an ordinary folder that holds a mount root (#999)
+Primary success call chain:
+  FolderController::CreateFolderIn(ordinary) -> AlbumBrowseService::CreateFolder
+    -> SleeveServiceImpl::CreateFolder (fs_lock_: RequireEditableStructure(parent) passes
+    -> FileSystem::Create) -> Sync
+  SleeveServiceImpl::LinkFileToFolder(mounted file, ordinary folder) -> RequireEditableFolder
+    passes -> FileSystem::LinkFileToFolder -> Sync
+Primary failure and restore call chain:
+  SleeveServiceImpl::CreateFolder(mounted parent) -> CanEditFolderStructure false
+    -> SleeveOperationError(kMountedFolderStructureIsReadOnly) before FileSystem::Create; Write
+    does not sync -> no element, no storage write -> FolderController status text
+  ImageController delete job -> AlbumBrowseService::DeleteFilesInFolderByElementIds(0, ids)
+    -> SleeveServiceImpl::DeleteFilesEverywhere -> RequireRemovableFromLibrary
+    -> MountStore::ReadSourceFile -> SleeveOperationError(kMountedPhotoIsPresent) -> refusal_
+    -> DeleteTargetsFinished {refusal, message} -> library.delete -32002 with data.error
+  library.import -> SleeveServiceImpl::CheckFolderStructureEditable(current folder)
+    -> -32002 with data.error; no folder scan and no import job
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target SleeveServiceTest
+    ImportServiceTest AlbumBrowseServiceMountTest MountTreeTest MountServiceTest
+    AutomationLibraryCommandsTest AlbumBackendFolderTest AlbumBackendImageDeleteTest
+    LibraryMutationOperationsTest LibraryReferenceModelTest SleeveFSTest --parallel 8 -> 0
+  Each binary from its _runtime folder; UI and automation tests with QT_QPA_PLATFORM=offscreen
+  python scripts/check_storage_boundary.py -> no findings
+  Mutation check: CanEditFolderStructure returns true -> the two folder cases of
+    MountedFolderStructureTest and both AlbumBrowseServiceMountTest cases fail; source restored
+Discovered / passed / failed / skipped counts:
+  SleeveServiceTest 30/30/0/0; ImportServiceTest 16/16/0/0; AlbumBrowseServiceMountTest
+  2/2/0/0; MountTreeTest 9/9/0/0; MountServiceTest 16/16/0/0; AutomationLibraryCommandsTest
+  15/15/0/0; AlbumBackendFolderTest 16/16/0/0; AlbumBackendImageDeleteTest 12/12/0/0;
+  LibraryMutationOperationsTest 5/5/0/0; LibraryReferenceModelTest 5/5/0/0; SleeveFSTest
+  13/13/0/0
+Manual verification: none required by MF5
+Performance or resource evidence, if required: not required
+Evidence path: test output of the commands above (local)
+Remaining defects or unavailable platforms:
+  #999: deleting an ordinary folder that holds a mount root deletes the mount tree
+  macOS and Linux builds not run locally; the macOS CI job builds the libraries
+```
 
 ### MF6. Library panel and thumbnail states
 

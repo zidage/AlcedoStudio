@@ -16,6 +16,7 @@
 #include <string_view>
 #include <vector>
 
+#include "app/sleeve_error.hpp"
 #include "app/sleeve_filter_service.hpp"
 #include "app/sleeve_service.hpp"
 #include "sleeve/album_query.hpp"
@@ -53,6 +54,8 @@ enum class AlbumFolderEditStatus {
   NameTaken,      ///< The destination folder holds another element with the same name.
   InvalidTarget,  ///< Root folder, empty name, missing folder, or a move into its own subtree.
   Failed,         ///< The storage write or the sync failed.
+  /// The folder or the destination is mounted (SleeveError::kMountedFolderStructureIsReadOnly).
+  StructureIsReadOnly,
 };
 
 struct AlbumFolderEditResult {
@@ -65,6 +68,9 @@ struct AlbumDeleteResult {
   std::vector<AlbumFileView>         deleted_files_{};
   std::vector<std::filesystem::path> failed_paths_{};
   std::vector<sl_element_id_t>       failed_element_ids_{};
+  /// Set when SleeveServiceImpl refused the request (Mounted Folder Plan, MF5). The refused
+  /// request changed nothing; each of its ids is in failed_element_ids_.
+  std::optional<SleeveError>         refusal_{};
 };
 
 class AlbumBrowseService {
@@ -150,8 +156,11 @@ class AlbumBrowseService {
   using QueryThreadObserver = std::function<void(std::string_view operation)>;
   void               SetQueryThreadObserver(QueryThreadObserver observer);
 
+  /// Empty when the folder cannot be created.
+  /// @throws SleeveOperationError when the parent is mounted; nothing changed.
   [[nodiscard]] auto CreateFolder(const std::filesystem::path& parent_folder_path,
                                   const file_name_t& name) -> std::optional<AlbumFolderView>;
+  /// @throws SleeveOperationError when the folder is mounted; nothing changed.
   [[nodiscard]] bool DeleteFolder(const std::filesystem::path& folder_path);
   /// Renames the folder at @p folder_path; it keeps its id, children, and album membership.
   [[nodiscard]] auto RenameFolder(const std::filesystem::path& folder_path,

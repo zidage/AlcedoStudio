@@ -104,6 +104,19 @@ auto ToVariantIdList(const std::vector<sl_element_id_t>& ids) -> QVariantList {
   return out;
 }
 
+/// The status text of a request that SleeveServiceImpl refused (Mounted Folder Plan, MF5).
+auto SleeveRefusalText(const SleeveError code) -> i18n::LocalizedText {
+  switch (code) {
+    case SleeveError::kMountedFolderStructureIsReadOnly:
+      return PL_TEXT("The structure of a mounted folder is read-only.");
+    case SleeveError::kMountedPhotoIsPresent:
+      return PL_TEXT("A mounted photo stays in the library while its file is on the disk.");
+    case SleeveError::kMountedPhotoIsMissing:
+      return PL_TEXT("Remove Missing Photos of the mount removes a missing photo.");
+  }
+  return PL_TEXT("The request was refused.");
+}
+
 auto DashValue() -> QString { return QString::fromUtf8("\u2014"); }
 
 auto ToDisplayText(const std::string& value) -> QString {
@@ -597,6 +610,9 @@ auto ImageController::DeleteResultMap(const DeleteExecutionResult& result) -> QV
       {QStringLiteral("failedCount"), result.failed_count_},
       {QStringLiteral("deletedElementIds"), ToVariantIdList(result.deleted_element_ids_)},
       {QStringLiteral("failedElementIds"), ToVariantIdList(result.failed_element_ids_)},
+      {QStringLiteral("refusal"), result.refusal_.has_value()
+                                      ? QString::fromLatin1(SleeveErrorName(*result.refusal_))
+                                      : QString{}},
       {QStringLiteral("message"), result.message_}};
 }
 
@@ -784,7 +800,9 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
   const int added_count  = static_cast<int>(added_ids.size());
   const int failed_count = static_cast<int>(link_result.failed_element_ids_.size());
   auto      msg          = i18n::LocalizedText{};
-  if (added_count == 0) {
+  if (added_count == 0 && link_result.refusal_.has_value()) {
+    msg = SleeveRefusalText(*link_result.refusal_);
+  } else if (added_count == 0) {
     msg = PL_TEXT("No images were added.");
   } else if (failed_count == 0) {
     msg = PL_TEXT("Added %1 image(s) to album.", added_count);
@@ -806,6 +824,9 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
   result["failedCount"]      = failed_count;
   result["addedElementIds"]  = ToVariantIdList(added_ids);
   result["failedElementIds"] = ToVariantIdList(link_result.failed_element_ids_);
+  result["refusal"]          = link_result.refusal_.has_value()
+                                   ? QString::fromLatin1(SleeveErrorName(*link_result.refusal_))
+                                   : QString{};
   result["message"]          = msg.Render();
   return result;
 }
@@ -891,6 +912,7 @@ auto ImageController::MakeDeleteJob(DeleteBatch batch) const
     try {
       const auto delete_result =
           browse->DeleteFilesInFolderByElementIds(batch.folder_id_, delete_element_ids);
+      outcome.refusal_ = delete_result.refusal_;
       outcome.deleted_element_ids_.reserve(delete_result.deleted_files_.size());
       for (const auto& file : delete_result.deleted_files_) {
         outcome.deleted_element_ids_.push_back(file.element_id_);
@@ -982,7 +1004,9 @@ auto ImageController::FinishDeleteBatch(const DeleteBatch& batch, const DeleteBa
   const int  failed_count        = static_cast<int>(failed_ids.size());
 
   auto       msg                 = i18n::LocalizedText{};
-  if (deleted_count == 0) {
+  if (deleted_count == 0 && outcome.refusal_.has_value()) {
+    msg = SleeveRefusalText(*outcome.refusal_);
+  } else if (deleted_count == 0) {
     msg = delete_from_library ? PL_TEXT("No images were deleted.")
                               : PL_TEXT("No images were removed from this album.");
   } else if (failed_count == 0) {
@@ -1009,6 +1033,7 @@ auto ImageController::FinishDeleteBatch(const DeleteBatch& batch, const DeleteBa
   result.failed_count_        = failed_count;
   result.deleted_element_ids_ = outcome.deleted_element_ids_;
   result.failed_element_ids_  = std::move(failed_ids);
+  result.refusal_             = outcome.refusal_;
   result.message_             = msg.Render();
   return result;
 }

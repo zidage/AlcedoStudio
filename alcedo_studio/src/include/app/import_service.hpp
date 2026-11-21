@@ -217,6 +217,8 @@ class ImportServiceImpl final : public ImportService, public MountFileImporter {
   /// placeholder loop runs on submission_thread_, metadata extraction on thread_pool_.
   /// job->on_progress_ reports the placeholder count while the loop runs, and job->on_finished_
   /// fires once every file is imported or failed.
+  /// @throws SleeveOperationError with kMountedFolderStructureIsReadOnly when @p dest is a mounted
+  ///         folder, before any source file is read and with no job started.
   auto ImportToFolder(const std::vector<image_path_t>& paths, const image_path_t& dest,
                       const ImportOptions& options = {}, std::shared_ptr<ImportJob> job = nullptr)
       -> std::shared_ptr<ImportJob> override;

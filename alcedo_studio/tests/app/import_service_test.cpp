@@ -18,11 +18,14 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/raw_import_look_source.hpp"
+#include "app/sleeve_error.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "import_test_fixation.hpp"
+#include "storage/store/mount/mount_store.hpp"
+#include "type/mount_records.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -586,6 +589,42 @@ TEST_F(ImportServiceTests, ImportToNonExistentDestination) {
   auto snapshot = import_job->import_log_->Snapshot();
   EXPECT_NO_THROW(import_service->SyncImports(snapshot, non_existent_dest));
   EXPECT_TRUE(fs_service->ListFolderEntries(L"/").empty());
+}
+
+// A mounted folder takes its files only from its directory (mounted_folder_plan.md, D7 and MF5).
+TEST_F(ImportServiceTests, ImportIntoAMountedFolderIsRefusedBeforeAnySourceRead) {
+  ProjectService project(db_path_, meta_path_);
+  auto           fs_service     = project.GetSleeveService();
+  auto           import_service = std::make_unique<ImportServiceImpl>(
+      fs_service, project.GetImagePoolService(),
+      std::make_shared<PipelineMgmtService>(project.GetStorage()));
+  auto [mount_root, sync] = fs_service->CreateMountRootFolder(0, L"Trip", 1);
+  ASSERT_TRUE(sync.success_) << sync.message_;
+  MountRootRecord mount;
+  mount.id             = 1;
+  mount.root_folder_id = mount_root->element_id_;
+  mount.root_path      = temp_dir_ / "Trip";
+  project.GetStorage()->GetMountStore().InsertMountRoot(mount);
+
+  // An existing RAW file: an import that read it would create an element and an image.
+  const std::vector<image_path_t> paths{std::filesystem::path(TEST_IMG_PATH) / "raw" / "airplane" /
+                                        "_DSC1704.NEF"};
+  auto                            job = std::make_shared<ImportJob>();
+  try {
+    (void)import_service->ImportToFolder(paths, L"/Trip", {}, job);
+    ADD_FAILURE() << "the import into a mounted folder started";
+  } catch (const SleeveOperationError& error) {
+    EXPECT_EQ(error.Code(), SleeveError::kMountedFolderStructureIsReadOnly) << error.what();
+  }
+
+  // No job started: it has no log and no progress, and the project holds no new element.
+  EXPECT_EQ(job->import_log_, nullptr);
+  EXPECT_EQ(job->progress_, nullptr);
+  EXPECT_TRUE(fs_service->ListFolderEntries(L"/Trip").empty());
+  const auto root_entries = fs_service->ListFolderEntries(L"/");
+  ASSERT_EQ(root_entries.size(), 1U);
+  EXPECT_EQ(root_entries[0]->element_id_, mount_root->element_id_);
+  EXPECT_TRUE(project.GetStorage()->GetImageStore().GetImageByPath(paths[0]).empty());
 }
 
 // Verify that after import, element names and image names match the original
