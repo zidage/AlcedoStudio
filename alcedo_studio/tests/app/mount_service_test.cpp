@@ -13,7 +13,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <fstream>
@@ -312,6 +314,11 @@ TEST_F(MountServiceTest, FirstScanBuildsFoldersAndPhotosOfTheDirectory) {
   EXPECT_EQ(result.folders_added_count, 3u);
   EXPECT_EQ(FolderPathsOf(mount_id),
             (std::vector<std::wstring>{L"Day1", L"Day1/Morning", L"Day2"}));
+  // The directory watcher of MF7 registers the directories of the listing. It holds the
+  // directory with no photo too: a file that the user copies there must start a scan.
+  auto listed = result.listed_directories;
+  std::sort(listed.begin(), listed.end());
+  EXPECT_EQ(listed, (std::vector<std::wstring>{L"Day1", L"Day1/Morning", L"Day2", L"Empty"}));
 
   const auto files = FilesOf(mount_id);
   ASSERT_EQ(files.size(), 4u);
@@ -504,6 +511,7 @@ TEST_F(MountServiceTest, UnreachableRootSetsOfflineAndChangesNoRecord) {
 
   EXPECT_EQ(result.status, MountScanStatus::kOffline);
   EXPECT_EQ(result.fingerprint_read_count, 0u);
+  EXPECT_TRUE(result.listed_directories.empty());
   EXPECT_EQ(SummaryOf(mount_id).reachability, MountReachability::kOffline);
   EXPECT_EQ(FilesOf(mount_id), files);
   EXPECT_EQ(FolderPathsOf(mount_id), folders);
@@ -761,6 +769,39 @@ TEST_F(MountServiceTest, SecondScanOfAnUnchangedDirectoryReadsNoFile) {
   EXPECT_EQ(second.fingerprint_read_count, 0u);
   EXPECT_EQ(second.unchanged_count, static_cast<std::size_t>(kFileCount));
   EXPECT_EQ(second.imported_count, 0u);
+}
+
+// The time measurement of the MF7 exit criterion: a scan of an unchanged directory of 10 000
+// files on a local SSD takes less than 2 seconds in a Release build. The setup imports 10 000
+// files, so the test runs only on request:
+//   MountServiceTest --gtest_also_run_disabled_tests --gtest_filter=*TenThousand*
+TEST_F(MountServiceTest,
+       DISABLED_ScanOfAnUnchangedDirectoryOfTenThousandFilesTakesUnderTwoSeconds) {
+  constexpr int kFileCount = 10000;
+  for (int index = 0; index < kFileCount; ++index) {
+    WriteJpeg(disk_ / "Archive" / ("Roll " + std::to_string(index / 100)) /
+                  ("frame_" + std::to_string(index) + ".jpg"),
+              index);
+  }
+  const auto mount_id = Mounts().CreateMount(0, disk_ / "Archive");
+  const auto first =
+      Mounts().ScanMount(MountScanRequest{.mount_id = mount_id, .importer = import_.get()});
+  ASSERT_EQ(first.status, MountScanStatus::kComplete) << first.error;
+  ASSERT_EQ(first.imported_count, static_cast<std::size_t>(kFileCount));
+
+  const auto start = std::chrono::steady_clock::now();
+  const auto second =
+      Mounts().ScanMount(MountScanRequest{.mount_id = mount_id, .importer = import_.get()});
+  const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - start)
+                              .count();
+
+  ASSERT_EQ(second.status, MountScanStatus::kComplete) << second.error;
+  EXPECT_EQ(second.unchanged_count, static_cast<std::size_t>(kFileCount));
+  RecordProperty("unchanged_scan_ms", std::to_string(elapsed_ms));
+  std::printf("unchanged scan of %d files: %lld ms\n", kFileCount,
+              static_cast<long long>(elapsed_ms));
+  EXPECT_LT(elapsed_ms, 2000);
 }
 
 }  // namespace

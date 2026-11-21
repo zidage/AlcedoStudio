@@ -565,6 +565,12 @@ alcedo_register_test_target(AlbumBackendBackgroundTaskTest ui)
 def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp "interaction_policy")
 alcedo_register_test_target(AlbumBackendInteractionPolicyTest ui)
 
+# Directory watchers of the mounted folders (mounted_folder_plan.md, MF7, P11) on real
+# temporary directories.
+def_ui_test(MountDirectoryWatcherTest mount_directory_watcher_test.cpp "mounted_folder")
+target_link_libraries(MountDirectoryWatcherTest PRIVATE MountDirectoryWatcher)
+alcedo_register_test_target(MountDirectoryWatcherTest ui)
+
 def_ui_test(AgentControlOwnerTest agent_control_owner_test.cpp "interaction_policy")
 alcedo_register_test_target(AgentControlOwnerTest ui)
 

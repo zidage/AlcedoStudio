@@ -443,6 +443,7 @@ auto MountService::ScanMount(const MountScanRequest& request) -> MountScanResult
     result.status = MountScanStatus::kCanceled;
     return result;
   }
+  result.listed_directories = listing.directories;
 
   MountScanRun run(*storage_, *sleeve_service_, *image_pool_service_, mount, request, result);
   try {
