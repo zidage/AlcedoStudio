@@ -19,6 +19,13 @@
 
 namespace alcedo {
 
+enum class OpenClGlContextApi {
+  Auto,
+  Wgl,
+  Glx,
+  Egl,
+};
+
 struct OpenClDeviceCapabilities {
   std::string           name;
   std::string           vendor;
@@ -81,8 +88,10 @@ struct OpenClInitializationOptions {
   void*                      d3d11_device = nullptr;
 
   // Optional native OpenGL context/display handles. On Windows these are HGLRC
-  // and HDC. When set, OpenCL initialization selects a device that can share
-  // with the GL context and creates a cl_khr_gl_sharing context.
+  // and HDC; on Linux they are GLXContext + Display* or EGLContext + EGLDisplay.
+  // When set, OpenCL initialization selects a device that can share with the GL
+  // context and creates a cl_khr_gl_sharing context.
+  OpenClGlContextApi         gl_context_api    = OpenClGlContextApi::Auto;
   void*                      gl_context = nullptr;
   void*                      gl_device_context = nullptr;
 };
@@ -124,8 +133,7 @@ class OpenClContext {
   // it takes precedence when a matching usable device exists.
   void        Initialize(const OpenClInitializationOptions& options = {});
 
-  // Non-throwing path for optional fallback logic. If OpenCL cannot be
-  // initialized, callers can continue with the CPU path instead.
+  // Non-throwing initialization probe. Failure does not select another processing backend.
   auto        TryInitialize(const OpenClInitializationOptions& options = {}) -> bool;
 
   auto        IsInitialized() const -> bool;

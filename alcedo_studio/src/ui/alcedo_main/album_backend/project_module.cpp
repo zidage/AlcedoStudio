@@ -225,6 +225,12 @@ ProjectModule::ProjectModule(QObject* parent) : QObject(parent), handler_(*this)
   task_status_text_ = PL_TEXT("Open or create a project to begin.");
 }
 
+ProjectModule::~ProjectModule() {
+  if (opencl_preparation_thread_.joinable()) {
+    opencl_preparation_thread_.join();
+  }
+}
+
 void ProjectModule::SetLifecycleHooks(ProjectLifecycleHooks hooks) {
   lifecycle_hooks_ = std::move(hooks);
 }
@@ -303,6 +309,10 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
   accelerator_prepare_started_ = true;
 
 #ifdef HAVE_OPENCL
+  // A failed preparation can be retried. Its completed worker remains joinable.
+  if (opencl_preparation_thread_.joinable()) {
+    opencl_preparation_thread_.join();
+  }
   // A driver compiler crash ends the process inside clBuildProgram, so the program name has to
   // be on disk before the call. Flush after each line instead of waiting for the log buffer.
   OpenClProgramLibrary::Instance().SetBuildTraceSink([](std::string_view message) {
@@ -313,7 +323,7 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
   SetAcceleratorPreparationState(true,
                                  PL_TEXT("Compiling OpenCL kernels. This happens every launch."));
   QPointer<ProjectModule> self(this);
-  std::thread([self]() {
+  opencl_preparation_thread_ = std::thread([self]() {
     QString error_text;
     try {
       WarmUpOpenClRuntime();
@@ -345,7 +355,7 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
               PL_TEXT("OpenCL preparation failed: %1", error_text));
         },
         Qt::QueuedConnection);
-  }).detach();
+  });
 #else
   SetAcceleratorPreparationState(false, {});
 #endif

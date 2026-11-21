@@ -72,6 +72,8 @@
 #include "edit/runtime/opencl/opencl_frame_presenter.hpp"
 #include "edit/runtime/opencl/opencl_mask_pass.hpp"
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
+#include "opencl/opencl_context.hpp"
+#include "opencl/opencl_runtime.hpp"
 #endif
 #if defined(HAVE_METAL)
 #include "edit/runtime/metal/metal_frame_presenter.hpp"
@@ -423,6 +425,9 @@ class CoverageChannelTest : public ::testing::Test {
       GTEST_SKIP() << "editor backend " << ToString(g_backend)
                    << " is unavailable: " << g_startup.error;
     }
+#ifdef ALCEDO_TEST_OPENCL_WITHOUT_GL_SHARING
+    ASSERT_FALSE(OpenClContext::Instance().GLSharingEnabled());
+#endif
     rhi_ = MakeRhi(g_backend, surface_);
     ASSERT_NE(rhi_, nullptr) << "QRhi creation failed for " << ToString(g_backend);
     if (g_backend == EditorBackend::OpenCl) {
@@ -509,15 +514,24 @@ class CoverageChannelTest : public ::testing::Test {
         [&] { return producer_->Present(selection, request, identity, *target_sink); }, adapter);
   }
 
-  auto Consume() -> bool {
-    return layer_.ConsumeNewest(rhi_.get(), viewport_->sessionEpoch(), viewport_->imageIdentity());
+  auto ConsumeLayer(ViewportMaskCoverageLayer& layer) -> bool {
+    QRhiCommandBuffer* command_buffer = nullptr;
+    if (rhi_->beginOffscreenFrame(&command_buffer) != QRhi::FrameOpSuccess) {
+      ADD_FAILURE() << "beginOffscreenFrame failed";
+      return false;
+    }
+    auto*      updates  = rhi_->nextResourceUpdateBatch();
+    const bool consumed = layer.ConsumeNewest(rhi_.get(), viewport_->sessionEpoch(),
+                                              viewport_->imageIdentity(), updates);
+    command_buffer->resourceUpdate(updates);
+    rhi_->endOffscreenFrame();
+    return consumed;
   }
 
-  /// Import the newest frame of the detail ROI coverage channel (Mask ranges D10).
-  auto ConsumeDetail() -> bool {
-    return detail_layer_.ConsumeNewest(rhi_.get(), viewport_->sessionEpoch(),
-                                       viewport_->imageIdentity());
-  }
+  auto Consume() -> bool { return ConsumeLayer(layer_); }
+
+  /// Import the newest frame of the detail ROI coverage channel.
+  auto ConsumeDetail() -> bool { return ConsumeLayer(detail_layer_); }
 
   auto Counters() -> ProducerCounters {
     return render_thread_.Post([this] { return producer_->Counters(); }).get();
@@ -570,7 +584,18 @@ class CoverageChannelTest : public ::testing::Test {
     return MaskCoverageCandidateSelection{pixels, kAnalysis, edge};
   }
 
-  [[nodiscard]] auto UsesQueuedTargets() const -> bool { return g_backend != EditorBackend::Metal; }
+  [[nodiscard]] auto UsesQueuedTargets() const -> bool {
+#if defined(__linux__) && defined(HAVE_OPENCL)
+    if (g_backend == EditorBackend::OpenCl && !OpenClContext::Instance().GLSharingEnabled()) {
+      return false;
+    }
+#endif
+    return g_backend != EditorBackend::Metal;
+  }
+
+  [[nodiscard]] auto UsesHostUpload() const -> bool {
+    return g_backend == EditorBackend::OpenCl && !UsesQueuedTargets();
+  }
 
   std::unique_ptr<QOffscreenSurface>   surface_;
   std::unique_ptr<QRhi>                rhi_;
@@ -604,6 +629,11 @@ inline auto RunCoverageChannelTests(int argc, char** argv) -> int {
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
   }
   QGuiApplication app(argc, argv);
+#ifdef ALCEDO_TEST_OPENCL_WITHOUT_GL_SHARING
+  // A device without GL sharing still renders on the GPU. Keep this process on
+  // the plain context to exercise the real readback and QRhi upload path.
+  (void)TryInitializeOpenClRuntime();
+#endif
   g_startup = ApplyEditorBackendBeforeWindow(g_backend);
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

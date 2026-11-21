@@ -215,6 +215,7 @@ void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   detail_coverage_sink_->ClearPendingMetalCoverage();
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
+    frame_sink_->ClearPendingHostFrames();
   }
   stopInteractivePresentLoop();
   emit SessionEpochChanged();
@@ -329,6 +330,7 @@ void EditorViewportItem::cancelPendingFrames() {
   detail_coverage_sink_->ClearPendingMetalCoverage();
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
+    frame_sink_->ClearPendingHostFrames();
   }
   requestPresentUpdate();
 }
