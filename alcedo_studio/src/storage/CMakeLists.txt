@@ -37,12 +37,15 @@ set(MAPPER_SRCS
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/edit_history/version_ref_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/edit_history/image_edit_state_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/pipeline/pipeline_mapper.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/mapper/mount/mount_root_mapper.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/mapper/mount/source_file_mapper.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/mapper/utc_timestamp_text.cpp"
 )
 
 def_library(SleeveMapper
     SOURCES ${MAPPER_SRCS}
     PUBLIC_DEPS DuckDB DuckORM Image SleeveElement ImagePool PipelineHistory EditPipeline
-        PipelineScheduler StorageQuery StrConv
+        PipelineScheduler StorageQuery StrConv xxHash
 )
 
 # Stores + Storage facade (no storage/service rank)
@@ -65,6 +68,7 @@ set(STORAGE_SRCS
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/album_edit_state_sql.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/edit_history/commit_graph_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/mask_asset/mask_asset_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/mount/mount_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/storage_session.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/storage_maintenance.cpp"
 )

@@ -2,7 +2,8 @@
 
 Date: 2026-11-19
 
-Status: **planned**. No phase has implementation evidence.
+Status: **in progress**. MF1 is implemented (#983). The other phases have no implementation
+evidence.
 
 Parent: [Roadmap](../../README.md).
 
@@ -362,7 +363,7 @@ stop request
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
-| MF1 #983 | Mount record, element mount id, source file record | Storage, sleeve element | none | 900 to 1300 | planned |
+| MF1 #983 | Mount record, element mount id, source file record | Storage, sleeve element | none | 900 to 1300 | implemented |
 | MF2 #984 | Fingerprint, volume identity, directory listing | Source file utilities | none | 800 to 1200 | planned |
 | MF3 #985 | Scan change list | Scan change list | MF1, MF2 | 900 to 1400 | planned |
 | MF4 #986 | Mount service: create, scan, adopt, apply, unmount | Mount service, sleeve service | MF3 | 1400 to 1900 | planned |
@@ -456,13 +457,95 @@ ALTER TABLE fails on open -> InitializeDB throws -> LoadProject reports the open
 
 **Exit criteria.**
 
-- [ ] The tests above pass in the debug build.
-- [ ] A project of version 0.10.0 and one of 0.11.0 open with no error.
-- [ ] No SQL text exists outside the storage module.
+- [x] The tests above pass in the debug build.
+- [x] A project of version 0.10.0 and one of 0.11.0 open with no error.
+- [x] No SQL text exists outside the storage module (`scripts/check_storage_boundary.py`: no
+      findings).
 
-**Expected diff.** 900 to 1300 lines.
+**Expected diff.** 900 to 1300 lines. Actual: about 1 400 added and 80 removed lines in 39
+files, of which about 550 are tests.
 
-**Completion record.** Section 13 template. Empty.
+**Decisions made during the work.** The plan did not specify these details. Each one agrees with
+the approved decisions.
+
+- The value types `MountRootRecord`, `SourceFileRecord`, and `SourceFileState` are in
+  `include/type/mount_records.hpp`, outside storage. MF3 takes them as input and has no storage
+  include. `mount_id_t` is in `include/type/type.hpp` beside `sl_element_id_t`.
+- `MountStore` follows `ElementStore`: it holds `Database&`, and each operation takes its own
+  connection and the database lock. `Storage::GetMountStore()` returns it.
+- The operations of step 3: `InsertMountRoot`, `ReadMountRoots`, `ReadNextMountId`,
+  `UpdateMountRootLocation`, `UpdateMountLastScanTime`, `RemoveMountRoot`; `UpsertSourceFiles`,
+  `ReadSourceFile`, `ReadSourceFilesOfMount`, `UpdateSourceFileState`, `RemoveSourceFiles`. The
+  source record writes take a list, because MF4 writes them in batches. `UpdateSourceFileState`
+  writes nothing when one element has no record. An update or removal of an unknown mount
+  throws.
+- `SourceFile.fingerprint` holds `Hash128::ToString` (32 hexadecimal digits). MF2 builds
+  `SourceFileFingerprint` from `Hash128` and the version.
+- `last_scan_at` and `missing_since` are UTC seconds (`std::time_t`). The text conversion of
+  `Element.added_time` moved to `storage/mapper/utc_timestamp_text`, and the three mappers use it.
+- `SleeveFile::Copy` and `SleeveFolder::Copy` keep `mount_id_`, because a copy-on-write copy
+  replaces the element at the same path. `FileSystem::DuplicateFileToFolder` clears it, because
+  the duplicate is a new photo (P5).
+- MF1 adds no index on `Element.mount_id`. `ReadSourceFilesOfMount` is one scan of `Element` for
+  each mount scan. The MF4 and MF7 time criteria measure it.
+- The open error for an unsupported version names the range: `(supported 0.10.0 to 0.12.0)`.
+- The 0.11.0 fixture `tests/resources/compat/raw_project_016c3535b.alcd` (Git LFS) was written
+  by build `016c3535b`: it opened `raw_project_abdb000c8.alcd`, set the Green label on image 1,
+  saved (project file 0.11.0), and packed the project.
+- `tests/support/storage_invariants.cpp` has four new rules: a mounted element names a stored
+  mount; the root folder of a mount is a folder of that mount; a mounted file has a source
+  record; a source record names a file element.
+- Step 6: no tracked document lists the tables. `docs/technical/` is not tracked; its local
+  `sleeve_filesystem_api_and_storage.md` has the column and the two tables.
+
+**Completion record.**
+
+```text
+Phase / date / status: MF1 / 2026-11-19 / implemented, pull request open
+Source revision and branch: fb0ed60f5 (main 016c3535b + this plan), feature/mount-records-element-mount-id
+Actual changed modules: Storage (Database DDL, ElementMapper, ElementStore, MountRootMapper,
+  SourceFileMapper, MountStore, Storage), sleeve element (mount_id_, Copy, duplicate), project
+  file version (pipeline_history_format.hpp, ProjectService open error), tests
+Implemented behavior: Element.mount_id (last column, NULL = ordinary); MountRoot and SourceFile
+  tables on new and old databases; SleeveElement::mount_id_ read and written with each element;
+  MountStore write, read, update, remove; SourceFile row removed with its file element; project
+  file 0.12.0 (minimum 0.10.0)
+Explicitly unimplemented items: none of MF1. Mount operations, fingerprint, and scan are MF2 to MF4.
+Primary success call chain:
+  ProjectService -> Storage -> Database::InitializeDB -> mount_schema_query
+  MountStore::InsertMountRoot -> MountRootMapper::Insert -> duckorm::insert -> MountRoot row
+  ElementStore::AddElements / UpdateElement -> ElementMapper (7 fields) -> Element.mount_id
+  ElementStore::RemoveElements -> SourceFileMapper::RemoveByIds -> no SourceFile row
+Primary failure and restore call chain:
+  ALTER TABLE or CREATE TABLE fails -> RunDdl throws -> Storage construction throws -> the open
+  reports the error; the database file holds no part of the failed statement
+  UpdateSourceFileState with an unrecorded element -> changed rows < ids -> throw before commit
+  -> Transaction rolls back
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target MountStoreTest
+    MapperCrtpRoundtripTest ProjectCompatibilityTest ProjectServiceTest CommitGraphTest
+    EditorMiniGitMaterializerTest PipelineEditBatchTest PipelineDocumentCheckpointTest SleeveFSTest
+    SleeveServiceTest StorageSessionTest LibraryReferenceModelTest AlbumQueryTest
+    LibrarySearchBenchmarkTest --parallel 4 -> 0
+  Each binary from its _runtime folder (build/tmp/mf1/run_mf1_tests.ps1)
+Discovered / passed / failed / skipped counts:
+  MountStoreTest 14/14/0/0; MapperCrtpRoundtripTest 9/9/0/0; ProjectServiceTest 9/9/0/0;
+  ProjectCompatibilityTest 6/5/1/0; CommitGraphTest 49/49/0/0; StorageSessionTest 4/4/0/0;
+  SleeveFSTest 13/13/0/0; SleeveServiceTest 27/27/0/0; PipelineEditBatchTest 22/22/0/0;
+  EditorMiniGitMaterializerTest 17/17/0/0; AlbumQueryTest 36/35/0/1;
+  LibraryReferenceModelTest 5/5/0/0; PipelineDocumentCheckpointTest 23/20/3/0;
+  LibrarySearchBenchmarkTest.DISABLED_RelevanceSelectOfFolderDoesNotGrowWithProjectSize 1/1/0/0
+Manual verification: none required by MF1
+Performance or resource evidence, if required: not required
+Evidence path: build/tmp/mf1/test_logs/
+Remaining defects or unavailable platforms:
+  ProjectWrittenByCurrentMainOpensAndRendersUnchanged: render hash of the Intel Iris Xe OpenCL
+    device differs from the recorded NVIDIA hash (#993); the open and render checks pass
+  PipelineDocumentCheckpointFormat.Existing*Root*: fail on main (#553)
+  ElementStore::UpdateElement of a file element throws on its FileImage row (#795); the
+    MountStoreTest update case uses a folder
+  macOS and Linux builds not run locally
+```
 
 ### MF2. Source file fingerprint, volume identity, and directory listing
 

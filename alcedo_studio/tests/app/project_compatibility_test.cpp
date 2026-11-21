@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include <QString>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -25,6 +26,7 @@
 #include <memory>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include "app/pipeline_service.hpp"
 #include "app/project_package_backend.hpp"
@@ -37,6 +39,7 @@
 #include "image/color_label.hpp"
 #include "image/image.hpp"
 #include "json.hpp"
+#include "sleeve/storage.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/project_compat_render.hpp"
 #include "support/storage_invariants.hpp"
@@ -355,9 +358,16 @@ constexpr const char* kRootIdsSql =
 constexpr const char* kEditStateRootIdsSql =
     "SELECT string_agg(element_id || ':' || root_id, ',' ORDER BY element_id) "
     "FROM ImageEditState;";
+constexpr const char* kMountColumnCountSql =
+    "SELECT COUNT(*) FROM duckdb_columns() WHERE table_name = 'Element' "
+    "AND column_name = 'mount_id';";
+constexpr const char* kMountTableCountSql =
+    "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name IN ('MountRoot', 'SourceFile');";
+constexpr const char* kMountedElementCountSql =
+    "SELECT COUNT(*) FROM Element WHERE mount_id IS NOT NULL;";
 
 // #769: a 0.10.0 project opens, gains the library mark columns with empty marks, keeps its root
-// ids, stores marks, and saves as 0.11.0.
+// ids, stores marks, and saves as the current version (0.12.0 since #983).
 TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds) {
   const test::TestTempDirectory temp_dir;
   TimeProvider::Refresh();
@@ -405,8 +415,9 @@ TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds
     project.SaveProject(meta_path);
   }
 
-  EXPECT_EQ(ReadProjectFileVersion(meta_path), "0.11.0");
+  EXPECT_EQ(ReadProjectFileVersion(meta_path), "0.12.0");
   EXPECT_EQ(QueryDatabaseFileInt64(db_path, kImageMarkColumnCountSql), 2);
+  EXPECT_EQ(QueryDatabaseFileInt64(db_path, kMountedElementCountSql), 0);
   EXPECT_EQ(QueryDatabaseFileInt64(
                 db_path, "SELECT color_labels FROM Image WHERE id = " + std::to_string(image_id)),
             ColorLabelBit(ColorLabel::kGreen) | ColorLabelBit(ColorLabel::kGray));
@@ -427,6 +438,109 @@ TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds
               ColorLabelBit(ColorLabel::kGreen) | ColorLabelBit(ColorLabel::kGray));
     EXPECT_TRUE(project.GetImagePoolService()->Read<bool>(
         image_id, [](const std::shared_ptr<Image>& image) { return image->delete_mark_; }));
+    test::ExpectStorageInvariants(*project.GetStorage());
+  }
+  std::filesystem::remove_all(workspace, ec);
+}
+
+/// Element ids of the comma-separated text of kElementIdsSql.
+auto ParseElementIds(const std::string& text) -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> ids;
+  std::size_t                  begin = 0;
+  while (begin < text.size()) {
+    const auto end = std::min(text.find(',', begin), text.size());
+    ids.push_back(static_cast<sl_element_id_t>(std::stoul(text.substr(begin, end - begin))));
+    begin = end + 1;
+  }
+  return ids;
+}
+
+constexpr const char* kElementIdsSql =
+    "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) FROM Element;";
+
+// #983 (Mounted Folder Plan, MF1): a 0.11.0 project opens, gains Element.mount_id with NULL for
+// each element and the empty mount tables, keeps the edit history root id of its image and its
+// library marks, and saves as 0.12.0. tests/resources/compat/raw_project_016c3535b.alcd was
+// written by build 016c3535b (project file 0.11.0): it opened raw_project_abdb000c8.alcd, set the
+// Green label on image 1, saved, and packed the project.
+TEST(ProjectCompatibilityTest, Version011ProjectGainsMountColumnAndKeepsRootIds) {
+  const test::TestTempDirectory temp_dir;
+  TimeProvider::Refresh();
+  nlohmann::json expected;
+  {
+    std::ifstream in(CompatDir() / "raw_project_abdb000c8.json", std::ios::binary);
+    ASSERT_TRUE(in.is_open());
+    expected = nlohmann::json::parse(in);
+  }
+  const auto      workspace = temp_dir.Path() / "alcedo_project_compat_mount";
+  std::error_code ec;
+  std::filesystem::remove_all(workspace, ec);
+  std::filesystem::path db_path;
+  std::filesystem::path meta_path;
+  QString               error;
+  ASSERT_TRUE(project_pack::UnpackProjectToWorkspace(CompatDir() / "raw_project_016c3535b.alcd",
+                                                     workspace, QStringLiteral("Compat"), &db_path,
+                                                     &meta_path, &error))
+      << error.toStdString();
+  ASSERT_EQ(ReadProjectFileVersion(meta_path), "0.11.0");
+  ASSERT_EQ(QueryDatabaseFileInt64(db_path, kMountColumnCountSql), 0)
+      << "the fixture must predate the mount id column";
+  ASSERT_EQ(QueryDatabaseFileInt64(db_path, kMountTableCountSql), 0)
+      << "the fixture must predate the mount tables";
+  ASSERT_EQ(QueryDatabaseFileInt64(db_path, kImageMarkColumnCountSql), 2)
+      << "a 0.11.0 project has the library mark columns";
+  const auto root_ids       = QueryDatabaseFileText(db_path, kRootIdsSql);
+  const auto edit_state_ids = QueryDatabaseFileText(db_path, kEditStateRootIdsSql);
+  const auto element_ids    = ParseElementIds(QueryDatabaseFileText(db_path, kElementIdsSql));
+  ASSERT_FALSE(root_ids.empty());
+  ASSERT_GE(element_ids.size(), 2u) << "the fixture holds the library root and one file";
+
+  const auto element_id = expected.at("element_id").get<sl_element_id_t>();
+  const auto image_id   = expected.at("image_id").get<image_id_t>();
+  const auto stored_root_id =
+      QueryDatabaseFileText(db_path, "SELECT root_id FROM ImageEditState WHERE element_id = " +
+                                         std::to_string(element_id));
+  {
+    ProjectService project(db_path, meta_path);
+    auto&          elements = project.GetStorage()->GetElementStore();
+    for (const auto id : element_ids) {
+      EXPECT_EQ(elements.GetElementById(id)->mount_id_, std::nullopt) << "element " << id;
+    }
+    EXPECT_TRUE(project.GetStorage()->GetMountStore().ReadMountRoots().empty());
+    EXPECT_EQ(project.GetStorage()->GetMountStore().ReadSourceFile(element_id), std::nullopt);
+    EXPECT_EQ(project.GetImagePoolService()->Read<int>(
+                  image_id,
+                  [](const std::shared_ptr<Image>& image) {
+                    return static_cast<int>(image->color_labels_);
+                  }),
+              ColorLabelBit(ColorLabel::kGreen));
+
+    // The history loads with full validation, and its root id is the stored one.
+    auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
+    auto lock  = guard.Lock();
+    CommitGraphStore store(guard.conn_);
+    const auto       loaded = store.LoadGraph(element_id);
+    ASSERT_TRUE(loaded.has_value());
+    EXPECT_EQ(loaded->GetRootId().ToString(), stored_root_id);
+    EXPECT_TRUE(store.GetRootSerializedPipelineState(element_id, loaded->GetRootId()).has_value());
+  }
+  {
+    ProjectService project(db_path, meta_path);
+    project.SaveProject(meta_path);
+  }
+
+  EXPECT_EQ(ReadProjectFileVersion(meta_path), "0.12.0");
+  EXPECT_EQ(QueryDatabaseFileInt64(db_path, kMountColumnCountSql), 1);
+  EXPECT_EQ(QueryDatabaseFileInt64(db_path, kMountTableCountSql), 2);
+  EXPECT_EQ(QueryDatabaseFileInt64(db_path, kMountedElementCountSql), 0);
+  EXPECT_EQ(QueryDatabaseFileText(db_path, kRootIdsSql), root_ids);
+  EXPECT_EQ(QueryDatabaseFileText(db_path, kEditStateRootIdsSql), edit_state_ids);
+
+  // The saved project opens again.
+  {
+    ProjectService project(db_path, meta_path);
+    EXPECT_EQ(project.GetStorage()->GetElementStore().GetElementById(element_id)->mount_id_,
+              std::nullopt);
     test::ExpectStorageInvariants(*project.GetStorage());
   }
   std::filesystem::remove_all(workspace, ec);
