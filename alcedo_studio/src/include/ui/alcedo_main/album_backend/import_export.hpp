@@ -25,6 +25,7 @@
 #include "ui/alcedo_main/album_backend/editor_gpu_resource_release.hpp"
 #include "ui/alcedo_main/album_backend/folder_import_scan_model.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
+#include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
@@ -94,6 +95,13 @@ class ImportExportHandler final : public QObject {
   /// before the export renders; `resume` runs once when that export ends: completed, every image
   /// failed, or the release failed.
   void                    SetExportGpuResourceRelease(EditorGpuResourceReleaseHooks release);
+  /**
+   * @brief The mount scans of the project (#1016). Each user import holds them from its start to
+   *        the end of its finalize step and starts its job when no scan worker writes the
+   *        project. A file that the scan of a mount lists (IsPathOfAMountScan) is left to that
+   *        scan. Null holds nothing.
+   */
+  void                    BindMountScans(MountScanCoordinator* mount_scans);
 
   /// The user import of the Import Images dialog into the current folder: the regular files of
   /// @p fileUrlsOrPaths, every import category allowed. Refused while an automation agent holds
@@ -267,6 +275,12 @@ class ImportExportHandler final : public QObject {
   void              StartImportResolvedPaths(std::vector<image_path_t> paths, bool preserveTarget,
                                              ImportCategoryMask allowedCategories,
                                              ImportPathSet      anyCategoryPaths = {});
+  /// Start the job @p job of the import that StartImportResolvedPaths prepared; runs when no
+  /// mount scan worker writes the project (#1016).
+  void              SubmitImportJob(const std::shared_ptr<ImportJob>& job,
+                                    const std::vector<image_path_t>& paths, ImportOptions options);
+  /// Take out of @p paths each file that the scan of a mount lists; returns their count.
+  auto              RemoveMountScanPaths(std::vector<image_path_t>& paths) const -> std::size_t;
   /// The regular files of @p fileUrlsOrPaths in input order, duplicates removed: the file filter
   /// of StartImport and StartImportToFolder.
   [[nodiscard]] static auto RegularFilePaths(const QStringList& fileUrlsOrPaths)
@@ -301,6 +315,9 @@ class ImportExportHandler final : public QObject {
   StatsEngine*                  stats_    = nullptr;
   NikonHeRecoveryController*    nikon_    = nullptr;
   SemanticGenerationController* semantic_ = nullptr;
+  MountScanCoordinator*              mount_scans_                   = nullptr;
+  /// Held from the start of a user import to its CompleteImport (#1016).
+  MountScanHold                      import_scan_hold_;
 
   FolderImportScanModel*        folder_scan_ = nullptr;
   std::shared_ptr<ImportJob>    current_import_job_{};

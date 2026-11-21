@@ -15,6 +15,7 @@
 
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/i18n.hpp"
+#include "utils/file/mount_directory_listing.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -177,6 +178,59 @@ auto MountScanResultDetail(const MountScanResult& result) -> QString {
   return parts.join(Tr(", "));
 }
 
+auto IsPathOfAMountScan(const std::filesystem::path&              path,
+                        const std::vector<std::filesystem::path>& mount_roots) -> bool {
+  for (const auto& root : mount_roots) {
+    if (!root.empty() && IsPathAtOrBelow(path, root) &&
+        ReadMountDirectoryFile(root, path).has_value()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ── MountScanHold ───────────────────────────────────────────────────────────
+
+MountScanHold::MountScanHold(MountScanCoordinator* coordinator, quint64 id)
+    : coordinator_(coordinator), id_(id) {}
+
+MountScanHold::MountScanHold(MountScanHold&& other) noexcept
+    : coordinator_(std::move(other.coordinator_)), id_(std::exchange(other.id_, 0)) {
+  other.coordinator_.clear();
+}
+
+auto MountScanHold::operator=(MountScanHold&& other) noexcept -> MountScanHold& {
+  if (this != &other) {
+    Release();
+    coordinator_ = std::move(other.coordinator_);
+    id_          = std::exchange(other.id_, 0);
+    other.coordinator_.clear();
+  }
+  return *this;
+}
+
+MountScanHold::~MountScanHold() { Release(); }
+
+void MountScanHold::WhenReady(std::function<void()> start) {
+  if (!start) {
+    return;
+  }
+  if (!IsHeld()) {
+    start();
+    return;
+  }
+  coordinator_->WhenHoldReady(id_, std::move(start));
+}
+
+void MountScanHold::Release() {
+  const auto id          = std::exchange(id_, 0);
+  auto*      coordinator = coordinator_.data();
+  coordinator_.clear();
+  if (id != 0 && coordinator != nullptr) {
+    coordinator->ReleaseHold(id);
+  }
+}
+
 // ── MountScanCoordinator ────────────────────────────────────────────────────
 
 MountScanCoordinator::MountScanCoordinator(MountScanCoordinatorDependencies dependencies,
@@ -229,6 +283,8 @@ void MountScanCoordinator::Stop() {
   // The queued end of this worker finds no stopped worker and does nothing.
   stopped_worker_.reset();
   emit StoppedWorkerEnded();
+  // The destructor calls Stop: a queued call does not run the waiting starts there.
+  QMetaObject::invokeMethod(this, [this] { RunReadyHolds(); }, Qt::QueuedConnection);
 }
 
 void MountScanCoordinator::HandleStoppedWorkerEnded(quint64 generation) {
@@ -241,6 +297,7 @@ void MountScanCoordinator::HandleStoppedWorkerEnded(quint64 generation) {
   }
   stopped_worker_.reset();
   emit StoppedWorkerEnded();
+  RunReadyHolds();
   StartNextScan();
 }
 
@@ -278,6 +335,7 @@ auto MountScanCoordinator::BeginStop() -> std::shared_future<void> {
   operations_.clear();
   for (auto& [mount_id, state] : mounts_) {
     (void)mount_id;
+    CancelPausedTask(state);
     for (auto& callback : state.on_next_scan_ended) {
       ended_callbacks.push_back(std::move(callback));
     }
@@ -327,6 +385,7 @@ void MountScanCoordinator::ReloadMounts() {
     clock_->StopTimer(it->first);
     watcher_->Unwatch(it->first);
     std::erase(queue_, it->first);
+    CancelPausedTask(it->second);
     CallScanEnded(it->second.on_next_scan_ended, CanceledScanResult());
     it = mounts_.erase(it);
   }
@@ -352,7 +411,7 @@ auto MountScanCoordinator::RequestScan(mount_id_t mount_id, MountScanTrigger tri
   if (running_ && running_->mount_id == mount_id) {
     state.scan_again = MergeTrigger(state.scan_again, trigger);
     if (trigger == MountScanTrigger::kSynchronize && running_->task_id.isEmpty()) {
-      running_->task_id = RegisterTask(state, Tr("Reading the folder"), -1);
+      running_->task_id = RegisterTask(mount_id, state, Tr("Reading the folder"), -1);
     }
     return true;
   }
@@ -374,6 +433,70 @@ auto MountScanCoordinator::RunMountOperation(std::function<void()>      operatio
   operations_.push_back(PendingOperation{std::move(operation), std::move(done)});
   StartNextScan();
   return true;
+}
+
+auto MountScanCoordinator::Hold() -> MountScanHold {
+  const quint64 id = ++next_hold_id_;
+  holds_.push_back(HoldState{id, {}});
+  if (running_ && !running_->stopped_by_hold) {
+    // The scan completes a batch that started its import and ends; it runs again after the
+    // last hold. A running operation is one storage change, so it completes.
+    running_->stopped_by_hold = true;
+    running_->stop_requested->store(true);
+  }
+  return MountScanHold(this, id);
+}
+
+auto MountScanCoordinator::MountRoots() const -> std::vector<std::filesystem::path> {
+  std::vector<std::filesystem::path> roots;
+  roots.reserve(mounts_.size());
+  for (const auto& [mount_id, state] : mounts_) {
+    (void)mount_id;
+    roots.push_back(state.root);
+  }
+  return roots;
+}
+
+void MountScanCoordinator::WhenHoldReady(quint64 hold_id, std::function<void()> on_ready) {
+  const auto it = std::find_if(holds_.begin(), holds_.end(),
+                               [hold_id](const HoldState& hold) { return hold.id == hold_id; });
+  if (it == holds_.end()) {
+    return;
+  }
+  if (!HasWorker()) {
+    on_ready();
+    return;
+  }
+  it->on_ready = std::move(on_ready);
+}
+
+void MountScanCoordinator::ReleaseHold(quint64 hold_id) {
+  std::erase_if(holds_, [hold_id](const HoldState& hold) { return hold.id == hold_id; });
+  if (holds_.empty()) {
+    StartNextScan();
+  }
+}
+
+void MountScanCoordinator::RunReadyHolds() {
+  if (HasWorker()) {
+    return;
+  }
+  std::vector<quint64> waiting;
+  for (const auto& hold : holds_) {
+    if (hold.on_ready) {
+      waiting.push_back(hold.id);
+    }
+  }
+  // A start can release any hold, so each start is looked up again before it runs.
+  for (const auto hold_id : waiting) {
+    const auto it = std::find_if(holds_.begin(), holds_.end(),
+                                 [hold_id](const HoldState& hold) { return hold.id == hold_id; });
+    if (it == holds_.end() || !it->on_ready) {
+      continue;
+    }
+    auto start = std::exchange(it->on_ready, nullptr);
+    start();
+  }
 }
 
 void MountScanCoordinator::StartOperation(PendingOperation pending) {
@@ -415,6 +538,7 @@ void MountScanCoordinator::HandleOperationEnded(quint64 generation, std::excepti
   if (run.done) {
     run.done(error);
   }
+  RunReadyHolds();
   StartNextScan();
 }
 
@@ -469,8 +593,9 @@ void MountScanCoordinator::HandleDirectoryChanged(mount_id_t mount_id) {
 }
 
 void MountScanCoordinator::StartNextScan() {
-  // A stopped worker can still write its batch; HandleStoppedWorkerEnded calls this again.
-  if (!port_ || running_ || running_operation_ || stopped_worker_) {
+  // A stopped worker can still write its batch; HandleStoppedWorkerEnded calls this again. The
+  // release of the last hold also calls this again.
+  if (!port_ || HasWorker() || !holds_.empty()) {
     return;
   }
   if (!operations_.empty()) {
@@ -497,8 +622,12 @@ void MountScanCoordinator::StartNextScan() {
     running_->ended = ended.get_future().share();
     state.on_next_scan_ended.clear();
     state.queued.reset();
-    if (running_->trigger == MountScanTrigger::kSynchronize) {
-      running_->task_id = RegisterTask(state, Tr("Reading the folder"), -1);
+    if (!state.paused_task_id.isEmpty()) {
+      // The scan that a hold stopped runs again in its task.
+      running_->task_id = std::exchange(state.paused_task_id, QString{});
+      tasks_->UpdateTask(running_->task_id, state.title, Tr("Reading the folder"), -1);
+    } else if (running_->trigger == MountScanTrigger::kSynchronize) {
+      running_->task_id = RegisterTask(mount_id, state, Tr("Reading the folder"), -1);
     }
 
     // The coordinator joins the worker before it is destroyed (Stop), so `this` outlives the
@@ -562,7 +691,7 @@ void MountScanCoordinator::HandleScanProgress(quint64 generation, mount_id_t mou
     if (running_->task_id.isEmpty()) {
       // An automatic scan shows when it starts to import new files.
       if (progress.new_files_done < progress.new_files_total) {
-        running_->task_id = RegisterTask(it->second, detail, percent);
+        running_->task_id = RegisterTask(mount_id, it->second, detail, percent);
       }
     } else {
       tasks_->UpdateTask(running_->task_id, it->second.title, detail, percent);
@@ -588,6 +717,9 @@ void MountScanCoordinator::HandleScanEnded(quint64 generation, mount_id_t mount_
     run.worker.join();
   }
 
+  // A scan that a hold stopped before its end runs again after the last hold (#1016).
+  const bool resume_after_hold =
+      run.stopped_by_hold && !run.canceled_by_user && result.status == MountScanStatus::kCanceled;
   std::optional<MountScanTrigger> again;
   if (const auto it = mounts_.find(mount_id); it != mounts_.end()) {
     auto&      state    = it->second;
@@ -597,8 +729,23 @@ void MountScanCoordinator::HandleScanEnded(quint64 generation, mount_id_t mount_
     }
     state.reachability  = result.status == MountScanStatus::kOffline ? MountReachability::kOffline
                                                                      : MountReachability::kOnline;
-    ReportScanEnd(run, state, result, previous, save_failed);
+    if (resume_after_hold && !save_failed) {
+      if (!run.task_id.isEmpty()) {
+        state.paused_task_id = run.task_id;
+        tasks_->UpdateTask(run.task_id, state.title, Tr("Paused"), -1);
+      }
+    } else {
+      ReportScanEnd(run, state, result, previous, save_failed);
+    }
     UpdateWatch(mount_id, state, result);
+    if (resume_after_hold) {
+      state.scan_again = MergeTrigger(state.scan_again, run.trigger);
+      // The requests that waited for this scan get the result of the scan that runs again.
+      state.on_next_scan_ended.insert(state.on_next_scan_ended.begin(),
+                                      std::make_move_iterator(run.on_ended.begin()),
+                                      std::make_move_iterator(run.on_ended.end()));
+      run.on_ended.clear();
+    }
     if (!run.canceled_by_user) {
       again = state.scan_again;
     }
@@ -616,6 +763,7 @@ void MountScanCoordinator::HandleScanEnded(quint64 generation, mount_id_t mount_
   if (again) {
     RequestScan(mount_id, *again);
   }
+  RunReadyHolds();
   StartNextScan();
 }
 
@@ -627,7 +775,7 @@ void MountScanCoordinator::ReportScanEnd(const RunningScan& run, const MountStat
   if (save_failed && result.status != MountScanStatus::kStorageFailure) {
     // The changes are in the database; the project file holds the state of the last save.
     if (task_id.isEmpty()) {
-      task_id = RegisterTask(state, QString(), -1);
+      task_id = RegisterTask(run.mount_id, state, QString(), -1);
     }
     tasks_->FinishTask(task_id, BackgroundTaskState::Failed, Tr("The project could not be saved."));
     return;
@@ -638,7 +786,7 @@ void MountScanCoordinator::ReportScanEnd(const RunningScan& run, const MountStat
         if (!MountScanChangedPhotos(result)) {
           return;
         }
-        task_id = RegisterTask(state, QString(), 100);
+        task_id = RegisterTask(run.mount_id, state, QString(), 100);
       }
       tasks_->FinishTask(task_id, BackgroundTaskState::Succeeded, MountScanResultDetail(result));
       return;
@@ -647,7 +795,7 @@ void MountScanCoordinator::ReportScanEnd(const RunningScan& run, const MountStat
         if (previous_reachability == MountReachability::kOffline) {
           return;
         }
-        task_id = RegisterTask(state, QString(), -1);
+        task_id = RegisterTask(run.mount_id, state, QString(), -1);
       }
       tasks_->FinishTask(task_id, BackgroundTaskState::Failed, Tr("Offline"));
       return;
@@ -658,7 +806,7 @@ void MountScanCoordinator::ReportScanEnd(const RunningScan& run, const MountStat
       return;
     case MountScanStatus::kStorageFailure:
       if (task_id.isEmpty()) {
-        task_id = RegisterTask(state, QString(), -1);
+        task_id = RegisterTask(run.mount_id, state, QString(), -1);
       }
       tasks_->FinishTask(task_id, BackgroundTaskState::Failed,
                          Tr("The changes could not be stored."));
@@ -686,8 +834,8 @@ void MountScanCoordinator::UpdateWatch(mount_id_t mount_id, MountState& state,
   state.watched = watcher_->Watch(mount_id, state.root, result.listed_directories);
 }
 
-auto MountScanCoordinator::RegisterTask(const MountState& state, const QString& detail,
-                                        int progress_percent) -> QString {
+auto MountScanCoordinator::RegisterTask(mount_id_t mount_id, const MountState& state,
+                                        const QString& detail, int progress_percent) -> QString {
   BackgroundTaskSnapshot snapshot;
   snapshot.kind_             = BackgroundTaskKind::MountScan;
   snapshot.state_            = BackgroundTaskState::Running;
@@ -697,14 +845,53 @@ auto MountScanCoordinator::RegisterTask(const MountState& state, const QString& 
   snapshot.cancelable_       = true;
   snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::CancelAndWait;
   // Stop finishes the task, which clears the cancel callback before the coordinator ends.
-  return tasks_->RegisterTask(snapshot,
-                              [this, generation = generation_] { CancelByUser(generation); });
+  return tasks_->RegisterTask(
+      snapshot, [this, generation = generation_, mount_id] { CancelByUser(generation, mount_id); });
 }
 
-void MountScanCoordinator::CancelByUser(quint64 generation) {
-  if (generation != generation_ || !running_) {
+void MountScanCoordinator::CancelPausedTask(MountState& state) {
+  if (!state.paused_task_id.isEmpty()) {
+    tasks_->FinishTask(std::exchange(state.paused_task_id, QString{}),
+                       BackgroundTaskState::Canceled);
+  }
+}
+
+void MountScanCoordinator::CancelByUser(quint64 generation, mount_id_t mount_id) {
+  if (generation != generation_) {
     return;
   }
+  if (!running_ || running_->mount_id != mount_id) {
+    // The task of a scan that a hold stopped: the scan does not run again. The end of the task
+    // can remove task records, so it runs after the cancel loop of the task list. A scan that
+    // took the task over in the meantime gets the cancel of a running scan.
+    QMetaObject::invokeMethod(
+        this,
+        [this, generation, mount_id] {
+          if (generation != generation_) {
+            return;
+          }
+          if (running_ && running_->mount_id == mount_id) {
+            CancelRunningScanByUser();
+            return;
+          }
+          const auto it = mounts_.find(mount_id);
+          if (it == mounts_.end() || it->second.paused_task_id.isEmpty()) {
+            return;
+          }
+          auto& state = it->second;
+          CancelPausedTask(state);
+          state.queued.reset();
+          state.scan_again.reset();
+          std::erase(queue_, mount_id);
+          CallScanEnded(state.on_next_scan_ended, CanceledScanResult());
+        },
+        Qt::QueuedConnection);
+    return;
+  }
+  CancelRunningScanByUser();
+}
+
+void MountScanCoordinator::CancelRunningScanByUser() {
   running_->canceled_by_user = true;
   running_->stop_requested->store(true);
   if (const auto it = mounts_.find(running_->mount_id); it != mounts_.end()) {

@@ -667,6 +667,165 @@ TEST_F(MountScanCoordinatorTest, FailedSaveEndsTheTaskFailed) {
             QStringLiteral("The project could not be saved."));
 }
 
+// ── Hold (#1016) ────────────────────────────────────────────────────────────
+
+TEST_F(MountScanCoordinatorTest, HoldWaitsForTheBatchAndTheScanRunsAgainAfterTheRelease) {
+  // #1016: a scan batch synced the placeholders of a user import that ran at the same time.
+  StartAndWaitForTheOpenScan();
+  port_->HoldInBatch();
+  std::vector<MountScanStatus> ended;
+  coordinator_->RequestScan(
+      kMount, MountScanTrigger::kSynchronize,
+      [&ended](const MountScanResult& result) { ended.push_back(result.status); });
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+
+  auto hold  = coordinator_->Hold();
+  bool ready = false;
+  hold.WhenReady([&ready] { ready = true; });
+  ProcessQueuedEvents();
+  EXPECT_FALSE(ready) << "the start waits for the batch in work";
+  EXPECT_TRUE(coordinator_->IsHeld());
+
+  port_->ReleaseScans();
+  ASSERT_TRUE(WaitUntil([&ready] { return ready; }));
+  EXPECT_TRUE(port_->SawStopRequest());
+  EXPECT_FALSE(coordinator_->HasWorker());
+  EXPECT_TRUE(ended.empty()) << "the request waits for the scan that runs again";
+  auto tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 1U);
+  EXPECT_EQ(tasks[0].value(QStringLiteral("state")).toString(), QStringLiteral("running"));
+  EXPECT_EQ(tasks[0].value(QStringLiteral("detail")).toString(), QStringLiteral("Paused"));
+
+  // No scan starts while the hold exists.
+  watcher_->Notify(kMount);
+  clock_->Advance(seconds(5));
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 2);
+  EXPECT_FALSE(coordinator_->HasWorker());
+
+  hold.Release();
+  EXPECT_FALSE(coordinator_->IsHeld());
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_EQ(port_->ScanCount(), 3) << "the paused scan and the request merge into one scan";
+  EXPECT_EQ(ended, (std::vector<MountScanStatus>{MountScanStatus::kComplete}));
+  tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 1U) << "the scan that runs again takes its task over";
+  EXPECT_EQ(tasks[0].value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"));
+}
+
+TEST_F(MountScanCoordinatorTest, HoldWithNoWorkerIsReadyAtOnceAndHoldsTheOperations) {
+  StartAndWaitForTheOpenScan();
+  auto hold  = coordinator_->Hold();
+  bool ready = false;
+  hold.WhenReady([&ready] { ready = true; });
+  EXPECT_TRUE(ready);
+
+  std::atomic<bool> operation_ran{false};
+  ASSERT_TRUE(coordinator_->RunMountOperation([&operation_ran] { operation_ran = true; }, {}));
+  coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
+  ProcessQueuedEvents();
+  EXPECT_FALSE(coordinator_->HasWorker());
+  EXPECT_EQ(port_->ScanCount(), 1);
+
+  // Two holds: the scans wait for the last one.
+  auto second = coordinator_->Hold();
+  hold.Release();
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 1);
+  EXPECT_FALSE(operation_ran.load());
+
+  second = MountScanHold{};
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_TRUE(operation_ran.load());
+}
+
+TEST_F(MountScanCoordinatorTest, ReleasedHoldDoesNotRunItsStart) {
+  StartAndWaitForTheOpenScan();
+  port_->HoldInBatch();
+  coordinator_->RequestScan(kMount, MountScanTrigger::kDirectoryChange);
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+
+  bool ready = false;
+  {
+    auto hold = coordinator_->Hold();
+    hold.WhenReady([&ready] { ready = true; });
+  }
+  port_->ReleaseScans();
+  // The stopped scan runs again, since no hold exists at its end.
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_FALSE(ready);
+}
+
+TEST_F(MountScanCoordinatorTest, CancelOfAPausedTaskDropsTheScan) {
+  StartAndWaitForTheOpenScan();
+  port_->HoldScans();
+  std::vector<MountScanStatus> ended;
+  coordinator_->RequestScan(
+      kMount, MountScanTrigger::kSynchronize,
+      [&ended](const MountScanResult& result) { ended.push_back(result.status); });
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+  auto hold  = coordinator_->Hold();
+  bool ready = false;
+  hold.WhenReady([&ready] { ready = true; });
+  ASSERT_TRUE(WaitUntil([&ready] { return ready; }));
+  port_->ReleaseScans();
+
+  const auto task_id = MountScanTasks(tasks_).at(0).value(QStringLiteral("id")).toString();
+  ASSERT_TRUE(tasks_.CancelTask(task_id));
+  ProcessQueuedEvents();
+  EXPECT_EQ(MountScanTasks(tasks_).at(0).value(QStringLiteral("state")).toString(),
+            QStringLiteral("canceled"));
+  EXPECT_EQ(ended, (std::vector<MountScanStatus>{MountScanStatus::kCanceled}));
+
+  hold.Release();
+  ProcessQueuedEvents();
+  EXPECT_FALSE(coordinator_->HasPendingScans());
+  EXPECT_EQ(port_->ScanCount(), 2);
+}
+
+TEST_F(MountScanCoordinatorTest, HoldOutlivesTheStopAndWaitsForTheStoppedWorker) {
+  StartAndWaitForTheOpenScan();
+  port_->HoldInBatch();
+  coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+  (void)coordinator_->BeginStop();
+
+  auto hold  = coordinator_->Hold();
+  bool ready = false;
+  hold.WhenReady([&ready] { ready = true; });
+  ProcessQueuedEvents();
+  EXPECT_FALSE(ready);
+  coordinator_->Start(port_);
+  port_->ReleaseScans();
+  ASSERT_TRUE(WaitUntil([&ready] { return ready; }));
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 2) << "the scan of the new start waits for the hold";
+
+  hold.Release();
+  ASSERT_TRUE(WaitForScans(3));
+}
+
+TEST(MountScanPathTest, AFileThatTheListingListsIsLeftToTheScan) {
+  test::TestTempDirectory temp_dir;
+  const auto              root  = temp_dir / "Japan";
+  const auto              write = [](const stdfs::path& path) {
+    stdfs::create_directories(path.parent_path());
+    std::ofstream(path, std::ios::binary) << "x";
+  };
+  write(root / "Kyoto" / "a.jpg");
+  write(root / ".cache" / "b.jpg");
+  write(root / "notes.txt");
+  write(temp_dir / "Other" / "c.jpg");
+  const std::vector<stdfs::path> roots{root};
+
+  EXPECT_TRUE(IsPathOfAMountScan(root / "Kyoto" / "a.jpg", roots));
+  EXPECT_FALSE(IsPathOfAMountScan(root / ".cache" / "b.jpg", roots))
+      << "the listing does not enter a directory whose name starts with a period";
+  EXPECT_FALSE(IsPathOfAMountScan(root / "notes.txt", roots));
+  EXPECT_FALSE(IsPathOfAMountScan(temp_dir / "Other" / "c.jpg", roots));
+  EXPECT_FALSE(IsPathOfAMountScan(root / "Kyoto" / "a.jpg", {}));
+}
+
 // ── Real directory, real project ────────────────────────────────────────────
 
 /// Encode a 24x16 JPEG whose pixels depend on @p seed.

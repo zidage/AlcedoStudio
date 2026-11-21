@@ -535,6 +535,10 @@ void ImageController::BindCollaborators(StatsEngine* stats, ImportExportHandler*
   background_tasks_ = background_tasks;
 }
 
+void ImageController::BindMountScans(MountScanCoordinator* mount_scans) {
+  mount_scans_ = mount_scans;
+}
+
 auto ImageController::SaveProjectSnapshot() -> bool {
   bool save_ok = true;
   try {
@@ -682,34 +686,47 @@ auto ImageController::StartDeleteImages(const QVariantList& targetEntries) -> QV
                         0, false);
 
   QPointer<ImageController> self(this);
-  std::thread([self, job = MakeDeleteJob(*batch), batch = std::move(*batch)]() mutable {
-    auto outcome        = std::make_shared<DeleteBatchOutcome>(job());
-    auto finished_batch = std::make_shared<DeleteBatch>(std::move(batch));
-    QMetaObject::invokeMethod(
-        self.data(),
-        [self, outcome, finished_batch]() {
-          if (!self) {
-            return;
-          }
-          const QVariantMap result =
-              DeleteResultMap(self->FinishDeleteBatch(*finished_batch, *outcome));
-          if (self->background_tasks_ != nullptr && !self->delete_task_id_.isEmpty()) {
-            self->background_tasks_->FinishTask(self->delete_task_id_,
-                                                result.value(QStringLiteral("success")).toBool()
-                                                    ? BackgroundTaskState::Succeeded
-                                                    : BackgroundTaskState::Failed,
-                                                result.value(QStringLiteral("message")).toString());
-            self->delete_task_id_.clear();
-          }
-          self->delete_running_ = false;
-          emit self->DeleteImagesFinished(result);
-        },
-        Qt::QueuedConnection);
-  }).detach();
+  auto                      job          = MakeDeleteJob(*batch);
+  auto                      shared_batch = std::make_shared<DeleteBatch>(std::move(*batch));
+  // #1016: no scan batch writes the project while the delete runs. The worker starts when the
+  // running scan has completed its batch.
+  delete_scan_hold_ = mount_scans_ != nullptr ? mount_scans_->Hold() : MountScanHold{};
+  delete_scan_hold_.WhenReady([self, job = std::move(job), shared_batch]() {
+    std::thread([self, job, shared_batch]() {
+      auto outcome = std::make_shared<DeleteBatchOutcome>(job());
+      FinishDeleteOnUiThread(self, shared_batch, outcome);
+    }).detach();
+  });
 
   result[QStringLiteral("started")] = true;
   result[QStringLiteral("taskId")]  = delete_task_id_;
   return result;
+}
+
+void ImageController::FinishDeleteOnUiThread(const QPointer<ImageController>&           self,
+                                             const std::shared_ptr<DeleteBatch>&        batch,
+                                             const std::shared_ptr<DeleteBatchOutcome>& outcome) {
+  QMetaObject::invokeMethod(
+      self.data(),
+      [self, outcome, batch]() {
+        if (!self) {
+          return;
+        }
+        const QVariantMap result = DeleteResultMap(self->FinishDeleteBatch(*batch, *outcome));
+        // The delete is stored and saved; the held scans start again.
+        self->delete_scan_hold_.Release();
+        if (self->background_tasks_ != nullptr && !self->delete_task_id_.isEmpty()) {
+          self->background_tasks_->FinishTask(self->delete_task_id_,
+                                              result.value(QStringLiteral("success")).toBool()
+                                                  ? BackgroundTaskState::Succeeded
+                                                  : BackgroundTaskState::Failed,
+                                              result.value(QStringLiteral("message")).toString());
+          self->delete_task_id_.clear();
+        }
+        self->delete_running_ = false;
+        emit self->DeleteImagesFinished(result);
+      },
+      Qt::QueuedConnection);
 }
 
 auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint targetFolderId)
@@ -1040,6 +1057,15 @@ auto ImageController::FinishDeleteBatch(const DeleteBatch& batch, const DeleteBa
 
 auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
     -> DeleteExecutionResult {
+  // #1016: this delete runs on the calling thread, so it cannot wait for a scan worker. No scan
+  // starts during the call: the scans start on this thread.
+  if (mount_scans_ != nullptr && mount_scans_->HasWorker()) {
+    DeleteExecutionResult result;
+    result.message_ = PL_TEXT("A mounted folder is being scanned. Please try again.").Render();
+    status_->SetTaskState(PL_TEXT("A mounted folder is being scanned. Please try again."), 0,
+                          false);
+    return result;
+  }
   QString refusal;
   auto    batch = PrepareDeleteBatch(targets, &refusal);
   if (!batch.has_value()) {

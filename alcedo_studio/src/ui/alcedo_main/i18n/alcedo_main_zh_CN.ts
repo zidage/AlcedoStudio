@@ -1360,6 +1360,18 @@
         <translation>无法保存项目。</translation>
     </message>
     <message>
+        <source>Paused</source>
+        <translation>已暂停</translation>
+    </message>
+    <message>
+        <source>%1 file(s) are in a mounted folder. The scan of that folder adds them.</source>
+        <translation>%1 个文件位于挂载文件夹中，将由该文件夹的扫描添加。</translation>
+    </message>
+    <message>
+        <source>A mounted folder is being scanned. Please try again.</source>
+        <translation>正在扫描挂载文件夹，请稍后再试。</translation>
+    </message>
+    <message>
         <source>The collection is no longer in the library.</source>
         <translation>该影集已不在图库中。</translation>
     </message>
