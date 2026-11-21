@@ -92,3 +92,36 @@ def_library(LutMetadata
     PUBLIC_DEPS Qt6::Core
     PRIVATE_DEPS JSON ThreadPool
 )
+
+# Read-only source file utilities of mounted folders (mounted_folder_plan.md, MF2): fingerprint,
+# volume identity, and directory listing. No function of the library writes a file.
+set(ALCEDO_SOURCE_FILE_UTILS_SOURCES
+    ${ALCEDO_SRC_ROOT}/utils/file/source_file_fingerprint.cpp
+    ${ALCEDO_SRC_ROOT}/utils/file/mount_directory_listing.cpp
+    ${ALCEDO_SRC_ROOT}/include/utils/file/source_file_fingerprint.hpp
+    ${ALCEDO_SRC_ROOT}/include/utils/file/mount_directory_listing.hpp
+    ${ALCEDO_SRC_ROOT}/include/utils/file/volume_identity.hpp
+)
+if(WIN32)
+    list(APPEND ALCEDO_SOURCE_FILE_UTILS_SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/file/volume_identity_windows.cpp)
+elseif(APPLE)
+    list(APPEND ALCEDO_SOURCE_FILE_UTILS_SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/file/volume_identity_macos.mm)
+    set_source_files_properties(${ALCEDO_SRC_ROOT}/utils/file/volume_identity_macos.mm
+        PROPERTIES LANGUAGE OBJCXX COMPILE_FLAGS "-fobjc-arc")
+else()
+    list(APPEND ALCEDO_SOURCE_FILE_UTILS_SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/file/volume_identity_linux.cpp)
+endif()
+def_library(SourceFileUtils
+    SOURCES ${ALCEDO_SOURCE_FILE_UTILS_SOURCES}
+    PUBLIC_DEPS xxHash
+    PRIVATE_DEPS Qt6::Core
+)
+if(WIN32)
+    # WNetGetConnectionW: the share of a mapped network drive.
+    target_link_libraries(SourceFileUtils PRIVATE mpr)
+elseif(APPLE)
+    target_link_libraries(SourceFileUtils PRIVATE "-framework Foundation")
+endif()
