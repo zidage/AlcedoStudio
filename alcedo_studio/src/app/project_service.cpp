@@ -530,6 +530,25 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
 
   storage_ = std::make_shared<Storage>(db_path_);
 
+  // #1015: the metadata start ids are the values of the last save. A database that was written
+  // after that save (a mount scan, then an exit without a save) holds larger ids. Each generator
+  // starts at the larger value, so a new element or image never takes an id that a row holds.
+  {
+    const auto stored = storage_->Maintenance().ReadLargestStoredIds();
+    const auto raise  = [](sl_element_id_t& start, int64_t largest_stored, const char* name) {
+      if (largest_stored > static_cast<int64_t>(start)) {
+        qCWarning(diag::projectLog).noquote()
+            << QStringLiteral("project.open.start_id_raised generator=%1 metadata=%2 stored=%3")
+                   .arg(QString::fromLatin1(name))
+                   .arg(static_cast<qulonglong>(start))
+                   .arg(static_cast<qlonglong>(largest_stored));
+        start = static_cast<sl_element_id_t>(largest_stored);
+      }
+    };
+    raise(start_id, stored.element_id, "element");
+    raise(image_pool_start_id, stored.image_id, "image");
+  }
+
   // Older projects have HNSW indexes on the semantic embedding tables. Search no
   // longer uses them, and while one exists every embedding write needs the vss
   // extension. Drop them; when that fails, the project does not open.

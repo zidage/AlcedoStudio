@@ -101,14 +101,21 @@ auto ProgressDetail(const MountScanProgress& progress) -> QString {
 
 ProjectMountScanPort::ProjectMountScanPort(
     std::shared_ptr<MountService> mounts, MountFileImporter* importer,
-    std::function<void(sl_element_id_t)> invalidate_thumbnail)
+    std::function<void(sl_element_id_t)> invalidate_thumbnail,
+    std::function<bool(QString*)>        save_project)
     : mounts_(std::move(mounts)),
       importer_(importer),
-      invalidate_thumbnail_(std::move(invalidate_thumbnail)) {
-  if (!mounts_ || importer_ == nullptr) {
+      invalidate_thumbnail_(std::move(invalidate_thumbnail)),
+      save_project_(std::move(save_project)) {
+  if (!mounts_ || importer_ == nullptr || !save_project_) {
     throw std::invalid_argument(
-        "ProjectMountScanPort: the mount service and the importer are required");
+        "ProjectMountScanPort: the mount service, the importer, and the save are required");
   }
+}
+
+auto ProjectMountScanPort::SaveProject() -> bool {
+  QString error;
+  return save_project_(&error);
 }
 
 auto ProjectMountScanPort::ListMounts() -> std::vector<MountSummary> {
@@ -140,6 +147,14 @@ auto MountScanChangedPhotos(const MountScanResult& result) -> bool {
              result.changed_in_place_count + result.missing_count + result.returned_count +
              result.import_failed_count >
          0;
+}
+
+auto MountScanStoredChanges(const MountScanResult& result) -> bool {
+  return result.imported_count + result.adopted_count + result.moved_count +
+                 result.changed_in_place_count + result.missing_count + result.returned_count +
+                 result.folders_added_count + result.folders_removed_count >
+             0 ||
+         result.relocated_root.has_value() || result.failed_batch > 0;
 }
 
 auto MountScanResultDetail(const MountScanResult& result) -> QString {
@@ -514,10 +529,20 @@ void MountScanCoordinator::StartNextScan() {
             result.status = MountScanStatus::kStorageFailure;
             result.error  = "unknown error";
           }
+          // #1015: the stored changes reach the project file before the worker ends, so the
+          // close, the load, and the exit, which wait for the worker, never save next to it.
+          bool save_failed = false;
+          if (MountScanStoredChanges(result)) {
+            try {
+              save_failed = !port->SaveProject();
+            } catch (...) {
+              save_failed = true;
+            }
+          }
           QMetaObject::invokeMethod(
               this,
-              [this, generation, mount_id, result = std::move(result)] {
-                HandleScanEnded(generation, mount_id, result);
+              [this, generation, mount_id, result = std::move(result), save_failed] {
+                HandleScanEnded(generation, mount_id, result, save_failed);
               },
               Qt::QueuedConnection);
           ended.set_value();
@@ -549,7 +574,7 @@ void MountScanCoordinator::HandleScanProgress(quint64 generation, mount_id_t mou
 }
 
 void MountScanCoordinator::HandleScanEnded(quint64 generation, mount_id_t mount_id,
-                                           const MountScanResult& result) {
+                                           const MountScanResult& result, bool save_failed) {
   if (generation != generation_) {
     HandleStoppedWorkerEnded(generation);
     return;
@@ -572,7 +597,7 @@ void MountScanCoordinator::HandleScanEnded(quint64 generation, mount_id_t mount_
     }
     state.reachability  = result.status == MountScanStatus::kOffline ? MountReachability::kOffline
                                                                      : MountReachability::kOnline;
-    ReportScanEnd(run, state, result, previous);
+    ReportScanEnd(run, state, result, previous, save_failed);
     UpdateWatch(mount_id, state, result);
     if (!run.canceled_by_user) {
       again = state.scan_again;
@@ -596,8 +621,17 @@ void MountScanCoordinator::HandleScanEnded(quint64 generation, mount_id_t mount_
 
 void MountScanCoordinator::ReportScanEnd(const RunningScan& run, const MountState& state,
                                          const MountScanResult& result,
-                                         MountReachability      previous_reachability) {
+                                         MountReachability      previous_reachability,
+                                         bool                   save_failed) {
   QString task_id = run.task_id;
+  if (save_failed && result.status != MountScanStatus::kStorageFailure) {
+    // The changes are in the database; the project file holds the state of the last save.
+    if (task_id.isEmpty()) {
+      task_id = RegisterTask(state, QString(), -1);
+    }
+    tasks_->FinishTask(task_id, BackgroundTaskState::Failed, Tr("The project could not be saved."));
+    return;
+  }
   switch (result.status) {
     case MountScanStatus::kComplete:
       if (task_id.isEmpty()) {

@@ -1356,6 +1356,10 @@
         <translation>无法保存这些变化。</translation>
     </message>
     <message>
+        <source>The project could not be saved.</source>
+        <translation>无法保存项目。</translation>
+    </message>
+    <message>
         <source>The collection is no longer in the library.</source>
         <translation>该影集已不在图库中。</translation>
     </message>
