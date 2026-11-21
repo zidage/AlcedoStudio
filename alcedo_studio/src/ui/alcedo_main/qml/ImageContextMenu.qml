@@ -189,7 +189,7 @@ AppContextMenu {
                             anchors.rightMargin: appTheme.spaceSm
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
-                            text: collectionRow.isRoot ? qsTr("全部图片")
+                            text: collectionRow.isRoot ? qsTr("All Photos")
                                                        : String(collectionRow.modelData.name)
                             color: collectionRow.targetEnabled ? appTheme.textColor
                                                                : appTheme.textMutedColor

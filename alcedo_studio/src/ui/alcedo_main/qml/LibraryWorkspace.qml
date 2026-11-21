@@ -70,6 +70,23 @@ Item {
                                                && !libraryQueryReplacing
 
     // A click on a folder tile shows that folder; the Collections tree selects and reveals it.
+    // Path of a collection for the header breadcrumb (#1028): All Photos, then each collection
+    // down to the collection itself. Each part is { folderId, name }.
+    function collectionPath(folderId) {
+        const rows = appModules.folders ? appModules.folders.folders : []
+        const byFolderId = CollectionTree.rowsByFolderId(rows)
+        const path = []
+        let current = byFolderId[String(Number(folderId))]
+        let guard = 0
+        while (current && Number(current.folderId) !== 0 && guard < 4096) {
+            path.unshift({ folderId: Number(current.folderId), name: String(current.name) })
+            current = byFolderId[String(Number(current.parentFolderId))]
+            ++guard
+        }
+        path.unshift({ folderId: 0, name: qsTr("All Photos") })
+        return path
+    }
+
     function showChildFolder(folderId) {
         if (appModules.folders && appModules.interactionPolicy.canChangeStateAsUser) {
             folderActivationGuardTimer.restart()
@@ -410,8 +427,83 @@ RowLayout {
             RowLayout {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 40
-                Label { text: qsTr("Browser"); color: root.colTextMuted; font.pixelSize: 13; font.weight: 600 }
-                Item { Layout.fillWidth: true }
+                // Path of the current collection. A click on a part above the current
+                // collection shows that collection. A path of more than four parts shows the
+                // first part, "...", and the last two parts; the tooltip of "..." has the
+                // hidden parts.
+                RowLayout {
+                    id: libraryBreadcrumb
+                    objectName: "libraryBreadcrumb"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    spacing: appTheme.spaceXs
+
+                    readonly property var path: root.collectionPath(
+                        Number(appModules.folders.currentFolderId))
+                    readonly property var shownPath: path.length > 4
+                        ? [path[0], null].concat(path.slice(-2))
+                        : path
+                    readonly property string hiddenNames: path.length > 4
+                        ? path.slice(1, -2).map(function(part) { return part.name }).join(" / ")
+                        : ""
+
+                    Repeater {
+                        model: libraryBreadcrumb.shownPath
+
+                        delegate: RowLayout {
+                            id: crumb
+                            required property var modelData
+                            required property int index
+                            readonly property bool last: index === libraryBreadcrumb.shownPath.length - 1
+                            readonly property bool folded: modelData === null
+                            Layout.minimumWidth: 0
+                            spacing: appTheme.spaceXs
+
+                            IconImage {
+                                Layout.preferredWidth: 12
+                                Layout.preferredHeight: 12
+                                Layout.alignment: Qt.AlignVCenter
+                                visible: crumb.index > 0
+                                sourceSize: Qt.size(12, 12)
+                                source: "qrc:/panel_icons/chevron-right.svg"
+                                color: root.colTextMuted
+                            }
+
+                            Label {
+                                objectName: "libraryBreadcrumbPart_" + crumb.index
+                                Layout.minimumWidth: 0
+                                Layout.maximumWidth: 220
+                                Layout.alignment: Qt.AlignVCenter
+                                elide: Text.ElideRight
+                                text: crumb.folded ? "..." : crumb.modelData.name
+                                color: crumb.last || crumbMouse.containsMouse ? root.colText
+                                                                               : root.colTextMuted
+                                font.family: appTheme.uiFontFamily
+                                font.pixelSize: appTheme.fontSizeTitle
+                                font.weight: crumb.last ? appTheme.fontWeightStrong
+                                                        : appTheme.fontWeightRegular
+
+                                ToolTip.visible: crumb.folded && crumbMouse.containsMouse
+                                ToolTip.text: libraryBreadcrumb.hiddenNames
+
+                                MouseArea {
+                                    id: crumbMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    enabled: !crumb.last
+                                    cursorShape: crumb.folded ? Qt.ArrowCursor : Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (!crumb.folded) {
+                                            root.showChildFolder(crumb.modelData.folderId)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
 
                 // ── Zoom slider ──
                 // Left end: the most photos (the smallest thumbnails, zoom level 7); right end:

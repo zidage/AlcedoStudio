@@ -100,7 +100,22 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorLutTileCompactWidth READ editorLutTileCompactWidth CONSTANT)
   Q_PROPERTY(int editorLutTileIconSize READ editorLutTileIconSize CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
+  // collectionsSidebarWidth is the default width; the user drags it in the min..max range.
   Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
+  Q_PROPERTY(int collectionsSidebarMinWidth READ collectionsSidebarMinWidth CONSTANT)
+  Q_PROPERTY(int collectionsSidebarMaxWidth READ collectionsSidebarMaxWidth CONSTANT)
+  // A drag of the sidebar edge below this width folds the sidebar.
+  Q_PROPERTY(int collectionsSidebarFoldWidth READ collectionsSidebarFoldWidth CONSTANT)
+  // Width of the rail that stays when the sidebar is folded in the Library.
+  Q_PROPERTY(int collectionsRailWidth READ collectionsRailWidth CONSTANT)
+  // Hover time on a rail button before the sidebar shows as an overlay.
+  Q_PROPERTY(int collectionsPeekDelayMs READ collectionsPeekDelayMs CONSTANT)
+  // Row height and indent per level of the sidebar tree and its navigation rows.
+  Q_PROPERTY(int collectionsTreeRowHeight READ collectionsTreeRowHeight CONSTANT)
+  Q_PROPERTY(int collectionsTreeIndentStep READ collectionsTreeIndentStep CONSTANT)
+  Q_PROPERTY(QColor collectionsTreeGuideColor READ collectionsTreeGuideColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor collectionsTreeGuideActiveColor READ collectionsTreeGuideActiveColor
+                 NOTIFY ThemeChanged)
   Q_PROPERTY(int collectionRowHeight READ collectionRowHeight CONSTANT)
   Q_PROPERTY(int collectionIndentStep READ collectionIndentStep CONSTANT)
   Q_PROPERTY(int collectionMenuMaxRows READ collectionMenuMaxRows CONSTANT)
@@ -422,6 +437,15 @@ class AppTheme final : public QObject {
   auto        editorLutTileCompactWidth() const -> int;
   auto        editorLutTileIconSize() const -> int;
   auto        collectionsSidebarWidth() const -> int;
+  auto        collectionsSidebarMinWidth() const -> int;
+  auto        collectionsSidebarMaxWidth() const -> int;
+  auto        collectionsSidebarFoldWidth() const -> int;
+  auto        collectionsRailWidth() const -> int;
+  auto        collectionsPeekDelayMs() const -> int;
+  auto        collectionsTreeRowHeight() const -> int;
+  auto        collectionsTreeIndentStep() const -> int;
+  auto        collectionsTreeGuideColor() const -> QColor;
+  auto        collectionsTreeGuideActiveColor() const -> QColor;
   auto        collectionRowHeight() const -> int;
   auto        collectionIndentStep() const -> int;
   auto        collectionMenuMaxRows() const -> int;

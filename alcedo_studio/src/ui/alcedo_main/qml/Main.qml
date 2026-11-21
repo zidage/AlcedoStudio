@@ -29,12 +29,27 @@ ApplicationWindow {
     // and the fade of the sidebar and the left edge of the workspace (issue 751). Only
     // setCollectionsSidebarExpanded writes it; it starts open, as collectionsSidebarExpanded.
     property real collectionsSidebarReveal: 1.0
+    // Width of the open sidebar. The user drags the sidebar edge in the range of the theme; a
+    // double-click on the edge sets the default again (#1028). The width holds for the session.
+    property real collectionsSidebarWidth: appTheme.collectionsSidebarWidth
+    // The folded sidebar of the Library keeps a rail of icons; the Editor gives the whole
+    // width to the image. The workspace switch sets it together with the fold state
+    // (applyDefaultCollectionsSidebarForWorkspace): a binding to the workspace would change the
+    // sidebar extent again while the host takes the size of the new workspace.
+    property bool collectionsRailShown: true
+    // True while the folded sidebar shows over the workspace (a hover on the rail).
+    property bool collectionsSidebarPeek: false
     // The width of the open sidebar and its gap to the workspace.
-    readonly property real collectionsSidebarOpenExtent: appTheme.collectionsSidebarWidth
+    readonly property real collectionsSidebarOpenExtent: root.collectionsSidebarWidth
                                                          + appTheme.spaceMd
+    // The width of the rail and its gap; 0 where the folded sidebar has no rail.
+    readonly property real collectionsSidebarRailExtent: root.collectionsRailShown
+                                                         ? appTheme.collectionsRailWidth
+                                                           + appTheme.spaceMd
+                                                         : 0
     // The left edge of the workspace: the shown part of the sidebar and its gap.
-    readonly property real collectionsSidebarExtent: collectionsSidebarReveal
-                                                     * collectionsSidebarOpenExtent
+    readonly property real collectionsSidebarExtent: collectionsSidebarRailExtent
+        + collectionsSidebarReveal * (collectionsSidebarOpenExtent - collectionsSidebarRailExtent)
     // True while a manual toggle folds or opens the sidebar. The shown workspace follows the
     // sidebar edge on every frame and defers the work that only its final size needs. It turns
     // false after the shown workspace has its final size (collectionsSidebarFoldAnimation).
@@ -159,6 +174,7 @@ ApplicationWindow {
     // fold stops at its end.
     function setCollectionsSidebarExpanded(expanded, animated) {
         root.collectionsSidebarExpanded = expanded
+        root.collectionsSidebarPeek = false
         const target = expanded ? 1.0 : 0.0
         if (!animated || appTheme.reduceMotion) {
             collectionsSidebarFoldAnimation.stop()
@@ -187,7 +203,15 @@ ApplicationWindow {
         const expanded = root.collectionsSidebarUserAdjusted
                 ? root.collectionsSidebarExpanded
                 : workspace === "library"
+        // The rail goes before a fold and comes after an open, so the extent changes once.
+        const railShown = workspace === "library"
+        if (!railShown) {
+            root.collectionsRailShown = false
+        }
         root.setCollectionsSidebarExpanded(expanded, false)
+        if (railShown) {
+            root.collectionsRailShown = true
+        }
     }
 
     function toggleActiveRightSidebar() {
@@ -721,23 +745,64 @@ ApplicationWindow {
 
             // The shown part of the sidebar and its gap. The panel keeps its full width and
             // slides inside this clip, so its folder list and text never reflow during a fold.
+            // While the folded sidebar shows over the workspace (peek), the clip is off and the
+            // slot draws above the workspace.
             Item {
                 id: collectionsSidebarSlot
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 width: root.collectionsSidebarExtent
-                clip: true
-                visible: root.collectionsSidebarReveal > 0
+                clip: !root.collectionsSidebarPeek
+                z: root.collectionsSidebarPeek ? 20 : 0
+                visible: root.collectionsSidebarExtent > 0 || root.collectionsSidebarPeek
+
+                CollectionsRail {
+                    id: collectionsRail
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: appTheme.collectionsRailWidth
+                    visible: root.collectionsRailShown && root.collectionsSidebarReveal < 1
+                    opacity: 1 - root.collectionsSidebarReveal
+                    enabled: !root.collectionsSidebarExpanded
+                    theme: root
+                    allPhotosSelected: Number(appModules.folders.currentFolderId) === 0
+                    onSearchRequested: root.globalSearchDialog.openFromCollection()
+                    onBackgroundTasksRequested: root.openBackgroundTasksDialog()
+                    onAllPhotosRequested: {
+                        if (root.backendInteractive) {
+                            appModules.folders.SelectFolder(0)
+                        }
+                    }
+                    onPeekRequested: {
+                        if (!root.collectionsSidebarExpanded) {
+                            root.collectionsSidebarPeek = true
+                        }
+                    }
+                    onPeekHoveredChanged: collectionsPeekCloseTimer.restart()
+                    onImportRequested: function(anchorItem) {
+                        collectionsSidebar.openImportMenu(anchorItem)
+                    }
+                }
 
                 CollectionsPanel {
                     id: collectionsSidebar
                     objectName: "collectionsSidebar"
-                    x: collectionsSidebarSlot.width - root.collectionsSidebarOpenExtent
+                    x: root.collectionsSidebarPeek
+                       ? 0
+                       : collectionsSidebarSlot.width - root.collectionsSidebarOpenExtent
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
-                    opacity: root.collectionsSidebarReveal
-                    enabled: root.collectionsSidebarExpanded
+                    panelWidth: root.collectionsSidebarWidth
+                    overlay: root.collectionsSidebarPeek
+                    // Dims while a drag of the edge would fold the sidebar.
+                    opacity: root.collectionsSidebarPeek
+                             ? 1.0
+                             : root.collectionsSidebarReveal
+                               * (collectionsSidebarResize.foldPending ? 0.55 : 1.0)
+                    visible: root.collectionsSidebarReveal > 0 || root.collectionsSidebarPeek
+                    enabled: root.collectionsSidebarExpanded || root.collectionsSidebarPeek
                     folderController: appModules.folders
                     theme: root
                     host: root
@@ -750,6 +815,98 @@ ApplicationWindow {
                     }
                     onSearchRequested: root.globalSearchDialog.openFromCollection()
                     onBackgroundTasksRequested: root.openBackgroundTasksDialog()
+                    onHoveredChanged: collectionsPeekCloseTimer.restart()
+                    onPopupOpenChanged: collectionsPeekCloseTimer.restart()
+                    onBusyChanged: collectionsPeekCloseTimer.restart()
+                }
+
+                // The peek ends when the pointer has left the sidebar and the rail, and no menu,
+                // dialog, inline editor, or drag of the sidebar is in progress.
+                Timer {
+                    id: collectionsPeekCloseTimer
+                    interval: appTheme.motionFadeMs * 2
+                    onTriggered: {
+                        if (root.collectionsSidebarPeek && !collectionsSidebar.hovered
+                                && !collectionsRail.peekHovered && !collectionsSidebar.popupOpen
+                                && !collectionsSidebar.busy) {
+                            root.collectionsSidebarPeek = false
+                        }
+                    }
+                }
+
+                // Edge of the open sidebar, in its gap to the workspace: a drag sets the width,
+                // a double-click sets the default width, and a drag below the fold width folds
+                // the sidebar.
+                MouseArea {
+                    id: collectionsSidebarResize
+                    objectName: "collectionsSidebarResizeHandle"
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: appTheme.spaceMd
+                    visible: root.collectionsSidebarExpanded && !root.collectionsSidebarPeek
+                             && root.collectionsSidebarReveal === 1
+                    hoverEnabled: true
+                    cursorShape: Qt.SplitHCursor
+                    preventStealing: true
+
+                    property real startX: 0
+                    property real startWidth: 0
+                    property bool foldPending: false
+
+                    onPressed: function(mouse) {
+                        startX = mapToGlobal(mouse.x, 0).x
+                        startWidth = root.collectionsSidebarWidth
+                        foldPending = false
+                        // The workspace edge moves on each step: the shown workspace defers the
+                        // work that only its final size needs, as during a fold.
+                        root.collectionsSidebarFolding = true
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (!pressed) {
+                            return
+                        }
+                        const target = startWidth + mapToGlobal(mouse.x, 0).x - startX
+                        foldPending = target < appTheme.collectionsSidebarFoldWidth
+                        root.collectionsSidebarWidth = Math.round(
+                            Math.max(appTheme.collectionsSidebarMinWidth,
+                                     Math.min(appTheme.collectionsSidebarMaxWidth, target)))
+                    }
+                    onReleased: {
+                        const fold = foldPending
+                        foldPending = false
+                        workspaceHost.settleShownWorkspaceLayouts()
+                        root.collectionsSidebarFolding = false
+                        if (fold) {
+                            root.collectionsSidebarWidth = startWidth
+                            root.toggleCollectionsSidebar()
+                        }
+                    }
+                    onCanceled: {
+                        foldPending = false
+                        root.collectionsSidebarWidth = startWidth
+                        workspaceHost.settleShownWorkspaceLayouts()
+                        root.collectionsSidebarFolding = false
+                    }
+                    onDoubleClicked: root.collectionsSidebarWidth = appTheme.collectionsSidebarWidth
+
+                    Rectangle {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.topMargin: appTheme.panelRadius
+                        anchors.bottomMargin: appTheme.panelRadius
+                        width: 2
+                        radius: 1
+                        color: collectionsSidebarResize.containsMouse
+                               || collectionsSidebarResize.pressed
+                               ? appTheme.textMutedColor
+                               : "transparent"
+                        Behavior on color {
+                            enabled: !appTheme.reduceMotion
+                            ColorAnimation { duration: 120 }
+                        }
+                    }
                 }
             }
 

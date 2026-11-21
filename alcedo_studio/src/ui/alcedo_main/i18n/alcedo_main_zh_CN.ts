@@ -2536,7 +2536,46 @@ Alcedo 将改用 %1。</translation>
     </message>
 </context>
 <context>
+    <name>CollectionsRail</name>
+    <message>
+        <source>Search</source>
+        <translation>搜索</translation>
+    </message>
+    <message>
+        <source>Background Tasks</source>
+        <translation>后台任务</translation>
+    </message>
+    <message>
+        <source>All Photos</source>
+        <translation>全部图片</translation>
+    </message>
+    <message>
+        <source>Collections</source>
+        <translation>影集</translation>
+    </message>
+    <message>
+        <source>Import</source>
+        <translation>导入</translation>
+    </message>
+</context>
+<context>
     <name>CollectionsPanel</name>
+    <message>
+        <source>Import</source>
+        <translation>导入</translation>
+    </message>
+    <message>
+        <source>Import Images...</source>
+        <translation>导入图像...</translation>
+    </message>
+    <message>
+        <source>Import Folder...</source>
+        <translation>导入文件夹...</translation>
+    </message>
+    <message>
+        <source>Mount Folder...</source>
+        <translation>挂载文件夹...</translation>
+    </message>
     <message>
         <source>Mount Folder Here...</source>
         <translation>在此挂载文件夹...</translation>
@@ -2644,7 +2683,7 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+39"/>
-        <source>全部图片</source>
+        <source>All Photos</source>
         <translation>全部图片</translation>
     </message>
     <message>
@@ -6370,7 +6409,7 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <translation>筛选影集</translation>
     </message>
     <message>
-        <source>全部图片</source>
+        <source>All Photos</source>
         <translation>全部图片</translation>
     </message>
     <message>
@@ -6756,6 +6795,10 @@ Refresh the library afterwards; they are listed under the User category. Import 
 </context>
 <context>
     <name>LibraryWorkspace</name>
+    <message>
+        <source>All Photos</source>
+        <translation>全部图片</translation>
+    </message>
     <message>
         <source>Import to %1</source>
         <translation>导入到 %1</translation>
