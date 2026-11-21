@@ -1436,8 +1436,8 @@ ColumnLayout {
     }
 
     Button {
-        id: openFolderBtn
-        objectName: "collectionsOpenFolderButton"
+        id: mountFolderBtn
+        objectName: "collectionsMountFolderButton"
         Layout.fillWidth: true
         Layout.preferredHeight: 46
         text: qsTr("Mount Folder")
@@ -1453,9 +1453,9 @@ ColumnLayout {
 
         background: Rectangle {
             radius: 8
-            color: theme.filledActionFill(openFolderBtn.enabled,
-                                          openFolderBtn.hovered,
-                                          openFolderBtn.down)
+            color: theme.filledActionFill(mountFolderBtn.enabled,
+                                          mountFolderBtn.hovered,
+                                          mountFolderBtn.down)
             Behavior on color {
                 enabled: !appTheme.reduceMotion
                 ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
@@ -1463,13 +1463,13 @@ ColumnLayout {
         }
 
         contentItem: IconLabel {
-            spacing: openFolderBtn.spacing
-            mirrored: openFolderBtn.mirrored
-            display: openFolderBtn.display
-            icon: openFolderBtn.icon
-            text: openFolderBtn.text
-            font: openFolderBtn.font
-            color: openFolderBtn.inkColor
+            spacing: mountFolderBtn.spacing
+            mirrored: mountFolderBtn.mirrored
+            display: mountFolderBtn.display
+            icon: mountFolderBtn.icon
+            text: mountFolderBtn.text
+            font: mountFolderBtn.font
+            color: mountFolderBtn.inkColor
         }
     }
 

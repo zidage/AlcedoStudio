@@ -1110,8 +1110,8 @@ auto PanelRow(Harness& h, uint element) -> QVariantMap {
 }
 
 /// Clicks Mount Folder and accepts the folder dialog with @p directory.
-void OpenFolderWith(Harness& h, const QString& directory) {
-  auto* button = FindItem(h.window->contentItem(), QStringLiteral("collectionsOpenFolderButton"));
+void MountFolderWith(Harness& h, const QString& directory) {
+  auto* button = FindItem(h.window->contentItem(), QStringLiteral("collectionsMountFolderButton"));
   auto* dialog = h.panel->findChild<QObject*>(QStringLiteral("collectionMountFolderDialog"));
   ASSERT_NE(button, nullptr);
   ASSERT_NE(dialog, nullptr);
@@ -1132,7 +1132,7 @@ void OpenFolderWith(Harness& h, const QString& directory) {
 
 // Issue #1008: Mount Folder at the foot of the panel mounts the chosen directory below the
 // selected collection: below the library root (tree depth 1), or inside an ordinary collection.
-TEST(CollectionsPanelQmlTest, OpenFolderMountsTheDirectoryBelowTheSelectedCollection) {
+TEST(CollectionsPanelQmlTest, MountFolderMountsTheDirectoryBelowTheSelectedCollection) {
   Harness h(SmallTree(), /*current_element=*/0);
   ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
   QTemporaryDir first_dir;
@@ -1140,7 +1140,7 @@ TEST(CollectionsPanelQmlTest, OpenFolderMountsTheDirectoryBelowTheSelectedCollec
   ASSERT_TRUE(first_dir.isValid());
   ASSERT_TRUE(second_dir.isValid());
 
-  OpenFolderWith(h, first_dir.path());
+  MountFolderWith(h, first_dir.path());
   ASSERT_EQ(h.fake.calls.filter(QStringLiteral("MountFolder:")).size(), 1)
       << h.fake.calls.join(',').toStdString();
   EXPECT_TRUE(h.fake.calls.contains(QStringLiteral("MountFolder:0:%1").arg(first_dir.path())))
@@ -1152,7 +1152,7 @@ TEST(CollectionsPanelQmlTest, OpenFolderMountsTheDirectoryBelowTheSelectedCollec
 
   h.fake.SelectFolder(h.fake.UiOf(1));
   ProcessEvents(40);
-  OpenFolderWith(h, second_dir.path());
+  MountFolderWith(h, second_dir.path());
   EXPECT_TRUE(h.fake.calls.contains(QStringLiteral("MountFolder:1:%1").arg(second_dir.path())))
       << h.fake.calls.join(',').toStdString();
   const QVariantMap inner_mount = PanelRow(h, 501);
@@ -1169,21 +1169,21 @@ TEST(CollectionsPanelQmlTest, FootActionsAreDisabledOnAMountedSelection) {
   Harness h(MountTree(), /*current_element=*/1);
   ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
   auto* content     = h.window->contentItem();
-  auto* open_folder = FindItem(content, QStringLiteral("collectionsOpenFolderButton"));
+  auto* mount_folder = FindItem(content, QStringLiteral("collectionsMountFolderButton"));
   auto* images      = FindItem(content, QStringLiteral("collectionsImportImagesButton"));
   auto* folder      = FindItem(content, QStringLiteral("collectionsImportFolderButton"));
-  ASSERT_NE(open_folder, nullptr);
+  ASSERT_NE(mount_folder, nullptr);
   ASSERT_NE(images, nullptr);
   ASSERT_NE(folder, nullptr);
   const auto all_enabled = [&](bool expected) {
-    return open_folder->isEnabled() == expected && images->isEnabled() == expected &&
+    return mount_folder->isEnabled() == expected && images->isEnabled() == expected &&
            folder->isEnabled() == expected;
   };
 
   EXPECT_TRUE(all_enabled(true));
   EXPECT_EQ(images->property("text").toString(), QStringLiteral("Import Images"));
   EXPECT_EQ(folder->property("text").toString(), QStringLiteral("Import Folder"));
-  EXPECT_EQ(open_folder->property("text").toString(), QStringLiteral("Mount Folder"));
+  EXPECT_EQ(mount_folder->property("text").toString(), QStringLiteral("Mount Folder"));
   // The halves split the width, sit on one row, and hold their labels without eliding.
   EXPECT_NEAR(images->width(), folder->width(), 1.0);
   for (auto* segment : {images, folder}) {
@@ -1206,7 +1206,7 @@ TEST(CollectionsPanelQmlTest, FootActionsAreDisabledOnAMountedSelection) {
   EXPECT_DOUBLE_EQ(
       qvariant_cast<QQuickItem*>(folder->property("background"))->childItems().at(0)->x(), -8.0);
   EXPECT_DOUBLE_EQ(images->mapToScene(QPointF(0, 0)).y(), folder->mapToScene(QPointF(0, 0)).y());
-  EXPECT_LT(open_folder->mapToScene(QPointF(0, 0)).y(), images->mapToScene(QPointF(0, 0)).y());
+  EXPECT_LT(mount_folder->mapToScene(QPointF(0, 0)).y(), images->mapToScene(QPointF(0, 0)).y());
 
   QTest::mouseClick(h.window, Qt::LeftButton, Qt::NoModifier, SceneCenter(images));
   EXPECT_TRUE(WaitUntil([&] {
@@ -1237,7 +1237,7 @@ TEST(CollectionsPanelQmlTest, FootActionsAreDisabledOnAMountedSelection) {
 }
 
 // Issue #1008: the row menu of the library root has Mount Folder Here.
-TEST(CollectionsPanelQmlTest, RootRowMenuHasOpenFolderHere) {
+TEST(CollectionsPanelQmlTest, RootRowMenuHasMountFolderHere) {
   Harness h(SmallTree());
   ASSERT_NE(h.panel, nullptr);
   auto* menu = h.window->findChild<QObject*>(QStringLiteral("collectionRowMenu"));
