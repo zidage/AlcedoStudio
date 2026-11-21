@@ -126,6 +126,14 @@ alcedo_add_automation_test(AutomationProjectCommandsTest
     LABEL ci_automation_flow
     CATEGORIES ci_automation)
 
+# Replace the source of an open editor image and compare its rendered pixels.
+alcedo_add_automation_test(EditorSourceReplacementRenderingTest
+    SOURCES editor_source_replacement_rendering_test.cpp
+    LIBRARIES AutomationHostLib OpenImageIO::OpenImageIO
+    LABEL ci_automation_flow
+    CATEGORIES ci_automation)
+alcedo_copy_duckdb_fts_extension(EditorSourceReplacementRenderingTest)
+
 # library.* and tasks.* parameter and state rules in an in-process headless session.
 alcedo_add_automation_test(AutomationLibraryCommandsTest
     SOURCES automation_library_commands_test.cpp

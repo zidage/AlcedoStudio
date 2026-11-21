@@ -63,10 +63,10 @@ class MountScanPort {
 /// The production port: MountService::ScanMount with the import service of the project.
 class ProjectMountScanPort final : public MountScanPort {
  public:
-  /// @param invalidate_thumbnail Called on the worker thread for each file that changed in
+  /// @param on_source_changed Called on the worker thread for each file that changed in
   ///        place, moved, or returned.
   ProjectMountScanPort(std::shared_ptr<MountService> mounts, MountFileImporter* importer,
-                       std::function<void(sl_element_id_t)> invalidate_thumbnail);
+                       std::function<void(sl_element_id_t)> on_source_changed);
 
   auto ListMounts() -> std::vector<MountSummary> override;
   auto ScanMount(mount_id_t mount_id, const std::atomic<bool>& stop_requested,
@@ -76,7 +76,7 @@ class ProjectMountScanPort final : public MountScanPort {
  private:
   std::shared_ptr<MountService>        mounts_;
   MountFileImporter*                   importer_ = nullptr;
-  std::function<void(sl_element_id_t)> invalidate_thumbnail_;
+  std::function<void(sl_element_id_t)> on_source_changed_;
 };
 
 /// Steady time and single-shot timers of the coordinator. A test advances the time by hand.

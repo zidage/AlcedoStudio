@@ -56,6 +56,15 @@ TEST_F(EditorSessionServiceFacadeTest, ShutdownRejectsFurtherOpens) {
   EXPECT_EQ(rejected.kind, EditorSessionResultKind::Rejected);
 }
 
+TEST_F(EditorSessionServiceFacadeTest, SourceReloadRejectsAnotherImageAndKeepsTheOpenIdentity) {
+  service_->Open(1, 2);
+  const auto previous_load = service_->active_image_load_request();
+  EXPECT_EQ(service_->ReloadSource(3, 4).kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(service_->identity().element_id, 1);
+  EXPECT_EQ(service_->identity().image_id, 2);
+  EXPECT_EQ(service_->active_image_load_request().value, previous_load.value);
+}
+
 TEST_F(EditorSessionServiceFacadeTest, ResultsAreRecordedForObserverOrdering) {
   service_->Open(1, 2);
   const auto results = service_->results();

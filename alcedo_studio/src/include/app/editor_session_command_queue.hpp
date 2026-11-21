@@ -136,7 +136,7 @@ enum class EditorSessionCompletionKind : std::uint8_t {
   SaveCheckpointFinished,
 };
 
-/// State of the session command admission gate.
+/// State of the session command admission rules.
 enum class EditorSessionQueueState : std::uint8_t {
   Accepting = 0,
   ShuttingDown,
@@ -159,6 +159,8 @@ struct EditorSessionCommand {
   std::string                             text;
   /// ApplyPaste: author of the Paste commit; nullopt is the user.
   std::optional<EditCommitAttribution>    attribution;
+  /// OpenImage: save and reload the same image after its source changed.
+  bool                                    reload_source = false;
   bool                                    persist_changes = true;
   /// Presentation binding for SetPresentationTarget / SetPresentationSize /
   /// SetGeometryOverlay. Unused by other command kinds.

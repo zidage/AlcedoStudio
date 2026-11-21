@@ -264,15 +264,15 @@ class MountScanRun {
     result_.folders_added_count    = changes.folders_to_add.size();
     result_.folders_removed_count  = changes.folders_to_remove.size();
 
-    if (request_.invalidate_thumbnail) {
+    if (request_.on_source_changed) {
       for (const auto& update : changes.changed_in_place) {
-        request_.invalidate_thumbnail(update.element_id);
+        request_.on_source_changed(update.element_id);
       }
       for (const auto& move : changes.moved) {
-        request_.invalidate_thumbnail(move.element_id);
+        request_.on_source_changed(move.element_id);
       }
       for (const auto& update : changes.returned) {
-        request_.invalidate_thumbnail(update.element_id);
+        request_.on_source_changed(update.element_id);
       }
     }
   }

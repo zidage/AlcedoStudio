@@ -734,27 +734,36 @@ void ApplicationModuleHost::SyncMountScans() {
   if (mount_scans_->IsStarted()) {
     return;
   }
-  auto invalidate_thumbnail =
-      [library = QPointer<LibraryModule>(library_.get())](sl_element_id_t element_id) {
-        // Called on the scan worker; the thumbnail state belongs to the UI thread.
-        QMetaObject::invokeMethod(
-            library,
-            [library, element_id] {
-              if (!library || library->project() == nullptr) {
-                return;
-              }
-              if (auto thumbnails = library->project()->handler().thumbnail_service()) {
-                thumbnails->InvalidateThumbnail(element_id);
-              }
-              const auto* item = library->FindAlbumItem(element_id);
-              if (item != nullptr) {
-                (void)library->thumbs().RefreshCurrentThumbnail(element_id, item->image_id);
-              }
-            },
-            Qt::QueuedConnection);
-      };
+  auto on_source_changed = [library = QPointer<LibraryModule>(library_.get()),
+                            editor  = QPointer<EditorSessionController>(editor_session_.get()),
+                            source_project = std::weak_ptr{project}](sl_element_id_t element_id) {
+    // The scan worker reports the change after updating the source record.
+    QMetaObject::invokeMethod(
+        library,
+        [library, editor, source_project, element_id] {
+          if (!library || !library->project()) {
+            return;
+          }
+          auto&      project_handler = library->project()->handler();
+          const auto changed_project = source_project.lock();
+          if (!changed_project || project_handler.project() != changed_project) {
+            return;
+          }
+          if (auto thumbnails = project_handler.thumbnail_service()) {
+            thumbnails->InvalidateThumbnail(element_id);
+          }
+          const auto* item = library->FindAlbumItem(element_id);
+          if (item != nullptr) {
+            (void)library->thumbs().RefreshCurrentThumbnail(element_id, item->image_id);
+          }
+          if (editor) {
+            editor->NotifySourceChanged(element_id);
+          }
+        },
+        Qt::QueuedConnection);
+  };
   mount_scans_->Start(std::make_shared<ProjectMountScanPort>(project->GetMountService(), importer,
-                                                             std::move(invalidate_thumbnail)));
+                                                             std::move(on_source_changed)));
 }
 
 void ApplicationModuleHost::ShutdownModules() {

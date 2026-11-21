@@ -99,12 +99,12 @@ auto ProgressDetail(const MountScanProgress& progress) -> QString {
 
 // ── ProjectMountScanPort ────────────────────────────────────────────────────
 
-ProjectMountScanPort::ProjectMountScanPort(
-    std::shared_ptr<MountService> mounts, MountFileImporter* importer,
-    std::function<void(sl_element_id_t)> invalidate_thumbnail)
+ProjectMountScanPort::ProjectMountScanPort(std::shared_ptr<MountService>        mounts,
+                                           MountFileImporter*                   importer,
+                                           std::function<void(sl_element_id_t)> on_source_changed)
     : mounts_(std::move(mounts)),
       importer_(importer),
-      invalidate_thumbnail_(std::move(invalidate_thumbnail)) {
+      on_source_changed_(std::move(on_source_changed)) {
   if (!mounts_ || importer_ == nullptr) {
     throw std::invalid_argument(
         "ProjectMountScanPort: the mount service and the importer are required");
@@ -124,7 +124,7 @@ auto ProjectMountScanPort::ScanMount(
   request.find_moved_volume    = find_moved_volume;
   request.importer             = importer_;
   request.stop_requested       = &stop_requested;
-  request.invalidate_thumbnail = invalidate_thumbnail_;
+  request.on_source_changed    = on_source_changed_;
   request.on_progress          = on_progress;
   return mounts_->ScanMount(request);
 }

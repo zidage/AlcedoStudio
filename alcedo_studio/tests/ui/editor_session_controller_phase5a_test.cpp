@@ -15,8 +15,10 @@
 #include <QThread>
 #include <QTimer>
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -52,6 +54,9 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   std::uint64_t         next_image_load_request_ = 0;
   PresentationSinkId    sink_id_                 = 0;
   int                   open_count               = 0;
+  int                   reload_count             = 0;
+  std::function<void()> on_reload_source;
+  std::uint64_t         queued_reload_operation_id = 0;
   int                   switch_count             = 0;
   int                   close_count              = 0;
   int                   persist_count            = 0;
@@ -103,6 +108,28 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     result.identity = identity_;
     NotifyChange();
     return result;
+  }
+
+  auto ReloadSource(sl_element_id_t element_id, image_id_t image_id)
+      -> EditorSessionResult override {
+    ++reload_count;
+    if (on_reload_source) {
+      on_reload_source();
+    }
+    if (queued_reload_operation_id != 0) {
+      EditorSessionResult result;
+      result.kind         = EditorSessionResultKind::Accepted;
+      result.operation_id = queued_reload_operation_id;
+      return result;
+    }
+    return Open(element_id, image_id);
+  }
+
+  void RejectQueuedSourceReload() {
+    EditorSessionResult result;
+    result.kind         = EditorSessionResultKind::Rejected;
+    result.operation_id = queued_reload_operation_id;
+    NotifyResult(result);
   }
 
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
@@ -500,6 +527,69 @@ TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
   EXPECT_EQ(controller.session_state(), EditorSessionState::NoImage);
   EXPECT_EQ(backend.close_count, 1);
   EXPECT_TRUE(backend.last_close_persist);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SourceRefreshWaitsForLoadingAndRunsOnceOnTheSameImage) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
+  editor_rhi::EditorViewportItem viewport;
+  controller.bindPresentationViewport(&viewport);
+  controller.Open(42, 84);
+  const auto previous_epoch = viewport.sessionEpoch();
+  backend.on_reload_source  = [&] {
+    EXPECT_EQ(viewport.imageIdentity(), 84);
+    EXPECT_EQ(viewport.sessionEpoch(), previous_epoch + 1);
+  };
+  controller.NotifySourceChanged(42);
+  EXPECT_EQ(backend.reload_count, 0);
+  backend.SimulateFirstFrameReady();
+  EXPECT_EQ(backend.reload_count, 1);
+  EXPECT_EQ(backend.identity().element_id, 42);
+  EXPECT_EQ(backend.identity().image_id, 84);
+  backend.SimulateFirstFrameReady();
+  EXPECT_EQ(backend.reload_count, 1);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SourceRefreshForAnotherImageLeavesTheOpenSourceLoaded) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
+  controller.Open(42, 84);
+  backend.SimulateFirstFrameReady();
+  controller.NotifySourceChanged(43);
+  EXPECT_EQ(backend.reload_count, 0);
+  EXPECT_EQ(backend.open_count, 1);
+}
+
+TEST(EditorSessionControllerPhase5ATest, QueuedSourceReloadKeepsNewViewportIdentityUntilRejected) {
+  FakeSessionBackend             backend;
+  EditorSessionController        controller(&backend);
+  editor_rhi::EditorViewportItem viewport;
+  controller.bindPresentationViewport(&viewport);
+  controller.Open(42, 84);
+  const auto previous_epoch = viewport.sessionEpoch();
+  backend.queued_reload_operation_id = 1;
+  controller.NotifySourceChanged(42);
+
+  // First-frame delivery submits reload from OnBackendChanged before the backend starts its save.
+  backend.SimulateFirstFrameReady();
+  ASSERT_EQ(backend.reload_count, 1);
+  EXPECT_EQ(viewport.sessionEpoch(), previous_epoch + 1);
+  backend.NotifyWithoutStateChange();
+  EXPECT_EQ(viewport.sessionEpoch(), previous_epoch + 1);
+  backend.RejectQueuedSourceReload();
+  EXPECT_EQ(viewport.sessionEpoch(), previous_epoch);
+}
+
+TEST(EditorSessionControllerPhase5ATest, NavigationAwayClearsThePendingSourceRefresh) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
+  controller.Open(42, 84);
+  controller.NotifySourceChanged(42);
+  controller.Open(100, 200);
+  backend.SimulateFirstFrameReady();
+  EXPECT_EQ(backend.reload_count, 0);
+  EXPECT_EQ(controller.element_id(), 100);
+  EXPECT_EQ(controller.image_id(), 200);
 }
 
 TEST(EditorSessionControllerPhase5ATest, WorkspaceSwitchesImagesWithoutClosingTheFirstSession) {
