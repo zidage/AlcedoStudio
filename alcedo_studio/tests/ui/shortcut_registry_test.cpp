@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <QFile>
+#include <QQuickItem>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QString>
@@ -255,6 +256,88 @@ TEST_F(ShortcutRegistryTest, MaskExclusiveScopeMayUseNodesDeleteBinding) {
                                                   Qt::Key_Delete, Qt::NoModifier, kKeyChord);
   EXPECT_FALSE(denied.value(QStringLiteral("succeeded")).toBool());
   EXPECT_EQ(denied.value(QStringLiteral("errorCode")).toString(), QStringLiteral("conflict"));
+}
+
+TEST_F(ShortcutRegistryTest, CropShortcutScopeYieldsToTextInputAndMaskEditing) {
+  auto                registry     = MakeRegistry();
+  const QString       crop_command = QStringLiteral("test.cropCommand");
+  ShortcutBindingSpec binding;
+  binding.id               = crop_command;
+  binding.scope            = QLatin1String(shortcut_scope::kEditorCropEdit);
+  binding.default_bindings = {{ShortcutInputKind::KeyChord, Qt::Key_X, Qt::NoModifier}};
+  registry->Register(binding);
+  ASSERT_TRUE(registry->FinalizeRegistration().isEmpty());
+
+  QQuickItem workspace;
+  QQuickItem viewport(&workspace);
+  QQuickItem text_input(&workspace);
+  text_input.setFlag(QQuickItem::ItemAcceptsInputMethod);
+  QQuickItem settings_capture;
+
+  const auto resolve = [&](bool crop_enabled, bool exclusive_mode_active, QQuickItem* focus) {
+    const auto scope =
+        registry->activeCropEditScope(crop_enabled, exclusive_mode_active, &workspace, focus);
+    return registry->commandIdForKey(scope, Qt::Key_X, Qt::NoModifier);
+  };
+  EXPECT_EQ(resolve(true, false, &viewport), crop_command);
+  EXPECT_TRUE(resolve(false, false, &viewport).isEmpty());
+  EXPECT_TRUE(resolve(true, true, &viewport).isEmpty());
+  EXPECT_TRUE(resolve(true, false, &text_input).isEmpty());
+  EXPECT_TRUE(resolve(true, false, &settings_capture).isEmpty());
+  EXPECT_TRUE(resolve(true, false, nullptr).isEmpty());
+  EXPECT_EQ(resolve(true, false, &viewport), crop_command);
+}
+
+TEST_F(ShortcutRegistryTest, CropShortcutScopeLeavesExistingBindingsUnchanged) {
+  const QString file         = QStringLiteral("crop-shortcuts.ini");
+  const QString undo         = QLatin1String(shortcut_id::kEditorUndo);
+  const QString crop_command = QStringLiteral("test.cropCommand");
+  const QString mask_command = QLatin1String(shortcut_id::kMaskDeleteSelection);
+  auto baseline = MakeRegistry(file);
+  ASSERT_TRUE(baseline->FinalizeRegistration().isEmpty());
+  ASSERT_TRUE(baseline->saveCandidate(undo, Qt::Key_J, Qt::ControlModifier, kKeyChord)
+                  .value(QStringLiteral("succeeded"))
+                  .toBool());
+  ASSERT_TRUE(baseline->saveCandidate(mask_command, Qt::Key_X, Qt::NoModifier, kKeyChord)
+                  .value(QStringLiteral("succeeded"))
+                  .toBool());
+
+  ShortcutBindingSpec binding;
+  binding.id               = crop_command;
+  binding.scope            = QLatin1String(shortcut_scope::kEditorCropEdit);
+  // Mask edit gets the same key when its higher-priority scope is active.
+  binding.default_bindings = {{ShortcutInputKind::KeyChord, Qt::Key_X, Qt::NoModifier}};
+  auto registry            = MakeRegistry(file);
+  registry->Register(binding);
+  ASSERT_TRUE(registry->FinalizeRegistration().isEmpty());
+  ASSERT_EQ(registry->rowCount(), baseline->rowCount() + 1);
+  for (int row = 0; row < baseline->rowCount(); ++row) {
+    const auto id =
+        baseline->data(baseline->index(row, 0), ShortcutRegistry::CommandIdRole).toString();
+    EXPECT_EQ(registry->keySequenceTexts(id), baseline->keySequenceTexts(id)) << id.toStdString();
+    EXPECT_EQ(registry->scopeForCommand(id), baseline->scopeForCommand(id)) << id.toStdString();
+  }
+  EXPECT_EQ(registry->keySequenceTexts(undo), QStringList{QStringLiteral("Ctrl+J")});
+  EXPECT_EQ(registry->keySequenceTexts(mask_command), QStringList{QStringLiteral("X")});
+  EXPECT_EQ(registry->keySequenceTexts(crop_command), QStringList{QStringLiteral("X")});
+
+  const auto workspace_conflict =
+      registry->validateCandidate(crop_command, Qt::Key_J, Qt::ControlModifier, kKeyChord);
+  EXPECT_EQ(workspace_conflict.value(QStringLiteral("conflictingCommandId")).toString(), undo);
+  const auto filmstrip_conflict =
+      registry->validateCandidate(crop_command, Qt::Key_Left, Qt::NoModifier, kKeyChord);
+  EXPECT_EQ(filmstrip_conflict.value(QStringLiteral("conflictingCommandId")).toString(),
+            QLatin1String(shortcut_id::kFilmstripPreviousImage));
+
+  const auto saved = registry->saveCandidate(crop_command, Qt::Key_O, Qt::NoModifier, kKeyChord);
+  ASSERT_TRUE(saved.value(QStringLiteral("succeeded")).toBool());
+  registry.reset();
+  auto reopened = MakeRegistry(file);
+  reopened->Register(binding);
+  ASSERT_TRUE(reopened->FinalizeRegistration().isEmpty());
+  EXPECT_EQ(reopened->keySequenceTexts(crop_command), QStringList{QStringLiteral("O")});
+  EXPECT_EQ(reopened->keySequenceTexts(undo), QStringList{QStringLiteral("Ctrl+J")});
+  EXPECT_EQ(reopened->keySequenceTexts(mask_command), QStringList{QStringLiteral("X")});
 }
 
 TEST_F(ShortcutRegistryTest, ModifierOnlyBindingMatchesRequiredPointerModifier) {

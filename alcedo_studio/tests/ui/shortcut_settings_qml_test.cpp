@@ -90,6 +90,18 @@ ApplicationWindow {
     property int probeActivations: 0
     property string probeCommandId: "library.selectAll"
     property string probeScope: "workspace.library"
+    property bool cropToolEnabled: false
+    property bool maskEditActive: false
+    readonly property string cropShortcutScope: ShortcutRegistry.activeCropEditScope(
+        root.cropToolEnabled, root.maskEditActive, cropWorkspace, root.activeFocusItem)
+
+    Item {
+        id: cropWorkspace
+        objectName: "cropWorkspace"
+        TextInput {
+            objectName: "cropTextInput"
+        }
+    }
 
     ScrollView {
         id: scroll
@@ -372,13 +384,15 @@ TEST(ShortcutSettingsQmlTest, KeyboardCategoryIsReachableAndAboutStillOpens) {
   EXPECT_FALSE(about_scroll->property("visible").toBool());
   EXPECT_NE(FieldForCommand(settings, QStringLiteral("library.selectAll")), nullptr);
 
-  // About moved to index 11 (after LUTs, Camera Profiles, and AI Models) and still opens.
-  auto* nav_about = FindItem(settings, QStringLiteral("settingsNavItem:11"));
+  const auto about_category = settings->property("aboutCategory");
+  ASSERT_TRUE(about_category.isValid());
+  const int about_index = about_category.toInt();
+  auto*     nav_about   = FindItem(settings, QStringLiteral("settingsNavItem:%1").arg(about_index));
   ASSERT_NE(nav_about, nullptr);
   // The category nav scrolls; About can sit below the fold.
   ScrollItemIntoView(harness.window_, QStringLiteral("settingsNavScroll"), nav_about);
   ClickItem(harness.window_, nav_about);
-  EXPECT_EQ(settings->property("currentCategory").toInt(), 11);
+  EXPECT_EQ(settings->property("currentCategory").toInt(), about_index);
   EXPECT_EQ(page_title->property("text").toString(), DialogText("About"));
   EXPECT_TRUE(about_scroll->property("visible").toBool());
   EXPECT_FALSE(keyboard_scroll->property("visible").toBool());
@@ -414,10 +428,9 @@ TEST(ShortcutSettingsQmlTest, RegistryRowsAppearInStableGroups) {
   ASSERT_FALSE(expected_commands.empty());
   // The registered catalog starts with the known group sequence.
   EXPECT_EQ(expected_groups,
-            (QStringList{RegistryText("Library"), RegistryText("Editor"),
-                         RegistryText("Filmstrip"), RegistryText("Versions"),
-                         RegistryText("LUT"), RegistryText("Masks"),
-                         RegistryText("Nodes")}));
+            (QStringList{RegistryText("Library"), RegistryText("Editor"), RegistryText("Filmstrip"),
+                         RegistryText("Versions"), RegistryText("LUT"), RegistryText("Masks"),
+                         RegistryText("Comparison"), RegistryText("Nodes")}));
 
   const auto headers =
       harness.window_->findChildren<QQuickItem*>(QStringLiteral("shortcutGroupHeader"));
@@ -839,6 +852,38 @@ TEST(ShortcutSettingsQmlTest, SuccessfulChangeUpdatesAnOpenRegisteredShortcut) {
   QTest::keyClick(harness.window_, Qt::Key_K, Qt::ControlModifier);
   ProcessEvents();
   EXPECT_EQ(harness.window_->property("probeActivations").toInt(), 1);
+}
+
+TEST(ShortcutSettingsQmlTest, CropShortcutScopeFollowsTextFocusAndShortcutCapture) {
+  ShortcutPanelHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  auto* workspace  = FindItem(harness.window_, QStringLiteral("cropWorkspace"));
+  auto* text_input = FindItem(harness.window_, QStringLiteral("cropTextInput"));
+  ASSERT_NE(workspace, nullptr);
+  ASSERT_NE(text_input, nullptr);
+
+  workspace->forceActiveFocus();
+  ASSERT_EQ(harness.window_->activeFocusItem(), workspace);
+  EXPECT_TRUE(harness.window_->property("cropShortcutScope").toString().isEmpty());
+  harness.window_->setProperty("cropToolEnabled", true);
+  EXPECT_EQ(harness.window_->property("cropShortcutScope").toString(),
+            QLatin1String(shortcut_scope::kEditorCropEdit));
+
+  text_input->forceActiveFocus();
+  ASSERT_EQ(harness.window_->activeFocusItem(), text_input);
+  EXPECT_TRUE(harness.window_->property("cropShortcutScope").toString().isEmpty());
+
+  auto* capture = StartCapture(harness, QStringLiteral("library.selectAll"));
+  ASSERT_NE(capture, nullptr);
+  ASSERT_EQ(harness.window_->activeFocusItem(), capture);
+  EXPECT_TRUE(harness.window_->property("cropShortcutScope").toString().isEmpty());
+
+  workspace->forceActiveFocus();
+  ASSERT_EQ(harness.window_->activeFocusItem(), workspace);
+  EXPECT_EQ(harness.window_->property("cropShortcutScope").toString(),
+            QLatin1String(shortcut_scope::kEditorCropEdit));
+  harness.window_->setProperty("maskEditActive", true);
+  EXPECT_TRUE(harness.window_->property("cropShortcutScope").toString().isEmpty());
 }
 
 TEST(ShortcutSettingsQmlTest, CaptureFieldExposesAccessibleNameDescriptionAndFocus) {
