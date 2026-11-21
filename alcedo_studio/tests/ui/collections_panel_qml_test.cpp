@@ -1114,6 +1114,14 @@ TEST(CollectionsPanelQmlTest, SelectionFromOutsideScrollsToTheSelectedRow) {
   h.fake.SetImageCounts({{65, 4}});
   ProcessEvents(80);
   EXPECT_DOUBLE_EQ(tree->property("contentY").toDouble(), content_y);
+
+  // Issue #1028: the scroll bar of the album grid. It has its own column, so the rows end at
+  // its left edge, and it hides a short time after the scroll.
+  auto* bar = FindItem(h.window->contentItem(), QStringLiteral("collectionsTreeScrollBar"));
+  ASSERT_NE(bar, nullptr);
+  EXPECT_GT(bar->width(), 0.0);
+  EXPECT_DOUBLE_EQ(row->width(), tree->width() - bar->width());
+  EXPECT_TRUE(WaitUntil([&] { return !bar->property("active").toBool(); }));
 }
 
 namespace {

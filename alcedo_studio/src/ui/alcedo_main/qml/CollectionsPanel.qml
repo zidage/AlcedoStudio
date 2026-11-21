@@ -80,6 +80,11 @@ ColumnLayout {
     readonly property int treeRowInset: appTheme.spaceXs
     readonly property int treeChevronSize: 16
     readonly property int treeIconSize: 16
+    // Width of a tree row: the tree width less the column of the scroll bar while the tree
+    // scrolls.
+    readonly property real treeRowWidth: folderList.contentHeight > folderList.height + 0.5
+                                         ? Math.max(0, folderList.width - treeScrollBar.width)
+                                         : folderList.width
 
     function rowIndent(row) {
         return Math.max(0, Number(row.treeDepth) - 1) * appTheme.collectionsTreeIndentStep
@@ -1078,7 +1083,22 @@ ColumnLayout {
                 Accessible.role: Accessible.Tree
                 Accessible.name: qsTr("Collections")
 
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                // The scroll bar of the Library album grid (ThumbnailGridView): shown while it
+                // is hovered or dragged, and for a short time after a scroll. It has its own
+                // column at the right of the rows, so it never covers a count (#1028).
+                ScrollBar.vertical: ScrollBar {
+                    id: treeScrollBar
+                    objectName: "collectionsTreeScrollBar"
+                    policy: ScrollBar.AsNeeded
+                    active: hovered || pressed || treeScrollActivity.running
+                }
+
+                Timer {
+                    id: treeScrollActivity
+                    interval: 800
+                    repeat: false
+                }
+                onContentYChanged: treeScrollActivity.restart()
 
                 Keys.onShortcutOverride: function(event) {
                     if (!panel.dragActive && panel.renamingElementId < 0
@@ -1127,7 +1147,7 @@ ColumnLayout {
 
                     objectName: isDraft ? "collectionDraftRow"
                                         : "collectionRow_" + String(modelData.elementId)
-                    width: ListView.view.width
+                    width: panel.treeRowWidth
                     height: shown ? appTheme.collectionsTreeRowHeight : 0
                     visible: shown
 
@@ -1411,7 +1431,7 @@ ColumnLayout {
                         if (!row || row.isDraft) {
                             return false
                         }
-                        const right = width - appTheme.spaceXs
+                        const right = panel.treeRowWidth - appTheme.spaceXs
                         return mouseX >= right - panel.treeMoreSize && mouseX <= right
                     }
 
