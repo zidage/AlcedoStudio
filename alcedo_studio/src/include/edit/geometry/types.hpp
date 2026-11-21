@@ -10,6 +10,18 @@
 
 namespace alcedo {
 
+/// Exact orientation of a framed image in display axes (x right, y down).
+enum class FrameOrientation : std::uint8_t {
+  Identity,
+  Rotate90Clockwise,
+  Rotate180,
+  Rotate90Counterclockwise,
+  FlipHorizontal,
+  FlipVertical,
+  Transpose,   ///< Reflection across the top-left to bottom-right diagonal.
+  Transverse,  ///< Reflection across the top-right to bottom-left diagonal.
+};
+
 inline constexpr float kGeometryMinNormalizedSize = 1e-4f;
 inline constexpr float kGeometryMatrixEpsilon     = 1e-4f;
 

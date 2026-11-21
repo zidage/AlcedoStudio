@@ -124,7 +124,7 @@ auto MaskEditGeometry::MakeDocumentPhotographGeometry(Extent2D full_reference,
       std::fabs(image.crop_rect.w - 1.0f) < 1.0e-6f &&
       std::fabs(image.crop_rect.h - 1.0f) < 1.0e-6f &&
       std::fabs(image.rotation_degrees) < 1.0e-4f;
-  if (identity_crop) {
+  if (identity_crop && image.orientation == FrameOrientation::Identity) {
     return MakeIdentityPhotographGeometry(full_reference);
   }
   return ResolveRenderGeometry(MakeSourceGeometry(full_reference, full_reference), image, {},

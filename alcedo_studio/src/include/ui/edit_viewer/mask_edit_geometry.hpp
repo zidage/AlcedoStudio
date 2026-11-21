@@ -110,11 +110,11 @@ class MaskEditGeometry {
       -> ResolvedRenderGeometry;
 
   /**
-   * @brief Resolved photograph geometry from document crop and rotation.
+   * @brief Resolved photograph geometry from crop, straightening, and frame orientation.
    *
-   * @p full_reference is uncropped ReferenceSpace. Identity crop and zero rotation
-   * return @ref MakeIdentityPhotographGeometry. Empty @p full_reference yields
-   * empty extents so @ref IsValid is false.
+   * @p full_reference is uncropped ReferenceSpace. Full crop, zero rotation, and
+   * identity orientation return @ref MakeIdentityPhotographGeometry. Empty
+   * @p full_reference yields empty extents so @ref IsValid is false.
    *
    * Thread: GUI. Pure; does not lock the pipeline.
    */

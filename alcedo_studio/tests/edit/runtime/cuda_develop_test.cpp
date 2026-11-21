@@ -27,6 +27,7 @@
 #include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/texture_format.hpp"
+#include "orientation_resample_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -548,6 +549,11 @@ TEST_F(CudaDevelopFixture, SwitchingHighlightReconstructionDoesNotKeepStalePubli
   device.WaitIdle();
   EXPECT_EQ(device.Workspace().Textures().UsedBytes(), used_after_first);
   EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
+}
+
+TEST_F(CudaDevelopFixture, QuarterTurnSwapsCanvasAndPreservesEverySourcePixel) {
+  gpu_dag_test::VerifyExactOrientationPixels<CudaRenderDevice>(ExecuteCudaDevelop,
+                                                               ExecuteCudaGeometryResample);
 }
 
 TEST_F(CudaDevelopFixture, ViewportGeometryResampleAllocatesADistinctDisplaySizedTexture) {

@@ -22,12 +22,13 @@ enum class GeometryOutputFrame : std::uint8_t {
 };
 
 /**
- * @brief Document crop and rotation. Viewport and dynamic resolution are not stored here.
+ * @brief Crop and straightening in reference axes, with orientation applied to the result.
  */
 struct ImageGeometryParams {
   NormalizedRect      crop_rect{};
   float               rotation_degrees = 0.0f;
   GeometryOutputFrame output_frame     = GeometryOutputFrame::CropFrame;
+  FrameOrientation    orientation      = FrameOrientation::Identity;
 };
 
 /**
