@@ -1406,21 +1406,21 @@ ColumnLayout {
                                             : Qt.rgba(themeSource.colText.r, themeSource.colText.g,
                                                       themeSource.colText.b, 0.4)
 
+        // One rounded rectangle that reaches one radius past the inner edge, clipped there:
+        // the inner corners are square and no two shapes overlap, so a translucent fill (the
+        // disabled state) stays even.
         background: Item {
-            readonly property color fill: segment.themeSource.secondaryButtonFill(
-                                              segment.enabled, segment.hovered, segment.pressed)
+            objectName: "importSegmentBackground"
+            clip: true
             Rectangle {
-                anchors.fill: parent
-                radius: 8
-                color: parent.fill
-            }
-            // Squares the inner corners.
-            Rectangle {
-                width: 8
+                objectName: "importSegmentFill"
+                readonly property real cornerRadius: 8
+                x: segment.leading ? 0 : -cornerRadius
+                width: parent.width + cornerRadius
                 height: parent.height
-                anchors.right: segment.leading ? parent.right : undefined
-                anchors.left: segment.leading ? undefined : parent.left
-                color: parent.fill
+                radius: cornerRadius
+                color: segment.themeSource.secondaryButtonFill(segment.enabled, segment.hovered,
+                                                               segment.pressed)
             }
         }
 

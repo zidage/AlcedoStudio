@@ -281,7 +281,10 @@ ApplicationWindow {
     property color colDanger: "#d9534f"
     property Item dialogBlurSource: null
 
+    // Main.qml: a disabled secondary action is the translucent idle fill.
     function secondaryButtonFill(enabled, hovered, pressed) {
+        if (!enabled)
+            return Qt.rgba(colButtonSecondary.r, colButtonSecondary.g, colButtonSecondary.b, 0.55)
         return hovered ? Qt.lighter(colButtonSecondary, 1.34) : colButtonSecondary
     }
     function filledActionFill(enabled, hovered, pressed) {
@@ -1188,7 +1191,20 @@ TEST(CollectionsPanelQmlTest, FootActionsAreDisabledOnAMountedSelection) {
     ASSERT_NE(label, nullptr);
     EXPECT_LE(label->implicitWidth(), segment->property("availableWidth").toReal())
         << segment->objectName().toStdString();
+    // One fill shape, clipped at the inner edge: a translucent disabled fill has no overlap
+    // that draws a darker strip.
+    auto* background = qvariant_cast<QQuickItem*>(segment->property("background"));
+    ASSERT_NE(background, nullptr);
+    EXPECT_TRUE(background->clip());
+    ASSERT_EQ(background->childItems().size(), 1) << segment->objectName().toStdString();
+    auto* fill = background->childItems().at(0);
+    EXPECT_DOUBLE_EQ(fill->width(), background->width() + 8.0);
   }
+  // The leading half overhangs its right edge and the trailing half its left edge.
+  EXPECT_DOUBLE_EQ(
+      qvariant_cast<QQuickItem*>(images->property("background"))->childItems().at(0)->x(), 0.0);
+  EXPECT_DOUBLE_EQ(
+      qvariant_cast<QQuickItem*>(folder->property("background"))->childItems().at(0)->x(), -8.0);
   EXPECT_DOUBLE_EQ(images->mapToScene(QPointF(0, 0)).y(), folder->mapToScene(QPointF(0, 0)).y());
   EXPECT_LT(open_folder->mapToScene(QPointF(0, 0)).y(), images->mapToScene(QPointF(0, 0)).y());
 
