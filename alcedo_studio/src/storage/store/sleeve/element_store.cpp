@@ -954,7 +954,7 @@ void ElementStore::UpdateElementRows(duckorm::Connection&                  conn,
   ElementMapper(conn).Update(element, element->element_id_);
   if (element->type_ == ElementType::FILE) {
     auto file = std::static_pointer_cast<SleeveFile>(element);
-    FileMapper(conn).Update({file->element_id_, file->image_id_}, file->image_id_);
+    FileMapper(conn).WriteBinding(file->element_id_, file->image_id_);
   } else if (element->type_ == ElementType::FOLDER) {
     // Write only the membership changes since the last sync, so the cost of a sync does not
     // grow with the number of children the folder already has.

@@ -297,6 +297,32 @@ auto SleeveServiceImpl::RenameFolder(const std::filesystem::path& folder_path,
       [folder_path, new_name](FileSystem& fs) { fs.RenameFolder(folder_path, new_name); });
 }
 
+auto SleeveServiceImpl::ReadMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id)
+    -> MountTree {
+  return Read<MountTree>([root_folder_id, mount_id](FileSystem& fs) {
+    return alcedo::ReadMountTree(fs, root_folder_id, mount_id);
+  });
+}
+
+auto SleeveServiceImpl::ApplyMountTreeChanges(const MountTreeChanges& changes) -> SyncResult {
+  return Write<void>([&changes](FileSystem& fs) { alcedo::ApplyMountTreeChanges(fs, changes); });
+}
+
+auto SleeveServiceImpl::CreateMountRootFolder(sl_element_id_t parent_id, const file_name_t& name,
+                                              mount_id_t mount_id)
+    -> std::pair<std::shared_ptr<SleeveFolder>, SyncResult> {
+  return Write<std::shared_ptr<SleeveFolder>>([parent_id, &name, mount_id](FileSystem& fs) {
+    return alcedo::CreateMountRootFolder(fs, parent_id, name, mount_id);
+  });
+}
+
+auto SleeveServiceImpl::RemoveMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id,
+                                        std::span<const sl_element_id_t> file_ids) -> SyncResult {
+  return Write<void>([root_folder_id, mount_id, file_ids](FileSystem& fs) {
+    alcedo::RemoveMountTree(fs, root_folder_id, mount_id, file_ids);
+  });
+}
+
 auto SleeveServiceImpl::MoveFolder(const std::filesystem::path& folder_path,
                                    const std::filesystem::path& new_parent_path) -> SyncResult {
   return Write<void>([folder_path, new_parent_path](FileSystem& fs) {

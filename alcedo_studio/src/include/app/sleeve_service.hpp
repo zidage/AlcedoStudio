@@ -14,6 +14,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "app/mount_tree.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "sleeve/sleeve_filesystem.hpp"
@@ -131,6 +132,26 @@ class SleeveServiceImpl final : public SleeveService {
   /// See FileSystem::MoveFolder. Throws like it; syncs the change before it returns.
   auto MoveFolder(const std::filesystem::path& folder_path,
                   const std::filesystem::path& new_parent_path) -> SyncResult;
+
+  /** @name Mounted folders (Mounted Folder Plan, MF4)
+   * The scan entry. These operations do not run the structure check of MF5: the scan is the
+   * only writer of the structure of a mount. Each runs in one `fs_lock_` scope; the writes then
+   * sync the tree. A failed sync leaves the changes in memory with their sync flags, and the next
+   * sync writes them.
+   */
+  ///@{
+  /// See ReadMountTree.
+  auto ReadMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id) -> MountTree;
+  /// See alcedo::ApplyMountTreeChanges. Throws like it, before the sync.
+  auto ApplyMountTreeChanges(const MountTreeChanges& changes) -> SyncResult;
+  /// See alcedo::CreateMountRootFolder. Throws like it, before the sync.
+  auto CreateMountRootFolder(sl_element_id_t parent_id, const file_name_t& name,
+                             mount_id_t mount_id)
+      -> std::pair<std::shared_ptr<SleeveFolder>, SyncResult>;
+  /// See alcedo::RemoveMountTree. Throws like it, before the sync.
+  auto RemoveMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id,
+                       std::span<const sl_element_id_t> file_ids) -> SyncResult;
+  ///@}
 
   auto GetStorage() -> std::shared_ptr<Storage> {
     return storage_;

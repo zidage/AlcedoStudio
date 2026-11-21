@@ -4,8 +4,12 @@
 
 #include "storage/mapper/sleeve/element/file_mapper.hpp"
 
+#include <cstdint>
 #include <stdexcept>
 #include <variant>
+
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/mapper/duckorm/duckdb_orm.hpp"
 
 namespace alcedo {
 auto FileMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> FileMapperParams {
@@ -43,4 +47,15 @@ auto FileMapper::GetBoundImageById(const sl_element_id_t id) -> image_id_t {
 }
 
 void FileMapper::RemoveBindByFileId(const sl_element_id_t id) { RemoveById(id); }
+
+void FileMapper::WriteBinding(sl_element_id_t file_id, image_id_t image_id) {
+  namespace expr = duckorm::expr;
+  auto statement = expr::raw("UPDATE FileImage SET image_id = ");
+  statement.append(expr::param(static_cast<std::int64_t>(image_id)));
+  statement.append(expr::raw(" WHERE file_id = "));
+  statement.append(expr::param(static_cast<std::int64_t>(file_id)));
+  if (duckorm::execute_count(conn_, statement) == 0) {
+    InsertParams({file_id, image_id});
+  }
+}
 }  // namespace alcedo
