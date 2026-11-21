@@ -82,9 +82,11 @@ bool ProjectHandler::StartProjectLoad(
   }
 
   project_module_.FinalizeEditorSession();
-  // The loader saves the current project and the load replaces its services. A load that fails
-  // keeps the current project; the end of the load starts its scans again.
-  project_module_.StopMountScans();
+  // The loader saves the current project and the load replaces its services. The stop request
+  // returns at once; the loader thread waits for the scan worker, which completes a batch that
+  // started its import, before it saves the project. A load that fails keeps the current
+  // project; the end of the load starts its scans again.
+  auto mount_scan_worker_ended = project_module_.BeginStopMountScans();
 
   load_entry_mode_ = entryMode;
 
@@ -111,7 +113,8 @@ bool ProjectHandler::StartProjectLoad(
   const bool old_project_entered = project_entered_;
 
   QPointer<ProjectModule> self(&project_module_);
-  std::thread([self, request_id, old_project = std::move(old_project),
+  std::thread([self, request_id, mount_scan_worker_ended = std::move(mount_scan_worker_ended),
+               old_project = std::move(old_project),
                old_pipeline = std::move(old_pipeline), old_thumbnail = std::move(old_thumbnail),
                old_meta = std::move(old_meta), old_package = std::move(old_package),
                old_workspace = std::move(old_workspace), old_project_entered,
@@ -142,6 +145,10 @@ bool ProjectHandler::StartProjectLoad(
     auto result = std::make_shared<LoadResult>();
 
     try {
+      // The scan worker writes the old project until it ends; the save below follows it.
+      if (mount_scan_worker_ended.valid()) {
+        mount_scan_worker_ended.wait();
+      }
       if (old_pipeline && old_project_entered) {
         old_pipeline->Sync();
       }

@@ -598,6 +598,69 @@ TEST_F(MountServiceTest, CanceledScanIsCompletedByTheNextScan) {
   EXPECT_TRUE(MountOf(mount_id).last_scan_at.has_value());
 }
 
+/// An importer that requests the stop of the scan in its first batch, then imports the batch.
+class StopInFirstBatchImporter final : public MountFileImporter {
+ public:
+  StopInFirstBatchImporter(MountFileImporter& importer, std::atomic<bool>& stop)
+      : importer_(importer), stop_(stop) {}
+
+  auto ImportMountedFiles(std::span<const MountFileImportRequest> requests)
+      -> std::vector<MountFileImportOutcome> override {
+    stop_.store(true);
+    return importer_.ImportMountedFiles(requests);
+  }
+
+ private:
+  MountFileImporter& importer_;
+  std::atomic<bool>& stop_;
+};
+
+TEST_F(MountServiceTest, StoppedFirstScanReadsOnlyTheFilesOfItsStoredBatch) {
+  // #1014: the first scan read the fingerprint of each file before its first import batch. The
+  // stop request arrives while batch 2 imports its two files. That batch is stored in full, and
+  // the scan reads none of the six other files.
+  constexpr int kFileCount = 8;
+  for (int index = 0; index < kFileCount; ++index) {
+    WriteJpeg(disk_ / "Roll" / ("frame_" + std::to_string(index) + ".jpg"), 20 + index);
+  }
+  const auto               mount_id = Mounts().CreateMount(0, disk_ / "Roll");
+  std::atomic<bool>        stop{false};
+  StopInFirstBatchImporter importer(*import_, stop);
+  MountScanRequest         request;
+  request.mount_id            = mount_id;
+  request.importer            = &importer;
+  request.stop_requested      = &stop;
+  request.new_file_batch_size = 2;
+  std::vector<MountScanProgress> progress;
+  request.on_progress = [&progress](const MountScanProgress& step) { progress.push_back(step); };
+
+  const auto stopped  = Mounts().ScanMount(request);
+
+  EXPECT_EQ(stopped.status, MountScanStatus::kCanceled);
+  EXPECT_EQ(stopped.fingerprint_read_count, 2u);
+  EXPECT_EQ(stopped.imported_count, 2u);
+  // Each stored photo has its source record: the batch is complete.
+  const auto files = FilesOf(mount_id);
+  ASSERT_EQ(files.size(), 2u);
+  for (const auto& [path, element_id] : files) {
+    const auto source = Store().ReadSourceFile(element_id);
+    ASSERT_TRUE(source.has_value()) << "no source record";
+    EXPECT_EQ(source->state, SourceFileState::kPresent);
+  }
+  // The progress shows the total of the directory before the first read.
+  ASSERT_EQ(progress.size(), 2u);
+  EXPECT_EQ(progress[0].new_files_total, static_cast<std::size_t>(kFileCount));
+  EXPECT_EQ(progress[0].new_files_done, 0u);
+  EXPECT_EQ(progress[1].new_files_done, 2u);
+
+  const auto completed = ScanAndCheckDirectory(mount_id);
+  EXPECT_EQ(completed.status, MountScanStatus::kComplete) << completed.error;
+  EXPECT_EQ(completed.unchanged_count, 2u);
+  EXPECT_EQ(completed.imported_count, 6u);
+  EXPECT_EQ(completed.fingerprint_read_count, 6u);
+  EXPECT_EQ(FilesOf(mount_id).size(), static_cast<std::size_t>(kFileCount));
+}
+
 /// An importer whose storage write fails for every batch.
 class FailingImporter final : public MountFileImporter {
  public:

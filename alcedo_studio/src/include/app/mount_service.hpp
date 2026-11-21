@@ -119,7 +119,8 @@ struct MountScanResult {
   std::size_t     folders_removed_count  = 0;
   std::size_t     unchanged_count        = 0;
   std::size_t     still_missing_count    = 0;
-  /// Listed files whose fingerprint could not be read; see MountScanChangeList.
+  /// Listed files whose fingerprint could not be read, in the comparison (see
+  /// MountScanChangeList) or in a new file batch. They stay as they are for the next scan.
   std::size_t     unreadable_count       = 0;
   std::size_t     unverified_count       = 0;
   std::size_t     deferred_count         = 0;
@@ -154,7 +155,9 @@ struct MountScanRequest {
   mount_id_t                                    mount_id       = 0;
   /// Imports the new files; required.
   MountFileImporter*                            importer       = nullptr;
-  /// Optional. The scan checks it before each new file batch; the current batch completes.
+  /// Optional. The scan reads it for each directory of the listing, before each fingerprint
+  /// read, and before each new file batch. A batch that started its import completes, so a stop
+  /// leaves each batch stored in full or not started.
   const std::atomic<bool>*                      stop_requested = nullptr;
   /// Optional. Called after the first batch for each file that changed in place, moved, or
   /// returned, so the thumbnail owner reads the file again.
@@ -235,6 +238,11 @@ class MountService {
    * Batch 1 holds the folder changes, the moved, adopted, changed, returned, and missing files.
    * Each later batch imports MountScanRequest::new_file_batch_size new files. Each batch is
    * stored before the next one starts.
+   *
+   * The comparison reads the fingerprint of a new file only when a lost record can pair with it
+   * (BuildMountScanChangeList). Each other new file is read in the batch that imports it, so the
+   * first scan of a directory stores its first photos after one batch of reads. A stop request
+   * ends the scan within one fingerprint read plus the import of the current batch.
    *
    * @return kOffline with no change when the root directory is unreachable; kCanceled when the
    *         stop request ended the scan; kStorageFailure when a batch failed.

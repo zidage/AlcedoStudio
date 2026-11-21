@@ -184,7 +184,7 @@ MountScanCoordinator::MountScanCoordinator(MountScanCoordinatorDependencies depe
 MountScanCoordinator::~MountScanCoordinator() { Stop(); }
 
 void MountScanCoordinator::Start(std::shared_ptr<MountScanPort> port) {
-  Stop();
+  (void)BeginStop();
   if (!port) {
     return;
   }
@@ -204,8 +204,34 @@ void MountScanCoordinator::Start(std::shared_ptr<MountScanPort> port) {
 }
 
 void MountScanCoordinator::Stop() {
-  if (!port_) {
+  (void)BeginStop();
+  if (!stopped_worker_) {
     return;
+  }
+  if (stopped_worker_->worker.joinable()) {
+    stopped_worker_->worker.join();
+  }
+  // The queued end of this worker finds no stopped worker and does nothing.
+  stopped_worker_.reset();
+  emit StoppedWorkerEnded();
+}
+
+void MountScanCoordinator::HandleStoppedWorkerEnded(quint64 generation) {
+  if (!stopped_worker_ || stopped_worker_->generation != generation) {
+    return;
+  }
+  // The worker thread posted this call as its last step before its end; the join is short.
+  if (stopped_worker_->worker.joinable()) {
+    stopped_worker_->worker.join();
+  }
+  stopped_worker_.reset();
+  emit StoppedWorkerEnded();
+  StartNextScan();
+}
+
+auto MountScanCoordinator::BeginStop() -> std::shared_future<void> {
+  if (!port_) {
+    return stopped_worker_ ? stopped_worker_->ended : std::shared_future<void>{};
   }
   ++generation_;
   clock_->StopAllTimers();
@@ -214,10 +240,9 @@ void MountScanCoordinator::Stop() {
   std::vector<MountScanEndedCallback> ended_callbacks;
   if (running_) {
     running_->stop_requested->store(true);
-    // The scan completes its current batch; the stored batches stay.
-    if (running_->worker.joinable()) {
-      running_->worker.join();
-    }
+    // The worker completes a batch that started its import and ends; the stored batches stay.
+    stopped_worker_ =
+        StoppedWorker{std::move(running_->worker), running_->ended, running_->generation};
     if (!running_->task_id.isEmpty()) {
       tasks_->FinishTask(running_->task_id, BackgroundTaskState::Canceled);
     }
@@ -226,10 +251,9 @@ void MountScanCoordinator::Stop() {
   }
   std::vector<MountOperationDoneCallback> dropped_operations;
   if (running_operation_) {
-    // An operation is one storage change; it completes.
-    if (running_operation_->worker.joinable()) {
-      running_operation_->worker.join();
-    }
+    // An operation is one storage change; its worker completes it.
+    stopped_worker_ = StoppedWorker{std::move(running_operation_->worker),
+                                    running_operation_->ended, running_operation_->generation};
     dropped_operations.push_back(std::move(running_operation_->done));
     running_operation_.reset();
   }
@@ -255,6 +279,7 @@ void MountScanCoordinator::Stop() {
       done(stopped);
     }
   }
+  return stopped_worker_ ? stopped_worker_->ended : std::shared_future<void>{};
 }
 
 void MountScanCoordinator::ReloadMounts() {
@@ -338,10 +363,14 @@ auto MountScanCoordinator::RunMountOperation(std::function<void()>      operatio
 
 void MountScanCoordinator::StartOperation(PendingOperation pending) {
   running_operation_.emplace();
-  running_operation_->done = std::move(pending.done);
+  running_operation_->done       = std::move(pending.done);
+  running_operation_->generation = generation_;
+  std::promise<void> ended;
+  running_operation_->ended = ended.get_future().share();
   // The coordinator joins the worker before it is destroyed (Stop), so `this` outlives it.
   running_operation_->worker =
-      std::thread([this, generation = generation_, operation = std::move(pending.operation)] {
+      std::thread([this, generation = generation_, operation = std::move(pending.operation),
+                   ended = std::move(ended)]() mutable {
         std::exception_ptr error;
         try {
           operation();
@@ -351,11 +380,16 @@ void MountScanCoordinator::StartOperation(PendingOperation pending) {
         QMetaObject::invokeMethod(
             this, [this, generation, error] { HandleOperationEnded(generation, error); },
             Qt::QueuedConnection);
+        ended.set_value();
       });
 }
 
 void MountScanCoordinator::HandleOperationEnded(quint64 generation, std::exception_ptr error) {
-  if (generation != generation_ || !running_operation_) {
+  if (generation != generation_) {
+    HandleStoppedWorkerEnded(generation);
+    return;
+  }
+  if (!running_operation_) {
     return;
   }
   RunningOperation run = std::move(*running_operation_);
@@ -406,7 +440,7 @@ auto MountScanCoordinator::IsScanRunning(mount_id_t mount_id) const -> bool {
 
 auto MountScanCoordinator::HasPendingScans() const -> bool {
   return running_.has_value() || !queue_.empty() || running_operation_.has_value() ||
-         !operations_.empty();
+         !operations_.empty() || stopped_worker_.has_value();
 }
 
 void MountScanCoordinator::HandleDirectoryChanged(mount_id_t mount_id) {
@@ -420,7 +454,8 @@ void MountScanCoordinator::HandleDirectoryChanged(mount_id_t mount_id) {
 }
 
 void MountScanCoordinator::StartNextScan() {
-  if (!port_ || running_ || running_operation_) {
+  // A stopped worker can still write its batch; HandleStoppedWorkerEnded calls this again.
+  if (!port_ || running_ || running_operation_ || stopped_worker_) {
     return;
   }
   if (!operations_.empty()) {
@@ -442,6 +477,9 @@ void MountScanCoordinator::StartNextScan() {
     running_->trigger        = *state.queued;
     running_->stop_requested = std::make_shared<std::atomic<bool>>(false);
     running_->on_ended       = std::move(state.on_next_scan_ended);
+    running_->generation     = generation_;
+    std::promise<void> ended;
+    running_->ended = ended.get_future().share();
     state.on_next_scan_ended.clear();
     state.queued.reset();
     if (running_->trigger == MountScanTrigger::kSynchronize) {
@@ -452,7 +490,8 @@ void MountScanCoordinator::StartNextScan() {
     // worker. Qt drops a queued call whose receiver is gone.
     running_->worker = std::thread(
         [this, generation = generation_, mount_id, port = port_, stop = running_->stop_requested,
-         find_moved_volume = running_->trigger == MountScanTrigger::kProjectOpen] {
+         find_moved_volume = running_->trigger == MountScanTrigger::kProjectOpen,
+         ended             = std::move(ended)]() mutable {
           MountScanResult result;
           try {
             result = port->ScanMount(
@@ -481,6 +520,7 @@ void MountScanCoordinator::StartNextScan() {
                 HandleScanEnded(generation, mount_id, result);
               },
               Qt::QueuedConnection);
+          ended.set_value();
         });
   }
 }
@@ -510,7 +550,11 @@ void MountScanCoordinator::HandleScanProgress(quint64 generation, mount_id_t mou
 
 void MountScanCoordinator::HandleScanEnded(quint64 generation, mount_id_t mount_id,
                                            const MountScanResult& result) {
-  if (generation != generation_ || !running_ || running_->mount_id != mount_id) {
+  if (generation != generation_) {
+    HandleStoppedWorkerEnded(generation);
+    return;
+  }
+  if (!running_ || running_->mount_id != mount_id) {
     return;
   }
   RunningScan run = std::move(*running_);
