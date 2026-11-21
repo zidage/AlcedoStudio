@@ -231,7 +231,7 @@ ApplicationWindow {
     }
 
     // Button hover and press change only the fill colour; the button keeps its size.
-    // Dark secondary action (Add to Export Queue, Import Images): hover lifts the fill,
+    // Dark secondary action (Add to Export Queue, the import button): hover lifts the fill,
     // press sinks it below the idle fill.
     function secondaryButtonFill(enabled, hovered, pressed) {
         if (!enabled) {
@@ -246,7 +246,7 @@ ApplicationWindow {
         return colButtonSecondary
     }
 
-    // Neutral filled action (Load Project, Export, Import From Folder): the light list well
+    // Neutral filled action (Load Project, Export, Mount Folder): the light list well
     // with its ink. Hover darkens the well, press darkens it more. A disabled action drops to
     // the sunken base fill with muted ink.
     function filledActionFill(enabled, hovered, pressed) {

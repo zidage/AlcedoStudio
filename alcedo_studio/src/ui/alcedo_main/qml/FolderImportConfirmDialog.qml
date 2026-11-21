@@ -26,7 +26,7 @@ Popup {
     readonly property var categoryCounts: scan ? scan.categoryCounts : [0, 0, 0, 0, 0, 0]
     readonly property int allowedCategories: scan ? scan.allowedCategories : 0
     readonly property int droppedFileCount: scan ? scan.droppedFileCount : 0
-    // Folder ui id of the drop target collection; -1 for Import From Folder (the
+    // Folder ui id of the drop target collection; -1 for Import Folder (the
     // current collection).
     property int dropTargetFolderId: -1
     property string dropTargetName: ""
@@ -132,7 +132,7 @@ Popup {
             elide: Text.ElideRight
             text: root.dropMode && root.dropTargetName.length > 0
                   ? qsTr("Import to %1").arg(root.dropTargetName)
-                  : qsTr("Import From Folder")
+                  : qsTr("Import Folder")
             font.family: root.theme ? root.theme.headlineFontFamily : appTheme.headlineFontFamily
             font.pixelSize: appTheme.fontSizeSection
             font.weight: appTheme.fontWeightHeading

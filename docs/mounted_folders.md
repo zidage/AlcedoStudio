@@ -13,11 +13,23 @@ The parameters are in the table at the end.
 
 ## Mount a folder
 
-1. In the Collections panel, right-click the library root or a collection and choose
-   **Mount Folder...**.
+1. In the Collections panel, select the library root or a collection, and click **Mount Folder**
+   at the foot of the panel. You can also right-click the row and choose
+   **Mount Folder Here...**.
 2. Choose the directory in the system folder dialog.
 3. A collection with the name of the directory appears below the row. Its first scan runs as a
    background task, and the photos appear while the scan imports them.
+
+**Mount Folder** and the import button below it both keep the files where they are. The
+difference is who owns the structure:
+
+- **Mount Folder** mounts the directory: its subdirectories are collections, and the collection
+  follows the disk.
+- **Import Images** and **Import Folder** put the photos into the selected collection once. The
+  photos are then yours to arrange, and later changes on the disk do not reach the library.
+
+While a mounted row is selected, the three buttons are disabled: a mount cannot hold another
+mount or imported photos.
 
 Each mount has its own directory tree, separate from the trees of the other mounts. The parent
 row of a new mount is an ordinary collection or the library root.
@@ -94,7 +106,9 @@ color labels, and Delete mark stay editable, and its edits stay.
   mounted row follows its directory.
 - A file drop on a mounted row or on the grid of a mounted folder shows the "not allowed"
   cursor; the files stay outside the library. Copy them into the directory instead.
-- **Add to** and a drag to an ordinary collection link a mounted photo into that collection.
+- **Add to** lists the library root and the ordinary collections; a mounted folder is not in
+  the list. **Add to** and a drag to an ordinary collection link a mounted photo into that
+  collection.
 - **Delete** at the library root applies to ordinary photos. Use the Delete mark to mark mounted
   photos for review.
 - **Show in File Manager** opens the directory of a mounted row.

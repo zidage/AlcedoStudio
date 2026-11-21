@@ -1789,6 +1789,14 @@ Alcedo will use %1 instead.</translation>
 <context>
     <name>CollectionsPanel</name>
     <message>
+        <source>Mount Folder Here...</source>
+        <translation>Mount Folder Here...</translation>
+    </message>
+    <message>
+        <source>Mount Folder</source>
+        <translation>Mount Folder</translation>
+    </message>
+    <message>
         <location filename="../qml/CollectionsPanel.qml" line="+22"/>
         <source>Search</source>
         <translation>Search</translation>
@@ -1865,7 +1873,7 @@ Alcedo will use %1 instead.</translation>
     </message>
     <message>
         <location line="+22"/>
-        <source>Import From Folder</source>
+        <source>Import Folder</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -4444,7 +4452,7 @@ Original source files on disk will be kept.</source>
     <name>FolderImportConfirmDialog</name>
     <message>
         <location filename="../qml/FolderImportConfirmDialog.qml" line="+84"/>
-        <source>Import From Folder</source>
+        <source>Import Folder</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
