@@ -39,10 +39,16 @@ enum class MountScanTrigger : std::uint8_t {
   kDirectoryChange,
   /// The user asked for the scan (Synchronize). The task shows from the start of the scan.
   kSynchronize,
+  /// A volume event (#1020): the volume of the watched mount was removed or its removal was
+  /// canceled, or a volume arrived while the mount was offline.
+  kVolumeChange,
 };
 
 /// Time after the last change notification of a mount before its scan starts (section 14).
 inline constexpr std::chrono::milliseconds kMountScanWatcherDelay{5000};
+/// Time after the arrival of a volume before the scans of the offline mounts start. Windows
+/// reports the arrival of the volume device before the drive letter is assigned.
+inline constexpr std::chrono::milliseconds kMountScanVolumeArrivalDelay{2000};
 /// Time in the background before an activation of the application starts the scans.
 inline constexpr std::chrono::milliseconds kMountScanActivationInterval{60000};
 
@@ -57,7 +63,7 @@ class MountScanPort {
    *        coordinator; blocks for the length of the scan.
    * @param on_progress Called on the worker thread after each stored batch.
    * @param find_moved_volume MountScanRequest::find_moved_volume; true for the scan of the
-   *        project open.
+   *        project open and of a volume event.
    */
   virtual auto ScanMount(mount_id_t mount_id, const std::atomic<bool>& stop_requested,
                          const std::function<void(const MountScanProgress&)>& on_progress,
@@ -129,8 +135,9 @@ struct MountScanCoordinatorDependencies {
   std::unique_ptr<MountScanClock>        clock;
   /// Required.
   std::unique_ptr<MountDirectoryWatcher> watcher;
-  std::chrono::milliseconds              watcher_delay       = kMountScanWatcherDelay;
-  std::chrono::milliseconds              activation_interval = kMountScanActivationInterval;
+  std::chrono::milliseconds              watcher_delay        = kMountScanWatcherDelay;
+  std::chrono::milliseconds              activation_interval  = kMountScanActivationInterval;
+  std::chrono::milliseconds              volume_arrival_delay = kMountScanVolumeArrivalDelay;
   /// Called on the UI thread after each stored batch of a scan, so the Library shows the photos
   /// while the scan imports them.
   std::function<void(mount_id_t)>        on_batch_stored;
@@ -141,13 +148,18 @@ struct MountScanCoordinatorDependencies {
 /**
  * @brief Starts the scans of the mounts of the open project (Mounted Folder Plan, MF7).
  *
- * The scan of the project open searches for a volume that moved to another mount point
- * (MountScanRequest::find_moved_volume, MF8). A scan that relocated the root is watched at the new
- * root.
+ * The scan of the project open and the scan of a volume event search for a volume that moved to
+ * another mount point (MountScanRequest::find_moved_volume, MF8). A scan that relocated the root
+ * is watched at the new root.
  *
  * Triggers: Start (project open), an activation of the application after the activation
  * interval or more in the background, the watcher delay after the last change notification of
- * a mount, and RequestScan.
+ * a mount, the volume events of the watcher, and RequestScan.
+ *
+ * Volume events (#1020): the removal of the volume of a watched mount, or the cancel of that
+ * removal, requests a scan of the mount at once; the scan finds the mount offline or watches it
+ * again. The arrival of a volume requests a scan of each offline mount after the volume arrival
+ * delay; a connected drive brings its mount online and its missing photos return.
  *
  * One scan runs at a time. A request for the mount of the running scan sets its "scan again"
  * flag: when the scan ends, one more scan of that mount starts. Production interleaving: the
@@ -348,6 +360,8 @@ class MountScanCoordinator final : public QObject {
   };
 
   void HandleDirectoryChanged(mount_id_t mount_id);
+  void HandleVolumeRemoved(mount_id_t mount_id);
+  void HandleVolumeArrived();
   /// Start the next queued operation, else the next queued scan, when the worker is free.
   void StartNextScan();
   void StartOperation(PendingOperation pending);
@@ -379,6 +393,7 @@ class MountScanCoordinator final : public QObject {
   std::unique_ptr<MountDirectoryWatcher>                  watcher_;
   std::chrono::milliseconds                               watcher_delay_;
   std::chrono::milliseconds                               activation_interval_;
+  std::chrono::milliseconds                               volume_arrival_delay_;
   std::function<void(mount_id_t)>                         on_batch_stored_;
   std::function<void(mount_id_t, const MountScanResult&)> on_scan_ended_;
 

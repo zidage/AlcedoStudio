@@ -141,4 +141,16 @@ auto ListVolumeMountPoints() -> std::vector<VolumeMountPoint> {
   return mount_points;
 }
 
+auto ListMountPointPaths() -> std::vector<std::filesystem::path> {
+  std::vector<std::filesystem::path> mount_points;
+  // A list of `X:\` strings, each with its terminator, and one more terminator at the end.
+  std::array<wchar_t, 4 * 26 + 1>    drives{};
+  const DWORD length = ::GetLogicalDriveStringsW(static_cast<DWORD>(drives.size()), drives.data());
+  if (length == 0 || length >= drives.size()) return mount_points;
+  for (const wchar_t* drive = drives.data(); *drive != L'\0'; drive += std::wcslen(drive) + 1) {
+    mount_points.emplace_back(drive);
+  }
+  return mount_points;
+}
+
 }  // namespace alcedo

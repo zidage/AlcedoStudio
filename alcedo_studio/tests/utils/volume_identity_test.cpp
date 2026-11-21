@@ -54,6 +54,20 @@ TEST(VolumeIdentityTest, MountPointListHoldsTheVolumeOfADirectory) {
   EXPECT_TRUE(found) << identity;
 }
 
+TEST(VolumeIdentityTest, MountTableHoldsAMountPointOfADirectory) {
+  // The directory watcher of the mounts compares two reads of the mount table for the volume
+  // events (#1020).
+  test::TestTempDirectory dir;
+  const auto              canonical = std::filesystem::canonical(dir.Path());
+  bool                    found     = false;
+  for (const auto& mount_point : ListMountPointPaths()) {
+    if (IsPathAtOrBelow(canonical, mount_point)) {
+      found = true;
+    }
+  }
+  EXPECT_TRUE(found) << canonical.string();
+}
+
 TEST(VolumeIdentityTest, MissingDirectoryHasEmptyIdentity) {
   test::TestTempDirectory dir;
   EXPECT_TRUE(ReadVolumeIdentity(dir / "absent").empty());

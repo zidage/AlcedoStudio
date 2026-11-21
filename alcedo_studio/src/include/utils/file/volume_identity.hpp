@@ -59,4 +59,22 @@ struct VolumeMountPoint {
  */
 [[nodiscard]] auto ListVolumeMountPoints() -> std::vector<VolumeMountPoint>;
 
+/**
+ * @brief List the mount point of each mounted file system, from the mount table of the system
+ *        only.
+ *
+ * The directory watcher of the mounts compares two lists to find a volume that arrived or was
+ * removed (#1020). The function reads no file system of the list, so a network file system that
+ * does not answer does not block it, and the UI thread can call it. The source of the list:
+ *
+ * - Windows: each drive of `GetLogicalDriveStringsW`.
+ * - macOS: `getfsstat` with `MNT_NOWAIT`.
+ * - Linux: the mount point field of each `/proc/self/mounts` entry.
+ *
+ * Thread safety: the function holds no state; any thread can call it.
+ *
+ * @return The mount points in the order of the system list. The function does not throw.
+ */
+[[nodiscard]] auto ListMountPointPaths() -> std::vector<std::filesystem::path>;
+
 }  // namespace alcedo

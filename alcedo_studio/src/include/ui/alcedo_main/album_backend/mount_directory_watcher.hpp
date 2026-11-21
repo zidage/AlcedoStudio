@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "type/type.hpp"
 
@@ -26,17 +28,31 @@ inline constexpr std::size_t kMountWatcherDirectoryLimit = 4096;
  * A notification only names the mount. The scan reads the directory listing for the result
  * (P8), so a lost or a spurious notification changes no data.
  *
+ * The watcher also reports the volume events (#1020): the removal of the volume of a watched
+ * mount, and the arrival of a volume, so an offline mount gets a scan when its drive is
+ * connected again.
+ *
  * Thread safety: create, call, and destroy on one thread with an event loop (the UI thread).
- * The change callback runs on that thread.
+ * The callbacks run on that thread.
  */
 class MountDirectoryWatcher {
  public:
   using ChangeCallback                                    = std::function<void(mount_id_t)>;
+  /// The volume of the watched mount was removed, or its removal was canceled. The watch of the
+  /// mount has ended when the callback runs; the scan finds the mount offline or watches it
+  /// again.
+  using VolumeRemovedCallback                             = std::function<void(mount_id_t)>;
+  /// A volume was mounted. The watcher does not know which mount it holds.
+  using VolumeArrivedCallback                             = std::function<void()>;
 
   virtual ~MountDirectoryWatcher()                        = default;
 
   /// Set the callback of the change notifications. Set it before the first Watch.
   virtual void SetChangeCallback(ChangeCallback callback) = 0;
+
+  /// Set the callbacks of the volume events. Set them before the first Watch.
+  virtual void SetVolumeCallbacks(VolumeRemovedCallback removed,
+                                  VolumeArrivedCallback arrived) = 0;
 
   /**
    * @brief Watch the root directory @p root of the mount @p mount_id and the directories
@@ -65,17 +81,36 @@ class MountDirectoryWatcher {
  * Windows: one change notification handle for each root directory that also reports the
  * directories below it. A handle in a directory prevents a rename of each directory above it,
  * so a handle for each directory would prevent the user from renaming a mounted directory that
- * has subdirectories. The watcher closes the handles of a volume that the user ejects.
+ * has subdirectories. The watcher closes the handles of a volume that the user ejects, and
+ * reports the removal when the eject completes or is canceled. A volume arrives with the
+ * device interface notification of the volume class (GUID_DEVINTERFACE_VOLUME).
  *
  * Other platforms: QFileSystemWatcher on the root and on each listed directory, at most
  * kMountWatcherDirectoryLimit directories for all mounts. A mount that passes the limit is not
- * watched.
+ * watched. The watcher reads the mount table (ListMountPointPaths) every
+ * kMountTablePollInterval: a new mount point is an arrival, and a mount point that is gone
+ * removes each watched mount whose root is at or below it.
  */
 auto CreatePlatformMountDirectoryWatcher() -> std::unique_ptr<MountDirectoryWatcher>;
 
-/// The QFileSystemWatcher form of the watcher, with @p directory_limit directories for all
-/// mounts. The platform watcher of macOS and Linux.
-auto CreateQtMountDirectoryWatcher(std::size_t directory_limit = kMountWatcherDirectoryLimit)
+/// The mount points of the system for the volume events of the QFileSystemWatcher form.
+/// ListMountPointPaths in production; a test injects a list.
+using MountTableReader = std::function<std::vector<std::filesystem::path>()>;
+
+/// Time between two reads of the mount table by the QFileSystemWatcher form of the watcher.
+inline constexpr std::chrono::milliseconds kMountTablePollInterval{2000};
+
+/**
+ * @brief The QFileSystemWatcher form of the watcher, with @p directory_limit directories for all
+ *        mounts. The platform watcher of macOS and Linux.
+ * @param read_mount_table The mount table; empty takes ListMountPointPaths.
+ * @param poll_interval Time between two reads of the mount table. The reads start with
+ *        SetVolumeCallbacks.
+ */
+auto CreateQtMountDirectoryWatcher(
+    std::size_t               directory_limit  = kMountWatcherDirectoryLimit,
+    MountTableReader          read_mount_table = {},
+    std::chrono::milliseconds poll_interval    = kMountTablePollInterval)
     -> std::unique_ptr<MountDirectoryWatcher>;
 
 }  // namespace alcedo::ui

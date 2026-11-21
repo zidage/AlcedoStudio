@@ -399,12 +399,15 @@ auto MountRootName(const stdfs::path& root) -> file_name_t {
 MountService::MountService(std::shared_ptr<Storage>           storage,
                            std::shared_ptr<SleeveServiceImpl> sleeve_service,
                            std::shared_ptr<ImagePoolService>  image_pool_service,
-                           VolumeMountPointList               list_volumes)
+                           VolumeMountPointList               list_volumes,
+                           VolumeIdentityReader               read_volume_identity)
     : storage_(std::move(storage)),
       sleeve_service_(std::move(sleeve_service)),
       image_pool_service_(std::move(image_pool_service)),
       list_volumes_(list_volumes ? std::move(list_volumes)
-                                 : VolumeMountPointList(&ListVolumeMountPoints)) {
+                                 : VolumeMountPointList(&ListVolumeMountPoints)),
+      read_volume_identity_(read_volume_identity ? std::move(read_volume_identity)
+                                                 : VolumeIdentityReader(&ReadVolumeIdentity)) {
   if (!storage_ || !sleeve_service_ || !image_pool_service_) {
     throw std::invalid_argument("MountService: storage, sleeve, and image pool are required");
   }
@@ -451,7 +454,7 @@ auto MountService::CreateMount(sl_element_id_t              parent_folder_id,
 
   MountRootRecord record;
   record.id              = mounts.ReadNextMountId();
-  record.volume_identity = ReadVolumeIdentity(root);
+  record.volume_identity = read_volume_identity_(root);
   record.root_path       = root;
 
   auto [folder, sync] =
@@ -481,14 +484,16 @@ auto MountService::ScanMount(const MountScanRequest& request) -> MountScanResult
   auto            mount = FindMount(request.mount_id);
 
   MountScanResult result;
-  auto            listing = ListMountDirectory(mount.root_path, request.stop_requested);
+  // The root path of an unmounted volume can stay as an empty directory on another volume
+  // (#1021): that root is unreachable too, so no photo of the mount becomes missing.
+  auto            listing = ListRootOnRecordedVolume(mount, request.stop_requested);
   if (listing.status == MountDirectoryListingStatus::kRootUnreachable &&
       request.find_moved_volume) {
     if (const auto moved_root = FindRootOnMovedVolume(mount)) {
       try {
         mount.root_path       = RelocateRootLocked(mount, *moved_root);
         result.relocated_root = mount.root_path;
-        listing               = ListMountDirectory(mount.root_path, request.stop_requested);
+        listing               = ListRootOnRecordedVolume(mount, request.stop_requested);
       } catch (const MountOperationError& e) {
         // The found directory is refused (another mount holds it) or the write failed: the mount
         // stays offline at its recorded root.
@@ -580,7 +585,7 @@ auto MountService::RelocateRootLocked(const MountRootRecord&       mount,
         locations.emplace_back(location.image_id, std::move(*relative_path));
       }
     }
-    mounts.UpdateMountRootLocation(mount.id, root, ReadVolumeIdentity(root));
+    mounts.UpdateMountRootLocation(mount.id, root, read_volume_identity_(root));
     WriteImageLocations(*image_pool_service_, root, locations);
   } catch (const std::exception& e) {
     throw MountOperationError(
@@ -625,12 +630,27 @@ auto MountService::FindRootOnMovedVolume(const MountRootRecord& mount) const
       }
       std::error_code ec;
       if (stdfs::is_directory(candidate, ec) && !ec &&
-          ReadVolumeIdentity(candidate) == mount.volume_identity) {
+          read_volume_identity_(candidate) == mount.volume_identity) {
         return candidate;
       }
     }
   }
   return std::nullopt;
+}
+
+auto MountService::ListRootOnRecordedVolume(const MountRootRecord&   mount,
+                                            const std::atomic<bool>* stop_requested) const
+    -> MountDirectoryListing {
+  // A mount without a recorded identity (a volume without one) has no check. A root whose volume
+  // has no readable identity now is not on the recorded volume either: the empty mount point of
+  // an unmounted volume can lie on a file system without an identity (tmpfs on Linux).
+  if (!mount.volume_identity.empty() &&
+      read_volume_identity_(mount.root_path) != mount.volume_identity) {
+    MountDirectoryListing listing;
+    listing.status = MountDirectoryListingStatus::kRootUnreachable;
+    return listing;
+  }
+  return ListMountDirectory(mount.root_path, stop_requested);
 }
 
 void MountService::LocateMissingFile(sl_element_id_t              element_id,

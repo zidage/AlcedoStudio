@@ -118,6 +118,10 @@ class ManualClock final : public MountScanClock {
 class ManualWatcher final : public MountDirectoryWatcher {
  public:
   void SetChangeCallback(ChangeCallback callback) override { on_change_ = std::move(callback); }
+  void SetVolumeCallbacks(VolumeRemovedCallback removed, VolumeArrivedCallback arrived) override {
+    on_volume_removed_ = std::move(removed);
+    on_volume_arrived_ = std::move(arrived);
+  }
   auto Watch(mount_id_t mount_id, const stdfs::path& root, std::span<const std::wstring>)
       -> bool override {
     if (fail_registration_) {
@@ -137,12 +141,26 @@ class ManualWatcher final : public MountDirectoryWatcher {
     }
   }
 
+  /// The volume of the watched mount was removed, or its removal was canceled.
+  void RemoveVolume(mount_id_t mount_id) {
+    if (watched_.erase(mount_id) > 0 && on_volume_removed_) {
+      on_volume_removed_(mount_id);
+    }
+  }
+  void ArriveVolume() {
+    if (on_volume_arrived_) {
+      on_volume_arrived_();
+    }
+  }
+
   bool                              fail_registration_ = false;
   std::set<mount_id_t>              watched_;
   std::map<mount_id_t, stdfs::path> watched_roots_;
 
  private:
-  ChangeCallback on_change_;
+  ChangeCallback        on_change_;
+  VolumeRemovedCallback on_volume_removed_;
+  VolumeArrivedCallback on_volume_arrived_;
 };
 
 /// A scan port that counts the scans. A scan can wait until the test lets it continue: a wait
@@ -582,6 +600,67 @@ TEST_F(MountScanCoordinatorTest, OfflineShowsOnceUntilTheMountIsOnlineAgain) {
   coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
   ASSERT_TRUE(WaitForScans(4));
   EXPECT_EQ(MountScanTasks(tasks_).size(), 2U);
+}
+
+// #1020: an eject closed the watch and nothing scanned the mount, so it stayed online.
+TEST_F(MountScanCoordinatorTest, VolumeRemovalScansTheMountAtOnceAndShowsItOffline) {
+  StartAndWaitForTheOpenScan();
+  ASSERT_TRUE(coordinator_->IsWatched(kMount));
+
+  MountScanResult offline;
+  offline.status = MountScanStatus::kOffline;
+  port_->SetNextResult(offline);
+  watcher_->RemoveVolume(kMount);
+  EXPECT_FALSE(coordinator_->IsWatched(kMount));
+  // No timer: the scan starts with the event.
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_FALSE(coordinator_->IsWatched(kMount));
+  const auto tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 1U);
+  EXPECT_EQ(tasks[0].value(QStringLiteral("detail")).toString(), QStringLiteral("Offline"));
+  EXPECT_EQ(port_->FindMovedVolumeRequests(), (std::vector<bool>{true, true}));
+}
+
+TEST_F(MountScanCoordinatorTest, CanceledVolumeRemovalWatchesTheMountAgain) {
+  StartAndWaitForTheOpenScan();
+  watcher_->RemoveVolume(kMount);
+  ASSERT_FALSE(coordinator_->IsWatched(kMount));
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_TRUE(coordinator_->IsWatched(kMount));
+  EXPECT_TRUE(MountScanTasks(tasks_).empty());
+}
+
+TEST_F(MountScanCoordinatorTest, VolumeArrivalScansAnOfflineMountAfterTheDelay) {
+  MountScanResult offline;
+  offline.status = MountScanStatus::kOffline;
+  port_->SetNextResult(offline);
+  StartAndWaitForTheOpenScan();
+  ASSERT_FALSE(coordinator_->IsWatched(kMount));
+
+  MountScanResult returned;
+  returned.returned_count = 4;
+  port_->SetNextResult(returned);
+  watcher_->ArriveVolume();
+  clock_->Advance(milliseconds(1000));
+  // A second arrival restarts the delay; one scan follows.
+  watcher_->ArriveVolume();
+  clock_->Advance(milliseconds(1999));
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 1);
+  clock_->Advance(milliseconds(1));
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_TRUE(coordinator_->IsWatched(kMount));
+  EXPECT_EQ(port_->FindMovedVolumeRequests(), (std::vector<bool>{true, true}));
+  const auto tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 2U);
+  EXPECT_EQ(tasks[1].value(QStringLiteral("detail")).toString(), QStringLiteral("4 returned"));
+
+  // A mount that is online gets no scan from an arrival.
+  watcher_->ArriveVolume();
+  EXPECT_FALSE(clock_->HasTimer(kMount));
+  clock_->Advance(seconds(30));
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 2);
 }
 
 TEST_F(MountScanCoordinatorTest, UserCancelEndsTheScanWithoutAnotherScan) {

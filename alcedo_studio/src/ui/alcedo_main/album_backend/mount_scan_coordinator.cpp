@@ -241,6 +241,7 @@ MountScanCoordinator::MountScanCoordinator(MountScanCoordinatorDependencies depe
       watcher_(std::move(dependencies.watcher)),
       watcher_delay_(dependencies.watcher_delay),
       activation_interval_(dependencies.activation_interval),
+      volume_arrival_delay_(dependencies.volume_arrival_delay),
       on_batch_stored_(std::move(dependencies.on_batch_stored)),
       on_scan_ended_(std::move(dependencies.on_scan_ended)) {
   if (tasks_ == nullptr || !clock_ || !watcher_) {
@@ -248,6 +249,8 @@ MountScanCoordinator::MountScanCoordinator(MountScanCoordinatorDependencies depe
         "MountScanCoordinator: the task list, the clock, and the watcher are required");
   }
   watcher_->SetChangeCallback([this](mount_id_t mount_id) { HandleDirectoryChanged(mount_id); });
+  watcher_->SetVolumeCallbacks([this](mount_id_t mount_id) { HandleVolumeRemoved(mount_id); },
+                               [this] { HandleVolumeArrived(); });
 }
 
 MountScanCoordinator::~MountScanCoordinator() { Stop(); }
@@ -592,6 +595,32 @@ void MountScanCoordinator::HandleDirectoryChanged(mount_id_t mount_id) {
   });
 }
 
+void MountScanCoordinator::HandleVolumeRemoved(mount_id_t mount_id) {
+  const auto it = mounts_.find(mount_id);
+  if (!port_ || it == mounts_.end()) {
+    return;
+  }
+  // The watcher ended the watch. The scan finds the mount offline, or watches it again when the
+  // removal was canceled.
+  it->second.watched = false;
+  RequestScan(mount_id, MountScanTrigger::kVolumeChange);
+}
+
+void MountScanCoordinator::HandleVolumeArrived() {
+  if (!port_) {
+    return;
+  }
+  for (const auto& [mount_id, state] : mounts_) {
+    if (state.reachability != MountReachability::kOffline) {
+      continue;
+    }
+    // A second arrival in the delay restarts it; one scan follows.
+    clock_->StartTimer(mount_id, volume_arrival_delay_, [this, mount_id] {
+      RequestScan(mount_id, MountScanTrigger::kVolumeChange);
+    });
+  }
+}
+
 void MountScanCoordinator::StartNextScan() {
   // A stopped worker can still write its batch; HandleStoppedWorkerEnded calls this again. The
   // release of the last hold also calls this again.
@@ -634,8 +663,9 @@ void MountScanCoordinator::StartNextScan() {
     // worker. Qt drops a queued call whose receiver is gone.
     running_->worker = std::thread(
         [this, generation = generation_, mount_id, port = port_, stop = running_->stop_requested,
-         find_moved_volume = running_->trigger == MountScanTrigger::kProjectOpen,
-         ended             = std::move(ended)]() mutable {
+         find_moved_volume = running_->trigger == MountScanTrigger::kProjectOpen ||
+                             running_->trigger == MountScanTrigger::kVolumeChange,
+         ended = std::move(ended)]() mutable {
           MountScanResult result;
           try {
             result = port->ScanMount(
