@@ -12,6 +12,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QThread>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -97,6 +98,42 @@ TEST(MountDirectoryWatcherTest, WatchOfAMissingDirectoryFails) {
     watcher->SetChangeCallback([](mount_id_t) {});
     EXPECT_FALSE(watcher->Watch(1, temp_dir / "Unplugged", {}));
   }
+}
+
+// #1020: the watcher of macOS and Linux reads the mount table for the volume events.
+TEST(MountDirectoryWatcherTest, QtWatcherReportsTheVolumeEventsOfTheMountTable) {
+  test::TestTempDirectory temp_dir;
+  const auto              card = temp_dir / "Card";
+  const auto              disk = temp_dir / "Disk";
+  stdfs::create_directories(card / "DCIM");
+  stdfs::create_directories(disk / "Photos");
+  std::vector<stdfs::path> table{temp_dir.Path(), card, disk};
+
+  auto                     watcher = CreateQtMountDirectoryWatcher(
+      kMountWatcherDirectoryLimit, [&table] { return table; }, std::chrono::milliseconds(5));
+  std::vector<mount_id_t> removed;
+  int                     arrivals = 0;
+  watcher->SetChangeCallback([](mount_id_t) {});
+  watcher->SetVolumeCallbacks([&removed](mount_id_t mount_id) { removed.push_back(mount_id); },
+                              [&arrivals] { ++arrivals; });
+  ASSERT_TRUE(watcher->Watch(1, card / "DCIM", {}));
+  ASSERT_TRUE(watcher->Watch(2, disk / "Photos", {}));
+
+  // The card is unmounted: only the mount on the card loses its watch.
+  table = {temp_dir.Path(), disk};
+  ASSERT_TRUE(WaitUntil([&removed] { return !removed.empty(); }));
+  QThread::msleep(50);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(removed, (std::vector<mount_id_t>{1}));
+  EXPECT_EQ(arrivals, 0);
+
+  // The card is mounted again.
+  table = {temp_dir.Path(), disk, card};
+  ASSERT_TRUE(WaitUntil([&arrivals] { return arrivals > 0; }));
+  QThread::msleep(50);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(arrivals, 1);
+  EXPECT_EQ(removed, (std::vector<mount_id_t>{1}));
 }
 
 #ifdef _WIN32

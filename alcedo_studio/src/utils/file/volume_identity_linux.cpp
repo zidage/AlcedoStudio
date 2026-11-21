@@ -92,4 +92,19 @@ auto ListVolumeMountPoints() -> std::vector<VolumeMountPoint> {
   return mount_points;
 }
 
+auto ListMountPointPaths() -> std::vector<std::filesystem::path> {
+  std::vector<std::filesystem::path> mount_points;
+  std::ifstream                      mounts("/proc/self/mounts");
+  std::string                        line;
+  while (std::getline(mounts, line)) {
+    std::istringstream fields(line);
+    std::string        device;
+    std::string        mount_point;
+    if (fields >> device >> mount_point) {
+      mount_points.emplace_back(UnescapeMountField(mount_point));
+    }
+  }
+  return mount_points;
+}
+
 }  // namespace alcedo

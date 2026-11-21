@@ -1839,6 +1839,55 @@ Remaining defects or unavailable platforms: ListVolumeMountPoints was compiled a
   macOS and Linux (WSL) as single files; the full macOS and Linux builds were not run
 ```
 
+**Change after the phase (#1020, #1021, 2026-11-21).** The volume check of a scan and the volume
+events of the watcher replace the rules of MF4, MF7, and P11 that are named below.
+
+```text
+Problem (#1021): a scan treated each root directory that it could list as online. On Linux and
+  macOS the empty mount point of an unmounted volume stays, so the scan made each photo of the
+  mount missing, and Remove Missing Photos then removed them with their edit history
+Problem (#1020): the Windows watcher closed its handles on an eject and reported nothing, so the
+  mount stayed online until the next scan, and a canceled eject left the mount without a watch.
+  A connected drive left its mount offline until an activation scan or Synchronize
+MF4: MountService::ScanMount reads the volume identity of the root before the listing
+  (ListRootOnRecordedVolume). A mount with a recorded identity whose root has another identity,
+  or none, is offline (D5) and gets the moved volume search when the request asks for it. A
+  mount without a recorded identity has no check. MountService takes a VolumeIdentityReader
+  (ReadVolumeIdentity in production) next to the VolumeMountPointList
+MF7: MountDirectoryWatcher::SetVolumeCallbacks reports the removal of the volume of a watched
+  mount (the watch has ended) and the arrival of a volume. MountScanCoordinator requests a
+  kVolumeChange scan of the mount at once for a removal, and of each offline mount after
+  kMountScanVolumeArrivalDelay (2 s) for an arrival. A kVolumeChange scan searches for a moved
+  volume, as the scan of the project open does
+P11: the Windows watcher closes the handles on DBT_DEVICEQUERYREMOVE and DBT_DEVICEREMOVEPENDING
+  and keeps the device notification; DBT_DEVICEREMOVECOMPLETE and DBT_DEVICEQUERYREMOVEFAILED end
+  the watch and report the removal. The arrival is the device interface notification of
+  GUID_DEVINTERFACE_VOLUME. The Qt watcher reads the mount table (ListMountPointPaths, no file
+  system access) every kMountTablePollInterval (2 s): a new mount point is an arrival, and a
+  mount point that is gone removes each watched mount at or below it
+Call chains:
+  eject -> WM_DEVICECHANGE DBT_DEVICEQUERYREMOVE -> CloseHandles -> DBT_DEVICEREMOVECOMPLETE ->
+    Unwatch -> (queued) MountScanCoordinator::HandleVolumeRemoved -> RequestScan(kVolumeChange)
+    -> ScanMount: kOffline -> task "Offline", FolderController::RefreshImageCounts
+  canceled eject -> DBT_DEVICEQUERYREMOVEFAILED -> same chain -> kComplete -> Watch again
+  drive connected -> DBT_DEVICEARRIVAL (DBT_DEVTYP_DEVICEINTERFACE) -> (queued)
+    HandleVolumeArrived -> timer of each offline mount (2 s) -> RequestScan(kVolumeChange) ->
+    ScanMount: online, missing photos return
+  Linux unmount -> QtMountDirectoryWatcher::PollMountTable -> mount point gone -> Unwatch ->
+    HandleVolumeRemoved -> ScanMount: the empty mount point has another identity -> kOffline
+Tests: MountServiceTest 27/27 (RootOnAnotherVolumeSetsOfflineAndChangesNoRecord,
+  RootOnAnotherVolumeSearchesForTheRecordedVolume); MountScanCoordinatorTest 27/27, 10 repeats
+  (VolumeRemovalScansTheMountAtOnceAndShowsItOffline, CanceledVolumeRemovalWatchesTheMountAgain,
+  VolumeArrivalScansAnOfflineMountAfterTheDelay); MountDirectoryWatcherTest 5/5, 20 repeats
+  (QtWatcherReportsTheVolumeEventsOfTheMountTable); SourceFileUtilsTest 21/22, 1 skipped
+  (MountTableHoldsAMountPointOfADirectory passes; the symbolic link test needs a privilege);
+  ApplicationCloseCoordinatorTest 6/6. Windows debug build
+Linux: volume_identity_linux.cpp and mount_directory_watcher_qt.cpp pass g++ 16 -std=c++20 -Wall
+  -Wextra -fsyntax-only with Qt 6 in WSL alcedo-arch with no diagnostic
+Not covered: a real eject, a canceled eject, and a connected drive were not run (the device
+  notifications come from the system); macOS ListMountPointPaths (getfsstat) was not compiled
+```
+
 ---
 
 ## 9. Cross-phase acceptance matrix
