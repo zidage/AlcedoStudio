@@ -564,6 +564,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("MountScanCoordinator", mount_scans_.get());
   folders_->BindMountScans(mount_scans_.get());
   application_close_->BindMountScans(mount_scans_.get());
+  // #1016: a user import and a delete hold the scans for their length.
+  import_export_->BindMountScans(mount_scans_.get());
+  images_->BindMountScans(mount_scans_.get());
   if (auto* gui = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
     connect(gui, &QGuiApplication::applicationStateChanged, mount_scans_.get(),
             [scans = mount_scans_.get()](Qt::ApplicationState state) {

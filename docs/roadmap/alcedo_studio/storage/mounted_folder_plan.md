@@ -219,6 +219,14 @@ name starts with a period. The file type rule is `is_supported_file`
   exit request the stop, and they save the project after the scan worker has ended: the close
   waits in the event loop, the load waits in its loader thread, and the exit waits in its event
   wait (#1014).
+- A user import and a delete hold the scans for their whole length, the finalize step of an
+  import included (`MountScanCoordinator::Hold`). A hold requests the stop of the running scan,
+  and no scan or mount operation starts while a hold exists. The import job or the delete worker
+  starts when no scan worker writes the project. The stopped scan runs again after the last
+  hold, with its trigger, its waiting callbacks, and its task (#1016).
+- A user import leaves each file that the listing of a mount lists to the scan of that mount
+  (`IsPathOfAMountScan`; decision D10). The synchronous delete of the Nikon HE recovery
+  (`ImageController::DeleteTargets`) refuses while a scan worker writes (#1016).
 
 ---
 

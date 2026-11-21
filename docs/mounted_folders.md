@@ -65,6 +65,12 @@ A scan that changes the library shows a task with its counts, for example `12 ne
 changes nothing leaves the project file as it is. When the save fails, the task shows
 `The project could not be saved.`; the changes stay in the library, and the next save writes them.
 
+Imports and deletes take turns with the scans. While an import or a delete runs, the scans wait.
+A scan that runs when an import or a delete starts completes the batch in work first; its task
+shows `Paused`, and the scan runs again when the import or the delete has ended. An import of a
+file inside a mounted directory leaves that file to the scan of the mount, so the file stays one
+photo, in its mounted collection; a message gives the count of these files.
+
 Alcedo Studio recognizes a moved file by its source fingerprint: a hash of the first and the last
 block of the file, with its byte size. A file that another application rewrites at its start or
 end and also moves gets a new fingerprint: the scan shows the old photo missing and the file as a
