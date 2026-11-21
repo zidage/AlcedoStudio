@@ -538,6 +538,7 @@ def_library(AutomationHostLib
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/task_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_task_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/library_commands.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/mount_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_library_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/export_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_export_commands.hpp"

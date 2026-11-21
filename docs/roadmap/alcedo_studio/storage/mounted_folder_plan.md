@@ -2,8 +2,8 @@
 
 Date: 2026-11-19
 
-Status: **in progress**. MF1 (#983), MF2 (#984), MF3 (#985), MF4 (#986), MF5 (#987), and MF7 (#989)
-are implemented. The other phases have no implementation evidence.
+Status: **implemented, pull requests open**. MF1 (#983) to MF8 (#990) are implemented. The user
+checks of MF6 and MF8 in the application are open.
 
 Parent: [Roadmap](../../README.md).
 
@@ -1422,7 +1422,47 @@ ScanMount returns Offline -> FinishTask(failed, "Offline") -> row shows Offline
   missing file before the open, and the editor reports the render failure as it does for an
   ordinary missing file.
 
-**Completion record.** Section 13 template. Empty.
+**Completion record.**
+
+```text
+Phase / date / status: MF6 / 2026-11-20 / implemented, pull request open, user check open
+Source revision and branch: 2cd412e7c (MF8 part A, pull request #1004) + this phase, built with
+  the Library part of MF8 in feature/mount-library-panel (pull request #1005)
+Actual changed modules: MountSummary (photo ids), MountScanCoordinator (RunMountOperation,
+  scan callbacks), FolderController (mount fields, mount states, commands),
+  ThumbnailManager (stored missing state), CollectionsPanel.qml, LibraryWorkspace.qml,
+  AppDialogs.qml, the three tile kinds, panel icons link and photo-off, zh_CN translations,
+  tests
+Implemented behavior: Mount Folder in the menu of an ordinary row and the library root; the
+  link icon after the name of each mounted row; Offline in the count position of an offline
+  mount; the mount root menu and the mounted folder menu of section 2.2; no drag, no dragged
+  row, no file drop, no rename or delete for a mounted row; the grid of a mounted folder
+  refuses a file drop; the missing tile icon; Delete at the library root and Remove from Album
+  in a mounted folder are disabled for mounted photos
+Explicitly unimplemented items: the editor open of a missing photo is unchanged (MF6
+  implementation decisions)
+Primary success call chain:
+  CollectionsPanel "Mount Folder..." -> FolderDialog -> FolderController::MountFolder
+    -> StartCreateMount -> MountScanCoordinator::RunMountOperation -> worker:
+    MountService::CreateMount -> HandleOperationEnded -> ReloadMounts, ReloadFolderTree,
+    SaveProjectState, RequestScan(kSynchronize) -> MountScan task -> scan end
+    -> RefreshImageCounts -> worker: ReadFolderImageCounts + ListMounts -> ApplyMountSummaries
+    (rows, ThumbnailManager::SetStoredMissingSources) -> RebuildFolderView
+Primary failure and restore call chain:
+  CreateMount throws MountOperationError(kNestedMount) -> done(error) -> ReportMountCommand
+    -> status line "The folder is inside a mounted folder or holds one." -> no row
+  scan offline -> on_scan_ended -> RefreshImageCounts -> mountOffline on each row of the mount
+Build and test commands with exit codes: msvc_env.cmd --build --preset win_debug --target
+  alcedo_main FolderControllerMountTest CollectionsPanelQmlTest MountScanCoordinatorTest
+  MountServiceTest: 0; FolderControllerMountTest.exe: 0 (3 runs);
+  CollectionsPanelQmlTest.exe (offscreen): 0 (2 runs)
+Discovered / passed / failed / skipped counts: FolderControllerMountTest 6/6/0/0;
+  CollectionsPanelQmlTest 18/18/0/0; MountScanCoordinatorTest 12/12/0/0
+Manual verification: open (the user checks the panel in the application)
+Performance or resource evidence, if required: not required
+Evidence path: pull request #1005
+Remaining defects or unavailable platforms: macOS and Linux builds of the panel not run
+```
 
 ### MF7. Scan triggers
 
@@ -1668,6 +1708,10 @@ RemoveMissingPhotos storage failure -> transaction rolls back -> StorageFailure 
   count of the mount. Locate Photo... is an item of the image menu for a missing mounted photo; its
   file dialog opens in the last directory of the photo (`Image.image_path`), else in the mount
   root. A refusal shows its text in the status line.
+- The automation commands wait for their operation through the FolderController command
+  entries; `library.mount` and `library.sync` also wait for the scan, and `timeout_ms` bounds the
+  wait. A refusal of `MountService` answers -32002 with `data.error`, the snake case name of the
+  `MountError` code.
 - `LocateMissingFile` applies the listing rules to the one file (`ReadMountDirectoryFile`): a file
   that a scan would not list is refused (`kFileIsNotListed`), so the next scan cannot report the
   located photo missing again. A directory that the last scan did not see gets its folders in the
@@ -1678,7 +1722,57 @@ RemoveMissingPhotos storage failure -> transaction rolls back -> StorageFailure 
   `SleeveServiceImpl::DeleteMissingMountedFiles`, which checks that each id is a missing photo of
   the mount; the MF5 rule refuses the same files on the ordinary delete.
 
-**Completion record.** Section 13 template. Empty.
+**Completion record.**
+
+```text
+Phase / date / status: MF8 / 2026-11-20 / implemented, pull requests open, user check open
+Source revision and branch: a98d64098 (MF7, pull request #1003) + this phase, in three parts:
+  feature/mount-missing-photos-service (#1004, service), feature/mount-library-panel (#1005,
+  Library with MF6), feature/mount-automation-commands (#1006, automation commands and
+  documents);
+  CLI documents in zidage/alcedo-skills#28
+Actual changed modules: volume identity (ListVolumeMountPoints), mount directory listing
+  (ReadMountDirectoryFile), MountService (RelocateRoot, volume search, LocateMissingFile,
+  RemoveMissingPhotos), SleeveServiceImpl (DeleteMissingMountedFiles), scan coordinator
+  (find_moved_volume on open, relocated root watch), FolderController and QML (part B),
+  automation mount commands, docs/mounted_folders.md, the alcedo-skills library reference
+Implemented behavior: Locate Folder binds a mount to the new location of its root and keeps
+  each element; the project open scan finds a volume with the recorded identity under a new
+  mount point; Locate Photo takes a file below the mount root as the source of a missing photo
+  and keeps its edit history; a file outside the mount, a file that a scan does not list, and
+  the file of another photo are refused; Remove Missing Photos removes exactly the missing
+  photos of one mount after a count confirmation; library.mounts, library.mount, library.sync,
+  and library.unmount run the FolderController commands of the panel and answer with the
+  results of the service operations
+Explicitly unimplemented items: none of the plan
+Primary success call chain:
+  mount root menu "Locate Folder..." -> FolderDialog -> FolderController::LocateMountFolder
+    -> StartRelocateMountRoot -> RunMountOperation -> worker: MountService::RelocateRoot
+    (MountRoot row, then Image.image_path below the new root) -> ReloadMounts,
+    RequestScan(kSynchronize) -> scan compares the new location
+  mount root menu "Remove Missing Photos" -> DeleteConfirmDialog (count) ->
+    FolderController::RemoveMissingPhotos -> RunMountOperation -> worker:
+    MountService::RemoveMissingPhotos -> SleeveServiceImpl::DeleteMissingMountedFiles,
+    PipelineMgmtService::DeletePipelines, ImagePoolService::RemoveBatch, ExportService
+    RemoveExportTasks -> thumbnail state, selection prune, Library refresh, counts
+  alcedo-cli library.sync -> FolderController::StartSynchronize(callback) -> RequestScan
+    -> scan end -> callback -> answer with the scan counts
+Primary failure and restore call chain:
+  RelocateRoot(directory inside another mount) -> kNestedMount -> status line, no change
+  LocateMissingFile(file outside the root) -> kFileOutsideMount -> status line, photo missing
+  library.mount(nested path) -> -32002 with data.error nested_mount
+Build and test commands with exit codes: msvc_env.cmd --build --preset win_debug (targets
+  SourceFileUtilsTest MountServiceTest MountScanCoordinatorTest FolderControllerMountTest
+  AutomationLibraryCommandsTest alcedo_main): 0; each test binary: 0
+Discovered / passed / failed / skipped counts: MountServiceTest 24/24/0/0 (1 disabled timing
+  test); SourceFileUtilsTest 21/20/0/1 (symbolic link privilege);
+  AutomationLibraryCommandsTest 16/16/0/0; FolderControllerMountTest 6/6/0/0
+Manual verification: open (the user checks Locate Folder and Remove Missing Photos)
+Performance or resource evidence, if required: not required
+Evidence path: pull requests #1004, #1005, and #1006; alcedo-skills#28
+Remaining defects or unavailable platforms: ListVolumeMountPoints was compiled and run on
+  macOS and Linux (WSL) as single files; the full macOS and Linux builds were not run
+```
 
 ---
 
