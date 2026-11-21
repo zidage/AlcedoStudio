@@ -481,7 +481,7 @@ labels.
   stripe.
 - The new-collection name field has a 1 px `textMutedColor` focus border and a
   neutral text selection.
-- Import From Folder is the neutral filled action: `editorListSelectedFillColor`
+- Open Folder is the neutral filled action: `editorListSelectedFillColor`
   fill (darker on hover and press), text and icon in
   `editorListSelectedInkColor`; disabled uses `bgBaseColor` with
   `textMutedColor` ink.
@@ -553,7 +553,7 @@ labels.
   shows the error in `dangerColor` with a compact Retry `DialogActionButton`. A
   successful empty filtered result shows No Matching Photos.
 - Load Project (empty Library) and the Export queue button are the neutral
-  filled action of `CollectionsPanel.qml` (Import From Folder). No gradient and
+  filled action of `CollectionsPanel.qml` (Open Folder). No gradient and
   no `#457B9D`.
 - The grid zoom slider has a `textColor` fill and handle on the `bgBaseColor`
   track. The Inspector resize handle shows `textMutedColor` on hover and drag.

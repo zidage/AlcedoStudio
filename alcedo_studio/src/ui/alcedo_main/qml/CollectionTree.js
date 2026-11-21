@@ -68,6 +68,21 @@ function orderRows(source, descending) {
     return out
 }
 
+// The rows without a mount: the root row and the ordinary collections. A mounted folder takes
+// no user change to its content (Mounted Folder Plan, D6), and no ordinary collection lies below
+// a mounted row, so the result is still one connected tree.
+function ordinaryRows(source) {
+    const out = []
+    const count = source ? source.length : 0
+    for (let i = 0; i < count; ++i) {
+        const row = source[i]
+        if (row && Number(row.mountId || 0) === 0) {
+            out.push(row)
+        }
+    }
+    return out
+}
+
 function rowsByFolderId(rows) {
     const map = {}
     for (let i = 0; i < rows.length; ++i) {

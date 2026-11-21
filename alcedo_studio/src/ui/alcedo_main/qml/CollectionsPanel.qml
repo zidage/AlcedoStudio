@@ -1376,26 +1376,86 @@ ColumnLayout {
         }
     }
 
+    // Foot of the panel (issue #1008). "Open" is the mount: the directory becomes a collection
+    // below the selected one and follows the disk. "Import" puts photos into the selected
+    // collection once. A mounted selection takes neither (Mounted Folder Plan, D6 and D7).
+    readonly property bool footActionsEnabled: backendInteractive
+                                               && structureEditable(rowForFolder(currentFolderId))
+
+    // One half of the import button. A half rounds its outer corners only; the two halves
+    // stand 1 px apart, so the panel colour draws the line between them.
+    component ImportSegment: Button {
+        id: segment
+        property var themeSource
+        property bool leading: true
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+        Layout.preferredHeight: 42
+        // A half is about 120 px wide: the label needs most of it in every UI language.
+        leftPadding: 6
+        rightPadding: 6
+        spacing: 6
+        font.family: appTheme.uiFontFamily
+        font.pixelSize: appTheme.fontSizeTitle
+        icon.width: 14
+        icon.height: 14
+        icon.color: contentInk
+        display: AbstractButton.TextBesideIcon
+        readonly property color contentInk: enabled
+                                            ? themeSource.colText
+                                            : Qt.rgba(themeSource.colText.r, themeSource.colText.g,
+                                                      themeSource.colText.b, 0.4)
+
+        background: Item {
+            readonly property color fill: segment.themeSource.secondaryButtonFill(
+                                              segment.enabled, segment.hovered, segment.pressed)
+            Rectangle {
+                anchors.fill: parent
+                radius: 8
+                color: parent.fill
+            }
+            // Squares the inner corners.
+            Rectangle {
+                width: 8
+                height: parent.height
+                anchors.right: segment.leading ? parent.right : undefined
+                anchors.left: segment.leading ? undefined : parent.left
+                color: parent.fill
+            }
+        }
+
+        contentItem: IconLabel {
+            spacing: segment.spacing
+            mirrored: segment.mirrored
+            display: segment.display
+            icon: segment.icon
+            text: segment.text
+            font: segment.font
+            color: segment.contentInk
+        }
+    }
+
     Button {
-        id: importFromFolderBtn
+        id: openFolderBtn
+        objectName: "collectionsOpenFolderButton"
         Layout.fillWidth: true
         Layout.preferredHeight: 46
-        text: qsTr("Import From Folder")
-        enabled: backendInteractive
-        icon.source: "qrc:/panel_icons/folder-open.svg"
+        text: qsTr("Open Folder")
+        enabled: panel.footActionsEnabled
+        icon.source: "qrc:/panel_icons/folder-symlink.svg"
         icon.width: 16
         icon.height: 16
         // Neutral filled action: the light list well with its ink (colours from the Main shell).
         readonly property color inkColor: theme.filledActionInk(enabled)
         icon.color: inkColor
         display: AbstractButton.TextBesideIcon
-        onClicked: panel.importFromFolderRequested()
+        onClicked: panel.requestMountFolder(panel.rowForFolder(panel.currentFolderId))
 
         background: Rectangle {
             radius: 8
-            color: theme.filledActionFill(importFromFolderBtn.enabled,
-                                          importFromFolderBtn.hovered,
-                                          importFromFolderBtn.down)
+            color: theme.filledActionFill(openFolderBtn.enabled,
+                                          openFolderBtn.hovered,
+                                          openFolderBtn.down)
             Behavior on color {
                 enabled: !appTheme.reduceMotion
                 ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
@@ -1403,40 +1463,40 @@ ColumnLayout {
         }
 
         contentItem: IconLabel {
-            spacing: importFromFolderBtn.spacing
-            mirrored: importFromFolderBtn.mirrored
-            display: importFromFolderBtn.display
-            icon: importFromFolderBtn.icon
-            text: importFromFolderBtn.text
-            font: importFromFolderBtn.font
-            color: importFromFolderBtn.inkColor
+            spacing: openFolderBtn.spacing
+            mirrored: openFolderBtn.mirrored
+            display: openFolderBtn.display
+            icon: openFolderBtn.icon
+            text: openFolderBtn.text
+            font: openFolderBtn.font
+            color: openFolderBtn.inkColor
         }
     }
 
-    Button {
-        id: importImagesBtn
+    RowLayout {
+        objectName: "collectionsImportButton"
         Layout.fillWidth: true
         Layout.preferredHeight: 42
-        text: qsTr("Import Images")
-        enabled: backendInteractive
-        icon.source: "qrc:/panel_icons/import.svg"
-        icon.width: 14
-        icon.height: 14
-        icon.color: theme.colText
-        display: AbstractButton.TextBesideIcon
-        Material.foreground: theme.colText
-        onClicked: panel.importRequested()
+        spacing: 1
 
-        background: Rectangle {
-            radius: 8
-            opacity: importImagesBtn.enabled ? 1.0 : 0.5
-            color: theme.secondaryButtonFill(importImagesBtn.enabled,
-                                             importImagesBtn.hovered,
-                                             importImagesBtn.pressed)
-            Behavior on color {
-                enabled: !appTheme.reduceMotion
-                ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
-            }
+        ImportSegment {
+            objectName: "collectionsImportImagesButton"
+            themeSource: panel.theme
+            leading: true
+            text: qsTr("Import Images")
+            enabled: panel.footActionsEnabled
+            icon.source: "qrc:/panel_icons/import.svg"
+            onClicked: panel.importRequested()
+        }
+
+        ImportSegment {
+            objectName: "collectionsImportFolderButton"
+            themeSource: panel.theme
+            leading: false
+            text: qsTr("Import Folder")
+            enabled: panel.footActionsEnabled
+            icon.source: "qrc:/panel_icons/folder-open.svg"
+            onClicked: panel.importFromFolderRequested()
         }
     }
 
@@ -1453,7 +1513,7 @@ ColumnLayout {
         }
         AppMenuItem {
             objectName: "collectionMenuMountFolder"
-            text: qsTr("Mount Folder...")
+            text: qsTr("Open Folder Here...")
             onTriggered: panel.requestMountFolder(rowMenu.targetRow)
         }
         AppMenuItem {
@@ -1531,7 +1591,8 @@ ColumnLayout {
 
     FolderDialog {
         id: mountFolderDialog
-        title: qsTr("Mount Folder")
+        objectName: "collectionMountFolderDialog"
+        title: qsTr("Open Folder")
         onAccepted: {
             const folderId = panel.pendingMountFolderId
             panel.pendingMountFolderId = -1

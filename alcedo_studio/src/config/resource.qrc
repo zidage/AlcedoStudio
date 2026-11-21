@@ -79,6 +79,7 @@
     <file>panel_icons/flask.svg</file>
     <file>panel_icons/sort.svg</file>
     <file>panel_icons/folder-plus.svg</file>
+    <file>panel_icons/folder-symlink.svg</file>
     <file>panel_icons/link.svg</file>
     <file>panel_icons/folder.svg</file>
     <file>panel_icons/photo-off.svg</file>
