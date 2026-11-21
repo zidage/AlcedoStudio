@@ -474,6 +474,18 @@ auto MountTree(bool archive_offline = false) -> std::vector<FakeFolderController
           {4, 0, QStringLiteral("Card"), 2, true, true, 0}};
 }
 
+/// A tree taller than the panel: a mount root with a collapsed child at the top, then 60
+/// ordinary folders F00..F59 (elements 10..69).
+auto LongTree() -> std::vector<FakeFolderController::Node> {
+  std::vector<FakeFolderController::Node> nodes{
+      {5, 0, QStringLiteral("A Mount"), 1, true, false, 0},
+      {6, 5, QStringLiteral("Day1"), 1, false, false, 0}};
+  for (uint i = 0; i < 60; ++i) {
+    nodes.push_back({10 + i, 0, QStringLiteral("F%1").arg(i, 2, 10, QLatin1Char('0'))});
+  }
+  return nodes;
+}
+
 /// The menu item @p object_name of the open menu @p menu.
 auto MenuItem(QObject* menu, const QString& object_name) -> QObject* {
   return menu != nullptr ? menu->findChild<QObject*>(object_name) : nullptr;
@@ -992,6 +1004,68 @@ TEST(CollectionsPanelQmlTest, MountedRowIsNotDraggedAndTakesNoDraggedRow) {
   // F2 and Delete do nothing on a mounted row.
   h.Invoke("beginRename", h.panel->property("folderRows").toList().at(2));
   EXPECT_EQ(h.panel->property("renamingElementId").toInt(), -1);
+}
+
+// Issue #1007: a reload the user did not start (a count refresh, a row added by a mount scan)
+// keeps the scroll position of the tree.
+TEST(CollectionsPanelQmlTest, ReloadWithoutAUserActionKeepsTheScrollPosition) {
+  Harness h(LongTree());
+  ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
+  auto* tree = h.Tree();
+  ASSERT_NE(tree, nullptr);
+  tree->setProperty("contentY", 500.0);
+  ProcessEvents(50);
+  const double kept = tree->property("contentY").toDouble();
+  ASSERT_DOUBLE_EQ(kept, 500.0);
+  // F20 (element 30) is in the view; its place on the screen must not move.
+  const auto scene_y = [&h] { return h.Row(30)->mapToScene(QPointF(0, 0)).y(); };
+  ASSERT_NE(h.Row(30), nullptr);
+  const double kept_scene_y = scene_y();
+
+  h.fake.SetImageCounts({{0, 90}, {10, 3}, {40, 7}});
+  ProcessEvents(80);
+  EXPECT_DOUBLE_EQ(tree->property("contentY").toDouble(), kept);
+  EXPECT_DOUBLE_EQ(scene_y(), kept_scene_y);
+
+  // A mount scan adds a row under the collapsed mount root and reassigns every ui id.
+  auto nodes = LongTree();
+  nodes.push_back({7, 5, QStringLiteral("Day2"), 1, false, false, 0});
+  h.fake.SetTree(std::move(nodes), 0);
+  ProcessEvents(80);
+  EXPECT_FALSE(h.RowShown(7));
+  ASSERT_NE(h.Row(30), nullptr);
+  // A new model resets the ListView, which then places rows it has not created at estimated
+  // positions, so contentY is no stable coordinate here: the rows keep their place on the
+  // screen.
+  EXPECT_DOUBLE_EQ(scene_y(), kept_scene_y);
+  ASSERT_NE(h.Row(40), nullptr);
+  EXPECT_DOUBLE_EQ(h.Row(40)->mapToScene(QPointF(0, 0)).y(),
+                   kept_scene_y + 10.0 * AppTheme::Instance().collectionRowHeight());
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
+}
+
+// Issue #1007: a selection from outside the tree scrolls the tree to the selected row.
+TEST(CollectionsPanelQmlTest, SelectionFromOutsideScrollsToTheSelectedRow) {
+  Harness h(LongTree());
+  ASSERT_NE(h.panel, nullptr);
+  auto* tree = h.Tree();
+  ASSERT_NE(tree, nullptr);
+  ASSERT_DOUBLE_EQ(tree->property("contentY").toDouble(), 0.0);
+
+  h.fake.SelectFolder(h.fake.UiOf(65));
+  ASSERT_TRUE(WaitUntil([&] { return h.RowShown(65); }));
+  ProcessEvents(50);
+  auto*        row       = h.Row(65);
+  const double content_y = tree->property("contentY").toDouble();
+  ASSERT_NE(row, nullptr);
+  EXPECT_GT(content_y, 0.0);
+  EXPECT_GE(row->y(), content_y);
+  EXPECT_LE(row->y() + row->height(), content_y + tree->height() + 0.5);
+
+  // A count refresh afterwards does not move the tree.
+  h.fake.SetImageCounts({{65, 4}});
+  ProcessEvents(80);
+  EXPECT_DOUBLE_EQ(tree->property("contentY").toDouble(), content_y);
 }
 
 }  // namespace alcedo::ui::test

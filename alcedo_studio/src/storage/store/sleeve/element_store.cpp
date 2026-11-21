@@ -1229,23 +1229,31 @@ auto ElementStore::ReadProjectOverview() const -> ProjectOverviewCounts {
 }
 
 auto ElementStore::ReadFolderImageCounts() const -> FolderImageCounts {
-  // One row per folder that holds a photo, then one row with a NULL folder id for the whole
-  // project. Both parts join the tables of BuildScopedFileQuery, so every count equals the
-  // total of the library view of its folder.
+  // `subtree` pairs each folder (the root 0 left out: its row shows the project count) with
+  // itself and every folder below it. The count of a folder is the number of distinct photos
+  // linked into any folder of its subtree, read through the tables of BuildScopedFileQuery.
+  // One row per folder whose subtree holds a photo, then one row with a NULL folder id for the
+  // whole project.
   static constexpr const char* kFolderCountsQuery =
-      "SELECT fc.folder_id, COUNT(*) "
-      "FROM FolderContent fc "
+      "WITH RECURSIVE subtree(anchor_id, folder_id) AS ("
+      "SELECT f.id, f.id FROM Element f WHERE f.type = {0} AND f.id <> 0 "
+      "UNION ALL SELECT s.anchor_id, c.id FROM subtree s "
+      "JOIN FolderContent fc ON fc.folder_id = s.folder_id "
+      "JOIN Element c ON c.id = fc.element_id AND c.type = {0}) "
+      "SELECT s.anchor_id, COUNT(DISTINCT e.id) "
+      "FROM subtree s "
+      "JOIN FolderContent fc ON fc.folder_id = s.folder_id "
       "JOIN Element e ON fc.element_id = e.id "
       "JOIN FileImage fi ON fi.file_id = e.id "
       "JOIN Image i ON i.id = fi.image_id "
-      "WHERE e.type = {} GROUP BY fc.folder_id "
-      "UNION ALL SELECT CAST(NULL AS BIGINT), COUNT(*) {}";
+      "WHERE e.type = {1} GROUP BY s.anchor_id "
+      "UNION ALL SELECT CAST(NULL AS BIGINT), COUNT(*) {2}";
 
   auto              guard   = database_.GetConnectionGuard();
   auto              db_lock = guard.Lock();
   const auto        project = BuildScopedFileQuery(0);
-  const auto        sql = std::format(kFolderCountsQuery, static_cast<uint32_t>(ElementType::FILE),
-                                      project.from_where_);
+  const auto        sql = std::format(kFolderCountsQuery, static_cast<uint32_t>(ElementType::FOLDER),
+                                      static_cast<uint32_t>(ElementType::FILE), project.from_where_);
 
   FolderImageCounts out;
   for (const auto& row : duckorm::query<FolderPhotoCountRow>(

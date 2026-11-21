@@ -23,7 +23,7 @@ Each mount has its own directory tree, separate from the trees of the other moun
 row of a new mount is an ordinary collection or the library root.
 
 Each mounted row shows a link icon after its name. The count of a mounted row counts its present
-and missing photos.
+and missing photos, in the folder and in all folders below it, as for every collection.
 
 ## Scans
 
