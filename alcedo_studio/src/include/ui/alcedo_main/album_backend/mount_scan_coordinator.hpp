@@ -5,11 +5,13 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <atomic>
 #include <chrono>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <memory>
@@ -25,6 +27,7 @@
 namespace alcedo::ui {
 
 class BackgroundTaskController;
+class MountScanHold;
 
 /// What asked for a scan (Mounted Folder Plan, MF7).
 enum class MountScanTrigger : std::uint8_t {
@@ -170,6 +173,16 @@ struct MountScanCoordinatorDependencies {
  * does not save. A failed save ends the task Failed with "The project could not be saved."; the
  * stored changes stay in the database.
  *
+ * Hold (#1016): a user import and a delete write the library through the same image pool and
+ * sleeve tree as the scan batches, and a batch syncs the whole pool and tree. Each of them holds
+ * the scans through Hold for its whole length, the finalize step of an import included. A hold
+ * requests the stop of the running scan, and no scan and no mount operation starts while a hold
+ * exists. MountScanHold::WhenReady runs the start of the import or the delete when no worker
+ * writes the project: at once, or after the running scan completed its batch, or after the
+ * running operation. A scan that the hold stopped runs again after the last hold, with its
+ * trigger, its waiting callbacks, and its task, which shows "Paused" in the meantime. A cancel of
+ * that task drops the scan.
+ *
  * After each scan that read the listing, the coordinator registers the directories of the
  * listing with the watcher. A mount whose registration fails is "not watched"; the other
  * triggers still scan it.
@@ -235,6 +248,23 @@ class MountScanCoordinator final : public QObject {
    */
   auto RunMountOperation(std::function<void()> operation, MountOperationDoneCallback done) -> bool;
 
+  /**
+   * @brief Hold the scans and the mount operations (#1016; see the class comment).
+   *
+   * Works also when the coordinator is not started: a stopped worker still counts as a worker.
+   * The hold ends with MountScanHold::Release or the destruction of the hold.
+   */
+  [[nodiscard]] auto Hold() -> MountScanHold;
+  /// True while a hold exists.
+  [[nodiscard]] auto IsHeld() const -> bool { return !holds_.empty(); }
+  /// True while a scan, an operation, or a stopped worker runs: a worker can write the project.
+  [[nodiscard]] auto HasWorker() const -> bool {
+    return running_.has_value() || running_operation_.has_value() || stopped_worker_.has_value();
+  }
+
+  /// The root directories of the mounts of the started coordinator.
+  [[nodiscard]] auto MountRoots() const -> std::vector<std::filesystem::path>;
+
   /// Read the mounts again (after a mount was created or removed). A removed mount loses its
   /// watch and its queued scan.
   void               ReloadMounts();
@@ -258,6 +288,8 @@ class MountScanCoordinator final : public QObject {
   void StoppedWorkerEnded();
 
  private:
+  friend class MountScanHold;
+
   struct MountState {
     std::filesystem::path           root;
     QString                         title;
@@ -267,6 +299,14 @@ class MountScanCoordinator final : public QObject {
     bool                            watched      = false;
     /// Callbacks of the requests for the next scan of the mount that starts.
     std::vector<MountScanEndedCallback> on_next_scan_ended;
+    /// The task of a scan that a hold stopped; the next scan of the mount takes it over.
+    QString                             paused_task_id;
+  };
+
+  struct HoldState {
+    quint64               id = 0;
+    /// The start that waits for the end of the worker (MountScanHold::WhenReady).
+    std::function<void()> on_ready;
   };
 
   struct PendingOperation {
@@ -302,6 +342,8 @@ class MountScanCoordinator final : public QObject {
     quint64                             generation = 0;
     QString                            task_id;
     bool                               canceled_by_user = false;
+    /// A hold requested the stop of the scan.
+    bool                                stopped_by_hold  = false;
     std::vector<MountScanEndedCallback> on_ended;
   };
 
@@ -320,9 +362,17 @@ class MountScanCoordinator final : public QObject {
   void ReportScanEnd(const RunningScan& run, const MountState& state, const MountScanResult& result,
                      MountReachability previous_reachability, bool save_failed);
   void UpdateWatch(mount_id_t mount_id, MountState& state, const MountScanResult& result);
-  auto RegisterTask(const MountState& state, const QString& detail, int progress_percent)
-      -> QString;
-  void                                                    CancelByUser(quint64 generation);
+  auto RegisterTask(mount_id_t mount_id, const MountState& state, const QString& detail,
+                    int progress_percent) -> QString;
+  void CancelByUser(quint64 generation, mount_id_t mount_id);
+  /// The cancel of the running scan: requires `running_`.
+  void CancelRunningScanByUser();
+  /// End the paused task of @p state as Canceled.
+  void CancelPausedTask(MountState& state);
+  void WhenHoldReady(quint64 hold_id, std::function<void()> on_ready);
+  void ReleaseHold(quint64 hold_id);
+  /// Run the waiting starts of the holds when no worker runs.
+  void RunReadyHolds();
 
   BackgroundTaskController*                               tasks_ = nullptr;
   std::unique_ptr<MountScanClock>                         clock_;
@@ -344,7 +394,58 @@ class MountScanCoordinator final : public QObject {
   /// Changes at each Start and BeginStop, so a queued call of an earlier run does nothing.
   quint64                                                 generation_ = 0;
   std::optional<MountScanClock::TimePoint>                inactive_since_;
+  /// The holds, oldest first. They stay through Start and BeginStop.
+  std::vector<HoldState>                                  holds_;
+  quint64                                                 next_hold_id_ = 0;
 };
+
+/**
+ * @brief A hold of the scans of a MountScanCoordinator (#1016). Move-only; the destruction
+ *        releases it. An empty hold (no coordinator) holds nothing.
+ *
+ * Thread safety: UI thread only, like the coordinator.
+ */
+class MountScanHold final {
+ public:
+  MountScanHold() = default;
+  MountScanHold(MountScanHold&& other) noexcept;
+  auto operator=(MountScanHold&& other) noexcept -> MountScanHold&;
+  MountScanHold(const MountScanHold&)                    = delete;
+  auto operator=(const MountScanHold&) -> MountScanHold& = delete;
+  ~MountScanHold();
+
+  /**
+   * @brief Run @p start on the UI thread when no worker of the coordinator writes the project.
+   *
+   * In this call when no worker runs or the hold is empty, else after the end of the worker.
+   * A released hold never runs it. A second call replaces a start that still waits.
+   */
+  void               WhenReady(std::function<void()> start);
+  /// End the hold; a start that still waits does not run. A released hold is empty.
+  void               Release();
+  /// True while the hold holds a coordinator.
+  [[nodiscard]] auto IsHeld() const -> bool { return id_ != 0 && coordinator_ != nullptr; }
+
+ private:
+  friend class MountScanCoordinator;
+  MountScanHold(MountScanCoordinator* coordinator, quint64 id);
+
+  QPointer<MountScanCoordinator> coordinator_;
+  quint64                        id_ = 0;
+};
+
+/**
+ * @brief True when a user import leaves @p path to the scan of a mount (#1016, decision D10:
+ *        one file has one element).
+ *
+ * The listing of one of @p mount_roots lists @p path (ReadMountDirectoryFile), so a scan of that
+ * mount imports the file, or has imported it. A file that the listing skips (below a directory
+ * whose name starts with a period, behind a link, or of no import category) stays with the user
+ * import. Reads the file system only for a path that is below a root.
+ */
+[[nodiscard]] auto IsPathOfAMountScan(const std::filesystem::path&              path,
+                                      const std::vector<std::filesystem::path>& mount_roots)
+    -> bool;
 
 /// The task detail of a scan result: the counts of new, moved, changed, missing, and returned
 /// photos, or "No changes".

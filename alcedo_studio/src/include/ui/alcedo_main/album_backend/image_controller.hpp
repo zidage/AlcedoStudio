@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
@@ -17,6 +18,7 @@
 #include "app/sleeve_error.hpp"
 #include "image/color_label.hpp"
 #include "type/type.hpp"
+#include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 
 namespace alcedo {
 class ProjectService;
@@ -64,6 +66,12 @@ class ImageController final : public QObject {
                                             SemanticGenerationController* semantic,
                                             InteractionPolicyController*  policy,
                                             BackgroundTaskController*     background_tasks);
+  /**
+   * @brief The mount scans of the project (#1016). StartDeleteImages holds them for the length
+   *        of the delete and starts its worker when no scan worker writes the project;
+   *        DeleteTargets refuses while a scan worker writes. Null holds nothing.
+   */
+  void                    BindMountScans(MountScanCoordinator* mount_scans);
 
   /**
    * @brief Deletes the images of @p targetEntries (from the project in the root folder, from the
@@ -269,6 +277,11 @@ class ImageController final : public QObject {
   // UI-thread part after the job: thumbnails, selection, view reload, status message.
   auto FinishDeleteBatch(const DeleteBatch& batch, const DeleteBatchOutcome& outcome)
       -> DeleteExecutionResult;
+  // From the delete worker of StartDeleteImages: FinishDeleteBatch, the end of the hold and of
+  // the task, and DeleteImagesFinished, queued to the UI thread of @p self.
+  static void                   FinishDeleteOnUiThread(const QPointer<ImageController>&           self,
+                                                       const std::shared_ptr<DeleteBatch>&        batch,
+                                                       const std::shared_ptr<DeleteBatchOutcome>& outcome);
   [[nodiscard]] auto   ResolveRatingTarget(uint elementId, uint imageId) const -> RatingTarget;
   [[nodiscard]] auto   SaveProjectSnapshot() -> bool;
 
@@ -287,6 +300,9 @@ class ImageController final : public QObject {
   bool                          mark_batch_running_ = false;
   QString                       delete_task_id_{};
   bool                          delete_running_ = false;
+  MountScanCoordinator*         mount_scans_    = nullptr;
+  /// Held from the start of a delete of StartDeleteImages to its end (#1016).
+  MountScanHold                 delete_scan_hold_;
 };
 
 }  // namespace alcedo::ui

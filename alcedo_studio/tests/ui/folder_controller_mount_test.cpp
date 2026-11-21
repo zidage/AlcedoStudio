@@ -253,5 +253,53 @@ TEST_F(FolderControllerMountTest, MountInsideAMountedFolderIsRefusedWithNoRow) {
   EXPECT_EQ(Mounts().ListMounts().size(), 1u);
 }
 
+// ── #1016: user import and scan ─────────────────────────────────────────────
+
+TEST_F(FolderControllerMountTest, UserImportOfAFileInAMountedFolderLeavesOneElement) {
+  // Decision D10: one file has one element. The user import gave a mounted file a second,
+  // ordinary element.
+  ASSERT_NO_FATAL_FAILURE(MountTrip());
+  WriteJpeg(temp_dir_ / "Other" / "c.jpg", 3);
+
+  backend_.import_export()->StartImport(
+      {PathToQString(disk_ / "Trip" / "a.jpg"), PathToQString(temp_dir_ / "Other" / "c.jpg")});
+  ASSERT_TRUE(WaitFor([this] {
+    return !backend_.import_export()->ImportRunning() && !backend_.mount_scans()->HasPendingScans();
+  }));
+  EXPECT_EQ(backend_.import_export()->ImportCompleted(), 1);
+  ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 3; }));
+  ProcessEvents(300);
+  EXPECT_EQ(ProjectPhotoCount(), 3);
+  EXPECT_EQ(Summary().present_count, 2u);
+}
+
+TEST_F(FolderControllerMountTest, NoScanRunsFromTheStartToTheFinalizeOfAUserImport) {
+  ASSERT_NO_FATAL_FAILURE(MountTrip());
+  WriteJpeg(temp_dir_ / "Other" / "c.jpg", 3);
+  WriteJpeg(disk_ / "Trip" / "Day1" / "d.jpg", 4);
+  auto* scans = backend_.mount_scans();
+
+  backend_.import_export()->StartImport({PathToQString(temp_dir_ / "Other" / "c.jpg")});
+  ASSERT_TRUE(backend_.import_export()->ImportRunning());
+  EXPECT_TRUE(scans->IsHeld());
+  const auto mount_id = Summary().record.id;
+  bool       ended    = false;
+  ASSERT_TRUE(scans->RequestScan(mount_id, MountScanTrigger::kSynchronize,
+                                 [&ended](const MountScanResult&) { ended = true; }));
+
+  bool scan_ran_during_import = false;
+  ASSERT_TRUE(WaitFor([&] {
+    if (backend_.import_export()->ImportRunning()) {
+      scan_ran_during_import = scan_ran_during_import || scans->HasWorker();
+      return false;
+    }
+    return true;
+  }));
+  EXPECT_FALSE(scan_ran_during_import);
+  EXPECT_FALSE(scans->IsHeld());
+  ASSERT_TRUE(WaitFor([&ended] { return ended; }));
+  ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 4; }));
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test
