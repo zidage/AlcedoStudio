@@ -137,6 +137,8 @@ class ScanInBatchPort final : public MountScanPort {
     result.status = MountScanStatus::kCanceled;
     return result;
   }
+  // The canceled scan stored no change, so the coordinator never calls it.
+  auto SaveProject() -> bool override { return true; }
 
   void Release() {
     {

@@ -29,6 +29,13 @@ struct StorageTableSummary {
   std::optional<int64_t> max_key;
 };
 
+/// The largest element id and the largest image id that a row of the project database holds.
+/// 0 when no row holds one.
+struct StoredIdBounds {
+  int64_t element_id = 0;
+  int64_t image_id   = 0;
+};
+
 /**
  * @brief Operations on the whole project database: the diagnostics summary, the package
  *        snapshot, and the removal of the HNSW indexes of older projects.
@@ -49,6 +56,19 @@ class StorageMaintenance {
    * is left out. Reads only.
    */
   [[nodiscard]] auto ReadDataSummary() -> std::vector<StorageTableSummary>;
+
+  /**
+   * @brief The largest element id and image id that any row holds (#1015).
+   *
+   * Reads each column that holds an element id (Element.id and each column that refers to an
+   * element: folder contents, file bindings, history, mounts, semantic and AI rows) and each
+   * column that holds an image id. A row that refers to a removed element still makes its id
+   * taken, so a new element never inherits its history or labels. Reads only.
+   *
+   * @throws std::runtime_error when the read fails. The tables exist in every opened database
+   *         (Database::InitializeDB creates them).
+   */
+  [[nodiscard]] auto ReadLargestStoredIds() -> StoredIdBounds;
 
   /**
    * @brief Drop the HNSW indexes that older projects created on the semantic embedding tables.
