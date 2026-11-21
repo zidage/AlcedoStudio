@@ -2522,12 +2522,12 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>CollectionsPanel</name>
     <message>
-        <source>Open Folder Here...</source>
-        <translation>在此打开文件夹...</translation>
+        <source>Mount Folder Here...</source>
+        <translation>在此挂载文件夹...</translation>
     </message>
     <message>
-        <source>Open Folder</source>
-        <translation>打开文件夹</translation>
+        <source>Mount Folder</source>
+        <translation>挂载文件夹</translation>
     </message>
     <message>
         <source>Synchronize</source>

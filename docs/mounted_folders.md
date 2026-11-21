@@ -13,17 +13,17 @@ The parameters are in the table at the end.
 
 ## Mount a folder
 
-1. In the Collections panel, select the library root or a collection, and click **Open Folder**
+1. In the Collections panel, select the library root or a collection, and click **Mount Folder**
    at the foot of the panel. You can also right-click the row and choose
-   **Open Folder Here...**.
+   **Mount Folder Here...**.
 2. Choose the directory in the system folder dialog.
 3. A collection with the name of the directory appears below the row. Its first scan runs as a
    background task, and the photos appear while the scan imports them.
 
-**Open Folder** and the import button below it both keep the files where they are. The
+**Mount Folder** and the import button below it both keep the files where they are. The
 difference is who owns the structure:
 
-- **Open Folder** mounts the directory: its subdirectories are collections, and the collection
+- **Mount Folder** mounts the directory: its subdirectories are collections, and the collection
   follows the disk.
 - **Import Images** and **Import Folder** put the photos into the selected collection once. The
   photos are then yours to arrange, and later changes on the disk do not reach the library.

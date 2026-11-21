@@ -1376,7 +1376,7 @@ ColumnLayout {
         }
     }
 
-    // Foot of the panel (issue #1008). "Open" is the mount: the directory becomes a collection
+    // Foot of the panel (issue #1008). Mount Folder: the directory becomes a collection
     // below the selected one and follows the disk. "Import" puts photos into the selected
     // collection once. A mounted selection takes neither (Mounted Folder Plan, D6 and D7).
     readonly property bool footActionsEnabled: backendInteractive
@@ -1440,7 +1440,7 @@ ColumnLayout {
         objectName: "collectionsOpenFolderButton"
         Layout.fillWidth: true
         Layout.preferredHeight: 46
-        text: qsTr("Open Folder")
+        text: qsTr("Mount Folder")
         enabled: panel.footActionsEnabled
         icon.source: "qrc:/panel_icons/folder-symlink.svg"
         icon.width: 16
@@ -1513,7 +1513,7 @@ ColumnLayout {
         }
         AppMenuItem {
             objectName: "collectionMenuMountFolder"
-            text: qsTr("Open Folder Here...")
+            text: qsTr("Mount Folder Here...")
             onTriggered: panel.requestMountFolder(rowMenu.targetRow)
         }
         AppMenuItem {
@@ -1592,7 +1592,7 @@ ColumnLayout {
     FolderDialog {
         id: mountFolderDialog
         objectName: "collectionMountFolderDialog"
-        title: qsTr("Open Folder")
+        title: qsTr("Mount Folder")
         onAccepted: {
             const folderId = panel.pendingMountFolderId
             panel.pendingMountFolderId = -1

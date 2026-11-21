@@ -85,11 +85,11 @@ collection links. Alcedo Studio writes no sidecar file.
 
 The Collections panel has the command **Mount Folder** in the same menu as **New Collection**.
 
-Issue #1008 (review of the mock, 2026-11-20) names the command **Open Folder** in the UI and adds
+Issue #1008 (review of the mock, 2026-11-20) keeps the name **Mount Folder** and adds
 an entry point: the primary button at the foot of the Collections panel mounts the directory
 below the selected collection. The row menu of the library root and of an ordinary row has
-**Open Folder Here...**. The two imports share one two-segment button below it (**Import
-Images**, **Import Folder**), so "Open" names only the mount and "Import" only the one-time
+**Mount Folder Here...**. The two imports share one two-segment button below it (**Import
+Images**, **Import Folder**), so "Mount" names only the mount and "Import" only the one-time
 imports. The three actions are disabled while a mounted row is selected. **Add to** lists the
 root anchor and the ordinary collections only.
 

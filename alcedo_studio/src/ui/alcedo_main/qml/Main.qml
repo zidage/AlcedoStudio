@@ -246,7 +246,7 @@ ApplicationWindow {
         return colButtonSecondary
     }
 
-    // Neutral filled action (Load Project, Export, Open Folder): the light list well
+    // Neutral filled action (Load Project, Export, Mount Folder): the light list well
     // with its ink. Hover darkens the well, press darkens it more. A disabled action drops to
     // the sunken base fill with muted ink.
     function filledActionFill(enabled, hovered, pressed) {

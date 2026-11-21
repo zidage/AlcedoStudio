@@ -1789,12 +1789,12 @@ Alcedo will use %1 instead.</translation>
 <context>
     <name>CollectionsPanel</name>
     <message>
-        <source>Open Folder Here...</source>
-        <translation>Open Folder Here...</translation>
+        <source>Mount Folder Here...</source>
+        <translation>Mount Folder Here...</translation>
     </message>
     <message>
-        <source>Open Folder</source>
-        <translation>Open Folder</translation>
+        <source>Mount Folder</source>
+        <translation>Mount Folder</translation>
     </message>
     <message>
         <location filename="../qml/CollectionsPanel.qml" line="+22"/>

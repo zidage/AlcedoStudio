@@ -990,12 +990,12 @@ TEST(CollectionsPanelQmlTest, MountRootMenuHasMountCommandsAndNoStructureCommand
   ASSERT_TRUE(QMetaObject::invokeMethod(folder_menu, "close"));
   ProcessEvents(60);
 
-  // An ordinary row keeps its menu and gets Open Folder Here (issue #1008).
+  // An ordinary row keeps its menu and gets Mount Folder Here (issue #1008).
   open_menu_of(1);
   ASSERT_TRUE(WaitUntil([&] { return ordinary_menu->property("visible").toBool(); }));
   ASSERT_NE(MenuItem(ordinary_menu, "collectionMenuMountFolder"), nullptr);
   EXPECT_EQ(MenuItem(ordinary_menu, "collectionMenuMountFolder")->property("text").toString(),
-            QStringLiteral("Open Folder Here..."));
+            QStringLiteral("Mount Folder Here..."));
   EXPECT_TRUE(MenuItem(ordinary_menu, "collectionMenuRename")->property("enabled").toBool());
   EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
 }
@@ -1109,7 +1109,7 @@ auto PanelRow(Harness& h, uint element) -> QVariantMap {
   return {};
 }
 
-/// Clicks Open Folder and accepts the folder dialog with @p directory.
+/// Clicks Mount Folder and accepts the folder dialog with @p directory.
 void OpenFolderWith(Harness& h, const QString& directory) {
   auto* button = FindItem(h.window->contentItem(), QStringLiteral("collectionsOpenFolderButton"));
   auto* dialog = h.panel->findChild<QObject*>(QStringLiteral("collectionMountFolderDialog"));
@@ -1130,7 +1130,7 @@ void OpenFolderWith(Harness& h, const QString& directory) {
 
 }  // namespace
 
-// Issue #1008: Open Folder at the foot of the panel mounts the chosen directory below the
+// Issue #1008: Mount Folder at the foot of the panel mounts the chosen directory below the
 // selected collection: below the library root (tree depth 1), or inside an ordinary collection.
 TEST(CollectionsPanelQmlTest, OpenFolderMountsTheDirectoryBelowTheSelectedCollection) {
   Harness h(SmallTree(), /*current_element=*/0);
@@ -1163,7 +1163,7 @@ TEST(CollectionsPanelQmlTest, OpenFolderMountsTheDirectoryBelowTheSelectedCollec
   EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
 }
 
-// Issue #1008: Open Folder and the two halves of the import button follow the selected row; a
+// Issue #1008: Mount Folder and the two halves of the import button follow the selected row; a
 // mounted selection, or a backend that is not interactive, disables all three.
 TEST(CollectionsPanelQmlTest, FootActionsAreDisabledOnAMountedSelection) {
   Harness h(MountTree(), /*current_element=*/1);
@@ -1183,7 +1183,7 @@ TEST(CollectionsPanelQmlTest, FootActionsAreDisabledOnAMountedSelection) {
   EXPECT_TRUE(all_enabled(true));
   EXPECT_EQ(images->property("text").toString(), QStringLiteral("Import Images"));
   EXPECT_EQ(folder->property("text").toString(), QStringLiteral("Import Folder"));
-  EXPECT_EQ(open_folder->property("text").toString(), QStringLiteral("Open Folder"));
+  EXPECT_EQ(open_folder->property("text").toString(), QStringLiteral("Mount Folder"));
   // The halves split the width, sit on one row, and hold their labels without eliding.
   EXPECT_NEAR(images->width(), folder->width(), 1.0);
   for (auto* segment : {images, folder}) {
@@ -1236,7 +1236,7 @@ TEST(CollectionsPanelQmlTest, FootActionsAreDisabledOnAMountedSelection) {
   EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
 }
 
-// Issue #1008: the row menu of the library root has Open Folder Here.
+// Issue #1008: the row menu of the library root has Mount Folder Here.
 TEST(CollectionsPanelQmlTest, RootRowMenuHasOpenFolderHere) {
   Harness h(SmallTree());
   ASSERT_NE(h.panel, nullptr);
@@ -1247,7 +1247,7 @@ TEST(CollectionsPanelQmlTest, RootRowMenuHasOpenFolderHere) {
   ASSERT_TRUE(WaitUntil([&] { return menu->property("visible").toBool(); }));
   auto* item = MenuItem(menu, "collectionMenuMountFolder");
   ASSERT_NE(item, nullptr);
-  EXPECT_EQ(item->property("text").toString(), QStringLiteral("Open Folder Here..."));
+  EXPECT_EQ(item->property("text").toString(), QStringLiteral("Mount Folder Here..."));
   EXPECT_TRUE(item->property("enabled").toBool());
 }
 
