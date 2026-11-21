@@ -808,6 +808,37 @@ alcedo_ui_gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowT
 alcedo_register_test_target(MainQmlWorkflowTest ui)
 alcedo_link_quickqanava_qml(MainQmlWorkflowTest)
 
+# The folder section of the Library view (issue #1009) in the production Main.qml, over real
+# mounts.
+add_executable(LibraryFolderSectionQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/library_folder_section_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LibraryFolderSectionQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(LibraryFolderSectionQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(LibraryFolderSectionQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(LibraryFolderSectionQmlTest
+    TEST_PREFIX "LibraryFolderSectionQmlTest.")
+alcedo_register_test_target(LibraryFolderSectionQmlTest ui)
+alcedo_link_quickqanava_qml(LibraryFolderSectionQmlTest)
+
 # Phase 6C-5 Phase 6B: QML entry surfaces blocked during save and recovered after.
 add_executable(EditorCheckpointQmlIntegrationTest
     ${ALCEDO_TEST_ROOT}/ui/editor_checkpoint_qml_integration_test.cpp

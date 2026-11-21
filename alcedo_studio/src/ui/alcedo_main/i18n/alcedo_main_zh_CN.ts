@@ -6719,6 +6719,21 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
 </context>
 <context>
+    <name>LibraryFolderSection</name>
+    <message>
+        <source>Offline</source>
+        <translation>离线</translation>
+    </message>
+    <message>
+        <source>Folders</source>
+        <translation>文件夹</translation>
+    </message>
+    <message>
+        <source>Show folder %1</source>
+        <translation>显示文件夹 %1</translation>
+    </message>
+</context>
+<context>
     <name>LibraryWorkspace</name>
     <message>
         <source>Import to %1</source>
