@@ -111,6 +111,24 @@ TEST(ExportQueueTest, RunRemovesItsFinishedEntries) {
   EXPECT_EQ(changed.count(), 3);
 }
 
+// #1018: a photo that its run reports as missing stays in the queue with that status, and the
+// next run takes it again.
+TEST(ExportQueueTest, MissingEntryStaysQueuedWithItsStatus) {
+  ExportQueue queue(nullptr, nullptr);
+  queue.AddTargets(
+      QVariantList{Item(1, 10, QStringLiteral("a.arw")), Item(2, 20, QStringLiteral("b.arw"))});
+  queue.ApplyExportState(1, Statuses({{"1:10", "queued"}, {"2:20", "queued"}}));
+  queue.ApplyExportState(1, Statuses({{"1:10", "missing"}, {"2:20", "succeeded"}}));
+  ASSERT_EQ(queue.Count(), 1);
+  EXPECT_EQ(queue.Entries()[0].element_id, 1u);
+  EXPECT_EQ(StatusKeyOfLabel(queue, QStringLiteral("a.arw")), QStringLiteral("1:10"));
+
+  queue.ApplyExportState(2, Statuses({{"1:10", "queued"}}));
+  EXPECT_EQ(queue.Entries()[0].run_id, 2u);
+  queue.ApplyExportState(2, Statuses({{"1:10", "succeeded"}}));
+  EXPECT_EQ(queue.Count(), 0);
+}
+
 // #955: a photo added again after its export is queued for the next export; the result of the
 // earlier run neither shows on its row nor removes it.
 TEST(ExportQueueTest, PhotoAddedAfterItsExportWaitsForTheNextRun) {
