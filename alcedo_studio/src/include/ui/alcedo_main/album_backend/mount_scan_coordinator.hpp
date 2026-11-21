@@ -11,6 +11,7 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <thread>
@@ -155,6 +156,15 @@ struct MountScanCoordinatorDependencies {
  * listing with the watcher. A mount whose registration fails is "not watched"; the other
  * triggers still scan it.
  *
+ * Stop: BeginStop requests the stop of the running scan and returns at once. The worker reads the
+ * request before each fingerprint read and before each new file batch, completes a batch that
+ * started its import, and ends. Until then HasStoppedWorker is true and no other scan or
+ * operation starts, so one worker at most writes the project. A project close, a project load,
+ * and the application exit wait for that worker before they save or replace the project: the
+ * close on StoppedWorkerEnded, the load on the result of BeginStop in its loader thread, and the
+ * exit in its event wait. The UI thread joins the worker only in Stop, which the destructor and
+ * the last step of the exit call.
+ *
  * Thread safety: UI thread only. The scans run on one worker thread.
  */
 class MountScanCoordinator final : public QObject {
@@ -170,14 +180,24 @@ class MountScanCoordinator final : public QObject {
   auto               operator=(const MountScanCoordinator&) -> MountScanCoordinator& = delete;
 
   /// Start for an entered project and request a kProjectOpen scan of each mount. A running
-  /// coordinator stops first.
+  /// coordinator stops first (BeginStop); the first scan starts when its worker has ended.
   void               Start(std::shared_ptr<MountScanPort> port);
 
   /**
-   * @brief Stop before the project closes: stop the timers and the watcher, request the stop of
-   *        the running scan, and wait for it. The running scan keeps its stored batches
-   *        (MountScanStatus::kCanceled). No effect when the coordinator is not started.
+   * @brief Stop without a wait: stop the timers and the watcher, drop the queued scans and
+   *        operations, and request the stop of the running scan. The task of the scan ends
+   *        Canceled and the waiting callbacks get their canceled result in this call.
+   *
+   * The worker of the running scan or operation continues to the end of its batch or its
+   * storage change; the stored batches stay (MountScanStatus::kCanceled).
+   *
+   * @return A future that is ready when that worker has ended; any thread can wait for it. An
+   *         invalid future when no worker runs.
    */
+  auto               BeginStop() -> std::shared_future<void>;
+
+  /// BeginStop, then a join of the worker on the calling thread. The wait is one fingerprint
+  /// read plus the batch in work at most. No wait when no worker runs.
   void               Stop();
 
   /**
@@ -209,8 +229,15 @@ class MountScanCoordinator final : public QObject {
   [[nodiscard]] auto IsWatched(mount_id_t mount_id) const -> bool;
   /// True while a scan of @p mount_id runs.
   [[nodiscard]] auto IsScanRunning(mount_id_t mount_id) const -> bool;
-  /// True while a scan or a mount operation runs or waits to run.
+  /// True while a scan or a mount operation runs or waits to run, or the worker of a stopped
+  /// scan or operation has not ended.
   [[nodiscard]] auto HasPendingScans() const -> bool;
+  /// True while the worker that BeginStop stopped has not ended. It can still write its batch.
+  [[nodiscard]] auto HasStoppedWorker() const -> bool { return stopped_worker_.has_value(); }
+
+ signals:
+  /// The worker that BeginStop stopped has ended; HasStoppedWorker is false.
+  void StoppedWorkerEnded();
 
  private:
   struct MountState {
@@ -232,6 +259,18 @@ class MountScanCoordinator final : public QObject {
   struct RunningOperation {
     MountOperationDoneCallback done;
     std::thread                worker;
+    /// Ready when the worker thread has run the operation and posted its end.
+    std::shared_future<void>   ended;
+    /// `generation_` at the start of the operation.
+    quint64                    generation = 0;
+  };
+
+  /// The worker of the scan or operation that ran at BeginStop. It holds the port of its run.
+  struct StoppedWorker {
+    std::thread              worker;
+    std::shared_future<void> ended;
+    /// `generation_` at the start of the worker; the queued end of the worker carries it.
+    quint64                  generation = 0;
   };
 
   struct RunningScan {
@@ -239,6 +278,10 @@ class MountScanCoordinator final : public QObject {
     MountScanTrigger                   trigger  = MountScanTrigger::kProjectOpen;
     std::shared_ptr<std::atomic<bool>> stop_requested;
     std::thread                        worker;
+    /// Ready when the worker thread has run the scan and posted its end.
+    std::shared_future<void>            ended;
+    /// `generation_` at the start of the scan.
+    quint64                             generation = 0;
     QString                            task_id;
     bool                               canceled_by_user = false;
     std::vector<MountScanEndedCallback> on_ended;
@@ -249,6 +292,8 @@ class MountScanCoordinator final : public QObject {
   void StartNextScan();
   void StartOperation(PendingOperation pending);
   void HandleOperationEnded(quint64 generation, std::exception_ptr error);
+  /// Join the stopped worker whose queued end carries @p generation, then start the next scan.
+  void HandleStoppedWorkerEnded(quint64 generation);
   void HandleScanProgress(quint64 generation, mount_id_t mount_id,
                           const MountScanProgress& progress);
   void HandleScanEnded(quint64 generation, mount_id_t mount_id, const MountScanResult& result);
@@ -273,7 +318,10 @@ class MountScanCoordinator final : public QObject {
   std::optional<RunningScan>                              running_;
   std::deque<PendingOperation>                            operations_;
   std::optional<RunningOperation>                         running_operation_;
-  /// Changes at each Start and Stop, so a queued call of an earlier run does nothing.
+  /// Set by BeginStop when a worker ran. No scan and no operation starts while it is set, so
+  /// `running_`, `running_operation_`, and this member hold one worker thread at most.
+  std::optional<StoppedWorker>                            stopped_worker_;
+  /// Changes at each Start and BeginStop, so a queued call of an earlier run does nothing.
   quint64                                                 generation_ = 0;
   std::optional<MountScanClock::TimePoint>                inactive_since_;
 };

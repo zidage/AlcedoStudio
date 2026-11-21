@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <ostream>
@@ -42,6 +43,9 @@ void PrintTo(const MountScanChangeList& changes, std::ostream* out) {
          << text(m.relative_path) << values(m.values);
   for (const auto& n : changes.new_files)
     *out << "\n new " << text(n.relative_path) << values(n.values);
+  for (const auto& n : changes.unread_new_files)
+    *out << "\n unread new " << text(n.relative_path) << " size=" << n.byte_size
+         << " time=" << n.modified_ns;
   for (const auto& m : changes.missing)
     *out << "\n missing " << m.element_id << " " << text(m.relative_path);
   for (const auto& u : changes.returned)
@@ -146,6 +150,12 @@ auto Scan(const MountScanRecords& records, FakeDisk& disk) -> MountScanChangeLis
   return BuildMountScanChangeList(records, disk.Listing(), disk.Function());
 }
 
+/// A listed file that the comparison did not read.
+auto Unread(std::wstring path, std::uint64_t size = kSize, std::int64_t time = kTime)
+    -> MountDirectoryFile {
+  return MountDirectoryFile{std::move(path), size, time};
+}
+
 using Paths = std::vector<std::wstring>;
 
 }  // namespace
@@ -230,6 +240,7 @@ TEST(MountScanChangeListTest, FileMovedBetweenDirectoriesKeepsItsElement) {
 }
 
 TEST(MountScanChangeListTest, CopyOfAPresentFileIsANewFile) {
+  // No record is lost, so no move can end at a copy: the comparison reads no file.
   FakeDisk disk;
   disk.Add(L"a.ARW", 1);
   disk.Add(L"a copy.ARW", 1);
@@ -237,11 +248,86 @@ TEST(MountScanChangeListTest, CopyOfAPresentFileIsANewFile) {
   const MountScanRecords records{.files = {Present(10, L"a.ARW", 1)}};
 
   MountScanChangeList    expected;
-  expected.new_files       = {{L"a copy.ARW", Values(1)}, {L"backup/a.ARW", Values(1)}};
-  expected.folders_to_add  = {L"backup"};
-  expected.unchanged_count = 1;
+  expected.unread_new_files = {Unread(L"a copy.ARW"), Unread(L"backup/a.ARW")};
+  expected.folders_to_add   = {L"backup"};
+  expected.unchanged_count  = 1;
   EXPECT_EQ(Scan(records, disk), expected);
-  EXPECT_EQ(disk.Reads(), (Paths{L"a copy.ARW", L"backup/a.ARW"}));
+  EXPECT_EQ(disk.Reads(), Paths{});
+}
+
+TEST(MountScanChangeListTest, FirstScanReadsNoFile) {
+  // A mount with no record: each listed file is a new file, and its import batch reads it.
+  FakeDisk disk;
+  disk.Add(L"day 2/c.ARW", 3);
+  disk.Add(L"a.ARW", 1);
+  disk.Add(L"day 1/b.ARW", 2);
+
+  MountScanChangeList expected;
+  expected.unread_new_files = {Unread(L"a.ARW"), Unread(L"day 1/b.ARW"), Unread(L"day 2/c.ARW")};
+  expected.folders_to_add   = {L"day 1", L"day 2"};
+  EXPECT_EQ(Scan(MountScanRecords{}, disk), expected);
+  EXPECT_EQ(disk.Reads(), Paths{});
+}
+
+TEST(MountScanChangeListTest, NewPathIsReadOnlyWhenALostRecordHasItsByteSize) {
+  // old.ARW is gone. The fingerprint holds the byte size, so only the new path with the size of
+  // the lost record can be its file.
+  FakeDisk disk;
+  disk.Add(L"renamed.ARW", 1);
+  disk.Add(L"other size.ARW", 2, kSize + 1);
+  const MountScanRecords records{.files = {Present(10, L"old.ARW", 1)}};
+
+  MountScanChangeList    expected;
+  expected.moved            = {{10, L"old.ARW", L"renamed.ARW", Values(1)}};
+  expected.unread_new_files = {Unread(L"other size.ARW", kSize + 1)};
+  EXPECT_EQ(Scan(records, disk), expected);
+  EXPECT_EQ(disk.Reads(), Paths{L"renamed.ARW"});
+}
+
+TEST(MountScanChangeListTest, StopRequestEndsTheFingerprintReadsWithAnEmptyChangeList) {
+  // Five new paths that the lost record can pair with. The stop request arrives in the second
+  // read; the comparison reads no third file.
+  FakeDisk disk;
+  for (const auto* name : {L"a.ARW", L"b.ARW", L"c.ARW", L"d.ARW", L"e.ARW"}) {
+    disk.Add(name, 7);
+  }
+  const MountScanRecords records{.files = {Present(10, L"old.ARW", 1)}};
+  std::atomic<bool>      stop{false};
+  int                    reads   = 0;
+  const auto             read    = disk.Function();
+
+  const auto             changes = BuildMountScanChangeList(
+      records, disk.Listing(),
+      [&](const MountDirectoryFile& file) {
+        if (++reads == 2) stop.store(true);
+        return read(file);
+      },
+      &stop);
+
+  EXPECT_EQ(changes, MountScanChangeList{});
+  EXPECT_EQ(disk.Reads(), (Paths{L"a.ARW", L"b.ARW"}));
+}
+
+TEST(MountScanChangeListTest, StopRequestEndsTheReadsOfChangedFiles) {
+  FakeDisk disk;
+  disk.Add(L"a.ARW", 1, kSize, kTime + 1);
+  disk.Add(L"b.ARW", 2, kSize, kTime + 1);
+  disk.Add(L"c.ARW", 3, kSize, kTime + 1);
+  const MountScanRecords records{
+      .files = {Present(10, L"a.ARW", 1), Present(11, L"b.ARW", 2), Present(12, L"c.ARW", 3)}};
+  std::atomic<bool> stop{false};
+  const auto        read    = disk.Function();
+
+  const auto        changes = BuildMountScanChangeList(
+      records, disk.Listing(),
+      [&](const MountDirectoryFile& file) {
+        stop.store(true);
+        return read(file);
+      },
+      &stop);
+
+  EXPECT_EQ(changes, MountScanChangeList{});
+  EXPECT_EQ(disk.Reads(), Paths{L"a.ARW"});
 }
 
 TEST(MountScanChangeListTest, TwoRecordsWithOneFingerprintMatchBySameNameFirst) {
@@ -440,9 +526,10 @@ TEST(MountScanChangeListTest, RecordWithAnotherFingerprintVersionMatchesNoNewPat
   const MountScanRecords records{.files = {record}};
 
   MountScanChangeList    expected;
-  expected.new_files = {{L"b.ARW", Values(1)}};
-  expected.missing   = {{10, L"a.ARW"}};
+  expected.unread_new_files = {Unread(L"b.ARW")};
+  expected.missing          = {{10, L"a.ARW"}};
   EXPECT_EQ(Scan(records, disk), expected);
+  EXPECT_EQ(disk.Reads(), Paths{});
 }
 
 TEST(MountScanChangeListTest, IncompleteListingGivesNoChangesAndReadsNoFile) {
