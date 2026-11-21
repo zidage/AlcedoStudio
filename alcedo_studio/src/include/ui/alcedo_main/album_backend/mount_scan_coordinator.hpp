@@ -51,10 +51,12 @@ class MountScanPort {
    * @brief Scan one mount (MountService::ScanMount). Called on the worker thread of the
    *        coordinator; blocks for the length of the scan.
    * @param on_progress Called on the worker thread after each stored batch.
+   * @param find_moved_volume MountScanRequest::find_moved_volume; true for the scan of the
+   *        project open.
    */
   virtual auto ScanMount(mount_id_t mount_id, const std::atomic<bool>& stop_requested,
-                         const std::function<void(const MountScanProgress&)>& on_progress)
-      -> MountScanResult = 0;
+                         const std::function<void(const MountScanProgress&)>& on_progress,
+                         bool find_moved_volume) -> MountScanResult = 0;
 };
 
 /// The production port: MountService::ScanMount with the import service of the project.
@@ -67,8 +69,8 @@ class ProjectMountScanPort final : public MountScanPort {
 
   auto ListMounts() -> std::vector<MountSummary> override;
   auto ScanMount(mount_id_t mount_id, const std::atomic<bool>& stop_requested,
-                 const std::function<void(const MountScanProgress&)>& on_progress)
-      -> MountScanResult override;
+                 const std::function<void(const MountScanProgress&)>& on_progress,
+                 bool find_moved_volume) -> MountScanResult override;
 
  private:
   std::shared_ptr<MountService>        mounts_;
@@ -112,6 +114,10 @@ struct MountScanCoordinatorDependencies {
 
 /**
  * @brief Starts the scans of the mounts of the open project (Mounted Folder Plan, MF7).
+ *
+ * The scan of the project open searches for a volume that moved to another mount point
+ * (MountScanRequest::find_moved_volume, MF8). A scan that relocated the root is watched at the new
+ * root.
  *
  * Triggers: Start (project open), an activation of the application after the activation
  * interval or more in the background, the watcher delay after the last change notification of

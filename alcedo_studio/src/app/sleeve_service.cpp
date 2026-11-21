@@ -447,6 +447,34 @@ auto SleeveServiceImpl::RemoveMountTree(sl_element_id_t root_folder_id, mount_id
   });
 }
 
+auto SleeveServiceImpl::DeleteMissingMountedFiles(mount_id_t                       mount_id,
+                                                  std::span<const sl_element_id_t> file_ids)
+    -> std::pair<std::vector<std::shared_ptr<SleeveFile>>, SyncResult> {
+  return Write<std::vector<std::shared_ptr<SleeveFile>>>(
+      [this, mount_id, file_ids](FileSystem& fs) -> std::vector<std::shared_ptr<SleeveFile>> {
+        auto& mounts = storage_->GetMountStore();
+        for (const auto file_id : file_ids) {
+          const auto file   = fs.Get(file_id);
+          const auto record = mounts.ReadSourceFile(file_id);
+          if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED ||
+              file->mount_id_ != mount_id || !record.has_value() ||
+              record->state != SourceFileState::kMissing) {
+            throw std::invalid_argument("SleeveServiceImpl: the element " +
+                                        std::to_string(file_id) +
+                                        " is not a missing photo of the mount");
+          }
+        }
+        std::vector<std::shared_ptr<SleeveFile>> files;
+        for (const auto file_id : fs.DeleteFilesEverywhere(file_ids)) {
+          auto element = fs.Get(file_id);
+          if (element && element->type_ == ElementType::FILE) {
+            files.push_back(std::static_pointer_cast<SleeveFile>(element));
+          }
+        }
+        return files;
+      });
+}
+
 auto SleeveServiceImpl::MoveFolder(const std::filesystem::path& folder_path,
                                    const std::filesystem::path& new_parent_path) -> SyncResult {
   return Write<void>([folder_path, new_parent_path](FileSystem& fs) {

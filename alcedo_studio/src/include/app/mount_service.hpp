@@ -11,6 +11,8 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -22,6 +24,7 @@
 #include "sleeve/storage.hpp"
 #include "type/mount_records.hpp"
 #include "type/type.hpp"
+#include "utils/file/volume_identity.hpp"
 
 namespace alcedo {
 
@@ -39,6 +42,17 @@ enum class MountError : std::uint8_t {
   kUnknownMount,
   /// A storage write failed.
   kStorageFailure,
+  /// The element is not a mounted photo whose file is missing (Locate).
+  kPhotoIsNotMissing,
+  /// The file is not below the root directory of the mount of the photo (Locate).
+  kFileOutsideMount,
+  /// The file is below the root directory, but a scan does not list it: an unsupported type, a
+  /// name or a directory that starts with a period, or a link on the way (Locate).
+  kFileIsNotListed,
+  /// Another photo of the mount has the file as its present source (Locate).
+  kFileHasPhoto,
+  /// The file could not be read (Locate).
+  kFileUnreadable,
 };
 
 /// The error of a refused or failed mount operation.
@@ -115,6 +129,9 @@ struct MountScanResult {
   /// ended. The directory watcher of the scan triggers registers these (Mounted Folder Plan,
   /// MF7).
   std::vector<std::wstring> listed_directories;
+  /// The new root directory when the scan found the recorded volume under a new mount point
+  /// (MountScanRequest::find_moved_volume) and relocated the root before the listing.
+  std::optional<std::filesystem::path> relocated_root;
 };
 
 /// The progress of the new file batches of one scan.
@@ -139,6 +156,25 @@ struct MountScanRequest {
   /// Optional. Called after the first batch and after each new file batch.
   std::function<void(const MountScanProgress&)> on_progress;
   std::size_t                                   new_file_batch_size = kMountScanNewFileBatchSize;
+  /// When the root directory is unreachable and the mount has a volume identity, look for that
+  /// volume under another mount point and relocate the root to the same path below it
+  /// (Mounted Folder Plan, MF8). The scan of the project open sets it.
+  bool                                          find_moved_volume   = false;
+};
+
+/// The mounted volumes for the volume search of MountScanRequest::find_moved_volume.
+/// ListVolumeMountPoints in production; a test injects a list.
+using VolumeMountPointList = std::function<std::vector<VolumeMountPoint>()>;
+
+/// Removes the edit data (pipelines and edit history) of the photos that RemoveMissingPhotos
+/// removed. PipelineMgmtService::DeletePipelines in production; MountService cannot depend on
+/// PipelineMgmtService, which depends on ProjectService.
+using MountEditDataRemoval = std::function<void(std::span<const sl_element_id_t>)>;
+
+/// The photos that RemoveMissingPhotos removed.
+struct MountMissingPhotoRemoval {
+  std::vector<sl_element_id_t> element_ids;
+  std::vector<image_id_t>      image_ids;
 };
 
 /**
@@ -165,9 +201,11 @@ struct MountScanRequest {
  */
 class MountService {
  public:
+  /// @param list_volumes The mounted volumes; empty takes ListVolumeMountPoints.
   /// @throws std::invalid_argument when a service is null.
   MountService(std::shared_ptr<Storage> storage, std::shared_ptr<SleeveServiceImpl> sleeve_service,
-               std::shared_ptr<ImagePoolService> image_pool_service);
+               std::shared_ptr<ImagePoolService> image_pool_service,
+               VolumeMountPointList              list_volumes = {});
 
   /**
    * @brief Bind a new collection in the folder @p parent_folder_id to @p directory.
@@ -206,18 +244,76 @@ class MountService {
    */
   void RemoveMount(mount_id_t mount_id);
 
+  /**
+   * @brief Bind the mount @p mount_id to the new location @p directory of its root directory
+   *        (Locate Folder; Mounted Folder Plan, MF8).
+   *
+   * The mount keeps each element. The stored root directory becomes the canonical path of
+   * @p directory, the volume identity is read again, and the `Image.image_path` of each file of
+   * the mount moves from the old root to the new root. The next scan compares the new location:
+   * a file that is not there becomes missing, and a new file is imported.
+   *
+   * Write order: the MountRoot row, then `Image.image_path`. When the second write fails, the
+   * next scan finds each file at the new location by its fingerprint (a move) and completes the
+   * relocation.
+   *
+   * @throws MountOperationError with kUnknownMount, kDirectoryUnreachable, kNestedMount (the
+   *         directory is, is inside, or contains the directory of another mount), or
+   *         kStorageFailure. A refused call changes nothing.
+   */
+  void RelocateRoot(mount_id_t mount_id, const std::filesystem::path& directory);
+
+  /**
+   * @brief Take @p file as the source of the missing mounted photo @p element_id (Locate;
+   *        Mounted Folder Plan, MF8).
+   *
+   * The file must be below the root directory of the mount of the photo, be a file that a scan
+   * lists, and be the present source of no other photo of the mount. The photo keeps its
+   * element, edit history, marks, and collection links. It gets the file name, the home link in
+   * the folder of the file's directory (a missing folder is added), `Image.image_path`, and the
+   * source values of the file; the fingerprint can be different from the record.
+   *
+   * @throws MountOperationError with kPhotoIsNotMissing, kFileOutsideMount, kFileIsNotListed,
+   *         kFileHasPhoto, kFileUnreadable, or kStorageFailure. A refused call changes nothing.
+   */
+  void LocateMissingFile(sl_element_id_t element_id, const std::filesystem::path& file);
+
+  /**
+   * @brief Remove each missing photo of the mount @p mount_id from the project: the element,
+   *        its links, its source record, its Image row, and through @p remove_edit_data its
+   *        pipelines and edit history (Remove Missing Photos; Mounted Folder Plan, MF8).
+   *
+   * This is the only removal of mounted photos from the project. It removes no file from the
+   * disk. A present photo stays.
+   *
+   * @return The removed photos; empty when the mount has no missing photo.
+   * @throws MountOperationError with kUnknownMount, or kStorageFailure when the sleeve write
+   *         failed (nothing is removed then).
+   */
+  auto RemoveMissingPhotos(mount_id_t mount_id, const MountEditDataRemoval& remove_edit_data)
+      -> MountMissingPhotoRemoval;
+
   /// Every mount in ascending id order, with its reachability and its file counts.
   auto ListMounts() const -> std::vector<MountSummary>;
 
  private:
-  auto                     FindMount(mount_id_t mount_id) const -> MountRootRecord;
-  void                     SetReachability(mount_id_t mount_id, MountReachability reachability);
+  auto FindMount(mount_id_t mount_id) const -> MountRootRecord;
+  void SetReachability(mount_id_t mount_id, MountReachability reachability);
+  /// RelocateRoot with the operation lock held. Returns the stored canonical root.
+  auto RelocateRootLocked(const MountRootRecord& mount, const std::filesystem::path& directory)
+      -> std::filesystem::path;
+  /// The same path as the root of @p mount below a mount point of its recorded volume; empty
+  /// when no listed volume has the identity or no such directory exists.
+  auto FindRootOnMovedVolume(const MountRootRecord& mount) const
+      -> std::optional<std::filesystem::path>;
 
-  std::shared_ptr<Storage> storage_;
+  std::shared_ptr<Storage>                          storage_;
   std::shared_ptr<SleeveServiceImpl>                sleeve_service_;
   std::shared_ptr<ImagePoolService>                 image_pool_service_;
+  VolumeMountPointList                              list_volumes_;
 
-  /// Serializes CreateMount, ScanMount, and RemoveMount.
+  /// Serializes CreateMount, ScanMount, RemoveMount, RelocateRoot, LocateMissingFile, and
+  /// RemoveMissingPhotos.
   std::mutex                                        operation_mutex_;
   mutable std::mutex                                reachability_mutex_;
   std::unordered_map<mount_id_t, MountReachability> reachability_;

@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include <array>
+#include <cwchar>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -99,6 +100,45 @@ auto ReadVolumeIdentity(const std::filesystem::path& directory) -> std::string {
     return {};
   }
   return ToUtf8(volume_name.data());
+}
+
+auto ListVolumeMountPoints() -> std::vector<VolumeMountPoint> {
+  std::vector<VolumeMountPoint> mount_points;
+
+  // Local volumes: the GUID path is the identity; each drive letter or mount folder is a mount
+  // point. A volume GUID path is 49 characters and the terminator.
+  std::array<wchar_t, 64>       volume_name{};
+  HANDLE search = ::FindFirstVolumeW(volume_name.data(), static_cast<DWORD>(volume_name.size()));
+  if (search != INVALID_HANDLE_VALUE) {
+    do {
+      DWORD length = 0;
+      ::GetVolumePathNamesForVolumeNameW(volume_name.data(), nullptr, 0, &length);
+      if (::GetLastError() != ERROR_MORE_DATA || length == 0) continue;
+      std::vector<wchar_t> paths(length);
+      if (!::GetVolumePathNamesForVolumeNameW(volume_name.data(), paths.data(), length, &length)) {
+        continue;
+      }
+      const auto identity = ToUtf8(volume_name.data());
+      // A list of strings, each with its terminator, and one more terminator at the end.
+      for (const wchar_t* path = paths.data(); *path != L'\0'; path += std::wcslen(path) + 1) {
+        mount_points.push_back(VolumeMountPoint{identity, std::filesystem::path(path)});
+      }
+    } while (::FindNextVolumeW(search, volume_name.data(), static_cast<DWORD>(volume_name.size())));
+    ::FindVolumeClose(search);
+  }
+
+  // Mapped network drives: the share is the identity; the drive is the mount point.
+  const DWORD drives = ::GetLogicalDrives();
+  for (wchar_t letter = L'A'; letter <= L'Z'; ++letter) {
+    if ((drives & (1u << (letter - L'A'))) == 0) continue;
+    const std::wstring drive{letter, L':', L'\\'};
+    if (::GetDriveTypeW(drive.c_str()) != DRIVE_REMOTE) continue;
+    auto identity = MappedDriveShareIdentity(drive);
+    if (!identity.empty()) {
+      mount_points.push_back(VolumeMountPoint{std::move(identity), std::filesystem::path(drive)});
+    }
+  }
+  return mount_points;
 }
 
 }  // namespace alcedo

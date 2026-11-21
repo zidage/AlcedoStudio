@@ -242,4 +242,47 @@ auto MountRelativePathOf(const stdfs::path& root, const stdfs::path& path)
   return relative;
 }
 
+auto ReadMountDirectoryFile(const stdfs::path& root, const stdfs::path& path)
+    -> std::optional<MountDirectoryFile> {
+  const auto path_elements = NormalElements(path);
+  const auto count         = RootElementCount(path_elements, NormalElements(root));
+  if (!count.has_value() || *count == path_elements.size()) {
+    return std::nullopt;
+  }
+
+  // Walk from the root as the listing does: each directory on the way is a real directory, and
+  // no name starts with a period.
+  stdfs::path     current = root;
+  std::error_code ec;
+  for (std::size_t index = *count; index < path_elements.size(); ++index) {
+    const auto name = path_elements[index].wstring();
+    if (name.empty() || name.front() == L'.') {
+      return std::nullopt;
+    }
+    current /= path_elements[index];
+    const auto type = stdfs::symlink_status(current, ec).type();
+    if (ec) {
+      return std::nullopt;
+    }
+    const bool last = index + 1 == path_elements.size();
+    if (last ? type != stdfs::file_type::regular : type != stdfs::file_type::directory) {
+      return std::nullopt;
+    }
+  }
+  if (CategoryForPath(current) == ImportFileCategory::Other) {
+    return std::nullopt;
+  }
+  const stdfs::directory_entry entry(current, ec);
+  if (ec) {
+    return std::nullopt;
+  }
+  const auto attributes = ReadFileAttributes(entry);
+  if (!attributes) {
+    return std::nullopt;
+  }
+  return MountDirectoryFile{.relative_path = *MountRelativePathOf(root, current),
+                            .byte_size     = attributes->byte_size,
+                            .modified_ns   = attributes->modified_ns};
+}
+
 }  // namespace alcedo

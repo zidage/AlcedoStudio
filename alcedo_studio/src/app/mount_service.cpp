@@ -15,6 +15,7 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -71,6 +72,36 @@ auto PresentRecord(sl_element_id_t element_id, const MountScanSourceValues& valu
   record.fingerprint_version = values.fingerprint.version;
   record.state               = SourceFileState::kPresent;
   return record;
+}
+
+void RequireSynced(const SyncResult& sync) {
+  if (!sync.success_) {
+    throw std::runtime_error("MountService: the sleeve tree was not written: " + sync.message_);
+  }
+}
+
+/// `Image.image_path` and the file name of each image of @p locations below @p root, in one pool
+/// sync.
+void WriteImageLocations(ImagePoolService& image_pool_service, const stdfs::path& root,
+                         const std::vector<std::pair<image_id_t, std::wstring>>& locations) {
+  if (locations.empty()) {
+    return;
+  }
+  for (const auto& [image_id, relative_path] : locations) {
+    auto path = PathBelowRoot(root, relative_path);
+    auto name = LastName(relative_path);
+    image_pool_service.Write_NoSync<void>(image_id,
+                                          [&path, &name](const std::shared_ptr<Image>& image) {
+                                            image->image_path_ = path;
+                                            image->image_name_ = name;
+                                          });
+  }
+  const auto status = image_pool_service.SyncWithStorage();
+  if (!status.failed_images_.empty()) {
+    const auto& failure = status.failed_images_.front();
+    throw std::runtime_error(std::format("MountService: the Image row {} was not written: {}",
+                                         failure.image_id_, failure.message_));
+  }
 }
 
 /// One stored mounted file of the scan: its image and its source record.
@@ -200,7 +231,7 @@ class MountScanRun {
     for (const auto& adoption : changes.adopted) {
       locations.emplace_back(ordinary_images_.at(adoption.element_id), adoption.relative_path);
     }
-    WriteImageLocations(locations);
+    WriteImageLocations(image_pool_service_, mount_.root_path, locations);
 
     std::vector<SourceFileRecord> sources;
     for (const auto& update : changes.changed_in_place) {
@@ -242,28 +273,6 @@ class MountScanRun {
       for (const auto& update : changes.returned) {
         request_.invalidate_thumbnail(update.element_id);
       }
-    }
-  }
-
-  /// `Image.image_path` and the file name of each image of @p locations, in one pool sync.
-  void WriteImageLocations(const std::vector<std::pair<image_id_t, std::wstring>>& locations) {
-    if (locations.empty()) {
-      return;
-    }
-    for (const auto& [image_id, relative_path] : locations) {
-      auto path = PathBelowRoot(mount_.root_path, relative_path);
-      auto name = LastName(relative_path);
-      image_pool_service_.Write_NoSync<void>(image_id,
-                                             [&path, &name](const std::shared_ptr<Image>& image) {
-                                               image->image_path_ = path;
-                                               image->image_name_ = name;
-                                             });
-    }
-    const auto status = image_pool_service_.SyncWithStorage();
-    if (!status.failed_images_.empty()) {
-      const auto& failure = status.failed_images_.front();
-      throw std::runtime_error(std::format("MountService: the Image row {} was not written: {}",
-                                           failure.image_id_, failure.message_));
     }
   }
 
@@ -321,12 +330,6 @@ class MountScanRun {
     }
   }
 
-  static void RequireSynced(const SyncResult& sync) {
-    if (!sync.success_) {
-      throw std::runtime_error("MountService: the sleeve tree was not written: " + sync.message_);
-    }
-  }
-
   MountStore&                                      mounts_;
   SleeveServiceImpl&                               sleeve_service_;
   ImagePoolService&                                image_pool_service_;
@@ -352,10 +355,13 @@ auto MountRootName(const stdfs::path& root) -> file_name_t {
 
 MountService::MountService(std::shared_ptr<Storage>           storage,
                            std::shared_ptr<SleeveServiceImpl> sleeve_service,
-                           std::shared_ptr<ImagePoolService>  image_pool_service)
+                           std::shared_ptr<ImagePoolService>  image_pool_service,
+                           VolumeMountPointList               list_volumes)
     : storage_(std::move(storage)),
       sleeve_service_(std::move(sleeve_service)),
-      image_pool_service_(std::move(image_pool_service)) {
+      image_pool_service_(std::move(image_pool_service)),
+      list_volumes_(list_volumes ? std::move(list_volumes)
+                                 : VolumeMountPointList(&ListVolumeMountPoints)) {
   if (!storage_ || !sleeve_service_ || !image_pool_service_) {
     throw std::invalid_argument("MountService: storage, sleeve, and image pool are required");
   }
@@ -429,10 +435,28 @@ auto MountService::ScanMount(const MountScanRequest& request) -> MountScanResult
     throw std::invalid_argument("MountService: a scan needs an importer");
   }
   std::lock_guard lock(operation_mutex_);
-  const auto      mount = FindMount(request.mount_id);
+  auto            mount = FindMount(request.mount_id);
 
   MountScanResult result;
-  const auto      listing = ListMountDirectory(mount.root_path, request.stop_requested);
+  auto            listing = ListMountDirectory(mount.root_path, request.stop_requested);
+  if (listing.status == MountDirectoryListingStatus::kRootUnreachable &&
+      request.find_moved_volume) {
+    if (const auto moved_root = FindRootOnMovedVolume(mount)) {
+      try {
+        mount.root_path       = RelocateRootLocked(mount, *moved_root);
+        result.relocated_root = mount.root_path;
+        listing               = ListMountDirectory(mount.root_path, request.stop_requested);
+      } catch (const MountOperationError& e) {
+        // The found directory is refused (another mount holds it) or the write failed: the mount
+        // stays offline at its recorded root.
+        if (e.Code() == MountError::kStorageFailure) {
+          result.status = MountScanStatus::kStorageFailure;
+          result.error  = e.what();
+          return result;
+        }
+      }
+    }
+  }
   if (listing.status == MountDirectoryListingStatus::kRootUnreachable) {
     SetReachability(mount.id, MountReachability::kOffline);
     result.status = MountScanStatus::kOffline;
@@ -477,6 +501,250 @@ void MountService::RemoveMount(mount_id_t mount_id) {
   }
   std::lock_guard reachability_lock(reachability_mutex_);
   reachability_.erase(mount_id);
+}
+
+void MountService::RelocateRoot(mount_id_t mount_id, const std::filesystem::path& directory) {
+  std::lock_guard lock(operation_mutex_);
+  RelocateRootLocked(FindMount(mount_id), directory);
+}
+
+auto MountService::RelocateRootLocked(const MountRootRecord&       mount,
+                                      const std::filesystem::path& directory) -> stdfs::path {
+  std::error_code ec;
+  const auto      root = stdfs::canonical(directory, ec);
+  if (ec || !stdfs::is_directory(root, ec) || ec) {
+    throw MountOperationError(MountError::kDirectoryUnreachable,
+                              std::format("MountService: '{}' is not a reachable directory",
+                                          conv::ToBytes(directory.wstring())));
+  }
+  auto& mounts = storage_->GetMountStore();
+  for (const auto& other : mounts.ReadMountRoots()) {
+    if (other.id != mount.id &&
+        (IsPathAtOrBelow(root, other.root_path) || IsPathAtOrBelow(other.root_path, root))) {
+      throw MountOperationError(
+          MountError::kNestedMount,
+          std::format("MountService: '{}' is inside or contains the mounted directory '{}'",
+                      conv::ToBytes(root.wstring()), conv::ToBytes(other.root_path.wstring())));
+    }
+  }
+
+  try {
+    // The relative paths come from the old root; a path that is not below it is left to the
+    // next scan, which finds the file by its fingerprint.
+    std::vector<std::pair<image_id_t, std::wstring>> locations;
+    for (const auto& location : mounts.ReadFileLocationsOfMount(mount.id)) {
+      if (auto relative_path = MountRelativePathOf(mount.root_path, location.image_path)) {
+        locations.emplace_back(location.image_id, std::move(*relative_path));
+      }
+    }
+    mounts.UpdateMountRootLocation(mount.id, root, ReadVolumeIdentity(root));
+    WriteImageLocations(*image_pool_service_, root, locations);
+  } catch (const std::exception& e) {
+    throw MountOperationError(
+        MountError::kStorageFailure,
+        std::format("MountService: the mount {} was not relocated: {}", mount.id, e.what()));
+  }
+  SetReachability(mount.id, MountReachability::kNotScanned);
+  return root;
+}
+
+auto MountService::FindRootOnMovedVolume(const MountRootRecord& mount) const
+    -> std::optional<stdfs::path> {
+  if (mount.volume_identity.empty()) {
+    return std::nullopt;
+  }
+  std::vector<VolumeMountPoint> volumes;
+  try {
+    volumes = list_volumes_();
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  // The old mount point of the volume is a start of the root path, so the path below it is an
+  // end of the elements after the root name. The longest end is tried first. The mount point
+  // itself is a candidate only for a root that was the root of its volume.
+  std::vector<stdfs::path> elements;
+  for (const auto& element : mount.root_path.relative_path()) {
+    if (!element.empty()) {
+      elements.push_back(element);
+    }
+  }
+  for (const auto& volume : volumes) {
+    if (volume.identity != mount.volume_identity) {
+      continue;
+    }
+    for (std::size_t first = 0; first <= elements.size(); ++first) {
+      if (first == elements.size() && !elements.empty()) {
+        break;
+      }
+      stdfs::path candidate = volume.mount_point;
+      for (std::size_t index = first; index < elements.size(); ++index) {
+        candidate /= elements[index];
+      }
+      std::error_code ec;
+      if (stdfs::is_directory(candidate, ec) && !ec &&
+          ReadVolumeIdentity(candidate) == mount.volume_identity) {
+        return candidate;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+void MountService::LocateMissingFile(sl_element_id_t              element_id,
+                                     const std::filesystem::path& file) {
+  std::lock_guard                lock(operation_mutex_);
+  auto&                          mounts = storage_->GetMountStore();
+
+  std::shared_ptr<SleeveElement> element;
+  try {
+    element = sleeve_service_->Read<std::shared_ptr<SleeveElement>>(
+        [element_id](FileSystem& fs) { return fs.Get(element_id); });
+  } catch (const std::exception&) {
+  }
+  const auto source = mounts.ReadSourceFile(element_id);
+  if (!element || element->type_ != ElementType::FILE || element->sync_flag_ == SyncFlag::DELETED ||
+      !element->mount_id_.has_value() || !source.has_value() ||
+      source->state != SourceFileState::kMissing) {
+    throw MountOperationError(
+        MountError::kPhotoIsNotMissing,
+        std::format("MountService: the element {} is not a missing mounted photo", element_id));
+  }
+  const auto      mount = FindMount(*element->mount_id_);
+
+  std::error_code ec;
+  const auto      path = stdfs::canonical(file, ec);
+  if (ec) {
+    throw MountOperationError(
+        MountError::kFileUnreadable,
+        std::format("MountService: '{}' cannot be read", conv::ToBytes(file.wstring())));
+  }
+  if (!MountRelativePathOf(mount.root_path, path).has_value()) {
+    throw MountOperationError(
+        MountError::kFileOutsideMount,
+        std::format("MountService: '{}' is not below the mounted directory '{}'",
+                    conv::ToBytes(path.wstring()), conv::ToBytes(mount.root_path.wstring())));
+  }
+  const auto listed = ReadMountDirectoryFile(mount.root_path, path);
+  if (!listed.has_value()) {
+    throw MountOperationError(
+        MountError::kFileIsNotListed,
+        std::format("MountService: a scan does not list '{}'", conv::ToBytes(path.wstring())));
+  }
+
+  std::unordered_map<sl_element_id_t, SourceFileState> states;
+  for (const auto& record : mounts.ReadSourceFilesOfMount(mount.id)) {
+    states.emplace(record.element_id, record.state);
+  }
+  image_id_t image_id = 0;
+  for (const auto& location : mounts.ReadFileLocationsOfMount(mount.id)) {
+    if (location.element_id == element_id) {
+      image_id = location.image_id;
+      continue;
+    }
+    const auto state = states.find(location.element_id);
+    if (state != states.end() && state->second == SourceFileState::kPresent &&
+        MountRelativePathOf(mount.root_path, location.image_path) == listed->relative_path) {
+      throw MountOperationError(MountError::kFileHasPhoto,
+                                std::format("MountService: the photo {} has the file '{}'",
+                                            location.element_id, conv::ToBytes(path.wstring())));
+    }
+  }
+
+  const auto fingerprint = ComputeSourceFileFingerprint(path);
+  if (!fingerprint.HasFingerprint() || image_id == 0) {
+    throw MountOperationError(
+        MountError::kFileUnreadable,
+        std::format("MountService: '{}' cannot be read", conv::ToBytes(path.wstring())));
+  }
+
+  try {
+    MountTreeChanges changes;
+    changes.mount_id       = mount.id;
+    changes.root_folder_id = mount.root_folder_id;
+    std::unordered_set<std::wstring> folders;
+    for (const auto& folder :
+         sleeve_service_->ReadMountTree(mount.root_folder_id, mount.id).folders) {
+      folders.insert(folder.relative_path);
+    }
+    // A directory that the last scan did not see gets its folders now, a parent first.
+    const auto directory = ParentDirectory(listed->relative_path);
+    for (std::size_t next = 0; !directory.empty();) {
+      const auto end    = directory.find(L'/', next);
+      const auto prefix = directory.substr(0, end);
+      if (!folders.contains(prefix)) {
+        changes.folders_to_add.push_back(prefix);
+      }
+      if (end == std::wstring::npos) {
+        break;
+      }
+      next = end + 1;
+    }
+    changes.placements.push_back(
+        MountTreeFilePlacement{element_id, directory, LastName(listed->relative_path)});
+    RequireSynced(sleeve_service_->ApplyMountTreeChanges(changes));
+
+    WriteImageLocations(*image_pool_service_, mount.root_path, {{image_id, listed->relative_path}});
+
+    const std::vector<SourceFileRecord> records{PresentRecord(
+        element_id,
+        MountScanSourceValues{listed->byte_size, listed->modified_ns, fingerprint.fingerprint})};
+    mounts.UpsertSourceFiles(records);
+  } catch (const std::exception& e) {
+    throw MountOperationError(
+        MountError::kStorageFailure,
+        std::format("MountService: the photo {} was not located: {}", element_id, e.what()));
+  }
+}
+
+auto MountService::RemoveMissingPhotos(mount_id_t                  mount_id,
+                                       const MountEditDataRemoval& remove_edit_data)
+    -> MountMissingPhotoRemoval {
+  std::lock_guard lock(operation_mutex_);
+  (void)FindMount(mount_id);
+  auto&                        mounts = storage_->GetMountStore();
+
+  std::vector<sl_element_id_t> missing_ids;
+  for (const auto& record : mounts.ReadSourceFilesOfMount(mount_id)) {
+    if (record.state == SourceFileState::kMissing) {
+      missing_ids.push_back(record.element_id);
+    }
+  }
+  MountMissingPhotoRemoval removal;
+  if (missing_ids.empty()) {
+    return removal;
+  }
+
+  try {
+    auto [files, sync] = sleeve_service_->DeleteMissingMountedFiles(mount_id, missing_ids);
+    if (!sync.success_) {
+      throw std::runtime_error(sync.message_);
+    }
+    for (const auto& file : files) {
+      removal.element_ids.push_back(file->element_id_);
+      if (file->image_id_ != 0) {
+        removal.image_ids.push_back(file->image_id_);
+      }
+    }
+  } catch (const std::exception& e) {
+    throw MountOperationError(
+        MountError::kStorageFailure,
+        std::format("MountService: the missing photos of the mount {} were not removed: {}",
+                    mount_id, e.what()));
+  }
+
+  if (remove_edit_data) {
+    remove_edit_data(removal.element_ids);
+  }
+  image_pool_service_->RemoveBatch(removal.image_ids);
+  const auto status = image_pool_service_->SyncWithStorage();
+  if (!status.failed_images_.empty()) {
+    const auto& failure = status.failed_images_.front();
+    throw MountOperationError(
+        MountError::kStorageFailure,
+        std::format("MountService: the photos are removed, but the Image row {} was not: {}",
+                    failure.image_id_, failure.message_));
+  }
+  return removal;
 }
 
 auto MountService::ListMounts() const -> std::vector<MountSummary> {

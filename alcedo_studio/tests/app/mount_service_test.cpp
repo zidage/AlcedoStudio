@@ -2,9 +2,10 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Mounted Folder Plan, MF4 (#986): MountService creates, scans, adopts, and removes mounts on
-// real temporary directories and a real project database. Each scan of this file runs through
-// ScanAndCheckDirectory, which compares the directory content before and after the scan.
+// Mounted Folder Plan, MF4 (#986) and MF8 (#990): MountService creates, scans, adopts, relocates,
+// and removes mounts, and locates and removes missing photos, on real temporary directories and a
+// real project database. Each scan of this file runs through ScanAndCheckDirectory, which
+// compares the directory content before and after the scan.
 
 #include "app/mount_service.hpp"
 
@@ -39,6 +40,7 @@
 #include "type/mount_records.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/file/mount_directory_listing.hpp"
+#include "utils/file/volume_identity.hpp"
 
 namespace alcedo {
 namespace {
@@ -802,6 +804,259 @@ TEST_F(MountServiceTest,
   std::printf("unchanged scan of %d files: %lld ms\n", kFileCount,
               static_cast<long long>(elapsed_ms));
   EXPECT_LT(elapsed_ms, 2000);
+}
+
+// ── MF8 (#990): root relocation, volume search, Locate, and Remove Missing Photos ──────────────
+
+TEST_F(MountServiceTest, RelocatedRootKeepsEachElementId) {
+  WriteTrip(L"Japan");
+  const auto mount_id = MountAndScan(L"Japan");
+  const auto files    = FilesOf(mount_id);
+  const auto rated    = files.at(L"Day1/b.jpg");
+  const auto root_id  = RootIdOf(rated);
+  SetRating(rated, 4);
+
+  stdfs::rename(disk_ / "Japan", disk_ / "Japan 2026");
+  ASSERT_EQ(ScanAndCheckDirectory(mount_id).status, MountScanStatus::kOffline);
+
+  Mounts().RelocateRoot(mount_id, disk_ / "Japan 2026");
+
+  EXPECT_EQ(MountOf(mount_id).root_path, stdfs::canonical(disk_ / "Japan 2026"));
+  EXPECT_EQ(MountOf(mount_id).volume_identity, ReadVolumeIdentity(disk_ / "Japan 2026"));
+  EXPECT_EQ(SummaryOf(mount_id).reachability, MountReachability::kNotScanned);
+  EXPECT_EQ(FilesOf(mount_id), files);
+  EXPECT_EQ(LocationOf(rated).image_path, MountOf(mount_id).root_path / "Day1" / "b.jpg");
+
+  // The next scan compares the new location: each file is unchanged, none is read again.
+  const auto result = ScanAndCheckDirectory(mount_id);
+  ASSERT_EQ(result.status, MountScanStatus::kComplete) << result.error;
+  EXPECT_EQ(result.unchanged_count, 4u);
+  EXPECT_EQ(result.imported_count, 0u);
+  EXPECT_EQ(result.missing_count, 0u);
+  EXPECT_EQ(result.fingerprint_read_count, 0u);
+  EXPECT_EQ(FilesOf(mount_id), files);
+  EXPECT_EQ(RootIdOf(rated), root_id);
+  EXPECT_EQ(RatingOf(rated), 4);
+  EXPECT_EQ(LibraryFileCount(), 4u);
+}
+
+TEST_F(MountServiceTest, RelocatedRootComparesTheNewLocationInTheNextScan) {
+  WriteTrip(L"Japan");
+  const auto mount_id = MountAndScan(L"Japan");
+  const auto files    = FilesOf(mount_id);
+
+  // The new location holds a part of the old files and one new file.
+  stdfs::create_directories(disk_ / "Copy");
+  stdfs::copy(disk_ / "Japan", disk_ / "Copy" / "Japan", stdfs::copy_options::recursive);
+  stdfs::remove(disk_ / "Copy" / "Japan" / "Day2" / "d.jpg");
+  WriteJpeg(disk_ / "Copy" / "Japan" / "Day2" / "f.jpg", 6);
+
+  Mounts().RelocateRoot(mount_id, disk_ / "Copy" / "Japan");
+  const auto result = ScanAndCheckDirectory(mount_id);
+
+  ASSERT_EQ(result.status, MountScanStatus::kComplete) << result.error;
+  EXPECT_EQ(result.missing_count, 1u);
+  EXPECT_EQ(result.imported_count, 1u);
+  const auto after = FilesOf(mount_id);
+  EXPECT_EQ(after.at(L"a.jpg"), files.at(L"a.jpg"));
+  EXPECT_EQ(after.at(L"Day1/Morning/c.jpg"), files.at(L"Day1/Morning/c.jpg"));
+  EXPECT_EQ(Store().ReadSourceFile(files.at(L"Day2/d.jpg"))->state, SourceFileState::kMissing);
+  EXPECT_TRUE(after.contains(L"Day2/f.jpg"));
+}
+
+TEST_F(MountServiceTest, RelocateRootRefusesTheDirectoryOfAnotherMount) {
+  WriteTrip(L"Japan");
+  WriteTrip(L"Italy");
+  const auto japan = MountAndScan(L"Japan");
+  const auto italy = MountAndScan(L"Italy");
+  const auto root  = MountOf(japan).root_path;
+
+  EXPECT_EQ(CodeOf([&] { Mounts().RelocateRoot(japan, disk_ / "Italy" / "Day1"); }),
+            MountError::kNestedMount);
+  EXPECT_EQ(CodeOf([&] { Mounts().RelocateRoot(japan, disk_); }), MountError::kNestedMount);
+  EXPECT_EQ(CodeOf([&] { Mounts().RelocateRoot(japan, disk_ / "absent"); }),
+            MountError::kDirectoryUnreachable);
+  EXPECT_EQ(CodeOf([&] { Mounts().RelocateRoot(99, disk_ / "Japan"); }), MountError::kUnknownMount);
+  EXPECT_EQ(MountOf(japan).root_path, root);
+  EXPECT_EQ(LocationOf(FilesOf(japan).at(L"a.jpg")).image_path, root / "a.jpg");
+  (void)italy;
+}
+
+TEST_F(MountServiceTest, VolumeWithRecordedIdentityIsFoundOnOpen) {
+  // The volume of the test is mounted at `disk_/E` and moves to `disk_/F`, as a card reader
+  // that gets a new drive letter.
+  WriteTrip(L"E/DCIM");
+  std::vector<VolumeMountPoint> volumes;
+  MountService                  service(project_->GetStorage(), project_->GetSleeveService(),
+                                        project_->GetImagePoolService(), [&volumes] { return volumes; });
+  const auto                    mount_id = service.CreateMount(0, disk_ / "E" / "DCIM");
+  const auto                    identity = MountOf(mount_id).volume_identity;
+  ASSERT_FALSE(identity.empty()) << "the test volume has no identity";
+  ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
+            MountScanStatus::kComplete);
+  const auto files = FilesOf(mount_id);
+
+  stdfs::rename(disk_ / "E", disk_ / "F");
+  volumes            = {VolumeMountPoint{"another volume", disk_ / "E"},
+                        VolumeMountPoint{identity, disk_ / "F"}};
+
+  // A scan without the search stays offline.
+  const auto offline = service.ScanMount({.mount_id = mount_id, .importer = import_.get()});
+  EXPECT_EQ(offline.status, MountScanStatus::kOffline);
+  EXPECT_FALSE(offline.relocated_root.has_value());
+
+  const auto result = service.ScanMount(
+      {.mount_id = mount_id, .importer = import_.get(), .find_moved_volume = true});
+  ASSERT_EQ(result.status, MountScanStatus::kComplete) << result.error;
+  ASSERT_TRUE(result.relocated_root.has_value());
+  EXPECT_EQ(*result.relocated_root, stdfs::canonical(disk_ / "F" / "DCIM"));
+  EXPECT_EQ(MountOf(mount_id).root_path, stdfs::canonical(disk_ / "F" / "DCIM"));
+  EXPECT_EQ(result.unchanged_count, 4u);
+  EXPECT_EQ(result.missing_count, 0u);
+  EXPECT_EQ(FilesOf(mount_id), files);
+}
+
+TEST_F(MountServiceTest, VolumeSearchLeavesTheMountOfflineWhenNoVolumeHasTheDirectory) {
+  WriteTrip(L"E/DCIM");
+  std::vector<VolumeMountPoint> volumes;
+  MountService                  service(project_->GetStorage(), project_->GetSleeveService(),
+                                        project_->GetImagePoolService(), [&volumes] { return volumes; });
+  const auto                    mount_id = service.CreateMount(0, disk_ / "E" / "DCIM");
+  const auto                    identity = MountOf(mount_id).volume_identity;
+  ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
+            MountScanStatus::kComplete);
+  const auto root = MountOf(mount_id).root_path;
+
+  // The volume is found, but the directory is not on it; another volume has the directory.
+  stdfs::rename(disk_ / "E" / "DCIM", disk_ / "E" / "Other");
+  stdfs::create_directories(disk_ / "G" / "DCIM");
+  volumes           = {VolumeMountPoint{identity, disk_ / "E"},
+                       VolumeMountPoint{"another volume", disk_ / "G"}};
+
+  const auto result = service.ScanMount(
+      {.mount_id = mount_id, .importer = import_.get(), .find_moved_volume = true});
+  EXPECT_EQ(result.status, MountScanStatus::kOffline);
+  EXPECT_FALSE(result.relocated_root.has_value());
+  EXPECT_EQ(MountOf(mount_id).root_path, root);
+  EXPECT_EQ(SummaryOf(mount_id).missing_count, 0u);
+}
+
+TEST_F(MountServiceTest, LocatedMissingPhotoKeepsEditHistory) {
+  WriteTrip(L"Japan");
+  const auto mount_id = MountAndScan(L"Japan");
+  const auto file_id  = FilesOf(mount_id).at(L"Day1/b.jpg");
+  const auto root_id  = RootIdOf(file_id);
+  SetRating(file_id, 4);
+  const auto collection = CreateCollection(L"Selects");
+  ASSERT_TRUE(Sleeve()
+                  .Write<void>([&](FileSystem& fs) { fs.LinkFileToFolder(file_id, collection); })
+                  .success_);
+
+  // Another application rewrote the file and saved it in a new directory: the fingerprint is
+  // different, so the scan reports the photo missing.
+  stdfs::remove(disk_ / "Japan" / "Day1" / "b.jpg");
+  ASSERT_EQ(ScanAndCheckDirectory(mount_id).missing_count, 1u);
+  const auto root = MountOf(mount_id).root_path;
+  WriteJpeg(root / "Edited" / "Final" / "b-final.jpg", 9);
+
+  Mounts().LocateMissingFile(file_id, root / "Edited" / "Final" / "b-final.jpg");
+
+  const auto source = Store().ReadSourceFile(file_id);
+  ASSERT_TRUE(source.has_value());
+  EXPECT_EQ(source->state, SourceFileState::kPresent);
+  EXPECT_FALSE(source->missing_since.has_value());
+  EXPECT_EQ(source->byte_size, stdfs::file_size(root / "Edited" / "Final" / "b-final.jpg"));
+  EXPECT_EQ(FilesOf(mount_id).at(L"Edited/Final/b-final.jpg"), file_id);
+  EXPECT_EQ(LocationOf(file_id).image_path, root / "Edited" / "Final" / "b-final.jpg");
+  EXPECT_EQ(HomeFoldersOf(mount_id, file_id), std::vector<std::wstring>{L"Edited/Final"});
+  EXPECT_EQ(RootIdOf(file_id), root_id);
+  EXPECT_EQ(RatingOf(file_id), 4);
+  EXPECT_TRUE(IsInFolder(file_id, collection));
+  EXPECT_EQ(SummaryOf(mount_id).missing_count, 0u);
+
+  // The next scan finds the located file unchanged and imports nothing.
+  const auto result = ScanAndCheckDirectory(mount_id);
+  ASSERT_EQ(result.status, MountScanStatus::kComplete) << result.error;
+  EXPECT_EQ(result.imported_count, 0u);
+  EXPECT_EQ(result.unchanged_count, 4u);
+  EXPECT_EQ(result.folders_added_count, 0u);
+  EXPECT_EQ(LibraryFileCount(), 4u);
+}
+
+TEST_F(MountServiceTest, FileOutsideTheMountIsRefusedForLocate) {
+  WriteTrip(L"Japan");
+  const auto mount_id = MountAndScan(L"Japan");
+  const auto files    = FilesOf(mount_id);
+  const auto file_id  = files.at(L"Day2/d.jpg");
+  stdfs::remove(disk_ / "Japan" / "Day2" / "d.jpg");
+  ASSERT_EQ(ScanAndCheckDirectory(mount_id).missing_count, 1u);
+  const auto root = MountOf(mount_id).root_path;
+  WriteJpeg(disk_ / "Elsewhere" / "d.jpg", 4);
+  const auto locate = [&](sl_element_id_t id, const stdfs::path& file) {
+    return CodeOf([&] { Mounts().LocateMissingFile(id, file); });
+  };
+
+  EXPECT_EQ(locate(file_id, disk_ / "Elsewhere" / "d.jpg"), MountError::kFileOutsideMount);
+  EXPECT_EQ(locate(file_id, root / ".cache" / "e.jpg"), MountError::kFileIsNotListed);
+  EXPECT_EQ(locate(file_id, root / "notes.txt"), MountError::kFileIsNotListed);
+  EXPECT_EQ(locate(file_id, root / "a.jpg"), MountError::kFileHasPhoto);
+  EXPECT_EQ(locate(file_id, root / "absent.jpg"), MountError::kFileUnreadable);
+  // Locate takes a missing photo only.
+  EXPECT_EQ(locate(files.at(L"a.jpg"), root / "Day1" / "b.jpg"), MountError::kPhotoIsNotMissing);
+
+  EXPECT_EQ(Store().ReadSourceFile(file_id)->state, SourceFileState::kMissing);
+  EXPECT_EQ(LocationOf(file_id).image_path, root / "Day2" / "d.jpg");
+  EXPECT_EQ(HomeFoldersOf(mount_id, file_id), std::vector<std::wstring>{L"Day2"});
+}
+
+TEST_F(MountServiceTest, RemoveMissingPhotosRemovesExactlyTheMissingPhotos) {
+  WriteTrip(L"Japan");
+  WriteTrip(L"Italy");
+  const auto japan       = MountAndScan(L"Japan");
+  const auto italy       = MountAndScan(L"Italy");
+  const auto files       = FilesOf(japan);
+  const auto italy_files = FilesOf(italy);
+  stdfs::remove(disk_ / "Japan" / "a.jpg");
+  stdfs::remove(disk_ / "Japan" / "Day2" / "d.jpg");
+  stdfs::remove(disk_ / "Italy" / "a.jpg");
+  ASSERT_EQ(ScanAndCheckDirectory(japan).missing_count, 2u);
+  ASSERT_EQ(ScanAndCheckDirectory(italy).missing_count, 1u);
+  const auto                   before = ReadDirectoryContent(disk_);
+
+  std::vector<sl_element_id_t> edit_data_removed;
+  const auto                   removal =
+      Mounts().RemoveMissingPhotos(japan, [&](std::span<const sl_element_id_t> ids) {
+        edit_data_removed.assign(ids.begin(), ids.end());
+        pipeline_->DeletePipelines(ids);
+      });
+
+  auto removed = removal.element_ids;
+  std::sort(removed.begin(), removed.end());
+  auto expected = std::vector<sl_element_id_t>{files.at(L"a.jpg"), files.at(L"Day2/d.jpg")};
+  std::sort(expected.begin(), expected.end());
+  EXPECT_EQ(removed, expected);
+  EXPECT_EQ(removal.image_ids.size(), 2u);
+  std::sort(edit_data_removed.begin(), edit_data_removed.end());
+  EXPECT_EQ(edit_data_removed, expected);
+
+  for (const auto id : expected) {
+    EXPECT_FALSE(Store().ReadSourceFile(id).has_value());
+    auto session = project_->GetStorage()->OpenSession();
+    EXPECT_FALSE(session.CommitGraph().LoadGraph(id).has_value());
+  }
+  EXPECT_EQ(FilesOf(japan), (std::map<std::wstring, sl_element_id_t>{
+                                {L"Day1/b.jpg", files.at(L"Day1/b.jpg")},
+                                {L"Day1/Morning/c.jpg", files.at(L"Day1/Morning/c.jpg")}}));
+  EXPECT_EQ(SummaryOf(japan).missing_count, 0u);
+  EXPECT_EQ(SummaryOf(japan).present_count, 2u);
+  // The missing photo of the other mount stays.
+  EXPECT_EQ(FilesOf(italy), italy_files);
+  EXPECT_EQ(SummaryOf(italy).missing_count, 1u);
+  EXPECT_EQ(LibraryFileCount(), 6u);
+  EXPECT_EQ(ReadDirectoryContent(disk_), before);
+
+  // Nothing is missing anymore.
+  EXPECT_TRUE(Mounts().RemoveMissingPhotos(japan, {}).element_ids.empty());
 }
 
 }  // namespace
