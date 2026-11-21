@@ -563,6 +563,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   mount_scans_ = std::make_unique<MountScanCoordinator>(std::move(mount_scan_dependencies));
   RecordConstruction("MountScanCoordinator", mount_scans_.get());
   folders_->BindMountScans(mount_scans_.get());
+  application_close_->BindMountScans(mount_scans_.get());
   if (auto* gui = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
     connect(gui, &QGuiApplication::applicationStateChanged, mount_scans_.get(),
             [scans = mount_scans_.get()](Qt::ApplicationState state) {
@@ -713,6 +714,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       scans->Stop();
     }
   };
+  lifecycle_hooks.begin_stop_mount_scans = [scans = mount_scans_.get()] {
+    return scans ? scans->BeginStop() : std::shared_future<void>{};
+  };
   lifecycle_hooks.resume_mount_scans = [this] { SyncMountScans(); };
   project_->SetLifecycleHooks(std::move(lifecycle_hooks));
 }
@@ -728,7 +732,9 @@ void ApplicationModuleHost::SyncMountScans() {
                           handler.project_entered() && !handler.project_loading() &&
                           project->GetMountService();
   if (!should_run) {
-    mount_scans_->Stop();
+    // No wait on the UI thread: the project load, the project close, and the exit each wait for
+    // the scan worker before they save or replace the project.
+    (void)mount_scans_->BeginStop();
     return;
   }
   if (mount_scans_->IsStarted()) {
@@ -772,9 +778,10 @@ void ApplicationModuleHost::ShutdownModules() {
     if (background_tasks_) {
       background_tasks_->CancelAll();
     }
-    // The running scan completes its current batch; the project save below runs after it.
+    // The stop request returns at once. The event wait below runs until the scan worker has
+    // ended (IsIdle); the project save runs after it.
     if (mount_scans_) {
-      mount_scans_->Stop();
+      (void)mount_scans_->BeginStop();
     }
     if (semantic_generation_) {
       semantic_generation_->CancelGeneration();
@@ -828,6 +835,11 @@ void ApplicationModuleHost::ShutdownModules() {
     const QDeadlineTimer deadline(15000);
     while (!IsIdle() && !deadline.hasExpired()) {
       QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    }
+    // A scan worker that outlived the deadline still writes its batch. The save needs each
+    // batch stored in full, so this call waits for the worker.
+    if (mount_scans_) {
+      mount_scans_->Stop();
     }
     // The runtime workspace is removed in the destructor, after ProjectModule closes the
     // project database (RemovePendingWorkspace).

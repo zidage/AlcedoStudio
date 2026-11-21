@@ -111,10 +111,14 @@ auto MatchGroup(FingerprintGroup& group, std::vector<MountScanFileMove>& moved)
 }  // namespace
 
 auto BuildMountScanChangeList(const MountScanRecords& records, const MountDirectoryListing& listing,
-                              const MountScanFingerprintFunction& fingerprint)
-    -> MountScanChangeList {
+                              const MountScanFingerprintFunction& fingerprint,
+                              const std::atomic<bool>* stop_requested) -> MountScanChangeList {
   MountScanChangeList changes;
   if (!listing.IsComplete()) return changes;
+
+  const auto stopped = [stop_requested] {
+    return stop_requested != nullptr && stop_requested->load();
+  };
 
   const auto below_unreadable_directory = [&](const std::wstring& relative_path) {
     return std::any_of(
@@ -171,6 +175,7 @@ auto BuildMountScanChangeList(const MountScanRecords& records, const MountDirect
       }
       continue;
     }
+    if (stopped()) return {};
     auto values = read_values(file);
     if (!values) continue;
     auto& target = was_missing ? changes.returned : changes.changed_in_place;
@@ -187,9 +192,13 @@ auto BuildMountScanChangeList(const MountScanRecords& records, const MountDirect
   std::vector<const MountScanFileRecord*>    unmatched_records;
   std::map<FingerprintKey, FingerprintGroup> groups;
   std::set<FingerprintKey>                   unverified_fingerprints;
+  // The byte sizes of the lost records that a new path can pair with. The fingerprint holds the
+  // byte size, so a new path with another size has the fingerprint of none of them.
+  std::set<std::uint64_t>                    lost_byte_sizes;
   for (const auto* record : lost_records) {
     const bool current_version =
         record->source.fingerprint_version == kSourceFileFingerprintVersion;
+    if (current_version) lost_byte_sizes.insert(record->source.byte_size);
     if (below_unreadable_directory(record->relative_path)) {
       unverified_records.push_back(record);
       if (current_version) unverified_fingerprints.insert(KeyOf(StoredFingerprint(record->source)));
@@ -210,10 +219,16 @@ auto BuildMountScanChangeList(const MountScanRecords& records, const MountDirect
     if (!inserted) it->second = std::min(it->second, ordinary.element_id);
   }
 
-  // Step 4: fingerprint the remaining new paths and group them with the lost records.
+  // Step 4: fingerprint the new paths that an ordinary file adopts or that a lost record can
+  // pair with, and group them with the lost records. The other new paths are not read here.
   for (const auto* file : new_paths) {
     const auto ordinary = ordinary_at_path.find(file->relative_path);
-    auto       values   = read_values(*file);
+    if (ordinary == ordinary_at_path.end() && !lost_byte_sizes.contains(file->byte_size)) {
+      changes.unread_new_files.push_back(*file);
+      continue;
+    }
+    if (stopped()) return {};
+    auto values = read_values(*file);
     if (!values) continue;
     if (ordinary != ordinary_at_path.end()) {
       changes.adopted.push_back(
@@ -279,6 +294,7 @@ auto BuildMountScanChangeList(const MountScanRecords& records, const MountDirect
   };
   std::sort(changes.moved.begin(), changes.moved.end(), by_path);
   std::sort(changes.new_files.begin(), changes.new_files.end(), by_path);
+  std::sort(changes.unread_new_files.begin(), changes.unread_new_files.end(), by_path);
   std::sort(changes.missing.begin(), changes.missing.end(), [](const auto& a, const auto& b) {
     return std::tie(a.relative_path, a.element_id) < std::tie(b.relative_path, b.element_id);
   });

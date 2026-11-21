@@ -209,6 +209,16 @@ name starts with a period. The file type rule is `is_supported_file`
   keeps the completed batches. The next scan finds the remaining new files, because they have no
   record.
 - One scan runs at a time for one mount. A request during a scan sets one "scan again" flag.
+- The comparison reads the fingerprint of a new file only when a lost record has its byte size
+  (the fingerprint holds the byte size). Each other new file is read in the batch that imports
+  it, so the first scan of a directory stores its first photos after one batch of reads (#1014).
+- The scan reads the stop request for each directory of the listing, before each fingerprint
+  read, and before each new file batch. A batch that started its import completes: a stop
+  leaves each batch stored in full or not started (#1014).
+- The UI thread does not wait for a scan. A project close, a project load, and the application
+  exit request the stop, and they save the project after the scan worker has ended: the close
+  waits in the event loop, the load waits in its loader thread, and the exit waits in its event
+  wait (#1014).
 
 ---
 
@@ -1618,6 +1628,45 @@ Measured fact for P11 (2026-11-20, Windows 11, NTFS): with a `FindFirstChangeNot
 handle open in `Root\Day1`, the rename of `Root` fails with access denied. With one recursive
 handle on `Root`, the rename of `Root\A` (which has a subdirectory) and of `Root` itself
 succeed; the rename of the parent of `Root` fails.
+
+**Change after the phase (#1014, 2026-11-20).** The stop of a scan replaces the rules of MF3,
+MF4, and MF7 that are named below. Section 2.6 holds the current rules.
+
+```text
+Problem: the first scan read the fingerprint of each file before its first import batch, with
+  no read of the stop request; MountScanCoordinator::Stop joined the scan worker on the UI
+  thread at project close, project load, and exit
+MF3: BuildMountScanChangeList has a stop request parameter, read before each fingerprint read; a
+  stop gives an empty change list. A new path is read only when an ordinary file adopts it or a
+  lost record of the current fingerprint version has its byte size; each other new path goes to
+  MountScanChangeList::unread_new_files without a read
+MF4: MountScanRun reads the fingerprint of the unread new files in the batch that imports them
+  and reads the stop request before each of these reads, which is before the first write of the
+  batch. A batch that started its import completes. The progress shows the total of the new
+  files before the first read
+MF7: MountScanCoordinator::BeginStop requests the stop and returns; the worker stays in
+  stopped_worker_ until its queued end (HandleStoppedWorkerEnded -> StoppedWorkerEnded), and no
+  scan or operation starts before that. Stop = BeginStop + join (destructor, last step of exit)
+Call chains:
+  project close -> ApplicationCloseCoordinator::Finish -> BeginStop -> HasStoppedWorker: wait
+    -> StoppedWorkerEnded (queued) -> EvaluateEditorClose -> Finish -> ProjectModule::
+    CloseProject -> StopMountScans (no worker) -> PersistProjectForClose; an abort, a cancel, or
+    a refused close -> ProjectModule::ResumeMountScans
+  project load -> ProjectHandler::StartProjectLoad -> ProjectModule::BeginStopMountScans ->
+    loader thread: wait for the future of the worker -> save of the old project -> load
+  exit -> ApplicationModuleHost::ShutdownModules -> BeginStop -> event wait until IsIdle (15 s)
+    -> Stop (join of a worker that is still in its batch) -> PersistProjectForClose
+Tests: MountScanChangeListTest 25/25 (FirstScanReadsNoFile, NewPathIsReadOnlyWhenALostRecord
+  HasItsByteSize, StopRequestEndsTheFingerprintReadsWithAnEmptyChangeList, StopRequestEndsThe
+  ReadsOfChangedFiles); MountServiceTest 25/25 (StoppedFirstScanReadsOnlyTheFilesOfItsStored
+  Batch); MountScanCoordinatorTest 15/15, 20 repeats (BeginStopReturnsWhileTheWorkerCompletes
+  ItsBatch, StartAfterBeginStopWaitsForTheStoppedWorker, BeginStopLetsTheRunningOperation
+  Complete); ApplicationCloseCoordinatorTest 6/6 (ProjectCloseWaitsForTheStoppedScanWorker);
+  callers: FolderControllerMountTest 6/6, ApplicationModuleHostLifecycleTest 2/2,
+  ApplicationModuleHostShutdownTest 11/11, ApplicationModuleHostIdleTest 1/1,
+  ProjectModuleTest 4/4. Windows debug build; alcedo_main links
+Not covered: a slow network share was not measured; Linux and macOS were not built
+```
 
 ### MF8. Missing photos, root relocation, and automation commands
 

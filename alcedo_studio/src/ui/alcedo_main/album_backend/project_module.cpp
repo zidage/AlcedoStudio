@@ -659,6 +659,8 @@ bool ProjectModule::CloseProject(bool persist) {
   // shows the Library.
   FinalizeEditorSession();
   // The save and the close need the mount service and the import service without a scan.
+  // ApplicationCloseCoordinator waits for the scan worker before this call, so the join of
+  // StopMountScans has no worker to wait for in the application.
   StopMountScans();
   if (persist) {
     QString error;
@@ -666,9 +668,7 @@ bool ProjectModule::CloseProject(bool persist) {
       SetServiceMessageForCurrentProject(error.isEmpty() ? PL_TEXT("Project save failed.")
                                                          : PL_TEXT("%1", error));
       SetTaskState(PL_TEXT("Project save failed."), 0, false);
-      if (lifecycle_hooks_.resume_mount_scans) {
-        lifecycle_hooks_.resume_mount_scans();
-      }
+      ResumeMountScans();
       return false;
     }
   }
@@ -896,6 +896,17 @@ void ProjectModule::FinalizeEditorSession() {
 void ProjectModule::StopMountScans() {
   if (lifecycle_hooks_.stop_mount_scans) {
     lifecycle_hooks_.stop_mount_scans();
+  }
+}
+
+auto ProjectModule::BeginStopMountScans() -> std::shared_future<void> {
+  return lifecycle_hooks_.begin_stop_mount_scans ? lifecycle_hooks_.begin_stop_mount_scans()
+                                                 : std::shared_future<void>{};
+}
+
+void ProjectModule::ResumeMountScans() {
+  if (lifecycle_hooks_.resume_mount_scans) {
+    lifecycle_hooks_.resume_mount_scans();
   }
 }
 

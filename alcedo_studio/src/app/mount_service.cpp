@@ -134,11 +134,14 @@ class MountScanRun {
 
   void Execute(const MountDirectoryListing& listing) {
     const auto records = ReadRecords();
-    const auto changes =
-        BuildMountScanChangeList(records, listing, [this](const MountDirectoryFile& file) {
-          ++result_.fingerprint_read_count;
-          return ComputeSourceFileFingerprint(PathBelowRoot(mount_.root_path, file.relative_path));
-        });
+    const auto changes = BuildMountScanChangeList(
+        records, listing, [this](const MountDirectoryFile& file) { return ReadFingerprint(file); },
+        request_.stop_requested);
+    // A stop request in the comparison gives an empty change list. No batch has started.
+    if (StopRequested()) {
+      result_.status = MountScanStatus::kCanceled;
+      return;
+    }
     result_.unchanged_count     = changes.unchanged_count;
     result_.still_missing_count = changes.still_missing_count;
     result_.unreadable_count    = changes.unreadable_count;
@@ -147,8 +150,8 @@ class MountScanRun {
 
     batch_                      = 1;
     ApplyFirstBatch(changes);
-    ReportProgress(changes.new_files.size(), 0);
-    if (!ImportNewFiles(changes.new_files)) {
+    ReportProgress(changes.new_files.size() + changes.unread_new_files.size(), 0);
+    if (!ImportNewFiles(changes)) {
       result_.status = MountScanStatus::kCanceled;
       return;
     }
@@ -277,9 +280,30 @@ class MountScanRun {
     }
   }
 
-  /// Import the new files in batches. Returns false when the stop request ended the scan.
-  auto ImportNewFiles(const std::vector<MountScanNewFile>& new_files) -> bool {
-    if (new_files.empty()) {
+  [[nodiscard]] auto StopRequested() const -> bool {
+    return request_.stop_requested != nullptr && request_.stop_requested->load();
+  }
+
+  auto ReadFingerprint(const MountDirectoryFile& file) -> SourceFileFingerprintResult {
+    ++result_.fingerprint_read_count;
+    return ComputeSourceFileFingerprint(PathBelowRoot(mount_.root_path, file.relative_path));
+  }
+
+  /**
+   * @brief Import the new files in batches: first the files that the comparison read, then the
+   *        files of MountScanChangeList::unread_new_files.
+   *
+   * A batch reads the fingerprint of each of its unread files, then imports its files, then
+   * writes their source records. The stop request is read before each batch and before each
+   * fingerprint read, which is before the first write of the batch. A batch that started its
+   * import completes.
+   *
+   * @return false when the stop request ended the scan.
+   */
+  auto ImportNewFiles(const MountScanChangeList& changes) -> bool {
+    const auto compared_count = changes.new_files.size();
+    const auto new_file_count = compared_count + changes.unread_new_files.size();
+    if (new_file_count == 0) {
       return true;
     }
     std::unordered_map<std::wstring, sl_element_id_t> folder_at{{L"", mount_.root_folder_id}};
@@ -289,38 +313,56 @@ class MountScanRun {
     }
 
     const auto batch_size = std::max<std::size_t>(1, request_.new_file_batch_size);
-    for (std::size_t begin = 0; begin < new_files.size(); begin += batch_size) {
-      if (request_.stop_requested && request_.stop_requested->load()) {
+    for (std::size_t begin = 0; begin < new_file_count; begin += batch_size) {
+      if (StopRequested()) {
         return false;
       }
       ++batch_;
-      const auto                           end = std::min(new_files.size(), begin + batch_size);
-      std::vector<MountFileImportRequest>  requests;
-      std::vector<const MountScanNewFile*> files;
+      const auto                          end = std::min(new_file_count, begin + batch_size);
+      std::vector<MountFileImportRequest> requests;
+      std::vector<MountScanSourceValues>  values;
       for (std::size_t index = begin; index < end; ++index) {
-        const auto& file   = new_files[index];
-        const auto  folder = folder_at.find(ParentDirectory(file.relative_path));
+        const bool  compared = index < compared_count;
+        const auto& relative_path =
+            compared ? changes.new_files[index].relative_path
+                     : changes.unread_new_files[index - compared_count].relative_path;
+        const auto folder = folder_at.find(ParentDirectory(relative_path));
         if (folder == folder_at.end()) {
           ++result_.import_failed_count;
           continue;
         }
-        requests.push_back(MountFileImportRequest{
-            PathBelowRoot(mount_.root_path, file.relative_path), folder->second, mount_.id});
-        files.push_back(&file);
+        if (compared) {
+          values.push_back(changes.new_files[index].values);
+        } else {
+          if (StopRequested()) {
+            return false;
+          }
+          const auto& file        = changes.unread_new_files[index - compared_count];
+          const auto  fingerprint = ReadFingerprint(file);
+          if (!fingerprint.HasFingerprint()) {
+            // The file stays without a record; the next scan reads it again.
+            ++result_.unreadable_count;
+            continue;
+          }
+          values.push_back(
+              MountScanSourceValues{file.byte_size, file.modified_ns, fingerprint.fingerprint});
+        }
+        requests.push_back(MountFileImportRequest{PathBelowRoot(mount_.root_path, relative_path),
+                                                  folder->second, mount_.id});
       }
 
       const auto                    outcomes = request_.importer->ImportMountedFiles(requests);
       std::vector<SourceFileRecord> sources;
       for (std::size_t index = 0; index < outcomes.size(); ++index) {
         if (outcomes[index].element_id.has_value()) {
-          sources.push_back(PresentRecord(*outcomes[index].element_id, files[index]->values));
+          sources.push_back(PresentRecord(*outcomes[index].element_id, values[index]));
         } else {
           ++result_.import_failed_count;
         }
       }
       mounts_.UpsertSourceFiles(sources);
       result_.imported_count += sources.size();
-      ReportProgress(new_files.size(), end);
+      ReportProgress(new_file_count, end);
     }
     return true;
   }
