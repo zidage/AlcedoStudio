@@ -571,6 +571,13 @@ def_ui_test(MountDirectoryWatcherTest mount_directory_watcher_test.cpp "mounted_
 target_link_libraries(MountDirectoryWatcherTest PRIVATE MountDirectoryWatcher)
 alcedo_register_test_target(MountDirectoryWatcherTest ui)
 
+# Scan triggers of the mounted folders (mounted_folder_plan.md, MF7): the trigger rules with a
+# test clock, and the platform watcher on a real directory and project database.
+def_ui_test(MountScanCoordinatorTest mount_scan_coordinator_test.cpp "mounted_folder")
+target_link_libraries(MountScanCoordinatorTest PRIVATE MountScanCoordinator OpenImageIO::OpenImageIO)
+alcedo_copy_duckdb_fts_extension(MountScanCoordinatorTest)
+alcedo_register_test_target(MountScanCoordinatorTest ui)
+
 def_ui_test(AgentControlOwnerTest agent_control_owner_test.cpp "interaction_policy")
 alcedo_register_test_target(AgentControlOwnerTest ui)
 

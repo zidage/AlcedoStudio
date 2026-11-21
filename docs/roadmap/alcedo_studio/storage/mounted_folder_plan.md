@@ -2,8 +2,8 @@
 
 Date: 2026-11-19
 
-Status: **in progress**. MF1 (#983), MF2 (#984), MF3 (#985), and MF4 (#986) are implemented. The
-other phases have no implementation evidence.
+Status: **in progress**. MF1 (#983), MF2 (#984), MF3 (#985), MF4 (#986), MF5 (#987), and MF7 (#989)
+are implemented. The other phases have no implementation evidence.
 
 Parent: [Roadmap](../../README.md).
 
@@ -66,6 +66,8 @@ collection links. Alcedo Studio writes no sidecar file.
 | P8 | The directory watcher only starts a scan. The directory listing is the only source of the scan result. | Change notifications can be lost, and a network volume can send none. |
 | P9 | The project file version becomes 0.12.0. Version 0.10.0 stays the minimum. | A build that does not know the `mount_id` column must refuse the project. |
 | P10 | The copy of a dropped file into a mounted directory is not part of this plan. | It is the only operation that writes to the user directory. It needs its own design after the scan is stable. |
+| P11 | On Windows the watcher holds one change notification handle on each root directory, which also reports the directories below it. It closes the handles of a volume that the user ejects. Other platforms use `QFileSystemWatcher` on each directory. | Windows refuses to rename a directory while a handle is open in a directory below it (measured 2026-11-20). `QFileSystemWatcher` holds one handle for each directory on Windows, so the user could not rename a mounted directory that has subdirectories. |
+| P12 | An automatic scan shows its background task only when it changes the library: from the start of its import of new files, or at its end when it moved, changed, returned, or lost photos. An offline result shows when the mount was not offline before. A Synchronize scan shows from its start. | Activation and the watcher start many scans that change nothing. A task for each would push the results of other work out of the task list. |
 
 ### 1.4 Rejected options that must not return
 
@@ -99,13 +101,16 @@ The command reports a named error, with no change to the project, when:
 
 ```text
 v  Trips                      1.2K      ordinary collection
-v  [=] 2026 Japan              842      mount root, folder mark
-      [=] Day 1                310      mounted folder
-      [=] Day 2                532      mounted folder
->  [=] Archive             Offline      offline mount, dimmed
+v  2026 Japan (link)           842      mount root, link icon
+      Day 1 (link)             310      mounted folder, link icon
+      Day 2 (link)             532      mounted folder, link icon
+>  Archive (link)          Offline      offline mount, dimmed
 ```
 
-- A mounted row shows the folder mark before the name. An ordinary row has no mark.
+- Each mounted row, the mount root and each mounted folder below it, shows the link icon
+  (`panel_icons/link.svg`, the Tabler `link` outline with a stroke width of 1.5) after the name,
+  in `textMutedColor`. The name keeps the alignment of the ordinary rows. An ordinary row has no
+  icon.
 - The count of a mounted folder counts present and missing photos.
 - An offline mount shows a dimmed name and the label **Offline** in the count position.
 - The row menu of a mount root has: **Synchronize**, **Show in File Manager**, **Unmount**, and,
@@ -1324,7 +1329,7 @@ unmount in the Library. Section 2.1 to 2.3 define the result.
   `canTakeFileDrop` and in the row drag rules.
 - `LibraryWorkspace.qml`: grid drop refusal for a mounted current folder.
 - `ImportExportHandler`: no import start for a mounted target.
-- `BackgroundTaskKind::MountScan` and its text.
+- `BackgroundTaskKind::MountScan` and its text (implemented in MF7).
 - Thumbnail model: `thumbMissingSource` is true when the stored state of a mounted photo is
   `missing`. The in-memory check stays for an ordinary photo.
 - `ImageController`: delete command availability for the selection.
@@ -1340,7 +1345,8 @@ unmount in the Library. Section 2.1 to 2.3 define the result.
 **Implementation steps.**
 
 1. Add the row fields and commands to `FolderController`.
-2. Add the background task kind and register the scan as a task with a stop callback.
+2. Call `MountScanCoordinator::RequestScan` with `kSynchronize` for Synchronize, and
+   `ReloadMounts` after Mount Folder and Unmount. The task kind and the scan task are in MF7.
 3. Add the Mount Folder menu item and the folder dialog.
 4. Add the mark, the Offline label, and the menus.
 5. Disable the structure commands and the drops from the row fields.
@@ -1393,13 +1399,21 @@ ScanMount returns Offline -> FinishTask(failed, "Offline") -> row shows Offline
 **Objective and deliverables.** A mount follows its directory with no user action. A reviewer can
 add a file to the directory and see the photo.
 
-**Inputs and prerequisites.** MF6.
+**Inputs and prerequisites.** MF4, MF5. MF7 also holds the scan task of MF6 (the
+`MountScan` task kind, the scan on a worker thread, and the Library refresh after each batch),
+because the triggers need it before the panel exists. MF6 adds the panel commands on top of
+`MountScanCoordinator::RequestScan` and `ReloadMounts`.
 
 **Modules, files, and APIs.**
 
-- Proposed `MountScanCoordinator` in the album backend.
-- `application_module_host.cpp`: start after `project_opened`, stop before project close.
-- `QFileSystemWatcher` on each directory of each online mount.
+- `MountScanCoordinator` (library `MountScanCoordinator`, album backend): the triggers, the
+  one-scan rule, the task, and the watch of each mount. `MountScanPort` keeps it testable without
+  a project; `ProjectMountScanPort` calls `MountService::ScanMount` with the import service.
+- `application_module_host.cpp`: start for an entered project that is not loading; stop through
+  `ProjectLifecycleHooks::stop_mount_scans` before a project load and before a project close.
+- `MountDirectoryWatcher`: on Windows one recursive change notification handle on each root
+  directory with eject handling (P11); elsewhere `QFileSystemWatcher` on each directory.
+- `MountScanResult::listed_directories`: the directories of the listing of the scan.
 
 **Data rules and invariants.**
 
@@ -1407,8 +1421,12 @@ add a file to the directory and see the photo.
   directory notification, 5 seconds after the last notification.
 - One scan at a time for one mount. A request during a scan sets one flag. The coordinator starts
   one more scan when the current scan ends.
-- The watcher holds at most 4 096 directories for all mounts. A mount that passes the limit, or
-  whose registration fails, runs with the other two triggers.
+- The per-directory watcher holds at most 4 096 directories for all mounts. A mount that passes
+  the limit, or whose registration fails, runs with the other two triggers. The Windows watcher
+  holds one handle for each mount and has no directory limit.
+- The task of a scan follows P12. A user cancel ends the scan and drops its "scan again" flag.
+- A scan that ends with changes refreshes the Library in place; a scan that added or removed
+  folders also reloads the folder tree. A scan with no change refreshes nothing.
 - After each scan, the coordinator registers the directories of the new listing.
 - The coordinator stops its timers and its watcher before the project closes, and it waits for
   the running scan to end through the stop request.
@@ -1451,13 +1469,77 @@ addPath fails -> the mount is marked "not watched" in the coordinator
 
 **Exit criteria.**
 
-- [ ] The tests pass in the debug build.
-- [ ] A scan of an unchanged directory of 10 000 files completes in less than 2 seconds on a
+- [x] The tests pass in the debug build.
+- [x] A scan of an unchanged directory of 10 000 files completes in less than 2 seconds on a
       local SSD in a Release build. The completion record holds the measured time.
 
 **Expected diff.** 700 to 1100 lines.
 
-**Completion record.** Section 13 template. Empty.
+**Completion record.**
+
+```text
+Phase / date / status: MF7 / 2026-11-20 / implemented, pull requests open
+Source revision and branch: 8cc0b80fb (MF5, pull request #1000) + this phase, in two pull
+  requests by the 2000-line rule: feature/mount-directory-watcher (the watchers and
+  MountScanResult::listed_directories) and feature/mount-scan-triggers (the coordinator)
+Actual changed modules: mount service (listed_directories), MountDirectoryWatcher library (Qt
+  and Windows watchers), MountScanCoordinator library (triggers, one-scan rule, task, watch),
+  background task kind MountScan, application module host and project module (start, stop
+  hooks, Library refresh), task island and task dialog kind label, zh_CN translations, tests
+Implemented behavior: a kProjectOpen scan of each mount when an entered project is not
+  loading; a kActivation scan of each mount after 60 s or more in the background; a
+  kDirectoryChange scan 5 s after the last notification of a mount; RequestScan for
+  Synchronize (MF6 calls it); one scan at a time with one "scan again" flag for the mount of
+  the running scan; the task rules of P12; the watch of each mount after each scan that read
+  the listing; the stop before a project load, before a project close, and at shutdown, with a
+  wait for the running scan; IsIdle is false while a scan runs or waits
+Explicitly unimplemented items: the panel commands that call RequestScan and ReloadMounts
+  (MF6); the link icon of the mounted rows (MF6, section 2.2); the middle dot of the task
+  island text (#1001)
+Primary success call chain:
+  file copied into a mounted directory -> Windows: FindFirstChangeNotification handle of the
+    root -> QWinEventNotifier::activated -> WinMountDirectoryWatcher::HandleChange
+    (FindNextChangeNotification) -> MountScanCoordinator::HandleDirectoryChanged -> clock timer
+    restarts (5 s) -> RequestScan(kDirectoryChange) -> StartNextScan -> worker thread:
+    ProjectMountScanPort::ScanMount -> MountService::ScanMount -> on_progress (queued)
+    -> HandleScanProgress: RegisterTask(MountScan) when new files wait, on_batch_stored
+    -> Library RequestLibraryContentRefresh, FolderController::RefreshImageCounts
+    -> HandleScanEnded: FinishTask(Succeeded, "1 new"), watcher Watch(listed_directories),
+    on_scan_ended -> folder tree reload when folders changed
+Primary failure and restore call chain:
+  Watch fails (registration error, eject, or the directory limit) -> MountState.watched false
+    -> project open, activation, and RequestScan(kSynchronize) still scan the mount; the next
+    scan that reads the listing tries the watch again
+  project close -> ProjectModule::CloseProject -> StopMountScans -> MountScanCoordinator::Stop:
+    timers and watches end, stop request, join of the worker (the current batch completes),
+    the task ends Canceled -> PersistProjectForClose; a failed save -> resume_mount_scans
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build build\debug --target MountDirectoryWatcherTest
+    MountScanCoordinatorTest MountServiceTest alcedo_main ApplicationModuleHostLifecycleTest
+    ApplicationModuleHostShutdownTest ApplicationModuleHostIdleTest
+    AlbumBackendBackgroundTaskTest ProjectModuleTest --parallel 8 -> 0
+  ctest -R "MountDirectoryWatcherTest|MountScanCoordinatorTest|MountServiceTest" -> 0
+  ctest -R "ApplicationModuleHost(Lifecycle|Shutdown|Idle)Test|AlbumBackendBackgroundTaskTest|
+    ProjectModuleTest" -> 0
+  MountDirectoryWatcherTest --gtest_repeat=20, MountScanCoordinatorTest --gtest_repeat=10 -> 0
+Discovered / passed / failed / skipped counts: mounted_folder label 31 / 30 / 0 / 1 (the
+  disabled timing test); caller suites 36 / 36 / 0 / 0
+Manual verification: none in the application yet; MF6 adds the panel commands
+Performance or resource evidence, if required: win_release_test build, MountServiceTest
+  --gtest_also_run_disabled_tests --gtest_filter=*TenThousand*: an unchanged scan of 10 000
+  files took 91 ms and 95 ms (two runs; WD_BLACK SN770 NVMe SSD, system temporary directory)
+Evidence path: this record
+Remaining defects or unavailable platforms: Linux and macOS were not built or run. The Qt
+  watcher passes g++ 16 -std=c++20 -Wall -Wextra -fsyntax-only with Qt 6 in WSL alcedo-arch
+  with no diagnostic; the coordinator was not checked there (its includes need OpenCV, which
+  that distribution lacks). The eject of a removable volume with a watched mount was not
+  tested (the Windows watcher closes its handles on DBT_DEVICEQUERYREMOVE)
+```
+
+Measured fact for P11 (2026-11-20, Windows 11, NTFS): with a `FindFirstChangeNotification`
+handle open in `Root\Day1`, the rename of `Root` fails with access denied. With one recursive
+handle on `Root`, the rename of `Root\A` (which has a subdirectory) and of `Root` itself
+succeed; the rename of the parent of `Root` fails.
 
 ### MF8. Missing photos, root relocation, and automation commands
 

@@ -38,6 +38,11 @@ struct ProjectLifecycleHooks {
   std::function<void()>               refresh_semantic_state;
   std::function<bool()>               export_inflight;
   std::function<void()>               refresh_translations;
+  /// Stop the scans of the mounted folders before the services of the project close or a
+  /// load replaces them; the call waits for the running scan.
+  std::function<void()>               stop_mount_scans;
+  /// Start the scans again when a close of the project failed.
+  std::function<void()>               resume_mount_scans;
 };
 
 /// Project lifecycle module: open/create/save, accelerator preference, recent
@@ -175,6 +180,8 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   void               ClearProjectUiState();
   [[nodiscard]] auto ProjectSwitchBlockReason() const -> QString;
   void               FinalizeEditorSession();
+  /// Calls ProjectLifecycleHooks::stop_mount_scans.
+  void               StopMountScans();
   [[nodiscard]] bool ShouldKeepSemanticModelData(const QString& profileId) const;
 
  signals:

@@ -82,6 +82,9 @@ bool ProjectHandler::StartProjectLoad(
   }
 
   project_module_.FinalizeEditorSession();
+  // The loader saves the current project and the load replaces its services. A load that fails
+  // keeps the current project; the end of the load starts its scans again.
+  project_module_.StopMountScans();
 
   load_entry_mode_ = entryMode;
 

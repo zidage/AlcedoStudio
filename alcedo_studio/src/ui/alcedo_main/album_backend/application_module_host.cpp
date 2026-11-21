@@ -8,6 +8,7 @@
 #include <QDeadlineTimer>
 #include <QDebug>
 #include <QEventLoop>
+#include <QGuiApplication>
 #include <QMetaObject>
 #include <QPointer>
 #include <QQmlEngine>
@@ -536,6 +537,40 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   connect(library_mutations_.get(), &LibraryMutationOperations::ElementsDeleted,
           export_queue_.get(), &ExportQueue::RemoveElements);
 
+  MountScanCoordinatorDependencies mount_scan_dependencies;
+  mount_scan_dependencies.tasks           = background_tasks_.get();
+  mount_scan_dependencies.clock           = CreateSteadyMountScanClock();
+  mount_scan_dependencies.watcher         = CreatePlatformMountDirectoryWatcher();
+  mount_scan_dependencies.on_batch_stored = [library = library_.get(),
+                                             folders = folders_.get()](mount_id_t) {
+    // The Library shows the photos of each stored batch in place.
+    library->RequestLibraryContentRefresh();
+    folders->RefreshImageCounts();
+  };
+  mount_scan_dependencies.on_scan_ended = [library = library_.get(), folders = folders_.get()](
+                                              mount_id_t, const MountScanResult& result) {
+    const bool folders_changed = result.folders_added_count + result.folders_removed_count > 0;
+    if (folders_changed) {
+      library->ReloadFolderTree(folders->current_folder_path());
+    }
+    if (folders_changed || MountScanChangedPhotos(result)) {
+      library->RequestLibraryContentRefresh();
+      folders->RefreshImageCounts();
+    }
+  };
+  mount_scans_ = std::make_unique<MountScanCoordinator>(std::move(mount_scan_dependencies));
+  RecordConstruction("MountScanCoordinator", mount_scans_.get());
+  if (auto* gui = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+    connect(gui, &QGuiApplication::applicationStateChanged, mount_scans_.get(),
+            [scans = mount_scans_.get()](Qt::ApplicationState state) {
+              scans->HandleApplicationActiveChanged(state == Qt::ApplicationActive);
+            });
+  }
+  connect(project_.get(), &ProjectModule::ProjectEnteredChanged, this,
+          [this] { SyncMountScans(); });
+  connect(project_.get(), &ProjectModule::ProjectLoadStateChanged, this,
+          [this] { SyncMountScans(); });
+
   library_->BindCollaborators(folders_.get(), search_.get(), stats_.get());
   library_->SetSemanticLabelProvider(
       [semantic = semantic_generation_.get()](sl_element_id_t element_id) {
@@ -670,7 +705,53 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       emit import_export->exportStateChanged();
     }
   };
+  lifecycle_hooks.stop_mount_scans = [scans = mount_scans_.get()] {
+    if (scans) {
+      scans->Stop();
+    }
+  };
+  lifecycle_hooks.resume_mount_scans = [this] { SyncMountScans(); };
   project_->SetLifecycleHooks(std::move(lifecycle_hooks));
+}
+
+void ApplicationModuleHost::SyncMountScans() {
+  if (!mount_scans_) {
+    return;
+  }
+  auto&      handler    = project_->handler();
+  const auto project    = handler.project();
+  auto*      importer   = handler.import_service();
+  const bool should_run = !shutting_down_ && project && importer != nullptr &&
+                          handler.project_entered() && !handler.project_loading() &&
+                          project->GetMountService();
+  if (!should_run) {
+    mount_scans_->Stop();
+    return;
+  }
+  if (mount_scans_->IsStarted()) {
+    return;
+  }
+  auto invalidate_thumbnail =
+      [library = QPointer<LibraryModule>(library_.get())](sl_element_id_t element_id) {
+        // Called on the scan worker; the thumbnail state belongs to the UI thread.
+        QMetaObject::invokeMethod(
+            library,
+            [library, element_id] {
+              if (!library || library->project() == nullptr) {
+                return;
+              }
+              if (auto thumbnails = library->project()->handler().thumbnail_service()) {
+                thumbnails->InvalidateThumbnail(element_id);
+              }
+              const auto* item = library->FindAlbumItem(element_id);
+              if (item != nullptr) {
+                (void)library->thumbs().RefreshCurrentThumbnail(element_id, item->image_id);
+              }
+            },
+            Qt::QueuedConnection);
+      };
+  mount_scans_->Start(std::make_shared<ProjectMountScanPort>(project->GetMountService(), importer,
+                                                             std::move(invalidate_thumbnail)));
 }
 
 void ApplicationModuleHost::ShutdownModules() {
@@ -687,6 +768,10 @@ void ApplicationModuleHost::ShutdownModules() {
     }
     if (background_tasks_) {
       background_tasks_->CancelAll();
+    }
+    // The running scan completes its current batch; the project save below runs after it.
+    if (mount_scans_) {
+      mount_scans_->Stop();
     }
     if (semantic_generation_) {
       semantic_generation_->CancelGeneration();
@@ -777,6 +862,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     pointer.reset();
     RecordDestruction(type_name, object);
   };
+  destroy(mount_scans_, "MountScanCoordinator");
   destroy(library_mutations_, "LibraryMutationOperations");
   destroy(application_close_, "ApplicationCloseCoordinator");
   destroy(project_launch_, "ProjectLaunchCoordinator");
@@ -836,6 +922,10 @@ void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
 auto ApplicationModuleHost::IsIdle() const -> bool {
   if (background_tasks_ &&
       background_tasks_->ActiveCountExcept(BackgroundTaskKind::AgentControl) > 0) {
+    return false;
+  }
+  // An automatic scan shows no task until it changes the library, but it writes the project.
+  if (mount_scans_ && mount_scans_->HasPendingScans()) {
     return false;
   }
   return !import_export_ ||
