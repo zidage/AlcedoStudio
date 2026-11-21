@@ -366,6 +366,56 @@ constexpr const char* kMountTableCountSql =
 constexpr const char* kMountedElementCountSql =
     "SELECT COUNT(*) FROM Element WHERE mount_id IS NOT NULL;";
 
+TEST(ProjectCompatibilityTest, AcceptedProjectKeepsCanonicalRootBytesAndCommitHash) {
+  const test::TestTempDirectory temp_dir;
+  TimeProvider::Refresh();
+  const auto    fixture_dir = CompatDir();
+  std::ifstream expected_input(fixture_dir / "raw_project_abdb000c8.json", std::ios::binary);
+  ASSERT_TRUE(expected_input.is_open());
+  const auto            expected   = nlohmann::json::parse(expected_input);
+  const auto            element_id = expected.at("element_id").get<sl_element_id_t>();
+
+  std::filesystem::path db_path;
+  std::filesystem::path meta_path;
+  QString               error;
+  ASSERT_TRUE(project_pack::UnpackProjectToWorkspace(
+      fixture_dir / "raw_project_abdb000c8.alcd", temp_dir.Path() / "workspace",
+      QStringLiteral("Compat"), &db_path, &meta_path, &error))
+      << error.toStdString();
+
+  constexpr const char* kRootBytesSql =
+      "SELECT serialized_pipeline_state::VARCHAR FROM PipelineRoot";
+  constexpr const char* kCommitHashesSql =
+      "SELECT string_agg(commit_hash, ',' ORDER BY commit_hash) FROM EditCommit";
+  ASSERT_EQ(QueryDatabaseFileInt64(db_path, "SELECT count(*) FROM PipelineRoot"), 1);
+  const auto root_ids      = QueryDatabaseFileText(db_path, kRootIdsSql);
+  const auto root_bytes    = QueryDatabaseFileText(db_path, kRootBytesSql);
+  const auto commit_hashes = QueryDatabaseFileText(db_path, kCommitHashesSql);
+  ASSERT_FALSE(root_ids.empty());
+  ASSERT_FALSE(root_bytes.empty());
+  ASSERT_FALSE(commit_hashes.empty());
+  ASSERT_EQ(nlohmann::json::parse(root_bytes).dump(), root_bytes);
+
+  {
+    ProjectService      project(db_path, meta_path);
+    PipelineMgmtService pipelines(project.GetStorage());
+    const auto          committed = pipelines.AcquireCommittedSnapshot(element_id);
+    ASSERT_NE(committed, nullptr);
+    EXPECT_EQ(committed->Document().ToJson(), expected.at("committed_document"));
+    project.SaveProject(meta_path);
+  }
+  {
+    ProjectService      reopened(db_path, meta_path);
+    PipelineMgmtService pipelines(reopened.GetStorage());
+    const auto          committed = pipelines.AcquireCommittedSnapshot(element_id);
+    ASSERT_NE(committed, nullptr);
+    EXPECT_EQ(committed->Document().ToJson(), expected.at("committed_document"));
+  }
+  EXPECT_EQ(QueryDatabaseFileText(db_path, kRootIdsSql), root_ids);
+  EXPECT_EQ(QueryDatabaseFileText(db_path, kRootBytesSql), root_bytes);
+  EXPECT_EQ(QueryDatabaseFileText(db_path, kCommitHashesSql), commit_hashes);
+}
+
 // #769: a 0.10.0 project opens, gains the library mark columns with empty marks, keeps its root
 // ids, stores marks, and saves as the current version (0.12.0 since #983).
 TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds) {

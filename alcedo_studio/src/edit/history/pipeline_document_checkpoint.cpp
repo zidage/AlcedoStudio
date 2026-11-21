@@ -5,6 +5,7 @@
 #include "edit/history/pipeline_document_checkpoint.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -38,17 +39,26 @@ void RequireExactObjectKeys(const nlohmann::json& json, std::initializer_list<co
   }
 }
 
-auto RequireUint32(const nlohmann::json& json, const char* key, std::uint32_t expected,
-                   std::string_view context) -> std::uint32_t {
+/// Read a stored unsigned 32-bit integer without truncating an out-of-range value.
+auto ReadUint32(const nlohmann::json& json, const char* key, std::string_view context)
+    -> std::uint32_t {
   const auto& value = json.at(key);
-  if (!value.is_number_unsigned() && !value.is_number_integer()) {
+  if (!value.is_number_integer()) {
     Fail(std::string{context} + ": '" + key + "' must be an integer");
   }
-  const auto parsed = value.get<std::uint32_t>();
-  if (parsed != expected) {
+  const auto parsed = value.get<std::uint64_t>();
+  if (parsed > std::numeric_limits<std::uint32_t>::max()) {
+    Fail(std::string{context} + ": '" + key + "' is out of range");
+  }
+  return static_cast<std::uint32_t>(parsed);
+}
+
+/// Require the published revision of a root or checkpoint record.
+void RequireUint32(const nlohmann::json& json, const char* key, std::uint32_t expected,
+                   std::string_view context) {
+  if (ReadUint32(json, key, context) != expected) {
     Fail(std::string{context} + ": unsupported " + key);
   }
-  return parsed;
 }
 
 auto RequireString(const nlohmann::json& json, const char* key, std::string_view context)
@@ -71,16 +81,19 @@ void AppendU32LE(std::vector<std::uint8_t>& out, std::uint32_t value) {
   out.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFFu));
 }
 
-void RequireCanonicalDocument(const nlohmann::json& stored, const PipelineDocument& document,
-                              std::string_view context) {
-  const auto canonical = document.ToJson();
-  if (stored.dump() != canonical.dump()) {
+/// Return the document bytes after verifying that the stored document has the same encoding.
+auto RequireCanonicalDocumentBytes(const nlohmann::json& stored, const PipelineDocument& document,
+                                   std::string_view context) -> std::string {
+  auto canonical = document.ToJson().dump();
+  if (stored.dump() != canonical) {
     Fail(std::string{context} + ": nested pipeline document is not in canonical form");
   }
+  return canonical;
 }
 
+/// Require a supported document revision and a valid graph before encoding or using it.
 void ValidateDocument(const PipelineDocument& document, std::string_view context) {
-  if (document.FormatVersion() != kPipelineDocumentFormatVersion) {
+  if (!IsSupportedPipelineDocumentFormatVersion(document.FormatVersion())) {
     Fail(std::string{context} + ": unsupported pipeline document format_version");
   }
   const auto graph_errors = document.Graph().Validate();
@@ -100,25 +113,34 @@ auto CanonicalRawColorDump(const std::optional<nlohmann::json>& raw_color_contex
   return raw_color_context->dump();
 }
 
-}  // namespace
-
-auto ComputeRootId(sl_element_id_t element_id, const PipelineDocument& document,
-                   const std::optional<nlohmann::json>& raw_color_context) -> root_id_t {
-  ValidateDocument(document, "ComputeRootId");
+/// Hash an already validated canonical document in its stored revision.
+auto HashCanonicalRoot(sl_element_id_t element_id, std::uint32_t document_version,
+                       std::string_view                     document_dump,
+                       const std::optional<nlohmann::json>& raw_color_context) -> root_id_t {
   constexpr std::string_view kDomain = "alcedo.pipeline_root.v2";
-  const auto                 document_dump = document.ToJson().dump();
-  const auto                 raw_dump      = CanonicalRawColorDump(raw_color_context);
+  const auto                 raw_dump = CanonicalRawColorDump(raw_color_context);
 
   std::vector<std::uint8_t> bytes;
+  bytes.reserve(kDomain.size() + 4 * sizeof(std::uint32_t) + document_dump.size() + 1 +
+                raw_dump.size());
   AppendBytes(bytes, kDomain.data(), kDomain.size());
   AppendU32LE(bytes, kRootStateFormatVersion);
-  AppendU32LE(bytes, kPipelineDocumentFormatVersion);
+  AppendU32LE(bytes, document_version);
   AppendU32LE(bytes, kImageEditSchemaVersion);
   AppendU32LE(bytes, element_id);
   AppendBytes(bytes, document_dump.data(), document_dump.size());
   bytes.push_back(0);
   AppendBytes(bytes, raw_dump.data(), raw_dump.size());
   return Hash128::Compute(bytes.data(), bytes.size());
+}
+
+}  // namespace
+
+auto ComputeRootId(sl_element_id_t element_id, const PipelineDocument& document,
+                   const std::optional<nlohmann::json>& raw_color_context) -> root_id_t {
+  ValidateDocument(document, "ComputeRootId");
+  return HashCanonicalRoot(element_id, document.FormatVersion(), document.ToJson().dump(),
+                           raw_color_context);
 }
 
 auto EncodePipelineRootState(sl_element_id_t element_id, const PipelineDocument& document,
@@ -128,7 +150,7 @@ auto EncodePipelineRootState(sl_element_id_t element_id, const PipelineDocument&
   nlohmann::json encoded{
       {"root_state_format_version", kRootStateFormatVersion},
       {"project_schema_version", kImageEditSchemaVersion},
-      {"pipeline_document_format_version", kPipelineDocumentFormatVersion},
+      {"pipeline_document_format_version", document.FormatVersion()},
       {"element_id", element_id},
       {"pipeline_document", document.ToJson()},
   };
@@ -137,7 +159,8 @@ auto EncodePipelineRootState(sl_element_id_t element_id, const PipelineDocument&
   return encoded;
 }
 
-auto DecodePipelineRootState(const nlohmann::json& json) -> PipelineRootState {
+auto DecodePipelineRootState(const nlohmann::json& json, std::optional<root_id_t> expected_root_id)
+    -> PipelineRootState {
   RequireExactObjectKeys(json,
                          {"root_state_format_version", "project_schema_version",
                           "pipeline_document_format_version", "element_id", "pipeline_document",
@@ -145,20 +168,17 @@ auto DecodePipelineRootState(const nlohmann::json& json) -> PipelineRootState {
                          "PipelineRootState");
   RequireUint32(json, "root_state_format_version", kRootStateFormatVersion, "PipelineRootState");
   RequireUint32(json, "project_schema_version", kImageEditSchemaVersion, "PipelineRootState");
-  RequireUint32(json, "pipeline_document_format_version", kPipelineDocumentFormatVersion,
-                "PipelineRootState");
-  if (!json.at("element_id").is_number_unsigned() && !json.at("element_id").is_number_integer()) {
-    Fail("PipelineRootState: element_id must be an integer");
-  }
-
+  const auto document_version =
+      ReadUint32(json, "pipeline_document_format_version", "PipelineRootState");
   PipelineRootState state;
-  state.element_id = json.at("element_id").get<sl_element_id_t>();
+  state.element_id = ReadUint32(json, "element_id", "PipelineRootState");
   if (state.element_id == 0) {
     Fail("PipelineRootState: element_id must be non-zero");
   }
   const auto& document_json = json.at("pipeline_document");
-  state.document            = PipelineDocument::FromJson(document_json);
-  RequireCanonicalDocument(document_json, state.document, "PipelineRootState");
+  state.document            = PipelineDocument::FromJson(document_json, document_version);
+  const auto canonical =
+      RequireCanonicalDocumentBytes(document_json, state.document, "PipelineRootState");
   ValidateDocument(state.document, "PipelineRootState");
 
   const auto& raw = json.at("raw_color_context");
@@ -168,6 +188,11 @@ auto DecodePipelineRootState(const nlohmann::json& json) -> PipelineRootState {
     state.raw_color_context = raw;
   } else {
     Fail("PipelineRootState: raw_color_context must be an object or null");
+  }
+  if (expected_root_id.has_value() &&
+      HashCanonicalRoot(state.element_id, document_version, canonical, state.raw_color_context) !=
+          *expected_root_id) {
+    Fail("PipelineRootState: root hash does not match the stored root ID");
   }
   return state;
 }
@@ -179,7 +204,7 @@ auto EncodePipelineDocumentCheckpoint(const root_id_t& root_id, head_commit_hash
   return nlohmann::json{
       {"checkpoint_state_format_version", kCheckpointStateFormatVersion},
       {"project_schema_version", kImageEditSchemaVersion},
-      {"pipeline_document_format_version", kPipelineDocumentFormatVersion},
+      {"pipeline_document_format_version", document.FormatVersion()},
       {"root_id", root_id.ToString()},
       {"head_commit_hash", HeadCommitHashToStorage(head)},
       {"transaction_chain_hash", chain.ToString()},
@@ -197,8 +222,8 @@ auto DecodePipelineDocumentCheckpoint(const nlohmann::json& json) -> PipelineDoc
                 "PipelineDocumentCheckpoint");
   RequireUint32(json, "project_schema_version", kImageEditSchemaVersion,
                 "PipelineDocumentCheckpoint");
-  RequireUint32(json, "pipeline_document_format_version", kPipelineDocumentFormatVersion,
-                "PipelineDocumentCheckpoint");
+  const auto document_version =
+      ReadUint32(json, "pipeline_document_format_version", "PipelineDocumentCheckpoint");
 
   PipelineDocumentCheckpoint checkpoint;
   checkpoint.root_id = Hash128::FromString(RequireString(json, "root_id", "PipelineDocumentCheckpoint"));
@@ -207,8 +232,8 @@ auto DecodePipelineDocumentCheckpoint(const nlohmann::json& json) -> PipelineDoc
   checkpoint.transaction_chain_hash = Hash128::FromString(
       RequireString(json, "transaction_chain_hash", "PipelineDocumentCheckpoint"));
   const auto& document_json = json.at("pipeline_document");
-  checkpoint.document       = PipelineDocument::FromJson(document_json);
-  RequireCanonicalDocument(document_json, checkpoint.document, "PipelineDocumentCheckpoint");
+  checkpoint.document       = PipelineDocument::FromJson(document_json, document_version);
+  RequireCanonicalDocumentBytes(document_json, checkpoint.document, "PipelineDocumentCheckpoint");
   ValidateDocument(checkpoint.document, "PipelineDocumentCheckpoint");
   return checkpoint;
 }

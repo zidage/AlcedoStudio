@@ -59,8 +59,17 @@ inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.12.0";
 /// Packed `.alcd` header version. Independent of the metadata string.
 inline constexpr std::uint32_t kPackedProjectFormatVersion = 7;
 
-/// `PipelineDocument` JSON `format_version`.
-inline constexpr std::uint32_t kPipelineDocumentFormatVersion = 7;
+/// Document revision with the crop rectangle, straightening angle, and aspect preference.
+inline constexpr std::uint32_t    kCropRotateDocumentFormatVersion = 7;
+
+/// `PipelineDocument` JSON `format_version` for newly created documents.
+inline constexpr std::uint32_t    kPipelineDocumentFormatVersion = kCropRotateDocumentFormatVersion;
+
+/// True if the document reader supports the stored revision. Compare before narrowing from JSON.
+[[nodiscard]] constexpr auto      IsSupportedPipelineDocumentFormatVersion(std::uint64_t version)
+    -> bool {
+  return version == kCropRotateDocumentFormatVersion;
+}
 
 /// Per-image history schema stored on `ImageEditState.project_schema_version`.
 inline constexpr std::uint32_t kImageEditSchemaVersion = 5;
