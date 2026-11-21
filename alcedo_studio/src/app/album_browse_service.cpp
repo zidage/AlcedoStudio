@@ -23,6 +23,7 @@ auto BuildFolderView(const std::filesystem::path&         parent_path,
   out.folder_id_   = folder ? folder->element_id_ : 0;
   out.folder_name_ = folder ? folder->element_name_ : file_name_t{};
   out.folder_path_ = parent_path / out.folder_name_;
+  out.mount_id_    = folder ? folder->mount_id_ : std::nullopt;
   return out;
 }
 

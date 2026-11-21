@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Controls.impl
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import "CollectionTree.js" as CollectionTree
 import "FileDrop.js" as FileDrop
@@ -234,7 +235,7 @@ ColumnLayout {
 
         const signature = rows.map(function(row) {
             return [row.isDraft ? "draft" : "", row.folderId, row.elementId, row.parentFolderId,
-                    row.name].join(":")
+                    row.name, row.mountId, row.mountOffline, row.mountMissingCount].join(":")
         }).join("|")
         if (signature !== rowsSignature) {
             const keepY = folderList.contentY
@@ -330,7 +331,7 @@ ColumnLayout {
         }
         cancelRename()
         const parentRow = rowForFolder(parentFolderId)
-        if (!parentRow) {
+        if (!parentRow || !structureEditable(parentRow)) {
             return
         }
         // Open the parent and every folder above it, so the draft row is in view.
@@ -388,8 +389,14 @@ ColumnLayout {
 
     // ── Rename ──────────────────────────────────────────────────────────────
 
+    // A mounted row takes no structure change: its tree follows its disk directory.
+    function structureEditable(row) {
+        return !!row && !row.isDraft && row.structureEditable !== false
+    }
+
     function beginRename(row) {
-        if (!row || row.isDraft || Number(row.folderId) === 0 || !backendInteractive) {
+        if (!row || row.isDraft || Number(row.folderId) === 0 || !backendInteractive
+                || !structureEditable(row)) {
             return
         }
         cancelDraftCollection()
@@ -419,7 +426,8 @@ ColumnLayout {
     // ── Delete ──────────────────────────────────────────────────────────────
 
     function requestDelete(row) {
-        if (!row || row.isDraft || Number(row.folderId) === 0 || !backendInteractive) {
+        if (!row || row.isDraft || Number(row.folderId) === 0 || !backendInteractive
+                || !structureEditable(row)) {
             return
         }
         pendingDeleteElementId = Number(row.elementId)
@@ -439,7 +447,8 @@ ColumnLayout {
     // ── Drag to move ────────────────────────────────────────────────────────
 
     function canDropOn(sourceRow, targetRow) {
-        if (!sourceRow || !targetRow || targetRow.isDraft) {
+        if (!sourceRow || !targetRow || targetRow.isDraft || !structureEditable(sourceRow)
+                || !structureEditable(targetRow)) {
             return false
         }
         if (Number(targetRow.folderId) === Number(sourceRow.parentFolderId)) {
@@ -488,9 +497,54 @@ ColumnLayout {
     // ── File drop to import ─────────────────────────────────────────────────
 
     // A collection row takes a file drop; the draft row and the row being renamed do not.
+    // A mounted row takes its files from its disk directory, so it takes no file drop.
     function canTakeFileDrop(row) {
         return fileDropEnabled && row !== null && row !== undefined && !row.isDraft
-               && Number(row.elementId) !== renamingElementId
+               && Number(row.elementId) !== renamingElementId && structureEditable(row)
+    }
+
+    // ── Mounted folders ─────────────────────────────────────────────────────
+
+    property int pendingMountFolderId: -1
+    property int pendingLocateFolderId: -1
+    property int pendingRemoveMissingFolderId: -1
+
+    function openRowMenu(row) {
+        if (Number(row.mountId) > 0) {
+            const menu = row.mountRoot === true ? mountRootMenu : mountedFolderMenu
+            menu.targetRow = row
+            menu.popup()
+            return
+        }
+        rowMenu.targetRow = row
+        rowMenu.popup()
+    }
+
+    function requestMountFolder(row) {
+        if (!row || !structureEditable(row) || !backendInteractive) {
+            return
+        }
+        pendingMountFolderId = Number(row.folderId)
+        mountFolderDialog.open()
+    }
+
+    function requestLocateFolder(row) {
+        if (!row || row.mountRoot !== true || !backendInteractive) {
+            return
+        }
+        pendingLocateFolderId = Number(row.folderId)
+        locateFolderDialog.open()
+    }
+
+    function requestRemoveMissingPhotos(row) {
+        if (!row || row.mountRoot !== true || Number(row.mountMissingCount) <= 0
+                || !backendInteractive) {
+            return
+        }
+        pendingRemoveMissingFolderId = Number(row.folderId)
+        removeMissingDialog.openWith(
+            qsTr("Remove %1 missing photos of \"%2\" from the project? Their edit history and Versions are removed.")
+                .arg(Number(row.mountMissingCount)).arg(row.name))
     }
 
     function updateFileDropTarget(listX, listY) {
@@ -742,6 +796,8 @@ ColumnLayout {
                     topInset: 0
                     bottomInset: 0
                     enabled: panel.backendInteractive
+                             && panel.structureEditable(panel.rowForFolder(panel.currentFolderId))
+                    opacity: enabled ? 1.0 : 0.4
                     Material.foreground: theme.colText
                     // A new collection goes inside the selected one.
                     onClicked: panel.beginCreateCollection(panel.currentFolderId)
@@ -833,6 +889,8 @@ ColumnLayout {
                     readonly property bool renaming: !isDraft
                         && Number(modelData.elementId) === panel.renamingElementId
                     readonly property bool editing: isDraft || renaming
+                    readonly property bool mounted: !isDraft && Number(modelData.mountId) > 0
+                    readonly property bool mountOffline: mounted && modelData.mountOffline === true
 
                     objectName: isDraft ? "collectionDraftRow"
                                         : "collectionRow_" + String(modelData.elementId)
@@ -875,12 +933,17 @@ ColumnLayout {
                         }
 
                         Label {
-                            Layout.fillWidth: true
+                            // A mounted row keeps the name at its text width, so the link icon
+                            // follows the name; the row shrinks it when the space is short.
+                            Layout.fillWidth: !folderRow.mounted
+                            Layout.preferredWidth: folderRow.mounted ? implicitWidth : -1
+                            Layout.minimumWidth: 0
                             Layout.alignment: Qt.AlignVCenter
                             visible: !folderRow.editing
                             // Uniform fixed-height tree rows elide (DESIGN.md truncation policy).
                             elide: Text.ElideRight
                             text: folderRow.isRoot ? qsTr("全部图片") : String(folderRow.modelData.name)
+                            opacity: folderRow.mountOffline ? 0.45 : 1.0
                             color: appTheme.textColor
                             font.family: appTheme.uiFontFamily
                             font.pixelSize: appTheme.fontSizeTitle
@@ -888,15 +951,38 @@ ColumnLayout {
                                                             : appTheme.fontWeightRegular
                         }
 
-                        // Photo count of the collection; the root row counts the project.
+                        // Mounted row: the link icon after the name (Mounted Folder Plan, 2.2).
+                        IconImage {
+                            objectName: folderRow.isDraft
+                                        ? ""
+                                        : "collectionMountIcon_" + String(folderRow.modelData.elementId)
+                            Layout.preferredWidth: 13
+                            Layout.preferredHeight: 13
+                            Layout.alignment: Qt.AlignVCenter
+                            visible: folderRow.mounted && !folderRow.editing
+                            sourceSize: Qt.size(13, 13)
+                            source: "qrc:/panel_icons/link.svg"
+                            color: appTheme.textMutedColor
+                            opacity: folderRow.mountOffline ? 0.45 : 1.0
+                        }
+
+                        Item {
+                            Layout.fillWidth: true
+                            visible: folderRow.mounted && !folderRow.editing
+                        }
+
+                        // Photo count of the collection; the root row counts the project. An
+                        // offline mount shows Offline in its place.
                         Label {
                             readonly property real count: panel.imageCountOf(folderRow.modelData)
                             objectName: folderRow.isDraft
                                         ? ""
                                         : "collectionCount_" + String(folderRow.modelData.elementId)
                             Layout.alignment: Qt.AlignVCenter
-                            visible: !folderRow.editing && count >= 0
-                            text: count >= 0 ? count.toLocaleString(Qt.locale(), "f", 0) : ""
+                            visible: !folderRow.editing && (count >= 0 || folderRow.mountOffline)
+                            text: folderRow.mountOffline
+                                  ? qsTr("Offline")
+                                  : count >= 0 ? count.toLocaleString(Qt.locale(), "f", 0) : ""
                             // Selected: brightens to the name ink on the neutral well.
                             color: folderRow.selected ? appTheme.textColor
                                                       : appTheme.textMutedColor
@@ -1036,8 +1122,7 @@ ColumnLayout {
                             suppressClick = true
                             const row = pressIndex >= 0 ? panel.folderRows[pressIndex] : null
                             if (row && !row.isDraft && panel.backendInteractive) {
-                                rowMenu.targetRow = row
-                                rowMenu.popup()
+                                panel.openRowMenu(row)
                             }
                         }
                     }
@@ -1051,7 +1136,8 @@ ColumnLayout {
                             const dy = mouse.y - pressPoint.y
                             const row = panel.folderRows[pressIndex]
                             if (dx * dx + dy * dy > 36 && row && !row.isDraft
-                                    && Number(row.folderId) !== 0 && panel.backendInteractive) {
+                                    && Number(row.folderId) !== 0 && panel.backendInteractive
+                                    && panel.structureEditable(row)) {
                                 panel.dragSourceRow = row
                                 panel.dragActive = true
                                 suppressClick = true
@@ -1293,6 +1379,11 @@ ColumnLayout {
             onTriggered: panel.beginCreateCollection(Number(rowMenu.targetRow.folderId))
         }
         AppMenuItem {
+            objectName: "collectionMenuMountFolder"
+            text: qsTr("Mount Folder...")
+            onTriggered: panel.requestMountFolder(rowMenu.targetRow)
+        }
+        AppMenuItem {
             objectName: "collectionMenuRename"
             text: qsTr("Rename")
             enabled: !rowMenu.targetIsRoot
@@ -1304,6 +1395,109 @@ ColumnLayout {
             text: qsTr("Delete collection")
             enabled: !rowMenu.targetIsRoot
             onTriggered: panel.requestDelete(rowMenu.targetRow)
+        }
+    }
+
+    // The row menu of a mount root (Mounted Folder Plan, sections 2.2 and MF8).
+    AppContextMenu {
+        id: mountRootMenu
+        objectName: "collectionMountRootMenu"
+        property var targetRow: null
+        readonly property bool offline: targetRow !== null && targetRow.mountOffline === true
+
+        AppMenuItem {
+            objectName: "collectionMenuSynchronize"
+            text: qsTr("Synchronize")
+            enabled: !mountRootMenu.offline
+            onTriggered: panel.foldersModule.SynchronizeMount(Number(mountRootMenu.targetRow.folderId))
+        }
+        AppMenuItem {
+            objectName: "collectionMenuLocateFolder"
+            text: qsTr("Locate Folder...")
+            enabled: mountRootMenu.offline
+            onTriggered: panel.requestLocateFolder(mountRootMenu.targetRow)
+        }
+        AppMenuItem {
+            objectName: "collectionMenuShowInFileManager"
+            text: qsTr("Show in File Manager")
+            enabled: !mountRootMenu.offline
+            onTriggered: panel.foldersModule.ShowMountedFolderInFileManager(
+                             Number(mountRootMenu.targetRow.folderId))
+        }
+        AppMenuSeparator {}
+        AppMenuItem {
+            objectName: "collectionMenuRemoveMissingPhotos"
+            text: qsTr("Remove Missing Photos")
+            enabled: mountRootMenu.targetRow !== null
+                     && Number(mountRootMenu.targetRow.mountMissingCount) > 0
+            onTriggered: panel.requestRemoveMissingPhotos(mountRootMenu.targetRow)
+        }
+        AppMenuSeparator {}
+        AppMenuItem {
+            objectName: "collectionMenuUnmount"
+            text: qsTr("Unmount")
+            onTriggered: panel.foldersModule.Unmount(Number(mountRootMenu.targetRow.folderId))
+        }
+    }
+
+    // The row menu of a mounted folder below the mount root.
+    AppContextMenu {
+        id: mountedFolderMenu
+        objectName: "collectionMountedFolderMenu"
+        property var targetRow: null
+
+        AppMenuItem {
+            objectName: "collectionMenuShowMountedFolder"
+            text: qsTr("Show in File Manager")
+            enabled: mountedFolderMenu.targetRow !== null
+                     && mountedFolderMenu.targetRow.mountOffline !== true
+            onTriggered: panel.foldersModule.ShowMountedFolderInFileManager(
+                             Number(mountedFolderMenu.targetRow.folderId))
+        }
+    }
+
+    FolderDialog {
+        id: mountFolderDialog
+        title: qsTr("Mount Folder")
+        onAccepted: {
+            const folderId = panel.pendingMountFolderId
+            panel.pendingMountFolderId = -1
+            if (folderId >= 0 && panel.foldersModule) {
+                panel.foldersModule.MountFolder(folderId, selectedFolder)
+            }
+        }
+        onRejected: panel.pendingMountFolderId = -1
+    }
+
+    FolderDialog {
+        id: locateFolderDialog
+        title: qsTr("Locate Folder")
+        onAccepted: {
+            const folderId = panel.pendingLocateFolderId
+            panel.pendingLocateFolderId = -1
+            if (folderId >= 0 && panel.foldersModule) {
+                panel.foldersModule.LocateMountFolder(folderId, selectedFolder)
+            }
+        }
+        onRejected: panel.pendingLocateFolderId = -1
+    }
+
+    DeleteConfirmDialog {
+        id: removeMissingDialog
+        objectName: "collectionRemoveMissingDialog"
+        parent: Overlay.overlay
+        theme: panel.host
+        host: panel.host
+        blurSource: panel.host ? panel.host.dialogBlurSource : null
+        appendSourceFilesNote: false
+        confirmEnabled: panel.backendInteractive
+        onCancelled: panel.pendingRemoveMissingFolderId = -1
+        onConfirmed: {
+            const folderId = panel.pendingRemoveMissingFolderId
+            panel.pendingRemoveMissingFolderId = -1
+            if (folderId >= 0 && panel.foldersModule) {
+                panel.foldersModule.RemoveMissingPhotos(folderId)
+            }
         }
     }
 

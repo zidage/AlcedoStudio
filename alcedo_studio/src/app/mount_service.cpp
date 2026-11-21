@@ -9,6 +9,7 @@
 #include <ctime>
 #include <exception>
 #include <format>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -721,9 +722,7 @@ auto MountService::RemoveMissingPhotos(mount_id_t                  mount_id,
     }
     for (const auto& file : files) {
       removal.element_ids.push_back(file->element_id_);
-      if (file->image_id_ != 0) {
-        removal.image_ids.push_back(file->image_id_);
-      }
+      removal.image_ids.push_back(file->image_id_);
     }
   } catch (const std::exception& e) {
     throw MountOperationError(
@@ -735,7 +734,10 @@ auto MountService::RemoveMissingPhotos(mount_id_t                  mount_id,
   if (remove_edit_data) {
     remove_edit_data(removal.element_ids);
   }
-  image_pool_service_->RemoveBatch(removal.image_ids);
+  std::vector<image_id_t> image_ids;
+  std::copy_if(removal.image_ids.begin(), removal.image_ids.end(), std::back_inserter(image_ids),
+               [](image_id_t image_id) { return image_id != 0; });
+  image_pool_service_->RemoveBatch(image_ids);
   const auto status = image_pool_service_->SyncWithStorage();
   if (!status.failed_images_.empty()) {
     const auto& failure = status.failed_images_.front();
@@ -753,8 +755,12 @@ auto MountService::ListMounts() const -> std::vector<MountSummary> {
   for (auto& record : mounts.ReadMountRoots()) {
     MountSummary summary;
     for (const auto& source : mounts.ReadSourceFilesOfMount(record.id)) {
-      ++(source.state == SourceFileState::kMissing ? summary.missing_count : summary.present_count);
+      (source.state == SourceFileState::kMissing ? summary.missing_element_ids
+                                                 : summary.present_element_ids)
+          .push_back(source.element_id);
     }
+    summary.present_count = summary.present_element_ids.size();
+    summary.missing_count = summary.missing_element_ids.size();
     {
       std::lock_guard lock(reachability_mutex_);
       if (const auto it = reachability_.find(record.id); it != reachability_.end()) {

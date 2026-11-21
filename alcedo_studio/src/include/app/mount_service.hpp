@@ -84,6 +84,12 @@ struct MountSummary {
   std::size_t       present_count = 0;
   /// Mounted files whose source record is missing.
   std::size_t       missing_count = 0;
+  /// The mounted files whose source record is present, in ascending element id order. The
+  /// Library disables Remove from Library for them (Mounted Folder Plan, section 2.3).
+  std::vector<sl_element_id_t> present_element_ids = {};
+  /// The mounted files whose source record is missing, in ascending element id order. Their
+  /// tiles show the missing state.
+  std::vector<sl_element_id_t> missing_element_ids = {};
 };
 
 /// How a scan ended.
@@ -174,6 +180,7 @@ using MountEditDataRemoval = std::function<void(std::span<const sl_element_id_t>
 /// The photos that RemoveMissingPhotos removed.
 struct MountMissingPhotoRemoval {
   std::vector<sl_element_id_t> element_ids;
+  /// The image of each element of @ref element_ids, at the same index; 0 when it had none.
   std::vector<image_id_t>      image_ids;
 };
 

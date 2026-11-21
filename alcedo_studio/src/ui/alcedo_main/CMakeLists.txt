@@ -210,6 +210,7 @@ add_library(AlbumBackendLib STATIC
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_comparison_controller.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/system_icon_image_provider.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/folder_controller.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/folder_controller_mount.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/stats_engine.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/search_controller.cpp"
