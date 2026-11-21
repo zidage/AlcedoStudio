@@ -22,8 +22,10 @@
 #include <cstdint>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
+#include <json.hpp>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -35,6 +37,7 @@
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "storage/store/storage_maintenance.hpp"
 #include "support/test_temp_directory.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/mount_directory_watcher.hpp"
@@ -171,8 +174,9 @@ class CountingScanPort final : public MountScanPort {
     }
     if (stop_requested.load()) {
       saw_stop_request_ = true;
-      MountScanResult result;
-      result.status = MountScanStatus::kCanceled;
+      // The counts of the next result are the batches that the scan stored before the stop.
+      MountScanResult result = next_result_;
+      result.status          = MountScanStatus::kCanceled;
       return result;
     }
     auto result = next_result_;
@@ -182,6 +186,21 @@ class CountingScanPort final : public MountScanPort {
       on_progress(MountScanProgress{result.imported_count, result.imported_count});
     }
     return result;
+  }
+
+  auto SaveProject() -> bool override {
+    std::lock_guard lock(mutex_);
+    ++save_count_;
+    return !fail_saves_;
+  }
+
+  void FailSaves() {
+    std::lock_guard lock(mutex_);
+    fail_saves_ = true;
+  }
+  auto SaveCount() -> int {
+    std::lock_guard lock(mutex_);
+    return save_count_;
   }
 
   void HoldScans() {
@@ -234,7 +253,9 @@ class CountingScanPort final : public MountScanPort {
   bool                      in_batch_         = false;
   bool                      scan_is_held_     = false;
   bool                      saw_stop_request_ = false;
+  bool                      fail_saves_       = false;
   int                       scan_count_       = 0;
+  int                       save_count_       = 0;
   std::vector<mount_id_t>   scanned_;
   std::vector<bool>         find_moved_volume_;
   MountScanResult           next_result_;
@@ -578,6 +599,74 @@ TEST_F(MountScanCoordinatorTest, UserCancelEndsTheScanWithoutAnotherScan) {
             QStringLiteral("canceled"));
 }
 
+TEST_F(MountScanCoordinatorTest, ScanSavesTheProjectOnlyWhenItStoredChanges) {
+  // #1015: an automatic scan wrote new rows and did not save the project file.
+  StartAndWaitForTheOpenScan();
+  EXPECT_EQ(port_->SaveCount(), 0) << "an unchanged scan saves nothing";
+
+  MountScanResult imported;
+  imported.imported_count = 3;
+  port_->SetNextResult(imported);
+  watcher_->Notify(kMount);
+  clock_->Advance(seconds(5));
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_EQ(port_->SaveCount(), 1);
+
+  // A file that could not be imported writes no row; the next scan tries it again.
+  MountScanResult import_failed;
+  import_failed.import_failed_count = 1;
+  port_->SetNextResult(import_failed);
+  coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_EQ(port_->SaveCount(), 1);
+
+  MountScanResult folders_only;
+  folders_only.folders_removed_count = 1;
+  port_->SetNextResult(folders_only);
+  coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
+  ASSERT_TRUE(WaitForScans(4));
+  EXPECT_EQ(port_->SaveCount(), 2);
+}
+
+TEST_F(MountScanCoordinatorTest, StoppedScanSavesItsStoredBatchesBeforeItsWorkerEnds) {
+  // The close, the load, and the exit save after the worker ended; the save of the scan runs
+  // before that end, so the two saves never run at once.
+  StartAndWaitForTheOpenScan();
+  MountScanResult stored;
+  stored.imported_count = 2;
+  port_->SetNextResult(stored);
+  port_->HoldInBatch();
+  coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+
+  const auto worker_ended = coordinator_->BeginStop();
+  ASSERT_TRUE(worker_ended.valid());
+  EXPECT_EQ(port_->SaveCount(), 0);
+
+  port_->ReleaseScans();
+  ASSERT_EQ(worker_ended.wait_for(seconds(20)), std::future_status::ready);
+  EXPECT_EQ(port_->SaveCount(), 1);
+  ASSERT_TRUE(WaitUntil([this] { return !coordinator_->HasStoppedWorker(); }));
+}
+
+TEST_F(MountScanCoordinatorTest, FailedSaveEndsTheTaskFailed) {
+  StartAndWaitForTheOpenScan();
+  port_->FailSaves();
+  MountScanResult imported;
+  imported.imported_count = 1;
+  port_->SetNextResult(imported);
+  watcher_->Notify(kMount);
+  clock_->Advance(seconds(5));
+  ASSERT_TRUE(WaitForScans(2));
+
+  EXPECT_EQ(port_->SaveCount(), 1);
+  const auto tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 1U);
+  EXPECT_EQ(tasks[0].value(QStringLiteral("state")).toString(), QStringLiteral("failed"));
+  EXPECT_EQ(tasks[0].value(QStringLiteral("detail")).toString(),
+            QStringLiteral("The project could not be saved."));
+}
+
 // ── Real directory, real project ────────────────────────────────────────────
 
 /// Encode a 24x16 JPEG whose pixels depend on @p seed.
@@ -654,11 +743,29 @@ TEST_F(MountScanCoordinatorProjectTest, FileAddedToTheDirectoryAppearsInTheLibra
   dependencies.clock   = std::move(clock);
   dependencies.watcher = CreatePlatformMountDirectoryWatcher();
   coordinator_         = std::make_unique<MountScanCoordinator>(std::move(dependencies));
-  coordinator_->Start(
-      std::make_shared<ProjectMountScanPort>(project_->GetMountService(), import_.get(), nullptr));
+  std::atomic<int> save_count{0};
+  coordinator_->Start(std::make_shared<ProjectMountScanPort>(
+      project_->GetMountService(), import_.get(), nullptr, [&](QString*) {
+        ++save_count;
+        project_->SaveProject(temp_dir_ / "project.json");
+        return true;
+      }));
   ASSERT_TRUE(WaitUntil([&] { return !coordinator_->HasPendingScans(); }));
   ProcessQueuedEvents();
   ASSERT_EQ(SummaryOf(mount_id).present_count, 1U);
+  // #1015: the project file holds start ids that no stored row reaches, with no user action.
+  EXPECT_EQ(save_count.load(), 1);
+  {
+    std::ifstream  in(temp_dir_ / "project.json");
+    nlohmann::json metadata;
+    ASSERT_TRUE(in.is_open());
+    in >> metadata;
+    const auto stored = project_->GetStorage()->Maintenance().ReadLargestStoredIds();
+    EXPECT_GT(stored.element_id, 0);
+    EXPECT_GT(stored.image_id, 0);
+    EXPECT_GE(metadata.at("start_id").get<int64_t>(), stored.element_id);
+    EXPECT_GE(metadata.at("image_pool_start_id").get<int64_t>(), stored.image_id);
+  }
   ASSERT_TRUE(coordinator_->IsWatched(mount_id));
   // The scan reads the files and writes nothing to the directory, so it starts no scan.
   ProcessQueuedEvents();
@@ -678,6 +785,7 @@ TEST_F(MountScanCoordinatorProjectTest, FileAddedToTheDirectoryAppearsInTheLibra
   ASSERT_EQ(tasks.size(), 2U);
   EXPECT_EQ(tasks.back().value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"));
   EXPECT_EQ(tasks.back().value(QStringLiteral("detail")).toString(), QStringLiteral("1 new"));
+  EXPECT_EQ(save_count.load(), 2);
 }
 
 }  // namespace

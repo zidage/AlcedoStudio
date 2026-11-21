@@ -759,8 +759,11 @@ void ApplicationModuleHost::SyncMountScans() {
             },
             Qt::QueuedConnection);
       };
+  // #1015: a scan that stored changes saves the project file on its worker, like the finalize
+  // step of a user import.
   mount_scans_->Start(std::make_shared<ProjectMountScanPort>(project->GetMountService(), importer,
-                                                             std::move(invalidate_thumbnail)));
+                                                             std::move(invalidate_thumbnail),
+                                                             handler.MakeSaveAndPackageJob()));
 }
 
 void ApplicationModuleHost::ShutdownModules() {

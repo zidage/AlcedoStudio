@@ -59,6 +59,12 @@ class MountScanPort {
   virtual auto ScanMount(mount_id_t mount_id, const std::atomic<bool>& stop_requested,
                          const std::function<void(const MountScanProgress&)>& on_progress,
                          bool find_moved_volume) -> MountScanResult = 0;
+  /**
+   * @brief Save the project file after a scan that stored changes (MountScanStoredChanges;
+   *        #1015). Called on the worker thread right after ScanMount, before the worker ends.
+   * @return false when the save failed. An exception counts as a failure.
+   */
+  virtual auto SaveProject() -> bool                                = 0;
 };
 
 /// The production port: MountService::ScanMount with the import service of the project.
@@ -66,18 +72,23 @@ class ProjectMountScanPort final : public MountScanPort {
  public:
   /// @param invalidate_thumbnail Called on the worker thread for each file that changed in
   ///        place, moved, or returned.
+  /// @param save_project ProjectHandler::MakeSaveAndPackageJob of the project: the metadata
+  ///        save and the package write, the step that ends a user import. Required.
   ProjectMountScanPort(std::shared_ptr<MountService> mounts, MountFileImporter* importer,
-                       std::function<void(sl_element_id_t)> invalidate_thumbnail);
+                       std::function<void(sl_element_id_t)> invalidate_thumbnail,
+                       std::function<bool(QString*)>        save_project);
 
   auto ListMounts() -> std::vector<MountSummary> override;
   auto ScanMount(mount_id_t mount_id, const std::atomic<bool>& stop_requested,
                  const std::function<void(const MountScanProgress&)>& on_progress,
                  bool find_moved_volume) -> MountScanResult override;
+  auto SaveProject() -> bool override;
 
  private:
   std::shared_ptr<MountService>        mounts_;
   MountFileImporter*                   importer_ = nullptr;
   std::function<void(sl_element_id_t)> invalidate_thumbnail_;
+  std::function<bool(QString*)>        save_project_;
 };
 
 /// Steady time and single-shot timers of the coordinator. A test advances the time by hand.
@@ -151,6 +162,13 @@ struct MountScanCoordinatorDependencies {
  * unmount; Mounted Folder Plan, MF6 and MF8) run on the same worker through RunMountOperation,
  * one at a time, before the next queued scan. The UI thread never waits for the operation lock of
  * MountService, which a scan holds for its whole length.
+ *
+ * Save (#1015): after a scan that stored changes (MountScanStoredChanges), the worker saves the
+ * project file through MountScanPort::SaveProject before it ends, also for a scan that a user
+ * cancel or BeginStop ended. One save per scan, not per batch. The project close, load, and exit
+ * already wait for the worker, so this save never runs next to their own save. An unchanged scan
+ * does not save. A failed save ends the task Failed with "The project could not be saved."; the
+ * stored changes stay in the database.
  *
  * After each scan that read the listing, the coordinator registers the directories of the
  * listing with the watcher. A mount whose registration fails is "not watched"; the other
@@ -296,9 +314,11 @@ class MountScanCoordinator final : public QObject {
   void HandleStoppedWorkerEnded(quint64 generation);
   void HandleScanProgress(quint64 generation, mount_id_t mount_id,
                           const MountScanProgress& progress);
-  void HandleScanEnded(quint64 generation, mount_id_t mount_id, const MountScanResult& result);
+  /// @param save_failed True when the scan stored changes and MountScanPort::SaveProject failed.
+  void HandleScanEnded(quint64 generation, mount_id_t mount_id, const MountScanResult& result,
+                       bool save_failed);
   void ReportScanEnd(const RunningScan& run, const MountState& state, const MountScanResult& result,
-                     MountReachability previous_reachability);
+                     MountReachability previous_reachability, bool save_failed);
   void UpdateWatch(mount_id_t mount_id, MountState& state, const MountScanResult& result);
   auto RegisterTask(const MountState& state, const QString& detail, int progress_percent)
       -> QString;
@@ -332,5 +352,14 @@ auto MountScanResultDetail(const MountScanResult& result) -> QString;
 
 /// True when the scan changed a photo of the library or could not import one.
 auto MountScanChangedPhotos(const MountScanResult& result) -> bool;
+
+/**
+ * @brief True when the scan wrote a library change that the project file must hold (#1015).
+ *
+ * A new, adopted, moved, changed, returned, or missing photo, a folder added or removed, a
+ * relocated root, or a failed batch (batches before it can be stored). A file that the scan could
+ * not import writes no row, and the next scan tries it again, so it alone does not count.
+ */
+auto MountScanStoredChanges(const MountScanResult& result) -> bool;
 
 }  // namespace alcedo::ui

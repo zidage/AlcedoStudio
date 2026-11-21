@@ -61,7 +61,9 @@ A scan runs at these times:
 - when you choose **Synchronize** in the menu of the mount root.
 
 A scan that changes the library shows a task with its counts, for example `12 new, 3 moved,
-1 missing`.
+1 missing`. At its end, the scan saves the project file once, as an import does. A scan that
+changes nothing leaves the project file as it is. When the save fails, the task shows
+`The project could not be saved.`; the changes stay in the library, and the next save writes them.
 
 Alcedo Studio recognizes a moved file by its source fingerprint: a hash of the first and the last
 block of the file, with its byte size. A file that another application rewrites at its start or
