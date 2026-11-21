@@ -124,7 +124,8 @@ auto ExportCounts(const ui::ImportExportHandler& import_export) -> QJsonObject {
                      {"skipped", import_export.ExportSkipped()}};
 }
 
-/// The photos of the last export run and their state (queued, running, succeeded, failed).
+/// The photos of the last export run and their state (queued, running, succeeded, failed,
+/// missing).
 auto ExportItems(const ui::ImportExportHandler& import_export) -> QJsonArray {
   QJsonArray items;
   const auto statuses = import_export.ExportItemStatuses();

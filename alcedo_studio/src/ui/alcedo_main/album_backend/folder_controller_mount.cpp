@@ -19,7 +19,6 @@
 #include <utility>
 #include <vector>
 
-#include "app/export_service.hpp"
 #include "app/image_pool_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "image/image.hpp"
@@ -341,17 +340,13 @@ auto FolderController::StartRemoveMissingPhotos(
   auto  mounts  = ph.project()->GetMountService();
   auto  removal = std::make_shared<MountMissingPhotoRemoval>();
   mount_scans_->RunMountOperation(
-      [mounts, mount_id, removal, pipelines = ph.pipeline_service(),
-       exports = ph.export_service()] {
+      [mounts, mount_id, removal, pipelines = ph.pipeline_service()] {
         *removal = mounts->RemoveMissingPhotos(mount_id,
                                                [&pipelines](std::span<const sl_element_id_t> ids) {
                                                  if (pipelines) {
                                                    pipelines->DeletePipelines(ids);
                                                  }
                                                });
-        if (exports) {
-          exports->RemoveExportTasks(removal->element_ids);
-        }
       },
       [this, removal, done = std::move(done)](std::exception_ptr error) {
         for (std::size_t index = 0; index < removal->element_ids.size(); ++index) {

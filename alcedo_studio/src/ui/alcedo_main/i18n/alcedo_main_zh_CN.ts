@@ -5804,11 +5804,16 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
     <message>
         <location line="+2"/>
+        <source>Missing</source>
+        <translation>文件缺失</translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Queued</source>
         <translation>已排队</translation>
     </message>
     <message>
-        <location line="+148"/>
+        <location line="+149"/>
         <source>Quality</source>
         <translation>质量</translation>
     </message>

@@ -37,6 +37,17 @@ auto ImagePoolService::CreateAndReturnPinned(const std::function<void(Image&)>& 
   return handle;
 }
 
+auto ImagePoolService::Contains(image_id_t image_id) -> bool {
+  std::unique_lock lock(pool_lock_);
+  if (!pool_manager_) {
+    throw std::runtime_error("[ERROR] ImagePoolService: Pool manager is not initialized.");
+  }
+  if (const auto img = pool_manager_->GetImage(image_id)) {
+    return img->GetSyncState() != ImageSyncState::DELETED;
+  }
+  return storage_->GetImageStore().GetImageById(image_id) != nullptr;
+}
+
 void ImagePoolService::Remove(image_id_t image_id) {
   std::unique_lock lock(pool_lock_);
   if (!pool_manager_) {

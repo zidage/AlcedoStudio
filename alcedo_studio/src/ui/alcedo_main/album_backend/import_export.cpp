@@ -73,6 +73,14 @@ auto ExportStatusKey(const sl_element_id_t elementId, const image_id_t imageId) 
          QString::number(static_cast<qulonglong>(imageId));
 }
 
+/// The exportItemStatuses value of a finished task.
+auto ExportItemStatus(bool succeeded, bool source_missing) -> QString {
+  if (succeeded) {
+    return QStringLiteral("succeeded");
+  }
+  return source_missing ? QStringLiteral("missing") : QStringLiteral("failed");
+}
+
 }  // namespace
 
 ImportExportHandler::ImportExportHandler(ProjectModule* project, LibraryModule* library,
@@ -706,9 +714,9 @@ void ImportExportHandler::RenderQueuedExport(int skippedCount) {
                   state_changed = true;
                 }
                 if (progress.task_finished_) {
-                  self->export_item_statuses_.insert(status_key, progress.task_success_
-                                                                     ? QStringLiteral("succeeded")
-                                                                     : QStringLiteral("failed"));
+                  self->export_item_statuses_.insert(
+                      status_key,
+                      ExportItemStatus(progress.task_success_, progress.task_source_missing_));
                   state_changed = true;
                 }
               }
@@ -1109,6 +1117,13 @@ auto ImportExportHandler::BuildExportQueue(
   for (size_t target_index = 0; target_index < targets.size(); ++target_index) {
     const auto [elementId, imageId] = targets[target_index];
     try {
+      // A photo that left the project still joins the run, as a task that reports it missing.
+      if (!proj->GetImagePoolService()->Contains(imageId)) {
+        esvc->EnqueueMissingPhotoTask(elementId, imageId);
+        ++summary.queued_count_;
+        summary.queued_targets_.emplace_back(elementId, imageId);
+        continue;
+      }
       const auto source_info =
           proj->GetImagePoolService()
               ->Read<std::tuple<std::filesystem::path, std::wstring, bool,

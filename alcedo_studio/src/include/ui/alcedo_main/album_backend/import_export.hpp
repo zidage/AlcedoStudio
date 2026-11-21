@@ -219,6 +219,9 @@ class ImportExportHandler final : public QObject {
   [[nodiscard]] auto export_error_summary() const -> QString {
     return export_error_summary_text_.Render();
   }
+  /// The state of each photo of the last export run, keyed "elementId:imageId": queued, running,
+  /// succeeded, failed, or missing (the photo is not in the project or its source file does not
+  /// exist; the other photos of the run export as usual).
   [[nodiscard]] auto ExportItemStatuses() const -> QVariantMap { return export_item_statuses_; }
   [[nodiscard]] auto export_item_statuses() const -> QVariantMap { return export_item_statuses_; }
   /// The number of the export run that ExportItemStatuses describes: 0 before the first run,

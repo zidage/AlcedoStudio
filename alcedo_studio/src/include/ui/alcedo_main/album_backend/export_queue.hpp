@@ -26,7 +26,8 @@ namespace alcedo::ui {
 ///   run has a status for the entry (ImportExportHandler::exportItemStatuses). Only the entries
 ///   of the current run show a run status; every other entry is queued for the next export.
 /// - An entry leaves the queue when its run reports it as succeeded or failed, when its element
-///   is deleted, and when the project changes.
+///   is deleted, and when the project changes. An entry that its run reports as missing stays in
+///   the queue with that status, and joins the next export run again.
 class ExportQueue final : public QObject {
   Q_OBJECT
   Q_PROPERTY(int count READ Count NOTIFY QueueChanged)
@@ -73,7 +74,8 @@ class ExportQueue final : public QObject {
 
   /// Applies the export state of ImportExportHandler: when @p run_id is a new run, the entries
   /// with a status in @p statuses join it; then the entries of the run whose status is
-  /// succeeded or failed leave the queue. Called on ImportExportHandler::ExportStateChanged.
+  /// succeeded or failed leave the queue, and the missing ones stay. Called on
+  /// ImportExportHandler::ExportStateChanged.
   void                     ApplyExportState(quint64 run_id, const QVariantMap& statuses);
 
  signals:
