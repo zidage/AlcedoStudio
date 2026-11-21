@@ -365,7 +365,7 @@ stop request
 | --- | --- | --- | --- | ---: | --- |
 | MF1 #983 | Mount record, element mount id, source file record | Storage, sleeve element | none | 900 to 1300 | implemented |
 | MF2 #984 | Fingerprint, volume identity, directory listing | Source file utilities | none | 800 to 1200 | implemented |
-| MF3 #985 | Scan change list | Scan change list | MF1, MF2 | 900 to 1400 | planned |
+| MF3 #985 | Scan change list | Scan change list | MF1, MF2 | 900 to 1400 | implemented |
 | MF4 #986 | Mount service: create, scan, adopt, apply, unmount | Mount service, sleeve service | MF3 | 1400 to 1900 | planned |
 | MF5 #987 | Read-only structure | Sleeve service, import, automation | MF1 | 600 to 1000 | planned |
 | MF6 #988 | Library panel and thumbnail states | Library panel, folder controller | MF4, MF5 | 1300 to 1800 | planned |
@@ -797,12 +797,117 @@ fingerprint error for a listed file -> the file is in no list -> unreadable_coun
 
 **Exit criteria.**
 
-- [ ] Each test compares the complete returned change list with the expected list.
-- [ ] The function has no include of a storage, sleeve service, or Qt header.
+- [x] Each test compares the complete returned change list with the expected list.
+- [x] The function has no include of a storage, sleeve service, or Qt header. The header includes
+      `type/mount_records.hpp`, `type/type.hpp`, and the two MF2 headers; the source includes
+      the standard library only.
 
-**Expected diff.** 900 to 1400 lines.
+**Expected diff.** 900 to 1400 lines. Actual: 977 added lines of code in 5 files, of which 493 are tests.
 
-**Completion record.** Section 13 template. Empty.
+**Decisions made during the work.** The plan did not specify these details. Each one agrees with
+the approved decisions.
+
+- Fingerprint reads: the function also reads the fingerprint of a listed file whose byte size or
+  modification time differs from its record (changed in place, and returned with new values).
+  The source record gets the values of the file (section 2.4), and a stored fingerprint of the
+  old content would make a later move of that file unmatchable (D2). An unchanged file and a
+  returned file with its recorded values are not read. A lost record contributes its stored
+  fingerprint.
+- A record whose `fingerprint_version` is not `kSourceFileFingerprintVersion` matches no new
+  path. A match key is the hash and the version.
+- A missing record takes part in the match like a present record: its file at a new path is a
+  move, and the source record becomes present. A missing record with no match is counted in
+  `still_missing_count` and is in no list, because it needs no write.
+- Adoption input: `MountScanOrdinaryFile` holds the element id and the relative path below the
+  root, with `/` and names in NFC. MountService (MF4) converts `Image.image_path`, because the
+  conversion needs the root directory and Qt. An adopted file is fingerprinted, because the apply
+  step writes its source record. Adoption runs before the fingerprint match, so the path
+  identifies an ordinary photo before a lost record can claim the file.
+- Name match: a record takes the first unmatched path, in sorted order, with an equal last
+  element name. The comparison is exact, so a case-only rename is a move and not a same-name
+  match.
+- A listed file whose fingerprint cannot be read is in no list and is counted in
+  `unreadable_count`. Its record, if any, stays as it is.
+- Unreadable directories (`MountDirectoryListing::unreadable_directories`): a record with no
+  listed file below such a directory is unverified (`unverified_count`). It does not become
+  missing and it matches no path. A new path with the fingerprint of an unverified record is
+  deferred (`deferred_count`) and is in no list, so a file that the listing could not see does
+  not become a second photo (P5 applies only when the first file is known to be present). A
+  folder at or below an unreadable directory stays.
+- Folder rule: `folders_to_add` holds each directory above a listed file that has no folder
+  record. `MountDirectoryListing::directories` is not read, because a directory with no
+  supported file at any depth gets no folder (section 2.4). A folder record is removed when it
+  is above no listed file, no missing photo, and no unverified record. This is the MF3 step 6
+  rule "keep a folder that will hold a missing photo". It takes precedence over the sentence of
+  section 2.4 that removes a folder after its elements became missing; the nearest-ancestor rule
+  then applies only when MF4 finds no folder for a missing photo.
+- Sort order: each file list by relative path (the new path of a move), `missing` then by element
+  id. `folders_to_add` in ascending order, so a parent precedes its children;
+  `folders_to_remove` in descending order, so a child precedes its parent.
+- Two records at one relative path: the lower element id keeps the path, and the other record is
+  lost. The tree does not produce this state; the rule keeps the output deterministic.
+- A listing that is not complete (`kRootUnreachable`, `kStopped`) gives an empty change list and
+  no fingerprint read (D5).
+- The library is `MountScanChangeList` (`app/CMakeLists.txt`), with `SourceFileUtils` as its
+  only dependency. The test target is `MountScanChangeListTest`, labels `ci_core_flow` and
+  `mounted_folder`, categories `app` and `ci_core`.
+- Tests added to the plan list: `FileWithNewModificationTimeIsChangedInPlace` also covers a new
+  byte size; `RecordsWithOneFingerprintAndNoSameNameMatchInSortedPathOrder`,
+  `MissingRecordWithItsFileAtANewPathIsMoved`, `UnreadableFileIsInNoListAndKeepsItsRecord`,
+  `RecordBelowAnUnreadableDirectoryIsUnverifiedAndMatchesNoNewPath`,
+  `RecordWithAnotherFingerprintVersionMatchesNoNewPath`,
+  `IncompleteListingGivesNoChangesAndReadsNoFile`, and
+  `FileMatchesOneRuleOnlyAndListsAreSortedByPath`. `MissingRecordWithFileAtItsPathReturns`
+  covers a return with the recorded values (no read) and with new values (one read). The copy
+  tests use two and three files with equal content.
+
+**Completion record.**
+
+```text
+Phase / date / status: MF3 / 2026-11-20 / implemented, pull request open
+Source revision and branch: 5fe3507c0 (MF2, pull request #995) + this phase,
+  feature/mount-scan-change-list
+Actual changed modules: scan change list (new library MountScanChangeList under app),
+  application tests (MountScanChangeListTest)
+Implemented behavior: BuildMountScanChangeList(records, listing, fingerprint) returns
+  changed_in_place, moved, new_files, missing, returned, adopted, folders_to_add,
+  folders_to_remove, and the counts unchanged, still missing, unreadable, unverified, and
+  deferred, by the rules of section 2.4 and the decisions above
+Explicitly unimplemented items: none of MF3. The apply step, the read of the records from
+  storage, and the conversion of image_path to a relative path are MF4.
+Primary success call chain:
+  BuildMountScanChangeList -> sort records by (relative path, element id) -> record_at_path
+    -> join listing.files by relative path -> unchanged | changed_in_place (fingerprint)
+       | returned (stored fingerprint or fingerprint)
+    -> lost records -> unverified (below an unreadable directory) | fingerprint groups
+    -> new paths -> fingerprint -> adopted (ordinary_at_path, lowest id) | fingerprint groups
+    -> MatchGroup: same file name, then sorted path -> moved; rest -> new_files | deferred;
+       records -> missing | still missing
+    -> folders: parents of listed files vs folder records, protected parents of missing and
+       unverified records -> folders_to_add (ascending), folders_to_remove (descending)
+    -> sort each file list by relative path
+Primary failure and restore call chain:
+  listing not complete -> empty change list, no fingerprint read -> caller makes no change (D5)
+  fingerprint error for a listed file -> the file is in no list -> unreadable_count + 1
+    -> the record stays -> the next scan reads the file again
+  directory below the root unreadable -> its lost records are unverified, its folders stay
+    -> a new path with their fingerprint is deferred -> the next complete listing decides
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target MountScanChangeListTest
+    --parallel 4 -> 0
+  ctest --test-dir build/debug -R "MountScanChangeListTest" -> 0
+  Linux (WSL alcedo-arch, GCC 16.2.1, gtest 1.18): g++ -std=c++20 -Wall -Wextra -Werror of the
+    source and the test file -> 0; test binary -> 0
+  Mutation check: the same-name pass of MatchGroup disabled -> TwoRecordsWithOneFingerprint
+    MatchBySameNameFirst fails with the two moves swapped; source restored
+Discovered / passed / failed / skipped counts:
+  Windows debug: 21 / 21 / 0 / 0; Linux: 21 / 21 / 0 / 0
+Manual verification: none required by MF3
+Performance or resource evidence, if required: not required
+Evidence path: none kept; the Linux build ran in /tmp/mf3_build and was removed
+Remaining defects or unavailable platforms: no Linux CI job exists; the macOS result is the macOS
+  CI job of the pull request (alcedo_tests_ci_core)
+```
 
 ### MF4. Mount service
 
