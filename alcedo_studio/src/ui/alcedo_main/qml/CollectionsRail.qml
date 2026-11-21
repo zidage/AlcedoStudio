@@ -24,6 +24,12 @@ Rectangle {
     radius: appTheme.panelRadius
     color: theme ? theme.colBgPanel : appTheme.bgPanelColor
 
+    // Icon ink of a rail button: muted, as the editor side panel icons; selection and hover
+    // brighten it.
+    function iconInk(selected, hovered) {
+        return selected || hovered ? appTheme.textColor : appTheme.textMutedColor
+    }
+
     onPeekHoveredChanged: {
         if (peekHovered) {
             peekTimer.restart()
@@ -54,7 +60,12 @@ Rectangle {
             compact: true
             actionName: qsTr("Search")
             iconSrc: "qrc:/panel_icons/search.svg"
+            iconColorDefault: rail.iconInk(false, searchHover.hovered)
             onClicked: rail.searchRequested()
+
+            HoverHandler {
+                id: searchHover
+            }
         }
 
         IconActionButton {
@@ -63,7 +74,12 @@ Rectangle {
             compact: true
             actionName: qsTr("Background Tasks")
             iconSrc: "qrc:/panel_icons/clock-play.svg"
+            iconColorDefault: rail.iconInk(false, tasksHover.hovered)
             onClicked: rail.backgroundTasksRequested()
+
+            HoverHandler {
+                id: tasksHover
+            }
         }
 
         Rectangle {
@@ -82,6 +98,7 @@ Rectangle {
             selected: rail.allPhotosSelected
             actionName: qsTr("All Photos")
             iconSrc: "qrc:/panel_icons/image.svg"
+            iconColorDefault: rail.iconInk(rail.allPhotosSelected, allPhotosHover.hovered)
             onClicked: rail.allPhotosRequested()
 
             HoverHandler {
@@ -96,6 +113,7 @@ Rectangle {
             selected: !rail.allPhotosSelected
             actionName: qsTr("Collections")
             iconSrc: "qrc:/panel_icons/folder.svg"
+            iconColorDefault: rail.iconInk(!rail.allPhotosSelected, collectionsHover.hovered)
             onClicked: rail.peekRequested()
 
             HoverHandler {

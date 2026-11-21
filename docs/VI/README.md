@@ -487,6 +487,10 @@ labels.
   `collectionsTreeGuideColor`; the guide of the collection that holds the
   selection in `collectionsTreeGuideActiveColor`. On hover the more button
   (`dots.svg`) takes the place of the count.
+- Every icon of the sidebar and its rail (navigation rows, tree rows, sort,
+  New collection, more button) is `textMutedColor`, as the editor side panel
+  icons; selection or hover makes it `textColor`. The Import button keeps its
+  filled-action ink. No pure white icon.
 - The new-collection name field has a 1 px `textMutedColor` focus border and a
   neutral text selection.
 - Import is the neutral filled action: `editorListSelectedFillColor` fill

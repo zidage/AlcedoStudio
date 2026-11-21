@@ -988,14 +988,16 @@ ColumnLayout {
                         contentItem: Item {
                             implicitWidth: 24
                             implicitHeight: 24
-                            Image {
+                            // Idle icons are muted, as in the editor side panels.
+                            IconImage {
                                 anchors.centerIn: parent
                                 width: 14
                                 height: 14
                                 source: "qrc:/panel_icons/sort.svg"
-                                sourceSize.width: 14
-                                sourceSize.height: 14
-                                fillMode: Image.PreserveAspectFit
+                                sourceSize: Qt.size(14, 14)
+                                color: sortButton.hovered || panel.sortDescending
+                                       ? appTheme.textColor
+                                       : appTheme.textMutedColor
                                 rotation: panel.sortDescending ? 180 : 0
 
                                 Behavior on rotation {
@@ -1044,14 +1046,15 @@ ColumnLayout {
                         contentItem: Item {
                             implicitWidth: 24
                             implicitHeight: 24
-                            Image {
+                            IconImage {
                                 anchors.centerIn: parent
                                 width: 14
                                 height: 14
                                 source: "qrc:/panel_icons/folder-plus.svg"
-                                sourceSize.width: 14
-                                sourceSize.height: 14
-                                fillMode: Image.PreserveAspectFit
+                                sourceSize: Qt.size(14, 14)
+                                color: addCollectionButton.hovered || panel.draftParentFolderId >= 0
+                                       ? appTheme.textColor
+                                       : appTheme.textMutedColor
                             }
                         }
 
@@ -1204,8 +1207,9 @@ ColumnLayout {
                             sourceSize: Qt.size(panel.treeIconSize, panel.treeIconSize)
                             source: folderRow.mountRoot ? "qrc:/panel_icons/folder-symlink.svg"
                                                         : "qrc:/panel_icons/folder.svg"
-                            color: folderRow.mountRoot ? appTheme.textColor
-                                                       : appTheme.textMutedColor
+                            // Muted as the editor side panel icons; the selected row brightens it.
+                            color: folderRow.selected ? appTheme.textColor
+                                                      : appTheme.textMutedColor
                             opacity: folderRow.mountOffline ? 0.45 : 1.0
                         }
 
@@ -1272,7 +1276,9 @@ ColumnLayout {
                                 height: 16
                                 sourceSize: Qt.size(16, 16)
                                 source: "qrc:/panel_icons/dots.svg"
-                                color: appTheme.textColor
+                                color: folderRow.menuOpen || treeMouse.moreHoverIndex === folderRow.index
+                                       ? appTheme.textColor
+                                       : appTheme.textMutedColor
                             }
                         }
                         Loader {
@@ -1719,7 +1725,9 @@ ColumnLayout {
                 Layout.alignment: Qt.AlignVCenter
                 sourceSize: Qt.size(16, 16)
                 source: navRow.iconSource
-                color: appTheme.textColor
+                // Muted as the editor side panel icons; selection and hover brighten it.
+                color: navRow.selected || navMouse.containsMouse ? appTheme.textColor
+                                                                 : appTheme.textMutedColor
             }
 
             Label {
