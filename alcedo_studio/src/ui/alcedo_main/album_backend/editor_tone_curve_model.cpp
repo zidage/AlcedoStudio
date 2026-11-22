@@ -159,13 +159,13 @@ auto EditorToneCurveModel::presetId() const -> QString {
 }
 
 auto EditorToneCurveModel::applyPreset(const QString& id) -> bool {
-  const auto* preset = alcedo::FindToneCurvePreset(id.toStdString());
-  if (preset == nullptr || dragActive_) {
+  if (dragActive_) {
     return false;
   }
+  const auto& preset = alcedo::ResolveToneCurvePreset(id.toStdString());
   settlePendingKeyMoves();
   SetSelectedIndexInternal(-1);
-  if (ReplaceChannelPoints(channel_, PresetControlPoints(*preset))) {
+  if (ReplaceChannelPoints(channel_, PresetControlPoints(preset))) {
     CommitSettled();
   }
   return true;

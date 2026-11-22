@@ -135,44 +135,49 @@ still opens, the combo shows the stored name in the warning color, and the user 
 entry. When the library file of the identity has another fingerprint, the library file renders and
 the reference takes its fingerprint.
 
-The `ProfileToneCurve` of a DCP profile (tag 50940) applies through the profile tone stage
+The `ProfileToneCurve` of a DCP profile (tag 50940) reaches the render as points of the RGB curve
+of Color Grade 1, in the Tone Curve section, where the user sees and edits it
 ([DCP Profile Tone Curve Study](roadmap/alcedo_studio/raw-processing/dcp_profile_tone_curve_study.md),
-section 6). Its symbols:
+section 11, #911). Its symbols:
 
-- `x` is the AP1 scene-linear RGB at the entry of the display transform, after every grade.
-- `M` is the camera-pass matrix pair from AP1 to linear ProPhoto RGB (D50).
+- `x` is the curve input on the ACEScc axis of the Tone Curve, and `v(x)` its scene value.
 - `E_a` is the exposure anchor, 1.5 EV: Alcedo +1.5 EV renders mid grey as ACR 0 EV.
 - `C` is the profile curve as a 4097-entry spline table.
-- `H` is the highlight shoulder at the curve input: identity up to the knee `k` = 0.5 (one stop
+- `H` is the highlight shoulder at the input of `C`: identity up to the knee `k` = 0.5 (one stop
   below raw white), then `1 - (1 - k)^2 / (v + 1 - 2k)` for an input `v`. It has slope 1 at the
   knee and stays below 1, so raw white maps to 0.75 and each further stop halves the distance to
   the curve's white.
 - `N_m^-1` is the inverse neutral response of DRT method `m` (ACES 2.0 or OpenDRT) at its
   default parameters on a 100-nit SDR reference display.
 
-Per pixel, the stage computes `M^-1 * N_m^-1(R_C(H(M * x * 2^-E_a)))`, with `H` per channel and
-negative channels at 0, where `R_C` is the DNG SDK baseline RGB tone with `C`. The DRT then
-renders the result, so the DRT maps tone once. A neutral below the knee renders the profile curve
-on the reference display. Scene light above raw white, from a higher exposure or from highlight
-reconstruction, rolls toward display white and keeps its gradation in place of a clip at raw
-white (study section 6.6). CUDA, OpenCL, and Metal compile
-one implementation (`profile_tone_gpu_math.h`). The stage runs when the reference is bound, its
-profile has the curve, the Develop key `camera_profile_file.profile_tone` is true (the default;
-the key is written only as `false`), and the DRT method is ACES 2.0 or OpenDRT. Film Print and
-Negative Scan render without it.
+The target output of the RGB curve is `y_t(x) = ACEScc(N_m^-1(C(H(v(x) * 2^-E_a))))`: through the
+DRT, a neutral renders the profile curve on the reference display, so the DRT maps tone once.
+`FitProfileToneCurve` (`edit/runtime/profile_tone_curve_import.hpp`) fits at most 16 points of the
+Tone Curve spline to it. Over the 1390 distinct curves of a 2445-file DCP folder the largest error
+is 0.83 CIE L* of display light (median 0.20), below a just noticeable difference. The RGB curve works per channel on ACEScc AP1; colors therefore differ from
+the DNG SDK baseline RGB tone on ProPhoto by about as much as the earlier stage at the DRT entry
+did (study section 11).
 
-In the editor, the switch **Tone Curve** under the Camera Profile combo sets `profile_tone`. A
-profile tone entry, a settled edit after which the stage runs and before which it stayed out,
-writes the identity RGB curve and saturation 1.0 of Color Grade 1 in the same Undo step, each while it
-still holds the RAW import default (the Film-like curve, saturation 1.3). A document imported
-before the Film-like curve (#891) holds contrast 15 instead, and the entry writes contrast 0.
-Exposure stays.
+In the editor, the switch **Tone Curve** under the Camera Profile combo sets the Develop key
+`camera_profile_file.profile_tone` (true by default; the key is written only as `false`). The RGB
+curve follows the profile curve while the reference is bound, its profile has the curve, the
+switch is on, and the DRT method is ACES 2.0 or OpenDRT:
+
+- An entry (a profile selection, the switch turned on, or a change from Film Print) writes the
+  fitted points into the RGB curve, and saturation 1.0 of Color Grade 1 while it still holds the
+  RAW import default 1.3, in the same Undo step. A document imported before the Film-like curve
+  (#891) holds contrast 15 instead, and the entry writes contrast 0. Exposure stays.
+- A change of profile or of method (ACES 2.0 and OpenDRT have different fits) moves an RGB curve
+  that still has the earlier fitted points.
+- An exit (the switch turned off, the default entry, or Film Print) puts the RAW import curve back
+  on such a curve: Film-like, or the identity on Film Print.
+- A curve that the user edited stays in a change and an exit.
 
 ## Scope and verification
 
 This support covers the single/dual-illuminant color path described above, from an embedded DNG
 profile or a DCP file. Alcedo renders through its own output transform; a DCP tone curve enters
-through the profile tone stage. Outside this scope: triple-illuminant profiles, the
+as points of the RGB curve. Outside this scope: triple-illuminant profiles, the
 `ProfileToneCurve` of an embedded DNG profile, the ACR3 default curve, and Adobe process-version
 rendering. A DCP file with `ColorMatrix3`, `RGBTables`, or a `ReductionMatrix` fails to load with
 an error that names the tag. The DCP reference is outside adjustment transfer, copy and paste, and
@@ -204,9 +209,9 @@ library scan and match, the effective profile, the binding on each load path, an
 list. Test DCP files come from `tests/image/dcp_test_file_writer.hpp`; no vendor profile bytes
 enter the repository.
 
-`DngToneCurveTest`, `ProfileToneReferenceTest`, and the `ProfileTone` fixtures of the CUDA,
-OpenCL, and Metal DRT suites check the curve, the stage, and its GPU renders.
-`EditorProfileToneEntryHistoryTest` checks the entry reset and its Undo step.
+`DngToneCurveTest` and `ProfileToneReferenceTest` check the curve, the neutral responses, and the
+fit of the RGB curve. `EditorProfileToneEntryHistoryTest` checks the entry, change, and exit
+writes and their Undo steps.
 
 Reference behavior was checked against Adobe's DNG SDK sources:
 [camera calibration](https://android.googlesource.com/platform/external/dng_sdk/+/refs/heads/android14-prebuilt-test/source/dng_color_spec.cpp),
@@ -217,17 +222,17 @@ and [table import](https://android.googlesource.com/platform/external/dng_sdk/+/
 
 | Symbol or parameter | Meaning | Unit | Value | Source |
 | --- | --- | --- | --- | --- |
-| `x` | AP1 scene-linear RGB at the display transform entry | relative scene light | per pixel | Alcedo |
-| `M` | AP1 to linear ProPhoto RGB (D50) | matrix | camera-pass matrix | Alcedo |
+| `x` | Curve input of the Tone Curve | ACEScc | 0 to 1 | Alcedo |
 | `E_a` | Exposure anchor between Alcedo and ACR | EV | 1.5 | Data, study section 3.3 |
 | `C` | Profile tone curve as a spline table | display light | 4097 entries on [0, 1] | DNG SDK |
 | `H` | Highlight shoulder at the curve input | ACR scale (raw white 1) | identity to `k`, limit 1 | Study section 6.6 |
 | `k` | Knee of `H` (`kProfileToneHighlightKnee`) | ACR scale | 0.5, one stop below raw white | Study section 6.6 |
-| `R_C` | Baseline RGB tone with `C` | display light | per pixel | DNG SDK `RefBaselineRGBTone` |
+| Fit goal | Error at which the fit stops adding points | CIE L* of display light | 0.2 | `kProfileToneCurveFitGoalLightness` |
+| Fit points | Largest number of points of the fitted curve | points | 16 | Tone Curve limit |
 | `N_m^-1` | Inverse neutral response of DRT method `m` | relative scene light | 4097 entries | Alcedo DRT, default parameters, 100 nits |
 | `profile_tone` | Develop key of `camera_profile_file`; written only as `false` | boolean | default true | Study section 6.3 |
-| Entry contrast | Contrast of Color Grade 1 after a profile tone entry | slider value | 0 | User decision, study section 6.5 |
-| Entry saturation | Saturation of Color Grade 1 after a profile tone entry | multiplier | 1.0 | User decision, study section 6.5 |
+| Entry contrast | Contrast of Color Grade 1 after a profile curve entry | slider value | 0 | User decision, study section 6.5 |
+| Entry saturation | Saturation of Color Grade 1 after a profile curve entry | multiplier | 1.0 | User decision, study section 6.5 |
 | RAW import curve | RGB curve of the Default document | Tone Curve preset | `film_like` | `kDefaultPipelineToneCurvePresetId` (#891) |
 | Earlier RAW import contrast | Contrast of a document imported before #891 | slider value | 15 | `kImportLookContrastBeforeFilmLike` |
 | RAW import saturation | Saturation of the Default document | multiplier | 1.3 | `kDefaultPipelineSaturation` |

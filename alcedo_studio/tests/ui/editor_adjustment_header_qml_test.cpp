@@ -77,6 +77,7 @@ class FakeMaskCreation final : public QObject {
     return !selected_mask_id_.isEmpty();
   }
   auto             finishCount() const -> int { return finish_count_; }
+  auto             beginCount() const -> int { return begin_count_; }
   auto             nudgeBeginCount() const -> int { return nudge_begin_count_; }
   auto             nudgeCount() const -> int { return nudge_count_; }
   auto             nudgeLastDx() const -> qreal { return nudge_last_dx_; }
@@ -129,6 +130,9 @@ class FakeMaskCreation final : public QObject {
 
  private:
   void Open(const QString& kind, bool creating) {
+    if (creating) {
+      ++begin_count_;
+    }
     active_           = true;
     creating_         = creating;
     tool_kind_        = kind;
@@ -148,6 +152,7 @@ class FakeMaskCreation final : public QObject {
   QString tool_kind_;
   QString selected_mask_id_;
   int     finish_count_          = 0;
+  int     begin_count_           = 0;
   int     analytic_finish_count_ = 0;
   bool    mask_enabled_          = true;
   bool    mask_invert_           = false;
@@ -1224,6 +1229,49 @@ TEST(EditorAdjustmentHeaderQmlTest, AddMaskOnUnlockedGradeStartsWithoutPrompt) {
   EXPECT_FALSE(prompt->property("visible").toBool());
   EXPECT_EQ(mask_creation.toolKind(), QStringLiteral("radial"));
   EXPECT_EQ(nodes.insertCount(), 0);
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, SameKindButtonOnDrawnMaskStartsNextMask) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  FakeAppModules     modules;
+  StackHarness       harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* radial   = harness.find(QStringLiteral("editorAdjustmentHeaderRadialButton"));
+  auto* gradient = harness.find(QStringLiteral("editorAdjustmentHeaderGradientButton"));
+  ASSERT_NE(radial, nullptr);
+  ASSERT_NE(gradient, nullptr);
+
+  // An armed tool that has not drawn yet: the second click puts it away.
+  ClickRadial(harness);
+  EXPECT_TRUE(radial->property("selected").toBool());
+  EXPECT_EQ(mask_creation.beginCount(), 1);
+  ClickRadial(harness);
+  EXPECT_EQ(mask_creation.finishCount(), 1);
+  EXPECT_TRUE(mask_creation.toolKind().isEmpty());
+
+  // A drawn Radial Mask in edit: Add Radial Mask starts the next Radial Mask.
+  mask_creation.SelectExisting(QStringLiteral("radial"));
+  ProcessEvents(30);
+  EXPECT_FALSE(radial->property("selected").toBool());
+  ClickRadial(harness);
+  EXPECT_EQ(mask_creation.finishCount(), 1);
+  EXPECT_EQ(mask_creation.beginCount(), 2);
+  EXPECT_TRUE(mask_creation.creating());
+  EXPECT_EQ(mask_creation.toolKind(), QStringLiteral("radial"));
+
+  // The same holds for a drawn Linear Gradient Mask.
+  mask_creation.SelectExisting(QStringLiteral("linear"));
+  ProcessEvents(30);
+  EXPECT_FALSE(gradient->property("selected").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(gradient, "clicked"));
+  ProcessEvents(30);
+  EXPECT_EQ(mask_creation.finishCount(), 1);
+  EXPECT_EQ(mask_creation.beginCount(), 3);
+  EXPECT_TRUE(mask_creation.creating());
+  EXPECT_EQ(mask_creation.toolKind(), QStringLiteral("linear"));
+  EXPECT_TRUE(gradient->property("selected").toBool());
 }
 
 TEST(EditorAdjustmentHeaderQmlTest, AddMaskOnLockedGradeAsksAndNewLayerChoicePersists) {

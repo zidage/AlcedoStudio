@@ -547,6 +547,83 @@ TEST_F(ThumbnailTests, ReleasingOneTierKeepsTheOtherConsumersPinnedTier) {
   EXPECT_FALSE(backend.library()->thumbs().IsThumbnailPinned(element_id));
 }
 
+// Issue 957: the editor filmstrip pins the thumbnail of the open photo when the current Library
+// list does not hold it. No row carries that photo, so ThumbnailUpdated alone publishes its URL,
+// to the first consumer and to a second consumer of the same tier.
+TEST_F(ThumbnailTests, PinnedPhotoOutsideCurrentListPublishesThumbnail) {
+  ApplicationModuleHost backend;
+  PinAcceleratorBeforeProjectOpen(backend);
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  auto images = CollectRawTestImages("airplane", 1);
+  if (images.empty()) {
+    images = CollectRawTestImages("still_life", 1);
+  }
+  if (images.empty()) {
+    GTEST_SKIP() << "No RAW test image available for the outside-list thumbnail test.";
+  }
+  backend.import_export()->StartImport(PathsToQStringList(images));
+  WaitForImportFinished(backend);
+  ASSERT_GE(backend.library()->ShownCount(), 1);
+  const QVariantMap row        = backend.library()->Thumbnails().front().toMap();
+  const auto        element_id = static_cast<sl_element_id_t>(row.value("elementId").toUInt());
+  const auto        image_id   = static_cast<image_id_t>(row.value("imageId").toUInt());
+  ASSERT_NE(element_id, 0);
+  ASSERT_NE(image_id, 0);
+
+  // An empty album: the photo leaves the current list.
+  backend.folders()->CreateFolder(QStringLiteral("EmptyAlbum"));
+  ProcessEvents(500);
+  uint album_id = 0;
+  for (const auto& folder : backend.folders()->Folders()) {
+    const auto map = folder.toMap();
+    if (map.value("name").toString() == QStringLiteral("EmptyAlbum")) {
+      album_id = map.value("folderId").toUInt();
+    }
+  }
+  ASSERT_NE(album_id, 0u);
+  backend.folders()->SelectFolder(album_id);
+  for (int i = 0; i < 100 && backend.library()->ShownCount() != 0; ++i) {
+    ProcessEvents(100);
+  }
+  ASSERT_EQ(backend.library()->ShownCount(), 0);
+  ASSERT_EQ(backend.library()->FindAlbumItem(element_id), nullptr);
+
+  constexpr uint kFilmstripEdge = 512;
+  const auto     ready_url      = [&](QSignalSpy& spy) {
+    for (int i = 0; i < 300; ++i) {
+      for (const auto& args : spy) {
+        if (args.at(0).toUInt() == static_cast<uint>(element_id) && !args.at(2).toBool() &&
+            !args.at(1).toString().isEmpty()) {
+          return args.at(1).toString();
+        }
+      }
+      ProcessEvents(100);
+    }
+    return QString{};
+  };
+
+  QSignalSpy first_spy(backend.library(), &LibraryModule::ThumbnailUpdated);
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id),
+                                         true, kFilmstripEdge);
+  const QString first_url = ready_url(first_spy);
+  ASSERT_FALSE(first_url.isEmpty()) << "A pinned photo outside the list published no thumbnail.";
+  EXPECT_FALSE(ResolveThumbUrlImage(backend, first_url).isNull());
+
+  QSignalSpy second_spy(backend.library(), &LibraryModule::ThumbnailUpdated);
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id),
+                                         true, kFilmstripEdge);
+  EXPECT_EQ(ready_url(second_spy), first_url)
+      << "A second consumer of the tier did not receive the stored thumbnail.";
+
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id),
+                                         false, kFilmstripEdge);
+  EXPECT_TRUE(backend.library()->thumbs().IsThumbnailPinned(element_id));
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id),
+                                         false, kFilmstripEdge);
+  EXPECT_FALSE(backend.library()->thumbs().IsThumbnailPinned(element_id));
+}
+
 // Windows display ICC plan, W6: the store keeps the thumbnail pixels and their encoding, and the
 // provider converts them to the destination of the main window.
 TEST_F(ThumbnailTests, RequestedThumbnailIsConvertedToTheDestination) {

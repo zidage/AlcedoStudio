@@ -12,6 +12,11 @@ import "ThumbnailTier.js" as ThumbnailTier
 // (librarySectionHeaderHeight and the zoom-derived photo row height), so scroll positions
 // follow AlbumSectionModel.RowOffset exactly. The view emits the same selection, focus,
 // context-menu, and zoom signals as ThumbnailGridView, so LibraryWorkspace handles both alike.
+//
+// Folder section (issue #1009): the child folders of the shown folder (folderSectionRows) stand
+// in a LibraryFolderSection above the first group, outside every group. The list scrolls from
+// -topInset (its topMargin), so the section scrolls with the groups and the row offsets stay as
+// they are.
 Item {
     id: root
     objectName: "albumSectionView"
@@ -21,6 +26,28 @@ Item {
     readonly property var selection: appModules.library.selection
     property var exportQueueById: ({})
     property int zoomLevel: 4
+
+    // Rows of FolderController.folders for the child folders of the shown folder, in the order
+    // of the Collections tree; empty hides the section.
+    property var folderSectionRows: []
+    // Height of the folder section above the first row (the topMargin of the list).
+    readonly property real topInset: folderSection.visible ? folderSection.height : 0
+    property real _appliedTopInset: 0
+    // A list at the top shows the whole new section; elsewhere the position is clamped.
+    onTopInsetChanged: {
+        const atTop = list.contentY <= -_appliedTopInset + 0.5
+        _appliedTopInset = topInset
+        if (atTop) {
+            list.contentY = -topInset
+        } else {
+            list.contentY = Math.max(-topInset, Math.min(root.maxListContentY(), list.contentY))
+        }
+    }
+
+    function maxListContentY() {
+        return Math.max(-root.topInset,
+                        sections.ContentHeight(headerHeight, photoRowHeight) - list.height)
+    }
 
     readonly property var library: appModules.library
     readonly property var sections: library.sectionModel
@@ -82,6 +109,8 @@ Item {
     signal zoomChanged(int zoomLevel)
     // A star click on the cell of @p item (2 to 6 columns): rate that photo only.
     signal ratingRequested(var item, int rating)
+    // A click on the tile of child folder @p folderId (ui id of FolderController).
+    signal folderActivated(int folderId)
 
     activeFocusOnTab: true
     Accessible.role: Accessible.List
@@ -99,6 +128,7 @@ Item {
         Qt.callLater(root.applyPendingScrollAnchor)
     }
     Component.onCompleted: {
+        _appliedTopInset = topInset
         layoutZoomLevel = Math.max(0, Math.min(zoomColumns.length - 1, zoomLevel))
         zoomReady = true
         sections.SetColumnCount(columnCount)
@@ -167,8 +197,9 @@ Item {
                 list.forceLayout()
                 const item = list.itemAtIndex(row)
                 if (item) {
-                    const maxY = list.originY + Math.max(0, list.contentHeight - list.height)
-                    list.contentY = Math.max(list.originY, Math.min(maxY,
+                    const maxY = list.originY + Math.max(-root.topInset,
+                                                         list.contentHeight - list.height)
+                    list.contentY = Math.max(list.originY - root.topInset, Math.min(maxY,
                         item.y + fraction * photoRowHeight - focusY))
                     list.forceLayout()
                     anchored = true
@@ -307,10 +338,10 @@ Item {
             return
         }
         const rowHeight = sections.RowInfo(row).kind === 0 ? headerHeight : photoRowHeight
+        // A negative offset is a position in the folder section above the first row.
         const target = sections.RowOffset(row, headerHeight, photoRowHeight)
-                     + Math.min(Math.max(0, Number(anchor.offset)), rowHeight - 1)
-        const maxY = Math.max(0, sections.ContentHeight(headerHeight, photoRowHeight) - list.height)
-        list.contentY = Math.max(0, Math.min(maxY, target))
+                     + Math.min(Math.max(-root.topInset, Number(anchor.offset)), rowHeight - 1)
+        list.contentY = Math.max(-root.topInset, Math.min(root.maxListContentY(), target))
     }
 
     // Restore a scroll anchor that this view (or an earlier instance of it) returned. It is
@@ -354,7 +385,7 @@ Item {
         if (top < list.contentY) {
             list.contentY = top
         } else if (bottom > list.contentY + list.height) {
-            list.contentY = Math.max(0, bottom - list.height)
+            list.contentY = Math.max(-root.topInset, bottom - list.height)
         }
     }
 
@@ -493,8 +524,9 @@ Item {
             if (!item) {
                 return
             }
-            const maxY = list.originY + Math.max(0, list.contentHeight - list.height)
-            list.contentY = Math.max(list.originY, Math.min(maxY, item.y - entry.rowTop))
+            const maxY = list.originY + Math.max(-root.topInset, list.contentHeight - list.height)
+            list.contentY = Math.max(list.originY - root.topInset,
+                                     Math.min(maxY, item.y - entry.rowTop))
             list.forceLayout()
             return
         }
@@ -1208,7 +1240,25 @@ Item {
             reuseItems: true
             cacheBuffer: Math.max(0, height)
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar {}
+            // Room for the folder section above the first row; the rows keep their offsets.
+            topMargin: root.topInset
+            ScrollBar.vertical: AlcedoScrollBar {}
+
+            // In the content of the list, above the first row: it scrolls with the rows. The
+            // tiles take their own presses; a wheel over the section scrolls the list.
+            LibraryFolderSection {
+                id: folderSection
+                // A child declared in a ListView stays on the view; the content item scrolls.
+                parent: list.contentItem
+                z: 2
+                y: -height
+                width: list.width
+                folders: root.folderSectionRows
+                photoCellWidth: root.cellWidth
+                compact: root.compactText
+                cellPadding: root.cardInset
+                onFolderActivated: function(folderId) { root.folderActivated(folderId) }
+            }
 
             onContentYChanged: {
                 visibleRowsTimer.restart()

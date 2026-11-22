@@ -15,6 +15,7 @@
 #include <QCoreApplication>
 #include <QDropEvent>
 #include <QEventLoop>
+#include <QFileInfo>
 #include <QFont>
 #include <QFontMetricsF>
 #include <QLocale>
@@ -27,6 +28,7 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
 #include <QUrl>
@@ -79,6 +81,11 @@ class FakeFolderController final : public QObject {
     uint    element_        = 0;
     uint    parent_element_ = 0;
     QString name_;
+    /// The mount fields of FolderController (Mounted Folder Plan, MF6): 0 for an ordinary row.
+    uint    mount_id_      = 0;
+    bool    mount_root_    = false;
+    bool    mount_offline_ = false;
+    uint    mount_missing_ = 0;
   };
 
   void SetTree(std::vector<Node> nodes, uint current_element) {
@@ -157,6 +164,30 @@ class FakeFolderController final : public QObject {
     calls << QStringLiteral("DeleteFolder:%1").arg(ElementOf(folderUiId));
   }
 
+  /// Adds a mount root named after the directory below the parent row, as a finished mount
+  /// creation does.
+  Q_INVOKABLE void MountFolder(uint parentFolderUiId, const QUrl& directory) {
+    const uint    parent = ElementOf(parentFolderUiId);
+    const QString path   = directory.toLocalFile();
+    calls << QStringLiteral("MountFolder:%1:%2").arg(parent).arg(path);
+    const uint created = next_element_++;
+    nodes_.push_back({created, parent, QFileInfo(path).fileName(), next_mount_++, true, false, 0});
+    Rebuild();
+  }
+
+  Q_INVOKABLE void SynchronizeMount(uint folderUiId) {
+    calls << QStringLiteral("SynchronizeMount:%1").arg(ElementOf(folderUiId));
+  }
+  Q_INVOKABLE void Unmount(uint folderUiId) {
+    calls << QStringLiteral("Unmount:%1").arg(ElementOf(folderUiId));
+  }
+  Q_INVOKABLE void ShowMountedFolderInFileManager(uint folderUiId) {
+    calls << QStringLiteral("ShowMountedFolderInFileManager:%1").arg(ElementOf(folderUiId));
+  }
+  Q_INVOKABLE void RemoveMissingPhotos(uint folderUiId) {
+    calls << QStringLiteral("RemoveMissingPhotos:%1").arg(ElementOf(folderUiId));
+  }
+
   /// Publishes photo counts by element id (root = element 0), as a finished count read does:
   /// the rows are republished with the same ui ids. A row without a count reads -1.
   void SetImageCounts(std::map<uint, qint64> counts) {
@@ -196,14 +227,21 @@ class FakeFolderController final : public QObject {
                                {"parentFolderId", 0u},
                                {"parentElementId", 0u},
                                {"name", QStringLiteral("Root")},
-                               {"imageCount", count_of(0)}});
+                               {"imageCount", count_of(0)},
+                               {"mountId", 0u},
+                               {"structureEditable", true}});
     for (const auto& node : nodes_) {
       rows.push_back(QVariantMap{{"folderId", UiOf(node.element_)},
                                  {"elementId", node.element_},
                                  {"parentFolderId", UiOf(node.parent_element_)},
                                  {"parentElementId", node.parent_element_},
                                  {"name", node.name_},
-                                 {"imageCount", count_of(node.element_)}});
+                                 {"imageCount", count_of(node.element_)},
+                                 {"mountId", node.mount_id_},
+                                 {"mountRoot", node.mount_root_},
+                                 {"mountOffline", node.mount_offline_},
+                                 {"mountMissingCount", node.mount_missing_},
+                                 {"structureEditable", node.mount_id_ == 0}});
     }
     rows_ = rows;
   }
@@ -215,11 +253,13 @@ class FakeFolderController final : public QObject {
   uint                 current_element_ = 0;
   uint                 generation_      = 0;
   uint                 next_element_    = 500;
+  uint                 next_mount_      = 100;
 };
 
 constexpr char kHarness[] = R"(
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 
 ApplicationWindow {
     id: root
@@ -241,7 +281,10 @@ ApplicationWindow {
     property color colDanger: "#d9534f"
     property Item dialogBlurSource: null
 
+    // Main.qml: a disabled secondary action is the translucent idle fill.
     function secondaryButtonFill(enabled, hovered, pressed) {
+        if (!enabled)
+            return Qt.rgba(colButtonSecondary.r, colButtonSecondary.g, colButtonSecondary.b, 0.55)
         return hovered ? Qt.lighter(colButtonSecondary, 1.34) : colButtonSecondary
     }
     function filledActionFill(enabled, hovered, pressed) {
@@ -257,6 +300,12 @@ ApplicationWindow {
     property int lastCollectionId: -1
     property var lastDropUrls: []
     property int lastDropFolderId: -1
+    property string lastImportSignal: ""
+
+    // The Qt Quick folder dialog draws inside this window; the test opens no system dialog.
+    function useQuickDialog(dialog) {
+        dialog.options = FolderDialog.DontUseNativeDialog
+    }
 
     Loader {
         id: panelLoader
@@ -274,6 +323,8 @@ ApplicationWindow {
                 root.lastDropUrls = urls
                 root.lastDropFolderId = folderId
             })
+            item.importRequested.connect(function() { root.lastImportSignal = "images" })
+            item.importFromFolderRequested.connect(function() { root.lastImportSignal = "folder" })
         }
     }
 
@@ -370,6 +421,10 @@ struct Harness {
     return row != nullptr && row->isVisible() && row->height() > 0.0;
   }
   auto Tree() -> QQuickItem* { return FindItem(window->contentItem(), QStringLiteral("collectionsTree")); }
+  /// The All Photos row above the tree: the root row of the folder model.
+  auto AllPhotos() -> QQuickItem* {
+    return FindItem(window->contentItem(), QStringLiteral("collectionsAllPhotosRow"));
+  }
   void Invoke(const char* method, const QVariant& arg) {
     ASSERT_TRUE(QMetaObject::invokeMethod(panel, method, Q_ARG(QVariant, arg)));
     ProcessEvents(30);
@@ -440,6 +495,32 @@ auto SmallTree() -> std::vector<FakeFolderController::Node> {
           {4, 0, QStringLiteral("B")}};
 }
 
+// Root, Trips (1), the mount root Archive (2) with the mounted folder Day1 (3), and the offline
+// mount root Card (4).
+auto MountTree(bool archive_offline = false) -> std::vector<FakeFolderController::Node> {
+  return {{1, 0, QStringLiteral("Trips")},
+          {2, 0, QStringLiteral("Archive"), 1, true, archive_offline, 3},
+          {3, 2, QStringLiteral("Day1"), 1, false, archive_offline, 0},
+          {4, 0, QStringLiteral("Card"), 2, true, true, 0}};
+}
+
+/// A tree taller than the panel: a mount root with a collapsed child at the top, then 60
+/// ordinary folders F00..F59 (elements 10..69).
+auto LongTree() -> std::vector<FakeFolderController::Node> {
+  std::vector<FakeFolderController::Node> nodes{
+      {5, 0, QStringLiteral("A Mount"), 1, true, false, 0},
+      {6, 5, QStringLiteral("Day1"), 1, false, false, 0}};
+  for (uint i = 0; i < 60; ++i) {
+    nodes.push_back({10 + i, 0, QStringLiteral("F%1").arg(i, 2, 10, QLatin1Char('0'))});
+  }
+  return nodes;
+}
+
+/// The menu item @p object_name of the open menu @p menu.
+auto MenuItem(QObject* menu, const QString& object_name) -> QObject* {
+  return menu != nullptr ? menu->findChild<QObject*>(object_name) : nullptr;
+}
+
 }  // namespace
 
 TEST(CollectionsPanelQmlTest, TokensMatchTheIssueValues) {
@@ -476,7 +557,7 @@ TEST(CollectionsPanelQmlTest, TreeStartsCollapsedWithCompactRowsAndExpandsOnRequ
   EXPECT_TRUE(h.RowShown(4));
   EXPECT_FALSE(h.RowShown(2));
   EXPECT_FALSE(h.RowShown(3));
-  EXPECT_DOUBLE_EQ(h.Row(1)->height(), AppTheme::Instance().collectionRowHeight());
+  EXPECT_DOUBLE_EQ(h.Row(1)->height(), AppTheme::Instance().collectionsTreeRowHeight());
 
   h.SetExpanded(1, true);
   EXPECT_TRUE(h.RowShown(2));
@@ -540,15 +621,15 @@ TEST(CollectionsPanelQmlTest, KeyboardMovesSelectionExpandsCollapsesAndOpensEdit
       << h.fake.calls.join(',').toStdString();
 }
 
-// Issue #733: every row shows the photo count of its collection; the root row shows the
+// Issue #733: every row shows the photo count of its collection; the All Photos row shows the
 // project count.
 TEST(CollectionsPanelQmlTest, RowsShowThePhotoCountInCaptionInk) {
   Harness h(SmallTree(), /*current_element=*/4);
   ASSERT_NE(h.panel, nullptr);
-  auto* root_count = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_0"));
+  auto* all_photos = h.AllPhotos();
   auto* a_count    = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_1"));
   auto* b_count    = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_4"));
-  ASSERT_NE(root_count, nullptr);
+  ASSERT_NE(all_photos, nullptr);
   ASSERT_NE(a_count, nullptr);
   ASSERT_NE(b_count, nullptr);
   // No count read yet: no label.
@@ -556,7 +637,7 @@ TEST(CollectionsPanelQmlTest, RowsShowThePhotoCountInCaptionInk) {
 
   h.fake.SetImageCounts({{0, 1234}, {1, 3}, {2, 2}, {3, 1}, {4, 0}});
   ASSERT_TRUE(WaitUntil([&] { return a_count->isVisible(); }));
-  EXPECT_EQ(root_count->property("text").toString(), QLocale().toString(1234.0, 'f', 0));
+  EXPECT_EQ(all_photos->property("trailingText").toString(), QLocale().toString(1234.0, 'f', 0));
   EXPECT_EQ(a_count->property("text").toString(), QStringLiteral("3"));
   EXPECT_TRUE(b_count->isVisible());
   EXPECT_EQ(b_count->property("text").toString(), QStringLiteral("0"));
@@ -694,7 +775,7 @@ TEST(CollectionsPanelQmlTest, FileDropOnARowNamesThatCollection) {
 
   // All Photos.
   h.ClearLastDrop();
-  EXPECT_TRUE(h.DropUrls(h.Row(0), files));
+  EXPECT_TRUE(h.DropUrls(h.AllPhotos(), files));
   EXPECT_EQ(h.LastDropFolderId(), 0);
 
   // A web link is not a local file.
@@ -811,6 +892,455 @@ TEST(CollectionsPanelQmlTest, AddToMenuWithoutCollectionsShowsTheEmptyRow) {
   EXPECT_TRUE(empty->property("visible").toBool());
   EXPECT_EQ(empty->property("text").toString(), QStringLiteral("No collections yet"));
   EXPECT_FALSE(filter->property("visible").toBool());
+}
+
+// Mounted Folder Plan, MF6 (#988): each mounted row shows the link icon after the name, and an
+// offline mount shows Offline in the count position.
+// Issue #1028: a mount root has the folder-symlink icon; a mounted folder and an ordinary
+// collection have the folder icon. The icon stands before the name.
+TEST(CollectionsPanelQmlTest, MountRootsShowTheSymlinkIconAndOfflineInTheCountPosition) {
+  Harness h(MountTree());
+  ASSERT_NE(h.panel, nullptr);
+  h.SetExpanded(2, true);
+  h.fake.SetImageCounts({{0, 12}, {1, 3}, {2, 5}, {3, 4}, {4, 9}});
+
+  const auto icon_of = [&h](uint element) {
+    return FindItem(h.window->contentItem(), QStringLiteral("collectionRowIcon_%1").arg(element));
+  };
+  for (const uint element : {1u, 2u, 3u, 4u}) {
+    auto* icon = icon_of(element);
+    ASSERT_NE(icon, nullptr) << element;
+    EXPECT_TRUE(WaitUntil([&] { return icon->isVisible(); })) << element;
+    const bool mount_root = element == 2u || element == 4u;
+    EXPECT_EQ(icon->property("source").toUrl().toString(),
+              mount_root ? QStringLiteral("qrc:/panel_icons/folder-symlink.svg")
+                         : QStringLiteral("qrc:/panel_icons/folder.svg"))
+        << element;
+  }
+  EXPECT_EQ(FindItem(h.window->contentItem(), QStringLiteral("collectionMountIcon_2")), nullptr);
+
+  auto* card_count    = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_4"));
+  auto* archive_count = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_2"));
+  ASSERT_NE(card_count, nullptr);
+  ASSERT_NE(archive_count, nullptr);
+  EXPECT_EQ(card_count->property("text").toString(), QStringLiteral("Offline"));
+  EXPECT_EQ(archive_count->property("text").toString(), QStringLiteral("5"));
+  // The icon sits left of the count. The row layout places a label that turns visible on its
+  // next polish.
+  auto* archive_icon = icon_of(2);
+  EXPECT_TRUE(WaitUntil([&] {
+    return archive_icon->mapToItem(h.Row(2), QPointF(0, 0)).x() <
+           archive_count->mapToItem(h.Row(2), QPointF(0, 0)).x();
+  })) << "icon x "
+      << archive_icon->mapToItem(h.Row(2), QPointF(0, 0)).x() << " count x "
+      << archive_count->mapToItem(h.Row(2), QPointF(0, 0)).x();
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
+}
+
+// The menu of a mount root has the mount commands and no structure command; Locate Folder is
+// enabled only for an offline mount, and Remove Missing Photos only with missing photos.
+TEST(CollectionsPanelQmlTest, MountRootMenuHasMountCommandsAndNoStructureCommand) {
+  Harness h(MountTree());
+  ASSERT_NE(h.panel, nullptr);
+  auto* root_menu     = h.window->findChild<QObject*>(QStringLiteral("collectionMountRootMenu"));
+  auto* ordinary_menu = h.window->findChild<QObject*>(QStringLiteral("collectionRowMenu"));
+  auto* folder_menu = h.window->findChild<QObject*>(QStringLiteral("collectionMountedFolderMenu"));
+  ASSERT_NE(root_menu, nullptr);
+  ASSERT_NE(ordinary_menu, nullptr);
+  ASSERT_NE(folder_menu, nullptr);
+
+  const auto open_menu_of = [&](uint element) {
+    QVariant row;
+    for (const auto& value : h.panel->property("folderRows").toList()) {
+      if (value.toMap().value("elementId").toUInt() == element) {
+        row = value;
+      }
+    }
+    ASSERT_TRUE(row.isValid());
+    ASSERT_TRUE(QMetaObject::invokeMethod(h.panel, "openRowMenu", Q_ARG(QVariant, row)));
+    ProcessEvents(40);
+  };
+
+  open_menu_of(2);
+  ASSERT_TRUE(WaitUntil([&] { return root_menu->property("visible").toBool(); }));
+  EXPECT_FALSE(ordinary_menu->property("visible").toBool());
+  EXPECT_TRUE(MenuItem(root_menu, "collectionMenuSynchronize")->property("enabled").toBool());
+  EXPECT_FALSE(MenuItem(root_menu, "collectionMenuLocateFolder")->property("enabled").toBool());
+  EXPECT_TRUE(MenuItem(root_menu, "collectionMenuShowInFileManager")->property("enabled").toBool());
+  EXPECT_TRUE(
+      MenuItem(root_menu, "collectionMenuRemoveMissingPhotos")->property("enabled").toBool());
+  EXPECT_TRUE(MenuItem(root_menu, "collectionMenuUnmount")->property("enabled").toBool());
+  EXPECT_EQ(MenuItem(root_menu, "collectionMenuRename"), nullptr);
+  EXPECT_EQ(MenuItem(root_menu, "collectionMenuDelete"), nullptr);
+  EXPECT_EQ(MenuItem(root_menu, "collectionMenuNewChild"), nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(MenuItem(root_menu, "collectionMenuUnmount"), "triggered"));
+  ProcessEvents(30);
+  EXPECT_TRUE(h.fake.calls.contains(QStringLiteral("Unmount:2")))
+      << h.fake.calls.join(',').toStdString();
+  ASSERT_TRUE(QMetaObject::invokeMethod(root_menu, "close"));
+  ProcessEvents(60);
+
+  // The offline mount without missing photos.
+  open_menu_of(4);
+  ASSERT_TRUE(WaitUntil([&] { return root_menu->property("visible").toBool(); }));
+  EXPECT_FALSE(MenuItem(root_menu, "collectionMenuSynchronize")->property("enabled").toBool());
+  EXPECT_TRUE(MenuItem(root_menu, "collectionMenuLocateFolder")->property("enabled").toBool());
+  EXPECT_FALSE(
+      MenuItem(root_menu, "collectionMenuShowInFileManager")->property("enabled").toBool());
+  EXPECT_FALSE(
+      MenuItem(root_menu, "collectionMenuRemoveMissingPhotos")->property("enabled").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(root_menu, "close"));
+  ProcessEvents(60);
+
+  // A mounted folder below the root: Show in File Manager only.
+  h.SetExpanded(2, true);
+  open_menu_of(3);
+  ASSERT_TRUE(WaitUntil([&] { return folder_menu->property("visible").toBool(); }));
+  EXPECT_FALSE(root_menu->property("visible").toBool());
+  EXPECT_NE(MenuItem(folder_menu, "collectionMenuShowMountedFolder"), nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(folder_menu, "close"));
+  ProcessEvents(60);
+
+  // An ordinary row keeps its menu and gets Mount Folder Here (issue #1008).
+  open_menu_of(1);
+  ASSERT_TRUE(WaitUntil([&] { return ordinary_menu->property("visible").toBool(); }));
+  ASSERT_NE(MenuItem(ordinary_menu, "collectionMenuMountFolder"), nullptr);
+  EXPECT_EQ(MenuItem(ordinary_menu, "collectionMenuMountFolder")->property("text").toString(),
+            QStringLiteral("Mount Folder Here..."));
+  EXPECT_TRUE(MenuItem(ordinary_menu, "collectionMenuRename")->property("enabled").toBool());
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
+}
+
+TEST(CollectionsPanelQmlTest, FileDropOnAMountedRowIsRefusedAndAnOrdinaryRowTakesIt) {
+  Harness h(MountTree());
+  ASSERT_NE(h.panel, nullptr);
+  h.panel->setProperty("fileDropEnabled", true);
+  h.SetExpanded(2, true);
+  ProcessEvents(20);
+  const QList<QUrl> files{QUrl::fromLocalFile(QStringLiteral("C:/photos/a.ARW"))};
+
+  for (const uint element : {2u, 3u}) {
+    h.ClearLastDrop();
+    EXPECT_FALSE(h.DropUrls(h.Row(element), files)) << element;
+    EXPECT_EQ(h.LastDropFolderId(), -1) << element;
+  }
+  h.ClearLastDrop();
+  EXPECT_TRUE(h.DropUrls(h.Row(1), files));
+  EXPECT_EQ(h.LastDropFolderId(), static_cast<int>(h.fake.UiOf(1)));
+}
+
+TEST(CollectionsPanelQmlTest, MountedRowIsNotDraggedAndTakesNoDraggedRow) {
+  Harness h(MountTree());
+  ASSERT_NE(h.panel, nullptr);
+  // A mounted row does not move.
+  h.Drag(h.Row(2), h.Row(1));
+  EXPECT_FALSE(h.fake.calls.join(',').contains(QStringLiteral("MoveFolder")))
+      << h.fake.calls.join(',').toStdString();
+  // An ordinary row cannot be dropped on a mounted row.
+  h.Drag(h.Row(1), h.Row(4));
+  EXPECT_FALSE(h.fake.calls.join(',').contains(QStringLiteral("MoveFolder")))
+      << h.fake.calls.join(',').toStdString();
+  // F2 and Delete do nothing on a mounted row.
+  h.Invoke("beginRename", h.panel->property("folderRows").toList().at(2));
+  EXPECT_EQ(h.panel->property("renamingElementId").toInt(), -1);
+}
+
+// Issue #1007: a reload the user did not start (a count refresh, a row added by a mount scan)
+// keeps the scroll position of the tree.
+TEST(CollectionsPanelQmlTest, ReloadWithoutAUserActionKeepsTheScrollPosition) {
+  Harness h(LongTree());
+  ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
+  auto* tree = h.Tree();
+  ASSERT_NE(tree, nullptr);
+  tree->setProperty("contentY", 500.0);
+  ProcessEvents(50);
+  const double kept = tree->property("contentY").toDouble();
+  ASSERT_DOUBLE_EQ(kept, 500.0);
+  // F20 (element 30) is in the view; its place on the screen must not move.
+  const auto scene_y = [&h] { return h.Row(30)->mapToScene(QPointF(0, 0)).y(); };
+  ASSERT_NE(h.Row(30), nullptr);
+  const double kept_scene_y = scene_y();
+
+  h.fake.SetImageCounts({{0, 90}, {10, 3}, {40, 7}});
+  ProcessEvents(80);
+  EXPECT_DOUBLE_EQ(tree->property("contentY").toDouble(), kept);
+  EXPECT_DOUBLE_EQ(scene_y(), kept_scene_y);
+
+  // A mount scan adds a row under the collapsed mount root and reassigns every ui id.
+  auto nodes = LongTree();
+  nodes.push_back({7, 5, QStringLiteral("Day2"), 1, false, false, 0});
+  h.fake.SetTree(std::move(nodes), 0);
+  ProcessEvents(80);
+  EXPECT_FALSE(h.RowShown(7));
+  ASSERT_NE(h.Row(30), nullptr);
+  // A new model resets the ListView, which then places rows it has not created at estimated
+  // positions, so contentY is no stable coordinate here: the rows keep their place on the
+  // screen.
+  EXPECT_DOUBLE_EQ(scene_y(), kept_scene_y);
+  ASSERT_NE(h.Row(40), nullptr);
+  EXPECT_DOUBLE_EQ(h.Row(40)->mapToScene(QPointF(0, 0)).y(),
+                   kept_scene_y + 10.0 * AppTheme::Instance().collectionsTreeRowHeight());
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
+}
+
+// Issue #1007: a selection from outside the tree scrolls the tree to the selected row.
+TEST(CollectionsPanelQmlTest, SelectionFromOutsideScrollsToTheSelectedRow) {
+  Harness h(LongTree());
+  ASSERT_NE(h.panel, nullptr);
+  auto* tree = h.Tree();
+  ASSERT_NE(tree, nullptr);
+  ASSERT_DOUBLE_EQ(tree->property("contentY").toDouble(), 0.0);
+
+  h.fake.SelectFolder(h.fake.UiOf(65));
+  ASSERT_TRUE(WaitUntil([&] { return h.RowShown(65); }));
+  ProcessEvents(50);
+  auto*        row       = h.Row(65);
+  const double content_y = tree->property("contentY").toDouble();
+  ASSERT_NE(row, nullptr);
+  EXPECT_GT(content_y, 0.0);
+  EXPECT_GE(row->y(), content_y);
+  EXPECT_LE(row->y() + row->height(), content_y + tree->height() + 0.5);
+
+  // A count refresh afterwards does not move the tree.
+  h.fake.SetImageCounts({{65, 4}});
+  ProcessEvents(80);
+  EXPECT_DOUBLE_EQ(tree->property("contentY").toDouble(), content_y);
+}
+
+namespace {
+
+/// The display row of @p element in the panel, or an empty map.
+auto PanelRow(Harness& h, uint element) -> QVariantMap {
+  for (const auto& value : h.panel->property("folderRows").toList()) {
+    const auto row = value.toMap();
+    if (!row.value("isDraft").toBool() && row.value("elementId").toUInt() == element) {
+      return row;
+    }
+  }
+  return {};
+}
+
+/// Clicks the Import button at the foot of the panel and waits for its menu.
+auto OpenImportMenu(Harness& h) -> QObject* {
+  auto* button = FindItem(h.window->contentItem(), QStringLiteral("collectionsImportButton"));
+  auto* menu   = h.panel->findChild<QObject*>(QStringLiteral("collectionsImportMenu"));
+  EXPECT_NE(button, nullptr);
+  EXPECT_NE(menu, nullptr);
+  if (button == nullptr || menu == nullptr) {
+    return nullptr;
+  }
+  QTest::mouseClick(h.window, Qt::LeftButton, Qt::NoModifier, SceneCenter(button));
+  EXPECT_TRUE(WaitUntil([&] { return menu->property("opened").toBool(); }));
+  return menu;
+}
+
+/// Chooses Mount Folder... in the Import menu and accepts the folder dialog with @p directory.
+void MountFolderWith(Harness& h, const QString& directory) {
+  auto* dialog = h.panel->findChild<QObject*>(QStringLiteral("collectionMountFolderDialog"));
+  ASSERT_NE(dialog, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(h.window, "useQuickDialog",
+                                        Q_ARG(QVariant, QVariant::fromValue(dialog))));
+  auto* menu = OpenImportMenu(h);
+  ASSERT_NE(menu, nullptr);
+  auto* item = MenuItem(menu, "collectionsMountFolderItem");
+  ASSERT_NE(item, nullptr);
+  ASSERT_TRUE(item->property("enabled").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(item, "triggered"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(menu, "close"));
+  ASSERT_TRUE(WaitUntil([&] { return dialog->property("visible").toBool(); }));
+  const QUrl url = QUrl::fromLocalFile(directory);
+  dialog->setProperty("currentFolder", url);
+  dialog->setProperty("selectedFolder", url);
+  ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "accept"));
+  ASSERT_TRUE(WaitUntil([&] { return !dialog->property("visible").toBool(); }));
+  ProcessEvents(60);
+}
+
+}  // namespace
+
+// Issue #1008: Mount Folder at the foot of the panel mounts the chosen directory below the
+// selected collection: below the library root (tree depth 1), or inside an ordinary collection.
+TEST(CollectionsPanelQmlTest, MountFolderMountsTheDirectoryBelowTheSelectedCollection) {
+  Harness h(SmallTree(), /*current_element=*/0);
+  ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
+  QTemporaryDir first_dir;
+  QTemporaryDir second_dir;
+  ASSERT_TRUE(first_dir.isValid());
+  ASSERT_TRUE(second_dir.isValid());
+
+  MountFolderWith(h, first_dir.path());
+  ASSERT_EQ(h.fake.calls.filter(QStringLiteral("MountFolder:")).size(), 1)
+      << h.fake.calls.join(',').toStdString();
+  EXPECT_TRUE(h.fake.calls.contains(QStringLiteral("MountFolder:0:%1").arg(first_dir.path())))
+      << h.fake.calls.join(',').toStdString();
+  const QVariantMap root_mount = PanelRow(h, 500);
+  ASSERT_FALSE(root_mount.isEmpty());
+  EXPECT_TRUE(root_mount.value("mountRoot").toBool());
+  EXPECT_EQ(root_mount.value("treeDepth").toInt(), 1);
+
+  h.fake.SelectFolder(h.fake.UiOf(1));
+  ProcessEvents(40);
+  MountFolderWith(h, second_dir.path());
+  EXPECT_TRUE(h.fake.calls.contains(QStringLiteral("MountFolder:1:%1").arg(second_dir.path())))
+      << h.fake.calls.join(',').toStdString();
+  const QVariantMap inner_mount = PanelRow(h, 501);
+  ASSERT_FALSE(inner_mount.isEmpty());
+  EXPECT_TRUE(inner_mount.value("mountRoot").toBool());
+  EXPECT_EQ(inner_mount.value("treeDepth").toInt(), 2);
+  EXPECT_EQ(inner_mount.value("parentElementId").toUInt(), 1u);
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
+}
+
+// Issues #1008 and #1028: one Import button at the foot of the panel opens a menu with Import
+// Images, Import Folder, and Mount Folder. The items follow the selected row; a mounted
+// selection, or a backend that is not interactive, disables all three.
+TEST(CollectionsPanelQmlTest, ImportMenuItemsAreDisabledOnAMountedSelection) {
+  Harness h(MountTree(), /*current_element=*/1);
+  ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
+  auto* button = FindItem(h.window->contentItem(), QStringLiteral("collectionsImportButton"));
+  ASSERT_NE(button, nullptr);
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Import"));
+
+  auto* menu = OpenImportMenu(h);
+  ASSERT_NE(menu, nullptr);
+  auto* images = MenuItem(menu, "collectionsImportImagesItem");
+  auto* folder = MenuItem(menu, "collectionsImportFolderItem");
+  auto* mount  = MenuItem(menu, "collectionsMountFolderItem");
+  ASSERT_NE(images, nullptr);
+  ASSERT_NE(folder, nullptr);
+  ASSERT_NE(mount, nullptr);
+  EXPECT_EQ(images->property("text").toString(), QStringLiteral("Import Images..."));
+  EXPECT_EQ(folder->property("text").toString(), QStringLiteral("Import Folder..."));
+  EXPECT_EQ(mount->property("text").toString(), QStringLiteral("Mount Folder..."));
+
+  const auto all_enabled = [&](bool expected) {
+    return images->property("enabled").toBool() == expected &&
+           folder->property("enabled").toBool() == expected &&
+           mount->property("enabled").toBool() == expected;
+  };
+  EXPECT_TRUE(all_enabled(true));
+  ASSERT_TRUE(QMetaObject::invokeMethod(images, "triggered"));
+  EXPECT_TRUE(WaitUntil([&] {
+    return h.window->property("lastImportSignal").toString() == QStringLiteral("images");
+  }));
+  ASSERT_TRUE(QMetaObject::invokeMethod(folder, "triggered"));
+  EXPECT_TRUE(WaitUntil([&] {
+    return h.window->property("lastImportSignal").toString() == QStringLiteral("folder");
+  }));
+  ASSERT_TRUE(QMetaObject::invokeMethod(menu, "close"));
+  ProcessEvents(40);
+
+  // The mount root and a mounted folder below it.
+  h.SetExpanded(2, true);
+  for (const uint element : {2u, 3u}) {
+    h.fake.SelectFolder(h.fake.UiOf(element));
+    EXPECT_TRUE(WaitUntil([&] { return all_enabled(false); })) << element;
+  }
+
+  // The library root takes the actions again.
+  h.fake.SelectFolder(0);
+  EXPECT_TRUE(WaitUntil([&] { return all_enabled(true); }));
+  h.panel->setProperty("backendInteractive", false);
+  EXPECT_TRUE(WaitUntil([&] { return all_enabled(false); }));
+  EXPECT_FALSE(button->isEnabled());
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
+}
+
+// Issue #1028: All Photos is the root row above the tree. A click selects the library root,
+// and Up from the first collection selects it.
+TEST(CollectionsPanelQmlTest, AllPhotosRowSelectsTheRoot) {
+  Harness h(SmallTree(), /*current_element=*/4);
+  ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
+  auto* all_photos = h.AllPhotos();
+  ASSERT_NE(all_photos, nullptr);
+  EXPECT_TRUE(all_photos->isVisible());
+  EXPECT_EQ(all_photos->property("label").toString(), QStringLiteral("All Photos"));
+  // The root row of the tree itself is hidden.
+  EXPECT_FALSE(h.RowShown(0));
+
+  QTest::mouseClick(h.window, Qt::LeftButton, Qt::NoModifier, SceneCenter(all_photos));
+  EXPECT_TRUE(WaitUntil([&] { return h.fake.CurrentFolderId() == 0; }));
+  EXPECT_TRUE(all_photos->property("selected").toBool());
+
+  h.fake.SelectFolder(h.fake.UiOf(1));
+  ProcessEvents(40);
+  h.FocusTree();
+  h.Key(Qt::Key_Up);
+  EXPECT_EQ(h.fake.CurrentFolderId(), 0u);
+
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
+}
+
+
+
+// Issue #1008: the row menu of the library root has Mount Folder Here.
+TEST(CollectionsPanelQmlTest, RootRowMenuHasMountFolderHere) {
+  Harness h(SmallTree());
+  ASSERT_NE(h.panel, nullptr);
+  auto* menu = h.window->findChild<QObject*>(QStringLiteral("collectionRowMenu"));
+  ASSERT_NE(menu, nullptr);
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(h.panel, "openRowMenu", Q_ARG(QVariant, QVariant(PanelRow(h, 0)))));
+  ASSERT_TRUE(WaitUntil([&] { return menu->property("visible").toBool(); }));
+  auto* item = MenuItem(menu, "collectionMenuMountFolder");
+  ASSERT_NE(item, nullptr);
+  EXPECT_EQ(item->property("text").toString(), QStringLiteral("Mount Folder Here..."));
+  EXPECT_TRUE(item->property("enabled").toBool());
+}
+
+namespace {
+
+/// Elements of the rows of the open "Add to" collection list, in list order.
+auto AddToElements(Harness& h) -> std::vector<uint> {
+  std::vector<uint> elements;
+  EXPECT_TRUE(QMetaObject::invokeMethod(h.window, "createMenu"));
+  ProcessEvents(50);
+  auto* menu = qvariant_cast<QObject*>(h.window->property("menuItem"));
+  EXPECT_NE(menu, nullptr);
+  if (menu == nullptr) {
+    return elements;
+  }
+  auto* add_to = menu->findChild<QObject*>(QStringLiteral("imageContextAddToMenu"));
+  EXPECT_NE(add_to, nullptr);
+  if (add_to == nullptr) {
+    return elements;
+  }
+  for (const auto& value : add_to->property("shownRows").toList()) {
+    elements.push_back(value.toMap().value("elementId").toUInt());
+  }
+  return elements;
+}
+
+}  // namespace
+
+// Issue #1008: "Add to" lists the root anchor and the ordinary collections; a mount and its
+// folders are left out, and the empty text counts the listed collections only.
+TEST(CollectionsPanelQmlTest, AddToMenuListsOrdinaryCollectionsOnly) {
+  {
+    // Ordinary Trips (1) and Walks (5); the mount Archive (2) with Day1 (3) and Day2 (6).
+    Harness h({{1, 0, QStringLiteral("Trips")},
+               {5, 0, QStringLiteral("Walks")},
+               {2, 0, QStringLiteral("Archive"), 1, true, false, 0},
+               {3, 2, QStringLiteral("Day1"), 1, false, false, 0},
+               {6, 2, QStringLiteral("Day2"), 1, false, false, 0}});
+    ASSERT_NE(h.panel, nullptr);
+    EXPECT_EQ(AddToElements(h), (std::vector<uint>{0, 1, 5}));
+    auto* menu   = qvariant_cast<QObject*>(h.window->property("menuItem"));
+    auto* add_to = menu->findChild<QObject*>(QStringLiteral("imageContextAddToMenu"));
+    EXPECT_EQ(add_to->property("collectionCount").toInt(), 2);
+  }
+  {
+    Harness h({{2, 0, QStringLiteral("Archive"), 1, true, false, 0},
+               {3, 2, QStringLiteral("Day1"), 1, false, false, 0}});
+    ASSERT_NE(h.panel, nullptr);
+    EXPECT_EQ(AddToElements(h), (std::vector<uint>{0}));
+    auto* menu   = qvariant_cast<QObject*>(h.window->property("menuItem"));
+    auto* add_to = menu->findChild<QObject*>(QStringLiteral("imageContextAddToMenu"));
+    auto* empty  = add_to->findChild<QQuickItem*>(QStringLiteral("imageContextCollectionEmpty"));
+    ASSERT_NE(empty, nullptr);
+    EXPECT_EQ(add_to->property("collectionCount").toInt(), 0);
+    EXPECT_EQ(empty->property("text").toString(), QStringLiteral("No collections yet"));
+  }
 }
 
 }  // namespace alcedo::ui::test

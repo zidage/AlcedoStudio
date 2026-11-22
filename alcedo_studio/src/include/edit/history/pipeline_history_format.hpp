@@ -27,13 +27,19 @@ namespace alcedo {
  * Builds that accept only 0.10.0 reject a 0.11.0
  * project, so they never write Image rows without the marks. The other identities are unchanged.
  *
- * Project metadata 0.12.0 adds project-wide PhotoStack and PhotoStackMember tables.
- * Supported 0.10.0 and 0.11.0 projects gain empty tables. The next save writes 0.12.0,
+ * Project metadata 0.12.0 adds the mounted folder records: the column `Element.mount_id` and the
+ * tables `MountRoot` and `SourceFile` (Mounted Folder Plan, MF1). A 0.10.0 or 0.11.0 project
+ * gains the column with NULL for each element (an ordinary element) and the two empty tables at
+ * open. Readers through 0.11.0 reject 0.12.0 before writing Element rows. An image root id does
+ * not depend on the Element row and stays unchanged.
+ *
+ * Project metadata 0.13.0 adds the project-wide PhotoStack and PhotoStackMember tables.
+ * Projects from 0.10.0 through 0.12.0 gain empty stack tables. The next save writes 0.13.0,
  * which older readers reject before writing project data. Image-edit identities stay unchanged.
  *
  * | Identity | Constant | Value |
  * | --- | --- | --- |
- * | Project metadata | @ref kProjectFileVersion | 0.12.0 |
+ * | Project metadata | @ref kProjectFileVersion | 0.13.0 |
  * | Packed project header | @ref kPackedProjectFormatVersion | 7 |
  * | Pipeline document JSON | @ref kPipelineDocumentFormatVersion | 7 |
  * | Image edit schema | @ref kImageEditSchemaVersion | 5 |
@@ -47,11 +53,11 @@ namespace alcedo {
  */
 
 /// Project metadata version written by SaveProject and required on open.
-inline constexpr std::string_view kProjectFileVersion                   = "0.12.0";
-/// Inclusive lower bound: 0.10.0 opens and gains the mark columns and empty stack tables.
+inline constexpr std::string_view kProjectFileVersion = "0.13.0";
+/// Inclusive lower bound: 0.10.0 opens and gains marks, mount records, and stack tables.
 inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.10.0";
 /// Inclusive upper bound of accepted project metadata. Equals @ref kProjectFileVersion.
-inline constexpr std::string_view kMaxSupportedProjectFileVersion       = "0.12.0";
+inline constexpr std::string_view kMaxSupportedProjectFileVersion = kProjectFileVersion;
 /// Packed `.alcd` header version. Independent of the metadata string.
 inline constexpr std::uint32_t kPackedProjectFormatVersion = 7;
 

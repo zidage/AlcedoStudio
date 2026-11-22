@@ -4,7 +4,11 @@ import QtQuick.Controls.impl
 import QtQuick.Layouts
 
 // One Mask Group row inside EditorMaskGroupsPanel: chevron, composite preview
-// slot, group name, and independent lock/delete actions. Expanded state comes
+// slot, group name, and the layer icon strip (visibility, lock, delete). A
+// hidden group dims its name and preview; the Color Grade stays on the
+// backbone with its parameters and Masks. A detached group (no scene-image
+// edge, outside the render) gets the same dimmed content, a "Detached" caption
+// above the first detached row, and no reorder drag. Expanded state comes
 // from EditorNodeLayoutStore.drawerOpen(nodeId) — the same "Masks expanded"
 // bit the Nodes drawer reads, so both projections agree.
 //
@@ -36,6 +40,9 @@ Item {
     property string nodeId: ""
     property string displayName: ""
     property bool groupEnabled: true
+    property bool detached: false
+    // True on the first detached row; the caption separates detached groups.
+    property bool showDetachedCaption: false
     property bool deletionProtected: false
     property var masks: []
     property bool selected: false
@@ -71,15 +78,38 @@ Item {
         }
         return root.masks.length !== undefined ? root.masks.length : 0
     }
+    // Any AI segmentation Mask turns the group preview into the AI lettermark.
+    readonly property bool hasAiMask: {
+        if (root.maskCount === 0) {
+            return false
+        }
+        for (let i = 0; i < root.maskCount; ++i) {
+            const mask = root.masks[i]
+            if (mask && mask.sourceKind !== undefined
+                    && String(mask.sourceKind) === "aiSegmentation") {
+                return true
+            }
+        }
+        return false
+    }
     readonly property real headerHeight: Math.max(
-                                             appTheme.iconButtonHitSizeCompact,
+                                             appTheme.layerIconHitSize,
                                              appTheme.maskGroupPreviewSize
                                              + appTheme.spaceXs * 2,
                                              groupName.implicitHeight
                                              + appTheme.spaceXs * 2)
+    readonly property real detachedCaptionHeight: root.showDetachedCaption
+                                                  ? detachedCaption.implicitHeight
+                                                    + appTheme.spaceXs
+                                                  : 0
+    // Name and preview ink: dimmed for a hidden or detached group.
+    readonly property bool contentDimmed: !root.groupEnabled || root.detached
     readonly property real bodyContentHeight: maskList.implicitHeight + appTheme.spaceXs
     readonly property real bodyHeight: Math.max(0, bodyContentHeight) * foldProgress
     readonly property color headerInkColor: root.textColor
+    // A hidden group keeps full chrome ink (chevron, focus ring) and dims only
+    // its own content: name and preview.
+    readonly property color nameInkColor: root.contentDimmed ? root.mutedColor : root.textColor
     readonly property string deleteDisabledReason: {
         if (!root.actionsEnabled) {
             return root.actionsDisabledReason
@@ -94,11 +124,12 @@ Item {
                                           && cardMouse.mouseY < root.headerHeight
     // Card position in ListView content coordinates while dragging; the panel
     // resolves it to the nearest insertion slot between group rows.
-    readonly property real dragContentY: root.y + dragBody.y + root.headerHeight / 2
+    readonly property real dragContentY: root.y + root.detachedCaptionHeight + dragBody.y
+                                         + root.headerHeight / 2
     property bool _dragMoved: false
 
     implicitWidth: 260
-    implicitHeight: headerHeight + bodyHeight + appTheme.spaceXs
+    implicitHeight: detachedCaptionHeight + headerHeight + bodyHeight + appTheme.spaceXs
     height: implicitHeight
     // Unclipped while dragging so the card can travel across sibling rows.
     clip: !root.dragging
@@ -106,6 +137,7 @@ Item {
 
     signal headerClicked()
     signal expansionToggled(bool expanded)
+    signal visibilityClicked()
     signal lockClicked()
     signal deleteClicked()
     // contentY args are in ListView content coordinates (see dragContentY).
@@ -118,7 +150,6 @@ Item {
     signal reorderCanceled()
     signal reorderStepRequested(int delta)
     signal maskClicked(int maskIndex)
-    signal maskInvertClicked(int maskIndex)
     signal maskDeleteClicked(int maskIndex)
     signal maskNavigateUp(int maskIndex)
     signal maskNavigateDown(int maskIndex)
@@ -208,11 +239,28 @@ Item {
     // travels on Y. The delegate slot itself does not move, so sibling
     // midpoints stay stable for the panel's drop-slot resolution. Do not
     // anchors.fill this item — MouseArea.drag cannot move an anchored target.
+    Label {
+        id: detachedCaption
+        objectName: "editorMaskGroupDetachedCaption"
+        visible: root.showDetachedCaption
+        width: parent.width
+        leftPadding: appTheme.spaceXs
+        text: qsTr("Detached")
+        color: root.mutedColor
+        elide: Text.ElideRight
+        font.family: appTheme.uiFontFamily
+        font.pixelSize: appTheme.fontSizeCaption
+        Accessible.role: Accessible.StaticText
+        Accessible.name: text
+    }
+
     Item {
         id: dragBody
         objectName: "editorMaskGroupDragBody"
         width: parent.width
-        height: parent.height
+        height: parent.height - root.detachedCaptionHeight
+        // The caption row sits above the card; the drag offset stays relative to the card.
+        transform: Translate { y: root.detachedCaptionHeight }
         opacity: root.dragging ? 0.94 : 1.0
 
         onYChanged: {
@@ -317,7 +365,10 @@ Item {
                         parts.push(qsTr("deletion locked"))
                     }
                     if (!root.groupEnabled) {
-                        parts.push(qsTr("disabled"))
+                        parts.push(qsTr("hidden"))
+                    }
+                    if (root.detached) {
+                        parts.push(qsTr("detached"))
                     }
                     if (root.selected) {
                         parts.push(qsTr("selected"))
@@ -444,35 +495,32 @@ Item {
                     // Composite preview slot. The column stays reserved for empty
                     // groups so every group name starts at the same x; the dark
                     // well only appears once the group actually owns Masks — an
-                    // empty box would pretend coverage exists (NM9.4 fills it).
+                    // empty box would pretend coverage exists. Any AI Mask turns
+                    // the well into the AI lettermark; otherwise the composite
+                    // coverage thumbnail fills it. A hidden group dims the well.
                     Item {
                         objectName: "editorMaskGroupPreviewSlot"
                         Layout.preferredWidth: appTheme.maskGroupPreviewSize
                         Layout.preferredHeight: appTheme.maskGroupPreviewSize
                         Layout.alignment: Qt.AlignVCenter
+                        opacity: root.contentDimmed ? appTheme.layerHiddenContentOpacity : 1.0
                         Accessible.ignored: true
+
+                        EditorAiMaskTile {
+                            objectName: "editorMaskGroupPreviewAiTile"
+                            anchors.fill: parent
+                            visible: root.hasAiMask
+                            inkColor: root.textColor
+                        }
 
                         Rectangle {
                             objectName: "editorMaskGroupPreview"
                             anchors.fill: parent
-                            visible: root.maskCount > 0
+                            visible: root.maskCount > 0 && !root.hasAiMask
                             radius: appTheme.controlRadiusSmall
                             color: appTheme.bgBaseColor
                             border.width: 1
                             border.color: "transparent"
-
-                            ColorImage {
-                                anchors.centerIn: parent
-                                width: appTheme.iconOpticalSize
-                                height: appTheme.iconOpticalSize
-                                source: "qrc:/panel_icons/masks.svg"
-                                sourceSize.width: appTheme.iconSourceSize
-                                sourceSize.height: appTheme.iconSourceSize
-                                fillMode: Image.PreserveAspectFit
-                                smooth: true
-                                color: root.mutedColor
-                                visible: groupThumb.source.toString().length === 0
-                            }
 
                             Image {
                                 id: groupThumb
@@ -494,7 +542,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.alignment: Qt.AlignVCenter
                         text: root.displayName
-                        color: root.headerInkColor
+                        color: root.nameInkColor
                         font.family: appTheme.uiFontFamily
                         font.pixelSize: appTheme.fontSizeBody
                         font.weight: root.selected || root.ownerActive
@@ -506,62 +554,80 @@ Item {
                         ToolTip.text: root.displayName
                     }
 
-                    Item {
-                        Layout.preferredWidth: appTheme.iconButtonHitSizeCompact
-                        Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+                    // Layer icon strip: fixed slot order visibility, lock, delete.
+                    // Later layer features append slots here.
+                    Row {
+                        id: iconStrip
+                        objectName: "editorMaskGroupIconStrip"
                         Layout.alignment: Qt.AlignVCenter
+                        spacing: 0
 
-                        IconActionButton {
-                            id: lockButton
-                            objectName: "editorMaskGroupLockButton"
-                            anchors.fill: parent
-                            compact: true
-                            stretchInLayout: true
-                            enabled: root.actionsEnabled
-                            selected: root.deletionProtected
-                            iconSrc: root.deletionProtected ? "qrc:/panel_icons/lock.svg"
-                                                            : "qrc:/panel_icons/lock-open.svg"
-                            iconColorDefault: root.deletionProtected ? root.textColor
-                                                                     : root.mutedColor
-                            iconColorMuted: root.mutedColor
-                            fillIdle: "transparent"
-                            fillHover: root.hoverColor
-                            fillPressed: appTheme.buttonPressedFillColor
-                            focusRingColor: root.headerInkColor
-                            actionName: root.deletionProtected
-                                        ? qsTr("Unlock %1").arg(root.displayName)
-                                        : qsTr("Lock %1 against deletion").arg(root.displayName)
-                            toolTipText: enabled ? actionName : root.actionsDisabledReason
-                            focusOnPointerPress: false
-                            onClicked: root.lockClicked()
+                        Item {
+                            width: appTheme.layerIconHitSize
+                            height: appTheme.layerIconHitSize
+
+                            EditorLayerIconButton {
+                                id: visibilityButton
+                                objectName: "editorMaskGroupVisibilityButton"
+                                anchors.fill: parent
+                                enabled: root.actionsEnabled
+                                active: !root.groupEnabled
+                                iconSrc: root.groupEnabled ? "qrc:/panel_icons/eye.svg"
+                                                           : "qrc:/panel_icons/eye-off.svg"
+                                activeColor: root.textColor
+                                idleColor: root.mutedColor
+                                hoverColor: root.hoverColor
+                                focusRingColor: root.headerInkColor
+                                actionName: root.groupEnabled
+                                            ? qsTr("Hide %1").arg(root.displayName)
+                                            : qsTr("Show %1").arg(root.displayName)
+                                disabledReason: root.actionsDisabledReason
+                                onClicked: root.visibilityClicked()
+                            }
                         }
-                    }
 
-                    Item {
-                        Layout.preferredWidth: appTheme.iconButtonHitSizeCompact
-                        Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-                        Layout.alignment: Qt.AlignVCenter
+                        Item {
+                            width: appTheme.layerIconHitSize
+                            height: appTheme.layerIconHitSize
 
-                        IconActionButton {
-                            id: deleteButton
-                            objectName: "editorMaskGroupDeleteButton"
-                            anchors.fill: parent
-                            compact: true
-                            stretchInLayout: true
-                            enabled: root.deleteDisabledReason.length === 0
-                            iconSrc: "qrc:/panel_icons/trash.svg"
-                            iconColorDefault: root.mutedColor
-                            iconColorMuted: root.mutedColor
-                            fillIdle: "transparent"
-                            fillHover: root.hoverColor
-                            fillPressed: appTheme.buttonPressedFillColor
-                            focusRingColor: root.headerInkColor
-                            actionName: qsTr("Delete %1").arg(root.displayName)
-                            toolTipText: root.deleteDisabledReason.length > 0
-                                         ? root.deleteDisabledReason
-                                         : actionName
-                            focusOnPointerPress: false
-                            onClicked: root.deleteClicked()
+                            EditorLayerIconButton {
+                                id: lockButton
+                                objectName: "editorMaskGroupLockButton"
+                                anchors.fill: parent
+                                enabled: root.actionsEnabled
+                                active: root.deletionProtected
+                                iconSrc: root.deletionProtected ? "qrc:/panel_icons/lock.svg"
+                                                                : "qrc:/panel_icons/lock-open.svg"
+                                activeColor: root.textColor
+                                idleColor: root.mutedColor
+                                hoverColor: root.hoverColor
+                                focusRingColor: root.headerInkColor
+                                actionName: root.deletionProtected
+                                            ? qsTr("Unlock %1").arg(root.displayName)
+                                            : qsTr("Lock %1 against deletion").arg(root.displayName)
+                                disabledReason: root.actionsDisabledReason
+                                onClicked: root.lockClicked()
+                            }
+                        }
+
+                        Item {
+                            width: appTheme.layerIconHitSize
+                            height: appTheme.layerIconHitSize
+
+                            EditorLayerIconButton {
+                                id: deleteButton
+                                objectName: "editorMaskGroupDeleteButton"
+                                anchors.fill: parent
+                                enabled: root.deleteDisabledReason.length === 0
+                                iconSrc: "qrc:/panel_icons/trash.svg"
+                                activeColor: root.textColor
+                                idleColor: root.mutedColor
+                                hoverColor: root.hoverColor
+                                focusRingColor: root.headerInkColor
+                                actionName: qsTr("Delete %1").arg(root.displayName)
+                                disabledReason: root.deleteDisabledReason
+                                onClicked: root.deleteClicked()
+                            }
                         }
                     }
                 }
@@ -613,7 +679,6 @@ Item {
                             selectionOutlineWidth: root.selectionOutlineWidth
                             maskThumbnails: root.maskThumbnails
                             onClicked: root.maskClicked(index)
-                            onInvertClicked: root.maskInvertClicked(index)
                             onDeleteClicked: root.maskDeleteClicked(index)
                             onNavigateUp: root.maskNavigateUp(index)
                             onNavigateDown: root.maskNavigateDown(index)

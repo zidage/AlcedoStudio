@@ -267,7 +267,7 @@ TEST(AutomationEditorCommandsTest, CurvePresetsListsThePresetsWithTheirPointsAnd
               data[static_cast<std::size_t>(i)].points.size());
     EXPECT_EQ(preset.value("editor_value").toObject(), (QJsonObject{{"points", id}}));
   }
-  EXPECT_EQ(presets.at(4).toObject().value("id").toString(), QStringLiteral("film_like"));
+  EXPECT_EQ(presets.at(4).toObject().value("id").toString(), QStringLiteral("cl_digital"));
   EXPECT_EQ(presets.at(4).toObject().value("group").toString(), QStringLiteral("Rendering"));
 }
 

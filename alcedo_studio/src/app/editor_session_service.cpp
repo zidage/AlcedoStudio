@@ -2134,8 +2134,9 @@ auto EditorSessionService::PublishTypedNodeHistorySuccess(std::string message)
     EditorRenderCommand render_command;
     render_command.reason       = *reason;
     render_command.operation_id = current_operation_id_;
-    render_.RouteInitialRender(render_command, result.identity,
-                               lifecycle_.active_image_load_request());
+    // The request id lets a waiter (an automation command) wait for the frame of the commit.
+    result.render_request_id    = render_.RouteInitialRender(
+        render_command, result.identity, lifecycle_.active_image_load_request());
   }
   BumpHistoryRevision();
   return Emit(std::move(result));
@@ -2194,6 +2195,37 @@ auto EditorSessionService::SetColorGradeDeletionProtected(const NodeId& node_id,
     return result;
   }
   return PublishTypedNodeHistorySuccess("Color Grade deletion protection updated");
+}
+
+auto EditorSessionService::SetColorGradeEnabled(const NodeId& node_id, bool enabled)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind         = EditorSessionCommandKind::SetColorGradeEnabled;
+    command.node_id      = node_id;
+    command.node_enabled = enabled;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return SetColorGradeEnabled(queued.node_id, queued.node_enabled);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Color Grade visibility requires an interactive history session");
+  }
+  std::string error;
+  bool        changed = false;
+  if (!dependencies_.history->SetColorGradeEnabled(lifecycle_.history_guard(), node_id, enabled,
+                                                   &error, &changed)) {
+    return Reject(error.empty() ? "Color Grade visibility failed" : std::move(error));
+  }
+  if (!changed) {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = lifecycle_.state();
+    result.identity = lifecycle_.identity();
+    return result;
+  }
+  return PublishTypedNodeHistorySuccess(enabled ? "Color Grade shown" : "Color Grade hidden");
 }
 
 auto EditorSessionService::EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult {
@@ -2563,24 +2595,25 @@ void EditorSessionService::SetPresentationSuspended(bool suspended) {
                                    lifecycle_.active_image_load_request(), lifecycle_.state());
 }
 
-void EditorSessionService::SetSuspendedForExport(bool suspended) {
+void EditorSessionService::SetSuspendedForGpuRelease(bool suspended) {
   if (!InOwnerReduction()) {
     EditorSessionCommand command;
-    command.kind                 = EditorSessionCommandKind::SetSuspendedForExport;
-    command.suspended_for_export = suspended;
+    command.kind                      = EditorSessionCommandKind::SetSuspendedForGpuRelease;
+    command.suspended_for_gpu_release = suspended;
     (void)SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-      SetSuspendedForExport(queued.suspended_for_export);
+      SetSuspendedForGpuRelease(queued.suspended_for_gpu_release);
       EditorSessionResult accepted;
       accepted.kind     = EditorSessionResultKind::Accepted;
       accepted.state    = lifecycle_.state();
       accepted.identity = lifecycle_.identity();
-      accepted.message  = queued.suspended_for_export ? "Rendering suspended for export"
-                                                      : "Rendering resumed after export";
+      accepted.message  = queued.suspended_for_gpu_release
+                              ? "Rendering suspended while the GPU resources are released"
+                              : "Rendering resumed after the GPU resource release";
       return accepted;
     });
     return;
   }
-  render_.SetSuspendedForExport(suspended, lifecycle_.identity(),
+  render_.SetSuspendedForGpuRelease(suspended, lifecycle_.identity(),
                                 lifecycle_.active_image_load_request(), lifecycle_.state());
 }
 

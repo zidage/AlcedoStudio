@@ -29,8 +29,11 @@ ExportQueue::ExportQueue(ProjectModule* project, ImportExportHandler* import_exp
     connect(project, &ProjectModule::ProjectChanged, this, &ExportQueue::Clear);
   }
   if (import_export != nullptr) {
-    connect(import_export, &ImportExportHandler::ExportStateChanged, this,
-            &ExportQueue::RemoveFinishedEntries);
+    connect(import_export, &ImportExportHandler::ExportStateChanged, this, [this]() {
+      if (import_export_ != nullptr) {
+        ApplyExportState(import_export_->ExportRunId(), import_export_->ExportItemStatuses());
+      }
+    });
   }
 }
 
@@ -61,7 +64,9 @@ auto ExportQueue::PreviewRows() const -> QVariantList {
   QVariantList rows;
   rows.reserve(static_cast<qsizetype>(ordered.size()));
   for (const Entry* entry : ordered) {
-    rows.push_back(QVariantMap{{QStringLiteral("statusKey"), StatusKey(*entry)},
+    const bool in_current_run = entry->run_id != 0 && entry->run_id == current_run_id_;
+    rows.push_back(QVariantMap{{QStringLiteral("statusKey"),
+                                in_current_run ? StatusKey(*entry) : QString()},
                                {QStringLiteral("summaryRow"), false},
                                {QStringLiteral("label"), entry->file_name},
                                {QStringLiteral("isHdr"), entry->is_hdr}});
@@ -94,7 +99,8 @@ void ExportQueue::AddTargets(const QVariantList& items) {
         entries_.begin(), entries_.end(),
         [&entry](const Entry& queued) { return queued.element_id == entry.element_id; });
     if (existing != entries_.end()) {
-      *existing = std::move(entry);
+      entry.run_id = existing->run_id;
+      *existing    = std::move(entry);
     } else {
       entries_.push_back(std::move(entry));
     }
@@ -137,16 +143,30 @@ auto ExportQueue::Targets() const -> QVariantList {
   return targets;
 }
 
-void ExportQueue::RemoveFinishedEntries() {
-  if (import_export_ == nullptr || entries_.empty()) {
-    return;
+void ExportQueue::ApplyExportState(quint64 run_id, const QVariantMap& statuses) {
+  bool changed = false;
+  if (run_id != current_run_id_) {
+    current_run_id_ = run_id;
+    // A new run takes the entries that were in the queue when it started; the statuses list
+    // exactly the photos of that run.
+    for (Entry& entry : entries_) {
+      if (statuses.contains(StatusKey(entry))) {
+        entry.run_id = run_id;
+      }
+    }
+    changed = !entries_.empty();
   }
-  const QVariantMap statuses = import_export_->ExportItemStatuses();
-  const auto        erased   = std::erase_if(entries_, [&statuses](const Entry& entry) {
-    const QString status = statuses.value(StatusKey(entry)).toString();
-    return status == QStringLiteral("succeeded") || status == QStringLiteral("failed");
-  });
-  if (erased > 0) {
+  if (run_id != 0) {
+    const auto erased = std::erase_if(entries_, [run_id, &statuses](const Entry& entry) {
+      if (entry.run_id != run_id) {
+        return false;
+      }
+      const QString status = statuses.value(StatusKey(entry)).toString();
+      return status == QStringLiteral("succeeded") || status == QStringLiteral("failed");
+    });
+    changed = changed || erased > 0;
+  }
+  if (changed) {
     emit QueueChanged();
   }
 }

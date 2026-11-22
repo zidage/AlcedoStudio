@@ -8,6 +8,7 @@
 #include <QDeadlineTimer>
 #include <QDebug>
 #include <QEventLoop>
+#include <QGuiApplication>
 #include <QMetaObject>
 #include <QPointer>
 #include <QQmlEngine>
@@ -30,6 +31,8 @@
 #include "app/image_pool_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/runtime/lens/lens_calibration_resolver.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/display_profile_readout.hpp"
@@ -400,10 +403,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     if (!pool) {
       return {};
     }
+    alcedo::EditorImageExifDisplay display;
     try {
-      return pool->Read<alcedo::EditorImageExifDisplay>(
-          static_cast<std::uint32_t>(image_id),
-          [](const std::shared_ptr<alcedo::Image>& image) {
+      display = pool->Read<alcedo::EditorImageExifDisplay>(
+          static_cast<std::uint32_t>(image_id), [](const std::shared_ptr<alcedo::Image>& image) {
             if (!image) {
               return alcedo::EditorImageExifDisplay{};
             }
@@ -412,6 +415,25 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     } catch (const std::exception&) {
       return {};
     }
+    // A fixed-lens camera (GFX100RF, Ricoh GR III) writes no lens name. Lens Correction then uses
+    // the profile of the built-in lens (#960), so Auto names that profile too.
+    if (display.lens_model.empty() && !display.camera_model.empty()) {
+      alcedo::LensInputMeta meta;
+      meta.cam_maker_         = display.camera_make;
+      meta.cam_model_         = display.camera_model;
+      meta.focal_length_mm_   = display.focal_mm.value_or(0.0f);
+      meta.aperture_f_number_ = display.aperture.value_or(0.0f);
+      if (const auto profile = alcedo::LensCalibrationResolver::FixedLensProfile(
+              meta, alcedo::DevelopPayload{}.lens_profile_db_path)) {
+        display.lens_make  = profile->maker_;
+        display.lens_model = profile->model_;
+      }
+    }
+    return display;
+  });
+  // The reader above runs on the UI thread; load the Lensfun database here so it does not.
+  lensfun_preload_ = std::thread([] {
+    alcedo::LensCalibrationResolver::PreloadDatabase(alcedo::DevelopPayload{}.lens_profile_db_path);
   });
   adjustment_transfer_->SetEditorSession(editor_session_.get());
   connect(adjustment_transfer_.get(), &AdjustmentTransferController::PackageChanged,
@@ -434,37 +456,44 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                                  : nullptr;
         });
   }
-  // An export renders on its own executor. The editor releases its GPU resources before the
-  // export allocates, and allocates them again on its next frame after the export ends.
-  import_export_->SetExportGpuResourceRelease(ExportGpuResourceRelease{
-      .release_before_export =
-          [this](ExportGpuResourceRelease::ReleaseCompletion on_released) {
-            const auto scheduler = editor_session_scheduler_;
-            if (!scheduler) {
-              on_released(true, {});
-              return;
-            }
-            // Queued on the session owner before the port refuses its first frame, so the owner
-            // records every refused frame and routes it again only after the export.
-            if (editor_session_runtime_ && editor_session_runtime_->service) {
-              editor_session_runtime_->service->SetSuspendedForExport(true);
-            }
-            scheduler->ReleaseGpuResourcesForExport(
-                [on_released = std::move(on_released)](EditorGpuResourceRelease release) {
-                  on_released(release.success, std::move(release.error));
-                });
-          },
-      .resume_after_export =
-          [this] {
-            // The port renders again before the owner routes the refused frames.
-            if (editor_session_scheduler_) {
-              editor_session_scheduler_->ResumeGpuResourcesAfterExport();
-            }
-            if (editor_session_runtime_ && editor_session_runtime_->service) {
-              editor_session_runtime_->service->SetSuspendedForExport(false);
-            }
-          },
-  });
+  // An export and semantic generation render on their own executors. The editor releases its GPU
+  // resources before either allocates, and allocates them again on its next frame after the last
+  // of them ends.
+  const auto editor_gpu_release_hooks = [this](EditorGpuReleaseHolder holder) {
+    return EditorGpuResourceReleaseHooks{
+        .release =
+            [this, holder](EditorGpuResourceReleaseHooks::ReleaseCompletion on_released) {
+              const auto scheduler = editor_session_scheduler_;
+              if (!scheduler) {
+                on_released(true, {});
+                return;
+              }
+              // Queued on the session owner before the port refuses its first frame, so the
+              // owner records every refused frame and routes it again only after the release.
+              if (editor_session_runtime_ && editor_session_runtime_->service) {
+                editor_session_runtime_->service->SetSuspendedForGpuRelease(true);
+              }
+              (void)scheduler->AcquireGpuResourceRelease(
+                  holder,
+                  [on_released = std::move(on_released)](EditorGpuResourceRelease release) {
+                    on_released(release.success, std::move(release.error));
+                  });
+            },
+        .resume =
+            [this, holder] {
+              // The port renders again before the owner routes the refused frames.
+              const bool last = editor_session_scheduler_ &&
+                                editor_session_scheduler_->EndGpuResourceRelease(holder);
+              if (last && editor_session_runtime_ && editor_session_runtime_->service) {
+                editor_session_runtime_->service->SetSuspendedForGpuRelease(false);
+              }
+            },
+    };
+  };
+  import_export_->SetExportGpuResourceRelease(
+      editor_gpu_release_hooks(EditorGpuReleaseHolder::Export));
+  semantic_generation_->SetEditorGpuResourceRelease(
+      editor_gpu_release_hooks(EditorGpuReleaseHolder::SemanticGeneration));
   lut_browser_ = std::make_unique<LutLibraryModel>();
   lut_browser_->setLibrary(lut_library_.get());
   RecordConstruction("LutLibraryModel", lut_browser_.get());
@@ -489,6 +518,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("EditorBehaviorPreferences", editor_behavior_.get());
   library_view_ = std::make_unique<LibraryViewPreferences>(this);
   RecordConstruction("LibraryViewPreferences", library_view_.get());
+  // The application QSettings, which the import service of project_handler.cpp reads.
+  raw_import_look_ = std::make_unique<RawImportLookSettingsModel>(QString{}, this);
+  RecordConstruction("RawImportLookSettingsModel", raw_import_look_.get());
   log_folder_ = std::make_unique<LogFolderController>(this);
   RecordConstruction("LogFolderController", log_folder_.get());
   project_launch_ = std::make_unique<ProjectLaunchCoordinator>(project_.get(), this);
@@ -504,6 +536,47 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   library_mutations_->SetInteractionPolicy(interaction_policy_.get());
   connect(library_mutations_.get(), &LibraryMutationOperations::ElementsDeleted,
           export_queue_.get(), &ExportQueue::RemoveElements);
+
+  MountScanCoordinatorDependencies mount_scan_dependencies;
+  mount_scan_dependencies.tasks           = background_tasks_.get();
+  mount_scan_dependencies.clock           = CreateSteadyMountScanClock();
+  mount_scan_dependencies.watcher         = CreatePlatformMountDirectoryWatcher();
+  mount_scan_dependencies.on_batch_stored = [library = library_.get(),
+                                             folders = folders_.get()](mount_id_t) {
+    // The Library shows the photos of each stored batch in place.
+    library->RequestLibraryContentRefresh();
+    folders->RefreshImageCounts();
+  };
+  mount_scan_dependencies.on_scan_ended = [library = library_.get(), folders = folders_.get()](
+                                              mount_id_t, const MountScanResult& result) {
+    const bool folders_changed = result.folders_added_count + result.folders_removed_count > 0;
+    if (folders_changed) {
+      library->ReloadFolderTree(folders->current_folder_path());
+    }
+    if (folders_changed || MountScanChangedPhotos(result)) {
+      library->RequestLibraryContentRefresh();
+    }
+    // The count read also reads the mount states: an offline or relocated mount changes its
+    // rows with no photo change.
+    folders->RefreshImageCounts();
+  };
+  mount_scans_ = std::make_unique<MountScanCoordinator>(std::move(mount_scan_dependencies));
+  RecordConstruction("MountScanCoordinator", mount_scans_.get());
+  folders_->BindMountScans(mount_scans_.get());
+  application_close_->BindMountScans(mount_scans_.get());
+  // #1016: a user import and a delete hold the scans for their length.
+  import_export_->BindMountScans(mount_scans_.get());
+  images_->BindMountScans(mount_scans_.get());
+  if (auto* gui = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+    connect(gui, &QGuiApplication::applicationStateChanged, mount_scans_.get(),
+            [scans = mount_scans_.get()](Qt::ApplicationState state) {
+              scans->HandleApplicationActiveChanged(state == Qt::ApplicationActive);
+            });
+  }
+  connect(project_.get(), &ProjectModule::ProjectEnteredChanged, this,
+          [this] { SyncMountScans(); });
+  connect(project_.get(), &ProjectModule::ProjectLoadStateChanged, this,
+          [this] { SyncMountScans(); });
 
   library_->BindCollaborators(folders_.get(), search_.get(), stats_.get());
   library_->SetSemanticLabelProvider(
@@ -639,7 +712,61 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       emit import_export->exportStateChanged();
     }
   };
+  lifecycle_hooks.stop_mount_scans = [scans = mount_scans_.get()] {
+    if (scans) {
+      scans->Stop();
+    }
+  };
+  lifecycle_hooks.begin_stop_mount_scans = [scans = mount_scans_.get()] {
+    return scans ? scans->BeginStop() : std::shared_future<void>{};
+  };
+  lifecycle_hooks.resume_mount_scans = [this] { SyncMountScans(); };
   project_->SetLifecycleHooks(std::move(lifecycle_hooks));
+}
+
+void ApplicationModuleHost::SyncMountScans() {
+  if (!mount_scans_) {
+    return;
+  }
+  auto&      handler    = project_->handler();
+  const auto project    = handler.project();
+  auto*      importer   = handler.import_service();
+  const bool should_run = !shutting_down_ && project && importer != nullptr &&
+                          handler.project_entered() && !handler.project_loading() &&
+                          project->GetMountService();
+  if (!should_run) {
+    // No wait on the UI thread: the project load, the project close, and the exit each wait for
+    // the scan worker before they save or replace the project.
+    (void)mount_scans_->BeginStop();
+    return;
+  }
+  if (mount_scans_->IsStarted()) {
+    return;
+  }
+  auto invalidate_thumbnail =
+      [library = QPointer<LibraryModule>(library_.get())](sl_element_id_t element_id) {
+        // Called on the scan worker; the thumbnail state belongs to the UI thread.
+        QMetaObject::invokeMethod(
+            library,
+            [library, element_id] {
+              if (!library || library->project() == nullptr) {
+                return;
+              }
+              if (auto thumbnails = library->project()->handler().thumbnail_service()) {
+                thumbnails->InvalidateThumbnail(element_id);
+              }
+              const auto* item = library->FindAlbumItem(element_id);
+              if (item != nullptr) {
+                (void)library->thumbs().RefreshCurrentThumbnail(element_id, item->image_id);
+              }
+            },
+            Qt::QueuedConnection);
+      };
+  // #1015: a scan that stored changes saves the project file on its worker, like the finalize
+  // step of a user import.
+  mount_scans_->Start(std::make_shared<ProjectMountScanPort>(project->GetMountService(), importer,
+                                                             std::move(invalidate_thumbnail),
+                                                             handler.MakeSaveAndPackageJob()));
 }
 
 void ApplicationModuleHost::ShutdownModules() {
@@ -656,6 +783,11 @@ void ApplicationModuleHost::ShutdownModules() {
     }
     if (background_tasks_) {
       background_tasks_->CancelAll();
+    }
+    // The stop request returns at once. The event wait below runs until the scan worker has
+    // ended (IsIdle); the project save runs after it.
+    if (mount_scans_) {
+      (void)mount_scans_->BeginStop();
     }
     if (semantic_generation_) {
       semantic_generation_->CancelGeneration();
@@ -710,6 +842,11 @@ void ApplicationModuleHost::ShutdownModules() {
     while (!IsIdle() && !deadline.hasExpired()) {
       QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
     }
+    // A scan worker that outlived the deadline still writes its batch. The save needs each
+    // batch stored in full, so this call waits for the worker.
+    if (mount_scans_) {
+      mount_scans_->Stop();
+    }
     // The runtime workspace is removed in the destructor, after ProjectModule closes the
     // project database (RemovePendingWorkspace).
     if (project_) {
@@ -726,6 +863,9 @@ void ApplicationModuleHost::ShutdownModules() {
 }
 
 ApplicationModuleHost::~ApplicationModuleHost() {
+  if (lensfun_preload_.joinable()) {
+    lensfun_preload_.join();
+  }
   ShutdownModules();
   // The session-owner worker calls the observers that EditorSessionController installed, and a
   // callback it already copied still runs after the controller clears its observer slots. The
@@ -743,10 +883,12 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     pointer.reset();
     RecordDestruction(type_name, object);
   };
+  destroy(mount_scans_, "MountScanCoordinator");
   destroy(library_mutations_, "LibraryMutationOperations");
   destroy(application_close_, "ApplicationCloseCoordinator");
   destroy(project_launch_, "ProjectLaunchCoordinator");
   destroy(log_folder_, "LogFolderController");
+  destroy(raw_import_look_, "RawImportLookSettingsModel");
   destroy(library_view_, "LibraryViewPreferences");
   destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");
@@ -801,6 +943,10 @@ void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
 auto ApplicationModuleHost::IsIdle() const -> bool {
   if (background_tasks_ &&
       background_tasks_->ActiveCountExcept(BackgroundTaskKind::AgentControl) > 0) {
+    return false;
+  }
+  // An automatic scan shows no task until it changes the library, but it writes the project.
+  if (mount_scans_ && mount_scans_->HasPendingScans()) {
     return false;
   }
   return !import_export_ ||

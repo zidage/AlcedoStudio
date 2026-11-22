@@ -35,6 +35,8 @@ enum class BackgroundTaskKind {
   /// An automation agent (CLI or MCP) holds control of the GUI session. Canceling the task
   /// gives control back to the user.
   AgentControl,
+  /// A scan of a mounted folder (Mounted Folder Plan, MF7).
+  MountScan,
 };
 
 /// Lifecycle state of a single background task record.

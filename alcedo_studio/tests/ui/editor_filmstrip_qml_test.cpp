@@ -9,6 +9,7 @@
 #include <QEventLoop>
 #include <QHash>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQuickItem>
@@ -23,6 +24,7 @@
 #include <QVariantMap>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -152,6 +154,7 @@ class FilmstripSession final : public QObject {
   Q_PROPERTY(int elementId READ elementId WRITE setElementId NOTIFY elementIdChanged)
   Q_PROPERTY(int imageId READ imageId WRITE setImageId NOTIFY imageIdChanged)
   Q_PROPERTY(bool hasImage READ hasImage CONSTANT)
+  Q_PROPERTY(QString imageFileName READ imageFileName CONSTANT)
   Q_PROPERTY(
       QString sessionState READ sessionState WRITE setSessionState NOTIFY sessionStateChanged)
   Q_PROPERTY(bool renderBusy READ renderBusy WRITE setRenderBusy NOTIFY renderBusyChanged)
@@ -166,6 +169,7 @@ class FilmstripSession final : public QObject {
   [[nodiscard]] int         elementId() const { return element_id_; }
   [[nodiscard]] int         imageId() const { return image_id_; }
   [[nodiscard]] bool        hasImage() const { return true; }
+  [[nodiscard]] QString     imageFileName() const { return QStringLiteral("outside.arw"); }
   [[nodiscard]] QString     sessionState() const { return session_state_; }
   [[nodiscard]] bool        renderBusy() const { return render_busy_; }
   [[nodiscard]] bool        canDiscardCurrentCommit() const { return can_discard_; }
@@ -857,7 +861,7 @@ TEST(EditorFilmstripQmlTest, LibrarySelectionShowsGraySelectedStateSeparateFromE
   ASSERT_TRUE(QMetaObject::invokeMethod(
       harness.filmstrip(), "handleIndexSelection", Q_ARG(QVariant, QVariant(5)),
       Q_ARG(QVariant, QVariant(static_cast<int>(Qt::ControlModifier))),
-      Q_ARG(QVariant, QVariant(false))));
+      Q_ARG(QVariant, QVariant(false)), Q_ARG(QVariant, QVariant(false))));
   ProcessEvents();
   EXPECT_EQ(harness.library_.selection()->SelectedCount(), 2);
   EXPECT_TRUE(harness.library_.selection()->IsSelected(1005));
@@ -881,7 +885,8 @@ TEST(EditorFilmstripQmlTest, LeftRightNavigationKeepsOneHighlightedTile) {
   // Plain click on image 1 opens it and selects it.
   ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "handleIndexSelection",
                                         Q_ARG(QVariant, QVariant(1)), Q_ARG(QVariant, QVariant(0)),
-                                        Q_ARG(QVariant, QVariant(true))));
+                                        Q_ARG(QVariant, QVariant(true)),
+                                        Q_ARG(QVariant, QVariant(false))));
   ProcessEvents();
   EXPECT_EQ(harness.session_.elementId(), 1001);
   EXPECT_TRUE(harness.library_.selection()->IsSelected(1001));
@@ -989,6 +994,152 @@ TEST(EditorFilmstripQmlTest, LocalSelectionKeepsHorizontalScrollUnchanged) {
   EXPECT_NEAR(list->property("contentX").toReal(), content_x_before, 2.0);
 }
 
+// Reads a delegate without scrolling, unlike TileAt.
+auto TileIfCreated(QQuickItem* list, int index) -> QQuickItem* {
+  QQuickItem* tile = nullptr;
+  QMetaObject::invokeMethod(list, "itemAtIndex", Qt::DirectConnection,
+                            Q_RETURN_ARG(QQuickItem*, tile), Q_ARG(int, index));
+  return tile;
+}
+
+// True when the whole tile lies inside [contentX, contentX + width].
+auto TileFullyVisible(QQuickItem* list, int index) -> bool {
+  QQuickItem* tile = TileIfCreated(list, index);
+  if (!tile) {
+    return false;
+  }
+  const double content_x = list->property("contentX").toReal();
+  return tile->x() >= content_x - 0.5 && tile->x() + tile->width() <= content_x + list->width() + 0.5;
+}
+
+// Issue 936: keyboard moves scroll the strip just enough to keep the focused tile visible.
+TEST(EditorFilmstripQmlTest, KeyboardMovesKeepFocusedTileVisible) {
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+
+  auto* filmstrip = harness.filmstrip();
+  auto* list      = harness.list();
+  ASSERT_NE(filmstrip, nullptr);
+  ASSERT_NE(list, nullptr);
+  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(list->property("contentWidth").toReal() > list->width() + 160.0, 2000);
+  ASSERT_NEAR(list->property("contentX").toReal(), 0.0, 0.5);
+
+  list->forceActiveFocus();
+  ProcessEvents();
+
+  // Right from the first tile walks the whole strip; the focused tile stays fully visible.
+  bool scrolled = false;
+  for (int index = 1; index < 8; ++index) {
+    const double before = list->property("contentX").toReal();
+    const bool   was_visible = TileFullyVisible(list, index);
+    QTest::keyClick(harness.window_, Qt::Key_Right);
+    ProcessEvents();
+    ASSERT_EQ(filmstrip->property("focusIndex").toInt(), index);
+    EXPECT_EQ(harness.session_.elementId(), 1000 + index);
+    EXPECT_TRUE(TileFullyVisible(list, index)) << "after Right to " << index;
+    const double after = list->property("contentX").toReal();
+    if (was_visible) {
+      // A tile already on screen leaves contentX unchanged.
+      EXPECT_NEAR(after, before, 0.5) << "after Right to " << index;
+    } else {
+      // A tile past the right edge lands at the right edge.
+      QQuickItem* tile = TileIfCreated(list, index);
+      ASSERT_NE(tile, nullptr);
+      EXPECT_NEAR(tile->x() + tile->width(), after + list->width(), 1.0);
+      scrolled = true;
+    }
+    EXPECT_NEAR(harness.session_.filmstripScrollPosition(), after, 0.5);
+  }
+  EXPECT_TRUE(scrolled);
+  const double right_end_x = list->property("contentX").toReal();
+  EXPECT_GT(right_end_x, 0.0);
+
+  // Left walks back; the first press that leaves the left edge scrolls one tile back.
+  bool scrolled_back = false;
+  for (int index = 6; index >= 0; --index) {
+    const double before      = list->property("contentX").toReal();
+    const bool   was_visible = TileFullyVisible(list, index);
+    QTest::keyClick(harness.window_, Qt::Key_Left);
+    ProcessEvents();
+    ASSERT_EQ(filmstrip->property("focusIndex").toInt(), index);
+    EXPECT_TRUE(TileFullyVisible(list, index)) << "after Left to " << index;
+    const double after = list->property("contentX").toReal();
+    if (was_visible) {
+      EXPECT_NEAR(after, before, 0.5) << "after Left to " << index;
+    } else {
+      QQuickItem* tile = TileIfCreated(list, index);
+      ASSERT_NE(tile, nullptr);
+      EXPECT_NEAR(tile->x(), after, 1.0);
+      EXPECT_LT(after, before);
+      scrolled_back = true;
+    }
+  }
+  EXPECT_TRUE(scrolled_back);
+  EXPECT_NEAR(list->property("contentX").toReal(), 0.0, 0.5);
+
+  // End scrolls to the last tile; Home scrolls back to the first.
+  QTest::keyClick(harness.window_, Qt::Key_End);
+  ProcessEvents();
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), 7);
+  EXPECT_TRUE(TileFullyVisible(list, 7));
+  EXPECT_NEAR(list->property("contentX").toReal(), right_end_x, 1.0);
+  QTest::keyClick(harness.window_, Qt::Key_Home);
+  ProcessEvents();
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), 0);
+  EXPECT_TRUE(TileFullyVisible(list, 0));
+  EXPECT_NEAR(list->property("contentX").toReal(), 0.0, 0.5);
+
+  // Shift+Right moves the range focus and also keeps the focused tile on screen.
+  for (int index = 1; index < 8; ++index) {
+    QTest::keyClick(harness.window_, Qt::Key_Right, Qt::ShiftModifier);
+    ProcessEvents();
+    ASSERT_EQ(filmstrip->property("focusIndex").toInt(), index);
+    EXPECT_TRUE(TileFullyVisible(list, index)) << "after Shift+Right to " << index;
+  }
+  EXPECT_NEAR(harness.session_.filmstripScrollPosition(), list->property("contentX").toReal(),
+              0.5);
+  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+}
+
+// Issue 936: a mouse click on a partly visible tile still leaves contentX unchanged, so the tile
+// stays cut by the edge.
+TEST(EditorFilmstripQmlTest, ClickOnPartlyVisibleTileKeepsHorizontalScroll) {
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+
+  auto* list = harness.list();
+  ASSERT_NE(list, nullptr);
+  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(list->property("contentWidth").toReal() > list->width() + 160.0, 2000);
+
+  // Scroll so the left edge cuts tile 1 in half.
+  constexpr int kPartial = 1;
+  QQuickItem*   tile     = TileIfCreated(list, kPartial);
+  ASSERT_NE(tile, nullptr);
+  list->setProperty("contentX", tile->x() + tile->width() * 0.5);
+  ProcessEvents();
+  const int partial = kPartial;
+  tile              = TileIfCreated(list, partial);
+  ASSERT_NE(tile, nullptr);
+  const double content_x_before = list->property("contentX").toReal();
+  ASSERT_GT(content_x_before, tile->x());
+  ASSERT_LT(content_x_before, tile->x() + tile->width());
+
+  // Click inside the visible part of the tile.
+  const QPointF local(tile->width() * 0.75, tile->height() * 0.5);
+  const QPoint  scene = tile->mapToScene(local).toPoint();
+  QTest::mouseClick(harness.window_, Qt::LeftButton, Qt::NoModifier, scene);
+  ProcessEvents();
+  EXPECT_EQ(harness.router_.openCount(), 1);
+  EXPECT_EQ(harness.session_.elementId(), 1000 + partial);
+  EXPECT_NEAR(list->property("contentX").toReal(), content_x_before, 0.5);
+  EXPECT_FALSE(TileFullyVisible(list, partial));
+  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+}
+
 // The filmstrip no longer owns a local menu: right-click forwards a menu
 // request (clicked row + scene point) to Main, which opens the shared image
 // context menu. This test checks the emitted request payload, including that a
@@ -1020,6 +1171,70 @@ TEST(EditorFilmstripQmlTest, ContextMenuRequestCarriesClickedRowAndScenePoint) {
   EXPECT_EQ(payload.value(QStringLiteral("imageId")).toInt(), 2001);
   EXPECT_DOUBLE_EQ(payload.value(QStringLiteral("sceneX")).toDouble(), 96.0);
   EXPECT_DOUBLE_EQ(payload.value(QStringLiteral("sceneY")).toDouble(), 24.0);
+}
+
+// Issue 957: the open image that the current Library list does not hold (a collection or
+// filter change while it is open) has its own slot before the list, with its own thumbnail
+// pin. A switch to an image of the list ends the slot and releases the pin.
+TEST(EditorFilmstripQmlTest, OpenImageOutsideListHasItsOwnSlotUntilAnotherImageOpens) {
+  // A one-pixel PNG: the slot thumbnail loads without an image provider.
+  const QString kOnePixelPngUrl = QStringLiteral(
+      "data:image/png;base64,"
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJg"
+      "gg==");
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+
+  auto* filmstrip = harness.filmstrip();
+  ASSERT_NE(filmstrip, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(harness.list() != nullptr, 2000);
+  auto* slot =
+      harness.window_->findChild<QQuickItem*>(QStringLiteral("editorFilmstripOutsideListSlot"));
+  ASSERT_NE(slot, nullptr);
+  EXPECT_FALSE(slot->isVisible());
+
+  // ImageActionsController.editorOutsideListImage, read through the host (Main).
+  QQmlComponent host_component(&harness.engine_);
+  host_component.setData(
+      QByteArrayLiteral("import QtQuick\n"
+                        "QtObject { property var editorOutsideListImage: null }"),
+      QUrl(QStringLiteral("file:///FilmstripHost.qml")));
+  std::unique_ptr<QObject> host(host_component.create());
+  ASSERT_NE(host, nullptr) << host_component.errorString().toStdString();
+  filmstrip->setProperty("host", QVariant::fromValue<QObject*>(host.get()));
+
+  // The session shows an image that the list does not hold.
+  harness.session_.setElementId(5000);
+  harness.session_.setImageId(6000);
+  host->setProperty("editorOutsideListImage", QVariantMap{{QStringLiteral("elementId"), 5000},
+                                                          {QStringLiteral("imageId"), 6000}});
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(slot->isVisible(), 2000);
+  EXPECT_TRUE(harness.library_.isPinned(5000));
+  EXPECT_EQ(filmstrip->property("currentFileName").toString(), QStringLiteral("outside.arw"));
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), -1);
+  // The list starts after the slot.
+  EXPECT_GT(harness.list()->x(), slot->x() + slot->width());
+
+  auto* card = slot->findChild<QQuickItem*>(QStringLiteral("editorFilmstripTileCard"));
+  ASSERT_NE(card, nullptr);
+  EXPECT_TRUE(card->property("editing").toBool());
+  EXPECT_EQ(card->property("fileName").toString(), QStringLiteral("outside.arw"));
+  emit harness.library_.thumbnailUpdated(5000, kOnePixelPngUrl, false, false, QString{});
+  ProcessEvents();
+  EXPECT_EQ(card->property("liveThumbUrl").toString(), kOnePixelPngUrl);
+
+  // Right opens the first image of the list; the slot ends with the switch.
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(filmstrip, "activateAdjacentImage", Q_ARG(QVariant, QVariant(1))));
+  ProcessEvents();
+  EXPECT_EQ(harness.router_.lastElementId(), 1000);
+  EXPECT_EQ(harness.session_.elementId(), 1000);
+  QTRY_VERIFY_WITH_TIMEOUT(!slot->isVisible(), 2000);
+  EXPECT_FALSE(harness.library_.isPinned(5000));
+  EXPECT_EQ(filmstrip->property("currentFileName").toString(), QStringLiteral("film_0.arw"));
+  filmstrip->setProperty("host", QVariant::fromValue<QObject*>(nullptr));
+  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
 TEST(EditorFilmstripQmlTest, SelectedTileShowsSavingAndRenderBadgesWhileSessionBusy) {

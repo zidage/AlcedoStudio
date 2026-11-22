@@ -95,6 +95,18 @@ void PlotHistogramLayer::set_cut_color(const QColor& color) {
   }
 }
 
+void PlotHistogramLayer::set_fill_opacity(qreal opacity) {
+  if (SetContent(fill_opacity_, std::clamp<qreal>(opacity, 0.0, 1.0))) {
+    emit styleChanged();
+  }
+}
+
+void PlotHistogramLayer::set_edge_opacity(qreal opacity) {
+  if (SetContent(edge_opacity_, std::clamp<qreal>(opacity, 0.0, 1.0))) {
+    emit styleChanged();
+  }
+}
+
 void PlotHistogramLayer::set_edge_width(qreal width) {
   if (SetContent(edge_width_, std::max<qreal>(0.0, width))) {
     emit styleChanged();
@@ -117,20 +129,22 @@ void PlotHistogramLayer::AppendGeometry(const PlotViewTransform& view,
   if (!HasHistogram(histogram)) {
     return;
   }
-  const std::array<QColor, 3> tints = {red_color_, green_color_, blue_color_};
+  const std::array<QColor, 3> tints         = {red_color_, green_color_, blue_color_};
+  const float                 fill_strength = kFillStrength * static_cast<float>(fill_opacity_);
+  const float                 edge_strength = kEdgeStrength * static_cast<float>(edge_opacity_);
   if (channels_ == Channels::All) {
     const auto chroma = plot_primitives::AdditiveChannelChroma(tints);
     for (int channel = 0; channel < 3; ++channel) {
       const auto& c = chroma[static_cast<size_t>(channel)];
-      AppendChannel(view, histogram, channel, plot_primitives::ScaledChromaColor(c, kFillStrength),
-                    plot_primitives::ScaledChromaColor(c, kEdgeStrength), geometry);
+      AppendChannel(view, histogram, channel, plot_primitives::ScaledChromaColor(c, fill_strength),
+                    plot_primitives::ScaledChromaColor(c, edge_strength), geometry);
     }
   } else {
     const int  channel = static_cast<int>(channels_) - static_cast<int>(Channels::Red);
     const auto chroma  = plot_primitives::TintChroma(tints[static_cast<size_t>(channel)]);
     AppendChannel(view, histogram, channel,
-                  plot_primitives::ScaledChromaColor(chroma, kFillStrength),
-                  plot_primitives::ScaledChromaColor(chroma, kEdgeStrength), geometry);
+                  plot_primitives::ScaledChromaColor(chroma, fill_strength),
+                  plot_primitives::ScaledChromaColor(chroma, edge_strength), geometry);
   }
   AppendPeakCuts(view, histogram, geometry);
 }

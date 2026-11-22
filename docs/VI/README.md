@@ -475,16 +475,38 @@ labels.
 
 ### `CollectionsPanel.qml`
 
+- One `colBgPanel` surface (#1028): wordmark, the Search, Background Tasks,
+  and All Photos rows, the Collections section with its tree, and the Import
+  button at the foot. The edge in the gap to the workspace sets the width;
+  a double-click sets the default width.
 - The "Alcedo" wordmark keeps the theme accent (documented use).
-- The selected collection row is the `editorListSelectedFillColor` well; its
-  name and folder icon (`ColorImage`) use `editorListSelectedInkColor`. No side
-  stripe.
+- The selected row (tree or navigation) is the quiet `controlHoveredFillColor`
+  well with unchanged `textColor` text in `fontWeightStrong`. No side stripe.
+- Tree rows: chevron column, icon column (`folder-symlink.svg` for a mount
+  root, `folder.svg` otherwise), name, count. Indent guides in
+  `collectionsTreeGuideColor`; the guide of the collection that holds the
+  selection in `collectionsTreeGuideActiveColor`. On hover the more button
+  (`dots.svg`) takes the place of the count.
+- Every icon of the sidebar and its rail (navigation rows, tree rows, sort,
+  New collection, more button) is `textMutedColor`, as the editor side panel
+  icons; selection or hover makes it `textColor`. The Import button keeps its
+  filled-action ink. No pure white icon.
 - The new-collection name field has a 1 px `textMutedColor` focus border and a
   neutral text selection.
-- Import From Folder is the neutral filled action: `editorListSelectedFillColor`
-  fill (darker on hover and press), text and icon in
-  `editorListSelectedInkColor`; disabled uses `bgBaseColor` with
-  `textMutedColor` ink.
+- Import is the neutral filled action: `editorListSelectedFillColor` fill
+  (darker on hover and press), text and icon in `editorListSelectedInkColor`.
+  Its menu opens above it.
+- States to check: no project; a project with no collection; deep tree with a
+  long name; a selected mount root; an offline mount; the Collections section
+  folded; a row menu open; a file drag over All Photos and over a row; a
+  collection drag onto All Photos; the narrowest and the widest width.
+
+### `CollectionsRail.qml`
+
+- The folded sidebar in the Library: compact `IconActionButton`s on a
+  `colBgPanel` rail. Import keeps the neutral filled action fill.
+- A hover on All Photos or Collections shows the sidebar over the workspace
+  with a 1 px `glassStrokeColor` outline.
 
 ### `ThumbnailEditMark.qml`, `ThumbnailStarRating.qml`
 
@@ -544,6 +566,12 @@ labels.
 
 - The grouped mode loads `AlbumSectionView`; the flat mode keeps
   `ThumbnailGridView`.
+- The header shows the path of the current collection (#1028): All Photos,
+  then each collection, with a 12 px `chevron-right.svg` in `textMutedColor`
+  between the parts. The parts above the current collection are muted and
+  select their collection on click; the current collection is `textColor`
+  in `fontWeightStrong`. A path of more than four parts folds its middle
+  into "...".
 - A query that replaces the result shows `StaggeredGridLoader` 150 ms after it
   starts (DESIGN.md "Library loading"). With no result shown (a collection
   switch), placeholder cards fill the grid area at the current zoom level and
@@ -553,7 +581,7 @@ labels.
   shows the error in `dangerColor` with a compact Retry `DialogActionButton`. A
   successful empty filtered result shows No Matching Photos.
 - Load Project (empty Library) and the Export queue button are the neutral
-  filled action of `CollectionsPanel.qml` (Import From Folder). No gradient and
+  filled action of `CollectionsPanel.qml` (Import). No gradient and
   no `#457B9D`.
 - The grid zoom slider has a `textColor` fill and handle on the `bgBaseColor`
   track. The Inspector resize handle shows `textMutedColor` on hover and drag.

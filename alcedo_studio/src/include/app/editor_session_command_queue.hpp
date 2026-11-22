@@ -67,10 +67,12 @@ enum class EditorSessionCommandKind : std::uint8_t {
   /// The bound viewport was suspended (minimized/hidden) or resumed.
   SetPresentationSuspended,
   /// An export released the editor GPU resources, or ended.
-  SetSuspendedForExport,
+  SetSuspendedForGpuRelease,
   SetAdjustmentProjectionNode,
   RenameColorGrade,
   SetColorGradeDeletionProtected,
+  /// Show or hide one Color Grade as one history commit that renders.
+  SetColorGradeEnabled,
   EditNodeGraph,
   /// Mask Groups: insert one clean Color Grade at the top of the backbone.
   InsertColorGradeAtTop,
@@ -166,11 +168,13 @@ struct EditorSessionCommand {
   bool                                    geometry_overlay_active = false;
   /// SetPresentationSuspended only.
   bool                                    presentation_suspended  = false;
-  /// SetSuspendedForExport only.
-  bool                                    suspended_for_export    = false;
+  /// SetSuspendedForGpuRelease only.
+  bool                                    suspended_for_gpu_release = false;
   NodeId                                  node_id;
   /// Desired deletion-only protection for SetColorGradeDeletionProtected.
   bool                                    deletion_protected = false;
+  /// Desired visibility for SetColorGradeEnabled.
+  bool                                    node_enabled       = true;
   /// InsertColorGradeAtTop only: the backbone node the caller expects directly
   /// before DRT/Post. Re-verified on the owner thread so a queued request can
   /// never insert above a predecessor that changed after submission.

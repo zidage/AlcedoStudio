@@ -9,11 +9,80 @@
 #include <unordered_set>
 
 #include "edit/graph/pipeline_document.hpp"
+#include "storage/store/mount/mount_store.hpp"
+#include "type/mount_records.hpp"
 #include "utils/logging/log.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
+
+auto SleeveErrorName(const SleeveError code) -> const char* {
+  switch (code) {
+    case SleeveError::kMountedFolderStructureIsReadOnly:
+      return "mounted_folder_structure_is_read_only";
+    case SleeveError::kMountedPhotoIsPresent:
+      return "mounted_photo_is_present";
+    case SleeveError::kMountedPhotoIsMissing:
+      return "mounted_photo_is_missing";
+  }
+  return "unknown";
+}
+
 namespace {
+
+/// Throws SleeveOperationError when @p folder is mounted.
+void RequireEditableStructure(const SleeveElement& folder) {
+  if (SleeveServiceImpl::CanEditFolderStructure(folder)) {
+    return;
+  }
+  throw SleeveOperationError(SleeveError::kMountedFolderStructureIsReadOnly,
+                             "The structure of the mounted folder '" +
+                                 conv::ToBytes(folder.element_name_) +
+                                 "' is read-only. It follows its disk directory.");
+}
+
+/// Throws SleeveOperationError when the folder @p folder_id is mounted. An id that names no
+/// element passes: the FileSystem operation that follows reports it.
+void RequireEditableFolder(FileSystem& fs, const sl_element_id_t folder_id) {
+  if (const auto folder = fs.Get(folder_id)) {
+    RequireEditableStructure(*folder);
+  }
+}
+
+/// Throws SleeveOperationError when a live file of @p file_ids is mounted (P7, MF5 data rules).
+/// A mounted file with no source record counts as present: the scan that gave it the mount id
+/// found its file, and a failed later batch of that scan can leave the record unwritten. Ids that
+/// name no live file pass, as in FileSystem::DeleteFilesEverywhere.
+void RequireRemovableFromLibrary(FileSystem& fs, MountStore& mount_store,
+                                 std::span<const sl_element_id_t> file_ids) {
+  std::vector<sl_element_id_t> mounted_ids;
+  for (const auto file_id : file_ids) {
+    std::shared_ptr<SleeveElement> file;
+    try {
+      file = fs.Get(file_id);
+    } catch (const std::exception&) {
+      continue;
+    }
+    if (file && file->type_ == ElementType::FILE && file->sync_flag_ != SyncFlag::DELETED &&
+        file->mount_id_.has_value()) {
+      mounted_ids.push_back(file_id);
+    }
+  }
+  if (mounted_ids.empty()) {
+    return;
+  }
+  for (const auto file_id : mounted_ids) {
+    const auto record = mount_store.ReadSourceFile(file_id);
+    if (!record.has_value() || record->state == SourceFileState::kPresent) {
+      throw SleeveOperationError(
+          SleeveError::kMountedPhotoIsPresent,
+          "A mounted photo whose file is present stays in the library. Use the Delete mark.");
+    }
+  }
+  throw SleeveOperationError(
+      SleeveError::kMountedPhotoIsMissing,
+      "A missing mounted photo leaves the library through Remove Missing Photos of its mount.");
+}
 
 auto ElementTypeLabel(const ElementType type) -> const char* {
   switch (type) {
@@ -136,6 +205,24 @@ auto SleeveServiceImpl::SyncLocked() -> SyncResult {
   return result;
 }
 
+auto SleeveServiceImpl::CanEditFolderStructure(const SleeveElement& folder) -> bool {
+  return !folder.mount_id_.has_value();
+}
+
+void SleeveServiceImpl::CheckFolderStructureEditable(const std::filesystem::path& folder_path) {
+  Read<void>([&folder_path](FileSystem& fs) {
+    std::shared_ptr<SleeveElement> folder;
+    try {
+      folder = fs.Get(folder_path, false);
+    } catch (const std::runtime_error&) {
+      return;
+    }
+    if (folder && folder->type_ == ElementType::FOLDER) {
+      RequireEditableStructure(*folder);
+    }
+  });
+}
+
 auto SleeveServiceImpl::GetCurrentID() const -> sl_element_id_t {
   std::lock_guard<std::mutex> lock(fs_lock_);
   return fs_->GetCurrentID();
@@ -191,6 +278,7 @@ auto SleeveServiceImpl::CreateFolder(const std::filesystem::path& parent_path,
                                      const file_name_t&           name)
     -> std::pair<std::shared_ptr<SleeveFolder>, SyncResult> {
   auto result = Write<std::shared_ptr<SleeveFolder>>([parent_path, name](FileSystem& fs) {
+    RequireEditableStructure(*fs.Get(parent_path, false));
     auto created = fs.Create(parent_path, name, ElementType::FOLDER);
     if (!created || created->type_ != ElementType::FOLDER) {
       throw std::runtime_error("SleeveService: Failed to create folder.");
@@ -211,14 +299,18 @@ auto SleeveServiceImpl::CreateFileInLibrary(const file_name_t& name)
 
 auto SleeveServiceImpl::LinkFileToFolder(sl_element_id_t file_id, sl_element_id_t folder_id)
     -> SyncResult {
-  return Write<void>(
-      [file_id, folder_id](FileSystem& fs) { fs.LinkFileToFolder(file_id, folder_id); });
+  return Write<void>([file_id, folder_id](FileSystem& fs) {
+    RequireEditableFolder(fs, folder_id);
+    fs.LinkFileToFolder(file_id, folder_id);
+  });
 }
 
 auto SleeveServiceImpl::DeleteFileFromFolder(sl_element_id_t file_id,
                                              sl_element_id_t folder_id) -> SyncResult {
-  return Write<void>(
-      [file_id, folder_id](FileSystem& fs) { fs.UnlinkFileFromFolder(file_id, folder_id); });
+  return Write<void>([file_id, folder_id](FileSystem& fs) {
+    RequireEditableFolder(fs, folder_id);
+    fs.UnlinkFileFromFolder(file_id, folder_id);
+  });
 }
 
 auto SleeveServiceImpl::DeleteFilesFromFolder(std::span<const sl_element_id_t> file_ids,
@@ -226,6 +318,7 @@ auto SleeveServiceImpl::DeleteFilesFromFolder(std::span<const sl_element_id_t> f
     -> std::pair<std::vector<std::shared_ptr<SleeveFile>>, SyncResult> {
   return Write<std::vector<std::shared_ptr<SleeveFile>>>(
       [file_ids, folder_id](FileSystem& fs) -> std::vector<std::shared_ptr<SleeveFile>> {
+        RequireEditableFolder(fs, folder_id);
         std::vector<std::shared_ptr<SleeveFile>> files;
         files.reserve(file_ids.size());
 
@@ -243,13 +336,17 @@ auto SleeveServiceImpl::DeleteFilesFromFolder(std::span<const sl_element_id_t> f
 }
 
 auto SleeveServiceImpl::DeleteFileEverywhere(sl_element_id_t file_id) -> SyncResult {
-  return Write<void>([file_id](FileSystem& fs) { fs.DeleteFileEverywhere(file_id); });
+  return Write<void>([this, file_id](FileSystem& fs) {
+    RequireRemovableFromLibrary(fs, storage_->GetMountStore(), std::span(&file_id, 1));
+    fs.DeleteFileEverywhere(file_id);
+  });
 }
 
 auto SleeveServiceImpl::DeleteFilesEverywhere(std::span<const sl_element_id_t> file_ids)
     -> std::pair<std::vector<std::shared_ptr<SleeveFile>>, SyncResult> {
   return Write<std::vector<std::shared_ptr<SleeveFile>>>(
-      [file_ids](FileSystem& fs) -> std::vector<std::shared_ptr<SleeveFile>> {
+      [this, file_ids](FileSystem& fs) -> std::vector<std::shared_ptr<SleeveFile>> {
+        RequireRemovableFromLibrary(fs, storage_->GetMountStore(), file_ids);
         std::vector<std::shared_ptr<SleeveFile>> files;
         files.reserve(file_ids.size());
 
@@ -275,6 +372,7 @@ auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,
     throw std::runtime_error(sync_restore_error_);
   }
 
+  RequireEditableFolder(*fs_, folder_id);
   auto       duplicated  = fs_->DuplicateFileToFolder(file_id, folder_id);
   SyncResult sync_result = SyncLocked();
   if (!duplicated || !sync_result.success_) {
@@ -292,22 +390,104 @@ auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,
 }
 
 auto SleeveServiceImpl::DeletePath(const std::filesystem::path& target_path) -> SyncResult {
-  return Write<void>([target_path](FileSystem& fs) { fs.Delete(target_path); });
+  return Write<void>([this, target_path](FileSystem& fs) {
+    // FileSystem::Delete removes a file of the root from the library and unlinks a file of any
+    // other folder from that folder.
+    const auto target = fs.Get(target_path, false);
+    if (target->type_ == ElementType::FOLDER) {
+      RequireEditableStructure(*target);
+    } else if (const auto parent = fs.Get(target_path.parent_path(), false);
+               parent->element_id_ == 0) {
+      RequireRemovableFromLibrary(fs, storage_->GetMountStore(),
+                                  std::span(&target->element_id_, 1));
+    } else {
+      RequireEditableStructure(*parent);
+    }
+    fs.Delete(target_path);
+  });
 }
 
 auto SleeveServiceImpl::DeleteElement(sl_element_id_t target_id) -> SyncResult {
-  return Write<void>([target_id](FileSystem& fs) { fs.Delete(target_id); });
+  return Write<void>([this, target_id](FileSystem& fs) {
+    // FileSystem::Delete removes a file from the library.
+    if (const auto target = fs.Get(target_id)) {
+      if (target->type_ == ElementType::FOLDER) {
+        RequireEditableStructure(*target);
+      } else {
+        RequireRemovableFromLibrary(fs, storage_->GetMountStore(), std::span(&target_id, 1));
+      }
+    }
+    fs.Delete(target_id);
+  });
 }
 
 auto SleeveServiceImpl::RenameFolder(const std::filesystem::path& folder_path,
                                      const file_name_t& new_name) -> SyncResult {
-  return Write<void>(
-      [folder_path, new_name](FileSystem& fs) { fs.RenameFolder(folder_path, new_name); });
+  return Write<void>([folder_path, new_name](FileSystem& fs) {
+    RequireEditableStructure(*fs.Get(folder_path, false));
+    fs.RenameFolder(folder_path, new_name);
+  });
+}
+
+auto SleeveServiceImpl::ReadMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id)
+    -> MountTree {
+  return Read<MountTree>([root_folder_id, mount_id](FileSystem& fs) {
+    return alcedo::ReadMountTree(fs, root_folder_id, mount_id);
+  });
+}
+
+auto SleeveServiceImpl::ApplyMountTreeChanges(const MountTreeChanges& changes) -> SyncResult {
+  return Write<void>([&changes](FileSystem& fs) { alcedo::ApplyMountTreeChanges(fs, changes); });
+}
+
+auto SleeveServiceImpl::CreateMountRootFolder(sl_element_id_t parent_id, const file_name_t& name,
+                                              mount_id_t mount_id)
+    -> std::pair<std::shared_ptr<SleeveFolder>, SyncResult> {
+  return Write<std::shared_ptr<SleeveFolder>>([parent_id, &name, mount_id](FileSystem& fs) {
+    return alcedo::CreateMountRootFolder(fs, parent_id, name, mount_id);
+  });
+}
+
+auto SleeveServiceImpl::RemoveMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id,
+                                        std::span<const sl_element_id_t> file_ids) -> SyncResult {
+  return Write<void>([root_folder_id, mount_id, file_ids](FileSystem& fs) {
+    alcedo::RemoveMountTree(fs, root_folder_id, mount_id, file_ids);
+  });
+}
+
+auto SleeveServiceImpl::DeleteMissingMountedFiles(mount_id_t                       mount_id,
+                                                  std::span<const sl_element_id_t> file_ids)
+    -> std::pair<std::vector<std::shared_ptr<SleeveFile>>, SyncResult> {
+  return Write<std::vector<std::shared_ptr<SleeveFile>>>(
+      [this, mount_id, file_ids](FileSystem& fs) -> std::vector<std::shared_ptr<SleeveFile>> {
+        auto& mounts = storage_->GetMountStore();
+        for (const auto file_id : file_ids) {
+          const auto file   = fs.Get(file_id);
+          const auto record = mounts.ReadSourceFile(file_id);
+          if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED ||
+              file->mount_id_ != mount_id || !record.has_value() ||
+              record->state != SourceFileState::kMissing) {
+            throw std::invalid_argument("SleeveServiceImpl: the element " +
+                                        std::to_string(file_id) +
+                                        " is not a missing photo of the mount");
+          }
+        }
+        std::vector<std::shared_ptr<SleeveFile>> files;
+        for (const auto file_id : fs.DeleteFilesEverywhere(file_ids)) {
+          auto element = fs.Get(file_id);
+          if (element && element->type_ == ElementType::FILE) {
+            files.push_back(std::static_pointer_cast<SleeveFile>(element));
+          }
+        }
+        return files;
+      });
 }
 
 auto SleeveServiceImpl::MoveFolder(const std::filesystem::path& folder_path,
                                    const std::filesystem::path& new_parent_path) -> SyncResult {
   return Write<void>([folder_path, new_parent_path](FileSystem& fs) {
+    RequireEditableStructure(*fs.Get(folder_path, false));
+    RequireEditableStructure(*fs.Get(new_parent_path, false));
     fs.MoveFolder(folder_path, new_parent_path);
   });
 }

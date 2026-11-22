@@ -9,6 +9,9 @@ import Alcedo.Main 1.0
 // shared Library selection. A tile has two independent states: editing (the
 // image that the editor shows) and selected (the image is in the Library
 // selection). Opening an image from the strip also makes it the selection.
+// The open image always has one filmstrip position: its tile in the list, or, when the
+// current Library list does not hold it (a collection, filter, or search change while it is
+// open), a separate slot before the list. The slot ends when the editor opens another image.
 // Motion / surface tokens: DESIGN.md.
 Item {
     id: root
@@ -50,6 +53,20 @@ Item {
         return thumbnailModel && selectedElementId > 0
                 ? thumbnailModel.rowByElementId(selectedElementId) : -1
     }
+    // The open image when the current Library list does not hold it
+    // (ImageActionsController.editorOutsideListImage, read through the host), or null. The
+    // list check publishes it; the slot shows only while the list has no row for the image.
+    readonly property var outsideListImage: {
+        const outside = host && host.editorOutsideListImage ? host.editorOutsideListImage : null
+        if (!outside || selectedIndex >= 0 || Number(outside.elementId) !== selectedElementId) {
+            return null
+        }
+        return outside
+    }
+    readonly property bool showsOutsideListImage: outsideListImage !== null
+    readonly property string openImageFileName: editorSession
+                                                && editorSession.imageFileName !== undefined
+                                                ? String(editorSession.imageFileName || "") : ""
     readonly property int currentIndex: selectedIndex >= 0 ? selectedIndex + 1 : 0
     readonly property int totalCount: thumbnailModel ? Number(thumbnailModel.count) : 0
     property string currentFileName: ""
@@ -64,6 +81,9 @@ Item {
     property bool _listHadFocus: false
     property bool _restoringScroll: false
     property int _pendingRevealIndex: -1
+    // Keyboard target whose delegate row is not in the ListView yet; revealed
+    // with ListView.Contain once the row arrives.
+    property int _pendingContainIndex: -1
     property bool _heightResizing: false
     property bool _rebindingModel: false
     property int _listRevision: 0
@@ -142,7 +162,9 @@ Item {
 
     function refreshCurrentFileName() {
         let name = ""
-        if (thumbnailModel && selectedIndex >= 0 && thumbnailModel.getItemAt) {
+        if (showsOutsideListImage) {
+            name = openImageFileName
+        } else if (thumbnailModel && selectedIndex >= 0 && thumbnailModel.getItemAt) {
             const row = thumbnailModel.getItemAt(selectedIndex)
             if (row && row.fileName) {
                 name = String(row.fileName)
@@ -165,6 +187,16 @@ Item {
             _restoringScroll = false
             _pendingRevealIndex = -1
             root.storeFilmstripScroll()
+            return
+        }
+
+        if (_pendingContainIndex >= 0) {
+            if (_pendingContainIndex >= filmstripListView.count) {
+                return
+            }
+            const index = _pendingContainIndex
+            _pendingContainIndex = -1
+            root.revealIndexIfHidden(index)
             return
         }
 
@@ -235,6 +267,24 @@ Item {
         selectionAnchorIndex = target
         _pendingRevealIndex = target
         scheduleScrollRestore()
+    }
+
+    // Scrolls the strip by the smallest amount that shows the whole tile: a
+    // visible tile keeps contentX, a tile past the right edge lands at the
+    // right edge, and a tile before the left edge lands at the left edge.
+    function revealIndexIfHidden(index) {
+        const target = Number(index)
+        if (!filmstripListView || target < 0 || target >= totalCount) {
+            return
+        }
+        if (target >= filmstripListView.count) {
+            _pendingContainIndex = target
+            scheduleScrollRestore()
+            return
+        }
+        _pendingContainIndex = -1
+        filmstripListView.positionViewAtIndex(target, ListView.Contain)
+        root.storeFilmstripScroll()
     }
 
     function applyFilmstripScrollTarget() {
@@ -359,7 +409,9 @@ Item {
         updateSelectionAnchor(index)
     }
 
-    function handleIndexSelection(index, modifiers, activate) {
+    // reveal: keyboard moves pass true so the focused tile stays on screen. A
+    // mouse click targets a tile the user already sees, so it keeps contentX.
+    function handleIndexSelection(index, modifiers, activate, reveal) {
         if (!selectionEnabled || index < 0 || index >= totalCount) {
             return
         }
@@ -370,6 +422,9 @@ Item {
 
         focusCurrentIndex(index)
         filmstripListView.forceActiveFocus()
+        if (reveal === true) {
+            root.revealIndexIfHidden(index)
+        }
         const shift = (modifiers & Qt.ShiftModifier) !== 0
         const control = (modifiers & Qt.ControlModifier) !== 0
         if (shift) {
@@ -386,9 +441,10 @@ Item {
         if (activate) {
             root.activateImage(index)
         } else {
-            // Selection from this filmstrip must not move contentX. Only
-            // cross-view requests (Library → applyFilmstripScrollTarget) may
-            // scroll the strip so the peer can find the new image.
+            // Selection from this filmstrip never puts the tile at the
+            // beginning; only keyboard moves scroll, and only by the reveal
+            // above. Library-originated requests go through
+            // applyFilmstripScrollTarget.
             root.notifyImageInteraction(item, index)
         }
     }
@@ -427,14 +483,14 @@ Item {
             return
         }
         const nextIndex = Math.max(0, Math.min(totalCount - 1, focusIndex + delta))
-        root.handleIndexSelection(nextIndex, modifiers || 0, false)
+        root.handleIndexSelection(nextIndex, modifiers || 0, false, true)
     }
 
     function activateAdjacentImage(delta) {
         // Left/Right open the adjacent image and move the selection with it, so
         // the editing tile is also the only selected tile. Out-of-range indices
         // are inert.
-        root.handleIndexSelection(focusIndex + delta, Qt.NoModifier, true)
+        root.handleIndexSelection(focusIndex + delta, Qt.NoModifier, true, true)
     }
 
     function activateFocused() {
@@ -477,20 +533,30 @@ Item {
         }
     }
     onSelectedIndexChanged: {
-        // Update focus/label only. Do not scroll: open/selection from this
-        // strip (or keyboard) must leave contentX alone. Library-originated
-        // reveals go through applyFilmstripScrollTarget instead.
+        // Update focus/label only. Keyboard moves reveal their tile in
+        // handleIndexSelection; Library-originated reveals go through
+        // applyFilmstripScrollTarget.
         refreshCurrentFileName()
         if (selectedIndex >= 0) {
             focusIndex = selectedIndex
         }
     }
+    onShowsOutsideListImageChanged: {
+        refreshCurrentFileName()
+        // Keyboard focus starts on the slot: Right moves to the first tile of the list.
+        if (showsOutsideListImage) {
+            focusIndex = -1
+        }
+    }
+    onOpenImageFileNameChanged: refreshCurrentFileName()
     onTotalCountChanged: {
         refreshCurrentFileName()
         if (totalCount <= 0) {
             focusIndex = -1
-        } else if (focusIndex < 0 || focusIndex >= totalCount) {
-            focusIndex = Math.max(0, Math.min(totalCount - 1, selectedIndex))
+        } else if (focusIndex >= totalCount || (focusIndex < 0 && !showsOutsideListImage)) {
+            focusIndex = showsOutsideListImage
+                    ? -1
+                    : Math.max(0, Math.min(totalCount - 1, selectedIndex))
         }
         if (!_rebindingModel) {
             applyFilmstripScrollTarget()
@@ -752,7 +818,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.alignment: Qt.AlignVCenter
                     text: {
-                        if (root.totalCount <= 0) {
+                        if (root.totalCount <= 0 && !root.showsOutsideListImage) {
                             return qsTr("No images in filmstrip")
                         }
                         return root.currentFileName.length > 0
@@ -840,17 +906,130 @@ Item {
             clip: true
 
             Label {
-                anchors.centerIn: parent
+                anchors.centerIn: filmstripListView
                 visible: root.totalCount <= 0
                 text: qsTr("No images")
                 color: root.colMuted
                 font.pixelSize: appTheme.fontSizeBody
             }
 
+            // The open image that the current list does not hold. It is the editing tile, so
+            // it has the editing ring; it has no selection and no menu of its own.
+            Item {
+                id: outsideListSlot
+                objectName: "editorFilmstripOutsideListSlot"
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.leftMargin: appTheme.spaceSm
+                anchors.topMargin: appTheme.spaceXs
+                visible: root.showsOutsideListImage
+                width: visible ? Math.max(appTheme.spaceXl * 7, outsideListCard.implicitWidth) : 0
+                height: filmstripListView.height
+                Accessible.role: Accessible.ListItem
+                Accessible.name: root.openImageFileName
+                Accessible.description: qsTr("Current image, not in this list")
+
+                property int pinnedElementId: 0
+                property int pinnedImageId: 0
+                property string thumbUrl: ""
+                property bool thumbLoading: false
+                property bool thumbMissingSource: false
+                property string thumbErrorText: ""
+
+                // The slot holds its own thumbnail pin: no list row pins this image.
+                function bindThumbnail() {
+                    const outside = root.outsideListImage
+                    const elementId = outside ? Number(outside.elementId) : 0
+                    const imageId = outside ? Number(outside.imageId) : 0
+                    if (elementId === pinnedElementId && imageId === pinnedImageId) {
+                        return
+                    }
+                    releaseThumbnail()
+                    if (elementId <= 0 || imageId <= 0 || !root.libraryModule) {
+                        return
+                    }
+                    pinnedElementId = elementId
+                    pinnedImageId = imageId
+                    thumbLoading = true
+                    root.libraryModule.SetThumbnailVisible(elementId, imageId, true,
+                                                           root.filmstripThumbnailMaxEdge)
+                }
+
+                function releaseThumbnail() {
+                    if (pinnedElementId > 0 && pinnedImageId > 0 && root.libraryModule) {
+                        root.libraryModule.SetThumbnailVisible(pinnedElementId, pinnedImageId,
+                                                               false,
+                                                               root.filmstripThumbnailMaxEdge)
+                    }
+                    pinnedElementId = 0
+                    pinnedImageId = 0
+                    thumbUrl = ""
+                    thumbLoading = false
+                    thumbMissingSource = false
+                    thumbErrorText = ""
+                }
+
+                Component.onCompleted: bindThumbnail()
+                Component.onDestruction: releaseThumbnail()
+
+                Connections {
+                    target: root
+                    function onOutsideListImageChanged() { outsideListSlot.bindThumbnail() }
+                }
+
+                Connections {
+                    target: root.libraryModule
+                    ignoreUnknownSignals: true
+                    function onThumbnailUpdated(updatedElementId, updatedUrl, loading,
+                                                missingSource, errorText) {
+                        if (outsideListSlot.pinnedElementId <= 0
+                                || Number(updatedElementId) !== outsideListSlot.pinnedElementId) {
+                            return
+                        }
+                        outsideListSlot.thumbUrl = updatedUrl || ""
+                        outsideListSlot.thumbLoading = Boolean(loading)
+                        outsideListSlot.thumbMissingSource = Boolean(missingSource)
+                        outsideListSlot.thumbErrorText = errorText || ""
+                    }
+                }
+
+                EditorFilmstripThumbnailCard {
+                    id: outsideListCard
+                    anchors.fill: parent
+                    fileName: root.openImageFileName
+                    imageIndex: 0
+                    liveThumbUrl: outsideListSlot.thumbUrl
+                    liveThumbLoading: outsideListSlot.thumbLoading
+                    thumbnailProblemState: outsideListSlot.thumbUrl.length === 0
+                                           && !outsideListSlot.thumbLoading
+                                           && (outsideListSlot.thumbMissingSource
+                                               || outsideListSlot.thumbErrorText.length > 0)
+                    thumbnailProblemText: outsideListSlot.thumbErrorText
+                    thumbnailMissingSource: outsideListSlot.thumbMissingSource
+                    editing: true
+                    saving: root.saving
+                    renderBusy: root.renderBusy
+                    thumbnailMaxEdge: root.filmstripThumbnailMaxEdge
+                }
+            }
+
+            // Separates the slot of the open image from the list.
+            Rectangle {
+                id: outsideListDivider
+                objectName: "editorFilmstripOutsideListDivider"
+                visible: root.showsOutsideListImage
+                anchors.left: outsideListSlot.right
+                anchors.leftMargin: visible ? appTheme.spaceSm : 0
+                anchors.verticalCenter: outsideListSlot.verticalCenter
+                width: visible ? 1 : 0
+                height: Math.max(1, outsideListSlot.height - appTheme.spaceLg * 2)
+                color: appTheme.dividerColor
+            }
+
             ListView {
                 id: filmstripListView
                 objectName: "editorFilmstripListView"
-                anchors.left: parent.left
+                anchors.left: root.showsOutsideListImage ? outsideListDivider.right : parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.leftMargin: appTheme.spaceSm
@@ -919,10 +1098,11 @@ Item {
                         root.moveFocus(event.key === Qt.Key_Left ? -1 : 1, event.modifiers)
                         event.accepted = true
                     } else if (event.key === Qt.Key_Home) {
-                        root.handleIndexSelection(0, event.modifiers, false)
+                        root.handleIndexSelection(0, event.modifiers, false, true)
                         event.accepted = true
                     } else if (event.key === Qt.Key_End) {
-                        root.handleIndexSelection(root.totalCount - 1, event.modifiers, false)
+                        root.handleIndexSelection(root.totalCount - 1, event.modifiers, false,
+                                                  true)
                         event.accepted = true
                     } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
                                || event.key === Qt.Key_Space) {
@@ -968,9 +1148,7 @@ Item {
                                                                     && !liveThumbLoading
                                                                     && (liveThumbMissingSource
                                                                         || liveThumbErrorText.length > 0)
-                    readonly property string thumbnailProblemText: liveThumbErrorText.length > 0
-                                                                   ? liveThumbErrorText
-                                                                   : qsTr("Source file was moved or deleted")
+                    readonly property string thumbnailProblemText: liveThumbErrorText
 
                     height: ListView.view ? ListView.view.height : 1
                     // The card fits a 3:2 photo slot to the height left above its
@@ -1045,6 +1223,7 @@ Item {
                         thumbnailReady: thumbnailDelegate.thumbnailReady
                         thumbnailProblemState: thumbnailDelegate.thumbnailProblemState
                         thumbnailProblemText: thumbnailDelegate.thumbnailProblemText
+                        thumbnailMissingSource: thumbnailDelegate.liveThumbMissingSource
                         editing: thumbnailDelegate.isEditing
                         selected: thumbnailDelegate.isLibrarySelected
                         hovered: thumbnailMouse.containsMouse
@@ -1071,7 +1250,7 @@ Item {
                                                                   | Qt.ControlModifier)) !== 0
                                 root.handleIndexSelection(thumbnailDelegate.index,
                                                           mouse.modifiers,
-                                                          !hasSelectionModifier)
+                                                          !hasSelectionModifier, false)
                             } else if (mouse.button === Qt.RightButton) {
                                 const p = thumbnailMouse.mapToItem(null, mouse.x, mouse.y)
                                 root.requestContextMenuForIndex(thumbnailDelegate.index, p.x, p.y)

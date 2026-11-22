@@ -148,6 +148,9 @@ struct AlbumQueryRead {
   /// Read the file id of every occurrence in occurrence order (AlbumQueryResult::
   /// occurrence_file_ids_), in the same transaction as the counts and the groups.
   bool    read_occurrence_file_ids_ = false;
+  /// Read the unique file ids of the result in ascending id order (AlbumQueryResult::
+  /// match_file_ids_), in the same transaction as the counts and the groups.
+  bool    read_match_file_ids_      = false;
 };
 
 /// Result of ElementStore::ReadAlbumQuery: counts, the requested groups and statistics, and one
@@ -164,6 +167,9 @@ struct AlbumQueryResult {
   /// several label groups is listed once per group). Empty unless
   /// AlbumQueryRead::read_occurrence_file_ids_.
   std::vector<sl_element_id_t>      occurrence_file_ids_{};
+  /// Unique file ids of the result in ascending id order, for a membership test with
+  /// std::binary_search. Empty unless AlbumQueryRead::read_match_file_ids_.
+  std::vector<sl_element_id_t>      match_file_ids_{};
 };
 
 /// Position of one file's occurrence in the ordered occurrence stream.
@@ -186,11 +192,14 @@ struct ProjectOverviewCounts {
 
 /// Photo count of the whole project and of every album folder, read by
 /// ElementStore::ReadFolderImageCounts from one statement. Each count has the scope of the
-/// library view of that folder (BuildScopedFileQuery with no filter).
+/// subtree of that folder: the distinct photos linked into the folder or into any folder below
+/// it (issue #1007). The library view of a folder shows only its own photos, so a folder with
+/// subfolders can count more than its view holds.
 struct FolderImageCounts {
   /// Photos of the whole project: the scope of `CountFilesInFolder(0)`, the root view.
   uint64_t                                      project_photo_count_ = 0;
-  /// Photos of each folder that holds at least one. A folder without an entry holds none.
+  /// Distinct photos of the subtree of each folder (the root left out) whose subtree holds at
+  /// least one. A folder without an entry holds none in its subtree.
   std::unordered_map<sl_element_id_t, uint64_t> folder_photo_counts_{};
 };
 
@@ -310,8 +319,8 @@ class ElementStore {
   /// DuckDB message when the statement fails.
   auto ReadProjectOverview() const -> ProjectOverviewCounts;
 
-  /// Photo count of the whole project and of every folder (FolderImageCounts), from one
-  /// statement grouped by folder id. Reads only; takes the connection lock and is safe to call
+  /// Photo count of the whole project and of the subtree of every folder (FolderImageCounts),
+  /// from one recursive statement over the folder tree. Reads only; takes the connection lock and is safe to call
   /// from any thread. Throws std::runtime_error with the DuckDB message when the statement
   /// fails.
   auto ReadFolderImageCounts() const -> FolderImageCounts;

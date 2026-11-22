@@ -86,12 +86,13 @@ class EditorSessionRenderController final {
   void SetPresentationSuspended(bool suspended, const EditorSessionIdentity& identity,
                                 ImageLoadRequestId image_load_request, EditorSessionState state);
   [[nodiscard]] auto presentation_suspended() const -> bool;
-  /// An export released the editor GPU resources (true) or ended (false). The render port refuses
-  /// frames like a suspended viewport while it runs; after it ends, the refused frames are routed
-  /// again as on a viewport resume, unless the viewport is still suspended.
-  void SetSuspendedForExport(bool suspended, const EditorSessionIdentity& identity,
-                             ImageLoadRequestId image_load_request, EditorSessionState state);
-  [[nodiscard]] auto suspended_for_export() const -> bool;
+  /// The editor GPU resources were released for an export or semantic generation (true), or the
+  /// last holder of that release ended (false). The render port refuses frames like a suspended
+  /// viewport meanwhile; after the release ends, the refused frames are routed again as on a
+  /// viewport resume, unless the viewport is still suspended.
+  void SetSuspendedForGpuRelease(bool suspended, const EditorSessionIdentity& identity,
+                                 ImageLoadRequestId image_load_request, EditorSessionState state);
+  [[nodiscard]] auto suspended_for_gpu_release() const -> bool;
 
   /// Route the initial render for a new image. Accepts the session identity,
   /// image-load request, and state as immutable inputs from the facade.
@@ -219,8 +220,8 @@ class EditorSessionRenderController final {
                      EditorSessionState state);
   /// Last suspension reported by the viewport owner.
   bool                                                 presentation_suspended_ = false;
-  /// An export holds the GPU resources the editor released.
-  bool                                                 suspended_for_export_ = false;
+  /// An export or semantic generation holds the GPU resources the editor released.
+  bool                                                 suspended_for_gpu_release_ = false;
   /// One refresh per resume: a refusal that lands after the resume routes the
   /// refresh itself, and a second refusal without a new resume does not loop.
   bool                                                 suspended_refresh_routed_ = false;

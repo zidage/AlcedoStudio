@@ -4,6 +4,7 @@
 
 #include "storage/store/storage_maintenance.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <format>
@@ -64,6 +65,47 @@ struct TableSummaryRow {
                                       &TableSummaryRow::max_key>;
 };
 
+/// A table and one of its columns that holds an id (ReadLargestStoredIds).
+struct IdColumn {
+  const char* table;
+  const char* column;
+};
+
+constexpr IdColumn kElementIdColumns[] = {
+    {"Element", "id"},
+    {"FolderContent", "folder_id"},
+    {"FolderContent", "element_id"},
+    {"FileImage", "file_id"},
+    {"ComboFolder", "folder_id"},
+    {"PipelineParam", "file_id"},
+    {"VersionRef", "element_id"},
+    {"ImageEditState", "element_id"},
+    {"PipelineRoot", "element_id"},
+    {"MountRoot", "root_folder_id"},
+    {"SourceFile", "element_id"},
+    {"SemanticImageEmbedding", "file_id"},
+    {"SemanticImageEmbedding768", "file_id"},
+    {"SemanticImageLabel", "file_id"},
+    {"AiImageUnderstanding", "file_id"},
+    {"AiImageFtsDocument", "file_id"},
+    {"AiImageSearchText", "file_id"},
+    {"AiImageRating", "file_id"},
+};
+
+constexpr IdColumn kImageIdColumns[] = {
+    {"Image", "id"},
+    {"FileImage", "image_id"},
+    {"SemanticImageEmbedding", "image_id"},
+    {"SemanticImageEmbedding768", "image_id"},
+};
+
+struct StoredIdBoundsRow {
+  int64_t element_id = 0;
+  int64_t image_id   = 0;
+
+  using Columns = duckorm::RowColumns<&StoredIdBoundsRow::element_id, &StoredIdBoundsRow::image_id>;
+};
+
 /// One HNSW index of the database (DropHnswIndexesOfOlderProject).
 struct HnswIndexRow {
   std::string schema_name;
@@ -94,6 +136,22 @@ auto KeyBoundExpression(std::string_view aggregate, std::string_view column) -> 
   const auto bound = std::format("{}({})", aggregate, QuoteIdentifier(column));
   return std::format(
       "CASE WHEN {0} IS NULL THEN NULL ELSE COALESCE(TRY_CAST({0} AS BIGINT), 0) END", bound);
+}
+
+/// GREATEST over the MAX of each column, 0 for a column without a value.
+template <std::size_t N>
+auto LargestIdExpression(const IdColumn (&columns)[N]) -> std::string {
+  std::string expression = "GREATEST(";
+  for (std::size_t index = 0; index < N; ++index) {
+    if (index > 0) {
+      expression += ", ";
+    }
+    expression +=
+        std::format("COALESCE((SELECT MAX({}) FROM {}), 0)", QuoteIdentifier(columns[index].column),
+                    QuoteIdentifier(columns[index].table));
+  }
+  expression += ")::BIGINT";
+  return expression;
 }
 
 /// Run @p sql without binds. Throws std::runtime_error that names @p step.
@@ -169,6 +227,25 @@ auto StorageMaintenance::ReadDataSummary() -> std::vector<StorageTableSummary> {
         .table = table.name, .rows = row->rows, .min_key = row->min_key, .max_key = row->max_key});
   }
   return summary;
+}
+
+auto StorageMaintenance::ReadLargestStoredIds() -> StoredIdBounds {
+  auto                             guard = database_.GetConnectionGuard();
+  auto                             lock  = guard.Lock();
+
+  std::optional<StoredIdBoundsRow> row;
+  try {
+    row = duckorm::query_one<StoredIdBoundsRow>(
+        guard.conn_, expr::raw(std::format("SELECT {}, {};", LargestIdExpression(kElementIdColumns),
+                                           LargestIdExpression(kImageIdColumns))));
+  } catch (const std::exception& e) {
+    throw std::runtime_error(
+        std::format("DuckDB read of the largest stored ids failed: {}", e.what()));
+  }
+  if (!row.has_value()) {
+    throw std::runtime_error("DuckDB read of the largest stored ids returned no row.");
+  }
+  return StoredIdBounds{.element_id = row->element_id, .image_id = row->image_id};
 }
 
 void StorageMaintenance::DropHnswIndexesOfOlderProject() {

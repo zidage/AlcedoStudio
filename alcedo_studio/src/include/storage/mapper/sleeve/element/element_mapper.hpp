@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
@@ -16,10 +17,8 @@
 #include "type/type.hpp"
 
 namespace alcedo {
-// Element (id BIGINT PRIMARY KEY, type INTEGER, element_name TEXT, added_time "
-//     "TIMESTAMP, modified_time "
-//     "TIMESTAMP, "
-//     "ref_count BIGINT);"
+/// One Element row (see the `Element` table in database.hpp), in table order:
+/// id, type, element_name, added_time, modified_time, ref_count, mount_id.
 struct ElementMapperParams {
   sl_element_id_t              id;
   uint32_t                     type;
@@ -27,6 +26,8 @@ struct ElementMapperParams {
   std::unique_ptr<std::string> added_time;
   std::unique_ptr<std::string> modified_time;
   uint32_t                     ref_count;
+  /// `Element.mount_id`: the mount of a mounted element; empty (NULL) for an ordinary element.
+  std::optional<int64_t>       mount_id;
 };
 
 /**
@@ -37,7 +38,7 @@ class ElementMapper
                     sl_element_id_t>,
       public FieldReflectable<ElementMapper> {
  private:
-  static constexpr uint32_t                                         field_count_      = 6;
+  static constexpr uint32_t                                         field_count_      = 7;
   static constexpr const char*                                      table_name_       = "Element";
   static constexpr const char*                                      primary_key_column_ = "id";
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_      = {
@@ -46,7 +47,8 @@ class ElementMapper
       FIELD(ElementMapperParams, element_name, VARCHAR),
       FIELD(ElementMapperParams, added_time, TIMESTAMP),
       FIELD(ElementMapperParams, modified_time, TIMESTAMP),
-      FIELD(ElementMapperParams, ref_count, UINT32)};
+      FIELD(ElementMapperParams, ref_count, UINT32),
+      FIELD(ElementMapperParams, mount_id, NULLABLE_INT64)};
 
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> ElementMapperParams;
@@ -59,7 +61,7 @@ class ElementMapper
   auto        GetElementById(const sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
   auto GetElementByName(const std::wstring& name) -> std::vector<std::shared_ptr<SleeveElement>>;
   auto GetElementByType(const ElementType type) -> std::vector<std::shared_ptr<SleeveElement>>;
-  /// Elements of a full SELECT whose projection is the six Element columns in table order.
+  /// Elements of a full SELECT whose projection is the seven Element columns in table order.
   auto        GetElementsByQuery(const duckorm::SqlFragment& query)
       -> std::vector<std::shared_ptr<SleeveElement>>;
 

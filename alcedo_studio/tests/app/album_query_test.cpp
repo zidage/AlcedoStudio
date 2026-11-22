@@ -643,6 +643,29 @@ TEST_F(AlbumQueryTest, OccurrenceFileIdsFollowThePageOrderWithOneEntryPerOccurre
   EXPECT_TRUE(ReadAll(project, AlbumQueryOptions{}).occurrence_file_ids_.empty());
 }
 
+// Issue #958: the match ids are the unique files of the result in ascending id order, whatever
+// the sort and the groups, so the Library can test whether a selected photo is in the result
+// with a binary search.
+TEST_F(AlbumQueryTest, MatchFileIdsAreTheUniqueResultFilesInIdOrder) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  const auto options = AlbumQueryOptions{.sort_field_     = AlbumSortField::kCaptureTime,
+                                         .sort_direction_ = SortDirection::kDescending,
+                                         .group_field_    = AlbumGroupField::kCameraModel};
+  const auto result  = Store(project).ReadAlbumQuery(
+      0, std::nullopt, options, kActiveModel,
+      AlbumQueryRead{.limit_ = 0, .read_occurrence_file_ids_ = true, .read_match_file_ids_ = true});
+  std::vector<sl_element_id_t> expected = result.occurrence_file_ids_;
+  std::sort(expected.begin(), expected.end());
+  expected.erase(std::unique(expected.begin(), expected.end()), expected.end());
+  // The shown order is not the id order, and the match ids still are.
+  EXPECT_NE(result.occurrence_file_ids_, expected);
+  EXPECT_EQ(result.match_file_ids_, expected);
+  EXPECT_EQ(static_cast<int64_t>(result.match_file_ids_.size()), result.unique_file_count_);
+  // Without the option the result has no match ids.
+  EXPECT_TRUE(ReadAll(project, AlbumQueryOptions{}).match_file_ids_.empty());
+}
+
 TEST_F(AlbumQueryTest, ImportDayFilterUsesLocalMidnightBoundaries) {
   ProjectService                                            project(db_path_, meta_path_);
   // America/New_York: 2026-06-10 is an ordinary EDT day (UTC-4, starts 04:00 UTC); 2026-03-08
@@ -915,8 +938,8 @@ TEST_F(AlbumQueryTest, AlbumScopeAndEmptyScopeUseTheSameQuery) {
   EXPECT_TRUE(empty.rows_.empty());
 }
 
-// Issue #733: one grouped read gives the Collections tree the photo count of every folder,
-// equal to the total of the library view of that folder; an empty folder has no entry.
+// Issue #733: one read gives the Collections tree the photo count of every folder; an empty
+// folder has no entry. A leaf folder counts the total of its library view.
 TEST_F(AlbumQueryTest, FolderImageCountsMatchEveryFolderScope) {
   ProjectService project(db_path_, meta_path_);
   BuildFixture(project);
@@ -946,13 +969,54 @@ TEST_F(AlbumQueryTest, FolderImageCountsMatchEveryFolderScope) {
   EXPECT_EQ(counts.folder_photo_counts_.at(day_id), 1u);
   EXPECT_FALSE(counts.folder_photo_counts_.contains(empty_id));
   EXPECT_EQ(store.CountFilesInFolder(empty_id), 0u);
-  for (const auto& [folder_id, count] : counts.folder_photo_counts_) {
-    EXPECT_EQ(count, store.CountFilesInFolder(folder_id)) << "folder " << folder_id;
-  }
+  EXPECT_EQ(counts.folder_photo_counts_.at(day_id), store.CountFilesInFolder(day_id));
 
   // Removing a photo from a folder is seen by the next read.
   ASSERT_TRUE(sleeve->DeleteFileFromFolder(ids_[0], trip_id).success_);
   EXPECT_EQ(store.ReadFolderImageCounts().folder_photo_counts_.at(trip_id), 2u);
+}
+
+// Issue #1007: the count of a folder is the number of distinct photos in its subtree. A parent
+// with photos only in its children counts them, and a photo linked into two children counts
+// once.
+TEST_F(AlbumQueryTest, FolderImageCountsCoverTheSubtree) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  auto       sleeve = project.GetSleeveService();
+  const auto a      = sleeve->CreateFolder(L"/", L"A");
+  ASSERT_TRUE(a.second.success_);
+  const auto b = sleeve->CreateFolder(L"/A", L"B");
+  const auto c = sleeve->CreateFolder(L"/A", L"C");
+  ASSERT_TRUE(b.second.success_);
+  ASSERT_TRUE(c.second.success_);
+  const auto d = sleeve->CreateFolder(L"/A/C", L"D");
+  ASSERT_TRUE(d.second.success_);
+  const auto a_id = a.first->element_id_;
+  const auto b_id = b.first->element_id_;
+  const auto c_id = c.first->element_id_;
+  const auto d_id = d.first->element_id_;
+  for (const auto index : {0, 1, 2}) {
+    ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[index], b_id).success_);
+  }
+  for (const auto index : {2, 3}) {
+    ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[index], c_id).success_);
+  }
+  // A grandchild photo counts in C and in A; ids_[0] is in B already.
+  for (const auto index : {0, 4}) {
+    ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[index], d_id).success_);
+  }
+
+  auto&      store  = Store(project);
+  const auto counts = store.ReadFolderImageCounts();
+  EXPECT_EQ(counts.project_photo_count_, ids_.size());
+  EXPECT_EQ(store.CountFilesInFolder(a_id), 0u);
+  ASSERT_TRUE(counts.folder_photo_counts_.contains(a_id));
+  EXPECT_EQ(counts.folder_photo_counts_.at(a_id), 5u);  // ids 0..4
+  EXPECT_EQ(counts.folder_photo_counts_.at(b_id), 3u);
+  EXPECT_EQ(counts.folder_photo_counts_.at(c_id), 4u);  // ids 0, 2, 3, 4
+  EXPECT_EQ(counts.folder_photo_counts_.at(d_id), 2u);
+  // The root row shows the project count; the read has no entry for it.
+  EXPECT_FALSE(counts.folder_photo_counts_.contains(0));
 }
 
 TEST_F(AlbumQueryTest, InvalidOptionsAndPageBoundsAreRejectedBeforeSql) {

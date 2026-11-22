@@ -203,6 +203,7 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::CommitAdjustment:
     case EditorSessionCommandKind::RenameColorGrade:
     case EditorSessionCommandKind::SetColorGradeDeletionProtected:
+    case EditorSessionCommandKind::SetColorGradeEnabled:
     case EditorSessionCommandKind::EditNodeGraph:
     case EditorSessionCommandKind::InsertColorGradeAtTop:
     case EditorSessionCommandKind::RemoveColorGradeAndBridge:
@@ -269,7 +270,7 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::SetPresentationSize:
     case EditorSessionCommandKind::SetGeometryOverlay:
     case EditorSessionCommandKind::SetPresentationSuspended:
-    case EditorSessionCommandKind::SetSuspendedForExport:
+    case EditorSessionCommandKind::SetSuspendedForGpuRelease:
     case EditorSessionCommandKind::SetAdjustmentProjectionNode:
       return std::nullopt;
   }

@@ -142,7 +142,7 @@ TEST(EditorParameterCatalogTest, ScalarRangesMatchPreviousPanelSliders) {
   };
   const Case cases[] = {
       {"exposure", "tone", -10.0, 10.0, 0.01, 2},  {"contrast", "tone", -100.0, 100.0, 1.0, 0},
-      {"highlights", "tone", -100.0, 100.0, 1.0, 0}, {"shadows", "tone", -100.0, 100.0, 1.0, 0},
+      {"highlights", "tone", -150.0, 100.0, 1.0, 0}, {"shadows", "tone", -100.0, 150.0, 1.0, 0},
       {"white", "tone", -100.0, 100.0, 1.0, 0},      {"black", "tone", -100.0, 100.0, 1.0, 0},
       {"saturation", "look", -100.0, 100.0, 1.0, 0}, {"vibrance", "look", -100.0, 100.0, 1.0, 0},
       {"diffusion", "post", 0.0, 100.0, 1.0, 0},     {"clarity", "post", -100.0, 100.0, 1.0, 0},
@@ -158,6 +158,40 @@ TEST(EditorParameterCatalogTest, ScalarRangesMatchPreviousPanelSliders) {
     EXPECT_DOUBLE_EQ(entry->range.default_value, 0.0) << test_case.field;
     EXPECT_DOUBLE_EQ(entry->range.step, test_case.step) << test_case.field;
     EXPECT_EQ(entry->range.decimals, test_case.decimals) << test_case.field;
+  }
+}
+
+// #922: Exposure, Highlights, and Shadows have a rail narrower than the accepted range (typing
+// reaches +-10 EV, Highlights -150, Shadows +150). Every other field has its rail on the full
+// range.
+TEST(EditorParameterCatalogTest, ExposureHighlightsAndShadowsHaveANarrowerRail) {
+  struct Case {
+    const char* field;
+    double      rail_minimum;
+    double      rail_maximum;
+  };
+  const Case narrower[] = {
+      {"exposure", -5.0, 5.0}, {"highlights", -100.0, 100.0}, {"shadows", -100.0, 100.0}};
+  for (const auto& entry : EditorParameterCatalog::Entries()) {
+    if (entry.kind != EditorParameterValueKind::Scalar) {
+      continue;
+    }
+    const auto* match = std::find_if(std::begin(narrower), std::end(narrower),
+                                     [&](const Case& c) { return entry.field == c.field; });
+    if (match == std::end(narrower)) {
+      EXPECT_DOUBLE_EQ(entry.range.rail_minimum, entry.range.minimum) << entry.field;
+      EXPECT_DOUBLE_EQ(entry.range.rail_maximum, entry.range.maximum) << entry.field;
+      continue;
+    }
+    EXPECT_DOUBLE_EQ(entry.range.rail_minimum, match->rail_minimum) << entry.field;
+    EXPECT_DOUBLE_EQ(entry.range.rail_maximum, match->rail_maximum) << entry.field;
+    EXPECT_GE(entry.range.rail_minimum, entry.range.minimum) << entry.field;
+    EXPECT_LE(entry.range.rail_maximum, entry.range.maximum) << entry.field;
+    EXPECT_LT(entry.range.rail_maximum - entry.range.rail_minimum,
+              entry.range.maximum - entry.range.minimum)
+        << entry.field;
+    EXPECT_GE(entry.range.default_value, entry.range.rail_minimum) << entry.field;
+    EXPECT_LE(entry.range.default_value, entry.range.rail_maximum) << entry.field;
   }
 }
 
@@ -1604,21 +1638,28 @@ TEST(EditorParameterCatalogTest, EachToneCurvePresetPassesTheCurveWrite) {
 TEST(EditorParameterCatalogTest, CurveWriteAppliesAPresetById) {
   std::string error;
   const auto  parsed = ParseEditorParameterWrite(
-      "curve", {{"curve", {{"points", "film_like"}, {"blue", "kodak_2383"}}}}, &error);
+      "curve", {{"curve", {{"points", "cl_digital"}, {"blue", "kodak_2383"}}}}, &error);
   ASSERT_TRUE(parsed.has_value()) << error;
   const auto* write = std::get_if<EditorCurveWrite>(&*parsed);
   ASSERT_NE(write, nullptr);
   ASSERT_TRUE(write->points.has_value());
-  EXPECT_EQ(*write->points, FindToneCurvePreset("film_like")->PointList());
+  EXPECT_EQ(*write->points, FindToneCurvePreset("cl_digital")->PointList());
   EXPECT_FALSE(write->red.has_value());
   ASSERT_TRUE(write->blue.has_value());
   EXPECT_EQ(*write->blue, FindToneCurvePreset("kodak_2383")->PointList());
 
-  EXPECT_FALSE(
-      ParseEditorParameterWrite("curve", {{"curve", {{"green", "velvia"}}}}, &error).has_value());
-  EXPECT_EQ(error, "curve.green names no Tone Curve preset: velvia; curve.presets lists them");
+  // An id that names no preset applies Cl. Digit: film_like, the id before #914, and any other.
+  const auto cl_digital = FindToneCurvePreset(kClDigitalToneCurvePresetId)->PointList();
+  for (const auto* id : {"film_like", "filmic", "velvia"}) {
+    const auto fallback = ParseEditorParameterWrite("curve", {{"curve", {{"green", id}}}}, &error);
+    ASSERT_TRUE(fallback.has_value()) << id << ": " << error;
+    const auto* green = std::get_if<EditorCurveWrite>(&*fallback);
+    ASSERT_NE(green, nullptr);
+    ASSERT_TRUE(green->green.has_value()) << id;
+    EXPECT_EQ(*green->green, cl_digital) << id;
+  }
   // A stored value holds points only.
-  EXPECT_FALSE(ParseEditorParameterValue("curve", {{"points", "film_like"}}, &error).has_value());
+  EXPECT_FALSE(ParseEditorParameterValue("curve", {{"points", "cl_digital"}}, &error).has_value());
 }
 
 TEST(EditorParameterCatalogTest, CurveValueWithoutAChannelKeyReadsThatChannelAsIdentity) {

@@ -43,6 +43,7 @@ auto SleeveFolder::Copy(sl_element_id_t new_id) const -> std::shared_ptr<SleeveE
   copy->indicies_cache_[copy->default_filter_] =
       std::vector<sl_element_id_t>(indicies_cache_.at(default_filter_));
   copy->children_loaded_ = children_loaded_;
+  copy->mount_id_        = mount_id_;
   return copy;
 }
 /**

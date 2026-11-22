@@ -40,6 +40,17 @@ ApplicationCloseCoordinator::ApplicationCloseCoordinator(EditorSessionController
   }
 }
 
+void ApplicationCloseCoordinator::BindMountScans(MountScanCoordinator* mount_scans) {
+  if (mount_scans_ != nullptr) {
+    disconnect(mount_scans_, nullptr, this, nullptr);
+  }
+  mount_scans_ = mount_scans;
+  if (mount_scans_ != nullptr) {
+    connect(mount_scans_, &MountScanCoordinator::StoppedWorkerEnded, this,
+            &ApplicationCloseCoordinator::EvaluateEditorClose, Qt::QueuedConnection);
+  }
+}
+
 bool ApplicationCloseCoordinator::CloseNeedsConfirmation() const {
   if (waiting()) {
     return true;
@@ -107,9 +118,13 @@ void ApplicationCloseCoordinator::Cancel() {
   if (!waiting()) {
     return;
   }
-  mode_          = Mode::kIdle;
-  awaiting_seal_ = false;
+  const Mode mode = mode_;
+  mode_           = Mode::kIdle;
+  awaiting_seal_  = false;
   emit WaitingChanged();
+  if (mode == Mode::kProjectClose && project_ != nullptr) {
+    project_->ResumeMountScans();
+  }
 }
 
 auto ApplicationCloseCoordinator::BeginProjectClose(bool persist) -> QString {
@@ -175,6 +190,14 @@ void ApplicationCloseCoordinator::EvaluateEditorClose() {
 }
 
 void ApplicationCloseCoordinator::Finish() {
+  if (mode_ == Mode::kProjectClose && mount_scans_ != nullptr) {
+    // The project save needs each scan batch stored in full. The stop request returns at once;
+    // StoppedWorkerEnded evaluates the close again when the worker has ended.
+    (void)mount_scans_->BeginStop();
+    if (mount_scans_->HasStoppedWorker()) {
+      return;
+    }
+  }
   const Mode mode = mode_;
   mode_           = Mode::kIdle;
   awaiting_seal_  = false;
@@ -188,6 +211,8 @@ void ApplicationCloseCoordinator::Finish() {
     return;
   }
   if (!project_->CloseProject(project_close_persist_)) {
+    // The project stays open: its scans start again.
+    project_->ResumeMountScans();
     emit ProjectCloseFinished(false, project_->ServiceMessage());
     return;
   }
@@ -202,6 +227,10 @@ void ApplicationCloseCoordinator::Abort(const QString& message) {
   if (mode == Mode::kApplicationExit) {
     emit ApplicationCloseAborted(message);
     return;
+  }
+  // An abort after the scans stopped keeps the project open: its scans start again.
+  if (project_ != nullptr) {
+    project_->ResumeMountScans();
   }
   emit ProjectCloseFinished(false,
                             message.isEmpty() ? tr("The editor image cannot be saved.") : message);

@@ -10,6 +10,15 @@ gtest_discover_tests(UpdateManifestTest TEST_PREFIX "UpdateManifestTest."
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(UpdateManifestTest app ci_core)
 
+# Mounted folder scan change list (mounted_folder_plan.md, MF3): each rule of section 2.4 on a
+# fake directory listing and a fake fingerprint function.
+add_executable(MountScanChangeListTest ${ALCEDO_TEST_ROOT}/app/mount_scan_change_list_test.cpp)
+target_include_directories(MountScanChangeListTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(MountScanChangeListTest PRIVATE MountScanChangeList GTest::gtest_main)
+gtest_discover_tests(MountScanChangeListTest TEST_PREFIX "MountScanChangeListTest."
+    PROPERTIES LABELS "ci_core_flow;mounted_folder")
+alcedo_register_test_target(MountScanChangeListTest app ci_core)
+
 add_executable(LutPackageManifestTest ${ALCEDO_TEST_ROOT}/app/lut_package_manifest_test.cpp)
 target_include_directories(LutPackageManifestTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(LutPackageManifestTest PRIVATE LutPackageManifest
@@ -40,6 +49,17 @@ target_link_libraries(CameraProfileLibraryServiceTest PRIVATE CameraProfileLibra
 gtest_discover_tests(CameraProfileLibraryServiceTest TEST_PREFIX "CameraProfileLibraryServiceTest."
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(CameraProfileLibraryServiceTest app ci_core)
+
+# RAW import look in QSettings (#918).
+add_executable(RawImportLookSettingsTest
+    ${ALCEDO_TEST_ROOT}/app/raw_import_look_settings_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
+target_include_directories(RawImportLookSettingsTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+    ${ALCEDO_TEST_ROOT})
+target_link_libraries(RawImportLookSettingsTest PRIVATE RawImportLookSettings GTest::gtest)
+gtest_discover_tests(RawImportLookSettingsTest TEST_PREFIX "RawImportLookSettingsTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(RawImportLookSettingsTest app ci_core)
 
 add_executable(LutPackageServiceTest
     ${ALCEDO_TEST_ROOT}/app/lut_package_service_test.cpp
@@ -281,6 +301,36 @@ if(ALCEDO_CUDA_ENABLED)
       PROPERTIES LABELS "app;geometry;gpu")
   alcedo_register_test_target(EditorGeometryOverlayPipelineTest app)
 endif()
+
+# Sleeve operations of the mount scan (mounted_folder_plan.md, MF4): the tree of a mount through
+# SleeveServiceImpl and a real project database.
+add_executable(MountTreeTest ${ALCEDO_TEST_ROOT}/app/mount_tree_test.cpp)
+target_include_directories(MountTreeTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(MountTreeTest PRIVATE FSService GTest::gtest_main)
+gtest_discover_tests(MountTreeTest TEST_PREFIX "MountTreeTest."
+  PROPERTIES LABELS "mounted_folder")
+alcedo_register_test_target(MountTreeTest app)
+
+# Mounted folder service (mounted_folder_plan.md, MF4): real temporary directories and a real
+# project database.
+add_executable(MountServiceTest ${ALCEDO_TEST_ROOT}/app/mount_service_test.cpp)
+target_include_directories(MountServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(MountServiceTest
+  StorageInvariantsTestSupport MountService ImportService ProjectService PipelineMgmtService
+  OpenImageIO::OpenImageIO GTest::gtest_main)
+gtest_discover_tests(MountServiceTest TEST_PREFIX "MountServiceTest."
+  PROPERTIES LABELS "mounted_folder")
+alcedo_copy_duckdb_fts_extension(MountServiceTest)
+alcedo_register_test_target(MountServiceTest app)
+
+# Album operations on a mounted folder (mounted_folder_plan.md, MF5): the named refusal of the
+# sleeve service and a real project database.
+add_executable(AlbumBrowseServiceMountTest ${ALCEDO_TEST_ROOT}/app/album_browse_service_mount_test.cpp)
+target_include_directories(AlbumBrowseServiceMountTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(AlbumBrowseServiceMountTest PRIVATE ProjectService GTest::gtest_main)
+gtest_discover_tests(AlbumBrowseServiceMountTest TEST_PREFIX "AlbumBrowseServiceMountTest."
+  PROPERTIES LABELS "mounted_folder")
+alcedo_register_test_target(AlbumBrowseServiceMountTest app)
 
 add_executable(ImportServiceTest ${ALCEDO_TEST_ROOT}/app/import_service_test.cpp)
 target_include_directories(ImportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})

@@ -94,6 +94,24 @@ auto InvariantRules() -> std::vector<InvariantRule> {
        "(SELECT 1 FROM PhotoStackMember m WHERE m.stack_id = s.stack_id "
        "AND m.file_id = s.cover_file_id)"},
 
+      // Mounted folders (Mounted Folder Plan, section 2.5).
+      {"mounted element names a stored mount",
+       "SELECT 'element ' || e.id || ' mount ' || e.mount_id FROM Element e "
+       "WHERE e.mount_id IS NOT NULL AND e.mount_id NOT IN (SELECT id FROM MountRoot)"},
+      {"mount root folder is a folder of its mount",
+       std::format("SELECT 'mount ' || m.id || ' root folder ' || m.root_folder_id "
+                   "FROM MountRoot m WHERE NOT EXISTS (SELECT 1 FROM Element e WHERE "
+                   "e.id = m.root_folder_id AND e.type = {} AND e.mount_id = m.id)",
+                   FolderType())},
+      {"mounted file has a source record",
+       std::format("SELECT 'file ' || e.id FROM Element e WHERE e.type = {} "
+                   "AND e.mount_id IS NOT NULL AND e.id NOT IN (SELECT element_id FROM SourceFile)",
+                   FileType())},
+      {"source record names a file element",
+       std::format("SELECT 'element ' || s.element_id FROM SourceFile s "
+                   "WHERE s.element_id NOT IN ({})",
+                   is_file)},
+
       // Edit history.
       {"file has a history root",
        std::format("SELECT 'file ' || e.id FROM Element e WHERE e.type = {} AND e.id NOT IN "

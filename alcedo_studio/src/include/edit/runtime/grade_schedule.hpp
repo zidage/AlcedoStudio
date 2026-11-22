@@ -189,7 +189,8 @@ template <class Backend>
     }
   }
 
-  const float mix = grade.Enabled() ? grade.Mix() : 0.0f;
+  // Only visible Color Grades compile (GraphCompiler skips hidden ones).
+  const float mix = grade.Mix();
   return MakeGradeSchedule(compiled_grade.stages, bound, mix, compiled_grade.mask_stack.has_value());
 }
 

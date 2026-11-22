@@ -36,11 +36,12 @@ class LibraryMutationOperations final : public QObject {
   /// RateTargetsAsUser. Null refuses nothing.
   void SetInteractionPolicy(InteractionPolicyController* interaction_policy);
 
-  /// The targets of a delete, rating, or paste from the context menu of @p clickedItem: with
-  /// @p includeSelection, the selected images when the selection is not empty; otherwise the
-  /// clicked image alone. The editor filmstrip has no selection surface and passes false.
-  Q_INVOKABLE QVariantList ResolveTargets(const QVariantMap& clickedItem,
-                                          bool               includeSelection) const;
+  /// The targets of a delete, rating, paste, or "Add to" from the context menu of
+  /// @p clickedItem, for the Library grid and the editor filmstrip alike: every selected image
+  /// when the selection holds the clicked image; otherwise the clicked image alone. A menu on an
+  /// image outside the selection never acts on the selection. Empty when @p clickedItem has no
+  /// element id.
+  Q_INVOKABLE QVariantList ResolveTargets(const QVariantMap& clickedItem) const;
   /// `project` when the current folder is the root (a delete removes the photos from the
   /// project), `album` otherwise (a delete removes them from the album).
   Q_INVOKABLE QString      DeleteScope() const;

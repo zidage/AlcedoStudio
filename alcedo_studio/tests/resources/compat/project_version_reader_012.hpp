@@ -9,13 +9,13 @@
 #include <string_view>
 
 // Historical compatibility fixture. These reader functions and version bounds come from
-// project_package_backend.cpp and pipeline_history_format.hpp at e59529c66d2d.
-// Keep this implementation fixed: it executes the 0.11 reader's version check independently
+// project_package_backend.cpp and pipeline_history_format.hpp at 61d59bc98afa.
+// Keep this implementation fixed: it executes the 0.12 reader's version check independently
 // of the current reader. A current-reader test cannot prove that an older reader rejects a
 // newly written format. No production code includes this fixture.
-namespace alcedo::test::version_011 {
+namespace alcedo::test::version_012 {
 inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.10.0";
-inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.11.0";
+inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.12.0";
 
 inline auto ParseSemVer(std::string_view version, std::array<int, 3>* out) -> bool {
   std::array<int, 3> parts{};
@@ -58,4 +58,4 @@ inline auto ProjectVersionIsSupported(std::string_view version) -> bool {
          parsed <= max_supported;
 }
 
-}  // namespace alcedo::test::version_011
+}  // namespace alcedo::test::version_012

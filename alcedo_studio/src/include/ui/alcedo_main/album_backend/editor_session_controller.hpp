@@ -129,6 +129,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// section. Empty for an image without one (a raster image). Same lifetime as exifLineText.
   Q_PROPERTY(QString cameraMake READ camera_make NOTIFY ImageExifChanged)
   Q_PROPERTY(QString cameraModel READ camera_model NOTIFY ImageExifChanged)
+  /// File name of the open image, the name that the Library rows show. Empty without an image.
+  /// Same lifetime as exifLineText.
+  Q_PROPERTY(QString imageFileName READ image_file_name NOTIFY ImageExifChanged)
   // Left tool rail page: empty string = collapsed; "history", "versions", "nodes",
   // "maskgroups", or "luts" (LUT browser) = expanded. Survives workspace round-trips within the
   // process (not persisted across application restart).
@@ -218,6 +221,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString    exif_lens_model() const { return exif_lens_model_; }
   [[nodiscard]] QString    camera_make() const { return camera_make_; }
   [[nodiscard]] QString    camera_model() const { return camera_model_; }
+  [[nodiscard]] QString    image_file_name() const { return image_file_name_; }
   [[nodiscard]] QString    editor_tool_panel_page() const { return editor_tool_panel_page_; }
   [[nodiscard]] qulonglong session_generation() const;
   [[nodiscard]] qulonglong history_revision() const;
@@ -357,6 +361,15 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
       -> alcedo::EditorSessionResult;
   /// Route deletion-only metadata through the backend; rejects when no session is available.
   auto SubmitSetColorGradeDeletionProtected(const alcedo::NodeId& node_id, bool deletion_protected)
+      -> alcedo::EditorSessionResult;
+  /// Route one show/hide change through the backend; a change renders. Rejects while an agent
+  /// holds control.
+  auto SubmitSetColorGradeEnabled(const alcedo::NodeId& node_id, bool enabled)
+      -> alcedo::EditorSessionResult;
+  /// The show/hide change of SubmitSetColorGradeEnabled for the agent commands: the same
+  /// backend command, without the agent control refusal of the user adapters. Its operation_id
+  /// identifies the command.
+  auto RequestSetColorGradeEnabled(const alcedo::NodeId& node_id, bool enabled)
       -> alcedo::EditorSessionResult;
   /** Route one net topology delta through the active session backend. */
   auto SubmitNodeGraphTopologyEdit(const alcedo::NodeGraphTopologyChange& change)
@@ -639,6 +652,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                 exif_lens_model_;
   QString                 camera_make_;
   QString                 camera_model_;
+  QString                 image_file_name_;
   QPointer<QObject>       presentation_viewport_;
   // Set once by BindHeadlessPresentationSink before the first render; read by render workers.
   alcedo::IFrameSink*     headless_presentation_sink_ = nullptr;

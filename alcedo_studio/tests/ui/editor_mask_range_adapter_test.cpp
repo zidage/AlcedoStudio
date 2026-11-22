@@ -9,7 +9,7 @@
 ///
 /// A range drag of the target Mask writes live values and settles as one history commit; a
 /// reset writes `null`; the range coverage is shown during a drag and while "Show selection" is
-/// on, and an adjustment input hides it. During the AI Mask edit of a stored Mask that Mask is
+/// on, which it is each time a Mask becomes the target (#944), and an adjustment input hides it. During the AI Mask edit of a stored Mask that Mask is
 /// the target; during the edit of a new AI Mask its candidate is the target (#604): its ranges
 /// write no document, show their coverage from the photo renders, and are written with the new
 /// Mask at Confirm. The Hue bar fill shows the hue that the kernels test.
@@ -120,6 +120,14 @@ class EditorMaskRangeAdapterTest : public EditorMaskCoveragePreviewTest {
     Settle();
   }
 
+  /// Select @p mask_id and turn "Show selection" off: only a range edit shows the coverage.
+  void SelectWithShowSelectionOff(const MaskId& mask_id) {
+    Select(mask_id);
+    adapter_->setRangeCoverageVisible(false);
+    Settle();
+    ASSERT_FALSE(Preview().range_probe.has_value());
+  }
+
   auto LiveMask(const MaskId& mask_id) -> const MaskModel* {
     working_ = Working();
     return working_->Document().PrimaryGrade()->FindMask(mask_id);
@@ -177,7 +185,7 @@ class EditorMaskRangeAdapterTest : public EditorMaskCoveragePreviewTest {
 TEST_F(EditorMaskRangeAdapterTest, RangeDragCommitsOnceAndShowsTheCoverageOnlyDuringTheDrag) {
   OpenThroughController();
   const auto mask_id = CreateRadialMask();
-  Select(mask_id);
+  SelectWithShowSelectionOff(mask_id);
   ASSERT_TRUE(adapter_->mask_range_available());
   EXPECT_DOUBLE_EQ(adapter_->mask_luminance_low(), 0.0);
   EXPECT_DOUBLE_EQ(adapter_->mask_luminance_high(), 1.0);
@@ -279,7 +287,7 @@ TEST_F(EditorMaskRangeAdapterTest, KeyStepBurstMovesOneHandleAndCommitsOnce) {
   adapter_->SetRangeStepSettleIntervalMs(kInterval);
   OpenThroughController();
   const auto mask_id = CreateRadialMask();
-  Select(mask_id);
+  SelectWithShowSelectionOff(mask_id);
   const auto commits = Graph()->CommitCount();
 
   // Four fine steps of the low handle and one coarse step of the high handle: one burst.
@@ -367,7 +375,7 @@ TEST_F(EditorMaskRangeAdapterTest, HueStepsKeepHandlesOnTheBarAndADragSettlesThe
 TEST_F(EditorMaskRangeAdapterTest, TypedRangeValuesAreClampedAndCommitOnce) {
   OpenThroughController();
   const auto mask_id = CreateRadialMask();
-  Select(mask_id);
+  SelectWithShowSelectionOff(mask_id);
   const auto commits = Graph()->CommitCount();
 
   // Luminance High typed as 60 (UI L x 100 = 0.6), then Low typed above it: clamped to the
@@ -495,7 +503,7 @@ TEST_F(EditorMaskRangeAdapterTest, ValuesSetAtAFullRangeAreKeptAndWrittenWithThe
   const auto mask_id  = CreateRadialMask();
   const auto other_id = CreateRadialMask();
   ASSERT_NE(mask_id, other_id);
-  Select(mask_id);
+  SelectWithShowSelectionOff(mask_id);
   ASSERT_FALSE(LiveMask(mask_id)->luminance_range.has_value());
   ASSERT_FALSE(LiveMask(mask_id)->color_range.has_value());
   const auto commits = Graph()->CommitCount();
@@ -623,10 +631,7 @@ TEST_F(EditorMaskRangeAdapterTest, ShowSelectionKeepsTheCoverageUntilAnAdjustmen
   OpenThroughController();
   const auto mask_id = CreateRadialMask();
   Select(mask_id);
-
-  adapter_->setRangeCoverageVisible(true);
-  Settle();
-  EXPECT_TRUE(adapter_->mask_range_coverage_visible());
+  EXPECT_TRUE(adapter_->mask_range_coverage_visible()) << "the toggle starts on (#944)";
   EXPECT_EQ(Preview().range_probe, Probe(mask_id));
 
   // A drag with the toggle on keeps the coverage after release.
@@ -650,6 +655,40 @@ TEST_F(EditorMaskRangeAdapterTest, ShowSelectionKeepsTheCoverageUntilAnAdjustmen
   adapter_->setRangeCoverageVisible(false);
   Settle();
   EXPECT_FALSE(Preview().range_probe.has_value());
+}
+
+// #944: "Show selection" starts on each time a Mask becomes the range target. Turned off by the
+// user or by an adjustment input, it stays off for that Mask until another Mask is the target.
+TEST_F(EditorMaskRangeAdapterTest, ShowSelectionStartsOnForEachTargetMask) {
+  OpenThroughController();
+  const auto first  = CreateRadialMask();
+  const auto second = CreateRadialMask();
+  ASSERT_NE(first, second);
+
+  Select(first);
+  EXPECT_TRUE(adapter_->mask_range_coverage_visible());
+  EXPECT_EQ(Preview().range_probe, Probe(first));
+
+  adapter_->setRangeCoverageVisible(false);
+  Settle();
+  EXPECT_FALSE(Preview().range_probe.has_value());
+  Select(first);
+  EXPECT_FALSE(adapter_->mask_range_coverage_visible()) << "the same target keeps the user's off";
+  EXPECT_FALSE(Preview().range_probe.has_value());
+
+  Select(second);
+  EXPECT_TRUE(adapter_->mask_range_coverage_visible());
+  EXPECT_EQ(Preview().range_probe, Probe(second));
+
+  ASSERT_TRUE(controller_->submitPatch(QStringLiteral("exposure"),
+                                       QStringLiteral("{\"exposure\":0.5}"), true));
+  Settle();
+  EXPECT_FALSE(adapter_->mask_range_coverage_visible());
+  EXPECT_FALSE(Preview().range_probe.has_value());
+
+  Select(first);
+  EXPECT_TRUE(adapter_->mask_range_coverage_visible());
+  EXPECT_EQ(Preview().range_probe, Probe(first));
 }
 
 TEST_F(EditorMaskRangeAdapterTest, AiMaskEditTargetsItsStoredMaskOrItsNewCandidate) {
@@ -900,7 +939,7 @@ TEST_F(EditorMaskRangeAdapterTest, SelectingAStoredAiMaskStartsNoAiMaskEditAndIt
 
   // A row selection (the Mask group panel and the Node drawer call selectMask only): the owner
   // selects the AI Mask; no edit, no lease, no sidecar request.
-  Select(mask_id);
+  SelectWithShowSelectionOff(mask_id);
   EXPECT_EQ(service_->mask_creation_state(), EditorMaskCreationState::Selected);
   EXPECT_TRUE(adapter_->mask_controls_active()) << "the Mask panel opens for the AI Mask";
   EXPECT_EQ(adapter_->tool_kind(), QStringLiteral("aiSegmentation"));

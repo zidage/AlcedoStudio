@@ -79,6 +79,12 @@
     <file>panel_icons/flask.svg</file>
     <file>panel_icons/sort.svg</file>
     <file>panel_icons/folder-plus.svg</file>
+    <file>panel_icons/folder-symlink.svg</file>
+    <file>panel_icons/chevron-right.svg</file>
+    <file>panel_icons/dots.svg</file>
+    <file>panel_icons/link.svg</file>
+    <file>panel_icons/folder.svg</file>
+    <file>panel_icons/photo-off.svg</file>
     <file>panel_icons/plus.svg</file>
     <file>panel_icons/play.svg</file>
     <file>panel_icons/stop.svg</file>
@@ -105,6 +111,8 @@
     <file>panel_icons/keyboard.svg</file>
     <file>panel_icons/close.svg</file>
     <file>panel_icons/lock.svg</file>
+    <file>panel_icons/eye.svg</file>
+    <file>panel_icons/eye-off.svg</file>
     <file>panel_icons/lock-open.svg</file>
     <file>history_icons/aperture.svg</file>
     <file>history_icons/arrow-right-left.svg</file>

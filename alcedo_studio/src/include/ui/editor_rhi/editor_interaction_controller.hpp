@@ -75,7 +75,7 @@ class EditorInteractionController : public QObject {
   Q_PROPERTY(int cursorShape READ cursorShape NOTIFY cursorChanged)
   Q_PROPERTY(bool hasCustomCursor READ hasCustomCursor NOTIFY cursorChanged)
   Q_PROPERTY(float rotationLabelDegrees READ rotationLabelDegrees NOTIFY cropChanged)
-  Q_PROPERTY(QPointF rotateHandleItemPos READ rotateHandleItemPos NOTIFY overlayGeometryChanged)
+  Q_PROPERTY(QPointF angleBadgeItemPos READ angleBadgeItemPos NOTIFY overlayGeometryChanged)
   Q_PROPERTY(bool overlayGeometryValid READ overlayGeometryValid NOTIFY overlayGeometryChanged)
   Q_PROPERTY(bool interactionEnabled READ interactionEnabled WRITE setInteractionEnabled NOTIFY
                  interactionEnabledChanged)
@@ -137,7 +137,7 @@ class EditorInteractionController : public QObject {
   }
   [[nodiscard]] auto hasCustomCursor() const -> bool { return cursor_.has_value(); }
   [[nodiscard]] auto rotationLabelDegrees() const -> float { return cropRotationDegrees(); }
-  [[nodiscard]] auto rotateHandleItemPos() const -> QPointF;
+  [[nodiscard]] auto angleBadgeItemPos() const -> QPointF;
   [[nodiscard]] auto overlayGeometryValid() const -> bool;
   [[nodiscard]] auto interactionEnabled() const -> bool { return interaction_enabled_; }
 

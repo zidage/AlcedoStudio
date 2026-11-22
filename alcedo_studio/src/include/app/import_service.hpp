@@ -15,6 +15,8 @@
 #include <utility>
 #include <vector>
 
+#include "app/mount_file_importer.hpp"
+#include "app/raw_import_look_source.hpp"
 #include "app/sleeve_service.hpp"
 #include "concurrency/thread_pool.hpp"
 #include "image_pool_service.hpp"
@@ -154,19 +156,34 @@ class ImportService {
   virtual void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) = 0;
 };
 
-class ImportServiceImpl final : public ImportService {
+class ImportServiceImpl final : public ImportService, public MountFileImporter {
  public:
   ImportServiceImpl() = delete;
+  /// Import with the product Default RAW import look (@ref ProductDefaultRawImportLookSource).
   /// @throws std::invalid_argument when @p pipeline_service is null: every imported image gets
   ///         its history root at import, and only the pipeline service can create it.
   ImportServiceImpl(std::shared_ptr<SleeveServiceImpl>   fs_service,
                     std::shared_ptr<ImagePoolService>    image_pool_service,
                     std::shared_ptr<PipelineMgmtService> pipeline_service)
+      : ImportServiceImpl(std::move(fs_service), std::move(image_pool_service),
+                          std::move(pipeline_service),
+                          std::make_shared<const ProductDefaultRawImportLookSource>()) {}
+  /// @param raw_import_look_source Source of the look of each RAW history root, read once at the
+  ///        start of each import.
+  /// @throws std::invalid_argument when @p pipeline_service or @p raw_import_look_source is null.
+  ImportServiceImpl(std::shared_ptr<SleeveServiceImpl>          fs_service,
+                    std::shared_ptr<ImagePoolService>           image_pool_service,
+                    std::shared_ptr<PipelineMgmtService>        pipeline_service,
+                    std::shared_ptr<const RawImportLookSource> raw_import_look_source)
       : fs_service_(std::move(fs_service)),
         image_pool_service_(std::move(image_pool_service)),
-        pipeline_service_(std::move(pipeline_service)) {
+        pipeline_service_(std::move(pipeline_service)),
+        raw_import_look_source_(std::move(raw_import_look_source)) {
     if (!pipeline_service_) {
       throw std::invalid_argument("ImportServiceImpl: pipeline service is required");
+    }
+    if (!raw_import_look_source_) {
+      throw std::invalid_argument("ImportServiceImpl: RAW import look source is required");
     }
   }
 
@@ -180,6 +197,12 @@ class ImportServiceImpl final : public ImportService {
   /// the image's history root after metadata extraction succeeds.
   std::shared_ptr<PipelineMgmtService> pipeline_service_ = nullptr;
 
+ private:
+  /// Look of the RAW history roots (#918): settings in the application, the product Default in
+  /// tests and tools. ImportToFolder reads it once per import, on the caller's thread.
+  std::shared_ptr<const RawImportLookSource> raw_import_look_source_ = nullptr;
+
+ public:
   /// Metadata workers: open RAW headers, read the HDR probe bytes and encode history roots.
   /// The work is short file reads plus CPU, so it scales with the logical core count.
   ThreadPool thread_pool_{std::max<size_t>(8, std::thread::hardware_concurrency())};
@@ -194,18 +217,36 @@ class ImportServiceImpl final : public ImportService {
   /// placeholder loop runs on submission_thread_, metadata extraction on thread_pool_.
   /// job->on_progress_ reports the placeholder count while the loop runs, and job->on_finished_
   /// fires once every file is imported or failed.
+  /// @throws SleeveOperationError with kMountedFolderStructureIsReadOnly when @p dest is a mounted
+  ///         folder, before any source file is read and with no job started.
   auto ImportToFolder(const std::vector<image_path_t>& paths, const image_path_t& dest,
                       const ImportOptions& options = {}, std::shared_ptr<ImportJob> job = nullptr)
       -> std::shared_ptr<ImportJob> override;
 
   void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) override;
 
+  /// The import of ImportToFolder for the new files of a mount scan: each file gets the mount id
+  /// and the home folder of its request. Waits for the import, then runs SyncImports.
+  auto ImportMountedFiles(std::span<const MountFileImportRequest> requests)
+      -> std::vector<MountFileImportOutcome> override;
+
  private:
-  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>& paths, const image_path_t& dest,
-                                   const std::shared_ptr<ImportJob>&      job,
-                                   const std::shared_ptr<ImportLog>&      import_log,
-                                   const std::shared_ptr<ImportProgress>& progress,
-                                   ImportCategoryMask                     allowed_categories,
-                                   const ImportPathSet&                   any_category_paths);
+  /// Creates the library element of the file @p index of an import, with the name @p file_name,
+  /// inside the lock of the sleeve service. Throws when the element cannot be created; the file
+  /// then counts as failed and leaves no element.
+  using FilePlacement = std::function<std::shared_ptr<SleeveElement>(
+      FileSystem& fs, std::size_t index, const file_name_t& file_name)>;
+
+  void StartImport(const std::vector<image_path_t>& paths, FilePlacement placement,
+                   const ImportOptions& options, const std::shared_ptr<ImportJob>& job);
+
+  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>&            paths,
+                                   const FilePlacement&                        placement,
+                                   const std::shared_ptr<ImportJob>&           job,
+                                   const std::shared_ptr<ImportLog>&           import_log,
+                                   const std::shared_ptr<ImportProgress>&      progress,
+                                   ImportCategoryMask                          allowed_categories,
+                                   const ImportPathSet&                        any_category_paths,
+                                   const std::shared_ptr<const RawImportLook>& raw_import_look);
 };
 };  // namespace alcedo

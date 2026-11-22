@@ -41,6 +41,14 @@ class FileMapper
   auto        GetFileById(const sl_element_id_t id) -> std::pair<sl_element_id_t, image_id_t>;
   auto        GetBoundImageById(const sl_element_id_t id) -> image_id_t;
   void        RemoveBindByFileId(const sl_element_id_t id);
+  /**
+   * @brief Store @p image_id as the image of the file @p file_id: update its binding row, or
+   *        insert one when the file has none.
+   *
+   * The FileImage table has no key constraint, so the generic Update (an upsert) cannot run on
+   * it (#795).
+   */
+  void        WriteBinding(sl_element_id_t file_id, image_id_t image_id);
 
   friend struct FieldReflectable<FileMapper>;
   using Mapper::Mapper;

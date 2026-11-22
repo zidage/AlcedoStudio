@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Effects
 
 // One filmstrip tile (DESIGN.md "Editor filmstrip tiles"). The photo keeps its own aspect ratio,
@@ -24,6 +25,8 @@ Item {
     property bool thumbnailReady: liveThumbUrl.length > 0
     property bool thumbnailProblemState: false
     property string thumbnailProblemText: ""
+    /// The source file is missing: the card shows one icon and no text.
+    property bool thumbnailMissingSource: false
     property bool editing: false
     property bool selected: false
     property bool hovered: false
@@ -193,12 +196,23 @@ Item {
             visible: root.liveThumbLoading
         }
 
+        IconImage {
+            anchors.centerIn: parent
+            width: appTheme.iconOpticalSize
+            height: appTheme.iconOpticalSize
+            sourceSize: Qt.size(width, height)
+            visible: root.thumbnailMissingSource && !root.thumbnailReady && !root.liveThumbLoading
+            source: "qrc:/panel_icons/photo-off.svg"
+            color: appTheme.textMutedColor
+        }
+
         Label {
             anchors.centerIn: parent
             width: Math.max(1, parent.width - appTheme.spaceLg)
             text: root.thumbnailProblemState
                   ? root.thumbnailProblemText : qsTr("No thumbnail")
             visible: !root.thumbnailReady && !root.liveThumbLoading
+                     && !root.thumbnailMissingSource
             color: root.thumbnailProblemState
                    ? appTheme.dangerColor : appTheme.textMutedColor
             font.pixelSize: appTheme.fontSizeCaption

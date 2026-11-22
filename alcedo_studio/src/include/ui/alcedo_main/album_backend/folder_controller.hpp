@@ -6,15 +6,20 @@
 
 #include <QObject>
 #include <QString>
+#include <QUrl>
 #include <QVariantList>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include "app/mount_service.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
+#include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -26,12 +31,27 @@ class SearchController;
 class StatsEngine;
 class IUiStatusSink;
 
+/// Called on the UI thread when a mount command ended: @p error is empty on success, else the
+/// exception of the operation (MountOperationError for a refusal of MountService).
+using MountCommandDone = std::function<void(std::exception_ptr error)>;
+
+/// The text of a mount command error for the status line and the automation answer.
+auto                   MountCommandErrorText(std::exception_ptr error) -> QString;
+
 /// Owns lazy folder-tree state and handles folder CRUD operations.
+///
+/// Mounted folders (Mounted Folder Plan, MF6 and MF8): each row of `folders` carries the mount
+/// fields `mountId` (0 for an ordinary row), `mountRoot`, `mountOffline`, `mountMissingCount`, and
+/// `structureEditable`. The mount states come from the photo count read (RefreshImageCounts),
+/// which reads MountService::ListMounts on the library query worker. The mount commands run
+/// through MountScanCoordinator::RunMountOperation on the scan worker.
 class FolderController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList folders READ Folders NOTIFY FoldersChanged)
   Q_PROPERTY(uint currentFolderId READ CurrentFolderId NOTIFY FolderSelectionChanged)
   Q_PROPERTY(QString currentFolderPath READ CurrentFolderPath NOTIFY FolderSelectionChanged)
+  /// True when the current folder is mounted: a file drop on the grid starts no import.
+  Q_PROPERTY(bool currentFolderMounted READ CurrentFolderMounted NOTIFY MountStateChanged)
 
  public:
   FolderController(ProjectModule* project, LibraryModule* library, IUiStatusSink* status,
@@ -41,6 +61,8 @@ class FolderController final : public QObject {
 
   void BindCollaborators(StatsEngine* stats, SearchController* search,
                          ImportExportHandler* import_export);
+  /// The scan coordinator of the application; the mount commands run on its worker.
+  void BindMountScans(MountScanCoordinator* mount_scans) { mount_scans_ = mount_scans; }
 
   /// Loads the whole folder tree and starts one photo count read (RefreshImageCounts).
   void               ReloadTree(const std::filesystem::path& preferredFolderPath);
@@ -76,6 +98,62 @@ class FolderController final : public QObject {
   Q_INVOKABLE bool MoveFolder(uint folderUiId, uint newParentFolderUiId);
   Q_INVOKABLE void DeleteFolder(uint folderUiId);
 
+  /** @name Mounted folders (Mounted Folder Plan, MF6 and MF8)
+   * The Q_INVOKABLE commands of the Collections panel and the image menu. Each one reports a
+   * refusal or a failure through the status sink. A row id names the folder row (0 = root).
+   */
+  ///@{
+  /// Mount the directory @p directory as a new collection in the row @p parentFolderUiId, then
+  /// start its first scan as a task.
+  Q_INVOKABLE void MountFolder(uint parentFolderUiId, const QUrl& directory);
+  /// Scan the mount of the row now, with a task from the start.
+  Q_INVOKABLE void SynchronizeMount(uint folderUiId);
+  /// Remove the mount of the row; its photos stay as ordinary photos.
+  Q_INVOKABLE void Unmount(uint folderUiId);
+  /// Open the disk directory of a mounted row in the file manager of the system.
+  Q_INVOKABLE void ShowMountedFolderInFileManager(uint folderUiId);
+  /// Bind the mount of the row to the new location @p directory of its root (Locate Folder).
+  Q_INVOKABLE void LocateMountFolder(uint folderUiId, const QUrl& directory);
+  /// Remove the missing photos of the mount of the row from the project.
+  Q_INVOKABLE void RemoveMissingPhotos(uint folderUiId);
+  /// True when @p elementId is a mounted photo whose file is missing (the Locate item).
+  Q_INVOKABLE bool IsMissingMountedPhoto(uint elementId) const;
+  /// True when @p elementIds holds a mounted photo whose file is present: such a photo stays in
+  /// the library, so Remove from Library is disabled.
+  Q_INVOKABLE bool HoldsPresentMountedPhoto(const QVariantList& elementIds) const;
+  /// The directory where the file dialog of Locate opens for @p elementId: the last directory
+  /// of the photo when it exists, else the root directory of its mount.
+  Q_INVOKABLE QUrl MissingPhotoLocateFolder(uint elementId) const;
+  /// Take @p file as the source of the missing mounted photo @p elementId (Locate).
+  Q_INVOKABLE void LocateMissingPhoto(uint elementId, const QUrl& file);
+  ///@}
+
+  /** @name Mount commands of automation and of the Q_INVOKABLE entries above
+   * Each one checks the state of the project and returns the refusal text, or starts the
+   * operation and returns an empty text. @p done runs on the UI thread after the Library refresh.
+   */
+  ///@{
+  /// @param first_scan_ended Optional; called with the result of the first scan.
+  auto StartCreateMount(sl_element_id_t parent_folder_id, const std::filesystem::path& directory,
+                        std::function<void(std::exception_ptr, mount_id_t)> done,
+                        MountScanEndedCallback first_scan_ended = {}) -> QString;
+  auto StartSynchronize(mount_id_t mount_id, MountScanEndedCallback ended = {}) -> QString;
+  auto StartUnmount(mount_id_t mount_id, MountCommandDone done) -> QString;
+  /// @param scan_ended Optional; called with the result of the scan after the relocation.
+  auto StartRelocateMountRoot(mount_id_t mount_id, const std::filesystem::path& directory,
+                              MountCommandDone done, MountScanEndedCallback scan_ended = {})
+      -> QString;
+  auto StartLocateMissingPhoto(sl_element_id_t element_id, const std::filesystem::path& file,
+                               MountCommandDone done) -> QString;
+  auto StartRemoveMissingPhotos(
+      mount_id_t                                                               mount_id,
+      std::function<void(std::exception_ptr, const MountMissingPhotoRemoval&)> done) -> QString;
+  /// The mounts of the open project as the last count read found them.
+  [[nodiscard]] auto MountSummaries() const -> const std::vector<MountSummary>& {
+    return mount_summaries_;
+  }
+  ///@}
+
   [[nodiscard]] auto Folders() const -> QVariantList { return folders_; }
   [[nodiscard]] auto folders() const -> const QVariantList& { return folders_; }
   [[nodiscard]] auto CurrentFolderId() const -> uint {
@@ -86,6 +164,7 @@ class FolderController final : public QObject {
     return current_folder_path_;
   }
   [[nodiscard]] auto CurrentFolderPath() const -> QString { return current_folder_path_text_; }
+  [[nodiscard]] auto CurrentFolderMounted() const -> bool;
   [[nodiscard]] auto current_folder_path_text() const -> const QString& {
     return current_folder_path_text_;
   }
@@ -100,15 +179,18 @@ class FolderController final : public QObject {
   void FoldersChanged();
   void FolderSelectionChanged();
   void folderSelectionChanged();
+  /// The mount states of the rows or of the current folder changed.
+  void MountStateChanged();
 
  private:
   struct FolderNodeState {
-    uint32_t              ui_id_      = 0;
-    sl_element_id_t       element_id_ = 0;
-    file_name_t           folder_name_{};
-    std::filesystem::path folder_path_{};
-    int                   depth_    = 0;
-    bool                  expanded_ = false;
+    uint32_t                  ui_id_      = 0;
+    sl_element_id_t           element_id_ = 0;
+    file_name_t               folder_name_{};
+    std::filesystem::path     folder_path_{};
+    int                       depth_    = 0;
+    bool                      expanded_ = false;
+    std::optional<mount_id_t> mount_id_{};
   };
 
   enum class FolderEdit { Create, Rename, Move, Delete };
@@ -142,6 +224,22 @@ class FolderController final : public QObject {
                                          std::unordered_map<sl_element_id_t, uint64_t> folder_counts,
                                          const QString&                                error);
   void                  DropImageCounts();
+  /// The mount fields of the row of @p folder.
+  void                  AddMountFields(const ExistingFolderEntry& folder, QVariantMap& row) const;
+  /// The summary of the mount @p mount_id; null when the last count read did not list it.
+  [[nodiscard]] auto    FindMountSummary(mount_id_t mount_id) const -> const MountSummary*;
+  /// The mount of the row @p folderUiId; reports through the status sink when it has none.
+  [[nodiscard]] auto    MountOfRow(uint folderUiId) const -> std::optional<mount_id_t>;
+  /// The disk directory of a mounted row: the root directory and the path of the row below the
+  /// mount root.
+  [[nodiscard]] auto    MountedDirectoryOfRow(uint folderUiId) const
+      -> std::optional<std::filesystem::path>;
+  /// Take the mounts of a count read: rows, missing tiles, and the current folder state.
+  void               ApplyMountSummaries(std::vector<MountSummary> summaries);
+  /// The refusal text of a mount command, or empty when the project takes one.
+  [[nodiscard]] auto MountCommandRefusal() const -> QString;
+  /// Report the end of a mount command through the status sink.
+  void               ReportMountCommand(std::exception_ptr error, const i18n::LocalizedText& done);
 
   ProjectModule*        project_       = nullptr;
   LibraryModule*        library_       = nullptr;
@@ -149,6 +247,7 @@ class FolderController final : public QObject {
   StatsEngine*          stats_         = nullptr;
   SearchController*     search_        = nullptr;
   ImportExportHandler*  import_export_ = nullptr;
+  MountScanCoordinator*                                       mount_scans_   = nullptr;
 
   std::unordered_map<std::wstring, FolderNodeState>           nodes_by_path_{};
   std::unordered_map<std::wstring, std::vector<std::wstring>> child_keys_by_path_{};
@@ -165,6 +264,10 @@ class FolderController final : public QObject {
   bool                                                        image_counts_loaded_  = false;
   uint64_t                                                    project_image_count_  = 0;
   std::unordered_map<sl_element_id_t, uint64_t>               image_count_by_folder_{};
+  /// The mounts of the newest applied count read.
+  std::vector<MountSummary>                                   mount_summaries_{};
+  std::unordered_set<sl_element_id_t>                         present_mounted_ids_{};
+  std::unordered_set<sl_element_id_t>                         missing_mounted_ids_{};
 };
 
 }  // namespace alcedo::ui

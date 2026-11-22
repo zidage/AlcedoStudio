@@ -9,16 +9,21 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
 
 #include "image/image.hpp"
+#include "sleeve/sleeve_element/sleeve_file.hpp"
+#include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/mapper/image/image_mapper.hpp"
 #include "storage/mapper/sleeve/edit_history/version_ref_mapper.hpp"
+#include "storage/mapper/sleeve/element/element_mapper.hpp"
 #include "storage/store/database.hpp"
 #include "type/type.hpp"
 #include "support/test_temp_directory.hpp"
@@ -214,4 +219,42 @@ TEST_F(VersionRefMapperKeyFixture, RemoveByIdBindsTextKeyWithQuote) {
   const auto kept = VersionRefMapper(guard_->conn_).GetById(std::string("a"));
   ASSERT_TRUE(kept.has_value());
   EXPECT_EQ(*kept->display_name, "Version a");
+}
+
+// #983: the seventh Element field, mount_id, is NULL for an ordinary element and the mount id
+// for a mounted element, through ToParams / FromParams and through a stored row.
+TEST_F(ImageMapperCrtpFixture, ElementMountIdRoundTripsThroughParamsAndStoredRow) {
+  ASSERT_EQ(ElementMapper::FieldCount(), 7u);
+  EXPECT_STREQ(ElementMapper::FieldDesc()[6].name_, "mount_id");
+
+  auto mounted_file       = std::make_shared<SleeveFile>(sl_element_id_t{31}, L"DSC0001.ARW");
+  mounted_file->mount_id_ = 4;
+  auto ordinary_folder    = std::make_shared<SleeveFolder>(sl_element_id_t{32}, L"Trips");
+
+  auto mounted_params     = ElementMapper::ToParams(mounted_file);
+  ASSERT_TRUE(mounted_params.mount_id.has_value());
+  EXPECT_EQ(*mounted_params.mount_id, 4);
+  EXPECT_EQ(ElementMapper::FromParams(std::move(mounted_params))->mount_id_,
+            std::optional<mount_id_t>{4});
+  auto ordinary_params = ElementMapper::ToParams(ordinary_folder);
+  EXPECT_FALSE(ordinary_params.mount_id.has_value());
+  EXPECT_EQ(ElementMapper::FromParams(std::move(ordinary_params))->mount_id_, std::nullopt);
+
+  ElementMapper element_mapper(guard_->conn_);
+  element_mapper.Insert(mounted_file);
+  element_mapper.Insert(ordinary_folder);
+  EXPECT_EQ(duckorm::scalar<int64_t>(
+                guard_->conn_, duckorm::expr::raw("SELECT mount_id FROM Element WHERE id = 31")),
+            std::optional<int64_t>{4});
+  EXPECT_EQ(duckorm::scalar<int64_t>(
+                guard_->conn_,
+                duckorm::expr::raw("SELECT COUNT(*) FROM Element WHERE id = 32 AND mount_id IS NULL")),
+            std::optional<int64_t>{1});
+  EXPECT_EQ(element_mapper.GetElementById(31)->mount_id_, std::optional<mount_id_t>{4});
+  EXPECT_EQ(element_mapper.GetElementById(32)->mount_id_, std::nullopt);
+
+  // A stored value outside the mount id range is refused on read.
+  duckorm::execute(guard_->conn_,
+                   duckorm::expr::raw("UPDATE Element SET mount_id = 4294967296 WHERE id = 31"));
+  EXPECT_THROW((void)element_mapper.GetElementById(31), std::runtime_error);
 }

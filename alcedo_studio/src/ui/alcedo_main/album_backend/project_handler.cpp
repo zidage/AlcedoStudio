@@ -14,6 +14,7 @@
 
 #include "app/mask_thumbnail_service.hpp"
 #include "app/project_package_service.hpp"
+#include "app/raw_import_look_settings.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
@@ -81,6 +82,11 @@ bool ProjectHandler::StartProjectLoad(
   }
 
   project_module_.FinalizeEditorSession();
+  // The loader saves the current project and the load replaces its services. The stop request
+  // returns at once; the loader thread waits for the scan worker, which completes a batch that
+  // started its import, before it saves the project. A load that fails keeps the current
+  // project; the end of the load starts its scans again.
+  auto mount_scan_worker_ended = project_module_.BeginStopMountScans();
 
   load_entry_mode_ = entryMode;
 
@@ -107,7 +113,8 @@ bool ProjectHandler::StartProjectLoad(
   const bool old_project_entered = project_entered_;
 
   QPointer<ProjectModule> self(&project_module_);
-  std::thread([self, request_id, old_project = std::move(old_project),
+  std::thread([self, request_id, mount_scan_worker_ended = std::move(mount_scan_worker_ended),
+               old_project = std::move(old_project),
                old_pipeline = std::move(old_pipeline), old_thumbnail = std::move(old_thumbnail),
                old_meta = std::move(old_meta), old_package = std::move(old_package),
                old_workspace = std::move(old_workspace), old_project_entered,
@@ -138,6 +145,10 @@ bool ProjectHandler::StartProjectLoad(
     auto result = std::make_shared<LoadResult>();
 
     try {
+      // The scan worker writes the old project until it ends; the save below follows it.
+      if (mount_scan_worker_ended.valid()) {
+        mount_scan_worker_ended.wait();
+      }
       if (old_pipeline && old_project_entered) {
         old_pipeline->Sync();
       }
@@ -203,9 +214,10 @@ bool ProjectHandler::StartProjectLoad(
       result->thumbnail_ = std::make_shared<ThumbnailService>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
           result->pipeline_, result->project_->GetStorage(), result->project_->GetProjectUUID());
+      // RAW imports take the look of the Import defaults settings (#918).
       result->import_ = std::make_unique<ImportServiceImpl>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
-          result->pipeline_);
+          result->pipeline_, std::make_shared<const RawImportLookSettings>());
       result->export_ = std::make_shared<ExportService>(result->project_->GetSleeveService(),
                                                         result->project_->GetImagePoolService(),
                                                         result->pipeline_);

@@ -31,6 +31,9 @@
 #include "app/album_browse_service.hpp"
 #include "app/editor_adjustment_context.hpp"
 #include "app/image_pool_service.hpp"
+#include "app/project_service.hpp"
+#include "app/sleeve_error.hpp"
+#include "app/sleeve_service.hpp"
 #include "app/thumbnail_service.hpp"
 #include "image/color_label.hpp"
 #include "image/image.hpp"
@@ -190,6 +193,12 @@ struct ThumbnailBatch {
   QPointer<AutomationCommandWait> wait_;
 };
 
+/// The `data` of a -32002 (rejected) answer to a request that SleeveServiceImpl refused (Mounted
+/// Folder Plan, MF5): `error` is the SleeveErrorName of the rule.
+auto SleeveRefusalData(const QString& error, const QString& message) -> QJsonObject {
+  return QJsonObject{{"reason", message}, {"error", error}};
+}
+
 /// Answers a library.delete command with the DeleteTargetsFinished @p result: the deleted and
 /// failed ids, or an error when nothing was deleted.
 void AnswerDelete(AutomationCommandWait* wait, const QVariantMap& result) {
@@ -197,8 +206,13 @@ void AnswerDelete(AutomationCommandWait* wait, const QVariantMap& result) {
     return;
   }
   const QString    message = result.value(QStringLiteral("message")).toString();
+  const QString    refusal = result.value(QStringLiteral("refusal")).toString();
   const QJsonArray deleted =
       QJsonArray::fromVariantList(result.value(QStringLiteral("deletedElementIds")).toList());
+  if (deleted.isEmpty() && !refusal.isEmpty()) {
+    wait->SendError(AutomationErrorCode::Rejected, message, SleeveRefusalData(refusal, message));
+    return;
+  }
   if (deleted.isEmpty()) {
     wait->SendOwnerError(AutomationErrorCode::Failed, message);
     return;
@@ -756,7 +770,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   import_files.description = QStringLiteral(
       "Imports the files 'paths', or the supported files of 'folder' (with its subfolders when "
       "'recursive', the default), into the current folder of the open project. Returns a task "
-      "id for tasks.wait as soon as the import starts.");
+      "id for tasks.wait as soon as the import starts. A mounted current folder answers -32002 "
+      "(rejected) with data.error 'mounted_folder_structure_is_read_only': a mounted folder "
+      "takes its files from its disk directory.");
   import_files.changes_state = true;
   import_files.params_schema = AutomationClosedParamsSchema(QJsonObject{
       {"paths", QJsonObject{{"type", "array"},
@@ -796,7 +812,18 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                                QStringLiteral("the folder does not exist: %1").arg(folder));
       return;
     }
-    if (!AutomationEnteredProject(host, reply)) {
+    const auto project = AutomationEnteredProject(host, reply);
+    if (!project) {
+      return;
+    }
+    try {
+      project->GetSleeveService()->CheckFolderStructureEditable(
+          host->folders()->CurrentFolderFsPath());
+    } catch (const SleeveOperationError& refusal) {
+      const QString message = QString::fromUtf8(refusal.what());
+      reply.SendError(
+          AutomationErrorCode::Rejected, message,
+          SleeveRefusalData(QString::fromLatin1(SleeveErrorName(refusal.Code())), message));
       return;
     }
     if (host->import_export()->ImportRunning()) {
@@ -1432,7 +1459,10 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
       "root folder as the current folder. With scope 'album' they leave the current album. "
       "Answers -32002 (rejected) while a task holds the photos: a mark, rating, or paste "
       "adjustments batch that is saving, or another delete. Send it again after tasks.wait. "
-      "Other start failures answer -32007 (failed).");
+      "A delete that the mounted folder rules refuse answers -32002 with data.error "
+      "'mounted_folder_structure_is_read_only', 'mounted_photo_is_present', or "
+      "'mounted_photo_is_missing'; the Delete mark stays available. Other start failures answer "
+      "-32007 (failed).");
   remove.changes_state = true;
   remove.params_schema = AutomationClosedParamsSchema(
       QJsonObject{
@@ -1484,6 +1514,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   };
   RegisterOrFail(registry, std::move(remove), &ok, error);
 
+  if (ok && !RegisterAutomationMountCommands(registry, host, error)) {
+    ok = false;
+  }
   return ok;
 }
 

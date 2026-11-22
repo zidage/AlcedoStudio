@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -16,7 +17,15 @@
 
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "app/raw_import_look_source.hpp"
+#include "app/sleeve_error.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "import_test_fixation.hpp"
+#include "storage/store/mount/mount_store.hpp"
+#include "type/mount_records.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -582,6 +591,42 @@ TEST_F(ImportServiceTests, ImportToNonExistentDestination) {
   EXPECT_TRUE(fs_service->ListFolderEntries(L"/").empty());
 }
 
+// A mounted folder takes its files only from its directory (mounted_folder_plan.md, D7 and MF5).
+TEST_F(ImportServiceTests, ImportIntoAMountedFolderIsRefusedBeforeAnySourceRead) {
+  ProjectService project(db_path_, meta_path_);
+  auto           fs_service     = project.GetSleeveService();
+  auto           import_service = std::make_unique<ImportServiceImpl>(
+      fs_service, project.GetImagePoolService(),
+      std::make_shared<PipelineMgmtService>(project.GetStorage()));
+  auto [mount_root, sync] = fs_service->CreateMountRootFolder(0, L"Trip", 1);
+  ASSERT_TRUE(sync.success_) << sync.message_;
+  MountRootRecord mount;
+  mount.id             = 1;
+  mount.root_folder_id = mount_root->element_id_;
+  mount.root_path      = temp_dir_ / "Trip";
+  project.GetStorage()->GetMountStore().InsertMountRoot(mount);
+
+  // An existing RAW file: an import that read it would create an element and an image.
+  const std::vector<image_path_t> paths{std::filesystem::path(TEST_IMG_PATH) / "raw" / "airplane" /
+                                        "_DSC1704.NEF"};
+  auto                            job = std::make_shared<ImportJob>();
+  try {
+    (void)import_service->ImportToFolder(paths, L"/Trip", {}, job);
+    ADD_FAILURE() << "the import into a mounted folder started";
+  } catch (const SleeveOperationError& error) {
+    EXPECT_EQ(error.Code(), SleeveError::kMountedFolderStructureIsReadOnly) << error.what();
+  }
+
+  // No job started: it has no log and no progress, and the project holds no new element.
+  EXPECT_EQ(job->import_log_, nullptr);
+  EXPECT_EQ(job->progress_, nullptr);
+  EXPECT_TRUE(fs_service->ListFolderEntries(L"/Trip").empty());
+  const auto root_entries = fs_service->ListFolderEntries(L"/");
+  ASSERT_EQ(root_entries.size(), 1U);
+  EXPECT_EQ(root_entries[0]->element_id_, mount_root->element_id_);
+  EXPECT_TRUE(project.GetStorage()->GetImageStore().GetImageByPath(paths[0]).empty());
+}
+
 // Verify that after import, element names and image names match the original
 // file names exactly (not "Element#*" or similar placeholders).
 TEST_F(ImportServiceTests, ImportedElementNameMatchesFileName) {
@@ -766,6 +811,61 @@ TEST_F(ImportServiceTests, ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoin
 
   EXPECT_TRUE(unsynced_after_sync.empty());
   EXPECT_TRUE(modified_after_sync.empty());
+}
+
+namespace {
+
+/// A RAW import look that differs from the product Default in every value (#918).
+class CustomRawImportLookSource final : public RawImportLookSource {
+ public:
+  [[nodiscard]] auto Read() const -> RawImportLook override {
+    ++reads_;
+    RawImportLook look;
+    look.exposure_ev          = 0.25f;
+    look.saturation           = 1.15f;
+    look.tone_curve_preset_id = "medium_contrast";
+    look.drt_method           = DrtMethod::Aces20;
+    look.open_drt_look_preset = "colorful";
+    look.lens_correction      = true;
+    return look;
+  }
+  mutable std::atomic<int> reads_{0};
+};
+
+}  // namespace
+
+TEST_F(ImportServiceTests, RawImportRootTakesTheLookOfTheSourceReadOncePerImport) {
+  ProjectService project(db_path_, meta_path_);
+  auto           pipeline = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto           source   = std::make_shared<CustomRawImportLookSource>();
+  std::unique_ptr<ImportService> import_service = std::make_unique<ImportServiceImpl>(
+      project.GetSleeveService(), project.GetImagePoolService(), pipeline, source);
+
+  std::vector<image_path_t> paths;
+  paths.push_back(TEST_IMG_PATH "/raw/airplane/_DSC1704.NEF");
+  auto                       import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> final_result;
+  auto                       final_result_future = final_result.get_future();
+  import_job->on_finished_ = [&final_result](const ImportResult& result) {
+    final_result.set_value(result);
+  };
+  import_job = import_service->ImportToFolder(paths, L"", {}, import_job);
+  ASSERT_NE(import_job, nullptr);
+  ASSERT_EQ(final_result_future.get().imported_, 1u);
+  EXPECT_EQ(source->reads_.load(), 1);
+
+  const auto snapshot = import_job->import_log_->Snapshot();
+  import_service->SyncImports(snapshot, L"");
+  ASSERT_EQ(snapshot.created_.size(), 1u);
+
+  const auto history = pipeline->LoadHistorySnapshot(snapshot.created_.front().element_id_);
+  ASSERT_NE(history.root_, nullptr);
+  const auto expected = CreateDefaultPipelineDocument(source->Read());
+  // Develop of the stored root also holds the RAW color context of the file; the grade and the
+  // DRT hold only the look.
+  EXPECT_EQ(history.root_->document.PrimaryGrade()->ToJson(), expected.PrimaryGrade()->ToJson());
+  EXPECT_EQ(history.root_->document.Drt()->ToJson(), expected.Drt()->ToJson());
+  EXPECT_TRUE(history.root_->document.Develop()->Params().LensEnabled());
 }
 
 };  // namespace alcedo

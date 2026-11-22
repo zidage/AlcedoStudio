@@ -205,6 +205,7 @@ add_executable(EditorSessionHistoryPortTest
 target_include_directories(EditorSessionHistoryPortTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorSessionHistoryPortTest
+  ProfileToneCurve
   AdjustmentTransferService
   AiMaskAnalysisImage
   LutPreviewImage
@@ -510,6 +511,10 @@ alcedo_register_test_target(ClipModelInstallActivationTest ui)
 def_ui_test(AlbumBackendFolderTest   album_backend_folder_test.cpp)
 alcedo_register_test_target(AlbumBackendFolderTest ui)
 
+# Mounted folder rows and commands of FolderController (mounted_folder_plan.md, MF6 and MF8).
+def_ui_test(FolderControllerMountTest   folder_controller_mount_test.cpp)
+alcedo_register_test_target(FolderControllerMountTest ui)
+
 def_ui_test(AlbumBackendImageDeleteTest album_backend_image_delete_test.cpp)
 alcedo_register_test_target(AlbumBackendImageDeleteTest ui)
 
@@ -563,6 +568,19 @@ alcedo_register_test_target(AlbumBackendBackgroundTaskTest ui)
 
 def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp "interaction_policy")
 alcedo_register_test_target(AlbumBackendInteractionPolicyTest ui)
+
+# Directory watchers of the mounted folders (mounted_folder_plan.md, MF7, P11) on real
+# temporary directories.
+def_ui_test(MountDirectoryWatcherTest mount_directory_watcher_test.cpp "mounted_folder")
+target_link_libraries(MountDirectoryWatcherTest PRIVATE MountDirectoryWatcher)
+alcedo_register_test_target(MountDirectoryWatcherTest ui)
+
+# Scan triggers of the mounted folders (mounted_folder_plan.md, MF7): the trigger rules with a
+# test clock, and the platform watcher on a real directory and project database.
+def_ui_test(MountScanCoordinatorTest mount_scan_coordinator_test.cpp "mounted_folder")
+target_link_libraries(MountScanCoordinatorTest PRIVATE MountScanCoordinator OpenImageIO::OpenImageIO)
+alcedo_copy_duckdb_fts_extension(MountScanCoordinatorTest)
+alcedo_register_test_target(MountScanCoordinatorTest ui)
 
 def_ui_test(AgentControlOwnerTest agent_control_owner_test.cpp "interaction_policy")
 alcedo_register_test_target(AgentControlOwnerTest ui)
@@ -790,6 +808,37 @@ alcedo_ui_gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowT
 alcedo_register_test_target(MainQmlWorkflowTest ui)
 alcedo_link_quickqanava_qml(MainQmlWorkflowTest)
 
+# The folder section of the Library view (issue #1009) in the production Main.qml, over real
+# mounts.
+add_executable(LibraryFolderSectionQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/library_folder_section_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LibraryFolderSectionQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(LibraryFolderSectionQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(LibraryFolderSectionQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(LibraryFolderSectionQmlTest
+    TEST_PREFIX "LibraryFolderSectionQmlTest.")
+alcedo_register_test_target(LibraryFolderSectionQmlTest ui)
+alcedo_link_quickqanava_qml(LibraryFolderSectionQmlTest)
+
 # Phase 6C-5 Phase 6B: QML entry surfaces blocked during save and recovered after.
 add_executable(EditorCheckpointQmlIntegrationTest
     ${ALCEDO_TEST_ROOT}/ui/editor_checkpoint_qml_integration_test.cpp
@@ -896,8 +945,9 @@ alcedo_ui_gtest_discover_tests(EditorFilmstripQmlTest
 )
 alcedo_register_test_target(EditorFilmstripQmlTest ui)
 
-# Issue 442: the editor closes its open image when the accepted, filtered
-# Library list no longer contains it (ImageActionsController list sync).
+# Issue 442 and 957: the editor checks its open image against the accepted, filtered
+# Library list and keeps it in the filmstrip slot of an image outside the list
+# (ImageActionsController list sync).
 add_executable(EditorLibraryListSyncQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_library_list_sync_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
@@ -925,6 +975,36 @@ alcedo_ui_gtest_discover_tests(EditorLibraryListSyncQmlTest
     PROPERTIES LABELS "workspace_qml;editor_filmstrip"
 )
 alcedo_register_test_target(EditorLibraryListSyncQmlTest ui)
+
+# Issue 957: the image context menu of the Library grid and the editor filmstrip targets the
+# whole selection when it holds the clicked image, and the clicked image alone otherwise.
+add_executable(ImageContextMenuTargetsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/image_context_menu_targets_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(ImageContextMenuTargetsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ImageContextMenuTargetsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
+)
+target_compile_definitions(ImageContextMenuTargetsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(ImageContextMenuTargetsQmlTest
+    TEST_PREFIX "ImageContextMenuTargetsQmlTest."
+    PROPERTIES LABELS "workspace_qml;editor_filmstrip"
+)
+alcedo_register_test_target(ImageContextMenuTargetsQmlTest ui)
 
 # Production QML handlers whose C++ signal starts with an upper-case letter (delete and rating
 # results, export end, accelerator preparation), driven through C++ fakes with the production
@@ -1122,6 +1202,39 @@ alcedo_ui_gtest_discover_tests(LibraryColorLabelSettingsQmlTest
     PROPERTIES LABELS "workspace_qml;library_settings"
 )
 alcedo_register_test_target(LibraryColorLabelSettingsQmlTest ui)
+
+# Settings > Default Behavior > RAW Import (#920) on the production SettingDialog and module host:
+# the rows follow the section model, the preview takes no input, and Done writes the look.
+add_executable(RawImportLookSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/raw_import_look_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(RawImportLookSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(RawImportLookSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        RawImportLookSettings
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(RawImportLookSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(RawImportLookSettingsQmlTest
+    TEST_PREFIX "RawImportLookSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;settings;import_look"
+)
+alcedo_register_test_target(RawImportLookSettingsQmlTest ui)
 
 # Settings > About and the Settings type scale (#824) on the production SettingDialog and module
 # host: Open Log Folder with a file-manager stand-in, theme type tokens on every page, and the
@@ -1607,6 +1720,31 @@ alcedo_ui_gtest_discover_tests(EditorNodeSelectionLayoutTest
     TEST_PREFIX "EditorNodeSelectionLayoutTest."
     PROPERTIES LABELS "editor_nodes;workspace_qml")
 alcedo_register_test_target(EditorNodeSelectionLayoutTest ui)
+
+# The RAW Import section model of Settings (#920): stored look, pending edits, apply as setters and
+# key removals, rejected values, and the curve line of each Tone Curve preset.
+add_executable(RawImportLookSettingsModelTest
+    ${ALCEDO_TEST_ROOT}/ui/raw_import_look_settings_model_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(RawImportLookSettingsModelTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(RawImportLookSettingsModelTest
+    PRIVATE
+        AlbumBackendLib
+        RawImportLookSettings
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(RawImportLookSettingsModelTest
+    TEST_PREFIX "RawImportLookSettingsModelTest."
+    PROPERTIES LABELS "settings;import_look")
+alcedo_register_test_target(RawImportLookSettingsModelTest ui)
 
 add_executable(MaskThumbnailCoordinatorTest
     ${ALCEDO_TEST_ROOT}/ui/mask_thumbnail_coordinator_test.cpp

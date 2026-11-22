@@ -19,6 +19,7 @@
 #include "app/semantic_generation_service.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/store/semantic/semantic_label_config.hpp"
+#include "ui/alcedo_main/album_backend/editor_gpu_resource_release.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -69,6 +70,10 @@ class SemanticGenerationController final : public QObject {
                                QObject* parent = nullptr);
 
   void BindCollaborators(NikonHeRecoveryController* nikon);
+  /// Editor GPU release of the semantic generation holder. A generation calls `release` after its
+  /// checks and before the sidecar boot and the job, continues from the release completion, and
+  /// calls `resume` once when it ends: finished, cancelled, failed to start, or release failed.
+  void SetEditorGpuResourceRelease(EditorGpuResourceReleaseHooks hooks);
 
   bool               PromptVisible() const;
   bool               Running() const { return running_; }
@@ -139,6 +144,15 @@ class SemanticGenerationController final : public QObject {
   [[nodiscard]] bool IsFreshProject() const;
   void StartGenerationForItems(std::vector<SemanticGenerationItem> items, bool forceRegenerate);
   void ContinueGenerationForItems(bool forceRegenerate);
+  // The part of the start after the editor released its GPU resources: the sidecar boot, the
+  // model registration, and the job. @p released is false with @p error when the release failed.
+  void ContinueAfterEditorGpuRelease(bool forceRegenerate, bool released, const std::string& error);
+  // Ends a start that did not reach the job with @p status: no running generation, no pending
+  // items, no sidecar lease, the background task (when registered) finished as Canceled when
+  // @p canceled and as Failed otherwise, and the editor GPU resumed.
+  void EndStart(i18n::LocalizedText status, bool canceled);
+  // Calls the `resume` hook once when this generation holds the editor GPU release.
+  void ResumeEditorGpu();
   void UpdateProgress(const SemanticGenerationProgress& progress);
   // The time estimate of the running job, from the rate of finished images in the last minute.
   void UpdateRemainingTimeEstimate(const SemanticGenerationProgress& progress);
@@ -173,6 +187,9 @@ class SemanticGenerationController final : public QObject {
   BackgroundTaskController*                 background_tasks_ = nullptr;
   IUiStatusSink*                            status_           = nullptr;
   NikonHeRecoveryController*                nikon_            = nullptr;
+  EditorGpuResourceReleaseHooks             editor_gpu_release_{};
+  // True from the `release` call of a generation until its `resume` call.
+  bool                                      editor_gpu_released_ = false;
   std::vector<SemanticGenerationItem>    pending_items_{};
   std::shared_ptr<SemanticGenerationJob> job_{};
   std::shared_ptr<void>                  sidecar_lease_{};
@@ -189,9 +206,9 @@ class SemanticGenerationController final : public QObject {
   bool                                   model_activation_running_ = false;
   bool                                   prompt_pending_           = false;
   bool                                   running_                  = false;
-  // True when the user pressed Cancel during the interactive sidecar boot
-  // (before job_ exists). The boot-failure path reads this to finish the
-  // background task as Canceled instead of Failed.
+  // True when the user pressed Cancel before job_ exists: while the editor GPU release or the
+  // interactive sidecar boot runs. The start reads it after the release and after a failed
+  // boot to finish the background task as Canceled instead of Failed.
   bool                                   start_canceled_           = false;
   int                                    total_                    = 0;
   int                                    embedded_                 = 0;

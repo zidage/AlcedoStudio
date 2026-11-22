@@ -16,6 +16,11 @@ import "ColorLabelNames.js" as ColorLabelNames
 // Both layouts use one input overlay (selection, rubber band, stars, context menu, wheel), one
 // scroll bar, and the same geometry functions (layoutRect, cardIndexAt, delegateForIndex, ...).
 //
+// Folder section (issue #1009): the child folders of the shown folder (folderSectionRows) stand
+// in a LibraryFolderSection above the first row. Its height is topInset: the view scrolls from
+// originY - topInset, so the section scrolls with the photos, and the layout coordinates of the
+// photos stay as they are.
+//
 // Zoom: a new zoom level is applied in one synchronous step (applyZoomTransition). Before the
 // layout changes, each shown card records its drawn rectangle; after the new layout and the new
 // scroll position are set, each card animates from that rectangle to its new one, and the card
@@ -41,6 +46,15 @@ Item {
     // The library selection (LibrarySelection). A delegate asks it for its own photo.
     readonly property var selection: appModules.library.selection
     property var exportQueueById: ({})
+
+    // ── Folder section ──
+    // Rows of FolderController.folders for the child folders of the shown folder, in the order
+    // of the Collections tree; empty hides the section.
+    property var folderSectionRows: []
+    // Height of the folder section above the first row: the scroll range starts this much above
+    // originY.
+    readonly property real topInset: folderSection.visible ? folderSection.height : 0
+    property real _appliedTopInset: 0
 
     // ── Layout ──
     // "classic" or "justified" (LibraryViewPreferences.gridLayout).
@@ -135,6 +149,8 @@ Item {
     // Ctrl+wheel asks the owner for a zoom level, so an owner binding of zoomLevel stays. The
     // view sets zoomLevel itself only when the owner did not.
     signal zoomLevelRequested(int zoomLevel)
+    // A click on the tile of child folder @p folderId (ui id of FolderController).
+    signal folderActivated(int folderId)
 
     function semanticTagTitle(rawTag) {
         const normalized = rawTag === undefined || rawTag === null
@@ -197,6 +213,7 @@ Item {
     }
 
     Component.onCompleted: {
+        _appliedTopInset = topInset
         committedZoomLevel = root.clampedZoomLevel(zoomLevel)
         _layoutZoomLevel = committedZoomLevel
         _layoutJustified = layoutMode === "justified"
@@ -236,6 +253,16 @@ Item {
         root.finishZoomCommit()
     }
     onLayoutModeChanged: root.applyLayoutMode()
+    // A view at the top shows the whole new section; elsewhere the position is clamped.
+    onTopInsetChanged: {
+        const atTop = root.view.contentY <= root.view.originY - _appliedTopInset + 0.5
+        _appliedTopInset = topInset
+        if (atTop) {
+            root.view.contentY = root.view.originY - topInset
+        } else {
+            root.clampContentY()
+        }
+    }
     onWidthChanged: {
         if (_layoutJustified) {
             root.applyJustifiedGeometry()
@@ -632,13 +659,21 @@ Item {
         return maxContentYForHeight(layoutContentHeight(), root.view.originY)
     }
 
+    // The scroll range runs from originY - topInset (the top of the folder section) to the
+    // end of the rows.
     function maxContentYForHeight(contentHeight, originY) {
-        return originY + Math.max(0, contentHeight - root.view.height)
+        return originY + Math.max(-root.topInset, contentHeight - root.view.height)
     }
 
     function clampYForHeight(contentHeight, contentY, originY) {
-        const minY = originY === undefined ? root.view.originY : originY
-        return Math.max(minY, Math.min(maxContentYForHeight(contentHeight, minY), contentY))
+        const origin = originY === undefined ? root.view.originY : originY
+        return Math.max(origin - root.topInset,
+                        Math.min(maxContentYForHeight(contentHeight, origin), contentY))
+    }
+
+    // True while a part of the folder section is in the view.
+    function folderSectionShown() {
+        return root.topInset > 0 && root.view.contentY < root.view.originY - 0.5
     }
 
     function clampContentY() {
@@ -671,6 +706,8 @@ Item {
         if (!_layoutJustified) {
             return
         }
+        // A shown folder section keeps its position; the rows below it are laid out again.
+        const sectionY = root.folderSectionShown() ? justifiedView.contentY : null
         const anchor = justifiedModel.layoutRowCount > 0 ? root.nearestCardIndexAt(0, 0) : -1
         let fraction = 0
         if (anchor >= 0) {
@@ -680,6 +717,9 @@ Item {
         justifiedView.contentY = justifiedModel.setGeometryAnchored(
             root.width, root.justifiedRowHeight, root.justifiedSpacing,
             root.justifiedCaptionHeight, anchor, fraction, 0)
+        if (sectionY !== null) {
+            justifiedView.contentY = root.clampYForHeight(root.layoutContentHeight(), sectionY)
+        }
     }
 
     // Show the layout that layoutMode names. The first shown photo stays at the top.
@@ -692,13 +732,22 @@ Item {
         if (wantJustified === _layoutJustified) {
             return
         }
+        // A shown folder section stays at the same place; otherwise the first shown photo does.
+        const sectionOffset = root.folderSectionShown() ? root.view.contentY - root.view.originY
+                                                        : null
         const topIndex = root.layoutReady() ? root.nearestCardIndexAt(0, 0) : -1
         root.finishActiveZoomLayoutAnimations()
         root.finishChangeAnimations()
         overlay.hoveredIndex = -1
         _layoutJustified = wantJustified
         root.applyJustifiedGeometry()
-        if (topIndex >= 0) {
+        if (sectionOffset !== null) {
+            if (!_layoutJustified) {
+                grid.forceLayout()
+            }
+            root.view.contentY = root.clampYForHeight(root.layoutContentHeight(),
+                                                      root.view.originY + sectionOffset)
+        } else if (topIndex >= 0) {
             if (!_layoutJustified) {
                 grid.forceLayout()
             }
@@ -866,8 +915,8 @@ Item {
     // of the result (layoutContentHeight). A drag moves contentY there and loads the pages up to
     // the rows that it shows.
     function scrollFraction() {
-        const height = root.layoutContentHeight()
-        return height > 0 ? (root.view.contentY - root.view.originY) / height : 0
+        const height = root.layoutContentHeight() + root.topInset
+        return height > 0 ? (root.view.contentY - root.view.originY + root.topInset) / height : 0
     }
 
     function scrollToFraction(fraction) {
@@ -875,7 +924,8 @@ Item {
         if (height <= 0 || !root.layoutReady()) {
             return
         }
-        root.view.contentY = root.clampYForHeight(height, root.view.originY + fraction * height)
+        root.view.contentY = root.clampYForHeight(
+            height, root.view.originY - root.topInset + fraction * (height + root.topInset))
         let lastIndex = 0
         if (_layoutJustified) {
             lastIndex = justifiedModel.indexAtY(justifiedView.contentY + justifiedView.height
@@ -1271,7 +1321,7 @@ Item {
         // The tile count stays while a scroll moves the window, so the window asks for pages.
         onWindowChanged: root.maybeLoadMoreThumbnails()
         // Another result shows from the top, as the classic GridView shows a reset model.
-        onViewportReset: justifiedView.contentY = 0
+        onViewportReset: justifiedView.contentY = -root.topInset
     }
 
     // A plain item with the scroll properties of a Flickable, not a Flickable: the view takes no
@@ -1321,6 +1371,8 @@ Item {
         // A scroll gives the cards that leave the view to the rows that enter it.
         reuseItems: true
         boundsBehavior: Flickable.StopAtBounds
+        // Room for the folder section above the first row; the rows keep their positions.
+        topMargin: root.topInset
         cellWidth: root.classicMetrics.cellW
         cellHeight: root.classicMetrics.cellH
         interactive: false
@@ -1377,9 +1429,10 @@ Item {
             readonly property bool thumbnailErrorState: !thumbnailReady && !thumbnailLoadingState
                                                         && thumbPin.liveThumbErrorText.length > 0
             readonly property bool thumbnailProblemState: thumbnailMissingState || thumbnailErrorState
-            readonly property string thumbnailProblemText: thumbPin.liveThumbErrorText.length > 0
-                                                           ? thumbPin.liveThumbErrorText
-                                                           : qsTr("Source file was moved or deleted")
+            // A missing source shows one icon and no text; another problem shows its text.
+            readonly property bool thumbnailShowsErrorText: thumbnailErrorState
+                                                            && !thumbnailMissingState
+            readonly property string thumbnailProblemText: thumbPin.liveThumbErrorText
 
             ThumbnailPinBinding {
                 id: thumbPin
@@ -1573,7 +1626,7 @@ Item {
                     image: thumbImage
                     compact: root.columns >= 8
                     // Left of the problem dot (8 px margin, 18 px) when the source is missing.
-                    rightInset: cardDelegate.thumbnailProblemState ? 30 : editMark.inset
+                    rightInset: cardDelegate.thumbnailShowsErrorText ? 30 : editMark.inset
                     edited: isEdited
                     editedAt: cardDelegate.editedAt
                     versionName: editVersionName
@@ -1586,7 +1639,7 @@ Item {
                     width: 18
                     height: 18
                     radius: 9
-                    visible: cardDelegate.thumbnailProblemState
+                    visible: cardDelegate.thumbnailShowsErrorText
                     color: root.cardDangerTint
                     border.width: 1
                     border.color: root.cardDanger
@@ -1599,8 +1652,19 @@ Item {
                     sourceComponent: Component {
                         Column {
                             spacing: 2
+                            IconImage {
+                                objectName: "thumbnailMissingSourceIcon"
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                visible: !cardDelegate.thumbnailShowsErrorText
+                                width: root.columns >= 11 ? 18 : 24
+                                height: width
+                                sourceSize: Qt.size(width, height)
+                                source: "qrc:/panel_icons/photo-off.svg"
+                                color: appTheme.textMutedColor
+                            }
                             Label {
                                 anchors.horizontalCenter: parent.horizontalCenter
+                                visible: cardDelegate.thumbnailShowsErrorText
                                 text: "!"
                                 color: root.cardDanger
                                 font.family: appTheme.dataFontFamily
@@ -1609,6 +1673,7 @@ Item {
                             }
                             Label {
                                 width: parent.width
+                                visible: cardDelegate.thumbnailShowsErrorText
                                 text: cardDelegate.thumbnailProblemText
                                 color: root.cardDanger
                                 font.family: appTheme.dataFontFamily
@@ -1625,7 +1690,7 @@ Item {
                 HoverHandler {
                     id: thumbHover
                 }
-                ToolTip.visible: cardDelegate.thumbnailProblemState && thumbHover.hovered
+                ToolTip.visible: cardDelegate.thumbnailShowsErrorText && thumbHover.hovered
                 ToolTip.text: cardDelegate.thumbnailProblemText
                 ToolTip.delay: 150
             }
@@ -2141,7 +2206,7 @@ Item {
 
         // A child of the overlay: the bar takes its own presses and drags, and a wheel over it
         // reaches the overlay, which scrolls the view.
-        ScrollBar {
+        AlcedoScrollBar {
             id: gridScrollBar
             objectName: "thumbnailGridView_scrollBar"
             z: 1
@@ -2151,7 +2216,7 @@ Item {
             orientation: Qt.Vertical
             policy: ScrollBar.AsNeeded
             size: {
-                const height = root.layoutContentHeight()
+                const height = root.layoutContentHeight() + root.topInset
                 return height > root.view.height ? root.view.height / height : 1
             }
             // Shown while it is hovered or dragged, and for a short time after a scroll.
@@ -2176,6 +2241,32 @@ Item {
         Connections {
             target: root.view
             function onContentYChanged() { scrollActivityTimer.restart() }
+        }
+    }
+
+    // ── Folder section ──
+    // In viewport coordinates above the input overlay: the tiles take their own presses and
+    // hover, and a wheel over the section reaches the overlay, which scrolls the view. The scroll
+    // bar keeps its column.
+    Item {
+        id: folderSectionViewport
+        objectName: "thumbnailGridView_folderSectionViewport"
+        z: 25
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: Math.max(0, root.width - gridScrollBar.width)
+        clip: true
+
+        LibraryFolderSection {
+            id: folderSection
+            width: folderSectionViewport.width
+            y: root.view.originY - root.topInset - root.view.contentY
+            folders: root.folderSectionRows
+            photoCellWidth: root.classicMetrics.cellW
+            compact: root.columns >= 8
+            cellPadding: root.cardInset
+            onFolderActivated: function(folderId) { root.folderActivated(folderId) }
         }
     }
 

@@ -25,6 +25,8 @@ use their own top-level category.
 
 - [duckorm Query Expression and Album Filter SQL Plan](alcedo_studio/storage/duckorm_query_expression_and_album_filter_sql_plan.md)
 - [Library Search Performance, Recall, and Project Size Plan](alcedo_studio/storage/library_search_and_project_size_plan.md)
+- [Mounted Folder Plan](alcedo_studio/storage/mounted_folder_plan.md): a collection that mirrors
+  a disk directory through a one-way scan; tracking issue #991
 
 ## Alcedo Studio — Image editing pipeline
 

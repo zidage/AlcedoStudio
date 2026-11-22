@@ -4,18 +4,25 @@
 
 // library.* and tasks.* parameter and state rules in an in-process headless session.
 
+#include <OpenImageIO/imageio.h>
 #include <gtest/gtest.h>
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStringList>
+#include <cstdint>
+#include <string>
 #include <vector>
 
+#include "app/project_service.hpp"
+#include "app/sleeve_service.hpp"
 #include "automation/automation_protocol.hpp"
 #include "automation_in_process_session.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/application_module_host.hpp"
 
 namespace alcedo::automation {
 namespace {
@@ -33,6 +40,23 @@ auto ErrorCode(const std::optional<AutomationResponse>& response)
     return std::nullopt;
   }
   return response->error->code;
+}
+
+/// Encode a 24x16 JPEG whose pixels depend on @p seed at @p path.
+void WriteJpeg(const QString& path, int seed) {
+  ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+  constexpr int             kWidth = 24, kHeight = 16, kChannels = 3;
+  std::vector<std::uint8_t> pixels(kWidth * kHeight * kChannels);
+  for (std::size_t index = 0; index < pixels.size(); ++index) {
+    pixels[index] = static_cast<std::uint8_t>(index * 7 + seed * 31);
+  }
+  const std::string file   = path.toStdString();
+  auto              output = OIIO::ImageOutput::create(file);
+  ASSERT_TRUE(output);
+  const OIIO::ImageSpec spec(kWidth, kHeight, kChannels, OIIO::TypeDesc::UINT8);
+  ASSERT_TRUE(output->open(file, spec));
+  ASSERT_TRUE(output->write_image(OIIO::TypeDesc::UINT8, pixels.data()));
+  ASSERT_TRUE(output->close());
 }
 
 TEST_F(AutomationLibraryCommandsTest, LibraryCommandsWithoutProjectAreNotReady) {
@@ -572,6 +596,40 @@ TEST_F(AutomationLibraryCommandsTest, StatsBucketLabelsSelectTheirPhotoCounts) {
 
 // A failed read answers with the database message; the SQL text of the statement stays in the
 // log (#814).
+// A mounted folder takes its files only from its directory (mounted_folder_plan.md, MF5).
+TEST_F(AutomationLibraryCommandsTest, ImportWithMountedCurrentFolderReturnsTheNamedError) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "mounted_import"}})
+                   .isEmpty());
+  const auto project = session.host().project()->handler().project();
+  ASSERT_NE(project, nullptr);
+  auto [mount_root, sync] = project->GetSleeveService()->CreateMountRootFolder(0, L"Trip", 1);
+  ASSERT_TRUE(sync.success_) << sync.message_;
+  session.host().folders()->ReloadTree(L"/Trip");
+  ASSERT_EQ(session.host().folders()->CurrentFolderElementId(), mount_root->element_id_);
+
+  const QString raw_root = QStringLiteral(TEST_IMG_PATH) + QStringLiteral("/ci_rawfiles");
+  const QString file =
+      QDir(raw_root).entryInfoList(QDir::Files, QDir::Name).value(0).absoluteFilePath();
+  ASSERT_FALSE(file.isEmpty());
+  for (const QJsonObject& params : {QJsonObject{{"paths", QJsonArray{file}}},
+                                    QJsonObject{{"folder", raw_root}, {"recursive", false}}}) {
+    const auto response = session.Call(QStringLiteral("library.import"), params);
+    ASSERT_EQ(ErrorCode(response), AutomationErrorCode::Rejected);
+    EXPECT_EQ(response->error->data.toObject().value("error").toString(),
+              QStringLiteral("mounted_folder_structure_is_read_only"));
+  }
+
+  // No import started, and the project holds no photo.
+  EXPECT_EQ(
+      session.CallResult(QStringLiteral("tasks.wait"), QJsonObject{{"idle", true}}).value("idle"),
+      QJsonValue(true));
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(), 0);
+  EXPECT_TRUE(project->GetSleeveService()->ListFolderEntries(L"/Trip").empty());
+}
+
 TEST_F(AutomationLibraryCommandsTest, FailedReadAnswersWithTheDatabaseMessageWithoutSql) {
   InProcessAutomationSession session;
   ASSERT_FALSE(session
@@ -595,6 +653,79 @@ TEST_F(AutomationLibraryCommandsTest, FailedReadAnswersWithTheDatabaseMessageWit
   EXPECT_TRUE(message.contains(QStringLiteral("Mars/Olympus_Mons"))) << message.toStdString();
   EXPECT_FALSE(message.contains(QStringLiteral("SQL"))) << message.toStdString();
   EXPECT_FALSE(message.contains(QStringLiteral("SELECT"))) << message.toStdString();
+}
+
+// Mounted Folder Plan, MF8 (#990): the mount commands answer with the results of the service
+// operations that the Collections panel runs.
+TEST_F(AutomationLibraryCommandsTest, MountSyncAndUnmountReturnTheServiceResults) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "mounted_folder"}})
+                   .isEmpty());
+  const QString trip = QDir(Folder()).filePath(QStringLiteral("disk/Trip"));
+  WriteJpeg(trip + QStringLiteral("/a.jpg"), 1);
+  WriteJpeg(trip + QStringLiteral("/Day1/b.jpg"), 2);
+
+  const QJsonObject mounted =
+      session.CallResult(QStringLiteral("library.mount"), QJsonObject{{"path", trip}});
+  const int mount_id = mounted.value("mount_id").toInt();
+  ASSERT_GT(mount_id, 0);
+  EXPECT_GT(mounted.value("folder_id").toInt(), 0);
+  const QJsonObject first_scan = mounted.value("scan").toObject();
+  EXPECT_EQ(first_scan.value("status").toString(), QStringLiteral("complete"));
+  EXPECT_EQ(first_scan.value("new").toInt(), 2);
+
+  const QJsonArray mounts =
+      session.CallResult(QStringLiteral("library.mounts")).value("mounts").toArray();
+  ASSERT_EQ(mounts.size(), 1);
+  const QJsonObject listed = mounts.at(0).toObject();
+  EXPECT_EQ(listed.value("mount_id").toInt(), mount_id);
+  EXPECT_EQ(listed.value("folder_id").toInt(), mounted.value("folder_id").toInt());
+  EXPECT_EQ(QFileInfo(listed.value("path").toString()).canonicalFilePath(),
+            QFileInfo(trip).canonicalFilePath());
+  EXPECT_EQ(listed.value("state").toString(), QStringLiteral("online"));
+  EXPECT_EQ(listed.value("present_count").toInt(), 2);
+  EXPECT_EQ(listed.value("missing_count").toInt(), 0);
+  EXPECT_TRUE(listed.value("last_scan_at").isString());
+
+  // A mount inside the mounted directory is refused with the name of the rule.
+  const auto nested = session.Call(QStringLiteral("library.mount"),
+                                   QJsonObject{{"path", trip + QStringLiteral("/Day1")}});
+  ASSERT_EQ(ErrorCode(nested), AutomationErrorCode::Rejected);
+  EXPECT_EQ(nested->error->data.toObject().value("error").toString(),
+            QStringLiteral("nested_mount"));
+
+  // library.sync with no mount id scans each mount.
+  ASSERT_TRUE(QFile::remove(trip + QStringLiteral("/a.jpg")));
+  const QJsonArray scans =
+      session.CallResult(QStringLiteral("library.sync")).value("scans").toArray();
+  ASSERT_EQ(scans.size(), 1);
+  EXPECT_EQ(scans.at(0).toObject().value("mount_id").toInt(), mount_id);
+  EXPECT_EQ(scans.at(0).toObject().value("status").toString(), QStringLiteral("complete"));
+  EXPECT_EQ(scans.at(0).toObject().value("missing").toInt(), 1);
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.mounts"))
+                .value("mounts")
+                .toArray()
+                .at(0)
+                .toObject()
+                .value("missing_count")
+                .toInt(),
+            1);
+  EXPECT_EQ(ErrorCode(session.Call(QStringLiteral("library.sync"), QJsonObject{{"mount_id", 99}})),
+            AutomationErrorCode::Rejected);
+
+  const QJsonObject unmounted =
+      session.CallResult(QStringLiteral("library.unmount"), QJsonObject{{"mount_id", mount_id}});
+  EXPECT_EQ(unmounted.value("mount_id").toInt(), mount_id);
+  EXPECT_TRUE(unmounted.value("unmounted").toBool());
+  EXPECT_TRUE(
+      session.CallResult(QStringLiteral("library.mounts")).value("mounts").toArray().isEmpty());
+  // The photos stay as ordinary photos.
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(), 2);
+  EXPECT_EQ(ErrorCode(session.Call(QStringLiteral("library.unmount"),
+                                   QJsonObject{{"mount_id", mount_id}})),
+            AutomationErrorCode::Rejected);
 }
 
 }  // namespace

@@ -4,13 +4,16 @@
 
 #include "edit/graph/pipeline_document.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "color/color_encoding_catalog.hpp"
@@ -172,18 +175,26 @@ void ValidateDocumentShape(const nlohmann::json& json) {
   ValidateFiniteNumbers(json, "document");
 }
 
-void ApplyDefaultPipelineLook(ColorGradeNodeModel& grade) {
+void ApplyRawImportLook(ColorGradeNodeModel& grade, const RawImportLook& look) {
   auto*       exposure   = grade.FindAdjustmentByType(type_ids::Exposure());
-  auto* saturation = grade.FindAdjustmentByType(type_ids::Saturation());
+  auto*       saturation = grade.FindAdjustmentByType(type_ids::Saturation());
   auto*       curve      = dynamic_cast<CurveModel*>(grade.FindAdjustmentByType(type_ids::Curve()));
-  const auto* preset     = FindToneCurvePreset(kDefaultPipelineToneCurvePresetId);
+  const auto* preset     = FindToneCurvePreset(look.tone_curve_preset_id);
   if (exposure == nullptr || saturation == nullptr || curve == nullptr || preset == nullptr) {
     throw std::logic_error("Default Color Grade is missing exposure, saturation, or curve");
   }
-  exposure->LoadJson({{"exposure_ev", kDefaultPipelineExposureEv}});
-  saturation->LoadJson({{"saturation", kDefaultPipelineSaturation}});
-  // The Film-like curve carries the contrast of the look; the Contrast slider stays at 0.
+  exposure->LoadJson({{"exposure_ev", look.exposure_ev}});
+  saturation->LoadJson({{"saturation", look.saturation}});
+  // The curve carries the contrast of the look; the Contrast slider stays at 0.
   curve->SetPoints(preset->PointList());
+}
+
+constexpr std::array<std::string_view, 7> kRawImportOpenDrtLookPresets = {
+    "standard", "arriba", "sylvan", "colorful", "aery", "dystopic", "umbra",
+};
+
+auto InClosedRange(float value, float min, float max) -> bool {
+  return std::isfinite(value) && value >= min && value <= max;
 }
 
 }  // namespace
@@ -475,16 +486,56 @@ auto CreateDefaultRasterPipelineDocument(const RasterColorDescription& source_co
   return document;
 }
 
+auto RawImportOpenDrtLookPresets() -> std::span<const std::string_view> {
+  return kRawImportOpenDrtLookPresets;
+}
+
+auto DescribeRawImportLookError(const RawImportLook& look) -> std::string {
+  if (!InClosedRange(look.exposure_ev, kRawImportLookMinExposureEv, kRawImportLookMaxExposureEv)) {
+    return "RAW import look exposure must be in [-10, 10] EV";
+  }
+  if (!InClosedRange(look.saturation, kRawImportLookMinSaturation, kRawImportLookMaxSaturation)) {
+    return "RAW import look saturation must be in [0, 2]";
+  }
+  if (FindToneCurvePreset(look.tone_curve_preset_id) == nullptr) {
+    return "RAW import look names an unknown Tone Curve preset: " + look.tone_curve_preset_id;
+  }
+  if (look.drt_method != DrtMethod::Aces20 && look.drt_method != DrtMethod::OpenDrt) {
+    return "RAW import look DRT method must be ACES 2.0 or OpenDRT";
+  }
+  if (std::ranges::find(kRawImportOpenDrtLookPresets, look.open_drt_look_preset) ==
+      kRawImportOpenDrtLookPresets.end()) {
+    return "RAW import look names an unknown OpenDRT look preset: " + look.open_drt_look_preset;
+  }
+  return {};
+}
+
 auto CreateDefaultPipelineDocument() -> PipelineDocument {
+  return CreateDefaultPipelineDocument(RawImportLook{});
+}
+
+auto CreateDefaultPipelineDocument(const RawImportLook& look) -> PipelineDocument {
+  if (const auto error = DescribeRawImportLookError(look); !error.empty()) {
+    throw std::invalid_argument(error);
+  }
   PipelineDocument document;
-  document.Graph().AddNode(std::make_unique<DevelopNodeModel>(NodeId{"develop"}));
+  auto             develop         = std::make_unique<DevelopNodeModel>(NodeId{"develop"});
+  auto             develop_payload = develop->Params().Params();
+  develop_payload.lens_enabled     = look.lens_correction;
+  develop->Params().ReplaceParams(std::move(develop_payload));
+  document.Graph().AddNode(std::move(develop));
   auto grade = ColorGradeNodeModel::MakeDefault(NodeId{"grade.primary"});
   grade->SetDisplayName(DefaultColorGradeDisplayName(1));
   grade->SetDeletionProtected(true);
-  ApplyDefaultPipelineLook(*grade);
+  ApplyRawImportLook(*grade, look);
   document.Graph().AddNode(std::move(grade));
   document.SetDefaultGradeId(NodeId{"grade.primary"});
-  document.Graph().AddNode(DrtNodeModel::MakeDefault(NodeId{"drt"}));
+  auto drt                = DrtNodeModel::MakeDefault(NodeId{"drt"});
+  auto drt_payload        = drt->Params().Params();
+  drt_payload.method      = look.drt_method;
+  drt_payload.look_preset = look.open_drt_look_preset;
+  drt->Params().ReplaceParams(std::move(drt_payload));
+  document.Graph().AddNode(std::move(drt));
   document.Graph().Connect(NodeId{"develop"}, PortId{"image"}, NodeId{"grade.primary"},
                            PortId{"image"});
   document.Graph().Connect(NodeId{"grade.primary"}, PortId{"image"}, NodeId{"drt"}, PortId{"image"});

@@ -21,20 +21,17 @@ inline constexpr std::uint32_t kGeometryImplementationVersion      = 1;
 /// Bumped when CameraColorPass math changes. Version 5 applies the ACES 1.3 Reference Gamut
 /// Compression to the profiled linear AP1 value before ACEScc encoding.
 inline constexpr std::uint32_t kCameraColorImplementationVersion   = 5;
-/// Bumped when Primary Grade pixel rules change. Version 6 fixes the compiled Grade
-/// stage order to Basic Tone + Color before the Local Laplacian stage.
-inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 6;
+/// Bumped when Primary Grade pixel rules change. Version 7 compiles the Local Laplacian stage
+/// (Shadows, Highlights) between Basic Tone and Color, before the Curve (issue #900).
+inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 7;
 /// Bumped when the canonical LLF reference identity or sampling rules change.
-/// Version 2 makes the canonical LLF source the post-Basic Tone + Color image.
-inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 2;
+/// Version 3 makes the canonical LLF source the post-Basic Tone image (issue #900).
+inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 3;
 /// Bumped when DRT pixel rules change, including the DiffusionFilter pass and the
 /// DiffusionFilterShape constants. Version 5 decodes ACEScc in the DiffusionFilter pass and
 /// applies the diffusion filter, built on the full-frame scatter canvas, before the display
 /// transform. Version 6 spreads the diffusion highlight boost over a log2 exposure range.
 inline constexpr std::uint32_t kDrtImplementationVersion           = 6;
-/// Bumped when the pixel rules of the profile tone stage change; only a DRT display key with the
-/// stage mixes it. Version 2 replaces the clip at raw white with the highlight shoulder.
-inline constexpr std::uint32_t kProfileToneImplementationVersion   = 2;
 /// Bumped when film print pixel rules change. Other DRT methods do not mix this value.
 /// Version 2 adds the point kernels on CUDA. Before it, a film print stopped with an error.
 /// Version 4 keeps the half-size cells of the inhibitor on their pixels at an odd size.

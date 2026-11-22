@@ -13,6 +13,7 @@
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/image/image_store.hpp"
+#include "storage/store/mount/mount_store.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "storage/store/semantic/semantic_label_store.hpp"
 #include "storage/store/semantic/semantic_model_registry.hpp"
@@ -53,6 +54,7 @@ class Storage {
   ElementStore                                                         element_store_;
   PhotoStackStore                                                       photo_stack_store_;
   ImageStore                                                           image_store_;
+  MountStore                                                           mount_store_;
   SemanticModelRegistry                                                 semantic_models_;
   SemanticEmbeddingStore                                                semantic_embeddings_;
   SemanticLabelStore                                                    semantic_labels_;
@@ -81,6 +83,8 @@ class Storage {
   /// Project-owned stack operations; callers never retain a connection or mutable membership.
   auto GetPhotoStackStore() -> PhotoStackStore&;
   auto GetImageStore() -> ImageStore&;
+  /// MountRoot and SourceFile rows (mounted folders).
+  auto GetMountStore() -> MountStore&;
   auto GetSemanticModelRegistry() -> SemanticModelRegistry&;
   auto GetSemanticEmbeddingStore() -> SemanticEmbeddingStore&;
   auto GetSemanticLabelStore() -> SemanticLabelStore&;

@@ -99,12 +99,12 @@ auto EditorInteractionController::aspectRatio() const -> float {
   return viewer_state_.GetCropOverlay().aspect_ratio;
 }
 
-auto EditorInteractionController::rotateHandleItemPos() const -> QPointF {
+auto EditorInteractionController::angleBadgeItemPos() const -> QPointF {
   const auto geometry = overlayGeometry();
   if (!geometry.crop_corners_valid) {
     return {};
   }
-  return geometry.rotate_handle_widget;
+  return geometry.angle_badge_widget;
 }
 
 auto EditorInteractionController::overlayGeometryValid() const -> bool {
@@ -689,6 +689,7 @@ auto EditorInteractionController::overlaySnapshot() const -> EditViewerOverlaySn
   snapshot.presentation_mode  = presentation_mode_;
   snapshot.detail_roi_visible = detail_roi_visible_;
   snapshot.detail_roi_uv      = detail_roi_uv_;
+  snapshot.crop_rotation_active = crop_interaction_controller_.RotationActive();
   return snapshot;
 }
 

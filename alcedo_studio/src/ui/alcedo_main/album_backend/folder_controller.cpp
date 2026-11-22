@@ -8,8 +8,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <optional>
 
 #include "app/album_browse_service.hpp"
+#include "app/sleeve_error.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
@@ -136,6 +138,7 @@ void FolderController::LoadChildren(const std::filesystem::path& parentPath) {
       auto& child =
           EnsureNode(folder.folder_path_, folder.folder_name_, parent_it->second.depth_ + 1);
       child.element_id_ = folder.folder_id_;
+      child.mount_id_   = folder.mount_id_;
       child_keys.push_back(PathKey(child.folder_path_));
     }
   } catch (...) {
@@ -206,7 +209,8 @@ void FolderController::AppendVisibleEntries(const std::filesystem::path&      fo
   }
 
   out.push_back({it->second.ui_id_, it->second.element_id_, it->second.folder_name_,
-                 it->second.folder_path_, it->second.depth_, it->second.expanded_});
+                 it->second.folder_path_, it->second.depth_, it->second.expanded_,
+                 it->second.mount_id_});
 
   if (!it->second.expanded_) {
     return;
@@ -254,18 +258,20 @@ void FolderController::RebuildFolderView() {
       }
     }
     // parentFolderId of the root row is 0 as well; the root row is the one with folderId 0.
-    next.push_back(QVariantMap{{"folderId", folder.ui_id_},
-                               {"elementId", static_cast<uint>(folder.element_id_)},
-                               {"parentFolderId", parent_ui_id},
-                               {"parentElementId", parent_element_id},
-                               {"name", name},
-                               {"depth", folder.depth_},
-                               {"path", album_util::FolderPathToDisplay(folder.folder_path_)},
-                               {"deletable", folder.ui_id_ != 0},
-                               {"childCount", child_count},
-                               {"hasChildren", child_count > 0},
-                               {"imageCount", RowImageCount(folder)},
-                               {"expanded", folder.expanded_}});
+    QVariantMap row{{"folderId", folder.ui_id_},
+                    {"elementId", static_cast<uint>(folder.element_id_)},
+                    {"parentFolderId", parent_ui_id},
+                    {"parentElementId", parent_element_id},
+                    {"name", name},
+                    {"depth", folder.depth_},
+                    {"path", album_util::FolderPathToDisplay(folder.folder_path_)},
+                    {"deletable", folder.ui_id_ != 0},
+                    {"childCount", child_count},
+                    {"hasChildren", child_count > 0},
+                    {"imageCount", RowImageCount(folder)},
+                    {"expanded", folder.expanded_}};
+    AddMountFields(folder, row);
+    next.push_back(std::move(row));
   }
 
   folders_ = std::move(next);
@@ -292,17 +298,29 @@ void FolderController::RefreshImageCounts() {
   }
   // The destructor waits for a running job, and Qt drops the posted result of a destroyed
   // receiver, so the job and the result may use `this`.
-  auto job = [this, browse = std::move(browse)](std::uint64_t generation) {
-    FolderImageCounts counts;
-    QString           error;
+  auto job = [this, browse = std::move(browse),
+              mounts = proj->GetMountService()](std::uint64_t generation) {
+    FolderImageCounts         counts;
+    std::vector<MountSummary> summaries;
+    QString                   error;
     try {
       counts = browse->ReadFolderImageCounts();
+      if (mounts) {
+        summaries = mounts->ListMounts();
+      }
     } catch (const std::exception& e) {
       error = QString::fromUtf8(e.what());
     }
     QMetaObject::invokeMethod(
         this,
-        [this, generation, counts = std::move(counts), error]() mutable {
+        [this, generation, counts = std::move(counts), summaries = std::move(summaries),
+         error]() mutable {
+          if (!library_->query_worker().IsCurrent(SearchRequestKind::kFolderCounts, generation)) {
+            return;
+          }
+          if (error.isEmpty()) {
+            ApplyMountSummaries(std::move(summaries));
+          }
           ApplyImageCounts(generation, counts.project_photo_count_,
                            std::move(counts.folder_photo_counts_), error);
         },
@@ -338,6 +356,9 @@ void FolderController::DropImageCounts() {
   image_counts_loaded_ = false;
   project_image_count_ = 0;
   image_count_by_folder_.clear();
+  mount_summaries_.clear();
+  present_mounted_ids_.clear();
+  missing_mounted_ids_.clear();
 }
 
 auto FolderController::TryGetPathForUiId(uint folderUiId) const
@@ -377,6 +398,7 @@ void FolderController::ApplyFolderSelection(uint folderUiId, bool emitSignal) {
 
   if (emitSignal || id_changed || path_changed || text_changed) {
     emit FolderSelectionChanged();
+    emit MountStateChanged();
     emit folderSelectionChanged();
   }
 }
@@ -604,7 +626,13 @@ uint FolderController::CreateFolderIn(uint parentFolderUiId, const QString& fold
     return 0;
   }
 
-  const auto created = browse->CreateFolder(parent_path.value(), name->toStdWString());
+  std::optional<AlbumFolderView> created;
+  try {
+    created = browse->CreateFolder(parent_path.value(), name->toStdWString());
+  } catch (const SleeveOperationError&) {
+    status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
+    return 0;
+  }
   if (!created.has_value()) {
     status_->SetTaskState(PL_TEXT("Failed to create folder."), 0, false);
     return 0;
@@ -649,6 +677,9 @@ bool FolderController::RenameFolder(uint folderUiId, const QString& newName) {
     case AlbumFolderEditStatus::InvalidTarget:
     case AlbumFolderEditStatus::Failed:
       status_->SetTaskState(PL_TEXT("Failed to rename folder."), 0, false);
+      return false;
+    case AlbumFolderEditStatus::StructureIsReadOnly:
+      status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
       return false;
   }
 
@@ -695,6 +726,9 @@ bool FolderController::MoveFolder(uint folderUiId, uint newParentFolderUiId) {
     case AlbumFolderEditStatus::Failed:
       status_->SetTaskState(PL_TEXT("Failed to move folder."), 0, false);
       return false;
+    case AlbumFolderEditStatus::StructureIsReadOnly:
+      status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
+      return false;
   }
 
   const bool save_ok = SaveProjectState();
@@ -722,8 +756,15 @@ void FolderController::DeleteFolder(uint folderUiId) {
   const bool deleted_holds_current = IsAtOrBelow(current_folder_path_, folder_path);
   const auto next_path = deleted_holds_current ? parent_path : current_folder_path_;
 
-  auto browse = project_->handler().project()->GetAlbumBrowseService();
-  if (!browse || !browse->DeleteFolder(folder_path)) {
+  auto       browse                = project_->handler().project()->GetAlbumBrowseService();
+  bool       deleted               = false;
+  try {
+    deleted = browse && browse->DeleteFolder(folder_path);
+  } catch (const SleeveOperationError&) {
+    status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
+    return;
+  }
+  if (!deleted) {
     status_->SetTaskState(PL_TEXT("Failed to delete folder."), 0, false);
     return;
   }

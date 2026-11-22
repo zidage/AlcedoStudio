@@ -28,6 +28,7 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/mapper/duckorm/duckdb_select.hpp"
+#include "storage/mapper/mount/source_file_mapper.hpp"
 #include "storage/query/filter_compiler.hpp"
 #include "storage/query/stats_dimension.hpp"
 #include "storage/store/ai/ai_store.hpp"
@@ -631,6 +632,16 @@ auto ReadAlbumQueryFromMatchSet(duckorm::Connection conn, const AlbumQueryOption
     out.occurrence_file_ids_ = ReadFileIds(conn, query);
   }
 
+  if (read.read_match_file_ids_) {
+    auto query = duckorm::clause::select_query(
+        std::vector{expr::raw("s.file_id")},
+        expr::raw(std::format("FROM {} s", kMatchSetTable)));
+    query.append(duckorm::clause::order_by(std::vector<duckorm::OrderTerm>{
+        {expr::raw("s.file_id"), duckorm::OrderDirection::kAscending,
+         duckorm::NullPlacement::kLast}}));
+    out.match_file_ids_ = ReadFileIds(conn, query);
+  }
+
   if (read.read_statistics_) {
     FolderStatsView statistics;
     ReadMatchSetBuckets(conn, statistics, !options.local_day_time_zone_.empty());
@@ -826,7 +837,7 @@ auto ElementStore::GetFolderChildren(const sl_element_id_t folder_id)
   auto       children     = ElementMapper(guard.conn_)
                       .GetElementsByQuery(duckorm::SqlFragment{
                           "SELECT e.id, e.type, e.element_name, e.added_time, e.modified_time, "
-                          "e.ref_count FROM Element e JOIN FolderContent fc "
+                          "e.ref_count, e.mount_id FROM Element e JOIN FolderContent fc "
                           "ON fc.element_id = e.id WHERE fc.folder_id = ?",
                           folder_param.binds_});
   const auto bindings =
@@ -934,6 +945,7 @@ void ElementStore::RemoveElementRows(duckorm::Connection&                       
     PhotoStackStore::RemoveFileMemberships(conn, file_ids);
     DeleteSemanticAndAiRowsForFiles(conn, file_ids);
     PipelineMapper(conn).RemoveByIds(file_ids);
+    SourceFileMapper(conn).RemoveByIds(file_ids);
     FileMapper(conn).RemoveByIds(file_ids);
   }
   if (!folder_ids.empty()) {
@@ -959,7 +971,7 @@ void ElementStore::UpdateElementRows(duckorm::Connection&                  conn,
   ElementMapper(conn).Update(element, element->element_id_);
   if (element->type_ == ElementType::FILE) {
     auto file = std::static_pointer_cast<SleeveFile>(element);
-    FileMapper(conn).Update({file->element_id_, file->image_id_}, file->image_id_);
+    FileMapper(conn).WriteBinding(file->element_id_, file->image_id_);
   } else if (element->type_ == ElementType::FOLDER) {
     // Write only the membership changes since the last sync, so the cost of a sync does not
     // grow with the number of children the folder already has.
@@ -1219,23 +1231,31 @@ auto ElementStore::ReadProjectOverview() const -> ProjectOverviewCounts {
 }
 
 auto ElementStore::ReadFolderImageCounts() const -> FolderImageCounts {
-  // One row per folder that holds a photo, then one row with a NULL folder id for the whole
-  // project. Both parts join the tables of BuildScopedFileQuery, so every count equals the
-  // total of the library view of its folder.
+  // `subtree` pairs each folder (the root 0 left out: its row shows the project count) with
+  // itself and every folder below it. The count of a folder is the number of distinct photos
+  // linked into any folder of its subtree, read through the tables of BuildScopedFileQuery.
+  // One row per folder whose subtree holds a photo, then one row with a NULL folder id for the
+  // whole project.
   static constexpr const char* kFolderCountsQuery =
-      "SELECT fc.folder_id, COUNT(*) "
-      "FROM FolderContent fc "
+      "WITH RECURSIVE subtree(anchor_id, folder_id) AS ("
+      "SELECT f.id, f.id FROM Element f WHERE f.type = {0} AND f.id <> 0 "
+      "UNION ALL SELECT s.anchor_id, c.id FROM subtree s "
+      "JOIN FolderContent fc ON fc.folder_id = s.folder_id "
+      "JOIN Element c ON c.id = fc.element_id AND c.type = {0}) "
+      "SELECT s.anchor_id, COUNT(DISTINCT e.id) "
+      "FROM subtree s "
+      "JOIN FolderContent fc ON fc.folder_id = s.folder_id "
       "JOIN Element e ON fc.element_id = e.id "
       "JOIN FileImage fi ON fi.file_id = e.id "
       "JOIN Image i ON i.id = fi.image_id "
-      "WHERE e.type = {} GROUP BY fc.folder_id "
-      "UNION ALL SELECT CAST(NULL AS BIGINT), COUNT(*) {}";
+      "WHERE e.type = {1} GROUP BY s.anchor_id "
+      "UNION ALL SELECT CAST(NULL AS BIGINT), COUNT(*) {2}";
 
   auto              guard   = database_.GetConnectionGuard();
   auto              db_lock = guard.Lock();
   const auto        project = BuildScopedFileQuery(0);
-  const auto        sql = std::format(kFolderCountsQuery, static_cast<uint32_t>(ElementType::FILE),
-                                      project.from_where_);
+  const auto        sql = std::format(kFolderCountsQuery, static_cast<uint32_t>(ElementType::FOLDER),
+                                      static_cast<uint32_t>(ElementType::FILE), project.from_where_);
 
   FolderImageCounts out;
   for (const auto& row : duckorm::query<FolderPhotoCountRow>(

@@ -135,6 +135,16 @@ def_library(CameraProfileLibraryService
     PUBLIC_DEPS Image Qt6::Core ThreadPool
 )
 
+# RAW import look in the application QSettings (#918). Import reads it through
+# RawImportLookSource; the default document factory sees only the RawImportLook value.
+def_library(RawImportLookSettings
+    SOURCES
+        "${ALCEDO_APP_ROOT}/raw_import_look_settings.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/raw_import_look_settings.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/raw_import_look_source.hpp"
+    PUBLIC_DEPS EditGraph Qt6::Core
+)
+
 # Owner of the local LUT library: root choice, inventory, favorites, import,
 # and root migration (lut_library_and_package_management_plan.md, L2).
 # Package extraction and activation (L3) run as a library operation. The published state is
@@ -205,7 +215,27 @@ target_compile_definitions(AiModelPackageService PRIVATE
 def_library(FSService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_service.cpp"
+        "${ALCEDO_APP_ROOT}/mount_tree.cpp"
     PUBLIC_DEPS SleeveFS PipelineHistory
+)
+
+# Mounted folder scan change list (mounted_folder_plan.md, MF3): compares the records of one
+# mount with a directory listing. No storage, sleeve service, or Qt dependency.
+def_library(MountScanChangeList
+    SOURCES
+        "${ALCEDO_APP_ROOT}/mount_scan_change_list.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mount_scan_change_list.hpp"
+    PUBLIC_DEPS SourceFileUtils
+)
+
+# Mounted folder service (mounted_folder_plan.md, MF4): create, scan, and remove mounts. New files
+# are imported through the MountFileImporter port (ImportServiceImpl), so this library does not
+# depend on ImportService, which depends on ProjectService through PipelineMgmtService.
+def_library(MountService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/mount_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mount_file_importer.hpp"
+    PUBLIC_DEPS FSService Storage ImagePoolService MountScanChangeList SourceFileUtils StrConv
 )
 
 def_library(SleeveFilterService
@@ -395,7 +425,8 @@ def_library(ProjectService
         "${ALCEDO_APP_ROOT}/project_package_backend.cpp"
         "${ALCEDO_APP_ROOT}/project_package_service.cpp"
         "${ALCEDO_SRC_ROOT}/ui/alcedo_main/album_backend/path_utils.cpp"
-    PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService PhotoStackService
+    PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService MountService
+                PhotoStackService
                 AiSidecarRuntimeService ModelDownloadService SemanticQueryEmbeddingCache
                 StrConv JSON xxHash stduuid EditMaskCore
     PRIVATE_DEPS
@@ -625,7 +656,7 @@ def_library(EditorPipelineCommandService
         "${ALCEDO_APP_ROOT}/editor_pipeline_command_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_pipeline_command_service.hpp"
     PUBLIC_DEPS EditGraph JSON EditorParameterWrite
-    PRIVATE_DEPS DcpCameraProfileBinding
+    PRIVATE_DEPS DcpCameraProfileBinding ProfileToneCurve
 )
 
 def_library(EditorPanelProjection
@@ -745,6 +776,7 @@ target_link_libraries(EditorSessionService PUBLIC EditorWorkingDocument)
 
 def_library(ImportService
     SOURCES "${ALCEDO_APP_ROOT}/import_service.cpp"
+            "${ALCEDO_INCLUDE_ROOT}/app/raw_import_look_source.hpp"
     # Import creates each image's history root through InitializeImageRoot on the
     # PipelineMgmtService injected at construction; it constructs no executor.
     PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService

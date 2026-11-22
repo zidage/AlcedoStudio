@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "edit/geometry/crop_frame.hpp"
 
@@ -206,8 +207,7 @@ auto CropGeometry::CropCenterWidgetPoint(const std::array<QPointF, 4>& corners) 
   return QPointF((corners[0].x() + corners[2].x()) * 0.5, (corners[0].y() + corners[2].y()) * 0.5);
 }
 
-auto CropGeometry::CropRotateHandleWidgetPoint(const std::array<QPointF, 4>& corners)
-    -> std::pair<QPointF, QPointF> {
+auto CropGeometry::CropAngleBadgeWidgetPoint(const std::array<QPointF, 4>& corners) -> QPointF {
   const qreal   min_x = std::min({corners[0].x(), corners[1].x(), corners[2].x(), corners[3].x()});
   const qreal   max_x = std::max({corners[0].x(), corners[1].x(), corners[2].x(), corners[3].x()});
   const qreal   min_y = std::min({corners[0].y(), corners[1].y(), corners[2].y(), corners[3].y()});
@@ -219,13 +219,12 @@ auto CropGeometry::CropRotateHandleWidgetPoint(const std::array<QPointF, 4>& cor
   const QPointF center        = CropCenterWidgetPoint(corners);
   const QPointF dir =
       NormalizeVector(anchor - center, portrait_crop ? QPointF(1.0, 0.0) : QPointF(0.0, -1.0));
-  const QPointF handle(anchor.x() + (dir.x() * kCropRotateHandleOffsetPx),
-                       anchor.y() + (dir.y() * kCropRotateHandleOffsetPx));
-  return {anchor, handle};
+  return QPointF(anchor.x() + (dir.x() * kCropAngleBadgeOffsetPx),
+                 anchor.y() + (dir.y() * kCropAngleBadgeOffsetPx));
 }
 
 auto CropGeometry::CursorForCropHit(const CropHitTestResult& hit) -> OverlayCursor {
-  if (hit.rotate_handle_hit) {
+  if (hit.rotate_hit) {
     return OverlayCursor::Rotate;
   }
   if (hit.corner_index >= 0 || hit.edge != CropEdge::None) {
@@ -263,73 +262,61 @@ auto CropGeometry::OppositeCropCornerIndex(int corner_index) -> int {
 auto CropGeometry::HitTestWidgetGeometry(const std::array<QPointF, 4>& corners_widget,
                                          const QPointF& event_pos) -> CropHitTestResult {
   CropHitTestResult hit{};
+  const QPointF     center            = CropCenterWidgetPoint(corners_widget);
 
   float             best_corner_dist2 = kCropCornerHitRadiusPx * kCropCornerHitRadiusPx;
+  float             nearest_corner_d2 = std::numeric_limits<float>::max();
   for (int i = 0; i < static_cast<int>(corners_widget.size()); ++i) {
-    const float dx = static_cast<float>(corners_widget[static_cast<size_t>(i)].x() - event_pos.x());
-    const float dy = static_cast<float>(corners_widget[static_cast<size_t>(i)].y() - event_pos.y());
-    const float d2 = (dx * dx) + (dy * dy);
+    const float d2    = VectorLengthSquared(corners_widget[static_cast<size_t>(i)] - event_pos);
+    nearest_corner_d2 = std::min(nearest_corner_d2, d2);
     if (d2 <= best_corner_dist2) {
       best_corner_dist2 = d2;
       hit.corner_index  = i;
     }
   }
-
-  const auto  handle_geom = CropRotateHandleWidgetPoint(corners_widget);
-  const float handle_dx   = static_cast<float>(handle_geom.second.x() - event_pos.x());
-  const float handle_dy   = static_cast<float>(handle_geom.second.y() - event_pos.y());
-  const float handle_d2   = (handle_dx * handle_dx) + (handle_dy * handle_dy);
-  hit.rotate_handle_hit =
-      handle_d2 <= (kCropRotateHandleHitRadiusPx * kCropRotateHandleHitRadiusPx);
-
-  const QPointF center = CropCenterWidgetPoint(corners_widget);
-  if (hit.corner_index >= 0 && !hit.rotate_handle_hit) {
+  if (hit.corner_index >= 0) {
     hit.resize_axis = corners_widget[static_cast<size_t>(hit.corner_index)] - center;
-  }
-  if (hit.rotate_handle_hit || hit.corner_index >= 0) {
     return hit;
   }
 
-  const float edge_hit_dist2 = kCropEdgeHitRadiusPx * kCropEdgeHitRadiusPx;
-  const float top_d2 = PointSegmentDistanceSquared(event_pos, corners_widget[0], corners_widget[1]);
-  const float right_d2 =
-      PointSegmentDistanceSquared(event_pos, corners_widget[1], corners_widget[2]);
-  const float bottom_d2 =
-      PointSegmentDistanceSquared(event_pos, corners_widget[2], corners_widget[3]);
-  const float left_d2 =
-      PointSegmentDistanceSquared(event_pos, corners_widget[3], corners_widget[0]);
-
-  float      min_edge_d2 = edge_hit_dist2;
-  const auto try_edge    = [&](float d2, CropEdge edge) {
-    if (d2 <= min_edge_d2) {
-      min_edge_d2 = d2;
-      hit.edge    = edge;
+  // Edge bands are asymmetric: wider outside the frame, so a press that lands a little beyond
+  // the edge still takes the edge. Edges are top, right, bottom, left (corners i to i + 1).
+  constexpr std::array<CropEdge, 4> kEdges = {CropEdge::Top, CropEdge::Right, CropEdge::Bottom,
+                                              CropEdge::Left};
+  float                             best_edge_abs = std::numeric_limits<float>::max();
+  for (size_t i = 0; i < kEdges.size(); ++i) {
+    const QPointF& a       = corners_widget[i];
+    const QPointF& b       = corners_widget[(i + 1) % corners_widget.size()];
+    const QPointF  ab      = b - a;
+    const float    ab_len2 = VectorLengthSquared(ab);
+    if (ab_len2 <= 1e-8f) {
+      continue;
     }
-  };
-  try_edge(top_d2, CropEdge::Top);
-  try_edge(right_d2, CropEdge::Right);
-  try_edge(bottom_d2, CropEdge::Bottom);
-  try_edge(left_d2, CropEdge::Left);
-  const auto edge_midpoint = [&](int a, int b) {
-    return LerpPoint(corners_widget[static_cast<size_t>(a)],
-                     corners_widget[static_cast<size_t>(b)], 0.5f);
-  };
-  switch (hit.edge) {
-    case CropEdge::Top:
-      hit.resize_axis = edge_midpoint(0, 1) - center;
-      break;
-    case CropEdge::Right:
-      hit.resize_axis = edge_midpoint(1, 2) - center;
-      break;
-    case CropEdge::Bottom:
-      hit.resize_axis = edge_midpoint(2, 3) - center;
-      break;
-    case CropEdge::Left:
-      hit.resize_axis = edge_midpoint(3, 0) - center;
-      break;
-    case CropEdge::None:
-      break;
+    const float along = Dot2(event_pos - a, ab) / ab_len2;
+    if (along < 0.0f || along > 1.0f) {
+      continue;
+    }
+    QPointF       normal   = NormalizeVector(QPointF(ab.y(), -ab.x()), QPointF(0.0, -1.0));
+    const QPointF midpoint = LerpPoint(a, b, 0.5f);
+    if (Dot2(normal, midpoint - center) < 0.0f) {
+      normal = -normal;
+    }
+    const float outward = Dot2(event_pos - a, normal);
+    if (outward < -kCropEdgeHitInsidePx || outward > kCropEdgeHitOutsidePx) {
+      continue;
+    }
+    if (std::abs(outward) < best_edge_abs) {
+      best_edge_abs   = std::abs(outward);
+      hit.edge        = kEdges[i];
+      hit.resize_axis = midpoint - center;
+    }
   }
+  if (hit.edge != CropEdge::None) {
+    return hit;
+  }
+
+  hit.rotate_hit = !IsPointInsideQuad(corners_widget, event_pos) &&
+                   nearest_corner_d2 <= kCropRotateZoneRadiusPx * kCropRotateZoneRadiusPx;
   return hit;
 }
 

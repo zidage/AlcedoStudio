@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <set>
 
+#include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
@@ -29,21 +30,29 @@ auto SensorFieldMask() -> DirtyFieldMask {
 }
 
 /**
- * @brief True when @p id was compiled into the Local Laplacian stage.
+ * @brief First value that a changed adjustment @p id of @p compiled invalidates.
  *
- * Compiled order places every non-local-tone adjustment before the LLF stage, so
- * any other changed adjustment invalidates the canonical LLF source and result.
- * An instance missing from the compiled list is treated as non-local-tone and
- * conservatively invalidates the LLF source chain.
+ * Compiled order is Basic Tone, the Local Laplacian stage, then Color
+ * (ColorGradeCompileOrder). A Basic Tone adjustment changes the canonical LLF
+ * source, a Shadows or Highlights adjustment the LLF result, and a Color adjustment
+ * (Curve through LMT) only the Grade output, so the LLF maps stay valid. An instance
+ * missing from the compiled list conservatively invalidates the LLF source chain.
  */
-auto IsLocalToneCompiled(const CompiledGradeNode& compiled, const AdjustmentInstanceId& id)
-    -> bool {
+auto AdjustmentChangeOrigin(const CompiledGradeNode& compiled, const AdjustmentInstanceId& id)
+    -> GraphValueId {
   for (const auto& adjustment : compiled.adjustments) {
-    if (adjustment.instance_id == id) {
-      return adjustment.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian;
+    if (adjustment.instance_id != id) {
+      continue;
     }
+    if (adjustment.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian) {
+      return LocalToneResultId(compiled.node_id);
+    }
+    if (ColorGradeCompileGroupOf(adjustment.type) == ColorGradeCompileGroup::Color) {
+      return compiled.scene_output;
+    }
+    return LocalToneSourceId(compiled.node_id);
   }
-  return false;
+  return LocalToneSourceId(compiled.node_id);
 }
 
 auto IsLocalTonePort(const GraphValueId& id) -> bool {
@@ -167,14 +176,6 @@ void RuntimeInvalidationState::CollectDevelopChanges(const ExecutionPlan& plan,
     origins.push_back(plan.develop_output);
     last_white_balance_revision_ = white_balance_revision;
   }
-  // `profile_tone` reaches only the display transform (dcp_profile_tone_curve_study.md, section
-  // 6.3), so the camera pass result and every scene result stay valid.
-  const auto profile_tone_revision =
-      develop->Params().FieldsRevision(DirtyFieldMask{DevelopDirty::ProfileTone});
-  if (profile_tone_revision != last_profile_tone_revision_) {
-    origins.push_back(plan.display_output);
-    last_profile_tone_revision_ = profile_tone_revision;
-  }
 }
 
 void RuntimeInvalidationState::CollectGradeChanges(
@@ -193,13 +194,13 @@ void RuntimeInvalidationState::CollectGradeChanges(
     if (ObserveRevision(last_mix_revision_, seen_mix, compiled.node_id, grade->MixRevision())) {
       origins.push_back(compiled.scene_output);
     }
-    // The LMT is a pointwise operation before the Local Laplacian stage, so a changed LUT
-    // resource invalidates from the LLF source like any other pointwise adjustment.
+    // The LMT is a Color adjustment after the Local Laplacian stage, so a changed LUT
+    // resource invalidates the Grade output and keeps the LLF maps.
     const auto lut_identity    = GradeLutResourceIdentity(*grade, lut_resources);
     seen_lut[compiled.node_id] = lut_identity;
     if (const auto it = last_lut_identity_.find(compiled.node_id);
         it != last_lut_identity_.end() && it->second != lut_identity) {
-      origins.push_back(LocalToneSourceId(compiled.node_id));
+      origins.push_back(compiled.scene_output);
     }
     for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
       const AdjustmentKey key{compiled.node_id, grade->AdjustmentIdAt(index)};
@@ -207,9 +208,7 @@ void RuntimeInvalidationState::CollectGradeChanges(
                            grade->AdjustmentAt(index).Revision())) {
         continue;
       }
-      origins.push_back(IsLocalToneCompiled(compiled, key.instance)
-                            ? LocalToneResultId(compiled.node_id)
-                            : LocalToneSourceId(compiled.node_id));
+      origins.push_back(AdjustmentChangeOrigin(compiled, key.instance));
     }
     if (!compiled.mask_stack.has_value()) {
       continue;
@@ -413,7 +412,6 @@ void RuntimeInvalidationState::ClearLastSeenRevisions() {
   last_lut_identity_.clear();
   last_sensor_revision_        = kNoParameterRevision;
   last_white_balance_revision_ = kNoParameterRevision;
-  last_profile_tone_revision_  = kNoParameterRevision;
   last_drt_revision_           = kNoParameterRevision;
   last_diffusion_revision_     = kNoParameterRevision;
   last_film_exposure_revision_ = kNoParameterRevision;

@@ -89,6 +89,10 @@ class PlotLayer : public QObject {
   virtual void PointerRelease(const PlotViewTransform& view, const PlotPointerEvent& event);
   virtual auto PointerDoubleClick(const PlotViewTransform& view, const PlotPointerEvent& event)
       -> bool;
+  /// A press of the right button. It starts no interaction: the layer gets no moves and no
+  /// release. Returning true accepts the click.
+  virtual auto PointerRightClick(const PlotViewTransform& view, const PlotPointerEvent& event)
+      -> bool;
   /// Returns true when the layer takes the hover at @p event. The pane then gives
   /// @ref HoverLeave to the layer that had it before.
   virtual auto Hover(const PlotViewTransform& view, const PlotPointerEvent& event) -> bool;

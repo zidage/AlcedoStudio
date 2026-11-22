@@ -12,7 +12,7 @@ namespace alcedo::automation {
 
 /// Registers `curve.presets`. It lists the Tone Curve presets (ToneCurvePresets) in menu order
 /// with their id, name, group, and points. `editor.set` on `curve` applies one by id, for example
-/// `{"points": "film_like"}` for the RGB curve. Returns false and writes @p error when the
+/// `{"points": "cl_digital"}` for the RGB curve. Returns false and writes @p error when the
 /// registration fails.
 [[nodiscard]] auto RegisterAutomationCurveCommands(AutomationCommandRegistry& registry,
                                                    QString* error = nullptr) -> bool;

@@ -280,10 +280,10 @@ class IEditorSessionBackend {
   /// The bound viewport was minimized/hidden (true) or shown again (false). Frames refused
   /// while suspended are rendered again on resume. Backends without a viewport may ignore it.
   virtual void SetPresentationSuspended(bool /*suspended*/) {}
-  /// An export released the editor GPU resources (true) or ended (false). Frames the render port
-  /// refused meanwhile are rendered again when it ends. Backends without a GPU renderer may
-  /// ignore it.
-  virtual void SetSuspendedForExport(bool /*suspended*/) {}
+  /// The editor GPU resources were released for an export or semantic generation (true), or the
+  /// last holder of that release ended (false). Frames the render port refused meanwhile are
+  /// rendered again when it ends. Backends without a GPU renderer may ignore it.
+  virtual void SetSuspendedForGpuRelease(bool /*suspended*/) {}
   /**
    * @brief Reproject load-only panel values from @p node_id.
    *
@@ -548,6 +548,17 @@ class IEditorSessionBackend {
     result.state    = state();
     result.identity = identity();
     result.message  = "Color Grade deletion protection is not supported by this backend";
+    return result;
+  }
+  /// Show or hide one Color Grade as one history commit that renders; equal values are
+  /// no-ops. Default rejects.
+  virtual auto SetColorGradeEnabled(const NodeId& /*node_id*/, bool /*enabled*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade visibility is not supported by this backend";
     return result;
   }
   /// Apply one net node-graph topology delta as one history commit. Default rejects.
@@ -1009,7 +1020,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   void SetPresentationSize(int width, int height) override;
   void SetGeometryOverlayActive(bool active) override;
   void SetPresentationSuspended(bool suspended) override;
-  void SetSuspendedForExport(bool suspended) override;
+  void SetSuspendedForGpuRelease(bool suspended) override;
 
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
@@ -1090,6 +1101,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// Queue a metadata-only deletion-lock command against the active history session.
   auto SetColorGradeDeletionProtected(const NodeId& node_id, bool deletion_protected)
       -> EditorSessionResult override;
+  /// Queue a show/hide command against the active history session; a change renders.
+  auto SetColorGradeEnabled(const NodeId& node_id, bool enabled) -> EditorSessionResult override;
   auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override;
   auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_predecessor_id)
       -> EditorSessionResult override;

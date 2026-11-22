@@ -34,6 +34,7 @@ auto SleeveFile::Copy(uint32_t new_id) const -> std::shared_ptr<SleeveElement> {
   // The image object is still reused
   new_file->image_                     = image_;
   new_file->image_id_                  = image_id_;
+  new_file->mount_id_                  = mount_id_;
   return new_file;
 }
 

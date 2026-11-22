@@ -8,9 +8,13 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -19,6 +23,7 @@
 #include "../support/storage_test_access.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
+#include "app/sleeve_error.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "json.hpp"
@@ -27,7 +32,9 @@
 #include "sleeve/storage.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "storage/store/mount/mount_store.hpp"
 #include "support/test_temp_directory.hpp"
+#include "type/mount_records.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
 
@@ -138,10 +145,12 @@ void WriteStoredExposure(Storage& storage, sl_element_id_t id, float exposure_ev
 
 TEST(ProjectVersionTests, MiniGitSchemaBumpRejectsPreviousProjectVersion) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
-  EXPECT_EQ(project_pack::kProjectFileVersion, "0.12.0");
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.13.0");
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.10.0"));
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.11.0"));
-  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.13.0"));
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.12.0"));
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.13.0"));
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.14.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.5"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.4"));
 }
@@ -1150,6 +1159,215 @@ TEST_F(SleeveServiceTests, FailedFirstSyncKeepsRootUsableAndDoesNotReuseDiscarde
   EXPECT_EQ(service->ResolveFolder(L"/"), root);
   EXPECT_EQ(root->sync_flag_, SyncFlag::SYNCED);
   EXPECT_TRUE(root->ContainsElementId(next.first->element_id_));
+}
+
+// Read-only structure of a mounted folder (mounted_folder_plan.md, MF5). The tests set the mount
+// id through the sleeve tree and the source records through MountStore; MountService is not
+// needed for the check.
+class MountedFolderStructureTest : public SleeveServiceTests {
+ protected:
+  static constexpr mount_id_t     kMount = 1;
+
+  std::unique_ptr<ProjectService> project_;
+  sl_element_id_t                 ordinary_folder_id_ = 0;
+  sl_element_id_t                 mount_root_id_      = 0;
+  sl_element_id_t                 mounted_folder_id_  = 0;
+  sl_element_id_t                 present_file_id_    = 0;
+  sl_element_id_t                 missing_file_id_    = 0;
+  sl_element_id_t                 ordinary_file_id_   = 0;
+
+  void                            SetUp() override {
+    SleeveServiceTests::SetUp();
+    project_ = std::make_unique<ProjectService>(db_path_, meta_path_);
+    ordinary_folder_id_ = Sleeve().CreateFolder(L"/", L"Ordinary").first->element_id_;
+    auto [root, root_sync] = Sleeve().CreateMountRootFolder(0, L"Trip", kMount);
+    ASSERT_TRUE(root_sync.success_) << root_sync.message_;
+    mount_root_id_ = root->element_id_;
+    auto [ids, sync] = Sleeve().Write<std::vector<sl_element_id_t>>([this](FileSystem& fs) {
+      auto day       = fs.CreateFolderIn(mount_root_id_, L"Day");
+      day->mount_id_ = kMount;
+      const auto add = [&fs](const std::wstring& name, std::optional<mount_id_t> mount_id,
+                             sl_element_id_t folder_id) {
+        auto file       = fs.CreateFileInLibrary(name);
+        file->image_id_ = file->element_id_;
+        file->mount_id_ = mount_id;
+        if (folder_id != 0) {
+          fs.LinkFileToFolder(file->element_id_, folder_id);
+        }
+        return file->element_id_;
+      };
+      return std::vector<sl_element_id_t>{
+          day->element_id_, add(L"present.nef", kMount, mount_root_id_),
+          add(L"missing.nef", kMount, day->element_id_), add(L"ordinary.nef", std::nullopt, 0)};
+    });
+    ASSERT_TRUE(sync.success_) << sync.message_;
+    mounted_folder_id_ = ids[0];
+    present_file_id_   = ids[1];
+    missing_file_id_   = ids[2];
+    ordinary_file_id_  = ids[3];
+
+    std::vector<SourceFileRecord> records(2);
+    records[0].element_id          = present_file_id_;
+    records[0].byte_size           = 100;
+    records[0].fingerprint_version = 1;
+    records[1]                     = records[0];
+    records[1].element_id          = missing_file_id_;
+    records[1].state               = SourceFileState::kMissing;
+    records[1].missing_since       = std::time_t{1763553600};
+    project_->GetStorage()->GetMountStore().UpsertSourceFiles(records);
+    project_->SaveProject(meta_path_);
+  }
+
+  void TearDown() override {
+    project_.reset();
+    SleeveServiceTests::TearDown();
+  }
+
+  auto Sleeve() -> SleeveServiceImpl& { return *project_->GetSleeveService(); }
+
+  /// Close the project and open it again from its database.
+  void Reopen() {
+    project_.reset();
+    project_ = std::make_unique<ProjectService>(db_path_, meta_path_);
+  }
+
+  /// Each folder of the tree by path, with the sorted ids of its live entries.
+  auto Tree() -> std::map<std::wstring, std::vector<sl_element_id_t>> {
+    std::map<std::wstring, std::vector<sl_element_id_t>> tree;
+    std::vector<std::filesystem::path>                   pending{L"/"};
+    while (!pending.empty()) {
+      const auto folder_path = pending.back();
+      pending.pop_back();
+      auto& ids = tree[folder_path.generic_wstring()];
+      for (const auto& entry : Sleeve().ListFolderEntries(folder_path)) {
+        ids.push_back(entry->element_id_);
+        if (entry->type_ == ElementType::FOLDER) {
+          pending.push_back(folder_path / entry->element_name_);
+        }
+      }
+      std::sort(ids.begin(), ids.end());
+    }
+    return tree;
+  }
+};
+
+/// Runs @p operation and expects SleeveOperationError with @p expected.
+template <typename Operation>
+void ExpectSleeveError(SleeveError expected, Operation&& operation) {
+  try {
+    operation();
+    ADD_FAILURE() << "the operation was not refused";
+  } catch (const SleeveOperationError& error) {
+    EXPECT_EQ(error.Code(), expected) << error.what();
+  }
+}
+
+TEST_F(MountedFolderStructureTest, FailedMountRemovalRestoresFileMountIdsAndLinks) {
+  const auto before = Tree();
+  {
+    auto guard = StorageTestAccess::GetDatabase(*project_->GetStorage()).GetConnectionGuard();
+    auto lock  = guard.Lock();
+    duckorm::execute(
+        guard.conn_,
+        duckorm::expr::raw("CREATE TABLE ProtectedMountRoot (id BIGINT REFERENCES Element(id))"));
+    duckorm::execute(guard.conn_, {"INSERT INTO ProtectedMountRoot VALUES (?)",
+                                  {static_cast<std::int64_t>(mount_root_id_)}});
+  }
+
+  const std::array files{present_file_id_, missing_file_id_};
+  const auto failed = Sleeve().RemoveMountTree(mount_root_id_, kMount, files);
+
+  ASSERT_FALSE(failed.success_);
+  EXPECT_NE(failed.message_.find("Constraint"), std::string::npos);
+  EXPECT_EQ(Tree(), before);
+  EXPECT_EQ(Sleeve().ResolveFile(L"/Trip/present.nef")->mount_id_, kMount);
+  EXPECT_EQ(Sleeve().ResolveFile(L"/Trip/Day/missing.nef")->mount_id_, kMount);
+}
+
+TEST_F(MountedFolderStructureTest, EachStructureOperationOnAMountedFolderReturnsTheNamedError) {
+  const auto before        = Tree();
+  const auto read_only     = SleeveError::kMountedFolderStructureIsReadOnly;
+  const auto present       = SleeveError::kMountedPhotoIsPresent;
+  const auto present_ids   = std::vector<sl_element_id_t>{ordinary_file_id_, present_file_id_};
+  const auto home_link_ids = std::vector<sl_element_id_t>{present_file_id_};
+
+  {
+    SCOPED_TRACE("new collection");
+    ExpectSleeveError(read_only, [&] { (void)Sleeve().CreateFolder(L"/Trip", L"New"); });
+    ExpectSleeveError(read_only, [&] { (void)Sleeve().CreateFolder(L"/Trip/Day", L"New"); });
+  }
+  {
+    SCOPED_TRACE("rename");
+    ExpectSleeveError(read_only, [&] { (void)Sleeve().RenameFolder(L"/Trip", L"Japan"); });
+    ExpectSleeveError(read_only, [&] { (void)Sleeve().RenameFolder(L"/Trip/Day", L"Night"); });
+  }
+  {
+    SCOPED_TRACE("move");
+    ExpectSleeveError(read_only, [&] { (void)Sleeve().MoveFolder(L"/Trip", L"/Ordinary"); });
+    ExpectSleeveError(read_only, [&] { (void)Sleeve().MoveFolder(L"/Trip/Day", L"/Ordinary"); });
+  }
+  {
+    SCOPED_TRACE("delete");
+    ExpectSleeveError(read_only, [&] { (void)Sleeve().DeletePath(L"/Trip"); });
+    ExpectSleeveError(read_only, [&] { (void)Sleeve().DeletePath(L"/Trip/Day"); });
+    ExpectSleeveError(read_only, [&] { (void)Sleeve().DeleteElement(mounted_folder_id_); });
+  }
+  {
+    SCOPED_TRACE("link and duplicate into the folder");
+    ExpectSleeveError(
+        read_only, [&] { (void)Sleeve().LinkFileToFolder(ordinary_file_id_, mounted_folder_id_); });
+    ExpectSleeveError(
+        read_only, [&] { (void)Sleeve().DuplicateFileToFolder(present_file_id_, mount_root_id_); });
+  }
+  {
+    SCOPED_TRACE("remove the home link");
+    ExpectSleeveError(
+        read_only, [&] { (void)Sleeve().DeleteFileFromFolder(present_file_id_, mount_root_id_); });
+    ExpectSleeveError(read_only,
+                      [&] { (void)Sleeve().DeleteFilesFromFolder(home_link_ids, mount_root_id_); });
+    ExpectSleeveError(read_only, [&] { (void)Sleeve().DeletePath(L"/Trip/present.nef"); });
+  }
+  {
+    SCOPED_TRACE("remove from library");
+    ExpectSleeveError(present, [&] { (void)Sleeve().DeleteFileEverywhere(present_file_id_); });
+    ExpectSleeveError(present, [&] { (void)Sleeve().DeleteElement(present_file_id_); });
+    ExpectSleeveError(present, [&] { (void)Sleeve().DeletePath(L"/present.nef"); });
+    // One mounted photo refuses the whole request: the ordinary photo stays too.
+    ExpectSleeveError(present, [&] { (void)Sleeve().DeleteFilesEverywhere(present_ids); });
+    ExpectSleeveError(SleeveError::kMountedPhotoIsMissing,
+                      [&] { (void)Sleeve().DeleteFileEverywhere(missing_file_id_); });
+  }
+
+  EXPECT_EQ(Tree(), before);
+  Reopen();
+  EXPECT_EQ(Tree(), before);
+  EXPECT_EQ(Sleeve().ResolveFolder(L"/Trip/Day")->mount_id_, kMount);
+}
+
+TEST_F(MountedFolderStructureTest, MountedFileLinksIntoAnOrdinaryCollection) {
+  ASSERT_TRUE(Sleeve().LinkFileToFolder(present_file_id_, ordinary_folder_id_).success_);
+
+  Reopen();
+  const auto entries = Sleeve().ListFolderEntries(L"/Ordinary");
+  ASSERT_EQ(entries.size(), 1U);
+  EXPECT_EQ(entries[0]->element_id_, present_file_id_);
+  EXPECT_EQ(entries[0]->mount_id_, kMount);
+  // The home link stays, and the link to an ordinary collection is free to remove.
+  EXPECT_EQ(Sleeve().ResolveFile(L"/Trip/present.nef")->element_id_, present_file_id_);
+  ASSERT_TRUE(Sleeve().DeleteFileFromFolder(present_file_id_, ordinary_folder_id_).success_);
+  EXPECT_TRUE(Sleeve().ListFolderEntries(L"/Ordinary").empty());
+}
+
+TEST_F(MountedFolderStructureTest, OrdinaryFolderCannotMoveIntoAMountedFolder) {
+  const auto before = Tree();
+  ExpectSleeveError(SleeveError::kMountedFolderStructureIsReadOnly,
+                    [&] { (void)Sleeve().MoveFolder(L"/Ordinary", L"/Trip"); });
+  ExpectSleeveError(SleeveError::kMountedFolderStructureIsReadOnly,
+                    [&] { (void)Sleeve().MoveFolder(L"/Ordinary", L"/Trip/Day"); });
+
+  Reopen();
+  EXPECT_EQ(Tree(), before);
+  EXPECT_EQ(Sleeve().ResolveFolder(L"/Ordinary")->element_id_, ordinary_folder_id_);
 }
 
 }  // namespace alcedo

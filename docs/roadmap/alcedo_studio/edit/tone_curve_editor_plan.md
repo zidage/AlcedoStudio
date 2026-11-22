@@ -2,7 +2,10 @@
 
 Date: 2026-11-13
 
-Status: TC1 to TC6 complete.
+Status: TC1 to TC6 complete. #900 (Shadows and Highlights before the Curve) complete. #901 (right
+click removes a point) complete. #902 (quiet curve histogram) complete. #903 (dense text) complete.
+#910 (Film-like and Filmic toe ends at (0, 0)) complete. #911 (DCP profile curve loaded into the
+RGB curve) complete. #914 (Cl. Digit placed by hand, Filmic removed) complete.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -29,7 +32,8 @@ the control of the RawTherapee curve editor and a modern look:
 - The histogram of the pixels at the input of the curve shows behind the curve.
 - Four curves: RGB (the current curve), R, G, and B.
 - A preset menu: contrast shapes, the Adobe default tone curve ("Film-like"), the darktable filmic
-  shape, and the tone of Kodak 2383, Velvia 50, and Ektachrome E100.
+  shape, and the tone of Kodak 2383, Velvia 50, and Ektachrome E100. Since #914: contrast shapes,
+  Cl. Digit placed by hand, and the three films.
 - The render applies the same spline that the panel draws, on CUDA, OpenCL, and Metal.
 - A new reusable plot pane draws the plot. The Tone Curve section is its only user in this work.
 
@@ -547,6 +551,7 @@ pane of TC4, over the curve input histogram of TC3, with the drawing, input, and
 - Keys (`PlotHandleLayer.keyPressed`): arrows move the selected point by 0.001, with Shift by
   0.01; Delete and Backspace remove it.
 - Double click on an inner point removes it. A double click elsewhere does nothing.
+- Right click on an inner point removes it (#901). A right click elsewhere does nothing.
 - Reset sets the selected curve to the identity.
 
 **History.** Each change below gives exactly one settled write of the `curve` field; a write has
@@ -946,3 +951,278 @@ Verification (Windows, debug build, RTX 3080 Laptop):
 The preset menu was not driven in the running application (no input is sent to a real window).
 The Metal render was not run: the presets are points of the TC1 spline, whose Metal test runs on
 the macOS CI. The full test suite was not run.
+
+### #900: Shadows and Highlights before the Curve (2026-11-13)
+
+Status: complete. Issue [#900](https://github.com/zidage/AlcedoStudio/issues/900), branch
+`feature/color-grade-shadows-highlights-first`, stacked on the #899 shoulder (PR #904).
+
+The Color Grade compiles in three groups (`ColorGradeCompileOrder`, `ColorGradeCompileGroupOf`):
+
+```
+Basic Tone: White Balance, Exposure, Contrast, Whites, Blacks   -> Pointwise stage
+Local Tone: Shadows, Highlights                                 -> Local Laplacian stage
+Color:      Curve, HLS, Saturation, Vibrance, Color Wheels, LMT -> Pointwise stage
+```
+
+Shadows and Highlights act on the basic tone result, and the Curve shapes their output. The panel
+order (`ColorGradeAdjustmentTypes`) is the same order. When the Local Laplacian stage does not run
+(both sliders at 0), `CompactGradeOps` fuses the two pointwise groups into one pass, as before.
+
+Changes:
+
+- Versions: `kGradeCompileAlgorithmVersion` 2, `kPrimaryGradeImplementationVersion` 7,
+  `kLlfReferenceImplementationVersion` 3. Plans, derived images, and LLF maps of the order before
+  are not reused. The stored JSON stays the same; documents that use Shadows or Highlights together
+  with a Color adjustment render with new pixels.
+- Invalidation (`AdjustmentChangeOrigin` in `runtime_invalidation.cpp`): a Basic Tone edit
+  invalidates the LLF source, a Shadows or Highlights edit the LLF result, and a Color edit (also a
+  changed LMT resource) only the Grade output. `HashLlfSourceKey` and `HashLlfReferenceKey` mix the
+  Basic Tone and Local Tone adjustments of their Grade and leave out its Color adjustments.
+- Curve input histogram (TC3): the curve input is the output of the Local Laplacian stage when that
+  stage runs. `GradeExecutor` then counts that image before the mix, with no commands. When the stage
+  does not run, the histogram evaluates the Basic Tone commands on the Grade input
+  (`BasicToneCommandOffsets`). A Grade whose last write is the Local Laplacian stage and that mixes
+  (mix below 1 or a mask) writes the unmixed output, records the histogram, and mixes in a pointwise
+  pass without commands; the CUDA, OpenCL, and Metal pointwise dispatch accepts zero commands for
+  this pass. A zero-mix Grade skips the Local Laplacian stage, so its histogram is the Basic Tone
+  result.
+
+Call chain of one Grade with an active Local Laplacian stage:
+
+```
+GradeExecutor<Ops>::Execute
+  BindAndScheduleGrade -> MakeGradeSchedule -> ops: Pointwise, LocalLaplacian, Pointwise
+  Ops::DispatchPointwise                  (Basic Tone)
+  Ops::ExecuteLocalTone -> LocalToneExecutor<Ops>::Execute
+  RecordCurveInputHistogram(dest, no offsets)        (only with a histogram request)
+  Ops::DispatchPointwiseWithMix           (Color, mix fused into the last write)
+```
+
+#### Cost of the second pointwise pass
+
+`grade_order_cost_measurement.hpp` renders the same Grade in both orders on one device: the order
+before #900 comes from the compiled plan with the adjustments permuted to Basic Tone, Color, Local
+Tone (one Pointwise and one Local Laplacian stage). Each frame is `Execute` plus `WaitIdle` of the
+whole plan (Grade and display transform) on the host clock. The Grade has Exposure 0.2,
+Saturation 1.2, Shadows 40, Highlights -30, and a three-point curve. Run it with
+`ALCEDO_GRADE_ORDER_MEASUREMENT=1` and the filter `*MultiGradeFixture.GradeStageOrderCostMeasurement`.
+
+- Exposure edit: both orders rebuild the LLF maps, so the P50 difference is the cost of the second
+  pointwise pass. The two Exposure scenarios alternate and swap their order each round.
+- Saturation edit: the #900 order keeps the LLF maps and runs only the Color pass and the display
+  transform. The order before #900 rebuilt the LLF maps on this edit, which is its Exposure row.
+
+P50 frame time in milliseconds, 31 frames per scenario, two runs each:
+
+| Backend | Input | Before #900, Exposure edit | #900, Exposure edit | Second pass | #900, Saturation edit |
+| --- | --- | ---: | ---: | ---: | ---: |
+| CUDA | 2560 x 1705 | 8.90 / 8.99 | 9.30 / 9.35 | +0.40 / +0.36 | 2.96 / 2.95 |
+| CUDA | 4600 x 3064 | 14.37 / 14.39 | 15.80 / 15.78 | +1.43 / +1.39 | 9.54 / 9.71 |
+| OpenCL | 2560 x 1705 | 11.82 / 11.65 | 12.16 / 12.17 | +0.35 / +0.52 | 4.60 / 4.53 |
+| OpenCL | 4600 x 3064 | 18.05 / 17.06 | 19.83 / 18.24 | +1.78 / +1.17 | 11.64 / 11.49 |
+| Metal | 2560 x 1705 | 37.31 / 37.67 | 37.64 / 37.61 | +0.33 / -0.06 | 14.92 / 14.89 |
+| Metal | 4600 x 3064 | 67.72 / 67.61 | 68.68 / 69.36 | +0.96 / +1.75 | 41.66 / 42.19 |
+
+CUDA and OpenCL: Windows release build, RTX 3080 Laptop GPU, driver 610.62. Metal: macOS 27.0.1
+debug build, MacBook Air Apple M4, 16 GB.
+
+The second pass costs about 0.4 ms at 2560 x 1705 and 1 to 1.8 ms at 4600 x 3064, at most 10 %
+of a frame that rebuilds the LLF maps. A Curve or other Color edit, which is the frequent edit of
+the Tone Curve section, no longer rebuilds them: such a frame takes 33 to 68 % of the frame of the
+order before (CUDA 2560: 2.96 ms against 8.90 ms).
+
+#### Verification
+
+| Binary and filter | Result |
+| --- | --- |
+| `GpuDagRawInputTest` (all: compiler, content keys, invalidation, static plan cache) | 266 passed |
+| `GpuDagModelGraphTest` (all) | 195 passed |
+| `GraphImageCacheRetentionTest` (all) | 17 passed |
+| `GpuDagCudaPrimaryGradeTest` (all) | 85 passed, 10 failed; the same 10 fail at the #904 head ([#905](https://github.com/zidage/AlcedoStudio/issues/905)) |
+| `GpuDagOpenClGradeTest` (all) | 150 passed, 6 failed; the same 6 fail at the #904 head ([#905](https://github.com/zidage/AlcedoStudio/issues/905)) |
+| `GpuDagMetalGradeTest` (all, Apple M4) | 84 passed, 10 failed; the #904 head fails these 10 and 12 more ([#905](https://github.com/zidage/AlcedoStudio/issues/905)) |
+
+The identity-look test helpers of the grade tests now also reset the Curve, which carries the
+Film-like look since #898; most of the failures at the #904 head came from that.
+
+| Term | Meaning |
+| --- | --- |
+| Basic Tone | White Balance, Exposure, Contrast, Whites, Blacks: the pointwise group before the LLF stage |
+| Local Tone | Shadows and Highlights: the Local Laplacian (LLF) stage |
+| Color | Curve, HLS, Saturation, Vibrance, Color Wheels, LMT: the pointwise group after the LLF stage |
+| LLF maps | The canonical LLF source and result planes (`local_tone.source.0`, `local_tone.result.0`) |
+| P50 | Median frame time of the 31 timed frames of a scenario |
+| Second pass | P50 of the #900 Exposure row minus P50 of the Exposure row of the order before |
+
+### #901: right click removes a control point (2026-11-13)
+
+Status: complete. Issue [#901](https://github.com/zidage/AlcedoStudio/issues/901), branch
+`feature/tone-curve-right-click-remove`, stacked on #900 (PR #906).
+
+- `PlotPane` accepts the right button. A right press goes to `PlotLayer::PointerRightClick` of the
+  top input layer that accepts it; it starts no drag and gives the layer no move and no release. A
+  right press that no layer accepts stays unaccepted and is no `backgroundPressed`, so it changes
+  no selection. During a left-button interaction the right button does nothing.
+- `PlotHandleLayer` accepts a right press on a handle and emits `rightClicked(index)`.
+  `EditorToneCurveSection` calls `EditorToneCurveModel::removePoint(index)`, which keeps the end
+  points and gives one settled write (one history entry). The curve line layer has no right-click
+  input, so a right click on the curve adds no point.
+- Fix found with the test: the window gives the second press of a double click as a press and then
+  the double click. The second press on a handle started a drag, and `removePoint` refuses during a
+  drag, so the double click removed no point. `PlotPane::mouseDoubleClickEvent` now ends the
+  interaction of the second press first (release, then double click). A right double click is no
+  second right click: the second press already was one.
+
+Call chain:
+
+```
+QQuickWindow -> PlotPane::mousePressEvent (Qt::RightButton) -> PlotPane::RightClick
+  -> PlotHandleLayer::PointerRightClick -> rightClicked(index)
+  -> EditorToneCurveSection onRightClicked -> EditorToneCurveModel::removePoint -> CommitSettled
+```
+
+| Binary and filter | Result |
+| --- | --- |
+| `EditorPlotPaneTest` (all) | 20 passed |
+| `EditorAdjustmentSnapshotQmlTest` (all) | 7 passed |
+
+### #902: quiet histogram behind the curve (2026-11-13)
+
+Status: complete. Issue [#902](https://github.com/zidage/AlcedoStudio/issues/902), branch
+`feature/tone-curve-histogram-fade`, stacked on #901.
+
+- `PlotHistogramLayer` has `fillOpacity` and `edgeOpacity` (default 1, clamped to [0, 1]). The
+  layer draws additively, so the opacity scales the light that a fill or an edge adds to the
+  surface (`kFillStrength` and `kEdgeStrength` times the opacity).
+- `AppTheme` tokens: `plotHistogramFillOpacity` 0.5 and `plotHistogramEdgeOpacity` 0.4. The Tone
+  Curve section binds them; the Scopes histogram keeps its full-strength colors.
+- Choice of the values: on `plotSurfaceColor` (Default theme `#161616`) the overlap of the three
+  fills adds about 46 to each component (about 68 in all), below the strong grid line (about 77)
+  and the identity line (about 92); a channel edge adds 80 to 94 to its own primary only. The
+  curve line and the handles use `textColor`. The look was checked on the two themes of the app,
+  Default and Classic, which are both dark; the app has no light theme.
+
+| Binary and filter | Result |
+| --- | --- |
+| `EditorPlotPaneTest` (all, with `HistogramOpacityScalesTheLightOfTheFillAndOfTheEdge`) | 21 passed |
+| `EditorAdjustmentSnapshotQmlTest` (all) | 7 passed |
+
+### #903: dense text of the Tone Curve section (2026-11-13)
+
+Status: complete. Issue [#903](https://github.com/zidage/AlcedoStudio/issues/903), branch
+`fix/tone-curve-dense-font-903`, stacked on #902 (PR #908).
+
+- `AppTheme::fontSizeMicro` is 10 px, the size of dense data controls. The Tone Curve section uses
+  it for the EV axis labels, the In and Out readout at the top of the plot, the labels and the EV
+  texts of the In and Out fields, and the channel titles. The preset name and the field values keep
+  `fontSizeBody`.
+- `SegmentedCardSwitcher` has `titlePixelSize` (default `fontSizeBody`) and a per-entry `stretch`
+  (default 1). A segment takes `stretch / sum of stretches` of the track width through its
+  preferred width. `Layout.horizontalStretchFactor` gives equal segments here: the layout engine
+  scales a stretch by the preferred widths, which are all 0. The RGB entry has stretch 1.6, so the
+  RGB title and its modified dot fit beside the one-letter titles.
+- The plot has a left and a right inset of half the width of the widest EV label (`+10`), so a
+  label centered on a tick at an end of the X axis shows in full. The plot stays square.
+- Cause of the clipped field row: the section body has a margin of `spaceSm` on each side and the
+  curve body a margin of `spaceXs`, 24 px in all, and the section reserved 8 px. The section now
+  reserves `2 * (spaceSm + spaceXs)`.
+- The field box is as wide as `0.0000` (the value format) plus its padding, so the longest EV text
+  (`+10.27 EV`, the point at 1.0) has room after the field.
+
+At the default editor panel width (320 px), the track of the channel selector gives the RGB segment
+41 px and each letter segment 26 px; the In field row gives its EV text 54 px for the 47 px of
+`+10.27 EV`.
+
+| Binary and filter | Result |
+| --- | --- |
+| `EditorAdjustmentSnapshotQmlTest` (all, with `ToneCurveSectionShowsAllTextInFullAtTheDefaultPanelWidth`) | 8 passed; the new test fails on the QML before the fix (RGB and EV texts elided, field values clipped, `+10` past the pane) |
+| `EditorRawDecodePanelQmlTest` (all, a caller of `SegmentedCardSwitcher`) | 10 passed |
+
+| Parameter | Value | Meaning |
+| --- | --- | --- |
+| `fontSizeMicro` | 10 px | Text size of dense data controls |
+| RGB `stretch` | 1.6 | Width share of the RGB segment; a letter segment has 1 |
+| `labelSideInset` | `ceil(width of "+10" / 2)` | Left and right inset of the plot |
+| `bodyContentHeight` | curve body height + `2 * (spaceSm + spaceXs)` | Body height of the section |
+
+### #910: Film-like and Filmic toe ends at (0, 0) (2026-11-13)
+
+Status: complete. Issue [#910](https://github.com/zidage/AlcedoStudio/issues/910), branch
+`fix/tone-curve-preset-toe-910`, stacked on #903 (PR #909).
+
+- User request: the toe of Film-like and Filmic goes to (0, 0); the raised black point of the two
+  presets (y = 0.145 and 0.117 at x = 0) is a look that users may not accept.
+- `scripts/fit_tone_curve_presets.py` fits a shadow toe for the two presets: below a knee three
+  stops under 18% grey the target falls to (0, 0) along a parabola with value and slope continuous
+  at the knee. The points of the fit with the shoulder stay from the point after the knee point
+  ([tone_curve_preset_study.md](tone_curve_preset_study.md), section 4.4). Film-like keeps 13
+  points (error 0.56 codes); Filmic has 12 (0.49 codes). From -3 EV up both render as before.
+- The three films keep their raised black (the maximum density of the film).
+- `FilmLikeToneCurveEarlierPoints()` replaces `FilmLikeToneCurvePointsBeforeShoulder()` and holds
+  the #891 and #899 fits, so `IsFilmLikeToneCurve` (the entry resets) recognizes documents
+  imported with either earlier look.
+
+| Binary and filter | Result |
+| --- | --- |
+| `ToneCurvePresetTest` (all, with `FilmLikeAndFilmicFallToTheOriginBelowTheToeKnee`) | 10 passed |
+| `EditorSessionHistoryPortTest --gtest_filter=*ProfileTone*:*Curve*:*FilmPrint*:*Default*` | 19 passed |
+| `GpuDagModelGraphTest`, `AdjustmentTransferCatalogTest`, `EditorPipelineCommandServiceTest`, `EditorToneCurveModelTest` | 195, 13, 24, 18 passed |
+| `PipelineDocumentCheckpointTest` | 20 passed; 3 `Existing*Root*` failures from the HLS defaults (#553) |
+
+### #911: the DCP profile curve as points of the RGB curve (2026-11-13)
+
+Status: complete. Issue [#911](https://github.com/zidage/AlcedoStudio/issues/911), branch
+`feature/profile-tone-curve-import-911`, stacked on #910 (PR #912). Design, fit, and measurements:
+[dcp_profile_tone_curve_study.md](../raw-processing/dcp_profile_tone_curve_study.md), section 11.
+
+- User request: with the camera profile's Tone Curve on, the app's own tone curve gives way; the
+  better form loads the profile curve into the Tone Curve panel and drops the stage before the DRT.
+- `FitProfileToneCurve` / `ProfileToneCurvePoints` (library `ProfileToneCurve`) fit at most 16
+  points of the TC1 spline to the neutral axis of the profile curve through the DRT, within 0.83
+  CIE L* on every curve of the 2445-file user folder (median 0.20).
+- `ProfileToneCurveWrites` (editor command service) writes the points into the RGB curve on an
+  entry, moves an unedited curve on a profile or method change, and puts the import look back on
+  an exit; Film Print follows no profile curve. One Undo restores the batch.
+- The stage at the DRT entry is removed on CUDA, OpenCL, and Metal; whole files are archived in
+  `alcedo_studio/deprecated/profile_tone_stage/`. The stored switch `profile_tone` keeps its key.
+
+| Binary and filter | Result |
+| --- | --- |
+| `ProfileToneReferenceTest` (all, with the new `ProfileToneCurveImportTest`) | 10 passed |
+| `ProfileToneReferenceTest --gtest_filter=ProfileToneCurveImportFolderTest.*` with `ALCEDO_DCP_FOLDER` | passed (1390 curves, both methods) |
+| `EditorSessionHistoryPortTest --gtest_filter=EditorProfileToneEntryHistoryTest.*` | 15 passed |
+| `DcpCameraProfileRenderTest`, `PipelineDcpProfileBindingTest`, `EditorPipelineCommandServiceTest` | 23, 16, 24 passed |
+| `EditorCameraProfileListModelTest`, `EditorPanelProjectionTest`, `EditorRawDecodePanelQmlTest`, `ToneCurvePresetTest` | 15, 14, 10, 10 passed |
+| `GpuDagOpenClGradeTest` (grade, film print, diffusion fixtures), `GpuDagCudaDrtProductTest` (DRT product, expected output, film print fixtures) | 76, 56 passed |
+
+### #914: Cl. Digit placed by hand, Filmic removed (2026-11-14)
+
+Status: complete. Issue [#914](https://github.com/zidage/AlcedoStudio/issues/914), branch
+`fix/tone-curve-default-film-like-shape`, stacked on #911 (PR #913). Shape, reference, and codes:
+[tone_curve_preset_study.md](tone_curve_preset_study.md), section 4.5.
+
+- User review against RawTherapee: the fitted Film-like (13 points) and Filmic (12 points) lifted
+  the shadows above the identity line and bent twice; RawTherapee shows a single S with 8 points
+  and shadows below the identity line. Cause: the fit target divides the source tone by ACES 2.0,
+  whose toe is deeper than both sources.
+- User decision: the curve axis is an EV axis, so the default curve is placed by hand; Filmic
+  gives nearly the same curve and leaves the menu. Menu name (user decision of 2026-11-14):
+  Cl. Digit, Chinese 经典数码, id `cl_digital`. A write by id resolves `film_like` and any
+  other unknown id to `cl_digital` (`ResolveToneCurvePreset`, used by the `curve` write and
+  `EditorToneCurveModel::applyPreset`).
+- Points (EV in to EV out): (-4, -4.7), (0, 0), (+2, +2.8), (+4, +6.1), (+6.5, +8.3) with the ends
+  (0, 0) and (1, 0.95434): 7 points, inflection at +2.80 EV, slope 1.29 at grey. From +1 to +3 EV
+  the display codes stay within 2.5 codes of the ACR3 tone; the shadows render darker than Linear.
+- `scripts/fit_tone_curve_presets.py` takes the hand points from `HAND_PRESETS` and reports the
+  shape; the fitted presets come out byte-identical. The Filmic port, the shoulder, and the toe
+  fits left the script; sections 4.3 and 4.4 of the study keep their record.
+- `ClDigitalToneCurveEarlierPoints()` (formerly `FilmLikeToneCurveEarlierPoints()`) adds the
+  #910 points, so the entry resets recognize documents imported with them.
+
+| Binary and filter | Result |
+| --- | --- |
+| `ToneCurvePresetTest` (all, with `ClDigitalIsOneSCurveWithTheShadowsBelowTheIdentity` and `ResolveGivesThePresetOfAnIdAndClDigitalForAnyOtherId`) | 9 passed |
+| `EditorToneCurveModelTest`, `EditorAdjustmentSnapshotQmlTest`, `GpuDagModelGraphTest` | 18, 8, 195 passed |
+| `AutomationEditorCommandsTest`, `AutomationAdjustmentCommandsTest`, `EditorParameterCatalogTest`, `AdjustmentTransferCatalogTest`, `EditorPipelineCommandServiceTest` | 9, 4, 51, 13, 24 passed |
+| `EditorSessionHistoryPortTest` | 133 passed; `CheckoutAndPasteHashesAreUnchanged` fails (#555) |

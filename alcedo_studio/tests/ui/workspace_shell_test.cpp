@@ -567,7 +567,7 @@ TEST_F(WorkspaceShellTests, CollectionsSidebarToolbarToggleRestoresCollapsedPane
   ASSERT_NE(sidebar_toggle, nullptr);
 
   EXPECT_TRUE(loaded->window->property("collectionsSidebarExpanded").toBool());
-  EXPECT_NEAR(collections->width(), 276.0, 1.0);
+  EXPECT_NEAR(collections->width(), 264.0, 1.0);
   EXPECT_TRUE(sidebar_toggle->isVisible());
   EXPECT_FALSE(sidebar_toggle->property("showFocusRing").toBool());
   EXPECT_FALSE(sidebar_toggle->property("focusOnPointerPress").toBool());
@@ -592,7 +592,7 @@ TEST_F(WorkspaceShellTests, CollectionsSidebarToolbarToggleRestoresCollapsedPane
 
   EXPECT_TRUE(loaded->window->property("collectionsSidebarExpanded").toBool());
   EXPECT_FALSE(sidebar_toggle->hasActiveFocus());
-  EXPECT_NEAR(collections->width(), 276.0, 1.0);
+  EXPECT_NEAR(collections->width(), 264.0, 1.0);
   EXPECT_EQ(sidebar_toggle->property("iconSrc").toUrl().toString(),
             QStringLiteral("qrc:/panel_icons/layout-sidebar.svg"));
 
@@ -2183,7 +2183,7 @@ TEST_F(WorkspaceShellTests, AppThemeExposesPhase4CGeometryAndMotionTokens) {
   EXPECT_EQ(theme.editorSidePanelWidthMax(), 460);
   EXPECT_EQ(theme.editorScopeHeight(), 192);
   EXPECT_EQ(theme.editorScopeHeightMin(), 160);
-  EXPECT_EQ(theme.collectionsSidebarWidth(), 276);
+  EXPECT_EQ(theme.collectionsSidebarWidth(), 264);
   EXPECT_GE(theme.editorSidePanelWidthMax(), theme.editorSidePanelWidth());
   EXPECT_GE(theme.editorSidePanelWidth(), theme.editorSidePanelWidthMin());
   EXPECT_GE(theme.editorScopeHeight(), theme.editorScopeHeightMin());
@@ -2513,7 +2513,8 @@ TEST_F(WorkspaceShellTests, AdjustmentSectionFoldDriverPreservesPanelSelection) 
   ASSERT_TRUE(
       QMetaObject::invokeMethod(group, "driveFoldProgress", Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents(10);
-  EXPECT_NEAR(group->height(), header_h + body_content_h, 1.5);
+  // The body adds its spaceSm (8 px) insets above and below the content.
+  EXPECT_NEAR(group->height(), header_h + body_content_h + 16.0, 1.5);
 
   ASSERT_TRUE(
       QMetaObject::invokeMethod(group, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));

@@ -336,7 +336,7 @@ Paths below are relative to the repository root.
 | Area | Current owner and path | Verified source behavior | Required change |
 | --- | --- | --- | --- |
 | Project tables | `src/include/storage/store/database.hpp`, `src/storage/store/database.cpp` under `alcedo_studio/` | Image, Element, FileImage, and FolderContent have no photo-stack relation. | Add stack tables and migration. |
-| Project compatibility | `src/include/edit/history/pipeline_history_format.hpp` | Project metadata writes 0.11.0 and accepts 0.10.0 through 0.11.0. | Introduce project metadata 0.12.0 without changing image-edit formats. |
+| Project compatibility | `src/include/edit/history/pipeline_history_format.hpp` | Project metadata writes 0.12.0 and accepts 0.10.0 through 0.12.0. | Introduce project metadata 0.13.0 without changing image-edit formats. |
 | Storage boundary | `src/include/sleeve/storage.hpp`, `src/include/storage/store/storage_session.hpp` | Stores take operation-scoped connections under the database lock. Sessions support shared operations. | Add one stack owner and transaction-local deletion repair. |
 | Matching and paging | `src/storage/store/sleeve/element_store.cpp` | `ReadAlbumQuery` evaluates SearchMatchSet once under a transaction. Position and ID reads share the photo order. | Add a display projection after matching and group membership. |
 | Group definitions | `src/storage/store/sleeve/album_query.cpp`, `src/include/sleeve/album_query.hpp` | Typed group keys include unknown values. Label grouping repeats File occurrences. | Preserve these meanings when forming fragments. |
@@ -433,10 +433,10 @@ Enforce it through the owner transaction and the storage invariant checker.
 Do not introduce a partially valid intermediate state visible to another connection.
 Use delete-and-insert within the transaction when ordinal changes would violate immediate uniqueness.
 
-Set project metadata version and maximum supported version to 0.12.0.
+Set project metadata version and maximum supported version to 0.13.0.
 Keep the lower supported version at 0.10.0.
-Opening 0.10.0 or 0.11.0 adds empty stack tables; it does not invent stacks.
-The next save writes 0.12.0. Earlier builds reject that version before writing project data.
+Opening 0.10.0 through 0.12.0 adds empty stack tables and preserves any mounted folder records.
+The next save writes 0.13.0. Earlier builds reject that version before writing project data.
 Keep the packed header, pipeline document, edit history, root, checkpoint, and transfer versions unchanged.
 If the implementation base has advanced this metadata version, use its next unused version and
 record that exact choice before implementing migration.
@@ -1287,6 +1287,13 @@ and ProjectServiceTest through CTest. Run the direct ImportServiceTest and Sleev
 **Status:** complete. Supported-version migration, stored-stack validation, package preservation,
 and diagnostic table counts. Branch and audited source base are the same as the PS2A record.
 The prerequisite PS2A commit is `6261e0a7`.
+
+**Merge into PR #828.** Upstream assigned 0.12.0 to mounted folders, so photo stacks use 0.13.0.
+A 0.12.0 project opens with its mount records intact and gains empty stack tables. The 0.12.0
+reader fixture checks that upstream readers reject 0.13.0. File removal deletes source records
+and repairs stack membership in the same storage transaction. If a mount tree update fails to
+save, Sleeve restores each affected element's stored mount ID with its other fields. The entries
+below record the original PS2B implementation and verification.
 
 **Changed modules and selected details.** The writer and maximum metadata version are 0.12.0;
 the minimum remains 0.10.0. Packed project, pipeline, image-edit, commit, chain, root, checkpoint,

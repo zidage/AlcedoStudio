@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Host reference of the profile tone stage (dcp_profile_tone_curve_study.md, sections 6.1 and 8,
-// phase T1): the neutral responses of ACES 2.0 and OpenDRT, their inverse tables, the neutral
-// error of the stage, and the CIEDE2000 measurement record of section 8 against an SDK-style
-// rendering of the same curve.
+// Neutral responses of ACES 2.0 and OpenDRT and their inverse tables
+// (dcp_profile_tone_curve_study.md, section 6.1, phase T1), the highlight shoulder (section 6.6),
+// and the CIEDE2000 record of sections 8 and 11 against an SDK-style rendering of the same curve:
+// the profile tone stage of T2 (archived by #911) and the RGB curve that #911 imports in its place.
 
 #include "edit/runtime/profile_tone_reference.hpp"
 
@@ -22,12 +22,14 @@
 #include <vector>
 
 #include "color/color_encoding_catalog.hpp"
+#include "color/color_encoding_math.h"
+#include "edit/graph/develop_color_transform.hpp"
+#include "edit/operators/models/tone_curve_spline.hpp"
 #include "edit/runtime/aces2_reference_math.h"
+#include "edit/runtime/dng_profile_gpu_data.hpp"
 #include "edit/runtime/drt/aces2_reference_runtime.hpp"
-#include "edit/runtime/profile_tone_gpu_math.h"
-#include "edit/runtime/profile_tone_stage.hpp"
+#include "edit/runtime/profile_tone_curve_import.hpp"
 #include "image/dng_tone_curve.hpp"
-#include "oklab_contrast_reference.hpp"
 
 namespace alcedo {
 namespace {
@@ -51,13 +53,6 @@ auto CameraLikeCurve() -> DngToneCurvePtr {
     points.push_back({static_cast<float>(x), static_cast<float>(y)});
   }
   return MakeDngToneCurve(std::move(points));
-}
-
-/// Raw value (ACR scale, raw white 1) of an AP1 neutral to the AP1 value at the DRT entry of the
-/// Default document: the exposure anchor applies.
-auto AnchoredNeutral(float raw) -> Rgb {
-  const float value = raw * std::exp2(kProfileToneExposureAnchorEv);
-  return {value, value, value};
 }
 
 TEST(ProfileToneReferenceTest, NeutralResponsesRenderMidGreyAndReachThePeak) {
@@ -113,33 +108,6 @@ TEST(ProfileToneReferenceTest, InverseTableReturnsTheSceneValueOfEachDisplayValu
   }
 }
 
-/// Largest relative error of `N_m(stage(v))` against `C(H(v))` on a neutral ramp from 12 stops
-/// below raw white to 4 stops above it (measurement (a) of study section 8). Below the knee of the
-/// highlight shoulder, `C(H(v))` is `C(v)`.
-auto NeutralRampError(const DngToneCurve& curve, const ProfileToneNeutralResponse& response)
-    -> double {
-  double max_error = 0.0;
-  for (float stops = -12.0f; stops <= 4.0f; stops += 1.0f / 16.0f) {
-    const float raw      = std::exp2(stops);
-    const Rgb   staged   = ApplyProfileToneStageReference(curve, response, AnchoredNeutral(raw));
-    const float expected = curve.Interpolate(ProfileToneHighlightShoulder(raw));
-    for (float channel : staged) {
-      max_error = std::max(max_error, std::abs(response.Forward(channel) / expected - 1.0));
-    }
-  }
-  return max_error;
-}
-
-TEST(ProfileToneReferenceTest, NeutralRampThroughTheStageRendersTheProfileCurveWithin1e3) {
-  const auto curve = CameraLikeCurve();
-  for (const auto method : kMethods) {
-    const auto   response = ProfileToneNeutralResponse::Resolve(method);
-    const double error    = NeutralRampError(*curve, *response);
-    std::printf("[measurement] neutral error, %s: %.2e relative\n", MethodName(method), error);
-    EXPECT_LT(error, 1e-3) << MethodName(method);
-  }
-}
-
 TEST(ProfileToneReferenceTest, HighlightShoulderKeepsTheCurveBelowTheKneeAndStaysBelowWhite) {
   constexpr float k = kProfileToneHighlightKnee;
   EXPECT_FLOAT_EQ(ProfileToneHighlightShoulder(-0.25f), 0.0f);
@@ -160,79 +128,6 @@ TEST(ProfileToneReferenceTest, HighlightShoulderKeepsTheCurveBelowTheKneeAndStay
     EXPECT_GT(value, previous) << stop;
     EXPECT_LT(value, 1.0f) << stop;
     previous = value;
-  }
-}
-
-TEST(ProfileToneReferenceTest, SceneLightAboveRawWhiteRollsOffTowardThePeak) {
-  const auto curve = CameraLikeCurve();
-  for (const auto method : kMethods) {
-    const auto response = ProfileToneNeutralResponse::Resolve(method);
-    float      previous = 0.0f;
-    for (float raw : {0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f}) {
-      const Rgb   staged  = ApplyProfileToneStageReference(*curve, *response, AnchoredNeutral(raw));
-      const float display = response->Forward(staged[1]);
-      // Each stop above the knee keeps a step in display light: the stage does not clip.
-      EXPECT_GT(display, previous + 1e-4f) << MethodName(method) << ' ' << raw;
-      EXPECT_LT(display, 1.0f) << MethodName(method) << ' ' << raw;
-      previous = display;
-    }
-    const Rgb far = ApplyProfileToneStageReference(*curve, *response, AnchoredNeutral(4096.0f));
-    EXPECT_NEAR(response->Forward(far[1]), 1.0f, 1e-3f) << MethodName(method);
-  }
-}
-
-TEST(ProfileToneReferenceTest, NegativeProPhotoChannelsRenderAsBlack) {
-  const auto curve    = CameraLikeCurve();
-  const auto response = ProfileToneNeutralResponse::Resolve(DrtMethod::Aces20);
-  const Rgb  staged   = ApplyProfileToneStageReference(*curve, *response, {-0.5f, -0.2f, -1.0f});
-  for (float channel : staged) EXPECT_NEAR(channel, 0.0f, 1e-6f);
-}
-
-TEST(ProfileToneReferenceTest, StageMatricesAreInversesAndKeepNeutralsNeutral) {
-  const auto& m = ProfileToneStageMatrices();
-  for (int r = 0; r < 3; ++r) {
-    for (int c = 0; c < 3; ++c) {
-      float sum = 0.0f;
-      for (int k = 0; k < 3; ++k)
-        sum += m.ap1_to_prophoto[r * 3 + k] * m.prophoto_to_ap1[k * 3 + c];
-      EXPECT_NEAR(sum, r == c ? 1.0f : 0.0f, 1e-5f) << r << ' ' << c;
-    }
-    const float row =
-        m.ap1_to_prophoto[r * 3] + m.ap1_to_prophoto[r * 3 + 1] + m.ap1_to_prophoto[r * 3 + 2];
-    EXPECT_NEAR(row, 1.0f, 1e-3f) << r;
-  }
-}
-
-// The GPU form of the stage (profile_tone_gpu_math.h on the buffer of PackProfileToneGpuData),
-// compiled for the host, against the scalar reference (phase T2).
-TEST(ProfileToneReferenceTest, GpuMathOnThePackedBufferMatchesTheScalarReference) {
-  const auto curve = CameraLikeCurve();
-  for (const auto method : kMethods) {
-    const auto response = ProfileToneNeutralResponse::Resolve(method);
-    const auto data     = PackProfileToneGpuData(ProfileToneStage{curve, method});
-    ASSERT_EQ(data.size(), static_cast<std::size_t>(PROFILE_TONE_GPU_FLOATS));
-    float largest = 0.0f;
-    for (float stops = -12.0f; stops <= 2.0f; stops += 0.5f) {
-      const float level = std::exp2(stops + kProfileToneExposureAnchorEv);
-      for (int hue = 0; hue < 12; ++hue) {
-        for (float purity : {0.0f, 0.3f, 0.6f, 0.95f}) {
-          const float angle = 6.2831853f * static_cast<float>(hue) / 12.0f;
-          Rgb         ap1{};
-          for (int c = 0; c < 3; ++c) {
-            ap1[c] = level * (1.0f + purity * std::cos(angle - 2.0943951f * static_cast<float>(c)));
-          }
-          const auto reference = ApplyProfileToneStageReference(*curve, *response, ap1);
-          const auto gpu =
-              ProfileToneApplyStage(ProfileToneMakeRgb(ap1[0], ap1[1], ap1[2]), data.data());
-          const Rgb out{gpu.r, gpu.g, gpu.b};
-          for (int c = 0; c < 3; ++c) {
-            largest = std::max(
-                largest, std::abs(out[c] - reference[c]) / std::max(std::abs(reference[c]), 1e-3f));
-          }
-        }
-      }
-    }
-    EXPECT_LT(largest, 1e-5f) << MethodName(method);
   }
 }
 
@@ -343,25 +238,50 @@ auto Summarize(std::vector<double> values) -> Statistics {
   return result;
 }
 
-/// The Color Grade 1 contrast and saturation of the Default document on linear AP1, in ACEScc
-/// order exposure (already in @p ap1), contrast, saturation (pipeline_document.cpp).
-auto ApplyImportLook(const Rgb& ap1, float contrast, float saturation) -> Rgb {
-  namespace ref = oklab_contrast_reference;
-  Rgb cc{ref::AcesccEncode(ap1[0]), ref::AcesccEncode(ap1[1]), ref::AcesccEncode(ap1[2])};
-  if (contrast != 0.0f) cc = ref::ApplyContrastAcescc(cc, contrast);
-  const float luma = 0.272229f * cc[0] + 0.674082f * cc[1] + 0.053689f * cc[2];
-  for (float& channel : cc) channel = luma + (channel - luma) * saturation;
-  return {ref::AcesccDecode(cc[0]), ref::AcesccDecode(cc[1]), ref::AcesccDecode(cc[2])};
+/// Linear AP1 to linear ProPhoto (D50) and back, the matrix pair of the camera pass.
+struct StageMatrices {
+  cv::Matx33d ap1_to_prophoto;
+  cv::Matx33d prophoto_to_ap1;
+};
+
+auto MakeStageMatrices() -> StageMatrices {
+  const cv::Matx33d prophoto_to_ap1 = ProPhotoToAp1(XyzD50ToAp1Matrix());
+  return {prophoto_to_ap1.inv(), prophoto_to_ap1};
 }
 
-TEST(ProfileToneReferenceTest, RecordsCiede2000OfTheAces2StageAgainstTheSdkRendering) {
+/// The profile tone stage of T2 at the DRT entry, archived by #911
+/// (deprecated/profile_tone_stage/): `H` per ProPhoto channel, the DNG SDK baseline RGB tone,
+/// `N_m^-1` per channel, back to AP1.
+auto ArchivedStage(const DngToneCurve& curve, const ProfileToneNeutralResponse& response,
+                   const StageMatrices& m, const Rgb& ap1) -> Rgb {
+  Rgb prophoto = Mul(m.ap1_to_prophoto, ap1);
+  for (float& channel : prophoto) {
+    channel = ProfileToneHighlightShoulder(channel * std::exp2(-kProfileToneExposureAnchorEv));
+  }
+  ApplyDngBaselineRgbTone(curve, prophoto);
+  for (float& channel : prophoto) channel = response.Inverse(channel);
+  return Mul(m.prophoto_to_ap1, prophoto);
+}
+
+/// The RGB curve of Color Grade 1 per channel on ACEScc (the grade kernels, TC1).
+auto ApplyRgbCurve(const tone_curve::ToneCurveSpline& spline, const Rgb& ap1) -> Rgb {
+  Rgb out{};
+  for (int c = 0; c < 3; ++c) {
+    out[c] = CeAcesccDecode(tone_curve::EvaluateToneCurveSpline(spline, CeAcesccEncode(ap1[c])));
+  }
+  return out;
+}
+
+TEST(ProfileToneReferenceTest, RecordsCiede2000OfTheStageAndOfTheImportedCurveAgainstTheSdk) {
   const auto curve    = CameraLikeCurve();
   const auto response = ProfileToneNeutralResponse::Resolve(DrtMethod::Aces20);
+  const auto imported = FitProfileToneCurve(*curve, DrtMethod::Aces20);
+  const auto spline   = tone_curve::SolveToneCurveSpline(imported.points);
   const auto aces     = ResolveAces2ReferenceRuntime(
       color::GamutPrimariesXy(color::ColorGamutId::Rec709), kProfileToneReferencePeakNits);
   const float*      packed           = aces->packed_.data();
 
-  const auto&       stage            = ProfileToneStageMatrices();
+  const auto        stage            = MakeStageMatrices();
   const cv::Matx33d prophoto_to_xyz  = ToMatx(color::RgbToXyzMatrix(color::ColorGamutId::ProPhoto));
   const cv::Matx33d rec709_to_xyz    = ToMatx(color::RgbToXyzMatrix(color::ColorGamutId::Rec709));
   const cv::Matx33d ap1_to_xyz       = ToMatx(color::RgbToXyzMatrix(color::ColorGamutId::Ap1));
@@ -371,8 +291,7 @@ TEST(ProfileToneReferenceTest, RecordsCiede2000OfTheAces2StageAgainstTheSdkRende
   const cv::Vec3d   d65              = rec709_to_xyz * cv::Vec3d(1, 1, 1);
   // SDK step 5 for sRGB: ProPhoto to XYZ D50, Bradford to D65, XYZ to Rec.709.
   const cv::Matx33d prophoto_to_srgb = rec709_to_xyz.inv() * Bradford(d50, d65) * prophoto_to_xyz;
-  cv::Matx33d       prophoto_to_ap1;
-  for (int i = 0; i < 9; ++i) prophoto_to_ap1.val[i] = stage.prophoto_to_ap1[i];
+  const cv::Matx33d prophoto_to_ap1  = stage.prophoto_to_ap1;
 
   const auto display_lab = [&](Rgb display) {
     for (float& channel : display) channel = std::clamp(channel, 0.0f, 1.0f);
@@ -402,8 +321,8 @@ TEST(ProfileToneReferenceTest, RecordsCiede2000OfTheAces2StageAgainstTheSdkRende
   }
 
   std::vector<double> per_channel;
+  std::vector<double> rgb_curve;
   std::vector<double> full_inverse;
-  std::vector<double> before_reset;
   for (const Rgb& patch : patches) {
     // SDK-style reference: exposure ramp clip, baseline RGB tone, ProPhoto to sRGB.
     Rgb sdk = patch;
@@ -415,8 +334,10 @@ TEST(ProfileToneReferenceTest, RecordsCiede2000OfTheAces2StageAgainstTheSdkRende
     // Default document after the entry reset: exposure +1.5 EV, contrast 0, saturation 1.0.
     const Rgb anchored = Mul(prophoto_to_ap1 * std::exp2(kProfileToneExposureAnchorEv), patch);
     per_channel.push_back(Ciede2000(
-        reference,
-        display_lab(aces_forward(ApplyProfileToneStageReference(*curve, *response, anchored)))));
+        reference, display_lab(aces_forward(ArchivedStage(*curve, *response, stage, anchored)))));
+    // #911: the imported RGB curve in Color Grade 1, then ACES 2.0.
+    rgb_curve.push_back(
+        Ciede2000(reference, display_lab(aces_forward(ApplyRgbCurve(spline, anchored)))));
 
     // Alternative A4: the full ACES 2.0 inverse of the SDK display value.
     Rgb clamped = sdk_display;
@@ -424,13 +345,6 @@ TEST(ProfileToneReferenceTest, RecordsCiede2000OfTheAces2StageAgainstTheSdkRende
     const A2rFloat3 ap0 = A2rDisplayToAp0(A2rMake3(clamped[0], clamped[1], clamped[2]), packed);
     const A2rFloat3 a4  = A2rAp0ToDisplay(ap0, packed);
     full_inverse.push_back(Ciede2000(reference, display_lab({a4.x, a4.y, a4.z})));
-
-    // Default document before the entry reset: the RAW import look stays on.
-    const Rgb graded =
-        ApplyImportLook(anchored, kImportLookContrastBeforeFilmLike, kDefaultPipelineSaturation);
-    before_reset.push_back(Ciede2000(
-        reference,
-        display_lab(aces_forward(ApplyProfileToneStageReference(*curve, *response, graded)))));
   }
 
   const auto print = [&](const char* name, const std::vector<double>& values) {
@@ -440,7 +354,11 @@ TEST(ProfileToneReferenceTest, RecordsCiede2000OfTheAces2StageAgainstTheSdkRende
     return stats;
   };
   const auto stage_stats =
-      print("per-channel inverse, Default document after the reset", per_channel);
+      print("profile tone stage (T2, archived), Default document after the reset", per_channel);
+  const auto curve_stats =
+      print("imported RGB curve (#911), Default document after the reset", rgb_curve);
+  std::printf("[measurement] imported curve: %zu points, fit error %.3f L*\n",
+              imported.points.size(), imported.error_lightness);
   const auto worst = static_cast<std::size_t>(
       std::max_element(per_channel.begin(), per_channel.end()) - per_channel.begin());
   std::printf("[measurement]   largest at ProPhoto (%.4f, %.4f, %.4f); mean by level:",
@@ -455,21 +373,28 @@ TEST(ProfileToneReferenceTest, RecordsCiede2000OfTheAces2StageAgainstTheSdkRende
     std::printf("[measurement] %s scene value at the peak: %.2f\n", MethodName(method),
                 ProfileToneNeutralResponse::Resolve(method)->SceneAtPeak());
   }
-  const auto a4_stats     = print("full ACES 2.0 inverse (A4)", full_inverse);
-  const auto before_stats = print("Default document before the reset", before_reset);
+  const auto a4_stats = print("full ACES 2.0 inverse (A4)", full_inverse);
   EXPECT_TRUE(std::isfinite(stage_stats.max));
+  EXPECT_TRUE(std::isfinite(curve_stats.max));
   EXPECT_TRUE(std::isfinite(a4_stats.max));
-  EXPECT_TRUE(std::isfinite(before_stats.max));
   // The neutral patches below the knee of the highlight shoulder render as the profile renders
   // them. The neutral patch above the knee (0.75 stops below raw white) records the shoulder: the
   // SDK clips there and keeps the curve.
-  std::printf("[measurement] neutral patch 0.75 stops below raw white: CIEDE2000 %.2f\n",
-              per_channel[patches.size() - 25]);
+  std::printf(
+      "[measurement] neutral patch 0.75 stops below raw white: CIEDE2000 %.2f (stage), "
+      "%.2f (RGB curve)\n",
+      per_channel[patches.size() - 25], rgb_curve[patches.size() - 25]);
+  std::printf("[measurement] neutral patches, imported RGB curve:");
+  for (std::size_t i = 0; i < patches.size(); i += 25) std::printf(" %.2f", rgb_curve[i]);
+  std::printf("\n");
   for (std::size_t i = 0; i < patches.size(); i += 25) {
     if (patches[i][0] <= kProfileToneHighlightKnee) {
       EXPECT_LT(per_channel[i], 0.1) << i;
+      // The RGB curve holds the neutral axis within its fit error (0.2 L*).
+      EXPECT_LT(rgb_curve[i], 0.6) << i;
     } else {
       EXPECT_LT(per_channel[i], 1.0) << i;
+      EXPECT_LT(rgb_curve[i], 1.0) << i;
     }
   }
 }

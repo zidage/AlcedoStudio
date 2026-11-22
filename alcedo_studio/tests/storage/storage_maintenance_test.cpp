@@ -217,6 +217,31 @@ TEST_F(StorageMaintenanceTest, DataSummaryIncludesBothStackTablesWithExactRowCou
             (std::vector<sl_element_id_t>{11, 12}));
 }
 
+TEST_F(StorageMaintenanceTest, LargestStoredIdsAreZeroForAnEmptyDatabase) {
+  const auto ids = storage_->Maintenance().ReadLargestStoredIds();
+  EXPECT_EQ(ids.element_id, 0);
+  EXPECT_EQ(ids.image_id, 0);
+}
+
+TEST_F(StorageMaintenanceTest, LargestStoredIdsReadEveryColumnThatHoldsAnId) {
+  // #1015: the id generators start above these values on open.
+  InsertRows();
+  auto ids = storage_->Maintenance().ReadLargestStoredIds();
+  EXPECT_EQ(ids.element_id, 11);
+  EXPECT_EQ(ids.image_id, 9);
+
+  // A row that refers to a removed element or image still holds its id.
+  RunSql(*storage_, "INSERT INTO FileImage (file_id, image_id) VALUES (12, 14);");
+  RunSql(*storage_,
+         "INSERT INTO ImageEditState (element_id, root_id, active_version_id, "
+         "materialized_transaction_chain_hash, project_schema_version) "
+         "VALUES (30, 'r', 'v', 'h', 1);");
+  RunSql(*storage_, "INSERT INTO AiImageRating (file_id, rating) VALUES (41, 3);");
+  ids = storage_->Maintenance().ReadLargestStoredIds();
+  EXPECT_EQ(ids.element_id, 41);
+  EXPECT_EQ(ids.image_id, 14);
+}
+
 TEST_F(StorageMaintenanceTest, DataSummaryLeavesOutATableThatTheDatabaseDoesNotHave) {
   RunSql(*storage_, "DROP TABLE SemanticLabelPrototype768;");
 
