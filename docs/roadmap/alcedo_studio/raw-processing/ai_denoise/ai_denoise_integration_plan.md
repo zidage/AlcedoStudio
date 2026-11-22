@@ -48,7 +48,7 @@ Develop stage reads the stored result in place of its own linearization and demo
 
 | Id | Decision | Measurement that it needs | Owner |
 | --- | --- | --- | --- |
-| U1 | `target_time`: the largest time for one 45 megapixel photo on the RTX 3080 Laptop GPU | The time of DN3 | User |
+| U1 | `target_time`: the largest time for one 45 megapixel photo on the RTX 3080 Laptop GPU. It has no value now. The user sets it after the measured time of the full model (the baseline of DN3) exists | The time of DN3 | User |
 | U2 | The pixel format and the compression of the stored result file | DN1, stored format table | User |
 | U3 | The tile size and the tile overlap | DN1, border difference table | Implementer, recorded in DN3 |
 | U4 | The highlight handling of the stored result | DN1, clipped area table | Implementer, recorded in DN5 |
@@ -628,7 +628,7 @@ no longer agrees with the branch.
 
 | Parameter | Value | Source |
 | --- | --- | --- |
-| `target_time` | From the user (U1) | User |
+| `target_time` | No value until the baseline time of DN3 exists; then from the user (U1) | User |
 | `tile_size` | 256 to 1024 packed pixels, multiple of 16; selected from the free GPU memory | DN1 |
 | `tile_overlap` | Smallest overlap with a border difference below the TF32 difference level | DN1 |
 | `leaky_relu_slope` | The value in the metadata of the weights file | DN0 |
