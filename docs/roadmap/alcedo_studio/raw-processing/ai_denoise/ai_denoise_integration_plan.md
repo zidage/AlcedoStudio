@@ -7,8 +7,10 @@
   C++ on Windows; DN2, DN3, DN10, and DN11 rewritten for it. 2026-11-22: macOS measured (DN1
   addition, ONNX Runtime on macOS); D2 extended to Core ML on macOS; DN10 rewritten for it.
   2026-11-22: FP16 on the Neural Engine measured (DN1 addition); U5 closed: macOS runs FP16 on
-  the Neural Engine (D2, DN10). 2026-11-22: FP16 on DirectML measured (DN1 addition); U6 with
-  the user
+  the Neural Engine (D2, DN10). 2026-11-22: FP16 on DirectML measured (DN1 addition); U6
+  closed: Windows runs FP16 too. 2026-11-22: the user removed the stored result file: the model
+  runs in the Develop render (D5 to D12, sections 2, 5, DN4 to DN9 rewritten; DN4 and DN9
+  removed; U2 closed)
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -29,49 +31,52 @@ repository rules can change after the date of this plan.
 
 ### 1.1 Goal
 
-Alcedo Studio gets AI noise reduction in the Develop stage. The user turns it on for a photo. The
-application runs a neural network on the RAW mosaic one time, stores the result on disk, and the
-Develop stage reads the stored result in place of its own linearization and demosaic.
+Alcedo Studio gets AI noise reduction in the Develop stage. The user turns it on for a photo.
+The Develop render runs a neural network on the RAW mosaic in place of its own linearization and
+demosaic, as it runs the DemosaicNet student for the Neural demosaic. The result stays in the
+memory cache of the render; it is not stored on disk (2026-11-22: in FP16 the model takes about
+the time of the DemosaicNet student, DN1 additions).
 
 ### 1.2 Approved decisions
 
 | Id | Decision | Date |
 | --- | --- | --- |
 | D1 | The model is the full UtNet2 Bayer model of the lab, `models/dark_area_loss/checkpoint_10000.pt`. It has no strength control. | 2026-11-21 |
-| D2 | The model runs in ONNX Runtime, in the process of Alcedo Studio through the C++ API of ONNX Runtime: on Windows in FP32 with the DirectML execution provider; on macOS in FP16 on the Neural Engine with the Core ML execution provider, with the rescaled FP16 graph of the lab (U5). The Rust sidecar does not run it. The model package holds the ONNX graphs that the lab makes from the safetensors weights (FP32 for Windows, FP16 for macOS). TensorRT and cuDNN are not used. Changed on 2026-11-22 from own CUDA forward code, after the DirectML measurement of DN1; macOS added on 2026-11-22 (the user: ONNX Runtime in C++ on macOS too); FP16 on the Neural Engine on 2026-11-22 (U5). | 2026-11-22 |
+| D2 | The model runs in FP16 in ONNX Runtime, in the process of Alcedo Studio through the C++ API of ONNX Runtime: on Windows with the DirectML execution provider (U6), on macOS on the Neural Engine with the Core ML execution provider (U5). Both use one FP16 graph of the rescaled layers that the lab makes from the safetensors weights. The Rust sidecar (`alcedo_mind`) has no part in the noise reduction. TensorRT and cuDNN are not used. Changed on 2026-11-22 from own CUDA forward code (after the DirectML measurement of DN1), then to FP16 on both platforms (U5, U6). | 2026-11-22 |
 | D3 | The work starts with the weights export and the measurements. The publication of the model package on R2 is the last product phase. | 2026-11-21 |
 | D4 | Distillation to a smaller model runs only if the measured time of DN3 is above `target_time`. | 2026-11-21 |
-| D5 | The denoise run blocks the application with a progress display and a Cancel control. It can process a batch of photos. It does not run in the background during editing. | 2026-11-21 |
-| D6 | The result is a stored result file of the RAW file, as the current Camera Raw stores its enhanced data. The RAW file stays the photo. A separate DNG file is not made. | 2026-11-21 |
-| D7 | The stored result files are in one folder that the user selects in the settings. The settings show the folder and the space in use, and let the user delete the files. | 2026-11-21 |
-| D8 | When the user deletes a photo from the library with its RAW file, the application deletes the stored result file of that RAW file too. The application deletes a stored result file in no other automatic case. | 2026-11-21 |
-| D9 | A project package (`.alcd`) does not contain stored result files. | 2026-11-21 |
-| D10 | A stored result file keeps the result of the model version that made it. A model update does not change it. | 2026-11-21 |
-| D11 | The Develop node keeps its structure: one root node, no input port. The noise reduction is a parameter of the Develop node. The loader gives the stored result to the Develop passes as a second prepared input of the same RAW file. | 2026-11-21 |
-| D12 | Noise reduction on, stored result absent: the editor and the export compute the result first, with the blocking progress display. A thumbnail and a semantic input image render from the reduced mosaic and do not read the stored result. | 2026-11-21 |
+| D5 | The model runs in the render of the editor and of the export, when the Develop sensor stage is computed (a new photo, a change of a sensor Develop parameter, a cache miss). The editor shows its normal render state; there is no blocking progress display and no batch run. A library action or a paste only sets the parameter. Replaced on 2026-11-22 (was: a blocking run with a progress display, Cancel, and a batch run). | 2026-11-22 |
+| D6 | The application stores no denoised image on disk: no stored result file and no separate DNG file. The RAW file stays the photo. The denoised image is an entry of the prepared source cache in memory. Replaced on 2026-11-22 by the user (was: a stored result file of the RAW file). | 2026-11-22 |
+| D7 | Removed on 2026-11-22 with the stored result file (was: the folder of the stored results in the settings). | 2026-11-22 |
+| D8 | Removed on 2026-11-22 with the stored result file (was: the deletion of the stored result file with the RAW file). | 2026-11-22 |
+| D9 | A project package (`.alcd`) holds the Develop parameter of the noise reduction and no denoised image. A project opened on another computer runs the model there. Changed on 2026-11-22. | 2026-11-22 |
+| D10 | The Develop parameter records the model version (the SHA-256 of the FP16 graph) when the user turns the noise reduction on. The render uses the installed model, and its content key holds the installed version. When the installed version differs from the recorded version, the RAW Decode panel states it: the result can differ from the earlier result. Replaced on 2026-11-22 (was: a stored result keeps the result of its model version). | 2026-11-22 |
+| D11 | The Develop node keeps its structure: one root node, no input port. The noise reduction is a parameter of the Develop node. The loader runs the model on the mosaic and gives the result to the Develop passes as a second prepared input of the same RAW file. Changed on 2026-11-22 (the loader runs the model in place of a read of the stored result). | 2026-11-22 |
+| D12 | A thumbnail and a semantic input image render from the reduced mosaic without the model (the Legacy demosaic, as now). The editor and the export run the model at the full size. When the model cannot run (not installed, no supported device, a run error), the editor and the export report the error and do not render the photo without the noise reduction. Changed on 2026-11-22. | 2026-11-22 |
 | D13 | Platform order: Windows (DirectML, for each render backend and each GPU with Direct3D 12), then macOS (Core ML on the Neural Engine of Apple silicon), then Linux. On a platform without its forward phase, the application does not show the noise reduction control. Changed on 2026-11-22 from the backend order CUDA, Metal, OpenCL. | 2026-11-22 |
-| D14 | The first version supports Bayer sensors only. For an X-Trans or a monochrome photo, the application reports that the photo is not supported. In a batch, it reports the photo and continues with the other photos. | 2026-11-21 |
+| D14 | The first version supports Bayer sensors only. For an X-Trans or a monochrome photo, the application reports that the photo is not supported. A library action or a paste for several photos reports the photo and sets the parameter of the other photos. | 2026-11-21 |
 
 ### 1.3 Decisions that wait for a measurement
 
 | Id | Decision | Measurement that it needs | Owner |
 | --- | --- | --- | --- |
 | U1 | `target_time`: the largest time for one 45 megapixel photo on the RTX 3080 Laptop GPU. It has no value now. The user sets it after the measured time of the full model (the baseline of DN3) exists | The time of DN3 | User |
-| U2 | The pixel format and the compression of the stored result file | DN1, stored format table | User |
+| U2 | The pixel format and the compression of the stored result file. Closed 2026-11-22: the stored result file is removed (D6) | DN1, stored format table | User |
 | U3 | The tile size and the tile overlap. Closed 2026-11-21: overlap 96 packed px, tile size the largest of 512 to 1536 that fits (DN1 completion record) | DN1, border difference table | Implementer, recorded in DN3 |
-| U4 | The highlight handling of the stored result. The user decided on 2026-11-22 that no clip mask is made: high-noise photos have a low dynamic range, and many scenes that need the highlight recovery are not at a high ISO | DN1, clipped area table | Implementer, recorded in DN5 |
+| U4 | The highlight handling of the model output. The user decided on 2026-11-22 that no clip mask is made: high-noise photos have a low dynamic range, and many scenes that need the highlight recovery are not at a high ISO | DN1, clipped area table | Implementer, recorded in DN5 |
 | U5 | macOS: FP16 on the Neural Engine (0.60 s at 45.4 MP, 75.7 to 80.6 dB against FP32 at +2 EV) in place of FP32 on the GPU (3.55 s). A change to D2 (FP32) and to the lab constraint "FP32 in Alcedo Studio". If yes: the rescale calibration on many photos, a check of the output for values that are not finite (the run then reports the error), and a check by eye of the FP16 output. Closed 2026-11-22: the user agreed; D2 and DN10 changed | DN1 addition, FP16 on the Neural Engine | User |
-| U6 | Windows: FP16 on DirectML (the macOS FP16 graph, 0.72 s against 0.94 s at 45.4 MP now; 0.044 s against 0.090 s for the GPU part of a tile; 70.0 to 72.8 dB against FP32 at +2 EV) in place of FP32. If yes: one FP16 graph for both platforms in the model package, the output check of DN10 also on Windows, and DN3 keeps the tiles in DirectML memory to get the GPU gain | DN1 addition, FP16 on DirectML | User |
+| U6 | Windows: FP16 on DirectML (the macOS FP16 graph, 0.72 s against 0.94 s at 45.4 MP now; 0.044 s against 0.090 s for the GPU part of a tile; 70.0 to 72.8 dB against FP32 at +2 EV) in place of FP32. If yes: one FP16 graph for both platforms in the model package, the output check of DN10 also on Windows, and DN3 keeps the tiles in DirectML memory to get the GPU gain. Closed 2026-11-22: the user agreed; D2, DN2, DN3 changed | DN1 addition, FP16 on DirectML | User |
 
 ### 1.4 Options that must not return
 
 - A separate DNG file for the denoised image.
 - A background denoise job that runs while the user edits.
 - A stored result file beside the RAW file.
-- A render without noise reduction when the noise reduction is on and the stored result is absent,
-  in the editor or in the export.
-- A different model, a lower resolution, or a different backend after a failure of the denoise
-  run. The run reports the error.
+- A render without noise reduction when the noise reduction is on and the model cannot run, in
+  the editor or in the export.
+- A different model, a lower resolution, FP32, or a different backend after a failure of the
+  model run. The render reports the error.
+- The model in the Rust sidecar (`alcedo_mind`).
 
 ## 2. Product design specification
 
@@ -80,77 +85,50 @@ Develop stage reads the stored result in place of its own linearization and demo
 - The RAW Decode panel gets one switch, `AI Denoise`, above the demosaic method.
 - The switch is visible when the platform has a forward phase (D13) and the photo is a Bayer
   RAW file. On Windows, the switch does not depend on the render backend (CUDA or OpenCL): the
-  model runs on DirectML. For an X-Trans or a monochrome photo, the switch is disabled and its tooltip states
-  that the sensor type is not supported.
+  model runs on DirectML. For an X-Trans or a monochrome photo, the switch is disabled and its
+  tooltip states that the sensor type is not supported.
 - When the switch is on, the demosaic method control is disabled, because the model also does the
   demosaic.
 - When the user turns the switch on and the model is not installed, the editor opens the AI Models
   page of the settings, as the AI Mask tool does. The switch stays off.
-- When the user turns the switch on and the stored result is absent, the application shows the
-  blocking progress display (2.3). After the run, the edit history gets one `SetParameter` change
-  and the viewport shows the result. When the user cancels, the switch stays off and the history
-  does not change.
-- When the user turns the switch on and a valid stored result exists, the history gets the change
-  immediately.
-- When the user opens a photo whose noise reduction is on and whose stored result is absent, the
-  editor shows the blocking progress display before the first frame. When the user cancels, the
-  editor closes the photo and returns to the library.
+- When the user turns the switch on, the edit history gets one `SetParameter` change with the
+  installed model version (D10), and the next frame renders with the model. The viewport shows
+  its normal render state during the run of the model.
+- When the user opens a photo whose noise reduction is on and the model is not installed, the
+  editor shows the render error with a control that opens the AI Models page (D12).
+- When the installed model version differs from the version in the parameter, the RAW Decode
+  panel states it under the switch.
 
-### 2.2 Library and batch
+### 2.2 Library, paste, and export
 
 - The library inspector actions get `AI Denoise`. It uses the targets of
-  `LibraryMutationOperations::ResolveTargets`.
-- A batch run processes one photo at a time on the GPU. It turns the noise reduction on in a new
-  Version of each photo that completes.
-- The result list of a batch gives one status for each photo: complete, not supported, RAW file
-  missing, model version different, failed with the error text, canceled.
-- A paste of the RAW Decode item with the noise reduction on starts the same batch run for the
-  targets that have no stored result.
-- The export computes an absent stored result as part of the export task of that photo.
+  `LibraryMutationOperations::ResolveTargets` and turns the noise reduction on in a new Version
+  of each Bayer photo. It runs no model. A photo that is not Bayer is reported (D14).
+- A paste of the RAW Decode item with the noise reduction on sets the parameter as each other
+  paste; it runs no model.
+- The export renders each photo with the model when its noise reduction is on. A photo whose
+  model run fails gets the error of that photo in the export queue; the other photos continue.
 
-### 2.3 Blocking progress display
+### 2.3 Model session
 
-- It uses the shell of `ImportProgressOverlay.qml`: `BlurredOverlay`, a progress ring, a text line,
-  and a Cancel control.
-- One photo: the progress is the fraction of completed tiles.
-- A batch: the progress is the fraction of completed photos plus the tile fraction of the current
-  photo. The text gives the file name, the index, and the remaining time. The remaining time comes
-  from the measured time of the completed photos.
-- Cancel takes effect between two tiles. A canceled photo leaves no file in the folder.
+- One process-wide owner holds the ONNX Runtime session of UtNet2 (DN6). The editor render and
+  the export use it one run at a time.
+- The owner creates the session at the first run and keeps it while the editor has a photo open
+  or an export runs. It releases the session when the editor closes and when the editor GPU
+  release holder releases the editor resources (export, semantic generation).
+- The first run of a session includes its creation (Windows: 0.07 to 0.53 s; macOS: 0.28 to
+  0.46 s for each tile shape, DN1 additions).
 
-### 2.4 Stored result file
-
-- Identity: the `SourceFile` fingerprint (XXH3-128 of the size and of the first and last 128 KB)
-  and the byte size of the RAW file. The file name is made from these two values. The file does not
-  depend on a project, so two projects that contain the same RAW file use one stored result.
-- Header fields: format version, RAW fingerprint and byte size, SHA-256 of the weights, input
-  preparation version, image width and height, active area, CFA phase, value domain, gain match
-  factor.
-- A file whose RAW identity, format version, or input preparation version does not agree is not
-  used. The application states the reason. A file of a different weights SHA-256 is valid (D10).
-- The writer writes to a temporary name in the same folder and then renames the file.
-- The pixel format and the compression are decision U2.
-
-### 2.5 Settings
-
-- A new section in the Cache page: the folder of the stored results (with a folder picker), the
-  file count, the total size, and `Delete all`.
-- A change of the folder moves no file. The settings text states the old folder so that the user
-  can move the files.
-- Before a deletion, when the installed model version differs from the version of a file, the
-  dialog states that a new result can differ from the deleted one.
-
-### 2.6 Failure behavior
+### 2.4 Failure behavior
 
 | Failure | Result |
 | --- | --- |
-| Model not installed | The AI Models page opens; no run starts |
-| Sensor type not supported | Error for that photo; no stored result |
-| RAW file missing or its mount offline | Error for that photo; the export keeps its existing "missing" status |
-| GPU error or not enough GPU memory for the smallest tile | The run stops with the GPU error text; no stored result |
-| No Direct3D 12 GPU, or ONNX Runtime or DirectML.dll fails to load | The run stops with the error text of ONNX Runtime; no stored result. The application does not run the model on the CPU |
-| Folder not writable or disk full | The run stops with the file system error text; the temporary file is removed |
-| Stored result does not agree with the RAW identity | The file is not used; the reason is shown; the result is computed again on the next editor entry or export |
+| Model not installed | Switch: the AI Models page opens, the switch stays off. Render of a photo with the parameter on: the render error with a control to the AI Models page |
+| Sensor type not supported | The switch is disabled; a library action reports the photo |
+| RAW file missing or its mount offline | The existing "missing" behavior of the editor and the export |
+| GPU or Neural Engine error, or not enough memory for the smallest tile | The render error with the error text of ONNX Runtime |
+| No Direct3D 12 GPU, or ONNX Runtime or DirectML.dll fails to load | The switch is hidden; a render of a photo with the parameter on reports the ONNX Runtime error. The application does not run the model on the CPU |
+| A value that is not finite in an output tile (FP16 overflow) | The render error that names the tile; the lab calibrates again (section 8) |
 
 ## 3. Scope
 
@@ -158,13 +136,12 @@ Develop stage reads the stored result in place of its own linearization and demo
 
 | Module | Responsibility in this plan |
 | --- | --- |
-| alcedo-denoise-lab | Weights export, ONNX graph export, expected outputs, measurements, `docs/alcedo_integration.md` |
+| alcedo-denoise-lab | Weights export, FP16 rescale calibration and ONNX graph export, expected outputs, measurements, `docs/alcedo_integration.md` |
 | `cmake`, `ui/alcedo_main/CMakeLists.txt` | The ONNX Runtime packages as a C++ dependency (DirectML on Windows, the osx-arm64 library on macOS), and their install rules |
-| `decoders/processor/nn` | The ONNX Runtime session of UtNet2, the overlap tile planner |
-| `app` (new denoise service) | The denoise run of one photo and of a batch, the stored result reader and writer |
-| `edit/input`, `edit/graph`, `edit/runtime` | The Develop parameter, the denoised input kind, the pass list, the content keys |
-| `ui/alcedo_main` | The switch, the blocking progress display, the library action, the settings section |
-| `decoders/processor/nn` (macOS) | The Core ML session of UtNet2 (DN10) |
+| `decoders/processor/nn` | The ONNX Runtime sessions of UtNet2 (DirectML, Core ML), the overlap tile planner, the tile loop |
+| `edit/input` | The model run in the loader, the process-wide session owner, the denoised entry of the prepared source cache |
+| `edit/graph`, `edit/runtime` | The Develop parameter, the denoised input kind, the pass list, the content keys |
+| `ui/alcedo_main` | The switch, the render error with the AI Models control, the library action, the GPU release of the session |
 | `opencl` | The forward code of Linux (DN11) |
 | `app/ai_model_package_*`, `scripts/ai_models` | The feed with more than one package, the denoise model package |
 | `ui/alcedo_main/automation` | The `denoise` commands of `alcedo-cli` |
@@ -184,15 +161,15 @@ Paths are relative to `alcedo_studio/src` unless they start with `docs/`, `scrip
 | Area | Current owner and path | Current behavior | Required change |
 | --- | --- | --- | --- |
 | Develop passes | `CompileDevelopPasses`, `edit/runtime/graph_compiler.cpp:427` | CFA input: UploadRaw, Linearize, CfaClamp, Demosaic, HighlightRecover, InverseCamMulPack, Lens, GeometryResample, CameraToAp1. RGB input (`RawInputKind::DebayeredRgb`): UploadRgb, Lens, GeometryResample, CameraToAp1 | A pass list for the denoised input kind that keeps HighlightRecover |
-| Linearization | `edit/runtime/cuda/cuda_develop_pass.cpp:102`, `decoders/processor/operators/gpu/cuda_white_balance.cu:114` | Black level, white level, and the relative as-shot white balance are applied before the demosaic. `InverseCamMulPack` removes the white balance after the highlight recovery | The stored result enters after the demosaic in the same value domain |
+| Linearization | `edit/runtime/cuda/cuda_develop_pass.cpp:102`, `decoders/processor/operators/gpu/cuda_white_balance.cu:114` | Black level, white level, and the relative as-shot white balance are applied before the demosaic. `InverseCamMulPack` removes the white balance after the highlight recovery | The model output enters after the demosaic in the same value domain |
 | Highlight recovery | `decoders/processor/operators/gpu/cuda_highlight_reconstruct.cu` | Works on demosaiced RGB with white balance, normalized to the white level. The clip levels come from `cam_mul`. It reads no mosaic and no clip mask | None, if U4 shows that clipped areas of the model output stay at the clip level |
 | RGB input without linearization | `RawInputLoader::FromDirectRgb`, `edit/input/raw_input_loader.cpp:628`; `cuda_sensor_demosaic.cpp:279` | `rgb_linearization` is empty, so the highlight recovery is off | The denoised input sets `rgb_linearization` from the RAW metadata |
 | Decode resolution | `renderer/pipeline_scheduler.cpp:154`, `include/edit/runtime/develop_demosaic.hpp:26` | Editor and export decode at `DecodeRes::FULL`. Thumbnails and semantic input images reduce the mosaic on the host and force the Legacy demosaic | None for D12 |
 | Develop node | `edit/graph/develop_node_model.cpp:591-598`, `include/edit/graph/develop_node_model.hpp:171` | Root node, no input port. `DevelopPayload::demosaic_method` holds `default`, `legacy`, or `neural_engine` | One new field; no port |
 | Root id | `ComputeRootId`, `edit/history/pipeline_document_checkpoint.cpp:105` | The id is a hash of the document JSON. A new JSON key in every document changes the id of old roots | Write the new key only when the noise reduction is on |
-| Content keys | `BuildFrameResultContentKeys`, `edit/runtime/result_content_key.cpp:548` | `develop.sensor_linear` is keyed on the prepared source, the linearization, and the sensor Develop parameters | Add the identity of the stored result |
-| Prepared source cache | `include/edit/input/prepared_source_cache.hpp` | Key: FNV hash of the encoded bytes, byte count, downsample passes, `kRawInputPreparationVersion` | Add the denoised input as its own entry kind |
-| GPU release | `include/ui/alcedo_main/album_backend/editor_gpu_resource_release.hpp`, `PipelineExecutor::ReleaseBinding` | Export and semantic generation release the GPU resources of the editor before they run | A holder for the denoise run |
+| Content keys | `BuildFrameResultContentKeys`, `edit/runtime/result_content_key.cpp:548` | `develop.sensor_linear` is keyed on the prepared source, the linearization, and the sensor Develop parameters | Add the noise reduction parameter and the installed model version |
+| Prepared source cache | `include/edit/input/prepared_source_cache.hpp` | Key: FNV hash of the encoded bytes, byte count, downsample passes, `kRawInputPreparationVersion` | Add the denoised input as its own entry kind (key: the source key, the model version, the input preparation version). A 45.4 MP entry holds 545 MB in FP32 |
+| GPU release | `include/ui/alcedo_main/album_backend/editor_gpu_resource_release.hpp`, `PipelineExecutor::ReleaseBinding` | Export and semantic generation release the GPU resources of the editor before they run | The release also releases the model session (2.3); the export creates it again for its own renders |
 | ONNX Runtime | `rust/puerh_mind/Cargo.toml:25-33` (`ort` 2.0.0-rc.13, ONNX Runtime 1.28); `ui/alcedo_main/CMakeLists.txt:1237` | Only the Rust sidecar uses ONNX Runtime. The pyke binaries link ONNX Runtime statically into `alcedo_mind.exe` (`onnxruntime.lib`, no DLL, no headers). The sidecar build copies DirectML.dll 1.15.4 beside `alcedo_main`. The vcpkg port of the tree (`vcpkg/ports/onnxruntime`, 1.23.2) has no DirectML feature, and the manifest does not use it | A C++ dependency on the NuGet packages `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4 (onnxruntime.dll and the C and C++ headers) and `Microsoft.AI.DirectML` 1.15.4 (DN2). The sidecar keeps its static ONNX Runtime; one DirectML.dll of one version is in the install folder. macOS (DN10): `libonnxruntime.dylib` of the osx-arm64 folder of `Microsoft.ML.OnnxRuntime` 1.24.4 (CPU, Core ML, and WebGPU execution providers), the same headers as on Windows. The macOS sidecar `alcedo_mind` also links ONNX Runtime 1.28 statically (no dylib in the bundle), in its own process |
 | CUDA conv layers | `cuda/nn/conv2d.cu:671-753`, `cuda/nn/cutlass_conv2d.cu:31-105` | Fast kernels for convolutions without padding only. Max pooling, LeakyReLU, and PixelShuffle are absent | None on Windows (D2). Input for an own forward code of DN11 |
 | Tile planner | `include/decoders/processor/neural_tile_jobs.hpp:190-331` | Planned for a network that shrinks its input: 1086 in, 1024 out, no overlap between outputs | A planner for an output of the input size with an overlap |
@@ -200,9 +177,8 @@ Paths are relative to `alcedo_studio/src` unless they start with `docs/`, `scrip
 | Tests of model code | `alcedo_studio/tests/cuda/CMakeLists.txt:14`, target `MlOpsTest` | CUDA layer and module tests with stored expected outputs | A new test target for the ONNX Runtime session (Windows only) |
 | Timing tools | `alcedo_studio/deprecated/legacy_pipeline/tests/perf/` | No CMake target builds them | A new timing tool target for UtNet2 |
 | Model packages | `app/ai_model_package_service.cpp:40`, `scripts/ai_models/prepare_ai_model_packages.py:90` | One known package. The script makes a feed with one entry, so a second package replaces the first | A feed with all packages |
-| Blocking UI | `ui/alcedo_main/qml/ImportProgressOverlay.qml`, `BlurredOverlay.qml` | Blocking overlay with progress and Cancel for the import | A denoise overlay on the same shell |
-| Paste | `ui/alcedo_main/album_backend/adjustment_transfer_apply_coordinator.cpp:73` | A paste writes a Version for each target and starts no computation | Start the batch run after the paste |
-| Files beside RAW files | `decoders/metadata_decoder.cpp:41` | The application reads XMP files and writes no file into a photo folder | None (D7) |
+| Paste | `ui/alcedo_main/album_backend/adjustment_transfer_apply_coordinator.cpp:73` | A paste writes a Version for each target and starts no computation | None: the paste sets the parameter (D5) |
+| Files beside RAW files | `decoders/metadata_decoder.cpp:41` | The application reads XMP files and writes no file into a photo folder | None (D6) |
 | Noise reduction | none | The editor has no noise reduction operator and no Detail panel | New |
 
 ## 5. Target architecture
@@ -211,41 +187,42 @@ Paths are relative to `alcedo_studio/src` unless they start with `docs/`, `scrip
 
 | Owner | Input | Output | Changes | Error surface |
 | --- | --- | --- | --- | --- |
-| `UtNet2DirectMlSession` (proposed, Windows) | One packed tile in host memory, the ONNX graph | One RGB tile in host memory | Its ONNX Runtime session and the DirectML memory arena of the session | Exception with the ONNX Runtime status text |
-| `UtNet2CoreMlSession` (proposed, macOS, DN10) | One packed tile in host memory, the FP16 ONNX graph | One RGB tile in host memory (float32, times `output_scale`) | Its ONNX Runtime sessions (one for each tile shape) and the Core ML models that they compile for the Neural Engine | Exception with the ONNX Runtime status text, or with the tile of a value that is not finite |
-| `DenoiseRunService` (proposed, `app`) | RAW path or encoded bytes, cancel request | A stored result file, progress events | The folder of the stored results | Result value with a status and an error text for each photo |
-| `DenoiseResultStore` (proposed, `app`) | RAW identity | Read handle, write handle, folder statistics | Files in the folder | File system error; header validation reason |
-| `RawInputLoader` (current) | RAW bytes, the Develop parameter, the store | `PreparedRawInput` of the denoised kind | Nothing outside its result | Exception when the parameter is on and the stored result is absent or invalid |
+| `UtNet2DirectMlSession` (proposed, Windows, DN2) | One packed tile, the FP16 ONNX graph | One RGB tile (float32, times `output_scale`) | Its ONNX Runtime session and the DirectML memory arena of the session | Exception with the ONNX Runtime status text, or with the tile of a value that is not finite |
+| `UtNet2CoreMlSession` (proposed, macOS, DN10) | One packed tile, the FP16 ONNX graph | One RGB tile (float32, times `output_scale`) | Its ONNX Runtime sessions (one for each tile shape) and the Core ML models that they compile for the Neural Engine | The same |
+| `DenoiseModelSession` (proposed, `edit/input`, DN6) | A packed mosaic, the installed FP16 graph | The gain-matched RGB image of the mosaic | The platform session; one run at a time for the editor and the export | Exception that the render reports |
+| `RawInputLoader` (current) | RAW bytes, the Develop parameter | `PreparedRawInput` of the denoised kind, through the prepared source cache | The denoised entry of the prepared source cache | Exception when the parameter is on and the model cannot run |
 | Develop passes (current) | `PreparedRawInput` | `develop.sensor_linear` | GPU textures of the frame | Existing render error path |
 
-The render path never starts a denoise run. The editor entry, the switch, the batch action, and
-the export start it before they request a frame. This keeps the rule of D12 in one place: a
-render with the noise reduction on and no valid stored result is an error.
+The model runs only in the loader, for a render at the full size. A render with the noise
+reduction on and a model that cannot run is an error (D12); no other code path starts a model
+run.
 
 ### 5.2 Data flow
 
 ```text
-Denoise run (one photo):
-  UI or export -> DenoiseRunService::Run(photo)
-    -> EditorGpuReleaseHolder (denoise) releases the editor GPU resources
-    -> LibRaw unpack -> ClassifyRawInput -> reject a sensor that is not Bayer
-    -> input preparation of the lab specification -> packed mosaic in host memory
-    -> UtNet2DirectMlSession: one session with free height and width (DN1 addition, DirectML)
-    -> for each tile: host input tile (reflection fill to 16) -> Ort::Session::Run on DirectML
-       -> crop the overlap into the host output
-       -> accumulate the sums of the gain match -> progress event -> check the cancel request
-    -> release the session (its memory arena holds up to 3.3 GiB)
-    -> apply the gain match factor -> DenoiseResultStore::Write (temporary file, rename)
-
-Render with the noise reduction on:
+Render with the noise reduction on (editor or export, DecodeRes::FULL):
   RawInputLoader::LoadEncoded
-    -> LibRaw open -> linearization metadata and cam_mul
-    -> DenoiseResultStore::Read(identity) -> validate the header
+    -> PreparedSourceCache lookup (source key, model version, preparation version)
+    -> on a miss:
+       -> LibRaw unpack -> ClassifyRawInput -> reject a sensor that is not Bayer
+       -> input preparation of the lab specification -> packed mosaic in host memory
+       -> DenoiseModelSession::Run(packed mosaic)
+          -> the platform session (created at the first run; DirectML on Windows, Core ML on
+             the Neural Engine on macOS), the DN3 tile loop with the overlap planner
+          -> for each tile: input tile in float16 -> Run -> output check -> crop into the output
+             -> accumulate the sums of the gain match
+          -> apply the gain match factor
+       -> insert the denoised entry into the prepared source cache
+    -> LibRaw metadata: linearization and cam_mul
     -> PreparedRawInput { kind = denoised RGB, rgb_linearization = set }
   CompileDevelopPasses
     -> UploadRgb (to the value domain of the highlight recovery) -> HighlightRecover
     -> InverseCamMulPack -> Lens -> GeometryResample -> CameraToAp1
-```
+
+Thumbnail or semantic input image (reduced mosaic): the current Legacy path, no model (D12).
+
+Editor close, or EditorGpuReleaseHolder (export, semantic generation):
+  -> DenoiseModelSession::Release -> the platform session ends and frees its memory
 
 ### 5.3 Model facts
 
@@ -271,26 +248,26 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | DN0 | Weights file, expected outputs, input and output specification | lab | none | 600 to 900 | complete (#1032) |
-| DN1 | Measurements: tile overlap, PyTorch time, clipped areas, stored formats | lab | DN0 | 700 to 1100 | complete (#1033) |
-| DN2 | ONNX graph in the lab release; ONNX Runtime DirectML as a C++ dependency; the session of UtNet2 with its tests | lab, `cmake`, `decoders/processor/nn` | DN0 | 700 to 1100 | planned |
-| DN3 | Overlap tile planner, full photo run on DirectML, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 800 to 1200 | planned |
-| DN4 | Stored result reader and writer, folder setting, statistics | `app` | U2 | 900 to 1400 | planned |
-| DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | DN4, U4 | 1200 to 1800 | planned |
-| DN6 | Denoise run service: preparation, tiles, gain match, cancel, GPU release, errors | `app` | DN3, DN4 | 1000 to 1500 | planned |
-| DN7 | Editor switch, blocking progress display, missing model path | `ui/alcedo_main` | DN5, DN6 | 800 to 1300 | planned |
-| DN8 | Batch action, paste, export, deletion with the RAW file | `ui/alcedo_main`, `app` | DN7 | 1000 to 1600 | planned |
-| DN9 | Settings section for the stored results | `ui/alcedo_main` | DN4 | 400 to 700 | planned |
-| DN10 | macOS forward code: the FP16 calibration and graph (lab), the Core ML session of UtNet2 on the Neural Engine in ONNX Runtime (C++), the osx-arm64 library | lab, `cmake`, `decoders/processor/nn` | DN3 | 800 to 1300 | planned |
-| DN11 | Linux forward code (OpenCL) | `opencl` | DN3 | 1400 to 1900 | planned |
+| DN1 | Measurements: tile overlap, PyTorch time, clipped areas, stored formats, ONNX Runtime on DirectML and macOS, FP16 | lab | DN0 | 700 to 1100 | complete (#1033) |
+| DN2 | FP16 rescale calibration and FP16 ONNX graph in the lab release; ONNX Runtime DirectML as a C++ dependency; the DirectML session of UtNet2 with its tests | lab, `cmake`, `decoders/processor/nn` | DN0 | 900 to 1400 | planned |
+| DN3 | Overlap tile planner, tile loop with float16 tiles, full photo run on DirectML, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 800 to 1200 | planned |
+| DN4 | Removed on 2026-11-22 (was: the stored result reader and writer) | | | | removed |
+| DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | U4 | 1000 to 1500 | planned |
+| DN6 | Model run in the loader: `DenoiseModelSession`, input preparation, gain match, the denoised entry of the prepared source cache, GPU release, errors | `edit/input`, `decoders/processor/nn` | DN3, DN5 | 800 to 1300 | planned |
+| DN7 | Editor switch, render error with the AI Models control, model version notice | `ui/alcedo_main` | DN6 | 500 to 900 | planned |
+| DN8 | Library action and export errors | `ui/alcedo_main` | DN7 | 300 to 600 | planned |
+| DN9 | Removed on 2026-11-22 (was: the settings section for the stored results) | | | | removed |
+| DN10 | macOS forward code: the Core ML session of UtNet2 on the Neural Engine in ONNX Runtime (C++), the osx-arm64 library | `cmake`, `decoders/processor/nn` | DN3 | 600 to 1000 | planned |
+| DN11 | Linux forward code | `opencl` or ONNX Runtime WebGPU | DN3 | 1400 to 1900 | planned |
 | DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | planned |
-| DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 500 to 900 | planned |
+| DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | planned |
 
-DN0 to DN3 have detailed sections below. DN4 to DN13 depend on U1 to U4. Each gets its detailed
-section in this file before its implementation starts, with the format of DN0 to DN3. DN4 and
-DN5 can start before DN3 completes: a script of the lab writes stored result files from PyTorch,
-so the Develop integration can be checked by eye before the DirectML tile loop of DN3 exists.
+DN0 to DN3 have detailed sections below. DN5 to DN13 depend on U1 and U4. Each gets its
+detailed section in this file before its implementation starts, with the format of DN0 to DN3.
+DN5 can start before DN3 completes: its tests build the denoised prepared input from the DN0
+expected outputs, so the Develop integration can be checked before the tile loop exists.
 
-Until DN12, a developer copies the ONNX graph file by hand into
+Until DN12, a developer copies the FP16 ONNX graph file by hand into
 `<model folder>/ai-denoise-v1/`. The model folder is the QSettings value
 `semantic/modelDirectory`.
 
@@ -613,9 +590,9 @@ $P scripts/export/measure_stored_formats.py $A
 `measurement_common.py`, 446 lines), plus 4 result JSON files (310 KB). Above the estimate of
 700 to 1100 lines because of the shared module and the extra format rows.
 
-**Remaining gaps:** step 5 (`write_stored_result.py`) after U2. Not measured: the forward code of
-Alcedo Studio (DN3), the highlight recovery on the stored result by eye (DN5), stored formats in
-C++.
+**Remaining gaps:** step 5 (`write_stored_result.py`) after U2; dropped on 2026-11-22 with the
+stored result file (D6). Not measured: the forward code of Alcedo Studio (DN3), the highlight
+recovery on the model output by eye (DN5).
 
 ##### Phase DN1 addition (2026-11-22): last tile, cuDNN algorithms, TF32
 
@@ -737,7 +714,9 @@ seconds (peak footprint at 45.4 MP):
   both graph files.
 - **Against DemosaicNet on the same M4:** the Metal DemosaicNet student takes 377 ms on the 24 MP
   Bayer photo of the Lumix S5M2 (`metal_nn_forward_demosaicnet_plan.md`). 1.83 s on 24.3 MP is 4.9
-  times (Windows: 1.9 times). A stored result (D6) is necessary on macOS.
+  times (Windows: 1.9 times). At this FP32 time a stored result was necessary on macOS; the
+  FP16 addition below brings the time to the DemosaicNet time, and the user removed the stored
+  result on 2026-11-22 (D6).
 - **Session start:** Core ML session creation 0.09 to 0.50 s, first run of a tile of 1536 0.49 to
   0.79 s. WebGPU compiles its shaders in the first run (1.35 to 1.73 s).
 - **Memory after the release:** in one process, the footprint after the release of the `free`
@@ -815,23 +794,25 @@ The user asked about FP16 on Windows too. Lab commit `d98a14f`; lab entry `infer
   one of them in FP32 before any run; the cause is open.
 - **Effect:** decision U6 (section 1.3).
 
-### DN2: ONNX graph, ONNX Runtime DirectML dependency, UtNet2 session
+### DN2: FP16 graph, ONNX Runtime DirectML dependency, UtNet2 session
 
-Rewritten on 2026-11-22 for D2 (ONNX Runtime DirectML in C++). The plan of own CUDA layers of
-UtNet2 is replaced; the DN1 addition of the last tile states the cuDNN level that those layers
-needed.
+Rewritten on 2026-11-22 for D2 (ONNX Runtime DirectML in C++), then for FP16 (U5, U6). The plan
+of own CUDA layers of UtNet2 is replaced; the DN1 addition of the last tile states the cuDNN
+level that those layers needed.
 
 **Objective and deliverables**
 
-- In the lab: `scripts/export/export_onnx.py` and the ONNX graph as a release asset beside the
-  safetensors weights, with its SHA-256 and the metadata of the weights file. The FP16 graph of
-  macOS comes later, with the lab work of DN10.
+- In the lab: the FP16 rescale calibration on many photos, the FP16 ONNX graph as a release
+  asset beside the safetensors weights (with its SHA-256, `output_scale`, the calibration record,
+  and the metadata of the weights file), and sheets of the FP16 and the FP32 output for a check
+  by eye by the user. This graph is the model of Windows and macOS (D2).
 - In Alcedo Studio: ONNX Runtime with DirectML as a C++ dependency on Windows, one session of
-  UtNet2 that runs one tile, and its tests against the DN0 expected outputs.
+  UtNet2 that runs one tile of the FP16 graph, and its tests against the DN0 expected outputs.
 
 **Inputs and prerequisites**
 
-DN0. The DN1 addition of 2026-11-22 (ONNX Runtime DirectML). `build/debug` configured.
+DN0. The DN1 additions of 2026-11-22 (ONNX Runtime DirectML, FP16 on the Neural Engine, FP16 on
+DirectML). `build/debug` configured.
 
 **Modules, files, and APIs**
 
@@ -839,8 +820,9 @@ Lab:
 
 | File | Responsibility |
 | --- | --- |
-| `scripts/export/export_onnx.py` (proposed) | The export function of `measure_onnx_directml.py` as its own script: opset 17, TorchScript exporter, input `input` (1, 4, height, width), output `output` (1, 3, 2 height, 2 width), height and width free. The ONNX metadata (`metadata_props`) gets `architecture`, `leaky_relu_slope`, `input_preparation_version`, and the SHA-256 of the safetensors weights. Check: the CPU execution provider gives the PyTorch output of the three DN0 inputs within 1e-5 of the largest value |
-| `measure_onnx_directml.py` | Imports the export function of `export_onnx.py` |
+| `scripts/export/export_onnx.py` (proposed) | The FP32 graph (the export function of `measure_onnx_directml.py`), the reference of the FP16 graph in the lab |
+| `scripts/export/export_fp16_onnx.py` (proposed) | From `macos/write_fp16_graph.py`: the rescale calibrated on all evaluation photos and on crops of the RawNIND test split, with a target that keeps a margin of 8 times or more to 65,504 on the photos outside the calibration (`check_fp16_range.py`); the FP16 graph with float16 input `input` (1, 4, h, w) and output `output` (1, 3, 2h, 2w), height and width free; `metadata_props`: `architecture`, `leaky_relu_slope`, `input_preparation_version`, the SHA-256 of the safetensors weights, `precision` = `float16`, `output_scale`, the calibration photo list and the smallest margin |
+| `scripts/export/make_fp16_sheets.py` (proposed) | +2 EV and +5 EV sheets of the FP16 and the FP32 output of the evaluation photos (whole image, dark crops, detail crops), for the check by eye |
 
 Alcedo Studio (headers under `include/decoders/processor/nn/`, sources under
 `decoders/processor/nn/`):
@@ -848,29 +830,31 @@ Alcedo Studio (headers under `include/decoders/processor/nn/`, sources under
 | File (proposed) | Responsibility |
 | --- | --- |
 | `cmake/OnnxRuntimeDirectMl.cmake` | Downloads the NuGet packages `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4 and `Microsoft.AI.DirectML` 1.15.4 at configure time with `file(DOWNLOAD ... EXPECTED_HASH SHA256=...)` into the build tree, extracts them, and defines the imported target `alcedo::onnxruntime_directml` (headers, `onnxruntime.lib`, `onnxruntime.dll`). Windows x64 only |
-| `ui/alcedo_main/CMakeLists.txt` | Copies `onnxruntime.dll` and `onnxruntime_providers_shared.dll` beside `alcedo_main` in the build and the install. DirectML.dll comes from the DirectML package; the build fails when the DirectML.dll that the sidecar build copies has a different file version |
-| `utnet2_specs.hpp` | Input and output names, the alignment of 16, the tile sizes of DN1, the metadata keys and values that the session checks |
-| `utnet2_directml_session.hpp`, `utnet2_directml_session.cpp` | `UtNet2DirectMlSession`: one `Ort::Env` for the process, one session with free height and width on the DirectML adapter of high performance, memory arena on, CPU fallback refused (`session.disable_cpu_ep_fallback`), graph optimization level all, `ORT_SEQUENTIAL`, memory pattern off. `Run(tile)`: host input (1, 4, h, w) to host output (1, 3, 2h, 2w). `Release()` ends the session and frees its memory arena |
+| `ui/alcedo_main/CMakeLists.txt` | Copies `onnxruntime.dll` and `onnxruntime_providers_shared.dll` beside `alcedo_main` in the build and the install. DirectML.dll comes from the DirectML package; the build fails when the DirectML.dll that the AI Mask sidecar build copies has a different file version |
+| `utnet2_specs.hpp` | Input and output names, the alignment of 16, the tile sizes, the metadata keys and values that the sessions check |
+| `utnet2_directml_session.hpp`, `utnet2_directml_session.cpp` | `UtNet2DirectMlSession`: one `Ort::Env` for the process, one session with free height and width on the DirectML adapter of high performance, memory arena on, CPU fallback refused (`session.disable_cpu_ep_fallback`), graph optimization level all, `ORT_SEQUENTIAL`, memory pattern off. `Run(tile)`: float32 host input (4, h, w) converted to float16, the float16 output (3, 2h, 2w) checked for values that are not finite and converted to float32 times `output_scale` (F16C). `Release()` ends the session and frees its memory arena |
 
 **Data rules**
 
-- FP32 only (Windows; the FP16 graph of macOS is DN10).
+- FP16 graph, float16 input and output; the conversion and the scale on the host.
 - The session fails at load when the graph file is absent, when a metadata value differs from
-  `utnet2_specs.hpp`, or when a node cannot run on DirectML. The error text names the file and
-  the first difference.
-- `Run` throws `std::runtime_error` with the ONNX Runtime status text and the tile shape. It
-  throws for a height or a width that is not a multiple of 16.
-- The session is not used on the CPU execution provider in the application (2.6). The CPU
-  execution provider is used only in the export check of the lab.
+  `utnet2_specs.hpp` (`precision` included), or when a node cannot run on DirectML. The error text
+  names the file and the first difference.
+- `Run` throws `std::runtime_error` with the ONNX Runtime status text and the tile shape, for a
+  height or a width that is not a multiple of 16, and for an output value that is not finite
+  (with the tile rectangle).
+- The session is not used on the CPU execution provider in the application (2.4).
 - Only `decoders/processor/nn` includes ONNX Runtime headers. The ONNX Runtime types do not appear
   in a public header of another module.
-- The Rust sidecar keeps its own static ONNX Runtime 1.28. The application has one
-  `onnxruntime.dll` (1.24.4) and one DirectML.dll (1.15.4).
+- The application has one `onnxruntime.dll` (1.24.4) and one DirectML.dll (1.15.4). The AI Mask
+  sidecar keeps its own static ONNX Runtime 1.28 in its process; it has no part in the noise
+  reduction.
 
 **Implementation steps**
 
-1. Lab: write `export_onnx.py`, add the ONNX graph and its SHA-256 to the release asset of DN0
-   and to the README of `scripts/export/`.
+1. Lab: write `export_onnx.py`, `export_fp16_onnx.py` (calibration, margin check, graph), and
+   `make_fp16_sheets.py`. Add the FP16 graph and its SHA-256 to the release asset of DN0 and to
+   the README of `scripts/export/`. Give the sheets to the user; a visible difference stops DN2.
 2. Write `cmake/OnnxRuntimeDirectMl.cmake` and the install rules. Check the install folder: one
    `onnxruntime.dll`, one DirectML.dll, and the AI Mask sidecar still starts with its DirectML
    session.
@@ -885,27 +869,31 @@ Alcedo Studio (headers under `include/decoders/processor/nn/`, sources under
 ```text
 test -> UtNet2DirectMlSession(graph path)
      -> Ort::Env -> SessionOptions (DirectML adapter, arena on, no CPU fallback)
-     -> Ort::Session (graph metadata checked)
-     -> Run(host tile) -> Ort::Session::Run on DirectML -> host output
+     -> Ort::Session (graph metadata checked: architecture, precision, output_scale)
+     -> Run(host tile) -> float16 input -> Ort::Session::Run on DirectML
+     -> float16 output check -> float32 times output_scale -> host output
      -> compare with the DN0 expected output
 ```
 
 **Primary failure call chain**
 
 ```text
-graph with another architecture or a node that DirectML cannot run
+graph with another architecture, an FP32 graph, or a node that DirectML cannot run
   -> the session constructor throws std::runtime_error with the file path and the reason
   -> no tile runs; the caller reports the error
+output tile with an infinite value
+  -> Run throws std::runtime_error with the tile rectangle; the caller reports the error
 ```
 
 **Tests** (`UtNet2DirectMlTest`)
 
 | Test | Assertion |
 | --- | --- |
-| `OutputMatchesPyTorchForEachExpectedOutput` | `random_64`, `random_256`, and `rawnind_crop_512` within 1e-5 of the largest expected value |
+| `OutputMatchesPyTorchForEachExpectedOutput` | `random_64`, `random_256`, and `rawnind_crop_512` within 5e-3 of the largest expected value (DN1: 2.4e-3 to 4.6e-3 on DirectML; the tolerance is set again from the calibrated graph) |
 | `LoadFailsOnDifferentArchitectureMetadata` | A copy of the graph with a different `architecture` value gives an error that names the key |
 | `LoadFailsOnMissingFile` | The error names the path |
 | `RunRejectsSizeThatIsNotAMultipleOfSixteen` | A 4 x 72 x 64 input throws; no output |
+| `RunThrowsOnAnOutputThatIsNotFinite` | An input of 6e4 in each value overflows FP16; `Run` throws with the tile rectangle |
 | `ReleaseFreesTheSessionAndALaterRunLoadsAgain` | After `Release`, `Run` loads the session again and gives the same output |
 
 **Build and run commands**
@@ -919,24 +907,27 @@ ctest --test-dir build/debug -R "UtNet2DirectMlTest" -j 1 --output-on-failure
 
 **Exit criteria**
 
-- [ ] The ONNX graph is in the lab release with its SHA-256.
-- [ ] The five tests pass in `build/debug`.
+- [ ] The FP16 graph is in the lab release with its SHA-256; the smallest margin of the photos
+      outside the calibration is 8 times or more.
+- [ ] The user checked the sheets by eye.
+- [ ] The six tests pass in `build/debug`.
 - [ ] The install folder has one `onnxruntime.dll` and one DirectML.dll, and the AI Mask sidecar
       runs its DirectML session.
 
-**Expected diff**: 700 to 1100 lines (lab included).
+**Expected diff**: 900 to 1400 lines (lab included).
 
 **Completion record**: empty until the phase is complete.
 
 ### DN3: overlap tile planner and full photo run on DirectML
 
-Rewritten on 2026-11-22 for D2.
+Rewritten on 2026-11-22 for D2, then for FP16 and the run in the render (D5, D6).
 
 **Objective and deliverables**
 
 The tile loop that denoises one full Bayer mosaic with `UtNet2DirectMlSession`, a test against
-one pass, and the measured time for 24, 36, and 45 megapixel photos. This phase closes U1 and
-D4.
+one pass, and the measured time for 24, 36, and 45 megapixel photos. The model runs in each full
+render whose sensor stage is computed, so the reference is the DemosaicNet student (376 ms on
+36.3 MP). This phase closes U1 and D4.
 
 **Inputs and prerequisites**
 
@@ -948,7 +939,7 @@ addition (one session with free height and width).
 | File | Responsibility |
 | --- | --- |
 | `include/decoders/processor/nn/overlap_tile_jobs.hpp` | `PlanOverlapTiles(width, height, tile, overlap, alignment)`: the input rectangle and the kept output rectangle of each tile (lab `measurement_common.plan_axis` with the shrunk last tile) |
-| `decoders/processor/nn/utnet2_tile_loop.cpp` | `DenoiseBayerMosaicDirectMl(packed mosaic, tile callback, cancel check)`: the tile size selection, the input tile with reflection, `Run`, the crop to the kept rectangle |
+| `decoders/processor/nn/utnet2_tile_loop.cpp` | `DenoiseBayerMosaic(session, packed mosaic, tile callback, cancel check)`: the tile loop for `UtNet2DirectMlSession` and `UtNet2CoreMlSession` (the same interface), the tile size selection, the input tile with reflection, `Run`, the crop to the kept rectangle |
 | `alcedo_studio/tests/perf/utnet2_photo_timing_tool.cpp` | Full photo time, the time of `Run`, and the used GPU memory |
 
 **Data rules**
@@ -961,13 +952,19 @@ addition (one session with free height and width).
 - One session with free height and width for all tiles and photos of a run. Sessions for each
   tile shape are not used: each keeps its own memory arena, and at tiles of 1536 they spill to
   shared memory on an 8 GB GPU (DN1 addition, DirectML).
-- Tile size: the largest of 1536, 1024, and 768 whose measured process memory (3.3, 1.0, and
-  0.9 GiB) fits in the free local video memory of the adapter (`IDXGIAdapter3::QueryVideoMemoryInfo`,
-  budget minus current usage). When 768 does not fit, the run throws the memory error. It does
-  not use a different backend.
-- The cancel check runs between tiles.
-- The session is released after the last photo of a run (single photo or batch), so that the
-  editor gets its GPU memory back.
+- Tile size: the largest of 1536, 1024, and 768 whose measured process memory fits in the free
+  local video memory of the adapter (`IDXGIAdapter3::QueryVideoMemoryInfo`, budget minus current
+  usage). DN3 measures the memory of the FP16 graph for the three sizes (FP32: 3.3, 1.0, and
+  0.9 GiB). When 768 does not fit, the run throws the memory error. It does not use a different
+  backend.
+- Tile input and output in float16: the loop binds float16 DirectML buffers (`IOBinding`) and
+  reuses them for each tile of a size. The timing tool reports the GPU time of the tiles beside
+  the full time (DN1: 0.044 s of GPU time in a `run` of 0.095 s for a tile of 1536). When the
+  full time at 45.4 MP is more than 1.5 times the GPU time, DN3 also keeps the packed image in
+  DirectML memory and extracts the tiles there.
+- The cancel check runs between tiles (a render that the editor no longer needs).
+- The tile loop does not own the session: `DenoiseModelSession` (DN6) keeps it between renders
+  and releases it (2.3).
 
 **Implementation steps**
 
@@ -984,7 +981,7 @@ addition (one session with free height and width).
 **Primary success call chain**
 
 ```text
-DenoiseBayerMosaicDirectMl
+DenoiseBayerMosaic
   -> UtNet2DirectMlSession (load one time for the run)
   -> select the tile size from the free video memory
   -> PlanOverlapTiles
@@ -996,7 +993,7 @@ DenoiseBayerMosaicDirectMl
 ```text
 DirectML device removed or out of memory during Run
   -> Run throws std::runtime_error with the ONNX Runtime status text
-  -> no more tile runs; the caller reports the error and writes no stored result
+  -> no more tile runs; the render reports the error (2.4)
 ```
 
 **Tests**
@@ -1020,63 +1017,56 @@ DirectML device removed or out of memory during Run
 
 **Completion record**: empty until the phase is complete.
 
-### DN4 to DN13
+### DN5 to DN13
 
-Each of these phases gets its detailed section before its implementation starts. The fixed points
-that the detailed sections must keep:
+Each of these phases gets its detailed section before its implementation starts. DN4 and DN9
+are removed (2026-11-22, D6). The fixed points that the detailed sections must keep:
 
-- **DN4**: the store is the only reader and writer of the folder. The header rules of 2.4. A write
-  failure leaves no file with the final name.
-- **DN5**: the new `DevelopPayload` field is written to JSON only when it is on. The Develop
-  dirty group of the change is the sensor group, so `develop.sensor_linear` and all later results
-  are computed again. The loader throws when the field is on and the store has no valid file.
-- **DN6**: the gain match factor is one value for the whole photo. The tile loop accumulates its
-  sums, and the writer applies the factor before the file gets its final name. In a batch, the CPU
-  unpacks the next RAW file while the GPU runs the current photo. The editor GPU release holder
-  is held during the run on every render backend: DirectML uses the same GPU memory as the CUDA
-  or OpenCL resources of the editor.
+- **DN5**: the new `DevelopPayload` fields (the switch and the model version, D10) are written
+  to JSON only when the switch is on. The Develop dirty group of the change is the sensor group,
+  so `develop.sensor_linear` and all later results are computed again. The content key of
+  `develop.sensor_linear` holds the switch and the installed model version. The tests build the
+  denoised prepared input from the DN0 expected outputs.
+- **DN6**: `DenoiseModelSession` is the only owner of the platform session in the process; the
+  editor render and the export use it one run at a time (2.3). The loader runs the model only
+  for a render at the full size (D12) and only on a miss of the prepared source cache. The gain
+  match factor is one value for the whole photo: the tile loop accumulates its sums, and the
+  loader applies the factor before it inserts the cache entry. The editor GPU release holder
+  also releases the model session, on every render backend: DirectML uses the same GPU memory
+  as the CUDA or OpenCL resources of the editor. A model that cannot run gives the render error
+  of 2.4; the loader does not return the photo without the noise reduction.
 - **DN7**: QML rules of the `alcedo-qml-ui` skill. No test for pure UI; the tests are on the C++
-  owner of the switch state.
-- **DN8**: the deletion path of `LibraryMutationOperations::StartDeleteTargets` calls the store
-  for each RAW file that it deletes (D8).
-- **DN10, DN11**: the same expected outputs, tolerances, and tile planner as DN3. The control of
-  2.1 appears on a platform in the phase that completes its forward code (D13).
-- **DN10** (U5, the user agreed on 2026-11-22): FP16 on the Neural Engine, the configuration of
-  the DN1 addition "FP16 on the Neural Engine". `UtNet2CoreMlSession` (`decoders/processor/nn`,
-  Apple silicon only) with the Core ML execution provider (`ModelFormat` MLProgram,
-  `MLComputeUnits` CPUAndNeuralEngine, `session.disable_cpu_ep_fallback` 1) and the FP16 graph
-  of the lab (the rescaled weights, float16 input and output, DepthToSpace in the graph). One
-  session for each tile input shape (the shape fixed with the free dimension overrides): a
-  session with free height and width puts half of the operations on the CPU. The sessions of a
-  run are kept for the photos of the same size and released after the last photo. The session
-  converts the input tile to float16 and the output to float32 times `output_scale`, the scale
-  of the last layer, which the graph carries in its metadata. After each tile, the session
-  checks the float16 output: a value that is not finite stops the run with an error that names
-  the tile (no other backend, no FP32 run: section 1.4). `UtNet2DirectMlSession` and
-  `UtNet2CoreMlSession` have the same `Run` and `Release` interface, so the tile loop of DN3
-  runs on both. Tiles of 1536 (peak footprint 2.0 GiB at 45.4 MP; 1024: 1.7 GiB). The
-  dependency is `libonnxruntime.dylib` of the osx-arm64 folder of `Microsoft.ML.OnnxRuntime`
-  1.24.4 (the version of Windows), downloaded with its SHA-256 and copied into
-  `Contents/Frameworks` of the bundle.
-  - Lab work before DN10: the rescale calibration on all evaluation photos and on crops of the
-    RawNIND test split, with the target set so that photos outside the calibration keep a
-    margin of 8 times or more to 65,504 (the 3-crop calibration gives 19 times on 11 photos);
-    the FP16 graph with `output_scale` and the calibration record in its metadata, as a release
-    asset with its SHA-256; sheets of the FP16 and the FP32 output at +2 EV and +5 EV for a
-    check by eye by the user.
-  - Tests: the five tests of DN2 and the five tests of DN3 on macOS, with the tolerance of the
-    FP16 graph (5e-3 of the largest expected value; measured 1.0e-3 to 1.5e-3); a test that an
-    output tile with an infinite value stops the run; the footprint of the process after a run
-    and after a batch of 5 photos.
+  owner of the switch state (the missing model path, the model version notice).
+- **DN8**: the library action uses `LibraryMutationOperations::ResolveTargets` and writes one
+  Version for each Bayer target; it runs no model. The export reports a model error for that
+  photo and continues.
+- **DN10, DN11**: the same expected outputs, tolerances, FP16 graph, and tile planner as DN2 and
+  DN3. The control of 2.1 appears on a platform in the phase that completes its forward code
+  (D13).
+- **DN10** (U5): FP16 on the Neural Engine, the configuration of the DN1 addition "FP16 on the
+  Neural Engine". `UtNet2CoreMlSession` (`decoders/processor/nn`, Apple silicon only) with the
+  Core ML execution provider (`ModelFormat` MLProgram, `MLComputeUnits` CPUAndNeuralEngine,
+  `session.disable_cpu_ep_fallback` 1) and the FP16 graph of DN2. One session for each tile
+  input shape (the shape fixed with the free dimension overrides): a session with free height
+  and width puts half of the operations on the CPU. `DenoiseModelSession` keeps the sessions of
+  the photo sizes that the editor and the export use until it releases them (2.3). The session
+  converts and checks the tiles as `UtNet2DirectMlSession` does, and has the same `Run` and
+  `Release` interface, so the tile loop of DN3 runs on both. Tiles of 1536 (peak footprint 2.0
+  GiB at 45.4 MP; 1024: 1.7 GiB). The dependency is `libonnxruntime.dylib` of the osx-arm64
+  folder of `Microsoft.ML.OnnxRuntime` 1.24.4 (the version of Windows), downloaded with its
+  SHA-256 and copied into `Contents/Frameworks` of the bundle.
+  - Tests: the tests of DN2 and DN3 on macOS with the FP16 tolerance (5e-3 of the largest
+    expected value; measured 1.0e-3 to 1.5e-3 on the Neural Engine); the footprint of the
+    process after the release of the sessions.
   - Time of the DN1 addition: 0.37, 0.51, 0.60 s for 24.3, 36.2, 45.4 MP on the MacBook Air M4.
     Session creation 0.28 to 0.46 s for each of the 4 tile shapes of a photo size; DN10 measures
-    `ModelCacheDirectory` for it.
-- **DN11**: own OpenCL kernels; the CUDA rows of section 4 are its starting point. Before it
-  writes kernels, DN11 measures the WebGPU execution provider of ONNX Runtime on Vulkan
-  (`Microsoft.ML.OnnxRuntime.EP.WebGpu` has linux-x64); on macOS, WebGPU took 2.6 times the Core
-  ML time.
+    `ModelCacheDirectory` for it, because a new photo size in the editor creates new sessions.
+- **DN11**: before own OpenCL kernels, DN11 measures the WebGPU execution provider of ONNX
+  Runtime on Vulkan with the FP16 graph (`Microsoft.ML.OnnxRuntime.EP.WebGpu` has linux-x64; on
+  macOS, WebGPU took 2.6 times the Core ML GPU time in FP32). The CUDA rows of section 4 are the
+  starting point of own kernels.
 - **DN12**: the feed keeps the AI Mask entry when the denoise entry is added. The `sequence` of
-  the feed increases.
+  the feed increases. The denoise package holds the FP16 graph.
 
 ## 8. Risks and stop conditions
 
@@ -1084,15 +1074,17 @@ that the detailed sections must keep:
 | --- | --- | --- |
 | The measured overlap is near the theoretical 100 packed pixels, so the tile overhead is 1.6 to 2.8 times | DN1 border table | Use the largest tile that the GPU memory permits; give the user the corrected time estimate before DN3 |
 | `onnxruntime-directml` 1.24.4 is the last DirectML package of ONNX Runtime | NuGet and PyPI package lists | Keep the pinned version. The graph uses 6 standard operators of opset 17 (Conv, LeakyRelu, MaxPool, ConvTranspose, Concat, DepthToSpace) |
-| The DirectML memory arena keeps up to 3.3 GiB after a run | Used GPU memory of the process in the DN3 timing tool | Release the session after each run (DN3 data rules); select a smaller tile from the free video memory |
-| A photo outside the calibration overflows FP16 on the Neural Engine | The output check of each tile (DN10); the margin of the held-out photos in the calibration record | The run reports the error for that photo. The lab calibrates again with the photo and publishes a new FP16 graph (a new model version, D10) |
-| The FP16 output shows a difference against FP32 by eye | The sheets of the DN10 lab work | The user checks the sheets before DN10 completes; a visible difference stops DN10 |
-| The process footprint stays high after the release of the Core ML sessions (GPU: up to 4.9 GiB after 5 photos; Neural Engine: 2.0 GiB in the lab tool) | Footprint test of DN10 after a run and after a batch | Find the owner of the memory before DN10 completes; a release that does not return the memory stops DN10 |
-| A Mac with 8 GB or a GPU with fewer cores takes longer or has too little memory for tiles of 1024 | DN10 run on such a Mac, if the user has one | Record it in the DN10 completion record; the run reports the memory error |
+| The DirectML memory arena keeps its memory while the session lives (FP32: up to 3.3 GiB) | Used GPU memory of the process in the DN3 timing tool | `DenoiseModelSession` releases the session with the editor GPU release and at the editor close (2.3); select a smaller tile from the free video memory |
+| A photo outside the calibration overflows FP16 | The output check of each tile (DN2, DN10); the margin of the held-out photos in the calibration record | The render reports the error for that photo. The lab calibrates again with the photo and publishes a new FP16 graph (a new model version, D10) |
+| The FP16 output shows a difference against FP32 by eye | The sheets of the DN2 lab work | The user checks the sheets before DN2 completes; a visible difference stops DN2 |
+| The model time in the render is too long for editing on a slower device (Intel Iris Xe: 5.2 s at 45.4 MP in FP16) | DN3 timing tool; DN6 render time | Record the time in the DN6 completion record; the user decides on the target devices (U1) |
+| The denoised entries of the prepared source cache use much host memory (545 MB for 45.4 MP in FP32) | DN6 memory record | The cache budget of the prepared source cache applies to the entry; DN6 records the budget use |
+| The process footprint stays high after the release of the Core ML sessions (GPU: up to 4.9 GiB after 5 photos; Neural Engine: 2.0 GiB in the lab tool) | Footprint test of DN10 | Find the owner of the memory before DN10 completes; a release that does not return the memory stops DN10 |
+| A Mac with 8 GB or a GPU with fewer cores takes longer or has too little memory for tiles of 1024 | DN10 run on such a Mac, if the user has one | Record it in the DN10 completion record; the render reports the memory error |
 | A GPU of another vendor gives a different output or time | DN2 tests on that GPU; DN3 timing tool | Record it in the DN3 completion record. A test failure stops DN6 for that vendor |
+| The Intel Iris Xe removes the DirectML device (887A0005 in 2 of 4 lab processes, one in FP32) | DN2 tests and the DN3 timing tool on the Iris Xe | Find the cause before DN6 completes; the render reports the error |
 | Clipped areas of the model output are below the clip threshold | DN1 clipped area table | Stop DN5 until its detailed section states the highlight handling |
-| The lossy formats show an error after +5 EV | DN1 stored format table and sheets | The user selects the format (U2) |
-| A JSON change breaks old root ids | `TryDecodeRootState` rejects an old project in the DN5 tests | Keep the key absent when the noise reduction is off |
+| A JSON change breaks old root ids | `TryDecodeRootState` rejects an old project in the DN5 tests | Keep the keys absent when the noise reduction is off |
 
 Stop the implementation and update this plan when a phase estimate passes 2000 lines, when a
 phase needs a substitute path that section 1.4 excludes, or when the source audit of section 4
@@ -1103,14 +1095,13 @@ no longer agrees with the branch.
 | Parameter | Value | Source |
 | --- | --- | --- |
 | `target_time` | No value until the baseline time of DN3 exists; then from the user (U1) | User |
-| `tile_size` | The largest of 768, 1024, and 1536 packed pixels whose DirectML process memory (0.9, 1.0, 3.3 GiB) fits in the free local video memory; 1536 is the fastest on the RTX 3080 Laptop GPU (0.82 s at 45.4 MP), 1024 takes 1.06 s | DN1 addition, DirectML |
-| `tile_overlap` | 96 packed pixels: the tiled output is the one-pass output | DN1 |
+| `tile_size` (Windows) | The largest of 768, 1024, and 1536 packed pixels whose DirectML process memory fits in the free local video memory; DN3 measures the FP16 memory (FP32: 0.9, 1.0, 3.3 GiB). 1536 is the fastest on the RTX 3080 Laptop GPU (FP16: 0.72 s at 45.4 MP with the tiles through host memory) | DN1 additions, DirectML and FP16 on DirectML |
 | `tile_size` (macOS) | 1536 packed pixels on the Neural Engine (0.60 s at 45.4 MP, peak footprint 2.0 GiB on the M4; 1024: 0.75 s, 1.7 GiB) | DN1 addition, FP16 on the Neural Engine |
-| Session strategy | Windows: one ONNX Runtime session with free height and width, the DirectML memory arena on. macOS: one session for each tile input shape. Both released after the run | DN1 additions, DirectML and FP16 on the Neural Engine |
-| Precision (macOS) | FP16 after the exact rescale of the layers; test tolerance 5e-3 of the largest expected value (measured 1.0e-3 to 1.5e-3); FP16 margin of 8 times or more on photos outside the calibration | DN1 addition, FP16 on the Neural Engine |
+| `tile_overlap` | 96 packed pixels: the tiled output is the one-pass output | DN1 |
+| Session strategy | Windows: one ONNX Runtime session with free height and width, the DirectML memory arena on. macOS: one session for each tile input shape. Kept by `DenoiseModelSession` between renders, released with the editor GPU release and at the editor close | DN1 additions; 2.3 |
+| Precision | FP16 after the exact rescale of the layers, one graph for Windows and macOS; test tolerance 5e-3 of the largest expected value (measured 1.0e-3 to 1.5e-3 on the Neural Engine, 2.4e-3 to 4.6e-3 on DirectML); FP16 margin of 8 times or more on photos outside the calibration | DN1 additions, FP16 |
 | ONNX Runtime | NuGet `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4 and `Microsoft.AI.DirectML` 1.15.4 on Windows; `libonnxruntime.dylib` of `Microsoft.ML.OnnxRuntime` 1.24.4 (osx-arm64) on macOS | DN1 additions, DirectML and macOS |
 | Core ML options | `ModelFormat` MLProgram, `MLComputeUnits` CPUAndNeuralEngine, `session.disable_cpu_ep_fallback` 1 | DN1 addition, FP16 on the Neural Engine |
 | `leaky_relu_slope` | The value in the metadata of the weights file and of the ONNX graph | DN0, DN2 |
-| Comparison tolerance of the forward tests | FP32 (Windows): 1e-5 of the largest value (from the CPU against GPU difference of PyTorch); DirectML gives at most 1.7e-6. FP16 (macOS): the Precision (macOS) row | DN0, DN1 additions |
+| `output_scale` | The scale of the last layer after the rescale, in the metadata of the FP16 graph (127.9 for the 3-crop calibration of DN1) | DN1 addition, FP16 on the Neural Engine; DN2 |
 | Model cost | 46.2 GMAC for each megapixel | Layer count, section 5.3 |
-| Stored result folder default | A `denoise` folder beside the thumbnail cache folder of the application | This plan |
