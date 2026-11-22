@@ -2,7 +2,8 @@
 
 Date: 2026-11-22
 
-Status: planned. Experiments VX1 to VX5 come first. No implementation phase has started.
+Status: planned. Experiments VX1 to VX5 come first. VX1 is complete (2026-11-22, section 9.1).
+No implementation phase has started.
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -61,13 +62,13 @@ The plan author made these decisions. Each one agrees with A1 to A7.
 | --- | --- | --- |
 | B1 | Vulkan is a fourth backend on `main` behind the build option `ALCEDO_ENABLE_VULKAN`. The option is `OFF` in release builds until VK19. | A long-lived fork must merge each new kernel and each interface change of `main`. An added backend does not touch the three current backends, so A2 is true without a fork. |
 | B2 | The worktree branch holds experiment code only. Experiment code does not merge. Its findings go into section 9. | Experiment code answers a question. It does not follow the structure rules of the product code. |
-| B3 | The kernel language is Slang. The build compiles each kernel to SPIR-V with `slangc`. VX1 confirms this decision or changes it to GLSL. | One Slang source can also give Metal Shading Language. This keeps the option to share kernels with macOS. |
+| B3 | The kernel language is Slang. The build compiles each kernel group to SPIR-V with `slangc`. VX1 confirmed this decision (section 9.1). | Slang includes the shared math headers, `film_print_math.h` included, with a macro layer of 28 lines. GLSL has no pointer syntax and cannot include that header. One Slang source can also give Metal Shading Language. |
 | B4 | The minimum is Vulkan 1.3. | Vulkan 1.3 includes dynamic rendering, synchronization2, and maintenance4 in the core. The two devices of the development computer report 1.4. |
 | B5 | Alcedo creates the `VkInstance` and the `VkDevice`. Qt Quick receives them through `QQuickGraphicsDevice::fromDeviceObjects`. | The pipeline and the editor then use one device, one memory budget, and no interop API. The CUDA pairing already uses the same idea with `fromAdapter`. |
 | B6 | There is one editor pairing for Vulkan: Vulkan pipeline with Qt Quick Vulkan. A pairing of Vulkan compute with Direct3D 11 or OpenGL does not exist. | A mixed pairing brings back an interop API. |
 | B7 | Before VK18, the Vulkan backend is available to tests, export, thumbnails, and `alcedo-cli` only. These paths use the explicit host download that the current backends also have. | The display change is the only step that is not additive. It comes after all passes are equal. |
 | B8 | A Vulkan failure reports the real error. It does not select CUDA, OpenCL, or a host path. | `AGENTS.md`, "No fallback without explicit authorization". |
-| B9 | A Vulkan pass is complete when a test renders one input on Vulkan and on OpenCL and the difference is in the tolerance of the matching OpenCL test. | OpenCL is the backend that tests select through Auto. The comparison uses rendered values and a tolerance. It stores no expected pixels. |
+| B9 | A Vulkan pass is complete when a test renders one input on Vulkan and on OpenCL and the difference is in the tolerance of the matching OpenCL test. The input has the value range of the input of that OpenCL test: a developed RAW image, or a synthetic image in the same range. | OpenCL is the backend that tests select through Auto. The comparison uses rendered values and a tolerance. It stores no expected pixels. VX1: an input with channel spreads of 4.4 stops gives differences above the grade tolerance between OpenCL on NVIDIA and OpenCL on Intel too (section 9.1). |
 | B10 | New features go to the current backends first. The Vulkan implementation of a new kernel follows in the phase that owns its pass. | A requirement to write each new feature four times decreases the feature speed, which A2 prohibits. |
 | B11 | The archive of CUDA and OpenCL moves the code to `alcedo_studio/deprecated/`. It does not delete it. | Repository rule for legacy code. |
 
@@ -263,8 +264,18 @@ VulkanContext                      process owner of instance, device, queues, al
 - A long kernel is divided into tiles and into more than one submission. VX3 sets the limit.
 - Images use `VK_FORMAT_R32G32B32A32_SFLOAT`, `VK_FORMAT_R32_SFLOAT`, and `VK_FORMAT_R8_UNORM`.
   These are the Vulkan forms of the three formats that the OpenCL backend requires.
-- Parameters go through the `ParameterArena` buffer. A push constant holds an offset only.
-- Descriptor sets use `VK_KHR_push_descriptor`. A kernel has one set.
+- Parameters go through the `ParameterArena` buffer. Buffers are device addresses
+  (`bufferDeviceAddress`). The push constants of a dispatch hold the device addresses of its
+  buffers and the offsets in them. The shared math headers read their tables through pointers, and
+  a Slang pointer is a device address (VX1).
+- A kernel finds a parameter record with integer address arithmetic on a `uint64_t` address, for
+  example `(Record*)(base + offset + k * sizeof(Record))`. Pointer arithmetic on a pointer to a
+  struct (`p + k`) is prohibited: the Intel driver 101.7092 stops in `vkCreateComputePipelines`
+  on that form after inlining (VX1). Pointer arithmetic on a pointer to `float` or `uint` is
+  permitted.
+- Buffer data has the scalar layout (`scalarBlockLayout`, `slangc -fvk-use-scalar-layout`), so a
+  struct of a shared header has the layout of the host C++ struct.
+- Descriptor sets use `VK_KHR_push_descriptor`. A kernel has one set. The set holds images only.
 - Memory goes through VMA. The budget uses `VK_EXT_memory_budget` and the application limit.
 - A stable render creates no pipeline, no shader module, no image, and no buffer. Counters prove
   this, as for OpenCL.
@@ -273,14 +284,39 @@ VulkanContext                      process owner of instance, device, queues, al
 ### 4.3 Kernel build
 
 ```text
-<group>.slang  --slangc (build time)-->  <kernel>.spv
-        -> build tree  shaders/vulkan/<kernel>.spv
-        -> install     <bin>/vulkan/<kernel>.spv  with an asset inventory and checksums
-        -> VulkanShaderModuleRegistry::Module(kernel name)
+<group>.slang  --slangc (build time)-->  <group>.spv   one module, one entry point for each kernel
+        --spirv-val (build time)
+        -> build tree  shaders/vulkan/<group>.spv
+        -> install     <bin>/vulkan/<group>.spv  with an asset inventory and checksums
+        -> VulkanShaderModuleRegistry::Module(group name), entry point = kernel name
 ```
 
-The build fails when `slangc` reports an error. The application compiles no shader source at run
-time. The install rule follows `alcedo_install_opencl_sources` (root `CMakeLists.txt`).
+`slangc` arguments (VX1): `-target spirv -profile spirv_1_6 -fvk-use-scalar-layout
+-fvk-use-entrypoint-name -O2`, and `-I alcedo_studio/src/include` for the shared headers.
+`-fvk-use-entrypoint-name` keeps the kernel name as the entry point name. With one `-entry`,
+`slangc` names the entry point `main` without this argument.
+
+The build runs `spirv-val --target-env vulkan1.3 --scalar-block-layout` on each module. `slangc`
+does not validate its output: in VX1 it wrote one module that `spirv-val` rejects (an `OpPhi`
+with a wrong count of incoming blocks) and reported no error.
+
+The build fails when `slangc` or `spirv-val` reports an error. The application compiles no shader
+source at run time. The install rule follows `alcedo_install_opencl_sources` (root
+`CMakeLists.txt`).
+
+The shared math headers have a `__SLANG__` branch beside the OpenCL C and Metal branches. Two
+rules keep one header text for all targets:
+
+- An array member of a struct is read through `&params->field[0]`, not through the array name.
+  Slang has no conversion of an array to a pointer. The form is equal in C++, CUDA, OpenCL C, and
+  Metal.
+- A function that takes a pointer to a value of the caller is in a `#if !defined(__SLANG__)`
+  block. Slang has pointers to device memory only. In VX1 the one such function
+  (`FilmKernelNegativeScanTerms`) is a host function.
+
+SPIR-V has no `cbrt`. The Slang form is `exp2(log2(|x|) / 3)` and one Newton step. Its difference
+from a double-precision `cbrt` has the size of the difference of the OpenCL `cbrt` (VX1). A second
+Newton step changes the result by little.
 
 ### 4.4 Primary call chains
 
@@ -354,6 +390,8 @@ SPIR-V give the OpenCL values on NVIDIA and Intel?
 `opencl_grade_test.cpp` and `opencl_film_print_test.cpp`. The shared header compiles with a macro
 layer of less than 100 lines. The build time for one kernel group is less than 10 seconds.
 If one criterion fails, B3 changes to GLSL with `glslc`, and section 4.3 changes with it.
+
+**Status.** Complete (2026-11-22). All three criteria pass. Section 9.1 has the record.
 
 ### VX2: Qt Quick on Vulkan with a shared device
 
@@ -502,7 +540,10 @@ device selection rule).
     family, its index, and the mutex of section 4.2.
 - `inc/vulkan/vulkan_requirements.hpp`, `src/vulkan/vulkan_requirements.cpp` (proposed):
   `CheckVulkanDeviceRequirements(physical device) -> VulkanRequirementResult` with the name of
-  each absent requirement. Pure function of the device properties.
+  each absent requirement. Pure function of the device properties. The requirements of the VX1
+  kernels: API 1.3, `bufferDeviceAddress`, `scalarBlockLayout`, `shaderInt64`,
+  `synchronization2`, `VK_KHR_push_descriptor`, and a compute queue with `timestampValidBits`
+  above 0. Both devices of the development computer have them.
 - `inc/image/gpu_backend.hpp`: `GpuBackendKind::Vulkan`.
 - `inc/edit/pipeline/pipeline_accelerator.hpp`, `edit/pipeline/pipeline_accelerator.cpp`:
   `AcceleratorBackendPreference::Vulkan`. `ResolveAcceleratorBackend(Vulkan)` gives Vulkan when
@@ -581,16 +622,19 @@ ctest --test-dir build/debug -R "Vulkan(Context|Requirements)Test" -j 1 --output
 a kernel by name and gets a compute pipeline. A reviewer sees one test kernel that runs and
 writes a known value, and a counter that shows zero pipeline creations on the second use.
 
-**Inputs and prerequisites.** VK0. The VX1 record.
+**Inputs and prerequisites.** VK0. The VX1 record (section 9.1): the `slangc` arguments, the
+`spirv-val` step, and the kernel rules of sections 4.2 and 4.3.
 
 **Modules, files, and APIs.**
 
 - `alcedo_studio/src/vulkan/CMakeLists.txt`: function `alcedo_add_slang_kernels(target, sources)`
-  (proposed). It runs `slangc` for each entry point, writes `<kernel>.spv`, and writes an asset
-  inventory with checksums.
+  (proposed). It runs `slangc` one time for each kernel group with one `-entry` for each kernel and
+  the arguments of section 4.3, writes `<group>.spv`, runs `spirv-val` on it, and writes an asset
+  inventory: kernel name, group file, checksum.
 - `inc/vulkan/vulkan_shader_module_registry.hpp`, `.cpp` (proposed):
-  `VulkanShaderModuleRegistry::Module(std::string_view kernel) -> VkShaderModule`. It resolves the
-  packaged path first, then the build tree path, as `ResolveOpenClSourcePath` does.
+  `VulkanShaderModuleRegistry::Module(std::string_view kernel) -> VkShaderModule`. It finds the
+  group file of the kernel in the inventory and resolves the packaged path first, then the build
+  tree path, as `ResolveOpenClSourcePath` does. The entry point name is the kernel name.
 - `inc/vulkan/vulkan_compute_pipeline_cache.hpp`, `.cpp` (proposed):
   `VulkanComputePipelineCache::Pipeline(const VulkanKernelDescriptor&) -> const VulkanComputePipeline&`.
   The descriptor has the kernel name, the binding list, and the specialization values.
@@ -780,7 +824,134 @@ Each category has a current state that is changed in place, and dated entries be
 
 ### 9.1 Kernel language (VX1)
 
-Current state: no measurement. The plan selects Slang (B3).
+Current state: Slang is the kernel language (B3). The Slang kernels give the OpenCL values on the
+RTX 3080 Laptop GPU and on Iris Xe in the tolerance of the OpenCL tests, with the shared headers
+and a macro layer of 28 lines. The `slangc` arguments, the `spirv-val` step, and the kernel rules
+are in sections 4.2 and 4.3.
+
+#### 2026-11-22: Slang and GLSL against OpenCL, NVIDIA and Intel
+
+**Setup.**
+
+| Item | Value |
+| --- | --- |
+| Source | `main` `61d59bc98` with this plan. Experiment code: `experiments/vulkan/vx1/` on branch `feature/vulkan-backend-experiments` |
+| Kernels in Slang | `primary_grade_pointwise_rgba32f` (with `oklab.cl`); `film_print_exposure` (FP1), `film_print_first_amounts` (FP4 and FP5), `film_print_display` (FP6) |
+| Shared headers in Slang | `color_encoding_math.h`, `aces_reference_gamut_compression.h`, `film_print_math.h` |
+| Reference | The product `.cl` sources, concatenated in the order of `opencl_gpu_dag_programs.cpp`, `-cl-std=CL1.2`, on the same device |
+| Tools | Vulkan SDK 1.4.328.1, `slangc` 2025.17.2, `glslc`, MSVC 14.44 |
+| Devices | RTX 3080 Laptop GPU, driver 610.62 (Vulkan and OpenCL). Iris Xe, driver 101.7092 (Vulkan), OpenCL driver 32.0.101.7092 |
+| Image | 2048 x 1536, RGBA32F storage images. Buffers are device addresses in the push constants |
+| Validation | `VK_LAYER_KHRONOS_validation` on in each comparison run: 0 errors, 0 warnings |
+| Evidence | worktree `build/tmp/vulkan_backend/vx1/`: one log for each case and device |
+
+Grade input "photo": ACEScc 0.25 to 0.65 (2^-5.3 to 2^1.7 linear) and channel spreads of
++-0.06 ACEScc (+-1 stop). Grade input "stress": ACEScc -0.05 to 1.15 and channel spreads of
++-0.25 ACEScc (+-4.4 stops). Both inputs have a grey ramp, neutral pixels, and ties of the
+largest channel. The grade has all 11 behaviors of `primary_grade.cl`: CAT02, exposure,
+contrast, whites, blacks, curves (4 records), HLS, saturation, vibrance, tone wheels, and a
+33-node LUT at strength 0.8.
+
+Film input: linear AP1 from 2^-12 to 2^4, colours outside AP1, and a row of zeros. The tables
+are synthetic, with the layout of `film_print_kernel_tables.hpp` and the value ranges of a stock:
+64 u'v' nodes, 24 locus facets, curves and inhibition curves of 260 to 300 values, a print table
+of 33 nodes. Variants: print with the negative grade and the cinema look on sRGB; light table
+with the surround on PQ; and the form with the blurred inhibitor (`inhibitor_blur` 1).
+
+**Result: difference of Vulkan (Slang) from OpenCL.**
+
+| Case | Tolerance | RTX 3080 Laptop GPU | Iris Xe |
+| --- | --- | --- | --- |
+| Grade, photo input | 2.0e-4 ACEScc | 3.8e-5 | 6.7e-5 |
+| Grade, stress input | 2.0e-4 ACEScc | 1.8e-2 (30335 of 9.4 million values above) | 1.9e-2 (31427 above) |
+| Film print, sRGB | 0.5 codes (8 bit) | 2.4e-4 codes | 3.0e-4 codes |
+| Film light table, PQ | 0.5 codes | 1.9e-4 codes | 1.2e-4 codes |
+| Film, blurred inhibitor form | 0.5 codes | 2.4e-4 codes | 2.7e-4 codes |
+
+The tolerances are those of `OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance` and of
+`kRampLimitCodes` in `opencl_film_print_test.cpp`. In the film cases, the log exposure between
+the kernels differs by 1.9e-6 log10 at most and the FP4 and FP5 amounts by 1.3e-6. Alpha is equal in each
+case.
+
+**Result: the stress input.** Each adjustment alone on the stress input differs by 3.3e-6 or
+less, except contrast (2.4e-3, 73 values on NVIDIA). The contrast outliers have one channel near
+-0.35 ACEScc, in the segment of the curve near the floor where linear light is below 2^-15. There
+the channel is a difference of cubes of the OkLab inverse, and a difference of a few float32 ulp
+in linear light becomes 4e-4 ACEScc. A double-precision form of the contrast on the host gives:
+
+| Contrast alone, stress input, NVIDIA | Largest difference | Values above 2.0e-4 |
+| --- | --- | --- |
+| OpenCL against double precision | 1.6e-3 | 118 |
+| Vulkan against double precision | 1.3e-3 | 110 |
+
+The same backend on the two devices, full grade:
+
+| Pair | Stress input | Photo input |
+| --- | --- | --- |
+| OpenCL NVIDIA against OpenCL Intel | 1.6e-2 (29130 above) | 3.1e-5 |
+| Vulkan NVIDIA against Vulkan Intel | 2.9e-2 (34325 above) | 4.3e-5 |
+
+So the stress difference is a property of float32 in this grade. OpenCL has it between two
+vendors. The comparison input of B9 has the value range of the input of the OpenCL test.
+
+**Result: the shared headers.** Each header gets a `__SLANG__` branch of macros: 13 lines in
+`color_encoding_math.h`, 3 lines in `aces_reference_gamut_compression.h`, 12 lines in
+`film_print_math.h`. `film_print_math.h` also gets 7 changed lines (`&params->field[0]` for an
+array member) and one `#if !defined(__SLANG__)` block around the host function
+`FilmKernelNegativeScanTerms` (`const T*` pointers to values of the caller). The OpenCL program
+and the MSVC host build compile the changed headers with no change of result. CUDA and Metal did
+not compile them in this experiment; the changed form is valid C++ and Metal Shading Language.
+
+**Result: `cbrt`.** SPIR-V has no `cbrt`. `exp2(log2(|x|) / 3)` alone gives 144 contrast values
+above 2.0e-4 against double precision; with one Newton step 110; with two steps 106. One step is
+the product form.
+
+**Result: build time and size (median of 5 runs).**
+
+| Source | Compile | SPIR-V | Source lines (code) |
+| --- | --- | --- | --- |
+| `primary_grade.slang`, one entry point, `-O2` | 343 ms | 42764 bytes | 316 |
+| `film_print.slang`, three entry points, `-O2` | 442 ms | 108156 bytes | 104 |
+| `primary_grade.comp` (GLSL), `glslc -O` | 159 ms | 40308 bytes | 265 |
+
+The Slang grade source has about 50 lines of experiment switches (`VX1_*` macros). The GLSL
+kernel gives the same differences from OpenCL as the Slang kernel on both devices. GLSL can
+include `color_encoding_math.h` with a branch of 9 lines. It cannot include `film_print_math.h`:
+that header has 71 lines with `->`, 39 pointer declarations, and 14 sums of a pointer and an
+offset, and GLSL has no pointer syntax. Pipeline creation takes 0.4 ms (Intel) and 1.3 ms
+(NVIDIA); the shader caches of the drivers were warm, so this is not a first-start time.
+
+**Result: defects of the tools and drivers.**
+
+| Item | Behavior | Rule for the product |
+| --- | --- | --- |
+| Intel driver 101.7092 | `vkCreateComputePipelines` stops the process (access violation) for the grade kernel at `-O1` and `-O2`. The cause is `p + k` on a pointer to the record struct (the Curve slot). `-O0` creates the pipeline. `spirv-opt` reproduces the failure from the `-O0` module after `inline-entry-points-exhaustive`. `spirv-val` accepts the module, and NVIDIA runs it. | Section 4.2: a record address is `uint64_t` arithmetic. With that form, the kernel at `-O2` runs on Intel with the results above. |
+| `slangc` 2025.17.2 | With one `-entry`, the SPIR-V entry point is `main`. With more than one, each keeps its name. | `-fvk-use-entrypoint-name` (section 4.3). |
+| `slangc` 2025.17.2 | A copy of a record from a device pointer into a local value, at `-O0`, gives an `OpPhi` with a wrong count of incoming blocks. `slangc` reports no error. | `spirv-val` in the build (section 4.3). |
+| `slangc` 2025.17.2 | `-fp-mode precise` gives the same results and adds no `NoContraction` decoration. | The default floating-point mode. |
+
+**Result: Metal target (step 5).** `slangc -target metal` accepts device pointers and pointer
+arithmetic, also on struct pointers. It rejects the address-of operator `&`, so the film kernels
+with `film_print_math.h` do not compile for Metal in this form. The grade kernel without `&` and a
+pointer probe compile with `xcrun metal` (Apple metal 32023.864, `-std=metal3.0`) with 0 errors
+and 0 warnings. They did not run on the Mac. Metal is outside this plan (section 1.4), so this
+only limits a later reuse of the Slang film kernels on macOS.
+
+**Indicative times (best of 5, OpenCL event profiling against Vulkan timestamps).**
+
+| Kernel | RTX 3080 OpenCL | RTX 3080 Vulkan | Iris Xe OpenCL | Iris Xe Vulkan |
+| --- | --- | --- | --- | --- |
+| Grade, 11 adjustments, photo input | 0.78 ms | 0.76 ms | 12.5 ms | 9.1 ms |
+| FP1 exposure | 0.60 ms | 0.41 ms | 5.9 ms | 4.3 ms |
+| FP4 and FP5 amounts | 0.19 ms | 0.19 ms | 2.9 ms | 2.9 ms |
+| FP6 display | 0.51 ms | 0.34 ms | 7.8 ms | 5.4 ms |
+
+The OpenCL kernels read `image2d_t` through a sampler; the Vulkan kernels read storage images.
+VX1 makes no performance decision.
+
+**Items outside this record.** The film tables are synthetic; VK13 compares the real tables of
+each stock. The CUDA backend was not compared. A first-start pipeline creation time was not
+measured.
 
 ### 9.2 Qt Quick on Vulkan (VX2)
 
@@ -868,6 +1039,12 @@ Remaining defects or unavailable platforms:
 | Minimum API | Vulkan version that the device must report | 1.3 | this plan (B4) |
 | Image formats | Formats of pipeline images | RGBA32F, R32F, R8 | current OpenCL backend |
 | Comparison tolerance | Maximum difference between Vulkan and OpenCL in a test | the tolerance of the matching OpenCL test | this plan (B9) |
+| Grade tolerance | Largest difference of the primary grade point kernel, ACEScc | 2.0e-4 | `opencl_grade_test.cpp` |
+| Film tolerance | Largest difference of the film print output, 8-bit codes | 0.5 | `kRampLimitCodes`, `opencl_film_print_test.cpp` |
+| `slangc` arguments | Arguments of each kernel group build | `-target spirv -profile spirv_1_6 -fvk-use-scalar-layout -fvk-use-entrypoint-name -O2` | VX1 (section 9.1) |
+| `spirv-val` arguments | Validation of each module in the build | `--target-env vulkan1.3 --scalar-block-layout` | VX1 |
+| `cbrt` Newton steps | Steps after `exp2(log2(\|x\|) / 3)` in the Slang `cbrt` | 1 | VX1 |
+| Slang macro layer | Lines of the `__SLANG__` branches of the three shared headers | 28 | VX1 |
 | Phase size limit | Maximum changed lines of one phase | 2000 | `alcedo-create-plan` skill |
 | Windows GPU timeout | Time after which Windows resets a GPU that does not respond | 2 s (default) | Windows display driver model |
 | UtNet2 time limit | Maximum UtNet2 time on Vulkan relative to DirectML | 2 times | this plan (VX4) |
