@@ -8,7 +8,7 @@ Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
 Source revision of the audit: `61d59bc98` (`main`)
 
-Experiment branch: `experiment/vulkan-compute-backend` (worktree, does not merge)
+Experiment branch: `feature/vulkan-backend-experiments` (worktree, does not merge)
 
 Related plans:
 
