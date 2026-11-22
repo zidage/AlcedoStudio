@@ -2,9 +2,11 @@
 
 Date: 2026-11-22
 
-Status: planned. Experiments VX1 to VX5 come first. VX1 and VX2 are complete (2026-11-22,
-sections 9.1 and 9.2). VX2 changed B5 to two devices and stopped VK18 until the plan has a new
-resize design (section 9.2). No implementation phase has started.
+Status: planned. Experiments VX1 to VX5 come first. VX1, VX2, VX3, and VX5 are complete
+(2026-11-22, sections 9.1, 9.2, 9.3, and 9.5); VX5 has no restore run of a lost device (section
+9.5). VX4 does not run: the neural networks use ONNX Runtime (user decision 2026-11-22, A5). VX2
+changed B5 to two devices and stopped VK18 until the plan has a new resize design (section 9.2). No
+implementation phase has started.
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -51,7 +53,7 @@ These decisions come from the user (2026-11-22).
 | A2 | Feature work on `main` continues on the current backends during this work. A release must not wait for this work. |
 | A3 | Experiments run in a dedicated worktree from `main`. |
 | A4 | The Vulkan backend follows the structure of the current backends: the same templates, the same pass list, the same test layout. |
-| A5 | The neural networks that run in the pipeline move to Vulkan compute: DemosaicNet and the UtNet2 model of AI Denoise. |
+| A5 | The neural networks that run in the pipeline use ONNX Runtime, as the UtNet2 model of AI Denoise does (DirectML on Windows, AI Denoise plan). A Vulkan neural network is not planned now: VX4 does not run, and VK15, VK16, and VK20 are deferred (user, 2026-11-22; this replaces the first form of A5, "DemosaicNet and UtNet2 move to Vulkan compute"). |
 | A6 | The mask models stay in the Rust sidecar. This plan does not change them. |
 | A7 | The CUDA libraries have little use in the product. Their absence in Vulkan is acceptable. |
 
@@ -124,8 +126,9 @@ the Windows backend list has one entry.
 | --- | --- |
 | No Vulkan 1.3 device, or a required feature is absent | Start fails with the device name and the name of the absent feature. |
 | Shader module absent or pipeline creation fails | The render fails with the kernel name and the `VkResult`. |
-| Allocation fails | The render fails with the requested size and the budget. No frame is published. |
-| `VK_ERROR_DEVICE_LOST` | The render fails with the error. The editor shows the error and does not publish a frame. VX5 defines the device restore procedure. |
+| Allocation above the memory limit (section 4.2) | The render fails with the requested size, the limit, and the budget. No frame is published. The pool does not call `vkAllocateMemory` above the limit: Windows places such memory in shared system memory at about 1/300 of the speed and does not move it back (VX5). |
+| A fence wait of the pipeline device returns `VK_TIMEOUT` | The render fails with a device stall error. A stall lasts until the Windows GPU timeout resets the GPU; a device loss follows (VX5). |
+| `VK_ERROR_DEVICE_LOST` | The render fails with the error. The editor shows the error and does not publish a frame. `VulkanContext` restores the device (section 9.5, restore procedure). |
 
 ### 2.5 Data rules
 
@@ -305,7 +308,19 @@ VulkanContext                      process owner of instance, pipeline device, d
 - Buffer data has the scalar layout (`scalarBlockLayout`, `slangc -fvk-use-scalar-layout`), so a
   struct of a shared header has the layout of the host C++ struct.
 - Descriptor sets use `VK_KHR_push_descriptor`. A kernel has one set. The set holds images only.
-- Memory goes through VMA. The budget uses `VK_EXT_memory_budget` and the application limit.
+- Memory goes through VMA. The memory limit is the `VK_EXT_memory_budget` budget of the
+  device-local heap minus a reserve of 512 MiB, or the application limit when that is lower. The
+  pool reads the budget before each new allocation, because the budget changes with the memory use
+  of other processes (VX5: from 7248 MiB to 3.9 GiB). The budget and the usage are values of the
+  process on the adapter: the pipeline device, the display device, and the Direct3D 12 memory of
+  ONNX Runtime DirectML count in them (VX5: equal to the DXGI values). Above the limit the pool
+  frees cache entries; when no cache entry is left, the allocation fails (section 2.4).
+  `vkAllocateMemory` does not fail at the budget, so the limit is a check of the pool (VX5).
+- Allocations use `VK_EXT_memory_priority`: 0.2 for cache entries (`GraphImageCache`,
+  `NodeResultCache`, `MaskTextureCache`), 0.8 for the images of the render in progress and for the
+  frame image ring. Windows moves low-priority memory out first (VX5). The device does not enable
+  `VK_EXT_pageable_device_local_memory`: with it an allocation does not fail even at 115 % of the
+  heap (VX5).
 - A stable render creates no pipeline, no shader module, no image, and no buffer. Counters prove
   this, as for OpenCL.
 - Kernel names and binding numbers are defined in one header for each kernel group.
@@ -497,6 +512,9 @@ not more than 2 times the DirectML time. If UtNet2 fails this criterion, VK20 ch
 Runtime DirectML with a Direct3D 12 resource import through `VK_KHR_external_memory_win32`, and the
 plan records that one interop pairing stays.
 
+**Status.** Not run (user decision 2026-11-22, A5): the neural networks use ONNX Runtime. VK15,
+VK16, and VK20 are deferred.
+
 ### VX5: video memory budget and device loss
 
 **Question.** How does the application keep to its memory budget, and how does it continue after a
@@ -512,6 +530,12 @@ device loss?
    `BasicRenderWorkspace` become empty.
 
 **Result.** The budget rule for `TexturePool` and the restore procedure for section 2.4.
+
+**Status.** Complete (2026-11-22) for the budget: the rule is in section 4.2. Device loss: a read
+of an address with no memory on the pipeline device stalls the GPU until the Windows GPU timeout;
+the restore procedure of section 9.5 has no run, because a forced reset needs administrator rights
+on this computer and a reset during the user's model experiments stops them. Section 9.5 has the
+record.
 
 ## 7. Phase summary
 
@@ -535,12 +559,12 @@ test of its kernels (B9).
 | VK12 | DiffusionFilter and Drt | `edit/runtime/vulkan/` | VK8 | 1500 to 1900 | planned |
 | VK13 | Film print | `edit/runtime/vulkan/` | VK12 | 1600 to 1950 | planned |
 | VK14 | Film print scan and film grain | `edit/runtime/vulkan/` | VK13 | 900 to 1300 | planned |
-| VK15 | Neural network layers | `src/vulkan/nn/` | VK2, VX4 | 1500 to 1900 | planned |
-| VK16 | DemosaicNet modules and the neural Develop branch | `decoders/processor/nn/` | VK15, VK6 | 1600 to 1950 | planned |
+| VK15 | Neural network layers | `src/vulkan/nn/` | VK2, VX4 | 1500 to 1900 | deferred (A5) |
+| VK16 | DemosaicNet modules and the neural Develop branch | `decoders/processor/nn/` | VK15, VK6 | 1600 to 1950 | deferred (A5) |
 | VK17 | Scope analyzer, host download, `PipelineExecutor`, preference `vulkan` | `edit/scope/`, `edit/pipeline/`, `ui/alcedo_cli/` | VK14, VK16 | 1400 to 1800 | planned |
 | VK18 | Editor display on Qt Quick Vulkan | `ui/editor_rhi/`, `ui/alcedo_main/main.cpp` | VK17, VX2, a new resize design (R1) | 1500 to 1900 | stopped (VX2) |
 | VK19 | Release build, packaging, experimental setting | CMake presets, `scripts/`, Settings QML | VK18 | 700 to 1000 | planned |
-| VK20 | UtNet2 forward code for AI Denoise | AI Denoise modules | VK15, #1030, VX4 | 1500 to 1900 | planned |
+| VK20 | UtNet2 forward code for AI Denoise | AI Denoise modules | VK15, #1030, VX4 | 1500 to 1900 | deferred (A5) |
 | VK21 | Vulkan as the Windows default | `pipeline_accelerator`, `editor_backend` | VK19, user decision | 200 to 400 | planned |
 | VK22 | Archive of the OpenCL backend and the OpenGL pairing | `alcedo_studio/deprecated/` | VK21, user decision | file moves, 600 to 1000 changed lines | planned |
 | VK23 | Archive of the CUDA backend and the Direct3D 11 pairing | `alcedo_studio/deprecated/` | VK22 | file moves, 800 to 1200 changed lines | planned |
@@ -778,8 +802,9 @@ workspace tests that the OpenCL backend passes.
 - The command context owns the image layout of each texture during a render. A pass states the
   access that it needs. The context records the transition.
 - A resource that an unfinished submission uses stays alive until the fence signals.
-- The budget is the minimum of the application limit and the `VK_EXT_memory_budget` value, with
-  the reserve of the VX5 record.
+- The memory limit is the minimum of the application limit and the `VK_EXT_memory_budget` value
+  minus 512 MiB (section 4.2, VX5). The pool reads the budget before each new allocation and sets
+  the memory priority of each allocation (section 4.2).
 - A stable render allocates nothing.
 - `VulkanCommandContext` divides an export render into submissions by the rule of section 4.2
   (8 ms budget, one in flight, bands of rows). It keeps the time per row of each kernel, size, and
@@ -1293,12 +1318,114 @@ before the export; a minimum share of the GPU for the export during a long drag.
 
 ### 9.4 Neural network throughput (VX4)
 
-Current state: no measurement on Vulkan. Reference time: ONNX Runtime DirectML 0.82 s for
-45.4 megapixels (AI Denoise plan, DN1 record).
+Current state: not run (user decision 2026-11-22, A5). The neural networks use ONNX Runtime;
+UtNet2 runs on ONNX Runtime DirectML in the Develop render (AI Denoise plan, DN3 record: 0.45 s for
+45.4 megapixels in FP16 on the RTX 3080 Laptop GPU).
 
 ### 9.5 Memory budget and device loss (VX5)
 
-Current state: no measurement.
+Current state: on the RTX 3080 Laptop GPU, memory stays in video memory at about 410 GB/s until the
+usage of the process is about 340 MiB below the `VK_EXT_memory_budget` budget. Memory that Windows
+places above that point goes to shared system memory and runs at 1.3 GB/s; it stays there while it
+is in use and after the process frees other memory. `vkAllocateMemory` fails only at 97 % of the
+heap (and never with pageable memory), so the pool keeps its own limit: the budget minus 512 MiB
+(section 4.2). The budget is a value of the process on the adapter, equal to the DXGI value, and it
+falls when another process uses video memory. With `VK_EXT_memory_priority`, Windows moves the
+low-priority memory out first. A read of an address with no memory on the pipeline device gives no
+device loss: the GPU stops, and the GUI thread of the program stops with it, until the Windows GPU
+timeout. The restore procedure below has no run.
+
+#### 2026-11-22: allocation above the budget, a second process, and a fault on the pipeline device
+
+**Setup.**
+
+| Item | Value |
+| --- | --- |
+| Source | `main` `61d59bc98` with this plan. Experiment code: `experiments/vulkan/vx5/` on branch `feature/vulkan-backend-experiments` (`d06c70260`), with the VX2 context and viewport (the context recreates one device; the viewport item switches its producer and sets the image layouts of the new producer in a Qt frame) |
+| Program | `vx5_memory`: the VulkanContext of VX2 with two devices on one physical device (B5). budget: no window; blocks of 256 MiB, each a dedicated device-local allocation with a device address, filled with `vkCmdFillBuffer`. After each new block, a touch pass (read and write of each `float4`, a timestamp after each block) over every block gives the speed of each block. Then 5 s of passes over every block (hold), 5 s over the newest 1.5 GiB (work), and 5 s after the oldest blocks are freed until the total is 512 MiB below the start budget (free). The run goes to the free budget at the start plus 2 GiB, or to the first failed allocation. lost: the viewport of VX3 (Qt Quick on the display device, 1280 x 800 on the LG ULTRAFINE; the producer on the pipeline device) and at 2 s one dispatch on the pipeline device that reads `0x7F0000000000` (an address with no memory). |
+| Priority forms | none: no priority. split: 0.2 for the blocks inside the free start budget, 0.8 for the blocks above it (`VK_EXT_memory_priority`). pageable: split with `VK_EXT_pageable_device_local_memory`. other: none while a second `vx5_memory` process holds 3 GiB and passes over it each 100 ms for 60 s. |
+| Devices | RTX 3080 Laptop GPU (8016 MiB device-local heap), driver 610.62. Iris Xe, driver 101.7092 (one heap of 16235 MiB in system memory). 32 GiB of system memory, 12 to 13 GiB free at the start. Vulkan SDK 1.4.328.1, `slangc` 2025.17.2, Qt 6.9.3 |
+| Windows | `TdrDelay` 60 s (VX3) |
+| Run check | `vx3/gpu_idle_guard.ps1` before and after each run (VX3). The guard held the first runs for the user's `UtNet2PhotoTimingTool` and `python` jobs. The run stops at 6 GiB of free system memory (not reached: lowest 7.8 GiB). |
+| Validation | `VK_LAYER_KHRONOS_validation` on in `smoke_budget_nvidia` and `lost_nvidia_fixed_stall`: 0 errors, 0 warnings, 0 threading errors. The other runs have the layer off. |
+| Evidence | worktree `build/tmp/vulkan_backend/vx5/`: `budget_nvidia_none`, `budget_nvidia_split`, `budget_nvidia_pageable`, `budget_nvidia_other3g` (with `.hold.txt` of the second process), `budget_intel_2g`, `lost_nvidia_fixed_stall`, `tdr_nvidia_dxcap_needs_admin`, `smoke_budget_nvidia`. `superseded/`: a first run of the none form with a build before the last change of the run report (same results). |
+
+**Result: budget values.** The budget of the device-local heap of the RTX 3080 at the start is
+7248 MiB (90 % of the heap); it falls to 6909 to 7011 MiB when the usage of the process passes
+5 GiB. The Vulkan budget and usage are equal to the values of `IDXGIAdapter3::QueryVideoMemoryInfo`
+for the process in each query. A block of 256 MiB on the display device adds 256 MiB to the usage
+that the pipeline device reads: the values cover every device of the process. The start budget does
+not show another process: with 3 GiB held by the second process, the budget at the start was still
+7248 MiB; it fell to 4699 MiB at 2.3 GiB of own usage and to 3912 to 3924 MiB from 3 GiB. Iris Xe:
+budget 15467 MiB of the 16235 MiB heap in system memory.
+
+**Result: allocation above the budget, RTX 3080 Laptop GPU.** Speed of the touch pass (read and
+write, GB/s); "slow" is below half of the speed of the first block.
+
+| Form | Blocks in video memory | First slow block (own usage, budget) | Speed of the slow blocks | Allocation failure | Effect of priority |
+| --- | --- | --- | --- | --- | --- |
+| none | 0 to 24 (6400 MiB), 397 to 413 GB/s | 25 (6663 MiB, 7004 MiB) | 4.7, then 1.3 to 1.4 GB/s | `VK_ERROR_OUT_OF_DEVICE_MEMORY` at 7936 MiB (97 % of the heap) | - |
+| split | 4 to 24, 28, 29 | 25 (6663 MiB, 7004 MiB) | 25 to 27 (priority 0.2): 1 to 4 GB/s | at 7936 MiB | The new blocks 28 and 29 (0.8) were placed in video memory at 278 to 282 GB/s; Windows moved the oldest blocks 0 to 3 (0.2) out to 3 GB/s. |
+| pageable | 16 to 24, 28 to 35 | 25 (6663 MiB, 7011 MiB) | 25 to 27: 1 to 5 GB/s; 0 to 15 moved out: 3 GB/s | none up to the end of the run (9216 MiB, 115 % of the heap) | As split; Windows moved 16 blocks of priority 0.2 out for the 8 blocks of priority 0.8. |
+| other (3 GiB in a second process) | 0 to 12, 28, 29 | 13 (3591 MiB, 3924 MiB) | 14 to 27: 1.3 to 1.4 GB/s | at 7936 MiB | - |
+
+In every form a block in system memory stays slow during 5 s of passes over every block, during
+5 s of passes over only the newest 1.5 GiB (the slow blocks among them stay slow), and after the
+process frees its oldest blocks to 512 MiB below the start budget. In the other form the budget
+came back to 7248 MiB at block 28 (at about the end of the 60 s hold time of the second process); then
+blocks 16 to 23 came back to video memory within 15 s, and 14, 15, 24, 26, and 27 stayed slow to
+the end of the run. A pass over the 7.5 GiB of the none form takes 1.6 to 1.7 s, of which the
+1.25 GiB in system memory takes 1.6 s; the 6.25 GiB in video memory takes 33 ms. The fill of a
+block takes 8 to 9 ms in video memory, 150 to 400 ms in system memory (none form), and 290 to
+540 ms when Windows moves other blocks out for it (split and pageable forms). `vkAllocateMemory`
+takes 0.4 to 13 ms in each form.
+
+**Result: Iris Xe.** 8 blocks (2 GiB, below the budget): 28 to 35 GB/s for each block, no change
+in the hold, work, and free phases. The run stays below the budget: the heap is system memory, and
+a run to the budget would take 15 GiB of the free system memory.
+
+**Result: a read of an address with no memory on the pipeline device, RTX 3080 Laptop GPU.** The
+fence wait of the dispatch returned `VK_TIMEOUT` after 10 s; the pipeline device reported no
+`VK_ERROR_DEVICE_LOST`. The NVIDIA driver wrote event 153 (`nvlddmkm`, "Error occurred on GPUID:
+100") at the time of the fault and a second event 153 60 s later (the `TdrDelay` of this computer).
+The GUI thread of the program did not run between the fault and the second event: the detection
+callback that the load thread queued at 12 s did not run, the 40 s stop timer of the program ran at
+about 60 s, and Qt Quick invalidated its scene graph 61.7 s after the start. The display device
+therefore made no progress during the stall, as in the long-group form of VX3: Qt's render thread
+waits for the GPU and the GUI thread waits for the render thread. With the Windows default
+`TdrDelay` of 2 s the stall is 2 s. No program state after the reset was recorded: the run ended at
+the reset.
+
+**Result: forced reset.** `dxcap -forcetdr` exits with -1 and "DXCap: force TDR failed: Please run
+as administrator"; the shell of the experiments has no administrator rights. A driver restart with
+Win+Ctrl+Shift+B needs real keyboard input, which the experiments do not use on this computer. A
+second fault run with the restore steps was stopped before its start (user, 2026-11-22: a model
+experiment of the user ran; a GPU reset stops it). The fault form on Iris Xe did not run: it would
+stall the GPU of the laptop panel for 60 s.
+
+**Restore procedure (design, no run).** `vx5_memory` implements it; a run on a computer where a
+reset is permitted records its times and the behavior of Qt Quick.
+
+1. Detection: each `vkQueueSubmit` and `vkWaitForFences` of the pipeline device. Fence waits have a
+   finite timeout; `VK_TIMEOUT` is a stall (section 2.4), `VK_ERROR_DEVICE_LOST` is a loss. A fence
+   of each device that is never submitted, read with `vkGetFenceStatus`, and the
+   `QQuickWindow::sceneGraphError` signal show a loss of the display device.
+2. Pipeline device lost, display device alive: the viewport releases the frame images of the lost
+   device (the item drops its `QRhiTexture` wrappers); after 3 more Qt frames the pipeline objects
+   go (render workspace with its caches, shared resources, frame image ring), then
+   `VulkanContext` destroys the pipeline device and creates a new one with the same create info. The
+   new frame image ring is imported into the display device; its initial layouts are recorded in a
+   Qt frame with `beginExternal`, because the display queue belongs to Qt's render thread after Qt
+   starts (this changes the rule of section 4.2 for a restore). The first render then fills the
+   caches again.
+3. Display device lost: the editor window goes (or its scene graph is released), both devices are
+   created again, and the window starts on the new display device. Which form Qt Quick 6.9 accepts
+   for a device of the program (`fromDeviceObjects`) is the open question of this step.
+
+**Items outside this record.** A restore run (both forms of step 3); the behavior of Qt Quick on a
+lost display device; the Windows reset with the default `TdrDelay` of 2 s; a fault on Iris Xe;
+allocation above the budget on Iris Xe; a new allocation after the free phase (whether it gets
+video memory); priorities of the frame image ring against the cache entries during a drag.
 
 ## 10. Risks and stop conditions
 
@@ -1306,13 +1433,15 @@ Current state: no measurement.
 | --- | --- | --- | --- |
 | R1 | Qt Quick on Vulkan on Windows has a worse resize or a different display color than Direct3D 11. | VX2: the resize part occurred (Iris Xe about 4 times the Direct3D 11 time for each step, RTX 3080 a longer tail). The color part did not occur. | VK18 stops. The plan gets a new resize design ([#1040](https://github.com/zidage/AlcedoStudio/issues/1040)) before more display work. The compute phases VK0 to VK17 continue. |
 | R2 | A long dispatch causes a device loss or stops the editor. | VX3: a whole export in one submission holds the preview for 100 ms (RTX 3080) to 2.4 s (Iris Xe); one workgroup of 3 s stops the display device for 3 s. The Qt Quick frames keep vsync with workgroups of normal length. | The split rule of section 4.2 (one export at a time, 8 ms submissions, one in flight, workgroups below 1 ms) and the VK2 data rule. |
-| R3 | Hand-written neural network kernels are slower than the vendor convolution code. | VX4 | DemosaicNet: the criterion of VX4 decides. UtNet2: VK20 uses DirectML with resource import, and the plan records the remaining interop pairing. |
+| R3 | Hand-written neural network kernels are slower than the vendor convolution code. | VX4 (not run, A5) | The neural networks use ONNX Runtime (A5). The interop of the Vulkan pipeline with ONNX Runtime DirectML gets a design when VK15, VK16, or VK20 resumes. |
 | R4 | The pipeline and Qt Quick race on the queues of one device. | VX2 thread safety validation: occurred on both devices, with a second queue and with the queue mutex (Qt's `vkDeviceWaitIdle` at resize) | Two devices on one physical device (B5, section 4.2). With them the validation reports 0 threading errors. |
 | R5 | The results differ between GPU vendors more than the tolerance. | Comparison tests on NVIDIA and Intel | The kernel marks the affected expressions as precise. The tolerance does not increase without a record. |
 | R6 | The archive of OpenCL removes support for GPUs with no Vulkan 1.3 driver. | Device reports from users, VK19 experimental period | User decision before VK22 (section 1.5). |
 | R7 | Software that injects a Vulkan layer makes the application crash. | VX2 step 6 (OBS hook, Steam overlay, Steam Fossilize, NVIDIA layers loaded: no crash, no hang), reports in the experimental period | The application disables the named implicit layers at start. |
 | R9 | The GUI thread waits for the Vulkan `beginFrame` of the render thread while the pipeline submits on its own device (about 10 ms of each frame on the NVIDIA driver). | VX2 | [#1041](https://github.com/zidage/AlcedoStudio/issues/1041): the cause and a design. VK18 measures input latency in the editor with the split device. |
 | R8 | The backends on `main` change faster than the Vulkan passes follow. | Failing comparison tests | Section 5, rule 3. |
+| R10 | A kernel reads an address with no memory. The GPU stops until the Windows GPU timeout, and the editor stops with it (VX5: no device loss before the timeout on NVIDIA 610.62). | VX5 | Debug test runs enable the GPU-assisted validation of the validation layer for each new kernel group. Section 2.4 reports the stall; the restore procedure of section 9.5 follows the reset. |
+| R11 | The memory of the process passes the budget, for example when another process (a second Alcedo process, ONNX Runtime DirectML) takes video memory. Windows places the new memory in shared system memory at about 1/300 of the speed and does not move it back while it is in use. | VX5 | The memory limit and the priorities of section 4.2. Bug #1043 of AI Denoise is the same case for two DirectML processes. |
 
 Stop the implementation of a phase when:
 
@@ -1392,3 +1521,10 @@ Remaining defects or unavailable platforms:
 | Swapchain of Qt (SDR) | Format, color space, present mode, images that Qt 6.9.3 creates | `B8G8R8A8_UNORM`, `SRGB_NONLINEAR`, FIFO, 3 | VX2, `VK_LAYER_LUNARG_api_dump` |
 | Orientation correction | `scaleZoom.y` of the composite pass when `QRhi::isYUpInNDC()` is false | -1 | VX2 |
 | Resize criterion | Largest resize latency of Vulkan relative to Direct3D 11 | 1.1 times | this plan (VX2) |
+| Memory reserve | Part of the `VK_EXT_memory_budget` budget that the pool keeps free | 512 MiB | VX5 (spill starts about 340 MiB below the budget) |
+| Memory limit | Largest memory use of the process for the pool | minimum of the application limit and the budget minus the reserve, read before each new allocation | VX5 (section 4.2) |
+| Memory priority, cache entries | `VkMemoryPriorityAllocateInfoEXT::priority` of `GraphImageCache`, `NodeResultCache`, `MaskTextureCache` entries | 0.2 | VX5 |
+| Memory priority, working images | Priority of the images of the render in progress and of the frame image ring | 0.8 | VX5 |
+| Pageable device-local memory | `VK_EXT_pageable_device_local_memory` | not enabled | VX5 (allocations do not fail at 115 % of the heap) |
+| Budget at the start, RTX 3080 Laptop GPU | Budget of the 8016 MiB device-local heap with no other load | 7248 MiB | VX5 |
+| Speed in system memory | Touch pass of memory that Windows placed in shared system memory, RTX 3080 Laptop GPU | 1.3 to 1.4 GB/s (video memory: about 410 GB/s) | VX5 |
