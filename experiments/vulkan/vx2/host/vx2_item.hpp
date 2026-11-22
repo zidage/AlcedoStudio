@@ -63,6 +63,16 @@ class Vx2Item : public QQuickRhiItem {
   };
 
   void Configure(const Config& config) { config_ = config; }
+
+  /// VX5 restore, GUI thread: the renderer drops the textures of the old producer at the next
+  /// synchronize and uses @p producer (nullptr: no photo). The renderer then sets the images of
+  /// the new producer to SHADER_READ_ONLY_OPTIMAL in its frame; the frame count of that frame is
+  /// in layouts_frame, and switch_generation_applied is the generation of the switch.
+  void SwitchProducer(Producer* producer);
+  [[nodiscard]] auto PendingProducer(std::uint64_t& generation) -> Producer*;
+
+  static std::atomic<std::uint64_t> switch_generation_applied;
+  static std::atomic<std::uint64_t> layouts_frame;
   [[nodiscard]] auto config() const -> const Config& { return config_; }
 
   /// GUI thread. RhiCompute: the next frame runs the compute pass with @p gain.
@@ -79,6 +89,9 @@ class Vx2Item : public QQuickRhiItem {
 
  private:
   Config        config_;
+  std::mutex    switch_mutex_;
+  Producer*     switch_producer_   = nullptr;
+  std::uint64_t switch_generation_ = 0;
   std::mutex    request_mutex_;
   bool          request_pending_ = false;
   float         request_gain_    = 1.0f;

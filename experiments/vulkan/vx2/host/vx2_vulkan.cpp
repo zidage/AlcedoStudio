@@ -276,6 +276,16 @@ void VulkanContext::CreateDevice(const VulkanOptions& options) {
       family, qt_queue_index, family, pipe_queue_index, split ? " on the second VkDevice" : "",
       shared_queue ? 1 : 0, use_mutex ? 1 : 0);
 
+  options_ = options;
+  device   = MakeDevice();
+  vkGetDeviceQueue(device, family, 0, &qt_queue);
+  // The same create info: one queue of the graphics family, on a VkDevice of its own.
+  pipe_device = split ? MakeDevice() : device;
+  AdoptPipelineDevice();
+}
+
+auto VulkanContext::MakeDevice() -> VkDevice {
+  const VulkanOptions& options = options_;
   // Qt Quick at priority 1, the pipeline at 0.5.
   const float priorities[2] = {1.0f, 0.5f};
   VkDeviceQueueCreateInfo q{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -283,12 +293,52 @@ void VulkanContext::CreateDevice(const VulkanOptions& options) {
   q.queueCount       = shared_queue || split ? 1 : 2;
   q.pQueuePriorities = priorities;
 
-  VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+  std::uint32_t ext_count = 0;
+  vkEnumerateDeviceExtensionProperties(physical, nullptr, &ext_count, nullptr);
+  std::vector<VkExtensionProperties> props(ext_count);
+  vkEnumerateDeviceExtensionProperties(physical, nullptr, &ext_count, props.data());
+  std::vector<std::string> available;
+  for (const auto& p : props) available.emplace_back(p.extensionName);
+
+  // VX5 features: chained in front of the core features when the extension is present.
+  VkPhysicalDeviceFaultFeaturesEXT fault{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+  VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT pageable{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT};
+  VkPhysicalDeviceMemoryPriorityFeaturesEXT priority{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT};
+  const bool want_priority = (options.memory_priority || options.pageable) &&
+                             Contains(available, VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
+  const bool want_pageable = options.pageable && want_priority &&
+                             Contains(available, VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME);
+  const bool want_fault = options.device_fault && Contains(available, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+  void* vx5_chain = nullptr;
+  if (want_priority) {
+    priority.pNext = vx5_chain;
+    vx5_chain      = &priority;
+  }
+  if (want_pageable) {
+    pageable.pNext = vx5_chain;
+    vx5_chain      = &pageable;
+  }
+  if (want_fault) {
+    fault.pNext = vx5_chain;
+    vx5_chain   = &fault;
+  }
+
+  VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, vx5_chain};
   VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &f13};
   VkPhysicalDeviceFeatures2        supported{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f12};
   vkGetPhysicalDeviceFeatures2(physical, &supported);
+  // The supported values are now in the VX5 structures; they are the enabled values too.
+  memory_priority_enabled = want_priority && priority.memoryPriority;
+  pageable_enabled        = want_pageable && pageable.pageableDeviceLocalMemory;
+  device_fault_enabled    = want_fault && fault.deviceFault;
+  priority.memoryPriority            = memory_priority_enabled ? VK_TRUE : VK_FALSE;
+  pageable.pageableDeviceLocalMemory = pageable_enabled ? VK_TRUE : VK_FALSE;
+  fault.deviceFault                  = device_fault_enabled ? VK_TRUE : VK_FALSE;
+  fault.deviceFaultVendorBinary      = VK_FALSE;
 
-  VkPhysicalDeviceVulkan13Features e13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+  VkPhysicalDeviceVulkan13Features e13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, vx5_chain};
   VkPhysicalDeviceVulkan12Features e12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &e13};
   VkPhysicalDeviceFeatures2        enabled{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &e12};
   if (!options.minimal_features) {
@@ -304,17 +354,14 @@ void VulkanContext::CreateDevice(const VulkanOptions& options) {
   e13.dynamicRendering    = f13.dynamicRendering;
   e13.maintenance4        = f13.maintenance4;
 
-  std::uint32_t ext_count = 0;
-  vkEnumerateDeviceExtensionProperties(physical, nullptr, &ext_count, nullptr);
-  std::vector<VkExtensionProperties> props(ext_count);
-  vkEnumerateDeviceExtensionProperties(physical, nullptr, &ext_count, props.data());
-  std::vector<std::string> available;
-  for (const auto& p : props) available.emplace_back(p.extensionName);
   std::vector<const char*> extensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME,
                                          VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
   for (const char* optional : {VK_EXT_MEMORY_BUDGET_EXTENSION_NAME, VK_EXT_HDR_METADATA_EXTENSION_NAME}) {
     if (Contains(available, optional)) extensions.push_back(optional);
   }
+  if (memory_priority_enabled) extensions.push_back(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
+  if (pageable_enabled) extensions.push_back(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME);
+  if (device_fault_enabled) extensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
   if (split) {
     if (!Contains(available, VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME)) {
       throw std::runtime_error("VK_KHR_external_memory_win32 is absent");
@@ -331,17 +378,34 @@ void VulkanContext::CreateDevice(const VulkanOptions& options) {
   info.pQueueCreateInfos       = &q;
   info.enabledExtensionCount   = static_cast<std::uint32_t>(extensions.size());
   info.ppEnabledExtensionNames = extensions.data();
-  VkCheck(vkCreateDevice(physical, &info, nullptr, &device), "vkCreateDevice");
-  vkGetDeviceQueue(device, family, 0, &qt_queue);
-  pipe_device = device;
-  if (split) {
-    // The same create info: one queue of the graphics family, on a VkDevice of its own.
-    VkCheck(vkCreateDevice(physical, &info, nullptr, &pipe_device), "vkCreateDevice (pipeline)");
-  }
+  VkDevice created = VK_NULL_HANDLE;
+  VkCheck(vkCreateDevice(physical, &info, nullptr, &created), "vkCreateDevice");
+  return created;
+}
+
+void VulkanContext::AdoptPipelineDevice() {
   vkGetDeviceQueue(pipe_device, family, pipe_queue_index, &pipeline_queue);
   push_descriptor = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
       vkGetDeviceProcAddr(pipe_device, "vkCmdPushDescriptorSetKHR"));
   if (push_descriptor == nullptr) throw std::runtime_error("vkCmdPushDescriptorSetKHR is absent");
+}
+
+void VulkanContext::RecreatePipelineDevice() {
+  if (!split) throw std::runtime_error("RecreatePipelineDevice needs the split device");
+  vkDestroyDevice(pipe_device, nullptr);
+  pipe_device    = VK_NULL_HANDLE;
+  pipeline_queue = VK_NULL_HANDLE;
+  pipe_device    = MakeDevice();
+  AdoptPipelineDevice();
+}
+
+void VulkanContext::RecreateDisplayDevice() {
+  if (!split) throw std::runtime_error("RecreateDisplayDevice needs the split device");
+  vkDestroyDevice(device, nullptr);
+  device   = VK_NULL_HANDLE;
+  qt_queue = VK_NULL_HANDLE;
+  device   = MakeDevice();
+  vkGetDeviceQueue(device, family, 0, &qt_queue);
 }
 
 auto VulkanContext::MemoryType(std::uint32_t bits, VkMemoryPropertyFlags flags) const
@@ -408,7 +472,8 @@ auto VulkanContext::ValidationReport() const -> std::string {
 // ---------------------------------------------------------------------------------------------
 
 Producer::Producer(VulkanContext& context, const std::vector<float>& fixture, int width,
-                   int height, int work, const std::vector<std::uint32_t>& spirv)
+                   int height, int work, const std::vector<std::uint32_t>& spirv,
+                   bool qt_layouts)
     : ctx_(context), width_(width), height_(height), work_(work) {
   VkDevice dev = ctx_.pipe_device;
 
@@ -593,7 +658,7 @@ Producer::Producer(VulkanContext& context, const std::vector<float>& fixture, in
   vkDestroyBuffer(dev, staging, nullptr);
   vkFreeMemory(dev, staging_mem, nullptr);
 
-  if (ctx_.split) {
+  if (ctx_.split && qt_layouts) {
     // The imported images get SHADER_READ_ONLY_OPTIMAL on the Qt device, on Qt's queue, before
     // Qt starts. The layout of an image is a state of each VkImage, so each device sets its own.
     VkCommandPoolCreateInfo qpool{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};

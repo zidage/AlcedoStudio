@@ -23,6 +23,8 @@ std::atomic<std::uint64_t> Vx2Item::submitted_frames{0};
 FrameMarks                 Vx2Item::marks{};
 std::atomic<bool>          Vx2Item::y_up_in_ndc{true};
 std::atomic<int>           Vx2Item::errors{0};
+std::atomic<std::uint64_t> Vx2Item::switch_generation_applied{0};
+std::atomic<std::uint64_t> Vx2Item::layouts_frame{0};
 
 namespace {
 
@@ -91,7 +93,25 @@ class Vx2Renderer final : public QQuickRhiItemRenderer {
       config_     = v->config();
       configured_ = true;
     }
-    if (config_.source == PhotoSource::VulkanProducer) {
+    std::uint64_t generation = 0;
+    Producer*     next       = v->PendingProducer(generation);
+    if (generation != generation_) {
+      // VX5 restore: the textures of the old producer go (QRhi releases them after the frames in
+      // flight); the old images stay alive until the GUI thread sees 3 more submitted frames.
+      generation_ = generation;
+      srbs_.clear();
+      srb_  = nullptr;
+      pipeline_.reset();
+      wrapped_.clear();
+      photo_         = nullptr;
+      acquire_image_ = VK_NULL_HANDLE;
+      config_.producer = next;
+      if (next != nullptr) pending_layouts_ = next->QtImages();
+      if (next == nullptr) Vx2Item::switch_generation_applied = generation;
+    }
+    if (config_.source == PhotoSource::VulkanProducer && config_.producer == nullptr) {
+      // No photo during a restore.
+    } else if (config_.source == PhotoSource::VulkanProducer) {
       auto frame = config_.producer->TakeLatest(Vx2Item::submitted_frames.load());
       if (frame) {
         if (wrapped_.size() < static_cast<std::size_t>(config_.producer->SlotCount())) {
@@ -157,6 +177,34 @@ class Vx2Renderer final : public QQuickRhiItemRenderer {
       Vx2Item::marks.new_request_ns = pending_ns_;
     }
     if (updates == nullptr) updates = rhi_->nextResourceUpdateBatch();
+
+    if (!pending_layouts_.empty()) {
+      // VX5 restore: the images of a new producer get SHADER_READ_ONLY_OPTIMAL in this frame. The
+      // display queue belongs to Qt's render thread after Qt starts.
+      cb->beginExternal();
+      const auto* native =
+          static_cast<const QRhiVulkanCommandBufferNativeHandles*>(cb->nativeHandles());
+      std::vector<VkImageMemoryBarrier> barriers;
+      for (VkImage image : pending_layouts_) {
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        b.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image               = image;
+        b.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        barriers.push_back(b);
+      }
+      vkCmdPipelineBarrier(native->commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                           static_cast<std::uint32_t>(barriers.size()), barriers.data());
+      cb->endExternal();
+      pending_layouts_.clear();
+      // This frame is frame (submitted + 1); it is complete when Qt has submitted 2 more.
+      Vx2Item::layouts_frame             = Vx2Item::submitted_frames.load() + 1;
+      Vx2Item::switch_generation_applied = generation_;
+    }
 
     if (acquire_image_ != VK_NULL_HANDLE) {
       // Split device: acquire the image from the external owner (the pipeline device released
@@ -342,6 +390,8 @@ class Vx2Renderer final : public QQuickRhiItemRenderer {
   QRhiRenderTarget*  pipeline_target_ = nullptr;
   QRhiTexture*       photo_ = nullptr;
   VkImage            acquire_image_ = VK_NULL_HANDLE;
+  std::uint64_t      generation_    = 0;
+  std::vector<VkImage> pending_layouts_;
   bool               compute_pending_ = false;
   float              gain_            = 1;
   std::uint64_t      pending_id_      = 0;
@@ -357,6 +407,21 @@ Vx2Item::Vx2Item(QQuickItem* parent) : QQuickRhiItem(parent) {
 }
 
 QQuickRhiItemRenderer* Vx2Item::createRenderer() { return new Vx2Renderer(); }
+
+void Vx2Item::SwitchProducer(Producer* producer) {
+  {
+    std::lock_guard<std::mutex> lock(switch_mutex_);
+    switch_producer_ = producer;
+    ++switch_generation_;
+  }
+  update();
+}
+
+auto Vx2Item::PendingProducer(std::uint64_t& generation) -> Producer* {
+  std::lock_guard<std::mutex> lock(switch_mutex_);
+  generation = switch_generation_;
+  return switch_producer_;
+}
 
 void Vx2Item::RequestGain(float gain, std::int64_t request_ns) {
   {

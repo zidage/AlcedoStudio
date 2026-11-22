@@ -38,6 +38,11 @@ struct VulkanOptions {
   /// with the Qt device through Win32 external memory (zero copy). Qt's vkDeviceWaitIdle then
   /// does not touch a pipeline queue.
   bool        split_device     = false;
+  /// VX5: VK_EXT_memory_priority, VK_EXT_pageable_device_local_memory, VK_EXT_device_fault, when
+  /// the device has them.
+  bool        memory_priority  = false;
+  bool        pageable         = false;
+  bool        device_fault     = false;
 };
 
 class VulkanContext {
@@ -73,6 +78,17 @@ class VulkanContext {
   std::mutex       pipeline_submit_mutex;
   std::vector<std::string> instance_extensions;
 
+  /// VX5: the optional extensions that the devices enabled.
+  bool             memory_priority_enabled = false;
+  bool             pageable_enabled        = false;
+  bool             device_fault_enabled    = false;
+
+  /// VX5 restore: destroys the pipeline device (the caller destroyed its objects) and creates a
+  /// new one with the same create info. Split mode only.
+  void RecreatePipelineDevice();
+  /// VX5 restore: the same for the display device (the caller destroyed Qt's objects on it).
+  void RecreateDisplayDevice();
+
   auto MemoryType(std::uint32_t bits, VkMemoryPropertyFlags flags) const -> std::uint32_t;
   void LogSurface(VkSurfaceKHR surface) const;
   void LogFormatFeatures() const;
@@ -89,7 +105,10 @@ class VulkanContext {
   void CreateInstance(const VulkanOptions& options);
   void PickDevice(const VulkanOptions& options);
   void CreateDevice(const VulkanOptions& options);
+  auto MakeDevice() -> VkDevice;
+  void AdoptPipelineDevice();
 
+  VulkanOptions                   options_;
   VkDebugUtilsMessengerEXT        messenger_ = VK_NULL_HANDLE;
   std::atomic<std::uint32_t>      errors_{0};
   std::atomic<std::uint32_t>      warnings_{0};
@@ -114,7 +133,7 @@ struct ProducerFrame {
 class Producer {
  public:
   Producer(VulkanContext& context, const std::vector<float>& fixture, int width, int height,
-           int work, const std::vector<std::uint32_t>& spirv);
+           int work, const std::vector<std::uint32_t>& spirv, bool qt_layouts = true);
   ~Producer();
   Producer(const Producer&)            = delete;
   Producer& operator=(const Producer&) = delete;
@@ -138,6 +157,13 @@ class Producer {
   [[nodiscard]] auto Height() const -> int { return height_; }
   /// The thread stopped on a Vulkan error (VX3: device loss).
   [[nodiscard]] auto Failed() const -> bool { return failed_.load(); }
+  /// VX5: the images of the Qt device. With qt_layouts = false the constructor leaves them in
+  /// UNDEFINED, and the Qt frame sets SHADER_READ_ONLY_OPTIMAL (a restore while Qt runs).
+  [[nodiscard]] auto QtImages() const -> std::vector<VkImage> {
+    std::vector<VkImage> images;
+    for (const auto& s : slots_) images.push_back(s.qt_image);
+    return images;
+  }
 
  private:
   enum class State { Free, Writing, Ready, Displayed, Retired };
