@@ -53,6 +53,11 @@ struct UtNet2Spec {
   // photo for each megapixel of its mosaic. About 3 times `target_time` (RTX 3080 Laptop GPU
   // 0.016 s, M4 Neural Engine 0.013 s, Intel Iris Xe 0.114 s for each megapixel).
   static constexpr double                          kSlowDeviceLimitSecondsPerMegapixel = 0.05;
+  // The slow-device check projects the time of a photo from the fastest of its measured tiles,
+  // and it starts after this count of measured tiles (or after the last tile). Under the load of
+  // another process, single tiles of the RTX 3080 Laptop GPU took 5 times their time (issue
+  // #1043, integration plan DN6); the Intel Iris Xe is slow in each tile.
+  static constexpr int                             kSlowDeviceMeasuredTiles            = 3;
 
   // Metadata of the graph (`metadata_props`) and the values that a session requires.
   static constexpr std::string_view                kMetadataArchitecture = "architecture";

@@ -13,6 +13,16 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <windows.h>
+// After windows.h.
+#include <pdh.h>
+#include <pdhmsg.h>
+
+// The libraries of the session (see decoders/CMakeLists.txt: not on the CMake link line).
+#pragma comment(lib, "d3d12.lib")
+#pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "pdh.lib")
+// The delay load of onnxruntime.dll (/DELAYLOAD, an interface link option of the target).
+#pragma comment(lib, "delayimp.lib")
 #include <wrl/client.h>
 
 // ORT_API_MANUAL_INIT comes from the alcedo::onnxruntime_directml target: onnxruntime.dll is
@@ -28,6 +38,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cwchar>
+#include <memory>
 #include <opencv2/core.hpp>
 #include <opencv2/core/utility.hpp>
 #include <optional>
@@ -136,6 +148,64 @@ auto DmlCreateDevice() -> decltype(&DMLCreateDevice1) {
   }();
   return function;
 }
+
+/// True when the adapter has no memory of its own (D3D12 UMA: an integrated GPU).
+auto IsUmaAdapter(IDXGIAdapter3* adapter) -> bool {
+  ComPtr<ID3D12Device> device;
+  if (FAILED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+    return false;
+  }
+  D3D12_FEATURE_DATA_ARCHITECTURE architecture{};
+  return SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE, &architecture,
+                                               sizeof(architecture))) &&
+         architecture.UMA != FALSE;
+}
+
+/// The Windows performance counter of the local video memory that all processes use on one
+/// adapter (`\GPU Adapter Memory(luid_<high>_<low>_phys_0)\Dedicated Usage`, bytes). The DXGI
+/// budget of a process does not count the memory of the other processes (issue #1043).
+class AdapterLocalUsageCounter {
+ public:
+  explicit AdapterLocalUsageCounter(const LUID& luid) {
+    std::array<wchar_t, 128> path{};
+    std::swprintf(path.data(), path.size(),
+                  L"\\GPU Adapter Memory(luid_0x%08lX_0x%08lX_phys_0)\\Dedicated Usage",
+                  static_cast<unsigned long>(luid.HighPart),
+                  static_cast<unsigned long>(luid.LowPart));
+    if (PdhOpenQueryW(nullptr, 0, &query_) != ERROR_SUCCESS) {
+      query_ = nullptr;
+      return;
+    }
+    if (PdhAddEnglishCounterW(query_, path.data(), 0, &counter_) != ERROR_SUCCESS) {
+      PdhCloseQuery(query_);
+      query_ = nullptr;
+    }
+  }
+  ~AdapterLocalUsageCounter() {
+    if (query_ != nullptr) {
+      PdhCloseQuery(query_);
+    }
+  }
+  AdapterLocalUsageCounter(const AdapterLocalUsageCounter&)                    = delete;
+  auto operator=(const AdapterLocalUsageCounter&) -> AdapterLocalUsageCounter& = delete;
+
+  /// The current value, or nothing when Windows has no such counter.
+  [[nodiscard]] auto Read() const -> std::optional<std::uint64_t> {
+    if (query_ == nullptr || PdhCollectQueryData(query_) != ERROR_SUCCESS) {
+      return std::nullopt;
+    }
+    PDH_FMT_COUNTERVALUE value{};
+    if (PdhGetFormattedCounterValue(counter_, PDH_FMT_LARGE, nullptr, &value) != ERROR_SUCCESS ||
+        value.CStatus != PDH_CSTATUS_VALID_DATA || value.largeValue < 0) {
+      return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(value.largeValue);
+  }
+
+ private:
+  PDH_HQUERY   query_   = nullptr;
+  PDH_HCOUNTER counter_ = nullptr;
+};
 
 /// The first hardware adapter of `preference` that creates a Direct3D 12 device.
 auto SelectAdapter(DirectMlAdapterPreference preference) -> ComPtr<IDXGIAdapter3> {
@@ -478,6 +548,10 @@ void CheckCrop(const PackedTileRect& tile, const TileOutputCrop& crop) {
 struct UtNet2DirectMlSession::Impl {
   std::filesystem::path          graph_path;
   ComPtr<IDXGIAdapter3>          adapter;
+  // The local video memory of the adapter (DXGI `DedicatedVideoMemory`), 0 for a UMA adapter,
+  // and the counter of its use by all processes (absent for a UMA adapter).
+  std::uint64_t                             adapter_local_bytes = 0;
+  std::unique_ptr<AdapterLocalUsageCounter> adapter_local_usage;
   float                          output_scale = 1.0f;
   // Declared before `session`, so that the session ends first: it holds the queue and the
   // DirectML device.
@@ -648,6 +722,19 @@ struct UtNet2DirectMlSession::Impl {
   }
 };
 
+auto DirectMlAdapterKey(DirectMlAdapterPreference preference) -> std::string {
+  const auto         adapter = SelectAdapter(preference);
+  DXGI_ADAPTER_DESC1 description{};
+  if (const HRESULT result = adapter->GetDesc1(&description); FAILED(result)) {
+    throw std::runtime_error("DXGI: GetDesc1 failed (" + HresultText(result) + ")");
+  }
+  std::array<char, 32> luid{};
+  std::snprintf(luid.data(), luid.size(), "0x%08lX%08lX",
+                static_cast<unsigned long>(description.AdapterLuid.HighPart),
+                static_cast<unsigned long>(description.AdapterLuid.LowPart));
+  return WideText(description.Description) + " (LUID " + luid.data() + ")";
+}
+
 UtNet2DirectMlSession::UtNet2DirectMlSession(std::filesystem::path     graph_path,
                                              DirectMlAdapterPreference preference)
     : impl_(std::make_unique<Impl>()) {
@@ -656,6 +743,12 @@ UtNet2DirectMlSession::UtNet2DirectMlSession(std::filesystem::path     graph_pat
     throw std::runtime_error("UtNet2 graph " + PathText(impl_->graph_path) + " does not exist");
   }
   impl_->adapter = SelectAdapter(preference);
+  DXGI_ADAPTER_DESC1 description{};
+  if (!IsUmaAdapter(impl_->adapter.Get()) && SUCCEEDED(impl_->adapter->GetDesc1(&description))) {
+    impl_->adapter_local_bytes = description.DedicatedVideoMemory;
+    impl_->adapter_local_usage =
+        std::make_unique<AdapterLocalUsageCounter>(description.AdapterLuid);
+  }
   impl_->Load();
 }
 
@@ -712,6 +805,12 @@ auto UtNet2DirectMlSession::DeviceMemory() const -> DeviceMemoryState {
     throw std::runtime_error("DXGI: QueryVideoMemoryInfo failed (" + HresultText(result) + ")");
   }
   DeviceMemoryState state{.budget_bytes = info.Budget, .usage_bytes = info.CurrentUsage};
+  if (impl_->adapter_local_usage) {
+    if (const auto usage = impl_->adapter_local_usage->Read(); usage.has_value()) {
+      state.adapter_local_bytes       = impl_->adapter_local_bytes;
+      state.adapter_local_usage_bytes = *usage;
+    }
+  }
   if (impl_->session) {
     for (const auto& entry : UtNet2Spec::kDirectMlTileMemory) {
       if (entry.tile_size <= impl_->largest_tile_side) {

@@ -23,6 +23,13 @@ enum class DirectMlAdapterPreference {
   MinimumPower,
 };
 
+/// The identity of the adapter that a session of `preference` selects: its description and its
+/// LUID, for example "NVIDIA GeForce RTX 3080 Laptop GPU (LUID 0x000000000001A376)". Creates no
+/// session. Throws `std::runtime_error` when no hardware adapter has Direct3D 12.
+[[nodiscard]] auto DirectMlAdapterKey(
+    DirectMlAdapterPreference preference = DirectMlAdapterPreference::HighPerformance)
+    -> std::string;
+
 /// The ONNX Runtime session of the FP16 UtNet2 graph on DirectML (Windows x64).
 ///
 /// The constructor selects the adapter (DXGI), loads ONNX Runtime (onnxruntime.dll beside the
