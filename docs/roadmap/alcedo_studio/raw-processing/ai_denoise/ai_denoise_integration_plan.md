@@ -637,6 +637,38 @@ request; lab entry `inference_cost.md`, 2026-11-22, last tile and cuDNN algorith
 - The cuDNN search of the algorithms takes 12 to 37 s on the first call of a new tile shape. The
   forward code of DN2 selects its kernels at build time and has no search.
 
+##### Phase DN1 addition (2026-11-22): ONNX Runtime with DirectML
+
+The user asked for the time of the model in ONNX Runtime with the DirectML execution provider.
+Lab commit `51c4007` on the same pull request; lab entry `inference_cost.md`, 2026-11-22, ONNX
+Runtime DirectML. ONNX Runtime 1.24.4 (the last `onnxruntime-directml` package on PyPI) with
+DirectML 1.15.4, the DirectML.dll that Alcedo Studio ships beside ONNX Runtime 1.28 of the AI
+Mask sidecar. The ONNX graph is made from the safetensors weights of DN0 (opset 17, 50 nodes,
+height and width free, each node on DirectML).
+
+| Measurement | Result |
+| --- | --- |
+| Precision against the DN0 expected outputs | 9.6e-7 to 1.7e-6 of the largest value on the RTX 3080 Laptop GPU and on the Intel Iris Xe; the DN0 tolerance is 1e-5 |
+| Time, one session with free height and width, tiles of 1536, overlap 96, shrunk last tile | 0.49 s (24.3 MP), 0.69 s (32.5 MP), 0.71 s (36.2 MP), 0.97 s (42.4 MP), 0.82 s (45.4 MP) |
+| PyTorch, fastest FP32 cuDNN algorithms, the same session | 0.41, 0.51, 0.56, 0.68, 0.69 s: DirectML is 1.2 to 1.3 times |
+| Time with tiles of 1024 | 1.06 s at 45.4 MP |
+| Used GPU memory of the process | 3.3 GiB (tiles of 1536), 1.0 GiB (tiles of 1024); PyTorch 4.8 GiB |
+| Host copies | 35 ms of the 114 ms of one tile of 1536 (input and output through host memory); 0.2 s of the 0.82 s at 45.4 MP |
+| One session for each tile shape | The same output; 9% to 17% faster when it fits, but each session keeps its own memory arena: 4 sessions of tiles of 1536 use 5.7 GiB and spill to shared memory (6.6 s at 45.4 MP) |
+| `ep.dml.disable_memory_arena` | 1.3 to 2.5 times longer with one free session |
+| One shape for all tiles (last tile filled by reflection to the full tile) | Not the one-pass output: up to 7.7e-2 of the largest value at the bottom and right border |
+| Session creation and first run | 0.07 to 0.13 s and 0.16 to 0.53 s |
+| Intel Iris Xe, tiles of 1024 | 3.5 s (24.3 MP), 6.9 s (45.4 MP) |
+
+- **Against DemosaicNet:** 0.71 s on 36.2 MP is 1.9 times the 376 ms of the DemosaicNet student.
+  The own CUDA kernels of DN2 reach this time only at the cuDNN level (section DN1 addition of
+  the last tile).
+- **Against D2:** D2 excludes ONNX Runtime. The measurement gives the time of an ONNX Runtime
+  path for the decision of the user; this record does not change D2, D13, DN2, or DN3.
+- GPU state: DirectML at 65 to 79 C, PyTorch at 72 to 88 C; median SM clock 1,485 to 1,800 MHz
+  in both. Not measured: ONNX Runtime 1.28 of Alcedo Studio, AMD GPUs, the Core ML execution
+  provider, copies that overlap the run.
+
 ### DN2: CUDA layers of UtNet2
 
 **Objective and deliverables**
