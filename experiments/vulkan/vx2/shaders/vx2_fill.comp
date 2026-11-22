@@ -1,0 +1,33 @@
+#version 440
+
+// VX2: writes the photo image from a source buffer. With gain 1 and no work iterations the image
+// is an exact copy of the source. The work loop gives a compute load without a change of result.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(std430, binding = 0) readonly buffer Source {
+  vec4 texels[];
+};
+layout(rgba32f, binding = 1) uniform writeonly image2D target;
+layout(std140, binding = 2) uniform Params {
+  // x: width, y: height, z: work iterations, w: unused.
+  ivec4 size;
+  // x: gain, yzw: unused.
+  vec4 grade;
+};
+
+void main() {
+  ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+  if (p.x >= size.x || p.y >= size.y) {
+    return;
+  }
+  vec4 c = texels[p.y * size.x + p.x];
+  float acc = c.g;
+  for (int i = 0; i < size.z; ++i) {
+    acc = fract(acc * 1.618034 + c.r + float(i) * 0.001);
+  }
+  vec3 rgb = c.rgb * grade.x;
+  if (acc < -1.0) {
+    rgb += vec3(1.0);
+  }
+  imageStore(target, p, vec4(rgb, c.a));
+}
