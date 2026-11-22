@@ -5,7 +5,8 @@
   complete (2026-11-21, lab PR zidage/alcedo-denoise-lab#3, issue #1033; U3 closed, U2 with
   the user); DN2 to DN13 planned. 2026-11-22: D2 and D13 changed to ONNX Runtime DirectML in
   C++ on Windows; DN2, DN3, DN10, and DN11 rewritten for it. 2026-11-22: macOS measured (DN1
-  addition, ONNX Runtime on macOS); D2 extended to Core ML on macOS; DN10 rewritten for it
+  addition, ONNX Runtime on macOS); D2 extended to Core ML on macOS; DN10 rewritten for it.
+  2026-11-22: FP16 on the Neural Engine measured (DN1 addition); U5 with the user
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -57,6 +58,7 @@ Develop stage reads the stored result in place of its own linearization and demo
 | U2 | The pixel format and the compression of the stored result file | DN1, stored format table | User |
 | U3 | The tile size and the tile overlap. Closed 2026-11-21: overlap 96 packed px, tile size the largest of 512 to 1536 that fits (DN1 completion record) | DN1, border difference table | Implementer, recorded in DN3 |
 | U4 | The highlight handling of the stored result. The user decided on 2026-11-22 that no clip mask is made: high-noise photos have a low dynamic range, and many scenes that need the highlight recovery are not at a high ISO | DN1, clipped area table | Implementer, recorded in DN5 |
+| U5 | macOS: FP16 on the Neural Engine (0.60 s at 45.4 MP, 75.7 to 80.6 dB against FP32 at +2 EV) in place of FP32 on the GPU (3.55 s). A change to D2 (FP32) and to the lab constraint "FP32 in Alcedo Studio". If yes: the rescale calibration on many photos, a check of the output for values that are not finite (the run then reports the error), and a check by eye of the FP16 output | DN1 addition, FP16 on the Neural Engine | User |
 
 ### 1.4 Options that must not return
 
@@ -740,6 +742,47 @@ seconds (peak footprint at 45.4 MP):
   and after a batch.
 - Not measured: M4 Pro, M4 Max, and other Apple GPUs; Intel Macs; Macs with more or less than
   16 GB; Core ML input and output in `IOSurface` memory.
+
+##### Phase DN1 addition (2026-11-22): FP16 on the Neural Engine, and the RAW processing of macOS
+
+The user found the 3.55 s of the GPU too slow and asked for other ways and for a comparison with
+the RAW processing of the macOS 27 system API. Lab commit `54867e1`; lab entry
+`inference_cost.md`, 2026-11-22, FP16 on the Neural Engine. The same Mac and planner.
+
+- **The GPU in FP32 is near its limit.** At 45.4 MP with tiles of 1536 the model computes 4.9
+  TFLOP. Core ML reaches 1.4 to 1.8 TFLOP/s; the FP32 peak of the 8-core M4 GPU is about 3.4
+  TFLOP/s (8 cores x 128 ALUs x 2 x about 1.5 GHz, an estimate). Own Metal code can save at most
+  about half of the 3.55 s. FP16 on the GPU saves 7% to 15% (3.30 s).
+- **FP16 on the Neural Engine:** the lab rescales the layers exactly (FP32 output within
+  8.7e-7, scale of the last layer put back on the host) so that the activations fit in FP16
+  (largest 119 to 3,413 on 11 photos, margin 19 times to 65,504). Core ML then places each of
+  the 52 operations on the Neural Engine (one session for each tile shape; a free-shape session
+  puts half of them on the CPU). The graph has float16 input and output; the Core ML execution
+  provider does not take a Cast from a float32 input.
+
+| macOS, M4, tiles of 1536 | 24.3 MP | 36.2 MP | 45.4 MP | Peak footprint |
+| --- | ---: | ---: | ---: | ---: |
+| Neural Engine, FP16, one session for each shape | **0.37 s** | **0.51 s** | **0.60 s** | 2.0 GiB |
+| GPU, FP16, free shape | 1.56 s | 2.58 s | 3.30 s | 3.2 GiB |
+| GPU, FP32, free shape (the DN10 configuration) | 1.83 s | 2.82 s | 3.55 s | 5.5 GiB |
+| DirectML FP32, RTX 3080 Laptop GPU (Windows) | 0.49 s | 0.71 s | 0.82 s | 3.3 GiB |
+
+| Output of the Neural Engine against FP32 (developed PSNR) | +2 EV whole | +2 EV dark | +5 EV dark |
+| --- | ---: | ---: | ---: |
+| 24.3 MP, Canon EOS R3 | 80.6 dB | 82.7 dB | 75.2 dB |
+| 32.5 MP, Canon EOS 90D, high ISO | 80.3 dB | 82.4 dB | 74.9 dB |
+| 42.4 MP, Sony ILCE-7RM3 | 75.7 dB | 67.8 dB | 60.2 dB |
+
+- The float16 stored result (U2) has at least 81.8 dB, the lossy JPEG XL formats 26 to 54 dB.
+- **RAW processing of macOS:** Core Image `CIRAWFilter` (decoder version 8) takes 0.36 to 0.60 s
+  for the whole photo (decode, demosaic, its luminance and color noise reduction, color, render
+  to host memory) on 24.0, 32.3, and 42.2 MP files. The macOS 27 SDK has no other RAW noise
+  reduction API. The Neural Engine time of the model (0.37 s at 24.3 MP) is in that range and
+  equals the Metal DemosaicNet student (377 ms).
+- **Windows:** FP16 on DirectML saves 17% to 20% (0.74 s against 0.89 s at 45.4 MP), with a
+  photo output within 3.8e-3 of the largest FP32 value. The RTX 3080 Laptop GPU has no Neural
+  Engine; the Windows gain of FP16 is small.
+- **Effect:** decision U5 (section 1.3). D2 (FP32) stays until the user decides.
 
 ### DN2: ONNX graph, ONNX Runtime DirectML dependency, UtNet2 session
 
