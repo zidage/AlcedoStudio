@@ -53,6 +53,28 @@
 #define CE_LOG    precise::log
 #define CE_LOG2   precise::log2
 #define CE_SQRT   precise::sqrt
+#elif defined(GL_core_profile)
+// GLSL (glslc), for the GLSL comparison of VX1 only.
+#define CE_INLINE
+#define CE_POW    pow
+#define CE_EXP    exp
+#define CE_EXP2   exp2
+#define CE_LOG    log
+#define CE_LOG2   log2
+#define CE_SQRT   sqrt
+#elif defined(__SLANG__)
+// Slang to SPIR-V (Vulkan compute, docs/roadmap/alcedo_studio/edit/vulkan_compute_backend_plan.md).
+#define CE_INLINE static
+#if defined(CE_SLANG_POW_EXP2_LOG2)
+#define CE_POW(x, y) exp2((y) * log2(x))
+#else
+#define CE_POW    pow
+#endif
+#define CE_EXP    exp
+#define CE_EXP2   exp2
+#define CE_LOG    log
+#define CE_LOG2   log2
+#define CE_SQRT   sqrt
 #else
 #include <cmath>
 #ifdef __CUDACC__

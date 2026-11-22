@@ -40,6 +40,18 @@
 #define FILM_KERNEL_PARAMS constant
 #define FILM_KERNEL_PRIVATE thread
 #define FILM_KERNEL_UINT   uint
+#elif defined(__SLANG__)
+// Slang to SPIR-V: a pointer is a device address (PhysicalStorageBuffer).
+#define FILM_KERNEL_INLINE static
+#define FILM_KERNEL_LOG10  log10
+#define FILM_KERNEL_POW    pow
+#define FILM_KERNEL_EXP    exp
+#define FILM_KERNEL_EXP2   exp2
+#define FILM_KERNEL_LOG2   log2
+#define FILM_KERNEL_VALUES
+#define FILM_KERNEL_PARAMS
+#define FILM_KERNEL_PRIVATE
+#define FILM_KERNEL_UINT   uint
 #else
 #include <cmath>
 #include <cstdint>
@@ -198,7 +210,7 @@ FILM_KERNEL_INLINE FilmKernelReal FilmKernelReadCurve(FILM_KERNEL_VALUES FilmKer
 FILM_KERNEL_INLINE FilmKernelRgb FilmKernelLayerExposure(
     FILM_KERNEL_PARAMS FilmKernelParams* params, FILM_KERNEL_VALUES FilmKernelReal* values,
     FilmKernelReal r, FilmKernelReal g, FilmKernelReal b) {
-  FILM_KERNEL_PARAMS FilmKernelReal* m = params->ap1_to_xyz;
+  FILM_KERNEL_PARAMS FilmKernelReal* m = &params->ap1_to_xyz[0];
   const FilmKernelReal               y = m[3] * r + m[4] * g + m[5] * b;
   if (y <= FILM_KERNEL_REAL(0.0)) {
     return FilmKernelMakeRgb(FILM_KERNEL_REAL(0.0), FILM_KERNEL_REAL(0.0), FILM_KERNEL_REAL(0.0));
@@ -311,8 +323,8 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelPointAmounts(FILM_KERNEL_PARAMS FilmK
   const FilmKernelRgb log_q = FilmKernelLogExposures(q);
   FilmKernelRgb       a     = FilmKernelCurveAmounts(params, values, log_q);
   if (params->inhibition_stored != 0U) {
-    a = FilmKernelStep(params, values, params->inhibition_k, log_q, a);
-    a = FilmKernelStep(params, values, params->inhibition_k, log_q, a);
+    a = FilmKernelStep(params, values, &params->inhibition_k[0], log_q, a);
+    a = FilmKernelStep(params, values, &params->inhibition_k[0], log_q, a);
   }
   return a;
 }
@@ -336,8 +348,8 @@ FilmKernelFirstAmountsWithPointPart(FILM_KERNEL_PARAMS FilmKernelParams* params,
   first.amounts = FilmKernelCurveAmounts(params, values, first.log_q);
   if (params->inhibition_has_point != 0U) {
     const FilmKernelRgb a1 =
-        FilmKernelStep(params, values, params->inhibition_k, first.log_q, first.amounts);
-    FILM_KERNEL_PARAMS FilmKernelReal* k = params->inhibition_point_k;
+        FilmKernelStep(params, values, &params->inhibition_k[0], first.log_q, first.amounts);
+    FILM_KERNEL_PARAMS FilmKernelReal* k = &params->inhibition_point_k[0];
     first.log_q.r -= k[0] * a1.r + k[1] * a1.g + k[2] * a1.b;
     first.log_q.g -= k[3] * a1.r + k[4] * a1.g + k[5] * a1.b;
     first.log_q.b -= k[6] * a1.r + k[7] * a1.g + k[8] * a1.b;
@@ -402,7 +414,7 @@ FilmKernelPrintDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params,
   const FilmKernelReal               x = v.r * v.r * v.r;
   const FilmKernelReal               y = v.g * v.g * v.g;
   const FilmKernelReal               z = v.b * v.b * v.b;
-  FILM_KERNEL_PARAMS FilmKernelReal* m = params->xyz_to_display;
+  FILM_KERNEL_PARAMS FilmKernelReal* m = &params->xyz_to_display[0];
   return FilmKernelMakeRgb(m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z,
                            m[6] * x + m[7] * y + m[8] * z);
 }
@@ -446,7 +458,7 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelLoupeFlare(FilmKernelRgb rgb, FilmKer
 FILM_KERNEL_INLINE FilmKernelRgb
 FilmKernelDisplaySurround(FILM_KERNEL_PARAMS FilmKernelParams* params, FilmKernelRgb rgb) {
   if (params->display_surround_power == FILM_KERNEL_REAL(0.0)) return rgb;
-  FILM_KERNEL_PARAMS FilmKernelReal* w = params->display_luminance;
+  FILM_KERNEL_PARAMS FilmKernelReal* w = &params->display_luminance[0];
   const FilmKernelReal               y =
       FilmKernelMax(w[0] * rgb.r + w[1] * rgb.g + w[2] * rgb.b, FILM_KERNEL_REAL(1e-12));
   const FilmKernelReal scale = FILM_KERNEL_POW(y, params->display_surround_power);
@@ -696,7 +708,9 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelCinemaLook(FilmKernelRgb linear) {
  *         base is at or above the grey), else 1. @p terms is written in both cases.
  *
  * The pointers are to values of the caller (FILM_KERNEL_PRIVATE: Metal needs an address space).
+ * Slang has no pointer to a value of the caller; the host computes the terms.
  */
+#if !defined(__SLANG__)
 FILM_KERNEL_INLINE int FilmKernelNegativeScanTerms(
     FILM_KERNEL_PRIVATE const FilmKernelReal* base_density,
     FILM_KERNEL_PRIVATE const FilmKernelReal* aim_density,
@@ -718,6 +732,7 @@ FILM_KERNEL_INLINE int FilmKernelNegativeScanTerms(
   }
   return valid;
 }
+#endif
 
 /** One channel of FilmKernelNegativeScanPixel. */
 FILM_KERNEL_INLINE FilmKernelReal FilmKernelNegativeScanChannel(FilmKernelReal t,

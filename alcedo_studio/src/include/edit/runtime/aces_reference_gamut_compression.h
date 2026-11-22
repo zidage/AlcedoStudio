@@ -11,6 +11,9 @@
 #elif defined(__METAL_VERSION__)
 #define ACES_RGC_INLINE static inline
 #define ACES_RGC_POW    pow
+#elif defined(__SLANG__)
+#define ACES_RGC_INLINE static
+#define ACES_RGC_POW    pow
 #else
 #include <cmath>
 #ifdef __CUDACC__

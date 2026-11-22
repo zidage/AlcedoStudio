@@ -1,0 +1,296 @@
+#version 460
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//
+// VX1 step 6: the point kernel of primary_grade.slang in GLSL (glslc), for the comparison of the
+// source size and the build time. Same binding model and push constant layout as the Slang kernel.
+// Experiment code: it does not merge.
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+#include "color/color_encoding_math.h"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// A record of the parameter arena. GLSL has no struct pointer arithmetic: a record is addressed by
+// its uint64 address.
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer GradeRecord {
+  uint  behavior;
+  uint  count;
+  float values[48];
+  uint  reserved[2];
+};
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Commands {
+  uint v[];
+};
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Lut {
+  vec4 v[];
+};
+
+layout(push_constant, scalar) uniform PrimaryGradePush {
+  uint64_t parameter_base;
+  Commands commands;
+  Lut      lut;
+  uint     command_count;
+  uint     command_offset;
+  uint     lut_edge;
+  uint     width;
+  uint     height;
+} push;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D src_image;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D dst_image;
+
+const uint kRecordBytes = 208u;
+
+float Cbrt(float x) {
+  if (x == 0.0) return 0.0;
+  const float a = abs(x);
+  float       r = exp2(log2(a) * (1.0 / 3.0));
+  r             = r - (r * r * r - a) / (3.0 * r * r);
+  return x < 0.0 ? -r : r;
+}
+
+// C fmod: the sign of x (GLSL mod has the sign of y).
+float Fmod(float x, float y) { return x - y * trunc(x / y); }
+
+vec3 AcesccToLinearAp1(vec3 c) {
+  return vec3(CeAcesccDecode(c.x), CeAcesccDecode(c.y), CeAcesccDecode(c.z));
+}
+
+vec3 LinearAp1ToAcescc(vec3 c) {
+  return vec3(CeAcesccEncode(c.x), CeAcesccEncode(c.y), CeAcesccEncode(c.z));
+}
+
+vec3 LinearAp1ToOkLab(vec3 c) {
+  const float l  = 0.6341104672 * c.x + 0.3489495087 * c.y + 0.0169400240 * c.z;
+  const float m  = 0.2754060131 * c.x + 0.6327713632 * c.y + 0.0918226237 * c.z;
+  const float s  = 0.1056775254 * c.x + 0.1971481306 * c.y + 0.6971743440 * c.z;
+  const float l_ = Cbrt(l);
+  const float m_ = Cbrt(m);
+  const float s_ = Cbrt(s);
+  return vec3(0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+              1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+              0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_);
+}
+
+vec3 OkLabToLinearAp1(vec3 lab) {
+  const float l_ = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
+  const float m_ = lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z;
+  const float s_ = lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z;
+  const float l  = l_ * l_ * l_;
+  const float m  = m_ * m_ * m_;
+  const float s  = s_ * s_ * s_;
+  return vec3(2.0693822907 * l - 1.1736821545 * m + 0.1042998638 * s,
+              -0.8917480677 * l + 2.1537429245 * m - 0.2619948569 * s,
+              -0.0615064732 * l - 0.4311325686 * m + 1.4926390418 * s);
+}
+
+float Luma(vec3 c) { return 0.272229 * c.x + 0.674082 * c.y + 0.053689 * c.z; }
+
+vec3 ApplyOkLabContrast(vec3 acescc, float contrast) {
+  const float kPivotLightness  = 0.5646216;
+  const float kCurveWidthStops = 2.5;
+  const float slope            = exp2(contrast * 0.01);
+  vec3        lab              = LinearAp1ToOkLab(AcesccToLinearAp1(acescc));
+  const float shape =
+      lab.x > 0.0 ? tanh(3.0 * log2(lab.x / kPivotLightness) / kCurveWidthStops) : -1.0;
+  const float gain         = exp2((slope - 1.0) * kCurveWidthStops * shape / 3.0);
+  const float chroma_scale = sqrt(slope) * min(gain, 1.0);
+  lab                      = vec3(lab.x * gain, lab.y * chroma_scale, lab.z * chroma_scale);
+  return LinearAp1ToAcescc(OkLabToLinearAp1(lab));
+}
+
+float ToneZoneShiftEv(float x, float s) {
+  if (x <= 0.0 || s == 0.0) return 0.0;
+  const float w = 3.0;
+  if (s > 0.0) {
+    const float t = min(x / w, 1.0);
+    return s * t * t * (3.0 - 2.0 * t);
+  }
+  const float a = -s;
+  if (x >= w + a) return -a;
+  float t = x / (w + a);
+  for (int i = 0; i < 5; ++i) {
+    const float f  = w * t + a * t * t * (3.0 - 2.0 * t) - x;
+    const float fp = w + 6.0 * a * t * (1.0 - t);
+    t              = clamp(t - f / fp, 0.0, 1.0);
+  }
+  return w * t - x;
+}
+
+float ApplyCurve(float value, uint64_t address) {
+  GradeRecord p = GradeRecord(address);
+  const uint  n = p.count;
+  if (n < 2u) {
+    return value;
+  }
+  if (value <= p.values[0]) {
+    return p.values[16] + p.values[32] * (value - p.values[0]);
+  }
+  if (value >= p.values[n - 1u]) {
+    return p.values[16u + n - 1u] + p.values[32u + n - 1u] * (value - p.values[n - 1u]);
+  }
+  uint i = 0u;
+  while (i + 2u < n && value >= p.values[i + 1u]) {
+    ++i;
+  }
+  const float h  = p.values[i + 1u] - p.values[i];
+  const float t  = (value - p.values[i]) / h;
+  const float dy = p.values[16u + i + 1u] - p.values[16u + i];
+  const float d  = dy / h;
+  const float u  = 1.0 - t;
+  return p.values[16u + i] + t * dy +
+         h * t * u * (u * (p.values[32u + i] - d) - t * (p.values[32u + i + 1u] - d));
+}
+
+float ApplyToneWheel(float c, GradeRecord p, int ch) {
+  if (p.values[3 + ch] == 0.0 && p.values[6 + ch] == 1.0 && p.values[9 + ch] == 0.0) {
+    return c + p.values[ch];
+  }
+  const float black = p.values[12];
+  const float range = p.values[13];
+  float       t     = (c + p.values[ch] - black) / range;
+  t += p.values[3 + ch] * clamp(1.0 - t, 0.0, 1.0);
+  if (t > 0.0 && t < 1.0) t = pow(t, p.values[6 + ch]);
+  t += p.values[9 + ch] * max(t, 0.0);
+  return black + t * range;
+}
+
+vec3 ApplyHls(vec3 c, GradeRecord p) {
+  const float maximum = max(c.x, max(c.y, c.z));
+  const float minimum = min(c.x, min(c.y, c.z));
+  const float chroma  = maximum - minimum;
+  float       hue     = 0.0;
+  if (chroma > 1.0e-6) {
+    if (maximum == c.x) {
+      hue = 60.0 * Fmod((c.y - c.z) / chroma, 6.0);
+    } else if (maximum == c.y) {
+      hue = 60.0 * ((c.z - c.x) / chroma + 2.0);
+    } else {
+      hue = 60.0 * ((c.x - c.y) / chroma + 4.0);
+    }
+  }
+  if (hue < 0.0) {
+    hue += 360.0;
+  }
+  if (chroma <= 1.0e-6) return c;
+  float sum_h = 0.0, sum_l = 0.0, sum_s = 0.0, sum_weight = 0.0;
+  for (int i = 0; i < 8; ++i) {
+    const float difference = abs(hue - p.values[i]);
+    const float distance   = min(difference, 360.0 - difference);
+    const float width      = max(p.values[32 + i], 1.0);
+    const float weight     = exp2(-distance * distance / (width * width));
+    sum_h += p.values[8 + i * 3] * weight;
+    sum_l += p.values[8 + i * 3 + 1] * weight;
+    sum_s += p.values[8 + i * 3 + 2] * weight;
+    sum_weight += weight;
+  }
+  if (sum_weight <= 1.0e-6) return c;
+  const float inv_weight = 1.0 / sum_weight;
+  const float adj_h      = sum_h * inv_weight;
+  const float adj_l      = sum_l * inv_weight;
+  const float adj_s      = sum_s * inv_weight;
+  if (abs(adj_h) <= 1.0e-6 && abs(adj_l) <= 1.0e-6 && abs(adj_s) <= 1.0e-6) return c;
+  const float angle = -adj_h * 2.25 * 0.017453292519943295;
+  const float scale = exp2(adj_s * 2.25 * (adj_s >= 0.0 ? 4.5 : 3.25));
+  const float lift  = adj_l * 1.125;
+  const float i     = 0.596 * c.x - 0.274 * c.y - 0.322 * c.z;
+  const float q     = 0.211 * c.x - 0.523 * c.y + 0.312 * c.z;
+  const float di    = (i * cos(angle) - q * sin(angle)) * scale - i;
+  const float dq    = (i * sin(angle) + q * cos(angle)) * scale - q;
+  return vec3(c.x + lift + 0.956 * di + 0.621 * dq, c.y + lift - 0.272 * di - 0.647 * dq,
+              c.z + lift - 1.106 * di + 1.703 * dq);
+}
+
+uint LutIndex(uint edge, uint x, uint y, uint z) { return (z * edge + y) * edge + x; }
+
+vec3 SampleLut3d(Lut lut, uint edge, float u, float v, float w) {
+  const vec3  coord   = clamp(vec3(u, v, w), 0.0, 1.0);
+  const vec3  tex_pos = coord * float(edge) - 0.5;
+  const vec3  pos     = clamp(tex_pos, 0.0, float(edge - 1u));
+  const uvec3 lo      = uvec3(pos);
+  const uvec3 hi      = min(lo + uvec3(1u), uvec3(edge - 1u));
+  const vec3  t       = pos - vec3(lo);
+  const vec4  c000    = lut.v[LutIndex(edge, lo.x, lo.y, lo.z)];
+  const vec4  c100    = lut.v[LutIndex(edge, hi.x, lo.y, lo.z)];
+  const vec4  c010    = lut.v[LutIndex(edge, lo.x, hi.y, lo.z)];
+  const vec4  c110    = lut.v[LutIndex(edge, hi.x, hi.y, lo.z)];
+  const vec4  c001    = lut.v[LutIndex(edge, lo.x, lo.y, hi.z)];
+  const vec4  c101    = lut.v[LutIndex(edge, hi.x, lo.y, hi.z)];
+  const vec4  c011    = lut.v[LutIndex(edge, lo.x, hi.y, hi.z)];
+  const vec4  c111    = lut.v[LutIndex(edge, hi.x, hi.y, hi.z)];
+  const vec4  c00     = mix(c000, c100, t.x);
+  const vec4  c10     = mix(c010, c110, t.x);
+  const vec4  c01     = mix(c001, c101, t.x);
+  const vec4  c11     = mix(c011, c111, t.x);
+  const vec4  c0      = mix(c00, c10, t.y);
+  const vec4  c1      = mix(c01, c11, t.y);
+  return mix(c0, c1, t.z).xyz;
+}
+
+vec3 ApplyAdjustment(vec3 c, uint64_t address, Lut lut, uint lut_edge) {
+  GradeRecord p        = GradeRecord(address);
+  const uint  behavior = p.behavior;
+  const float value    = p.values[0];
+  if (behavior == 0u && value != 0.0) {
+    const vec3 lin = vec3(CeAcesccDecode(c.x), CeAcesccDecode(c.y), CeAcesccDecode(c.z));
+    c = vec3(CeAcesccEncode(p.values[1] * lin.x + p.values[2] * lin.y + p.values[3] * lin.z),
+             CeAcesccEncode(p.values[4] * lin.x + p.values[5] * lin.y + p.values[6] * lin.z),
+             CeAcesccEncode(p.values[7] * lin.x + p.values[8] * lin.y + p.values[9] * lin.z));
+  } else if (behavior == 1u) {
+    c += value / CE_ACESCC_B;
+  } else if (behavior == 2u && value != 0.0) {
+    c = ApplyOkLabContrast(c, value);
+  } else if ((behavior == 3u || behavior == 4u) && value != 0.0) {
+    const float x        = (Luma(c) - CE_ACESCC_MIDDLE_GREY) * CE_ACESCC_B;
+    const float s        = value * 0.03;
+    const float shift_ev = behavior == 3u ? ToneZoneShiftEv(x, s) : -ToneZoneShiftEv(-x, -s);
+    c += shift_ev / CE_ACESCC_B;
+  } else if (behavior == 7u) {
+    c.x = ApplyCurve(ApplyCurve(c.x, address), address + 1u * kRecordBytes);
+    c.y = ApplyCurve(ApplyCurve(c.y, address), address + 2u * kRecordBytes);
+    c.z = ApplyCurve(ApplyCurve(c.z, address), address + 3u * kRecordBytes);
+  } else if (behavior == 8u) {
+    c = ApplyHls(c, p);
+  } else if (behavior == 9u || behavior == 10u) {
+    float scale = behavior == 9u ? value : 1.0 + value * 0.01;
+    if (behavior == 10u) {
+      const float maximum = max(c.x, max(c.y, c.z));
+      const float minimum = min(c.x, min(c.y, c.z));
+      scale               = 1.0 + (scale - 1.0) * (1.0 - min(maximum - minimum, 1.0));
+    }
+    const float l = Luma(c);
+    if (scale > 1.5) {
+      const float peak       = max(c.x, max(c.y, c.z));
+      const float peak_raise = (peak - l) * (scale - 1.0);
+      if (peak_raise > 0.1) scale = 1.0 + 0.1 / max(peak - l, 1.0e-6);
+    }
+    c = l + (c - l) * scale;
+  } else if (behavior == 11u) {
+    c.x = ApplyToneWheel(c.x, p, 0);
+    c.y = ApplyToneWheel(c.y, p, 1);
+    c.z = ApplyToneWheel(c.z, p, 2);
+  } else if (behavior == 12u && value > 0.0 && lut_edge > 1u) {
+    const float scale   = float(lut_edge - 1u) / float(lut_edge);
+    const float offset  = 1.0 / (2.0 * float(lut_edge));
+    const vec3  sampled = SampleLut3d(lut, lut_edge, c.x * scale + offset, c.y * scale + offset,
+                                      c.z * scale + offset);
+    c = value >= 1.0 ? sampled : c + value * (sampled - c);
+  }
+  return c;
+}
+
+void main() {
+  const uvec2 id = gl_GlobalInvocationID.xy;
+  if (id.x >= push.width || id.y >= push.height) return;
+  const vec4 source = imageLoad(src_image, ivec2(id));
+  vec3       c      = source.xyz;
+  for (uint i = 0u; i < push.command_count; ++i) {
+    const uint offset = push.commands.v[push.command_offset + i];
+    c = ApplyAdjustment(c, push.parameter_base + offset, push.lut, push.lut_edge);
+  }
+  imageStore(dst_image, ivec2(id), vec4(c, source.w));
+}
