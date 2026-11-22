@@ -12,7 +12,9 @@
   runs in the Develop render (D5 to D12, sections 2, 5, DN4 to DN9 rewritten; DN4 and DN9
   removed; U2 closed). 2026-11-22: U1 closed: `target_time` is the measured FP16 time (D4: no
   distillation); a device above `slow_device_limit` gets the slow-device error with the action
-  that turns the noise reduction off (2.4, DN3, DN6 to DN8)
+  that turns the noise reduction off (2.4, DN3, DN6 to DN8). 2026-11-22: DN2 complete except
+  the check by eye of the sheets by the user and a run of the DirectML session of the AI Mask
+  sidecar (issue #1038, lab PR zidage/alcedo-denoise-lab#4)
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -271,7 +273,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | --- | --- | --- | --- | ---: | --- |
 | DN0 | Weights file, expected outputs, input and output specification | lab | none | 600 to 900 | complete (#1032) |
 | DN1 | Measurements: tile overlap, PyTorch time, clipped areas, stored formats, ONNX Runtime on DirectML and macOS, FP16 | lab | DN0 | 700 to 1100 | complete (#1033) |
-| DN2 | FP16 rescale calibration and FP16 ONNX graph in the lab release; ONNX Runtime DirectML as a C++ dependency; the DirectML session of UtNet2 with its tests | lab, `cmake`, `decoders/processor/nn` | DN0 | 900 to 1400 | planned |
+| DN2 | FP16 rescale calibration and FP16 ONNX graph in the lab release; ONNX Runtime DirectML as a C++ dependency; the DirectML session of UtNet2 with its tests | lab, `cmake`, `decoders/processor/nn` | DN0 | 900 to 1400 | complete except the user check of the sheets (#1038) |
 | DN3 | Overlap tile planner, tile loop with float16 tiles, slow-device check, full photo run on DirectML, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 800 to 1200 | planned |
 | DN4 | Removed on 2026-11-22 (was: the stored result reader and writer) | | | | removed |
 | DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | U4 | 1000 to 1500 | planned |
@@ -911,7 +913,7 @@ output tile with an infinite value
 
 | Test | Assertion |
 | --- | --- |
-| `OutputMatchesPyTorchForEachExpectedOutput` | `random_64`, `random_256`, and `rawnind_crop_512` within 5e-3 of the largest expected value (DN1: 2.4e-3 to 4.6e-3 on DirectML; the tolerance is set again from the calibrated graph) |
+| `OutputMatchesPyTorchForEachExpectedOutput` | `random_64`, `random_256`, and `rawnind_crop_512` within 7e-3 of the largest expected value (set from the calibrated graph: 1.5 times its largest DirectML difference, 4.07e-3, rounded up) |
 | `LoadFailsOnDifferentArchitectureMetadata` | A copy of the graph with a different `architecture` value gives an error that names the key |
 | `LoadFailsOnMissingFile` | The error names the path |
 | `RunRejectsSizeThatIsNotAMultipleOfSixteen` | A 4 x 72 x 64 input throws; no output |
@@ -929,16 +931,128 @@ ctest --test-dir build/debug -R "UtNet2DirectMlTest" -j 1 --output-on-failure
 
 **Exit criteria**
 
-- [ ] The FP16 graph is in the lab release with its SHA-256; the smallest margin of the photos
+- [x] The FP16 graph is in the lab release with its SHA-256; the smallest margin of the photos
       outside the calibration is 8 times or more.
 - [ ] The user checked the sheets by eye.
-- [ ] The six tests pass in `build/debug`.
+- [x] The six tests pass in `build/debug` (seven with `LoadFailsOnFloat32Graph`).
 - [ ] The install folder has one `onnxruntime.dll` and one DirectML.dll, and the AI Mask sidecar
-      runs its DirectML session.
+      runs its DirectML session. The first part is proven; the sidecar was started beside the new
+      DLLs and loaded the same DirectML.dll, but no sidecar session ran (record below).
 
 **Expected diff**: 900 to 1400 lines (lab included).
 
-**Completion record**: empty until the phase is complete.
+##### Phase DN2 completion record (2026-11-22)
+
+**Status:** partial. The lab FP16 graph, the ONNX Runtime DirectML dependency, the session, and
+its tests are complete. Open: the check by eye of the sheets by the user, and a run of the
+DirectML session of the AI Mask sidecar beside the new DLLs. Issue #1038; lab PR
+zidage/alcedo-denoise-lab#4 (stacked on #3).
+
+**Primary success call chain:**
+
+```text
+UtNet2DirectMlSession(graph path)                       decoders/processor/nn
+  -> Impl::Load -> ProcessEnv -> OnnxRuntimeApi
+     -> LoadLibraryExW("onnxruntime.dll", folder of the executable, then System32)
+     -> OrtGetApiBase()->GetApi(ORT_API_VERSION) -> Ort::InitApi    (delay-loaded DLL)
+  -> SessionOptions: ORT_ENABLE_ALL, ORT_SEQUENTIAL, memory pattern off,
+     session.disable_cpu_ep_fallback = 1, OrtDmlApi::SessionOptionsAppendExecutionProvider_DML2
+     (HighPerformance, Gpu)
+  -> Ort::Session(env, graph) -> CheckGraph: names, float16, channels, metadata
+     (architecture, precision, input_preparation_version, weights_sha256, output_scale)
+Run(float32 input span, PackedTileRect, float32 output span)
+  -> size checks -> (session created again after Release)
+  -> cv::Mat::convertTo CV_16F (host) -> Ort::Value over the reused float16 buffers
+  -> Ort::Session::Run on DirectML -> convertTo CV_32F times output_scale
+  -> cv::checkRange (finite) -> output span
+```
+
+**Primary failure call chain:**
+
+```text
+graph missing / FP32 graph / other metadata / node DirectML cannot run / DLL load error
+  -> Impl::Load throws std::runtime_error("UtNet2 graph <path>: <first difference or ORT text>")
+  -> no session; the caller reports the error (DN6)
+tile height or width not a multiple of 16, or a span of the wrong size
+  -> Run throws before any conversion; the output span is not written
+output value not finite (FP16 overflow)
+  -> Run throws "UtNet2 tile at (x, y) of w x h packed px: ... channel c, output row r, column k"
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OutputMatchesPyTorchForEachExpectedOutput` (4.07e-3, 3.76e-3, 2.76e-3 of the largest value) | `UtNet2DirectMlTest` | PASS |
+| `LoadFailsOnDifferentArchitectureMetadata` | `UtNet2DirectMlTest` | PASS |
+| `LoadFailsOnFloat32Graph` (added: the FP32 graph of the failure chain) | `UtNet2DirectMlTest` | PASS |
+| `LoadFailsOnMissingFile` | `UtNet2DirectMlTest` | PASS |
+| `RunRejectsSizeThatIsNotAMultipleOfSixteen` | `UtNet2DirectMlTest` | PASS |
+| `RunThrowsOnAnOutputThatIsNotFinite` | `UtNet2DirectMlTest` | PASS |
+| `ReleaseFreesTheSessionAndALaterRunLoadsAgain` (bit-equal output after the new load) | `UtNet2DirectMlTest` | PASS |
+| Without `ALCEDO_AI_DENOISE_TEST_ASSETS` each test skips with a message that names it | `UtNet2DirectMlTest` | SKIPPED as intended |
+| FP16 calibration: smallest held-out margin 71.7 (8 required) on 78 photos | lab `export_fp16_onnx.py` | PASS |
+| `alcedo_main` folder: one `onnxruntime.dll` (package file), one `onnxruntime_providers_shared.dll`, one DirectML.dll with the SHA-256 of the sidecar copy (`9c9e6d82...`) | `build/debug` | PASS |
+| Install folder (`cmake --install build/debug`): one file each of the three DLLs | `build/tmp/dn2/install/bin` | PASS |
+| `verify_windows_install_tree.ps1` on that install | | the new entries pass; the script stops at `Qt6Core.dll` because a debug install has `Qt6Cored.dll` |
+| Sidecar beside the new DLLs: `alcedo_mind.exe --device directml:0` starts and loads `DirectML.dll` of the folder; its import table has DirectML.dll and no `onnxruntime*.dll` | `build/debug` | started; no session ran (the sidecar creates its sessions at the first request, and no test drives a DirectML request) |
+
+Commands:
+
+```text
+cmd /c "scripts\msvc_env.cmd --build build\debug --target UtNet2DirectMlTest"
+$env:ALCEDO_AI_DENOISE_TEST_ASSETS = "<folder: the FP16 graph, the FP32 graph, the 3 expected outputs>"
+ctest --test-dir build/debug -R "UtNet2DirectMlTest" -j 1 --output-on-failure   # 7/7
+cmd /c "scripts\msvc_env.cmd --build build\debug --target alcedo_main"
+cmd /c "scripts\msvc_env.cmd --install build\debug --prefix <absolute folder> --component Unspecified"
+lab: export_onnx.py, export_fp16_onnx.py, make_fp16_sheets.py (README of scripts/export/)
+```
+
+Lab results: the FP16 graph (15,552,242 bytes, SHA-256 `0bc98084c9bff16d...`, `output_scale`
+170.34) and `fp16_calibration.json` are assets of the release
+`export-utnet2-bayer-dark-loss-10k`. FP16 against FP32 on the 11 evaluation photos: 68.2 to
+76.5 dB at +2 EV on the whole image, 73.3 dB or more on the dark crops, 60.8 to 75.3 dB at +5 EV
+(lab `quality.md`, 2026-11-22). The sheets are in the lab folder
+`results/export/images/fp16_sheets/` (not committed).
+
+Detail choices made during the work (the plan did not state them):
+
+- The CMake module is `scripts/cmake/fetch_onnxruntime_directml.cmake` with the copy script
+  `scripts/cmake/copy_onnxruntime_directml_runtime.cmake`, beside `fetch_aria2.cmake`; the
+  repository has no root `cmake/` folder. The library target is `UtNet2DirectMl`
+  (`decoders/CMakeLists.txt`). `alcedo_main` gets the DLLs now and links the target in DN6.
+- `onnxruntime.dll` is delay-loaded (`/DELAYLOAD`, `ORT_API_MANUAL_INIT`) and loaded by the
+  session from the folder of the executable, so `alcedo_main` starts without it (2.4: the
+  switch is hidden and a render reports the load error). Windows 11 has an older
+  `System32\onnxruntime.dll`; when it is loaded, the API version check names its path.
+- The DirectML.dll check compares the SHA-256 of the package file and of the sidecar copy at
+  each build (the same file of the same package), in place of the file version.
+- `Run` takes float32 spans and a `PackedTileRect` (the origin of the tile in the photo), so that
+  the error names the tile rectangle; DN3 gives the rectangle of each tile.
+- The adapter is selected with `OrtDmlApi::SessionOptionsAppendExecutionProvider_DML2`
+  (HighPerformance, Gpu), the documented DirectML API; the generic provider registration does
+  not list DML.
+- The host conversion uses OpenCV `convertTo` (`CV_16F`), which uses F16C, in place of own F16C
+  code.
+- Calibration set: the whole evaluation photos and centre crops of 1536 packed px of all raw
+  files of the RawNIND test split. Held-out set: the whole raw files of the 8 RawNIND scenes
+  outside the test split. Rescale target 1024 as in DN1.
+- FP16 test tolerance 7e-3 (rule above), and the test `LoadFailsOnFloat32Graph`.
+- The installer gets the license texts of ONNX Runtime and DirectML (`THIRD_PARTY_NOTICE.txt`
+  entries 33 and 34); DirectML.dll of the sidecar had no entry before.
+
+**Checklist / exit condition:** items 1 and 3 checked. Item 2 waits for the user. Item 4: the
+install folder part is proven; the sidecar session run is not.
+
+**LOC note (grill-code-review):** Alcedo Studio: 848 new lines (session 319 + 80 + 48, test 221
++ 20, CMake 160) and about 50 changed lines in existing CMake, the install check, and the notice.
+Lab: 3 new scripts (633 lines) and the JSON records (`fp16_calibration.json` 824 lines,
+`fp16_sheets.json` 902 lines). No file is near 1000 lines of code.
+
+**Remaining gaps:** the check by eye of the sheets by the user; a DirectML request to the AI Mask
+sidecar beside the new DLLs (the next start of AI Mask in the application does it); the session
+on the Intel Iris Xe and on an AMD GPU (DN3 timing tool); the release install check
+(`verify_windows_install_tree.ps1` needs a release install).
 
 ### DN3: overlap tile planner and full photo run on DirectML
 
@@ -1101,7 +1215,7 @@ are removed (2026-11-22, D6). The fixed points that the detailed sections must k
   GiB at 45.4 MP; 1024: 1.7 GiB). The dependency is `libonnxruntime.dylib` of the osx-arm64
   folder of `Microsoft.ML.OnnxRuntime` 1.24.4 (the version of Windows), downloaded with its
   SHA-256 and copied into `Contents/Frameworks` of the bundle.
-  - Tests: the tests of DN2 and DN3 on macOS with the FP16 tolerance (5e-3 of the largest
+  - Tests: the tests of DN2 and DN3 on macOS with the FP16 tolerance (7e-3 of the largest
     expected value; measured 1.0e-3 to 1.5e-3 on the Neural Engine); the footprint of the
     process after the release of the sessions.
   - Time of the DN1 addition: 0.37, 0.51, 0.60 s for 24.3, 36.2, 45.4 MP on the MacBook Air M4.
@@ -1149,9 +1263,9 @@ no longer agrees with the branch.
 | `tile_size` (macOS) | 1536 packed pixels on the Neural Engine (0.60 s at 45.4 MP, peak footprint 2.0 GiB on the M4; 1024: 0.75 s, 1.7 GiB) | DN1 addition, FP16 on the Neural Engine |
 | `tile_overlap` | 96 packed pixels: the tiled output is the one-pass output | DN1 |
 | Session strategy | Windows: one ONNX Runtime session with free height and width, the DirectML memory arena on. macOS: one session for each tile input shape. Kept by `DenoiseModelSession` between renders, released with the editor GPU release and at the editor close | DN1 additions; 2.3 |
-| Precision | FP16 after the exact rescale of the layers, one graph for Windows and macOS; test tolerance 5e-3 of the largest expected value (measured 1.0e-3 to 1.5e-3 on the Neural Engine, 2.4e-3 to 4.6e-3 on DirectML); FP16 margin of 8 times or more on photos outside the calibration | DN1 additions, FP16 |
+| Precision | FP16 after the exact rescale of the layers, one graph for Windows and macOS; test tolerance 7e-3 of the largest expected value (DN2: 1.5 times the largest difference of the DN2 graph on DirectML, 2.8e-3 to 4.1e-3; the 3-crop graph of DN1 gave 1.0e-3 to 1.5e-3 on the Neural Engine); FP16 margin of 8 times or more on photos outside the calibration | DN1 additions, FP16 |
 | ONNX Runtime | NuGet `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4 and `Microsoft.AI.DirectML` 1.15.4 on Windows; `libonnxruntime.dylib` of `Microsoft.ML.OnnxRuntime` 1.24.4 (osx-arm64) on macOS | DN1 additions, DirectML and macOS |
 | Core ML options | `ModelFormat` MLProgram, `MLComputeUnits` CPUAndNeuralEngine, `session.disable_cpu_ep_fallback` 1 | DN1 addition, FP16 on the Neural Engine |
 | `leaky_relu_slope` | The value in the metadata of the weights file and of the ONNX graph | DN0, DN2 |
-| `output_scale` | The scale of the last layer after the rescale, in the metadata of the FP16 graph (127.9 for the 3-crop calibration of DN1) | DN1 addition, FP16 on the Neural Engine; DN2 |
+| `output_scale` | The scale of the last layer after the rescale, in the metadata of the FP16 graph: 170.34 for the graph of DN2 (127.9 for the 3-crop calibration of DN1) | DN1 addition, FP16 on the Neural Engine; DN2 |
 | Model cost | 46.2 GMAC for each megapixel | Layer count, section 5.3 |

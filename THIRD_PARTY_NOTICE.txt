@@ -241,6 +241,22 @@ License: MIT
 License text file: third_party_licenses/c-ares-LICENSE.md
 The corresponding source archive is in the aria2 release above.
 
+33) ONNX Runtime 1.24.4 with the DirectML execution provider (Windows: onnxruntime.dll and
+onnxruntime_providers_shared.dll, AI Denoise)
+Upstream: https://github.com/microsoft/onnxruntime, NuGet package Microsoft.ML.OnnxRuntime.DirectML
+License: MIT
+License text files:
+- third_party_licenses/onnxruntime-LICENSE.txt
+- third_party_licenses/onnxruntime-ThirdPartyNotices.txt
+
+34) DirectML 1.15.4 (Windows: DirectML.dll, AI Denoise and the AI Mask sidecar)
+Upstream: https://github.com/microsoft/DirectML, NuGet package Microsoft.AI.DirectML
+License: Microsoft Software License Terms for DirectML (redistributable with applications for
+Windows)
+License text files:
+- third_party_licenses/DirectML-LICENSE.txt
+- third_party_licenses/DirectML-ThirdPartyNotices.txt
+
 E) Redistribution reminder
 
 - Keep this notice, the root LICENSE, the root NOTICE, and all files in third_party_licenses/ when redistributing source/binaries.
