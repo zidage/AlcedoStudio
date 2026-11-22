@@ -12,9 +12,9 @@
   runs in the Develop render (D5 to D12, sections 2, 5, DN4 to DN9 rewritten; DN4 and DN9
   removed; U2 closed). 2026-11-22: U1 closed: `target_time` is the measured FP16 time (D4: no
   distillation); a device above `slow_device_limit` gets the slow-device error with the action
-  that turns the noise reduction off (2.4, DN3, DN6 to DN8). 2026-11-22: DN2 complete except
-  the check by eye of the sheets by the user and a run of the DirectML session of the AI Mask
-  sidecar (issue #1038, lab PR zidage/alcedo-denoise-lab#4)
+  that turns the noise reduction off (2.4, DN3, DN6 to DN8). 2026-11-22: DN2 complete (issue
+  #1038, lab PR zidage/alcedo-denoise-lab#4); the user checked the FP16 sheets by eye and
+  accepted FP16
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -273,7 +273,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | --- | --- | --- | --- | ---: | --- |
 | DN0 | Weights file, expected outputs, input and output specification | lab | none | 600 to 900 | complete (#1032) |
 | DN1 | Measurements: tile overlap, PyTorch time, clipped areas, stored formats, ONNX Runtime on DirectML and macOS, FP16 | lab | DN0 | 700 to 1100 | complete (#1033) |
-| DN2 | FP16 rescale calibration and FP16 ONNX graph in the lab release; ONNX Runtime DirectML as a C++ dependency; the DirectML session of UtNet2 with its tests | lab, `cmake`, `decoders/processor/nn` | DN0 | 900 to 1400 | complete except the user check of the sheets (#1038) |
+| DN2 | FP16 rescale calibration and FP16 ONNX graph in the lab release; ONNX Runtime DirectML as a C++ dependency; the DirectML session of UtNet2 with its tests | lab, `cmake`, `decoders/processor/nn` | DN0 | 900 to 1400 | complete (#1038) |
 | DN3 | Overlap tile planner, tile loop with float16 tiles, slow-device check, full photo run on DirectML, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 800 to 1200 | planned |
 | DN4 | Removed on 2026-11-22 (was: the stored result reader and writer) | | | | removed |
 | DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | U4 | 1000 to 1500 | planned |
@@ -933,20 +933,18 @@ ctest --test-dir build/debug -R "UtNet2DirectMlTest" -j 1 --output-on-failure
 
 - [x] The FP16 graph is in the lab release with its SHA-256; the smallest margin of the photos
       outside the calibration is 8 times or more.
-- [ ] The user checked the sheets by eye.
+- [x] The user checked the sheets by eye (2026-11-22: no visible difference; FP16 accepted).
 - [x] The six tests pass in `build/debug` (seven with `LoadFailsOnFloat32Graph`).
-- [ ] The install folder has one `onnxruntime.dll` and one DirectML.dll, and the AI Mask sidecar
-      runs its DirectML session. The first part is proven; the sidecar was started beside the new
-      DLLs and loaded the same DirectML.dll, but no sidecar session ran (record below).
+- [x] The install folder has one `onnxruntime.dll` and one DirectML.dll, and the AI Mask sidecar
+      runs its DirectML session.
 
 **Expected diff**: 900 to 1400 lines (lab included).
 
 ##### Phase DN2 completion record (2026-11-22)
 
-**Status:** partial. The lab FP16 graph, the ONNX Runtime DirectML dependency, the session, and
-its tests are complete. Open: the check by eye of the sheets by the user, and a run of the
-DirectML session of the AI Mask sidecar beside the new DLLs. Issue #1038; lab PR
-zidage/alcedo-denoise-lab#4 (stacked on #3).
+**Status:** complete. The lab FP16 graph, the ONNX Runtime DirectML dependency, the session,
+and its tests. The user checked the sheets by eye on 2026-11-22: no visible difference, FP16
+accepted. Issue #1038; lab PR zidage/alcedo-denoise-lab#4 (stacked on #3).
 
 **Primary success call chain:**
 
@@ -995,7 +993,7 @@ output value not finite (FP16 overflow)
 | `alcedo_main` folder: one `onnxruntime.dll` (package file), one `onnxruntime_providers_shared.dll`, one DirectML.dll with the SHA-256 of the sidecar copy (`9c9e6d82...`) | `build/debug` | PASS |
 | Install folder (`cmake --install build/debug`): one file each of the three DLLs | `build/tmp/dn2/install/bin` | PASS |
 | `verify_windows_install_tree.ps1` on that install | | the new entries pass; the script stops at `Qt6Core.dll` because a debug install has `Qt6Cored.dll` |
-| Sidecar beside the new DLLs: `alcedo_mind.exe --device directml:0` starts and loads `DirectML.dll` of the folder; its import table has DirectML.dll and no `onnxruntime*.dll` | `build/debug` | started; no session ran (the sidecar creates its sessions at the first request, and no test drives a DirectML request) |
+| AI Mask sidecar beside the new DLLs (gRPC with grpcurl): `LoadSegmentationModels` with device `directml` loads the 5 models on `directml:0` (backend `onnxruntime-directml`), and `StartSegmentationSession` runs the encoder on a 64 x 64 image (125 ms; 166 ms from the install folder); the process loads the DirectML.dll of the folder and no `onnxruntime*.dll` (its import table has none) | `build/debug` and the install folder | PASS |
 
 Commands:
 
@@ -1041,18 +1039,15 @@ Detail choices made during the work (the plan did not state them):
 - The installer gets the license texts of ONNX Runtime and DirectML (`THIRD_PARTY_NOTICE.txt`
   entries 33 and 34); DirectML.dll of the sidecar had no entry before.
 
-**Checklist / exit condition:** items 1 and 3 checked. Item 2 waits for the user. Item 4: the
-install folder part is proven; the sidecar session run is not.
+**Checklist / exit condition:** all four items checked.
 
 **LOC note (grill-code-review):** Alcedo Studio: 848 new lines (session 319 + 80 + 48, test 221
 + 20, CMake 160) and about 50 changed lines in existing CMake, the install check, and the notice.
 Lab: 3 new scripts (633 lines) and the JSON records (`fp16_calibration.json` 824 lines,
 `fp16_sheets.json` 902 lines). No file is near 1000 lines of code.
 
-**Remaining gaps:** the check by eye of the sheets by the user; a DirectML request to the AI Mask
-sidecar beside the new DLLs (the next start of AI Mask in the application does it); the session
-on the Intel Iris Xe and on an AMD GPU (DN3 timing tool); the release install check
-(`verify_windows_install_tree.ps1` needs a release install).
+**Remaining gaps:** the session on the Intel Iris Xe and on an AMD GPU (DN3 timing tool); the
+release install check (`verify_windows_install_tree.ps1` needs a release install).
 
 ### DN3: overlap tile planner and full photo run on DirectML
 
