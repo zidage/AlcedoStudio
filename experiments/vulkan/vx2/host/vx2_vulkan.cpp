@@ -664,6 +664,7 @@ void Producer::Submit(VkCommandBuffer cb, VkFence fence) {
     }
     VkCheck(vkQueueSubmit(ctx_.pipeline_queue, 1, &si, fence), "vkQueueSubmit (pipeline)");
   } else {
+    std::lock_guard<std::mutex> lock(ctx_.pipeline_submit_mutex);
     VkCheck(vkQueueSubmit(ctx_.pipeline_queue, 1, &si, fence), "vkQueueSubmit (pipeline)");
   }
 }
@@ -674,7 +675,14 @@ void Producer::Start(std::function<void()> on_ready) {
     std::lock_guard<std::mutex> lock(mutex_);
     running_ = true;
   }
-  thread_ = std::thread([this] { Run(); });
+  thread_ = std::thread([this] {
+    try {
+      Run();
+    } catch (const std::exception& e) {
+      Log("ERROR producer thread: %s", e.what());
+      failed_ = true;
+    }
+  });
 }
 
 void Producer::Stop() {

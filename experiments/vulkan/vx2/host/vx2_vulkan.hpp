@@ -68,6 +68,9 @@ class VulkanContext {
 
   /// The lock of plan section 4.2 when the pipeline and Qt Quick share one queue.
   std::timed_mutex queue_mutex;
+  /// VX3: the pipeline queue has more than one user thread (the producer and the load); this lock
+  /// is the external synchronization of vkQueueSubmit on it when queue_mutex is not in use.
+  std::mutex       pipeline_submit_mutex;
   std::vector<std::string> instance_extensions;
 
   auto MemoryType(std::uint32_t bits, VkMemoryPropertyFlags flags) const -> std::uint32_t;
@@ -133,6 +136,8 @@ class Producer {
   void SetContinuous(bool continuous) { continuous_ = continuous; }
   [[nodiscard]] auto Width() const -> int { return width_; }
   [[nodiscard]] auto Height() const -> int { return height_; }
+  /// The thread stopped on a Vulkan error (VX3: device loss).
+  [[nodiscard]] auto Failed() const -> bool { return failed_.load(); }
 
  private:
   enum class State { Free, Writing, Ready, Displayed, Retired };
@@ -184,6 +189,7 @@ class Producer {
   std::vector<double>      gpu_ms_;
   std::vector<double>      lock_wait_ms_;
   bool                     continuous_ = false;
+  std::atomic<bool>        failed_{false};
   std::function<void()>    on_ready_;
   std::thread              thread_;
 };
