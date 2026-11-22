@@ -117,13 +117,17 @@ struct PreparedSourceLookup {
   std::uint64_t encoded_byte_count   = 0;
   std::uint8_t  downsample_passes    = 0;
   std::uint32_t preparation_version  = kRawInputPreparationVersion;
+  /// The AI Denoise entry of the source (HashAiDenoiseModelVersion of the installed model
+  /// version); 0 for the unpacked entry.
+  std::uint64_t denoise_model_hash   = 0;
 };
 
 inline auto operator==(const PreparedSourceLookup& a, const PreparedSourceLookup& b) -> bool {
   return a.encoded_content_hash == b.encoded_content_hash &&
          a.encoded_byte_count == b.encoded_byte_count &&
          a.downsample_passes == b.downsample_passes &&
-         a.preparation_version == b.preparation_version;
+         a.preparation_version == b.preparation_version &&
+         a.denoise_model_hash == b.denoise_model_hash;
 }
 
 inline auto operator<(const PreparedSourceLookup& a, const PreparedSourceLookup& b) -> bool {
@@ -136,7 +140,10 @@ inline auto operator<(const PreparedSourceLookup& a, const PreparedSourceLookup&
   if (a.downsample_passes != b.downsample_passes) {
     return a.downsample_passes < b.downsample_passes;
   }
-  return a.preparation_version < b.preparation_version;
+  if (a.preparation_version != b.preparation_version) {
+    return a.preparation_version < b.preparation_version;
+  }
+  return a.denoise_model_hash < b.denoise_model_hash;
 }
 
 /**
@@ -158,7 +165,7 @@ struct PreparedSourceKey {
 
   [[nodiscard]] auto Lookup() const -> PreparedSourceLookup {
     return PreparedSourceLookup{encoded_content_hash, encoded_byte_count, downsample_passes,
-                                preparation_version};
+                                preparation_version, denoise_model_hash};
   }
 };
 

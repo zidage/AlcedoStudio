@@ -36,3 +36,44 @@ if(TARGET UtNet2DirectMl)
   target_link_libraries(UtNet2PhotoTimingTool PRIVATE UtNet2DirectMl dxgi)
   alcedo_copy_onnxruntime_directml_runtime(UtNet2PhotoTimingTool)
 endif()
+
+# DN6: the input preparation, the gain match, the owner of the model session, and the denoised
+# entry of the prepared source cache, with a test platform (all platforms). Two tests read the
+# lab files of ALCEDO_AI_DENOISE_TEST_ASSETS and skip without them.
+add_executable(AiDenoiseLoaderTest
+  ${ALCEDO_TEST_ROOT}/ai_denoise/ai_denoise_input_test.cpp
+  ${ALCEDO_TEST_ROOT}/ai_denoise/ai_denoise_model_session_test.cpp
+)
+target_include_directories(AiDenoiseLoaderTest PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(AiDenoiseLoaderTest PRIVATE GTest::gtest_main EditInput NnSafetensors
+  Sha256Digest)
+target_compile_definitions(AiDenoiseLoaderTest PRIVATE
+  ALCEDO_AI_DENOISE_TEST_TEMP_ROOT="${CMAKE_SOURCE_DIR}/build/tmp/ai-denoise-loader-test"
+  ALCEDO_AI_DENOISE_TEST_RAW="${ALCEDO_TEST_ROOT}/resources/sample_images/raw/_DSC0726.ARW")
+gtest_discover_tests(AiDenoiseLoaderTest TEST_PREFIX "AiDenoiseLoaderTest.")
+alcedo_register_test_target(AiDenoiseLoaderTest core ci_core)
+
+# DN6: the model run in the CUDA and OpenCL renderers (a test platform), and the FP16 graph on
+# DirectML with a RAW file (ALCEDO_AI_DENOISE_TEST_ASSETS).
+if(ALCEDO_CUDA_ENABLED OR ALCEDO_OPENCL_ENABLED)
+  add_executable(AiDenoiseRenderTest
+    ${ALCEDO_TEST_ROOT}/ai_denoise/ai_denoise_render_test.cpp
+  )
+  target_include_directories(AiDenoiseRenderTest PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(AiDenoiseRenderTest PRIVATE GTest::gtest_main EditInput EditScope Image)
+  if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(AiDenoiseRenderTest PRIVATE EditRuntimeCuda EditRuntimeFilm)
+  endif()
+  if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(AiDenoiseRenderTest PRIVATE EditRuntimeOpenCl RawProcessorOp
+      OpenClDemosaicNet OpenClProgramLibrary)
+  endif()
+  target_compile_definitions(AiDenoiseRenderTest PRIVATE
+    ALCEDO_AI_DENOISE_TEST_TEMP_ROOT="${CMAKE_SOURCE_DIR}/build/tmp/ai-denoise-render-test"
+    ALCEDO_AI_DENOISE_TEST_RAW="${ALCEDO_TEST_ROOT}/resources/sample_images/raw/_DSC0726.ARW")
+  if(TARGET UtNet2DirectMl)
+    alcedo_copy_onnxruntime_directml_runtime(AiDenoiseRenderTest)
+  endif()
+  gtest_discover_tests(AiDenoiseRenderTest TEST_PREFIX "AiDenoiseRenderTest.")
+  alcedo_register_test_target(AiDenoiseRenderTest gpu)
+endif()

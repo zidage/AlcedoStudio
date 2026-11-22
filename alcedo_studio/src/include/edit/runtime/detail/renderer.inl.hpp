@@ -134,6 +134,12 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     binding_ = key;
   }
   const PipelineDocument& document = snapshot.Document();
+  // AI Denoise (integration plan, DN6, D12): the model runs for a full-size render with the switch
+  // on. A reduced render (thumbnail, semantic input image) renders the CFA path.
+  const auto* const       denoise_develop = document.Develop();
+  const bool run_ai_denoise = ai_denoise_ != nullptr && request.decode_res == DecodeRes::FULL &&
+                              denoise_develop != nullptr &&
+                              denoise_develop->Params().Params().ai_denoise.has_value();
 
   // Encoded bytes; empty when the request carries a prepared input.
   std::span<const std::byte> encoded_bytes;
@@ -156,13 +162,27 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
   };
   BoundPreviewRequest bound_request(request.submission.metadata.presentation_request_id);
   if (interactive) {
-    prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
+    if (run_ai_denoise) {
+      const auto version = ai_denoise_->InstalledModelVersion();
+      prepared_lease.emplace(source_cache_.AcquireDenoised(
+          encoded_bytes, version,
+          [&](const PreparedRawInput& cfa) { return ai_denoise_->Denoise(cfa, version); }));
+    } else {
+      prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
+    }
     plan = plan_cache_.GetOrCompile(document, prepared_lease->Get().CompileSource());
   } else {
     batch_prepared = request.prepared_input
                          ? request.prepared_input
                          : std::make_shared<const PreparedRawInput>(
                                unpack_(encoded_bytes, request.decode_res));
+    // A batch render unpacks at each render, so it runs the model at each render.
+    if (run_ai_denoise && !request.prepared_input &&
+        batch_prepared->CompileSource().kind == DevelopInputKind::BayerCfa) {
+      const auto version = ai_denoise_->InstalledModelVersion();
+      batch_prepared =
+          std::make_shared<const PreparedRawInput>(ai_denoise_->Denoise(*batch_prepared, version));
+    }
     diag::PreviewCpuInterval compile(diag::PreviewCpuStage::PlanCompile);
     plan = GraphCompiler::CompileStatic(document, batch_prepared->CompileSource(),
                                         Backend::kCapabilityVersion);

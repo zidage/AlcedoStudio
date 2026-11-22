@@ -10,6 +10,7 @@
 #include <optional>
 
 #include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/input/ai_denoise_model_session.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
@@ -78,6 +79,9 @@ class PipelineExecutor {
   /// Reader every renderer of this executor uses for the R8 assets of AI Masks.
   std::shared_ptr<const MaskAssetReader>     mask_assets_;
 
+  /// The owner of the AI Denoise model session that every renderer of this executor uses.
+  std::shared_ptr<DenoiseModelSession>       ai_denoise_;
+
   /// Renderers of one backend, one per served role; each is created by its first Apply.
   template <class RendererType>
   struct RoleRenderers {
@@ -106,10 +110,13 @@ class PipelineExecutor {
    *        file-path-only DefaultLutResourceResolver.
    * @param mask_assets Reader of the AI Mask assets of the project, handed to every renderer this
    *        executor creates. Null selects DefaultMaskAssetReader, which fails each read.
+   * @param ai_denoise Owner of the AI Denoise model session, handed to every renderer this
+   *        executor creates. Null selects ProcessDenoiseModelSession().
    */
   explicit PipelineExecutor(ExecutorRole                               role,
                             std::shared_ptr<const LutResourceResolver> lut_resources = nullptr,
-                            std::shared_ptr<const MaskAssetReader>     mask_assets   = nullptr);
+                            std::shared_ptr<const MaskAssetReader>     mask_assets   = nullptr,
+                            std::shared_ptr<DenoiseModelSession>       ai_denoise    = nullptr);
 
   [[nodiscard]] auto Serves(ExecutorRole role) const -> bool {
     return role == ExecutorRole::Interactive ? serves_interactive_ : serves_batch_;
@@ -203,6 +210,15 @@ class PipelineExecutor {
    * @pre Caller holds GetRenderLock() or has exclusive access.
    */
   void               ReleaseBinding();
+
+  /**
+   * @brief End the AI Denoise model session and free its device memory (integration plan, 2.3):
+   *        the editor GPU release and the editor close call it after @ref ReleaseBinding. The
+   *        session is process-wide, so this also releases it for the other executors; their next
+   *        run creates it again. Waits for a model run in progress.
+   */
+  void               ReleaseAiDenoiseSession();
+
   /**
    * @brief GPU bytes the created renderers hold: texture pool, transient arena capacity, and
    *        parameter arena capacity.
