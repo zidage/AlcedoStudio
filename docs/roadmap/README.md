@@ -34,6 +34,8 @@ use their own top-level category.
 - [GPU DAG OpenCL Migration Phase Plan](alcedo_studio/edit/gpu_dag_opencl_migration_phase_plan.md)
 - [GPU DAG Metal Migration Phase Plan](alcedo_studio/edit/gpu_dag_metal_migration_phase_plan.md)
 - [Phase G10 — Legacy Pipeline Removal and Release Qualification](alcedo_studio/edit/gpu_dag_final_removal_phase_plan.md)
+- [Vulkan Compute Backend Master Plan](alcedo_studio/edit/vulkan_compute_backend_plan.md): one
+  Vulkan backend for the Windows pipeline and editor display; tracking issue #1036
 - [Node-aware Pipeline Editing and Mask Authoring Master Plan](alcedo_studio/edit/node_mask_editor_master_plan.md)
 - [Brush Mask Architecture, History, and Raster Materialization Master Plan](alcedo_studio/edit/brush_mask_architecture_master_plan.md)
 - [AI Segmentation Mask (EfficientSAM3) Master Plan](alcedo_studio/edit/ai_segmentation_mask_master_plan.md)
