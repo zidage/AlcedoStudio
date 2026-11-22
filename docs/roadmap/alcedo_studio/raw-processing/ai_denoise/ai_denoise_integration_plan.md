@@ -1,8 +1,9 @@
 # AI Denoise Integration Master Plan
 
 - Date: 2026-11-21
-- Status: DN0 complete (2026-11-21, lab PR zidage/alcedo-denoise-lab#2, issue #1032); DN1 to
-  DN13 planned
+- Status: DN0 complete (2026-11-21, lab PR zidage/alcedo-denoise-lab#2, issue #1032); DN1
+  complete (2026-11-21, lab PR zidage/alcedo-denoise-lab#3, issue #1033; U3 closed, U2 with
+  the user); DN2 to DN13 planned
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -51,7 +52,7 @@ Develop stage reads the stored result in place of its own linearization and demo
 | --- | --- | --- | --- |
 | U1 | `target_time`: the largest time for one 45 megapixel photo on the RTX 3080 Laptop GPU. It has no value now. The user sets it after the measured time of the full model (the baseline of DN3) exists | The time of DN3 | User |
 | U2 | The pixel format and the compression of the stored result file | DN1, stored format table | User |
-| U3 | The tile size and the tile overlap | DN1, border difference table | Implementer, recorded in DN3 |
+| U3 | The tile size and the tile overlap. Closed 2026-11-21: overlap 96 packed px, tile size the largest of 512 to 1536 that fits (DN1 completion record) | DN1, border difference table | Implementer, recorded in DN3 |
 | U4 | The highlight handling of the stored result | DN1, clipped area table | Implementer, recorded in DN5 |
 
 ### 1.4 Options that must not return
@@ -248,14 +249,15 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
   resolution level of the encoder after the first has the same cost.
 - The theoretical receptive field radius is about 100 packed pixels. With that overlap on each
   side, a tile of 512 packed pixels keeps 35% of its area and a tile of 1024 keeps 63%. The
-  measured overlap of DN1 replaces this estimate.
+  measured overlap of DN1 replaces this estimate: 96 packed px gives the one-pass output, so a
+  tile of 1024 keeps 66% of its area and a tile of 1536 keeps 76% (DN1 completion record).
 
 ## 6. Phase summary
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | DN0 | Weights file, expected outputs, input and output specification | lab | none | 600 to 900 | complete (#1032) |
-| DN1 | Measurements: tile overlap, PyTorch time, clipped areas, stored formats | lab | DN0 | 700 to 1100 | planned |
+| DN1 | Measurements: tile overlap, PyTorch time, clipped areas, stored formats | lab | DN0 | 700 to 1100 | complete (#1033) |
 | DN2 | CUDA layers of UtNet2 with tests and a time for each layer shape | `cuda/nn` | DN0 | 1400 to 1900 | planned |
 | DN3 | CUDA UtNet2 module, overlap tile planner, full photo run, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 1200 to 1700 | planned |
 | DN4 | Stored result reader and writer, folder setting, statistics | `app` | U2 | 900 to 1400 | planned |
@@ -488,13 +490,117 @@ Use 4 CPU threads. Record the peak working set and the peak GPU memory of each j
 
 **Exit criteria**
 
-- [ ] Each of the four tables is in the findings files with its command and its source file.
-- [ ] `tile_size` and `tile_overlap` have values in the parameter table of the lab plan.
-- [ ] The user has the stored format table and the sheets for U2.
+- [x] Each of the four tables is in the findings files with its command and its source file.
+- [x] `tile_size` and `tile_overlap` have values in the parameter table of the lab plan.
+- [x] The user has the stored format table and the sheets for U2.
 
 **Expected diff**: 700 to 1100 lines.
 
-**Completion record**: empty until the phase is complete.
+##### Phase DN1 completion record (2026-11-21)
+
+**Status:** complete for steps 1 to 4. Issue #1033, lab pull request
+[zidage/alcedo-denoise-lab#3](https://github.com/zidage/alcedo-denoise-lab/pull/3) (branch
+`feature/denoise-measurements`, based on the DN0 branch). Step 5 (`write_stored_result.py`) starts
+when the user selects the format (U2), as the step states.
+
+**Results** (PyTorch 2.11.0+cu128, cuDNN 9.19.0, IEEE FP32 with TF32 off, RTX 3080 Laptop GPU
+8 GB with 3.1 GiB used by other programs, weights `utnet2_bayer_dark_loss_10k.safetensors`):
+
+| Table | Result | Lab findings entry |
+| --- | --- | --- |
+| Tile overlap | 96 packed px. The tiled output is then the one-pass output (difference 0 for tiles of 512 to 1024, below 1e-6 developed for 256). At 80 the border difference is 3 to 30 times the TF32 level. The receptive field is 92 packed px; tile inputs at multiples of 16 keep the pooling grid | `inference_cost.md`, tile overlap |
+| GPU memory of one tile | 163 MiB (256), 200 MiB (512), 451 MiB (768), 800 MiB (1024), 1,800 MiB (1536), 3,200 MiB (2048), PyTorch allocated memory above the weights and the packed image | `inference_cost.md`, tile overlap and PyTorch time |
+| PyTorch time, 45.4 MP | 0.92 s with tiles of 1536 (1.96 GiB allocated, 2.85 GiB reserved), 1.37 s with 1024 (0.98 GiB), 1.39 s with 768, 2.17 s with 512, 20.7 s with 256, 1.67 s with 2048 | `inference_cost.md`, PyTorch time |
+| PyTorch time, 24.3 / 32.5 / 36.2 / 42.4 MP | 0.58 to 0.97 s / 0.83 to 1.14 s / 1.03 to 1.13 s / 0.92 to 1.56 s for tiles of 768 to 2048 | the same |
+| GPU state during the time runs | 71 to 89 C, median SM clock 1,350 to 1,785 MHz (largest 2,100); largest used GPU memory of the process (NVML, CUDA context included) 4.36 GiB | the same |
+| Clipped areas | On 5 of 6 photos, the gain-matched output in clipped cells is 0.887 to 0.992 of `linear_max` (median); 0% to 72% of the pixels reach 0.987. The clip threshold of Alcedo Studio does not find most clipped areas in the stored result | `quality.md`, model output in clipped highlights |
+| Stored formats | float16: at least 81.8 dB developed. JPEG XL lossless of float16 1.9 to 2.3 MB/MP (86 to 106 MB at 45 MP, encode 0.09 s/MP, decode 0.05 s/MP); float16 byte planes + zstd 3 3.3 to 3.6 MB/MP (0.02 s/MP each way); lossy JPEG XL 0.007 to 0.31 MB/MP at 26 to 54 dB, color blocks in dark areas at +5 EV for linear values from distance 0.5. Clip mask: at most 2,871 bytes | `quality.md`, stored result formats |
+
+**Effect on the decisions that wait for a measurement:**
+
+- U3 (implementer): `tile_overlap` = 96 packed px. `tile_size` = the largest of 512, 768, 1024,
+  and 1536 whose workspace fits in the free GPU memory. Closed here; DN3 uses these values.
+- U4 (implementer, DN5): the stored result alone does not let the highlight recovery find the
+  clipped areas. DN5 gives the highlight recovery the clipped photosites of the mosaic (a clip
+  mask in the stored result file, at most 3 KB, or the mosaic read by the loader). The detailed
+  section of DN5 states which.
+- U2 (user): open. The table and the sheets are with the user (lab plan, "Items that need the
+  user").
+
+**Primary success call chain:**
+
+```text
+measure_photo_time.py (and the three other scripts)
+  -> measurement_common.prepare_packed_rggb (rawpy: visible area, black of each position,
+     LibRaw maximum, reflection to RGGB, 4-channel pack)
+  -> measurement_common.load_model (safetensors, architecture check, strict load)
+  -> measurement_common.run_tiled
+     -> plan_tiles (plan_axis: first tile keeps [0, T - O), next tiles T - 2 O, last at N - T)
+     -> packed image to the GPU -> for each tile: tile_input -> UtNet2 forward (CUDA events)
+        -> kept rectangle -> pinned host output
+     -> PyTorch peak allocated and reserved memory, GpuSampler (NVML temperature, clock, power,
+        used memory every 50 ms)
+  -> gain_match_factor -> to_rec2020 -> developed -> results/export/*.json
+```
+
+**Primary failure call chain:**
+
+```text
+weights with another architecture, a missing tensor, or another shape
+  -> load_model raises RuntimeError (metadata) or load_state_dict(strict=True) raises
+  -> no measurement runs, no result file
+raw file that is not a 2 x 2 Bayer pattern
+  -> prepare_packed_rggb raises ValueError with the file name and the pattern
+tile size not a multiple of 16 or not larger than 2 x overlap
+  -> plan_axis raises ValueError; no tile runs
+```
+
+**What was proven (executed checks):**
+
+| Criterion | Evidence | Result |
+| --- | --- | --- |
+| The planner covers each axis exactly one time with at least the overlap of context | one-time check `build/tmp/dn1/check_planner_and_clip_survey.py` (lab, not committed): 8 lengths x 4 tile sizes x 8 overlaps | PASS |
+| The tiled output at the selected overlap equals one pass | `results/export/tile_overlap.json`, 3 crops of 1536 packed px | PASS: 0 for 512 to 1024, at most 7.8e-7 developed for 256 |
+| The stored format encoders give back their input | one-time check `build/tmp/dn1/check_codecs.py` and `check_codecs_smooth.py`: lossless formats equal float16; lossy JPEG XL keeps the channel means | PASS |
+| The four tables have a command and a source file | lab `scripts/export/README.md`, "Measurements (phase DN1)", and the four findings entries | PASS |
+
+Commands (lab repository, `build/tmp/export/venv`):
+
+```text
+P="build/tmp/export/venv/Scripts/python -I -u"
+A="--authors-repo build/tmp/reference_measurement/rawnind_jddc"
+$P scripts/export/measure_tile_overlap.py $A
+$P scripts/export/measure_photo_time.py $A --overlap-by-tile 256:96 512:96 768:96 1024:96 1536:96 2048:96
+$P scripts/export/measure_clipped_areas.py $A --tile 1536 --overlap 96
+$P scripts/export/measure_stored_formats.py $A
+```
+
+**Changes against the plan text:**
+
+- No local photo has 36 or 45 megapixels. The 36.2 MP size is a crop of the 42.4 MP Sony
+  ILCE-7RM3 photo and the 45.4 MP size (Nikon Z 8, 8256 x 5504) is that photo extended by
+  reflection. The time of an FP32 convolution does not depend on the pixel values. The 24.3,
+  32.5, and 42.4 MP photos are real.
+- The time table also has tiles of 1536 and 2048 packed px. With an overlap of 96, a tile of 1024
+  keeps 66% of its area and a tile of 1536 keeps 76%, and 1536 is the fastest on every photo. So
+  `tile_size` extends to 1536 (section 9). 2048 reserves 4.85 GiB and is slower on this 8 GB GPU.
+- The time depends on the tile count, not only on the photo size, because the last tile of an
+  axis has the full tile size. DN3 records this in the time of its planner.
+- Step 3 used 6 photos; one of them (Canon EOS R3) has a LibRaw `linear_max` below its largest
+  raw values, so its "clipped" cells are not all saturated. The other 5 give the result.
+- The overlap selection uses the developed values (+2 EV) for the largest and the RMS difference;
+  the linear values are recorded beside them.
+- The stored format table also has JPEG XL lossless and float16 byte planes with a difference of
+  the left neighbour. The log encoding is `log2(v + 2^-16)` over [0, 2] as 16-bit codes with the
+  sRGB transfer tag.
+
+**LOC note:** lab diff 6 changed files (+298 lines) and 5 new scripts (1,344 lines; largest
+`measurement_common.py`, 446 lines), plus 4 result JSON files (310 KB). Above the estimate of
+700 to 1100 lines because of the shared module and the extra format rows.
+
+**Remaining gaps:** step 5 (`write_stored_result.py`) after U2. Not measured: the forward code of
+Alcedo Studio (DN3), the highlight recovery on the stored result by eye (DN5), stored formats in
+C++.
 
 ### DN2: CUDA layers of UtNet2
 
@@ -729,8 +835,8 @@ no longer agrees with the branch.
 | Parameter | Value | Source |
 | --- | --- | --- |
 | `target_time` | No value until the baseline time of DN3 exists; then from the user (U1) | User |
-| `tile_size` | 256 to 1024 packed pixels, multiple of 16; selected from the free GPU memory | DN1 |
-| `tile_overlap` | Smallest overlap with a border difference below the TF32 difference level | DN1 |
+| `tile_size` | The largest of 512, 768, 1024, and 1536 packed pixels whose workspace fits in the free GPU memory (PyTorch: 200, 451, 800, 1,800 MiB); 1536 is the fastest on the RTX 3080 Laptop GPU | DN1 |
+| `tile_overlap` | 96 packed pixels: the tiled output is the one-pass output | DN1 |
 | `leaky_relu_slope` | The value in the metadata of the weights file | DN0 |
 | Comparison tolerance of the forward tests | From the CPU against GPU difference of PyTorch | DN0 |
 | Model cost | 46.2 GMAC for each megapixel | Layer count, section 5.3 |
