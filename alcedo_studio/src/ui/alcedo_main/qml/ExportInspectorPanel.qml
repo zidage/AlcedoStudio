@@ -194,6 +194,8 @@ Item {
             return qsTr("Done")
         case "failed":
             return qsTr("Failed")
+        case "missing":
+            return qsTr("Missing")
         default:
             return qsTr("Queued")
         }
@@ -206,6 +208,7 @@ Item {
         case "succeeded":
             return appTheme.backgroundTaskFinishedColor
         case "failed":
+        case "missing":
             return appTheme.backgroundTaskFailedColor
         default:
             return appTheme.textMutedColor

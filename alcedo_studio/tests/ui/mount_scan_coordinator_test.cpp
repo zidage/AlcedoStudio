@@ -22,7 +22,10 @@
 #include <cstdint>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <future>
+#include <json.hpp>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -34,6 +37,7 @@
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "storage/store/storage_maintenance.hpp"
 #include "support/test_temp_directory.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/mount_directory_watcher.hpp"
@@ -114,6 +118,10 @@ class ManualClock final : public MountScanClock {
 class ManualWatcher final : public MountDirectoryWatcher {
  public:
   void SetChangeCallback(ChangeCallback callback) override { on_change_ = std::move(callback); }
+  void SetVolumeCallbacks(VolumeRemovedCallback removed, VolumeArrivedCallback arrived) override {
+    on_volume_removed_ = std::move(removed);
+    on_volume_arrived_ = std::move(arrived);
+  }
   auto Watch(mount_id_t mount_id, const stdfs::path& root, std::span<const std::wstring>)
       -> bool override {
     if (fail_registration_) {
@@ -133,15 +141,31 @@ class ManualWatcher final : public MountDirectoryWatcher {
     }
   }
 
+  /// The volume of the watched mount was removed, or its removal was canceled.
+  void RemoveVolume(mount_id_t mount_id) {
+    if (watched_.erase(mount_id) > 0 && on_volume_removed_) {
+      on_volume_removed_(mount_id);
+    }
+  }
+  void ArriveVolume() {
+    if (on_volume_arrived_) {
+      on_volume_arrived_();
+    }
+  }
+
   bool                              fail_registration_ = false;
   std::set<mount_id_t>              watched_;
   std::map<mount_id_t, stdfs::path> watched_roots_;
 
  private:
-  ChangeCallback on_change_;
+  ChangeCallback        on_change_;
+  VolumeRemovedCallback on_volume_removed_;
+  VolumeArrivedCallback on_volume_arrived_;
 };
 
-/// A scan port that counts the scans. A scan can wait at a gate until the test opens it.
+/// A scan port that counts the scans. A scan can wait until the test lets it continue: a wait
+/// that the stop request ends (a scan between two batches), or a wait that only the test ends
+/// (a scan in a batch that started its import).
 class CountingScanPort final : public MountScanPort {
  public:
   explicit CountingScanPort(std::vector<MountSummary> mounts) : mounts_(std::move(mounts)) {}
@@ -155,21 +179,22 @@ class CountingScanPort final : public MountScanPort {
     ++scan_count_;
     scanned_.push_back(mount_id);
     find_moved_volume_.push_back(find_moved_volume);
-    const bool wait_at_gate = gate_closed_;
-    if (wait_at_gate) {
-      waiting_at_gate_ = true;
+    const bool hold_scan = hold_scans_;
+    if (hold_scan) {
+      scan_is_held_ = true;
       changed_.notify_all();
       // The coordinator stops a scan through the stop request; the scan reports kCanceled.
       // Nothing notifies a change of the stop request, so the wait polls it.
-      while (gate_closed_ && !stop_requested.load()) {
+      while (hold_scans_ && (in_batch_ || !stop_requested.load())) {
         changed_.wait_for(lock, milliseconds(5));
       }
-      waiting_at_gate_ = false;
+      scan_is_held_ = false;
     }
     if (stop_requested.load()) {
       saw_stop_request_ = true;
-      MountScanResult result;
-      result.status = MountScanStatus::kCanceled;
+      // The counts of the next result are the batches that the scan stored before the stop.
+      MountScanResult result = next_result_;
+      result.status          = MountScanStatus::kCanceled;
       return result;
     }
     auto result = next_result_;
@@ -181,21 +206,43 @@ class CountingScanPort final : public MountScanPort {
     return result;
   }
 
-  void CloseGate() {
+  auto SaveProject() -> bool override {
     std::lock_guard lock(mutex_);
-    gate_closed_ = true;
+    ++save_count_;
+    return !fail_saves_;
   }
-  void OpenGate() {
+
+  void FailSaves() {
+    std::lock_guard lock(mutex_);
+    fail_saves_ = true;
+  }
+  auto SaveCount() -> int {
+    std::lock_guard lock(mutex_);
+    return save_count_;
+  }
+
+  void HoldScans() {
+    std::lock_guard lock(mutex_);
+    hold_scans_ = true;
+  }
+  /// The next scan waits in a batch: the stop request does not end the wait, ReleaseScans does.
+  void HoldInBatch() {
+    std::lock_guard lock(mutex_);
+    hold_scans_ = true;
+    in_batch_   = true;
+  }
+  void ReleaseScans() {
     {
       std::lock_guard lock(mutex_);
-      gate_closed_ = false;
+      hold_scans_ = false;
+      in_batch_   = false;
     }
     changed_.notify_all();
   }
-  auto WaitAtGate() -> bool {
+  auto WaitUntilScanIsHeld() -> bool {
     return WaitUntil([this] {
       std::lock_guard lock(mutex_);
-      return waiting_at_gate_;
+      return scan_is_held_;
     });
   }
   void SetNextResult(MountScanResult result) {
@@ -220,10 +267,13 @@ class CountingScanPort final : public MountScanPort {
   std::vector<MountSummary> mounts_;
   std::mutex                mutex_;
   std::condition_variable   changed_;
-  bool                      gate_closed_      = false;
-  bool                      waiting_at_gate_  = false;
+  bool                      hold_scans_       = false;
+  bool                      in_batch_         = false;
+  bool                      scan_is_held_     = false;
   bool                      saw_stop_request_ = false;
+  bool                      fail_saves_       = false;
   int                       scan_count_       = 0;
+  int                       save_count_       = 0;
   std::vector<mount_id_t>   scanned_;
   std::vector<bool>         find_moved_volume_;
   MountScanResult           next_result_;
@@ -339,10 +389,10 @@ TEST_F(MountScanCoordinatorTest, TenNotificationsInTwoSecondsStartOneScan) {
 
 TEST_F(MountScanCoordinatorTest, RequestDuringAScanStartsExactlyOneMoreScan) {
   StartAndWaitForTheOpenScan();
-  port_->CloseGate();
+  port_->HoldScans();
   watcher_->Notify(kMount);
   clock_->Advance(seconds(5));
-  ASSERT_TRUE(port_->WaitAtGate());
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
   ASSERT_TRUE(coordinator_->IsScanRunning(kMount));
 
   // Requests of every trigger during the scan set one flag.
@@ -352,7 +402,7 @@ TEST_F(MountScanCoordinatorTest, RequestDuringAScanStartsExactlyOneMoreScan) {
   clock_->Advance(seconds(5));
   coordinator_->RequestScan(kMount, MountScanTrigger::kDirectoryChange);
 
-  port_->OpenGate();
+  port_->ReleaseScans();
   ASSERT_TRUE(WaitForScans(3));
   EXPECT_EQ(port_->ScanCount(), 3);
   EXPECT_EQ(ended_count_, 3);
@@ -400,9 +450,9 @@ TEST_F(MountScanCoordinatorTest, ActivationAfterSixtySecondsInTheBackgroundStart
 
 TEST_F(MountScanCoordinatorTest, ProjectCloseEndsTheRunningScan) {
   StartAndWaitForTheOpenScan();
-  port_->CloseGate();
+  port_->HoldScans();
   coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
-  ASSERT_TRUE(port_->WaitAtGate());
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
 
   coordinator_->Stop();
   EXPECT_TRUE(port_->SawStopRequest());
@@ -417,6 +467,98 @@ TEST_F(MountScanCoordinatorTest, ProjectCloseEndsTheRunningScan) {
   coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
   ProcessQueuedEvents();
   EXPECT_EQ(port_->ScanCount(), 2);
+}
+
+TEST_F(MountScanCoordinatorTest, BeginStopReturnsWhileTheWorkerCompletesItsBatch) {
+  // #1014: the stop of the scans joined the worker on the UI thread. The scan here is in a
+  // batch that the stop request does not end.
+  StartAndWaitForTheOpenScan();
+  port_->HoldInBatch();
+  coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+  int ended_signals = 0;
+  QObject::connect(coordinator_.get(), &MountScanCoordinator::StoppedWorkerEnded,
+                   coordinator_.get(), [&ended_signals] { ++ended_signals; });
+
+  const auto worker_ended = coordinator_->BeginStop();
+
+  EXPECT_FALSE(coordinator_->IsStarted());
+  EXPECT_TRUE(coordinator_->HasStoppedWorker());
+  EXPECT_TRUE(coordinator_->HasPendingScans());
+  ASSERT_TRUE(worker_ended.valid());
+  EXPECT_EQ(worker_ended.wait_for(milliseconds(0)), std::future_status::timeout);
+  const auto tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 1U);
+  EXPECT_EQ(tasks[0].value(QStringLiteral("state")).toString(), QStringLiteral("canceled"));
+  ProcessQueuedEvents();
+  EXPECT_EQ(ended_signals, 0);
+  // A second request gives the same worker.
+  EXPECT_TRUE(coordinator_->BeginStop().valid());
+
+  port_->ReleaseScans();
+  ASSERT_TRUE(WaitUntil([this] { return !coordinator_->HasStoppedWorker(); }));
+  EXPECT_EQ(ended_signals, 1);
+  EXPECT_EQ(worker_ended.wait_for(milliseconds(0)), std::future_status::ready);
+  EXPECT_TRUE(port_->SawStopRequest());
+  EXPECT_FALSE(coordinator_->HasPendingScans());
+  EXPECT_FALSE(coordinator_->BeginStop().valid());
+  EXPECT_EQ(ended_count_, 1) << "a stopped scan reports no end to the scan observer";
+}
+
+TEST_F(MountScanCoordinatorTest, StartAfterBeginStopWaitsForTheStoppedWorker) {
+  // One worker at most writes the project: the scans of a new start wait for the worker of the
+  // stopped scan.
+  StartAndWaitForTheOpenScan();
+  port_->HoldInBatch();
+  coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+  (void)coordinator_->BeginStop();
+
+  coordinator_->Start(port_);
+  ProcessQueuedEvents();
+  EXPECT_TRUE(coordinator_->IsStarted());
+  EXPECT_TRUE(coordinator_->HasStoppedWorker());
+  EXPECT_EQ(port_->ScanCount(), 2);
+
+  port_->ReleaseScans();
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_FALSE(coordinator_->HasStoppedWorker());
+  EXPECT_EQ(port_->ScanCount(), 3);
+  EXPECT_TRUE(coordinator_->IsWatched(kMount));
+}
+
+TEST_F(MountScanCoordinatorTest, BeginStopLetsTheRunningOperationComplete) {
+  StartAndWaitForTheOpenScan();
+  std::promise<void> release;
+  std::atomic<bool>  operation_started{false};
+  std::atomic<bool>  operation_completed{false};
+  int                done_count = 0;
+  bool               done_error = false;
+  ASSERT_TRUE(coordinator_->RunMountOperation(
+      [&, released = release.get_future().share()] {
+        operation_started.store(true);
+        released.wait();
+        operation_completed.store(true);
+      },
+      [&](std::exception_ptr error) {
+        ++done_count;
+        done_error = error != nullptr;
+      }));
+  ASSERT_TRUE(WaitUntil([&] { return operation_started.load(); }));
+
+  const auto worker_ended = coordinator_->BeginStop();
+
+  // The callback gets the stop; the storage change of the operation still completes.
+  EXPECT_EQ(done_count, 1);
+  EXPECT_TRUE(done_error);
+  EXPECT_TRUE(coordinator_->HasStoppedWorker());
+  ASSERT_TRUE(worker_ended.valid());
+  EXPECT_FALSE(operation_completed.load());
+
+  release.set_value();
+  ASSERT_TRUE(WaitUntil([this] { return !coordinator_->HasStoppedWorker(); }));
+  EXPECT_TRUE(operation_completed.load());
+  EXPECT_EQ(done_count, 1);
 }
 
 TEST_F(MountScanCoordinatorTest, AutomaticScanShowsATaskWhenItImportsNewFiles) {
@@ -460,11 +602,72 @@ TEST_F(MountScanCoordinatorTest, OfflineShowsOnceUntilTheMountIsOnlineAgain) {
   EXPECT_EQ(MountScanTasks(tasks_).size(), 2U);
 }
 
+// #1020: an eject closed the watch and nothing scanned the mount, so it stayed online.
+TEST_F(MountScanCoordinatorTest, VolumeRemovalScansTheMountAtOnceAndShowsItOffline) {
+  StartAndWaitForTheOpenScan();
+  ASSERT_TRUE(coordinator_->IsWatched(kMount));
+
+  MountScanResult offline;
+  offline.status = MountScanStatus::kOffline;
+  port_->SetNextResult(offline);
+  watcher_->RemoveVolume(kMount);
+  EXPECT_FALSE(coordinator_->IsWatched(kMount));
+  // No timer: the scan starts with the event.
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_FALSE(coordinator_->IsWatched(kMount));
+  const auto tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 1U);
+  EXPECT_EQ(tasks[0].value(QStringLiteral("detail")).toString(), QStringLiteral("Offline"));
+  EXPECT_EQ(port_->FindMovedVolumeRequests(), (std::vector<bool>{true, true}));
+}
+
+TEST_F(MountScanCoordinatorTest, CanceledVolumeRemovalWatchesTheMountAgain) {
+  StartAndWaitForTheOpenScan();
+  watcher_->RemoveVolume(kMount);
+  ASSERT_FALSE(coordinator_->IsWatched(kMount));
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_TRUE(coordinator_->IsWatched(kMount));
+  EXPECT_TRUE(MountScanTasks(tasks_).empty());
+}
+
+TEST_F(MountScanCoordinatorTest, VolumeArrivalScansAnOfflineMountAfterTheDelay) {
+  MountScanResult offline;
+  offline.status = MountScanStatus::kOffline;
+  port_->SetNextResult(offline);
+  StartAndWaitForTheOpenScan();
+  ASSERT_FALSE(coordinator_->IsWatched(kMount));
+
+  MountScanResult returned;
+  returned.returned_count = 4;
+  port_->SetNextResult(returned);
+  watcher_->ArriveVolume();
+  clock_->Advance(milliseconds(1000));
+  // A second arrival restarts the delay; one scan follows.
+  watcher_->ArriveVolume();
+  clock_->Advance(milliseconds(1999));
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 1);
+  clock_->Advance(milliseconds(1));
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_TRUE(coordinator_->IsWatched(kMount));
+  EXPECT_EQ(port_->FindMovedVolumeRequests(), (std::vector<bool>{true, true}));
+  const auto tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 2U);
+  EXPECT_EQ(tasks[1].value(QStringLiteral("detail")).toString(), QStringLiteral("4 returned"));
+
+  // A mount that is online gets no scan from an arrival.
+  watcher_->ArriveVolume();
+  EXPECT_FALSE(clock_->HasTimer(kMount));
+  clock_->Advance(seconds(30));
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 2);
+}
+
 TEST_F(MountScanCoordinatorTest, UserCancelEndsTheScanWithoutAnotherScan) {
   StartAndWaitForTheOpenScan();
-  port_->CloseGate();
+  port_->HoldScans();
   coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
-  ASSERT_TRUE(port_->WaitAtGate());
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
   coordinator_->RequestScan(kMount, MountScanTrigger::kDirectoryChange);
 
   const auto task_id = MountScanTasks(tasks_).at(0).value(QStringLiteral("id")).toString();
@@ -473,6 +676,233 @@ TEST_F(MountScanCoordinatorTest, UserCancelEndsTheScanWithoutAnotherScan) {
   EXPECT_EQ(port_->ScanCount(), 2);
   EXPECT_EQ(MountScanTasks(tasks_).at(0).value(QStringLiteral("state")).toString(),
             QStringLiteral("canceled"));
+}
+
+TEST_F(MountScanCoordinatorTest, ScanSavesTheProjectOnlyWhenItStoredChanges) {
+  // #1015: an automatic scan wrote new rows and did not save the project file.
+  StartAndWaitForTheOpenScan();
+  EXPECT_EQ(port_->SaveCount(), 0) << "an unchanged scan saves nothing";
+
+  MountScanResult imported;
+  imported.imported_count = 3;
+  port_->SetNextResult(imported);
+  watcher_->Notify(kMount);
+  clock_->Advance(seconds(5));
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_EQ(port_->SaveCount(), 1);
+
+  // A file that could not be imported writes no row; the next scan tries it again.
+  MountScanResult import_failed;
+  import_failed.import_failed_count = 1;
+  port_->SetNextResult(import_failed);
+  coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_EQ(port_->SaveCount(), 1);
+
+  MountScanResult folders_only;
+  folders_only.folders_removed_count = 1;
+  port_->SetNextResult(folders_only);
+  coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
+  ASSERT_TRUE(WaitForScans(4));
+  EXPECT_EQ(port_->SaveCount(), 2);
+}
+
+TEST_F(MountScanCoordinatorTest, StoppedScanSavesItsStoredBatchesBeforeItsWorkerEnds) {
+  // The close, the load, and the exit save after the worker ended; the save of the scan runs
+  // before that end, so the two saves never run at once.
+  StartAndWaitForTheOpenScan();
+  MountScanResult stored;
+  stored.imported_count = 2;
+  port_->SetNextResult(stored);
+  port_->HoldInBatch();
+  coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+
+  const auto worker_ended = coordinator_->BeginStop();
+  ASSERT_TRUE(worker_ended.valid());
+  EXPECT_EQ(port_->SaveCount(), 0);
+
+  port_->ReleaseScans();
+  ASSERT_EQ(worker_ended.wait_for(seconds(20)), std::future_status::ready);
+  EXPECT_EQ(port_->SaveCount(), 1);
+  ASSERT_TRUE(WaitUntil([this] { return !coordinator_->HasStoppedWorker(); }));
+}
+
+TEST_F(MountScanCoordinatorTest, FailedSaveEndsTheTaskFailed) {
+  StartAndWaitForTheOpenScan();
+  port_->FailSaves();
+  MountScanResult imported;
+  imported.imported_count = 1;
+  port_->SetNextResult(imported);
+  watcher_->Notify(kMount);
+  clock_->Advance(seconds(5));
+  ASSERT_TRUE(WaitForScans(2));
+
+  EXPECT_EQ(port_->SaveCount(), 1);
+  const auto tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 1U);
+  EXPECT_EQ(tasks[0].value(QStringLiteral("state")).toString(), QStringLiteral("failed"));
+  EXPECT_EQ(tasks[0].value(QStringLiteral("detail")).toString(),
+            QStringLiteral("The project could not be saved."));
+}
+
+// ── Hold (#1016) ────────────────────────────────────────────────────────────
+
+TEST_F(MountScanCoordinatorTest, HoldWaitsForTheBatchAndTheScanRunsAgainAfterTheRelease) {
+  // #1016: a scan batch synced the placeholders of a user import that ran at the same time.
+  StartAndWaitForTheOpenScan();
+  port_->HoldInBatch();
+  std::vector<MountScanStatus> ended;
+  coordinator_->RequestScan(
+      kMount, MountScanTrigger::kSynchronize,
+      [&ended](const MountScanResult& result) { ended.push_back(result.status); });
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+
+  auto hold  = coordinator_->Hold();
+  bool ready = false;
+  hold.WhenReady([&ready] { ready = true; });
+  ProcessQueuedEvents();
+  EXPECT_FALSE(ready) << "the start waits for the batch in work";
+  EXPECT_TRUE(coordinator_->IsHeld());
+
+  port_->ReleaseScans();
+  ASSERT_TRUE(WaitUntil([&ready] { return ready; }));
+  EXPECT_TRUE(port_->SawStopRequest());
+  EXPECT_FALSE(coordinator_->HasWorker());
+  EXPECT_TRUE(ended.empty()) << "the request waits for the scan that runs again";
+  auto tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 1U);
+  EXPECT_EQ(tasks[0].value(QStringLiteral("state")).toString(), QStringLiteral("running"));
+  EXPECT_EQ(tasks[0].value(QStringLiteral("detail")).toString(), QStringLiteral("Paused"));
+
+  // No scan starts while the hold exists.
+  watcher_->Notify(kMount);
+  clock_->Advance(seconds(5));
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 2);
+  EXPECT_FALSE(coordinator_->HasWorker());
+
+  hold.Release();
+  EXPECT_FALSE(coordinator_->IsHeld());
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_EQ(port_->ScanCount(), 3) << "the paused scan and the request merge into one scan";
+  EXPECT_EQ(ended, (std::vector<MountScanStatus>{MountScanStatus::kComplete}));
+  tasks = MountScanTasks(tasks_);
+  ASSERT_EQ(tasks.size(), 1U) << "the scan that runs again takes its task over";
+  EXPECT_EQ(tasks[0].value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"));
+}
+
+TEST_F(MountScanCoordinatorTest, HoldWithNoWorkerIsReadyAtOnceAndHoldsTheOperations) {
+  StartAndWaitForTheOpenScan();
+  auto hold  = coordinator_->Hold();
+  bool ready = false;
+  hold.WhenReady([&ready] { ready = true; });
+  EXPECT_TRUE(ready);
+
+  std::atomic<bool> operation_ran{false};
+  ASSERT_TRUE(coordinator_->RunMountOperation([&operation_ran] { operation_ran = true; }, {}));
+  coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
+  ProcessQueuedEvents();
+  EXPECT_FALSE(coordinator_->HasWorker());
+  EXPECT_EQ(port_->ScanCount(), 1);
+
+  // Two holds: the scans wait for the last one.
+  auto second = coordinator_->Hold();
+  hold.Release();
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 1);
+  EXPECT_FALSE(operation_ran.load());
+
+  second = MountScanHold{};
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_TRUE(operation_ran.load());
+}
+
+TEST_F(MountScanCoordinatorTest, ReleasedHoldDoesNotRunItsStart) {
+  StartAndWaitForTheOpenScan();
+  port_->HoldInBatch();
+  coordinator_->RequestScan(kMount, MountScanTrigger::kDirectoryChange);
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+
+  bool ready = false;
+  {
+    auto hold = coordinator_->Hold();
+    hold.WhenReady([&ready] { ready = true; });
+  }
+  port_->ReleaseScans();
+  // The stopped scan runs again, since no hold exists at its end.
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_FALSE(ready);
+}
+
+TEST_F(MountScanCoordinatorTest, CancelOfAPausedTaskDropsTheScan) {
+  StartAndWaitForTheOpenScan();
+  port_->HoldScans();
+  std::vector<MountScanStatus> ended;
+  coordinator_->RequestScan(
+      kMount, MountScanTrigger::kSynchronize,
+      [&ended](const MountScanResult& result) { ended.push_back(result.status); });
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+  auto hold  = coordinator_->Hold();
+  bool ready = false;
+  hold.WhenReady([&ready] { ready = true; });
+  ASSERT_TRUE(WaitUntil([&ready] { return ready; }));
+  port_->ReleaseScans();
+
+  const auto task_id = MountScanTasks(tasks_).at(0).value(QStringLiteral("id")).toString();
+  ASSERT_TRUE(tasks_.CancelTask(task_id));
+  ProcessQueuedEvents();
+  EXPECT_EQ(MountScanTasks(tasks_).at(0).value(QStringLiteral("state")).toString(),
+            QStringLiteral("canceled"));
+  EXPECT_EQ(ended, (std::vector<MountScanStatus>{MountScanStatus::kCanceled}));
+
+  hold.Release();
+  ProcessQueuedEvents();
+  EXPECT_FALSE(coordinator_->HasPendingScans());
+  EXPECT_EQ(port_->ScanCount(), 2);
+}
+
+TEST_F(MountScanCoordinatorTest, HoldOutlivesTheStopAndWaitsForTheStoppedWorker) {
+  StartAndWaitForTheOpenScan();
+  port_->HoldInBatch();
+  coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+  (void)coordinator_->BeginStop();
+
+  auto hold  = coordinator_->Hold();
+  bool ready = false;
+  hold.WhenReady([&ready] { ready = true; });
+  ProcessQueuedEvents();
+  EXPECT_FALSE(ready);
+  coordinator_->Start(port_);
+  port_->ReleaseScans();
+  ASSERT_TRUE(WaitUntil([&ready] { return ready; }));
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 2) << "the scan of the new start waits for the hold";
+
+  hold.Release();
+  ASSERT_TRUE(WaitForScans(3));
+}
+
+TEST(MountScanPathTest, AFileThatTheListingListsIsLeftToTheScan) {
+  test::TestTempDirectory temp_dir;
+  const auto              root  = temp_dir / "Japan";
+  const auto              write = [](const stdfs::path& path) {
+    stdfs::create_directories(path.parent_path());
+    std::ofstream(path, std::ios::binary) << "x";
+  };
+  write(root / "Kyoto" / "a.jpg");
+  write(root / ".cache" / "b.jpg");
+  write(root / "notes.txt");
+  write(temp_dir / "Other" / "c.jpg");
+  const std::vector<stdfs::path> roots{root};
+
+  EXPECT_TRUE(IsPathOfAMountScan(root / "Kyoto" / "a.jpg", roots));
+  EXPECT_FALSE(IsPathOfAMountScan(root / ".cache" / "b.jpg", roots))
+      << "the listing does not enter a directory whose name starts with a period";
+  EXPECT_FALSE(IsPathOfAMountScan(root / "notes.txt", roots));
+  EXPECT_FALSE(IsPathOfAMountScan(temp_dir / "Other" / "c.jpg", roots));
+  EXPECT_FALSE(IsPathOfAMountScan(root / "Kyoto" / "a.jpg", {}));
 }
 
 // ── Real directory, real project ────────────────────────────────────────────
@@ -551,11 +981,29 @@ TEST_F(MountScanCoordinatorProjectTest, FileAddedToTheDirectoryAppearsInTheLibra
   dependencies.clock   = std::move(clock);
   dependencies.watcher = CreatePlatformMountDirectoryWatcher();
   coordinator_         = std::make_unique<MountScanCoordinator>(std::move(dependencies));
-  coordinator_->Start(
-      std::make_shared<ProjectMountScanPort>(project_->GetMountService(), import_.get(), nullptr));
+  std::atomic<int> save_count{0};
+  coordinator_->Start(std::make_shared<ProjectMountScanPort>(
+      project_->GetMountService(), import_.get(), nullptr, [&](QString*) {
+        ++save_count;
+        project_->SaveProject(temp_dir_ / "project.json");
+        return true;
+      }));
   ASSERT_TRUE(WaitUntil([&] { return !coordinator_->HasPendingScans(); }));
   ProcessQueuedEvents();
   ASSERT_EQ(SummaryOf(mount_id).present_count, 1U);
+  // #1015: the project file holds start ids that no stored row reaches, with no user action.
+  EXPECT_EQ(save_count.load(), 1);
+  {
+    std::ifstream  in(temp_dir_ / "project.json");
+    nlohmann::json metadata;
+    ASSERT_TRUE(in.is_open());
+    in >> metadata;
+    const auto stored = project_->GetStorage()->Maintenance().ReadLargestStoredIds();
+    EXPECT_GT(stored.element_id, 0);
+    EXPECT_GT(stored.image_id, 0);
+    EXPECT_GE(metadata.at("start_id").get<int64_t>(), stored.element_id);
+    EXPECT_GE(metadata.at("image_pool_start_id").get<int64_t>(), stored.image_id);
+  }
   ASSERT_TRUE(coordinator_->IsWatched(mount_id));
   // The scan reads the files and writes nothing to the directory, so it starts no scan.
   ProcessQueuedEvents();
@@ -575,6 +1023,7 @@ TEST_F(MountScanCoordinatorProjectTest, FileAddedToTheDirectoryAppearsInTheLibra
   ASSERT_EQ(tasks.size(), 2U);
   EXPECT_EQ(tasks.back().value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"));
   EXPECT_EQ(tasks.back().value(QStringLiteral("detail")).toString(), QStringLiteral("1 new"));
+  EXPECT_EQ(save_count.load(), 2);
 }
 
 }  // namespace

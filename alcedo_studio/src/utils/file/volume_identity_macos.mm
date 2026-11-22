@@ -3,6 +3,8 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #import <Foundation/Foundation.h>
+#include <sys/mount.h>
+#include <sys/param.h>
 
 #include <filesystem>
 #include <string>
@@ -48,6 +50,21 @@ auto ListVolumeMountPoints() -> std::vector<VolumeMountPoint> {
       if (identity == nullptr || path == nullptr) continue;
       mount_points.push_back(VolumeMountPoint{std::string(identity), std::filesystem::path(path)});
     }
+  }
+  return mount_points;
+}
+
+auto ListMountPointPaths() -> std::vector<std::filesystem::path> {
+  std::vector<std::filesystem::path> mount_points;
+  // MNT_NOWAIT returns the cached values of the kernel and asks no file system.
+  const int                          count = ::getfsstat(nullptr, 0, MNT_NOWAIT);
+  if (count <= 0) return mount_points;
+  // A file system that is mounted between the two calls is left for the next read.
+  std::vector<struct statfs> entries(static_cast<std::size_t>(count));
+  const int                  read = ::getfsstat(
+      entries.data(), static_cast<int>(entries.size() * sizeof(struct statfs)), MNT_NOWAIT);
+  for (int index = 0; index < read; ++index) {
+    mount_points.emplace_back(entries[static_cast<std::size_t>(index)].f_mntonname);
   }
   return mount_points;
 }

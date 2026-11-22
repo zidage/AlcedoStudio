@@ -1356,6 +1356,22 @@
         <translation>无法保存这些变化。</translation>
     </message>
     <message>
+        <source>The project could not be saved.</source>
+        <translation>无法保存项目。</translation>
+    </message>
+    <message>
+        <source>Paused</source>
+        <translation>已暂停</translation>
+    </message>
+    <message>
+        <source>%1 file(s) are in a mounted folder. The scan of that folder adds them.</source>
+        <translation>%1 个文件位于挂载文件夹中，将由该文件夹的扫描添加。</translation>
+    </message>
+    <message>
+        <source>A mounted folder is being scanned. Please try again.</source>
+        <translation>正在扫描挂载文件夹，请稍后再试。</translation>
+    </message>
+    <message>
         <source>The collection is no longer in the library.</source>
         <translation>该影集已不在图库中。</translation>
     </message>
@@ -2520,7 +2536,46 @@ Alcedo 将改用 %1。</translation>
     </message>
 </context>
 <context>
+    <name>CollectionsRail</name>
+    <message>
+        <source>Search</source>
+        <translation>搜索</translation>
+    </message>
+    <message>
+        <source>Background Tasks</source>
+        <translation>后台任务</translation>
+    </message>
+    <message>
+        <source>All Photos</source>
+        <translation>全部图片</translation>
+    </message>
+    <message>
+        <source>Collections</source>
+        <translation>影集</translation>
+    </message>
+    <message>
+        <source>Import</source>
+        <translation>导入</translation>
+    </message>
+</context>
+<context>
     <name>CollectionsPanel</name>
+    <message>
+        <source>Import</source>
+        <translation>导入</translation>
+    </message>
+    <message>
+        <source>Import Images...</source>
+        <translation>导入图像...</translation>
+    </message>
+    <message>
+        <source>Import Folder...</source>
+        <translation>导入文件夹...</translation>
+    </message>
+    <message>
+        <source>Mount Folder...</source>
+        <translation>挂载文件夹...</translation>
+    </message>
     <message>
         <source>Mount Folder Here...</source>
         <translation>在此挂载文件夹...</translation>
@@ -2628,7 +2683,7 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+39"/>
-        <source>全部图片</source>
+        <source>All Photos</source>
         <translation>全部图片</translation>
     </message>
     <message>
@@ -5788,11 +5843,16 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
     <message>
         <location line="+2"/>
+        <source>Missing</source>
+        <translation>文件缺失</translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Queued</source>
         <translation>已排队</translation>
     </message>
     <message>
-        <location line="+148"/>
+        <location line="+149"/>
         <source>Quality</source>
         <translation>质量</translation>
     </message>
@@ -6349,7 +6409,7 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <translation>筛选影集</translation>
     </message>
     <message>
-        <source>全部图片</source>
+        <source>All Photos</source>
         <translation>全部图片</translation>
     </message>
     <message>
@@ -6735,6 +6795,10 @@ Refresh the library afterwards; they are listed under the User category. Import 
 </context>
 <context>
     <name>LibraryWorkspace</name>
+    <message>
+        <source>All Photos</source>
+        <translation>全部图片</translation>
+    </message>
     <message>
         <source>Import to %1</source>
         <translation>导入到 %1</translation>

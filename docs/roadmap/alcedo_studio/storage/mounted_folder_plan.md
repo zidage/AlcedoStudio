@@ -209,6 +209,24 @@ name starts with a period. The file type rule is `is_supported_file`
   keeps the completed batches. The next scan finds the remaining new files, because they have no
   record.
 - One scan runs at a time for one mount. A request during a scan sets one "scan again" flag.
+- The comparison reads the fingerprint of a new file only when a lost record has its byte size
+  (the fingerprint holds the byte size). Each other new file is read in the batch that imports
+  it, so the first scan of a directory stores its first photos after one batch of reads (#1014).
+- The scan reads the stop request for each directory of the listing, before each fingerprint
+  read, and before each new file batch. A batch that started its import completes: a stop
+  leaves each batch stored in full or not started (#1014).
+- The UI thread does not wait for a scan. A project close, a project load, and the application
+  exit request the stop, and they save the project after the scan worker has ended: the close
+  waits in the event loop, the load waits in its loader thread, and the exit waits in its event
+  wait (#1014).
+- A user import and a delete hold the scans for their whole length, the finalize step of an
+  import included (`MountScanCoordinator::Hold`). A hold requests the stop of the running scan,
+  and no scan or mount operation starts while a hold exists. The import job or the delete worker
+  starts when no scan worker writes the project. The stopped scan runs again after the last
+  hold, with its trigger, its waiting callbacks, and its task (#1016).
+- A user import leaves each file that the listing of a mount lists to the scan of that mount
+  (`IsPathOfAMountScan`; decision D10). The synchronous delete of the Nikon HE recovery
+  (`ImageController::DeleteTargets`) refuses while a scan worker writes (#1016).
 
 ---
 
@@ -1619,6 +1637,45 @@ handle open in `Root\Day1`, the rename of `Root` fails with access denied. With 
 handle on `Root`, the rename of `Root\A` (which has a subdirectory) and of `Root` itself
 succeed; the rename of the parent of `Root` fails.
 
+**Change after the phase (#1014, 2026-11-20).** The stop of a scan replaces the rules of MF3,
+MF4, and MF7 that are named below. Section 2.6 holds the current rules.
+
+```text
+Problem: the first scan read the fingerprint of each file before its first import batch, with
+  no read of the stop request; MountScanCoordinator::Stop joined the scan worker on the UI
+  thread at project close, project load, and exit
+MF3: BuildMountScanChangeList has a stop request parameter, read before each fingerprint read; a
+  stop gives an empty change list. A new path is read only when an ordinary file adopts it or a
+  lost record of the current fingerprint version has its byte size; each other new path goes to
+  MountScanChangeList::unread_new_files without a read
+MF4: MountScanRun reads the fingerprint of the unread new files in the batch that imports them
+  and reads the stop request before each of these reads, which is before the first write of the
+  batch. A batch that started its import completes. The progress shows the total of the new
+  files before the first read
+MF7: MountScanCoordinator::BeginStop requests the stop and returns; the worker stays in
+  stopped_worker_ until its queued end (HandleStoppedWorkerEnded -> StoppedWorkerEnded), and no
+  scan or operation starts before that. Stop = BeginStop + join (destructor, last step of exit)
+Call chains:
+  project close -> ApplicationCloseCoordinator::Finish -> BeginStop -> HasStoppedWorker: wait
+    -> StoppedWorkerEnded (queued) -> EvaluateEditorClose -> Finish -> ProjectModule::
+    CloseProject -> StopMountScans (no worker) -> PersistProjectForClose; an abort, a cancel, or
+    a refused close -> ProjectModule::ResumeMountScans
+  project load -> ProjectHandler::StartProjectLoad -> ProjectModule::BeginStopMountScans ->
+    loader thread: wait for the future of the worker -> save of the old project -> load
+  exit -> ApplicationModuleHost::ShutdownModules -> BeginStop -> event wait until IsIdle (15 s)
+    -> Stop (join of a worker that is still in its batch) -> PersistProjectForClose
+Tests: MountScanChangeListTest 25/25 (FirstScanReadsNoFile, NewPathIsReadOnlyWhenALostRecord
+  HasItsByteSize, StopRequestEndsTheFingerprintReadsWithAnEmptyChangeList, StopRequestEndsThe
+  ReadsOfChangedFiles); MountServiceTest 25/25 (StoppedFirstScanReadsOnlyTheFilesOfItsStored
+  Batch); MountScanCoordinatorTest 15/15, 20 repeats (BeginStopReturnsWhileTheWorkerCompletes
+  ItsBatch, StartAfterBeginStopWaitsForTheStoppedWorker, BeginStopLetsTheRunningOperation
+  Complete); ApplicationCloseCoordinatorTest 6/6 (ProjectCloseWaitsForTheStoppedScanWorker);
+  callers: FolderControllerMountTest 6/6, ApplicationModuleHostLifecycleTest 2/2,
+  ApplicationModuleHostShutdownTest 11/11, ApplicationModuleHostIdleTest 1/1,
+  ProjectModuleTest 4/4. Windows debug build; alcedo_main links
+Not covered: a slow network share was not measured; Linux and macOS were not built
+```
+
 ### MF8. Missing photos, root relocation, and automation commands
 
 **Objective and deliverables.** The user can repair an offline mount and a missing photo, and can
@@ -1780,6 +1837,55 @@ Performance or resource evidence, if required: not required
 Evidence path: pull requests #1004, #1005, and #1006; alcedo-skills#28
 Remaining defects or unavailable platforms: ListVolumeMountPoints was compiled and run on
   macOS and Linux (WSL) as single files; the full macOS and Linux builds were not run
+```
+
+**Change after the phase (#1020, #1021, 2026-11-21).** The volume check of a scan and the volume
+events of the watcher replace the rules of MF4, MF7, and P11 that are named below.
+
+```text
+Problem (#1021): a scan treated each root directory that it could list as online. On Linux and
+  macOS the empty mount point of an unmounted volume stays, so the scan made each photo of the
+  mount missing, and Remove Missing Photos then removed them with their edit history
+Problem (#1020): the Windows watcher closed its handles on an eject and reported nothing, so the
+  mount stayed online until the next scan, and a canceled eject left the mount without a watch.
+  A connected drive left its mount offline until an activation scan or Synchronize
+MF4: MountService::ScanMount reads the volume identity of the root before the listing
+  (ListRootOnRecordedVolume). A mount with a recorded identity whose root has another identity,
+  or none, is offline (D5) and gets the moved volume search when the request asks for it. A
+  mount without a recorded identity has no check. MountService takes a VolumeIdentityReader
+  (ReadVolumeIdentity in production) next to the VolumeMountPointList
+MF7: MountDirectoryWatcher::SetVolumeCallbacks reports the removal of the volume of a watched
+  mount (the watch has ended) and the arrival of a volume. MountScanCoordinator requests a
+  kVolumeChange scan of the mount at once for a removal, and of each offline mount after
+  kMountScanVolumeArrivalDelay (2 s) for an arrival. A kVolumeChange scan searches for a moved
+  volume, as the scan of the project open does
+P11: the Windows watcher closes the handles on DBT_DEVICEQUERYREMOVE and DBT_DEVICEREMOVEPENDING
+  and keeps the device notification; DBT_DEVICEREMOVECOMPLETE and DBT_DEVICEQUERYREMOVEFAILED end
+  the watch and report the removal. The arrival is the device interface notification of
+  GUID_DEVINTERFACE_VOLUME. The Qt watcher reads the mount table (ListMountPointPaths, no file
+  system access) every kMountTablePollInterval (2 s): a new mount point is an arrival, and a
+  mount point that is gone removes each watched mount at or below it
+Call chains:
+  eject -> WM_DEVICECHANGE DBT_DEVICEQUERYREMOVE -> CloseHandles -> DBT_DEVICEREMOVECOMPLETE ->
+    Unwatch -> (queued) MountScanCoordinator::HandleVolumeRemoved -> RequestScan(kVolumeChange)
+    -> ScanMount: kOffline -> task "Offline", FolderController::RefreshImageCounts
+  canceled eject -> DBT_DEVICEQUERYREMOVEFAILED -> same chain -> kComplete -> Watch again
+  drive connected -> DBT_DEVICEARRIVAL (DBT_DEVTYP_DEVICEINTERFACE) -> (queued)
+    HandleVolumeArrived -> timer of each offline mount (2 s) -> RequestScan(kVolumeChange) ->
+    ScanMount: online, missing photos return
+  Linux unmount -> QtMountDirectoryWatcher::PollMountTable -> mount point gone -> Unwatch ->
+    HandleVolumeRemoved -> ScanMount: the empty mount point has another identity -> kOffline
+Tests: MountServiceTest 27/27 (RootOnAnotherVolumeSetsOfflineAndChangesNoRecord,
+  RootOnAnotherVolumeSearchesForTheRecordedVolume); MountScanCoordinatorTest 27/27, 10 repeats
+  (VolumeRemovalScansTheMountAtOnceAndShowsItOffline, CanceledVolumeRemovalWatchesTheMountAgain,
+  VolumeArrivalScansAnOfflineMountAfterTheDelay); MountDirectoryWatcherTest 5/5, 20 repeats
+  (QtWatcherReportsTheVolumeEventsOfTheMountTable); SourceFileUtilsTest 21/22, 1 skipped
+  (MountTableHoldsAMountPointOfADirectory passes; the symbolic link test needs a privilege);
+  ApplicationCloseCoordinatorTest 6/6. Windows debug build
+Linux: volume_identity_linux.cpp and mount_directory_watcher_qt.cpp pass g++ 16 -std=c++20 -Wall
+  -Wextra -fsyntax-only with Qt 6 in WSL alcedo-arch with no diagnostic
+Not covered: a real eject, a canceled eject, and a connected drive were not run (the device
+  notifications come from the system); macOS ListMountPointPaths (getfsstat) was not compiled
 ```
 
 ---

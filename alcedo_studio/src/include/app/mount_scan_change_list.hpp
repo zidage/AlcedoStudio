@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -79,7 +80,8 @@ struct MountScanFileMove {
   auto                  operator==(const MountScanFileMove&) const -> bool = default;
 };
 
-/// A listed file that matches no record. The apply step imports it by reference.
+/// A listed file that matches no record, with the fingerprint that the comparison read to pair it
+/// with a lost record. The apply step imports it by reference.
 struct MountScanNewFile {
   std::wstring          relative_path;
   MountScanSourceValues values;
@@ -107,6 +109,11 @@ struct MountScanChangeList {
   std::vector<MountScanFileUpdate>   changed_in_place;
   std::vector<MountScanFileMove>     moved;
   std::vector<MountScanNewFile>      new_files;
+  /// Listed files that match no record and whose fingerprint the comparison did not read: no
+  /// lost record has their byte size, so no move can end at them. The apply step reads the
+  /// fingerprint of each file in the batch that imports it, so a first scan stores its first
+  /// photos after one batch of reads. Sorted by relative path.
+  std::vector<MountDirectoryFile>    unread_new_files;
   std::vector<MountScanMissingFile>  missing;
   std::vector<MountScanFileUpdate>   returned;
   std::vector<MountScanFileUpdate>   adopted;
@@ -155,10 +162,16 @@ using MountScanFingerprintFunction =
  *   not kSourceFileFingerprintVersion matches no path.
  * - The remaining new paths are new files. A remaining lost record that is present becomes
  *   missing; one that is missing stays missing.
- * - The fingerprint function runs only for a listed file with no record at its path and for a
- *   listed file whose size or time differs from its record. A lost record contributes its stored
+ * - The fingerprint function runs only for a listed file whose size or time differs from its
+ *   record, for a new path that an ordinary file adopts, and for a new path whose byte size is
+ *   the byte size of a lost record with a fingerprint of the current version. The fingerprint
+ *   holds the byte size, so a new path with another size is the end of no move; it goes to
+ *   MountScanChangeList::unread_new_files without a read. A lost record contributes its stored
  *   fingerprint. An unchanged file is not read.
  * - A listing that is not complete gives an empty change list (Mounted Folder Plan, D5).
+ * - @p stop_requested is read before each fingerprint read. When it is true, the function reads
+ *   no more files and returns an empty change list; the caller reads the request to tell this
+ *   result from a directory with no change.
  *
  * The function reads no storage and no user interface state. It reads file bytes only through
  * @p fingerprint.
@@ -167,7 +180,8 @@ using MountScanFingerprintFunction =
  */
 [[nodiscard]] auto BuildMountScanChangeList(const MountScanRecords&             records,
                                             const MountDirectoryListing&        listing,
-                                            const MountScanFingerprintFunction& fingerprint)
+                                            const MountScanFingerprintFunction& fingerprint,
+                                            const std::atomic<bool>* stop_requested = nullptr)
     -> MountScanChangeList;
 
 }  // namespace alcedo

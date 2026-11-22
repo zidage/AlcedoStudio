@@ -1242,7 +1242,7 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             // Room for the folder section above the first row; the rows keep their offsets.
             topMargin: root.topInset
-            ScrollBar.vertical: ScrollBar {}
+            ScrollBar.vertical: AlcedoScrollBar {}
 
             // In the content of the list, above the first row: it scrolls with the rows. The
             // tiles take their own presses; a wheel over the section scrolls the list.

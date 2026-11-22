@@ -4124,11 +4124,16 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+2"/>
+        <source>Missing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Queued</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+148"/>
+        <location line="+149"/>
         <source>Quality</source>
         <translation type="unfinished"></translation>
     </message>

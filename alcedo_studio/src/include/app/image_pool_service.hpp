@@ -143,6 +143,11 @@ class ImagePoolService {
   auto CreateAndReturnPinned(const std::function<void(Image&)>& fill)
       -> ImagePoolManager::PinnedImageHandle;
 
+  /// True when the project has the image @p image_id: in the pool and not marked for deletion,
+  /// or in storage.
+  /// @throws std::runtime_error when the pool manager is not initialized.
+  auto Contains(image_id_t image_id) -> bool;
+
   void Remove(image_id_t image_id);
   void RemoveBatch(std::span<const image_id_t> image_ids);
   auto SyncWithStorage() -> ImagePoolSyncStatus;

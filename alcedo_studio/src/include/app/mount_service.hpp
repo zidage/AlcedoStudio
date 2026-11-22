@@ -24,6 +24,7 @@
 #include "sleeve/storage.hpp"
 #include "type/mount_records.hpp"
 #include "type/type.hpp"
+#include "utils/file/mount_directory_listing.hpp"
 #include "utils/file/volume_identity.hpp"
 
 namespace alcedo {
@@ -119,7 +120,8 @@ struct MountScanResult {
   std::size_t     folders_removed_count  = 0;
   std::size_t     unchanged_count        = 0;
   std::size_t     still_missing_count    = 0;
-  /// Listed files whose fingerprint could not be read; see MountScanChangeList.
+  /// Listed files whose fingerprint could not be read, in the comparison (see
+  /// MountScanChangeList) or in a new file batch. They stay as they are for the next scan.
   std::size_t     unreadable_count       = 0;
   std::size_t     unverified_count       = 0;
   std::size_t     deferred_count         = 0;
@@ -154,7 +156,9 @@ struct MountScanRequest {
   mount_id_t                                    mount_id       = 0;
   /// Imports the new files; required.
   MountFileImporter*                            importer       = nullptr;
-  /// Optional. The scan checks it before each new file batch; the current batch completes.
+  /// Optional. The scan reads it for each directory of the listing, before each fingerprint
+  /// read, and before each new file batch. A batch that started its import completes, so a stop
+  /// leaves each batch stored in full or not started.
   const std::atomic<bool>*                      stop_requested = nullptr;
   /// Optional. Called after the first batch for each file that changed in place, moved, or
   /// returned, so readers can refresh the source.
@@ -171,6 +175,10 @@ struct MountScanRequest {
 /// The mounted volumes for the volume search of MountScanRequest::find_moved_volume.
 /// ListVolumeMountPoints in production; a test injects a list.
 using VolumeMountPointList = std::function<std::vector<VolumeMountPoint>()>;
+
+/// The volume identity of a directory in the form of ReadVolumeIdentity. ReadVolumeIdentity in
+/// production; a test injects an identity.
+using VolumeIdentityReader = std::function<std::string(const std::filesystem::path&)>;
 
 /// Removes the edit data (pipelines and edit history) of the photos that RemoveMissingPhotos
 /// removed. PipelineMgmtService::DeletePipelines in production; MountService cannot depend on
@@ -209,10 +217,13 @@ struct MountMissingPhotoRemoval {
 class MountService {
  public:
   /// @param list_volumes The mounted volumes; empty takes ListVolumeMountPoints.
+  /// @param read_volume_identity The volume identity of a directory; empty takes
+  ///        ReadVolumeIdentity.
   /// @throws std::invalid_argument when a service is null.
   MountService(std::shared_ptr<Storage> storage, std::shared_ptr<SleeveServiceImpl> sleeve_service,
                std::shared_ptr<ImagePoolService> image_pool_service,
-               VolumeMountPointList              list_volumes = {});
+               VolumeMountPointList              list_volumes         = {},
+               VolumeIdentityReader              read_volume_identity = {});
 
   /**
    * @brief Bind a new collection in the folder @p parent_folder_id to @p directory.
@@ -236,8 +247,19 @@ class MountService {
    * Each later batch imports MountScanRequest::new_file_batch_size new files. Each batch is
    * stored before the next one starts.
    *
-   * @return kOffline with no change when the root directory is unreachable; kCanceled when the
-   *         stop request ended the scan; kStorageFailure when a batch failed.
+   * The comparison reads the fingerprint of a new file only when a lost record can pair with it
+   * (BuildMountScanChangeList). Each other new file is read in the batch that imports it, so the
+   * first scan of a directory stores its first photos after one batch of reads. A stop request
+   * ends the scan within one fingerprint read plus the import of the current batch.
+   *
+   * The volume check comes before the listing: when the mount has a recorded volume identity
+   * and the root directory has another identity (or none), the root is on another volume, and
+   * the mount is offline (D5). Production case: on Linux or macOS the root is the mount point
+   * of a volume, and after the volume is unmounted the empty mount point directory stays. A
+   * listing of that directory would make each photo of the mount missing.
+   *
+   * @return kOffline with no change when the root directory is unreachable or on another volume;
+   *         kCanceled when the stop request ended the scan; kStorageFailure when a batch failed.
    * @throws MountOperationError with kUnknownMount; std::invalid_argument when the request has
    *         no importer.
    */
@@ -313,11 +335,17 @@ class MountService {
   /// when no listed volume has the identity or no such directory exists.
   auto FindRootOnMovedVolume(const MountRootRecord& mount) const
       -> std::optional<std::filesystem::path>;
+  /// The listing of the root of @p mount, or a kRootUnreachable listing when the root is on
+  /// another volume than the recorded one.
+  auto ListRootOnRecordedVolume(const MountRootRecord&   mount,
+                                const std::atomic<bool>* stop_requested) const
+      -> MountDirectoryListing;
 
   std::shared_ptr<Storage>                          storage_;
   std::shared_ptr<SleeveServiceImpl>                sleeve_service_;
   std::shared_ptr<ImagePoolService>                 image_pool_service_;
   VolumeMountPointList                              list_volumes_;
+  VolumeIdentityReader                              read_volume_identity_;
 
   /// Serializes CreateMount, ScanMount, RemoveMount, RelocateRoot, LocateMissingFile, and
   /// RemoveMissingPhotos.

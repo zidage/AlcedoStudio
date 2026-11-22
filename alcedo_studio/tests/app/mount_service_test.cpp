@@ -598,6 +598,69 @@ TEST_F(MountServiceTest, CanceledScanIsCompletedByTheNextScan) {
   EXPECT_TRUE(MountOf(mount_id).last_scan_at.has_value());
 }
 
+/// An importer that requests the stop of the scan in its first batch, then imports the batch.
+class StopInFirstBatchImporter final : public MountFileImporter {
+ public:
+  StopInFirstBatchImporter(MountFileImporter& importer, std::atomic<bool>& stop)
+      : importer_(importer), stop_(stop) {}
+
+  auto ImportMountedFiles(std::span<const MountFileImportRequest> requests)
+      -> std::vector<MountFileImportOutcome> override {
+    stop_.store(true);
+    return importer_.ImportMountedFiles(requests);
+  }
+
+ private:
+  MountFileImporter& importer_;
+  std::atomic<bool>& stop_;
+};
+
+TEST_F(MountServiceTest, StoppedFirstScanReadsOnlyTheFilesOfItsStoredBatch) {
+  // #1014: the first scan read the fingerprint of each file before its first import batch. The
+  // stop request arrives while batch 2 imports its two files. That batch is stored in full, and
+  // the scan reads none of the six other files.
+  constexpr int kFileCount = 8;
+  for (int index = 0; index < kFileCount; ++index) {
+    WriteJpeg(disk_ / "Roll" / ("frame_" + std::to_string(index) + ".jpg"), 20 + index);
+  }
+  const auto               mount_id = Mounts().CreateMount(0, disk_ / "Roll");
+  std::atomic<bool>        stop{false};
+  StopInFirstBatchImporter importer(*import_, stop);
+  MountScanRequest         request;
+  request.mount_id            = mount_id;
+  request.importer            = &importer;
+  request.stop_requested      = &stop;
+  request.new_file_batch_size = 2;
+  std::vector<MountScanProgress> progress;
+  request.on_progress = [&progress](const MountScanProgress& step) { progress.push_back(step); };
+
+  const auto stopped  = Mounts().ScanMount(request);
+
+  EXPECT_EQ(stopped.status, MountScanStatus::kCanceled);
+  EXPECT_EQ(stopped.fingerprint_read_count, 2u);
+  EXPECT_EQ(stopped.imported_count, 2u);
+  // Each stored photo has its source record: the batch is complete.
+  const auto files = FilesOf(mount_id);
+  ASSERT_EQ(files.size(), 2u);
+  for (const auto& [path, element_id] : files) {
+    const auto source = Store().ReadSourceFile(element_id);
+    ASSERT_TRUE(source.has_value()) << "no source record";
+    EXPECT_EQ(source->state, SourceFileState::kPresent);
+  }
+  // The progress shows the total of the directory before the first read.
+  ASSERT_EQ(progress.size(), 2u);
+  EXPECT_EQ(progress[0].new_files_total, static_cast<std::size_t>(kFileCount));
+  EXPECT_EQ(progress[0].new_files_done, 0u);
+  EXPECT_EQ(progress[1].new_files_done, 2u);
+
+  const auto completed = ScanAndCheckDirectory(mount_id);
+  EXPECT_EQ(completed.status, MountScanStatus::kComplete) << completed.error;
+  EXPECT_EQ(completed.unchanged_count, 2u);
+  EXPECT_EQ(completed.imported_count, 6u);
+  EXPECT_EQ(completed.fingerprint_read_count, 6u);
+  EXPECT_EQ(FilesOf(mount_id).size(), static_cast<std::size_t>(kFileCount));
+}
+
 /// An importer whose storage write fails for every batch.
 class FailingImporter final : public MountFileImporter {
  public:
@@ -939,6 +1002,101 @@ TEST_F(MountServiceTest, VolumeSearchLeavesTheMountOfflineWhenNoVolumeHasTheDire
   EXPECT_FALSE(result.relocated_root.has_value());
   EXPECT_EQ(MountOf(mount_id).root_path, root);
   EXPECT_EQ(SummaryOf(mount_id).missing_count, 0u);
+}
+
+/// The reachability that @p service holds for the mount; each service holds its own.
+auto ReachabilityIn(const MountService& service, mount_id_t mount_id) -> MountReachability {
+  for (const auto& summary : service.ListMounts()) {
+    if (summary.record.id == mount_id) {
+      return summary.reachability;
+    }
+  }
+  throw std::runtime_error("no mount with the id");
+}
+
+// #1021: the root directory is the mount point of a volume. After the volume is unmounted the
+// mount point stays as an empty directory on another volume.
+TEST_F(MountServiceTest, RootOnAnotherVolumeSetsOfflineAndChangesNoRecord) {
+  WriteTrip(L"Card");
+  std::string  root_identity = "card volume";
+  MountService service(
+      project_->GetStorage(), project_->GetSleeveService(), project_->GetImagePoolService(),
+      [] { return std::vector<VolumeMountPoint>{}; },
+      [&root_identity](const stdfs::path&) { return root_identity; });
+  const auto mount_id = service.CreateMount(0, disk_ / "Card");
+  ASSERT_EQ(MountOf(mount_id).volume_identity, "card volume");
+  ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
+            MountScanStatus::kComplete);
+  const auto files        = FilesOf(mount_id);
+  const auto folders      = FolderPathsOf(mount_id);
+  const auto sources      = Store().ReadSourceFilesOfMount(mount_id);
+  const auto last_scan_at = MountOf(mount_id).last_scan_at;
+
+  // The empty mount point directory of the unmounted card.
+  stdfs::rename(disk_ / "Card", disk_ / "Card contents");
+  stdfs::create_directories(disk_ / "Card");
+  for (const auto& identity : {std::string("system volume"), std::string()}) {
+    root_identity     = identity;
+    const auto result = service.ScanMount({.mount_id = mount_id, .importer = import_.get()});
+    EXPECT_EQ(result.status, MountScanStatus::kOffline) << "identity '" << identity << "'";
+    EXPECT_EQ(result.fingerprint_read_count, 0u);
+    EXPECT_TRUE(result.listed_directories.empty());
+    EXPECT_EQ(ReachabilityIn(service, mount_id), MountReachability::kOffline);
+    EXPECT_EQ(Store().ReadSourceFilesOfMount(mount_id), sources);
+    EXPECT_EQ(FilesOf(mount_id), files);
+    EXPECT_EQ(FolderPathsOf(mount_id), folders);
+    EXPECT_EQ(MountOf(mount_id).last_scan_at, last_scan_at);
+    EXPECT_EQ(SummaryOf(mount_id).missing_count, 0u);
+  }
+
+  // The card is mounted again at the same mount point.
+  stdfs::remove(disk_ / "Card");
+  stdfs::rename(disk_ / "Card contents", disk_ / "Card");
+  root_identity     = "card volume";
+  const auto online = service.ScanMount({.mount_id = mount_id, .importer = import_.get()});
+  EXPECT_EQ(online.status, MountScanStatus::kComplete);
+  EXPECT_EQ(online.unchanged_count, 4u);
+  EXPECT_EQ(online.missing_count, 0u);
+  EXPECT_EQ(ReachabilityIn(service, mount_id), MountReachability::kOnline);
+}
+
+TEST_F(MountServiceTest, RootOnAnotherVolumeSearchesForTheRecordedVolume) {
+  // The card was mounted at `disk_/Card`; it is mounted at `disk_/Card 1` now, and the old mount
+  // point stays as an empty directory.
+  WriteTrip(L"Card/DCIM");
+  std::vector<VolumeMountPoint> volumes;
+  stdfs::path                   card_mount_point = disk_ / "Card";
+  MountService                  service(
+      project_->GetStorage(), project_->GetSleeveService(), project_->GetImagePoolService(),
+      [&volumes] { return volumes; },
+      [&card_mount_point](const stdfs::path& directory) {
+        return IsPathAtOrBelow(directory, card_mount_point) ? std::string("card volume")
+                                                                             : std::string("system volume");
+      });
+  const auto mount_id = service.CreateMount(0, disk_ / "Card" / "DCIM");
+  ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
+            MountScanStatus::kComplete);
+  const auto files = FilesOf(mount_id);
+
+  stdfs::rename(disk_ / "Card", disk_ / "Card 1");
+  stdfs::create_directories(disk_ / "Card" / "DCIM");
+  card_mount_point = disk_ / "Card 1";
+  volumes          = {VolumeMountPoint{"system volume", disk_},
+                      VolumeMountPoint{"card volume", card_mount_point}};
+
+  // A scan without the search stays offline at the empty mount point.
+  EXPECT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
+            MountScanStatus::kOffline);
+  EXPECT_EQ(SummaryOf(mount_id).missing_count, 0u);
+
+  const auto result = service.ScanMount(
+      {.mount_id = mount_id, .importer = import_.get(), .find_moved_volume = true});
+  ASSERT_EQ(result.status, MountScanStatus::kComplete) << result.error;
+  ASSERT_TRUE(result.relocated_root.has_value());
+  EXPECT_EQ(*result.relocated_root, stdfs::canonical(disk_ / "Card 1" / "DCIM"));
+  EXPECT_EQ(result.unchanged_count, 4u);
+  EXPECT_EQ(result.missing_count, 0u);
+  EXPECT_EQ(FilesOf(mount_id), files);
 }
 
 TEST_F(MountServiceTest, LocatedMissingPhotoKeepsEditHistory) {

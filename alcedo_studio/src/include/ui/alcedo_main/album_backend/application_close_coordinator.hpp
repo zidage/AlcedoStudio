@@ -10,6 +10,7 @@
 #include <cstdint>
 
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
 
@@ -23,6 +24,9 @@ namespace alcedo::ui {
 /// - It waits while the session is Saving or Switching, or a close or a persist is in flight.
 /// - It aborts on a pending recovery, RetainedImageFailure, or Failed, with the session error.
 /// - It finishes on NoImage or ShuttingDown, or at once when it only waits for a persist.
+/// A project close then stops the scans of the mounted folders (MountScanCoordinator::BeginStop)
+/// and waits on MountScanCoordinator::StoppedWorkerEnded until the scan worker has ended, so the
+/// project is saved with each scan batch stored in full and the UI thread does not wait.
 /// One close runs at a time.
 class ApplicationCloseCoordinator final : public QObject {
   Q_OBJECT
@@ -33,6 +37,9 @@ class ApplicationCloseCoordinator final : public QObject {
   ApplicationCloseCoordinator(EditorSessionController* editor_session,
                               WorkspaceRouter* workspace_router, ProjectModule* project,
                               QObject* parent = nullptr);
+
+  /// The scans that a project close stops before it saves the project. Optional.
+  void               BindMountScans(MountScanCoordinator* mount_scans);
 
   [[nodiscard]] auto waiting() const -> bool { return mode_ != Mode::kIdle; }
 
@@ -50,7 +57,8 @@ class ApplicationCloseCoordinator final : public QObject {
   Q_INVOKABLE void   BeginDiscard();
   /// Application quit outside the Editor while a persist runs: waits for the persist only.
   Q_INVOKABLE void   BeginPersistWait();
-  /// Stops waiting. The editor finalize that already started continues.
+  /// Stops waiting. The editor finalize that already started continues. The scans that a
+  /// project close stopped start again.
   Q_INVOKABLE void   Cancel();
 
   /// Closes the loaded project: finalizes the editor image (with its changes when @p persist)
@@ -85,6 +93,7 @@ class ApplicationCloseCoordinator final : public QObject {
   QPointer<EditorSessionController> editor_session_;
   QPointer<WorkspaceRouter>         workspace_router_;
   QPointer<ProjectModule>           project_;
+  QPointer<MountScanCoordinator>    mount_scans_;
   Mode                              mode_                  = Mode::kIdle;
   // False when the close only waits for a running persist (no editor finalize started).
   bool                              awaiting_seal_         = false;

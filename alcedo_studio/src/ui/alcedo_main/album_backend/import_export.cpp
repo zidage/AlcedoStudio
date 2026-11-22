@@ -73,6 +73,14 @@ auto ExportStatusKey(const sl_element_id_t elementId, const image_id_t imageId) 
          QString::number(static_cast<qulonglong>(imageId));
 }
 
+/// The exportItemStatuses value of a finished task.
+auto ExportItemStatus(bool succeeded, bool source_missing) -> QString {
+  if (succeeded) {
+    return QStringLiteral("succeeded");
+  }
+  return source_missing ? QStringLiteral("missing") : QStringLiteral("failed");
+}
+
 }  // namespace
 
 ImportExportHandler::ImportExportHandler(ProjectModule* project, LibraryModule* library,
@@ -135,6 +143,25 @@ void ImportExportHandler::SetInteractionPolicy(InteractionPolicyController* inte
 
 void ImportExportHandler::SetExportGpuResourceRelease(EditorGpuResourceReleaseHooks release) {
   export_gpu_resource_release_ = std::move(release);
+}
+
+void ImportExportHandler::BindMountScans(MountScanCoordinator* mount_scans) {
+  mount_scans_ = mount_scans;
+}
+
+auto ImportExportHandler::RemoveMountScanPaths(std::vector<image_path_t>& paths) const
+    -> std::size_t {
+  if (mount_scans_ == nullptr) {
+    return 0;
+  }
+  const auto roots = mount_scans_->MountRoots();
+  if (roots.empty()) {
+    return 0;
+  }
+  const auto before = paths.size();
+  std::erase_if(paths,
+                [&roots](const image_path_t& path) { return IsPathOfAMountScan(path, roots); });
+  return before - paths.size();
 }
 
 auto ImportExportHandler::RegularFilePaths(const QStringList& fileUrlsOrPaths)
@@ -317,6 +344,16 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
     status_->SetTaskState(PL_TEXT("Import already running."), 0, true);
     return;
   }
+  // #1016, decision D10: one file has one element. The scan of a mount imports the files of its
+  // directory as mounted photos, so the user import leaves them to it.
+  if (const auto left_to_scans = RemoveMountScanPaths(paths); left_to_scans > 0) {
+    status_->SetServiceMessage(
+        PL_TEXT("%1 file(s) are in a mounted folder. The scan of that folder adds them.",
+                static_cast<qulonglong>(left_to_scans)));
+    if (paths.empty()) {
+      return;
+    }
+  }
 
   if (!preserveTarget) {
     import_target_folder_id_   = folders_->CurrentFolderElementId().value_or(0);
@@ -374,10 +411,31 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
         Qt::QueuedConnection);
   };
 
+  ImportOptions options;
+  options.allowed_categories_ = allowedCategories;
+  options.any_category_paths_ = std::move(anyCategoryPaths);
+  // #1016: no scan batch writes the project from here to CompleteImport. The job starts when the
+  // running scan has completed its batch; a cancel before that start reads no file.
+  import_scan_hold_           = mount_scans_ != nullptr ? mount_scans_->Hold() : MountScanHold{};
+  import_scan_hold_.WhenReady(
+      [self, job, paths = std::move(paths), options = std::move(options)]() {
+        if (self) {
+          self->SubmitImportJob(job, paths, options);
+        }
+      });
+}
+
+void ImportExportHandler::SubmitImportJob(const std::shared_ptr<ImportJob>& job,
+                                          const std::vector<image_path_t>&  paths,
+                                          ImportOptions                     options) {
+  if (current_import_job_ != job) {
+    return;
+  }
   try {
-    ImportOptions options;
-    options.allowed_categories_ = allowedCategories;
-    options.any_category_paths_ = std::move(anyCategoryPaths);
+    auto* isvc = project_->handler().import_service();
+    if (isvc == nullptr) {
+      throw std::runtime_error("the import service is unavailable");
+    }
     current_import_job_ = isvc->ImportToFolder(paths, import_target_folder_path_, options, job);
     // ImportToFolder sets the RAW file count before it returns; the dialog sizes its rings now.
     if (current_import_job_ && current_import_job_->progress_) {
@@ -387,6 +445,7 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
     }
   } catch (const std::exception& e) {
     current_import_job_.reset();
+    import_scan_hold_.Release();
     import_running_     = false;
     import_phase_       = ImportPhaseState::Idle;
     import_status_text_ = PL_TEXT("Import failed: %1", QString::fromUtf8(e.what()));
@@ -655,9 +714,9 @@ void ImportExportHandler::RenderQueuedExport(int skippedCount) {
                   state_changed = true;
                 }
                 if (progress.task_finished_) {
-                  self->export_item_statuses_.insert(status_key, progress.task_success_
-                                                                     ? QStringLiteral("succeeded")
-                                                                     : QStringLiteral("failed"));
+                  self->export_item_statuses_.insert(
+                      status_key,
+                      ExportItemStatus(progress.task_success_, progress.task_source_missing_));
                   state_changed = true;
                 }
               }
@@ -744,6 +803,7 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   current_import_job_.reset();
 
   if (!importJob || !importJob->import_log_) {
+    import_scan_hold_.Release();
     import_running_     = false;
     import_canceling_   = false;
     import_phase_       = ImportPhaseState::Idle;
@@ -815,6 +875,8 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
                                          const std::shared_ptr<const ImportLogSnapshot>& snapshot,
                                          const ImportFinalizeOutcome&                    outcome) {
   JoinFinalizeThread();
+  // The import is stored and saved; the held scans start again.
+  import_scan_hold_.Release();
   const bool reimporting_nikon_he        = nikon_ && nikon_->is_reimporting();
   const auto recovery_target_folder_id   = import_target_folder_id_;
   const auto recovery_target_folder_path = import_target_folder_path_;
@@ -1055,6 +1117,13 @@ auto ImportExportHandler::BuildExportQueue(
   for (size_t target_index = 0; target_index < targets.size(); ++target_index) {
     const auto [elementId, imageId] = targets[target_index];
     try {
+      // A photo that left the project still joins the run, as a task that reports it missing.
+      if (!proj->GetImagePoolService()->Contains(imageId)) {
+        esvc->EnqueueMissingPhotoTask(elementId, imageId);
+        ++summary.queued_count_;
+        summary.queued_targets_.emplace_back(elementId, imageId);
+        continue;
+      }
       const auto source_info =
           proj->GetImagePoolService()
               ->Read<std::tuple<std::filesystem::path, std::wstring, bool,

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -38,9 +39,13 @@ struct ProjectLifecycleHooks {
   std::function<void()>               refresh_semantic_state;
   std::function<bool()>               export_inflight;
   std::function<void()>               refresh_translations;
-  /// Stop the scans of the mounted folders before the services of the project close or a
-  /// load replaces them; the call waits for the running scan.
+  /// Stop the scans of the mounted folders before the services of the project close; the call
+  /// waits for the worker of the running scan (MountScanCoordinator::Stop).
   std::function<void()>               stop_mount_scans;
+  /// Request the stop of the scans of the mounted folders without a wait
+  /// (MountScanCoordinator::BeginStop). The result is ready when the worker of the running scan
+  /// has ended; it is invalid when no worker runs.
+  std::function<std::shared_future<void>()> begin_stop_mount_scans;
   /// Start the scans again when a close of the project failed.
   std::function<void()>               resume_mount_scans;
 };
@@ -182,6 +187,11 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   void               FinalizeEditorSession();
   /// Calls ProjectLifecycleHooks::stop_mount_scans.
   void               StopMountScans();
+  /// Calls ProjectLifecycleHooks::begin_stop_mount_scans. An invalid future when the hook is
+  /// empty.
+  auto               BeginStopMountScans() -> std::shared_future<void>;
+  /// Calls ProjectLifecycleHooks::resume_mount_scans.
+  void               ResumeMountScans();
   [[nodiscard]] bool ShouldKeepSemanticModelData(const QString& profileId) const;
 
  signals:

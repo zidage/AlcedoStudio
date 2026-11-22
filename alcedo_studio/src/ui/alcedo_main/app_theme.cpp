@@ -1309,7 +1309,20 @@ auto AppTheme::editorLutTileMinWidth() const -> int { return 128; }
 // Narrowest single tile column the docked filter sidebar leaves beside it.
 auto AppTheme::editorLutTileCompactWidth() const -> int { return 88; }
 auto AppTheme::editorLutTileIconSize() const -> int { return 36; }
-auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }
+auto AppTheme::collectionsSidebarWidth() const -> int { return 264; }
+auto AppTheme::collectionsSidebarMinWidth() const -> int { return 208; }
+auto AppTheme::collectionsSidebarMaxWidth() const -> int { return 420; }
+auto AppTheme::collectionsSidebarFoldWidth() const -> int { return 160; }
+auto AppTheme::collectionsRailWidth() const -> int { return 52; }
+auto AppTheme::collectionsPeekDelayMs() const -> int { return 250; }
+auto AppTheme::collectionsTreeRowHeight() const -> int { return 28; }
+auto AppTheme::collectionsTreeIndentStep() const -> int { return 12; }
+// Indent guides of the sidebar tree: a faint line, brighter for the folder that holds the
+// selection (VS Code Explorer pattern, #1028).
+auto AppTheme::collectionsTreeGuideColor() const -> QColor { return WithAlpha(textColor(), 20); }
+auto AppTheme::collectionsTreeGuideActiveColor() const -> QColor {
+  return WithAlpha(textColor(), 64);
+}
 auto AppTheme::collectionRowHeight() const -> int { return 26; }
 auto AppTheme::collectionIndentStep() const -> int { return 14; }
 auto AppTheme::collectionMenuMaxRows() const -> int { return 12; }
