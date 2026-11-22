@@ -274,7 +274,21 @@ VulkanContext                      process owner of instance, pipeline device, d
   imported device.
 - One render records all its passes into one command buffer and submits one time. A pass encoder
   does not submit and does not wait.
-- A long kernel is divided into tiles and into more than one submission. VX3 sets the limit.
+- An export render (full resolution) goes to the pipeline queue in submissions of at most 4 ms of
+  estimated GPU time, with at most two submissions in flight (VX3, section 9.3). A dispatch that
+  is longer than the budget is divided into bands of rows with `vkCmdDispatchBase`
+  (`VK_PIPELINE_CREATE_DISPATCH_BASE_BIT`); the bands of one dispatch need no barrier between
+  them. Each submission begins with a compute-to-compute memory barrier, which covers the earlier
+  submissions of the queue. The estimate of a dispatch is its time per row from the timestamps of
+  the earlier renders of the same kernel, size, and device. A preview render (2560 pixels on the
+  long edge during a drag, 4K when the interaction stops) and a thumbnail render are one
+  submission each.
+- A preview request waits for at most the submissions of the export that are in flight (8 ms with
+  the rule above); the preview submission goes to the queue before the next export submission.
+- A workgroup finishes in less than 1 ms. A kernel with a loop of data-dependent length divides
+  the loop over more workgroups or more dispatches. The GPU switches to another `VkDevice` (Qt
+  Quick, the desktop) between workgroups, so one workgroup that runs for seconds stops the display
+  and reaches the Windows GPU timeout (VX3).
 - Images use `VK_FORMAT_R32G32B32A32_SFLOAT`, `VK_FORMAT_R32_SFLOAT`, and `VK_FORMAT_R8_UNORM`.
   These are the Vulkan forms of the three formats that the OpenCL backend requires.
 - Parameters go through the `ParameterArena` buffer. Buffers are device addresses
@@ -453,6 +467,13 @@ section 4.2 failed in its first form and changed to two devices (B5). Section 9.
 
 **Result.** A split rule: the maximum time of one submission and the tile size for each kernel
 class. Section 4.2 gets the rule.
+
+**Status.** Complete (2026-11-22) on the RTX 3080 Laptop GPU. The rule of section 4.2 is a
+submission budget of 4 ms with two submissions in flight, bands of rows for a dispatch above the
+budget, and a workgroup time below 1 ms. Iris Xe results are indicative (user decision
+2026-11-22: OpenCL stays on such devices for a long time; the experiments iterate fast). The
+Windows GPU timeout itself is outside the test: this computer has `TdrDelay` 60 s. Section 9.3 has
+the record.
 
 ### VX4: neural network throughput
 
@@ -758,6 +779,9 @@ workspace tests that the OpenCL backend passes.
 - The budget is the minimum of the application limit and the `VK_EXT_memory_budget` value, with
   the reserve of the VX5 record.
 - A stable render allocates nothing.
+- `VulkanCommandContext` divides an export render into submissions by the rule of section 4.2
+  (4 ms budget, two in flight, bands of rows). It keeps the time per row of each kernel, size, and
+  device from the timestamps of the earlier renders. A preview render is one submission.
 
 **Implementation steps.**
 
@@ -1148,7 +1172,117 @@ the experiment (Qt pretends that the extensions are present; no validation error
 
 ### 9.3 Long dispatch (VX3)
 
-Current state: no measurement.
+Current state: on the RTX 3080 Laptop GPU the Qt Quick window of the display device keeps vsync
+during a 45 megapixel export on the pipeline device in every submission form, because the two
+`VkDevice` objects are separate GPU contexts and the GPU switches between them at workgroup
+boundaries. The submission form decides the wait of the preview render, which shares the pipeline
+queue with the export: the whole export in one submission (about 100 ms) delays a 2560-pixel
+preview from 7 ms to 101 ms; submissions of 4 ms with two in flight keep it at 14 to 17 ms and
+cost less than 1 % of export time. One workgroup that runs for 3 s stops the display device for
+the 3 s. The rule is in section 4.2.
+
+#### 2026-11-22: 45 megapixel export, 2560 and 4K preview, and 3 s kernels on the pipeline device
+
+**Setup.**
+
+| Item | Value |
+| --- | --- |
+| Source | `main` `61d59bc98` with this plan. Experiment code: `experiments/vulkan/vx3/` on branch `feature/vulkan-backend-experiments`, with the VX2 viewport code |
+| Program | `vx3_load`: the VulkanContext of VX2 with two devices on one physical device (B5). Qt Quick on the display device draws a 1280 x 800 window each vsync; the VX2 producer writes its viewport image. The export and the preview run on the pipeline device, each with its own command pool, query pool, and fences; one lock serializes `vkQueueSubmit` on the pipeline queue. |
+| Export | 8256 x 5504 (45.4 megapixels), 226 dispatches: Local Tone with the canonical planes at 2048 x 1366 (7 levels, 15 samples; 216 dispatches on the planes and the full-size apply), then film print FP1, FP4 and FP5 (inhibitor form), FP6 (the VX1 Slang kernels), with three pairs of separable blurs of radius 32 (spread, inhibitor, halation). RGBA32F storage images, planes of 3 floats per pixel as device addresses. The film tables are the synthetic tables of VX1. 3.0 GiB of device memory. |
+| Preview | The same 226 dispatches at 2560 x 1707 (blur radius 10) each 16.7 ms (a drag: a new request each frame, one render at a time) or at 3840 x 2560 (blur radius 15) each 250 ms (the settled view). One submission each. |
+| Submission forms | whole: one submission. op: one submission for each dispatch (226). budget B: submissions of at most B ms of estimated GPU time; a dispatch above the room of a submission is divided into bands of 16-row groups with `vkCmdDispatchBase`. The estimate is the time per row from a calibration render of the same size (timestamps after each dispatch). In flight: the count of export submissions on the queue before the export thread waits for a fence. |
+| Spin kernels | `vx3_spin`: a chain of dependent multiply-adds of a chosen length. wide: one dispatch of 8192 x 4096 threads (131072 groups), about 3 s in all. long: one group of 16 x 16 threads for 3 s. many: 300 dispatches of 10 ms in one submission. |
+| Devices | RTX 3080 Laptop GPU, driver 610.62, LG ULTRAFINE at 60 Hz (screen 0). Iris Xe, driver 101.7092, laptop panel at 240 Hz (screen 1). Vulkan SDK 1.4.328.1, `slangc` 2025.17.2, Qt 6.9.3 |
+| Windows | `TdrDelay` and `TdrDdiDelay` 60 s on this computer (the Windows default is 2 s); `HwSchMode` unset |
+| Run check | `gpu_idle_guard.ps1` before and after each run: no process of the model experiments or tests (python, ONNX Runtime, alcedo, ctest), no process other than the desktop compositor above 10 % of a GPU engine, NVIDIA use at most 40 %. A run counts when both checks pass and the reference second before the export (same run) has a frame period p99 of at most 19 ms. The user's `UtNet2PhotoTimingTool`, `ctest` and `python` runs held the series several times. |
+| Validation | `VK_LAYER_KHRONOS_validation` on in the check runs (2048 x 1536 export; 4096 x 2730 export with the 2560 preview): 0 errors, 0 warnings, 0 threading errors. Timing runs have the layer off. |
+| Evidence | worktree `build/tmp/vulkan_backend/vx3/`: one log for each run (`kernels_*`, `win_*`, `spin_*`), `summarize.ps1` for the table form. `superseded/`: runs of a first harness that drew the window only with a new image. |
+
+**Result: dispatch times of the export, no window (best of 3 calibration renders).**
+
+| Class | Dispatches | RTX 3080 Laptop GPU | Iris Xe |
+| --- | --- | --- | --- |
+| Point, full size (FP1, FP4/FP5, FP6, Local Tone apply) | 4 | 3.0 to 4.8 ms each (0.067 to 0.106 ms per megapixel) | 45 to 65 ms each (0.99 to 1.44 ms per megapixel) |
+| Separable blur of radius 32, full size | 6 | 11.0 to 11.9 ms each (0.24 to 0.26 ms per megapixel) | 187 to 200 ms each (4.1 to 4.4 ms per megapixel) |
+| Local Tone planes at 2048 x 1366 | 216 | 3.3 ms in all, largest 0.71 ms | 41 ms in all, largest 10.1 ms |
+| Render | 226 | 86.3 ms | 1424.5 ms |
+
+**Result: export time for each submission form, no window (one render, wall time).**
+
+| Form | Submissions (RTX 3080) | RTX 3080 Laptop GPU | Iris Xe |
+| --- | --- | --- | --- |
+| whole | 1 | 90.3 ms | 1553.4 ms |
+| op | 226 | 106.2 ms | 1591.4 ms |
+| budget 4 ms, 1 in flight | 22 | 93.1 ms | 1576.9 ms |
+| budget 4 ms, 2 in flight | 22 | 87.1 ms | 1458.9 ms |
+| budget 8 ms, 1 in flight | 11 | 88.3 ms | 1514.8 ms |
+| budget 8 ms, 2 in flight | 11 | 86.5 ms | 1456.2 ms |
+| budget 16 ms, 1 in flight | 6 | 87.1 ms | 1465.3 ms |
+| budget 33 ms, 2 in flight | 3 | 85.4 ms | 1452.6 ms |
+
+A submission costs about 0.07 ms of CPU and GPU idle time on the RTX 3080 and 0.13 ms on Iris Xe
+when the thread waits for each fence (op and one in flight); with two in flight the GPU has the
+next submission at the fence and the idle time is below 1 ms for the whole render. The Iris Xe
+whole render took about 100 ms more than the split forms; the record has one run of each form.
+
+**Result: preview during the export, RTX 3080 Laptop GPU, LG ULTRAFINE.** Each run has 12 exports
+back to back. Preview latency: from the start of the request to the fence of the preview
+submission. Frame period: Qt Quick window, during the exports.
+
+| Preview | Export form | Preview latency p50 / p95 / max | Frame period p99 / max | Export time (mean of 12) |
+| --- | --- | --- | --- | --- |
+| 2560, drag | none | 6.9 / 8.4 / 8.8 ms | 17.7 / 18.8 ms | - |
+| 2560, drag | whole | 100.7 / 103.4 / 103.8 ms | 17.4 / 17.5 ms | 101.0 ms |
+| 2560, drag | op | 14.3 / 20.1 / 22.2 ms | 17.8 / 18.2 ms | 181.8 ms |
+| 2560, drag | budget 16 ms, 1 in flight | 24.0 / 25.8 / 26.4 ms | 17.9 / 18.0 ms | 137.8 ms |
+| 2560, drag | budget 8 ms, 1 in flight | 12.2 / 15.5 / 16.4 ms | 17.6 / 18.1 ms | 161.6 ms |
+| 2560, drag | budget 4 ms, 2 in flight | 13.8 / 16.2 / 16.7 ms | 17.6 / 18.0 ms | 162.3 ms |
+| 4K, settle | none (reference second) | 16.2 to 16.5 ms (p50) | 18.3 / 19.0 ms | - |
+| 4K, settle | whole | 78.5 / 102.1 / 108.0 ms | 17.6 / 17.7 ms | 103.8 ms |
+| 4K, settle | budget 16 ms, 1 in flight | 23.9 / 27.8 / 31.9 ms | 18.8 / 23.0 ms | 102.5 ms |
+| 4K, settle | budget 8 ms, 1 in flight | 18.6 / 20.8 / 22.6 ms | 17.8 / 17.8 ms | 103.1 ms |
+| 4K, settle | budget 4 ms, 2 in flight | 20.9 / 21.1 / 21.1 ms | 17.7 / 18.6 ms | 102.5 ms |
+
+The preview latency is the preview render (6.5 ms at 2560, 13.1 ms at 4K) and the export work
+ahead of it on the queue: the whole export, or at most the submissions in flight. During a drag
+the export gets the GPU between previews, so its time grows from 101 ms to 162 ms; at the settled
+view (one preview each 250 ms) the export time stays at 103 ms. The Qt Quick frame period p99 is
+within 1 ms of the reference in each form, the whole export included.
+
+Some runs of the RTX 3080 had frame periods of about 6 and 28 ms alternating for the whole run,
+the reference second before the export included; the run check marks those runs and the table
+uses the runs of the same case with a clean reference.
+
+**Result: preview during the export, Iris Xe (indicative).** The Iris Xe runs on the 240 Hz panel
+have a reference frame period p99 of 31 to 56 ms (Vulkan on that panel runs at about 100 frames/s,
+VX2), so the run check does not apply to them. A 2560 preview takes 110 to 190 ms of GPU time and a
+4K preview 200 to 340 ms. The whole export beside a drag preview took 2.4 to 2.9 s in one
+submission, and the preview waited 2.4 s. With split submissions a drag preview runs back to back,
+the queue alternates one export submission and one preview render, and the export takes 16 to
+37 s instead of 1.5 s.
+
+**Result: 3 s kernels, RTX 3080 Laptop GPU, with a 2560 drag preview.**
+
+| Form | Device loss | Frame period during the kernel p99 / max | Frames in 3 s | Preview latency |
+| --- | --- | --- | --- | --- |
+| many: 300 dispatches of 10 ms, one submission | none | 18.2 / 18.8 ms | 183 | 3053 ms |
+| wide: one dispatch of 131072 groups, 3.2 s | none | 44.4 to 44.6 / 46.6 to 49.8 ms (two runs) | 171 to 184 | 3215 to 3250 ms |
+| long: one group, 3.0 s | none | - | 1 | 3003 ms |
+
+The many and wide forms keep the display device drawing: the GPU switches contexts between
+dispatches and between groups. The wide runs have a reference second with the alternating periods
+of the paragraph above, so their frame periods are indicative. With one group running, Qt Quick
+drew one frame in 3 s: the GPU switches to another context only at a group boundary. The display
+of the LG ULTRAFINE (an output of this GPU) is a context of the same GPU. With the Windows default
+`TdrDelay` of 2 s, Windows resets a GPU that does not switch within 2 s, so the long form is the
+form that reaches the timeout; this computer has 60 s and the test cannot confirm the reset. In
+every form the preview waits for the whole kernel, as for a whole export.
+
+**Items outside this record.** The Windows GPU timeout at 2 s (a change of `TdrDelay` needs a
+restart of the computer); Iris Xe beyond the indicative values; a blur radius of 128 (the largest
+`FilmBlurKernel`); queue priorities (`VK_EXT_global_priority`) as a second way to order the preview
+before the export; a minimum share of the GPU for the export during a long drag.
 
 ### 9.4 Neural network throughput (VX4)
 
@@ -1164,7 +1298,7 @@ Current state: no measurement.
 | Id | Risk | Detection | Response |
 | --- | --- | --- | --- |
 | R1 | Qt Quick on Vulkan on Windows has a worse resize or a different display color than Direct3D 11. | VX2: the resize part occurred (Iris Xe about 4 times the Direct3D 11 time for each step, RTX 3080 a longer tail). The color part did not occur. | VK18 stops. The plan gets a new resize design ([#1040](https://github.com/zidage/AlcedoStudio/issues/1040)) before more display work. The compute phases VK0 to VK17 continue. |
-| R2 | A long dispatch causes a device loss or stops the editor. | VX3 | The split rule goes into section 4.2 and into VK2. |
+| R2 | A long dispatch causes a device loss or stops the editor. | VX3: a whole export in one submission holds the preview for 100 ms (RTX 3080) to 2.4 s (Iris Xe); one workgroup of 3 s stops the display device for 3 s. The Qt Quick frames keep vsync with workgroups of normal length. | The split rule of section 4.2 (4 ms submissions, two in flight, workgroups below 1 ms) and the VK2 data rule. |
 | R3 | Hand-written neural network kernels are slower than the vendor convolution code. | VX4 | DemosaicNet: the criterion of VX4 decides. UtNet2: VK20 uses DirectML with resource import, and the plan records the remaining interop pairing. |
 | R4 | The pipeline and Qt Quick race on the queues of one device. | VX2 thread safety validation: occurred on both devices, with a second queue and with the queue mutex (Qt's `vkDeviceWaitIdle` at resize) | Two devices on one physical device (B5, section 4.2). With them the validation reports 0 threading errors. |
 | R5 | The results differ between GPU vendors more than the tolerance. | Comparison tests on NVIDIA and Intel | The kernel marks the affected expressions as precise. The tolerance does not increase without a record. |
@@ -1234,7 +1368,14 @@ Remaining defects or unavailable platforms:
 | `cbrt` Newton steps | Steps after `exp2(log2(\|x\|) / 3)` in the Slang `cbrt` | 1 | VX1 |
 | Slang macro layer | Lines of the `__SLANG__` branches of the three shared headers | 28 | VX1 |
 | Phase size limit | Maximum changed lines of one phase | 2000 | `alcedo-create-plan` skill |
-| Windows GPU timeout | Time after which Windows resets a GPU that does not respond | 2 s (default) | Windows display driver model |
+| Windows GPU timeout | Time after which Windows resets a GPU that does not respond | 2 s (default); 60 s on the development computer (`TdrDelay`) | Windows display driver model; registry of the development computer |
+| Export submission budget | Maximum estimated GPU time of one export submission | 4 ms | VX3 (section 9.3) |
+| Export submissions in flight | Export submissions on the pipeline queue before the export waits for a fence | 2 | VX3 |
+| Band | Unit of a dispatch that is divided over submissions | 16 rows (one row of 16 x 16 groups) | VX3 |
+| Workgroup time limit | Maximum running time of one workgroup | 1 ms | VX3 (one group of 3 s stops the display device) |
+| Preview sizes | Long edge of the preview render: during a drag, at the settled view | 2560, 3840 pixels | user, 2026-11-22 |
+| Export render, RTX 3080 Laptop GPU | Local Tone and film print, 45.4 megapixels, 226 dispatches | 86 ms | VX3 |
+| Export render, Iris Xe | The same render | 1.42 to 1.55 s | VX3 |
 | UtNet2 time limit | Maximum UtNet2 time on Vulkan relative to DirectML | 2 times | this plan (VX4) |
 | DirectML reference time | UtNet2, 45.4 megapixels, tile 1536, RTX 3080 Laptop GPU | 0.82 s | AI Denoise plan, DN1 record |
 | Devices for each physical device | `VkDevice` objects that Alcedo creates: pipeline device and display device | 2 | VX2 (section 9.2) |
