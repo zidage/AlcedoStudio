@@ -1,7 +1,8 @@
 # AI Denoise Integration Master Plan
 
 - Date: 2026-11-21
-- Status: planned
+- Status: DN0 complete (2026-11-21, lab PR zidage/alcedo-denoise-lab#2, issue #1032); DN1 to
+  DN13 planned
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -253,7 +254,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
-| DN0 | Weights file, expected outputs, input and output specification | lab | none | 600 to 900 | planned |
+| DN0 | Weights file, expected outputs, input and output specification | lab | none | 600 to 900 | complete (#1032) |
 | DN1 | Measurements: tile overlap, PyTorch time, clipped areas, stored formats | lab | DN0 | 700 to 1100 | planned |
 | DN2 | CUDA layers of UtNet2 with tests and a time for each layer shape | `cuda/nn` | DN0 | 1400 to 1900 | planned |
 | DN3 | CUDA UtNet2 module, overlap tile planner, full photo run, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 1200 to 1700 | planned |
@@ -341,13 +342,112 @@ Until DN12, a developer copies the weights file by hand into
 
 **Exit criteria**
 
-- [ ] The weights file loads in a new model with an output difference of 0.
-- [ ] The manifest lists each expected output with its shape and SHA-256.
-- [ ] The specification states each item of step 3 with its proof.
+- [x] The weights file loads in a new model with an output difference of 0.
+- [x] The manifest lists each expected output with its shape and SHA-256.
+- [x] The specification states each item of step 3 with its proof.
 
 **Expected diff**: 600 to 900 lines.
 
-**Completion record**: empty until the phase is complete.
+##### Phase DN0 completion record (2026-11-21)
+
+**Status:** complete. Issue #1032, lab pull request
+[zidage/alcedo-denoise-lab#2](https://github.com/zidage/alcedo-denoise-lab/pull/2) (branch
+`feature/weights-export`), release asset
+[`export-utnet2-bayer-dark-loss-10k`](https://github.com/zidage/alcedo-denoise-lab/releases/tag/export-utnet2-bayer-dark-loss-10k).
+
+**Deliverables:**
+
+| Item | Value |
+| --- | --- |
+| Weights file | `utnet2_bayer_dark_loss_10k.safetensors`, 31,047,448 bytes, SHA-256 `0bfb9ddb07e6e6c20e6764dfc30336d9314d5760f875992f2144f13dd0df13a5`, 46 tensors, 7,760,748 parameters |
+| Metadata | `architecture = utnet2_bayer_funit32`, `leaky_relu_slope = 0.2`, `input_preparation_version = 1`, `license = GPL-3.0 AND CC-BY-4.0`, `checkpoint_sha256`, `checkpoint_step`, `authors_commit`, `layout`, `license_note` |
+| Expected outputs | `random_64.safetensors` (input, output, 23 layer outputs `layer.<prefix>`), `random_256.safetensors`, `rawnind_crop_512.safetensors` (input, output, `rgb_xyz_matrix`); NCHW float32 without the batch axis, before the gain match |
+| Manifest | lab `results/export/expected_outputs_manifest.json`: SHA-256 and byte size of each file, shape and CPU against GPU difference of each tensor, `tolerance_abs` of each tensor |
+| Tolerance of DN2, DN3, DN10, DN11 | `max abs(alcedo - expected) <= 1e-5 * max abs(expected)` for each tensor. 1e-5 is 4 times the largest CPU against GPU difference of PyTorch (2.4e-6 of the largest value, layer `tconvs1.0`), rounded up |
+| Specification | lab `docs/alcedo_integration.md`, sections "Weights file" to "Expected outputs and tolerance" |
+
+**Primary success call chain:**
+
+```text
+export_weights.py
+  -> torch.load(checkpoint)["model"] -> check_tensors (names, shapes, float32 against LAYERS)
+  -> write_safetensors (sorted metadata, forward order) -> tensors JSON table with SHA-256
+make_expected_outputs.py
+  -> safetensors.load_file -> authors' UtNet2.load_state_dict(strict=True)
+  -> GPU run (TF32 off, deterministic cuDNN) and CPU run (4 threads), hooks on the 23 layers
+  -> write_safetensors for each input -> manifest (differences, tolerance, gain match factors)
+export_weights.py --verify
+  -> safetensors.load_file -> new UtNet2(strict=True) -> torch.equal to the checkpoint tensors
+  -> outputs of the export and the checkpoint on the 3 inputs: max abs difference 0
+  -> stored expected outputs: max abs difference 0 -> verify JSON, exit status 0
+```
+
+**Primary failure call chain:**
+
+```text
+checkpoint with a missing tensor, a different shape, an extra tensor, or a float64 tensor
+  -> check_tensors raises RuntimeError that names each tensor and the expected shape
+  -> no file is written
+verify finds a difference
+  -> "passed": false in the verify JSON -> exit status 1
+```
+
+**What was proven (executed checks):**
+
+| Criterion | Evidence | Result |
+| --- | --- | --- |
+| The weights load in a new model with an output difference of 0 | lab `results/export/utnet2_bayer_dark_loss_10k_verify.json` | PASS: 3 of 3 outputs at 0, all 46 tensors bit for bit, metadata equal |
+| The expected outputs come from this weights file | the same file, `export_vs_stored_expected_max_abs` | PASS: 0 on 3 of 3 |
+| Each topology difference stops the export | one-time check `build/tmp/export/check_topology_errors.py` (lab, not committed) | PASS: 4 of 4 cases named |
+| The same bytes on each run | two runs of both scripts, SHA-256 of 4 files | PASS: equal |
+| The release assets have the recorded SHA-256 | `gh release download` of the 4 assets, `sha256sum` | PASS: 4 of 4 |
+
+Commands (lab repository, `build/tmp/export/venv`, PyTorch 2.11.0+cu128, RTX 3080 Laptop GPU):
+
+```text
+P="build/tmp/export/venv/Scripts/python -I"
+A="--authors-repo build/tmp/reference_measurement/rawnind_jddc"
+$P scripts/export/export_weights.py $A
+$P scripts/export/make_expected_outputs.py $A
+$P scripts/export/export_weights.py $A --verify
+```
+
+**Facts for the later phases** (lab `docs/alcedo_integration.md` gives the proof lines):
+
+- Input: `(raw - black) / (maximum - black)` with LibRaw `color.maximum`, no clip, no white
+  balance, packed RGGB. The authors use `black_level_per_channel[0]` for all four positions;
+  Alcedo Studio uses the level of each position (at most 2 levels apart on the local RawNIND
+  files, Canon only). On Sony ILCE-7C files `maximum` is 16,383 and `linear_max` 15,360, so
+  saturation is at 0.9355 of the input domain. DN5 and U4 must use this value domain.
+- CFA phase: the authors remove the first and the last row or column to reach RGGB. Alcedo
+  Studio extends the mosaic by one row at the top (GBRG, BGGR) and one column at the left (GRBG,
+  BGGR) by reflection without a repeat of the edge pixel, so every pixel of the area gets an
+  output. DN3 and DN6 implement this.
+- Alignment: the authors crop to a multiple of 16 packed pixels. Alcedo Studio fills each tile by
+  reflection of the packed image (DN3 data rule).
+- Output: camera RGB without white balance; the scale is not defined (about 1e5 times the input;
+  factor 9.69e-6 on the crop). The gain match factor of DN6 is
+  `sum_c w_c mean_in(c) / sum_c w_c mean_out(c)`, `w_c` the column sums of the camera to
+  Rec.2020 matrix, over the result pixels. It differs from the authors' factor by 3.4e-4 of the
+  factor on the crop.
+
+**Changes against the plan text:**
+
+- The weights file is at `models/export/dark_area_loss/` of the lab, not `models/export/`: the
+  lab `models/README.md` puts each export in `models/export/<run>/`.
+- The scripts write the safetensors files with an own writer (`write_safetensors`, sorted
+  metadata keys). The `safetensors` package 0.8.0 writes the metadata in a random order, so its
+  file had a different SHA-256 on each run and a recorded SHA-256 could not be made again. The
+  `safetensors` package reads the files in `--verify`.
+- The total size is 57.5 MB, above 40 MB, so the weights and the expected outputs are a release
+  asset (the rule of "Tests and evidence").
+
+**LOC note:** lab diff 2,074 lines, of which 929 are result JSON tables; 1,145 lines of scripts
+and documents (largest file `make_expected_outputs.py`, 291 lines), above the estimate of 600 to
+900 because of the topology table, the deterministic writer, and the specification.
+
+**Remaining gaps:** none for DN0. The tile size, the overlap, the highlight handling, and the
+stored result format are DN1. The time of the model is DN1 (PyTorch) and DN3 (Alcedo Studio).
 
 ### DN1: measurements (lab repository)
 
