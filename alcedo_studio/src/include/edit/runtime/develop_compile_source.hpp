@@ -11,11 +11,14 @@
 namespace alcedo {
 
 enum class DevelopInputKind : std::uint8_t {
-  BayerCfa  = 0,
-  XTransCfa = 1,
-  DirectRgb = 2,
+  BayerCfa    = 0,
+  XTransCfa   = 1,
+  DirectRgb   = 2,
   /// JPEG, PNG, TIFF or OpenEXR: UploadRgb with the raster linearize step, then DisplayToAp1.
-  Raster    = 3,
+  Raster      = 3,
+  /// AI Denoise output (RawInputKind::DenoisedRgb): UploadRgb with the white balance and the
+  /// range clamp of the CFA path, then the highlight recovery and CameraToAp1.
+  DenoisedRgb = 4,
 };
 
 /**

@@ -12,6 +12,8 @@
 #include <opencv2/core.hpp>
 #include <stdexcept>
 
+#include "decoders/processor/raw_linearization_params.hpp"
+#include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/raw_rgb_linearization_params.hpp"
 
 namespace alcedo::raw_norm {
@@ -45,6 +47,30 @@ inline auto BuildRgbLinearization(const libraw_colordata_t& color, bool integer_
     if (!std::isfinite(params.scale[c]) || params.scale[c] <= 0.0f) {
       throw std::runtime_error("Decoded RGB normalization gain is not positive and finite");
     }
+  }
+  return params;
+}
+
+/**
+ * @brief RGB linearization of an AI Denoise input (AI Denoise integration plan, DN5).
+ *
+ * The denoised plane is in the value domain of the CFA Linearize step before its clamp and its
+ * white balance. This gives black 0, the relative as-shot white balance of @p linearization as
+ * the scale (only when LibRaw has not applied it), and the clamp of each channel to [0, wb]: the
+ * clamp of the CFA path to the white level before the white balance. It is the form for the
+ * highlight recovery on; DevelopRgbLinearization narrows the range when it is off.
+ */
+inline auto BuildDenoisedRgbLinearization(const RawLinearizationParams& linearization)
+    -> RawRgbLinearizationParams {
+  RawRgbLinearizationParams params;
+  params.integer_codes  = 0;
+  params.clamp_to_range = 1;
+  for (int c = 0; c < 3; ++c) {
+    const float gain    = RelativeWhiteBalanceMultiplier(linearization.cam_mul, c,
+                                                         linearization.apply_as_shot_wb != 0);
+    params.black[c]     = 0.0f;
+    params.scale[c]     = gain;
+    params.range_max[c] = gain;
   }
   return params;
 }

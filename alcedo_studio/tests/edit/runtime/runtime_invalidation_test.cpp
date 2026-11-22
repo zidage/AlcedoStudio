@@ -478,6 +478,24 @@ TEST(RuntimeInvalidation, DemosaicInvalidatesSensorAndDownstreamLlf) {
             harness.Completed(LocalToneSourceId(harness.Primary().node_id)));
 }
 
+TEST(RuntimeInvalidation, AiDenoiseChangeInvalidatesTheSensorResult) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  harness.document.Develop()->Params().ApplyAiDenoiseUpdate(DevelopAiDenoise{std::string(64, 'a')});
+  harness.Collect();
+  EXPECT_GT(harness.Required(harness.plan.sensor_linear_output),
+            harness.Completed(harness.plan.sensor_linear_output));
+  EXPECT_GT(harness.Required(harness.plan.display_output),
+            harness.Completed(harness.plan.display_output));
+
+  // Off again is a second change from the sensor result.
+  harness.Complete();
+  ASSERT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+  harness.document.Develop()->Params().ApplyAiDenoiseUpdate(std::nullopt);
+  harness.Collect();
+  EXPECT_FALSE(harness.Current(harness.plan.sensor_linear_output));
+}
+
 TEST(RuntimeInvalidation, HighlightReconstructionInvalidatesSensorAndDownstreamLlf) {
   ValidityHarness harness;
   harness.PublishCurrent();

@@ -14,6 +14,7 @@
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
+#include "edit/runtime/develop_ai_denoise.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/execution_plan.hpp"
@@ -112,6 +113,11 @@ class PlanExecutor {
                                       : diag::PreviewPassKind::UploadRaw;
         diag::PreviewPassInterval develop_pass(plan.sensor_linear_output.producer.Value(),
                                                develop_kind);
+        // A render that needs the AI Denoise model and has no denoised input reports the error;
+        // it never renders the photo without the noise reduction (plan section 1.4).
+        if (const auto* develop_node = document.Develop(); develop_node != nullptr) {
+          RequireDevelopInputForAiDenoise(develop_node->Params().Params(), plan.source);
+        }
         if (BindOrMiss(workspace, invalidation, plan.sensor_linear_output, sensor_extent, completed,
                        stats)) {
           develop_pass.SetState(diag::PreviewExecutionState::Skipped);

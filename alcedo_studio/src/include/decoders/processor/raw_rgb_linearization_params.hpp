@@ -18,11 +18,16 @@ namespace alcedo {
  * Scalar arrays keep the ABI identical in CUDA, OpenCL and Metal.
  */
 struct RawRgbLinearizationParams {
-  float         black[3]      = {};
-  float         scale[3]      = {1.0f, 1.0f, 1.0f};
-  std::uint32_t integer_codes = 0;
+  float         black[3]       = {};
+  float         scale[3]       = {1.0f, 1.0f, 1.0f};
+  std::uint32_t integer_codes  = 0;
+  /// When 1, each channel is clamped to [0, range_max] after the scale. The AI Denoise input sets
+  /// it to keep the clamp of the CFA Linearize step (DevelopRgbLinearization); decoded RGB keeps
+  /// its range and leaves it 0.
+  std::uint32_t clamp_to_range = 0;
+  float         range_max[3]   = {1.0f, 1.0f, 1.0f};
 };
 
-static_assert(sizeof(RawRgbLinearizationParams) == 28);
+static_assert(sizeof(RawRgbLinearizationParams) == 44);
 
 }  // namespace alcedo

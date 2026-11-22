@@ -53,6 +53,7 @@ __global__ void LinearizeRgbKernel(cv::cuda::PtrStepSz<float4> src, cv::cuda::Pt
     values[c] -= params.black[c];
     if (params.integer_codes) values[c] = fmaxf(values[c], 0.0f);
     values[c] *= params.scale[c];
+    if (params.clamp_to_range) values[c] = fminf(fmaxf(values[c], 0.0f), params.range_max[c]);
   }
   dst(y, x) = make_float3(values[0], values[1], values[2]);
 }

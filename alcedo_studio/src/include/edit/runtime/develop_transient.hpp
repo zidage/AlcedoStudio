@@ -20,7 +20,8 @@ inline constexpr std::size_t kConservativeNeuralDevelopBytesPerPixel = 24;
 inline constexpr std::size_t kConservativeNeuralTileScratchBytes     = 64ull << 20;
 
 inline auto ConservativeDevelopInitialBytes(const DevelopCompileSource& source) -> std::size_t {
-  if (source.kind == DevelopInputKind::DirectRgb || source.kind == DevelopInputKind::Raster) {
+  if (source.kind == DevelopInputKind::DirectRgb || source.kind == DevelopInputKind::Raster ||
+      source.kind == DevelopInputKind::DenoisedRgb) {
     return 0;
   }
   const auto width  = static_cast<std::size_t>(source.host_extent.width);
@@ -44,7 +45,8 @@ inline auto ConservativeDevelopInitialBytes(const DevelopCompileSource& source,
   if (demosaic_method != RawDemosaicMethod::NeuralEngine) {
     return ConservativeDevelopInitialBytes(source);
   }
-  if (source.kind == DevelopInputKind::DirectRgb || source.kind == DevelopInputKind::Raster) {
+  if (source.kind == DevelopInputKind::DirectRgb || source.kind == DevelopInputKind::Raster ||
+      source.kind == DevelopInputKind::DenoisedRgb) {
     return 0;
   }
   const auto width  = static_cast<std::size_t>(source.host_extent.width);

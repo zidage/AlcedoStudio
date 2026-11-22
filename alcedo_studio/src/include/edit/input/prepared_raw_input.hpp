@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include "decoders/dng_default_crop.hpp"
 #include "decoders/processor/raw_color_context.hpp"
@@ -34,6 +35,12 @@ inline constexpr std::uint32_t kRawInputPreparationVersion = 7;
     hash *= 1099511628211ull;
   }
   return hash;
+}
+
+/// PreparedSourceKey::denoise_model_hash of an AI Denoise model version text. Never 0.
+[[nodiscard]] inline auto HashAiDenoiseModelVersion(std::string_view version) -> std::uint64_t {
+  const auto hash = HashContentBytes(std::as_bytes(std::span(version.data(), version.size())));
+  return hash == 0 ? 1 : hash;
 }
 
 enum class HostPixelFormat : std::uint8_t {
@@ -145,6 +152,9 @@ struct PreparedSourceKey {
   RectI              sensor_active_area{};
   std::int32_t       orientation_flip    = 0;
   std::uint32_t      preparation_version = kRawInputPreparationVersion;
+  /// RawInputKind::DenoisedRgb only: FNV-1a hash of the version text of the AI Denoise model
+  /// that made the pixels (HashAiDenoiseModelVersion). 0 for every other input.
+  std::uint64_t      denoise_model_hash  = 0;
 
   [[nodiscard]] auto Lookup() const -> PreparedSourceLookup {
     return PreparedSourceLookup{encoded_content_hash, encoded_byte_count, downsample_passes,
@@ -158,7 +168,8 @@ inline auto operator==(const PreparedSourceKey& a, const PreparedSourceKey& b) -
          a.cfa_hash == b.cfa_hash && a.dng_warp_hash == b.dng_warp_hash &&
          a.downsample_passes == b.downsample_passes &&
          a.sensor_active_area == b.sensor_active_area && a.orientation_flip == b.orientation_flip &&
-         a.preparation_version == b.preparation_version;
+         a.preparation_version == b.preparation_version &&
+         a.denoise_model_hash == b.denoise_model_hash;
 }
 
 /**
