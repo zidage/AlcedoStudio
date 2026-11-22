@@ -1163,14 +1163,14 @@ Current state: no measurement.
 
 | Id | Risk | Detection | Response |
 | --- | --- | --- | --- |
-| R1 | Qt Quick on Vulkan on Windows has a worse resize or a different display color than Direct3D 11. | VX2: the resize part occurred (Iris Xe about 4 times the Direct3D 11 time for each step, RTX 3080 a longer tail). The color part did not occur. | VK18 stops. The plan gets a new resize design before more display work. The compute phases VK0 to VK17 continue. |
+| R1 | Qt Quick on Vulkan on Windows has a worse resize or a different display color than Direct3D 11. | VX2: the resize part occurred (Iris Xe about 4 times the Direct3D 11 time for each step, RTX 3080 a longer tail). The color part did not occur. | VK18 stops. The plan gets a new resize design ([#1040](https://github.com/zidage/AlcedoStudio/issues/1040)) before more display work. The compute phases VK0 to VK17 continue. |
 | R2 | A long dispatch causes a device loss or stops the editor. | VX3 | The split rule goes into section 4.2 and into VK2. |
 | R3 | Hand-written neural network kernels are slower than the vendor convolution code. | VX4 | DemosaicNet: the criterion of VX4 decides. UtNet2: VK20 uses DirectML with resource import, and the plan records the remaining interop pairing. |
 | R4 | The pipeline and Qt Quick race on the queues of one device. | VX2 thread safety validation: occurred on both devices, with a second queue and with the queue mutex (Qt's `vkDeviceWaitIdle` at resize) | Two devices on one physical device (B5, section 4.2). With them the validation reports 0 threading errors. |
 | R5 | The results differ between GPU vendors more than the tolerance. | Comparison tests on NVIDIA and Intel | The kernel marks the affected expressions as precise. The tolerance does not increase without a record. |
 | R6 | The archive of OpenCL removes support for GPUs with no Vulkan 1.3 driver. | Device reports from users, VK19 experimental period | User decision before VK22 (section 1.5). |
 | R7 | Software that injects a Vulkan layer makes the application crash. | VX2 step 6 (OBS hook, Steam overlay, Steam Fossilize, NVIDIA layers loaded: no crash, no hang), reports in the experimental period | The application disables the named implicit layers at start. |
-| R9 | The GUI thread waits for the Vulkan `beginFrame` of the render thread while the pipeline submits on its own device (about 10 ms of each frame on the NVIDIA driver). | VX2 | VK18 measures input latency in the editor with the split device. The new resize design of R1 also covers this wait. |
+| R9 | The GUI thread waits for the Vulkan `beginFrame` of the render thread while the pipeline submits on its own device (about 10 ms of each frame on the NVIDIA driver). | VX2 | [#1041](https://github.com/zidage/AlcedoStudio/issues/1041): the cause and a design. VK18 measures input latency in the editor with the split device. |
 | R8 | The backends on `main` change faster than the Vulkan passes follow. | Failing comparison tests | Section 5, rule 3. |
 
 Stop the implementation of a phase when:
