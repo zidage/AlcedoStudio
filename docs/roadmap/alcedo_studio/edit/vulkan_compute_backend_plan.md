@@ -274,8 +274,10 @@ VulkanContext                      process owner of instance, pipeline device, d
   imported device.
 - One render records all its passes into one command buffer and submits one time. A pass encoder
   does not submit and does not wait.
-- An export render (full resolution) goes to the pipeline queue in submissions of at most 4 ms of
-  estimated GPU time, with at most two submissions in flight (VX3, section 9.3). A dispatch that
+- The application exports one photo at a time (user decision 2026-11-22: one export render holds
+  the export resources). An export render (full resolution) goes to the pipeline queue in
+  submissions of at most 8 ms of estimated GPU time, one submission at a time: the export thread
+  waits for the fence of a submission before it submits the next (VX3, section 9.3). A dispatch that
   is longer than the budget is divided into bands of rows with `vkCmdDispatchBase`
   (`VK_PIPELINE_CREATE_DISPATCH_BASE_BIT`); the bands of one dispatch need no barrier between
   them. Each submission begins with a compute-to-compute memory barrier, which covers the earlier
@@ -283,8 +285,8 @@ VulkanContext                      process owner of instance, pipeline device, d
   the earlier renders of the same kernel, size, and device. A preview render (2560 pixels on the
   long edge during a drag, 4K when the interaction stops) and a thumbnail render are one
   submission each.
-- A preview request waits for at most the submissions of the export that are in flight (8 ms with
-  the rule above); the preview submission goes to the queue before the next export submission.
+- A preview request waits for at most the export submission on the queue (8 ms with the rule
+  above); the preview submission goes to the queue before the next export submission.
 - A workgroup finishes in less than 1 ms. A kernel with a loop of data-dependent length divides
   the loop over more workgroups or more dispatches. The GPU switches to another `VkDevice` (Qt
   Quick, the desktop) between workgroups, so one workgroup that runs for seconds stops the display
@@ -468,9 +470,9 @@ section 4.2 failed in its first form and changed to two devices (B5). Section 9.
 **Result.** A split rule: the maximum time of one submission and the tile size for each kernel
 class. Section 4.2 gets the rule.
 
-**Status.** Complete (2026-11-22) on the RTX 3080 Laptop GPU. The rule of section 4.2 is a
-submission budget of 4 ms with two submissions in flight, bands of rows for a dispatch above the
-budget, and a workgroup time below 1 ms. Iris Xe results are indicative (user decision
+**Status.** Complete (2026-11-22) on the RTX 3080 Laptop GPU. The rule of section 4.2 is one
+export at a time, a submission budget of 8 ms with one submission in flight, bands of rows for a
+dispatch above the budget, and a workgroup time below 1 ms. Iris Xe results are indicative (user decision
 2026-11-22: OpenCL stays on such devices for a long time; the experiments iterate fast). The
 Windows GPU timeout itself is outside the test: this computer has `TdrDelay` 60 s. Section 9.3 has
 the record.
@@ -780,7 +782,7 @@ workspace tests that the OpenCL backend passes.
   the reserve of the VX5 record.
 - A stable render allocates nothing.
 - `VulkanCommandContext` divides an export render into submissions by the rule of section 4.2
-  (4 ms budget, two in flight, bands of rows). It keeps the time per row of each kernel, size, and
+  (8 ms budget, one in flight, bands of rows). It keeps the time per row of each kernel, size, and
   device from the timestamps of the earlier renders. A preview render is one submission.
 
 **Implementation steps.**
@@ -1177,9 +1179,14 @@ during a 45 megapixel export on the pipeline device in every submission form, be
 `VkDevice` objects are separate GPU contexts and the GPU switches between them at workgroup
 boundaries. The submission form decides the wait of the preview render, which shares the pipeline
 queue with the export: the whole export in one submission (about 100 ms) delays a 2560-pixel
-preview from 7 ms to 101 ms; submissions of 4 ms with two in flight keep it at 14 to 17 ms and
-cost less than 1 % of export time. One workgroup that runs for 3 s stops the display device for
-the 3 s. The rule is in section 4.2.
+preview from 7 ms to 101 ms; submissions of 8 ms with one in flight keep it at 12 to 16 ms (a 4K
+preview at 19 to 23 ms) and cost no measurable export time (88.3 ms against 90.3 ms whole). One
+workgroup that runs for 3 s stops the display device for the 3 s. The rule is in section 4.2.
+
+The product exports one photo at a time with one export submission in flight (user decision
+2026-11-22, after this record). Of the forms with one in flight, 8 ms has the lowest export cost
+(Iris Xe, indicative: 1515 ms against 1577 ms at 4 ms) and keeps the preview wait at 8 ms. Two in
+flight lowers the export time further (86.5 ms at 8 ms) and stays outside the product rule.
 
 #### 2026-11-22: 45 megapixel export, 2560 and 4K preview, and 3 s kernels on the pipeline device
 
@@ -1298,7 +1305,7 @@ Current state: no measurement.
 | Id | Risk | Detection | Response |
 | --- | --- | --- | --- |
 | R1 | Qt Quick on Vulkan on Windows has a worse resize or a different display color than Direct3D 11. | VX2: the resize part occurred (Iris Xe about 4 times the Direct3D 11 time for each step, RTX 3080 a longer tail). The color part did not occur. | VK18 stops. The plan gets a new resize design ([#1040](https://github.com/zidage/AlcedoStudio/issues/1040)) before more display work. The compute phases VK0 to VK17 continue. |
-| R2 | A long dispatch causes a device loss or stops the editor. | VX3: a whole export in one submission holds the preview for 100 ms (RTX 3080) to 2.4 s (Iris Xe); one workgroup of 3 s stops the display device for 3 s. The Qt Quick frames keep vsync with workgroups of normal length. | The split rule of section 4.2 (4 ms submissions, two in flight, workgroups below 1 ms) and the VK2 data rule. |
+| R2 | A long dispatch causes a device loss or stops the editor. | VX3: a whole export in one submission holds the preview for 100 ms (RTX 3080) to 2.4 s (Iris Xe); one workgroup of 3 s stops the display device for 3 s. The Qt Quick frames keep vsync with workgroups of normal length. | The split rule of section 4.2 (one export at a time, 8 ms submissions, one in flight, workgroups below 1 ms) and the VK2 data rule. |
 | R3 | Hand-written neural network kernels are slower than the vendor convolution code. | VX4 | DemosaicNet: the criterion of VX4 decides. UtNet2: VK20 uses DirectML with resource import, and the plan records the remaining interop pairing. |
 | R4 | The pipeline and Qt Quick race on the queues of one device. | VX2 thread safety validation: occurred on both devices, with a second queue and with the queue mutex (Qt's `vkDeviceWaitIdle` at resize) | Two devices on one physical device (B5, section 4.2). With them the validation reports 0 threading errors. |
 | R5 | The results differ between GPU vendors more than the tolerance. | Comparison tests on NVIDIA and Intel | The kernel marks the affected expressions as precise. The tolerance does not increase without a record. |
@@ -1369,8 +1376,9 @@ Remaining defects or unavailable platforms:
 | Slang macro layer | Lines of the `__SLANG__` branches of the three shared headers | 28 | VX1 |
 | Phase size limit | Maximum changed lines of one phase | 2000 | `alcedo-create-plan` skill |
 | Windows GPU timeout | Time after which Windows resets a GPU that does not respond | 2 s (default); 60 s on the development computer (`TdrDelay`) | Windows display driver model; registry of the development computer |
-| Export submission budget | Maximum estimated GPU time of one export submission | 4 ms | VX3 (section 9.3) |
-| Export submissions in flight | Export submissions on the pipeline queue before the export waits for a fence | 2 | VX3 |
+| Export submission budget | Maximum estimated GPU time of one export submission | 8 ms | VX3 (section 9.3) |
+| Export submissions in flight | Export submissions on the pipeline queue before the export waits for a fence | 1 | user, 2026-11-22; VX3 |
+| Exports at a time | Export renders that run at one time | 1 | user, 2026-11-22 |
 | Band | Unit of a dispatch that is divided over submissions | 16 rows (one row of 16 x 16 groups) | VX3 |
 | Workgroup time limit | Maximum running time of one workgroup | 1 ms | VX3 (one group of 3 s stops the display device) |
 | Preview sizes | Long edge of the preview render: during a drag, at the settled view | 2560, 3840 pixels | user, 2026-11-22 |
