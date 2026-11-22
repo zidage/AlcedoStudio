@@ -1083,22 +1083,14 @@ ColumnLayout {
                 Accessible.role: Accessible.Tree
                 Accessible.name: qsTr("Collections")
 
-                // The scroll bar of the Library album grid (ThumbnailGridView): shown while it
-                // is hovered or dragged, and for a short time after a scroll. It has its own
-                // column at the right of the rows, so it never covers a count (#1028).
-                ScrollBar.vertical: ScrollBar {
+                // The shared scroll bar of the Inspector pages. It has its own column at the
+                // right of the rows, so it never covers a count, and it sits above the tree
+                // pointer handler (z 10), so it takes its own drags (#1028).
+                ScrollBar.vertical: AlcedoScrollBar {
                     id: treeScrollBar
                     objectName: "collectionsTreeScrollBar"
-                    policy: ScrollBar.AsNeeded
-                    active: hovered || pressed || treeScrollActivity.running
+                    z: 20
                 }
-
-                Timer {
-                    id: treeScrollActivity
-                    interval: 800
-                    repeat: false
-                }
-                onContentYChanged: treeScrollActivity.restart()
 
                 Keys.onShortcutOverride: function(event) {
                     if (!panel.dragActive && panel.renamingElementId < 0

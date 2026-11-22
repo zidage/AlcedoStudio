@@ -929,6 +929,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/ImageInspectorPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollectionsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollectionsRail.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AlcedoScrollBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollectionTree.js"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ColorLabelNames.js"
     "${ALCEDO_UI_SHELL_ROOT}/qml/DataFormat.js"

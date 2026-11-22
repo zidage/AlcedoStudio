@@ -805,7 +805,7 @@ RowLayout {
                     contentWidth: width
                     contentHeight: folderSectionAlone.height
                     boundsBehavior: Flickable.StopAtBounds
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    ScrollBar.vertical: AlcedoScrollBar {}
 
                     readonly property var metrics: root.libraryLoadingGridMetrics(width)
 

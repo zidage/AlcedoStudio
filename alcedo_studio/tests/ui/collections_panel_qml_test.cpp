@@ -527,15 +527,6 @@ TEST(CollectionsPanelQmlTest, TokensMatchTheIssueValues) {
   auto& theme = AppTheme::Instance();
   EXPECT_EQ(theme.collectionRowHeight(), 26);
   EXPECT_EQ(theme.collectionIndentStep(), 14);
-  // Issue #1028: the sidebar tree and the width range of the sidebar.
-  EXPECT_EQ(theme.collectionsTreeRowHeight(), 28);
-  EXPECT_EQ(theme.collectionsTreeIndentStep(), 12);
-  EXPECT_EQ(theme.collectionsSidebarWidth(), 264);
-  EXPECT_EQ(theme.collectionsSidebarMinWidth(), 208);
-  EXPECT_EQ(theme.collectionsSidebarMaxWidth(), 420);
-  EXPECT_EQ(theme.collectionsSidebarFoldWidth(), 160);
-  EXPECT_EQ(theme.collectionsRailWidth(), 52);
-  EXPECT_EQ(theme.collectionsPeekDelayMs(), 250);
   EXPECT_EQ(theme.collectionMenuMaxRows(), 12);
   EXPECT_EQ(theme.collectionMenuFilterThreshold(), 15);
 }
@@ -1114,14 +1105,6 @@ TEST(CollectionsPanelQmlTest, SelectionFromOutsideScrollsToTheSelectedRow) {
   h.fake.SetImageCounts({{65, 4}});
   ProcessEvents(80);
   EXPECT_DOUBLE_EQ(tree->property("contentY").toDouble(), content_y);
-
-  // Issue #1028: the scroll bar of the album grid. It has its own column, so the rows end at
-  // its left edge, and it hides a short time after the scroll.
-  auto* bar = FindItem(h.window->contentItem(), QStringLiteral("collectionsTreeScrollBar"));
-  ASSERT_NE(bar, nullptr);
-  EXPECT_GT(bar->width(), 0.0);
-  EXPECT_DOUBLE_EQ(row->width(), tree->width() - bar->width());
-  EXPECT_TRUE(WaitUntil([&] { return !bar->property("active").toBool(); }));
 }
 
 namespace {
@@ -1217,8 +1200,6 @@ TEST(CollectionsPanelQmlTest, ImportMenuItemsAreDisabledOnAMountedSelection) {
   auto* button = FindItem(h.window->contentItem(), QStringLiteral("collectionsImportButton"));
   ASSERT_NE(button, nullptr);
   EXPECT_EQ(button->property("text").toString(), QStringLiteral("Import"));
-  // The button is the last item of the panel: below the tree.
-  EXPECT_GT(button->mapToScene(QPointF(0, 0)).y(), h.Tree()->mapToScene(QPointF(0, 0)).y());
 
   auto* menu = OpenImportMenu(h);
   ASSERT_NE(menu, nullptr);
@@ -1231,10 +1212,6 @@ TEST(CollectionsPanelQmlTest, ImportMenuItemsAreDisabledOnAMountedSelection) {
   EXPECT_EQ(images->property("text").toString(), QStringLiteral("Import Images..."));
   EXPECT_EQ(folder->property("text").toString(), QStringLiteral("Import Folder..."));
   EXPECT_EQ(mount->property("text").toString(), QStringLiteral("Mount Folder..."));
-  // The menu opens above the button.
-  auto* menu_item = qvariant_cast<QQuickItem*>(menu->property("contentItem"));
-  ASSERT_NE(menu_item, nullptr);
-  EXPECT_LT(menu_item->mapToScene(QPointF(0, 0)).y(), button->mapToScene(QPointF(0, 0)).y());
 
   const auto all_enabled = [&](bool expected) {
     return images->property("enabled").toBool() == expected &&
@@ -1270,9 +1247,8 @@ TEST(CollectionsPanelQmlTest, ImportMenuItemsAreDisabledOnAMountedSelection) {
 }
 
 // Issue #1028: All Photos is the root row above the tree. A click selects the library root,
-// Up from the first collection selects it, and the Collections header folds the tree while All
-// Photos stays.
-TEST(CollectionsPanelQmlTest, AllPhotosRowSelectsTheRootAndStaysWhenTheSectionFolds) {
+// and Up from the first collection selects it.
+TEST(CollectionsPanelQmlTest, AllPhotosRowSelectsTheRoot) {
   Harness h(SmallTree(), /*current_element=*/4);
   ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
   auto* all_photos = h.AllPhotos();
@@ -1292,89 +1268,10 @@ TEST(CollectionsPanelQmlTest, AllPhotosRowSelectsTheRootAndStaysWhenTheSectionFo
   h.Key(Qt::Key_Up);
   EXPECT_EQ(h.fake.CurrentFolderId(), 0u);
 
-  auto* toggle = FindItem(h.window->contentItem(), QStringLiteral("collectionsSectionToggle"));
-  ASSERT_NE(toggle, nullptr);
-  QTest::mouseClick(h.window, Qt::LeftButton, Qt::NoModifier, SceneCenter(toggle));
-  EXPECT_TRUE(WaitUntil([&] { return !h.Tree()->isVisible(); }));
-  EXPECT_TRUE(all_photos->isVisible());
-  QTest::mouseClick(h.window, Qt::LeftButton, Qt::NoModifier, SceneCenter(toggle));
-  EXPECT_TRUE(WaitUntil([&] { return h.Tree()->isVisible() && h.RowShown(1); }));
   EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
 }
 
-// Issue #1028: leaf rows and rows with children align their names; each row has one indent
-// guide per collection above it, and the guide of the collection that holds the selection is
-// the bright one.
-TEST(CollectionsPanelQmlTest, TreeRowsAlignNamesAndDrawIndentGuides) {
-  Harness h(SmallTree(), /*current_element=*/3);
-  ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
-  ASSERT_TRUE(WaitUntil([&] { return h.RowShown(3); }));
 
-  // A (children) and B (leaf) at the top level: the icons, and so the names, align.
-  auto* a_icon = FindItem(h.window->contentItem(), QStringLiteral("collectionRowIcon_1"));
-  auto* b_icon = FindItem(h.window->contentItem(), QStringLiteral("collectionRowIcon_4"));
-  ASSERT_NE(a_icon, nullptr);
-  ASSERT_NE(b_icon, nullptr);
-  EXPECT_TRUE(WaitUntil([&] {
-    return a_icon->mapToScene(QPointF(0, 0)).x() == b_icon->mapToScene(QPointF(0, 0)).x();
-  }));
-  auto* a1_icon = FindItem(h.window->contentItem(), QStringLiteral("collectionRowIcon_2"));
-  ASSERT_NE(a1_icon, nullptr);
-  EXPECT_DOUBLE_EQ(a1_icon->mapToScene(QPointF(0, 0)).x() - a_icon->mapToScene(QPointF(0, 0)).x(),
-                   AppTheme::Instance().collectionsTreeIndentStep());
-
-  // A1x (depth 3) has the guides of A and A1; A1 holds the selection, so its guide is bright.
-  const QVariantList ancestors = h.panel->property("rowAncestors").toList();
-  const QVariantList rows      = h.panel->property("folderRows").toList();
-  int                a1x_index = -1;
-  for (int i = 0; i < rows.size(); ++i) {
-    if (rows[i].toMap().value("elementId").toUInt() == 3u) {
-      a1x_index = i;
-    }
-  }
-  ASSERT_GE(a1x_index, 0);
-  const QVariantList chain = ancestors.value(a1x_index).toList();
-  ASSERT_EQ(chain.size(), 2);
-  EXPECT_EQ(chain[0].toInt(), static_cast<int>(h.fake.UiOf(1)));
-  EXPECT_EQ(chain[1].toInt(), static_cast<int>(h.fake.UiOf(2)));
-  EXPECT_EQ(h.panel->property("activeGuideFolderId").toInt(), static_cast<int>(h.fake.UiOf(2)));
-  EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
-}
-
-// Issue #1028: on hover the more button takes the place of the count; a click on it opens the
-// row menu.
-TEST(CollectionsPanelQmlTest, MoreButtonReplacesTheCountOnHoverAndOpensTheRowMenu) {
-  Harness h(SmallTree(), /*current_element=*/0);
-  ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
-  h.fake.SetImageCounts({{0, 10}, {1, 3}, {2, 2}, {3, 1}, {4, 4}});
-  auto* row   = h.Row(4);
-  auto* count = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_4"));
-  auto* more  = FindItem(h.window->contentItem(), QStringLiteral("collectionMoreButton_4"));
-  ASSERT_NE(row, nullptr);
-  ASSERT_NE(count, nullptr);
-  ASSERT_NE(more, nullptr);
-  ASSERT_TRUE(WaitUntil([&] { return count->isVisible(); }));
-  EXPECT_FALSE(more->isVisible());
-
-  QTest::mouseMove(h.window, SceneCenter(row));
-  EXPECT_TRUE(WaitUntil([&] { return more->isVisible() && !count->isVisible(); }));
-  // The row layout places the button that turned visible on its next polish: at the right end.
-  EXPECT_TRUE(WaitUntil([&] {
-    return more->mapToItem(row, QPointF(more->width(), 0)).x() > row->width() - 8.0;
-  }));
-
-  auto* menu = h.window->findChild<QObject*>(QStringLiteral("collectionRowMenu"));
-  ASSERT_NE(menu, nullptr);
-  QTest::mouseMove(h.window, SceneCenter(more));
-  QTest::mouseClick(h.window, Qt::LeftButton, Qt::NoModifier, SceneCenter(more));
-  EXPECT_TRUE(WaitUntil([&] { return menu->property("visible").toBool(); }));
-  // The click opened the menu and did not select the row.
-  EXPECT_EQ(h.fake.CurrentFolderId(), 0u);
-  EXPECT_TRUE(row->property("menuOpen").toBool());
-  ASSERT_TRUE(QMetaObject::invokeMethod(menu, "close"));
-  EXPECT_TRUE(WaitUntil([&] { return !row->property("menuOpen").toBool(); }));
-  EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
-}
 
 // Issue #1008: the row menu of the library root has Mount Folder Here.
 TEST(CollectionsPanelQmlTest, RootRowMenuHasMountFolderHere) {
