@@ -513,7 +513,7 @@ when the user selects the format (U2), as the step states.
 | PyTorch time, 45.4 MP | 0.92 s with tiles of 1536 (1.96 GiB allocated, 2.85 GiB reserved), 1.37 s with 1024 (0.98 GiB), 1.39 s with 768, 2.17 s with 512, 20.7 s with 256, 1.67 s with 2048 | `inference_cost.md`, PyTorch time |
 | PyTorch time, 24.3 / 32.5 / 36.2 / 42.4 MP | 0.58 to 0.97 s / 0.83 to 1.14 s / 1.03 to 1.13 s / 0.92 to 1.56 s for tiles of 768 to 2048 | the same |
 | GPU state during the time runs | 71 to 89 C, median SM clock 1,350 to 1,785 MHz (largest 2,100); largest used GPU memory of the process (NVML, CUDA context included) 4.36 GiB | the same |
-| Clipped areas | On 5 of 6 photos, the gain-matched output in clipped cells is 0.887 to 0.992 of `linear_max` (median); 0% to 72% of the pixels reach 0.987. The clip threshold of Alcedo Studio does not find most clipped areas in the stored result | `quality.md`, model output in clipped highlights |
+| Clipped areas | On 5 of 6 photos, the gain-matched output in clipped cells is 0.888 to 0.992 of `linear_max` (median); 0% to 72% of the pixels reach 0.987. The clip threshold of Alcedo Studio does not find most clipped areas in the stored result | `quality.md`, model output in clipped highlights |
 | Stored formats | float16: at least 81.8 dB developed. JPEG XL lossless of float16 1.9 to 2.3 MB/MP (86 to 106 MB at 45 MP, encode 0.09 s/MP, decode 0.05 s/MP); float16 byte planes + zstd 3 3.3 to 3.6 MB/MP (0.02 s/MP each way); lossy JPEG XL 0.007 to 0.31 MB/MP at 26 to 54 dB, color blocks in dark areas at +5 EV for linear values from distance 0.5. Clip mask: at most 2,871 bytes | `quality.md`, stored result formats |
 
 **Effect on the decisions that wait for a measurement:**
@@ -601,6 +601,40 @@ $P scripts/export/measure_stored_formats.py $A
 **Remaining gaps:** step 5 (`write_stored_result.py`) after U2. Not measured: the forward code of
 Alcedo Studio (DN3), the highlight recovery on the stored result by eye (DN5), stored formats in
 C++.
+
+##### Phase DN1 addition (2026-11-22): last tile, cuDNN algorithms, TF32
+
+The user asked how much faster the model can run, with 2 times the DemosaicNet time as the
+level at which a stored result may not be necessary. Lab commit `1ffaf8a` on the same pull
+request; lab entry `inference_cost.md`, 2026-11-22, last tile and cuDNN algorithms.
+
+| Change | 45.4 MP, tiles of 1536 | 36.2 MP, best tile |
+| --- | ---: | ---: |
+| DN1 record: deterministic cuDNN algorithms, last tile of the full size | 0.92 s | 1.03 s |
+| Fastest cuDNN algorithms (`cudnn.benchmark`), output within 1.1e-6 | 0.73 s | 0.76 s |
+| Fastest algorithms and the last tile shrunk to its need | **0.69 s** | **0.64 s** |
+| TF32 instead of FP32 (full last tile) | 0.72 s | 0.68 s |
+
+- **TF32 is not a useful change.** On this GeForce GPU it saves 0 to 0.17 s against the fastest
+  FP32 algorithms and changes the output by 5.5e-4. D2 (FP32) stays.
+- **The tile planner must start each tile input at a multiple of 16.** The DN1 planner put the
+  last tile of an axis at `[N - T, N)`. When `N` is not a multiple of 16 (the 24.3, 32.5, and
+  42.4 MP photos), that tile moves the grid of the max pooling layers, and its output differs
+  from one pass by up to 6% of the largest value. The lab planner now shrinks the last tile: its
+  input starts `O` px before its kept range and is filled by reflection to a multiple of 16. The
+  output is then the one-pass output (0 on a crop of 1500 x 1400 packed px), and the 36.2 MP
+  photo computes 10.8 M packed px instead of 14.2 M. DN3 implements this planner (data rules and
+  test below). The clipped-area table is made again with it (changes in the third decimal); the
+  stored format table compares each format with one result, so the planner does not change it.
+- **Against DemosaicNet:** the DemosaicNet student of Alcedo Studio takes 376 ms (p50 from 82 to
+  84 C) and 294 ms (cool) on the 36.3 MP D800e Bayer photo
+  (`cuda_demosaicnet_performance_next.md`). The model takes 0.64 s on 36.2 MP in PyTorch, 1.7
+  times the 376 ms and 2.2 times the 294 ms. The DemosaicNet time is its complete stage; the
+  model time does not include the input preparation and the gain match. DN3 measures the same
+  span in Alcedo Studio. The own kernels of DN2 must reach the cuDNN level (8.6 TFLOP/s in this
+  run) for this ratio; the current FP32 kernels of Alcedo Studio reach 1.6 to 2.0 TFLOP/s.
+- The cuDNN search of the algorithms takes 12 to 37 s on the first call of a new tile shape. The
+  forward code of DN2 selects its kernels at build time and has no search.
 
 ### DN2: CUDA layers of UtNet2
 
@@ -734,6 +768,9 @@ DN2. The `tile_size` and `tile_overlap` values of DN1.
   this in its tests, as `neural_tile_jobs.hpp` does.
 - A tile at the image border is filled by reflection to the alignment of 16, as the lab
   specification states. The filled area is not part of the output.
+- Each tile input starts at a multiple of 16 packed px. The last tile of an axis is shrunk: its
+  input starts `tile_overlap` px before its kept range and ends at the image border (lab
+  `measurement_common.plan_axis`, DN1 addition of 2026-11-22).
 - The module selects the largest tile size of the DN1 table whose workspace fits in the free GPU
   memory. When the smallest size does not fit, it throws the memory error. It does not use a
   different backend.
@@ -777,7 +814,7 @@ weights file absent or with a different tensor table
 | Test | Assertion |
 | --- | --- |
 | `OverlapTilesCoverTheImageExactlyOnce` | For sizes that are and are not multiples of the tile, each output pixel is in one kept rectangle |
-| `OverlapTileInputsAreMultiplesOfSixteen` | Each input rectangle has a width and a height that are multiples of 16 |
+| `OverlapTileInputsAreMultiplesOfSixteen` | Each input rectangle starts at a multiple of 16 and has a width and a height that are multiples of 16, also for image sizes that are not multiples of 16 |
 | `UtNet2BayerOutputMatchesPyTorchWithinTolerance` | The three expected outputs of DN0 are matched within the DN0 tolerance |
 | `UtNet2TiledOutputMatchesOnePassWithinBorderTolerance` | On the 512 crop, the tiled output at the DN1 overlap differs from one pass by less than the DN1 border level |
 | `UtNet2LoadFailsOnMissingTensor` | A file without one tensor gives an error that names the tensor |
