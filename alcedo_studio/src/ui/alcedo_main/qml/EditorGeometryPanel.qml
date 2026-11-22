@@ -516,7 +516,6 @@ Item {
                     AdjustmentCombo {
                         objectName: "geometryAspectCombo"
                         Layout.fillWidth: true
-                        fitPopupToWindow: true
                         model: aspectModel
                     }
                     AdjustmentSlider {

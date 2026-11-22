@@ -15,7 +15,6 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QRectF>
-#include <QTest>
 #include <QVariantMap>
 #include <cstdint>
 #include <exception>
@@ -259,11 +258,6 @@ class AdjustmentStackHarness {
   }
 
   [[nodiscard]] auto root() const -> QQuickItem* { return root_.get(); }
-  /// Resize the window and the adjustment stack to the same height.
-  void SetHeight(int height) {
-    root_->setHeight(height);
-    window_.setHeight(height);
-  }
   [[nodiscard]] auto errors() const -> QString {
     QStringList text;
     for (const auto& error : errors_) {
@@ -397,41 +391,6 @@ TEST(EditorGeometryPanelQmlTest, SavedPresetSelectionSurvivesLabelAndOrderChange
   EXPECT_NEAR(frame.height(), 0.6, 1e-6);
   EXPECT_TRUE(interaction.aspectLocked());
   EXPECT_FLOAT_EQ(interaction.aspectRatio(), 1.5f);
-  EXPECT_TRUE(session.calls.empty());
-}
-
-TEST(EditorGeometryPanelQmlTest, AspectPopupShowsAllRowsWhenTheyFitAndScrollsInShortWindow) {
-  GeometrySession         session;
-  FakeGeometryInteraction interaction;
-  AdjustmentStackHarness  harness(&session, &interaction);
-  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
-
-  auto* wrapper = harness.findObject<QObject>(QStringLiteral("geometryAspectCombo"));
-  ASSERT_NE(wrapper, nullptr);
-  auto* combo = wrapper->findChild<QObject*>(QStringLiteral("adjustmentCombo"));
-  ASSERT_NE(combo, nullptr);
-  auto* popup = combo->property("popup").value<QObject*>();
-  ASSERT_NE(popup, nullptr);
-  auto* list = popup->property("contentItem").value<QQuickItem*>();
-  ASSERT_NE(list, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(popup, "open"));
-  ASSERT_TRUE(QTest::qWaitFor([&] {
-    return popup->property("opened").toBool() && list->property("contentHeight").toReal() > 240.0;
-  }));
-  EXPECT_EQ(list->property("count").toInt(), combo->property("count").toInt());
-  EXPECT_GE(list->height() + 1.0, list->property("contentHeight").toReal());
-
-  constexpr int kShortWindowHeight = 260;
-  harness.SetHeight(kShortWindowHeight);
-  ASSERT_TRUE(QTest::qWaitFor([&] {
-    return list->height() > 0.0 && list->height() < list->property("contentHeight").toReal();
-  }));
-  const QRectF viewport = list->mapRectToScene(list->boundingRect());
-  EXPECT_GE(viewport.top(), 0.0);
-  EXPECT_LE(viewport.bottom(), kShortWindowHeight);
-  EXPECT_GE(viewport.height() + 2.0 + 2.0 * AppTheme::Instance().spaceSm(), kShortWindowHeight);
-  ASSERT_TRUE(QMetaObject::invokeMethod(list, "positionViewAtEnd"));
-  EXPECT_TRUE(QTest::qWaitFor([&] { return list->property("atYEnd").toBool(); }));
   EXPECT_TRUE(session.calls.empty());
 }
 
