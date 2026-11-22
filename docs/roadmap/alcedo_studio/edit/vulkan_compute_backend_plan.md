@@ -2,8 +2,9 @@
 
 Date: 2026-11-22
 
-Status: planned. Experiments VX1 to VX5 come first. VX1 is complete (2026-11-22, section 9.1).
-No implementation phase has started.
+Status: planned. Experiments VX1 to VX5 come first. VX1 and VX2 are complete (2026-11-22,
+sections 9.1 and 9.2). VX2 changed B5 to two devices and stopped VK18 until the plan has a new
+resize design (section 9.2). No implementation phase has started.
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -64,7 +65,7 @@ The plan author made these decisions. Each one agrees with A1 to A7.
 | B2 | The worktree branch holds experiment code only. Experiment code does not merge. Its findings go into section 9. | Experiment code answers a question. It does not follow the structure rules of the product code. |
 | B3 | The kernel language is Slang. The build compiles each kernel group to SPIR-V with `slangc`. VX1 confirmed this decision (section 9.1). | Slang includes the shared math headers, `film_print_math.h` included, with a macro layer of 28 lines. GLSL has no pointer syntax and cannot include that header. One Slang source can also give Metal Shading Language. |
 | B4 | The minimum is Vulkan 1.3. | Vulkan 1.3 includes dynamic rendering, synchronization2, and maintenance4 in the core. The two devices of the development computer report 1.4. |
-| B5 | Alcedo creates the `VkInstance` and the `VkDevice`. Qt Quick receives them through `QQuickGraphicsDevice::fromDeviceObjects`. | The pipeline and the editor then use one device, one memory budget, and no interop API. The CUDA pairing already uses the same idea with `fromAdapter`. |
+| B5 | Alcedo creates the `VkInstance` and two `VkDevice` objects on one `VkPhysicalDevice`: the display device and the pipeline device. Qt Quick receives the display device through `QQuickGraphicsDevice::fromDeviceObjects`. A frame image is allocated on the pipeline device with Win32 external memory and imported into the display device (zero copy). VX2 changed this decision from one device (section 9.2). | Qt calls `vkDeviceWaitIdle` on its device at each swapchain resize, before `beforeFrameBegin`. That call needs exclusive access to every queue of the device, so a pipeline queue on the same device races with it: the validation layer reports it with a second queue and with the queue mutex, and a run without the mutex crashed. On a second device Qt's call touches no pipeline queue. A device with one queue (Iris Xe) also needs no mutex, because each device gets its own `VkQueue`. One physical device keeps one memory heap and one budget. |
 | B6 | There is one editor pairing for Vulkan: Vulkan pipeline with Qt Quick Vulkan. A pairing of Vulkan compute with Direct3D 11 or OpenGL does not exist. | A mixed pairing brings back an interop API. |
 | B7 | Before VK18, the Vulkan backend is available to tests, export, thumbnails, and `alcedo-cli` only. These paths use the explicit host download that the current backends also have. | The display change is the only step that is not additive. It comes after all passes are equal. |
 | B8 | A Vulkan failure reports the real error. It does not select CUDA, OpenCL, or a host path. | `AGENTS.md`, "No fallback without explicit authorization". |
@@ -237,14 +238,15 @@ Renderer<VulkanBackend>
         |-- VulkanComputePipelineCache   pipeline by kernel name and specialization
         |-- LUT images by content key
         `-- neural network weights
-VulkanContext                      process owner of instance, device, queues, allocator
+VulkanContext                      process owner of instance, pipeline device, display device,
+                                   queues, allocators
 ```
 
 ### 4.1 Owners
 
 | Owner | Input | Output | Lifetime | Error surface |
 | --- | --- | --- | --- | --- |
-| `VulkanContext` | Device preference (`ALCEDO_VULKAN_DEVICE`), required features | `VkInstance`, `VkPhysicalDevice`, `VkDevice`, pipeline queue, Qt queue, VMA allocator, capability record | Process. Created before the first `QQuickWindow` when the editor uses Vulkan. | Exception with the device name and the absent feature |
+| `VulkanContext` | Device preference (`ALCEDO_VULKAN_DEVICE`), required features | `VkInstance`, `VkPhysicalDevice`, the pipeline `VkDevice` and its queue, the display `VkDevice` (from VK18) and its queue, one VMA allocator for each device, capability record | Process. Created before the first `QQuickWindow` when the editor uses Vulkan. | Exception with the device name and the absent feature |
 | `VulkanShaderModuleRegistry` | Kernel name | `VkShaderModule` from a packaged `.spv` file | `VulkanContext` | Exception with the kernel name and the file path |
 | `VulkanComputePipelineCache` | Kernel name, specialization values | `VkPipeline`, `VkPipelineLayout`, descriptor set layout | `VulkanContext`. The `VkPipelineCache` data is stored in the application cache folder. | Exception with the kernel name and the `VkResult` |
 | `VulkanBackend` | Size, format | `Buffer`, `Texture2D` (move-only), counters | Render device | Exception with the size and the budget |
@@ -253,12 +255,23 @@ VulkanContext                      process owner of instance, device, queues, al
 
 ### 4.2 Rules
 
-- The pipeline and Qt Quick use one `VkDevice`.
-- The pipeline submits on its own queue when the device has a second queue that supports compute.
-  On a device with one queue, the pipeline and Qt Quick use that queue, and one mutex makes each
-  queue operation exclusive. The mutex is held by the Qt render thread from
-  `QQuickWindow::beforeFrameBegin` to `QQuickWindow::afterFrameEnd`. VX2 tests this rule on
-  Iris Xe with the thread safety validation.
+- The pipeline and Qt Quick use two `VkDevice` objects on one `VkPhysicalDevice` (B5). Each
+  device has one queue of the graphics family. The pipeline code uses only the pipeline device;
+  Qt Quick uses only the display device. The program uses the display queue only before the first
+  `QQuickWindow` exists (initial image layouts). Each queue has one user thread (VX2, section 9.2).
+- A frame image for the viewport is an RGBA32F image of the pipeline device, in a dedicated
+  allocation exported as `VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT`, and an image with
+  the same create info on the display device, bound to the imported memory. The Win32 handle is
+  closed after the import. The pipeline releases the image to `VK_QUEUE_FAMILY_EXTERNAL` in
+  `SHADER_READ_ONLY_OPTIMAL`; the viewport renderer acquires it in the same layout in the Qt
+  command buffer (`QRhiCommandBuffer::beginExternal`) of the frame that samples it first. The
+  display image enters `QRhiTexture::createFrom` with `SHADER_READ_ONLY_OPTIMAL`.
+- A frame image stays unchanged until Qt has begun the second frame after the last frame that
+  sampled it (Qt has two frames in flight). The ring has at least five images.
+- The display device enables every supported core feature except `robustBufferAccess`, and the
+  extensions of `QRhiVulkanInitParams::preferredExtensionsForImportedDevice()` that the device
+  has. Qt reads the features of the physical device and assumes that they are enabled for an
+  imported device.
 - One render records all its passes into one command buffer and submits one time. A pass encoder
   does not submit and does not wait.
 - A long kernel is divided into tiles and into more than one submission. VX3 sets the limit.
@@ -334,11 +347,13 @@ PipelineExecutor (preference Vulkan)
 Success, editor (from VK18):
 
 ```text
-main: VulkanContext::Create
-  -> QQuickGraphicsDevice::fromDeviceObjects(physical device, device, Qt queue family, Qt queue index)
+main: VulkanContext::Create (pipeline device, display device)
+  -> QQuickGraphicsDevice::fromDeviceObjects(physical device, display device, family, queue 0)
   -> Renderer<VulkanBackend>::Render -> FramePresenter<VulkanBackend>::Present
-  -> IFrameSink (Vulkan image target) -> DirectPresentQueue
-  -> EditorViewportRenderer: QRhiTexture::createFrom(VkImage) -> viewport composite pass
+       writes the exported frame image, releases it to VK_QUEUE_FAMILY_EXTERNAL, waits its fence
+  -> IFrameSink (Vulkan image target: the imported display image) -> DirectPresentQueue
+  -> EditorViewportRenderer: acquire barrier (beginExternal), QRhiTexture::createFrom(VkImage)
+  -> viewport composite pass (scaleZoom.y = -1 when !QRhi::isYUpInNDC())
 ```
 
 Failure:
@@ -418,6 +433,12 @@ resize and drag frame times are not more than 10 % above the Direct3D 11 values.
 transform gives the same pixels. If the resize or color result fails, the plan records the defect
 and VK18 stops until the plan has a new display design.
 
+**Status.** Complete (2026-11-22). Zero copy display, the drag frame times, and the display pixels
+pass on both devices. The resize criterion fails on both devices: Iris Xe needs about 4 times the
+Direct3D 11 time for each resize step, and the RTX 3080 Laptop GPU has a longer tail. VK18 stops
+until the plan has a new resize design; the compute phases VK0 to VK17 continue. The queue rule of
+section 4.2 failed in its first form and changed to two devices (B5). Section 9.2 has the record.
+
 ### VX3: long dispatch on the shared device
 
 **Question.** Which dispatch size keeps the device alive and the editor responsive?
@@ -494,7 +515,7 @@ test of its kernels (B9).
 | VK15 | Neural network layers | `src/vulkan/nn/` | VK2, VX4 | 1500 to 1900 | planned |
 | VK16 | DemosaicNet modules and the neural Develop branch | `decoders/processor/nn/` | VK15, VK6 | 1600 to 1950 | planned |
 | VK17 | Scope analyzer, host download, `PipelineExecutor`, preference `vulkan` | `edit/scope/`, `edit/pipeline/`, `ui/alcedo_cli/` | VK14, VK16 | 1400 to 1800 | planned |
-| VK18 | Editor display on Qt Quick Vulkan | `ui/editor_rhi/`, `ui/alcedo_main/main.cpp` | VK17, VX2 | 1500 to 1900 | planned |
+| VK18 | Editor display on Qt Quick Vulkan | `ui/editor_rhi/`, `ui/alcedo_main/main.cpp` | VK17, VX2, a new resize design (R1) | 1500 to 1900 | stopped (VX2) |
 | VK19 | Release build, packaging, experimental setting | CMake presets, `scripts/`, Settings QML | VK18 | 700 to 1000 | planned |
 | VK20 | UtNet2 forward code for AI Denoise | AI Denoise modules | VK15, #1030, VX4 | 1500 to 1900 | planned |
 | VK21 | Vulkan as the Windows default | `pipeline_accelerator`, `editor_backend` | VK19, user decision | 200 to 400 | planned |
@@ -531,13 +552,14 @@ device selection rule).
 - `alcedo_studio/src/vulkan/CMakeLists.txt` (proposed): target `VulkanContext`.
 - `inc/vulkan/vulkan_context.hpp`, `src/vulkan/vulkan_context.cpp` (proposed):
   - `VulkanContext::Create(const VulkanInitializationOptions&) -> VulkanContext&`. Creates the
-    instance, selects the device, creates the device, the queues, and the allocator. Changes
-    process state. Throws with the device name and the absent feature.
+    instance, selects the physical device, creates the pipeline device, its queue, and its
+    allocator. The display device follows in VK18 (B5). Changes process state. Throws with the
+    device name and the absent feature.
   - `VulkanContext::Instance() -> VulkanContext&`. Read access after `Create`.
   - `VulkanContext::Capabilities() const -> const VulkanCapabilities&`: API version, queue
     families, limits, and optional features.
-  - `VulkanContext::PipelineQueue()` and `VulkanContext::QtQueue()`: each gives the `VkQueue`, its
-    family, its index, and the mutex of section 4.2.
+  - `VulkanContext::PipelineQueue()`: the `VkDevice` of the pipeline, its `VkQueue`, the queue
+    family, and the queue index. The pipeline thread is the only user of this queue.
 - `inc/vulkan/vulkan_requirements.hpp`, `src/vulkan/vulkan_requirements.cpp` (proposed):
   `CheckVulkanDeviceRequirements(physical device) -> VulkanRequirementResult` with the name of
   each absent requirement. Pure function of the device properties. The requirements of the VX1
@@ -742,7 +764,7 @@ workspace tests that the OpenCL backend passes.
 1. Add `Buffer` and `Texture2D` with VMA.
 2. Add the upload, download, and copy operations with staging buffers from `TransientBufferArena`.
 3. Add `VulkanCommandContext` with the layout record and one submission for each render.
-4. Add `Submit` and `Wait` with the queue mutex of section 4.2.
+4. Add `Submit` and `Wait` on the pipeline queue of the pipeline device (section 4.2).
 5. Instantiate the device and workspace templates. Change a shared template only when the
    compiler shows a real difference, and record the change in this section.
 6. Port the tests of `opencl_workspace_test.cpp` by behavior.
@@ -811,7 +833,7 @@ the entry before the implementation.
 | VK15 | Convolution layers, activation storage, workspace, stage profiler | `opencl/nn/*.cpp`, `demosaicnet_conv.cl` | Each layer equals the expected output of the weights file in the tolerance of the OpenCL layer tests. |
 | VK16 | Bayer and X-Trans DemosaicNet modules, tiles, cache, the neural branch of Develop | `opencl_demosaicnet_*.cpp`, `demosaicnet_structural.cl` | Neural demosaic equals OpenCL. The time agrees with the VX4 record. |
 | VK17 | Scope analyzer on the final DRT image, `FramePresenter<VulkanBackend>::Download`, `PipelineExecutor::vulkan_renderers_`, preference `vulkan` in the setting and in `alcedo-cli` | `opencl_scope_analyzer.cpp`, `opencl_frame_presenter.cpp` | Export of one RAW on Vulkan equals the OpenCL export in tolerance. Scope data equals OpenCL. |
-| VK18 | `EditorBackend::Vulkan`, start with `fromDeviceObjects`, Vulkan frame target in `IFrameSink` and in the lease enums, `EditorViewportRenderer` import of the `VkImage`, mask coverage display. Rename of `editor_rhi_contracts_test.cpp`. | `OpenClOpenGlLeaseAdapter`, Metal zero copy path | The harness shows a rendered frame with `--editor-backend=vulkan`. The presented pixels equal the downloaded pixels. |
+| VK18 | `EditorBackend::Vulkan`, the display device of `VulkanContext` and start with `fromDeviceObjects`, Vulkan frame target in `IFrameSink` and in the lease enums (exported frame images, section 4.2), `EditorViewportRenderer` acquire barrier and import of the `VkImage`, orientation correction of `ViewportCompositePass`, mask coverage display. Rename of `editor_rhi_contracts_test.cpp`. | `OpenClOpenGlLeaseAdapter`, Metal zero copy path | The harness shows a rendered frame with `--editor-backend=vulkan`. The presented pixels equal the downloaded pixels. |
 | VK19 | `ALCEDO_ENABLE_VULKAN=ON` in `win_release`, install of the `.spv` files, checks in `scripts/verify_windows_install_tree.ps1`, the Settings entry with the label `Experimental` | `alcedo_install_opencl_sources`, `package_windows.ps1` | The installed tree passes `gpu_kernel_check --vulkan`. |
 | VK20 | UtNet2 forward code on the layers of VK15, or the DirectML path with resource import (VX4 decides) | AI Denoise plan, phase for the OpenCL forward code | Output equals the expected outputs of the lab release in its tolerance. |
 | VK21 | Auto selects Vulkan on Windows. The record has the time and memory of Vulkan against CUDA and OpenCL for the scenarios of section 12 of the OpenCL plan. | `pipeline_accelerator.cpp`, `editor_backend.cpp` | Auto resolves to Vulkan. Each scenario time is in the record. |
@@ -955,9 +977,174 @@ measured.
 
 ### 9.2 Qt Quick on Vulkan (VX2)
 
-Current state: no measurement. Known facts: Qt 6.9.3 of the development computer has Vulkan
-support and `fromDeviceObjects`. Iris Xe has one queue, so the mutex rule of section 4.2 is
-necessary on that device.
+Current state: Qt Quick 6.9.3 on Vulkan shows a compute-written `VkImage` with zero copy on the
+RTX 3080 Laptop GPU and on Iris Xe, with no validation error. The product composite shaders and
+the display table give the Direct3D 11 pixels exactly, after one correction of the orientation.
+Drag frame times of the split device are within 1 % of Direct3D 11 (p99). Resize fails the
+criterion: Iris Xe needs about 70 ms for each resize step against 16.5 ms on Direct3D 11. The
+pipeline and Qt Quick use two `VkDevice` objects on one physical device (B5); one device with a
+queue mutex races with Qt's `vkDeviceWaitIdle`. With the pipeline on a second queue or device, the
+GUI thread waits about 10 ms of each frame on the NVIDIA driver (Direct3D 11: 0.6 ms). VK18 stops
+until the plan has a new resize design.
+
+#### 2026-11-22: Qt Quick Vulkan with devices of the program, against Qt Quick Direct3D 11
+
+**Setup.**
+
+| Item | Value |
+| --- | --- |
+| Source | `main` `61d59bc98` with this plan. Experiment code: `experiments/vulkan/vx2/` on branch `feature/vulkan-backend-experiments` |
+| Program | `vx2_viewport`, a stand-alone Qt Quick program (no QML engine) with one `QQuickRhiItem` with the settings of `EditorViewportItem` (RGBA32F colour buffer, no mirror, no blending). It draws with the product shaders `editor_viewport.vert` and `editor_viewport.frag` unchanged, the vertex data of `ViewportCompositePass`, and a 65-node display table. The product harness `EditorRhiHarness` needs the full product build in the worktree, so the program stands in for it. |
+| Vulkan mode | The program creates the `VkInstance` (surface extensions, `VK_EXT_swapchain_colorspace`) and the device, and gives them to Qt with `QVulkanInstance::setVkInstance` and `QQuickGraphicsDevice::fromDeviceObjects`. A producer thread writes the photo into a ring of five RGBA32F images with a compute shader on the pipeline queue, waits its fence, and Qt wraps the image with `QRhiTexture::createFrom`. |
+| Direct3D 11 mode | `QSGRendererInterface::Direct3D11` on the same GPU (`fromAdapter` with the LUID). A QRhi compute pass in the Qt frame runs the same compute shader (one GLSL source, `qsb` to HLSL; the SPIR-V of the same `.qsb` file runs in Vulkan mode). |
+| Queue modes | separate: queue 1 of the graphics family of the Qt device. shared: queue 0 with the queue mutex, held from `beforeFrameBegin` to `afterFrameEnd` (frame) or from `afterRendering` to `afterFrameEnd` (submit). split: queue 0 of a second `VkDevice` |
+| Display table | sRGB to the ICC profile of the monitor of the window, LittleCMS, relative colorimetric with black point compensation, the table layout of `DisplayTransformLut` |
+| Devices | RTX 3080 Laptop GPU, driver 610.62. Iris Xe, driver 101.7092. Qt 6.9.3, Vulkan SDK 1.4.328.1 |
+| Screens | LG ULTRAFINE, 3840 x 2160, 60 Hz, scale 2, output of the NVIDIA adapter, ICC profile `LG ULTRAFINE`. Laptop panel, 2560 x 1440, 240 Hz, scale 1.5, output of the Intel adapter, profile `sRGB IEC61966-2.1` |
+| Load | Drag: a new photo for each frame (requested at `frameSwapped`), 2560 x 1600, 8 s, the first second dropped. Resize: `QWindow::resize` every 16 ms, a triangle wave from 900 x 560 to 1500 x 940 logical pixels. Stress: drag and resize together, the producer back to back. Interactive resizing with the mouse (the Windows sizing loop) needs real input and was not run. |
+| Evidence | worktree `build/tmp/vulkan_backend/vx2/`: one log for each run, grabs as PNG |
+
+Measures: the frame period is the time between two `afterFrameEnd` signals. Missed vsyncs are the
+vsync intervals of the measured time minus the frames. The GUI block is the lateness of a 2 ms
+timer on the GUI thread (the time that an input event waits). The resize latency is the time from
+`QWindow::resize` to the end of the first frame with the new swapchain size.
+
+**Result: zero copy display and validation.** Both devices show the producer image with zero copy
+in each queue mode, with `VK_LAYER_KHRONOS_validation` on: 0 errors and 0 warnings outside the
+stress runs. `R32G32B32A32_SFLOAT` has linear filtering on both devices, so the linear sampler of
+the composite pass is valid. A device with the minimum features (no core feature) gives 0
+validation errors with Qt Quick too.
+
+**Result: display pixels.** The window is grabbed with `QQuickWindow::grabWindow` at one device
+pixel for each photo pixel (960 x 720). The photo has grey and channel ramps, 4096 colours, values
+from -0.25 to 1.5, and an orientation mark.
+
+| Device, screen | Vulkan against Direct3D 11 | Both against a CPU composite (double precision) |
+| --- | --- | --- |
+| RTX 3080 Laptop GPU, LG ULTRAFINE | 0 of 2073600 values differ | 0.56 codes at most |
+| Iris Xe, laptop panel | 0 of 2073600 | 0.51 codes |
+| Iris Xe, LG ULTRAFINE (other adapter) | 0 of 2073600 | 0.51 codes |
+| RTX 3080 Laptop GPU, split device | 0 of 2073600 | 0.56 codes |
+
+The product shaders with the product vertex data draw the photo upside down on Vulkan: the grab
+matches the CPU composite only after a vertical flip (0.56 codes). `QRhi::isYUpInNDC()` is false
+on Vulkan and true on Direct3D 11. The correction is `scaleZoom.y = -1` when `isYUpInNDC()` is
+false; all values in the table use it. VK18 adds it to `ViewportCompositePass`.
+
+Qt creates the swapchain with `VK_FORMAT_B8G8R8A8_UNORM`, `VK_COLOR_SPACE_SRGB_NONLINEAR_KHR`,
+`VK_PRESENT_MODE_FIFO_KHR`, and 3 images on both devices (`VK_LAYER_LUNARG_api_dump`). The format
+is UNORM, so the display table output reaches the monitor without a second encoding. The NVIDIA
+surface also offers `R16G16B16A16_SFLOAT` with `EXTENDED_SRGB_LINEAR` and `A2B10G10R10_UNORM`
+with `HDR10_ST2084`; Qt reports `HDRExtendedSrgbLinear` and `HDR10` as supported on Vulkan and
+neither on Direct3D 11 for the same screen. The Intel surface offers 8-bit formats only.
+
+**Result: drag frame times, LG ULTRAFINE (60 Hz), RTX 3080 Laptop GPU.**
+
+| Mode | Period p50 | p99 | max | Missed vsyncs | GUI block p95 | GUI block max |
+| --- | --- | --- | --- | --- | --- | --- |
+| Direct3D 11 | 16.66 ms | 18.27 ms | 19.39 ms | 0 | 0.58 ms | 2.8 ms |
+| Vulkan, shared queue, submit lock | 16.75 / 16.61 ms | 19.09 / 19.03 ms | 22.2 / 20.4 ms | 0 / 0 | 0.49 / 0.37 ms | 19.2 / 35.3 ms |
+| Vulkan, shared queue, frame lock | 16.67 ms | 19.29 ms | 21.6 ms | 0 | 0.54 ms | 20.4 ms |
+| Vulkan, separate queue | 23.91 / 16.67 ms | 28.65 / 18.94 ms | 29.8 / 20.3 ms | 1 / 0 | 19.8 / 10.2 ms | 35.8 / 36.8 ms |
+| Vulkan, split device | 16.65 ms | 18.45 ms | 19.18 ms | 0 | 10.2 ms | 24.5 ms |
+
+Two values are two runs. The p99 period of the shared and split modes is at most 6 % above Direct3D 11 (one
+separate-queue run had alternating periods of about 9 and 24 ms with one missed vsync). The
+content latency (request to frame end) is one frame in each mode.
+
+The render thread of the threaded render loop calls `QRhi::beginFrame` before `sync()`, and the
+GUI thread waits until `sync()` (Qt 6.9 `QSGRenderThread::syncAndRender`). When the pipeline
+submits on a queue other than Qt's queue (separate queue or split device), `beginFrame` waits
+about 10 ms on the NVIDIA driver, and the GUI thread waits with it: the GUI block p95 is 10 ms
+against 0.5 ms. With the pipeline on Qt's queue the wait is 0.06 ms. The wait is in the fence or
+the image acquire of `beginFrame`; the experiment cannot divide it further. Frame periods are equal
+in both cases.
+
+**Result: pipeline load during the drag, RTX 3080 Laptop GPU, LG ULTRAFINE.** The producer runs
+back to back with about 14 ms of GPU work for each image; the window renders each vsync.
+
+| Mode | Period p50 | p99 | Missed vsyncs | Producer images/s |
+| --- | --- | --- | --- | --- |
+| split device | 16.61 ms | 19.48 ms | 0 | 64.8 |
+| separate queue | 24.51 ms | 30.95 ms | 1 | 65.0 |
+| shared queue, submit lock | 6.62 ms | 29.90 ms | -1 | 30.1 |
+
+The split device keeps the window at vsync and the pipeline at full speed. On one shared queue the
+pipeline gets half the images, and the frame periods alternate. On Iris Xe all modes give about
+50 frames/s with 15 ms of pipeline work for each image (one GPU engine for both).
+
+**Result: resize.**
+
+| Device, screen, mode | Resize latency p50 | p95 | p99 | max |
+| --- | --- | --- | --- | --- |
+| RTX 3080, LG, Direct3D 11 (two runs) | 16.65 / 16.45 ms | 17.51 / 17.26 ms | 17.99 / 17.48 ms | 20.2 / 19.8 ms |
+| RTX 3080, LG, Vulkan separate (two runs) | 15.07 / 15.73 ms | 25.07 / 30.99 ms | 34.16 / 33.90 ms | 47.3 / 61.8 ms |
+| RTX 3080, LG, Vulkan shared | 15.38 ms | 29.95 ms | 31.90 ms | 42.7 ms |
+| RTX 3080, LG, Vulkan split | 15.16 ms | 20.18 ms | 26.28 ms | 34.9 ms |
+| RTX 3080, laptop panel, Direct3D 11 | 16.36 ms | 20.06 ms | 23.83 ms | 26.6 ms |
+| RTX 3080, laptop panel, Vulkan separate | 24.76 ms | 38.99 ms | 45.17 ms | 54.9 ms |
+| Iris Xe, laptop panel, Direct3D 11 (two runs) | 16.45 / 16.53 ms | 29.77 / 19.70 ms | 41.68 / 29.71 ms | 63.4 / 39.5 ms |
+| Iris Xe, laptop panel, Vulkan shared, submit lock (two runs) | 74.74 / 85.74 ms | 94.62 / 123.0 ms | 103.7 / 162.4 ms | 106.8 / 176.9 ms |
+| Iris Xe, laptop panel, Vulkan shared, no mutex | 65.98 ms | 93.70 ms | 116.4 ms | 134.7 ms |
+| Iris Xe, laptop panel, Vulkan split | 67.00 ms | 80.16 ms | 86.40 ms | 97.5 ms |
+
+On Iris Xe the time goes into the render thread outside the frame (p95 77 to 106 ms between two
+frames), where Qt recreates the swapchain: `QRhiVulkan::recreateSwapChain` calls
+`vkDeviceWaitIdle`, creates the new swapchain, and releases the old one with a second
+`vkDeviceWaitIdle`. The queue mode does not change it. On the RTX 3080 the median is equal to
+Direct3D 11 and the tail is longer; the split device has the shortest tail. During a resize the
+GUI thread waits for the resized frame on both APIs (GUI block p50 32 ms on Direct3D 11, 14 to 16 ms on
+Vulkan RTX 3080, 70 to 94 ms on Vulkan Iris Xe).
+
+**Result: the queue rule (stress, validation with thread safety).**
+
+| Device, mode | Threading errors | Result |
+| --- | --- | --- |
+| RTX 3080, separate queue | 10 (limit of the layer) | `vkQueueSubmit` of the pipeline during Qt's `vkDeviceWaitIdle` |
+| RTX 3080, shared queue, no mutex | 10 | process stopped with `0xC0000409` |
+| RTX 3080, shared queue, frame lock | 10 | `vkDeviceWaitIdle` and `vkQueueSubmit` at the same time |
+| RTX 3080, shared queue, submit lock | 10 | the same |
+| Iris Xe, shared queue, no mutex | 10 | the process stopped responding; ended after several minutes |
+| Iris Xe, shared queue, frame lock | 10 | `vkDeviceWaitIdle` and `vkQueueSubmit` at the same time |
+| Iris Xe, shared queue, submit lock | 10 | the same |
+| RTX 3080, split device | 0 | 156 producer images/s, 10 s |
+| Iris Xe, split device | 0 | 42 producer images/s, 10 s |
+
+`vkDeviceWaitIdle` needs exclusive access to all queues of its device. Qt calls it in
+`recreateSwapChain` (swapchain resize), in `releaseSwapChainResources`, and in `destroy`; the
+resize runs before `beforeFrameBegin`, outside both lock spans, and Qt has no signal before it.
+`QRhi::finish()` calls `vkQueueWaitIdle` on Qt's queue. On a second device none of these calls
+touches the pipeline queue.
+
+**Result: two GPUs.** DXGI lists the LG ULTRAFINE as an output of the NVIDIA adapter and the
+laptop panel as an output of the Intel adapter. Vulkan lists the RTX 3080 first and two Iris Xe
+devices with different LUIDs (`19f13`, the adapter with the panel output, and `261de`, with no
+output); `vkGetPhysicalDeviceSurfaceSupportKHR` is true for each device on each screen. Qt
+Direct3D 11 without `fromAdapter` selects the RTX 3080 on both screens. A device can present to
+the screen of the other adapter: the drag p99 is 18.19 ms (RTX 3080 on the panel; Direct3D 11
+17.62 ms) and 19.05 ms (Iris Xe on the LG ULTRAFINE; Direct3D 11 32.78 ms with 5 missed vsyncs),
+and the RTX 3080 resize p50 on the panel is 24.76 ms (Direct3D 11 16.36 ms). The rule for VK0:
+`ALCEDO_VULKAN_DEVICE` selects the device; by default the discrete GPU, as Qt Direct3D 11 does,
+and the device is matched to DXGI by LUID.
+
+On the 240 Hz laptop panel Direct3D 11 (both GPUs) and Vulkan on the RTX 3080 run at 60 frames/s; Vulkan
+on Iris Xe runs at 82 to 128 frames/s. Frame times on that panel are therefore compared only
+inside one API.
+
+**Result: injected layers.** The loader inserts `VK_LAYER_NV_optimus`, `VK_LAYER_NV_present`, and
+`VK_LAYER_OBS_HOOK` (OBS Studio) by default, and `VK_LAYER_VALVE_steam_overlay` and
+`VK_LAYER_VALVE_steam_fossilize` with their enable variables. Stress runs of 8 s with all five, on
+both devices with the split device, ended normally with frame counts like those of the runs
+without the layers. The EOS overlay layer (`EOSOverlayVkLayer-Win64.json`, `api_version`
+1.2.136) was found with its enable variable and not inserted; the loader log gives no reason.
+Screen recording and overlay drawing were inactive in these runs, so R7 keeps its response.
+`VK_LAYER_VALVE_steam_fossilize` wrote two pipeline cache files (`fossilize.<hash>.<n>.foz`) into
+the working directory of the process; the application sets its working directory to a folder of
+its own before it creates the instance.
+
+**Items outside this record.** Interactive resizing with the mouse; a monitor with HDR on (both
+outputs report SDR); device loss (VX5); `preferredExtensionsForImportedDevice` was not enabled in
+the experiment (Qt pretends that the extensions are present; no validation error resulted).
 
 ### 9.3 Long dispatch (VX3)
 
@@ -976,13 +1163,14 @@ Current state: no measurement.
 
 | Id | Risk | Detection | Response |
 | --- | --- | --- | --- |
-| R1 | Qt Quick on Vulkan on Windows has a worse resize or a different display color than Direct3D 11. | VX2 | VK18 stops. The plan gets a new display design before more display work. The compute phases VK0 to VK17 continue. |
+| R1 | Qt Quick on Vulkan on Windows has a worse resize or a different display color than Direct3D 11. | VX2: the resize part occurred (Iris Xe about 4 times the Direct3D 11 time for each step, RTX 3080 a longer tail). The color part did not occur. | VK18 stops. The plan gets a new resize design before more display work. The compute phases VK0 to VK17 continue. |
 | R2 | A long dispatch causes a device loss or stops the editor. | VX3 | The split rule goes into section 4.2 and into VK2. |
 | R3 | Hand-written neural network kernels are slower than the vendor convolution code. | VX4 | DemosaicNet: the criterion of VX4 decides. UtNet2: VK20 uses DirectML with resource import, and the plan records the remaining interop pairing. |
-| R4 | A device with one queue has a race between the pipeline and Qt Quick. | VX2 thread safety validation | The mutex rule of section 4.2. If the validation still reports an error, the pipeline submits on the Qt render thread. |
+| R4 | The pipeline and Qt Quick race on the queues of one device. | VX2 thread safety validation: occurred on both devices, with a second queue and with the queue mutex (Qt's `vkDeviceWaitIdle` at resize) | Two devices on one physical device (B5, section 4.2). With them the validation reports 0 threading errors. |
 | R5 | The results differ between GPU vendors more than the tolerance. | Comparison tests on NVIDIA and Intel | The kernel marks the affected expressions as precise. The tolerance does not increase without a record. |
 | R6 | The archive of OpenCL removes support for GPUs with no Vulkan 1.3 driver. | Device reports from users, VK19 experimental period | User decision before VK22 (section 1.5). |
-| R7 | Software that injects a Vulkan layer makes the application crash. | VX2 step 6, reports in the experimental period | The application disables the named implicit layers at start. |
+| R7 | Software that injects a Vulkan layer makes the application crash. | VX2 step 6 (OBS hook, Steam overlay, Steam Fossilize, NVIDIA layers loaded: no crash, no hang), reports in the experimental period | The application disables the named implicit layers at start. |
+| R9 | The GUI thread waits for the Vulkan `beginFrame` of the render thread while the pipeline submits on its own device (about 10 ms of each frame on the NVIDIA driver). | VX2 | VK18 measures input latency in the editor with the split device. The new resize design of R1 also covers this wait. |
 | R8 | The backends on `main` change faster than the Vulkan passes follow. | Failing comparison tests | Section 5, rule 3. |
 
 Stop the implementation of a phase when:
@@ -1049,3 +1237,9 @@ Remaining defects or unavailable platforms:
 | Windows GPU timeout | Time after which Windows resets a GPU that does not respond | 2 s (default) | Windows display driver model |
 | UtNet2 time limit | Maximum UtNet2 time on Vulkan relative to DirectML | 2 times | this plan (VX4) |
 | DirectML reference time | UtNet2, 45.4 megapixels, tile 1536, RTX 3080 Laptop GPU | 0.82 s | AI Denoise plan, DN1 record |
+| Devices for each physical device | `VkDevice` objects that Alcedo creates: pipeline device and display device | 2 | VX2 (section 9.2) |
+| Frame image handle type | External memory type of a viewport frame image | `VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT`, dedicated allocation | VX2 |
+| Frame image ring | Viewport frame images for each viewport | at least 5 | VX2 (2 Qt frames in flight) |
+| Swapchain of Qt (SDR) | Format, color space, present mode, images that Qt 6.9.3 creates | `B8G8R8A8_UNORM`, `SRGB_NONLINEAR`, FIFO, 3 | VX2, `VK_LAYER_LUNARG_api_dump` |
+| Orientation correction | `scaleZoom.y` of the composite pass when `QRhi::isYUpInNDC()` is false | -1 | VX2 |
+| Resize criterion | Largest resize latency of Vulkan relative to Direct3D 11 | 1.1 times | this plan (VX2) |
