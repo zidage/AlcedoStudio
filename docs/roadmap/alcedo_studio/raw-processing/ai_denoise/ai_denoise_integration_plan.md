@@ -16,7 +16,9 @@
   #1038, lab PR zidage/alcedo-denoise-lab#4); the user checked the FP16 sheets by eye and
   accepted FP16. 2026-11-22: DN3 complete (issue #1042): 0.45 s at 45.4 MP on the RTX 3080
   Laptop GPU (`target_time` 0.72 s); the Intel Iris Xe gets the slow-device error; a false
-  slow-device error under video memory load is issue #1043 (a stop condition of DN6)
+  slow-device error under video memory load is issue #1043 (a stop condition of DN6).
+  2026-11-22: DN5 complete (issue #1045): the Develop parameter `ai_denoise`, the denoised input
+  kind, and its Develop passes on CUDA and OpenCL (Metal code written, not built)
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -281,7 +283,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN2 | FP16 rescale calibration and FP16 ONNX graph in the lab release; ONNX Runtime DirectML as a C++ dependency; the DirectML session of UtNet2 with its tests | lab, `cmake`, `decoders/processor/nn` | DN0 | 900 to 1400 | complete (#1038) |
 | DN3 | Overlap tile planner, tile loop with float16 tiles, slow-device check, full photo run on DirectML, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 800 to 1200 | complete (#1042) |
 | DN4 | Removed on 2026-11-22 (was: the stored result reader and writer) | | | | removed |
-| DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | U4 | 1000 to 1500 | planned |
+| DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | U4 | 1000 to 1500 | complete (#1045) |
 | DN6 | Model run in the loader: `DenoiseModelSession`, input preparation, gain match, the denoised entry of the prepared source cache, GPU release, errors | `edit/input`, `decoders/processor/nn` | DN3, DN5 | 800 to 1300 | planned |
 | DN7 | Editor switch, render error with the AI Models control, model version notice | `ui/alcedo_main` | DN6 | 500 to 900 | planned |
 | DN8 | Library action and export errors | `ui/alcedo_main` | DN7 | 300 to 600 | planned |
@@ -1340,16 +1342,284 @@ condition). Not measured: AMD GPUs; the DN2 output tests on the Iris Xe (the tim
 there; the tests select the high-performance adapter); the editor render backend after a
 DirectML device removal (DN6).
 
-### DN5 to DN13
+### DN5: Develop parameter, denoised input kind, and the Develop passes
+
+Written on 2026-11-22, before the implementation.
+
+**Objective and deliverables**
+
+The Develop node gets the AI Denoise parameter (the switch and the model version, D10), and the
+Develop passes of CUDA, OpenCL, and Metal render a denoised prepared input: a camera RGB image
+of the whole decode area at the full size. The loader does not run the model in this phase
+(DN6); the tests build the denoised input from the DN0 expected outputs and from synthetic
+planes. A render that needs the model and has no denoised input reports an error (1.4).
+
+**Inputs and prerequisites**
+
+U4 (closed: no clip mask). The value domain of the gain-matched model output (lab
+`docs/alcedo_integration.md`, "Output and gain match"). DN5 does not need DN3.
+
+**Modules, files, and APIs**
+
+| File | Responsibility |
+| --- | --- |
+| `include/edit/graph/develop_node_model.hpp`, `edit/graph/develop_node_model.cpp` | `DevelopAiDenoise` (`model_version`, the SHA-256 of the FP16 graph in 64 lowercase hexadecimal digits); `DevelopPayload::ai_denoise` (`std::optional`; absent is off); `DevelopDirty::Denoise`; `DevelopParamsModel::AiDenoise` and `ApplyAiDenoiseUpdate`; the JSON key `ai_denoise` |
+| `include/decoders/processor/raw_processor_pattern.hpp`, `include/edit/runtime/develop_compile_source.hpp` | `RawInputKind::DenoisedRgb`, `DevelopInputKind::DenoisedRgb` |
+| `include/edit/input/raw_input_loader.hpp`, `edit/input/raw_input_loader.cpp` | `RawInputLoader::FromDenoisedBayer(cfa input, denoised plane, model version)` |
+| `include/edit/input/prepared_raw_input.hpp` | `PreparedSourceKey::denoise_model_hash` |
+| `include/decoders/processor/raw_rgb_linearization_params.hpp` and the `linearize_rgb` kernels of CUDA, OpenCL, and Metal | The range clamp after the scale (`clamp_to_range`, `range_max`) |
+| `include/edit/runtime/develop_ai_denoise.hpp` (new) | `DenoisedRgbLinearization`, `DevelopRgbLinearization(input, highlights_reconstruct)`, `RequireDevelopInputForAiDenoise(params, source)` |
+| `edit/runtime/graph_compiler.cpp`, `edit/runtime/result_content_key.cpp`, `edit/runtime/runtime_invalidation.cpp` | The pass list of the denoised kind, the content keys, the sensor dirty group |
+| `edit/runtime/{cuda,opencl,metal}/*_develop_pass.*`, `include/edit/runtime/plan_executor.hpp` | The denoised kind on the RGB upload path of each backend; the input check before the Develop encode |
+
+**Data rules**
+
+- **JSON.** The key `ai_denoise` (`{"model_version": "<64 lowercase hexadecimal digits>"}`) is
+  written only when the switch is on, so the JSON and the root id of every other document stay
+  as before (section 8). A key that is not such an object, or an `ai_denoise` key in a raster
+  document, stops the load with an error; the Model is then unchanged.
+- **Dirty group.** A change of `ai_denoise` (on, off, or another model version) marks
+  `DevelopDirty::Denoise`. The sensor field mask of the runtime invalidation holds it, so
+  `develop.sensor_linear` and all later results are computed again.
+- **Denoised plane.** F32 RGBA, the size of the decode area of the full-size CFA input
+  (`BuildDecodeCropRect`, the DNG default crop included), camera RGB without white balance. The
+  value domain of channel `c` is the domain of the CFA Linearize step before its clamp and its
+  white balance: 0 is `black_level[c]`, 1 is `white_level[c]` of `RawLinearizationParams` (green
+  uses entry 1). Values below 0 and above 1 are kept. The model domain of the lab uses LibRaw
+  `maximum` as the white level; DN6 multiplies channel `c` by the gain match factor and by
+  `(maximum - black[c]) / (white_level[c] - black[c])` in one pass.
+- **Denoised input.** `FromDenoisedBayer` takes a full-size Bayer CFA input (`LoadEncoded` or
+  `FromUnpackedCfa` at `DecodeRes::FULL`) and copies its linearization, color context, DNG warp,
+  orientation, and encoded identity. The sensor geometry collapses to the plane, as for the
+  direct RGB input, so the develop output is the oriented decode area (the CFA path loses up to
+  4 px at a sensor border to the RCD border; the model does not). `source_key.input_kind` is
+  `DenoisedRgb` and `source_key.denoise_model_hash` is the FNV-1a hash of the model version.
+  A reduced CFA input, an X-Trans input, a plane of another size or format, and a model version
+  that is not 64 lowercase hexadecimal digits are rejected.
+- **Linearization and highlights.** The denoised input runs the RGB upload path: `linearize_rgb`
+  with black 0 and the relative as-shot white balance as the scale (as the CFA Linearize step,
+  only when LibRaw has not applied it), then the highlight recovery of the RGB path with the
+  `cam_mul` of the CFA input, then the inverse white balance and the pack. The clamp of the CFA
+  path is kept: with the highlight recovery on, `linearize_rgb` clamps channel `c` to
+  `[0, wb[c]]` (the clamp to the white level before the white balance); with it off, to
+  `[0, min(wb[c], 1)]` (also the CfaClamp after the white balance). `RawRgbLinearizationParams`
+  gets `clamp_to_range` and `range_max[3]` for it (28 to 44 bytes); the direct RGB input keeps
+  `clamp_to_range` 0, so its output does not change.
+- **Highlight handling (U4).** No clip mask. The highlight recovery runs unchanged on the
+  denoised RGB: clip level 0.987 of the white level after the white balance, soft ramp from
+  0.95. DN1 measured the gain-matched output in clipped cells at 0.888 to 0.992 of the white
+  level (median), so the recovery finds part of the clipped areas only; the user accepted this
+  (U4, 2026-11-22).
+- **Pass list.** UploadRgb, HighlightRecover, InverseCamMulPack, Lens, GeometryResample,
+  CameraToAp1. No Linearize, CfaClamp, or Demosaic pass. The demosaic method resolves to Legacy
+  and runs no model.
+- **Content keys.** The sensor key mixes `denoise_model_hash` of the prepared source and the
+  switch only when they are set, so the keys of all other inputs and documents stay as before.
+  The installed version is in the prepared input; the recorded version of the parameter is not
+  mixed (D10: the render uses the installed model).
+- **Input check (D12, 1.4).** Before the Develop encode, the plan executor calls
+  `RequireDevelopInputForAiDenoise`. Switch on and a full-size input (`downsample_passes` 0) that
+  is not denoised: the render error ("AI Denoise is on and the prepared input is not denoised"
+  for a Bayer CFA; "AI Denoise supports Bayer sensors only" for X-Trans and direct RGB). A
+  denoised input with the switch off: the render error. A reduced input (thumbnail, semantic
+  input image) with the switch on renders the CFA path as now.
+- **Not in DN5.** The model run in the loader and the denoised cache entry (DN6). The editor
+  parameter field (`SetParameter`, the history replay of the owned key `ai_denoise`, the paste of
+  the RAW Decode item) is in DN7 with the switch, which writes it.
+
+**Implementation steps**
+
+1. The parameter: payload field, JSON, dirty bit, focused update, equality, tests.
+2. The input kinds, `FromDenoisedBayer`, the source key, tests.
+3. The range clamp of `linearize_rgb` on the three backends, `develop_ai_denoise.hpp`, the RGB
+   upload path for the denoised kind, the transient estimates, the OpenCL kernel warm-up.
+4. The pass list, the content keys, the sensor dirty group, the input check, tests.
+5. The GPU tests on CUDA and OpenCL in `build/debug`; the Metal test source beside them.
+
+**Primary success call chain**
+
+```text
+render with ai_denoise on (DN6 supplies the input; DN5 tests build it)
+  -> RawInputLoader::FromDenoisedBayer(full-size CFA input, denoised plane, model version)
+  -> GraphCompiler::Compile -> CompileDevelopPasses(DenoisedRgb): UploadRgb, HighlightRecover,
+     InverseCamMulPack, Lens, GeometryResample, CameraToAp1
+  -> plan executor: BuildFrameResultContentKeys (switch, denoise_model_hash) -> miss
+     -> RequireDevelopInputForAiDenoise -> Execute<Backend>Develop (RGB upload path)
+        -> upload -> linearize_rgb(DevelopRgbLinearization: white balance, range clamp)
+        -> highlight recovery (cam_mul) -> inverse white balance, crop, orientation -> sensor_linear
+```
+
+**Primary failure call chain**
+
+```text
+ai_denoise on, full-size CFA input (no loader run)
+  -> RequireDevelopInputForAiDenoise throws std::runtime_error
+  -> the render error; no Develop pass runs
+JSON ai_denoise malformed, or present in a raster document
+  -> DevelopParamsModel::LoadJson throws before a field changes -> the document load fails
+```
+
+**Tests**
+
+| Test | Assertion |
+| --- | --- |
+| `AiDenoiseKeyIsAbsentWhileTheSwitchIsOff` | The default Develop JSON has no `ai_denoise` key; a document without it keeps its JSON bytes and its root id through decode and encode |
+| `AiDenoiseJsonRoundTripsTheModelVersion` | On: the key holds the version; load and write give the same JSON; off again removes the key |
+| `AiDenoiseJsonRejectsAMalformedValueAndKeepsTheModel` | A version of another length, upper case, a string in place of the object, and the key in a raster document stop the load; the Model JSON is unchanged |
+| `AiDenoiseChangeMarksTheSensorGroupDirty` | `ApplyAiDenoiseUpdate` on, another version, off: each marks `Denoise` once; an equal update marks nothing; a raster document throws |
+| `AiDenoiseChangeInvalidatesTheSensorResult` | The runtime invalidation gives `develop.sensor_linear` as the origin of the change |
+| `DenoisedInputTakesTheCfaMetadataAndTheDecodeArea` | Kind, extents, crop, orientation, linearization, white balance scale and range of `rgb_linearization`, source key with the model hash |
+| `DenoisedInputRejectsAReducedOrNonBayerInputAndAWrongPlane` | The rejected inputs of the data rules throw |
+| `DenoisedInputCompilesTheRgbUploadWithHighlightRecovery` | The pass list of the data rules, in order; no Linearize, CfaClamp, Demosaic |
+| `SensorKeyHoldsTheSwitchAndTheModelVersion` | The sensor key changes with the switch and with the model hash of the input, and is the earlier key again when the switch is off again; another recorded version alone does not change it |
+| `InputCheckRejectsAFullSizeInputThatIsNotDenoised` | The function of the input check for each kind, size, and switch state |
+| `DenoisedPlaneBecomesTheSensorImageWithTheCfaClamp` (CUDA, OpenCL, Metal) | Synthetic plane with values below 0, between, and above 1: `develop.sensor_linear` equals `clamp(v x wb, 0, r) / wb` for HLR on (r = wb) and off (r = min(wb, 1)) |
+| `FullSizeRenderWithTheSwitchOnAndACfaInputReportsTheError` (CUDA, OpenCL, Metal) | `Execute` throws; a reduced CFA input with the switch on renders |
+| `DenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender` (CUDA, OpenCL, Metal; DN0 assets) | `rawnind_crop_512`: the CFA render of its input mosaic and the render of its gain-matched output; channel means of `develop.sensor_linear` within 3%; the mean absolute Laplacian of the denoised render at most half of the CFA render |
+
+**Exit criteria**
+
+- [x] The tests pass in `build/debug` on CUDA and OpenCL (the Metal tests run in DN10 on the
+      Mac, which builds the Metal code).
+- [x] The tests of the touched suites (`GpuDagModelGraphTest`, `GpuDagRawInputTest`,
+      `PipelineDocumentCheckpointTest`, the CUDA and OpenCL Develop tests) have no new failure.
+
+**Expected diff**: 1000 to 1500 lines.
+
+##### Phase DN5 completion record (2026-11-22)
+
+**Status:** complete. The Develop parameter `ai_denoise`, `RawInputLoader::FromDenoisedBayer`,
+the denoised input kind on the RGB upload path of CUDA, OpenCL, and Metal, the range clamp of
+`linearize_rgb`, the pass list, the content keys, the sensor dirty group, and the input check of
+the plan executor. Issue #1045. The Metal code is written and not built (no Mac in this phase);
+DN10 builds and runs its tests.
+
+**Primary success call chain:**
+
+```text
+render with ai_denoise on (DN6 supplies the input; the DN5 tests build it)
+  -> RawInputLoader::FromDenoisedBayer(full-size Bayer CFA input, F32 RGBA plane of the decode
+     area, model version)                                     edit/input/raw_input_loader.cpp
+     -> rgb_linearization = raw_norm::BuildDenoisedRgbLinearization(cfa linearization)
+     -> FinishPrepared (RGB geometry), source_key.denoise_model_hash
+  -> GraphCompiler::Compile -> CompileDevelopPasses(DenoisedRgb)
+     -> UploadRgb, HighlightRecover, InverseCamMulPack, Lens, GeometryResample, CameraToAp1
+  -> PlanExecutor::Execute (include/edit/runtime/plan_executor.hpp)
+     -> RequireDevelopInputForAiDenoise(Develop params, plan.source)
+     -> BindOrMiss(sensor key: switch + denoise_model_hash) -> miss
+     -> PassEncoder<UploadRgb> -> Execute{Cuda,OpenCl,Metal}Develop (RGB upload branch)
+        -> upload -> linearize_rgb(DevelopRgbLinearization(input, highlights_reconstruct))
+        -> highlight recovery with cam_mul (on) -> inverse white balance, crop, orientation
+        -> develop.sensor_linear
+```
+
+**Primary failure call chain:**
+
+```text
+ai_denoise on, full-size input that is not denoised (DN5: every full-size render with the switch)
+  -> RequireDevelopInputForAiDenoise throws std::runtime_error before the sensor lookup
+     ("AI Denoise is on and the prepared input is not denoised"; X-Trans and direct RGB:
+     "AI Denoise supports Bayer sensors only")
+  -> Execute cancels the render and rethrows -> the render error; no Develop pass runs
+denoised input with the switch off -> the same check, "AI Denoise is off and the prepared input
+  is denoised"
+JSON ai_denoise malformed, or in a raster document
+  -> DevelopParamsModel::LoadJson throws before Mutate -> the Model is unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `AiDenoiseKeyIsAbsentWhileTheSwitchIsOff` (a root written before DN5; on changes the root id and round-trips; off gives the bytes and the root id again) | `PipelineDocumentCheckpointTest` | PASS |
+| `AiDenoiseJsonRoundTripsTheModelVersion` | `GpuDagModelGraphTest` | PASS |
+| `AiDenoiseJsonRejectsAMalformedValueAndKeepsTheModel` (7 malformed values and the raster key) | `GpuDagModelGraphTest` | PASS |
+| `AiDenoiseChangeMarksTheSensorGroupDirty` (also `ReplaceParams`, and the invalid version) | `GpuDagModelGraphTest` | PASS |
+| `AiDenoiseIsRejectedForARasterDocument` (added) | `GpuDagModelGraphTest` | PASS |
+| `AiDenoiseChangeInvalidatesTheSensorResult` | `GpuDagRawInputTest` | PASS |
+| `DenoisedInputTakesTheCfaMetadataAndTheDecodeArea` (margins, DNG default crop, orientation 6, a file with the white balance applied) | `GpuDagRawInputTest` | PASS |
+| `DenoisedInputRejectsAReducedOrNonBayerInputAndAWrongPlane` | `GpuDagRawInputTest` | PASS |
+| `DenoisedInputCompilesTheRgbUploadWithHighlightRecovery` | `GpuDagRawInputTest` | PASS |
+| `SensorKeyHoldsTheSwitchAndTheModelVersion` | `GpuDagRawInputTest` | PASS |
+| `InputCheckRejectsAFullSizeInputThatIsNotDenoised` | `GpuDagRawInputTest` | PASS |
+| `DenoisedPlaneBecomesTheSensorImageWithTheCfaClamp` | `GpuDagCudaDevelopTest`, `GpuDagOpenClDevelopTest` | PASS (CUDA after the fix of #1046) |
+| `FullSizeRenderWithTheSwitchOnAndACfaInputReportsTheError` | `GpuDagCudaDevelopTest`, `GpuDagOpenClDevelopTest` | PASS |
+| `DenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender` | `GpuDagCudaDevelopTest`, `GpuDagOpenClDevelopTest` | PASS |
+| The three tests of the backend (Metal) | `GpuDagMetalDevelopTest` | not built (DN10) |
+| The decoded RGB tests on the changed `linearize_rgb` (`UnpackedRgbLevels...`, `RgbDngWarp...`) | CUDA and OpenCL Develop tests | PASS |
+
+Measured on `rawnind_crop_512` (ISO 6400, RTX 3080 Laptop GPU), ratio of the channel means of
+the denoised render to the CFA render, and the mean absolute Laplacian of G:
+
+| Backend | R | G | B | Laplacian CFA | Laplacian denoised |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CUDA | 0.9971 | 1.0003 | 1.0141 | 0.01212 | 0.00149 |
+| OpenCL | 1.0059 | 1.0068 | 1.0215 | 0.01361 | 0.00149 |
+
+The CUDA ratios are the ratios of the lab gain match against the mosaic means (0.997, 1.000,
+1.015); the OpenCL CFA render has lower channel means than the CUDA CFA render (its RCD and
+highlight passes), so its ratios are up to 0.7% higher. The noise is 8 to 9 times lower.
+
+Commands:
+
+```text
+cmd /c "scripts\msvc_env.cmd --build build\debug --target GpuDagModelGraphTest GpuDagRawInputTest PipelineDocumentCheckpointTest GpuDagCudaDevelopTest GpuDagOpenClDevelopTest"
+$env:ALCEDO_AI_DENOISE_TEST_ASSETS = "<folder with the DN0 expected outputs>"
+ctest --test-dir build/debug -R "AiDenoise|Denoised|DenoiseChange|FullSizeRenderWithTheSwitchOn|UnpackedRgbLevels|RgbDngWarp" -j 1   # 21/21
+ctest --test-dir build/debug -R "^(GpuDagModelGraphTest|GpuDagRawInputTest|PipelineDocumentCheckpointTest|GpuDagCudaDevelopTest|GpuDagOpenClDevelopTest)\." -j 1   # 564/569
+ctest --test-dir build/debug -R "^(GpuDagCudaDrtProductTest|GpuDagCudaPrimaryGradeTest)\." -j 1   # 219/230
+```
+
+Suite totals: 564 of 569 in the five touched suites. The 5 failures exist without DN5:
+`ExistingRawRoot...`, `ExistingLmtRoot...`, `ExistingFilmGrainRoot...` (issue #553), and
+`DcpProfileMatchesScalarReference` on CUDA and OpenCL (issue #972; the same value 0.004808 as
+on the Intel Iris Xe, on a CFA path with the highlight recovery off). The CUDA grade suites (for
+the fix of #1046): 219 of 230; the 11 failures are the multi-grade, scene work pair, neighbor
+detail, and LUT timing tests of issues #905 and #690, which render direct RGB inputs without RGB
+linearization and do not run the highlight kernels. Full suite: not run (AGENTS.md).
+
+**Changes against the plan text and detail choices:**
+
+- **CUDA highlight defect (issue #1046).** With the highlight recovery on and no clipped pixel,
+  the CUDA pack kernels clamped each white-balanced channel to 1 (the CFA path too); OpenCL and
+  Metal did not. The kernels now clamp below at 0 only (`SanitizeAndPackRGBA*Kernel`), as the
+  reconstruct kernels do. Separate commit.
+- `IsAiDenoiseModelVersion` is an inline function in
+  `include/edit/graph/ai_denoise_model_version.hpp`, and the denoised linearization is
+  `raw_norm::BuildDenoisedRgbLinearization` beside `BuildRgbLinearization`, so `EditInput` gets
+  no link dependency on `EditGraph`. `develop_ai_denoise.hpp` holds `DevelopRgbLinearization` and
+  `RequireDevelopInputForAiDenoise`.
+- `HashAiDenoiseModelVersion` (FNV-1a of the version text, never 0) is in
+  `prepared_raw_input.hpp`. `PreparedSourceKey::Lookup` does not hold the model hash: the lookup
+  of the denoised cache entry is DN6.
+- The input check runs before the sensor result lookup, so a published sensor result never
+  hides a wrong input.
+- The pixel test renders orientation 0; orientation 6 is in the extents of
+  `DenoisedInputTakesTheCfaMetadataAndTheDecodeArea` (the pack kernels are the RGB pack of the
+  direct RGB input).
+- The level tolerance of the DN0 crop test is 3% (plan text: 2%): the lab gain match leaves the
+  blue mean 1.5% above the mosaic mean, and the OpenCL CFA render adds 0.7%.
+- `cuda_white_balance.cu` was converted from CRLF to LF in a separate commit.
+- `AiDenoiseIsRejectedForARasterDocument` was added.
+
+**Checklist / exit condition:** both items checked.
+
+**LOC note (grill-code-review):** 37 files. Production 385 added and 36 removed lines (the
+#1046 fix included); tests 778 added (`denoised_rgb_test_support.hpp` 304,
+`develop_ai_denoise_input_test.cpp` 242, `develop_ai_denoise_test.cpp` 136); this plan section
+and record. Largest touched production files: `raw_input_loader.cpp` 778 lines,
+`develop_node_model.cpp` 667. No file is near 1000 lines.
+
+**Remaining gaps:** the Metal build and its three tests (DN10). The editor parameter field of
+`ai_denoise` (`SetParameter`, the history replay of the owned key, the paste of the RAW Decode
+item) is DN7. Until DN6, every full-size render of a document with the switch on reports the
+input error (the switch has no control before DN7).
+
+### DN6 to DN13
 
 Each of these phases gets its detailed section before its implementation starts. DN4 and DN9
 are removed (2026-11-22, D6). The fixed points that the detailed sections must keep:
 
-- **DN5**: the new `DevelopPayload` fields (the switch and the model version, D10) are written
-  to JSON only when the switch is on. The Develop dirty group of the change is the sensor group,
-  so `develop.sensor_linear` and all later results are computed again. The content key of
-  `develop.sensor_linear` holds the switch and the installed model version. The tests build the
-  denoised prepared input from the DN0 expected outputs.
 - **DN6**: `DenoiseModelSession` is the only owner of the platform session in the process; the
   editor render and the export use it one run at a time (2.3). The loader runs the model only
   for a render at the full size (D12) and only on a miss of the prepared source cache. The gain
