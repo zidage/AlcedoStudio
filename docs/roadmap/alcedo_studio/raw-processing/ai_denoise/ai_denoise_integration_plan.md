@@ -10,7 +10,9 @@
   the Neural Engine (D2, DN10). 2026-11-22: FP16 on DirectML measured (DN1 addition); U6
   closed: Windows runs FP16 too. 2026-11-22: the user removed the stored result file: the model
   runs in the Develop render (D5 to D12, sections 2, 5, DN4 to DN9 rewritten; DN4 and DN9
-  removed; U2 closed)
+  removed; U2 closed). 2026-11-22: U1 closed: `target_time` is the measured FP16 time (D4: no
+  distillation); a device above `slow_device_limit` gets the slow-device error with the action
+  that turns the noise reduction off (2.4, DN3, DN6 to DN8)
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -44,7 +46,7 @@ the time of the DemosaicNet student, DN1 additions).
 | D1 | The model is the full UtNet2 Bayer model of the lab, `models/dark_area_loss/checkpoint_10000.pt`. It has no strength control. | 2026-11-21 |
 | D2 | The model runs in FP16 in ONNX Runtime, in the process of Alcedo Studio through the C++ API of ONNX Runtime: on Windows with the DirectML execution provider (U6), on macOS on the Neural Engine with the Core ML execution provider (U5). Both use one FP16 graph of the rescaled layers that the lab makes from the safetensors weights. The Rust sidecar (`alcedo_mind`) has no part in the noise reduction. TensorRT and cuDNN are not used. Changed on 2026-11-22 from own CUDA forward code (after the DirectML measurement of DN1), then to FP16 on both platforms (U5, U6). | 2026-11-22 |
 | D3 | The work starts with the weights export and the measurements. The publication of the model package on R2 is the last product phase. | 2026-11-21 |
-| D4 | Distillation to a smaller model runs only if the measured time of DN3 is above `target_time`. | 2026-11-21 |
+| D4 | No distillation to a smaller model. `target_time` is the measured FP16 time of the full model (U1), so the full model meets it. Changed on 2026-11-22 (was: distillation if the DN3 time is above `target_time`). | 2026-11-22 |
 | D5 | The model runs in the render of the editor and of the export, when the Develop sensor stage is computed (a new photo, a change of a sensor Develop parameter, a cache miss). The editor shows its normal render state; there is no blocking progress display and no batch run. A library action or a paste only sets the parameter. Replaced on 2026-11-22 (was: a blocking run with a progress display, Cancel, and a batch run). | 2026-11-22 |
 | D6 | The application stores no denoised image on disk: no stored result file and no separate DNG file. The RAW file stays the photo. The denoised image is an entry of the prepared source cache in memory. Replaced on 2026-11-22 by the user (was: a stored result file of the RAW file). | 2026-11-22 |
 | D7 | Removed on 2026-11-22 with the stored result file (was: the folder of the stored results in the settings). | 2026-11-22 |
@@ -60,7 +62,7 @@ the time of the DemosaicNet student, DN1 additions).
 
 | Id | Decision | Measurement that it needs | Owner |
 | --- | --- | --- | --- |
-| U1 | `target_time`: the largest time for one 45 megapixel photo on the RTX 3080 Laptop GPU. It has no value now. The user sets it after the measured time of the full model (the baseline of DN3) exists | The time of DN3 | User |
+| U1 | `target_time`: the largest time for one 45 megapixel photo. Closed 2026-11-22: the user set it to the measured FP16 times of the DN1 additions, 0.72 s on the RTX 3080 Laptop GPU (DirectML) and 0.60 s on the MacBook Air M4 (Neural Engine). The exit criteria of DN3 and DN10 compare the time of a full photo in Alcedo Studio with them; a time more than 15% above stops the phase until the record states the cause. A slower device gets the slow-device error (`slow_device_limit`, 2.4); the Intel Iris Xe (5.16 s) is such a device | DN1 additions, DirectML and FP16 | User |
 | U2 | The pixel format and the compression of the stored result file. Closed 2026-11-22: the stored result file is removed (D6) | DN1, stored format table | User |
 | U3 | The tile size and the tile overlap. Closed 2026-11-21: overlap 96 packed px, tile size the largest of 512 to 1536 that fits (DN1 completion record) | DN1, border difference table | Implementer, recorded in DN3 |
 | U4 | The highlight handling of the model output. The user decided on 2026-11-22 that no clip mask is made: high-noise photos have a low dynamic range, and many scenes that need the highlight recovery are not at a high ISO | DN1, clipped area table | Implementer, recorded in DN5 |
@@ -73,7 +75,9 @@ the time of the DemosaicNet student, DN1 additions).
 - A background denoise job that runs while the user edits.
 - A stored result file beside the RAW file.
 - A render without noise reduction when the noise reduction is on and the model cannot run, in
-  the editor or in the export.
+  the editor or in the export. Only the user turns the noise reduction off, with the
+  `Turn Off AI Denoise` control of the error (2.4).
+- A run that continues on a device above `slow_device_limit`, or a CPU run in its place.
 - A different model, a lower resolution, FP32, or a different backend after a failure of the
   model run. The render reports the error.
 - The model in the Rust sidecar (`alcedo_mind`).
@@ -96,6 +100,9 @@ the time of the DemosaicNet student, DN1 additions).
   its normal render state during the run of the model.
 - When the user opens a photo whose noise reduction is on and the model is not installed, the
   editor shows the render error with a control that opens the AI Models page (D12).
+- Each render error of the model (2.4) has the control `Turn Off AI Denoise`. It writes one
+  `SetParameter` change that turns the switch off and renders the photo again without the
+  model. Undo turns the switch on again; the next render runs the model again.
 - When the installed model version differs from the version in the parameter, the RAW Decode
   panel states it under the switch.
 
@@ -108,6 +115,8 @@ the time of the DemosaicNet student, DN1 additions).
   paste; it runs no model.
 - The export renders each photo with the model when its noise reduction is on. A photo whose
   model run fails gets the error of that photo in the export queue; the other photos continue.
+- The queue item of that photo has the control `Turn Off AI Denoise`. It writes the change
+  that turns the switch off into the Version of the export item and queues the item again.
 
 ### 2.3 Model session
 
@@ -118,6 +127,8 @@ the time of the DemosaicNet student, DN1 additions).
   release holder releases the editor resources (export, semantic generation).
 - The first run of a session includes its creation (Windows: 0.07 to 0.53 s; macOS: 0.28 to
   0.46 s for each tile shape, DN1 additions).
+- The owner keeps the slow-device result of the device until the process ends. A later run on
+  that device gives the slow-device error at once and runs no tile.
 
 ### 2.4 Failure behavior
 
@@ -129,6 +140,17 @@ the time of the DemosaicNet student, DN1 additions).
 | GPU or Neural Engine error, or not enough memory for the smallest tile | The render error with the error text of ONNX Runtime |
 | No Direct3D 12 GPU, or ONNX Runtime or DirectML.dll fails to load | The switch is hidden; a render of a photo with the parameter on reports the ONNX Runtime error. The application does not run the model on the CPU |
 | A value that is not finite in an output tile (FP16 overflow) | The render error that names the tile; the lab calibrates again (section 8) |
+| The device is too slow: the projected time of the photo is above `slow_device_limit` (for example the Intel Iris Xe, 0.114 s for each megapixel) | The run stops after the tile that shows it; the render error states that the device is too slow for AI Denoise. The owner keeps the result (2.3) |
+
+Each render error of the model has the control `Turn Off AI Denoise` (2.1, 2.2). A model that
+is not installed also has the control that opens the AI Models page.
+
+The slow-device check: the tile loop measures the time of the tile runs. The creation of a
+session and the first run of a session (it compiles the graph; on macOS, the first run of each
+tile shape) are not measured. After each measured tile, the loop projects the time of the whole
+photo from the time for each output pixel of the measured tiles. When the projected time is
+above `slow_device_limit` multiplied by the megapixels of the photo, the run stops. A run with
+no measured tile (a photo of one tile on a new session) has no check; the next run has it.
 
 ## 3. Scope
 
@@ -150,7 +172,7 @@ the time of the DemosaicNet student, DN1 additions).
 
 - The linear UtNet2 model for X-Trans. The lab has no fine-tuned linear model.
 - A strength control and a blend with the original image.
-- A smaller distilled model, unless D4 starts it. That work has its own plan in the lab.
+- A smaller distilled model (D4).
 - The WebGPU and CPU render paths. They are deprecated.
 
 ## 4. Current source audit
@@ -250,7 +272,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN0 | Weights file, expected outputs, input and output specification | lab | none | 600 to 900 | complete (#1032) |
 | DN1 | Measurements: tile overlap, PyTorch time, clipped areas, stored formats, ONNX Runtime on DirectML and macOS, FP16 | lab | DN0 | 700 to 1100 | complete (#1033) |
 | DN2 | FP16 rescale calibration and FP16 ONNX graph in the lab release; ONNX Runtime DirectML as a C++ dependency; the DirectML session of UtNet2 with its tests | lab, `cmake`, `decoders/processor/nn` | DN0 | 900 to 1400 | planned |
-| DN3 | Overlap tile planner, tile loop with float16 tiles, full photo run on DirectML, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 800 to 1200 | planned |
+| DN3 | Overlap tile planner, tile loop with float16 tiles, slow-device check, full photo run on DirectML, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 800 to 1200 | planned |
 | DN4 | Removed on 2026-11-22 (was: the stored result reader and writer) | | | | removed |
 | DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | U4 | 1000 to 1500 | planned |
 | DN6 | Model run in the loader: `DenoiseModelSession`, input preparation, gain match, the denoised entry of the prepared source cache, GPU release, errors | `edit/input`, `decoders/processor/nn` | DN3, DN5 | 800 to 1300 | planned |
@@ -262,7 +284,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | planned |
 | DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | planned |
 
-DN0 to DN3 have detailed sections below. DN5 to DN13 depend on U1 and U4. Each gets its
+DN0 to DN3 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
 detailed section in this file before its implementation starts, with the format of DN0 to DN3.
 DN5 can start before DN3 completes: its tests build the denoised prepared input from the DN0
 expected outputs, so the Develop integration can be checked before the tile loop exists.
@@ -927,7 +949,7 @@ Rewritten on 2026-11-22 for D2, then for FP16 and the run in the render (D5, D6)
 The tile loop that denoises one full Bayer mosaic with `UtNet2DirectMlSession`, a test against
 one pass, and the measured time for 24, 36, and 45 megapixel photos. The model runs in each full
 render whose sensor stage is computed, so the reference is the DemosaicNet student (376 ms on
-36.3 MP). This phase closes U1 and D4.
+36.3 MP), and the target is `target_time` (U1). The phase also adds the slow-device check (2.4).
 
 **Inputs and prerequisites**
 
@@ -939,7 +961,8 @@ addition (one session with free height and width).
 | File | Responsibility |
 | --- | --- |
 | `include/decoders/processor/nn/overlap_tile_jobs.hpp` | `PlanOverlapTiles(width, height, tile, overlap, alignment)`: the input rectangle and the kept output rectangle of each tile (lab `measurement_common.plan_axis` with the shrunk last tile) |
-| `decoders/processor/nn/utnet2_tile_loop.cpp` | `DenoiseBayerMosaic(session, packed mosaic, tile callback, cancel check)`: the tile loop for `UtNet2DirectMlSession` and `UtNet2CoreMlSession` (the same interface), the tile size selection, the input tile with reflection, `Run`, the crop to the kept rectangle |
+| `decoders/processor/nn/utnet2_tile_loop.cpp` | `DenoiseBayerMosaic(session, packed mosaic, tile callback, cancel check, clock)`: the tile loop for `UtNet2DirectMlSession` and `UtNet2CoreMlSession` (the same interface), the tile size selection, the input tile with reflection, `Run`, the crop to the kept rectangle, the slow-device check (2.4) |
+| `include/decoders/processor/nn/denoise_errors.hpp` | `DenoiseDeviceTooSlowError` (a `std::runtime_error` with the projected and the allowed time), so that DN6 keeps the result and DN7 shows the slow-device text |
 | `alcedo_studio/tests/perf/utnet2_photo_timing_tool.cpp` | Full photo time, the time of `Run`, and the used GPU memory |
 
 **Data rules**
@@ -963,6 +986,10 @@ addition (one session with free height and width).
   full time at 45.4 MP is more than 1.5 times the GPU time, DN3 also keeps the packed image in
   DirectML memory and extracts the tiles there.
 - The cancel check runs between tiles (a render that the editor no longer needs).
+- The slow-device check of 2.4 runs between tiles, after the cancel check. Its clock is a
+  parameter (a steady clock in the product, a fake clock in the tests). The time of the
+  session creation and of the first run of a session is excluded. Above the limit, the loop
+  throws `DenoiseDeviceTooSlowError` and runs no more tiles.
 - The tile loop does not own the session: `DenoiseModelSession` (DN6) keeps it between renders
   and releases it (2.3).
 
@@ -976,7 +1003,10 @@ addition (one session with free height and width).
    of the tile loop, the sum of the `Run` times, the used GPU memory of the process, and the GPU
    temperature and clock (NVML when the adapter is NVIDIA).
 5. Run the tool on the three photos in the release build. Record the table beside the DN1
-   DirectML and PyTorch times. Give the 45 megapixel time to the user for U1.
+   DirectML and PyTorch times and against `target_time` (0.72 s at 45.4 MP on the RTX 3080
+   Laptop GPU).
+6. Run the tool on the Intel Iris Xe. Record the time for each megapixel and the tile at which
+   the slow-device check stops the run.
 
 **Primary success call chain**
 
@@ -994,6 +1024,11 @@ DenoiseBayerMosaic
 DirectML device removed or out of memory during Run
   -> Run throws std::runtime_error with the ONNX Runtime status text
   -> no more tile runs; the render reports the error (2.4)
+
+Projected time above slow_device_limit after a measured tile
+  -> DenoiseBayerMosaic throws DenoiseDeviceTooSlowError
+  -> no more tile runs; DenoiseModelSession keeps the result (DN6); the render reports the
+     slow-device error with Turn Off AI Denoise (2.4)
 ```
 
 **Tests**
@@ -1005,13 +1040,16 @@ DirectML device removed or out of memory during Run
 | `TiledOutputEqualsOnePassOnTheExpectedCrop` | On `rawnind_crop_512` with tiles of 256 and overlap 96, the tiled output equals the one-pass output within 1e-5 of the largest value |
 | `TileSizeSelectionUsesTheLargestThatFits` | For free memory values below and above the three thresholds, the selected size is the largest that fits; below the smallest, the error |
 | `TileLoopStopsAtCancelRequest` | After the cancel request, no more tile callback runs |
+| `TileLoopStopsWhenTheProjectedTimeIsAboveTheLimit` | With a fake session and a fake clock at 0.114 s for each megapixel, the loop throws `DenoiseDeviceTooSlowError` after the first measured tile; at 0.016 s it runs all tiles |
+| `SlowDeviceCheckExcludesTheFirstRunOfASession` | A first run of 2 s on a new session followed by fast tiles completes; a photo of one tile on a new session completes without a check |
 
 **Exit criteria**
 
-- [ ] The five tests pass in `build/debug`.
-- [ ] The time table of the three photos is in the completion record.
-- [ ] U1 is closed: the user gives `target_time`, and the record states whether D4 starts the
-      smaller model.
+- [ ] The seven tests pass in `build/debug`.
+- [ ] The time table of the three photos is in the completion record. The 45.4 MP time on the
+      RTX 3080 Laptop GPU is at most 15% above `target_time` (0.83 s), or the record states the
+      cause and the phase stops (U1).
+- [ ] The Iris Xe run stops with the slow-device error, and the record states its time.
 
 **Expected diff**: 800 to 1200 lines.
 
@@ -1035,11 +1073,19 @@ are removed (2026-11-22, D6). The fixed points that the detailed sections must k
   also releases the model session, on every render backend: DirectML uses the same GPU memory
   as the CUDA or OpenCL resources of the editor. A model that cannot run gives the render error
   of 2.4; the loader does not return the photo without the noise reduction.
+  `DenoiseModelSession` keeps a `DenoiseDeviceTooSlowError` for the device (the adapter LUID on
+  Windows) until the process ends, also after the release of the session, and throws it at once
+  for a later run on that device (2.3). The render error carries the error kind (not installed,
+  too slow, run error), so that DN7 and DN8 select the text and the controls.
 - **DN7**: QML rules of the `alcedo-qml-ui` skill. No test for pure UI; the tests are on the C++
-  owner of the switch state (the missing model path, the model version notice).
+  owner of the switch state (the missing model path, the model version notice, the
+  `Turn Off AI Denoise` action: one `SetParameter` change that turns the switch off, undo turns
+  it on, and the next render runs without the model).
 - **DN8**: the library action uses `LibraryMutationOperations::ResolveTargets` and writes one
   Version for each Bayer target; it runs no model. The export reports a model error for that
-  photo and continues.
+  photo and continues. The `Turn Off AI Denoise` control of the queue item writes the change
+  into the Version of the item and queues it again; a test covers the change and the new queue
+  state.
 - **DN10, DN11**: the same expected outputs, tolerances, FP16 graph, and tile planner as DN2 and
   DN3. The control of 2.1 appears on a platform in the phase that completes its forward code
   (D13).
@@ -1059,6 +1105,8 @@ are removed (2026-11-22, D6). The fixed points that the detailed sections must k
     expected value; measured 1.0e-3 to 1.5e-3 on the Neural Engine); the footprint of the
     process after the release of the sessions.
   - Time of the DN1 addition: 0.37, 0.51, 0.60 s for 24.3, 36.2, 45.4 MP on the MacBook Air M4.
+    `target_time` on macOS is 0.60 s at 45.4 MP (U1); the DN10 time may be at most 15% above
+    it (0.69 s). The slow-device check of DN3 runs on macOS too.
     Session creation 0.28 to 0.46 s for each of the 4 tile shapes of a photo size; DN10 measures
     `ModelCacheDirectory` for it, because a new photo size in the editor creates new sessions.
 - **DN11**: before own OpenCL kernels, DN11 measures the WebGPU execution provider of ONNX
@@ -1077,12 +1125,13 @@ are removed (2026-11-22, D6). The fixed points that the detailed sections must k
 | The DirectML memory arena keeps its memory while the session lives (FP32: up to 3.3 GiB) | Used GPU memory of the process in the DN3 timing tool | `DenoiseModelSession` releases the session with the editor GPU release and at the editor close (2.3); select a smaller tile from the free video memory |
 | A photo outside the calibration overflows FP16 | The output check of each tile (DN2, DN10); the margin of the held-out photos in the calibration record | The render reports the error for that photo. The lab calibrates again with the photo and publishes a new FP16 graph (a new model version, D10) |
 | The FP16 output shows a difference against FP32 by eye | The sheets of the DN2 lab work | The user checks the sheets before DN2 completes; a visible difference stops DN2 |
-| The model time in the render is too long for editing on a slower device (Intel Iris Xe: 5.2 s at 45.4 MP in FP16) | DN3 timing tool; DN6 render time | Record the time in the DN6 completion record; the user decides on the target devices (U1) |
+| The model time in the render is too long for editing on a slower device (Intel Iris Xe: 5.2 s at 45.4 MP in FP16) | The slow-device check of each run (2.4) | The render reports the slow-device error with `Turn Off AI Denoise`; the user decided on 2026-11-22 that a slow device gets this error (U1) |
+| A fast device crosses `slow_device_limit` under load (thermal limit, another GPU process) and gets the error | DN3 timing tool under load; DN6 render time | `slow_device_limit` is about 3 times `target_time`; record the times under load in the DN3 completion record. A false error on the RTX 3080 Laptop GPU or the M4 stops DN6 until the limit or the measurement changes |
 | The denoised entries of the prepared source cache use much host memory (545 MB for 45.4 MP in FP32) | DN6 memory record | The cache budget of the prepared source cache applies to the entry; DN6 records the budget use |
 | The process footprint stays high after the release of the Core ML sessions (GPU: up to 4.9 GiB after 5 photos; Neural Engine: 2.0 GiB in the lab tool) | Footprint test of DN10 | Find the owner of the memory before DN10 completes; a release that does not return the memory stops DN10 |
 | A Mac with 8 GB or a GPU with fewer cores takes longer or has too little memory for tiles of 1024 | DN10 run on such a Mac, if the user has one | Record it in the DN10 completion record; the render reports the memory error |
 | A GPU of another vendor gives a different output or time | DN2 tests on that GPU; DN3 timing tool | Record it in the DN3 completion record. A test failure stops DN6 for that vendor |
-| The Intel Iris Xe removes the DirectML device (887A0005 in 2 of 4 lab processes, one in FP32) | DN2 tests and the DN3 timing tool on the Iris Xe | Find the cause before DN6 completes; the render reports the error |
+| The Intel Iris Xe removes the DirectML device (887A0005 in 2 of 4 lab processes, one in FP32) | DN2 tests and the DN3 timing tool on the Iris Xe | The slow-device check stops the Iris Xe after its first measured tile, so a render runs few tiles there. A device removal gives the render error with `Turn Off AI Denoise`. Record in the DN3 completion record whether the render backend of the editor continues after the removal; if it does not, find the cause before DN6 completes |
 | Clipped areas of the model output are below the clip threshold | DN1 clipped area table | Stop DN5 until its detailed section states the highlight handling |
 | A JSON change breaks old root ids | `TryDecodeRootState` rejects an old project in the DN5 tests | Keep the keys absent when the noise reduction is off |
 
@@ -1094,7 +1143,8 @@ no longer agrees with the branch.
 
 | Parameter | Value | Source |
 | --- | --- | --- |
-| `target_time` | No value until the baseline time of DN3 exists; then from the user (U1) | User |
+| `target_time` | The measured FP16 time at 45.4 MP: 0.72 s on the RTX 3080 Laptop GPU (DirectML), 0.60 s on the MacBook Air M4 (Neural Engine). A phase time more than 15% above it stops the phase (DN3, DN10) | User (U1), DN1 additions |
+| `slow_device_limit` | 0.05 s for each megapixel of the mosaic (2.3 s at 45.4 MP), about 3 times `target_time` (RTX 3080 Laptop GPU 0.016 s, M4 0.013 s, Intel Iris Xe 0.114 s for each megapixel) | User (slow devices get the error), DN1 additions |
 | `tile_size` (Windows) | The largest of 768, 1024, and 1536 packed pixels whose DirectML process memory fits in the free local video memory; DN3 measures the FP16 memory (FP32: 0.9, 1.0, 3.3 GiB). 1536 is the fastest on the RTX 3080 Laptop GPU (FP16: 0.72 s at 45.4 MP with the tiles through host memory) | DN1 additions, DirectML and FP16 on DirectML |
 | `tile_size` (macOS) | 1536 packed pixels on the Neural Engine (0.60 s at 45.4 MP, peak footprint 2.0 GiB on the M4; 1024: 0.75 s, 1.7 GiB) | DN1 addition, FP16 on the Neural Engine |
 | `tile_overlap` | 96 packed pixels: the tiled output is the one-pass output | DN1 |
