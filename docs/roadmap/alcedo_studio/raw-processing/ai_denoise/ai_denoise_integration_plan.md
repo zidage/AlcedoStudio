@@ -7,7 +7,8 @@
   C++ on Windows; DN2, DN3, DN10, and DN11 rewritten for it. 2026-11-22: macOS measured (DN1
   addition, ONNX Runtime on macOS); D2 extended to Core ML on macOS; DN10 rewritten for it.
   2026-11-22: FP16 on the Neural Engine measured (DN1 addition); U5 closed: macOS runs FP16 on
-  the Neural Engine (D2, DN10)
+  the Neural Engine (D2, DN10). 2026-11-22: FP16 on DirectML measured (DN1 addition); U6 with
+  the user
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -60,6 +61,7 @@ Develop stage reads the stored result in place of its own linearization and demo
 | U3 | The tile size and the tile overlap. Closed 2026-11-21: overlap 96 packed px, tile size the largest of 512 to 1536 that fits (DN1 completion record) | DN1, border difference table | Implementer, recorded in DN3 |
 | U4 | The highlight handling of the stored result. The user decided on 2026-11-22 that no clip mask is made: high-noise photos have a low dynamic range, and many scenes that need the highlight recovery are not at a high ISO | DN1, clipped area table | Implementer, recorded in DN5 |
 | U5 | macOS: FP16 on the Neural Engine (0.60 s at 45.4 MP, 75.7 to 80.6 dB against FP32 at +2 EV) in place of FP32 on the GPU (3.55 s). A change to D2 (FP32) and to the lab constraint "FP32 in Alcedo Studio". If yes: the rescale calibration on many photos, a check of the output for values that are not finite (the run then reports the error), and a check by eye of the FP16 output. Closed 2026-11-22: the user agreed; D2 and DN10 changed | DN1 addition, FP16 on the Neural Engine | User |
+| U6 | Windows: FP16 on DirectML (the macOS FP16 graph, 0.72 s against 0.94 s at 45.4 MP now; 0.044 s against 0.090 s for the GPU part of a tile; 70.0 to 72.8 dB against FP32 at +2 EV) in place of FP32. If yes: one FP16 graph for both platforms in the model package, the output check of DN10 also on Windows, and DN3 keeps the tiles in DirectML memory to get the GPU gain | DN1 addition, FP16 on DirectML | User |
 
 ### 1.4 Options that must not return
 
@@ -788,6 +790,30 @@ the RAW processing of the macOS 27 system API. Lab commit `54867e1`; lab entry
   graph on the Neural Engine (D2, DN10). This replaces the GPU configuration of the previous
   addition ("Selected for DN10"); the macOS graph is the FP16 graph with DepthToSpace, so the
   graph without DepthToSpace is not part of the model package.
+
+##### Phase DN1 addition (2026-11-22): FP16 on DirectML
+
+The user asked about FP16 on Windows too. Lab commit `d98a14f`; lab entry `inference_cost.md`,
+2026-11-22, FP16 on DirectML. The FP16 graph of the previous addition on DirectML (ONNX Runtime
+1.24.4), one session with free height and width.
+
+| Windows, DirectML | 24.3 MP | 36.2 MP | 45.4 MP | One tile of 1536 in device memory |
+| --- | ---: | ---: | ---: | ---: |
+| RTX 3080 Laptop GPU, FP32, tiles of 1536 | 0.53 s | 0.78 s | 0.94 s | 0.090 s |
+| RTX 3080 Laptop GPU, FP16, tiles of 1536 | 0.44 s | 0.55 s | 0.72 s | 0.044 s |
+| Intel Iris Xe, FP32, tiles of 1024 | 3.57 s | | 6.68 s | |
+| Intel Iris Xe, FP16, tiles of 1024 | 2.76 s | | 5.16 s | |
+
+- FP16 halves the GPU time of a tile, but the full run is only 1.2 to 1.4 times faster: with
+  the tile input and output through host memory, the copies and the host tile work are about
+  half of the FP16 time (a `run` call of a tile of 1536: 0.095 s, of which 0.044 s on the GPU).
+  A tile loop with the packed image and the output in DirectML memory (IOBinding) can bring the
+  45.4 MP time near 6 x 0.044 s plus one upload and one readback.
+- Developed PSNR of DirectML FP16 against FP32: 70.0 to 72.8 dB at +2 EV on the whole image,
+  69.7 to 71.0 dB at +5 EV on the dark crops (Neural Engine: 75.7 to 80.6 and 60.2 to 75.2 dB).
+- On the Iris Xe, two of four processes ended with the DirectML error 887A0005 (device removed),
+  one of them in FP32 before any run; the cause is open.
+- **Effect:** decision U6 (section 1.3).
 
 ### DN2: ONNX graph, ONNX Runtime DirectML dependency, UtNet2 session
 
