@@ -74,8 +74,39 @@ ColumnLayout {
         return Qt.rgba(colorValue.r, colorValue.g, colorValue.b, alphaValue)
     }
 
+    // Tree row geometry (#1028): a fixed chevron column and a fixed icon column, so the names
+    // of leaf rows and parent rows align. The indent guide of a level runs through the centre
+    // of the chevron column of that level.
+    readonly property int treeRowInset: appTheme.spaceXs
+    readonly property int treeChevronSize: 16
+    readonly property int treeIconSize: 16
+    // Width of a tree row: the tree width less the column of the scroll bar while the tree
+    // scrolls.
+    readonly property real treeRowWidth: folderList.contentHeight > folderList.height + 0.5
+                                         ? Math.max(0, folderList.width - treeScrollBar.width)
+                                         : folderList.width
+
     function rowIndent(row) {
-        return Math.max(0, Number(row.treeDepth) - 1) * appTheme.collectionIndentStep
+        return Math.max(0, Number(row.treeDepth) - 1) * appTheme.collectionsTreeIndentStep
+    }
+
+    // The x of the indent guide of tree level @p level (1 = top level), in row coordinates.
+    function guideX(level) {
+        return treeRowInset + (level - 1) * appTheme.collectionsTreeIndentStep
+               + treeChevronSize / 2
+    }
+
+    // folderId of the collection whose indent guide is bright: the selected collection when it
+    // is open, otherwise the collection that holds it. -1 when no guide is bright.
+    readonly property int activeGuideFolderId: {
+        const row = rowForFolder(currentFolderId)
+        if (!row || Number(row.folderId) === 0) {
+            return -1
+        }
+        if (row.hasChildren === true && isExpanded(row)) {
+            return Number(row.folderId)
+        }
+        return Number(row.parentFolderId) > 0 ? Number(row.parentFolderId) : -1
     }
 
     function indexOfFolder(folderId) {
@@ -136,25 +167,38 @@ ColumnLayout {
             return !row.isDraft
         }))
         const shown = []
+        const ancestors = []
         for (let i = 0; i < folderRows.length; ++i) {
             const row = folderRows[i]
-            let visible = true
-            let parentId = !row.isDraft && Number(row.folderId) === 0
-                ? -1 : Number(row.parentFolderId)
+            // The root row is the All Photos row above the tree, not a row of the tree.
+            const isRoot = !row.isDraft && Number(row.folderId) === 0
+            let visible = collectionsSectionOpen && !isRoot
+            // Collections above the row, top level first; the root is not one of them.
+            const chain = []
+            let parentId = isRoot ? -1 : Number(row.parentFolderId)
             let guard = 0
-            while (visible && parentId >= 0 && guard < 4096) {
+            while (parentId > 0 && guard < 4096) {
                 const parent = byFolderId[String(Number(parentId))]
                 if (!parent || Number(parent.folderId) === 0) {
                     break
                 }
-                visible = isExpanded(parent)
+                chain.unshift(Number(parent.folderId))
+                visible = visible && isExpanded(parent)
                 parentId = Number(parent.parentFolderId)
                 ++guard
             }
             shown.push(visible)
+            ancestors.push(chain)
         }
+        rowAncestors = ancestors
         rowShown = shown
     }
+
+    // The Collections section header folds the whole tree; All Photos stays.
+    property bool collectionsSectionOpen: true
+    onCollectionsSectionOpenChanged: recomputeShownRows()
+    // folderIds of the collections above each row of folderRows, top level first.
+    property var rowAncestors: []
 
     // Expands every ancestor of the folder so its row is shown, then scrolls to it.
     function revealFolder(folderId) {
@@ -177,6 +221,9 @@ ColumnLayout {
             ++guard
         }
         expandedIds = next
+        if (Number(folderId) !== 0) {
+            collectionsSectionOpen = true
+        }
         recomputeShownRows()
         const index = indexOfFolder(folderId)
         if (index >= 0) {
@@ -278,7 +325,7 @@ ColumnLayout {
             for (let i = 0; i < rowShown.length; ++i) {
                 shown += rowShown[i] === true ? 1 : 0
             }
-            const maxY = Math.max(0, shown * appTheme.collectionRowHeight - folderList.height)
+            const maxY = Math.max(0, shown * appTheme.collectionsTreeRowHeight - folderList.height)
             folderList.contentY = folderList.originY + Math.max(0, Math.min(anchor.y, maxY))
             return
         }
@@ -290,11 +337,13 @@ ColumnLayout {
         }
     }
 
-    // Indices of the shown, non-draft rows, top to bottom.
+    // Indices of the shown, non-draft rows, top to bottom. The root row (All Photos, above the
+    // tree) comes first.
     function shownFolderIndices() {
         const out = []
         for (let i = 0; i < folderRows.length; ++i) {
-            if (rowShown[i] === true && !folderRows[i].isDraft) {
+            const isRoot = !folderRows[i].isDraft && Number(folderRows[i].folderId) === 0
+            if ((rowShown[i] === true || isRoot) && !folderRows[i].isDraft) {
                 out.push(i)
             }
         }
@@ -390,6 +439,7 @@ ColumnLayout {
             ++guard
         }
         expandedIds = next
+        collectionsSectionOpen = true
         draftParentFolderId = Number(parentFolderId)
         rebuildFolderRows()
         for (let i = 0; i < folderRows.length; ++i) {
@@ -510,9 +560,22 @@ ColumnLayout {
         return !CollectionTree.isAtOrBelow(byFolderId, targetRow.folderId, sourceRow.folderId)
     }
 
-    function updateDropTarget(listX, listY) {
+    // The row at a point of the tree view: a tree row, or the root row when the point is on the
+    // All Photos row above the tree.
+    function rowAtListPoint(listX, listY) {
+        const onAllPhotos = allPhotosRow.mapFromItem(folderList, listX, listY)
+        if (allPhotosRow.contains(onAllPhotos)) {
+            return rowForFolder(0)
+        }
+        if (listY < 0 || listY > folderList.height) {
+            return null
+        }
         const index = folderList.indexAt(listX, listY + folderList.contentY)
-        const target = index >= 0 ? folderRows[index] : null
+        return index >= 0 ? folderRows[index] : null
+    }
+
+    function updateDropTarget(listX, listY) {
+        const target = rowAtListPoint(listX, listY)
         dropTargetFolderId = canDropOn(dragSourceRow, target) ? Number(target.folderId) : -1
     }
 
@@ -560,6 +623,7 @@ ColumnLayout {
     property int pendingRemoveMissingFolderId: -1
 
     function openRowMenu(row) {
+        menuRowElementId = Number(row.elementId)
         if (Number(row.mountId) > 0) {
             const menu = row.mountRoot === true ? mountRootMenu : mountedFolderMenu
             menu.targetRow = row
@@ -604,14 +668,41 @@ ColumnLayout {
         return fileDropFolderId >= 0
     }
 
-    width: appTheme.collectionsSidebarWidth
-    implicitWidth: appTheme.collectionsSidebarWidth
-    Layout.preferredWidth: appTheme.collectionsSidebarWidth
-    Layout.minimumWidth: appTheme.collectionsSidebarWidth
-    Layout.maximumWidth: appTheme.collectionsSidebarWidth
+    // The shell sets the width: the user drags the sidebar edge (#1028).
+    property real panelWidth: appTheme.collectionsSidebarWidth
+    // True while the folded sidebar shows over the workspace: a hairline outline separates it.
+    property bool overlay: false
+    width: panelWidth
+    implicitWidth: panelWidth
     Layout.fillHeight: true
-    spacing: 12
+    spacing: 0
     clip: true
+
+    // True while a menu or a dialog of the panel is open. The overlay sidebar of the folded
+    // Library stays while it is true, also when the pointer is on the menu.
+    readonly property bool popupOpen: rowMenu.visible || mountRootMenu.visible
+                                      || mountedFolderMenu.visible || importMenu.visible
+                                      || deleteDialog.visible || removeMissingDialog.visible
+    readonly property bool hovered: panelHover.hovered
+    // True while an inline editor or a drag is in progress.
+    readonly property bool busy: dragActive || renamingElementId >= 0 || draftParentFolderId >= 0
+
+    HoverHandler {
+        id: panelHover
+    }
+
+    // Opens the import menu above @p anchorItem (the Import button, or the Import button of the
+    // rail of the folded sidebar).
+    function openImportMenu(anchorItem) {
+        const target = anchorItem || importButton
+        importMenu.parent = target
+        importMenu.minimumWidth = target === importButton ? importButton.width : 0
+        importMenu.x = target === importButton ? 0 : target.width + appTheme.spaceXs
+        importMenu.y = target === importButton
+                ? -importMenu.implicitHeight - appTheme.spaceXs
+                : target.height - importMenu.implicitHeight
+        importMenu.open()
+    }
 
     // The tree scrolls only after a user action that targets a row: a selection (from the tree
     // or from outside it), New Collection, a committed rename, a drag move, and the first rows
@@ -666,254 +757,321 @@ ColumnLayout {
         }
     }
 
+    // One sidebar surface (#1028): wordmark, navigation rows, the Collections section with its
+    // tree, and the Import button at the foot.
     Rectangle {
         id: collectionsSurface
         objectName: "collectionsSurface"
         Layout.fillWidth: true
         Layout.fillHeight: true
         radius: theme.panelRadius
-        color: Qt.darker(theme.colBgPanel, 1.08)
-        border.width: 1
-        border.color: panel.withAlpha(theme.colText, 0.05)
+        color: theme.colBgPanel
+        border.width: panel.overlay ? 1 : 0
+        border.color: appTheme.glassStrokeColor
         clip: true
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 14
-            spacing: 12
+            anchors.leftMargin: appTheme.spaceSm
+            anchors.rightMargin: appTheme.spaceSm
+            anchors.topMargin: appTheme.spaceXs
+            anchors.bottomMargin: appTheme.spaceSm
+            spacing: 0
 
-            Row {
-                id: identityCard
-                objectName: "collectionsIdentityCard"
+            Item {
                 Layout.fillWidth: true
-                spacing: 0
-                Label {
-                    text: qsTr("Alcedo")
-                    font.family: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
-                    font.pixelSize: 19
-                    font.weight: 700
-                    color: theme ? theme.colAccentPrimary : appTheme.accentColor
-                }
-                Label {
-                    text: " "
-                    font.family: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
-                    font.pixelSize: 19
-                    font.weight: 700
-                }
-                Label {
-                    text: qsTr("Studio")
-                    font.family: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
-                    font.pixelSize: 19
-                    font.weight: 700
-                    color: theme ? theme.colText : appTheme.textColor
+                Layout.preferredHeight: 44
+
+                Row {
+                    id: identityCard
+                    objectName: "collectionsIdentityCard"
+                    anchors.left: parent.left
+                    anchors.leftMargin: panel.treeRowInset
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 0
+                    Label {
+                        text: qsTr("Alcedo")
+                        font.family: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
+                        font.pixelSize: 17
+                        font.weight: 700
+                        color: theme ? theme.colAccentPrimary : appTheme.accentColor
+                    }
+                    Label {
+                        text: " "
+                        font.family: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
+                        font.pixelSize: 17
+                        font.weight: 700
+                    }
+                    Label {
+                        text: qsTr("Studio")
+                        font.family: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
+                        font.pixelSize: 17
+                        font.weight: 700
+                        color: theme ? theme.colText : appTheme.textColor
+                    }
                 }
             }
 
-            ColumnLayout {
+            Repeater {
+                model: panel.utilityTabs
+
+                delegate: NavRow {
+                    required property var modelData
+                    objectName: "collectionsUtility_" + modelData.tabId
+                    iconSource: modelData.iconSource
+                    label: modelData.label
+                    onActivated: {
+                        panel.activeUtilityTab = modelData.tabId
+                        if (modelData.tabId === "search") {
+                            panel.searchRequested()
+                        } else if (modelData.tabId === "background-tasks") {
+                            panel.backgroundTasksRequested()
+                        }
+                    }
+                }
+            }
+
+            // The library root: every photo of the project. It is the root row of the folder
+            // model, shown above the tree.
+            NavRow {
+                id: allPhotosRow
+                objectName: "collectionsAllPhotosRow"
+                readonly property var rootRow: panel.rowForFolder(0)
+                readonly property real count: panel.imageCountOf(rootRow)
+                visible: rootRow !== null
+                iconSource: "qrc:/panel_icons/image.svg"
+                label: qsTr("All Photos")
+                trailingText: count >= 0 ? count.toLocaleString(Qt.locale(), "f", 0) : ""
+                selected: panel.currentFolderId === 0
+                dropTarget: panel.dropTargetFolderId === 0 || panel.fileDropFolderId === 0
+                onActivated: {
+                    folderList.forceActiveFocus()
+                    panel.selectRow(rootRow)
+                }
+                onContextRequested: {
+                    if (rootRow && panel.backendInteractive) {
+                        panel.openRowMenu(rootRow)
+                    }
+                }
+
+                // A file drop on All Photos imports into the library root.
+                DropArea {
+                    objectName: "collectionsAllPhotosFileDropArea"
+                    anchors.fill: parent
+                    keys: ["text/uri-list"]
+                    property var urls: []
+
+                    onEntered: function(drag) {
+                        urls = panel.canTakeFileDrop(allPhotosRow.rootRow)
+                               ? FileDrop.localFileUrls(drag) : []
+                        if (urls.length === 0) {
+                            drag.accepted = false
+                            return
+                        }
+                        panel.fileDropFolderId = 0
+                        drag.accept(Qt.CopyAction)
+                    }
+                    onExited: {
+                        panel.fileDropFolderId = -1
+                        urls = []
+                    }
+                    onDropped: function(drop) {
+                        const dropped = urls.length > 0 ? urls : FileDrop.localFileUrls(drop)
+                        panel.fileDropFolderId = -1
+                        urls = []
+                        if (!panel.canTakeFileDrop(allPhotosRow.rootRow) || dropped.length === 0) {
+                            drop.accepted = false
+                            return
+                        }
+                        drop.accept(Qt.CopyAction)
+                        panel.filesDropped(dropped, 0)
+                    }
+                }
+            }
+
+            // Collections section header: the title folds the tree; sort and New Collection
+            // show on hover, on keyboard focus, and while they are in use.
+            Item {
+                id: sectionHeader
+                objectName: "collectionsSectionHeader"
                 Layout.fillWidth: true
-                spacing: 6
+                Layout.preferredHeight: 30
+                Layout.topMargin: appTheme.spaceSm
 
-                Repeater {
-                    model: panel.utilityTabs
+                readonly property bool actionsShown: sectionHover.hovered
+                                                     || sortButton.activeFocus
+                                                     || addCollectionButton.activeFocus
+                                                     || panel.sortDescending
+                                                     || panel.draftParentFolderId >= 0
 
-                    delegate: Rectangle {
-                        id: utilityTab
-                        required property var modelData
+                HoverHandler {
+                    id: sectionHover
+                }
 
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Math.max(32, utilityTabRow.implicitHeight
-                                                         + appTheme.spaceXs)
-                        radius: 8
-                        color: utilityMouse.pressed
-                               ? panel.withAlpha(theme.colHover, 0.34)
-                               : (utilityMouse.containsMouse
-                                  ? panel.withAlpha(theme.colHover, 0.24)
-                                  : "transparent")
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: panel.treeRowInset
+                    spacing: appTheme.spaceXs
 
-                        RowLayout {
-                            id: utilityTabRow
-                            anchors.fill: parent
-                            anchors.leftMargin: 2
-                            anchors.rightMargin: 8
-                            spacing: 10
+                    Item {
+                        id: sectionToggle
+                        objectName: "collectionsSectionToggle"
+                        Layout.preferredWidth: sectionTitle.implicitWidth + panel.treeChevronSize
+                                               + appTheme.spaceXs
+                        Layout.fillHeight: true
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("Collections")
 
-                            Image {
-                                Layout.preferredWidth: 17
-                                Layout.preferredHeight: 17
-                                source: modelData.iconSource
-                                sourceSize.width: 17
-                                sourceSize.height: 17
-                                fillMode: Image.PreserveAspectFit
-                                mipmap: false
-                                smooth: false
-                            }
+                        Label {
+                            id: sectionTitle
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("Collections")
+                            color: sectionToggleMouse.containsMouse ? appTheme.textColor
+                                                                    : appTheme.textMutedColor
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeBody
+                            font.weight: appTheme.fontWeightStrong
+                        }
 
-                            Label {
-                                Layout.fillWidth: true
-                                text: modelData.label
-                                color: panel.withAlpha(theme.colText, 0.92)
-                                font.family: appTheme.uiFontFamily
-                                font.pixelSize: 13
-                                font.weight: 600
-                                wrapMode: Text.Wrap
-                                verticalAlignment: Text.AlignVCenter
+                        IconImage {
+                            anchors.left: sectionTitle.right
+                            anchors.leftMargin: appTheme.spaceXs
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 12
+                            height: 12
+                            sourceSize: Qt.size(12, 12)
+                            source: "qrc:/panel_icons/chevron-right.svg"
+                            color: appTheme.textMutedColor
+                            rotation: panel.collectionsSectionOpen ? 90 : 0
+                            opacity: sectionHover.hovered || !panel.collectionsSectionOpen ? 1 : 0
+                            Behavior on rotation {
+                                enabled: !appTheme.reduceMotion
+                                NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
                             }
                         }
 
                         MouseArea {
-                            id: utilityMouse
+                            id: sectionToggleMouse
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                panel.activeUtilityTab = modelData.tabId
-                                if (modelData.tabId === "search") {
-                                    panel.searchRequested()
-                                } else if (modelData.tabId === "background-tasks") {
-                                    panel.backgroundTasksRequested()
+                            onClicked: panel.collectionsSectionOpen = !panel.collectionsSectionOpen
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    Button {
+                        id: sortButton
+                        implicitWidth: 24
+                        implicitHeight: 24
+                        Layout.preferredWidth: 24
+                        Layout.preferredHeight: 24
+                        Layout.alignment: Qt.AlignVCenter
+                        leftPadding: 0
+                        rightPadding: 0
+                        topPadding: 0
+                        bottomPadding: 0
+                        leftInset: 0
+                        rightInset: 0
+                        topInset: 0
+                        bottomInset: 0
+                        opacity: sectionHeader.actionsShown ? 1 : 0
+                        Material.foreground: theme.colText
+                        onClicked: panel.sortDescending = !panel.sortDescending
+
+                        background: Rectangle {
+                            implicitWidth: 24
+                            implicitHeight: 24
+                            radius: appTheme.controlRadiusSmall
+                            color: sortButton.hovered || panel.sortDescending
+                                   ? appTheme.controlFillColor
+                                   : "transparent"
+                        }
+
+                        contentItem: Item {
+                            implicitWidth: 24
+                            implicitHeight: 24
+                            // Idle icons are muted, as in the editor side panels.
+                            IconImage {
+                                anchors.centerIn: parent
+                                width: 14
+                                height: 14
+                                source: "qrc:/panel_icons/sort.svg"
+                                sourceSize: Qt.size(14, 14)
+                                color: sortButton.hovered || panel.sortDescending
+                                       ? appTheme.textColor
+                                       : appTheme.textMutedColor
+                                rotation: panel.sortDescending ? 180 : 0
+
+                                Behavior on rotation {
+                                    enabled: !appTheme.reduceMotion
+                                    NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
                                 }
                             }
                         }
-                    }
-                }
-            }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                Label {
-                    text: qsTr("LOCAL FOLDERS")
-                    color: panel.withAlpha(theme.colText, 0.5)
-                    font.pixelSize: 11
-                    font.letterSpacing: 1.2
-                    font.weight: 600
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                    id: sortButton
-                    implicitWidth: 28
-                    implicitHeight: 28
-                    Layout.minimumWidth: 28
-                    Layout.preferredWidth: 28
-                    Layout.maximumWidth: 28
-                    Layout.minimumHeight: 28
-                    Layout.preferredHeight: 28
-                    Layout.maximumHeight: 28
-                    Layout.alignment: Qt.AlignVCenter
-                    leftPadding: 0
-                    rightPadding: 0
-                    topPadding: 0
-                    bottomPadding: 0
-                    leftInset: 0
-                    rightInset: 0
-                    topInset: 0
-                    bottomInset: 0
-                    Material.foreground: theme.colText
-                    onClicked: panel.sortDescending = !panel.sortDescending
-
-                    background: Rectangle {
-                        implicitWidth: 28
-                        implicitHeight: 28
-                        radius: width / 2
-                        color: sortButton.hovered || panel.sortDescending
-                               ? panel.withAlpha(theme.colHover, 0.55)
-                               : "transparent"
+                        ToolTip.visible: hovered
+                        ToolTip.text: panel.sortDescending ? qsTr("Sorted Z-A") : qsTr("Sorted A-Z")
                     }
 
-                    contentItem: Item {
-                        implicitWidth: 28
-                        implicitHeight: 28
-                        Image {
-                            anchors.centerIn: parent
-                            width: 16
-                            height: 16
-                            source: "qrc:/panel_icons/sort.svg"
-                            sourceSize.width: 16
-                            sourceSize.height: 16
-                            fillMode: Image.PreserveAspectFit
-                            mipmap: false
-                            smooth: false
-                            rotation: panel.sortDescending ? 180 : 0
+                    Button {
+                        id: addCollectionButton
+                        objectName: "collectionsAddButton"
+                        implicitWidth: 24
+                        implicitHeight: 24
+                        Layout.preferredWidth: 24
+                        Layout.preferredHeight: 24
+                        Layout.alignment: Qt.AlignVCenter
+                        leftPadding: 0
+                        rightPadding: 0
+                        topPadding: 0
+                        bottomPadding: 0
+                        leftInset: 0
+                        rightInset: 0
+                        topInset: 0
+                        bottomInset: 0
+                        enabled: panel.backendInteractive
+                                 && panel.structureEditable(panel.rowForFolder(panel.currentFolderId))
+                        opacity: !sectionHeader.actionsShown ? 0 : (enabled ? 1.0 : 0.4)
+                        Material.foreground: theme.colText
+                        // A new collection goes inside the selected one.
+                        onClicked: panel.beginCreateCollection(panel.currentFolderId)
 
-                            Behavior on rotation {
-                                NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+                        background: Rectangle {
+                            implicitWidth: 24
+                            implicitHeight: 24
+                            radius: appTheme.controlRadiusSmall
+                            color: addCollectionButton.hovered || panel.draftParentFolderId >= 0
+                                   ? appTheme.controlFillColor
+                                   : "transparent"
+                        }
+
+                        contentItem: Item {
+                            implicitWidth: 24
+                            implicitHeight: 24
+                            IconImage {
+                                anchors.centerIn: parent
+                                width: 14
+                                height: 14
+                                source: "qrc:/panel_icons/folder-plus.svg"
+                                sourceSize: Qt.size(14, 14)
+                                color: addCollectionButton.hovered || panel.draftParentFolderId >= 0
+                                       ? appTheme.textColor
+                                       : appTheme.textMutedColor
                             }
                         }
+
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("New collection")
                     }
-
-                    ToolTip.visible: hovered
-                    ToolTip.text: panel.sortDescending ? qsTr("Sorted Z-A") : qsTr("Sorted A-Z")
-                }
-
-                Button {
-                    id: addCollectionButton
-                    objectName: "collectionsAddButton"
-                    implicitWidth: 28
-                    implicitHeight: 28
-                    Layout.minimumWidth: 28
-                    Layout.preferredWidth: 28
-                    Layout.maximumWidth: 28
-                    Layout.minimumHeight: 28
-                    Layout.preferredHeight: 28
-                    Layout.maximumHeight: 28
-                    Layout.alignment: Qt.AlignVCenter
-                    leftPadding: 0
-                    rightPadding: 0
-                    topPadding: 0
-                    bottomPadding: 0
-                    leftInset: 0
-                    rightInset: 0
-                    topInset: 0
-                    bottomInset: 0
-                    enabled: panel.backendInteractive
-                             && panel.structureEditable(panel.rowForFolder(panel.currentFolderId))
-                    opacity: enabled ? 1.0 : 0.4
-                    Material.foreground: theme.colText
-                    // A new collection goes inside the selected one.
-                    onClicked: panel.beginCreateCollection(panel.currentFolderId)
-
-                    background: Rectangle {
-                        implicitWidth: 28
-                        implicitHeight: 28
-                        radius: width / 2
-                        color: addCollectionButton.hovered || panel.draftParentFolderId >= 0
-                               ? panel.withAlpha(theme.colHover, 0.55)
-                               : "transparent"
-                    }
-
-                    contentItem: Item {
-                        implicitWidth: 28
-                        implicitHeight: 28
-                        Image {
-                            anchors.centerIn: parent
-                            width: 16
-                            height: 16
-                            source: "qrc:/panel_icons/folder-plus.svg"
-                            sourceSize.width: 16
-                            sourceSize.height: 16
-                            fillMode: Image.PreserveAspectFit
-                            mipmap: false
-                            smooth: false
-                        }
-                    }
-
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("New collection")
                 }
             }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: panel.withAlpha(theme.colText, 0.06)
-            }
-
             ListView {
                 id: folderList
                 objectName: "collectionsTree"
+                visible: panel.collectionsSectionOpen
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
@@ -925,7 +1083,14 @@ ColumnLayout {
                 Accessible.role: Accessible.Tree
                 Accessible.name: qsTr("Collections")
 
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                // The shared scroll bar of the Inspector pages. It has its own column at the
+                // right of the rows, so it never covers a count, and it sits above the tree
+                // pointer handler (z 10), so it takes its own drags (#1028).
+                ScrollBar.vertical: AlcedoScrollBar {
+                    id: treeScrollBar
+                    objectName: "collectionsTreeScrollBar"
+                    z: 20
+                }
 
                 Keys.onShortcutOverride: function(event) {
                     if (!panel.dragActive && panel.renamingElementId < 0
@@ -963,12 +1128,19 @@ ColumnLayout {
                         && Number(modelData.elementId) === panel.renamingElementId
                     readonly property bool editing: isDraft || renaming
                     readonly property bool mounted: !isDraft && Number(modelData.mountId) > 0
+                    readonly property bool mountRoot: mounted && modelData.mountRoot === true
                     readonly property bool mountOffline: mounted && modelData.mountOffline === true
+                    readonly property bool menuOpen: !isDraft
+                        && Number(modelData.elementId) === panel.menuRowElementId
+                    // On hover and while its menu is open, the more button takes the place of
+                    // the count.
+                    readonly property bool moreShown: !editing && !panel.dragActive
+                                                      && (hovered || menuOpen)
 
                     objectName: isDraft ? "collectionDraftRow"
                                         : "collectionRow_" + String(modelData.elementId)
-                    width: ListView.view.width
-                    height: shown ? appTheme.collectionRowHeight : 0
+                    width: panel.treeRowWidth
+                    height: shown ? appTheme.collectionsTreeRowHeight : 0
                     visible: shown
 
                     Rectangle {
@@ -980,42 +1152,87 @@ ColumnLayout {
                         // Hover: the darker hoverColor wash.
                         color: folderRow.selected && !folderRow.editing
                                ? appTheme.controlHoveredFillColor
-                               : (folderRow.dropTarget || folderRow.hovered)
+                               : (folderRow.dropTarget || folderRow.hovered || folderRow.menuOpen)
                                  ? appTheme.hoverColor
                                  : "transparent"
                         border.width: folderRow.dropTarget ? 1 : 0
                         border.color: appTheme.textMutedColor
                     }
 
+                    // Indent guides: one line per collection above the row, through the
+                    // chevron column of that collection. The guide of the collection that
+                    // holds the selection is brighter.
+                    Repeater {
+                        model: folderRow.shown ? (panel.rowAncestors[folderRow.index] || []) : []
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            required property int index
+                            x: panel.guideX(index + 1)
+                            width: 1
+                            height: folderRow.height
+                            color: Number(modelData) === panel.activeGuideFolderId
+                                   ? appTheme.collectionsTreeGuideActiveColor
+                                   : appTheme.collectionsTreeGuideColor
+                        }
+                    }
+
                     RowLayout {
                         anchors.fill: parent
-                        anchors.leftMargin: appTheme.spaceXs + panel.rowIndent(folderRow.modelData)
-                        anchors.rightMargin: appTheme.spaceSm
-                        spacing: appTheme.spaceXs
+                        anchors.leftMargin: panel.treeRowInset + panel.rowIndent(folderRow.modelData)
+                        anchors.rightMargin: appTheme.spaceXs
+                        spacing: 0
 
-                        // Disclosure triangle; the same glyphs as the Library section headers.
-                        Label {
-                            Layout.preferredWidth: appTheme.collectionIndentStep
+                        // Disclosure chevron column. A leaf row keeps the empty column, so its
+                        // name aligns with the names of the rows that have children.
+                        Item {
+                            Layout.preferredWidth: panel.treeChevronSize
+                            Layout.preferredHeight: panel.treeChevronSize
                             Layout.alignment: Qt.AlignVCenter
-                            horizontalAlignment: Text.AlignHCenter
-                            text: !folderRow.isRoot && folderRow.modelData.hasChildren === true
-                                  ? (panel.isExpanded(folderRow.modelData) ? "▾" : "▸")
-                                  : ""
-                            color: appTheme.textMutedColor
-                            font.pixelSize: appTheme.fontSizeBody
+
+                            IconImage {
+                                objectName: folderRow.isDraft
+                                            ? ""
+                                            : "collectionChevron_" + String(folderRow.modelData.elementId)
+                                anchors.centerIn: parent
+                                width: 12
+                                height: 12
+                                sourceSize: Qt.size(12, 12)
+                                visible: !folderRow.isDraft && folderRow.modelData.hasChildren === true
+                                source: "qrc:/panel_icons/chevron-right.svg"
+                                color: appTheme.textMutedColor
+                                rotation: panel.isExpanded(folderRow.modelData) ? 90 : 0
+                            }
+                        }
+
+                        // Folder icon. A mount root has the folder-symlink icon; the folders of a
+                        // mount and the ordinary collections have the folder icon.
+                        IconImage {
+                            objectName: folderRow.isDraft
+                                        ? ""
+                                        : "collectionRowIcon_" + String(folderRow.modelData.elementId)
+                            Layout.leftMargin: appTheme.spaceXs
+                            Layout.rightMargin: appTheme.spaceSm
+                            Layout.preferredWidth: panel.treeIconSize
+                            Layout.preferredHeight: panel.treeIconSize
+                            Layout.alignment: Qt.AlignVCenter
+                            sourceSize: Qt.size(panel.treeIconSize, panel.treeIconSize)
+                            source: folderRow.mountRoot ? "qrc:/panel_icons/folder-symlink.svg"
+                                                        : "qrc:/panel_icons/folder.svg"
+                            // Muted as the editor side panel icons; the selected row brightens it.
+                            color: folderRow.selected ? appTheme.textColor
+                                                      : appTheme.textMutedColor
+                            opacity: folderRow.mountOffline ? 0.45 : 1.0
                         }
 
                         Label {
-                            // A mounted row keeps the name at its text width, so the link icon
-                            // follows the name; the row shrinks it when the space is short.
-                            Layout.fillWidth: !folderRow.mounted
-                            Layout.preferredWidth: folderRow.mounted ? implicitWidth : -1
+                            Layout.fillWidth: true
                             Layout.minimumWidth: 0
                             Layout.alignment: Qt.AlignVCenter
                             visible: !folderRow.editing
                             // Uniform fixed-height tree rows elide (DESIGN.md truncation policy).
                             elide: Text.ElideRight
-                            text: folderRow.isRoot ? qsTr("全部图片") : String(folderRow.modelData.name)
+                            text: folderRow.isRoot ? qsTr("All Photos") : String(folderRow.modelData.name)
                             opacity: folderRow.mountOffline ? 0.45 : 1.0
                             color: appTheme.textColor
                             font.family: appTheme.uiFontFamily
@@ -1024,48 +1241,61 @@ ColumnLayout {
                                                             : appTheme.fontWeightRegular
                         }
 
-                        // Mounted row: the link icon after the name (Mounted Folder Plan, 2.2).
-                        IconImage {
-                            objectName: folderRow.isDraft
-                                        ? ""
-                                        : "collectionMountIcon_" + String(folderRow.modelData.elementId)
-                            Layout.preferredWidth: 13
-                            Layout.preferredHeight: 13
-                            Layout.alignment: Qt.AlignVCenter
-                            visible: folderRow.mounted && !folderRow.editing
-                            sourceSize: Qt.size(13, 13)
-                            source: "qrc:/panel_icons/link.svg"
-                            color: appTheme.textMutedColor
-                            opacity: folderRow.mountOffline ? 0.45 : 1.0
-                        }
-
-                        Item {
-                            Layout.fillWidth: true
-                            visible: folderRow.mounted && !folderRow.editing
-                        }
-
-                        // Photo count of the collection; the root row counts the project. An
-                        // offline mount shows Offline in its place.
+                        // Photo count of the collection. An offline mount shows Offline in its
+                        // place.
                         Label {
                             readonly property real count: panel.imageCountOf(folderRow.modelData)
                             objectName: folderRow.isDraft
                                         ? ""
                                         : "collectionCount_" + String(folderRow.modelData.elementId)
+                            Layout.leftMargin: appTheme.spaceSm
                             Layout.alignment: Qt.AlignVCenter
-                            visible: !folderRow.editing && (count >= 0 || folderRow.mountOffline)
+                            visible: !folderRow.editing && !folderRow.moreShown
+                                     && (count >= 0 || folderRow.mountOffline)
                             text: folderRow.mountOffline
                                   ? qsTr("Offline")
                                   : count >= 0 ? count.toLocaleString(Qt.locale(), "f", 0) : ""
                             // Selected: brightens to the name ink on the neutral well.
                             color: folderRow.selected ? appTheme.textColor
                                                       : appTheme.textMutedColor
-                            font.family: appTheme.dataFontFamily
+                            font.family: folderRow.mountOffline ? appTheme.uiFontFamily
+                                                                : appTheme.headlineFontFamily
+                            font.features: { "tnum": 1 }
                             font.pixelSize: appTheme.fontSizeCaption
+                            font.weight: folderRow.mountOffline ? appTheme.fontWeightRegular
+                                                                : appTheme.fontWeightStrong
                         }
 
+                        // More button: opens the row menu (the tree pointer handler takes the
+                        // click; see treeMouse.onMoreButton).
+                        Rectangle {
+                            objectName: folderRow.isDraft
+                                        ? ""
+                                        : "collectionMoreButton_" + String(folderRow.modelData.elementId)
+                            Layout.leftMargin: appTheme.spaceSm
+                            Layout.preferredWidth: panel.treeMoreSize
+                            Layout.preferredHeight: panel.treeMoreSize
+                            Layout.alignment: Qt.AlignVCenter
+                            visible: folderRow.moreShown
+                            radius: appTheme.controlRadiusSmall
+                            color: folderRow.menuOpen || treeMouse.moreHoverIndex === folderRow.index
+                                   ? appTheme.controlHoveredFillColor
+                                   : "transparent"
+
+                            IconImage {
+                                anchors.centerIn: parent
+                                width: 16
+                                height: 16
+                                sourceSize: Qt.size(16, 16)
+                                source: "qrc:/panel_icons/dots.svg"
+                                color: folderRow.menuOpen || treeMouse.moreHoverIndex === folderRow.index
+                                       ? appTheme.textColor
+                                       : appTheme.textMutedColor
+                            }
+                        }
                         Loader {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: appTheme.collectionRowHeight - 4
+                            Layout.preferredHeight: appTheme.collectionsTreeRowHeight - 6
                             Layout.alignment: Qt.AlignVCenter
                             active: folderRow.editing && folderRow.shown
                             visible: active
@@ -1170,6 +1400,8 @@ ColumnLayout {
                     preventStealing: true
 
                     property int hoverIndex: -1
+                    // Index of the row whose more button is under the pointer, -1 when none.
+                    property int moreHoverIndex: -1
                     property int pressIndex: -1
                     property point pressPoint: Qt.point(0, 0)
                     property bool suppressClick: false
@@ -1180,12 +1412,25 @@ ColumnLayout {
 
                     function onDisclosure(index, mouseX) {
                         const row = panel.folderRows[index]
-                        const start = appTheme.spaceXs + panel.rowIndent(row)
+                        const start = panel.treeRowInset + panel.rowIndent(row)
                         return mouseX >= start - 2
-                               && mouseX <= start + appTheme.collectionIndentStep + 2
+                               && mouseX <= start + panel.treeChevronSize + 2
                     }
 
-                    onExited: hoverIndex = -1
+                    // The more button sits at the right end of a hovered row.
+                    function onMoreButton(index, mouseX) {
+                        const row = index >= 0 ? panel.folderRows[index] : null
+                        if (!row || row.isDraft) {
+                            return false
+                        }
+                        const right = panel.treeRowWidth - appTheme.spaceXs
+                        return mouseX >= right - panel.treeMoreSize && mouseX <= right
+                    }
+
+                    onExited: {
+                        hoverIndex = -1
+                        moreHoverIndex = -1
+                    }
                     onPressed: function(mouse) {
                         folderList.forceActiveFocus()
                         pressIndex = rowIndexAt(mouse.x, mouse.y)
@@ -1201,6 +1446,7 @@ ColumnLayout {
                     }
                     onPositionChanged: function(mouse) {
                         hoverIndex = rowIndexAt(mouse.x, mouse.y)
+                        moreHoverIndex = onMoreButton(hoverIndex, mouse.x) ? hoverIndex : -1
                         if (!(mouse.buttons & Qt.LeftButton) || pressIndex < 0) {
                             return
                         }
@@ -1246,11 +1492,18 @@ ColumnLayout {
                             panel.toggleExpanded(row)
                             return
                         }
+                        if (onMoreButton(index, mouse.x)) {
+                            if (panel.backendInteractive) {
+                                panel.openRowMenu(row)
+                            }
+                            return
+                        }
                         panel.selectRow(row)
                     }
                     onDoubleClicked: function(mouse) {
                         const index = rowIndexAt(mouse.x, mouse.y)
-                        if (index >= 0 && !onDisclosure(index, mouse.x)) {
+                        if (index >= 0 && !onDisclosure(index, mouse.x)
+                                && !onMoreButton(index, mouse.x)) {
                             panel.toggleExpanded(panel.folderRows[index])
                         }
                     }
@@ -1345,6 +1598,68 @@ ColumnLayout {
                     font.pixelSize: 13
                 }
             }
+
+            // Folded Collections section: the space below the header stays empty.
+            Item {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: !folderList.visible
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                Layout.topMargin: appTheme.spaceXs
+                Layout.leftMargin: -appTheme.spaceSm
+                Layout.rightMargin: -appTheme.spaceSm
+                color: appTheme.dividerColor
+            }
+
+            // Foot of the panel: one Import button. Its menu has Import Images, Import Folder,
+            // and Mount Folder (#1028; the actions of #1008).
+            Button {
+                id: importButton
+                objectName: "collectionsImportButton"
+                Layout.fillWidth: true
+                Layout.topMargin: appTheme.spaceSm
+                Layout.preferredHeight: 36
+                text: qsTr("Import")
+                icon.source: "qrc:/panel_icons/import.svg"
+                icon.width: 16
+                icon.height: 16
+                // Neutral filled action: the light list well with its ink (colours from the
+                // Main shell). The button stays enabled: its menu shows which actions apply.
+                readonly property color inkColor: theme.filledActionInk(enabled)
+                icon.color: inkColor
+                Material.foreground: inkColor
+                display: AbstractButton.TextBesideIcon
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightStrong
+                enabled: panel.backendInteractive
+                onClicked: panel.openImportMenu(importButton)
+
+                background: Rectangle {
+                    radius: appTheme.controlRadiusSmall
+                    color: theme.filledActionFill(importButton.enabled,
+                                                  importButton.hovered || importMenu.visible,
+                                                  importButton.down)
+                    Behavior on color {
+                        enabled: !appTheme.reduceMotion
+                        ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
+                    }
+                }
+
+                contentItem: IconLabel {
+                    spacing: importButton.spacing
+                    mirrored: importButton.mirrored
+                    display: importButton.display
+                    icon: importButton.icon
+                    text: importButton.text
+                    font: importButton.font
+                    color: importButton.inkColor
+                }
+            }
         }
 
         // Floating label of the dragged collection; follows the pointer.
@@ -1355,7 +1670,7 @@ ColumnLayout {
             x: panel.dragPoint.x + 12
             y: panel.dragPoint.y - height / 2
             width: Math.min(dragLabelText.implicitWidth + appTheme.spaceSm * 2, collectionsSurface.width * 0.8)
-            height: appTheme.collectionRowHeight
+            height: appTheme.collectionsTreeRowHeight
             radius: appTheme.controlRadiusSmall
             color: appTheme.bgBaseColor
             border.width: 1
@@ -1376,133 +1691,128 @@ ColumnLayout {
         }
     }
 
-    // Foot of the panel (issue #1008). Mount Folder: the directory becomes a collection
-    // below the selected one and follows the disk. "Import" puts photos into the selected
-    // collection once. A mounted selection takes neither (Mounted Folder Plan, D6 and D7).
+    // Import Images, Import Folder, and Mount Folder put photos into the selected collection, or
+    // mount a directory below it. A mounted selection takes none of them (Mounted Folder Plan,
+    // D6 and D7).
     readonly property bool footActionsEnabled: backendInteractive
                                                && structureEditable(rowForFolder(currentFolderId))
 
-    // One half of the import button. A half rounds its outer corners only; the two halves
-    // stand 1 px apart, so the panel colour draws the line between them.
-    component ImportSegment: Button {
-        id: segment
-        property var themeSource
-        property bool leading: true
-        Layout.fillWidth: true
-        Layout.preferredWidth: 1
-        Layout.preferredHeight: 42
-        // A half is about 120 px wide: the label needs most of it in every UI language.
-        leftPadding: 6
-        rightPadding: 6
-        spacing: 6
-        font.family: appTheme.uiFontFamily
-        font.pixelSize: appTheme.fontSizeTitle
-        icon.width: 14
-        icon.height: 14
-        icon.color: contentInk
-        display: AbstractButton.TextBesideIcon
-        readonly property color contentInk: enabled
-                                            ? themeSource.colText
-                                            : Qt.rgba(themeSource.colText.r, themeSource.colText.g,
-                                                      themeSource.colText.b, 0.4)
+    // Width and height of the more button of a tree row.
+    readonly property int treeMoreSize: 22
+    // elementId of the row whose menu is open, -1 when none.
+    property int menuRowElementId: -1
 
-        // One rounded rectangle that reaches one radius past the inner edge, clipped there:
-        // the inner corners are square and no two shapes overlap, so a translucent fill (the
-        // disabled state) stays even.
-        background: Item {
-            objectName: "importSegmentBackground"
-            clip: true
-            Rectangle {
-                objectName: "importSegmentFill"
-                readonly property real cornerRadius: 8
-                x: segment.leading ? 0 : -cornerRadius
-                width: parent.width + cornerRadius
-                height: parent.height
-                radius: cornerRadius
-                color: segment.themeSource.secondaryButtonFill(segment.enabled, segment.hovered,
-                                                               segment.pressed)
+    // Navigation row above the tree (Search, Background Tasks, All Photos): the height and the
+    // states of a tree row, with an icon in the chevron column.
+    component NavRow: Rectangle {
+        id: navRow
+        property url iconSource
+        property string label
+        property string trailingText
+        property bool selected: false
+        property bool dropTarget: false
+        signal activated()
+        signal contextRequested()
+
+        Layout.fillWidth: true
+        Layout.preferredHeight: appTheme.collectionsTreeRowHeight
+        radius: appTheme.controlRadiusSmall
+        color: selected ? appTheme.controlHoveredFillColor
+                        : (navMouse.containsMouse || dropTarget) ? appTheme.hoverColor
+                                                                 : "transparent"
+        border.width: dropTarget ? 1 : 0
+        border.color: appTheme.textMutedColor
+        Accessible.role: Accessible.Button
+        Accessible.name: label
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: appTheme.spaceXs
+            anchors.rightMargin: appTheme.spaceSm
+            spacing: appTheme.spaceSm
+
+            IconImage {
+                Layout.preferredWidth: 16
+                Layout.preferredHeight: 16
+                Layout.alignment: Qt.AlignVCenter
+                sourceSize: Qt.size(16, 16)
+                source: navRow.iconSource
+                // Muted as the editor side panel icons; selection and hover brighten it.
+                color: navRow.selected || navMouse.containsMouse ? appTheme.textColor
+                                                                 : appTheme.textMutedColor
+            }
+
+            Label {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                Layout.alignment: Qt.AlignVCenter
+                elide: Text.ElideRight
+                text: navRow.label
+                color: appTheme.textColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: navRow.selected ? appTheme.fontWeightStrong
+                                             : appTheme.fontWeightRegular
+            }
+
+            Label {
+                Layout.alignment: Qt.AlignVCenter
+                visible: navRow.trailingText.length > 0
+                text: navRow.trailingText
+                color: navRow.selected ? appTheme.textColor : appTheme.textMutedColor
+                font.family: appTheme.headlineFontFamily
+                font.features: { "tnum": 1 }
+                font.pixelSize: appTheme.fontSizeCaption
+                font.weight: appTheme.fontWeightStrong
             }
         }
 
-        contentItem: IconLabel {
-            spacing: segment.spacing
-            mirrored: segment.mirrored
-            display: segment.display
-            icon: segment.icon
-            text: segment.text
-            font: segment.font
-            color: segment.contentInk
-        }
-    }
-
-    Button {
-        id: mountFolderBtn
-        objectName: "collectionsMountFolderButton"
-        Layout.fillWidth: true
-        Layout.preferredHeight: 46
-        text: qsTr("Mount Folder")
-        enabled: panel.footActionsEnabled
-        icon.source: "qrc:/panel_icons/folder-symlink.svg"
-        icon.width: 16
-        icon.height: 16
-        // Neutral filled action: the light list well with its ink (colours from the Main shell).
-        readonly property color inkColor: theme.filledActionInk(enabled)
-        icon.color: inkColor
-        display: AbstractButton.TextBesideIcon
-        onClicked: panel.requestMountFolder(panel.rowForFolder(panel.currentFolderId))
-
-        background: Rectangle {
-            radius: 8
-            color: theme.filledActionFill(mountFolderBtn.enabled,
-                                          mountFolderBtn.hovered,
-                                          mountFolderBtn.down)
-            Behavior on color {
-                enabled: !appTheme.reduceMotion
-                ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
+        MouseArea {
+            id: navMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            cursorShape: Qt.PointingHandCursor
+            onClicked: function(mouse) {
+                if (mouse.button === Qt.RightButton) {
+                    navRow.contextRequested()
+                } else {
+                    navRow.activated()
+                }
             }
-        }
-
-        contentItem: IconLabel {
-            spacing: mountFolderBtn.spacing
-            mirrored: mountFolderBtn.mirrored
-            display: mountFolderBtn.display
-            icon: mountFolderBtn.icon
-            text: mountFolderBtn.text
-            font: mountFolderBtn.font
-            color: mountFolderBtn.inkColor
-        }
-    }
-
-    RowLayout {
-        objectName: "collectionsImportButton"
-        Layout.fillWidth: true
-        Layout.preferredHeight: 42
-        spacing: 1
-
-        ImportSegment {
-            objectName: "collectionsImportImagesButton"
-            themeSource: panel.theme
-            leading: true
-            text: qsTr("Import Images")
-            enabled: panel.footActionsEnabled
-            icon.source: "qrc:/panel_icons/import.svg"
-            onClicked: panel.importRequested()
-        }
-
-        ImportSegment {
-            objectName: "collectionsImportFolderButton"
-            themeSource: panel.theme
-            leading: false
-            text: qsTr("Import Folder")
-            enabled: panel.footActionsEnabled
-            icon.source: "qrc:/panel_icons/folder-open.svg"
-            onClicked: panel.importFromFolderRequested()
         }
     }
 
     AppContextMenu {
+        id: importMenu
+        objectName: "collectionsImportMenu"
+        property real minimumWidth: 0
+        width: Math.max(implicitWidth, minimumWidth)
+
+        AppMenuItem {
+            objectName: "collectionsImportImagesItem"
+            text: qsTr("Import Images...")
+            enabled: panel.footActionsEnabled
+            onTriggered: panel.importRequested()
+        }
+        AppMenuItem {
+            objectName: "collectionsImportFolderItem"
+            text: qsTr("Import Folder...")
+            enabled: panel.footActionsEnabled
+            onTriggered: panel.importFromFolderRequested()
+        }
+        AppMenuSeparator {}
+        AppMenuItem {
+            objectName: "collectionsMountFolderItem"
+            text: qsTr("Mount Folder...")
+            enabled: panel.footActionsEnabled
+            onTriggered: panel.requestMountFolder(panel.rowForFolder(panel.currentFolderId))
+        }
+    }
+    AppContextMenu {
         id: rowMenu
         objectName: "collectionRowMenu"
+        onClosed: panel.menuRowElementId = -1
         property var targetRow: null
         readonly property bool targetIsRoot: targetRow !== null && Number(targetRow.folderId) === 0
 
@@ -1535,6 +1845,7 @@ ColumnLayout {
     AppContextMenu {
         id: mountRootMenu
         objectName: "collectionMountRootMenu"
+        onClosed: panel.menuRowElementId = -1
         property var targetRow: null
         readonly property bool offline: targetRow !== null && targetRow.mountOffline === true
 
@@ -1577,6 +1888,7 @@ ColumnLayout {
     AppContextMenu {
         id: mountedFolderMenu
         objectName: "collectionMountedFolderMenu"
+        onClosed: panel.menuRowElementId = -1
         property var targetRow: null
 
         AppMenuItem {

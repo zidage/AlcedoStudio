@@ -2206,7 +2206,7 @@ Item {
 
         // A child of the overlay: the bar takes its own presses and drags, and a wheel over it
         // reaches the overlay, which scrolls the view.
-        ScrollBar {
+        AlcedoScrollBar {
             id: gridScrollBar
             objectName: "thumbnailGridView_scrollBar"
             z: 1

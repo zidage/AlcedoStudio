@@ -13,29 +13,29 @@ The parameters are in the table at the end.
 
 ## Mount a folder
 
-1. In the Collections panel, select the library root or a collection, and click **Mount Folder**
-   at the foot of the panel. You can also right-click the row and choose
+1. In the Collections panel, select **All Photos** or a collection. Click **Import** at the foot
+   of the panel, and choose **Mount Folder...**. You can also right-click the row and choose
    **Mount Folder Here...**.
 2. Choose the directory in the system folder dialog.
 3. A collection with the name of the directory appears below the row. Its first scan runs as a
    background task, and the photos appear while the scan imports them.
 
-**Mount Folder** and the import button below it both keep the files where they are. The
-difference is who owns the structure:
+**Mount Folder...** and the two import items above it in the **Import** menu all keep the
+files where they are. The difference is who owns the structure:
 
-- **Mount Folder** mounts the directory: its subdirectories are collections, and the collection
+- **Mount Folder...** mounts the directory: its subdirectories are collections, and the collection
   follows the disk.
-- **Import Images** and **Import Folder** put the photos into the selected collection once. The
+- **Import Images...** and **Import Folder...** put the photos into the selected collection once. The
   photos are then yours to arrange, and later changes on the disk do not reach the library.
 
-While a mounted row is selected, the three buttons are disabled: a mount cannot hold another
+While a mounted row is selected, the three items are disabled: a mount cannot hold another
 mount or imported photos.
 
 Each mount has its own directory tree, separate from the trees of the other mounts. The parent
 row of a new mount is an ordinary collection or the library root.
 
-Each mounted row shows a link icon after its name. The count of a mounted row counts its present
-and missing photos, in the folder and in all folders below it, as for every collection. The
+The root row of a mount shows a folder icon with an arrow; the folders below it show the folder
+icon. The count of a mounted row counts its present and missing photos, in the folder and in all folders below it, as for every collection. The
 Library view of a folder shows its child folders as tiles above its photos; a click on a tile
 shows that folder.
 
