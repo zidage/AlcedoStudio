@@ -190,7 +190,8 @@ auto AdjustmentStackUrl() -> QUrl {
 
 // The crop_rotate projection EditorPanelPresentation publishes.
 auto MakeSnapshot(const QString& preset, double x, double y, double width, double height,
-                  double angle) -> QVariantMap {
+                  double angle, double aspect_width = 16.0, double aspect_height = 9.0)
+    -> QVariantMap {
   QVariantMap cropRect;
   cropRect.insert(QStringLiteral("x"), x);
   cropRect.insert(QStringLiteral("y"), y);
@@ -198,8 +199,8 @@ auto MakeSnapshot(const QString& preset, double x, double y, double width, doubl
   cropRect.insert(QStringLiteral("h"), height);
 
   QVariantMap aspect;
-  aspect.insert(QStringLiteral("width"), 16.0);
-  aspect.insert(QStringLiteral("height"), 9.0);
+  aspect.insert(QStringLiteral("width"), aspect_width);
+  aspect.insert(QStringLiteral("height"), aspect_height);
 
   QVariantMap crop;
   crop.insert(QStringLiteral("crop_rect"), cropRect);
@@ -300,6 +301,17 @@ auto PresetOf(const GeometrySession::Call& call) -> QString {
   return QString::fromStdString(GeometryOf(call).aspect_preset.value_or(std::string()));
 }
 
+/// Return the model index for a preset identifier, or -1 when it is absent.
+auto FindPresetIndex(const QObject& model, const QString& id) -> int {
+  const auto entries = model.property("entries").toList();
+  for (int index = 0; index < entries.size(); ++index) {
+    if (entries.at(index).toMap().value(QStringLiteral("value")).toString() == id) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 }  // namespace
 
 TEST(EditorGeometryPanelQmlTest, GeometryPanelExposesTypedModelsAndEnablesOverlay) {
@@ -353,6 +365,32 @@ TEST(EditorGeometryPanelQmlTest, SnapshotProjectsCropAndSourceSizeComesFromThePr
   EXPECT_EQ(geometryPanel->property("sourceImageWidth").toInt(), 3000);
   EXPECT_EQ(geometryPanel->property("sourceImageHeight").toInt(), 4500);
   // Showing a snapshot is not an edit.
+  EXPECT_TRUE(session.calls.empty());
+}
+
+TEST(EditorGeometryPanelQmlTest, SavedPresetSelectionSurvivesLabelAndOrderChanges) {
+  const auto              preset_id = QStringLiteral("ratio_1_5_1_native_vistavision");
+  GeometrySession         session(MakeSnapshot(preset_id, 0.1, 0.15, 0.6, 0.6, 0.0, 1.5, 1.0), 4);
+  FakeGeometryInteraction interaction;
+  AdjustmentStackHarness  harness(&session, &interaction);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* aspect  = harness.findObject<QObject>(QStringLiteral("geometryAspectModel"));
+  auto* wrapper = harness.findObject<QObject>(QStringLiteral("geometryAspectCombo"));
+  ASSERT_NE(aspect, nullptr);
+  ASSERT_NE(wrapper, nullptr);
+  const auto* combo = wrapper->findChild<QObject*>(QStringLiteral("adjustmentCombo"));
+  ASSERT_NE(combo, nullptr);
+  EXPECT_EQ(aspect->property("currentValue").toString(), preset_id);
+  EXPECT_EQ(combo->property("currentIndex").toInt(), 3);
+  EXPECT_EQ(combo->property("currentText").toString(), QStringLiteral("3:2"));
+  const QRectF frame = interaction.cropRectNormalized();
+  EXPECT_NEAR(frame.x(), 0.1, 1e-6);
+  EXPECT_NEAR(frame.y(), 0.15, 1e-6);
+  EXPECT_NEAR(frame.width(), 0.6, 1e-6);
+  EXPECT_NEAR(frame.height(), 0.6, 1e-6);
+  EXPECT_TRUE(interaction.aspectLocked());
+  EXPECT_FLOAT_EQ(interaction.aspectRatio(), 1.5f);
   EXPECT_TRUE(session.calls.empty());
 }
 
@@ -446,7 +484,9 @@ TEST(EditorGeometryPanelQmlTest, SelectingAspectPresetSubmitsOneSettledCropOfTha
 
   auto* aspect = harness.findObject<QObject>(QStringLiteral("geometryAspectModel"));
   ASSERT_NE(aspect, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(aspect, "selectIndex", Q_ARG(int, 4)));  // 16:9
+  const int index = FindPresetIndex(*aspect, QStringLiteral("ratio_16_9"));
+  ASSERT_GE(index, 0);
+  ASSERT_TRUE(QMetaObject::invokeMethod(aspect, "selectIndex", Q_ARG(int, index)));
 
   ASSERT_EQ(session.calls.size(), 1u);
   EXPECT_TRUE(session.calls.back().settled);
@@ -466,11 +506,15 @@ TEST(EditorGeometryPanelQmlTest, SelectingLandscapePresetOrientsCropForPortraitI
 
   auto* aspect = harness.findObject<QObject>(QStringLiteral("geometryAspectModel"));
   ASSERT_NE(aspect, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(aspect, "selectIndex", Q_ARG(int, 4)));
+  const int index = FindPresetIndex(*aspect, QStringLiteral("ratio_1_5_1_native_vistavision"));
+  ASSERT_GE(index, 0);
+  ASSERT_TRUE(QMetaObject::invokeMethod(aspect, "selectIndex", Q_ARG(int, index)));
 
   ASSERT_EQ(session.calls.size(), 1u);
+  EXPECT_TRUE(session.calls.back().settled);
+  EXPECT_EQ(PresetOf(session.calls.back()), QStringLiteral("ratio_1_5_1_native_vistavision"));
   const QRectF rect = RectOf(session.calls.back());
-  EXPECT_NEAR((rect.width() * 3000.0) / (rect.height() * 4000.0), 9.0 / 16.0, 1e-4);
+  EXPECT_NEAR((rect.width() * 3000.0) / (rect.height() * 4000.0), 2.0 / 3.0, 1e-4);
   EXPECT_NEAR(rect.center().x(), 0.5, 1e-4);
 }
 

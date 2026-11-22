@@ -40,6 +40,7 @@
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/tone_curve_presets.hpp"
+#include "ui/alcedo_main/editor_support/modules/geometry.hpp"
 #include "ui/alcedo_main/editor_support/modules/hls_math.hpp"
 
 namespace alcedo {
@@ -379,9 +380,13 @@ TEST(EditorParameterCatalogTest, CatalogJsonListsEveryEntryWithUiRange) {
   EXPECT_DOUBLE_EQ(properties.at(2).at("ui_step").get<double>(), 0.001);
   EXPECT_EQ(properties.at(2).at("ui_decimals"), 3);
   EXPECT_EQ(properties.at(5).at("name"), "aspect_preset");
-  EXPECT_EQ(properties.at(5).at("options").size(), 12U);
-  EXPECT_EQ(properties.at(5).at("options").at(4),
-            (nlohmann::json{{"value", "ratio_16_9"}, {"label", "16:9"}}));
+  const auto& options = properties.at(5).at("options");
+  const auto& presets = ui::geometry::CropAspectPresetOptions();
+  ASSERT_EQ(options.size(), presets.size());
+  for (std::size_t i = 0; i < presets.size(); ++i) {
+    EXPECT_EQ(options.at(i).at("value"), presets.at(i).id_);
+    EXPECT_EQ(options.at(i).at("label"), presets.at(i).label_);
+  }
 }
 
 TEST(EditorParameterCatalogTest, ObjectFieldsAreKnownFieldKeysWithPanels) {
@@ -639,6 +644,25 @@ TEST(EditorParameterCatalogTest, PartialCropMergesWithCurrentValue) {
                    current, &error)
                    .has_value());
   EXPECT_EQ(error, "crop_rotate.aspect_width and aspect_height need aspect_preset custom");
+}
+
+TEST(EditorParameterCatalogTest, CropPresetWriteRequiresIdentifierInsteadOfDisplayLabel) {
+  const auto                  current = CropProjection(0.0, 0.0, 1.0, 1.0, 0.0, "free", 1.0, 1.0);
+  std::string                 error;
+  const EditorParameterSource source{6000, 4500};
+  const auto                  renamed_preset = EditorParameterCatalog::ToModelJson(
+      "crop_rotate", {{"aspect_preset", "ratio_1_5_1_native_vistavision"}}, current, source,
+      &error);
+  ASSERT_TRUE(renamed_preset.has_value()) << error;
+  const auto& crop = renamed_preset->at("crop_rotate");
+  EXPECT_EQ(crop.at("aspect_ratio_preset"), "ratio_1_5_1_native_vistavision");
+  EXPECT_EQ(crop.at("aspect_ratio"), (nlohmann::json{{"width", 1.5}, {"height", 1.0}}));
+  EXPECT_NEAR(FramePixelAspect(*renamed_preset, 6000, 4500), 1.5, kRoundTripTolerance);
+
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson("crop_rotate", {{"aspect_preset", "3:2"}},
+                                                   current, source, &error)
+                   .has_value());
+  EXPECT_NE(error.find("crop_rotate.aspect_preset must be one of:"), std::string::npos);
 }
 
 TEST(EditorParameterCatalogTest, CompleteCropValueConstrainsForTheChangedValueOnly) {

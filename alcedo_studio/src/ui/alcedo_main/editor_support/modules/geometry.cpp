@@ -15,19 +15,18 @@ constexpr float                                  kAspectEpsilon           = 1e-4
 constexpr std::array<CropAspectPresetOption, 12> kCropAspectPresetOptions = {{
     {CropAspectPreset::Free, "free", "Free", 0.0f, 0.0f},
     {CropAspectPreset::Custom, "custom", "Custom", 0.0f, 0.0f},
-    {CropAspectPreset::Ratio235_1_35mm, "ratio_2_35_1_35mm", "2.35:1 (35mm)", 2.35f, 1.0f},
     {CropAspectPreset::Ratio1_1, "ratio_1_1", "1:1", 1.0f, 1.0f},
-    {CropAspectPreset::Ratio16_9, "ratio_16_9", "16:9", 16.0f, 9.0f},
-    {CropAspectPreset::Ratio1_9_IMAX, "ratio_1_9_1_imax", "1.9:1 (IMAX)", 1.9f, 1.0f},
-    {CropAspectPreset::Ratio1_85_DCI, "ratio_1_85_1_dci", "1.85:1 (DCI)", 1.85f, 1.0f},
-    {CropAspectPreset::Ratio2_2_70mm, "ratio_2_2_1_70mm", "2.2:1 (70mm)", 2.2f, 1.0f},
-    {CropAspectPreset::Ratio1_43_70mm_IMAX, "ratio_1_43_1_70mm_imax", "1.43:1 (70mm IMAX)", 1.43f,
+    {CropAspectPreset::Ratio1_5_NativeOrVistaVision, "ratio_1_5_1_native_vistavision", "3:2", 1.5f,
      1.0f},
-    {CropAspectPreset::Ratio4_3_35mm, "ratio_4_3_35mm", "4:3 (35mm)", 4.0f, 3.0f},
-    {CropAspectPreset::Ratio1_5_NativeOrVistaVision, "ratio_1_5_1_native_vistavision",
-     "1.5:1 (native or VistaVision)", 1.5f, 1.0f},
+    {CropAspectPreset::Ratio4_3_35mm, "ratio_4_3_35mm", "4:3", 4.0f, 3.0f},
+    {CropAspectPreset::Ratio16_9, "ratio_16_9", "16:9", 16.0f, 9.0f},
+    {CropAspectPreset::Ratio1_43_70mm_IMAX, "ratio_1_43_1_70mm_imax", "1.43:1 (IMAX)", 1.43f, 1.0f},
+    {CropAspectPreset::Ratio1_85_DCI, "ratio_1_85_1_dci", "1.85:1 (Flat)", 1.85f, 1.0f},
+    {CropAspectPreset::Ratio1_9_IMAX, "ratio_1_9_1_imax", "1.90:1 (IMAX)", 1.9f, 1.0f},
+    {CropAspectPreset::Ratio2_2_70mm, "ratio_2_2_1_70mm", "2.20:1 (70 mm)", 2.2f, 1.0f},
+    {CropAspectPreset::Ratio235_1_35mm, "ratio_2_35_1_35mm", "2.35:1 (CinemaScope)", 2.35f, 1.0f},
     {CropAspectPreset::Ratio2_76_PanavisionUltra, "ratio_2_76_1_panavision_ultra",
-     "2.76:1 (Panavision Ultra)", 2.76f, 1.0f},
+     "2.76:1 (Ultra Panavision 70)", 2.76f, 1.0f},
 }};
 
 auto                                             ClampImageAspect(float image_aspect) -> float {

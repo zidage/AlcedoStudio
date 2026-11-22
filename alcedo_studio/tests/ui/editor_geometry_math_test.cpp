@@ -8,21 +8,48 @@
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <iterator>
 
 #include "ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
 
 namespace alcedo::ui::test {
 
-TEST(EditorGeometryMathTest, AspectPresetCatalogMatchesPipelineOptions) {
+TEST(EditorGeometryMathTest, AspectMenuUsesReviewedLabelsAndOrderForExistingPresets) {
+  constexpr struct {
+    const char* id;
+    const char* label;
+    float       width;
+    float       height;
+  } expected[] = {
+      {"free", "Free", 0.0f, 0.0f},
+      {"custom", "Custom", 0.0f, 0.0f},
+      {"ratio_1_1", "1:1", 1.0f, 1.0f},
+      {"ratio_1_5_1_native_vistavision", "3:2", 1.5f, 1.0f},
+      {"ratio_4_3_35mm", "4:3", 4.0f, 3.0f},
+      {"ratio_16_9", "16:9", 16.0f, 9.0f},
+      {"ratio_1_43_1_70mm_imax", "1.43:1 (IMAX)", 1.43f, 1.0f},
+      {"ratio_1_85_1_dci", "1.85:1 (Flat)", 1.85f, 1.0f},
+      {"ratio_1_9_1_imax", "1.90:1 (IMAX)", 1.9f, 1.0f},
+      {"ratio_2_2_1_70mm", "2.20:1 (70 mm)", 2.2f, 1.0f},
+      {"ratio_2_35_1_35mm", "2.35:1 (CinemaScope)", 2.35f, 1.0f},
+      {"ratio_2_76_1_panavision_ultra", "2.76:1 (Ultra Panavision 70)", 2.76f, 1.0f},
+  };
   EditorGeometryMath math;
-
   const auto         presets = math.aspectPresets();
-  ASSERT_EQ(presets.size(), 12);
-  EXPECT_EQ(presets.front().toMap().value(QStringLiteral("value")).toString(),
-            QStringLiteral("free"));
-  EXPECT_EQ(presets.at(4).toMap().value(QStringLiteral("value")).toString(),
-            QStringLiteral("ratio_16_9"));
+  ASSERT_EQ(presets.size(), std::ssize(expected));
+  qsizetype index = 0;
+  for (const auto& preset : expected) {
+    SCOPED_TRACE(preset.id);
+    const auto entry = presets.at(index++).toMap();
+    EXPECT_EQ(entry.value(QStringLiteral("value")).toString(), QString::fromUtf8(preset.id));
+    EXPECT_EQ(entry.value(QStringLiteral("label")).toString(), QString::fromUtf8(preset.label));
+    EXPECT_EQ(entry.value(QStringLiteral("width")).toDouble(), preset.width);
+    EXPECT_EQ(entry.value(QStringLiteral("height")).toDouble(), preset.height);
+  }
+}
 
+TEST(EditorGeometryMathTest, PresetLookupResolvesRatioAndLockByIdentifier) {
+  EditorGeometryMath math;
   const auto ratio = math.presetRatio(QStringLiteral("ratio_16_9"));
   ASSERT_EQ(ratio.size(), 2);
   EXPECT_DOUBLE_EQ(ratio.at(0).toDouble(), 16.0);
