@@ -53,7 +53,7 @@ Develop stage reads the stored result in place of its own linearization and demo
 | U1 | `target_time`: the largest time for one 45 megapixel photo on the RTX 3080 Laptop GPU. It has no value now. The user sets it after the measured time of the full model (the baseline of DN3) exists | The time of DN3 | User |
 | U2 | The pixel format and the compression of the stored result file | DN1, stored format table | User |
 | U3 | The tile size and the tile overlap. Closed 2026-11-21: overlap 96 packed px, tile size the largest of 512 to 1536 that fits (DN1 completion record) | DN1, border difference table | Implementer, recorded in DN3 |
-| U4 | The highlight handling of the stored result | DN1, clipped area table | Implementer, recorded in DN5 |
+| U4 | The highlight handling of the stored result. The user decided on 2026-11-22 that no clip mask is made: high-noise photos have a low dynamic range, and many scenes that need the highlight recovery are not at a high ISO | DN1, clipped area table | Implementer, recorded in DN5 |
 
 ### 1.4 Options that must not return
 
@@ -523,7 +523,8 @@ when the user selects the format (U2), as the step states.
 - U4 (implementer, DN5): the stored result alone does not let the highlight recovery find the
   clipped areas. DN5 gives the highlight recovery the clipped photosites of the mosaic (a clip
   mask in the stored result file, at most 3 KB, or the mosaic read by the loader). The detailed
-  section of DN5 states which.
+  section of DN5 states which. Changed on 2026-11-22: the user decided that no clip mask is
+  made (U4 row of section 1.3).
 - U2 (user): open. The table and the sheets are with the user (lab plan, "Items that need the
   user").
 
