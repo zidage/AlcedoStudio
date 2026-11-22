@@ -14,6 +14,8 @@ Item {
 
     property var model: null
     property bool showResetButton: true
+    // Let a short catalog show all rows when the window has room.
+    property bool fitPopupToWindow: false
     // Editor panels stay dense (28). Settings and other spacious surfaces can
     // raise this without changing the field chrome.
     property int controlHeight: 28
@@ -129,7 +131,11 @@ Item {
             popup: Popup {
                 y: combo.height + 2
                 width: combo.width
-                implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
+                implicitHeight: root.fitPopupToWindow
+                                ? implicitContentHeight + topPadding + bottomPadding
+                                : Math.min(implicitContentHeight + topPadding + bottomPadding, 240)
+                topMargin: root.fitPopupToWindow ? appTheme.spaceSm : -1
+                bottomMargin: topMargin
                 padding: 1
 
                 background: Rectangle {
