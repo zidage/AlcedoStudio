@@ -65,11 +65,14 @@ struct VulkanDeviceCapabilities {
   std::vector<std::string>                         extensions;
   VulkanDeviceFeatures                             features;
   std::vector<VulkanQueueFamily>                   queue_families;
-  /// The formats of `PipelineImageFormats()`, in that order.
+  /// The formats of `PipelineImageFormats()`, in that order, then the formats of
+  /// `OptionalImageFormats()`.
   std::vector<VulkanFormatSupport>                 formats;
   VkPhysicalDeviceLimits                           limits{};
   /// Size of the largest `DEVICE_LOCAL` memory heap.
   uint64_t                                         device_local_heap_bytes = 0;
+  /// Vulkan 1.3 `maxBufferSize`: the largest `VkBuffer` that the device can create.
+  uint64_t                                         max_buffer_bytes        = 0;
 
   /// True when @ref extensions has @p extension_name.
   [[nodiscard]] auto HasExtension(std::string_view extension_name) const -> bool;
@@ -80,7 +83,12 @@ struct VulkanDeviceCapabilities {
 /// The three image formats of the pipeline (plan section 4.2): RGBA32F, R32F, and R8.
 [[nodiscard]] auto PipelineImageFormats() -> std::span<const VkFormat>;
 
-/// The name of a format of `PipelineImageFormats()`, for example `VK_FORMAT_R32_SFLOAT`.
+/// The image formats of the other `TextureFormat` values: RGBA8 and R16 unsigned integer. A device
+/// without them is usable; a texture of such a format fails at its creation with the format name.
+[[nodiscard]] auto OptionalImageFormats() -> std::span<const VkFormat>;
+
+/// The name of a format of `PipelineImageFormats()` or `OptionalImageFormats()`, for example
+/// `VK_FORMAT_R32_SFLOAT`.
 [[nodiscard]] auto PipelineImageFormatName(VkFormat format) -> std::string_view;
 
 /// `major.minor.patch` of a `VK_MAKE_API_VERSION` value.

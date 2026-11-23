@@ -17,6 +17,9 @@ std::atomic<uint64_t> g_upload_bytes{0};
 std::atomic<uint64_t> g_download_bytes{0};
 std::atomic<uint64_t> g_submits{0};
 std::atomic<uint64_t> g_waits{0};
+std::atomic<uint64_t> g_buffer_creations{0};
+std::atomic<uint64_t> g_image_creations{0};
+std::atomic<uint64_t> g_destroyed_resources{0};
 
 void                  Add(std::atomic<uint64_t>& counter, uint64_t value) noexcept {
   counter.fetch_add(value, std::memory_order_relaxed);
@@ -38,6 +41,9 @@ auto ReadVulkanApiCounters() noexcept -> VulkanApiCounters {
   counters.download_bytes      = Load(g_download_bytes);
   counters.submits             = Load(g_submits);
   counters.waits               = Load(g_waits);
+  counters.buffer_creations    = Load(g_buffer_creations);
+  counters.image_creations     = Load(g_image_creations);
+  counters.destroyed_resources = Load(g_destroyed_resources);
   return counters;
 }
 
@@ -52,6 +58,9 @@ auto VulkanApiCounterDelta(const VulkanApiCounters& before, const VulkanApiCount
   delta.download_bytes      = after.download_bytes - before.download_bytes;
   delta.submits             = after.submits - before.submits;
   delta.waits               = after.waits - before.waits;
+  delta.buffer_creations    = after.buffer_creations - before.buffer_creations;
+  delta.image_creations     = after.image_creations - before.image_creations;
+  delta.destroyed_resources = after.destroyed_resources - before.destroyed_resources;
   return delta;
 }
 
@@ -63,5 +72,8 @@ void NoteVulkanUpload(uint64_t bytes) noexcept { Add(g_upload_bytes, bytes); }
 void NoteVulkanDownload(uint64_t bytes) noexcept { Add(g_download_bytes, bytes); }
 void NoteVulkanSubmit() noexcept { Add(g_submits, 1); }
 void NoteVulkanWait() noexcept { Add(g_waits, 1); }
+void NoteVulkanBufferCreation() noexcept { Add(g_buffer_creations, 1); }
+void NoteVulkanImageCreation() noexcept { Add(g_image_creations, 1); }
+void NoteVulkanResourceDestruction() noexcept { Add(g_destroyed_resources, 1); }
 
 }  // namespace alcedo::vulkan

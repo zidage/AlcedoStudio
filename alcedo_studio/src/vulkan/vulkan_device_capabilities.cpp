@@ -18,6 +18,11 @@ constexpr std::array<VkFormat, 3> kPipelineImageFormats = {
     VK_FORMAT_R8_UNORM,
 };
 
+constexpr std::array<VkFormat, 2> kOptionalImageFormats = {
+    VK_FORMAT_R8G8B8A8_UNORM,
+    VK_FORMAT_R16_UINT,
+};
+
 auto ReadExtensionNames(VkPhysicalDevice physical_device) -> std::vector<std::string> {
   uint32_t count = 0;
   vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &count, nullptr);
@@ -99,9 +104,12 @@ auto ReadQueueFamilies(VkPhysicalDevice physical_device) -> std::vector<VulkanQu
 
 auto ReadFormatSupport(VkPhysicalDevice physical_device, uint32_t api_version)
     -> std::vector<VulkanFormatSupport> {
+  std::vector<VkFormat> read_formats(kPipelineImageFormats.begin(), kPipelineImageFormats.end());
+  read_formats.insert(read_formats.end(), kOptionalImageFormats.begin(),
+                      kOptionalImageFormats.end());
   std::vector<VulkanFormatSupport> formats;
-  formats.reserve(kPipelineImageFormats.size());
-  for (const VkFormat format : kPipelineImageFormats) {
+  formats.reserve(read_formats.size());
+  for (const VkFormat format : read_formats) {
     VkFormatProperties3 properties3{};
     properties3.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3;
     VkFormatProperties2 properties2{};
@@ -155,6 +163,8 @@ auto VulkanDeviceCapabilities::FormatFeatures(VkFormat format) const -> VkFormat
 
 auto PipelineImageFormats() -> std::span<const VkFormat> { return kPipelineImageFormats; }
 
+auto OptionalImageFormats() -> std::span<const VkFormat> { return kOptionalImageFormats; }
+
 auto PipelineImageFormatName(VkFormat format) -> std::string_view {
   switch (format) {
     case VK_FORMAT_R32G32B32A32_SFLOAT:
@@ -163,6 +173,10 @@ auto PipelineImageFormatName(VkFormat format) -> std::string_view {
       return "VK_FORMAT_R32_SFLOAT";
     case VK_FORMAT_R8_UNORM:
       return "VK_FORMAT_R8_UNORM";
+    case VK_FORMAT_R8G8B8A8_UNORM:
+      return "VK_FORMAT_R8G8B8A8_UNORM";
+    case VK_FORMAT_R16_UINT:
+      return "VK_FORMAT_R16_UINT";
     default:
       return "VkFormat (not a pipeline image format)";
   }
@@ -181,7 +195,17 @@ auto ReadVulkanDeviceCapabilities(VkPhysicalDevice physical_device) -> VulkanDev
   properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
   properties.pNext = &id_properties;
   vkGetPhysicalDeviceProperties2(physical_device, &properties);
-  const auto&              core = properties.properties;
+  const auto&                        core = properties.properties;
+  // maxBufferSize is a Vulkan 1.3 property. A device below 1.3 fails the requirement check, so
+  // its value stays 0 and is not used.
+  VkPhysicalDeviceVulkan13Properties properties13{};
+  properties13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES;
+  if (core.apiVersion >= VK_API_VERSION_1_3) {
+    VkPhysicalDeviceProperties2 properties_13_chain{};
+    properties_13_chain.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties_13_chain.pNext = &properties13;
+    vkGetPhysicalDeviceProperties2(physical_device, &properties_13_chain);
+  }
 
   VulkanDeviceCapabilities capabilities;
   capabilities.name           = core.deviceName;
@@ -206,6 +230,7 @@ auto ReadVulkanDeviceCapabilities(VkPhysicalDevice physical_device) -> VulkanDev
   capabilities.formats                 = ReadFormatSupport(physical_device, core.apiVersion);
   capabilities.limits                  = core.limits;
   capabilities.device_local_heap_bytes = ReadLargestDeviceLocalHeap(physical_device);
+  capabilities.max_buffer_bytes        = properties13.maxBufferSize;
   return capabilities;
 }
 

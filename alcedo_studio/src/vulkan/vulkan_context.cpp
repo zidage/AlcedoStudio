@@ -351,6 +351,13 @@ void VulkanContext::CreateKernelObjects(const VulkanInitializationOptions& optio
                                                                     options.pipeline_cache_file);
 }
 
+void VulkanContext::SubmitToPipelineQueue(const VkSubmitInfo2& submit, VkFence fence) {
+  std::lock_guard lock(pipeline_queue_mutex_);
+  ThrowIfVulkanError(
+      pipeline_device_functions_.vkQueueSubmit2(pipeline_queue_.queue, 1, &submit, fence),
+      "vkQueueSubmit2");
+}
+
 void VulkanContext::Release() noexcept {
   if (pipeline_queue_.device != VK_NULL_HANDLE) {
     // A failure here (device lost) leaves nothing to wait for; the objects are destroyed anyway.

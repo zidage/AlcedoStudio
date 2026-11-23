@@ -391,6 +391,19 @@ if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(EditRuntimeOpenCl PUBLIC HAVE_OPENCL)
 endif()
 
+# Vulkan render backend (#1036, phase VK2): resources, transfers, and submission of the shared
+# device and workspace templates. The pass encoders follow in the later phases.
+if(ALCEDO_VULKAN_ENABLED)
+    def_library(EditRuntimeVulkan
+        SOURCES
+            ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_backend.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_command_context.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_staging_buffers.cpp
+        PUBLIC_DEPS EditRuntime VulkanContext
+        PRIVATE_DEPS AlcedoLog
+    )
+endif()
+
 if(ALCEDO_CUDA_ENABLED)
     # The existing scheduler owns PipelineExecutor. Its CUDA branch is a thin adapter into
     # EditRuntimeCuda.
