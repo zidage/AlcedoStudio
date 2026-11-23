@@ -298,9 +298,16 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN8 | Library action and export errors | `ui/alcedo_main` | DN7 | 300 to 600 | planned |
 | DN9 | Removed on 2026-11-22 (was: the settings section for the stored results) | | | | removed |
 | DN10 | macOS forward code: the Core ML session of UtNet2 on the Neural Engine in ONNX Runtime (C++), the osx-arm64 library | `cmake`, `decoders/processor/nn` | DN3 | 600 to 1000 | planned |
-| DN11 | Linux forward code | `opencl` or ONNX Runtime WebGPU | DN3 | 1400 to 1900 | planned |
+| DN11 | Linux forward code | `opencl` or ONNX Runtime WebGPU | DN3 | 1400 to 1900 | last (2026-11-22: the only Linux environment is WSL) |
 | DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | planned |
 | DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | planned |
+| DN14 | Render feedback in the editor: placeholder image before the first frame, progress bar of the model run | `ui/alcedo_main`, `app`, `edit/input` | DN7 | 500 to 900 | planned (after DN8) |
+
+Order of the remaining phases: DN8, DN14, DN10, DN12, DN13, and DN11 last (DN11 last and DN14
+added by the user on 2026-11-22).
+DN10 has its lab validation (DN1 macOS additions: the standalone C++ tool on the M4, Neural
+Engine FP16 0.60 s at 45.4 MP with the 3-crop graph of DN1); the Alcedo Studio work of DN10 has
+not started, and the DN2 graph has not run on the Mac.
 
 DN0 to DN3 and DN5 to DN7 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
 detailed section in this file before its implementation starts, with the format of DN0 to DN3.
@@ -2288,7 +2295,7 @@ same instance through the default of `PipelineExecutor`, which reads the export 
 with `ParseAiDenoiseRenderError`); the macOS and Linux platforms (DN10, DN11) show no switch until
 then.
 
-### DN8 to DN13
+### DN8 to DN14
 
 Each of these phases gets its detailed section before its implementation starts. DN4 and DN9
 are removed (2026-11-22, D6). The fixed points that the detailed sections must keep:
@@ -2321,7 +2328,17 @@ are removed (2026-11-22, D6). The fixed points that the detailed sections must k
     it (0.69 s). The slow-device check of DN3 runs on macOS too.
     Session creation 0.28 to 0.46 s for each of the 4 tile shapes of a photo size; DN10 measures
     `ModelCacheDirectory` for it, because a new photo size in the editor creates new sessions.
-- **DN11**: before own OpenCL kernels, DN11 measures the WebGPU execution provider of ONNX
+- **DN14**: the first full-size render with AI Denoise takes about 1 s (RTX 3080 Laptop GPU)
+  up to the slow-device limit; later edits read the prepared source cache. Until the first
+  frame, the viewport shows the library thumbnail of the open Version from the thumbnail cache
+  (rendered from the committed edit, with its crop, without the model); without one, the camera
+  preview of `EmbeddedPreviewReader` for a Version without a crop or rotation; otherwise the
+  current label. A thin determinate bar at the bottom edge of the viewport follows the tile
+  callback of the tile loop (tile k of n); the decode and the Develop passes keep the spinner.
+  Turning the switch on in an open photo keeps the current frame and shows the bar over it.
+  Tests: the progress values from the tile loop to the editor session (reset on a new run and
+  on an error) and the choice of the placeholder; no QML test.
+- **DN11** (last; the only Linux environment of the user is WSL): before own OpenCL kernels, DN11 measures the WebGPU execution provider of ONNX
   Runtime on Vulkan with the FP16 graph (`Microsoft.ML.OnnxRuntime.EP.WebGpu` has linux-x64; on
   macOS, WebGPU took 2.6 times the Core ML GPU time in FP32). The CUDA rows of section 4 are the
   starting point of own kernels.
