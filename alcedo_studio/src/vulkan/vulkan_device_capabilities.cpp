@@ -190,6 +190,8 @@ auto ReadVulkanDeviceCapabilities(VkPhysicalDevice physical_device) -> VulkanDev
   capabilities.device_type    = core.deviceType;
   capabilities.api_version    = core.apiVersion;
   capabilities.driver_version = core.driverVersion;
+  std::copy(std::begin(core.pipelineCacheUUID), std::end(core.pipelineCacheUUID),
+            capabilities.pipeline_cache_uuid.begin());
   if (id_properties.deviceLUIDValid == VK_TRUE) {
     std::array<uint8_t, VK_LUID_SIZE> luid{};
     std::copy(std::begin(id_properties.deviceLUID), std::end(id_properties.deviceLUID),

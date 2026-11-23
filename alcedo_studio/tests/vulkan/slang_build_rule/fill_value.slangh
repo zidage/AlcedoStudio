@@ -1,0 +1,2 @@
+// The value of fill_with_header.slang. VulkanSlangBuildRuleTest changes it in its copy.
+static const uint kFillValue = 7;

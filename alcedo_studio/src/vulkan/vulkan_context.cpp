@@ -120,6 +120,7 @@ auto VulkanContext::CreateUnlocked(const VulkanInitializationOptions& options)
   context->SelectPhysicalDevice(options);
   context->CreatePipelineDevice();
   context->CreatePipelineAllocator();
+  context->CreateKernelObjects(options);
 
   ALCEDO_LOG_INFO(Gpu) << "Vulkan: device " << context->capabilities_.name << ", Vulkan "
                        << FormatVulkanApiVersion(context->capabilities_.api_version)
@@ -334,11 +335,37 @@ void VulkanContext::CreatePipelineAllocator() {
   ThrowIfVulkanError(vmaCreateAllocator(&create_info, &pipeline_allocator_), "vmaCreateAllocator");
 }
 
+void VulkanContext::CreateKernelObjects(const VulkanInitializationOptions& options) {
+  shader_modules_ = std::make_unique<VulkanShaderModuleRegistry>(
+      pipeline_queue_.device, pipeline_device_functions_,
+      options.kernel_folders.value_or(VulkanKernelFolderCandidatesOfThisProcess()));
+
+  VulkanComputePipelineCacheDevice device;
+  device.device                       = pipeline_queue_.device;
+  device.functions                    = &pipeline_device_functions_;
+  device.identity.vendor_id           = capabilities_.vendor_id;
+  device.identity.device_id           = capabilities_.device_id;
+  device.identity.pipeline_cache_uuid = capabilities_.pipeline_cache_uuid;
+  device.max_push_constant_bytes      = capabilities_.limits.maxPushConstantsSize;
+  compute_pipelines_ = std::make_unique<VulkanComputePipelineCache>(device, *shader_modules_,
+                                                                    options.pipeline_cache_file);
+}
+
 void VulkanContext::Release() noexcept {
   if (pipeline_queue_.device != VK_NULL_HANDLE) {
     // A failure here (device lost) leaves nothing to wait for; the objects are destroyed anyway.
     (void)pipeline_device_functions_.vkDeviceWaitIdle(pipeline_queue_.device);
   }
+  if (compute_pipelines_) {
+    try {
+      compute_pipelines_->StoreToDisk();
+    } catch (const std::exception& error) {
+      // The next process starts with an empty pipeline cache; no result is lost.
+      ALCEDO_LOG_WARN(Gpu) << "Vulkan: the pipeline cache data is not stored: " << error.what();
+    }
+    compute_pipelines_.reset();
+  }
+  shader_modules_.reset();
   if (pipeline_allocator_ != VK_NULL_HANDLE) {
     vmaDestroyAllocator(pipeline_allocator_);
     pipeline_allocator_ = VK_NULL_HANDLE;
