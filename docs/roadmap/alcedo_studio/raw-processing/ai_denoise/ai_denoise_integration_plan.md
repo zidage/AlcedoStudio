@@ -301,15 +301,15 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN11 | Linux forward code | `opencl` or ONNX Runtime WebGPU | DN3 | 1400 to 1900 | last (2026-11-22: the only Linux environment is WSL) |
 | DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | planned |
 | DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | planned |
-| DN14 | Render feedback in the editor: placeholder image before the first frame, progress bar of the model run | `ui/alcedo_main`, `app`, `edit/input` | DN7 | 500 to 900 | planned (after DN8) |
+| DN14 | Render feedback in the editor: placeholder image before the first frame, the step of the render (Reading RAW, AI Denoise tile k of n, Developing group k of n) in a pill and a segmented bar | `ui/alcedo_main`, `app`, `edit/input`, `edit/runtime` | DN7 | 900 to 1400 | in progress |
 
-Order of the remaining phases: DN8, DN14, DN10, DN12, DN13, and DN11 last (DN11 last and DN14
-added by the user on 2026-11-22).
+Order of the remaining phases: DN14, DN8, DN10, DN12, DN13, and DN11 last (DN11 last and DN14
+added by the user on 2026-11-22; DN14 before DN8 by the user on 2026-11-23).
 DN10 has its lab validation (DN1 macOS additions: the standalone C++ tool on the M4, Neural
 Engine FP16 0.60 s at 45.4 MP with the 3-crop graph of DN1); the Alcedo Studio work of DN10 has
 not started, and the DN2 graph has not run on the Mac.
 
-DN0 to DN3 and DN5 to DN7 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
+DN0 to DN3, DN5 to DN7, and DN14 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
 detailed section in this file before its implementation starts, with the format of DN0 to DN3.
 DN5 can start before DN3 completes: its tests build the denoised prepared input from the DN0
 expected outputs, so the Develop integration can be checked before the tile loop exists.
@@ -2311,7 +2311,131 @@ same instance through the default of `PipelineExecutor`, which reads the export 
 with `ParseAiDenoiseRenderError`); the macOS and Linux platforms (DN10, DN11) show no switch until
 then.
 
-### DN8 to DN14
+### DN14: render feedback in the editor
+
+Written on 2026-11-23, before the implementation. The user moved DN14 before DN8 and asked for
+feedback at each step of a render, because the Develop part of the first render takes long. The
+user chose direction A of the mock of 2026-11-23 (a caption pill and a segmented bar).
+
+**Objective and deliverables**
+
+While a render of the editor reads the RAW file or runs the model, the viewport shows the step
+of the render and its count; before the first frame of a photo, it shows a placeholder image.
+The deliverables: the step progress of a render from the renderer to the viewport, the tile
+count of the model run, the Develop group count of the plan executor, the placeholder choice
+and its image provider, the pill and the bar in QML, the translations.
+
+**Inputs and prerequisites**
+
+DN6 (`DenoiseModelSession`, the tile callback of DN3), DN7 (the error state of the render
+controller), the viewport render alert of issue #1056.
+
+**Product rules** (the mock of 2026-11-23, direction A)
+
+- **Steps of a render.** `Reading RAW` (the unpack of the encoded RAW file), `AI Denoise` (the
+  tile loop), `Developing` (the Develop passes of the plan). A render has `Reading RAW` when its
+  source is not in the prepared source cache, `AI Denoise` when the switch is on and the denoised
+  source is not in the cache, and `Developing` always.
+- **When it shows.** Only a render with `Reading RAW` or `AI Denoise` reports steps: the first
+  frame of a photo or of another Version, the frame after the switch goes on, a frame after the
+  prepared source cache was cleared (editor GPU release). A render that reads only the caches
+  (a slider frame, the Quality Base frame after the first frame) reports nothing and keeps the
+  present spinners.
+- **Counts.** `AI Denoise`: tile k of n from the tile callback; before the first tile (the
+  session creation and the first tile, 0.1 to 0.5 s) it shows 0 of n, and n is 0 until the
+  loop has planned its tiles (the pill then shows no count). `Developing`: the group that runs,
+  of the groups of the plan: `Sensor`, `Lens and geometry`, `Color`, `Color Grade i of n` (one
+  for each Color Grade of the plan), `Display`. The sensor group ends with a wait for the GPU;
+  in an editor render the later groups are recorded without a wait (the session-packed
+  allocation), so their names change when the host records them and the frame completes after
+  the last. The mock said "the group that the GPU finished"; the group that runs is what the
+  plan executor knows without a new wait.
+- **Pill and bar.** A frosted pill at the bottom left of the viewport (12 px from the edges):
+  one dot for each step of the render (done, current, later), the step name, its count. Under
+  it, at the bottom edge of the viewport, a bar of 3 px with one segment for each step, 2 px
+  apart: a done step is full, the current step fills by its count, `Reading RAW` (no count)
+  sweeps. The pill and the bar fade out in 200 ms when the render ends (frame, error,
+  cancellation).
+- **Spinners.** The center spinner of the viewport does not show while the pill shows. The
+  corner spinner of slider frames does not change.
+- **Error.** A render that ends with an error hides the pill and the bar; the render alert of
+  issue #1056 shows the AI Denoise error (DN7).
+- **Placeholder before the first frame**, in this order:
+  1. the library thumbnail of the open Version from the thumbnail image store, the largest tier
+     that a view of the application holds (2048, 1024, 512, 256). It is rendered from the
+     committed edit with its crop and without the model. The editor copies the image at the
+     open, because the store drops an image when its last view releases it.
+  2. the camera preview of the RAW file (`EmbeddedPreviewReader`), only for a Version without
+     a crop and without a rotation, read on a worker thread.
+  3. none: the present label `Preparing image viewport`, with the pill and the bar.
+  The placeholder is fitted in the viewport like the frame at the fit zoom and hides at the
+  first presented frame. The image is released when the photo enters Interactive or closes.
+- **Switch on in an open photo.** The current frame stays; the pill and the bar show over it
+  (the source is in the cache, so the render has the steps `AI Denoise` and `Developing`).
+
+**Data rules**
+
+- **Progress value.** `RenderProgress` (`edit/runtime/render_progress.hpp`, header only, so the
+  editor session reads it without the render libraries): the steps of the render
+  (`read_raw`, `ai_denoise`), the current step, `completed` and `total` (tiles; Develop groups),
+  and for `Developing` the group kind and the Color Grade index and count. A value, copied
+  through the queues.
+- **Route.** The render controller puts a progress callback into each render intent
+  (presentation state, in no key, as the Mask coverage probe). The scheduler port gives it to
+  the pipeline task, the task to the apply request, and the renderer reports through it on the
+  render worker. The session service posts each value to its owner queue, where the render
+  controller keeps it as the progress of the open photo; the queue orders it against the
+  render results, because the scheduler completes a task on its worker before it starts the
+  next. A terminal result of the photo (ready, failed, cancelled, refused while suspended) and
+  the load of another photo clear it. Each change notifies the render progress observer;
+  `EditorSessionController` publishes `renderProgress`.
+- **Cache queries.** `PreparedSourceCache::HoldsEncoded` and `HoldsDenoised` answer whether an
+  acquire would read the RAW file or run the model, without a change of the cache.
+- **Placeholder owner.** `EditorViewportPlaceholder` (album backend, `appModules.editorPlaceholder`)
+  keeps the placeholder image of the open photo and serves it through the image provider
+  `alcedo-editor-placeholder`. It keeps no copy of the session state: the module host gives it
+  the open photo and the session state.
+
+**Modules, files, and APIs**
+
+| File | Responsibility |
+| --- | --- |
+| `include/edit/runtime/render_progress.hpp` (new) | `RenderProgress`, `RenderProgressCallback`, `RenderProgressReporter` |
+| `include/edit/input/prepared_source_cache.hpp`, `.cpp` | `HoldsEncoded`, `HoldsDenoised` |
+| `include/edit/input/ai_denoise_model_session.hpp`, `.cpp` | `Denoise` reports the tiles |
+| `include/edit/runtime/pipeline_apply_request.hpp`, `include/renderer/pipeline_task.hpp`, `renderer/pipeline_scheduler.cpp` | The callback of the request and of the task |
+| `include/edit/runtime/detail/renderer.inl.hpp`, `include/edit/runtime/plan_executor.hpp`, the `Execute` of the render devices | The steps, the Develop groups |
+| `include/app/editor_render_intent.hpp`, `ui/alcedo_main/album_backend/editor_session_render_scheduler_port.cpp` | The callback of the intent |
+| `app/editor_session_render_controller.cpp`, `app/editor_session_service.cpp`, their headers | The progress state, the owner queue, the observer |
+| `ui/alcedo_main/album_backend/editor_session_controller.*` | `renderProgress` |
+| `ui/alcedo_main/album_backend/editor_viewport_placeholder.*` (new), `application_module_host.cpp` | The placeholder choice, its image provider |
+| `qml/EditorRenderProgress.qml` (new), `qml/EditorWorkspace.qml`, the `.ts` files | The pill, the bar, the placeholder image |
+
+**Tests**
+
+| Test | Assertion |
+| --- | --- |
+| `CacheReportsWhetherAnAcquireReadsTheRawOrRunsTheModel` | `HoldsEncoded` and `HoldsDenoised` before and after the acquires; the stats do not change |
+| `DenoiseReportsEachTileOfTheRun` (`AiDenoiseLoaderTest`) | k = 1 to n of n in order, n = the tiles of the record |
+| `ReporterSendsTheStepsAndTheDevelopGroups` | The values of `RenderProgressReporter` for a render with each set of steps |
+| `RenderThatReadsTheRawReportsItsStepsInOrder` (GPU render test) | Reading RAW, then the Develop groups 1 to n of n with their kinds; the next render of the same source reports nothing |
+| `ProgressOfTheOpenPhotoIsPublishedAndClearedByItsFrame` (session) | The callback of the intent gives the progress of the session; a ready frame clears it; a failed frame clears it; a value of another load request is dropped |
+| `ProgressIsClearedWhenAnotherPhotoLoads` (session) | |
+| `PlaceholderUsesTheLargestHeldThumbnail` | The largest tier of the store, copied |
+| `PlaceholderReadsTheCameraPreviewOnlyWithoutCropAndRotation` | No thumbnail: the preview is read on a worker for a Version without crop and rotation; with a crop or a rotation there is none |
+| `PlaceholderOfAPhotoThatIsNoLongerOpenIsDropped`, `PlaceholderIsReleasedWhenThePhotoIsInteractive` | |
+
+No QML test: the pill, the bar, and the placeholder image are pure UI (repository rule).
+
+**Exit criteria**
+
+- [ ] The tests pass in `build/debug`.
+- [ ] The touched suites have no new failure.
+- [ ] The production window of `MainQmlWorkflowTest` loads the changed QML without a warning.
+
+**Expected diff**: 900 to 1400 lines (the estimate of section 6 was for the bar alone).
+
+### DN8 to DN13
 
 Each of these phases gets its detailed section before its implementation starts. DN4 and DN9
 are removed (2026-11-22, D6). The fixed points that the detailed sections must keep:
@@ -2344,16 +2468,6 @@ are removed (2026-11-22, D6). The fixed points that the detailed sections must k
     it (0.69 s). The slow-device check of DN3 runs on macOS too.
     Session creation 0.28 to 0.46 s for each of the 4 tile shapes of a photo size; DN10 measures
     `ModelCacheDirectory` for it, because a new photo size in the editor creates new sessions.
-- **DN14**: the first full-size render with AI Denoise takes about 1 s (RTX 3080 Laptop GPU)
-  up to the slow-device limit; later edits read the prepared source cache. Until the first
-  frame, the viewport shows the library thumbnail of the open Version from the thumbnail cache
-  (rendered from the committed edit, with its crop, without the model); without one, the camera
-  preview of `EmbeddedPreviewReader` for a Version without a crop or rotation; otherwise the
-  current label. A thin determinate bar at the bottom edge of the viewport follows the tile
-  callback of the tile loop (tile k of n); the decode and the Develop passes keep the spinner.
-  Turning the switch on in an open photo keeps the current frame and shows the bar over it.
-  Tests: the progress values from the tile loop to the editor session (reset on a new run and
-  on an error) and the choice of the placeholder; no QML test.
 - **DN11** (last; the only Linux environment of the user is WSL): before own OpenCL kernels, DN11 measures the WebGPU execution provider of ONNX
   Runtime on Vulkan with the FP16 graph (`Microsoft.ML.OnnxRuntime.EP.WebGpu` has linux-x64; on
   macOS, WebGPU took 2.6 times the Core ML GPU time in FP32). The CUDA rows of section 4 are the
