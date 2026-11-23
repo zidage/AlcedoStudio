@@ -195,6 +195,11 @@ void DevelopParamsModel::ApplyAiDenoiseUpdate(std::optional<DevelopAiDenoise> de
 }
 
 void DevelopParamsModel::ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update) {
+  if (update.ai_denoise.has_value() && update.ai_denoise->has_value() &&
+      !IsAiDenoiseModelVersion((*update.ai_denoise)->model_version)) {
+    throw std::invalid_argument(
+        "Develop: the AI Denoise model version must be 64 lowercase hexadecimal digits");
+  }
   MutateWithDirtyFields([update = std::move(update)](DevelopPayload& payload) mutable {
     if (payload.input.has_value()) {
       throw std::logic_error("Develop: a raster image has no RAW decode settings");
@@ -216,6 +221,10 @@ void DevelopParamsModel::ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update) {
     if (update.user_wb.has_value() && payload.user_wb != *update.user_wb) {
       payload.user_wb = *update.user_wb;
       changed |= DirtyFieldMask{DevelopDirty::WhiteBalance};
+    }
+    if (update.ai_denoise.has_value() && payload.ai_denoise != *update.ai_denoise) {
+      payload.ai_denoise = std::move(*update.ai_denoise);
+      changed |= DirtyFieldMask{DevelopDirty::Denoise};
     }
     return changed;
   });

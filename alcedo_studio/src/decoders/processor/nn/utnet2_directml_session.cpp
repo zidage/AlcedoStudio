@@ -722,6 +722,11 @@ struct UtNet2DirectMlSession::Impl {
   }
 };
 
+void LoadDirectMlRuntime() {
+  (void)OnnxRuntimeApi();
+  (void)DmlCreateDevice();
+}
+
 auto DirectMlAdapterKey(DirectMlAdapterPreference preference) -> std::string {
   const auto         adapter = SelectAdapter(preference);
   DXGI_ADAPTER_DESC1 description{};

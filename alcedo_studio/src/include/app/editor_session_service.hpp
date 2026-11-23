@@ -36,6 +36,7 @@
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/input/ai_denoise_error.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -861,6 +862,11 @@ class IEditorSessionBackend {
     return {};
   }
   [[nodiscard]] virtual auto first_frame_time_ms() const -> double { return -1.0; }
+  /// The AI Denoise error of the last frame of the open photo (integration plan, DN7); a change
+  /// notifies the change notifier. Default fakes have none.
+  [[nodiscard]] virtual auto ai_denoise_error() const -> std::optional<AiDenoiseRenderError> {
+    return std::nullopt;
+  }
 
  protected:
   [[nodiscard]] auto RejectComparison(std::string message) const -> EditorSessionResult {
@@ -1167,6 +1173,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   }
   [[nodiscard]] auto render_diagnostics() const -> EditorRenderCoordinatorDiagnostics override {
     return render_.render_diagnostics();
+  }
+  [[nodiscard]] auto ai_denoise_error() const -> std::optional<AiDenoiseRenderError> override {
+    return render_.ai_denoise_error();
   }
   [[nodiscard]] auto first_frame_time_ms() const -> double override {
     return render_.first_frame_time_ms();

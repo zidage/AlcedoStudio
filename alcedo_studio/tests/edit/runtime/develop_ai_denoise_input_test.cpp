@@ -220,12 +220,14 @@ TEST(DevelopAiDenoiseInputTest, InputCheckRejectsAFullSizeInputThatIsNotDenoised
   } catch (const std::runtime_error& error) {
     EXPECT_STREQ(error.what(), "AI Denoise is on and the prepared input is not denoised");
   }
+  // A photo that is not Bayer: the typed error of DN7, whose kind the editor shows.
   for (const auto kind : {DevelopInputKind::XTransCfa, DevelopInputKind::DirectRgb}) {
     try {
       RequireDevelopInputForAiDenoise(on, source(kind, 0));
       ADD_FAILURE() << "kind " << static_cast<int>(kind) << " was accepted";
-    } catch (const std::runtime_error& error) {
-      EXPECT_STREQ(error.what(), "AI Denoise supports Bayer sensors only");
+    } catch (const AiDenoiseError& error) {
+      EXPECT_EQ(error.Kind(), AiDenoiseErrorKind::SensorNotSupported);
+      EXPECT_EQ(error.Text(), "AI Denoise supports Bayer sensors only");
     }
   }
 

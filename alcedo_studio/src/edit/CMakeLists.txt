@@ -120,6 +120,7 @@ def_library(EditInput
         ${ALCEDO_SRC_ROOT}/edit/input/prepared_source_cache.cpp
         ${ALCEDO_SRC_ROOT}/edit/input/raster_input_loader.cpp
         ${ALCEDO_SRC_ROOT}/edit/input/ai_denoise_input.cpp
+        ${ALCEDO_SRC_ROOT}/edit/input/raw_sensor_layout.cpp
         ${ALCEDO_SRC_ROOT}/edit/input/ai_denoise_model_session.cpp
         ${EDIT_INPUT_AI_DENOISE_PLATFORM_SRC}
     PUBLIC_DEPS EditGeometry JSON libraw::raw_r opencv_core Image UtNet2TileLoop

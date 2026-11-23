@@ -43,13 +43,15 @@ endif()
 add_executable(AiDenoiseLoaderTest
   ${ALCEDO_TEST_ROOT}/ai_denoise/ai_denoise_input_test.cpp
   ${ALCEDO_TEST_ROOT}/ai_denoise/ai_denoise_model_session_test.cpp
+  ${ALCEDO_TEST_ROOT}/ai_denoise/ai_denoise_error_test.cpp
 )
 target_include_directories(AiDenoiseLoaderTest PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(AiDenoiseLoaderTest PRIVATE GTest::gtest_main EditInput NnSafetensors
   Sha256Digest)
 target_compile_definitions(AiDenoiseLoaderTest PRIVATE
   ALCEDO_AI_DENOISE_TEST_TEMP_ROOT="${CMAKE_SOURCE_DIR}/build/tmp/ai-denoise-loader-test"
-  ALCEDO_AI_DENOISE_TEST_RAW="${ALCEDO_TEST_ROOT}/resources/sample_images/raw/_DSC0726.ARW")
+  ALCEDO_AI_DENOISE_TEST_RAW="${ALCEDO_TEST_ROOT}/resources/sample_images/raw/_DSC0726.ARW"
+  ALCEDO_AI_DENOISE_TEST_LINEAR_DNG="${ALCEDO_TEST_ROOT}/resources/sample_images/raw/linear_dng/mfzoty.dng")
 gtest_discover_tests(AiDenoiseLoaderTest TEST_PREFIX "AiDenoiseLoaderTest.")
 alcedo_register_test_target(AiDenoiseLoaderTest core ci_core)
 

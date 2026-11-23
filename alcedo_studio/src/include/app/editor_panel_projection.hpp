@@ -89,6 +89,8 @@ struct EditorPanelGradeWhiteBalanceValue {
 struct EditorPanelRawDecodeValue {
   std::string method                  = "default";
   bool        highlights_reconstruct  = true;
+  /// The AI Denoise switch (integration plan, DN7). `method` keeps the stored demosaic method.
+  bool        ai_denoise              = false;
 };
 
 struct EditorPanelOdtValue {

@@ -296,6 +296,15 @@ void EditorSessionService::HandleRenderEvent(const EditorRenderEvent& event) {
     PublishRenderProgressIfChanged();
     return;
   }
+  if (event.kind == EditorRenderEventKind::AiDenoiseErrorChanged) {
+    // No session result: the controller reads ai_denoise_error() at the change notification.
+    if (publication_depth_ != 0) {
+      publication_dirty_ = true;
+    } else {
+      NotifyChange();
+    }
+    return;
+  }
 
   EditorSessionResult result;
   result.operation_id = event.operation_id;
@@ -335,6 +344,7 @@ void EditorSessionService::HandleRenderEvent(const EditorRenderEvent& event) {
       result.message = event.message;
       break;
     case EditorRenderEventKind::BusyChanged:
+    case EditorRenderEventKind::AiDenoiseErrorChanged:
       return;
   }
   result.state    = event.state;

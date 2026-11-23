@@ -11,11 +11,11 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "decoders/processor/nn/utnet2_tile_loop.hpp"
+#include "edit/input/ai_denoise_error.hpp"
 #include "edit/input/ai_denoise_platform.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 
@@ -25,30 +25,6 @@ namespace alcedo {
 /// (integration plan, section 6: copied by hand until DN12 publishes the package).
 inline constexpr std::string_view kAiDenoiseModelFolderName = "ai-denoise-v1";
 inline constexpr std::string_view kAiDenoiseGraphFileName = "utnet2_bayer_dark_loss_10k_fp16.onnx";
-
-/// The kind of an AI Denoise render error (plan 2.4), for the text and the controls of DN7 and
-/// DN8. Each kind has the control `Turn Off AI Denoise`.
-enum class AiDenoiseErrorKind : std::uint8_t {
-  /// The graph file is not in the model folder: the control to the AI Models page too.
-  ModelNotInstalled,
-  /// The projected time of a photo is above `slow_device_limit` (kept for the device).
-  DeviceTooSlow,
-  /// The runtime failed: ONNX Runtime, DirectML, Direct3D 12, the video memory, an output value
-  /// that is not finite, a platform without forward code, or input that the model cannot take.
-  RunFailed,
-};
-
-/// A render error of AI Denoise. The renderer passes it through unchanged.
-class AiDenoiseError : public std::runtime_error {
- public:
-  AiDenoiseError(AiDenoiseErrorKind kind, const std::string& text)
-      : std::runtime_error(text), kind_(kind) {}
-
-  [[nodiscard]] auto Kind() const -> AiDenoiseErrorKind { return kind_; }
-
- private:
-  AiDenoiseErrorKind kind_;
-};
 
 /// Counters of a @ref DenoiseModelSession, for the tests and the log.
 struct DenoiseModelSessionStats {
@@ -111,6 +87,15 @@ class DenoiseModelSession {
   /// slow-device results stay.
   void               Release();
 
+  /**
+   * @brief True when this platform can run the model (D13): it has a platform, a device for the
+   *        model, and its runtime libraries load. The editor shows the switch only then.
+   *
+   * The first call checks; later calls return its result (the libraries and the adapters of a
+   * process do not change).
+   */
+  [[nodiscard]] auto IsPlatformAvailable() -> bool;
+
   [[nodiscard]] auto IsSessionLoaded() const -> bool;
   [[nodiscard]] auto Stats() const -> DenoiseModelSessionStats;
 
@@ -119,6 +104,8 @@ class DenoiseModelSession {
 
   std::unique_ptr<AiDenoisePlatform> platform_;
   nn::UtNet2TileLoopOptions          options_;
+  std::once_flag                     platform_check_once_;
+  bool                               platform_available_ = false;
 
   mutable std::mutex                 folder_mutex_;
   ModelFolderProvider                folder_provider_;

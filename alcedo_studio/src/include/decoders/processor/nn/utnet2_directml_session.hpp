@@ -30,6 +30,11 @@ enum class DirectMlAdapterPreference {
     DirectMlAdapterPreference preference = DirectMlAdapterPreference::HighPerformance)
     -> std::string;
 
+/// Loads onnxruntime.dll and DirectML.dll as a session does (the folder of the executable first)
+/// and checks the API version of ONNX Runtime. Creates no session. Throws `std::runtime_error`
+/// with the error of the load. A later call after a success does nothing.
+void                        LoadDirectMlRuntime();
+
 /// The ONNX Runtime session of the FP16 UtNet2 graph on DirectML (Windows x64).
 ///
 /// The constructor selects the adapter (DXGI), loads ONNX Runtime (onnxruntime.dll beside the

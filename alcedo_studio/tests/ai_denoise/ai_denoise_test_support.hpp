@@ -132,6 +132,9 @@ struct TestPlatformRecord {
   std::atomic<int>          failing_tile_run{-1};
   /// Each tile run sleeps this long (the concurrency test).
   std::chrono::milliseconds run_sleep{0};
+  /// CheckRuntime throws this text when it is not empty (DN7 platform check).
+  std::string               runtime_load_error;
+  std::atomic<int>          runtime_checks{0};
 };
 
 /// A session whose output is known (kChannelOfOutput, kTestOutputScale) and that is ready for
@@ -195,6 +198,13 @@ class TestPlatform final : public AiDenoisePlatform {
   explicit TestPlatform(std::shared_ptr<TestPlatformRecord> record) : record_(std::move(record)) {}
 
   [[nodiscard]] auto DeviceKey() -> std::string override { return record_->device_key; }
+
+  void               CheckRuntime() override {
+    ++record_->runtime_checks;
+    if (!record_->runtime_load_error.empty()) {
+      throw std::runtime_error(record_->runtime_load_error);
+    }
+  }
 
   [[nodiscard]] auto CreateSession(const std::filesystem::path& graph_path)
       -> std::unique_ptr<nn::UtNet2TileSession> override {

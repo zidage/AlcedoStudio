@@ -447,8 +447,10 @@ TEST(EditorParameterCatalogTest, RawDecodeDefaultsMatchPreviousPanelDefaults) {
   // The panel lists the method options in menu order.
   ASSERT_EQ(entry->properties.size(), 2U);
   ASSERT_EQ(entry->properties[0].options.size(), 3U);
+  EXPECT_EQ(entry->properties[0].options[0].value, "default");
+  EXPECT_EQ(entry->properties[0].options[0].label, "Auto");
   EXPECT_EQ(entry->properties[0].options[2].value, "neural_engine");
-  EXPECT_EQ(entry->properties[0].options[2].label, "Neural Engine");
+  EXPECT_EQ(entry->properties[0].options[2].label, "Neural");
 
   EXPECT_FALSE(EditorParameterCatalog::ToModelJson("raw_decode", {{"method", "ahd"}}, current,
                                                    &error)
