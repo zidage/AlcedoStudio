@@ -3,19 +3,24 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 // Builders of the AI Denoise loader tests (integration plan, DN6): a Bayer CFA input with LibRaw
-// levels and a camera matrix, a platform with a test session whose output is known, and a model
+// levels, a camera matrix, a platform with a test session whose output is known, and a model
 // folder with a graph file.
 
 #pragma once
 
+#include <libraw/libraw.h>
+
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <opencv2/core.hpp>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -23,11 +28,49 @@
 #include <vector>
 
 #include "decoders/processor/nn/utnet2_tile_loop.hpp"
+#include "edit/graph/develop_color_transform.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/input/ai_denoise_model_session.hpp"
 #include "edit/input/ai_denoise_platform.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "image/image.hpp"
+#include "image/metadata_extractor.hpp"
 
 namespace alcedo::ai_denoise_test {
+
+/// The camera matrix of the gain match of the RAW file @p path: the D65 matrix of the render of
+/// its import camera profile (#1055), as the editor binds it.
+inline auto ImportedXyzToCamera(const std::filesystem::path& path) -> std::array<double, 9> {
+  Image image(1, path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(path, image);
+  if (!image.HasRawColorContext()) {
+    throw std::runtime_error("no RAW colour context in " + path.string());
+  }
+  auto document = CreateDefaultPipelineDocument();
+  BindImportedCameraProfile(document, image.GetRawColorContext());
+  const auto resolved = ResolveDevelopXyzToCameraD65(document.Develop()->Params().Params());
+  if (!resolved.ok) {
+    throw std::runtime_error("no camera matrix for " + path.string() + ": " +
+                             std::string(ColorTransformErrorMessage(resolved.error)));
+  }
+  return resolved.xyz_to_camera;
+}
+
+/// True when LibRaw `color.cam_xyz` of @p path, the matrix that DN6 read, has no inverse.
+inline auto LibRawCamXyzIsSingular(const std::filesystem::path& path) -> bool {
+  auto raw = std::make_unique<LibRaw>();
+  if (raw->open_file(path.string().c_str()) != LIBRAW_SUCCESS) {
+    throw std::runtime_error("LibRaw cannot open " + path.string());
+  }
+  cv::Matx33d matrix;
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) {
+      matrix(r, c) = raw->imgdata.color.cam_xyz[r][c];
+    }
+  }
+  const double determinant = cv::determinant(matrix);
+  return !std::isfinite(determinant) || std::abs(determinant) < 1e-12;
+}
 
 /// The output of the test session: output channel c at output (v, u) of a tile is the input of
 /// packed channel kChannelOfOutput[c] at (v / 2, u / 2) times kTestOutputScale (the model output
@@ -35,9 +78,9 @@ namespace alcedo::ai_denoise_test {
 inline constexpr int    kChannelOfOutput[3] = {0, 1, 3};
 inline constexpr double kTestOutputScale    = 1e5;
 
-/// A camera matrix (LibRaw cam_xyz, camera from XYZ) that has an inverse.
-inline constexpr float  kTestCamXyz[9]      = {0.70f,  0.20f, 0.10f,  0.30f, 0.90f,
-                                               -0.10f, 0.05f, -0.10f, 0.80f};
+/// A camera matrix (XYZ to camera, the gain match input of Denoise) that has an inverse.
+inline constexpr std::array<double, 9> kTestXyzToCamera    = {0.70,  0.20, 0.10,  0.30, 0.90,
+                                                              -0.10, 0.05, -0.10, 0.80};
 
 /// The classic Bayer pattern whose top left cell is @p name ("RGGB", "GBRG", "GRBG", "BGGR").
 inline auto             BayerPattern(const std::string& name) -> RawCfaPattern {
@@ -93,8 +136,8 @@ inline auto TestCode(int y, int x) -> std::uint16_t {
   }
 }
 
-/// A full-size Bayer CFA input of @p width x @p height host px with @p pattern, the test levels,
-/// and the test camera matrix. @p sensor sets margins or a crop; empty: the whole plane. @p code
+/// A full-size Bayer CFA input of @p width x @p height host px with @p pattern and the test
+/// levels. @p sensor sets margins or a crop; empty: the whole plane. @p code
 /// gives the code of host position (y, x).
 inline auto MakeBayerInput(std::uint32_t width, std::uint32_t height, const RawCfaPattern& pattern,
                            std::optional<RawSensorGeometry>              sensor = std::nullopt,
@@ -114,13 +157,8 @@ inline auto MakeBayerInput(std::uint32_t width, std::uint32_t height, const RawC
     }
   }
   plane.bytes = std::const_pointer_cast<const std::byte>(storage);
-  auto input =
-      RawInputLoader::FromUnpackedCfa(std::move(plane), pattern, TestLinearization(),
-                                      sensor.value_or(RawSensorGeometry{}), DecodeRes::FULL);
-  for (int i = 0; i < 9; ++i) {
-    input.color_context.cam_xyz_[i] = kTestCamXyz[i];
-  }
-  return input;
+  return RawInputLoader::FromUnpackedCfa(std::move(plane), pattern, TestLinearization(),
+                                         sensor.value_or(RawSensorGeometry{}), DecodeRes::FULL);
 }
 
 /// The code of a dark photo: each 2 x 2 cell has one code (so G1 and G2 are equal), mostly up to

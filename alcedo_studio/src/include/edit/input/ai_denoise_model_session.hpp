@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -79,11 +80,12 @@ class DenoiseModelSession {
    *        (`RawInputLoader::FromDenoisedBayer`).
    *
    * Runs the input preparation, the tile loop with the gain match sums, the gain match, and the
-   * plane assembly. Waits while another run is in progress.
+   * plane assembly. Waits while another run is in progress. @p xyz_to_camera is the camera matrix
+   * of the render at D65 (ResolveDevelopXyzToCameraD65); the gain match weights come from it.
    * @throws AiDenoiseError of each kind; no partial result.
    */
-  [[nodiscard]] auto Denoise(const PreparedRawInput& cfa, std::string_view model_version)
-      -> PreparedRawInput;
+  [[nodiscard]] auto Denoise(const PreparedRawInput& cfa, std::string_view model_version,
+                             const std::array<double, 9>& xyz_to_camera) -> PreparedRawInput;
 
   /// Ends the platform session and frees its device memory. Waits for a run in progress. The
   /// slow-device results stay.

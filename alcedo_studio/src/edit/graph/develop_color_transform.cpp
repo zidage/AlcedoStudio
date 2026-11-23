@@ -877,6 +877,50 @@ auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransfo
   return ColorTransformResult{true, ColorTransformError::Ok, transform};
 }
 
+auto ResolveDevelopXyzToCameraD65(const DevelopPayload& develop) -> XyzToCameraResult {
+  const auto fail = [](ColorTransformError error) {
+    XyzToCameraResult result;
+    result.error = error;
+    return result;
+  };
+  if (develop.camera_profile_file.has_value() && !CameraProfileFileRenderable(develop)) {
+    return fail(ColorTransformError::UnboundCameraProfileFile);
+  }
+  const DevelopCameraProfile camera_profile = EffectiveCameraProfile(develop);
+  cv::Matx33d                cm1;
+  cv::Matx33d                cm2;
+  double                     endpoint_cct_1 = kCalibrationLowCCT;
+  double                     endpoint_cct_2 = kCalibrationHighCCT;
+  const auto                 endpoint_error =
+      ResolveColorMatrixEndpoints(camera_profile, cm1, cm2, endpoint_cct_1, endpoint_cct_2);
+  if (endpoint_error != ColorTransformError::Ok) {
+    return fail(endpoint_error);
+  }
+  const auto& dng_profile_ref = camera_profile.dng_profile;
+  if (dng_profile_ref.IsReferenced() && !dng_profile_ref.IsBound()) {
+    return fail(ColorTransformError::UnboundDngProfile);
+  }
+  if (const DngColorProfile* dng_profile = dng_profile_ref.Profile().get()) {
+    ApplyAnalogBalanceAndCameraCalibration(cm1.val, dng_profile->analog_balance.data(),
+                                           dng_profile->camera_calibration_1.data());
+    ApplyAnalogBalanceAndCameraCalibration(cm2.val, dng_profile->analog_balance.data(),
+                                           dng_profile->camera_calibration_2.data());
+  }
+  const cv::Matx33d xyz_to_camera =
+      InterpolateColorMatrix(cm1, cm2, kCalibrationHighCCT, endpoint_cct_1, endpoint_cct_2);
+  if (!IsFiniteInvertible(xyz_to_camera)) {
+    return fail(IsFiniteMatrix(xyz_to_camera) ? ColorTransformError::SingularCameraMatrix
+                                              : ColorTransformError::NonFiniteMatrix);
+  }
+  XyzToCameraResult result;
+  result.ok    = true;
+  result.error = ColorTransformError::Ok;
+  for (int i = 0; i < 9; ++i) {
+    result.xyz_to_camera[static_cast<std::size_t>(i)] = xyz_to_camera.val[i];
+  }
+  return result;
+}
+
 auto ColorTransformErrorMessage(ColorTransformError error) -> std::string_view {
   switch (error) {
     case ColorTransformError::Ok:

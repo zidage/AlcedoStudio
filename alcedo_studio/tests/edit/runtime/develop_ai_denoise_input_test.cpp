@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -25,6 +26,7 @@ namespace {
 
 const std::string kVersionA(64, 'a');
 const std::string kVersionB(64, 'b');
+const std::array<double, 9> kCamera = {0.7, 0.2, 0.1, 0.3, 0.9, -0.1, 0.05, -0.1, 0.8};
 
 /// 64 x 48 RGGB mosaic with a 2 px margin at the left and the top and a DNG default crop of
 /// 56 x 40, so the decode area is not the whole plane. Orientation 6.
@@ -44,9 +46,10 @@ auto              MakeCfaInput(DecodeRes decode_res = DecodeRes::FULL) -> Prepar
       gpu_dag_test::MakeRggbPattern(), gpu_dag_test::NearBlackLinearization(), sensor, decode_res);
 }
 
-auto MakeDenoised(const PreparedRawInput& cfa, const std::string& version = kVersionA)
-    -> PreparedRawInput {
-  return RawInputLoader::FromDenoisedBayer(cfa, gpu_dag_test::MakeF32RgbaPlane(56, 40), version);
+auto MakeDenoised(const PreparedRawInput& cfa, const std::string& version = kVersionA,
+                  const std::array<double, 9>& camera = kCamera) -> PreparedRawInput {
+  return RawInputLoader::FromDenoisedBayer(cfa, gpu_dag_test::MakeF32RgbaPlane(56, 40), version,
+                                           camera);
 }
 
 TEST(DevelopAiDenoiseInputTest, DenoisedInputTakesTheCfaMetadataAndTheDecodeArea) {
@@ -92,10 +95,14 @@ TEST(DevelopAiDenoiseInputTest, DenoisedInputTakesTheCfaMetadataAndTheDecodeArea
   EXPECT_EQ(denoised.source_key.encoded_content_hash, cfa.source_key.encoded_content_hash);
   EXPECT_EQ(denoised.source_key.encoded_byte_count, cfa.source_key.encoded_byte_count);
   EXPECT_EQ(denoised.source_key.input_kind, RawInputKind::DenoisedRgb);
-  EXPECT_EQ(denoised.source_key.denoise_model_hash, HashAiDenoiseModelVersion(kVersionA));
-  EXPECT_NE(denoised.source_key.denoise_model_hash, 0U);
-  EXPECT_EQ(cfa.source_key.denoise_model_hash, 0U);
+  EXPECT_EQ(denoised.source_key.denoise_hash, HashAiDenoiseRun(kVersionA, kCamera));
+  EXPECT_NE(denoised.source_key.denoise_hash, 0U);
+  EXPECT_EQ(cfa.source_key.denoise_hash, 0U);
   EXPECT_FALSE(MakeDenoised(cfa, kVersionB).source_key == denoised.source_key);
+  // Another camera matrix of the gain match is another key (#1055).
+  auto other_camera = kCamera;
+  other_camera[0] += 0.05;
+  EXPECT_FALSE(MakeDenoised(cfa, kVersionA, other_camera).source_key == denoised.source_key);
 
   // A file whose white balance LibRaw applied gets no white balance gain.
   auto applied                           = cfa;
@@ -115,24 +122,25 @@ TEST(DevelopAiDenoiseInputTest, DenoisedInputRejectsAReducedOrNonBayerInputAndAW
       gpu_dag_test::MakeXTransPattern(), gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(60, 48), DecodeRes::FULL);
   EXPECT_THROW((void)RawInputLoader::FromDenoisedBayer(
-                   xtrans, gpu_dag_test::MakeF32RgbaPlane(60, 48), kVersionA),
+                   xtrans, gpu_dag_test::MakeF32RgbaPlane(60, 48), kVersionA, kCamera),
                std::runtime_error);
 
   const auto direct = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(56, 40),
                                                     gpu_dag_test::FullSensor(56, 40));
   EXPECT_THROW((void)RawInputLoader::FromDenoisedBayer(
-                   direct, gpu_dag_test::MakeF32RgbaPlane(56, 40), kVersionA),
+                   direct, gpu_dag_test::MakeF32RgbaPlane(56, 40), kVersionA, kCamera),
                std::runtime_error);
 
   // The whole mosaic is not the decode area.
   EXPECT_THROW((void)RawInputLoader::FromDenoisedBayer(cfa, gpu_dag_test::MakeF32RgbaPlane(64, 48),
-                                                       kVersionA),
+                                                       kVersionA, kCamera),
                std::runtime_error);
   auto u16 = gpu_dag_test::MakeU16CfaPlane(56, 40, gpu_dag_test::MakeRggbPattern());
-  EXPECT_THROW((void)RawInputLoader::FromDenoisedBayer(cfa, u16, kVersionA), std::runtime_error);
+  EXPECT_THROW((void)RawInputLoader::FromDenoisedBayer(cfa, u16, kVersionA, kCamera),
+               std::runtime_error);
   for (const auto& version : {std::string("abc"), std::string(64, 'A'), std::string()}) {
     EXPECT_THROW((void)RawInputLoader::FromDenoisedBayer(
-                     cfa, gpu_dag_test::MakeF32RgbaPlane(56, 40), version),
+                     cfa, gpu_dag_test::MakeF32RgbaPlane(56, 40), version, kCamera),
                  std::runtime_error);
   }
 }

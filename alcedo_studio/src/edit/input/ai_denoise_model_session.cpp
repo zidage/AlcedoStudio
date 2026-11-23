@@ -94,8 +94,8 @@ auto DenoiseModelSession::InstalledModelVersion() -> std::string {
   return version;
 }
 
-auto DenoiseModelSession::Denoise(const PreparedRawInput& cfa, std::string_view model_version)
-    -> PreparedRawInput {
+auto DenoiseModelSession::Denoise(const PreparedRawInput& cfa, std::string_view model_version,
+                                  const std::array<double, 9>& xyz_to_camera) -> PreparedRawInput {
   std::scoped_lock lock(run_mutex_);
   if (!platform_) {
     throw AiDenoiseError(AiDenoiseErrorKind::RunFailed,
@@ -118,7 +118,7 @@ auto DenoiseModelSession::Denoise(const PreparedRawInput& cfa, std::string_view 
   try {
     mosaic = PackBayerForAiDenoise(cfa);
     ApplyAiDenoiseInputCurve(mosaic, AiDenoiseInputCurveFor(mosaic.input_means));
-    weights = AiDenoiseGainWeights(cfa.color_context.cam_xyz_);
+    weights = AiDenoiseGainWeights(xyz_to_camera);
   } catch (const std::exception& error) {
     throw AiDenoiseError(AiDenoiseErrorKind::RunFailed, error.what());
   }
@@ -148,7 +148,8 @@ auto DenoiseModelSession::Denoise(const PreparedRawInput& cfa, std::string_view 
     mosaic.planes          = {};
     auto plane             = AssembleDenoisedPlane(view, mosaic, gain, cfa.linearization);
     output                 = {};
-    auto denoised = RawInputLoader::FromDenoisedBayer(cfa, std::move(plane), model_version);
+    auto denoised =
+        RawInputLoader::FromDenoisedBayer(cfa, std::move(plane), model_version, xyz_to_camera);
     ALCEDO_LOG_INFO(Render) << "AI Denoise: " << mosaic.area_width << " x " << mosaic.area_height
                             << " px in " << record.tile_count << " tiles of " << record.tile_size
                             << ", session " << Seconds(loaded - started) << " s, tile loop "

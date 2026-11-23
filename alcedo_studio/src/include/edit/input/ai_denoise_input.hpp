@@ -121,13 +121,15 @@ void ApplyAiDenoiseInputCurve(AiDenoisePackedMosaic& mosaic, const AiDenoiseInpu
 
 /**
  * @brief The column sums w_c of the camera RGB to linear Rec.2020 matrix,
- *        XYZ_to_Rec2020 * inverse(cam_xyz): the share of each camera channel in the mean of a
- *        Rec.2020 image.
+ *        XYZ_to_Rec2020 * inverse(xyz_to_camera): the share of each camera channel in the mean of
+ *        a Rec.2020 image.
  *
- * @p cam_xyz is the 3 x 3 LibRaw `color.cam_xyz` (camera from XYZ), row-major.
+ * @p xyz_to_camera is the camera matrix of the render at D65 (ResolveDevelopXyzToCameraD65:
+ * DNG ColorMatrix sense, camera from XYZ), row-major.
  * @throws std::runtime_error when the matrix is singular or not finite.
  */
-[[nodiscard]] auto AiDenoiseGainWeights(const float (&cam_xyz)[9]) -> std::array<double, 3>;
+[[nodiscard]] auto AiDenoiseGainWeights(const std::array<double, 9>& xyz_to_camera)
+    -> std::array<double, 3>;
 
 /**
  * @brief The sums of the model output in the decode area, added tile by tile.

@@ -1675,8 +1675,10 @@ DN3 (tile loop, slow-device check), DN5 (`FromDenoisedBayer`, the input check). 
   at the left, and an odd size one row or column at the bottom or the right, each by reflection
   without the edge pixel; then the mosaic starts with R and is packed to 4 planes (R, G1, G2, B).
 - **Gain match.** `g = sum_c w_c mean_in(c) / sum_c w_c mean_out(c)`: `w_c` the column sums of
-  `XYZ_to_Rec2020 * inverse(cam_xyz)` (LibRaw `color.cam_xyz`, copied into the color context at
-  the unpack), `mean_in(c)` the mean of the prepared samples of color `c` in the area (G: both
+  `XYZ_to_Rec2020 * inverse(xyz_to_camera)`, with `xyz_to_camera` the camera matrix of the render
+  at D65 (`ResolveDevelopXyzToCameraD65`: the effective camera profile of the Develop node, its
+  ColorMatrix at 6504 K with the AnalogBalance and CameraCalibration of a DNG profile; #1055),
+  `mean_in(c)` the mean of the prepared samples of color `c` in the area (G: both
   positions), `mean_out(c)` the mean of output channel `c` in the area. The tile callback adds
   the output sums of the kept rectangle of each tile inside the area (double precision).
 - **Denoised plane.** Channel `c` of the area: `g * out_c * (maximum - black_level[c]) /
@@ -1784,12 +1786,14 @@ with the editor GPU release and at the editor close, the error kinds, and issue 
 ```text
 Renderer::RenderImage (DecodeRes::FULL, ai_denoise on)      include/edit/runtime/detail/renderer.inl.hpp
   -> DenoiseModelSession::InstalledModelVersion (SHA-256 of the graph file, kept by size and time)
-  -> PreparedSourceCache::AcquireDenoised(encoded, version) -> miss    edit/input/prepared_source_cache.cpp
+  -> detail::AiDenoiseXyzToCamera -> ResolveDevelopXyzToCameraD65 (the camera matrix of the
+     render at D65; no matrix: the render error of the camera colour pass)
+  -> PreparedSourceCache::AcquireDenoised(encoded, version, camera) -> miss (key: HashAiDenoiseRun)
      -> AcquireEncoded(FULL): the CFA entry (hit or LibRaw unpack); not Bayer CFA -> that lease
-     -> DenoiseModelSession::Denoise(cfa, version) (run mutex)       edit/input/ai_denoise_model_session.cpp
+     -> DenoiseModelSession::Denoise(cfa, version, camera) (run mutex) edit/input/ai_denoise_model_session.cpp
         -> AiDenoisePlatform::DeviceKey (DirectMlAdapterKey: description and LUID); slow-device map
         -> PackBayerForAiDenoise (decode area, phase rows and columns by reflection, input means)
-        -> AiDenoiseGainWeights(cam_xyz) -> CreateSession on the first run (UtNet2DirectMlSession)
+        -> AiDenoiseGainWeights(camera) -> CreateSession on the first run (UtNet2DirectMlSession)
         -> nn::DenoiseBayerMosaic (AvailableTileMemory: process budget and adapter memory of all
            processes) -> each tile: Run -> AiDenoiseOutputSums::AddKept
         -> AiDenoiseGainFactor -> AssembleDenoisedPlane -> RawInputLoader::FromDenoisedBayer
@@ -1904,7 +1908,19 @@ of a fast device during the paging of another process stopped the run.
   7968 x 5320 of LibRaw): the model input is the area that Alcedo develops, so it differs from the
   lab packing by the 8 px border. The comparison test uses the common area.
 - **`RawLinearizationParams::libraw_maximum`** holds LibRaw `color.maximum` (not hashed: the
-  source key holds the file). The loader copies LibRaw `cam_xyz` into the color context.
+  source key holds the file).
+- **The gain match uses the camera matrix of the render (#1055, 2026-11-22).** DN6 read LibRaw
+  `color.cam_xyz`. LibRaw fills that field only from its own Adobe table: for a DNG it reads the
+  ColorMatrix into a local array for `rgb_cam` only, so the field is zero for DNG files of models
+  outside the table (phones, DJI, Leica, Sigma) and for cameras newer than the table (GFX100RF,
+  Lumix L10, Z5II); 27 Bayer files of the sample set had a zero matrix and the run stopped with
+  "the camera matrix is singular". The run now takes `ResolveDevelopXyzToCameraD65` of the Develop
+  node, the matrix that the render uses, and fails only where the render fails. The matrix is in
+  the key of the denoised entry (`PreparedSourceKey::denoise_hash` = `HashAiDenoiseRun`): another
+  camera profile runs the model again, a white balance change does not. For the ILCE-7RM3 of the
+  lab comparison the ColorMatrix2 of `camera_matrices.hpp` is not the matrix of the LibRaw table,
+  so the weights differ from the lab weights (R 3.78 / 2.69, G 1.19 / 1.21, B 0.48 / 0.83); the
+  DirectML run on that file keeps the channel means of the CFA render within 2.5%.
 - **Pattern black:** the prepared value subtracts the pattern black of the position, as the CFA
   Linearize step; the denominator uses `maximum - black_level[c]`. For a file without a pattern
   black this is the lab preparation.

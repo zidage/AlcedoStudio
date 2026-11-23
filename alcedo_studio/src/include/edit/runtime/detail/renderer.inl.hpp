@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
 
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
@@ -28,6 +30,18 @@
 
 namespace alcedo {
 namespace detail {
+
+/// The camera matrix of the AI Denoise gain match: the camera matrix of the render of @p develop
+/// at D65 (issue 1055). A profile without one fails the render here, as it fails the camera colour
+/// pass without AI Denoise.
+inline auto AiDenoiseXyzToCamera(const DevelopPayload& develop) -> std::array<double, 9> {
+  const auto resolved = ResolveDevelopXyzToCameraD65(develop);
+  if (!resolved.ok) {
+    throw std::runtime_error("AI Denoise: " +
+                             ColorTransformFailureMessage(develop, resolved.error));
+  }
+  return resolved.xyz_to_camera;
+}
 
 /// ROI geometry of one GPU DAG render, at Debug level in alcedo.render.roi. Release builds compile
 /// it out; Debug builds write it when QT_LOGGING_RULES enables alcedo.render.roi.debug.
@@ -164,9 +178,10 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
   if (interactive) {
     if (run_ai_denoise) {
       const auto version = ai_denoise_->InstalledModelVersion();
+      const auto camera  = detail::AiDenoiseXyzToCamera(denoise_develop->Params().Params());
       prepared_lease.emplace(source_cache_.AcquireDenoised(
-          encoded_bytes, version,
-          [&](const PreparedRawInput& cfa) { return ai_denoise_->Denoise(cfa, version); }));
+          encoded_bytes, version, camera,
+          [&](const PreparedRawInput& cfa) { return ai_denoise_->Denoise(cfa, version, camera); }));
     } else {
       prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
     }
@@ -180,8 +195,9 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     if (run_ai_denoise && !request.prepared_input &&
         batch_prepared->CompileSource().kind == DevelopInputKind::BayerCfa) {
       const auto version = ai_denoise_->InstalledModelVersion();
-      batch_prepared =
-          std::make_shared<const PreparedRawInput>(ai_denoise_->Denoise(*batch_prepared, version));
+      const auto camera  = detail::AiDenoiseXyzToCamera(denoise_develop->Params().Params());
+      batch_prepared     = std::make_shared<const PreparedRawInput>(
+          ai_denoise_->Denoise(*batch_prepared, version, camera));
     }
     diag::PreviewCpuInterval compile(diag::PreviewCpuStage::PlanCompile);
     plan = GraphCompiler::CompileStatic(document, batch_prepared->CompileSource(),
