@@ -48,8 +48,17 @@ Item {
 
     // The AI Models page, from Manage of an item whose AI Denoise model is not installed.
     signal aiModelsPageRequested()
-    // A refusal of Turn Off AI Denoise, for the snackbar of the window.
+    // A refusal or a failure of Turn Off AI Denoise, for the snackbar of the window.
     signal messageRequested(string message)
+
+    Connections {
+        target: appModules.exportAiDenoise
+        ignoreUnknownSignals: true
+        function onTurnOffFinished(result) {
+            if (result && result.message)
+                root.messageRequested(result.message)
+        }
+    }
 
     readonly property int queuePreviewLimit: 36
     readonly property int queueListMaxHeight: 180
@@ -1278,7 +1287,7 @@ Item {
                                                 objectName: "exportQueueTurnOffAiDenoiseButton"
                                                 kind: "normal"
                                                 enabled: root.controlsEnabled
-                                                         && appModules.aiDenoiseActions.running !== true
+                                                         && appModules.exportAiDenoise.running !== true
                                                 text: qsTr("Turn Off AI Denoise")
                                                 buttonWidth: contentItem.implicitWidth + 2 * appTheme.spaceSm
                                                 buttonHeight: appTheme.iconButtonHitSizeCompact
@@ -1286,7 +1295,7 @@ Item {
                                                 font.pixelSize: appTheme.fontSizeCaption
                                                 onClicked: {
                                                     const elementId = Number(String(modelData.statusKey).split(":")[0])
-                                                    const result = appModules.aiDenoiseActions
+                                                    const result = appModules.exportAiDenoise
                                                                    .turnOffForExportItem(elementId)
                                                     if (result && result.started !== true && result.message)
                                                         root.messageRequested(result.message)

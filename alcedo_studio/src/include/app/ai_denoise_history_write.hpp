@@ -29,8 +29,8 @@ struct AiDenoiseHistoryWrite {
  *        history: one `raw_decode` SetParameter commit on the active Version (integration plan,
  *        DN8).
  *
- * This is the change of the editor switch (DN7) for the library action and for
- * `Turn Off AI Denoise` of an export queue item. It reads the history with
+ * This is the change of the editor switch (DN7) for `Turn Off AI Denoise` of an export queue
+ * item. It reads the history with
  * PipelineMgmtService::LoadHistorySnapshot, replays the active Version head, applies the
  * `raw_decode` write with @p denoise (on with its version, or off when empty), and writes the new
  * history with PipelineMgmtService::PersistHistory in one storage transaction. The Version list

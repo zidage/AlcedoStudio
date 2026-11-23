@@ -26,8 +26,8 @@
   labels `Auto` and `Neural`, and the viewport card of each model error with
   `Turn Off AI Denoise`; the user removed the model version notice (D10). 2026-11-23: DN14
   complete (issue #1059): the steps of a render in a pill and a segmented bar, and the
-  placeholder image before the first frame. 2026-11-23: DN8 complete (issue #1061): `AI Denoise`
-  in the image context menu writes the switch on for the Bayer RAW photos of its targets; an
+  placeholder image before the first frame. 2026-11-23: DN8 complete (issue #1061): several photos
+  get AI Denoise through Copy and Paste of the RAW Decode item (no library action, user); an
   export item with an AI Denoise error stays in the queue with `Turn Off AI Denoise`
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
@@ -63,7 +63,7 @@ the time of the DemosaicNet student, DN1 additions).
 | D2 | The model runs in FP16 in ONNX Runtime, in the process of Alcedo Studio through the C++ API of ONNX Runtime: on Windows with the DirectML execution provider (U6), on macOS on the Neural Engine with the Core ML execution provider (U5). Both use one FP16 graph of the rescaled layers that the lab makes from the safetensors weights. The Rust sidecar (`alcedo_mind`) has no part in the noise reduction. TensorRT and cuDNN are not used. Changed on 2026-11-22 from own CUDA forward code (after the DirectML measurement of DN1), then to FP16 on both platforms (U5, U6). | 2026-11-22 |
 | D3 | The work starts with the weights export and the measurements. The publication of the model package on R2 is the last product phase. | 2026-11-21 |
 | D4 | No distillation to a smaller model. `target_time` is the measured FP16 time of the full model (U1), so the full model meets it. Changed on 2026-11-22 (was: distillation if the DN3 time is above `target_time`). | 2026-11-22 |
-| D5 | The model runs in the render of the editor and of the export, when the Develop sensor stage is computed (a new photo, a change of a sensor Develop parameter, a cache miss). The editor shows its normal render state; there is no blocking progress display and no batch run. A library action or a paste only sets the parameter. Replaced on 2026-11-22 (was: a blocking run with a progress display, Cancel, and a batch run). | 2026-11-22 |
+| D5 | The model runs in the render of the editor and of the export, when the Develop sensor stage is computed (a new photo, a change of a sensor Develop parameter, a cache miss). The editor shows its normal render state; there is no blocking progress display and no batch run. A paste only sets the parameter. Replaced on 2026-11-22 (was: a blocking run with a progress display, Cancel, and a batch run). | 2026-11-22 |
 | D6 | The application stores no denoised image on disk: no stored result file and no separate DNG file. The RAW file stays the photo. The denoised image is an entry of the prepared source cache in memory. Replaced on 2026-11-22 by the user (was: a stored result file of the RAW file). | 2026-11-22 |
 | D7 | Removed on 2026-11-22 with the stored result file (was: the folder of the stored results in the settings). | 2026-11-22 |
 | D8 | Removed on 2026-11-22 with the stored result file (was: the deletion of the stored result file with the RAW file). | 2026-11-22 |
@@ -72,7 +72,7 @@ the time of the DemosaicNet student, DN1 additions).
 | D11 | The Develop node keeps its structure: one root node, no input port. The noise reduction is a parameter of the Develop node. The loader runs the model on the mosaic and gives the result to the Develop passes as a second prepared input of the same RAW file. Changed on 2026-11-22 (the loader runs the model in place of a read of the stored result). | 2026-11-22 |
 | D12 | A thumbnail and a semantic input image render from the reduced mosaic without the model (the Legacy demosaic, as now). The editor and the export run the model at the full size. When the model cannot run (not installed, no supported device, a run error), the editor and the export report the error and do not render the photo without the noise reduction. Changed on 2026-11-22. | 2026-11-22 |
 | D13 | Platform order: Windows (DirectML, for each render backend and each GPU with Direct3D 12), then macOS (Core ML on the Neural Engine of Apple silicon), then Linux. On a platform without its forward phase, the application does not show the noise reduction control. Changed on 2026-11-22 from the backend order CUDA, Metal, OpenCL. | 2026-11-22 |
-| D14 | The first version supports Bayer sensors only. For an X-Trans or a monochrome photo, the application reports that the photo is not supported. A library action or a paste for several photos reports the photo and sets the parameter of the other photos. | 2026-11-21 |
+| D14 | The first version supports Bayer sensors only. For an X-Trans or a monochrome photo, the application reports that the photo is not supported. A paste for several photos sets the parameter of each photo; the render of a photo that is not Bayer reports it (changed on 2026-11-23, DN8: no library action). | 2026-11-23 |
 
 ### 1.3 Decisions that wait for a measurement
 
@@ -126,13 +126,10 @@ the time of the DemosaicNet student, DN1 additions).
 
 ### 2.2 Library, paste, and export
 
-- The image context menu gets `AI Denoise`. It uses the targets of
-  `LibraryMutationOperations::ResolveTargets` and turns the noise reduction on with one change on
-  the active Version of each Bayer photo, the change of the editor switch (DN8 changed it from
-  the inspector actions and a new Version). It runs no model. A photo that is not Bayer is
-  reported (D14).
-- A paste of the RAW Decode item with the noise reduction on sets the parameter as each other
-  paste; it runs no model.
+- Several photos get the noise reduction through Copy Adjustments and Paste Adjustments: a
+  paste of the RAW Decode item with the noise reduction on sets the parameter as each other
+  paste; it runs no model. The library has no separate action (user, 2026-11-23, DN8). A pasted
+  photo that is not Bayer reports `SensorNotSupported` at its render (D14).
 - The export renders each photo with the model when its noise reduction is on. A photo whose
   model run fails gets the error of that photo in the export queue; the other photos continue.
 - The queue item of that photo has the control `Turn Off AI Denoise`. It writes the change
@@ -158,7 +155,7 @@ the time of the DemosaicNet student, DN1 additions).
 | Failure | Result |
 | --- | --- |
 | Model not installed | Switch: the AI Models page opens, the switch stays off. Render of a photo with the parameter on: the render error with a control to the AI Models page |
-| Sensor type not supported | The switch is disabled; a library action reports the photo |
+| Sensor type not supported | The switch is disabled; the render of a pasted photo reports it with `Turn Off AI Denoise` |
 | RAW file missing or its mount offline | The existing "missing" behavior of the editor and the export |
 | GPU or Neural Engine error, or not enough memory for the smallest tile | The render error with the error text of ONNX Runtime |
 | No Direct3D 12 GPU, or ONNX Runtime or DirectML.dll fails to load | The switch is hidden; a render of a photo with the parameter on reports the ONNX Runtime error. The application does not run the model on the CPU |
@@ -188,7 +185,7 @@ measured tile (a photo of one tile on a new session) has no check; the next run 
 | `decoders/processor/nn` | The ONNX Runtime sessions of UtNet2 (DirectML, Core ML), the overlap tile planner, the tile loop |
 | `edit/input` | The model run in the loader, the process-wide session owner, the denoised entry of the prepared source cache |
 | `edit/graph`, `edit/runtime` | The Develop parameter, the denoised input kind, the pass list, the content keys |
-| `ui/alcedo_main` | The switch, the render error with the AI Models control, the library action, the GPU release of the session |
+| `ui/alcedo_main` | The switch, the render error with the AI Models control, the export queue controls, the GPU release of the session |
 | `opencl` | The forward code of Linux (DN11) |
 | `app/ai_model_package_*`, `scripts/ai_models` | The feed with more than one package, the denoise model package |
 | `ui/alcedo_main/automation` | The `denoise` commands of `alcedo-cli` |
@@ -302,7 +299,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | U4 | 1000 to 1500 | complete (#1045) |
 | DN6 | Model run in the loader: `DenoiseModelSession`, input preparation, gain match, the denoised entry of the prepared source cache, GPU release, errors | `edit/input`, `decoders/processor/nn` | DN3, DN5 | 800 to 1300 | complete (#1048) |
 | DN7 | Editor switch, render error with the AI Models control | `ui/alcedo_main`, `app`, `edit/input` | DN6 | 900 to 1400 | complete (#1050) |
-| DN8 | Library action and export errors | `ui/alcedo_main`, `app` | DN7 | 300 to 600 | complete (#1061) |
+| DN8 | Batch through Paste, and export errors | `ui/alcedo_main`, `app` | DN7 | 300 to 600 | complete (#1061) |
 | DN9 | Removed on 2026-11-22 (was: the settings section for the stored results) | | | | removed |
 | DN10 | macOS forward code: the Core ML session of UtNet2 on the Neural Engine in ONNX Runtime (C++), the osx-arm64 library | `cmake`, `decoders/processor/nn` | DN3 | 600 to 1000 | planned |
 | DN11 | Linux forward code | `opencl` or ONNX Runtime WebGPU | DN3 | 1400 to 1900 | last (2026-11-22: the only Linux environment is WSL) |
@@ -2561,48 +2558,35 @@ after the first frame is dropped. Tests `PlaceholderStaysUntilTheViewportCompose
 and `CameraPreviewAfterTheFirstFrameIsDropped` (`EditorViewportPlaceholderTest`, 6/6 PASS). The
 log line `Editor placeholder: <kind> <w> x <h>` names the chosen image.
 
-### DN8: library action and export errors
+### DN8: batch through Paste, and export errors
 
-Written on 2026-11-23, before the implementation.
+Written on 2026-11-23, before the implementation. Revised on 2026-11-23 by the user: AI Denoise
+for several photos goes through Copy Adjustments and Paste Adjustments (the RAW Decode item); the
+library gets no action of its own.
 
 **Objective and deliverables**
 
-The library turns AI Denoise on for several photos without the editor, and the export reports
-a model error for each photo and continues. The deliverables: the stored-history write of the
-switch, the library action with its Bayer check and its background task, the export item
+Several photos get AI Denoise through the existing Copy and Paste of the RAW Decode item, and the
+export reports a model error for each photo and continues. The deliverables: the export item
 status of a model error, the `Turn Off AI Denoise` and `Manage` controls of the export queue
-item, the queue state after `Turn Off AI Denoise`, the translations.
+item, the stored-history write of the switch for `Turn Off AI Denoise`, the queue state after it,
+the translations.
 
 **Inputs and prerequisites**
 
 DN6 (the model run in the export render through the session of `PipelineExecutor`), DN7
 (`AiDenoiseError`, `ParseAiDenoiseRenderError`, `EditorAiDenoiseControl`, the `ai_denoise` key of
-`raw_decode`), the export item status `missing` of issue #1018.
+`raw_decode` and its paste), the export item status `missing` of issue #1018.
 
 **Product rules** (2.2 is the specification; these are the details of the implementation)
 
-- **Library action.** The image context menu of the Library grid and of the editor filmstrip
-  gets `AI Denoise` after `Paste Adjustments`. Its targets are those of
-  `LibraryMutationOperations::ResolveTargets` (the selection when it holds the clicked photo,
-  else the clicked photo), the rule of the other actions of that menu. The item is absent when
-  the platform cannot run the model (D13). The library inspector keeps its button row: it acts
-  on the selection without a clicked photo, and the row holds the export action.
-- **The change of a target.** One `raw_decode` change on the active Version of each target with
-  `ai_denoise: {"model_version": <installed>}`: the change of the editor switch (DN7). The
-  action does not make a Version for each photo; the export renders the active Version, and the
-  editor undoes the change as any other. A target whose switch is already on with the installed
-  version is unchanged. The action runs no model (D5).
-- **The photo open in the editor** takes the change through the editor session
-  (`EditorAiDenoiseControl`), as a Paste does: the session owns its history.
-- **Model not installed:** the action opens the AI Models page and writes nothing (as the
-  switch). **An automation agent holds control:** the action is refused with the reason.
-- **Bayer check (D14).** Each target is checked with `ReadRawSensorLayout` on the worker before
-  its write. A photo that is not Bayer (X-Trans, monochrome, a raster image, a file that LibRaw
-  cannot open) is reported and not written; the other targets are written.
-- **Result.** One snackbar message: the number of photos turned on, and the number of photos
-  that are not supported or failed. A background task `AI Denoise` shows the run in the
-  background task bar and holds the locks of a Paste (delete, project close, editor image
-  selection, workspace switch), because it writes stored histories.
+- **Several photos.** The user turns AI Denoise on in one photo, copies its adjustments with the
+  RAW Decode item, and pastes them on the other photos. The paste carries `ai_denoise` (DN7,
+  `PasteOfRawDecodeCarriesTheSwitch`) and runs no model (D5). The library has no separate
+  `AI Denoise` action (user, 2026-11-23).
+- **A pasted photo that is not Bayer** gets the parameter as each other paste; its render reports
+  `SensorNotSupported` with `Turn Off AI Denoise` (the card of DN7, the export item below). The
+  paste does not read the sensor of its targets.
 - **Export error.** A photo whose export render fails with an AI Denoise error gets the item
   status `ai_denoise`. It stays in the export queue, as a `missing` photo does; the other photos
   of the run continue. The queue row shows the title of the kind (the titles of the DN7 card)
@@ -2610,7 +2594,8 @@ DN6 (the model run in the export render through the session of `PipelineExecutor
 - **Turn Off AI Denoise of a queue item** writes one `raw_decode` change with `ai_denoise: null`
   on the active Version of the photo (through the editor session when the editor has it open),
   then puts the item back to `Queued`: it leaves the run whose status it showed and joins the
-  next export. It starts no export.
+  next export. It starts no export. A background task `AI Denoise` shows the write and holds the
+  locks of a Paste, because it writes a stored history.
 
 **Data rules**
 
@@ -2626,11 +2611,11 @@ DN6 (the model run in the export render through the session of `PipelineExecutor
 - **Queue state.** `ExportQueue::ApplyExportState` keeps the `ai_denoise` entries.
   `ExportQueue::ReturnToQueued(element_id)` sets the run of the entry to 0, so the entry shows
   `Queued` and the next run takes it.
-- **Owner.** `AiDenoiseLibraryActions` (album backend, `appModules.aiDenoiseActions`): the
-  library action and the `Turn Off AI Denoise` of a queue item. Its services are functions (the
-  platform check, the installed version, the image path, the sensor layout, the pipeline
-  service, the editor image and its write, the refresh of a written target), so the tests run it
-  without the application. One run at a time.
+- **Owner.** `ExportAiDenoiseControl` (album backend, `appModules.exportAiDenoise`):
+  `Turn Off AI Denoise` of a queue item. Its services are functions (the agent refusal, the
+  stored-history writer bound to the pipeline service on the GUI thread, the editor photo and
+  its switch, the refresh of a written photo), so the tests run it without the application. One
+  write at a time.
 
 **Modules, files, and APIs**
 
@@ -2640,44 +2625,33 @@ DN6 (the model run in the export render through the session of `PipelineExecutor
 | `include/app/export_service.hpp`, `app/export_service.cpp` | `ExportProgress::task_message_` |
 | `include/ui/alcedo_main/album_backend/import_export.hpp`, `import_export.cpp` | `ExportItemStatusOf`, `exportItemAiDenoiseErrors` |
 | `include/ui/alcedo_main/album_backend/export_queue.hpp`, `export_queue.cpp` | Keep `ai_denoise` entries; `ReturnToQueued` |
-| `include/ui/alcedo_main/album_backend/ai_denoise_library_actions.hpp`, `.cpp` (new), `application_module_host.*` | The library action, the queue item control, the background task |
+| `include/ui/alcedo_main/album_backend/export_ai_denoise_control.hpp`, `.cpp` (new), `application_module_host.*` | `Turn Off AI Denoise` of a queue item, the background task |
 | `include/ui/alcedo_main/album_backend/background_task_controller.hpp`, `.cpp` | `BackgroundTaskKind::AiDenoiseSwitch` |
-| `qml/AppDialogs.qml`, `qml/ImageActionsController.qml`, `qml/ExportInspectorPanel.qml`, `qml/InspectorPanel.qml`, `qml/LibraryWorkspace.qml`, `qml/BackgroundTaskBar.qml`, `qml/BackgroundTasksDialog.qml`, the `.ts` files | The menu item, the queue row controls, the task name |
+| `qml/ExportInspectorPanel.qml`, `qml/InspectorPanel.qml`, `qml/LibraryWorkspace.qml`, `qml/BackgroundTaskBar.qml`, `qml/BackgroundTasksDialog.qml`, the `.ts` files | The queue row controls, the task name |
 
 **Primary success call chain**
 
 ```text
-image menu AI Denoise -> ImageActionsController.requestAiDenoise -> AiDenoiseLibraryActions
-  ::turnOnForTargets(ResolveTargets) -> installed version; paths on the GUI thread
-  -> background task AiDenoiseSwitch -> worker: ReadRawSensorLayout -> Bayer
-     -> WriteAiDenoiseSwitchToStoredHistory (LoadHistorySnapshot, replay, write, one commit,
-        PersistHistory)
-  -> GUI: refresh of each written target (edit state, thumbnail); the editor photo through
-     EditorAiDenoiseControl -> finished(result) -> snackbar
 export run -> render -> AiDenoiseError -> ExportResult::message_ -> ExportProgress::task_message_
   -> ExportItemStatusOf = ai_denoise, exportItemAiDenoiseErrors -> ExportQueue keeps the entry
   -> queue row: title of the kind, Turn Off AI Denoise
-Turn Off AI Denoise (queue row) -> AiDenoiseLibraryActions::turnOffForExportItem -> worker:
+Turn Off AI Denoise (queue row) -> ExportAiDenoiseControl::turnOffForExportItem -> worker:
   WriteAiDenoiseSwitchToStoredHistory(off) -> GUI: refresh -> ExportQueue::ReturnToQueued -> Queued
 ```
 
 **Primary failure call chain**
 
 ```text
-model not installed -> turnOnForTargets returns model_not_installed -> AI Models page; no write
-target not Bayer, or LibRaw cannot open it -> reported in notSupported; not written
-history write throws (editor took the image, storage changed, replay failed) -> reported in
-  failures; that history is unchanged; the other targets are written
 Turn Off write fails -> the item keeps the ai_denoise status; the message in the snackbar
-another run of the owner is running -> refused with the reason; nothing starts
+an agent holds control, or a write runs -> refused with the reason; nothing starts
 ```
 
 **Implementation steps**
 
 1. `WriteAiDenoiseSwitchToStoredHistory` and its tests.
 2. The export message, the item status, the kept queue entries, `ReturnToQueued`.
-3. `AiDenoiseLibraryActions`, the background task kind, the module host.
-4. QML: the menu item, the queue row controls, the task name, the translations.
+3. `ExportAiDenoiseControl`, the background task kind, the module host.
+4. QML: the queue row controls, the task name, the translations.
 
 **Tests**
 
@@ -2689,67 +2663,57 @@ another run of the owner is running -> refused with the reason; nothing starts
 | `WriteRefusesAnImageThatTheEditorHolds` | Throws; the stored history is unchanged |
 | `ItemStatusOfAnAiDenoiseErrorIsAiDenoise` | `ExportItemStatusOf` for each status; a message with the marker after other text |
 | `AiDenoiseEntriesStayInTheQueueAndReturnToQueued` (`ExportQueueTest`) | The entry stays after its run; `ReturnToQueued` clears its status key; the next run takes it |
-| `TurnOnWritesTheBayerTargetsAndReportsTheOthers` | Fake services: the Bayer targets are written with the version; an X-Trans target and a file that cannot be read are reported; the result counts |
-| `TurnOnWithoutAModelRequestsTheAiModelsPageAndWritesNothing` | |
-| `TurnOnRoutesTheEditorPhotoThroughTheEditor` | The editor photo is not written to storage; the editor write gets the version |
-| `TurnOffOfAQueueItemWritesTheSwitchOffAndReturnsTheItemToQueued` | The write is off; the queue entry has no status key after it; a failed write keeps the entry in its run |
-| `SecondRunIsRefusedWhileOneRuns` | |
+| `TurnOffOfAQueueItemWritesTheSwitchOffAndReturnsTheItemToQueued` | The write is off; the queue entry has no status key after it |
+| `FailedTurnOffKeepsTheItemInItsRun` | |
+| `TurnOffOfTheEditorPhotoGoesThroughTheEditor` | |
+| `TurnOffIsRefusedWhileAnAgentHoldsControlOrAWriteRuns` | |
 
-No QML test: the menu item and the row controls are pure UI (repository rule).
+No QML test: the row controls are pure UI (repository rule).
 
 **Exit criteria**
 
 - [x] The tests pass in `build/debug`.
-- [x] The touched suites (`ExportQueueTest`, `EditorAiDenoiseControlTest`,
-      `LibraryMutationOperationsTest`) have no new failure.
-- [x] The production window of `MainQmlWorkflowTest` loads the changed QML without a warning.
+- [x] The touched suites (`ExportQueueTest`, `EditorAiDenoiseControlTest`) have no new failure.
+- [x] The production window of `MainQmlWorkflowTest` loads the changed QML without a new warning.
 
-**Expected diff**: 900 to 1300 lines (the estimate of section 6 did not count the history write
-and the tests).
+**Expected diff**: 700 to 1000 lines.
 
 ##### Phase DN8 completion record (2026-11-23)
 
-**Status:** complete. The image context menu has `AI Denoise`: it writes the switch on for the
-Bayer RAW photos of its targets and reports the others; the export keeps a photo whose render
-fails with an AI Denoise error in the queue with the title of the error and the controls
-`Turn Off AI Denoise` and `Manage`. Issue #1061.
+**Status:** complete. Several photos get AI Denoise through Copy and Paste of the RAW Decode
+item. The export keeps a photo whose render fails with an AI Denoise error in the queue with the
+title of the error and the controls `Turn Off AI Denoise` and `Manage`. Issue #1061.
 
 **Primary success call chain:**
 
 ```text
-image menu AI Denoise (AppDialogs, id ai-denoise) -> ImageActionsController.requestAiDenoise
-  -> AiDenoiseLibraryActions::turnOnForTargets(ResolveTargets targets)
-     -> DenoiseModelSession::InstalledModelVersion; image paths and the editor photo on the GUI
-        thread; StoredHistoryWriter bound to the pipeline service of the project
-     -> BackgroundTaskController::RegisterTask(AiDenoiseSwitch, the locks of a Paste)
-  -> QThreadPool: ReadRawSensorLayout -> Bayer
-     -> WriteAiDenoiseSwitchToStoredHistory: LoadHistorySnapshot -> BuildDocumentFromRoot(active
-        head) -> CompleteCurrentPanelParameterTarget(raw_decode) -> ApplyEditorParameterWrite
-        (DevelopRawDecodeUpdate{ai_denoise}) -> MakeSetParameterBatch -> one commit on the active
-        Version -> PersistHistory (one transaction)
-  -> GUI: FinishRun -> the editor photo through EditorAiDenoiseControl::turnOn; refresh of each
-     written photo (SetAlbumItemEditState, InvalidateThumbnail, RefreshCurrentThumbnail)
-     -> FinishTask -> RunFinished -> snackbar; LibraryModule::NoteEditHistoryChanged
+Copy Adjustments (RAW Decode item of a photo with the switch on) -> Paste Adjustments
+  -> AdjustmentTransferApplyCoordinator (or the editor session for the open photo): the
+     raw_decode value with ai_denoise in a new root-relative Version of each target (DN7)
 export run -> ExportService::RunExportRenderTask -> render throws AiDenoiseError -> ExportResult
   ::message_ -> ExportProgress::task_message_ -> ImportExportHandler: ExportItemStatusOf =
   ai_denoise, exportItemAiDenoiseErrors[key] = {kind, text} -> ExportQueue::ApplyExportState keeps
   the entry -> ExportInspectorPanel row: title of the kind, Turn Off AI Denoise (Manage)
-Turn Off AI Denoise (row) -> AiDenoiseLibraryActions::turnOffForExportItem -> worker:
-  WriteAiDenoiseSwitchToStoredHistory(off) (or EditorAiDenoiseControl::turnOff for the editor
-  photo) -> GUI: refresh -> ExportQueue::ReturnToQueued (run 0, no statusKey) -> Queued; the next
-  export takes it
+Turn Off AI Denoise (row) -> ExportAiDenoiseControl::turnOffForExportItem
+  -> BackgroundTaskController::RegisterTask(AiDenoiseSwitch, the locks of a Paste)
+  -> QThreadPool: WriteAiDenoiseSwitchToStoredHistory(off): LoadHistorySnapshot ->
+     BuildDocumentFromRoot(active head) -> CompleteCurrentPanelParameterTarget(raw_decode) ->
+     ApplyEditorParameterWrite -> MakeSetParameterBatch -> one commit on the active Version ->
+     PersistHistory (one transaction)
+     (the photo open in the editor: EditorAiDenoiseControl::turnOff on the GUI thread)
+  -> GUI: refresh (SetAlbumItemEditState, InvalidateThumbnail, RefreshCurrentThumbnail,
+     NoteEditHistoryChanged) -> ExportQueue::ReturnToQueued (run 0, no statusKey) -> Queued; the
+     next export takes it -> FinishTask -> TurnOffFinished
 ```
 
 **Primary failure call chain:**
 
 ```text
-no model -> turnOnForTargets returns model_not_installed -> Main.openAiModelSettings; no write
-no platform, an agent holds control, a run runs -> refused with the reason -> snackbar
-X-Trans, monochrome, raster, or a file that LibRaw cannot open -> notSupported; not written
-stored-history write throws (the editor took the image, another writer, a replay failure)
-  -> failures with the error text; that history is unchanged; the other photos are written
-editor refuses the change -> failures ("The editor did not accept the change.")
-Turn Off write fails -> the item keeps its run and its ai_denoise status; snackbar with the error
+Turn Off write throws (the editor took the image, another writer, a replay failure)
+  -> the history is unchanged; the item keeps its run and its ai_denoise status
+  -> TurnOffFinished with the message -> ExportInspectorPanel.messageRequested -> snackbar
+editor refuses the change -> the same, "The editor did not accept the change."
+an agent holds control, or a write runs -> turnOffForExportItem refused with the reason -> snackbar
 ```
 
 **What was proven (executed tests):**
@@ -2757,30 +2721,24 @@ Turn Off write fails -> the item keeps its run and its ai_denoise status; snackb
 | Required name / criterion | Target / binary | Result |
 | --- | --- | --- |
 | `TurnOnWritesOneRawDecodeCommitOnTheActiveVersion` (the first parent is the old head; the Version list and the active Version stay; an earlier exposure edit stays) | `AiDenoiseHistoryWriteTest` | PASS |
-| `WriteOfTheSameValueIsUnchanged` (off on a new image; on twice; another installed version is a change) | `AiDenoiseHistoryWriteTest` | PASS |
+| `WriteOfTheSameValueIsUnchanged` | `AiDenoiseHistoryWriteTest` | PASS |
 | `TurnOffRemovesTheKeyFromTheStoredDocument` | `AiDenoiseHistoryWriteTest` | PASS |
 | `WriteRefusesAnImageThatTheEditorHolds` | `AiDenoiseHistoryWriteTest` | PASS |
 | `ItemStatusOfAnAiDenoiseErrorIsAiDenoise` | `ExportQueueTest` | PASS |
 | `AiDenoiseEntriesStayInTheQueueAndReturnToQueued` | `ExportQueueTest` | PASS |
-| `TurnOnWritesTheBayerTargetsAndReportsTheOthers` | `AiDenoiseLibraryActionsTest` | PASS |
-| `FailedWriteIsReportedAndTheOtherTargetsAreWritten` (added) | `AiDenoiseLibraryActionsTest` | PASS |
-| `TurnOnWithoutAModelRequestsTheAiModelsPageAndWritesNothing` | `AiDenoiseLibraryActionsTest` | PASS |
-| `TurnOnIsRefusedWithoutAPlatformOrWhileAnAgentHoldsControl` (added) | `AiDenoiseLibraryActionsTest` | PASS |
-| `TurnOnRoutesTheEditorPhotoThroughTheEditor` | `AiDenoiseLibraryActionsTest` | PASS |
-| `EditorPhotoThatIsNotBayerIsNotWritten` (added) | `AiDenoiseLibraryActionsTest` | PASS |
-| `TurnOffOfAQueueItemWritesTheSwitchOffAndReturnsTheItemToQueued`, as `...ReturnsItToQueued` | `AiDenoiseLibraryActionsTest` | PASS |
-| `FailedTurnOffKeepsTheItemInItsRun`, `TurnOffOfTheEditorPhotoGoesThroughTheEditor` (added) | `AiDenoiseLibraryActionsTest` | PASS |
-| `SecondRunIsRefusedWhileOneRuns` | `AiDenoiseLibraryActionsTest` | PASS |
-| The touched suites | `EditorAiDenoiseControlTest`, `LibraryMutationOperationsTest` | PASS (11/11) |
-| The production window loads the changed QML without a warning (`QT_FORCE_STDERR_LOGGING=1`) | `MainQmlWorkflowTest` | 4/5: the failure is `toggleByUser` (issue #722); no QML warning |
+| `TurnOffOfAQueueItemWritesTheSwitchOffAndReturnsTheItemToQueued`, as `...ReturnsItToQueued` | `ExportAiDenoiseControlTest` | PASS |
+| `FailedTurnOffKeepsTheItemInItsRun` | `ExportAiDenoiseControlTest` | PASS |
+| `TurnOffOfTheEditorPhotoGoesThroughTheEditor` | `ExportAiDenoiseControlTest` | PASS |
+| `TurnOffIsRefusedWhileAnAgentHoldsControlOrAWriteRuns` | `ExportAiDenoiseControlTest` | PASS |
+| The paste of the RAW Decode item carries the switch (DN7, `PasteOfRawDecodeCarriesTheSwitch`) | `EditorAiDenoiseSwitchTest` | PASS in DN7; not changed by DN8 |
+| The editor switch is unchanged | `EditorAiDenoiseControlTest` | PASS |
+| The production window loads the changed QML (`QT_FORCE_STDERR_LOGGING=1`) | `MainQmlWorkflowTest` | 4/5: the failure is `toggleByUser` (#722); the only QML warning is the Material `Dialog.qml` radius warning of #722 and #749 |
 
 Commands:
 
 ```text
-cmd /c "scripts\msvc_env.cmd --build build\debug --target AiDenoiseHistoryWriteTest ExportQueueTest AiDenoiseLibraryActionsTest alcedo_main"
-cmd /c "scripts\msvc_env.cmd --build build\debug --target MainQmlWorkflowTest EditorAiDenoiseControlTest LibraryMutationOperationsTest"
-ctest --test-dir build/debug -R "^(AiDenoiseHistoryWriteTest|ExportQueueTest|AiDenoiseLibraryActionsTest)\." -j 4   # 23/23
-ctest --test-dir build/debug -R "^(EditorAiDenoiseControlTest|LibraryMutationOperationsTest)\." -j 4   # 11/11
+cmd /c "scripts\msvc_env.cmd --build build\debug --target AiDenoiseHistoryWriteTest ExportQueueTest ExportAiDenoiseControlTest EditorAiDenoiseControlTest MainQmlWorkflowTest alcedo_main"
+ctest --test-dir build/debug -R "^(AiDenoiseHistoryWriteTest|ExportQueueTest|ExportAiDenoiseControlTest|EditorAiDenoiseControlTest)\." -j 4   # 23/23
 ctest --test-dir build/debug -R "^MainQmlWorkflowTest\." -j 1   # 4/5 (#722)
 ```
 
@@ -2788,37 +2746,31 @@ Suite totals: see the commands. Full suite: not run (AGENTS.md).
 
 **Changes against the plan text and detail choices:**
 
-- **The library action is in the image context menu, not in the inspector button row** (2.2
-  said "the library inspector actions"). `ResolveTargets` needs a clicked photo; the menu is where
-  it applies, next to `Paste Adjustments`. The inspector row keeps the export action.
-- **One `raw_decode` change on the active Version, not a new Version for each photo** (2.2 said
-  "in a new Version"). It is the change of the editor switch, so the editor undoes it as any other
-  change, the export renders it, and the photo gets no extra Version (the Version pile-up of
-  #764). The photo open in the editor takes the same change through the editor session, which
-  has no operation that makes a Version and a commit in one step.
-- **The writer of a run is bound on the GUI thread** (`stored_history_writer`): the pipeline
-  service of the project is read on the GUI thread, as the Paste coordinator reads it, and the
-  worker only calls the bound writer.
-- **A file that LibRaw cannot open is reported as not supported**, with a log line of the LibRaw
-  error: the action writes no switch that a render would reject (D14).
-- **`Turn Off AI Denoise` of a queue item starts no export**: the item shows `Queued` and the
-  next export takes it.
+- **No library action (user, 2026-11-23).** The first version of DN8 added `AI Denoise` to the
+  image context menu with its own Bayer check and background run. The user rejected the extra
+  design: several photos go through Copy and Paste Adjustments, which already carries the switch.
+  Section 2.2 and D14 follow: the paste does not read the sensor; a render of a photo that is not
+  Bayer reports `SensorNotSupported` with `Turn Off AI Denoise`.
+- **`Turn Off AI Denoise` writes on the active Version**: the change of the editor switch, so the
+  editor undoes it as any other change and the export renders it.
+- **The writer is bound on the GUI thread** (`stored_history_writer`): the pipeline service of
+  the project is read on the GUI thread, as the Paste coordinator reads it, and the worker only
+  calls the bound writer.
+- **`Turn Off AI Denoise` starts no export**: the item shows `Queued` and the next export takes it.
 - **The automation export items** report the new state `ai_denoise` without a change of the
   command (the state is the item status text).
-- The menu item and the row controls are not tested by a QML test (repository rule) and were not
-  checked by eye in the running application.
+- The row controls are not tested by a QML test (repository rule) and were not checked by eye in
+  the running application.
 
 **Checklist / exit condition:** the tests pass in `build/debug`; the touched suites have no new
-failure; the production window loads the changed QML without a warning.
+failure; the production window loads the changed QML without a new warning.
 
-**LOC note:** about 1840 added lines in `alcedo_studio` and the plan: production about 870 (new
-files: `ai_denoise_library_actions` 466, `ai_denoise_history_write` 142), tests about 590, the
-translations 196. `application_module_host.cpp` (above 1000 lines before) gets 64 lines of
-wiring; the logic is in the new owners.
+**LOC note:** about 1000 added lines in `alcedo_studio` and the plan; new files below 200 lines.
+`application_module_host.cpp` (above 1000 lines before) gets the wiring of the control; the logic
+is in the new owners.
 
-**Remaining gaps:** the menu item and the queue row are not checked by eye in the running
-application; an export with a real model error was not run (the tests drive the status from the
-render message).
+**Remaining gaps:** the queue row is not checked by eye in the running application; an export
+with a real model error was not run (the tests drive the status from the render message).
 
 ### DN10 to DN13
 

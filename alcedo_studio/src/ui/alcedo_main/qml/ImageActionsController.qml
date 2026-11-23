@@ -218,32 +218,6 @@ Item {
         appModules.exportQueue.AddTargets(root.pendingDeleteTargets)
     }
 
-    // "AI Denoise" in the image menu (AI Denoise plan, DN8): the switch on for the menu targets.
-    // Without a model the AI Models page opens and nothing is written.
-    function requestAiDenoise() {
-        if (!root.pendingDeleteTargets || root.pendingDeleteTargets.length === 0) {
-            return
-        }
-        const result = appModules.aiDenoiseActions.turnOnForTargets(root.pendingDeleteTargets)
-        if (result && result.result === "model_not_installed") {
-            host.openAiModelSettings()
-            return
-        }
-        if (result && result.started !== true && result.message) {
-            host.showSnackbar(result.message)
-        }
-    }
-
-    Connections {
-        target: appModules.aiDenoiseActions
-        ignoreUnknownSignals: true
-        function onRunFinished(result) {
-            if (result && result.message) {
-                host.showSnackbar(result.message)
-            }
-        }
-    }
-
     function runAddTargetsToAlbum(targetFolderId) {
         if (!root.pendingDeleteTargets || root.pendingDeleteTargets.length === 0) {
             return

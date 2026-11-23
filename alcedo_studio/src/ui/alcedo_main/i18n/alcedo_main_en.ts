@@ -1384,30 +1384,6 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished">The agent gave control back to you.</translation>
     </message>
     <message>
-        <source>AI Denoise is on.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>AI Denoise is on for %1 photos.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>AI Denoise is on for %1 of %2 photos.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Not a Bayer RAW photo: %1.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Failed: %1.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>AI Denoise cannot run on this computer.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <source>AI Denoise is already being changed.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1420,19 +1396,11 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>%1 images</source>
+        <source>Turn Off AI Denoise</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <source>No valid image was selected.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Not supported for X-Trans sensors</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Not supported for this sensor</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -1545,10 +1513,6 @@ Alcedo will use %1 instead.</translation>
     </message>
     <message>
         <source>Supported images (%1)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>AI Denoise</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

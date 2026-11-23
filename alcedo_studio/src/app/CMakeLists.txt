@@ -453,7 +453,7 @@ def_library(AdjustmentTransferService
 )
 
 # The AI Denoise switch written into the stored history of an image that the editor does not hold
-# (AI Denoise integration plan, DN8): the library action and Turn Off AI Denoise of the export.
+# (AI Denoise integration plan, DN8): Turn Off AI Denoise of an export queue item.
 def_library(AiDenoiseHistoryWrite
     SOURCES
         "${ALCEDO_APP_ROOT}/ai_denoise_history_write.cpp"

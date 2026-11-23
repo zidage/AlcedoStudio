@@ -25,7 +25,6 @@ class QQmlEngine;
 #include "app/update_service.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 #include "ui/alcedo_main/album_backend/agent_control_owner.hpp"
-#include "ui/alcedo_main/album_backend/ai_denoise_library_actions.hpp"
 #include "ui/alcedo_main/album_backend/ai_model_download_task_publisher.hpp"
 #include "ui/alcedo_main/album_backend/application_close_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
@@ -36,6 +35,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/editor_comparison_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
+#include "ui/alcedo_main/album_backend/export_ai_denoise_control.hpp"
 #include "ui/alcedo_main/album_backend/export_queue.hpp"
 #include "ui/alcedo_main/album_backend/export_recipe_builder.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
@@ -104,8 +104,8 @@ class ApplicationModuleHost final : public QObject {
   /// The AI Mask tool of the open image (SM9 MVP).
   Q_PROPERTY(EditorAiMaskTool* aiMaskTool READ ai_mask_tool CONSTANT)
   Q_PROPERTY(EditorAiDenoiseControl* editorAiDenoise READ editor_ai_denoise CONSTANT)
-  /// AI Denoise of the image context menu and of the export queue items (AI Denoise plan, DN8).
-  Q_PROPERTY(AiDenoiseLibraryActions* aiDenoiseActions READ ai_denoise_actions CONSTANT)
+  /// Turn Off AI Denoise of the export queue items (AI Denoise plan, DN8).
+  Q_PROPERTY(ExportAiDenoiseControl* exportAiDenoise READ export_ai_denoise CONSTANT)
   /// The image of the editor viewport before the first frame of a photo (AI Denoise plan, DN14).
   Q_PROPERTY(EditorViewportPlaceholder* editorPlaceholder READ editor_placeholder CONSTANT)
   Q_PROPERTY(WorkspaceRouter* workspaceRouter READ workspace_router CONSTANT)
@@ -199,8 +199,8 @@ class ApplicationModuleHost final : public QObject {
   }
   [[nodiscard]] auto ai_mask_tool() -> EditorAiMaskTool* { return ai_mask_tool_.get(); }
   [[nodiscard]] auto editor_ai_denoise() -> EditorAiDenoiseControl* { return ai_denoise_.get(); }
-  [[nodiscard]] auto ai_denoise_actions() -> AiDenoiseLibraryActions* {
-    return ai_denoise_actions_.get();
+  [[nodiscard]] auto export_ai_denoise() -> ExportAiDenoiseControl* {
+    return export_ai_denoise_.get();
   }
   [[nodiscard]] auto editor_placeholder() -> EditorViewportPlaceholder* {
     return editor_placeholder_.get();
@@ -301,7 +301,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<EditorComparisonController>          editor_comparison_;
   std::unique_ptr<EditorAiMaskTool>                    ai_mask_tool_;
   std::unique_ptr<EditorAiDenoiseControl>              ai_denoise_;
-  std::unique_ptr<AiDenoiseLibraryActions>             ai_denoise_actions_;
+  std::unique_ptr<ExportAiDenoiseControl>              export_ai_denoise_;
   /// Shared with the image provider of the QML engine, which can outlive the host.
   std::shared_ptr<EditorPlaceholderImage>              editor_placeholder_image_;
   std::unique_ptr<EditorViewportPlaceholder>           editor_placeholder_;

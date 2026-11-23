@@ -3,7 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 // AI Denoise integration plan, DN8: the switch written into the stored history of an image that
-// the editor does not hold (the library action and Turn Off AI Denoise of the export queue).
+// the editor does not hold (Turn Off AI Denoise of an export queue item).
 
 #include "app/ai_denoise_history_write.hpp"
 

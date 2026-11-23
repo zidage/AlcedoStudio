@@ -206,19 +206,6 @@ Item {
         return [{ id: "locate-photo", label: qsTr("Locate Photo..."), enabled: true }]
     }
 
-    // AI Denoise for the menu targets (AI Denoise plan, DN8); absent where the model cannot run.
-    function aiDenoiseActions() {
-        const actions = appModules.aiDenoiseActions
-        if (!actions || actions.available !== true) {
-            return []
-        }
-        return [{
-            id: "ai-denoise",
-            label: qsTr("AI Denoise"),
-            enabled: host.pendingDeleteTargets.length > 0 && actions.running !== true
-        }]
-    }
-
     // A mounted photo leaves the library only through Remove Missing Photos of its mount, and a
     // mounted folder keeps its photos while their files are present.
     function deleteKeepsMountedPhotos() {
@@ -266,8 +253,7 @@ Item {
                 label: qsTr("Paste Adjustments"),
                 enabled: appModules.adjustmentTransfer.packageAvailable
                          && host.pendingAdjustmentPasteTargets.length > 0
-            }
-        ]).concat(root.aiDenoiseActions()).concat([
+            },
             {
                 id: "delete",
                 label: Number(appModules.folders.currentFolderId) === 0 ? qsTr("Delete") : qsTr("Remove from Album"),
@@ -306,10 +292,6 @@ Item {
             }
             if (actionId === "paste-adjustments") {
                 adjustmentTransferActionsObj.requestPasteAdjustments()
-                return
-            }
-            if (actionId === "ai-denoise") {
-                root.imageActionsController.requestAiDenoise()
                 return
             }
             if (actionId === "delete") {

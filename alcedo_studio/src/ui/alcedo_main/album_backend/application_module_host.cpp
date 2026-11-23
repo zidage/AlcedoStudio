@@ -405,21 +405,14 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   ai_denoise_ = std::make_unique<EditorAiDenoiseControl>(std::move(ai_denoise_services),
                                                          editor_session_.get(), this);
   RecordConstruction("EditorAiDenoiseControl", ai_denoise_.get());
-  // AI Denoise integration plan, DN8: the image context menu and the export queue items.
-  AiDenoiseLibraryActions::Services denoise_action_services;
-  denoise_action_services.platform_available = [] {
-    return alcedo::PipelineExecutor::ProcessAiDenoiseSession()->IsPlatformAvailable();
-  };
-  denoise_action_services.installed_model_version = [] {
-    return alcedo::PipelineExecutor::ProcessAiDenoiseSession()->InstalledModelVersion();
-  };
-  denoise_action_services.user_refusal = [this] {
+  // AI Denoise integration plan, DN8: Turn Off AI Denoise of an export queue item. Several photos
+  // get the switch through Copy and Paste Adjustments (the RAW Decode item).
+  ExportAiDenoiseControl::Services export_denoise_services;
+  export_denoise_services.user_refusal = [this] {
     return UserStateChangeRefusal(interaction_policy_.get());
   };
-  denoise_action_services.image_path         = image_path;
-  denoise_action_services.read_sensor_layout = &alcedo::ReadRawSensorLayout;
-  denoise_action_services.stored_history_writer =
-      [this]() -> AiDenoiseLibraryActions::StoredHistoryWriter {
+  export_denoise_services.stored_history_writer =
+      [this]() -> ExportAiDenoiseControl::StoredHistoryWriter {
     auto pipeline = project_ != nullptr ? project_->handler().pipeline_service() : nullptr;
     if (!pipeline) {
       return {};
@@ -429,15 +422,14 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       return alcedo::WriteAiDenoiseSwitchToStoredHistory(*pipeline, element_id, denoise);
     };
   };
-  denoise_action_services.editor_element_id = [session = editor_session_.get()] {
+  export_denoise_services.editor_element_id = [session = editor_session_.get()] {
     return session->has_image() ? static_cast<sl_element_id_t>(session->element_id())
                                 : sl_element_id_t{0};
   };
-  denoise_action_services.write_editor_photo =
-      [control = ai_denoise_.get()](const std::optional<alcedo::DevelopAiDenoise>& denoise) {
-        return denoise.has_value() ? control->turnOn() == QStringLiteral("on") : control->turnOff();
-      };
-  denoise_action_services.refresh_written_photo =
+  export_denoise_services.turn_off_editor_photo = [control = ai_denoise_.get()] {
+    return control->turnOff();
+  };
+  export_denoise_services.refresh_written_photo =
       [this](sl_element_id_t element_id, const alcedo::AiDenoiseHistoryWrite& write) {
         const auto* item     = library_->FindAlbumItem(element_id);
         const auto  image_id = item != nullptr ? item->image_id : image_id_t{0};
@@ -454,17 +446,12 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
         if (image_id != 0 && !library_->thumbs().RefreshCurrentThumbnail(element_id, image_id)) {
           library_->thumbs().UpdateThumbnailState(element_id, QString(), false, false);
         }
+        // The write changes stored edits; an edit-ordered library shows them.
+        library_->NoteEditHistoryChanged(editor_session_->active());
       };
-  ai_denoise_actions_ = std::make_unique<AiDenoiseLibraryActions>(
-      std::move(denoise_action_services), background_tasks_.get(), export_queue_.get(), this);
-  RecordConstruction("AiDenoiseLibraryActions", ai_denoise_actions_.get());
-  // The writes change stored edits; an edit-ordered library shows them.
-  QObject::connect(ai_denoise_actions_.get(), &AiDenoiseLibraryActions::RunFinished, library_.get(),
-                   [this](const QVariantMap& result) {
-                     if (result.value(QStringLiteral("doneCount")).toInt() > 0) {
-                       library_->NoteEditHistoryChanged(editor_session_->active());
-                     }
-                   });
+  export_ai_denoise_ = std::make_unique<ExportAiDenoiseControl>(
+      std::move(export_denoise_services), background_tasks_.get(), export_queue_.get(), this);
+  RecordConstruction("ExportAiDenoiseControl", export_ai_denoise_.get());
   // AI Denoise integration plan, DN14: the image of the viewport before the first frame.
   editor_placeholder_image_ = std::make_shared<EditorPlaceholderImage>([this] {
     const auto store = library_ != nullptr ? library_->thumbs().image_store() : nullptr;
@@ -1077,7 +1064,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(lut_target_, "LutLibraryController");
   destroy(lut_browser_, "LutLibraryModel");
   destroy(editor_placeholder_, "EditorViewportPlaceholder");
-  destroy(ai_denoise_actions_, "AiDenoiseLibraryActions");
+  destroy(export_ai_denoise_, "ExportAiDenoiseControl");
   destroy(ai_denoise_, "EditorAiDenoiseControl");
   destroy(ai_mask_tool_, "EditorAiMaskTool");
   destroy(editor_comparison_, "EditorComparisonController");
