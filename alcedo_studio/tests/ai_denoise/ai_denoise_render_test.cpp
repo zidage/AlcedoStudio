@@ -29,6 +29,7 @@
 #include "edit/input/ai_denoise_model_session.hpp"
 #include "edit/input/ai_denoise_platform.hpp"
 #include "edit/input/raster_input_loader.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image_buffer.hpp"
 #include "support/render_snapshot_source.hpp"
 #ifdef HAVE_CUDA
@@ -319,6 +320,22 @@ TEST(AiDenoiseRenderTest, RawPhotoRendersWithTheFp16GraphOnDirectMlOnCuda) {
   VerifyRawPhotoRendersWithTheFp16GraphOnDirectMl<CudaRenderer>();
 }
 #endif
+
+// DN7: on Windows the executors are in the EditPipeline DLL, which has its own copy of the
+// process session. The model folder that the application sets through
+// PipelineExecutor::ProcessAiDenoiseSession() must reach the session of the executors.
+TEST(AiDenoiseRenderTest, ExecutorsUseTheSessionWhoseModelFolderTheApplicationSets) {
+  const ai_denoise_test::TestModelFolder folder("executor_session", "graph of the executors");
+  const auto&                            process = PipelineExecutor::ProcessAiDenoiseSession();
+  process->SetModelFolderProvider([path = folder.Folder()] { return path; });
+  {
+    const PipelineExecutor executor(ExecutorRole::Interactive);
+    ASSERT_EQ(executor.AiDenoiseSession().get(), process.get());
+    EXPECT_EQ(executor.AiDenoiseSession()->InstalledModelVersion(),
+              process->InstalledModelVersion());
+  }
+  process->SetModelFolderProvider({});
+}
 
 #ifdef HAVE_OPENCL
 TEST(AiDenoiseRenderTest, FullSizeRenderWithTheSwitchOnRendersTheModelOutputOnOpenCl) {

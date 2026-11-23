@@ -111,12 +111,29 @@ class PipelineExecutor {
    * @param mask_assets Reader of the AI Mask assets of the project, handed to every renderer this
    *        executor creates. Null selects DefaultMaskAssetReader, which fails each read.
    * @param ai_denoise Owner of the AI Denoise model session, handed to every renderer this
-   *        executor creates. Null selects ProcessDenoiseModelSession().
+   *        executor creates. Null selects @ref ProcessAiDenoiseSession.
    */
   explicit PipelineExecutor(ExecutorRole                               role,
                             std::shared_ptr<const LutResourceResolver> lut_resources = nullptr,
                             std::shared_ptr<const MaskAssetReader>     mask_assets   = nullptr,
                             std::shared_ptr<DenoiseModelSession>       ai_denoise    = nullptr);
+
+  /**
+   * @brief The AI Denoise model session that executors use by default
+   *        (ProcessDenoiseModelSession() of the library of this class).
+   *
+   * On Windows this class is in the EditPipeline DLL, which has its own copy of the static
+   * EditInput library and so its own process session. The application sets the model folder,
+   * reads the installed model, checks the platform, and releases the session through this
+   * function, so that it reaches the instance that the renders use (AI Denoise plan, DN7).
+   */
+  [[nodiscard]] static auto ProcessAiDenoiseSession()
+      -> const std::shared_ptr<DenoiseModelSession>&;
+
+  /// The AI Denoise model session of this executor.
+  [[nodiscard]] auto AiDenoiseSession() const -> const std::shared_ptr<DenoiseModelSession>& {
+    return ai_denoise_;
+  }
 
   [[nodiscard]] auto Serves(ExecutorRole role) const -> bool {
     return role == ExecutorRole::Interactive ? serves_interactive_ : serves_batch_;

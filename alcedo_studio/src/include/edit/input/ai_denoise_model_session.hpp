@@ -135,6 +135,10 @@ class DenoiseModelSession {
  *
  * The executors of the editor, the export, the thumbnails, and the semantic input images use it
  * (the last two never run the model: they decode reduced). The application sets its model folder.
+ *
+ * The instance is a static of this (static) library, so each binary that links it has its own:
+ * on Windows the EditPipeline DLL and the application. Code outside EditPipeline uses
+ * PipelineExecutor::ProcessAiDenoiseSession(), which returns the instance of the executors.
  */
 [[nodiscard]] auto ProcessDenoiseModelSession() -> const std::shared_ptr<DenoiseModelSession>&;
 

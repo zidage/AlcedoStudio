@@ -35,6 +35,7 @@
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/input/ai_denoise_model_session.hpp"
 #include "edit/input/raw_sensor_layout.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/lens/lens_calibration_resolver.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
@@ -165,8 +166,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   // the library (plan L4).
   project_->SetLutResources(lut_library_->Resources());
   // AI Denoise reads its FP16 graph from the AI model folder of the settings, read at each check
-  // of the installed model (integration plan, DN6).
-  alcedo::ProcessDenoiseModelSession()->SetModelFolderProvider([] {
+  // of the installed model (integration plan, DN6). The session of the executors is reached
+  // through PipelineExecutor: on Windows the executors are in a DLL with their own copy.
+  alcedo::PipelineExecutor::ProcessAiDenoiseSession()->SetModelFolderProvider([] {
     return std::filesystem::path(alcedo::ConfiguredSemanticModelDirectory().toStdWString());
   });
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
@@ -373,10 +375,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   // AI Denoise integration plan, DN7: the switch of the RAW Decode card.
   EditorAiDenoiseControl::Services ai_denoise_services;
   ai_denoise_services.platform_available = [] {
-    return alcedo::ProcessDenoiseModelSession()->IsPlatformAvailable();
+    return alcedo::PipelineExecutor::ProcessAiDenoiseSession()->IsPlatformAvailable();
   };
   ai_denoise_services.installed_model_version = [] {
-    return alcedo::ProcessDenoiseModelSession()->InstalledModelVersion();
+    return alcedo::PipelineExecutor::ProcessAiDenoiseSession()->InstalledModelVersion();
   };
   ai_denoise_services.image_path = [this](std::uint32_t image_id) -> std::filesystem::path {
     if (project_ == nullptr || project_->handler().project() == nullptr) {
@@ -901,7 +903,7 @@ void ApplicationModuleHost::ShutdownModules() {
     }
     // No render runs after the export and the editor scheduler ended; the AI Denoise session
     // ends before ONNX Runtime and DirectML unload.
-    alcedo::ProcessDenoiseModelSession()->Release();
+    alcedo::PipelineExecutor::ProcessAiDenoiseSession()->Release();
   } catch (...) {
   }
 }

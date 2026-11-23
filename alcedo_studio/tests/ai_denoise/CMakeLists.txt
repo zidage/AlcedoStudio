@@ -62,7 +62,8 @@ if(ALCEDO_CUDA_ENABLED OR ALCEDO_OPENCL_ENABLED)
     ${ALCEDO_TEST_ROOT}/ai_denoise/ai_denoise_render_test.cpp
   )
   target_include_directories(AiDenoiseRenderTest PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-  target_link_libraries(AiDenoiseRenderTest PRIVATE GTest::gtest_main EditInput EditScope Image)
+  target_link_libraries(AiDenoiseRenderTest PRIVATE GTest::gtest_main EditInput EditPipeline
+    EditScope Image)
   if(ALCEDO_CUDA_ENABLED)
     target_link_libraries(AiDenoiseRenderTest PRIVATE EditRuntimeCuda EditRuntimeFilm)
   endif()

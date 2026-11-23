@@ -100,7 +100,11 @@ PipelineExecutor::PipelineExecutor(ExecutorRole                               ro
       resolved_accelerator_backend_(alcedo::ResolveAcceleratorBackend(accelerator_preference_)),
       lut_resources_(lut_resources ? std::move(lut_resources) : DefaultLutResourceResolver()),
       mask_assets_(mask_assets ? std::move(mask_assets) : DefaultMaskAssetReader()),
-      ai_denoise_(ai_denoise ? std::move(ai_denoise) : ProcessDenoiseModelSession()) {}
+      ai_denoise_(ai_denoise ? std::move(ai_denoise) : ProcessAiDenoiseSession()) {}
+
+auto PipelineExecutor::ProcessAiDenoiseSession() -> const std::shared_ptr<DenoiseModelSession>& {
+  return ProcessDenoiseModelSession();
+}
 
 auto PipelineExecutor::Apply(const PipelineGraphSnapshot& snapshot,
                              std::shared_ptr<ImageBuffer> input,

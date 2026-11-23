@@ -2184,6 +2184,14 @@ not run (AGENTS.md).
 
 **Changes against the plan text and detail choices:**
 
+- **Issue #1052 (a DN6 defect, found in the user test of DN7).** The editor render reported
+  "no AI model folder is set" with the model installed: `ProcessDenoiseModelSession()` is a
+  static of the static library `EditInput`, so the EditPipeline DLL (`PipelineExecutor`) and the
+  application each have an instance, and the application set the folder on its own. The DN6
+  record ("one instance") is wrong for the Windows DLL build. `PipelineExecutor::
+  ProcessAiDenoiseSession()` returns the instance of the executors; the application sets the
+  folder, reads the installed model, checks the platform, and releases the session through it.
+  Test: `AiDenoiseRenderTest.ExecutorsUseTheSessionWhoseModelFolderTheApplicationSets` (PASS).
 - **The error header is header only.** `EditorSessionRenderController` reads the render message
   without linking `EditInput` (LibRaw, ONNX Runtime); a first build failed at the link of the
   session library.
@@ -2213,7 +2221,8 @@ lines, plan 172 lines: above the estimate of 900 to 1400 with the tests. The cha
 `editor_session_controller.cpp` 2362 with 20, `application_module_host.cpp` 1061 with 34,
 `EditorWorkspace.qml` 1118 with 22); the new logic is in its own owners.
 
-**Remaining gaps:** the library action and the export errors (DN8, which reads the export error
+**Remaining gaps:** the library action and the export errors (DN8; the export executor uses the
+same instance through the default of `PipelineExecutor`, which reads the export error
 with `ParseAiDenoiseRenderError`); the macOS and Linux platforms (DN10, DN11) show no switch until
 then.
 
