@@ -10,6 +10,9 @@ enum class GpuBackendKind {
   CUDA,
   OpenCL,
   Metal,
+  /// In development (#1036). Only a build with ALCEDO_ENABLE_VULKAN resolves to it, and no
+  /// renderer accepts it before the phase VK17 of the Vulkan plan.
+  Vulkan,
 };
 
 }  // namespace alcedo

@@ -24,6 +24,12 @@ auto DefaultGpuBackend() -> GpuBackendKind {
 }
 
 auto ResolveGpuBackend(GpuBackendKind backend) -> GpuBackendKind {
+  // GpuImageWrapper has no Vulkan image: the Vulkan backend renders through the GPU DAG textures
+  // (Vulkan plan, phase VK2). The check comes before any change of the wrapper, so backend_ is
+  // never Vulkan and the Vulkan cases of the switches below are not reached.
+  if (backend == GpuBackendKind::Vulkan) {
+    throw std::runtime_error("GpuImageWrapper: the Vulkan backend has no GpuImageWrapper image.");
+  }
   return backend == GpuBackendKind::None ? DefaultGpuBackend() : backend;
 }
 }  // namespace
@@ -101,6 +107,7 @@ auto GpuImageWrapper::Empty() const -> bool {
     case GpuBackendKind::Metal:
       return metal_image_.Empty();
 #endif
+    case GpuBackendKind::Vulkan:
     case GpuBackendKind::None:
       return true;
   }
@@ -121,6 +128,7 @@ auto GpuImageWrapper::Width() const -> int {
     case GpuBackendKind::Metal:
       return static_cast<int>(metal_image_.Width());
 #endif
+    case GpuBackendKind::Vulkan:
     case GpuBackendKind::None:
       return 0;
   }
@@ -141,6 +149,7 @@ auto GpuImageWrapper::Height() const -> int {
     case GpuBackendKind::Metal:
       return static_cast<int>(metal_image_.Height());
 #endif
+    case GpuBackendKind::Vulkan:
     case GpuBackendKind::None:
       return 0;
   }
@@ -161,6 +170,7 @@ auto GpuImageWrapper::Type() const -> int {
     case GpuBackendKind::Metal:
       return metal::MetalImage::CVTypeFromPixelFormat(metal_image_.Format());
 #endif
+    case GpuBackendKind::Vulkan:
     case GpuBackendKind::None:
       return -1;
   }
@@ -190,6 +200,7 @@ void GpuImageWrapper::Create(int width, int height, int type, GpuBackendKind bac
                           metal::MetalImage::PixelFormatFromCVType(type));
       return;
 #endif
+    case GpuBackendKind::Vulkan:
     case GpuBackendKind::None:
       break;
   }
@@ -218,6 +229,7 @@ void GpuImageWrapper::Upload(const cv::Mat& cpu_data, GpuBackendKind backend) {
       metal_image_.Upload(cpu_data);
       return;
 #endif
+    case GpuBackendKind::Vulkan:
     case GpuBackendKind::None:
       break;
   }
@@ -241,6 +253,7 @@ void GpuImageWrapper::Download(cv::Mat& cpu_data) const {
       metal_image_.Download(cpu_data);
       return;
 #endif
+    case GpuBackendKind::Vulkan:
     case GpuBackendKind::None:
       break;
   }
@@ -271,6 +284,7 @@ void GpuImageWrapper::ShareFrom(const GpuImageWrapper& src) {
       metal_image_ = src.metal_image_;
       return;
 #endif
+    case GpuBackendKind::Vulkan:
     case GpuBackendKind::None:
       return;
   }
@@ -301,6 +315,7 @@ void GpuImageWrapper::CopyTo(GpuImageWrapper& dst) const {
       metal_image_.CopyTo(dst.metal_image_);
       return;
 #endif
+    case GpuBackendKind::Vulkan:
     case GpuBackendKind::None:
       break;
   }
@@ -331,6 +346,7 @@ void GpuImageWrapper::ConvertTo(GpuImageWrapper& dst, int type, double alpha, do
                              alpha, beta);
       return;
 #endif
+    case GpuBackendKind::Vulkan:
     case GpuBackendKind::None:
       break;
   }

@@ -17,6 +17,10 @@
 #include "opencl/opencl_runtime.hpp"
 #endif
 
+#ifdef HAVE_VULKAN
+#include "vulkan/vulkan_context.hpp"
+#endif
+
 namespace alcedo {
 namespace {
 
@@ -53,6 +57,17 @@ void PrepareExplicitOpenClRuntime() {
 #endif
 }
 
+// Creates the VulkanContext of the process when it does not exist. A device without the
+// requirements of the plan throws with the device name and the absent requirement.
+void PrepareExplicitVulkanRuntime() {
+#ifdef HAVE_VULKAN
+  (void)vulkan::VulkanContext::InstanceOrCreate(
+      vulkan::VulkanInitializationOptions::FromEnvironment());
+#else
+  throw std::runtime_error("Vulkan accelerator backend is not compiled.");
+#endif
+}
+
 [[noreturn]] void ThrowUnavailableBackend(std::string_view backend) {
   throw std::runtime_error("Requested accelerator backend is unavailable: " + std::string(backend) +
                            ".");
@@ -81,6 +96,10 @@ auto ResolveAcceleratorBackend(AcceleratorBackendPreference preference) -> GpuBa
     case AcceleratorBackendPreference::OpenCL:
       PrepareExplicitOpenClRuntime();
       return GpuBackendKind::OpenCL;
+
+    case AcceleratorBackendPreference::Vulkan:
+      PrepareExplicitVulkanRuntime();
+      return GpuBackendKind::Vulkan;
 
     case AcceleratorBackendPreference::Metal:
 #ifdef HAVE_METAL
@@ -136,6 +155,12 @@ auto IsCompiledGpuBackend(GpuBackendKind backend) -> bool {
 #else
       return false;
 #endif
+    case GpuBackendKind::Vulkan:
+#ifdef HAVE_VULKAN
+      return true;
+#else
+      return false;
+#endif
   }
   return false;
 }
@@ -160,6 +185,9 @@ auto IsImplementedMergedPipelineBackend(GpuBackendKind backend) -> bool {
 #else
       return false;
 #endif
+    case GpuBackendKind::Vulkan:
+      // The Vulkan renderer comes with the phase VK17 of the Vulkan plan.
+      return false;
     case GpuBackendKind::None:
       return false;
   }
@@ -186,6 +214,9 @@ auto IsImplementedGeometryOperatorBackend(GpuBackendKind backend) -> bool {
 #else
       return false;
 #endif
+    case GpuBackendKind::Vulkan:
+      // The Vulkan geometry kernels come with the phase VK3 of the Vulkan plan.
+      return false;
     case GpuBackendKind::None:
       return false;
   }
@@ -205,6 +236,8 @@ auto AcceleratorBackendPreferenceToString(AcceleratorBackendPreference preferenc
       return "opencl";
     case AcceleratorBackendPreference::Metal:
       return "metal";
+    case AcceleratorBackendPreference::Vulkan:
+      return "vulkan";
   }
   return "unknown";
 }
