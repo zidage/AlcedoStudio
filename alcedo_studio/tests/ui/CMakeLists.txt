@@ -537,6 +537,10 @@ alcedo_register_test_target(EditorComparisonLargeRawPairTest ui)
 def_ui_test(EditorAiDenoiseControlTest editor_ai_denoise_control_test.cpp)
 alcedo_register_test_target(EditorAiDenoiseControlTest ui)
 
+# AI Denoise integration plan, DN14: the image of the editor viewport before the first frame.
+def_ui_test(EditorViewportPlaceholderTest editor_viewport_placeholder_test.cpp)
+alcedo_register_test_target(EditorViewportPlaceholderTest ui)
+
 def_ui_test(AlbumBackendImportTest   album_backend_import_test.cpp)
 alcedo_register_test_target(AlbumBackendImportTest ui)
 

@@ -37,6 +37,7 @@
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/input/ai_denoise_error.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -867,6 +868,12 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto ai_denoise_error() const -> std::optional<AiDenoiseRenderError> {
     return std::nullopt;
   }
+  /// The step of the render of the open photo that reads the RAW file or runs the AI Denoise
+  /// model (AI Denoise plan, DN14); a change notifies the render progress observer. Default
+  /// fakes have none.
+  [[nodiscard]] virtual auto render_progress() const -> std::optional<RenderProgress> {
+    return std::nullopt;
+  }
 
  protected:
   [[nodiscard]] auto RejectComparison(std::string message) const -> EditorSessionResult {
@@ -1177,6 +1184,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto ai_denoise_error() const -> std::optional<AiDenoiseRenderError> override {
     return render_.ai_denoise_error();
   }
+  [[nodiscard]] auto render_progress() const -> std::optional<RenderProgress> override {
+    return render_.render_progress();
+  }
   [[nodiscard]] auto first_frame_time_ms() const -> double override {
     return render_.first_frame_time_ms();
   }
@@ -1429,6 +1439,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   bool                                           published_input_sequence_open_ = false;
   std::atomic<bool>                              consume_wakeup_posted_{false};
   bool                                           last_published_render_busy_ = false;
+  std::optional<RenderProgress>                  last_published_render_progress_;
   /// When the last frame finished (ready, failed, or cancelled); preview diagnostics only.
   std::atomic<std::int64_t>                      last_frame_finished_ns_{0};
   std::vector<EditorSessionResult>               results_;

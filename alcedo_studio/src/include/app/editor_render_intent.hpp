@@ -14,6 +14,7 @@
 #include "edit/frame_presentation_types.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/mask_coverage_probe.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -137,6 +138,9 @@ struct EditorRenderIntent {
   // The Color Grade whose curve input this frame also counts, and the receiver of the counts
   // (issue #888). Presentation state in no key; only a render of the whole frame counts it.
   std::optional<CurveInputHistogramRequest>      curve_input_histogram;
+  // Receives the steps of the render when it reads the RAW file or runs the AI Denoise model
+  // (AI Denoise plan, DN14). Presentation state in no key; called on the render worker.
+  RenderProgressCallback                         render_progress;
 };
 
 struct EditorRenderRequest {

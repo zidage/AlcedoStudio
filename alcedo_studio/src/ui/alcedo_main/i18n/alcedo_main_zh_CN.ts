@@ -5092,6 +5092,45 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
 </context>
 <context>
+    <name>EditorRenderProgress</name>
+    <message>
+        <source>Reading RAW</source>
+        <translation>读取 RAW</translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation>AI 降噪</translation>
+    </message>
+    <message>
+        <source>Developing</source>
+        <translation>显影</translation>
+    </message>
+    <message>
+        <source>%1 / %2 tiles</source>
+        <translation>%1 / %2 块</translation>
+    </message>
+    <message>
+        <source>Sensor</source>
+        <translation>传感器</translation>
+    </message>
+    <message>
+        <source>Lens and geometry</source>
+        <translation>镜头与几何</translation>
+    </message>
+    <message>
+        <source>Color</source>
+        <translation>色彩</translation>
+    </message>
+    <message>
+        <source>Color Grade %1 of %2</source>
+        <translation>调色 %1 / %2</translation>
+    </message>
+    <message>
+        <source>Display</source>
+        <translation>显示</translation>
+    </message>
+</context>
+<context>
     <name>EditorAiDenoiseErrorCard</name>
     <message>
         <source>AI Denoise model not installed</source>

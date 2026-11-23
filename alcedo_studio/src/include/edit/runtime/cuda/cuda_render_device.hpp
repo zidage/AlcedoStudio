@@ -18,6 +18,7 @@
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/mask_coverage_probe_record.hpp"
 #include "edit/runtime/render_device_type.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "gpu/transient_allocation_policy.hpp"
 
@@ -120,6 +121,7 @@ class CudaRenderDevice {
    *
    * @param histogram When not null, the Grade with its `grade_id` also records the histogram of
    *        its curve input (PlanExecutor::Execute).
+   * @param progress When not null, receives each Develop group (PlanExecutor::Execute).
    */
   [[nodiscard]] auto Execute(
       const ExecutionPlan& plan, const PreparedRawInput& input, const PipelineDocument& document,
@@ -127,7 +129,8 @@ class CudaRenderDevice {
       TransientAllocationPolicy transient_policy      = TransientAllocationPolicy::SessionPacked,
       ResultPersistenceScope    persistence           = ResultPersistenceScope::AllCurrentResults,
       MaskCoverageProbeRecord<CudaBackend>* probe     = nullptr,
-      CurveInputHistogramRecord*            histogram = nullptr) -> GraphValueId;
+      CurveInputHistogramRecord*            histogram = nullptr,
+      RenderProgressReporter*               progress  = nullptr) -> GraphValueId;
 
  private:
   CudaRenderWorkspace                              workspace_;

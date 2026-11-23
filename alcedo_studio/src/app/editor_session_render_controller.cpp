@@ -91,6 +91,12 @@ auto EditorSessionRenderController::MakeRenderIntent(const EditorRenderCommand& 
       intent.mask_coverage_probe = probe_source_();
     }
     intent.curve_input_histogram = curve_input_histogram_;
+    if (render_progress_receiver_) {
+      intent.render_progress = [receiver = render_progress_receiver_,
+                                image_load_request](const RenderProgress& progress) {
+        receiver(image_load_request, progress);
+      };
+    }
   }
   FillRenderIntentDefaults(intent);
   return intent;
@@ -116,6 +122,30 @@ auto EditorSessionRenderController::curve_input_histogram_request() const
     -> std::optional<CurveInputHistogramRequest> {
   std::scoped_lock lock(probe_source_mutex_);
   return curve_input_histogram_;
+}
+
+void EditorSessionRenderController::SetRenderProgressReceiver(RenderProgressReceiver receiver) {
+  std::scoped_lock lock(probe_source_mutex_);
+  render_progress_receiver_ = std::move(receiver);
+}
+
+auto EditorSessionRenderController::NotifyRenderProgress(
+    ImageLoadRequestId image_load_request, const RenderProgress& progress,
+    ImageLoadRequestId active_image_load_request) -> bool {
+  if (!image_load_request.valid() || image_load_request != active_image_load_request) {
+    return false;
+  }
+  std::scoped_lock lock(mutex_);
+  if (render_progress_ == progress) {
+    return false;
+  }
+  render_progress_ = progress;
+  return true;
+}
+
+auto EditorSessionRenderController::render_progress() const -> std::optional<RenderProgress> {
+  std::scoped_lock lock(mutex_);
+  return render_progress_;
 }
 
 void EditorSessionRenderController::SetPresentationSuspended(
@@ -410,6 +440,21 @@ void EditorSessionRenderController::NotifyRenderResult(
     return;
   }
 
+  // The render of the photo ended: its steps end with it (DN14). The renders run one at a
+  // time, and the result of a render reaches the owner before the progress of the next one.
+  switch (render_result.kind) {
+    case EditorRenderResultKind::FrameReady:
+    case EditorRenderResultKind::Failed:
+    case EditorRenderResultKind::Cancelled:
+    case EditorRenderResultKind::PresentationSuspended: {
+      std::scoped_lock lock(mutex_);
+      render_progress_.reset();
+      break;
+    }
+    default:
+      break;
+  }
+
   if (render_result.kind == EditorRenderResultKind::PresentationSuspended) {
     NoteSuspendedPresentation(render_result, identity, image_load_request, state);
     NotifyBusyIfChanged(render_result.intent.operation_id, identity, state);
@@ -553,6 +598,7 @@ void EditorSessionRenderController::ResetForNewImage() {
   first_frame_time_ms_ = -1.0;
   // The error belongs to the photo; the session publishes the new image with its state change.
   ai_denoise_error_.reset();
+  render_progress_.reset();
 }
 
 void EditorSessionRenderController::MarkImageAcquired() {

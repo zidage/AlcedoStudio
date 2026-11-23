@@ -95,7 +95,8 @@ auto DenoiseModelSession::InstalledModelVersion() -> std::string {
 }
 
 auto DenoiseModelSession::Denoise(const PreparedRawInput& cfa, std::string_view model_version,
-                                  const std::array<double, 9>& xyz_to_camera) -> PreparedRawInput {
+                                  const std::array<double, 9>& xyz_to_camera,
+                                  const TileProgress&          on_tile) -> PreparedRawInput {
   std::scoped_lock lock(run_mutex_);
   if (!platform_) {
     throw AiDenoiseError(AiDenoiseErrorKind::RunFailed,
@@ -140,7 +141,13 @@ auto DenoiseModelSession::Denoise(const PreparedRawInput& cfa, std::string_view 
     AiDenoiseOutputSums     sums(mosaic);
     const auto              record = nn::DenoiseBayerMosaic(
         *session_, mosaic.View(), view,
-        [&](const nn::UtNet2TileResult& tile) { sums.AddKept(view, tile.kept); }, {},
+        [&](const nn::UtNet2TileResult& tile) {
+          sums.AddKept(view, tile.kept);
+          if (on_tile) {
+            on_tile(tile.index + 1, tile.tile_count);
+          }
+        },
+        {},
         [] { return std::chrono::steady_clock::now(); }, options_);
     ++stats_.denoise_runs;
     stats_.last_input_gain = mosaic.curve.gain;

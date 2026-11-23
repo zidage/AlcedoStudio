@@ -1203,6 +1203,38 @@ the detail is the raw error text in full.
 | `viewportAlertSecondaryTextColor` | `textColor` at 170/255 | Icon, message, Show Details, Copy |
 | `viewportAlertDetailFillColor` | black at 97/255 | Detail well |
 
+### Viewport render progress
+
+A render of the open photo that reads the RAW file or runs the AI Denoise model
+shows its steps in `EditorRenderProgress.qml` (AI Denoise plan, DN14). The user
+requested the pill on 2026-11-23 (direction A of the DN14 mock); it is an
+exception to "Hard ban: unrequested pills and badges" for this surface only.
+
+| Part | Tokens |
+| --- | --- |
+| Pill | At the bottom left of the viewport, `spaceMd` from the left and the bottom edge; `viewportProgressPillHeight` (26), fully rounded, `viewportProgressPillColor`, 1 px `glassStrokeColor`; `spaceSm` padding and spacing |
+| Step dots | One for each step of the render, `viewportProgressDotSize` (6); a done step `viewportProgressFillColor`, the current step `textColor`, a later step `viewportProgressTrackColor` |
+| Step name | `fontSizeCaption`, `fontWeightHeading`, `textColor` |
+| Count | `fontSizeCaption`, `viewportAlertSecondaryTextColor`, tabular figures: `12 / 24 tiles`, or the Develop group (`Sensor`, `Lens and geometry`, `Color`, `Color Grade 1 of 2`, `Display`) |
+| Bar | At the bottom edge of the viewport, `viewportProgressBarHeight` (3); one segment for each step, `viewportProgressSegmentGap` (2) apart; track `viewportProgressTrackColor`, fill `viewportProgressFillColor`; a step with no count sweeps a 30% fill |
+
+The pill and the bar fade in and out over `viewportProgressFadeMs` (200). While
+the pill shows, the center spinner of the viewport hides. The render alert covers
+them when the render fails. Before the first frame, the placeholder image of the
+photo (`appModules.editorPlaceholder`) fills the viewport like the frame at the fit
+zoom, under the pill and the bar.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `viewportProgressPillHeight` | 26 | Height of the pill |
+| `viewportProgressDotSize` | 6 | Step dot |
+| `viewportProgressBarHeight` | 3 | Height of the bar |
+| `viewportProgressSegmentGap` | 2 | Gap between the segments of the bar |
+| `viewportProgressFadeMs` | 200 | Fade of the pill and the bar |
+| `viewportProgressPillColor` | (18, 18, 18) at 184/255 | Pill fill over the photo |
+| `viewportProgressTrackColor` | white at 36/255 | Track of the bar; a later step dot |
+| `viewportProgressFillColor` | white at 230/255 | Fill of the bar; a done step dot |
+
 ### AI Mask tool panel
 
 `EditorAiMaskPanel.qml` covers the adjustment pages while an AI Mask edit is

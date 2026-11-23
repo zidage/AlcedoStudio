@@ -160,6 +160,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // {kind, text} with kind model_not_installed, device_too_slow, run_failed, or
   // sensor_not_supported; empty after a ready frame. The viewport error card reads it.
   Q_PROPERTY(QVariantMap aiDenoiseError READ ai_denoise_error NOTIFY AiDenoiseErrorChanged)
+  // AI Denoise integration plan, DN14: the step of the render of the open photo that reads the
+  // RAW file or runs the model (RenderProgressToVariant); empty when no such render runs. The
+  // viewport pill and bar read it.
+  Q_PROPERTY(QVariantMap renderProgress READ render_progress NOTIFY RenderProgressChanged)
   /// Phase 6C-7: read-only field-value snapshot for panel loading. Keys are
   /// stable field identifiers (e.g. "exposure", "contrast"); values are the
   /// parsed JSON params. Published after open, checkout, undo, redo, recovery,
@@ -249,6 +253,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] double      first_frame_time_ms() const;
   [[nodiscard]] QVariantMap render_diagnostics() const;
   [[nodiscard]] QVariantMap ai_denoise_error() const { return ai_denoise_error_; }
+  [[nodiscard]] QVariantMap render_progress() const { return render_progress_; }
   // Phase 7A R4: typed result of the last history/Version operation, owned by
   // EditorHistoryOperationPublisher (not ad-hoc controller fields).
   [[nodiscard]] QString     last_history_message() const {
@@ -513,6 +518,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void RenderBusyChanged();
   void RenderDiagnosticsChanged();
   void AiDenoiseErrorChanged();
+  void RenderProgressChanged();
   // Phase 6C-7: emitted when the backend adjustment snapshot is published.
   void AdjustmentSnapshotChanged();
   void ActionAvailabilityChanged();
@@ -553,6 +559,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     SyncViewportIdentity();
   /// Publish the AI Denoise error of the backend when it changed (DN7).
   void                     SyncAiDenoiseError();
+  /// Publish renderProgress from the backend when it changed (DN14).
+  void                     SyncRenderProgress();
   void                     SyncViewportDisplayConfig();
   void                     SyncAlbumHdrFlagFromSnapshot();
   /// Show the open photo's edit state (head commit time and name of the active Version) on
@@ -659,6 +667,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                 exif_lens_make_;
   /// The last published AI Denoise error, for the change signal of the property.
   QVariantMap             ai_denoise_error_;
+  QVariantMap             render_progress_;
   QString                 exif_lens_model_;
   QString                 camera_make_;
   QString                 camera_model_;

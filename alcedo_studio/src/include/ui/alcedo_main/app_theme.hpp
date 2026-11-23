@@ -102,6 +102,16 @@ class AppTheme final : public QObject {
                  ThemeChanged)
   Q_PROPERTY(
       QColor viewportAlertDetailFillColor READ viewportAlertDetailFillColor NOTIFY ThemeChanged)
+  // Viewport render progress (EditorRenderProgress.qml, AI Denoise plan DN14): the pill, its step
+  // dots, the segmented bar at the bottom edge, and the fade at the end of the render.
+  Q_PROPERTY(int viewportProgressPillHeight READ viewportProgressPillHeight CONSTANT)
+  Q_PROPERTY(int viewportProgressDotSize READ viewportProgressDotSize CONSTANT)
+  Q_PROPERTY(int viewportProgressBarHeight READ viewportProgressBarHeight CONSTANT)
+  Q_PROPERTY(int viewportProgressSegmentGap READ viewportProgressSegmentGap CONSTANT)
+  Q_PROPERTY(int viewportProgressFadeMs READ viewportProgressFadeMs CONSTANT)
+  Q_PROPERTY(QColor viewportProgressPillColor READ viewportProgressPillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor viewportProgressTrackColor READ viewportProgressTrackColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor viewportProgressFillColor READ viewportProgressFillColor NOTIFY ThemeChanged)
   // LUT browser rail page (LUT library plan L6A): preferred page width, filter card width,
   // minimum tile width, and the tile placeholder icon size. See DESIGN.md.
   Q_PROPERTY(int editorLutBrowserPanelWidth READ editorLutBrowserPanelWidth CONSTANT)
@@ -448,6 +458,14 @@ class AppTheme final : public QObject {
   auto        viewportAlertScrimColor() const -> QColor;
   auto        viewportAlertSecondaryTextColor() const -> QColor;
   auto        viewportAlertDetailFillColor() const -> QColor;
+  auto        viewportProgressPillHeight() const -> int;
+  auto        viewportProgressDotSize() const -> int;
+  auto        viewportProgressBarHeight() const -> int;
+  auto        viewportProgressSegmentGap() const -> int;
+  auto        viewportProgressFadeMs() const -> int;
+  auto        viewportProgressPillColor() const -> QColor;
+  auto        viewportProgressTrackColor() const -> QColor;
+  auto        viewportProgressFillColor() const -> QColor;
   auto        editorLutBrowserPanelWidth() const -> int;
   auto        editorLutBrowserPanelWidthMin() const -> int;
   auto        editorLutBrowserFilterWidth() const -> int;

@@ -24,7 +24,9 @@
   slow-device check from the fastest measured tile; 0.56 to 0.72 s for a ready run at 42.2 MP.
   2026-11-22: DN7 complete (issue #1050): the editor switch with the locked Method track, the
   labels `Auto` and `Neural`, and the viewport card of each model error with
-  `Turn Off AI Denoise`; the user removed the model version notice (D10)
+  `Turn Off AI Denoise`; the user removed the model version notice (D10). 2026-11-23: DN14
+  complete (issue #1059): the steps of a render in a pill and a segmented bar, and the
+  placeholder image before the first frame
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -301,7 +303,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN11 | Linux forward code | `opencl` or ONNX Runtime WebGPU | DN3 | 1400 to 1900 | last (2026-11-22: the only Linux environment is WSL) |
 | DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | planned |
 | DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | planned |
-| DN14 | Render feedback in the editor: placeholder image before the first frame, the step of the render (Reading RAW, AI Denoise tile k of n, Developing group k of n) in a pill and a segmented bar | `ui/alcedo_main`, `app`, `edit/input`, `edit/runtime` | DN7 | 900 to 1400 | in progress |
+| DN14 | Render feedback in the editor: placeholder image before the first frame, the step of the render (Reading RAW, AI Denoise tile k of n, Developing group k of n) in a pill and a segmented bar | `ui/alcedo_main`, `app`, `edit/input`, `edit/runtime` | DN7 | 900 to 1400 | complete (#1059) |
 
 Order of the remaining phases: DN14, DN8, DN10, DN12, DN13, and DN11 last (DN11 last and DN14
 added by the user on 2026-11-22; DN14 before DN8 by the user on 2026-11-23).
@@ -2429,11 +2431,117 @@ No QML test: the pill, the bar, and the placeholder image are pure UI (repositor
 
 **Exit criteria**
 
-- [ ] The tests pass in `build/debug`.
-- [ ] The touched suites have no new failure.
-- [ ] The production window of `MainQmlWorkflowTest` loads the changed QML without a warning.
+- [x] The tests pass in `build/debug`.
+- [x] The touched suites have no new failure.
+- [x] The production window of `MainQmlWorkflowTest` loads the changed QML without a warning.
 
 **Expected diff**: 900 to 1400 lines (the estimate of section 6 was for the bar alone).
+
+##### Phase DN14 completion record (2026-11-23)
+
+**Status:** complete. A render of the open photo that reads the RAW file or runs the model shows
+its steps in a pill and a segmented bar at the bottom of the viewport (`Reading RAW`,
+`AI Denoise` with tile k of n, `Developing` with the group that runs); before the first frame
+the viewport shows the held library thumbnail of the photo or its camera preview. Issue #1059.
+
+**Primary success call chain:**
+
+```text
+open photo -> EditorSessionRenderController::MakeRenderIntent (intent.render_progress = the
+  receiver with the image-load request) -> EditorSessionRenderSchedulerPort (task.render_progress_)
+  -> PipelineTask::MakeApplyRequest (request.progress) -> Renderer::Render (render worker):
+     PreparedSourceCache::HoldsDenoised / HoldsEncoded -> RenderProgressReporter(read_raw, ai_denoise)
+     -> ReadRawStarted -> AcquireDenoised -> DenoiseModelSession::Denoise(on_tile)
+        -> AiDenoiseTiles(0, 0), then (k, n) after each tile of DenoiseBayerMosaic
+     -> PlanExecutor::Execute(progress) -> DevelopGroupStarted(Sensor, Lens and geometry, Color,
+        Color Grade i, Display)
+  -> receiver -> EditorSessionService command queue (owner) -> EditorSessionRenderController
+     ::NotifyRenderProgress (the active image-load request only) -> PublishRenderProgressIfChanged
+  -> RenderProgressObserver -> EditorSessionController::SyncRenderProgress -> renderProgress
+  -> EditorRenderProgress.qml (pill, bar)
+FrameReady -> EditorSessionRenderController::NotifyRenderResult clears the progress -> the pill
+  and the bar fill and fade out (viewportProgressFadeMs)
+state Acquiring/Loading/Switching -> ApplicationModuleHost -> EditorViewportPlaceholder
+  ::SetWaitingPhoto -> held thumbnail (largest tier of ThumbnailImageStore, copied)
+  | QThreadPool: committed snapshot without crop and rotation -> EmbeddedPreviewReader::Read(768)
+  -> EditorPlaceholderImage -> image://alcedo-editor-placeholder/<revision> -> Image under the
+  viewport item while no frame is presented; Interactive -> SetWaitingPhoto(0, 0) releases it
+```
+
+**Primary failure call chain:**
+
+```text
+model error in the tile loop -> AiDenoiseError -> Failed result -> NotifyRenderResult clears the
+  progress -> the pill fades; ParseAiDenoiseRenderError -> the render alert of #1056 (DN7)
+cancelled or refused (suspended) frame -> the progress clears with the result
+progress of a closed or replaced photo -> NotifyRenderProgress: another image-load request -> dropped
+render that reads only the caches -> inactive RenderProgressReporter -> nothing reported; the
+  present spinners
+camera preview of a photo that no longer waits -> ApplyCameraPreview: another photo -> dropped
+geometry check or preview read throws -> logged; no placeholder, the label shows
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `CacheReportsWhetherAnAcquireReadsTheRawOrRunsTheModel` (also: the queries change no stats; another version or camera matrix is another entry; Clear) | `AiDenoiseLoaderTest` | PASS |
+| `DenoiseReportsEachTileOfTheRun` | `AiDenoiseLoaderTest` | PASS |
+| `ReporterSendsTheStepsAndTheDevelopGroups` | `AiDenoiseLoaderTest` (`RenderProgressTest`) | PASS |
+| `RenderThatReadsOnlyTheCachesReportsNothing` (added) | `AiDenoiseLoaderTest` (`RenderProgressTest`) | PASS |
+| `RenderThatReadsTheRawReportsItsStepsInOrder` (CUDA and OpenCL: Reading RAW, tiles 1 to n, groups in order; the next frame reports nothing; the switch off reports Reading RAW and the groups; the switch on in the same document reports no Reading RAW) | `AiDenoiseRenderTest` | PASS (both backends) |
+| `ProgressOfTheOpenPhotoIsPublishedAndClearedByItsFrame` (the owner queue, the observer, the same value notifies nothing, a ready and a failed frame clear it) | `EditorAiDenoiseSessionTest` | PASS |
+| `ProgressIsClearedWhenAnotherPhotoLoads`, as `ProgressOfAPhotoThatIsNoLongerOpenIsDropped` (the close clears it; a late value is dropped) | `EditorAiDenoiseSessionTest` | PASS |
+| `PlaceholderUsesTheLargestHeldThumbnail` (a copy; the provider serves it; no preview read) | `EditorViewportPlaceholderTest` | PASS |
+| `PlaceholderReadsTheCameraPreviewOnlyWithoutCropAndRotation` (worker thread; a crop and a failed check give none) | `EditorViewportPlaceholderTest` | PASS |
+| `PlaceholderOfAPhotoThatIsNoLongerOpenIsDropped`, `PlaceholderIsReleasedWhenThePhotoStopsWaiting` (as `...StopsWaiting`; a new URL for each open) | `EditorViewportPlaceholderTest` | PASS |
+| The FP16 graph on DirectML through the renderers, with the lab assets (`ALCEDO_AI_DENOISE_TEST_ASSETS=build/tmp/dn6/assets`) | `AiDenoiseRenderTest` | PASS (CUDA, OpenCL) |
+| The production window loads the changed QML without a warning (`QT_FORCE_STDERR_LOGGING=1`) | `MainQmlWorkflowTest` | 4/5: the failure is `toggleByUser` (issue #722); no QML warning |
+
+Commands:
+
+```text
+cmd /c "scripts\msvc_env.cmd --build build\debug --target alcedo_main"
+cmd /c "scripts\msvc_env.cmd --build build\debug --target AiDenoiseLoaderTest AiDenoiseRenderTest EditorAiDenoiseSessionTest EditorViewportPlaceholderTest EditorSessionRenderControllerTest EditorAiDenoiseControlTest MainQmlWorkflowTest"
+ctest --test-dir build/debug -R "^(AiDenoiseLoaderTest|EditorAiDenoiseSessionTest|EditorViewportPlaceholderTest|EditorSessionRenderControllerTest|EditorAiDenoiseControlTest)\." -j 4   # 71/71, 2 skipped (lab assets)
+ctest --test-dir build/debug -R "^AiDenoiseRenderTest\." -j 1   # 9/9 with ALCEDO_AI_DENOISE_TEST_ASSETS
+ctest --test-dir build/debug -R "^MainQmlWorkflowTest\." -j 1   # 4/5 (#722)
+ctest --test-dir build/debug -R "^(EditorRenderCoordinatorTest|EditorSessionRenderSchedulerPortTest|EditorSessionServiceFacadeTest|EditorSessionControllerPhase5ATest|GpuDagRawInputTest|EditorAiDenoiseSwitchTest)\." -j 4   # 423/423
+```
+
+Suite totals: see the commands. Full suite: not run (AGENTS.md).
+
+**Changes against the plan text and detail choices:**
+
+- **The Develop count is the group that runs, not the group that the GPU finished** (the mock
+  text). The plan executor waits for the GPU after the sensor group; in an editor render the
+  later groups are recorded without a wait. A new wait would slow every render.
+- **Reading RAW is reported before the acquire** when the cache query says the acquire unpacks;
+  `AcquireDenoised` keeps its signature.
+- **A batch render (export) also reports** when its request has a receiver; no export sets one
+  yet (DN8 can).
+- **The pill has no background blur**: a fill of (18, 18, 18) at 184/255 with the glass stroke.
+  A blur of the region under the pill would need a second capture of the RHI viewport for each
+  frame of the run.
+- **The placeholder states** are Acquiring, Loading, and Switching of the session; its camera
+  preview is read at a shorter edge of at least 768 px.
+- **DESIGN.md** gets "Viewport render progress": the user requested the pill (2026-11-23), an
+  exception to the ban of unrequested pills for this surface only.
+- **A test trap:** two snapshot sources are two bindings of a renderer, and a new binding clears
+  the source cache, so the switch-on case of the renderer test turns the switch on in the same
+  document, as the editor does.
+- The pill, the bar, and the placeholder image are not checked by a QML test (repository rule)
+  and were not checked by eye in the running application.
+
+**Checklist / exit condition:** the tests pass in `build/debug`; the touched suites have no new
+failure; the production window loads the changed QML without a warning.
+
+**LOC note:** about 1800 added lines in `alcedo_studio` (about 620 of them tests, 120 the
+translations and DESIGN.md); new files below 220 lines. `editor_session_service.cpp` (3986
+lines) and `editor_session_controller.cpp` (2433 lines) were above 1000 lines before; DN14 adds
+13 and 71 lines to them.
+
+**Remaining gaps:** the feedback in the running application is not checked by eye.
 
 ### DN8 to DN13
 

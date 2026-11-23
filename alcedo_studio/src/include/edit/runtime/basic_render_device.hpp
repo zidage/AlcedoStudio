@@ -14,6 +14,7 @@
 #include "edit/runtime/basic_render_workspace.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/plan_executor.hpp"
 #include "edit/runtime/result_persistence.hpp"
@@ -145,6 +146,7 @@ class BasicRenderDevice {
    *
    * @param histogram When not null, the Grade with its `grade_id` also records the histogram of
    *        its curve input (PlanExecutor::Execute).
+   * @param progress When not null, receives each Develop group (PlanExecutor::Execute).
    */
   [[nodiscard]] auto Execute(
       const ExecutionPlan& plan, const PreparedRawInput& input, const PipelineDocument& document,
@@ -152,13 +154,15 @@ class BasicRenderDevice {
       TransientAllocationPolicy         transient_policy = TransientAllocationPolicy::SessionPacked,
       ResultPersistenceScope            persistence = ResultPersistenceScope::AllCurrentResults,
       MaskCoverageProbeRecord<Backend>* probe       = nullptr,
-      CurveInputHistogramRecord*        histogram   = nullptr) -> GraphValueId {
+      CurveInputHistogramRecord*        histogram   = nullptr,
+      RenderProgressReporter*           progress    = nullptr) -> GraphValueId {
     // Backends with an isolated submission stream (OpenCL dedicated queue)
     // bind it to this thread for the encode so shared helpers that resolve a
     // queue through the global context land on the render-local stream.
     auto queue_scope = EnterThreadQueueScope();
     return PlanExecutor<Backend>::Execute(*this, plan, input, document, publish_on_success,
-                                          transient_policy, persistence, probe, histogram);
+                                          transient_policy, persistence, probe, histogram,
+                                          progress);
   }
 
  private:

@@ -18,6 +18,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "ai_denoise_test_support.hpp"
@@ -178,6 +179,31 @@ TEST(AiDenoiseModelSessionTest, DenoiseOfADarkPhotoReturnsItsExposureAfterTheInp
   // A photo at the training level runs without the curve.
   (void)session->Denoise(MakeBayerInput(64, 48, BayerPattern("RGGB")), version, kTestXyzToCamera);
   EXPECT_EQ(session->Stats().last_input_gain, 1.0);
+}
+
+// DN14: the editor shows tile k of n of the run.
+TEST(AiDenoiseModelSessionTest, DenoiseReportsEachTileOfTheRun) {
+  const TestModelFolder folder("tile_progress");
+  auto                  record  = std::make_shared<TestPlatformRecord>();
+  auto                  session = MakeTestModelSession(record, folder);
+  const auto            version = session->InstalledModelVersion();
+  // 600 x 400 px: 300 x 200 packed px in tiles of 256 with an overlap of 96 is more than one tile.
+  const auto            input   = MakeBayerInput(600, 400, BayerPattern("RGGB"));
+
+  std::vector<std::pair<int, int>> reports;
+  (void)session->Denoise(input, version, kTestXyzToCamera, [&](int completed, int total) {
+    reports.emplace_back(completed, total);
+  });
+  ASSERT_GT(reports.size(), 1U);
+  const int total = reports.front().second;
+  ASSERT_EQ(reports.size(), static_cast<std::size_t>(total));
+  for (int k = 0; k < total; ++k) {
+    EXPECT_EQ(reports[k], std::make_pair(k + 1, total));
+  }
+
+  // A run without a receiver reports nothing and gives the same result.
+  (void)session->Denoise(input, version, kTestXyzToCamera);
+  EXPECT_EQ(session->Stats().denoise_runs, 2U);
 }
 
 TEST(AiDenoiseModelSessionTest, ModelSessionCreatesThePlatformSessionOnceAndAgainAfterRelease) {
@@ -393,6 +419,55 @@ TEST(AiDenoiseModelSessionTest, DenoisedEntryIsReusedAndRunsTheModelOnce) {
   (void)cache.AcquireDenoised(EncodedBytes(encoded), version_b, other_camera, denoise);
   EXPECT_EQ(runs, 3);
   EXPECT_EQ(unpacks, 2);
+}
+
+// DN14: the renderer asks the cache which steps a render has before it acquires the source.
+TEST(AiDenoiseModelSessionTest, CacheReportsWhetherAnAcquireReadsTheRawOrRunsTheModel) {
+  PreparedSourceCache cache([](std::span<const std::byte>, DecodeRes) {
+    return MakeBayerInput(64, 48, BayerPattern("RGGB"));
+  });
+  const std::vector<std::byte> encoded(128, std::byte{9});
+  const std::string            version(64, 'a');
+  const auto                   denoise = [&](const PreparedRawInput& cfa) {
+    HostImagePlane rgba;
+    rgba.extent       = Extent2D{64, 48};
+    rgba.stride_bytes = 64 * 16;
+    rgba.format       = HostPixelFormat::F32Rgba;
+    auto storage      = std::shared_ptr<std::byte>(new std::byte[rgba.ByteCount()],
+                                                   [](std::byte* p) { delete[] p; });
+    std::fill_n(reinterpret_cast<float*>(storage.get()), rgba.ByteCount() / 4, 0.25f);
+    rgba.bytes = std::const_pointer_cast<const std::byte>(storage);
+    return RawInputLoader::FromDenoisedBayer(cfa, std::move(rgba), version, kTestXyzToCamera);
+  };
+
+  EXPECT_FALSE(cache.HoldsEncoded(EncodedBytes(encoded), DecodeRes::FULL));
+  EXPECT_FALSE(cache.HoldsDenoised(EncodedBytes(encoded), version, kTestXyzToCamera));
+  EXPECT_EQ(cache.EntryCount(), 0U);
+  EXPECT_EQ(cache.GetStats().misses, 0U);
+
+  (void)cache.AcquireEncoded(EncodedBytes(encoded), DecodeRes::FULL);
+  EXPECT_TRUE(cache.HoldsEncoded(EncodedBytes(encoded), DecodeRes::FULL));
+  EXPECT_FALSE(cache.HoldsEncoded(EncodedBytes(encoded), DecodeRes::HALF));
+  EXPECT_FALSE(cache.HoldsDenoised(EncodedBytes(encoded), version, kTestXyzToCamera));
+
+  (void)cache.AcquireDenoised(EncodedBytes(encoded), version, kTestXyzToCamera, denoise);
+  EXPECT_TRUE(cache.HoldsDenoised(EncodedBytes(encoded), version, kTestXyzToCamera));
+  EXPECT_FALSE(cache.HoldsDenoised(EncodedBytes(encoded), std::string(64, 'b'), kTestXyzToCamera));
+  auto other_camera = kTestXyzToCamera;
+  other_camera[4] += 0.05;
+  EXPECT_FALSE(cache.HoldsDenoised(EncodedBytes(encoded), version, other_camera));
+
+  // The queries change no stats and no entry.
+  const auto stats = cache.GetStats();
+  (void)cache.HoldsEncoded(EncodedBytes(encoded), DecodeRes::FULL);
+  (void)cache.HoldsDenoised(EncodedBytes(encoded), version, kTestXyzToCamera);
+  EXPECT_EQ(cache.GetStats().hits, stats.hits);
+  EXPECT_EQ(cache.GetStats().misses, stats.misses);
+  EXPECT_EQ(cache.EntryCount(), 2U);
+
+  cache.Clear();
+  EXPECT_FALSE(cache.HoldsEncoded(EncodedBytes(encoded), DecodeRes::FULL));
+  EXPECT_FALSE(cache.HoldsDenoised(EncodedBytes(encoded), version, kTestXyzToCamera));
 }
 
 TEST(AiDenoiseModelSessionTest, DenoiseHashCoversTheModelVersionAndTheCameraMatrix) {

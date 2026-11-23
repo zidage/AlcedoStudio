@@ -96,6 +96,17 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
   lifecycle_.SetOwnerCheck([this] { return command_queue_.IsOwnerThread(); });
   // Every render intent carries the range probe that the preview publishes (Mask ranges D9).
   render_.SetMaskCoverageProbeSource([this] { return coverage_preview_.State().range_probe; });
+  // The steps of a render (AI Denoise plan, DN14) reach the owner through the queue of the
+  // render results, so a result is handled before the progress of the next render.
+  render_.SetRenderProgressReceiver(
+      [this](ImageLoadRequestId image_load_request, const RenderProgress& progress) {
+        command_queue_.PostCompletion([this, image_load_request, progress] {
+          if (render_.NotifyRenderProgress(image_load_request, progress,
+                                           lifecycle_.active_image_load_request())) {
+            PublishRenderProgressIfChanged();
+          }
+        });
+      });
   // Pacing deadlines are delivered by the session-owner executor itself; a
   // GUI timer is no longer part of the serial schedule.
   default_deadline_handler_ = [this](std::int64_t delay_ns) {
@@ -1872,11 +1883,13 @@ void EditorSessionService::ScheduleDeadlineConsume(std::int64_t delay_ns) {
 }
 
 void EditorSessionService::PublishRenderProgressIfChanged() {
-  const bool busy = render_.render_busy();
-  if (busy == last_published_render_busy_) {
+  const bool busy     = render_.render_busy();
+  auto       progress = render_.render_progress();
+  if (busy == last_published_render_busy_ && progress == last_published_render_progress_) {
     return;
   }
-  last_published_render_busy_ = busy;
+  last_published_render_busy_     = busy;
+  last_published_render_progress_ = std::move(progress);
   NotifyRenderProgress();
 }
 

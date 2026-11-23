@@ -37,6 +37,7 @@
 #include "edit/input/raw_sensor_layout.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/lens/lens_calibration_resolver.hpp"
+#include "io/image/embedded_preview_reader.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/display_profile_readout.hpp"
@@ -380,7 +381,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   ai_denoise_services.installed_model_version = [] {
     return alcedo::PipelineExecutor::ProcessAiDenoiseSession()->InstalledModelVersion();
   };
-  ai_denoise_services.image_path = [this](std::uint32_t image_id) -> std::filesystem::path {
+  const auto image_path = [this](std::uint32_t image_id) -> std::filesystem::path {
     if (project_ == nullptr || project_->handler().project() == nullptr) {
       return {};
     }
@@ -397,10 +398,71 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       return {};
     }
   };
+  ai_denoise_services.image_path         = image_path;
   ai_denoise_services.read_sensor_layout = &alcedo::ReadRawSensorLayout;
   ai_denoise_ = std::make_unique<EditorAiDenoiseControl>(std::move(ai_denoise_services),
                                                          editor_session_.get(), this);
   RecordConstruction("EditorAiDenoiseControl", ai_denoise_.get());
+  // AI Denoise integration plan, DN14: the image of the viewport before the first frame.
+  editor_placeholder_image_ = std::make_shared<EditorPlaceholderImage>([this] {
+    const auto store = library_ != nullptr ? library_->thumbs().image_store() : nullptr;
+    return store ? store->Destination() : nullptr;
+  });
+  EditorViewportPlaceholder::Services placeholder_services;
+  placeholder_services.held_thumbnail = [this](sl_element_id_t element_id)
+      -> std::optional<EditorViewportPlaceholder::EncodedImage> {
+    const auto store = library_ != nullptr ? library_->thumbs().image_store() : nullptr;
+    if (!store) {
+      return std::nullopt;
+    }
+    for (const std::uint32_t max_edge : {2048U, 1024U, 512U, 256U}) {
+      auto image = store->Get(element_id, max_edge);
+      if (!image.isNull()) {
+        return EditorViewportPlaceholder::EncodedImage{
+            std::move(image), store->Encoding(element_id, max_edge).value_or(ViewerDisplayConfig{})};
+      }
+    }
+    return std::nullopt;
+  };
+  placeholder_services.image_path             = image_path;
+  placeholder_services.crop_or_rotation_check = [this](sl_element_id_t element_id)
+      -> std::function<bool()> {
+    auto pipeline = project_ != nullptr ? project_->handler().pipeline_service() : nullptr;
+    if (!pipeline) {
+      return {};
+    }
+    return [pipeline = std::move(pipeline), element_id] {
+      const auto snapshot = pipeline->AcquireCommittedSnapshot(element_id);
+      const auto& geometry = snapshot->Document().Geometry();
+      return !geometry.CropRect().IsFullFrame() || geometry.RotationDegrees() != 0.0f;
+    };
+  };
+  placeholder_services.read_camera_preview = [](const std::filesystem::path& path) -> QImage {
+    // A shorter edge of at least 768 px: enough for the viewport at the fit zoom of most windows;
+    // a large JPEG preview then decodes at a reduced scale.
+    const auto preview = alcedo::EmbeddedPreviewReader::Read(path, 768);
+    if (!preview.has_value() || preview->rgb8.empty()) {
+      return {};
+    }
+    const auto& rgb = preview->rgb8;
+    return QImage(rgb.data, rgb.cols, rgb.rows, static_cast<qsizetype>(rgb.step),
+                  QImage::Format_RGB888)
+        .copy();
+  };
+  editor_placeholder_ = std::make_unique<EditorViewportPlaceholder>(
+      std::move(placeholder_services), editor_placeholder_image_, this);
+  RecordConstruction("EditorViewportPlaceholder", editor_placeholder_.get());
+  QObject::connect(editor_session_.get(), &EditorSessionController::StateChanged,
+                   editor_placeholder_.get(),
+                   [session = editor_session_.get(), placeholder = editor_placeholder_.get()] {
+                     const auto state   = session->session_state();
+                     const bool waiting = session->has_image() &&
+                                          (state == alcedo::EditorSessionState::Acquiring ||
+                                           state == alcedo::EditorSessionState::Loading ||
+                                           state == alcedo::EditorSessionState::Switching);
+                     placeholder->SetWaitingPhoto(waiting ? session->element_id() : 0U,
+                                                  waiting ? session->image_id() : 0U);
+                   });
   QObject::connect(editor_session_.get(), &EditorSessionController::StateChanged, ai_denoise_.get(),
                    [session = editor_session_.get(), control = ai_denoise_.get()] {
                      control->SetImage(session->has_image() ? session->image_id() : 0U);
@@ -941,6 +1003,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(lut_preview_, "LutPreviewController");
   destroy(lut_target_, "LutLibraryController");
   destroy(lut_browser_, "LutLibraryModel");
+  destroy(editor_placeholder_, "EditorViewportPlaceholder");
   destroy(ai_denoise_, "EditorAiDenoiseControl");
   destroy(ai_mask_tool_, "EditorAiMaskTool");
   destroy(editor_comparison_, "EditorComparisonController");
@@ -1021,6 +1084,10 @@ void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
                            new ComparisonImageProvider(SharedComparisonImageStore()));
   engine->addImageProvider(QString::fromUtf8(kLutPreviewImageProviderId),
                            new LutPreviewImageProvider(SharedLutPreviewImageStore()));
+  if (editor_placeholder_image_) {
+    engine->addImageProvider(QString::fromUtf8(kEditorPlaceholderImageProviderId),
+                             new EditorPlaceholderImageProvider(editor_placeholder_image_));
+  }
 
   if (library_ == nullptr) {
     return;

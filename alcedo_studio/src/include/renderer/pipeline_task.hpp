@@ -16,6 +16,7 @@
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "type/type.hpp"
@@ -90,6 +91,9 @@ struct PipelineTask {
   // for every task that renders; a task without one fails.
   std::shared_ptr<const PipelineGraphSnapshot>           snapshot_;
   std::function<bool()>                             cancel_requested_;
+  // Editor frames only: receives the steps of a render that reads the RAW file or runs the AI
+  // Denoise model (AI Denoise plan, DN14). Copied into PipelineApplyRequest::progress.
+  RenderProgressCallback                            render_progress_;
   // Optional control-plane completion (preview + export). Invoked once on every
   // terminal path so callers do not need a dedicated blocking worker thread.
   std::function<void(bool success, std::string message)> on_complete_;

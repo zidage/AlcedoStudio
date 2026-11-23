@@ -25,6 +25,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/input/ai_denoise_error.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "support/editor_history_port_test_reads.hpp"
 #include "support/editor_lease_test_support.hpp"
 #include "support/editor_parameter_write_test.hpp"
@@ -233,6 +234,87 @@ TEST_F(EditorAiDenoiseSessionTest, TurnOffAiDenoiseIsOneChangeAndUndoTurnsItOn) 
   EXPECT_TRUE(scheduler_->switch_at_schedule[frames_before_undo]);
   CompleteFrames(false, slow);
   EXPECT_TRUE(service_->ai_denoise_error().has_value());
+}
+
+/// A value that the renderer sends during a model run (DN14).
+auto TilesOf(int completed, int total) -> RenderProgress {
+  RenderProgress progress;
+  progress.read_raw   = true;
+  progress.ai_denoise = true;
+  progress.step       = RenderStep::AiDenoise;
+  progress.completed  = completed;
+  progress.total      = total;
+  return progress;
+}
+
+TEST_F(EditorAiDenoiseSessionTest, ProgressOfTheOpenPhotoIsPublishedAndClearedByItsFrame) {
+  Start(true);
+  int notified = 0;
+  service_->SetRenderProgressObserver([&] { ++notified; });
+  (void)service_->Open(kElementId, kImageId);
+  Drain();
+  ASSERT_FALSE(scheduler_->scheduled.empty());
+  const auto first_frame = scheduler_->scheduled.front().intent.render_progress;
+  ASSERT_TRUE(static_cast<bool>(first_frame));
+  EXPECT_FALSE(service_->render_progress().has_value());
+
+  // The render worker reports; the owner publishes after its queue.
+  first_frame(TilesOf(3, 12));
+  EXPECT_FALSE(service_->render_progress().has_value());
+  const int before = notified;
+  Drain();
+  ASSERT_TRUE(service_->render_progress().has_value());
+  EXPECT_EQ(*service_->render_progress(), TilesOf(3, 12));
+  EXPECT_GT(notified, before);
+
+  // The same value again notifies nothing.
+  const int same_before = notified;
+  first_frame(TilesOf(3, 12));
+  Drain();
+  EXPECT_EQ(notified, same_before);
+
+  // The ready frame ends the steps of its render.
+  const int ready_before = notified;
+  CompleteFrames(true);
+  ASSERT_EQ(service_->state(), EditorSessionState::Interactive) << LastMessage();
+  EXPECT_FALSE(service_->render_progress().has_value());
+  EXPECT_GT(notified, ready_before);
+
+  // A failed frame ends them too: the switch on in the open photo runs the model again.
+  const auto frames = scheduler_->scheduled.size();
+  ASSERT_EQ(CommitRawDecode(R"("method":"legacy")").kind, EditorSessionResultKind::RenderRouted)
+      << LastMessage();
+  Drain();
+  ASSERT_GT(scheduler_->scheduled.size(), frames);
+  const auto switched = scheduler_->scheduled[frames].intent.render_progress;
+  ASSERT_TRUE(static_cast<bool>(switched));
+  switched(TilesOf(0, 0));
+  Drain();
+  ASSERT_TRUE(service_->render_progress().has_value());
+  CompleteFrames(false, kModelMissing);
+  EXPECT_FALSE(service_->render_progress().has_value());
+  EXPECT_TRUE(service_->ai_denoise_error().has_value());
+}
+
+TEST_F(EditorAiDenoiseSessionTest, ProgressOfAPhotoThatIsNoLongerOpenIsDropped) {
+  Start(true);
+  (void)service_->Open(kElementId, kImageId);
+  Drain();
+  ASSERT_FALSE(scheduler_->scheduled.empty());
+  const auto first_frame = scheduler_->scheduled.front().intent.render_progress;
+  ASSERT_TRUE(static_cast<bool>(first_frame));
+  first_frame(TilesOf(1, 12));
+  Drain();
+  ASSERT_TRUE(service_->render_progress().has_value());
+
+  // The load of the photo ends: its progress goes with it, and a late value is dropped.
+  (void)service_->Close(false);
+  CompleteFrames(false, "Cancelled during execution");
+  Drain();
+  EXPECT_FALSE(service_->render_progress().has_value());
+  first_frame(TilesOf(2, 12));
+  Drain();
+  EXPECT_FALSE(service_->render_progress().has_value());
 }
 
 }  // namespace

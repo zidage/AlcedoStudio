@@ -32,6 +32,8 @@
 #include "edit/input/ai_denoise_platform.hpp"
 #include "edit/input/raster_input_loader.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "image/image_buffer.hpp"
 #include "support/render_snapshot_source.hpp"
 #ifdef HAVE_CUDA
@@ -178,6 +180,105 @@ void VerifyFullSizeRenderWithTheSwitchOnRendersTheModelOutput() {
   EXPECT_TRUE(cv::checkRange(RenderHost(batch, on_source, image, DecodeRes::FULL)));
   EXPECT_TRUE(cv::checkRange(RenderHost(batch, on_source, image, DecodeRes::FULL)));
   EXPECT_EQ(session->Stats().denoise_runs, 4U);
+}
+
+/// The values of the render of @p source on @p renderer, at full size with a progress receiver
+/// (DN14).
+template <class RendererType>
+auto RenderWithProgress(RendererType& renderer, const test::RenderSnapshotSource& source,
+                        const std::shared_ptr<ImageBuffer>& image) -> std::vector<RenderProgress> {
+  std::vector<RenderProgress> values;
+  PipelineApplyRequest        request;
+  request.decode_res          = DecodeRes::FULL;
+  request.role                = ExecutorRole::Interactive;
+  request.require_host_output = true;
+  request.progress = [&](const RenderProgress& value) { values.push_back(value); };
+  if (!renderer.Render(*source.Freeze(), image, request)) {
+    throw std::runtime_error("the render returned no host output");
+  }
+  return values;
+}
+
+/// Checks that @p values from @p first on are the Develop groups of one plan, in order.
+void ExpectDevelopGroupsInOrder(const std::vector<RenderProgress>& values, std::size_t first) {
+  ASSERT_LT(first, values.size());
+  const int groups = values[first].total;
+  ASSERT_EQ(values.size() - first, static_cast<std::size_t>(groups));
+  const int grades = groups - DevelopGroupCount(0);
+  ASSERT_GE(grades, 0);
+  for (int k = 0; k < groups; ++k) {
+    const auto& value = values[first + k];
+    SCOPED_TRACE(k);
+    EXPECT_EQ(value.step, RenderStep::Develop);
+    EXPECT_EQ(value.completed, k);
+    EXPECT_EQ(value.total, groups);
+    DevelopGroup expected = DevelopGroup::ColorGrade;
+    if (k == 0) expected = DevelopGroup::Sensor;
+    if (k == 1) expected = DevelopGroup::LensAndGeometry;
+    if (k == 2) expected = DevelopGroup::Color;
+    if (k == groups - 1) expected = DevelopGroup::Display;
+    EXPECT_EQ(value.group, expected);
+    if (expected == DevelopGroup::ColorGrade) {
+      EXPECT_EQ(value.grade_index, k - 3);
+      EXPECT_EQ(value.grade_count, grades);
+    }
+  }
+}
+
+template <class RendererType>
+void VerifyRenderThatReadsTheRawReportsItsStepsInOrder() {
+  const TestModelFolder folder("render_progress");
+  auto                  record  = std::make_shared<TestPlatformRecord>();
+  auto                  session = MakeTestModelSession(record, folder);
+  const auto            image   = MakeEncodedImage(23);
+  const test::RenderSnapshotSource on_source(DenoiseDocument(true));
+  const auto                       off_document = DenoiseDocument(false);
+  const test::RenderSnapshotSource off_source(off_document);
+
+  // The first frame of a photo with the switch on: Reading RAW, the tiles, the Develop groups.
+  RendererType renderer(ExecutorRole::Interactive, MakeUnpacker(), nullptr, nullptr, session);
+  const auto   first = RenderWithProgress(renderer, on_source, image);
+  ASSERT_GE(first.size(), 3U);
+  for (const auto& value : first) {
+    EXPECT_TRUE(value.read_raw);
+    EXPECT_TRUE(value.ai_denoise);
+  }
+  EXPECT_EQ(first[0].step, RenderStep::ReadRaw);
+  EXPECT_EQ(first[1].step, RenderStep::AiDenoise);
+  EXPECT_EQ(first[1].completed, 0);
+  EXPECT_EQ(first[1].total, 0);
+  std::size_t index = 2;
+  int         tiles = 0;
+  while (index < first.size() && first[index].step == RenderStep::AiDenoise) {
+    ++tiles;
+    EXPECT_EQ(first[index].completed, tiles);
+    ++index;
+  }
+  ASSERT_GT(tiles, 0);
+  EXPECT_EQ(first[index - 1].total, tiles);
+  ExpectDevelopGroupsInOrder(first, index);
+
+  // The next frame reads the caches: it reports nothing.
+  EXPECT_TRUE(RenderWithProgress(renderer, on_source, image).empty());
+
+  // A photo with the switch off: Reading RAW and the Develop groups.
+  RendererType off_renderer(ExecutorRole::Interactive, MakeUnpacker(), nullptr, nullptr, session);
+  const auto   off = RenderWithProgress(off_renderer, off_source, image);
+  ASSERT_GE(off.size(), 2U);
+  EXPECT_TRUE(off[0].read_raw);
+  EXPECT_FALSE(off[0].ai_denoise);
+  EXPECT_EQ(off[0].step, RenderStep::ReadRaw);
+  ExpectDevelopGroupsInOrder(off, 1);
+  EXPECT_TRUE(RenderWithProgress(off_renderer, off_source, image).empty());
+
+  // The switch goes on in the open photo (the same document; another document is another
+  // binding, whose renderer clears its caches): the source is in the cache, so no Reading RAW.
+  off_document->Develop()->Params().ApplyAiDenoiseUpdate(DevelopAiDenoise{kRecordedVersion});
+  const auto switched = RenderWithProgress(off_renderer, off_source, image);
+  ASSERT_GE(switched.size(), 2U);
+  EXPECT_FALSE(switched[0].read_raw);
+  EXPECT_TRUE(switched[0].ai_denoise);
+  EXPECT_EQ(switched[0].step, RenderStep::AiDenoise);
 }
 
 template <class RendererType>
@@ -348,6 +449,11 @@ TEST(AiDenoiseRenderTest, ModelErrorIsTheRenderErrorWithItsKindOnCuda) {
   VerifyModelErrorIsTheRenderErrorWithItsKind<CudaRenderer>();
 }
 
+TEST(AiDenoiseRenderTest, RenderThatReadsTheRawReportsItsStepsInOrderOnCuda) {
+  if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
+  VerifyRenderThatReadsTheRawReportsItsStepsInOrder<CudaRenderer>();
+}
+
 TEST(AiDenoiseRenderTest, RawPhotoRendersWithTheFp16GraphOnDirectMlOnCuda) {
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
   VerifyRawPhotoRendersWithTheFp16GraphOnDirectMl<CudaRenderer>();
@@ -379,6 +485,11 @@ TEST(AiDenoiseRenderTest, FullSizeRenderWithTheSwitchOnRendersTheModelOutputOnOp
 TEST(AiDenoiseRenderTest, ModelErrorIsTheRenderErrorWithItsKindOnOpenCl) {
   if (!TryInitializeOpenClRuntime()) GTEST_SKIP() << "No OpenCL device available.";
   VerifyModelErrorIsTheRenderErrorWithItsKind<OpenClRenderer>();
+}
+
+TEST(AiDenoiseRenderTest, RenderThatReadsTheRawReportsItsStepsInOrderOnOpenCl) {
+  if (!TryInitializeOpenClRuntime()) GTEST_SKIP() << "No OpenCL device available.";
+  VerifyRenderThatReadsTheRawReportsItsStepsInOrder<OpenClRenderer>();
 }
 
 TEST(AiDenoiseRenderTest, RawPhotoRendersWithTheFp16GraphOnDirectMlOnOpenCl) {

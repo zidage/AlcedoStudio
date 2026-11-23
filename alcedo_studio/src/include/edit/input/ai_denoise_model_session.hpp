@@ -74,6 +74,10 @@ class DenoiseModelSession {
    */
   [[nodiscard]] auto InstalledModelVersion() -> std::string;
 
+  /// Receives the tiles of a run: @p completed of @p total tiles finished (DN14). Called on the
+  /// thread of @ref Denoise after each tile.
+  using TileProgress = std::function<void(int completed, int total)>;
+
   /**
    * @brief Denoise the full-size Bayer input @p cfa with the installed model of version
    *        @p model_version and return the denoised input of DN5
@@ -82,10 +86,12 @@ class DenoiseModelSession {
    * Runs the input preparation, the tile loop with the gain match sums, the gain match, and the
    * plane assembly. Waits while another run is in progress. @p xyz_to_camera is the camera matrix
    * of the render at D65 (ResolveDevelopXyzToCameraD65); the gain match weights come from it.
+   * @p on_tile (it can be empty) gets tile k of n after each tile of the loop.
    * @throws AiDenoiseError of each kind; no partial result.
    */
   [[nodiscard]] auto Denoise(const PreparedRawInput& cfa, std::string_view model_version,
-                             const std::array<double, 9>& xyz_to_camera) -> PreparedRawInput;
+                             const std::array<double, 9>& xyz_to_camera,
+                             const TileProgress&          on_tile = {}) -> PreparedRawInput;
 
   /// Ends the platform session and frees its device memory. Waits for a run in progress. The
   /// slow-device results stay.
