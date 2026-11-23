@@ -40,11 +40,14 @@ struct TileOutputCrop {
   int           destination_y = 0;
 };
 
-/// The local video memory of the adapter of a session, for the tile size selection.
+/// The device memory of a session, for the tile size selection: the local video memory of the
+/// adapter on Windows (DXGI), the physical memory on macOS (the Neural Engine uses the unified
+/// memory).
 struct DeviceMemoryState {
-  /// The budget of the process (DXGI `Budget`).
+  /// The budget of the process (DXGI `Budget`; macOS: the physical memory).
   std::uint64_t budget_bytes = 0;
-  /// The current use of the process, the session included (DXGI `CurrentUsage`).
+  /// The current use of the process, the session included (DXGI `CurrentUsage`; macOS: the
+  /// physical memory that macOS does not count as available, of all processes).
   std::uint64_t usage_bytes  = 0;
   /// The part of `usage_bytes` that the session holds and reuses for its next tiles (its memory
   /// arena), 0 when the session is released.
@@ -80,8 +83,12 @@ class UtNet2TileSession {
   /// no graph, so that its time is the time of the device (the slow-device check measures it).
   [[nodiscard]] virtual auto IsReadyFor(int width, int height) const -> bool = 0;
 
-  /// The local video memory of the adapter of the session.
+  /// The device memory of the session (see DeviceMemoryState).
   [[nodiscard]] virtual auto DeviceMemory() const -> DeviceMemoryState       = 0;
+
+  /// The device memory that a run needs for each tile size on this platform, largest first
+  /// (`UtNet2Spec::kDirectMlTileMemory`, `UtNet2Spec::kCoreMlTileMemory`).
+  [[nodiscard]] virtual auto TileMemory() const -> std::span<const UtNet2TileMemory> = 0;
 };
 
 /// The packed RGGB mosaic of a photo in float32 planes (4, height, width), row-major, input
@@ -107,7 +114,9 @@ struct UtNet2TileLoopOptions {
   /// than 2 x `overlap` (the tests use small tiles).
   int                               tile_size    = 0;
   int                               overlap      = UtNet2Spec::kTileOverlap;
-  std::span<const UtNet2TileMemory> tile_memory  = UtNet2Spec::kDirectMlTileMemory;
+  /// The table of the tile size selection; empty (the product) selects the table of the session
+  /// (`UtNet2TileSession::TileMemory`).
+  std::span<const UtNet2TileMemory> tile_memory  = {};
   /// `slow_device_limit` (plan 2.4, section 9) in seconds for each megapixel of the mosaic.
   double slow_device_limit_seconds_per_megapixel = UtNet2Spec::kSlowDeviceLimitSecondsPerMegapixel;
   /// The measured tiles before the first slow-device check

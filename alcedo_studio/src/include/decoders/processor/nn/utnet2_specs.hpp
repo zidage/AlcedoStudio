@@ -49,6 +49,17 @@ struct UtNet2Spec {
       {.tile_size = 768, .device_bytes = std::uint64_t{736} << 20},
   }};
 
+  // The memory of a run with tiles of each size on the Neural Engine (Core ML, one session for
+  // each tile shape), largest first: the growth of the physical footprint of the process from
+  // the photo and its output image in memory without a session to after the runs of the 45.4 MP
+  // photo (4 tile shapes), rounded up to 16 MiB. MacBook Air M4 (integration plan, DN10
+  // completion record): 402, 146, and 108 MiB.
+  static constexpr std::array<UtNet2TileMemory, 3> kCoreMlTileMemory                   = {{
+      {.tile_size = 1536, .device_bytes = std::uint64_t{416} << 20},
+      {.tile_size = 1024, .device_bytes = std::uint64_t{160} << 20},
+      {.tile_size = 768, .device_bytes = std::uint64_t{112} << 20},
+  }};
+
   // `slow_device_limit` (integration plan, 2.4 and section 9): the largest projected time of a
   // photo for each megapixel of its mosaic. About 3 times `target_time` (RTX 3080 Laptop GPU
   // 0.016 s, M4 Neural Engine 0.013 s, Intel Iris Xe 0.114 s for each megapixel).

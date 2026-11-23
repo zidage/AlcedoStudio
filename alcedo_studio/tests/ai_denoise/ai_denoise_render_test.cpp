@@ -2,8 +2,9 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// The AI Denoise model run in the renderer (integration plan, DN6): a test platform through the
-// CUDA and OpenCL renderers, and the FP16 graph on DirectML with a RAW file.
+// The AI Denoise model run in the renderer (integration plan, DN6, DN10): a test platform through
+// the CUDA, OpenCL, and Metal renderers, and the FP16 graph on the platform of the build (DirectML
+// on Windows, Core ML on the Neural Engine on macOS) with a RAW file.
 
 #include <gtest/gtest.h>
 
@@ -44,6 +45,9 @@
 #ifdef HAVE_OPENCL
 #include "edit/runtime/opencl/opencl_renderer.hpp"
 #include "opencl/opencl_runtime.hpp"
+#endif
+#ifdef HAVE_METAL
+#include "edit/runtime/metal/metal_renderer.hpp"
 #endif
 
 namespace alcedo {
@@ -348,10 +352,10 @@ auto MeanAbsoluteLaplacian(const cv::Mat& image) -> double {
   return sum / count;
 }
 
-/// The RAW file through the renderer with the FP16 graph on DirectML (the product platform):
-/// the same levels as the CFA render and less noise in a crop at 100%.
+/// The RAW file through the renderer with the FP16 graph on the product platform (DirectML,
+/// Core ML): the same levels as the CFA render and less noise in a crop at 100%.
 template <class RendererType>
-void VerifyRawPhotoRendersWithTheFp16GraphOnDirectMl() {
+void VerifyRawPhotoRendersWithTheFp16GraphOfThePlatform() {
   const auto assets = RawAssets();
   if (!assets) {
     GTEST_SKIP() << "Set ALCEDO_AI_DENOISE_TEST_ASSETS to a folder with the FP16 graph.";
@@ -403,7 +407,7 @@ void VerifyRawPhotoRendersWithTheFp16GraphOnDirectMl() {
       denoised_mean[2], cfa_noise, denoised_noise);
   EXPECT_LT(denoised_noise, cfa_noise);
 
-  // The time of a model run on the ready session (the session compiled both tile widths in the
+  // The time of a model run on the ready session (the session compiled the tile shapes in the
   // first render): the time of a cache miss in the editor (another photo of the same size).
   {
     auto&      encoded   = image->GetBuffer();
@@ -456,7 +460,7 @@ TEST(AiDenoiseRenderTest, RenderThatReadsTheRawReportsItsStepsInOrderOnCuda) {
 
 TEST(AiDenoiseRenderTest, RawPhotoRendersWithTheFp16GraphOnDirectMlOnCuda) {
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
-  VerifyRawPhotoRendersWithTheFp16GraphOnDirectMl<CudaRenderer>();
+  VerifyRawPhotoRendersWithTheFp16GraphOfThePlatform<CudaRenderer>();
 }
 #endif
 
@@ -494,7 +498,37 @@ TEST(AiDenoiseRenderTest, RenderThatReadsTheRawReportsItsStepsInOrderOnOpenCl) {
 
 TEST(AiDenoiseRenderTest, RawPhotoRendersWithTheFp16GraphOnDirectMlOnOpenCl) {
   if (!TryInitializeOpenClRuntime()) GTEST_SKIP() << "No OpenCL device available.";
-  VerifyRawPhotoRendersWithTheFp16GraphOnDirectMl<OpenClRenderer>();
+  VerifyRawPhotoRendersWithTheFp16GraphOfThePlatform<OpenClRenderer>();
+}
+#endif
+
+#ifdef HAVE_METAL
+auto HasMetalDevice() -> bool {
+  try {
+    return BindSystemDefaultMetalPresentationDevice() != nullptr;
+  } catch (...) {
+    return false;
+  }
+}
+
+TEST(AiDenoiseRenderTest, FullSizeRenderWithTheSwitchOnRendersTheModelOutputOnMetal) {
+  if (!HasMetalDevice()) GTEST_SKIP() << "No Metal device available.";
+  VerifyFullSizeRenderWithTheSwitchOnRendersTheModelOutput<MetalRenderer>();
+}
+
+TEST(AiDenoiseRenderTest, ModelErrorIsTheRenderErrorWithItsKindOnMetal) {
+  if (!HasMetalDevice()) GTEST_SKIP() << "No Metal device available.";
+  VerifyModelErrorIsTheRenderErrorWithItsKind<MetalRenderer>();
+}
+
+TEST(AiDenoiseRenderTest, RenderThatReadsTheRawReportsItsStepsInOrderOnMetal) {
+  if (!HasMetalDevice()) GTEST_SKIP() << "No Metal device available.";
+  VerifyRenderThatReadsTheRawReportsItsStepsInOrder<MetalRenderer>();
+}
+
+TEST(AiDenoiseRenderTest, RawPhotoRendersWithTheFp16GraphOnCoreMlOnMetal) {
+  if (!HasMetalDevice()) GTEST_SKIP() << "No Metal device available.";
+  VerifyRawPhotoRendersWithTheFp16GraphOfThePlatform<MetalRenderer>();
 }
 #endif
 

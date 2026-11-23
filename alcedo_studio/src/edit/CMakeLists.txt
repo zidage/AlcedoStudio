@@ -107,10 +107,13 @@ endif()
 
 # CPU RAW unpack / downsample. No CUDA, no ImageBuffer.
 # AI Denoise (integration plan, DN6): the input preparation, the gain match, and the process-wide
-# owner of the model session. The platform session is DirectML on Windows x64 (UtNet2DirectMl);
-# a build without it has no forward code, and a run reports the error.
+# owner of the model session. The platform session is DirectML on Windows x64 (UtNet2DirectMl)
+# and Core ML on macOS on Apple silicon (UtNet2CoreMl, DN10); a build without them has no forward
+# code, and a run reports the error.
 if(TARGET UtNet2DirectMl)
     set(EDIT_INPUT_AI_DENOISE_PLATFORM_SRC ${ALCEDO_SRC_ROOT}/edit/input/ai_denoise_directml_platform.cpp)
+elseif(TARGET UtNet2CoreMl)
+    set(EDIT_INPUT_AI_DENOISE_PLATFORM_SRC ${ALCEDO_SRC_ROOT}/edit/input/ai_denoise_coreml_platform.cpp)
 else()
     set(EDIT_INPUT_AI_DENOISE_PLATFORM_SRC ${ALCEDO_SRC_ROOT}/edit/input/ai_denoise_platform_unavailable.cpp)
 endif()
@@ -128,6 +131,8 @@ def_library(EditInput
 )
 if(TARGET UtNet2DirectMl)
     target_link_libraries(EditInput PRIVATE UtNet2DirectMl)
+elseif(TARGET UtNet2CoreMl)
+    target_link_libraries(EditInput PRIVATE UtNet2CoreMl)
 endif()
 
 # GPU-agnostic DAG runtime (parameter arena, texture LRU, KV cache). No CUDA headers.

@@ -100,6 +100,9 @@ class UtNet2DirectMlSession final : public UtNet2TileSession {
   /// arena keeps it).
   [[nodiscard]] auto DeviceMemory() const -> DeviceMemoryState override;
 
+  /// `UtNet2Spec::kDirectMlTileMemory`.
+  [[nodiscard]] auto TileMemory() const -> std::span<const UtNet2TileMemory> override;
+
   /// Ends the session, frees its memory arena and its buffers, and ends its Direct3D 12 and
   /// DirectML devices. The graph path, the adapter, and the scale stay; a later `Run` creates the
   /// session again.

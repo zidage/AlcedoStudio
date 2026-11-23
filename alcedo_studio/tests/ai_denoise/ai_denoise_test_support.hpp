@@ -22,11 +22,13 @@
 #include <memory>
 #include <opencv2/core.hpp>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "decoders/processor/nn/utnet2_specs.hpp"
 #include "decoders/processor/nn/utnet2_tile_loop.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -251,6 +253,10 @@ class TestTileSession final : public nn::UtNet2TileSession {
     return {.budget_bytes = std::uint64_t{8} << 30};
   }
 
+  [[nodiscard]] auto TileMemory() const -> std::span<const nn::UtNet2TileMemory> override {
+    return nn::UtNet2Spec::kDirectMlTileMemory;
+  }
+
  private:
   std::shared_ptr<TestPlatformRecord> record_;
 };
@@ -268,7 +274,8 @@ class TestPlatform final : public AiDenoisePlatform {
     }
   }
 
-  [[nodiscard]] auto CreateSession(const std::filesystem::path& graph_path)
+  [[nodiscard]] auto CreateSession(const std::filesystem::path& graph_path,
+                                   std::string_view /*model_version*/)
       -> std::unique_ptr<nn::UtNet2TileSession> override {
     if (!std::filesystem::is_regular_file(graph_path)) {
       throw std::runtime_error("test platform: no graph at " + graph_path.string());

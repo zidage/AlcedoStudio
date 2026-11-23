@@ -130,7 +130,7 @@ auto DenoiseModelSession::Denoise(const PreparedRawInput& cfa, std::string_view 
   try {
     const auto started = std::chrono::steady_clock::now();
     if (!session_) {
-      session_         = platform_->CreateSession(graph);
+      session_         = platform_->CreateSession(graph, model_version);
       session_device_  = device;
       session_version_ = std::string(model_version);
       ++stats_.sessions_created;

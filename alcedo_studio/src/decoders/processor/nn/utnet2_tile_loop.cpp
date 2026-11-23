@@ -99,7 +99,7 @@ auto SelectUtNet2TileSize(std::span<const UtNet2TileMemory> tile_memory,
     throw std::invalid_argument("AI Denoise: the tile memory table is empty");
   }
   if (selected == nullptr) {
-    throw std::runtime_error("AI Denoise: not enough video memory: tiles of " +
+    throw std::runtime_error("AI Denoise: not enough device memory: tiles of " +
                              std::to_string(smallest->tile_size) + " packed px need " +
                              MebibyteText(smallest->device_bytes) + ", " +
                              MebibyteText(available_bytes) + " are free");
@@ -135,8 +135,8 @@ auto DenoiseBayerMosaic(UtNet2TileSession& session, const PackedMosaicView& mosa
   if (options.tile_size != 0) {
     record.tile_size = options.tile_size;
   } else {
-    record.tile_size =
-        SelectUtNet2TileSize(options.tile_memory, AvailableTileMemory(session.DeviceMemory()));
+    const auto table = options.tile_memory.empty() ? session.TileMemory() : options.tile_memory;
+    record.tile_size = SelectUtNet2TileSize(table, AvailableTileMemory(session.DeviceMemory()));
   }
   const auto tiles =
       PlanOverlapTiles(mosaic.width, mosaic.height, record.tile_size, options.overlap, kAlignment);

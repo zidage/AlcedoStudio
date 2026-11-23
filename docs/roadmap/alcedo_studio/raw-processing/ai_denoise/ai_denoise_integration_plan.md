@@ -28,7 +28,10 @@
   complete (issue #1059): the steps of a render in a pill and a segmented bar, and the
   placeholder image before the first frame. 2026-11-23: DN8 complete (issue #1061): several photos
   get AI Denoise through Copy and Paste of the RAW Decode item (no library action, user); an
-  export item with an AI Denoise error stays in the queue with `Turn Off AI Denoise`
+  export item with an AI Denoise error stays in the queue with `Turn Off AI Denoise`.
+  2026-11-23: DN10 complete (issue #1069): the FP16 graph on the Neural Engine of macOS (Core ML,
+  one session for each tile shape, a model cache for each model version), 45.4 MP in 0.55 s on
+  the M4; the DN5 Metal code built and run
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -301,7 +304,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN7 | Editor switch, render error with the AI Models control | `ui/alcedo_main`, `app`, `edit/input` | DN6 | 900 to 1400 | complete (#1050) |
 | DN8 | Batch through Paste, and export errors | `ui/alcedo_main`, `app` | DN7 | 300 to 600 | complete (#1061) |
 | DN9 | Removed on 2026-11-22 (was: the settings section for the stored results) | | | | removed |
-| DN10 | macOS forward code: the Core ML session of UtNet2 on the Neural Engine in ONNX Runtime (C++), the osx-arm64 library | `cmake`, `decoders/processor/nn` | DN3 | 600 to 1000 | planned |
+| DN10 | macOS forward code: the Core ML session of UtNet2 on the Neural Engine in ONNX Runtime (C++), the osx-arm64 library | `cmake`, `decoders/processor/nn` | DN3 | 600 to 1000 | complete (#1069) |
 | DN11 | Linux forward code | `opencl` or ONNX Runtime WebGPU | DN3 | 1400 to 1900 | last (2026-11-22: the only Linux environment is WSL) |
 | DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | planned |
 | DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | planned |
@@ -309,11 +312,10 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 
 Order of the remaining phases: DN14, DN8, DN10, DN12, DN13, and DN11 last (DN11 last and DN14
 added by the user on 2026-11-22; DN14 before DN8 by the user on 2026-11-23).
-DN10 has its lab validation (DN1 macOS additions: the standalone C++ tool on the M4, Neural
-Engine FP16 0.60 s at 45.4 MP with the 3-crop graph of DN1); the Alcedo Studio work of DN10 has
-not started, and the DN2 graph has not run on the Mac.
+DN10 is complete (2026-11-23): the DN2 graph runs in Alcedo Studio on the Neural Engine of the
+M4 in 0.55 s at 45.4 MP.
 
-DN0 to DN3, DN5 to DN8, and DN14 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
+DN0 to DN3, DN5 to DN8, DN10, and DN14 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
 detailed section in this file before its implementation starts, with the format of DN0 to DN3.
 DN5 can start before DN3 completes: its tests build the denoised prepared input from the DN0
 expected outputs, so the Develop integration can be checked before the tile loop exists.
@@ -2772,9 +2774,288 @@ is in the new owners.
 **Remaining gaps:** the queue row is not checked by eye in the running application; an export
 with a real model error was not run (the tests drive the status from the render message).
 
-### DN10 to DN13
+### DN10: macOS forward code (Core ML on the Neural Engine)
 
-Each of these phases gets its detailed section before its implementation starts. DN4 and DN9
+Written on 2026-11-23, before the implementation. The fixed points are the DN10 bullet of
+"DN11 to DN13" (the configuration of the DN1 addition "FP16 on the Neural Engine", U5) and D13.
+
+**Objective and deliverables**
+
+AI Denoise runs on macOS (Apple silicon) in the Develop render of the editor and of the export,
+with the FP16 graph of DN2 on the Neural Engine. The deliverables:
+
+- `UtNet2CoreMlSession`: the ONNX Runtime session of the FP16 graph with the Core ML execution
+  provider, one session for each tile input shape, with the run, check, and release interface
+  of `UtNet2DirectMlSession`, so that the DN3 tile loop and `DenoiseModelSession` run unchanged.
+- `libonnxruntime.dylib` of `Microsoft.ML.OnnxRuntime` 1.24.4 (osx-arm64) as a C++ dependency,
+  downloaded at configure time with its SHA-256, linked by the session, and installed into
+  `Contents/Frameworks` of the bundle.
+- The AI Denoise platform of macOS (`CreateProductAiDenoisePlatform`), so that the switch of the
+  RAW Decode panel appears on macOS (D13).
+- The first build and run of the DN5 Metal code, and the DN6 render tests on the Metal renderer.
+- The time of a full photo against `target_time` (0.60 s at 45.4 MP on the M4), the session
+  creation time of a photo size with and without `ModelCacheDirectory`, and the footprint of the
+  process after a run, after a batch of photos, and after the release of the sessions.
+
+**Inputs and prerequisites**
+
+DN2 (the FP16 graph, SHA-256 `0bc98084...`, `output_scale` 170.34; the DN0 expected outputs),
+DN3 (the tile planner and the tile loop), DN5 (the Metal code of the denoised input), DN6
+(`DenoiseModelSession`, `AiDenoisePlatform`), DN7 (the switch, shown when
+`IsPlatformAvailable`). The MacBook Air M4 (16 GB, macOS 27.0.1) of the DN1 additions, reached
+over SSH. The graph has the free dimensions `height`, `width`, `output_height`, and
+`output_width`; its 50 nodes use Conv, LeakyRelu, MaxPool, ConvTranspose, Concat, and
+DepthToSpace.
+
+**Product rules**
+
+- **Device.** The model runs on the Neural Engine of Apple silicon: Core ML `ModelFormat`
+  MLProgram, `MLComputeUnits` CPUAndNeuralEngine, `session.disable_cpu_ep_fallback` 1 (a node
+  that Core ML does not take is a load error, not a CPU run: section 1.4). An Intel Mac has no
+  build of the session (the macOS build is arm64), so it has no platform and no switch (D13).
+- **One session for each tile input shape.** The shape is fixed with the free dimension
+  overrides of the four dimensions. A photo size uses up to 4 shapes (the full tile, the last
+  column, the last row, the corner). The sessions of the shapes that the editor and the export
+  used stay until `Release` (2.3); the first run of a new shape creates its session and is not
+  measured by the slow-device check (2.4).
+- **Tile size.** From the memory of the Mac, with the table `UtNet2Spec::kCoreMlTileMemory`
+  (1536, 1024, 768 packed px; values from the DN10 measurement of the footprint growth). The
+  memory that the selection can use is the physical memory that is free or inactive (Mach
+  `vm_statistics64`), plus the memory that the sessions hold. The session gives its table to the
+  tile loop (`UtNet2TileSession::TileMemory`), so the loop selects with the table of the platform
+  that runs.
+- **Errors** are the errors of 2.4: a load error names the graph and the ONNX Runtime or Core ML
+  text; a run error names the tile; a value that is not finite names the tile and the value.
+
+**Data rules**
+
+- No persisted format changes. The model version is the SHA-256 of the same FP16 graph file on
+  both platforms (D10), so a project from Windows opens on macOS with the same content key.
+- `ModelCacheDirectory` (the compiled Core ML models of the sessions): DN10 measures the session
+  creation of a photo size with and without it. The cache is used only when it shortens the
+  creation of the sessions of a photo size by more than a third; then its folder is
+  `~/Library/Caches/<bundle identifier>/ai-denoise-coreml` and its content belongs to the model
+  version (the folder name holds the version). The completion record states the result.
+
+**Modules, files, and APIs**
+
+| File | Responsibility |
+| --- | --- |
+| `scripts/cmake/fetch_onnxruntime_macos.cmake` (new) | The NuGet package `Microsoft.ML.OnnxRuntime` 1.24.4: SHA-256, headers, `libonnxruntime.1.24.4.dylib` (its install name); the target `alcedo::onnxruntime_macos`; the install into the bundle |
+| `include/decoders/processor/nn/utnet2_onnx_graph.hpp`, `decoders/processor/nn/utnet2_onnx_graph.cpp` (new) | What both platform sessions share: the graph check against `UtNet2Spec`, the tile and crop checks, the float32 to float16 tile input, the float16 output rectangle to float32 times `output_scale` with the check for values that are not finite. Moved out of `utnet2_directml_session.cpp` |
+| `include/decoders/processor/nn/utnet2_coreml_session.hpp`, `decoders/processor/nn/utnet2_coreml_session.cpp` (new) | `UtNet2CoreMlSession`, `LoadCoreMlRuntime`, `CoreMlDeviceKey` |
+| `include/decoders/processor/nn/utnet2_tile_loop.hpp`, `utnet2_tile_loop.cpp`, `utnet2_specs.hpp` | `UtNet2TileSession::TileMemory`; `UtNet2TileLoopOptions::tile_memory` empty selects the table of the session; `kCoreMlTileMemory` |
+| `decoders/processor/nn/utnet2_directml_session.cpp` | Uses `utnet2_onnx_graph`; `TileMemory` |
+| `edit/input/ai_denoise_coreml_platform.cpp` (new), `edit/CMakeLists.txt` | The platform of macOS |
+| `decoders/CMakeLists.txt`, `CMakeLists.txt` | `UtNet2CoreMl`; the dylib in `Contents/Frameworks` |
+| `tests/ai_denoise/utnet2_session_test.cpp` (renamed from `utnet2_directml_session_test.cpp`), `tests/ai_denoise/CMakeLists.txt` | The DN2 and DN3 session tests for the session of the build: `UtNet2DirectMlTest` (Windows), `UtNet2CoreMlTest` (macOS) |
+| `tests/ai_denoise/utnet2_coreml_photo_timing_tool.cpp` (new) | The time of full photos, the session creation, the footprint |
+| `tests/ai_denoise/ai_denoise_render_test.cpp` | The DN6 render tests on Metal; the RAW photo with the FP16 graph on the platform of the build |
+
+**Primary success call chain**
+
+```text
+render of a photo with ai_denoise (MetalRenderer, DecodeRes::FULL) -> PreparedSourceCache::
+  AcquireDenoised miss -> DenoiseModelSession::Denoise -> CoreMlAiDenoisePlatform::CreateSession
+  (first run) -> DenoiseBayerMosaic(tile size from UtNet2CoreMlSession::DeviceMemory and
+  TileMemory) -> for each tile: UtNet2CoreMlSession::Run -> the session of the tile shape (created
+  at its first run: free dimension overrides, Core ML on the Neural Engine) -> float16 input ->
+  Ort::Session::Run -> float16 output rectangle to float32 times output_scale, finite check ->
+  gain match -> FromDenoisedBayer -> Metal Develop passes (DN5) -> frame
+```
+
+**Primary failure call chain**
+
+```text
+libonnxruntime.dylib absent or without Core ML -> the process does not start (linked library)
+  in a broken bundle; the bundle check of the install lists the missing @rpath library
+graph load or run error (Core ML compile error, a node outside Core ML) -> std::runtime_error
+  -> DenoiseModelSession: RunFailed, session released -> render error card (DN7)
+value that is not finite -> RunFailed naming the tile; slow projected time -> DeviceTooSlow
+```
+
+**Implementation steps**
+
+1. The dependency script, the session library, the shared graph code (Windows build and tests
+   stay green after the move).
+2. `UtNet2CoreMlSession`, `TileMemory`, the macOS platform.
+3. The session test for both platforms; the Metal render tests.
+4. The timing tool; the measurements on the M4 (time, session creation with and without the
+   model cache, footprint, tile memory); `kCoreMlTileMemory` from them.
+5. The install of the dylib into the bundle and the bundle dependency check.
+
+**Tests**
+
+| Test | Assertion |
+| --- | --- |
+| The DN2 and DN3 tests of `utnet2_session_test.cpp` on macOS (`UtNet2CoreMlTest`) | The expected outputs within 7e-3 of the largest value; the load errors (architecture, float32 graph, missing file); the size and the finite checks; the tiled output against the one-pass output; `IsReadyFor` only after a run of the shape; `Release` and a later run |
+| The same tests on Windows (`UtNet2DirectMlTest`) | No change after the move of the shared code |
+| `UtNet2TileLoopTest` | The loop selects with the table of the session when the options give none |
+| `GpuDagMetalDevelopTest` denoised tests (DN5) | The first run of the Metal code of the denoised input |
+| `AiDenoiseRenderTest` on Metal | The DN6 renderer tests with the test platform; the RAW file with the FP16 graph on the Neural Engine: the same levels as the CFA render and less noise |
+
+**Exit criteria**
+
+- [ ] The tests above pass on the M4 (`build/macos-debug`) and on Windows (`build/debug`).
+- [ ] The time of the 45.4 MP photo is at most 0.69 s (15% above 0.60 s), or the record states
+  the cause.
+- [ ] The footprint after the release of the sessions returns to the level before the run
+  (section 8: a release that does not return the memory stops DN10).
+- [ ] The install puts `libonnxruntime.1.24.4.dylib` into `Contents/Frameworks`, and the bundle
+  dependency check passes.
+
+**Expected diff**: 800 to 1200 lines.
+
+##### Phase DN10 completion record (2026-11-23)
+
+**Status:** complete. AI Denoise runs on macOS on Apple silicon: the FP16 graph of DN2 on the
+Neural Engine through ONNX Runtime 1.24.4 (C++, Core ML execution provider), one session for each
+tile shape, with a Core ML model cache for each model version; the DN5 Metal code builds and
+renders the denoised input; the switch of the RAW Decode panel appears on macOS. 45.4 MP in
+0.543 to 0.577 s on the MacBook Air M4 (`target_time` 0.60 s). Issue #1069.
+
+**Primary success call chain:**
+
+```text
+render with ai_denoise on (MetalRenderer, DecodeRes::FULL) -> PreparedSourceCache::AcquireDenoised
+  miss -> DenoiseModelSession::Denoise -> (first run) CoreMlAiDenoisePlatform::CreateSession(graph,
+  version) -> PrepareCoreMlModelCache(CoreMlModelCacheRoot(), version) -> UtNet2CoreMlSession
+  (graph check with a CPU session that ends at once)
+  -> DenoiseBayerMosaic: SelectUtNet2TileSize(session.TileMemory() = kCoreMlTileMemory,
+     AvailableTileMemory(DeviceMemory(): hw.memsize, kern.memorystatus_level, held))
+  -> for each tile: CheckUtNet2TileRun -> session of the tile shape (first run: free dimension
+     overrides height, width, output_height, output_width; Core ML MLProgram CPUAndNeuralEngine,
+     no CPU fallback, ModelCacheDirectory <cache>/<version>/<w>x<h>) -> ConvertUtNet2TileInput
+     (float16 host buffer) -> Ort::Session::Run -> WriteUtNet2OutputCrop (float32 x output_scale,
+     finite check)
+  -> gain match -> FromDenoisedBayer -> Metal Develop passes (DN5) -> frame
+editor close or GPU release -> DenoiseModelSession::Release -> the sessions of all shapes end
+```
+
+**Primary failure call chain:**
+
+```text
+graph absent or different -> UtNet2CoreMlSession constructor throws (graph path, first
+  difference) -> DenoiseModelSession: RunFailed -> render error card with Turn Off AI Denoise (DN7)
+Core ML load or run error -> std::runtime_error naming the graph or the tile -> RunFailed, the
+  session released (the next run creates it again)
+FP16 overflow -> WriteUtNet2OutputCrop throws (tile, channel, row, column) -> RunFailed
+slow projected time -> DenoiseDeviceTooSlowError -> DeviceTooSlow, kept for the device
+model version that is not a SHA-256 -> PrepareCoreMlModelCache throws, no folder is touched
+ONNX Runtime library of another version or without Core ML -> LoadCoreMlRuntime throws ->
+  IsPlatformAvailable false -> no switch (D13)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OutputMatchesPyTorchForEachExpectedOutput` on the Neural Engine (1.31e-3, 1.42e-3, 1.13e-3 of the largest value; tolerance 7e-3) | `UtNet2CoreMlTest` (M4) | PASS |
+| `LoadFailsOnDifferentArchitectureMetadata`, `LoadFailsOnFloat32Graph`, `LoadFailsOnMissingFile` | `UtNet2CoreMlTest` | PASS |
+| `RunRejectsSizeThatIsNotAMultipleOfSixteen`, `RunThrowsOnAnOutputThatIsNotFinite` (the Neural Engine gives inf, not a saturated value) | `UtNet2CoreMlTest` | PASS |
+| `TiledOutputEqualsOnePassOnTheExpectedCrop` (tiled and one pass bit-equal on the Neural Engine) | `UtNet2CoreMlTest` | PASS |
+| `SessionIsReadyOnlyForATileShapeThatRan`, `ReleaseFreesTheSessionAndALaterRunLoadsAgain` | `UtNet2CoreMlTest` | PASS |
+| `ModelCacheHoldsEachShapeAndGivesTheOutputOfACompiledSession` (new) | `UtNet2CoreMlTest` | PASS |
+| `UtNet2CoreMlModelCacheTest.PreparedFolderIsTheOnlyEntryOfTheRoot` (new; rejects `..`, `../other`, upper case) | `UtNet2CoreMlTest` | PASS |
+| The same session tests on DirectML after the move of the shared code | `UtNet2DirectMlTest` (RTX 3080 Laptop GPU) | PASS |
+| `LoopSelectsWithTheTableOfTheSessionWhenTheOptionsGiveNone` (new) and the DN3 loop tests | `UtNet2TileLoopTest` (M4 and Windows) | PASS 10/10 |
+| DN6 loader tests | `AiDenoiseLoaderTest` (M4: 32 pass, 2 skip without the lab packing of a RAW file; Windows) | PASS |
+| `FullSizeRenderWithTheSwitchOnRendersTheModelOutputOnMetal`, `ModelErrorIsTheRenderErrorWithItsKindOnMetal`, `RenderThatReadsTheRawReportsItsStepsInOrderOnMetal` (new) | `AiDenoiseRenderTest` (M4) | PASS |
+| `RawPhotoRendersWithTheFp16GraphOnCoreMlOnMetal` (new): `_DSC0726.ARW` (42.2 MP), means of the denoised crop 1.022, 0.981, 0.987 of the CFA render, Laplacian 0.0313 to 0.0215 | `AiDenoiseRenderTest` (M4) | PASS |
+| The DN5 Metal tests `DenoisedPlaneBecomesTheSensorImageWithTheCfaClamp`, `FullSizeRenderWithTheSwitchOnAndACfaInputReportsTheError`, `DenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender` (ratios 1.006, 1.007, 1.022; Laplacian 0.0136 to 0.0015): the first build and run of the Metal code | `GpuDagMetalDevelopTest` (M4) | PASS. The suite: 26 pass, 3 skip, 3 fail: `MetalGeometryUsesOneResampleForCropRotationViewportAndScale` and `MetalCameraColorConsumesSharedDualIlluminantTransform` (#869), `DcpProfileMatchesScalarReference` (0.0048 against the threshold 0.005, #972, commented) |
+| The AI Denoise suites on Windows after the change of `AiDenoisePlatform::CreateSession` | `UtNet2TileLoopTest`, `UtNet2DirectMlTest`, `AiDenoiseLoaderTest`, `AiDenoiseRenderTest` (CUDA, OpenCL, DirectML) | PASS 62/62 |
+| The application links `@rpath/libonnxruntime.1.24.4.dylib` and loads it from the build rpath (dyld) | `alcedo_main` (`build/macos-debug`) | PASS |
+
+Commands:
+
+```text
+Windows: cmd /c "scripts\msvc_env.cmd --build build\debug --target UtNet2TileLoopTest UtNet2DirectMlTest AiDenoiseLoaderTest AiDenoiseRenderTest"
+         ALCEDO_AI_DENOISE_TEST_ASSETS=build\tmp\dn6\assets ctest --test-dir build/debug -R "^(UtNet2TileLoopTest|UtNet2DirectMlTest|AiDenoiseLoaderTest|AiDenoiseRenderTest)\." -j 1   # 62/62
+M4:      cmake --build build/macos-debug --target UtNet2TileLoopTest UtNet2CoreMlTest UtNet2CoreMlPhotoTimingTool AiDenoiseLoaderTest AiDenoiseRenderTest GpuDagMetalDevelopTest alcedo_main
+         ALCEDO_AI_DENOISE_TEST_ASSETS=<DN2 graphs and DN0 outputs> build/macos-debug/alcedo_studio/tests/ai_denoise/<test>
+         the timing tool built with -O2 from the same sources (the release tree builds no tests)
+```
+
+Suite totals: see the table. Full suite: not run (AGENTS.md).
+
+**Measurements (MacBook Air M4, 16 GB, macOS 27.0.1, thermal state nominal, tool with -O2):**
+
+| Photo, tiles of 1536 | Tile loop, ready sessions | First run of the photo size, no model cache (session creation) | First run, model cache filled (session creation) |
+| --- | ---: | ---: | ---: |
+| 24.3 MP | 0.336 to 0.342 s | 1.80 s (1.44 s) | 0.43 s (0.080 s) |
+| 36.2 MP | 0.451 to 0.474 s | 1.62 s (1.15 s) | 0.49 s (0.040 s) |
+| 45.4 MP | **0.543 to 0.577 s** | 1.90 s (1.31 s) | 0.59 s (0.035 s) |
+
+- Lab (DN1 addition, 3-crop graph): 0.37, 0.51, 0.60 s. The DN2 graph in Alcedo Studio is faster
+  by 7% to 10%; `target_time` (0.60 s) is met without the margin of 15%.
+- Tile sizes at 45.4 MP: 1536 0.55 s, 1024 0.68 s, 768 0.79 s; footprint growth of the sessions
+  and the runs 402, 146, 108 MiB (`kCoreMlTileMemory` 416, 160, 112 MiB).
+- Model cache: 30 MB on disk for each tile shape (297 MB for the 10 shapes of the three sizes).
+- The RAW file through the Metal renderer (debug build): first render with the model and a cold
+  cache 2.8 s; a model run on ready sessions 0.51 to 1.09 s in total (tile loop 0.47 to 0.55 s;
+  the rest is the input preparation and the plane assembly of the debug build).
+
+**Footprint after the release (section 8, stop condition):** the sessions return their memory;
+the memory that stays belongs to the allocator.
+
+- Default settings: the footprint after `Release` stays at 1.1 to 1.9 GiB. `vmmap` shows it as
+  `Malloc Large (empty)` (954 MiB after a 24.3 MP and a 45.4 MP photo): freed large blocks that
+  libmalloc keeps for reuse. No Core ML, IOSurface, or ONNX Runtime region remains. The amount is
+  bounded and reused: 9 photos in 3 rounds keep 2076 MiB; with a release after each photo it
+  stays between 1.1 and 1.9 GiB.
+- `MallocLargeCache=0`: 152 MiB after the release of two photos (11 to 41 MiB after the graph
+  check), and the same footprint after each photo of 8 photos with a release after each: no
+  growth for each session. About 110 to 160 MiB stay with the Core ML and ONNX Runtime runtime.
+- `MallocDeferredReclaim=0` alone, `malloc_zone_pressure_relief`, and a simulated memory pressure
+  (`memory_pressure -S -l warn`) do not change it.
+- In the timing tool most of the cached blocks are the photo and output images of the tool. The
+  application keeps the large cache of libmalloc for all its allocations; DN10 does not change
+  the allocator of the process.
+
+**Changes against the plan text and detail choices:**
+
+- **Shared code in two files**: `utnet2_tile_io` (tile checks, float16 input, output rectangle,
+  OpenCV only, in `UtNet2TileLoop`) and `utnet2_onnx_graph` (the graph check, ONNX Runtime
+  headers, compiled into each platform library). The plan named one file.
+- **Model cache used** (session creation 95% shorter): `CoreMlModelCacheRoot()` is
+  `alcedo-studio/ai-denoise-coreml` in the cache folder of the user that macOS manages
+  (`_CS_DARWIN_USER_CACHE_DIR`; macOS empties it when the disk is low) in place of
+  `~/Library/Caches/<bundle identifier>`, so the session library needs no bundle API.
+  `PrepareCoreMlModelCache` keeps only the folder of the installed version, and each tile shape
+  has its own folder: the Core ML execution provider keys its cache on the graph, so one folder
+  for all shapes loaded the model of another shape ("MultiArray shape (1 x 4 x 1536 x 1440) does
+  not match the shape (1 x 4 x 1536 x 1536)"). `AiDenoisePlatform::CreateSession` gets the model
+  version for it.
+- **Memory of the tile selection**: `kern.memorystatus_level` (the free percentage of
+  `memory_pressure`: free, inactive, purgeable, and file-backed pages) in place of the free and
+  inactive pages of `vm_statistics64`, which leave out the memory that macOS gives back without
+  pressure.
+- **The graph check at construction** uses a CPU session with graph optimization off that ends
+  at once: a Core ML session needs a fixed shape, and a free-shape Core ML session with
+  `session.disable_cpu_ep_fallback` fails.
+- **The memory error text** is "not enough device memory" (was "video memory"; the Mac has
+  unified memory).
+- `std::from_chars` of a double needs macOS 26; the graph check reads `output_scale` with a
+  stream in the classic locale on both platforms.
+- The two DN7 sensor layout tests skip when the sample RAW files (local files of the developer)
+  are absent, as the other sample tests do.
+- `libonnxruntime.1.24.4.dylib` is built for macOS 14.0; the bundled Qt and OpenCV of Homebrew
+  are too, so the application needs macOS 14 already.
+
+**Checklist / exit condition:** the tests pass on the M4 and on Windows (the failures of
+`GpuDagMetalDevelopTest` are #869 and #972); 45.4 MP in at most 0.577 s; the sessions return their
+memory (the large cache of libmalloc above); the bundle: see below.
+
+**LOC note:** new source files below 350 lines (the session test 387); `utnet2_directml_session.cpp`
+853 to 688 lines after the move of the shared code. About 1500 added lines with the plan.
+
+**Remaining gaps:** the switch and a render were not checked by eye in the running application
+on the Mac; no Mac with 8 GB or another chip was measured; the 3 known failures of
+`GpuDagMetalDevelopTest` (#869, #972).
+
+### DN11 to DN13
+
+Each of these phases gets its detailed section before its implementation starts (DN10 has its section above, 2026-11-23). DN4 and DN9
 are removed (2026-11-22, D6). The fixed points that the detailed sections must keep:
 
 - **DN10, DN11**: the same expected outputs, tolerances, FP16 graph, and tile planner as DN2 and
@@ -2819,7 +3100,7 @@ are removed (2026-11-22, D6). The fixed points that the detailed sections must k
 | The model time in the render is too long for editing on a slower device (Intel Iris Xe: 5.2 s at 45.4 MP in FP16) | The slow-device check of each run (2.4) | The render reports the slow-device error with `Turn Off AI Denoise`; the user decided on 2026-11-22 that a slow device gets this error (U1) |
 | A fast device crosses `slow_device_limit` under load (thermal limit, another GPU process) and gets the error | DN3 timing tool under load; DN6 render time | `slow_device_limit` is about 3 times `target_time`; record the times under load in the DN3 completion record. A false error on the RTX 3080 Laptop GPU or the M4 stops DN6 until the limit or the measurement changes. DN3: a false error when other processes oversubscribe the video memory, issue #1043. DN6 changed the measurement: the tile size counts the local memory of all processes, and the check uses the fastest of the measured tiles from the third on (DN6 completion record) |
 | The denoised entries of the prepared source cache use much host memory (545 MB for 45.4 MP in FP32; 726 MiB in F32 RGBA, DN6) | DN6 memory record | The cache budget of the prepared source cache applies to the entry; DN6 records the budget use |
-| The process footprint stays high after the release of the Core ML sessions (GPU: up to 4.9 GiB after 5 photos; Neural Engine: 2.0 GiB in the lab tool) | Footprint test of DN10 | Find the owner of the memory before DN10 completes; a release that does not return the memory stops DN10 |
+| The process footprint stays high after the release of the Core ML sessions (GPU: up to 4.9 GiB after 5 photos; Neural Engine: 2.0 GiB in the lab tool) | Footprint test of DN10 | Find the owner of the memory before DN10 completes; a release that does not return the memory stops DN10. DN10: the owner is the large cache of libmalloc (`Malloc Large (empty)`, bounded and reused); with `MallocLargeCache=0` the footprint returns to 150 to 180 MiB after each release (DN10 completion record) |
 | A Mac with 8 GB or a GPU with fewer cores takes longer or has too little memory for tiles of 1024 | DN10 run on such a Mac, if the user has one | Record it in the DN10 completion record; the render reports the memory error |
 | A GPU of another vendor gives a different output or time | DN2 tests on that GPU; DN3 timing tool | Record it in the DN3 completion record. A test failure stops DN6 for that vendor |
 | The Intel Iris Xe removes the DirectML device (887A0005 in 2 of 4 lab processes, one in FP32) | DN2 tests and the DN3 timing tool on the Iris Xe | The slow-device check stops the Iris Xe after its first measured tile, so a render runs few tiles there (DN3: after 0.67 to 0.79 s on a ready session, after 10.1 s on a new session; no removal in 2 processes). A device removal gives the render error with `Turn Off AI Denoise`. Record in the DN3 completion record whether the render backend of the editor continues after the removal; if it does not, find the cause before DN6 completes |
@@ -2837,12 +3118,12 @@ no longer agrees with the branch.
 | `target_time` | The measured FP16 time at 45.4 MP: 0.72 s on the RTX 3080 Laptop GPU (DirectML), 0.60 s on the MacBook Air M4 (Neural Engine). A phase time more than 15% above it stops the phase (DN3, DN10) | User (U1), DN1 additions |
 | `slow_device_limit` | 0.05 s for each megapixel of the mosaic (2.3 s at 45.4 MP), about 3 times `target_time` (RTX 3080 Laptop GPU 0.016 s, M4 0.013 s, Intel Iris Xe 0.114 s for each megapixel). The projection uses the fastest measured tile from the third measured tile on (`UtNet2Spec::kSlowDeviceMeasuredTiles`) | User (slow devices get the error), DN1 additions, DN6 |
 | `tile_size` (Windows) | The largest of 768, 1024, and 1536 packed pixels whose DirectML process memory fits in the free local video memory (the smaller of the budget of the process minus its usage and, on an adapter with local memory, the local memory minus the use of all processes; then plus the memory that the session holds, DN6): FP16 736, 768, and 2704 MiB (`UtNet2Spec::kDirectMlTileMemory`; FP32: 0.9, 1.0, 3.3 GiB). 1536 is the fastest on the RTX 3080 Laptop GPU (0.45 s at 45.4 MP; 1024: 0.58 s; 768: 0.70 s) | DN1 additions, DN3 |
-| `tile_size` (macOS) | 1536 packed pixels on the Neural Engine (0.60 s at 45.4 MP, peak footprint 2.0 GiB on the M4; 1024: 0.75 s, 1.7 GiB) | DN1 addition, FP16 on the Neural Engine |
+| `tile_size` (macOS) | The largest of 768, 1024, and 1536 packed pixels whose memory fits in the available memory of the Mac (`kern.memorystatus_level` of the physical memory, plus the memory that the sessions hold): 112, 160, and 416 MiB (`UtNet2Spec::kCoreMlTileMemory`). 1536 is the fastest on the M4 (0.55 s at 45.4 MP; 1024: 0.68 s; 768: 0.79 s) | DN1 addition, FP16 on the Neural Engine; DN10 |
 | `tile_overlap` | 96 packed pixels: the tiled output is the one-pass output | DN1 |
-| Session strategy | Windows: one ONNX Runtime session with free height and width, the DirectML memory arena on. macOS: one session for each tile input shape. Kept by `DenoiseModelSession` between renders, released with the editor GPU release and at the editor close | DN1 additions; 2.3 |
+| Session strategy | Windows: one ONNX Runtime session with free height and width, the DirectML memory arena on. macOS: one session for each tile input shape, its compiled Core ML model in the model cache of the model version (`<user cache folder>/alcedo-studio/ai-denoise-coreml/<version>/<width>x<height>`; session creation 0.01 to 0.02 s from the cache, 0.3 to 0.4 s without). Kept by `DenoiseModelSession` between renders, released with the editor GPU release and at the editor close | DN1 additions; 2.3; DN10 |
 | Precision | FP16 after the exact rescale of the layers, one graph for Windows and macOS; test tolerance 7e-3 of the largest expected value (DN2: 1.5 times the largest difference of the DN2 graph on DirectML, 2.8e-3 to 4.1e-3; the 3-crop graph of DN1 gave 1.0e-3 to 1.5e-3 on the Neural Engine); FP16 margin of 8 times or more on photos outside the calibration | DN1 additions, FP16 |
 | ONNX Runtime | NuGet `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4 and `Microsoft.AI.DirectML` 1.15.4 on Windows; `libonnxruntime.dylib` of `Microsoft.ML.OnnxRuntime` 1.24.4 (osx-arm64) on macOS | DN1 additions, DirectML and macOS |
-| Core ML options | `ModelFormat` MLProgram, `MLComputeUnits` CPUAndNeuralEngine, `session.disable_cpu_ep_fallback` 1 | DN1 addition, FP16 on the Neural Engine |
+| Core ML options | `ModelFormat` MLProgram, `MLComputeUnits` CPUAndNeuralEngine, `session.disable_cpu_ep_fallback` 1, `ModelCacheDirectory` one folder for each tile shape, the free dimensions `height`, `width`, `output_height`, `output_width` fixed to the tile shape | DN1 addition, FP16 on the Neural Engine; DN10 |
 | `leaky_relu_slope` | The value in the metadata of the weights file and of the ONNX graph | DN0, DN2 |
 | `output_scale` | The scale of the last layer after the rescale, in the metadata of the FP16 graph: 170.34 for the graph of DN2 (127.9 for the 3-crop calibration of DN1) | DN1 addition, FP16 on the Neural Engine; DN2 |
 | Model cost | 46.2 GMAC for each megapixel | Layer count, section 5.3 |
