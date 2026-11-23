@@ -536,6 +536,9 @@ alcedo_register_test_target(EditorComparisonLargeRawPairTest ui)
 # AI Denoise integration plan, DN7: the switch owner of the editor.
 def_ui_test(EditorAiDenoiseControlTest editor_ai_denoise_control_test.cpp)
 alcedo_register_test_target(EditorAiDenoiseControlTest ui)
+# AI Denoise integration plan, DN8: the library action and Turn Off AI Denoise of the export.
+def_ui_test(AiDenoiseLibraryActionsTest ai_denoise_library_actions_test.cpp)
+alcedo_register_test_target(AiDenoiseLibraryActionsTest ui)
 
 # AI Denoise integration plan, DN14: the image of the editor viewport before the first frame.
 def_ui_test(EditorViewportPlaceholderTest editor_viewport_placeholder_test.cpp)

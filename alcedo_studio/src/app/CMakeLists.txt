@@ -452,6 +452,16 @@ def_library(AdjustmentTransferService
     PRIVATE_DEPS EditorAdjustmentPipeline EditorPipelineCommandService
 )
 
+# The AI Denoise switch written into the stored history of an image that the editor does not hold
+# (AI Denoise integration plan, DN8): the library action and Turn Off AI Denoise of the export.
+def_library(AiDenoiseHistoryWrite
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_denoise_history_write.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_denoise_history_write.hpp"
+    PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory
+    PRIVATE_DEPS PipelineHistoryApplier EditorPipelineCommandService EditorParameterWrite
+)
+
 # Read-only Version catalog for the Adjustment Transfer source column. Replays
 # one selected Version from the immutable root into an independent document and
 # builds stable node/item descriptors. Qt-free application layer.

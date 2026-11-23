@@ -619,6 +619,15 @@ gtest_discover_tests(PipelineMapperTest TEST_PREFIX "PipelineMapperTest."
 
 alcedo_register_test_target(PipelineMapperTest app ci_core)
 
+# AI Denoise integration plan, DN8: the switch written into a stored history.
+add_executable(AiDenoiseHistoryWriteTest ${ALCEDO_TEST_ROOT}/app/ai_denoise_history_write_test.cpp)
+target_include_directories(AiDenoiseHistoryWriteTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(AiDenoiseHistoryWriteTest
+  AiDenoiseHistoryWrite ProjectService PipelineMgmtService PipelineHistoryApplier
+  GTest::gtest_main)
+gtest_discover_tests(AiDenoiseHistoryWriteTest TEST_PREFIX "AiDenoiseHistoryWriteTest.")
+alcedo_register_test_target(AiDenoiseHistoryWriteTest app)
+
 # Phase 6C-8: Mini-Git-based Paste and Merge tests using the project fixture.
 add_executable(AdjustmentTransferServiceMiniGitTest
   ${ALCEDO_TEST_ROOT}/app/adjustment_transfer_service_mini_git_test.cpp)

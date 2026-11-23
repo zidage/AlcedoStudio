@@ -946,6 +946,8 @@ RowLayout {
                         host.openImageContextMenu(item, sceneX, sceneY)
                     }
                     onColorLabelSettingsRequested: host.openColorLabelSettings()
+                    onAiModelsPageRequested: host.openAiModelSettings()
+                    onMessageRequested: function(message) { host.showSnackbar(message) }
                 }
 
                 ColumnLayout {

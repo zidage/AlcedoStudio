@@ -1383,6 +1383,70 @@ Alcedo will use %1 instead.</translation>
         <source>The agent gave control back to you.</source>
         <translation type="unfinished">The agent gave control back to you.</translation>
     </message>
+    <message>
+        <source>AI Denoise is on.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise is on for %1 photos.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise is on for %1 of %2 photos.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not a Bayer RAW photo: %1.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Failed: %1.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise cannot run on this computer.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise is already being changed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise is being changed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 images</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No valid image was selected.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not supported for X-Trans sensors</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not supported for this sensor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Pipeline service is unavailable.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The editor did not accept the change.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise could not be turned off: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>AgentSessionCard</name>
@@ -1483,6 +1547,10 @@ Alcedo will use %1 instead.</translation>
         <source>Supported images (%1)</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>BackgroundTaskBar</name>
@@ -1541,6 +1609,10 @@ Alcedo will use %1 instead.</translation>
     <message>
         <source>Agent</source>
         <translation type="unfinished">Agent</translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -1661,6 +1733,10 @@ Alcedo will use %1 instead.</translation>
     <message>
         <source>Other Tasks</source>
         <translation type="unfinished">Other Tasks</translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -4383,6 +4459,30 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+36"/>
         <source>Export Progress</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise model not installed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>This GPU is too slow for AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise does not support this sensor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Manage</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Turn Off AI Denoise</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

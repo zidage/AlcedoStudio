@@ -82,6 +82,9 @@ struct ExportProgress {
   bool            task_success_  = false;
   /// ExportResult::source_missing_ of the finished task.
   bool            task_source_missing_ = false;
+  /// ExportResult::message_ of a finished task that failed; empty otherwise. An AI Denoise
+  /// render error keeps its marker here (ParseAiDenoiseRenderError, integration plan DN8).
+  std::string     task_message_;
 };
 
 /**

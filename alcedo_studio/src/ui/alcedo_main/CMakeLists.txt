@@ -228,6 +228,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_ai_denoise_control.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_ai_denoise_control.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/ai_denoise_library_actions.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/ai_denoise_library_actions.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_viewport_placeholder.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_viewport_placeholder.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_panel_presentation.cpp"
@@ -429,6 +431,8 @@ target_link_libraries(AlbumBackendLib
         PipelineMgmtService
         AdjustmentTransferService
         AdjustmentTransferCatalog
+        # AI Denoise of the library and of the export queue (integration plan, DN8).
+        AiDenoiseHistoryWrite
         AiMaskAnalysisImage
         LutPreviewImage
         # The AI Mask tool runs the segmentation service and the edit session on its worker.

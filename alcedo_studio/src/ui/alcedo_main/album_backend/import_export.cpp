@@ -14,11 +14,13 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
 
+#include "edit/input/ai_denoise_error.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
@@ -68,20 +70,27 @@ auto           SanitizeBitDepth(ImageFormatType format, ExportFormatOptions::BIT
   }
 }
 
+auto TokenText(std::string_view token) -> QString {
+  return QString::fromUtf8(token.data(), static_cast<qsizetype>(token.size()));
+}
+
 auto ExportStatusKey(const sl_element_id_t elementId, const image_id_t imageId) -> QString {
   return QString::number(static_cast<qulonglong>(elementId)) + ":" +
          QString::number(static_cast<qulonglong>(imageId));
 }
 
-/// The exportItemStatuses value of a finished task.
-auto ExportItemStatus(bool succeeded, bool source_missing) -> QString {
+}  // namespace
+
+auto ExportItemStatusOf(bool succeeded, bool source_missing, std::string_view message) -> QString {
   if (succeeded) {
     return QStringLiteral("succeeded");
   }
-  return source_missing ? QStringLiteral("missing") : QStringLiteral("failed");
+  if (source_missing) {
+    return QStringLiteral("missing");
+  }
+  return alcedo::ParseAiDenoiseRenderError(message).has_value() ? QStringLiteral("ai_denoise")
+                                                                : QStringLiteral("failed");
 }
-
-}  // namespace
 
 ImportExportHandler::ImportExportHandler(ProjectModule* project, LibraryModule* library,
                                          FolderController* folders, IUiStatusSink* status,
@@ -633,6 +642,7 @@ void ImportExportHandler::StartExportWithRecipeOptionsForTargets(
   }
 
   export_item_statuses_.clear();
+  export_item_ai_denoise_errors_.clear();
   ++export_run_id_;
   for (const auto& [elementId, imageId] : queue_result.queued_targets_) {
     export_item_statuses_.insert(ExportStatusKey(elementId, imageId), QStringLiteral("queued"));
@@ -714,9 +724,18 @@ void ImportExportHandler::RenderQueuedExport(int skippedCount) {
                   state_changed = true;
                 }
                 if (progress.task_finished_) {
-                  self->export_item_statuses_.insert(
-                      status_key,
-                      ExportItemStatus(progress.task_success_, progress.task_source_missing_));
+                  const QString status =
+                      ExportItemStatusOf(progress.task_success_, progress.task_source_missing_,
+                                         progress.task_message_);
+                  self->export_item_statuses_.insert(status_key, status);
+                  if (status == QStringLiteral("ai_denoise")) {
+                    const auto error = alcedo::ParseAiDenoiseRenderError(progress.task_message_);
+                    self->export_item_ai_denoise_errors_.insert(
+                        status_key,
+                        QVariantMap{{QStringLiteral("kind"),
+                                     TokenText(alcedo::AiDenoiseErrorKindToken(error->kind))},
+                                    {QStringLiteral("text"), QString::fromStdString(error->text)}});
+                  }
                   state_changed = true;
                 }
               }
@@ -1283,6 +1302,7 @@ void ImportExportHandler::ResetExportProgressState(const i18n::LocalizedText& st
   export_status_text_        = status;
   export_error_summary_text_ = {};
   export_item_statuses_.clear();
+  export_item_ai_denoise_errors_.clear();
   export_total_     = 0;
   export_completed_ = 0;
   export_succeeded_ = 0;
@@ -1296,6 +1316,7 @@ void ImportExportHandler::SetExportFailureState(const i18n::LocalizedText& messa
   export_status_text_        = message;
   export_error_summary_text_ = {};
   export_item_statuses_.clear();
+  export_item_ai_denoise_errors_.clear();
   emit ExportStateChanged();
   emit exportStateChanged();
   status_->SetTaskState(message, 0, false);

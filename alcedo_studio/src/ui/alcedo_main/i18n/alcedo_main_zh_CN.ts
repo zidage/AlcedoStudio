@@ -2018,6 +2018,66 @@ Alcedo 将改用 %1。</translation>
         <source>Activate an AI model in Settings before generating labels.</source>
         <translation>请先在设置中激活 AI 模型，再生成标签。</translation>
     </message>
+    <message>
+        <source>AI Denoise is on.</source>
+        <translation>AI 降噪已开启。</translation>
+    </message>
+    <message>
+        <source>AI Denoise is on for %1 photos.</source>
+        <translation>已为 %1 张照片开启 AI 降噪。</translation>
+    </message>
+    <message>
+        <source>AI Denoise is on for %1 of %2 photos.</source>
+        <translation>已为 %2 张照片中的 %1 张开启 AI 降噪。</translation>
+    </message>
+    <message>
+        <source>Not a Bayer RAW photo: %1.</source>
+        <translation>非 Bayer RAW 照片：%1 张。</translation>
+    </message>
+    <message>
+        <source>Failed: %1.</source>
+        <translation>失败：%1 张。</translation>
+    </message>
+    <message>
+        <source>AI Denoise cannot run on this computer.</source>
+        <translation>此电脑无法运行 AI 降噪。</translation>
+    </message>
+    <message>
+        <source>AI Denoise is already being changed.</source>
+        <translation>AI 降噪正在更改中。</translation>
+    </message>
+    <message>
+        <source>AI Denoise is being changed.</source>
+        <translation>正在更改 AI 降噪。</translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation>AI 降噪</translation>
+    </message>
+    <message>
+        <source>No valid image was selected.</source>
+        <translation>未选择有效的图像。</translation>
+    </message>
+    <message>
+        <source>Not supported for X-Trans sensors</source>
+        <translation>不支持 X-Trans 传感器</translation>
+    </message>
+    <message>
+        <source>Not supported for this sensor</source>
+        <translation>不支持此传感器</translation>
+    </message>
+    <message>
+        <source>Pipeline service is unavailable.</source>
+        <translation>管线服务不可用。</translation>
+    </message>
+    <message>
+        <source>The editor did not accept the change.</source>
+        <translation>编辑器未接受此更改。</translation>
+    </message>
+    <message>
+        <source>AI Denoise could not be turned off: %1</source>
+        <translation>无法关闭 AI 降噪：%1</translation>
+    </message>
 </context>
 <context>
     <name>AgentSessionCard</name>
@@ -2136,6 +2196,10 @@ Alcedo 将改用 %1。</translation>
         <source>Supported images (%1)</source>
         <translation>支持的图像 (%1)</translation>
     </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation>AI 降噪</translation>
+    </message>
 </context>
 <context>
     <name>BackgroundTaskBar</name>
@@ -2218,6 +2282,10 @@ Alcedo 将改用 %1。</translation>
     <message>
         <source>Ratings</source>
         <translation>评分</translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation>AI 降噪</translation>
     </message>
 </context>
 <context>
@@ -2358,6 +2426,10 @@ Alcedo 将改用 %1。</translation>
     <message>
         <source>Ratings</source>
         <translation>评分</translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation>AI 降噪</translation>
     </message>
 </context>
 <context>
@@ -6158,6 +6230,30 @@ Refresh the library afterwards; they are listed under the User category. Import 
     <message>
         <source>Max edge (px)</source>
         <translation>最长边（像素）</translation>
+    </message>
+    <message>
+        <source>AI Denoise model not installed</source>
+        <translation>未安装 AI 降噪模型</translation>
+    </message>
+    <message>
+        <source>This GPU is too slow for AI Denoise</source>
+        <translation>此 GPU 运行 AI 降噪太慢</translation>
+    </message>
+    <message>
+        <source>AI Denoise does not support this sensor</source>
+        <translation>AI 降噪不支持此传感器</translation>
+    </message>
+    <message>
+        <source>AI Denoise failed</source>
+        <translation>AI 降噪失败</translation>
+    </message>
+    <message>
+        <source>Manage</source>
+        <translation>管理</translation>
+    </message>
+    <message>
+        <source>Turn Off AI Denoise</source>
+        <translation>关闭 AI 降噪</translation>
     </message>
 </context>
 <context>
