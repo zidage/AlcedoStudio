@@ -6,6 +6,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <exception>
 #include <fstream>
@@ -115,7 +116,8 @@ auto DenoiseModelSession::Denoise(const PreparedRawInput& cfa, std::string_view 
   AiDenoisePackedMosaic mosaic;
   std::array<double, 3> weights{};
   try {
-    mosaic  = PackBayerForAiDenoise(cfa);
+    mosaic = PackBayerForAiDenoise(cfa);
+    ApplyAiDenoiseInputCurve(mosaic, AiDenoiseInputCurveFor(mosaic.input_means));
     weights = AiDenoiseGainWeights(cfa.color_context.cam_xyz_);
   } catch (const std::exception& error) {
     throw AiDenoiseError(AiDenoiseErrorKind::RunFailed, error.what());
@@ -141,17 +143,19 @@ auto DenoiseModelSession::Denoise(const PreparedRawInput& cfa, std::string_view 
         [&](const nn::UtNet2TileResult& tile) { sums.AddKept(view, tile.kept); }, {},
         [] { return std::chrono::steady_clock::now(); }, options_);
     ++stats_.denoise_runs;
-    const double gain = AiDenoiseGainFactor(weights, mosaic.input_means, sums.Means());
-    mosaic.planes     = {};
-    auto plane        = AssembleDenoisedPlane(view, mosaic, gain, cfa.linearization);
-    output            = {};
-    auto denoised     = RawInputLoader::FromDenoisedBayer(cfa, std::move(plane), model_version);
+    stats_.last_input_gain = mosaic.curve.gain;
+    const double gain      = AiDenoiseGainFactor(weights, mosaic.input_means, sums.Means());
+    mosaic.planes          = {};
+    auto plane             = AssembleDenoisedPlane(view, mosaic, gain, cfa.linearization);
+    output                 = {};
+    auto denoised = RawInputLoader::FromDenoisedBayer(cfa, std::move(plane), model_version);
     ALCEDO_LOG_INFO(Render) << "AI Denoise: " << mosaic.area_width << " x " << mosaic.area_height
                             << " px in " << record.tile_count << " tiles of " << record.tile_size
                             << ", session " << Seconds(loaded - started) << " s, tile loop "
                             << Seconds(record.loop_time) << " s, total "
-                            << Seconds(std::chrono::steady_clock::now() - started) << " s, gain "
-                            << gain;
+                            << Seconds(std::chrono::steady_clock::now() - started)
+                            << " s, input gain " << mosaic.curve.gain << " ("
+                            << std::log2(mosaic.curve.gain) << " EV), gain match " << gain;
     return denoised;
   } catch (const nn::DenoiseDeviceTooSlowError& error) {
     slow_devices_[device] = error.what();

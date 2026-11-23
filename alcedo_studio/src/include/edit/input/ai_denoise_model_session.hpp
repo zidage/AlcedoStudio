@@ -30,6 +30,8 @@ inline constexpr std::string_view kAiDenoiseGraphFileName = "utnet2_bayer_dark_l
 struct DenoiseModelSessionStats {
   std::uint64_t denoise_runs     = 0;
   std::uint64_t sessions_created = 0;
+  /// The gain of the input exposure curve of the last run (1: identity).
+  double        last_input_gain  = 1.0;
 };
 
 /**

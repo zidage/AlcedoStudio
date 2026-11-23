@@ -239,6 +239,135 @@ TEST(AiDenoiseInputTest, DenoisedPlaneIsTheGainMatchedOutputInTheWhiteLevelDomai
   EXPECT_EQ(denoised.input_kind, RawInputKind::DenoisedRgb);
 }
 
+TEST(AiDenoiseInputTest, InputCurveIsTheGainUpToTheKneeAndKeepsTheWhiteLevel) {
+  EXPECT_TRUE(AiDenoiseInputCurveOfGain(1.0).IsIdentity());
+  EXPECT_TRUE(AiDenoiseInputCurveOfGain(0.5).IsIdentity());
+  EXPECT_THROW((void)AiDenoiseInputCurveOfGain(std::nan("")), std::runtime_error);
+  for (const double gain : {1.001, 1.5, 4.0, kAiDenoiseMaxInputGain}) {
+    SCOPED_TRACE("gain " + std::to_string(gain));
+    const auto curve = AiDenoiseInputCurveOfGain(gain);
+    ASSERT_FALSE(curve.IsIdentity());
+    const double knee_x = kAiDenoiseCurveKnee / gain;
+    // The gain alone up to the knee, also below 0.
+    for (const double x : {-0.01, 0.0, 0.3 * knee_x, knee_x}) {
+      EXPECT_DOUBLE_EQ(curve.Apply(x), gain * x) << x;
+    }
+    // The white level stays at 1; the highlights stay at or below it.
+    EXPECT_NEAR(curve.Apply(1.0), 1.0, 1e-12);
+    // A continuous slope at the knee and at the white level.
+    const double h           = 1e-7;
+    const auto   slope_below = [&](double x) { return (curve.Apply(x) - curve.Apply(x - h)) / h; };
+    const auto   slope_above = [&](double x) { return (curve.Apply(x + h) - curve.Apply(x)) / h; };
+    EXPECT_NEAR(slope_above(knee_x) / gain, 1.0, 1e-4);
+    EXPECT_NEAR(slope_below(1.0) / curve.tail_slope, 1.0, 1e-4);
+    EXPECT_NEAR(slope_above(1.0) / curve.tail_slope, 1.0, 1e-6);
+    // Rising everywhere, and the inverse returns each value.
+    double previous = curve.Apply(-0.1);
+    for (int i = -99; i <= 2000; ++i) {
+      const double x = i / 1000.0;
+      const double y = curve.Apply(x);
+      ASSERT_GT(y, previous) << x;
+      if (x <= 1.0) {
+        ASSERT_LE(y, 1.0 + 1e-12) << x;
+      }
+      ASSERT_NEAR(curve.Invert(y), x, 1e-12 * std::max(1.0, std::abs(x))) << x;
+      previous = y;
+    }
+  }
+}
+
+TEST(AiDenoiseInputTest, InputCurveRaisesAPhotoBelowTheTrainingLevelToIt) {
+  const auto curve_of_level = [](double level) {
+    // The level is the mean of the 3 means.
+    return AiDenoiseInputCurveFor({0.5 * level, level, 1.5 * level});
+  };
+  EXPECT_TRUE(curve_of_level(kAiDenoiseTargetInputLevel).IsIdentity());
+  EXPECT_TRUE(curve_of_level(0.2).IsIdentity());
+  EXPECT_NEAR(curve_of_level(kAiDenoiseTargetInputLevel / 4.0).gain, 4.0, 1e-12);
+  EXPECT_NEAR(curve_of_level(kAiDenoiseTargetInputLevel / 11.0).gain, 11.0, 1e-12);
+  // The largest gain for a very dark photo, a black frame, and a level below the black level.
+  EXPECT_EQ(curve_of_level(kAiDenoiseTargetInputLevel / 100.0).gain, kAiDenoiseMaxInputGain);
+  EXPECT_EQ(curve_of_level(0.0).gain, kAiDenoiseMaxInputGain);
+  EXPECT_EQ(curve_of_level(-1e-4).gain, kAiDenoiseMaxInputGain);
+}
+
+TEST(AiDenoiseInputTest, InputCurveChangesThePlanesAndTheMeansOfTheArea) {
+  // GBRG, 31 x 25: a row at the top and a column at the right are added by reflection; their
+  // samples are not part of the means.
+  const auto input    = MakeBayerInput(31, 25, BayerPattern("GBRG"));
+  const auto original = PackBayerForAiDenoise(input);
+  auto       mosaic   = original;
+  const auto curve    = AiDenoiseInputCurveOfGain(6.0);
+  ApplyAiDenoiseInputCurve(mosaic, curve);
+  EXPECT_EQ(mosaic.curve.gain, 6.0);
+  int wrong = 0;
+  for (std::size_t i = 0; i < original.planes.size(); ++i) {
+    wrong += mosaic.planes[i] != static_cast<float>(curve.Apply(original.planes[i])) ? 1 : 0;
+  }
+  EXPECT_EQ(wrong, 0);
+
+  const auto plane     = static_cast<std::size_t>(mosaic.width) * mosaic.height;
+  double     sums[3]   = {};
+  double     counts[3] = {};
+  for (int ay = 0; ay < 25; ++ay) {
+    for (int ax = 0; ax < 31; ++ax) {
+      const int ey      = ay + mosaic.added_top;
+      const int ex      = ax + mosaic.added_left;
+      const int channel = (ey % 2) * 2 + ex % 2;
+      const int color   = channel == 0 ? 0 : (channel == 3 ? 2 : 1);
+      sums[color] +=
+          mosaic.planes[channel * plane + static_cast<std::size_t>(ey / 2) * mosaic.width + ex / 2];
+      counts[color] += 1.0;
+    }
+  }
+  for (int c = 0; c < 3; ++c) {
+    EXPECT_NEAR(mosaic.input_means[c], sums[c] / counts[c], 1e-12) << "color " << c;
+  }
+  // A mosaic takes one curve.
+  EXPECT_THROW(ApplyAiDenoiseInputCurve(mosaic, curve), std::runtime_error);
+  auto identity = original;
+  ApplyAiDenoiseInputCurve(identity, AiDenoiseInputCurve{});
+  EXPECT_EQ(identity.planes, original.planes);
+  EXPECT_EQ(identity.input_means, original.input_means);
+}
+
+TEST(AiDenoiseInputTest, DenoisedPlaneInvertsTheInputCurve) {
+  const auto input  = MakeBayerInput(31, 25, BayerPattern("BGGR"));
+  auto       mosaic = PackBayerForAiDenoise(input);
+  ApplyAiDenoiseInputCurve(mosaic, AiDenoiseInputCurveOfGain(4.0));
+  const int          width  = mosaic.OutputWidth();
+  const int          height = mosaic.OutputHeight();
+  std::vector<float> data(static_cast<std::size_t>(3) * width * height);
+  const auto         value = [&](int c, int y, int x) { return 1000.0f * c + 10.0f * y + x; };
+  for (int c = 0; c < 3; ++c) {
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        data[(static_cast<std::size_t>(c) * height + y) * width + x] = value(c, y, x);
+      }
+    }
+  }
+  // The gain-matched output reaches 1.15: the line, the shoulder, and the line above 1.
+  constexpr double kGain = 5e-4;
+  const auto       plane =
+      AssembleDenoisedPlane({data, width, height}, mosaic, kGain, input.linearization);
+  const auto* pixels = reinterpret_cast<const float*>(plane.bytes.get());
+  const auto& lin    = input.linearization;
+  for (int y = 0; y < 25; ++y) {
+    for (int x = 0; x < 31; ++x) {
+      for (int c = 0; c < 3; ++c) {
+        const double scale = (lin.libraw_maximum - lin.black_level[c]) /
+                             (static_cast<double>(lin.white_level[c]) - lin.black_level[c]);
+        const double expected =
+            mosaic.curve.Invert(kGain * value(c, y + mosaic.added_top, x + mosaic.added_left)) *
+            scale;
+        ASSERT_NEAR(pixels[(static_cast<std::size_t>(y) * 31 + x) * 4 + c], expected,
+                    1e-6 * std::abs(expected) + 1e-9)
+            << "x " << x << " y " << y << " c " << c;
+      }
+    }
+  }
+}
+
 TEST(AiDenoiseInputTest, GainMatchFactorEqualsTheLabValueOnTheExpectedCrop) {
   const auto folder = TestAssets();
   if (!folder) {

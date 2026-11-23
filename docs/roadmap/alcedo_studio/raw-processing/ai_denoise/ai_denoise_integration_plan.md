@@ -1935,6 +1935,68 @@ the removal resets the adapter that it shares (a laptop with only the Intel Iris
 measured. The Metal and macOS paths (DN10). The control and the texts of the error kinds (DN7,
 DN8).
 
+##### Phase DN6 addition (2026-11-22): input exposure curve
+
+**Reason (user test of DN7, issue #1053):** an underexposed ISO 800 photo got less noise reduction than a
+normally exposed ISO 3200 photo. The RawNIND training pairs keep the scene brightness at each
+ISO (the noisy input against its clean image: median +1.02 EV, 5% to 95% 0 to +1.08 EV, the
+same at ISO 100 and ISO 65535; 3404 noisy pairs of the lab training data), and the training
+gives the input no gain (`match_gain: output`). So the model sees the noise of each ISO only at
+the brightness of a normal exposure, and the input preparation of DN6 gave a dark photo to the
+model at its own brightness. The user decided on 2026-11-22 to raise the exposure in Alcedo
+Studio directly, before a lab measurement.
+
+**Design.** `DenoiseModelSession::Denoise` applies a curve to the packed mosaic after
+`PackBayerForAiDenoise` and before the tile loop; the gain match runs in the domain of the curve
+(the input means after the curve); `AssembleDenoisedPlane` applies the inverse curve before the
+white level scale. So the result keeps the exposure of the photo, and the model sees a dark
+photo at the training brightness.
+
+| Item | Value | Source |
+| --- | --- | --- |
+| Level of a photo | Mean of the R, G, and B means of the prepared samples of the decode area | The statistic of the lab record (`camera_rgb_mean_mosaic`) |
+| `kAiDenoiseTargetInputLevel` | 0.028 of the white level: the median level of the 3404 noisy training inputs (clean level / `raw_gain`; 5% to 95%: 0.0056 to 0.072) | Lab `data/patches/rawnind_bayer_demosaicnet` |
+| Gain | target / level, from 1 to `kAiDenoiseMaxInputGain`; a photo at or above the target keeps the identity | This addition |
+| `kAiDenoiseMaxInputGain` | 16 (4 EV) | FP16 check below |
+| Curve below the knee | `y = gain x` up to `y = kAiDenoiseCurveKnee` = 0.5, also for values below 0 | This addition |
+| Curve above the knee | `y = 0.5 + s ln(1 + gain (x - 0.5 / gain) / s)`, the shoulder width `s` by bisection so that `x = 1` gives `y = 1`; above `x = 1` a line with the slope of the shoulder there | Keeps the highlights at or below the white level, the range of the training inputs |
+| Time | One pass over the packed mosaic (curve and means) and the inverse in the existing assembly pass; the model time does not change | |
+
+**FP16 check** (lab venv, ONNX Runtime 1.24.4 DirectML, the FP16 graph of DN2, non-overlapping
+crops of 1024 packed px, `tests/resources/sample_images/raw` folders `night`, `lowlight`,
+`high_iso`): 20 photos read; 14 at or above the target keep the identity. With the curve:
+`lowlight/DSC_0604.NEF` level 0.0030, gain 9.37 (3.23 EV), largest output 628 (493 without the
+curve); `high_iso/_DSC2546.NEF` gain 2.07, 144 (89); four night photos gain 1.05 to 1.51, 742
+to 836 (760 to 841). No value is non-finite; the largest output is 1% of the float16 limit.
+
+**Check by eye** (crop of 512 packed px, gray world balance, the green mean to 18%):
+`DSC_0604.NEF` with the curve has visibly less noise in the flat gray areas than without it,
+with the same edges; `_DSC2546.NEF` (2.07x) shows a small difference; the clipped light of
+`night/2136729222.rw2` has the same edge and colors with and without the curve.
+
+**Tests** (`AiDenoiseLoaderTest`): the curve (the gain up to the knee, `x = 1` stays at 1, a
+continuous slope at the knee and at the white level, rising, inverse); the gain rule (identity
+at and above the target, the gain below it, the largest gain for a black frame and a level
+below 0); the curve on the planes and the means of the area only; the inverse in
+`AssembleDenoisedPlane` across the line, the shoulder, and the line above 1; a dark photo
+through `DenoiseModelSession` with the test session (its output is its input) returns the
+prepared input of each cell (largest relative difference at most 1e-5, gain 5.04) and
+`Stats().last_input_gain`.
+
+**Call chain:**
+
+```text
+DenoiseModelSession::Denoise
+  -> PackBayerForAiDenoise (prepared values, input means)
+  -> AiDenoiseInputCurveFor(input means) -> ApplyAiDenoiseInputCurve (planes, means after the curve)
+  -> DenoiseBayerMosaic -> AiDenoiseGainFactor (means after the curve)
+  -> AssembleDenoisedPlane (inverse curve, then the white level scale) -> FromDenoisedBayer
+```
+
+**Remaining gaps:** the user checks the effect on the underexposed photos of the user in the
+editor. The lab measurement of the quality against the brightness of the input (RawNIND test
+split) is not run.
+
 ### DN7: editor switch and render errors
 
 Written on 2026-11-22, before the implementation. The user approved the panel design of the mock
@@ -2305,3 +2367,4 @@ no longer agrees with the branch.
 | `leaky_relu_slope` | The value in the metadata of the weights file and of the ONNX graph | DN0, DN2 |
 | `output_scale` | The scale of the last layer after the rescale, in the metadata of the FP16 graph: 170.34 for the graph of DN2 (127.9 for the 3-crop calibration of DN1) | DN1 addition, FP16 on the Neural Engine; DN2 |
 | Model cost | 46.2 GMAC for each megapixel | Layer count, section 5.3 |
+| Input exposure curve | Gain = 0.028 / (mean of the R, G, B means), from 1 to 16; linear up to the output 0.5, then a log shoulder that keeps the white level at 1; inverted after the gain match | DN6 addition, input exposure curve |

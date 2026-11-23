@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -93,9 +94,11 @@ inline auto TestCode(int y, int x) -> std::uint16_t {
 }
 
 /// A full-size Bayer CFA input of @p width x @p height host px with @p pattern, the test levels,
-/// and the test camera matrix. @p sensor sets margins or a crop; empty: the whole plane.
+/// and the test camera matrix. @p sensor sets margins or a crop; empty: the whole plane. @p code
+/// gives the code of host position (y, x).
 inline auto MakeBayerInput(std::uint32_t width, std::uint32_t height, const RawCfaPattern& pattern,
-                           std::optional<RawSensorGeometry> sensor = std::nullopt)
+                           std::optional<RawSensorGeometry>              sensor = std::nullopt,
+                           const std::function<std::uint16_t(int, int)>& code   = TestCode)
     -> PreparedRawInput {
   HostImagePlane plane;
   plane.extent       = Extent2D{width, height};
@@ -107,7 +110,7 @@ inline auto MakeBayerInput(std::uint32_t width, std::uint32_t height, const RawC
   for (std::uint32_t y = 0; y < height; ++y) {
     for (std::uint32_t x = 0; x < width; ++x) {
       codes[static_cast<std::size_t>(y) * width + x] =
-          TestCode(static_cast<int>(y), static_cast<int>(x));
+          code(static_cast<int>(y), static_cast<int>(x));
     }
   }
   plane.bytes = std::const_pointer_cast<const std::byte>(storage);
@@ -116,6 +119,27 @@ inline auto MakeBayerInput(std::uint32_t width, std::uint32_t height, const RawC
                                       sensor.value_or(RawSensorGeometry{}), DecodeRes::FULL);
   for (int i = 0; i < 9; ++i) {
     input.color_context.cam_xyz_[i] = kTestCamXyz[i];
+  }
+  return input;
+}
+
+/// The code of a dark photo: each 2 x 2 cell has one code (so G1 and G2 are equal), mostly up to
+/// 120 above the black level, with a few cells below the black level, at the LibRaw maximum, and
+/// above it.
+inline auto DarkCellCode(int y, int x) -> std::uint16_t {
+  const int cell = (y / 2) * 7919 + x / 2;
+  if (cell % 997 == 0) return 16383;  // the LibRaw maximum
+  if (cell % 991 == 0) return 16500;  // above the maximum
+  if (cell % 13 == 0) return 500;     // below the black level
+  return static_cast<std::uint16_t>(512 + ((y / 2) * 37 + (x / 2) * 11) % 120);
+}
+
+/// A dark RGGB input of DarkCellCode with the black level 512 for each color: the prepared values
+/// of a cell are equal for G1 and G2. Even sizes keep every cell inside the area.
+inline auto MakeDarkBayerInput(std::uint32_t width, std::uint32_t height) -> PreparedRawInput {
+  auto input = MakeBayerInput(width, height, BayerPattern("RGGB"), std::nullopt, DarkCellCode);
+  for (int c = 0; c < 4; ++c) {
+    input.linearization.black_level[c] = 512.0f;
   }
   return input;
 }
