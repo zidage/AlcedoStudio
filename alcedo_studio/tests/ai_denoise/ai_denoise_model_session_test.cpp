@@ -342,7 +342,7 @@ TEST(AiDenoiseModelSessionTest, PhotoWithoutLibRawCamXyzDenoisesWithTheCameraMat
 TEST(AiDenoiseModelSessionTest, PlatformWithoutForwardCodeReportsRunFailed) {
   const TestModelFolder folder("no_platform");
   DenoiseModelSession   session(nullptr);
-  session.SetModelFolderProvider([path = folder.Folder()] { return path; });
+  session.SetGraphLocator(folder.Locator());
   const auto version = session.InstalledModelVersion();
   EXPECT_EQ(ErrorKindOf([&] {
               (void)session.Denoise(MakeBayerInput(32, 32, BayerPattern("RGGB")), version,

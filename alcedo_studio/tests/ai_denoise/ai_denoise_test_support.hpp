@@ -25,6 +25,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -288,7 +289,10 @@ class TestPlatform final : public AiDenoisePlatform {
   std::shared_ptr<TestPlatformRecord> record_;
 };
 
-/// A model folder below build/tmp with `ai-denoise-v1/<graph file>` holding @p content.
+/// The file name of the FP16 graph of the lab release (the test assets folder holds it).
+inline constexpr std::string_view kFp16GraphFileName = "utnet2_bayer_dark_loss_10k_fp16.onnx";
+
+/// A model folder below build/tmp with `alcedo-ai-denoise-v1/<graph file>` holding @p content.
 class TestModelFolder {
  public:
   explicit TestModelFolder(const std::string& name, const std::string& content = "graph v1") {
@@ -309,7 +313,12 @@ class TestModelFolder {
 
   [[nodiscard]] auto Folder() const -> const std::filesystem::path& { return folder_; }
   [[nodiscard]] auto GraphPath() const -> std::filesystem::path {
-    return folder_ / kAiDenoiseModelFolderName / kAiDenoiseGraphFileName;
+    return folder_ / "alcedo-ai-denoise-v1" / kFp16GraphFileName;
+  }
+  /// A locator that finds the graph file of this folder (the application resolves the
+  /// installed package; ResolveAiDenoiseGraph has its own tests).
+  [[nodiscard]] auto Locator() const -> DenoiseModelSession::GraphLocator {
+    return [graph = GraphPath()] { return AiDenoiseGraphLookup{graph, {}}; };
   }
 
  private:
@@ -327,7 +336,7 @@ inline auto MakeTestModelSession(const std::shared_ptr<TestPlatformRecord>& reco
   options.slow_device_measured_tiles              = 1;
   auto session =
       std::make_shared<DenoiseModelSession>(std::make_unique<TestPlatform>(record), options);
-  session->SetModelFolderProvider([path = folder.Folder()] { return path; });
+  session->SetGraphLocator(folder.Locator());
   return session;
 }
 

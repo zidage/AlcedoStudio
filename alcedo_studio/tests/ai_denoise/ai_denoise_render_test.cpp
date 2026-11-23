@@ -326,7 +326,8 @@ auto RawAssets() -> std::optional<std::pair<std::filesystem::path, std::filesyst
   if (value == nullptr || *value == '\0') {
     return std::nullopt;
   }
-  const std::filesystem::path graph = std::filesystem::path(value) / kAiDenoiseGraphFileName;
+  const std::filesystem::path graph =
+      std::filesystem::path(value) / ai_denoise_test::kFp16GraphFileName;
   const std::filesystem::path raw(ALCEDO_AI_DENOISE_TEST_RAW);
   if (!std::filesystem::exists(graph) || !std::filesystem::exists(raw)) {
     return std::nullopt;
@@ -368,7 +369,7 @@ void VerifyRawPhotoRendersWithTheFp16GraphOfThePlatform() {
   std::filesystem::copy_file(assets->first, folder.GraphPath(),
                              std::filesystem::copy_options::overwrite_existing);
   auto session = std::make_shared<DenoiseModelSession>(std::move(platform));
-  session->SetModelFolderProvider([path = folder.Folder()] { return path; });
+  session->SetGraphLocator(folder.Locator());
 
   std::ifstream             stream(assets->second, std::ios::binary);
   std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(stream)),
@@ -465,19 +466,19 @@ TEST(AiDenoiseRenderTest, RawPhotoRendersWithTheFp16GraphOnDirectMlOnCuda) {
 #endif
 
 // DN7: on Windows the executors are in the EditPipeline DLL, which has its own copy of the
-// process session. The model folder that the application sets through
+// process session. The graph locator that the application sets through
 // PipelineExecutor::ProcessAiDenoiseSession() must reach the session of the executors.
-TEST(AiDenoiseRenderTest, ExecutorsUseTheSessionWhoseModelFolderTheApplicationSets) {
+TEST(AiDenoiseRenderTest, ExecutorsUseTheSessionWhoseGraphLocatorTheApplicationSets) {
   const ai_denoise_test::TestModelFolder folder("executor_session", "graph of the executors");
   const auto&                            process = PipelineExecutor::ProcessAiDenoiseSession();
-  process->SetModelFolderProvider([path = folder.Folder()] { return path; });
+  process->SetGraphLocator(folder.Locator());
   {
     const PipelineExecutor executor(ExecutorRole::Interactive);
     ASSERT_EQ(executor.AiDenoiseSession().get(), process.get());
     EXPECT_EQ(executor.AiDenoiseSession()->InstalledModelVersion(),
               process->InstalledModelVersion());
   }
-  process->SetModelFolderProvider({});
+  process->SetGraphLocator({});
 }
 
 #ifdef HAVE_OPENCL

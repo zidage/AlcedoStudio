@@ -11,8 +11,10 @@ The formats are those that the C++ installer reads (AI Models plan, AM1 completi
   ``artifacts`` keyed by platform (``url``, ``size``, ``sha256``, ``file_count``,
   ``unpacked_bytes``, ``inventory_sha256``).
 
-A model set definition (``ai_mask_model_set_v1.json``) pins the size and SHA-256 of every model
-file. Requires py7zr (``pip install py7zr``) and cryptography.
+A model set definition (``ai_mask_model_set_v1.json``, ``ai_denoise_model_set_v1.json``) pins the
+size and SHA-256 of every model file. A feed lists every package: a preparation builds one
+definition and carries the other entries of the verified base feed (``merge_feed_entries``).
+Requires py7zr (``pip install py7zr``) and cryptography.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import urllib.error
+import urllib.request
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -33,6 +37,7 @@ import py7zr
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DEFINITION = Path(__file__).resolve().parent / "ai_mask_model_set_v1.json"
+DENOISE_DEFINITION = Path(__file__).resolve().parent / "ai_denoise_model_set_v1.json"
 DEFAULT_PUBLIC_BASE = "https://static.aoraw.org"
 DEFAULT_PREFIX = "ai-models/v1"
 MANIFEST_KIND = "alcedo-ai-model-packages"
@@ -379,14 +384,101 @@ def verify_package_archive(archive_path: Path, entry: dict, platform: str,
         shutil.rmtree(directory, ignore_errors=True)
 
 
-def verify_signature(manifest_path: Path, signature_path: Path, public_key_base64: str) -> None:
-    """Verify the detached Ed25519 signature over the exact manifest bytes."""
-    raw_key = base64.b64decode(public_key_base64, validate=True)
-    raw_signature = base64.b64decode(signature_path.read_bytes().strip(), validate=True)
+def verify_signature_bytes(manifest: bytes, signature: bytes, public_key_base64: str) -> None:
+    """Verify the detached Ed25519 signature ``signature`` (Base64) over ``manifest``."""
+    try:
+        raw_key = base64.b64decode(public_key_base64, validate=True)
+        raw_signature = base64.b64decode(signature.strip(), validate=True)
+    except ValueError as error:
+        raise AiModelPackageError("the public key or signature is not Base64") from error
     if len(raw_key) != 32 or len(raw_signature) != 64:
         raise AiModelPackageError("the public key or signature length is not valid")
     try:
-        Ed25519PublicKey.from_public_bytes(raw_key).verify(raw_signature,
-                                                           manifest_path.read_bytes())
+        Ed25519PublicKey.from_public_bytes(raw_key).verify(raw_signature, manifest)
     except InvalidSignature as error:
         raise AiModelPackageError("the AI model feed signature is not valid") from error
+
+
+def verify_signature(manifest_path: Path, signature_path: Path, public_key_base64: str) -> None:
+    """Verify the detached Ed25519 signature over the exact manifest bytes."""
+    verify_signature_bytes(manifest_path.read_bytes(), signature_path.read_bytes(),
+                           public_key_base64)
+
+
+# ── Feeds with more than one package ──────────────────────────────────────────
+
+# Cloudflare refuses the default Python-urllib User-Agent.
+USER_AGENT = "AlcedoStudio-ai-models/1.0 (+https://github.com/zidage/AlcedoStudio)"
+FETCH_TIMEOUT_SECONDS = 120
+MANIFEST_FILE_NAME = "manifest.json"
+SIGNATURE_FILE_NAME = "manifest.json.sig"
+BASE_DIRECTORY_NAME = "base"
+
+
+def entry_key(entry: dict) -> tuple[str, int]:
+    return entry["id"], entry["model_set_version"]
+
+
+def parse_feed(data: bytes) -> dict:
+    """Parse a feed and check the fields that the merge and the publication read."""
+    try:
+        manifest = json.loads(data)
+    except ValueError as error:
+        raise AiModelPackageError("the AI model feed is not valid JSON") from error
+    _require(isinstance(manifest, dict) and manifest.get("schema") == 1 and
+             manifest.get("kind") == MANIFEST_KIND, "the AI model feed schema is not supported")
+    sequence = manifest.get("sequence")
+    _require(isinstance(sequence, int) and sequence >= 1, "the AI model feed has no sequence")
+    packages = manifest.get("packages")
+    _require(isinstance(packages, list) and len(packages) > 0,
+             "the AI model feed has no package list")
+    for entry in packages:
+        _require(isinstance(entry, dict) and isinstance(entry.get("id"), str) and
+                 isinstance(entry.get("model_set_version"), int) and
+                 isinstance(entry.get("artifacts"), dict),
+                 "an entry of the AI model feed is not valid")
+    keys = [entry_key(entry) for entry in packages]
+    _require(len(keys) == len(set(keys)), "the AI model feed lists an (id, model_set_version) twice")
+    return manifest
+
+
+def fetch_url(url: str, method: str = "GET") -> tuple[int, dict, bytes]:
+    """HTTPS request; returns the status, the headers, and the body (empty for HEAD)."""
+    _require(url.startswith("https://"), f"not an HTTPS URL: {url}")
+    request = urllib.request.Request(url, method=method, headers={
+        "User-Agent": USER_AGENT, "Cache-Control": "no-cache"})
+    try:
+        with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
+            body = response.read() if method == "GET" else b""
+            return response.status, dict(response.headers), body
+    except urllib.error.HTTPError as error:
+        return error.code, dict(error.headers or {}), b""
+    except urllib.error.URLError as error:
+        raise AiModelPackageError(f"{url}: {error.reason}") from error
+
+
+def load_base_feed(source: str, public_key_base64: str) -> tuple[dict, bytes, bytes]:
+    """Read the base feed (a directory or the HTTPS URL of its manifest) and verify it.
+
+    Returns the parsed feed and the exact manifest and signature bytes.
+    """
+    if source.startswith("https://"):
+        status, _, manifest = fetch_url(source)
+        _require(status == 200, f"{source} returned HTTP {status}")
+        status, _, signature = fetch_url(source + ".sig")
+        _require(status == 200, f"{source}.sig returned HTTP {status}")
+    else:
+        directory = Path(source)
+        manifest = (directory / MANIFEST_FILE_NAME).read_bytes()
+        signature = (directory / SIGNATURE_FILE_NAME).read_bytes()
+    verify_signature_bytes(manifest, signature, public_key_base64)
+    return parse_feed(manifest), manifest, signature
+
+
+def merge_feed_entries(base_entries: list[dict], new_entries: list[dict]) -> list[dict]:
+    """Every base entry of another (id, model_set_version), unchanged, plus ``new_entries``.
+
+    A base entry of the same (id, model_set_version) is replaced: a new revision of a version.
+    """
+    replaced = {entry_key(entry) for entry in new_entries}
+    return [entry for entry in base_entries if entry_key(entry) not in replaced] + new_entries

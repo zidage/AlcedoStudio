@@ -9622,6 +9622,26 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>在 GitHub 上打开 AI 蒙版模型项目</translation>
     </message>
     <message>
+        <source>Removes the noise of Bayer RAW photos in the Develop stage, with the demosaic.</source>
+        <translation>在显影阶段为 Bayer RAW 照片降噪，同时完成去马赛克。</translation>
+    </message>
+    <message>
+        <source>Open the AI Denoise model project on GitHub</source>
+        <translation>在 GitHub 上打开 AI 降噪模型项目</translation>
+    </message>
+    <message>
+        <source>Remove the AI Denoise model</source>
+        <translation>移除 AI 降噪模型</translation>
+    </message>
+    <message>
+        <source>Remove the AI Denoise model?</source>
+        <translation>要移除 AI 降噪模型吗？</translation>
+    </message>
+    <message>
+        <source>Without the model, photos with AI Denoise show an error until you download it again.</source>
+        <translation>移除后，在重新下载模型之前，开启 AI 降噪的照片会显示错误。</translation>
+    </message>
+    <message>
         <source>v%1 %2</source>
         <translation>v%1 %2</translation>
     </message>
@@ -9738,8 +9758,8 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>模型文件夹</translation>
     </message>
     <message>
-        <source>The folder that holds the AI Mask models and the content recognition models. Changing it does not move the installed models.</source>
-        <translation>存放 AI 蒙版模型和内容识别模型的文件夹。更换文件夹不会移动已安装的模型。</translation>
+        <source>The folder that holds the AI Mask, AI Denoise, and content recognition models. Changing it does not move the installed models.</source>
+        <translation>存放 AI 蒙版、AI 降噪和内容识别模型的文件夹。更换文件夹不会移动已安装的模型。</translation>
     </message>
     <message>
         <source>Change folder…</source>
@@ -9762,16 +9782,16 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>重新读取已安装的模型</translation>
     </message>
     <message>
-        <source>AI Mask</source>
-        <translation>AI 蒙版</translation>
+        <source>Editor Models</source>
+        <translation>编辑器模型</translation>
     </message>
     <message>
         <source>The AI model check failed: %1</source>
         <translation>AI 模型检查失败：%1</translation>
     </message>
     <message>
-        <source>AI Mask model downloads are not available in this build.</source>
-        <translation>此版本不提供 AI 蒙版模型下载。</translation>
+        <source>AI Mask and AI Denoise model downloads are not available in this build.</source>
+        <translation>此版本不提供 AI 蒙版和 AI 降噪模型下载。</translation>
     </message>
     <message>
         <source>Check again</source>
@@ -9855,6 +9875,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>AI Mask</source>
         <translation>AI 蒙版</translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation>AI 降噪</translation>
     </message>
     <message>
         <source>The AI model server URL is not allowed.</source>

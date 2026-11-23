@@ -49,6 +49,7 @@ using Json                           = nlohmann::json;
 constexpr std::string_view kPlatform = "windows-x86_64";
 const QUrl    kFeedUrl(QStringLiteral("https://static.aoraw.org/ai-models/v1/manifest.json"));
 const QString kId = QStringLiteral("alcedo-ai-mask");
+const QString kDenoiseId = QStringLiteral("alcedo-ai-denoise");
 
 // ── File and archive fixtures ───────────────────────────────────────────────
 
@@ -233,6 +234,69 @@ auto SignFeed(const Json& entries, std::uint64_t sequence) -> SignedFeed {
   return {json, QByteArray(reinterpret_cast<const char*>(signature), 64).toBase64()};
 }
 
+/// The entry of @p id in a parsed feed.
+auto FeedEntry(const Json& manifest, const QString& id) -> const Json& {
+  for (const Json& entry : manifest["packages"]) {
+    if (entry["id"] == id.toStdString()) return entry;
+  }
+  ADD_FAILURE() << "the feed has no entry " << id.toStdString();
+  static const Json kEmpty = Json::object();
+  return kEmpty;
+}
+
+/// A complete installation of @p id v@p version, written without an archive: @p files and
+/// @p model_set as `model_set.json`, listed by the inventory and the receipt.
+void WriteInstallation(const fs::path& models, std::string_view id, std::uint64_t version,
+                       std::map<std::string, std::string> files, const Json& model_set) {
+  files["model_set.json"]  = model_set.dump(1);
+  const fs::path directory = models / AiModelPackageDirectoryName(id, version);
+  Json           list      = Json::array();
+  std::uint64_t  unpacked  = 0;
+  for (const auto& [path, bytes] : files) {
+    WriteBytes(directory / PackagePathFromUtf8(path), bytes);
+    list.push_back({{"path", path}, {"size", bytes.size()}, {"sha256", Sha256Hex(bytes)}});
+    unpacked += bytes.size();
+  }
+  const std::string inventory = Json{{"schema", 1},
+                                     {"kind", "alcedo-ai-model-package-inventory"},
+                                     {"id", id},
+                                     {"model_set_version", version},
+                                     {"revision", "r1"},
+                                     {"platform", kPlatform},
+                                     {"files", list}}
+                                    .dump(1);
+  WriteBytes(directory / "package-inventory.json", inventory);
+  AiModelPackageReceipt receipt;
+  receipt.package_id        = std::string(id);
+  receipt.model_set_version = version;
+  receipt.revision          = "r1";
+  receipt.platform          = std::string(kPlatform);
+  receipt.file_count        = files.size();
+  receipt.unpacked_bytes    = unpacked;
+  receipt.inventory_sha256  = Sha256Hex(inventory);
+  receipt.artifact_url      = "https://static.aoraw.org/ai-models/v1/packages/test.7z";
+  receipt.artifact_size     = 1;
+  receipt.artifact_sha256   = Sha256Hex("archive");
+  receipt.feed_sequence     = 1;
+  WriteBytes(directory / "installed.json", SerializeAiModelPackageReceipt(receipt));
+}
+
+/// The `model_set.json` of an AI Denoise package; @p graph empty leaves the role out.
+auto DenoiseModelSet(std::uint64_t version, std::string_view graph) -> Json {
+  Json models = Json::array();
+  if (!graph.empty()) {
+    models.push_back(
+        {{"role", "denoise_graph"}, {"path", graph}, {"licenses", Json::array({"GPL-3.0"})}});
+  }
+  return {{"schema", 1},
+          {"kind", "alcedo-ai-model-set"},
+          {"id", "alcedo-ai-denoise"},
+          {"model_set_version", version},
+          {"revision", "r1"},
+          {"platform", kPlatform},
+          {"models", models}};
+}
+
 // ── Transport and preference doubles ────────────────────────────────────────
 
 /// Serves the current signed feed and counts every request.
@@ -412,9 +476,9 @@ class AiModelPackageServiceTest : public ::testing::Test {
   }
 
   /// Start the install of the offered entry and wait for its end. True when it committed.
-  auto Install() -> bool {
+  auto Install(const QString& id = kId) -> bool {
     QSignalSpy finished(service_.get(), &AiModelPackageService::InstallFinished);
-    if (!service_->InstallPackage(kId)) return false;
+    if (!service_->InstallPackage(id)) return false;
     if (!WaitUntil([&] { return finished.count() == 1; })) return false;
     return finished.at(0).at(1).toBool();
   }
@@ -476,7 +540,8 @@ TEST_F(AiModelPackageServiceTest, StartupReadsLocalInstallationWithoutRequesting
   EXPECT_TRUE(service_->enabled());
   EXPECT_FALSE(service_->checked());
   EXPECT_FALSE(service_->checking());
-  ASSERT_EQ(service_->packages().size(), 1);
+  // The packages that this build knows, in the order of the AI Models page (DN12).
+  ASSERT_EQ(service_->packages().size(), 2);
   const QVariantMap row = Row();
   EXPECT_EQ(row.value(QStringLiteral("id")).toString(), kId);
   EXPECT_EQ(row.value(QStringLiteral("status")).toString(), QStringLiteral("notInstalled"));
@@ -486,6 +551,14 @@ TEST_F(AiModelPackageServiceTest, StartupReadsLocalInstallationWithoutRequesting
             kAiMaskModelSetMinimumVersion);
   EXPECT_EQ(row.value(QStringLiteral("maximumSupportedVersion")).toULongLong(),
             kAiMaskModelSetMaximumVersion);
+  const QVariantMap denoise = service_->packages().at(1).toMap();
+  EXPECT_EQ(denoise.value(QStringLiteral("id")).toString(), kDenoiseId);
+  EXPECT_EQ(denoise.value(QStringLiteral("name")).toString(), QStringLiteral("AI Denoise"));
+  EXPECT_EQ(denoise.value(QStringLiteral("status")).toString(), QStringLiteral("notInstalled"));
+  EXPECT_EQ(denoise.value(QStringLiteral("minimumSupportedVersion")).toULongLong(),
+            kAiDenoiseModelSetMinimumVersion);
+  EXPECT_EQ(denoise.value(QStringLiteral("maximumSupportedVersion")).toULongLong(),
+            kAiDenoiseModelSetMaximumVersion);
 }
 
 TEST_F(AiModelPackageServiceTest, CheckRequestsManifestAndSignatureOnceWithoutDownloading) {
@@ -568,7 +641,7 @@ TEST_F(AiModelPackageServiceTest, PythonPreparedPackageInstallsOnEachPlatform) {
   feed_->feed            = {QByteArray::fromStdString(ReadBytes(fixture / "manifest.json")),
                             QByteArray::fromStdString(ReadBytes(fixture / "manifest.json.sig"))};
   const Json manifest    = Json::parse(ReadBytes(fixture / "manifest.json"));
-  for (const auto& [platform, artifact] : manifest["packages"][0]["artifacts"].items()) {
+  for (const auto& [platform, artifact] : FeedEntry(manifest, kId)["artifacts"].items()) {
     SCOPED_TRACE(platform);
     const std::string url    = artifact["url"].get<std::string>();
     downloads_->sources[url] = fixture / PackagePathFromUtf8(url.substr(url.rfind('/') + 1));
@@ -1059,6 +1132,142 @@ TEST_F(AiModelPackageServiceTest, ApplicationAndAiModelDownloadsShareAdmission) 
     ASSERT_TRUE(WaitUntil([&] { return !transfers.IsRunning(); }));
     service_.reset();
   }
+}
+
+// ── AI Denoise package (AI Denoise integration plan, DN12) ─────────────────
+
+// The fixture feed lists the AI Denoise package that the Python tooling prepares from
+// ai_denoise_model_set_v1.json; its graph is the file of the role denoise_graph.
+TEST_F(AiModelPackageServiceTest, PythonPreparedAiDenoisePackageInstallsAndItsGraphResolves) {
+  const fs::path fixture = PackagePathFromUtf8(ALCEDO_AI_MODEL_PACKAGE_FIXTURE_DIR);
+  feed_->feed            = {QByteArray::fromStdString(ReadBytes(fixture / "manifest.json")),
+                            QByteArray::fromStdString(ReadBytes(fixture / "manifest.json.sig"))};
+  const Json manifest    = Json::parse(ReadBytes(fixture / "manifest.json"));
+  for (const auto& [platform, artifact] : FeedEntry(manifest, kDenoiseId)["artifacts"].items()) {
+    SCOPED_TRACE(platform);
+    const std::string url    = artifact["url"].get<std::string>();
+    downloads_->sources[url] = fixture / PackagePathFromUtf8(url.substr(url.rfind('/') + 1));
+    models_                  = base_ / ("denoise-models-" + platform);
+    fs::create_directories(models_);
+    AiModelPackageServiceOptions options = MakeOptions();
+    options.platform                     = QString::fromStdString(platform);
+    service_ = std::make_unique<AiModelPackageService>(std::move(options));
+
+    Check();
+    ASSERT_TRUE(service_->checked()) << service_->last_error().toStdString();
+    const QVariantMap row = service_->packages().at(1).toMap();
+    EXPECT_EQ(row.value(QStringLiteral("id")).toString(), kDenoiseId);
+    EXPECT_EQ(row.value(QStringLiteral("name")).toString(), QStringLiteral("AI Denoise"));
+    EXPECT_EQ(row.value(QStringLiteral("action")).toString(), QStringLiteral("install"));
+    EXPECT_EQ(row.value(QStringLiteral("licenses")).toList().size(), 2);
+    EXPECT_NE(ResolveAiDenoiseGraph(models_).problem.find("not installed"), std::string::npos);
+
+    ASSERT_TRUE(Install(kDenoiseId)) << service_->Package(kDenoiseId)->error.toStdString();
+    EXPECT_EQ(service_->Package(kDenoiseId)->status, AiModelPackageStatus::kCurrent);
+    EXPECT_EQ(State().status, AiModelPackageStatus::kNotInstalled) << "AI Mask is not installed";
+    const AiDenoiseGraphLocation location = ResolveAiDenoiseGraph(models_);
+    EXPECT_TRUE(location.problem.empty()) << location.problem;
+    EXPECT_EQ(location.graph,
+              models_ / "alcedo-ai-denoise-v1" / "utnet2_bayer_dark_loss_10k_fp16.onnx");
+    EXPECT_TRUE(fs::is_regular_file(models_ / "alcedo-ai-denoise-v1" / "licenses" /
+                                    "CC-BY-4.0.txt"));
+    service_.reset();
+  }
+}
+
+TEST_F(AiModelPackageServiceTest, AiDenoiseGraphComesOnlyFromACompleteSupportedInstallation) {
+  EXPECT_NE(ResolveAiDenoiseGraph({}).problem.find("no AI model folder"), std::string::npos);
+  AiDenoiseGraphLocation location = ResolveAiDenoiseGraph(models_);
+  EXPECT_TRUE(location.graph.empty());
+  EXPECT_NE(location.problem.find("not installed"), std::string::npos) << location.problem;
+
+  // The folder that developers filled by hand before DN12 is not read.
+  WriteBytes(models_ / "ai-denoise-v1" / "utnet2_bayer_dark_loss_10k_fp16.onnx", "graph");
+  EXPECT_TRUE(ResolveAiDenoiseGraph(models_).graph.empty());
+
+  const fs::path                           v1 = models_ / "alcedo-ai-denoise-v1";
+  const std::map<std::string, std::string> files{{"graph.onnx", "graph bytes"},
+                                                 {"NOTICE.txt", "notice"}};
+  WriteInstallation(models_, "alcedo-ai-denoise", 1, files, DenoiseModelSet(1, "graph.onnx"));
+  location = ResolveAiDenoiseGraph(models_);
+  EXPECT_TRUE(location.problem.empty()) << location.problem;
+  EXPECT_EQ(location.graph, v1 / "graph.onnx");
+
+  // A listed file is missing: incomplete (Repair on the AI Models page).
+  fs::remove(v1 / "NOTICE.txt");
+  location = ResolveAiDenoiseGraph(models_);
+  EXPECT_TRUE(location.graph.empty());
+  EXPECT_NE(location.problem.find("incomplete"), std::string::npos) << location.problem;
+
+  // model_set.json without the graph role.
+  fs::remove_all(v1);
+  WriteInstallation(models_, "alcedo-ai-denoise", 1, files, DenoiseModelSet(1, ""));
+  location = ResolveAiDenoiseGraph(models_);
+  EXPECT_TRUE(location.graph.empty());
+  EXPECT_NE(location.problem.find("names no denoise_graph"), std::string::npos)
+      << location.problem;
+
+  // Only a version above the supported range.
+  fs::remove_all(v1);
+  WriteInstallation(models_, "alcedo-ai-denoise", 2, files, DenoiseModelSet(2, "graph.onnx"));
+  location = ResolveAiDenoiseGraph(models_);
+  EXPECT_TRUE(location.graph.empty());
+  EXPECT_NE(location.problem.find("needs a newer version"), std::string::npos) << location.problem;
+}
+
+// Alcedo Studio 0.3.4 to 0.3.6 read the same feed with this parser and know only the AI Mask
+// package. The AI Denoise entry must not change what they offer or report for AI Mask (DN12).
+TEST_F(AiModelPackageServiceTest, AiDenoiseEntryKeepsTheAiMaskStateOfReleasedBuilds) {
+  StartService();
+  const BuiltPackage v1 = Publish(1, "r1", 0);
+  InstallRevision(v1);
+  const Json denoise    = FeedEntry(
+      Json::parse(ReadBytes(PackagePathFromUtf8(ALCEDO_AI_MODEL_PACKAGE_FIXTURE_DIR) /
+                            "manifest.json")),
+      kDenoiseId);
+
+  QByteArray                    public_key;
+  std::array<unsigned char, 64> unused{};
+  KeyPair(&public_key, &unused);
+  const QString platform = QString::fromLatin1(kPlatform.data(), kPlatform.size());
+  struct ReleasedBuildView {
+    AiModelPackageStatus status = AiModelPackageStatus::kError;
+    QString              revision;
+    QByteArray           archive_sha256;
+  };
+  const auto released_build_view = [&](const Json& entries) {
+    const SignedFeed                   feed   = SignFeed(entries, ++sequence_);
+    const AiModelPackageManifestResult result = VerifyAiModelPackageManifest(
+        feed.json, feed.signature, public_key, kFeedUrl, sequence_ - 1);
+    EXPECT_TRUE(result) << result.error.toStdString();
+    ReleasedBuildView view;
+    if (!result) return view;
+    const AiModelPackageComparison comparison =
+        CompareAiModelPackage(ReadAiMaskModelInstallation(models_), &*result.manifest, kId,
+                              kAiMaskModelSetMinimumVersion, kAiMaskModelSetMaximumVersion,
+                              platform);
+    view.status = comparison.status;
+    if (comparison.offer != nullptr) {
+      view.revision       = comparison.offer->revision;
+      view.archive_sha256 = comparison.offer->Artifact(platform)->sha256;
+    }
+    return view;
+  };
+  const ReleasedBuildView mask_only = released_build_view(Json::array({v1.entry}));
+  const ReleasedBuildView with_denoise = released_build_view(Json::array({denoise, v1.entry}));
+  EXPECT_EQ(mask_only.status, AiModelPackageStatus::kCurrent);
+  EXPECT_EQ(with_denoise.status, mask_only.status);
+  EXPECT_EQ(with_denoise.revision, QStringLiteral("r1"));
+  EXPECT_EQ(with_denoise.archive_sha256, mask_only.archive_sha256);
+
+  // This build lists both: AI Mask stays current, AI Denoise is offered.
+  feed_->feed = SignFeed(Json::array({denoise, v1.entry}), ++sequence_);
+  Check();
+  ASSERT_TRUE(service_->checked()) << service_->last_error().toStdString();
+  EXPECT_EQ(State().status, AiModelPackageStatus::kCurrent);
+  EXPECT_EQ(Row().value(QStringLiteral("action")).toString(), QString());
+  EXPECT_EQ(service_->packages().at(1).toMap().value(QStringLiteral("action")).toString(),
+            QStringLiteral("install"));
 }
 
 }  // namespace

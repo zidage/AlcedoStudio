@@ -144,7 +144,8 @@ struct AiMaskModelSetReadiness {
     -> AiMaskModelSetReadiness;
 
 /// Owner of the signed AI model package feed state, the local installations of the AI model
-/// packages that this build knows (the AI Mask model set), and their download, install,
+/// packages that this build knows (the AI Mask model set and the AI Denoise model, in this order),
+/// and their download, install,
 /// update, repair, and removal (docs/roadmap/alcedo_studio/ai/external_ai_model_download_plan.md,
 /// AM1).
 ///

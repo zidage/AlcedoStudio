@@ -42,24 +42,28 @@ DenoiseModelSession::DenoiseModelSession(std::unique_ptr<AiDenoisePlatform> plat
 
 DenoiseModelSession::~DenoiseModelSession() = default;
 
-void DenoiseModelSession::SetModelFolderProvider(ModelFolderProvider provider) {
-  std::scoped_lock lock(folder_mutex_);
-  folder_provider_ = std::move(provider);
+void DenoiseModelSession::SetGraphLocator(GraphLocator locator) {
+  std::scoped_lock lock(locator_mutex_);
+  graph_locator_ = std::move(locator);
 }
 
 auto DenoiseModelSession::GraphPath() const -> std::filesystem::path {
-  std::filesystem::path folder;
+  GraphLocator locator;
   {
-    std::scoped_lock lock(folder_mutex_);
-    if (folder_provider_) {
-      folder = folder_provider_();
-    }
+    std::scoped_lock lock(locator_mutex_);
+    locator = graph_locator_;
   }
-  if (folder.empty()) {
+  AiDenoiseGraphLookup lookup;
+  if (locator) {
+    lookup = locator();
+  } else {
+    lookup.problem = "the application sets no model location";
+  }
+  if (lookup.graph.empty()) {
     throw AiDenoiseError(AiDenoiseErrorKind::ModelNotInstalled,
-                         "AI Denoise: the model is not installed: no AI model folder is set");
+                         "AI Denoise: the model is not installed: " + lookup.problem);
   }
-  return folder / kAiDenoiseModelFolderName / kAiDenoiseGraphFileName;
+  return lookup.graph;
 }
 
 auto DenoiseModelSession::InstalledModelVersion() -> std::string {

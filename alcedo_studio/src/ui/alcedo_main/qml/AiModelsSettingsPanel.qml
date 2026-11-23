@@ -10,7 +10,8 @@ import QtQuick.Layouts
 // activate the external AI models, in the layout of Settings > LUTs.
 //
 // - The model directory tile (one directory for all AI models, plan P7).
-// - "AI Mask": one PackageCard for the AI Mask model set (AiModelPackageService, signed feed).
+// - "Editor Models": one PackageCard for each package of the signed feed that this build knows
+//   (AiModelPackageService): the AI Mask model set and the AI Denoise model.
 // - "Content Recognition (CLIP)": the download source, then one PackageCard per CLIP model
 //   (ModelDownloadController) with Download, Cancel, Remove, and Activate for the open project
 //   (SemanticGenerationController). The active model of the open project has the active border.
@@ -34,7 +35,7 @@ ColumnLayout {
     property bool projectOpen: false
 
     readonly property bool packagesEnabled: !!packageService && packageService.enabled
-    readonly property var maskRows: packageService ? packageService.packages : []
+    readonly property var packageRows: packageService ? packageService.packages : []
     readonly property var clipRows: downloadController ? downloadController.models : []
     readonly property bool statementAccepted: !!packageService && packageService.downloadStatementAccepted
     readonly property bool clipDownloadRunning: !!downloadController && downloadController.modelDownloadRunning
@@ -48,9 +49,9 @@ ColumnLayout {
                                                        ? String(semanticController.activatingModelProfileId || "") : ""
     readonly property bool modelActivationRunning: !!semanticController && semanticController.modelActivationRunning
 
-    // The download that waits for the statement: {kind: "aiMask" | "clip", id}.
+    // The download that waits for the statement: {kind: "package" | "clip", id}.
     property var pendingDownload: null
-    // The card whose removal waits for confirmation: "aiMask:<id>" or "clip:<profileId>".
+    // The card whose removal waits for confirmation: "package:<id>" or "clip:<profileId>".
     property string pendingRemovalKey: ""
 
     spacing: appTheme.spaceMd
@@ -67,7 +68,7 @@ ColumnLayout {
     }
 
     function startDownload(kind, id) {
-        if (kind === "aiMask" && packageService)
+        if (kind === "package" && packageService)
             packageService.installPackage(id)
         else if (kind === "clip" && downloadController)
             downloadController.installModel(id)
@@ -90,8 +91,8 @@ ColumnLayout {
     function confirmRemoval() {
         const key = pendingRemovalKey
         pendingRemovalKey = ""
-        if (key.startsWith("aiMask:") && packageService)
-            packageService.removePackage(key.substring(7))
+        if (key.startsWith("package:") && packageService)
+            packageService.removePackage(key.substring(8))
         else if (key.startsWith("clip:") && downloadController)
             downloadController.removeModel(key.substring(5))
     }
@@ -121,15 +122,66 @@ ColumnLayout {
         return normalized.startsWith("/") ? "file://" + normalized : "file:///" + normalized
     }
 
-    // ── AI Mask model set ────────────────────────────────────────────────
+    // ── Packages of the signed feed (AI Mask, AI Denoise) ────────────────
 
-    // What the AI Mask set does, in one sentence (the revision Pill shows the version).
-    readonly property string maskDescription:
-        qsTr("Selects the subject, people, sky, and the objects that you click, box, or draw over.")
-    // The project that trains and prepares the AI Mask models.
-    readonly property string maskProjectUrl: "https://github.com/zidage/alcedo-ai-mask-lab"
+    readonly property string aiMaskPackageId: "alcedo-ai-mask"
+    readonly property string aiDenoisePackageId: "alcedo-ai-denoise"
 
-    function maskRevisionText(row) {
+    // What a package does, in one sentence (the revision Pill shows the version).
+    function packageDescription(id) {
+        switch (id) {
+        case page.aiMaskPackageId:
+            return qsTr("Selects the subject, people, sky, and the objects that you click, box, or draw over.")
+        case page.aiDenoisePackageId:
+            return qsTr("Removes the noise of Bayer RAW photos in the Develop stage, with the demosaic.")
+        }
+        return ""
+    }
+
+    // The project that trains and prepares the models of a package.
+    function packageProjectUrl(id) {
+        switch (id) {
+        case page.aiMaskPackageId: return "https://github.com/zidage/alcedo-ai-mask-lab"
+        case page.aiDenoisePackageId: return "https://github.com/zidage/alcedo-denoise-lab"
+        }
+        return ""
+    }
+
+    function packageProjectToolTip(id) {
+        switch (id) {
+        case page.aiMaskPackageId: return qsTr("Open the AI Mask model project on GitHub")
+        case page.aiDenoisePackageId: return qsTr("Open the AI Denoise model project on GitHub")
+        }
+        return ""
+    }
+
+    function packageRemoveToolTip(id) {
+        switch (id) {
+        case page.aiMaskPackageId: return qsTr("Remove the AI Mask models")
+        case page.aiDenoisePackageId: return qsTr("Remove the AI Denoise model")
+        }
+        return ""
+    }
+
+    function packageRemoveQuestion(id) {
+        switch (id) {
+        case page.aiMaskPackageId: return qsTr("Remove the AI Mask models?")
+        case page.aiDenoisePackageId: return qsTr("Remove the AI Denoise model?")
+        }
+        return ""
+    }
+
+    function packageRemoveWarning(id) {
+        switch (id) {
+        case page.aiMaskPackageId:
+            return qsTr("Without the models, the AI Mask tool cannot make AI Masks until you download them again.")
+        case page.aiDenoisePackageId:
+            return qsTr("Without the model, photos with AI Denoise show an error until you download it again.")
+        }
+        return ""
+    }
+
+    function packageRevisionText(row) {
         const installedVersion = Number(row.installedModelSetVersion || 0)
         const installed = installedVersion > 0 && (row.installedRevision || "").length > 0
                           ? qsTr("v%1 %2").arg(installedVersion).arg(row.installedRevision) : ""
@@ -143,7 +195,7 @@ ColumnLayout {
     }
 
     // License files are in the installed set; before the installation, the name only.
-    function maskLicenses(row) {
+    function packageLicenses(row) {
         const licenses = row.licenses || []
         const installedVersion = Number(row.installedModelSetVersion || 0)
         const installed = installedVersion > 0 && (row.installedRevision || "").length > 0
@@ -154,13 +206,13 @@ ColumnLayout {
             result.push({
                 name: licenses[i].name,
                 url: installed && directory.length > 0 && file.length > 0
-                     ? localFileUrl(directory + "/alcedo-ai-mask-v" + installedVersion + "/" + file) : ""
+                     ? localFileUrl(directory + "/" + row.id + "-v" + installedVersion + "/" + file) : ""
             })
         }
         return result
     }
 
-    function maskStatusText(row) {
+    function packageStatusText(row) {
         switch (row.status) {
         case "notInstalled": return qsTr("Not installed")
         case "current": return qsTr("Installed and current")
@@ -177,7 +229,7 @@ ColumnLayout {
         return ""
     }
 
-    function maskStatusColor(row) {
+    function packageStatusColor(row) {
         switch (row.status) {
         case "current": return appTheme.accentColor
         case "updateAvailable":
@@ -189,7 +241,7 @@ ColumnLayout {
         return appTheme.textMutedColor
     }
 
-    function maskActionText(action) {
+    function packageActionText(action) {
         switch (action) {
         case "install": return qsTr("Download")
         case "update": return qsTr("Update")
@@ -314,7 +366,7 @@ ColumnLayout {
                 }
                 Label {
                     Layout.fillWidth: true
-                    text: qsTr("The folder that holds the AI Mask models and the content recognition models. Changing it does not move the installed models.")
+                    text: qsTr("The folder that holds the AI Mask, AI Denoise, and content recognition models. Changing it does not move the installed models.")
                     color: appTheme.textMutedColor
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeBody
@@ -365,7 +417,7 @@ ColumnLayout {
         }
     }
 
-    // ── AI Mask ──────────────────────────────────────────────────────────
+    // ── Editor Models (AI Mask, AI Denoise) ──────────────────────────────
     RowLayout {
         Layout.fillWidth: true
         Layout.topMargin: appTheme.spaceLg
@@ -379,7 +431,7 @@ ColumnLayout {
 
             Label {
                 Layout.fillWidth: true
-                text: qsTr("AI Mask")
+                text: qsTr("Editor Models")
                 color: appTheme.textColor
                 font.family: appTheme.headlineFontFamily
                 font.pixelSize: appTheme.fontSizeSection
@@ -397,7 +449,7 @@ ColumnLayout {
                 objectName: "aiModelsPackagesUnavailable"
                 Layout.fillWidth: true
                 visible: !page.packagesEnabled
-                text: qsTr("AI Mask model downloads are not available in this build.")
+                text: qsTr("AI Mask and AI Denoise model downloads are not available in this build.")
                 color: appTheme.textMutedColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
@@ -423,8 +475,8 @@ ColumnLayout {
     }
 
     GridLayout {
-        id: maskGrid
-        objectName: "aiModelsMaskList"
+        id: packageGrid
+        objectName: "aiModelsPackageList"
         Layout.fillWidth: true
         Layout.leftMargin: 34
         Layout.rightMargin: 34
@@ -434,55 +486,55 @@ ColumnLayout {
 
         // Instantiator over the row count, not the row list: cards persist while progress
         // changes, so a Cancel press is not lost to a rebuilt card.
-        // An empty cell after a card that is alone in its row, so the AI Mask card keeps the
+        // An empty cell after a card that is alone in its row, so a package card keeps the
         // column width and the shape of the CLIP cards.
         Item {
-            id: maskRowFiller
+            id: packageRowFiller
             Layout.fillWidth: true
             Layout.preferredWidth: 1
-            visible: maskGrid.columns > 1 && page.maskRows.length % 2 === 1
+            visible: packageGrid.columns > 1 && page.packageRows.length % 2 === 1
         }
 
         Instantiator {
-            model: page.maskRows.length
+            model: page.packageRows.length
             onObjectAdded: function(index, object) {
-                object.parent = maskGrid
+                object.parent = packageGrid
                 // Reparenting appends: the filler stays after the cards.
-                maskRowFiller.parent = null
-                maskRowFiller.parent = maskGrid
+                packageRowFiller.parent = null
+                packageRowFiller.parent = packageGrid
             }
             delegate: PackageCard {
-                id: maskCard
+                id: packageCard
                 required property int index
-                readonly property var row: page.maskRows[index] || ({})
+                readonly property var row: page.packageRows[index] || ({})
                 readonly property string packageId: row.id || ""
 
-                namePrefix: "aiModelsMask"
+                namePrefix: "aiModelsPackage"
                 cardKey: packageId
                 title: row.name || packageId
-                subtitle: page.maskDescription
-                upstreamUrl: page.maskProjectUrl
-                upstreamToolTip: qsTr("Open the AI Mask model project on GitHub")
-                pills: [page.maskRevisionText(row), page.formatBytes(row.archiveBytes)]
-                licenses: page.maskLicenses(row)
-                statusText: page.maskStatusText(row)
-                statusColor: page.maskStatusColor(row)
+                subtitle: page.packageDescription(packageId)
+                upstreamUrl: page.packageProjectUrl(packageId)
+                upstreamToolTip: page.packageProjectToolTip(packageId)
+                pills: [page.packageRevisionText(row), page.formatBytes(row.archiveBytes)]
+                licenses: page.packageLicenses(row)
+                statusText: page.packageStatusText(row)
+                statusColor: page.packageStatusColor(row)
                 busy: !!row.busy
                 progressIndeterminate: row.status !== "downloading"
                 progressPercent: (row.progress || 0) * 100
                 errorText: row.error || ""
-                actionText: page.maskActionText(row.action || "")
+                actionText: page.packageActionText(row.action || "")
                 actionKind: row.action === "retry" ? "normal" : "accent"
                 cancelVisible: !!row.cancelable
                 removable: !!row.removable
-                removeToolTip: qsTr("Remove the AI Mask models")
-                confirmingRemoval: page.pendingRemovalKey === "aiMask:" + packageId
-                removeQuestion: qsTr("Remove the AI Mask models?")
-                removeWarning: qsTr("Without the models, the AI Mask tool cannot make AI Masks until you download them again.")
+                removeToolTip: page.packageRemoveToolTip(packageId)
+                confirmingRemoval: page.pendingRemovalKey === "package:" + packageId
+                removeQuestion: page.packageRemoveQuestion(packageId)
+                removeWarning: page.packageRemoveWarning(packageId)
                 removeConfirmEnabled: !!row.removable
-                onActionRequested: page.requestDownload("aiMask", maskCard.packageId)
-                onCancelRequested: page.packageService.cancelInstall(maskCard.packageId)
-                onRemoveRequested: page.pendingRemovalKey = "aiMask:" + maskCard.packageId
+                onActionRequested: page.requestDownload("package", packageCard.packageId)
+                onCancelRequested: page.packageService.cancelInstall(packageCard.packageId)
+                onRemoveRequested: page.pendingRemovalKey = "package:" + packageCard.packageId
                 onRemoveKept: page.pendingRemovalKey = ""
                 onRemoveConfirmed: page.confirmRemoval()
             }

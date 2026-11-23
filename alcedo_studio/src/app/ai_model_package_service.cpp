@@ -37,8 +37,12 @@ struct KnownAiModelPackage {
   quint64          maximum_version = 0;
 };
 
+/// The order of the AI Models page. A build ignores the feed entries of the IDs it does not
+/// list, so a feed can add a package without a change for the builds that do not know it.
 constexpr KnownAiModelPackage kKnownPackages[] = {
-    {kAiMaskModelPackageId, kAiMaskModelSetMinimumVersion, kAiMaskModelSetMaximumVersion}};
+    {kAiMaskModelPackageId, kAiMaskModelSetMinimumVersion, kAiMaskModelSetMaximumVersion},
+    {kAiDenoiseModelPackageId, kAiDenoiseModelSetMinimumVersion,
+     kAiDenoiseModelSetMaximumVersion}};
 
 auto BuildPlatform() -> QString {
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
@@ -295,7 +299,13 @@ auto AiModelPackageService::packages() const -> QVariantList {
     }
     QString name = offer != nullptr ? offer->name : QString();
     if (name.isEmpty()) {
-      name = package.id == ToQString(kAiMaskModelPackageId) ? tr("AI Mask") : package.id;
+      if (package.id == ToQString(kAiMaskModelPackageId)) {
+        name = tr("AI Mask");
+      } else if (package.id == ToQString(kAiDenoiseModelPackageId)) {
+        name = tr("AI Denoise");
+      } else {
+        name = package.id;
+      }
     }
     list.push_back(QVariantMap{
         {QStringLiteral("id"), package.id},

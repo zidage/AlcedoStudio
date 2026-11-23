@@ -22,10 +22,13 @@
 
 namespace alcedo {
 
-/// The folder of the AI Denoise model below the AI model folder, and the file of its FP16 graph
-/// (integration plan, section 6: copied by hand until DN12 publishes the package).
-inline constexpr std::string_view kAiDenoiseModelFolderName = "ai-denoise-v1";
-inline constexpr std::string_view kAiDenoiseGraphFileName = "utnet2_bayer_dark_loss_10k_fp16.onnx";
+/// Where the FP16 graph of the installed AI Denoise model is (integration plan, DN12).
+struct AiDenoiseGraphLookup {
+  /// The graph file; empty when no usable model is installed.
+  std::filesystem::path graph;
+  /// Why there is no graph (English, part of the `ModelNotInstalled` error); empty with a graph.
+  std::string           problem;
+};
 
 /// Counters of a @ref DenoiseModelSession, for the tests and the log.
 struct DenoiseModelSessionStats {
@@ -48,8 +51,9 @@ struct DenoiseModelSessionStats {
  */
 class DenoiseModelSession {
  public:
-  /// The AI model folder (`semantic/modelDirectory`); empty when the application has none.
-  using ModelFolderProvider = std::function<std::filesystem::path()>;
+  /// Finds the graph of the installed model package. Called at each check of the installed
+  /// model (each render with AI Denoise), from any thread.
+  using GraphLocator = std::function<AiDenoiseGraphLookup()>;
 
   /**
    * @param platform Null on a platform without forward code: a run then throws `RunFailed`.
@@ -62,15 +66,15 @@ class DenoiseModelSession {
   DenoiseModelSession(const DenoiseModelSession&)                                  = delete;
   auto               operator=(const DenoiseModelSession&) -> DenoiseModelSession& = delete;
 
-  /// Sets the provider of the AI model folder; the graph is
-  /// `<folder>/ai-denoise-v1/utnet2_bayer_dark_loss_10k_fp16.onnx`.
-  void               SetModelFolderProvider(ModelFolderProvider provider);
+  /// Sets the locator of the graph. The application finds the graph in the AI Denoise package of
+  /// its AI model folder (`<folder>/alcedo-ai-denoise-v<N>/`, DN12).
+  void               SetGraphLocator(GraphLocator locator);
 
   /**
    * @brief The installed model version: the SHA-256 of the graph file, 64 lowercase hexadecimal
    *        digits (D10). Read again when the size or the write time of the file changes.
-   * @throws AiDenoiseError `ModelNotInstalled` when no folder is set or the file is absent;
-   *         `RunFailed` when the file cannot be read.
+   * @throws AiDenoiseError `ModelNotInstalled` when no locator is set or it finds no graph (with
+   *         its reason), or the file is absent; `RunFailed` when the file cannot be read.
    */
   [[nodiscard]] auto InstalledModelVersion() -> std::string;
 
@@ -117,8 +121,8 @@ class DenoiseModelSession {
   std::once_flag                     platform_check_once_;
   bool                               platform_available_ = false;
 
-  mutable std::mutex                 folder_mutex_;
-  ModelFolderProvider                folder_provider_;
+  mutable std::mutex                 locator_mutex_;
+  GraphLocator                       graph_locator_;
 
   struct InstalledGraph {
     std::filesystem::path           path;
@@ -144,7 +148,7 @@ class DenoiseModelSession {
  * @brief The one @ref DenoiseModelSession of the process, with the platform of this build.
  *
  * The executors of the editor, the export, the thumbnails, and the semantic input images use it
- * (the last two never run the model: they decode reduced). The application sets its model folder.
+ * (the last two never run the model: they decode reduced). The application sets its graph locator.
  *
  * The instance is a static of this (static) library, so each binary that links it has its own:
  * on Windows the EditPipeline DLL and the application. Code outside EditPipeline uses

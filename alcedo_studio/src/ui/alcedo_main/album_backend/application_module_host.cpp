@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "app/ai_denoise_history_write.hpp"
+#include "app/ai_model_package_install.hpp"
 #include "app/editor_adjustment_context.hpp"
 #include "app/editor_pending_input.hpp"
 #include "app/editor_session_bootstrap.hpp"
@@ -168,11 +169,14 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   // Every project's editor, thumbnail, and export executors resolve LUT references through
   // the library (plan L4).
   project_->SetLutResources(lut_library_->Resources());
-  // AI Denoise reads its FP16 graph from the AI model folder of the settings, read at each check
-  // of the installed model (integration plan, DN6). The session of the executors is reached
-  // through PipelineExecutor: on Windows the executors are in a DLL with their own copy.
-  alcedo::PipelineExecutor::ProcessAiDenoiseSession()->SetModelFolderProvider([] {
-    return std::filesystem::path(alcedo::ConfiguredSemanticModelDirectory().toStdWString());
+  // AI Denoise reads its FP16 graph from the AI Denoise package of the AI model folder of the
+  // settings (alcedo-ai-denoise-v<N>, integration plan DN12), found again at each check of the
+  // installed model. The session of the executors is reached through PipelineExecutor: on
+  // Windows the executors are in a DLL with their own copy.
+  alcedo::PipelineExecutor::ProcessAiDenoiseSession()->SetGraphLocator([] {
+    alcedo::AiDenoiseGraphLocation location = alcedo::ResolveAiDenoiseGraph(
+        std::filesystem::path(alcedo::ConfiguredSemanticModelDirectory().toStdWString()));
+    return alcedo::AiDenoiseGraphLookup{std::move(location.graph), std::move(location.problem)};
   });
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
   RecordConstruction("LibraryModule", library_.get());

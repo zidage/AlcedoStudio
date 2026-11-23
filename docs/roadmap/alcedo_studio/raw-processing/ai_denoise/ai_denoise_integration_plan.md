@@ -31,7 +31,9 @@
   export item with an AI Denoise error stays in the queue with `Turn Off AI Denoise`.
   2026-11-23: DN10 complete (issue #1069): the FP16 graph on the Neural Engine of macOS (Core ML,
   one session for each tile shape, a model cache for each model version), 45.4 MP in 0.55 s on
-  the M4; the DN5 Metal code built and run
+  the M4; the DN5 Metal code built and run. 2026-11-23: DN12 complete (issue #1072): the AI
+  model feed lists the AI Denoise package next to the AI Mask set; the render reads the graph
+  from the installed package
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -306,7 +308,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN9 | Removed on 2026-11-22 (was: the settings section for the stored results) | | | | removed |
 | DN10 | macOS forward code: the Core ML session of UtNet2 on the Neural Engine in ONNX Runtime (C++), the osx-arm64 library | `cmake`, `decoders/processor/nn` | DN3 | 600 to 1000 | complete (#1069) |
 | DN11 | Linux forward code | `opencl` or ONNX Runtime WebGPU | DN3 | 1400 to 1900 | last (2026-11-22: the only Linux environment is WSL) |
-| DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | planned |
+| DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | complete (#1072) |
 | DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | planned |
 | DN14 | Render feedback in the editor: placeholder image before the first frame, the step of the render (Reading RAW, AI Denoise tile k of n, Developing group k of n) in a pill and a segmented bar | `ui/alcedo_main`, `app`, `edit/input`, `edit/runtime` | DN7 | 900 to 1400 | complete (#1059) |
 
@@ -320,9 +322,10 @@ detailed section in this file before its implementation starts, with the format 
 DN5 can start before DN3 completes: its tests build the denoised prepared input from the DN0
 expected outputs, so the Develop integration can be checked before the tile loop exists.
 
-Until DN12, a developer copies the FP16 ONNX graph file by hand into
-`<model folder>/ai-denoise-v1/`. The model folder is the QSettings value
-`semantic/modelDirectory`.
+Since DN12, the AI Models page installs the FP16 ONNX graph into
+`<model folder>/alcedo-ai-denoise-v1/` (the package `alcedo-ai-denoise`). The model folder is
+the QSettings value `semantic/modelDirectory`. The folder `ai-denoise-v1` that developers
+filled by hand before DN12 is not read.
 
 ## 7. Detailed phases
 
@@ -3056,6 +3059,235 @@ dependency check pass.
 on the Mac; no Mac with 8 GB or another chip was measured; the 3 known failures of
 `GpuDagMetalDevelopTest` (#869, #972).
 
+### DN12: feed with more than one package, AI Denoise model package
+
+Written on 2026-11-23, before the implementation (issue #1072). The fixed points are the DN12
+bullet of "DN11 to DN13", D3 (the publication is the last product phase), D10 (the model version
+is the SHA-256 of the graph), and the AI Models plan
+([external_ai_model_download_plan.md](../../ai/external_ai_model_download_plan.md), P1 to P5 and
+AM2). The user asked on 2026-11-23 that the download of the released builds stays compatible.
+
+**Objective and deliverables**
+
+- The AI Denoise package `alcedo-ai-denoise`, model set version 1, revision r1, for
+  `windows-x86_64` and `macos-arm64`, built from a model set definition with pinned files, as the
+  AI Mask package is.
+- A feed with more than one package: `prepare_ai_model_packages.py` builds one package and carries
+  every other entry of the verified live feed; `publish_ai_model_packages.py` uploads the new
+  archives only and checks that the carried archives are on the server.
+- `AiModelPackageService` knows the AI Denoise package; Settings > AI Models shows its card.
+- The render reads the graph from the installed package. The hand-copied folder `ai-denoise-v1`
+  is no longer read.
+- The feed published on R2, after the approval of the user (AM2 rule: the agent asks before it
+  uploads).
+
+**Inputs and prerequisites**
+
+DN2 (the FP16 graph, 15,552,242 bytes, SHA-256
+`0bc98084c9bff16d489945ec357fd008465414813e5330f4a6077f205b668469`, the lab release
+`export-utnet2-bayer-dark-loss-10k`), DN7 (the switch: a missing model opens the AI Models page),
+the AM1 to AM5 code, and the live feed of sequence `20261028041321` (one entry, AI Mask v1 r1).
+
+**Compatibility with the released builds (user, 2026-11-23)**
+
+Alcedo Studio 0.3.4, 0.3.5, and 0.3.6 read the same feed URL. Their feed parser, installer, and
+service are the code of `main` (no change since `v0.3.4`), so the rules are:
+
+- The AI Denoise entry uses only the fields and the limits of feed schema 1 (`schema` stays 1):
+  an HTTPS `.7z` archive URL on the feed host, a revision `r<N>`, at least one license, the
+  artifact fields. A released build parses the whole feed, so an entry that it rejects would stop
+  its AI Mask download too.
+- A released build lists only the packages that it knows (`kKnownPackages`), so it ignores the
+  entry `alcedo-ai-denoise`.
+- The AI Mask entry is carried with the same values (the same archive URLs, sizes, and SHA-256),
+  so an installed AI Mask set stays `current` and a new download gets the same archive.
+- The sequence of the new feed is above the live sequence; the released builds raise their
+  trusted sequence to it.
+- Projects keep their model version: the package holds the graph file of DN2, whose SHA-256 is
+  the version that the switch records (D10).
+
+**Product rules**
+
+- **Package content.** `model_set.json` (role `denoise_graph`), `package-inventory.json`,
+  `NOTICE.txt`, `utnet2_bayer_dark_loss_10k_fp16.onnx` (the same file on both platforms: one
+  FP16 graph, D2), `licenses/GPL-3.0.txt` (the root `LICENSE` without the additional permission,
+  as in the AI Mask package), and `licenses/CC-BY-4.0.txt`. The feed licenses are `GPL-3.0` and
+  `CC BY 4.0`, the licenses of the lab weights (lab `docs/alcedo_integration.md`). `NOTICE.txt`
+  names the lab, the checkpoint, the FP16 export, the public RawNIND weights that the fine-tune
+  starts from (GPL-3.0 and CC BY 4.0), and the RawNIND dataset (CC BY-SA 4.0; the lab treats the
+  weights as adapted material under GPL-3.0).
+- **Installation.** `<model folder>/alcedo-ai-denoise-v1/` (AM1 rules: staging, receipt,
+  commit point). The build supports model set version 1 only.
+- **Graph location.** The render takes the file of the role `denoise_graph` of `model_set.json`
+  of a complete supported installation. Not installed, an installation below or above the
+  supported versions, an incomplete installation, and a `model_set.json` without the role are
+  `ModelNotInstalled` errors (DN7: the card opens the AI Models page), each with its reason.
+- **AI Models page.** The first section is named "Editor Models" and holds the AI Mask card and
+  the AI Denoise card (two columns), in the order of the service. Each card has its own
+  description, project link (`zidage/alcedo-denoise-lab` for AI Denoise), and removal texts; the
+  license link opens the file of the installed package `<id>-v<version>`. The download statement
+  stays at version 1: its text covers every model of the page ("Each model has its own license").
+- **Feed preparation.** A run builds one definition. The base feed is the live feed (or a local
+  copy, or none for a first feed with `--no-base-feed`); its signature must verify with the update
+  key. Every base entry with another (`id`, `model_set_version`) is carried; the entry of the
+  same (`id`, `model_set_version`) is replaced (a new revision). The exact base files are copied
+  to `<output>/base/`. The sequence must be above the base sequence.
+- **Publication.** An artifact whose archive is in `<output>/packages/` is verified and uploaded;
+  any other artifact must belong to an entry equal to an entry of the verified base feed (the
+  same JSON values). With `--upload`, a HEAD request of each carried archive must return 200 with
+  the signed size before the first upload.
+
+**Modules, files, and APIs**
+
+| File | Responsibility |
+| --- | --- |
+| `scripts/ai_models/ai_denoise_model_set_v1.json`, `ai_denoise_model_set_v1_NOTICE.txt` (new) | The definition and the notice of the AI Denoise package |
+| `third_party_licenses/RawNIND-weights-CC-BY-4.0.txt` (new), `THIRD_PARTY_NOTICE.txt` | The CC BY 4.0 text (legalcode.txt of Creative Commons) |
+| `scripts/ai_models/ai_model_packages.py` | `load_base_feed`, `merge_feed_entries` |
+| `scripts/ai_models/prepare_ai_model_packages.py` | `--source PLATFORM=DIR`, `--base-feed`, `--no-base-feed` |
+| `scripts/ai_models/publish_ai_model_packages.py` | Carried entries: no upload, the HEAD check |
+| `include/app/ai_model_package_install.hpp`, `app/ai_model_package_install.cpp` | `kAiDenoiseModelPackageId`, its version range, `ReadAiDenoiseModelInstallation`, `ResolveAiDenoiseGraph` |
+| `app/ai_model_package_service.cpp` | The second known package |
+| `include/edit/input/ai_denoise_model_session.hpp`, `edit/input/ai_denoise_model_session.cpp` | `SetGraphLocator` in place of `SetModelFolderProvider` |
+| `ui/alcedo_main/album_backend/application_module_host.cpp` | The locator from the model folder of the settings |
+| `ui/alcedo_main/qml/AiModelsSettingsPanel.qml`, `i18n/alcedo_main_zh_CN.ts` | The section and the AI Denoise card |
+| `alcedo_studio/tests/resources/ai_model_packages/` | The fixture feed with the two packages (the AI Denoise entry built over the AI Mask feed) |
+
+**Primary success call chain**
+
+```text
+prepare_ai_model_packages.main --definition ai_denoise_model_set_v1.json
+  -> load_base_feed (live manifest + .sig, update key) -> build_package per platform
+  -> merge_feed_entries (AI Mask v1 carried, AI Denoise v1 added) -> sign -> verify
+publish_ai_model_packages.main --upload -> carried archives: HEAD 200 and size
+  -> new archives -> archived .sig + manifest -> live .sig -> live manifest
+Settings > AI Models -> CheckPackages -> AI Denoise card -> Download -> alcedo-ai-denoise-v1/
+render with ai_denoise -> DenoiseModelSession::InstalledModelVersion -> graph locator
+  -> ResolveAiDenoiseGraph (complete installation, role denoise_graph) -> SHA-256 -> run
+```
+
+**Primary failure call chain**
+
+```text
+base feed signature invalid, or sequence not above the base -> prepare stops, no manifest
+carried entry differs from the base, or a carried archive is absent on the server
+  -> publish stops before the first upload
+AI Denoise package absent, incomplete, or of an unsupported version
+  -> ResolveAiDenoiseGraph reason -> AiDenoiseError ModelNotInstalled -> card "Open AI Models"
+```
+
+**Tests**
+
+| Test | Assertion |
+| --- | --- |
+| Python: the AI Denoise definition | It pins the DN2 graph (size and SHA-256) on both platforms and the two license texts; the notice names the files, the licenses, RawNIND, and its dataset license |
+| Python: a feed over a base feed | The base entry is carried with the same values; a base entry of the same (`id`, `model_set_version`) is replaced; a base feed with an invalid signature, or a sequence that is not above the base, stops the preparation |
+| Python: the publication of a feed with a carried entry | The plan uploads only the new archives; a carried entry that differs from the base stops the publication |
+| Python: the C++ fixture | The fixture is the current Python output (two packages) |
+| `AiModelPackageManifestTest` | The two-package fixture verifies |
+| `AiModelPackageServiceTest` | The service lists AI Mask and AI Denoise; a feed with both offers each; the AI Mask comparison and offer are the same with and without the AI Denoise entry (released builds); the Python AI Denoise package installs and its graph resolves on each platform |
+| `AiModelPackageServiceTest` (graph location) | Not installed, incomplete, below and above the range, no `denoise_graph` role: no graph, each with its reason; a complete installation: the graph path |
+| `AiDenoiseModelSessionTest`, `AiDenoiseRenderTest` | The tests run with the graph locator |
+| `AiModelsSettingsQmlTest` | The existing page tests with the two cards of the fixture |
+
+**Exit criteria**
+
+- [ ] The tests above pass in `build/debug`; the Python tests pass.
+- [ ] The prepared feed carries the live AI Mask entry with the same values and verifies with the
+  update key.
+- [ ] The feed is published with the approval of the user; the public manifest and signature are
+  the prepared bytes, and the public AI Denoise archives pass `verify_package_archive`.
+
+**Expected diff**: 900 to 1400 lines.
+
+##### Phase DN12 completion record (2026-11-23)
+
+**Status:** complete in the code and the tools; the feed is prepared, signed, and verified, and
+its upload waits for the approval of the user (AM2 rule). The AI model feed lists the AI Denoise
+package `alcedo-ai-denoise` v1 r1 next to the AI Mask set; Settings > AI Models shows its card;
+the render reads the graph from `<model folder>/alcedo-ai-denoise-v1/`.
+
+**Primary success call chain:**
+
+```text
+prepare_ai_model_packages.main --definition ai_denoise_model_set_v1.json --source PLATFORM=DIR
+  -> load_base_feed (live manifest + .sig, verify_signature_bytes with the update key)
+  -> sequence above the base -> base files to <output>/base/
+  -> build_package per platform (pins, licenses, NOTICE, inventory, 7z, verify_package_archive)
+  -> merge_feed_entries (AI Mask v1 r1 carried, AI Denoise v1 r1 added) -> manifest_bytes -> sign
+publish_ai_model_packages.main -> verify_prepared_output (signature; new archives verified;
+  entries equal to a base entry are carried) -> planned_uploads (no carried archive)
+  -> --upload: check_carried_archives (HEAD 200 + size) -> publish_object ... live manifest last
+AiModelPackageService (kKnownPackages: AI Mask, AI Denoise) -> CheckPackages -> card -> Install
+  -> InstallAiModelPackageArchive -> alcedo-ai-denoise-v1/ (installed.json = commit point)
+Renderer (ai_denoise on) -> DenoiseModelSession::InstalledModelVersion -> GraphPath
+  -> graph locator (application_module_host) -> ResolveAiDenoiseGraph(model folder)
+  -> ReadAiDenoiseModelInstallation -> AiModelSetFilePath(role denoise_graph) -> SHA-256 -> run
+```
+
+**Primary failure call chain:**
+
+```text
+base signature invalid / sequence not above the base -> prepare exit 1, no manifest
+an entry without archives in the output that is not a base entry -> publish raises before uploads
+a carried archive not on the server or of another size -> publish raises before the first upload
+no folder, not installed, incomplete, unsupported version, no denoise_graph role
+  -> AiDenoiseGraphLocation.problem -> AiDenoiseError ModelNotInstalled ("AI Denoise: the model is
+     not installed: <reason>; see Settings > AI Models") -> card with "Open AI Models" (DN7)
+```
+
+**What was proven (executed tests):**
+
+| Required test | Test | Result |
+| --- | --- | --- |
+| The AI Denoise definition | `AiDenoiseModelSetDefinitionTest` (2 tests): the DN2 graph (15,552,242 bytes, the SHA-256 of this plan) on both platforms, the GPL-3.0 and CC BY 4.0 texts, the notice | PASS |
+| A feed over a base feed | `AiModelFeedWithMoreThanOnePackageTest.test_FeedOverBaseCarriesTheBaseEntryUnchanged`, `...test_EntryOfTheSameVersionIsReplaced`, `...test_InvalidBaseSignatureOrSequenceStopsPreparation` | PASS |
+| The publication of a feed with a carried entry | `...test_PublicationUploadsOnlyTheNewArchivesAndChecksCarriedEntries` (plan, HEAD check, a changed carried entry) | PASS |
+| The C++ fixture is the current Python output | `AiModelPackageCppFixtureTest.test_CppFixtureIsTheCurrentPythonPreparedFeed` (two packages) | PASS |
+| Earlier tooling tests | the 10 AM2 tests (`--no-base-feed` added to their preparation) | PASS |
+| The two-package fixture verifies in C++ | `AiModelPackageManifestTest.PythonPreparedFeedVerifiesInCpp` | PASS |
+| The service lists both packages | `AiModelPackageServiceTest.StartupReadsLocalInstallationWithoutRequestingFeed` | PASS |
+| Released builds keep their AI Mask state | `AiModelPackageServiceTest.AiDenoiseEntryKeepsTheAiMaskStateOfReleasedBuilds`: the parser and the AI Mask comparison of the released builds give `current` and the same offer with and without the AI Denoise entry | PASS |
+| The Python AI Denoise package installs and its graph resolves (both platforms) | `AiModelPackageServiceTest.PythonPreparedAiDenoisePackageInstallsAndItsGraphResolves` | PASS |
+| The graph location | `AiModelPackageServiceTest.AiDenoiseGraphComesOnlyFromACompleteSupportedInstallation` (no folder, not installed, the hand-copied `ai-denoise-v1`, complete, incomplete, no role, v2 only) | PASS |
+| The session and render tests with the graph locator | `AiDenoiseLoaderTest`, `AiDenoiseRenderTest` (the 4 tests of the lab assets skip without `ALCEDO_AI_DENOISE_TEST_ASSETS`) | PASS |
+| The AI Models page | `AiModelsSettingsQmlTest` (the existing tests with the two cards of the fixture) | PASS |
+
+Commands: `python -m unittest discover -s scripts/ai_models/tests` (16 tests);
+`cmd /c "scripts\msvc_env.cmd --build build\debug --target AiModelPackageManifestTest
+AiModelPackageServiceTest AiDenoiseLoaderTest AiDenoiseRenderTest AiModelsSettingsQmlTest
+SimplifiedChineseCatalogTest alcedo_main"`; `ctest --test-dir build/debug -j 1 -R
+"^(AiModelPackageManifestTest|AiModelPackageServiceTest|AiDenoiseLoaderTest|AiDenoiseRenderTest|AiModelsSettingsQmlTest|SimplifiedChineseCatalogTest)\."`
+(94 tests: 89 pass, 4 skip, 1 fails: the `CollectionsPanel` count of
+`SimplifiedChineseCatalogTest`, issue #1012, before this change).
+
+**The prepared feed (2026-11-23):** sequence `20261123220131`, over the live feed
+`20261028041321` (signature verified with `update_public_key.txt`). The AI Mask entry has the
+same values as in the live feed (compared as JSON). AI Denoise v1 r1: 5 files (the graph,
+`model_set.json`, `NOTICE.txt`, `licenses/GPL-3.0.txt`, `licenses/CC-BY-4.0.txt`); Windows
+archive 14,017,034 bytes, SHA-256
+`9f6c19c9aadfb497905497e26fbfbc1bf8e6650670c9a2b13c45ac7216c39278`; macOS archive 14,017,779 bytes,
+SHA-256 `ff2e54f359414a5806760f3c0fc5383edfe05a57723712ec83896f02084682b5`. The source graph is the
+DN2 file (`0bc98084...`), so the projects keep their model version. The publication plan uploads
+the two AI Denoise archives, the archived pair, and the live pair; the AI Mask archives are carried.
+
+**Changes against the plan text and detail choices:**
+
+- The AI Denoise entry is checked with the parser of the released builds through the code of
+  `main` (the feed code is unchanged since `v0.3.4`), not with a released binary.
+- `--windows-source` and `--macos-source` stay as the short forms of `--source PLATFORM=DIR`.
+- The AI Models page object names `aiModelsMask*` are now `aiModelsPackage*` (one card per package).
+- The model folder description and the "not available" text name AI Denoise; the download statement
+  stays at version 1.
+- `THIRD_PARTY_NOTICE.txt` item 35 and `third_party_licenses/RawNIND-weights-CC-BY-4.0.txt` (the
+  `legalcode.txt` of Creative Commons, downloaded on 2026-11-23).
+
+**Checklist / exit condition:** the tests pass (except #1012); the prepared feed carries the live
+AI Mask entry unchanged and verifies with the update key; the upload waits for the user.
+
+**Remaining gaps:** the card and an install from the live feed were not checked in the running
+application; the macOS build was not built for this phase (no macOS-only code changed).
+
 ### DN11 to DN13
 
 Each of these phases gets its detailed section before its implementation starts (DN10 has its section above, 2026-11-23). DN4 and DN9
@@ -3088,8 +3320,8 @@ are removed (2026-11-22, D6). The fixed points that the detailed sections must k
   Runtime on Vulkan with the FP16 graph (`Microsoft.ML.OnnxRuntime.EP.WebGpu` has linux-x64; on
   macOS, WebGPU took 2.6 times the Core ML GPU time in FP32). The CUDA rows of section 4 are the
   starting point of own kernels.
-- **DN12**: the feed keeps the AI Mask entry when the denoise entry is added. The `sequence` of
-  the feed increases. The denoise package holds the FP16 graph.
+- **DN12** (complete, section above): the feed keeps the AI Mask entry when the denoise entry is
+  added. The `sequence` of the feed increases. The denoise package holds the FP16 graph.
 
 ## 8. Risks and stop conditions
 

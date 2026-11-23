@@ -63,14 +63,16 @@ def _pin(path: str, data: bytes) -> dict:
     return {"path": path, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
 
-def write_test_model_set(work: Path, revision: str = "r1") -> tuple[Path, dict[str, Path]]:
-    """A copy of the real AI Mask definition with small model files, notice, and licenses.
+def write_test_model_set(work: Path, revision: str = "r1",
+                         real_definition: Path = ai_model_packages.DEFAULT_DEFINITION
+                         ) -> tuple[Path, dict[str, Path]]:
+    """A copy of a real definition with small model files, notice, and licenses.
 
     Keeps the package ID, version, model roles, model file names, and license names and paths of
-    ``ai_mask_model_set_v1.json``. Returns the definition path and the source directory per
-    platform.
+    ``real_definition`` (the AI Mask definition by default). Returns the definition path and the
+    source directory per platform.
     """
-    definition = json.loads(ai_model_packages.DEFAULT_DEFINITION.read_text(encoding="utf-8"))
+    definition = json.loads(real_definition.read_text(encoding="utf-8"))
     definition["revision"] = revision
     work.mkdir(parents=True, exist_ok=True)
     # Bytes, not text: Windows text mode writes CRLF, and the fixture must not depend on the OS.
@@ -110,24 +112,34 @@ def write_test_model_set(work: Path, revision: str = "r1") -> tuple[Path, dict[s
 
 
 def build_test_feed(work: Path, output: Path, sequence: int = FIXTURE_SEQUENCE,
-                    revision: str = "r1") -> dict:
-    """Prepare the test model set for both platforms into ``output`` and sign it."""
-    definition_path, sources = write_test_model_set(work / "model_set", revision)
-    definition = ai_model_packages.load_definition(definition_path)
-    artifacts = {platform: ai_model_packages.build_package(
-        definition, platform, sources[platform], output, ai_model_packages.DEFAULT_PREFIX,
-        ai_model_packages.DEFAULT_PUBLIC_BASE) for platform in ai_model_packages.PLATFORMS}
+                    revision: str = "r1",
+                    definitions: tuple[Path, ...] = (ai_model_packages.DEFAULT_DEFINITION,)
+                    ) -> dict:
+    """Prepare the test model set of each real definition for both platforms into ``output``,
+    list them in one feed, and sign it."""
+    entries = []
+    for real_definition in definitions:
+        definition_path, sources = write_test_model_set(
+            work / "model_set" / real_definition.stem, revision, real_definition)
+        definition = ai_model_packages.load_definition(definition_path)
+        artifacts = {platform: ai_model_packages.build_package(
+            definition, platform, sources[platform], output, ai_model_packages.DEFAULT_PREFIX,
+            ai_model_packages.DEFAULT_PUBLIC_BASE) for platform in ai_model_packages.PLATFORMS}
+        entries.append(ai_model_packages.feed_entry(definition, artifacts))
     manifest_path = output / "manifest.json"
-    manifest_path.write_bytes(ai_model_packages.manifest_bytes(
-        sequence, [ai_model_packages.feed_entry(definition, artifacts)]))
+    manifest_path.write_bytes(ai_model_packages.manifest_bytes(sequence, entries))
     sign_with_test_key(manifest_path, output / "manifest.json.sig")
     return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+# The C++ fixture lists both packages of the feed: AI Denoise first (the feed sorts by ID).
+FIXTURE_DEFINITIONS = (ai_model_packages.DEFAULT_DEFINITION, ai_model_packages.DENOISE_DEFINITION)
 
 
 def write_cpp_fixture() -> None:
     with TemporaryDirectory() as work:
         output = work / "out"
-        build_test_feed(work, output)
+        build_test_feed(work, output, definitions=FIXTURE_DEFINITIONS)
         CPP_FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
         for old in CPP_FIXTURE_DIR.iterdir():
             old.unlink()
