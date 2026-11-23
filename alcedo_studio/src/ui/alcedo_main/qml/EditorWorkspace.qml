@@ -208,26 +208,6 @@ Item {
                         interactionEnabled: root.viewportInputEnabled
                     }
 
-                    // Before the first frame: the library thumbnail of the photo, or its camera
-                    // preview (DN14). Fitted like the frame at the fit zoom, under the viewport.
-                    Image {
-                        id: viewportPlaceholderImage
-                        objectName: "editorViewportPlaceholder"
-                        anchors.centerIn: parent
-                        width: viewportSlot.stageWidth
-                        height: viewportSlot.stageHeight
-                        scale: viewportSlot.stageScale
-                        visible: root.hasImage && !editorViewportItem.presentationAvailable
-                                 && status === Image.Ready
-                        source: root.hasImage && root.viewportPlaceholder
-                                ? root.viewportPlaceholder.source : ""
-                        fillMode: Image.PreserveAspectFit
-                        cache: false
-                        smooth: true
-                        mipmap: true
-                        z: 1
-                    }
-
                     EditorViewportItem {
                         id: editorViewportItem
                         objectName: "editorViewportItem"
@@ -307,6 +287,40 @@ Item {
                         // exclusive mouse grab — handlers below own input.
                         z: 2
                         Component.onCompleted: root.bindMaskOverlay()
+                    }
+
+                    // Before the first frame: the library thumbnail of the photo, or its camera
+                    // preview (DN14). It covers the viewport (an earlier photo or an empty
+                    // target), fitted like the frame at the fit zoom, until the viewport has
+                    // composed a frame after it showed. `presentationAvailable` only says that
+                    // the viewport has a render target, which it has before any frame.
+                    Image {
+                        id: viewportPlaceholderImage
+                        objectName: "editorViewportPlaceholder"
+                        anchors.centerIn: parent
+                        width: viewportSlot.stageWidth
+                        height: viewportSlot.stageHeight
+                        scale: viewportSlot.stageScale
+                        visible: root.hasImage && source.toString().length > 0
+                                 && status === Image.Ready
+                        source: root.hasImage && root.viewportPlaceholder
+                                ? root.viewportPlaceholder.source : ""
+                        fillMode: Image.PreserveAspectFit
+                        cache: false
+                        smooth: true
+                        mipmap: true
+                        // Above the viewport item, under the overlays and the status chrome.
+                        z: 2.5
+
+                        // The composed frames of the viewport when this image showed.
+                        property real composedAtShow: 0
+                        readonly property bool frameComposedSinceShow:
+                            visible && editorViewportItem.presentedFrameCount > composedAtShow
+                        onSourceChanged: composedAtShow = editorViewportItem.presentedFrameCount
+                        onFrameComposedSinceShowChanged: {
+                            if (frameComposedSinceShow && root.viewportPlaceholder)
+                                root.viewportPlaceholder.release()
+                        }
                     }
 
                     // Spinner / status remain ordinary QML (not baked into the RHI pass).

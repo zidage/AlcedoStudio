@@ -99,8 +99,9 @@ void EditorViewportPlaceholder::SetWaitingPhoto(sl_element_id_t element_id, imag
   if (element_id == element_id_ && image_id == image_id_) {
     return;
   }
-  element_id_ = element_id;
-  image_id_   = image_id;
+  element_id_        = element_id;
+  image_id_          = image_id;
+  first_frame_ready_ = false;
   Release();
   if (element_id == 0 || image_id == 0) {
     return;
@@ -155,7 +156,8 @@ void EditorViewportPlaceholder::SetWaitingPhoto(sl_element_id_t element_id, imag
 
 void EditorViewportPlaceholder::ApplyCameraPreview(sl_element_id_t element_id, image_id_t image_id,
                                                    QImage preview) {
-  if (element_id != element_id_ || image_id != image_id_ || preview.isNull()) {
+  if (element_id != element_id_ || image_id != image_id_ || first_frame_ready_ ||
+      preview.isNull()) {
     return;
   }
   Show(QStringLiteral("camera_preview"), std::move(preview), CameraPreviewEncoding());
@@ -163,12 +165,18 @@ void EditorViewportPlaceholder::ApplyCameraPreview(sl_element_id_t element_id, i
 
 void EditorViewportPlaceholder::Show(QString kind, QImage image,
                                      const ViewerDisplayConfig& encoding) {
+  ALCEDO_LOG_INFO(Render) << "Editor placeholder: " << kind.toStdString() << " " << image.width()
+                          << " x " << image.height() << " for element " << element_id_;
   image_->Set(std::move(image), encoding);
   ++revision_;
   source_ = ProviderUrl(revision_);
   kind_   = std::move(kind);
   emit SourceChanged();
 }
+
+void EditorViewportPlaceholder::SetFirstFrameReady() { first_frame_ready_ = true; }
+
+void EditorViewportPlaceholder::release() { Release(); }
 
 void EditorViewportPlaceholder::Release() {
   if (source_.isEmpty()) {

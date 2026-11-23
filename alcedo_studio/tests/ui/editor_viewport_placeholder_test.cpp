@@ -173,7 +173,7 @@ TEST(EditorViewportPlaceholderTest, PlaceholderIsReleasedWhenThePhotoStopsWaitin
   placeholder.SetWaitingPhoto(1, 10);
   const auto first = placeholder.source();
   ASSERT_FALSE(first.isEmpty());
-  // The photo is Interactive: the image is released.
+  // The editor closes the photo: the image is released.
   placeholder.SetWaitingPhoto(0, 0);
   EXPECT_TRUE(placeholder.source().isEmpty());
   EXPECT_TRUE(placeholder.kind().isEmpty());
@@ -183,6 +183,40 @@ TEST(EditorViewportPlaceholderTest, PlaceholderIsReleasedWhenThePhotoStopsWaitin
   // The next open has a new URL, so the QML image does not show a cached old image.
   placeholder.SetWaitingPhoto(1, 10);
   EXPECT_NE(placeholder.source(), first);
+}
+
+TEST(EditorViewportPlaceholderTest, PlaceholderStaysUntilTheViewportComposesTheFirstFrame) {
+  TestServices              services;
+  auto                      image = std::make_shared<EditorPlaceholderImage>();
+  EditorViewportPlaceholder placeholder(services.Make(), image);
+
+  placeholder.SetWaitingPhoto(1, 10);
+  ASSERT_FALSE(placeholder.source().isEmpty());
+  // The first frame is ready (Interactive), but the viewport has not composed it yet.
+  placeholder.SetFirstFrameReady();
+  EXPECT_FALSE(placeholder.source().isEmpty());
+  EXPECT_FALSE(image->Source().isNull());
+  // The viewport composed it (QML).
+  placeholder.release();
+  EXPECT_TRUE(placeholder.source().isEmpty());
+  EXPECT_TRUE(image->Source().isNull());
+  // The same photo stays open: it chooses no new placeholder.
+  placeholder.SetWaitingPhoto(1, 10);
+  EXPECT_TRUE(placeholder.source().isEmpty());
+}
+
+TEST(EditorViewportPlaceholderTest, CameraPreviewAfterTheFirstFrameIsDropped) {
+  TestServices              services;
+  auto                      image = std::make_shared<EditorPlaceholderImage>();
+  EditorViewportPlaceholder placeholder(services.Make(), image);
+
+  // The first frame is ready before the camera preview arrives.
+  placeholder.SetWaitingPhoto(2, 20);
+  placeholder.SetFirstFrameReady();
+  EXPECT_TRUE(QTest::qWaitFor([&] { return services.preview_reads.load() == 1; }, 5000));
+  QTest::qWait(100);
+  EXPECT_TRUE(placeholder.source().isEmpty());
+  EXPECT_TRUE(image->Source().isNull());
 }
 
 }  // namespace

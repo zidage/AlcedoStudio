@@ -72,10 +72,11 @@ class EditorPlaceholderImageProvider final : public QQuickImageProvider {
  * Version has no crop and no rotation, else nothing. The thumbnail is copied at once, because the
  * thumbnail store drops an image when its last view releases it. The check of the Version and the
  * read of the camera preview run on a worker thread; a result for a photo that no longer waits is
- * dropped. The image is released when the photo stops waiting.
+ * dropped. The image stays until the viewport has composed the first frame of the photo
+ * (@ref release), so the viewport never shows an empty frame between the two.
  *
- * It keeps no copy of the session: the module host calls @ref SetWaitingPhoto at each state change
- * of the editor session.
+ * It keeps no copy of the session: the module host calls @ref SetWaitingPhoto and
+ * @ref SetFirstFrameReady at the state changes of the editor session.
  *
  * Thread: the GUI thread. The services are called on the GUI thread, except the check that
  * `crop_or_rotation_check` returns and `read_camera_preview`, which run on a worker thread.
@@ -113,12 +114,22 @@ class EditorViewportPlaceholder final : public QObject {
                             QObject* parent = nullptr);
 
   /**
-   * @brief The photo that waits for its first frame; (0, 0) when no photo waits.
+   * @brief The photo that waits for its first frame; (0, 0) when the editor has no photo.
    *
    * A new photo chooses its placeholder; the same photo changes nothing; (0, 0) releases the
    * image.
    */
   void                      SetWaitingPhoto(sl_element_id_t element_id, image_id_t image_id);
+
+  /**
+   * @brief The first frame of the waiting photo is ready (the session is Interactive).
+   *
+   * A camera preview that arrives later is dropped. A shown image stays until @ref release.
+   */
+  void                      SetFirstFrameReady();
+
+  /// The viewport composed a frame of the photo after the placeholder showed: release the image.
+  Q_INVOKABLE void          release();
 
   [[nodiscard]] auto        source() const -> QString { return source_; }
   [[nodiscard]] auto        kind() const -> QString { return kind_; }
@@ -138,9 +149,11 @@ class EditorViewportPlaceholder final : public QObject {
 
   Services services_;
   std::shared_ptr<EditorPlaceholderImage> image_;
-  sl_element_id_t                         element_id_ = 0;
-  image_id_t                              image_id_   = 0;
-  quint64                                 revision_   = 0;
+  sl_element_id_t                         element_id_        = 0;
+  image_id_t                              image_id_          = 0;
+  /// The first frame of the photo is ready: no new placeholder for it.
+  bool                                    first_frame_ready_ = false;
+  quint64                                 revision_          = 0;
   QString                                 source_;
   QString                                 kind_;
 };

@@ -2543,6 +2543,19 @@ lines) and `editor_session_controller.cpp` (2433 lines) were above 1000 lines be
 
 **Remaining gaps:** the feedback in the running application is not checked by eye.
 
+**2026-11-23, user test: the placeholder did not show.** Cause: the QML image showed only while
+`EditorViewportItem.presentationAvailable` was false, but that property says that the viewport
+has a render target (`consumer_available` of the present queue), which it has before any frame;
+the image was also under the viewport item (z 1 against 2). The upload of the image is not the
+cause: it is a QML `Image` from its own provider and does not pass through the render queue.
+Fix: the image stands above the viewport item (z 2.5, under the overlays and the status chrome)
+while it has a source, and it is released when `presentedFrameCount` of the viewport advances
+after it showed (`EditorViewportPlaceholder::release`), so no empty frame shows between the two.
+The Interactive state no longer releases it (`SetFirstFrameReady`); a camera preview that arrives
+after the first frame is dropped. Tests `PlaceholderStaysUntilTheViewportComposesTheFirstFrame`
+and `CameraPreviewAfterTheFirstFrameIsDropped` (`EditorViewportPlaceholderTest`, 6/6 PASS). The
+log line `Editor placeholder: <kind> <w> x <h>` names the chosen image.
+
 ### DN8 to DN13
 
 Each of these phases gets its detailed section before its implementation starts. DN4 and DN9

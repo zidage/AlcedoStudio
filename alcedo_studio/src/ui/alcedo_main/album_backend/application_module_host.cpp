@@ -455,13 +455,24 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   QObject::connect(editor_session_.get(), &EditorSessionController::StateChanged,
                    editor_placeholder_.get(),
                    [session = editor_session_.get(), placeholder = editor_placeholder_.get()] {
-                     const auto state   = session->session_state();
-                     const bool waiting = session->has_image() &&
-                                          (state == alcedo::EditorSessionState::Acquiring ||
-                                           state == alcedo::EditorSessionState::Loading ||
-                                           state == alcedo::EditorSessionState::Switching);
-                     placeholder->SetWaitingPhoto(waiting ? session->element_id() : 0U,
-                                                  waiting ? session->image_id() : 0U);
+                     if (!session->has_image()) {
+                       placeholder->SetWaitingPhoto(0U, 0U);
+                       return;
+                     }
+                     switch (session->session_state()) {
+                       case alcedo::EditorSessionState::Acquiring:
+                       case alcedo::EditorSessionState::Loading:
+                       case alcedo::EditorSessionState::Switching:
+                         placeholder->SetWaitingPhoto(session->element_id(), session->image_id());
+                         break;
+                       case alcedo::EditorSessionState::Interactive:
+                         // The image stays until the viewport composes the frame (QML release).
+                         placeholder->SetFirstFrameReady();
+                         break;
+                       default:
+                         placeholder->SetWaitingPhoto(0U, 0U);
+                         break;
+                     }
                    });
   QObject::connect(editor_session_.get(), &EditorSessionController::StateChanged, ai_denoise_.get(),
                    [session = editor_session_.get(), control = ai_denoise_.get()] {
