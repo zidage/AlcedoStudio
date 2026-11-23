@@ -91,6 +91,17 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorScopeHeight READ editorScopeHeight CONSTANT)
   Q_PROPERTY(int editorScopeHeightMin READ editorScopeHeightMin CONSTANT)
   Q_PROPERTY(int editorAdjustmentHeaderMinHeight READ editorAdjustmentHeaderMinHeight CONSTANT)
+  // Viewport render alert (ViewportRenderAlert.qml, #1056): text column width, button height,
+  // detail lines before the detail scrolls, and the colors over the blurred viewport.
+  Q_PROPERTY(int viewportAlertWidth READ viewportAlertWidth CONSTANT)
+  Q_PROPERTY(int viewportAlertButtonHeight READ viewportAlertButtonHeight CONSTANT)
+  Q_PROPERTY(int viewportAlertDetailMaxLines READ viewportAlertDetailMaxLines CONSTANT)
+  Q_PROPERTY(int viewportAlertCopiedMs READ viewportAlertCopiedMs CONSTANT)
+  Q_PROPERTY(QColor viewportAlertScrimColor READ viewportAlertScrimColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor viewportAlertSecondaryTextColor READ viewportAlertSecondaryTextColor NOTIFY
+                 ThemeChanged)
+  Q_PROPERTY(
+      QColor viewportAlertDetailFillColor READ viewportAlertDetailFillColor NOTIFY ThemeChanged)
   // LUT browser rail page (LUT library plan L6A): preferred page width, filter card width,
   // minimum tile width, and the tile placeholder icon size. See DESIGN.md.
   Q_PROPERTY(int editorLutBrowserPanelWidth READ editorLutBrowserPanelWidth CONSTANT)
@@ -430,6 +441,13 @@ class AppTheme final : public QObject {
   auto        editorScopeHeight() const -> int;
   auto        editorScopeHeightMin() const -> int;
   auto        editorAdjustmentHeaderMinHeight() const -> int;
+  auto        viewportAlertWidth() const -> int;
+  auto        viewportAlertButtonHeight() const -> int;
+  auto        viewportAlertDetailMaxLines() const -> int;
+  auto        viewportAlertCopiedMs() const -> int;
+  auto        viewportAlertScrimColor() const -> QColor;
+  auto        viewportAlertSecondaryTextColor() const -> QColor;
+  auto        viewportAlertDetailFillColor() const -> QColor;
   auto        editorLutBrowserPanelWidth() const -> int;
   auto        editorLutBrowserPanelWidthMin() const -> int;
   auto        editorLutBrowserFilterWidth() const -> int;

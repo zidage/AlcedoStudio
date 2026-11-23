@@ -333,11 +333,12 @@ Item {
                         z: 3
                     }
 
-                    // The AI Denoise error of the open photo (AI Denoise plan, DN7). It stays until
-                    // a frame of the photo is ready.
+                    // The AI Denoise error of the open photo (AI Denoise plan, DN7). It blurs the
+                    // viewport and stays until a frame of the photo is ready.
                     EditorAiDenoiseErrorCard {
                         id: aiDenoiseErrorCard
-                        anchors.centerIn: parent
+                        anchors.fill: parent
+                        blurSource: editorViewportItem
                         error: root.hasImage && root.editorSession
                                ? root.editorSession.aiDenoiseError : ({})
                         controlsEnabled: root.editorEditControlsEnabled

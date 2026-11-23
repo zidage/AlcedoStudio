@@ -1301,6 +1301,18 @@ auto AppTheme::editorScopeHeight() const -> int { return 192; }
 auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
 // EXIF caption line + spaceXs + compact Mask-tool hit row (DESIGN.md).
 auto AppTheme::editorAdjustmentHeaderMinHeight() const -> int { return 58; }
+// Viewport render alert (DESIGN.md "Viewport render alert", #1056). The alert stands on the
+// blurred viewport: a black scrim keeps white text readable over a bright photo, and the
+// secondary text and the detail well are tints of it, not panel surfaces.
+auto AppTheme::viewportAlertWidth() const -> int { return 380; }
+auto AppTheme::viewportAlertButtonHeight() const -> int { return 32; }
+auto AppTheme::viewportAlertDetailMaxLines() const -> int { return 8; }
+auto AppTheme::viewportAlertCopiedMs() const -> int { return 1500; }
+auto AppTheme::viewportAlertScrimColor() const -> QColor { return QColor(0, 0, 0, 140); }
+auto AppTheme::viewportAlertSecondaryTextColor() const -> QColor {
+  return WithAlpha(textColor(), 170);
+}
+auto AppTheme::viewportAlertDetailFillColor() const -> QColor { return QColor(0, 0, 0, 97); }
 // LUT browser rail page (DESIGN.md "LUT browser"): filter card + tile grid card.
 auto AppTheme::editorLutBrowserPanelWidth() const -> int { return 560; }
 auto AppTheme::editorLutBrowserPanelWidthMin() const -> int { return 280; }
