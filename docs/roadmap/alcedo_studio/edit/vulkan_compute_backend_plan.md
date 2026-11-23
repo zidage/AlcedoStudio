@@ -6,7 +6,8 @@ Status: planned. Experiments VX1 to VX5 come first. VX1, VX2, VX3, and VX5 are c
 (2026-11-22, sections 9.1, 9.2, 9.3, and 9.5); VX5 has no restore run of a lost device (section
 9.5). VX4 does not run: the neural networks use ONNX Runtime (user decision 2026-11-22, A5). VX2
 changed B5 to two devices and stopped VK18 until the plan has a new resize design (section 9.2).
-VK0 is complete (2026-11-23, #1063). VK1 is complete (2026-11-23, #1065).
+VK0 is complete (2026-11-23, #1063). VK1 is complete (2026-11-23, #1065). VK2 is complete
+(2026-11-23, #1067).
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -261,7 +262,10 @@ VulkanContext                      process owner of instance, pipeline device, d
 - The pipeline and Qt Quick use two `VkDevice` objects on one `VkPhysicalDevice` (B5). Each
   device has one queue of the graphics family. The pipeline code uses only the pipeline device;
   Qt Quick uses only the display device. The program uses the display queue only before the first
-  `QQuickWindow` exists (initial image layouts). Each queue has one user thread (VX2, section 9.2).
+  `QQuickWindow` exists (initial image layouts). Qt Quick is the only user of the display queue
+  (VX2, section 9.2). The render devices (editor, thumbnails, export) run on threads of their own
+  and submit to the pipeline queue only through `VulkanContext::SubmitToPipelineQueue`, which
+  holds one lock for `vkQueueSubmit2` (VK2).
 - A frame image for the viewport is an RGBA32F image of the pipeline device, in a dedicated
   allocation exported as `VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT`, and an image with
   the same create info on the display device, bound to the imported memory. The Win32 handle is
@@ -391,7 +395,9 @@ Failure:
 
 ```text
 PassEncoder or Submit throws (VkResult, kernel name)
-  -> VulkanCommandContext drops the command buffer and the frame result
+  -> BasicRenderDevice::CancelRender -> VulkanBackend::Wait submits the commands that the
+     failed encode recorded and waits (VK2 record: as in OpenCL, where each enqueue runs)
+  -> the unpublished writes are discarded; the completed submission id does not advance
   -> no content key is published; the caches keep their earlier entries
   -> Renderer returns the error to PipelineExecutor -> application service -> user message
 ```
@@ -546,7 +552,7 @@ test of its kernels (B9).
 | --- | --- | --- | --- | ---: | --- |
 | VK0 | Build option, dependencies, `VulkanContext`, enum values | root CMake, `src/vulkan/`, `pipeline_accelerator` | VX1, VX2 | 1300 to 1700 | complete (#1063) |
 | VK1 | Slang build rule, shader module registry, compute pipeline cache, kernel check tool | `src/vulkan/`, `tools/gpu_kernel_check.cpp` | VK0 | 1300 to 1700 | complete (#1065) |
-| VK2 | `VulkanBackend`, `VulkanCommandContext`, workspace instance | `edit/runtime/vulkan/` | VK1, VX3, VX5 | 1600 to 1900 | planned |
+| VK2 | `VulkanBackend`, `VulkanCommandContext`, workspace instance | `edit/runtime/vulkan/` | VK1, VX3, VX5 | 1600 to 1900 | complete (#1067) |
 | VK3 | Shared kernel modules, geometry utilities, comparison test support | `edit/runtime/vulkan/shader/`, `src/vulkan/` | VK2 | 1500 to 1900 | planned |
 | VK4 | RAW operators: linearize, CFA clamp, reference space, RCD, X-Trans, pack | `decoders/processor/operators/gpu/` | VK3 | 1400 to 1800 | planned |
 | VK5 | RAW operators: highlight reconstruction, lens calibration, DNG warp | `decoders/processor/operators/gpu/`, `edit/runtime/lens/vulkan/` | VK4 | 1500 to 1900 | planned |
@@ -1014,7 +1020,7 @@ workspace tests that the OpenCL backend passes.
   the memory priority of each allocation (section 4.2).
 - A stable render allocates nothing.
 - `VulkanCommandContext` divides an export render into submissions by the rule of section 4.2
-  (8 ms budget, one in flight, bands of rows). It keeps the time per row of each kernel, size, and
+  (8 ms budget, one in flight, bands of rows). Moved to VK17 (completion record below). It keeps the time per row of each kernel, size, and
   device from the timestamps of the earlier renders. A preview render is one submission.
 
 **Implementation steps.**
@@ -1039,8 +1045,9 @@ BasicRenderDevice<VulkanBackend>::BeginRender -> VulkanCommandContext::BeginRend
 
 ```text
 CreateTexture2D passes the budget -> exception (size, budget)
-  -> VulkanCommandContext drops the command buffer
-  -> TexturePool keeps its leases unchanged -> the submission id does not advance
+  -> no Vulkan object is created; TexturePool keeps its leases unchanged
+  -> CancelRender -> Wait runs the recorded commands -> the completed submission id does not
+     advance (completion record: the context does not drop the commands)
 ```
 
 **Tests and evidence.**
@@ -1061,13 +1068,113 @@ ctest --test-dir build/debug -R "GpuDagVulkanWorkspaceTest" -j 1 --output-on-fai
 
 **Exit criteria.**
 
-- [ ] `static_assert(RenderBackend<VulkanBackend>)` compiles.
-- [ ] The listed tests pass on both local devices with no validation error.
-- [ ] The CUDA, OpenCL, and Metal workspace tests are unchanged.
+- [x] `static_assert(RenderBackend<VulkanBackend>)` compiles.
+- [x] The listed tests pass on both local devices with no validation error.
+- [x] The CUDA, OpenCL, and Metal workspace tests are unchanged.
 
 **Expected diff.** 1600 to 1900 lines.
 
-**Completion record.** (empty)
+##### Phase VK2 completion record (2026-11-23)
+
+**Status:** complete. Issue #1067. Branch `feature/vulkan-vk2-backend` on the VK1 branch
+`feature/vulkan-vk1-kernels` (pull request #1066).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Files and target | `vulkan_backend.hpp/.cpp`, target `EditRuntimeVulkan` | `EditRuntimeVulkan` (static, `PUBLIC_DEPS EditRuntime VulkanContext`) with three owners: `VulkanBackend` (resources, transfers, memory limit, resource lifetime, submission ids), `VulkanCommandContext` (`vulkan_command_context.hpp/.cpp`: command pool, command buffers, fences, image layout record, barrier state), `VulkanStagingBuffers` (`vulkan_staging_buffers.hpp/.cpp`: host-visible staging chunks). `vulkan_render_device.hpp` has the `static_assert` and the aliases `VulkanRenderDevice` and `VulkanRenderWorkspace`. | One reason to change for each file. A pass encoder of VK3 and later includes the render device header only. |
+| Image layout | "The command context owns the image layout of each texture during a render. A pass states the access that it needs." | Every image is in `VK_IMAGE_LAYOUT_GENERAL` after its first use. The first use in a recording records `UNDEFINED -> GENERAL` once (`VulkanBackend::PrepareImage`). The context keeps these resource ids; the backend adds them to its record of initialized images only when the batch is submitted, and `Texture2D::Reset` removes the id. A barrier between commands is then a global memory barrier: a new recording starts with one (it covers the earlier submissions of the queue), and a command after a write starts with one (`VulkanCommandContext::NoteWrite`). | Storage, sampled, and transfer use are all valid in `GENERAL`, so no pass needs a layout of its own. A layout that a dropped recording recorded never reaches the record of the backend. Finer barriers (by stage and access) can replace the global barrier in a pass encoder when a measurement shows a cost. |
+| Failed encode | Failure chain: "`VulkanCommandContext` drops the command buffer" | `Wait` submits a recording that is still open and waits for it. `BasicRenderDevice::CancelRender` calls `Wait`, so the commands that a failed encode recorded run; the workspace discards the unpublished writes, and `CompletedSubmission` does not advance (no `Submit` set a render submission in flight). The context drops a recording only when `vkEndCommandBuffer` or the submission fails, and at its destruction. | The OpenCL backend runs each enqueue at once, and the shared templates expect that: `ParameterArena::UploadDirty` marks a slot as applied when the upload call returns, also outside `BeginRender`. A dropped command buffer would lose such an upload while the arena records it as applied. Section 4.4 and the failure chain above are changed. |
+| Downloads | "download" in the success chain | `DownloadTexture2D` and `DownloadBufferRange` record the copy and a barrier to host reads, submit the recording, wait for the fences of the context, copy the bytes from the staging chunk, and only then let the staging memory return for reuse. | The host needs the bytes when the call returns (the OpenCL read also blocks). A staging chunk above 64 MiB is destroyed when it returns, so the copy comes first. |
+| Staging | "staging buffers from `TransientBufferArena`" | `VulkanStagingBuffers` of the command context: one for uploads (`AUTO_PREFER_HOST`, sequential write) and one for downloads (random access, cached). Chunks of at least 4 MiB with a bump offset; a chunk belongs to the recording, then to its batch, then returns to a free list when the batch is complete. A chunk above 64 MiB is destroyed at that point. The bytes of an upload are copied into the chunk when the upload is recorded. | `TransientBufferArena` holds device-local memory without host access. A stable render reuses the chunks (`StagingBufferCreateCount` 0 in the second render). The caller can reuse its array at once (`HostUploadKeepsItsBytesAfterTheCallerReusesTheStorage`). Staging memory is system memory and is not in the device-local budget. |
+| Resource lifetime | "A resource that an unfinished submission uses stays alive until the fence signals." | `Reset` gives the objects back to the backend with the last batch serial that can use them: the last submitted batch, or the next one when a recording is open. The backend destroys them at once when that batch is complete, else after the wait that completes it. One recording at a time can be open for a backend (a second command context gets `std::logic_error`). | Batch serials are given in submission order on one queue, so the fence of a batch covers every earlier batch. Memory that nothing uses is freed at once, so a Develop rewrite gets the memory of the textures that it releases. |
+| Pipeline queue | Section 4.2: "Each queue has one user thread" | `VulkanContext::SubmitToPipelineQueue` holds one lock for `vkQueueSubmit2`. Fence waits are outside the lock. Section 4.2 is changed. | The editor, thumbnail, and export render devices run on threads of their own and share the one pipeline queue. A `VkQueue` needs external synchronization. The race of VX2 is with Qt on the display device, which has its own queue (B5). |
+| Memory limit | Section 4.2 | Before each allocation `CheckMemoryLimit` reads the budget of the largest device-local heap (`vmaSetCurrentFrameIndex` makes VMA read `VK_EXT_memory_budget` again, then `vmaGetHeapBudgets`) and rejects an allocation above the budget minus 512 MiB, or above the application limit (`SetMemoryLimitBytes`), before the size limits of the device. The message has the size, the usage, the limit, and the budget; `gpu.alloc.failed` is written first. | VX5: the budget changes with the use of other processes, and `vkAllocateMemory` does not fail at the budget. |
+| Memory priority | 0.2 for cache entries, 0.8 for the images of the render | Every allocation of VK2 has 0.8 (`kWorkingSetPriority`). | The priority is fixed at allocation. `GraphImageCache` and `NodeResultCache` get their images from the `TexturePool`, which allocates them for the render; an image becomes a cache entry later. The LUT cache (VK8) and the mask coverage cache (VK11) allocate their own entries and set 0.2 there. |
+| Export split | "`VulkanCommandContext` divides an export render into submissions (8 ms, bands of rows) and keeps the time per row from timestamps" | Moved to VK17. VK2 submits one batch for each render. | VK2 has no kernel and no export render. The time per row comes from timestamps of real kernels, and the export path of Vulkan starts in VK17 (`PipelineExecutor`, `FramePresenter<VulkanBackend>::Download`). The VK17 entry of the scope table is changed. |
+| Buffers | none | `Buffer::DevicePointer()` is the device address (`vkGetBufferDeviceAddress`). `MaxSlabBytes` is the Vulkan 1.3 `maxBufferSize` (new `VulkanDeviceCapabilities::max_buffer_bytes`); `MaxTransientBytes` is three quarters of the device-local heap. | Kernels read buffers through addresses (section 4.2), so the transient arena gives addresses directly. |
+| Formats | Section 4.2: RGBA32F, R32F, R8 | The five `TextureFormat` values: RGBA8 and R16 unsigned integer are optional (`OptionalImageFormats()`, read into `VulkanDeviceCapabilities::formats`). `CreateTexture2D` requires storage and transfer support of the format and fails with the format name without it. Each texture has a `VkImageView`. | The workspace templates can ask for each format. The view is for the push descriptors of the pass encoders. |
+| AI Mask edge | none | `RecordAiMaskEdge` throws `std::logic_error` that names VK11. | `MaskCoverageTextureCache` requires the function at compile time; the kernels come with VK11. |
+| Counters | "the counters of VK1" | `VulkanApiCounters` gets `buffer_creations`, `image_creations`, and `destroyed_resources` (staging included). The backend has the counters of the OpenCL backend that the templates and tests read; the context has `CommandBufferCreateCount`, `FenceCreateCount`, and `StagingBufferCreateCount`. | The test of a stable render checks each Vulkan object that a render can create. |
+
+**Primary success call chain:**
+
+```text
+BasicRenderDevice<VulkanBackend>::BeginRender -> BasicRenderWorkspace::BeginRender
+  -> VulkanBackend::Wait (nothing open) -> SetSubmissionId(NextSubmissionId)
+  -> ParameterArena::UploadDirty -> VulkanBackend::UploadBufferRange
+       -> VulkanCommandContext::BeginCommand (new recording: memory barrier; NoteRecordingOpened)
+       -> VulkanStagingBuffers::Allocate -> memcpy -> vkCmdCopyBuffer -> NoteWrite
+  -> TexturePool::Acquire -> VulkanBackend::CreateTexture2D (first use only)
+       -> CheckMemoryLimit (VK_EXT_memory_budget) -> vmaCreateImage -> vkCreateImageView
+  -> VulkanBackend::UploadTexture2D -> BeginCommand (barrier after the write) -> PrepareImage
+       (UNDEFINED -> GENERAL once) -> vkCmdCopyBufferToImage
+  -> BasicRenderWorkspace::EndRender -> VulkanBackend::Submit
+       -> VulkanCommandContext::SubmitRecording(batch serial) -> vkEndCommandBuffer
+       -> VulkanContext::SubmitToPipelineQueue (lock, vkQueueSubmit2, fence)
+       -> initialized image ids to the backend; staging chunks to the batch
+  -> BasicRenderDevice::WaitIdle -> VulkanBackend::Wait -> vkWaitForFences
+       -> command buffers and fences free; staging recycled; retired resources destroyed
+       -> CompletedSubmission = render submission
+  -> VulkanBackend::DownloadTexture2D -> copy to download staging -> host read barrier
+       -> submit -> wait -> vmaInvalidateAllocation -> memcpy -> staging recycled
+```
+
+**Primary failure call chain:**
+
+```text
+UploadTexture2D fails (injected failure, or a range error) during the encode
+  -> BasicRenderDevice::CancelRender -> VulkanBackend::Wait
+       -> the commands recorded before the failure are submitted and waited (they write only
+          unpublished images and parameter slots)
+  -> BasicRenderWorkspace::CancelRender discards the unpublished writes
+  -> CompletedSubmission keeps the last successful render; the earlier published result stays
+CreateTexture2D above the memory limit
+  -> CheckMemoryLimit -> gpu.alloc.failed -> std::runtime_error (size, usage, limit, budget)
+  -> no Vulkan object, no allocation count; the pool keeps its leases
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `UploadedRgba32fImageDownloadsWithEqualValues` (37 x 23, packed rows) | `GpuDagVulkanWorkspaceTest` | PASS (RTX 3080 Laptop GPU and Iris Xe) |
+| `R8DirtyRectangleUploadChangesOnlyTheRectangle` (each texel inside and outside, 28 uploaded bytes) | `GpuDagVulkanWorkspaceTest` | PASS (both) |
+| `SecondRenderOfOnePlanAllocatesNoImageAndNoBuffer` (parameter upload, pooled image upload, transient range): 0 buffers, images, allocations, frees, command buffers, fences, staging buffers; 1 submission | `GpuDagVulkanWorkspaceTest` | PASS (both) |
+| `TextureInAnUnfinishedSubmissionIsNotReleased`: the pool keeps the image until the wait, then frees it at once | `GpuDagVulkanWorkspaceTest` | PASS (both) |
+| `AllocationAboveTheBudgetReportsSizeAndBudget`: a buffer of the whole budget and a texture above the application limit fail with the size and the limits; no allocation | `GpuDagVulkanWorkspaceTest` | PASS (both) |
+| `FailedEncodeDoesNotAdvanceTheCompletedSubmission`: the earlier result stays valid, the failed one is not published | `GpuDagVulkanWorkspaceTest` | PASS (both) |
+| 12 more: the templates instantiate and one empty render completes; R32F and R8 round trip; buffer ranges at an offset; image to buffer to image to image in one render (barriers); the upload keeps its bytes after the caller overwrites them; the parameter slot uploads once; the transient arena rewinds to the same address; a buffer above the max slab size; a released texture stays alive until its batch is complete; a failed parameter upload stays queued and the next upload writes it; a second command context cannot record while the first records; the AI Mask edge names VK11 | `GpuDagVulkanWorkspaceTest` | PASS (both) |
+| Validation errors | `TearDown` of each test | 0 on both devices |
+| VK0 and VK1 suites after the changes of `VulkanContext`, the capabilities, and the counters | `VulkanContextTest`, `VulkanRequirementsTest`, `VulkanShaderModuleRegistryTest`, `VulkanComputePipelineCacheTest`, `VulkanSlangBuildRuleTest`, `PipelineAcceleratorTest`, `alcedo-gpu-check --vulkan` | PASS |
+
+Commands (worktree `build/debug`, `ALCEDO_ENABLE_VULKAN=ON`):
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagVulkanWorkspaceTest VulkanRequirementsTest VulkanContextTest VulkanShaderModuleRegistryTest VulkanComputePipelineCacheTest PipelineAcceleratorTest alcedo_gpu_check
+ctest --test-dir build/debug -R "Vulkan" -j 1                        default device (RTX 3080 Laptop GPU): 69/69
+ALCEDO_VULKAN_DEVICE=Iris ctest --test-dir build/debug -R "GpuDagVulkanWorkspaceTest|VulkanContextTest|VulkanComputePipelineCacheTest" -j 1: 35/35
+ctest --test-dir build/debug -R "PipelineAcceleratorTest" -j 1: pass (1 skipped: the test for a build without Vulkan)
+build/debug/alcedo_studio/src/alcedo-gpu-check.exe --vulkan: gpu.kernels.ok=vulkan kernels=2, exit 0
+```
+
+The CUDA, OpenCL, and Metal workspace tests did not run: VK2 changes no shared template, no
+OpenCL, CUDA, or Metal file, and no CMake target of those backends (the changed shared files are
+`src/edit/CMakeLists.txt` and `tests/edit/CMakeLists.txt`, each with one block inside
+`ALCEDO_VULKAN_ENABLED`). The full test suite was not run (repository rule).
+
+**Checklist / exit condition:** all three exit criteria are met.
+
+**LOC note:** about 2570 added lines (estimate 1600 to 1900): 1880 lines in the 7 new production
+files, 585 lines of tests, 104 lines in existing files. The estimate did not include the staging
+owner (243 lines). The largest file is `vulkan_backend.cpp` (765 lines); its parts (resources,
+lifetime, transfers, submission) share the state of the backend, so it stays one file.
+
+**Remaining gaps:** none for VK2. The export split (8 ms submissions, bands of rows, time per row)
+is in VK17. The 0.2 memory priority of cache entries comes with the caches that allocate their own
+entries (VK8, VK11).
 
 ### Phases VK3 to VK23: scope of each phase
 
@@ -1090,7 +1197,7 @@ the entry before the implementation.
 | VK14 | Film print scan, film grain negative and post | `film_print_scan.cl`, `film_grain_*.cl`, `opencl_film_grain_pass.cpp` | Negative scan and grain equal OpenCL. |
 | VK15 | Convolution layers, activation storage, workspace, stage profiler | `opencl/nn/*.cpp`, `demosaicnet_conv.cl` | Each layer equals the expected output of the weights file in the tolerance of the OpenCL layer tests. |
 | VK16 | Bayer and X-Trans DemosaicNet modules, tiles, cache, the neural branch of Develop | `opencl_demosaicnet_*.cpp`, `demosaicnet_structural.cl` | Neural demosaic equals OpenCL. The time agrees with the VX4 record. |
-| VK17 | Scope analyzer on the final DRT image, `FramePresenter<VulkanBackend>::Download`, `PipelineExecutor::vulkan_renderers_`, preference `vulkan` in the setting and in `alcedo-cli` | `opencl_scope_analyzer.cpp`, `opencl_frame_presenter.cpp` | Export of one RAW on Vulkan equals the OpenCL export in tolerance. Scope data equals OpenCL. |
+| VK17 | Scope analyzer on the final DRT image, `FramePresenter<VulkanBackend>::Download`, `PipelineExecutor::vulkan_renderers_`, preference `vulkan` in the setting and in `alcedo-cli`, the export split of section 4.2 in `VulkanCommandContext` (8 ms submissions, one in flight, bands of rows, time per row from timestamps; moved from VK2) | `opencl_scope_analyzer.cpp`, `opencl_frame_presenter.cpp` | Export of one RAW on Vulkan equals the OpenCL export in tolerance. Scope data equals OpenCL. A 45 megapixel export has no submission above 8 ms of measured GPU time. |
 | VK18 | `EditorBackend::Vulkan`, the display device of `VulkanContext` and start with `fromDeviceObjects`, Vulkan frame target in `IFrameSink` and in the lease enums (exported frame images, section 4.2), `EditorViewportRenderer` acquire barrier and import of the `VkImage`, orientation correction of `ViewportCompositePass`, mask coverage display. Rename of `editor_rhi_contracts_test.cpp`. | `OpenClOpenGlLeaseAdapter`, Metal zero copy path | The harness shows a rendered frame with `--editor-backend=vulkan`. The presented pixels equal the downloaded pixels. |
 | VK19 | `ALCEDO_ENABLE_VULKAN=ON` in `win_release`, install of the `.spv` files, checks in `scripts/verify_windows_install_tree.ps1`, the Settings entry with the label `Experimental` | `alcedo_install_opencl_sources`, `package_windows.ps1` | The installed tree passes `gpu_kernel_check --vulkan`. |
 | VK20 | UtNet2 forward code on the layers of VK15, or the DirectML path with resource import (VX4 decides) | AI Denoise plan, phase for the OpenCL forward code | Output equals the expected outputs of the lab release in its tolerance. |
