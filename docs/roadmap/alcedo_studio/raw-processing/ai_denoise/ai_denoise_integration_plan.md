@@ -3192,18 +3192,18 @@ AI Denoise package absent, incomplete, or of an unsupported version
 
 **Exit criteria**
 
-- [ ] The tests above pass in `build/debug`; the Python tests pass.
-- [ ] The prepared feed carries the live AI Mask entry with the same values and verifies with the
+- [x] The tests above pass in `build/debug`; the Python tests pass.
+- [x] The prepared feed carries the live AI Mask entry with the same values and verifies with the
   update key.
-- [ ] The feed is published with the approval of the user; the public manifest and signature are
+- [x] The feed is published with the approval of the user; the public manifest and signature are
   the prepared bytes, and the public AI Denoise archives pass `verify_package_archive`.
 
 **Expected diff**: 900 to 1400 lines.
 
 ##### Phase DN12 completion record (2026-11-23)
 
-**Status:** complete in the code and the tools; the feed is prepared, signed, and verified, and
-its upload waits for the approval of the user (AM2 rule). The AI model feed lists the AI Denoise
+**Status:** complete. The feed of sequence `20261123220131` is live (uploaded with the approval
+of the user on 2026-11-23, AM2 rule). The AI model feed lists the AI Denoise
 package `alcedo-ai-denoise` v1 r1 next to the AI Mask set; Settings > AI Models shows its card;
 the render reads the graph from `<model folder>/alcedo-ai-denoise-v1/`.
 
@@ -3271,6 +3271,12 @@ SHA-256 `ff2e54f359414a5806760f3c0fc5383edfe05a57723712ec83896f02084682b5`. The 
 DN2 file (`0bc98084...`), so the projects keep their model version. The publication plan uploads
 the two AI Denoise archives, the archived pair, and the live pair; the AI Mask archives are carried.
 
+**Publication (2026-11-23, approved by the user):** `publish_ai_model_packages.py --upload`
+uploaded the two AI Denoise archives, the archived pair, and the live pair (live manifest last).
+Downloaded again from `static.aoraw.org`: the public `manifest.json` and `.sig` are the prepared
+bytes and the signature verifies with the update key; both AI Denoise archives pass
+`verify_package_archive`; the carried AI Mask archives answer HEAD with 200 and their signed size.
+
 **Changes against the plan text and detail choices:**
 
 - The AI Denoise entry is checked with the parser of the released builds through the code of
@@ -3282,8 +3288,9 @@ the two AI Denoise archives, the archived pair, and the live pair; the AI Mask a
 - `THIRD_PARTY_NOTICE.txt` item 35 and `third_party_licenses/RawNIND-weights-CC-BY-4.0.txt` (the
   `legalcode.txt` of Creative Commons, downloaded on 2026-11-23).
 
-**Checklist / exit condition:** the tests pass (except #1012); the prepared feed carries the live
-AI Mask entry unchanged and verifies with the update key; the upload waits for the user.
+**Checklist / exit condition:** all exit criteria are met: the tests pass (except #1012); the
+feed carries the AI Mask entry unchanged and verifies with the update key; the feed is published
+and the public files verify.
 
 **Remaining gaps:** the card and an install from the live feed were not checked in the running
 application; the macOS build was not built for this phase (no macOS-only code changed).
