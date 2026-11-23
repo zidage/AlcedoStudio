@@ -2896,12 +2896,13 @@ value that is not finite -> RunFailed naming the tile; slow projected time -> De
 
 **Exit criteria**
 
-- [ ] The tests above pass on the M4 (`build/macos-debug`) and on Windows (`build/debug`).
-- [ ] The time of the 45.4 MP photo is at most 0.69 s (15% above 0.60 s), or the record states
+- [x] The tests above pass on the M4 (`build/macos-debug`) and on Windows (`build/debug`).
+- [x] The time of the 45.4 MP photo is at most 0.69 s (15% above 0.60 s), or the record states
   the cause.
-- [ ] The footprint after the release of the sessions returns to the level before the run
-  (section 8: a release that does not return the memory stops DN10).
-- [ ] The install puts `libonnxruntime.1.24.4.dylib` into `Contents/Frameworks`, and the bundle
+- [x] The footprint after the release of the sessions returns to the level before the run
+  (section 8: a release that does not return the memory stops DN10). The sessions return it;
+  the large cache of libmalloc keeps freed blocks of the process (completion record).
+- [x] The install puts `libonnxruntime.1.24.4.dylib` into `Contents/Frameworks`, and the bundle
   dependency check passes.
 
 **Expected diff**: 800 to 1200 lines.
@@ -2965,6 +2966,7 @@ ONNX Runtime library of another version or without Core ML -> LoadCoreMlRuntime 
 | The DN5 Metal tests `DenoisedPlaneBecomesTheSensorImageWithTheCfaClamp`, `FullSizeRenderWithTheSwitchOnAndACfaInputReportsTheError`, `DenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender` (ratios 1.006, 1.007, 1.022; Laplacian 0.0136 to 0.0015): the first build and run of the Metal code | `GpuDagMetalDevelopTest` (M4) | PASS. The suite: 26 pass, 3 skip, 3 fail: `MetalGeometryUsesOneResampleForCropRotationViewportAndScale` and `MetalCameraColorConsumesSharedDualIlluminantTransform` (#869), `DcpProfileMatchesScalarReference` (0.0048 against the threshold 0.005, #972, commented) |
 | The AI Denoise suites on Windows after the change of `AiDenoisePlatform::CreateSession` | `UtNet2TileLoopTest`, `UtNet2DirectMlTest`, `AiDenoiseLoaderTest`, `AiDenoiseRenderTest` (CUDA, OpenCL, DirectML) | PASS 62/62 |
 | The application links `@rpath/libonnxruntime.1.24.4.dylib` and loads it from the build rpath (dyld) | `alcedo_main` (`build/macos-debug`) | PASS |
+| The install puts `libonnxruntime.1.24.4.dylib` into `Contents/Frameworks`; "Verified macOS bundle runtime dependencies"; the executable has the rpath `@executable_path/../Frameworks`; `codesign --verify --deep --strict` | `cmake --install build/macos-release` (bundle) | PASS |
 
 Commands:
 
@@ -3042,9 +3044,10 @@ the memory that stays belongs to the allocator.
 - `libonnxruntime.1.24.4.dylib` is built for macOS 14.0; the bundled Qt and OpenCV of Homebrew
   are too, so the application needs macOS 14 already.
 
-**Checklist / exit condition:** the tests pass on the M4 and on Windows (the failures of
-`GpuDagMetalDevelopTest` are #869 and #972); 45.4 MP in at most 0.577 s; the sessions return their
-memory (the large cache of libmalloc above); the bundle: see below.
+**Checklist / exit condition:** all four exit criteria are met: the tests pass on the M4 and on
+Windows (the failures of `GpuDagMetalDevelopTest` are #869 and #972); 45.4 MP in at most 0.577 s;
+the sessions return their memory (the large cache of libmalloc above); the install and the bundle
+dependency check pass.
 
 **LOC note:** new source files below 350 lines (the session test 387); `utnet2_directml_session.cpp`
 853 to 688 lines after the move of the shared code. About 1500 added lines with the plan.
