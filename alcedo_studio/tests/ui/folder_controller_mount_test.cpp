@@ -89,10 +89,9 @@ class FolderControllerMountTest : public ApplicationModuleHostTestFixture {
     return std::nullopt;
   }
 
-  /// The photo count of the library root row: the whole project.
-  auto ProjectPhotoCount() -> qint64 {
-    return Folders().Folders().front().toMap().value("imageCount").toLongLong();
-  }
+  /// All Photos: every photo of the project. The root row counts the Library row, which leaves
+  /// out the mount trees (#1076).
+  auto ProjectPhotoCount() -> qint64 { return Folders().AllPhotosCount(); }
 
   auto Summary() -> MountSummary {
     const auto summaries = Mounts().ListMounts();
@@ -105,7 +104,7 @@ class FolderControllerMountTest : public ApplicationModuleHostTestFixture {
     ASSERT_TRUE(CreateTestProject(backend_));
     ASSERT_TRUE(backend_.mount_scans()->IsStarted());
     Folders().MountFolder(QUrl::fromLocalFile(PathToQString(disk_ / "Trip")));
-    // A row counts the photos of its own folder: the root row counts the project.
+    // A row counts the photos of its own folder; All Photos counts the project.
     ASSERT_TRUE(WaitFor([this] {
       return RowNamed("Trip").has_value() && RowNamed("Day1").has_value() &&
              ProjectPhotoCount() == 2 && !backend_.mount_scans()->HasPendingScans();
@@ -131,6 +130,45 @@ class FolderControllerMountTest : public ApplicationModuleHostTestFixture {
   stdfs::path           disk_;
 };
 
+// Issue #1078: the Library row reads the photos directly in the library root and counts the root
+// and the ordinary collections, without the mount trees. All Photos reads and counts every photo.
+// A mounted row carries the volume of its mount for the Disk section.
+TEST_F(FolderControllerMountTest, LibraryRowLeavesOutTheMountedPhotosAndAllPhotosHasThem) {
+  ASSERT_NO_FATAL_FAILURE(MountTrip());
+
+  const auto root_row = Folders().Folders().front().toMap();
+  EXPECT_EQ(root_row.value("folderId").toUInt(), 0u);
+  EXPECT_EQ(root_row.value("imageCount").toLongLong(), 0);
+  EXPECT_EQ(Folders().AllPhotosCount(), 2);
+
+  Folders().SelectLibraryRoot();
+  EXPECT_TRUE(Folders().LibraryRootSelected());
+  EXPECT_EQ(Folders().CurrentFolderId(), 0u);
+  ASSERT_TRUE(WaitFor([this] {
+    return !backend_.library()->QueryReplacing() && backend_.library()->TotalCount() == 0;
+  }));
+  // The read of the scope has ended: the count stays.
+  ProcessEvents(500);
+  EXPECT_FALSE(backend_.library()->QueryReplacing());
+  EXPECT_EQ(backend_.library()->TotalCount(), 0);
+
+  Folders().SelectFolder(0);
+  EXPECT_FALSE(Folders().LibraryRootSelected());
+  ASSERT_TRUE(WaitFor([this] {
+    return !backend_.library()->QueryReplacing() && backend_.library()->TotalCount() == 2;
+  }));
+
+  // A folder other than the root is never the Library row.
+  Folders().SelectLibraryRoot();
+  const auto trip = RowNamed("Trip");
+  ASSERT_TRUE(trip.has_value());
+  Folders().SelectFolder(trip->value("folderId").toUInt());
+  EXPECT_FALSE(Folders().LibraryRootSelected());
+
+  EXPECT_FALSE(trip->value("mountVolumeKey").toString().isEmpty());
+  EXPECT_FALSE(trip->value("mountPoint").toString().isEmpty());
+  EXPECT_FALSE(trip->value("mountVolumeRoot").toString().isEmpty());
+}
 TEST_F(FolderControllerMountTest, MountedRowReportsMountedAndNotStructureEditable) {
   ASSERT_NO_FATAL_FAILURE(MountTrip());
 

@@ -8,6 +8,7 @@
 #include <QString>
 #include <QUrl>
 #include <QVariantList>
+#include <QVariantMap>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -18,6 +19,7 @@
 #include <vector>
 
 #include "app/mount_service.hpp"
+#include "storage/store/sleeve/element_store.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/alcedo_main/i18n.hpp"
@@ -52,6 +54,16 @@ class FolderController final : public QObject {
   Q_PROPERTY(QString currentFolderPath READ CurrentFolderPath NOTIFY FolderSelectionChanged)
   /// True when the current folder is mounted: a file drop on the grid starts no import.
   Q_PROPERTY(bool currentFolderMounted READ CurrentFolderMounted NOTIFY MountStateChanged)
+  /// With currentFolderId 0: true for the Library row (the photos directly in the library root,
+  /// AlbumScope::LibraryRoot), false for All Photos (every photo of the project) (#1078).
+  Q_PROPERTY(bool libraryRootSelected READ LibraryRootSelected NOTIFY FolderSelectionChanged)
+  /// Photo count of All Photos: every photo of the project, mounted photos included; -1 before
+  /// the first count read. The root row of `folders` carries the count of the Library row.
+  Q_PROPERTY(qint64 allPhotosCount READ AllPhotosCount NOTIFY FoldersChanged)
+  /// The last volume that arrived with no mount of the project (#1076), for the card of the Disk
+  /// section: {name, mountPoint, hasDcim, rootUrl, dcimUrl}; empty when there is none or the
+  /// user closed the card.
+  Q_PROPERTY(QVariantMap arrivedVolume READ ArrivedVolume NOTIFY ArrivedVolumeChanged)
 
  public:
   FolderController(ProjectModule* project, LibraryModule* library, IUiStatusSink* status,
@@ -61,8 +73,9 @@ class FolderController final : public QObject {
 
   void BindCollaborators(StatsEngine* stats, SearchController* search,
                          ImportExportHandler* import_export);
-  /// The scan coordinator of the application; the mount commands run on its worker.
-  void BindMountScans(MountScanCoordinator* mount_scans) { mount_scans_ = mount_scans; }
+  /// The scan coordinator of the application; the mount commands run on its worker. Its
+  /// VolumeWithoutMountArrived sets arrivedVolume.
+  void               BindMountScans(MountScanCoordinator* mount_scans);
 
   /// Loads the whole folder tree and starts one photo count read (RefreshImageCounts).
   void               ReloadTree(const std::filesystem::path& preferredFolderPath);
@@ -84,7 +97,15 @@ class FolderController final : public QObject {
     return TryGetPathForUiId(folderUiId);
   }
 
+  /// Selects the folder row @p folderUiId; 0 selects All Photos.
   Q_INVOKABLE void SelectFolder(uint folderUiId);
+  /// Selects the Library row: the library root with the photos directly in it (#1078).
+  Q_INVOKABLE void SelectLibraryRoot();
+  /// Closes the card of the arrived volume: arrivedVolume becomes empty.
+  Q_INVOKABLE void DismissArrivedVolume();
+  /// Takes a volume that arrived with no mount (MountScanCoordinator::VolumeWithoutMountArrived).
+  void             SetArrivedVolume(const QString& volumeName, const QString& mountPoint,
+                                    bool hasDcimDirectory);
   /// Creates a folder inside the current folder.
   Q_INVOKABLE void CreateFolder(const QString& folderName);
   /// Creates a folder inside @p parentFolderUiId (0 = top level). Returns the element id of
@@ -165,6 +186,11 @@ class FolderController final : public QObject {
   }
   [[nodiscard]] auto CurrentFolderPath() const -> QString { return current_folder_path_text_; }
   [[nodiscard]] auto CurrentFolderMounted() const -> bool;
+  [[nodiscard]] auto LibraryRootSelected() const -> bool { return library_root_selected_; }
+  [[nodiscard]] auto AllPhotosCount() const -> qint64 {
+    return image_counts_loaded_ ? static_cast<qint64>(project_image_count_) : -1;
+  }
+  [[nodiscard]] auto ArrivedVolume() const -> QVariantMap { return arrived_volume_; }
   [[nodiscard]] auto current_folder_path_text() const -> const QString& {
     return current_folder_path_text_;
   }
@@ -181,6 +207,7 @@ class FolderController final : public QObject {
   void folderSelectionChanged();
   /// The mount states of the rows or of the current folder changed.
   void MountStateChanged();
+  void ArrivedVolumeChanged();
 
  private:
   struct FolderNodeState {
@@ -204,6 +231,8 @@ class FolderController final : public QObject {
   /// Saves and packages the project; false when either step fails.
   [[nodiscard]] bool SaveProjectState() const;
   void               ReportFolderEditDone(const i18n::LocalizedText& message, bool save_ok) const;
+  /// Clears the Inspector filters and the search and reloads the Library for a new selection.
+  void               ReloadSelectedScope();
   /// Loads the children of @p folderPath and of every folder below it.
   void               LoadSubtree(const std::filesystem::path& folderPath);
   void               EnsureRootNode();
@@ -220,9 +249,7 @@ class FolderController final : public QObject {
   [[nodiscard]] auto    RowImageCount(const ExistingFolderEntry& folder) const -> qint64;
   /// Takes the result of the count read @p generation unless a newer read replaced it. On
   /// @p error the rows show no count.
-  void                  ApplyImageCounts(std::uint64_t generation, uint64_t project_count,
-                                         std::unordered_map<sl_element_id_t, uint64_t> folder_counts,
-                                         const QString&                                error);
+  void ApplyImageCounts(std::uint64_t generation, FolderImageCounts counts, const QString& error);
   void                  DropImageCounts();
   /// The mount fields of the row of @p folder.
   void                  AddMountFields(const ExistingFolderEntry& folder, QVariantMap& row) const;
@@ -263,6 +290,11 @@ class FolderController final : public QObject {
   /// replaces it; closing the project drops it.
   bool                                                        image_counts_loaded_  = false;
   uint64_t                                                    project_image_count_  = 0;
+  /// The count of the root row: the photos directly in the root and in the collections.
+  uint64_t                                                    library_root_image_count_ = 0;
+  /// With current_folder_ui_id_ 0: the Library row rather than All Photos.
+  bool                                                        library_root_selected_    = false;
+  QVariantMap                                                 arrived_volume_{};
   std::unordered_map<sl_element_id_t, uint64_t>               image_count_by_folder_{};
   /// The mounts of the newest applied count read.
   std::vector<MountSummary>                                   mount_summaries_{};

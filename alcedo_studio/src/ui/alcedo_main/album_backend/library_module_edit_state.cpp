@@ -110,8 +110,10 @@ auto LibraryModule::SettlePendingReveal(uint fileId, bool found) -> bool {
   if (pending_reveal_file_id_ == 0 || fileId != pending_reveal_file_id_) {
     return false;
   }
-  // The root folder (ui id 0) reads every project file, so a miss there is final.
-  if (found || reveal_scope_widened_ || folders_ == nullptr || folders_->CurrentFolderId() == 0) {
+  // All Photos (ui id 0 without the Library row) reads every project file, so a miss there is
+  // final.
+  if (found || reveal_scope_widened_ || folders_ == nullptr ||
+      (folders_->CurrentFolderId() == 0 && !folders_->LibraryRootSelected())) {
     SetPendingReveal(0);
     return false;
   }

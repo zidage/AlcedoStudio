@@ -26,6 +26,7 @@
 #include "storage/store/semantic/semantic_label_config.hpp"
 #include "storage/store/semantic/semantic_records.hpp"
 #include "storage/store/sleeve/element_store.hpp"
+#include "type/album_scope.hpp"
 #include "ui/alcedo_main/album_backend/album_catalog.hpp"
 #include "ui/alcedo_main/album_backend/album_section_model.hpp"
 #include "ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
@@ -57,6 +58,9 @@ class StatsEngine;
  */
 struct LibraryQueryInput {
   sl_element_id_t                      folder_id_ = 0;
+  /// With folder_id_ kLibraryRootFolderId: true for the Library row (the photos directly in the
+  /// root), false for All Photos (#1078).
+  bool                                 library_root_ = false;
   std::optional<FilterNode>            stats_filter_{};
   LibrarySearchInput                   search_{};
   AlbumQueryOptions                    options_{};
@@ -69,6 +73,11 @@ struct LibraryQueryInput {
   std::shared_ptr<ImagePoolService>    image_pool_{};
   std::shared_ptr<Storage>             storage_{};
   SemanticLabelLanguage                label_language_ = SemanticLabelLanguage::kEnglish;
+
+  /// The photos that the reads of this input cover.
+  [[nodiscard]] auto                   Scope() const -> AlbumScope {
+    return library_root_ ? AlbumScope::LibraryRoot() : AlbumScope(folder_id_);
+  }
 };
 
 /// Result of one library read, moved once into the queued UI completion.

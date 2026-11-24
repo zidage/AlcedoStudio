@@ -547,8 +547,9 @@ ApplicationWindow {
 
     // Collection name for the drop overlay and the folder dialog title.
     function collectionDisplayName(folderId) {
+        // A drop with folder 0 goes into the library root (#1078).
         if (Number(folderId) === 0) {
-            return qsTr("All Photos")
+            return qsTr("Library")
         }
         const rows = appModules.folders ? appModules.folders.folders : []
         for (let i = 0; i < rows.length; ++i) {
@@ -560,7 +561,7 @@ ApplicationWindow {
     }
 
     function importDroppedUrls(urls, folderId) {
-        appDialogs.importDroppedUrls(urls, Number(folderId), root.collectionDisplayName(folderId))
+        appDialogs.importDroppedUrls(urls, Number(folderId))
     }
 
     function openLutImportDialog() {
@@ -691,7 +692,7 @@ ApplicationWindow {
                                                    ? workspaceHost.libraryItem.thumbnailMaxEdge : 0
     readonly property alias selectionState: selectionStateObj
     readonly property var importDialog: appDialogs.importDialog
-    readonly property var importFolderDialog: appDialogs.importFolderDialog
+    readonly property var importFolderFlow: appDialogs.importFolderFlow
     readonly property var globalSearchDialog: appDialogs.globalSearchDialog
 
     SelectionState {
@@ -768,6 +769,7 @@ ApplicationWindow {
                     enabled: !root.collectionsSidebarExpanded
                     theme: root
                     allPhotosSelected: Number(appModules.folders.currentFolderId) === 0
+                                       && appModules.folders.libraryRootSelected !== true
                     onSearchRequested: root.globalSearchDialog.openFromCollection()
                     onBackgroundTasksRequested: root.openBackgroundTasksDialog()
                     onAllPhotosRequested: {
@@ -809,7 +811,9 @@ ApplicationWindow {
                     backendInteractive: root.backendInteractive
                     fileDropEnabled: root.fileDropImportAllowed
                     onImportRequested: root.importDialog.open()
-                    onImportFromFolderRequested: root.importFolderDialog.open()
+                    onImportFolderRequested: function(action, folderUrl, startFolderUrl) {
+                        root.importFolderFlow.begin(action, folderUrl, startFolderUrl)
+                    }
                     onFilesDropped: function(urls, folderId) {
                         root.importDroppedUrls(urls, folderId)
                     }

@@ -16,6 +16,9 @@ RowLayout {
     /// Label of the collection box in the Import diagram; empty shows the word "Collection".
     property string collectionName: ""
     property real drawingHeight: 40
+    /// False disables the Mount card: a drop of several items or of files has no one folder to
+    /// mount (#1078).
+    property bool mountEnabled: true
     /// Prefix of the objectName of each card: <prefix>Import and <prefix>Mount.
     property string cardObjectNamePrefix: "importFolderChoice"
 
@@ -43,6 +46,7 @@ RowLayout {
         Layout.fillHeight: true
         Layout.preferredWidth: 1
         action: "mount"
+        enabled: cards.mountEnabled
         selected: cards.selectedAction === "mount"
         collectionName: cards.collectionName
         drawingHeight: cards.drawingHeight
