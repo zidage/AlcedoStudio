@@ -1125,6 +1125,12 @@ if(TARGET ${ALCEDO_MAIN_BIN})
                 DESTINATION "${_bundle_macos_dest}"
             )
         endif()
+        # ONNX Runtime of AI Denoise (decoders/CMakeLists.txt, DN10): the executable links
+        # @rpath/libonnxruntime.1.24.4.dylib and finds it through @executable_path/../Frameworks.
+        if(ALCEDO_ONNXRUNTIME_MACOS_LIBRARY)
+            install(FILES "${ALCEDO_ONNXRUNTIME_MACOS_LIBRARY}"
+                DESTINATION "${_bundle_frameworks_dest}")
+        endif()
         if(DEFINED ALCEDO_LENSFUN_LIBRARY_DIR AND NOT "${ALCEDO_LENSFUN_LIBRARY_DIR}" STREQUAL "")
             set(_lensfun_soname_path "${ALCEDO_LENSFUN_LIBRARY_DIR}/liblensfun.2.dylib")
             file(REAL_PATH "${_lensfun_soname_path}" _lensfun_real_path)

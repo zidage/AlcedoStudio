@@ -10,8 +10,10 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -124,6 +126,10 @@ class TestSession final : public UtNet2TileSession {
 
   [[nodiscard]] auto DeviceMemory() const -> DeviceMemoryState override { return memory; }
 
+  [[nodiscard]] auto TileMemory() const -> std::span<const UtNet2TileMemory> override {
+    return tile_memory;
+  }
+
   void               StartNewSession() { ready_ = false; }
 
   double             seconds_per_megapixel = 0.0;
@@ -133,6 +139,9 @@ class TestSession final : public UtNet2TileSession {
   int                runs                  = 0;
   int                wrong_input_values    = 0;
   DeviceMemoryState  memory{.budget_bytes = std::uint64_t{8} << 30};
+  /// The table of the platform of the session (`TileMemory`).
+  std::vector<UtNet2TileMemory> tile_memory{UtNet2Spec::kDirectMlTileMemory.begin(),
+                                            UtNet2Spec::kDirectMlTileMemory.end()};
 
  private:
   TestClock&        clock_;
@@ -250,7 +259,7 @@ TEST(UtNet2TileLoopTest, TileSizeSelectionUsesTheLargestThatFits) {
     (void)SelectUtNet2TileSize(table, bytes_of(768) - 1);
     ADD_FAILURE() << "no error below the smallest tile";
   } catch (const std::runtime_error& error) {
-    EXPECT_NE(std::string(error.what()).find("not enough video memory"), std::string::npos)
+    EXPECT_NE(std::string(error.what()).find("not enough device memory"), std::string::npos)
         << error.what();
   }
 
@@ -305,6 +314,37 @@ TEST(UtNet2TileLoopTest, TileSizeSelectionCountsTheVideoMemoryOfOtherProcesses) 
             .adapter_local_bytes       = 8016 * kMiB,
             .adapter_local_usage_bytes = 8100 * kMiB};
   EXPECT_EQ(AvailableTileMemory(memory), 0U);
+}
+
+// DN10: the product passes no table, so the loop selects with the table of the platform session
+// (Core ML on macOS has another table than DirectML); a table of the options replaces it.
+TEST(UtNet2TileLoopTest, LoopSelectsWithTheTableOfTheSessionWhenTheOptionsGiveNone) {
+  constexpr std::uint64_t kMiB = std::uint64_t{1} << 20;
+  TestClock               clock;
+  TestMosaic              mosaic(64, 48);
+  LoopOutput              output(mosaic);
+  TestSession             session(clock, nullptr);
+  session.tile_memory = {{.tile_size = 512, .device_bytes = 900 * kMiB},
+                         {.tile_size = 256, .device_bytes = 300 * kMiB}};
+  session.memory      = {.budget_bytes = 1000 * kMiB};
+  EXPECT_EQ(
+      DenoiseBayerMosaic(session, mosaic.View(), output.View(), {}, NoCancel(), clock.Function())
+          .tile_size,
+      512);
+  session.memory.budget_bytes = 500 * kMiB;
+  EXPECT_EQ(
+      DenoiseBayerMosaic(session, mosaic.View(), output.View(), {}, NoCancel(), clock.Function())
+          .tile_size,
+      256);
+
+  const std::array<UtNet2TileMemory, 1> options_table = {
+      {{.tile_size = 768, .device_bytes = 100 * kMiB}}};
+  UtNet2TileLoopOptions options;
+  options.tile_memory = options_table;
+  EXPECT_EQ(DenoiseBayerMosaic(session, mosaic.View(), output.View(), {}, NoCancel(),
+                               clock.Function(), options)
+                .tile_size,
+            768);
 }
 
 TEST(UtNet2TileLoopTest, TileInputsAreTheMosaicWithReflectionAndTheCropsFormTheOutput) {

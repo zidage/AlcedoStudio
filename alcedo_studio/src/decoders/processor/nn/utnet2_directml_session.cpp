@@ -33,42 +33,25 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
-#include <charconv>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cwchar>
 #include <memory>
-#include <opencv2/core.hpp>
-#include <opencv2/core/utility.hpp>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 
+#include "decoders/processor/nn/utnet2_onnx_graph.hpp"
 #include "decoders/processor/nn/utnet2_specs.hpp"
+#include "decoders/processor/nn/utnet2_tile_io.hpp"
 
 namespace alcedo::nn {
 namespace {
 
 using Microsoft::WRL::ComPtr;
-
-auto PathText(const std::filesystem::path& path) -> std::string {
-  const auto text = path.u8string();
-  return std::string(text.begin(), text.end());
-}
-
-auto TileText(const PackedTileRect& tile) -> std::string {
-  std::ostringstream text;
-  text << "UtNet2 tile at (" << tile.x << ", " << tile.y << ") of " << tile.width << " x "
-       << tile.height << " packed px";
-  return text.str();
-}
 
 auto HresultText(HRESULT result) -> std::string {
   std::array<char, 16> text{};
@@ -76,13 +59,15 @@ auto HresultText(HRESULT result) -> std::string {
   return text.data();
 }
 
-auto WideText(const wchar_t* text) -> std::string { return PathText(std::filesystem::path(text)); }
+auto WideText(const wchar_t* text) -> std::string {
+  return UtNet2PathText(std::filesystem::path(text));
+}
 
 auto ModulePath(HMODULE module) -> std::string {
   std::wstring buffer(MAX_PATH, L'\0');
   const DWORD length = GetModuleFileNameW(module, buffer.data(), static_cast<DWORD>(buffer.size()));
   buffer.resize(length);
-  return PathText(std::filesystem::path(buffer));
+  return UtNet2PathText(std::filesystem::path(buffer));
 }
 
 /// Loads onnxruntime.dll (the folder of the executable first, then System32) and initializes the
@@ -440,109 +425,6 @@ auto SessionOptions(IDMLDevice* dml, ID3D12CommandQueue* queue) -> Ort::SessionO
   return options;
 }
 
-void RequireTensor(const Ort::TypeInfo& info, std::string_view role, std::string_view name,
-                   std::string_view expected_name, int channels,
-                   const std::filesystem::path& path) {
-  const auto prefix = "UtNet2 graph " + PathText(path) + ": ";
-  if (name != expected_name) {
-    throw std::runtime_error(prefix + std::string(role) + " is `" + std::string(name) +
-                             "`, expected `" + std::string(expected_name) + "`");
-  }
-  const auto tensor = info.GetTensorTypeAndShapeInfo();
-  if (tensor.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
-    throw std::runtime_error(prefix + std::string(role) + " `" + std::string(name) +
-                             "` is not float16 (element type " +
-                             std::to_string(static_cast<int>(tensor.GetElementType())) + ")");
-  }
-  const auto shape = tensor.GetShape();
-  if (shape.size() != 4 || shape[1] != channels) {
-    throw std::runtime_error(prefix + std::string(role) + " `" + std::string(name) +
-                             "` is not (1, " + std::to_string(channels) + ", height, width)");
-  }
-}
-
-auto RequireMetadata(const Ort::ModelMetadata& metadata, std::string_view key,
-                     const std::filesystem::path& path) -> std::string {
-  Ort::AllocatorWithDefaultOptions allocator;
-  const auto value = metadata.LookupCustomMetadataMapAllocated(std::string(key).c_str(), allocator);
-  if (!value) {
-    throw std::runtime_error("UtNet2 graph " + PathText(path) + ": metadata `" + std::string(key) +
-                             "` is absent");
-  }
-  return std::string(value.get());
-}
-
-void RequireMetadataValue(const Ort::ModelMetadata& metadata, std::string_view key,
-                          std::string_view expected, const std::filesystem::path& path) {
-  const auto value = RequireMetadata(metadata, key, path);
-  if (value != expected) {
-    throw std::runtime_error("UtNet2 graph " + PathText(path) + ": metadata `" + std::string(key) +
-                             "` is `" + value + "`, expected `" + std::string(expected) + "`");
-  }
-}
-
-/// Checks the graph of `session` against UtNet2Spec; returns its `output_scale`.
-auto CheckGraph(Ort::Session& session, const std::filesystem::path& path) -> float {
-  const auto prefix = "UtNet2 graph " + PathText(path) + ": ";
-  if (session.GetInputCount() != 1 || session.GetOutputCount() != 1) {
-    throw std::runtime_error(prefix + "the graph has " + std::to_string(session.GetInputCount()) +
-                             " inputs and " + std::to_string(session.GetOutputCount()) +
-                             " outputs, expected 1 and 1");
-  }
-  Ort::AllocatorWithDefaultOptions allocator;
-  RequireTensor(session.GetInputTypeInfo(0), "input",
-                session.GetInputNameAllocated(0, allocator).get(), UtNet2Spec::kInputName,
-                UtNet2Spec::kInputChannels, path);
-  RequireTensor(session.GetOutputTypeInfo(0), "output",
-                session.GetOutputNameAllocated(0, allocator).get(), UtNet2Spec::kOutputName,
-                UtNet2Spec::kOutputChannels, path);
-
-  const auto metadata = session.GetModelMetadata();
-  RequireMetadataValue(metadata, UtNet2Spec::kMetadataArchitecture, UtNet2Spec::kArchitecture,
-                       path);
-  RequireMetadataValue(metadata, UtNet2Spec::kMetadataPrecision, UtNet2Spec::kPrecision, path);
-  RequireMetadataValue(metadata, UtNet2Spec::kMetadataInputPreparationVersion,
-                       UtNet2Spec::kInputPreparationVersion, path);
-  const auto sha256 = RequireMetadata(metadata, UtNet2Spec::kMetadataWeightsSha256, path);
-  if (sha256.size() != 64 || sha256.find_first_not_of("0123456789abcdef") != std::string::npos) {
-    throw std::runtime_error(prefix + "metadata `" +
-                             std::string(UtNet2Spec::kMetadataWeightsSha256) + "` is `" + sha256 +
-                             "`, expected 64 lower-case hex digits");
-  }
-  const auto scale_text = RequireMetadata(metadata, UtNet2Spec::kMetadataOutputScale, path);
-  double     scale      = 0.0;
-  const auto parsed =
-      std::from_chars(scale_text.data(), scale_text.data() + scale_text.size(), scale);
-  if (parsed.ec != std::errc{} || parsed.ptr != scale_text.data() + scale_text.size() ||
-      !std::isfinite(scale) || scale <= 0.0) {
-    throw std::runtime_error(prefix + "metadata `" + std::string(UtNet2Spec::kMetadataOutputScale) +
-                             "` is `" + scale_text + "`, expected a finite number above 0");
-  }
-  return static_cast<float>(scale);
-}
-
-void CheckCrop(const PackedTileRect& tile, const TileOutputCrop& crop) {
-  constexpr int kUpscale = UtNet2Spec::kOutputUpscale;
-  const auto&   target   = crop.destination;
-  const bool    in_tile  = crop.source_x >= 0 && crop.source_y >= 0 && crop.width > 0 &&
-                       crop.height > 0 && crop.source_x + crop.width <= kUpscale * tile.width &&
-                       crop.source_y + crop.height <= kUpscale * tile.height;
-  const bool in_target =
-      crop.destination_x >= 0 && crop.destination_y >= 0 &&
-      crop.destination_x + crop.width <= target.width &&
-      crop.destination_y + crop.height <= target.height &&
-      target.data.size() ==
-          UtNet2Spec::kOutputChannels * static_cast<std::size_t>(target.width) * target.height;
-  if (!in_tile || !in_target) {
-    std::ostringstream text;
-    text << TileText(tile) << ": the output rectangle (" << crop.source_x << ", " << crop.source_y
-         << ") of " << crop.width << " x " << crop.height << " to (" << crop.destination_x << ", "
-         << crop.destination_y << ") of an image of " << target.width << " x " << target.height
-         << " is outside the tile output or the image";
-    throw std::runtime_error(text.str());
-  }
-}
-
 }  // namespace
 
 struct UtNet2DirectMlSession::Impl {
@@ -566,7 +448,7 @@ struct UtNet2DirectMlSession::Impl {
 
   void                           Load() {
     if (!std::filesystem::is_regular_file(graph_path)) {
-      throw std::runtime_error("UtNet2 graph " + PathText(graph_path) + " does not exist");
+      throw std::runtime_error("UtNet2 graph " + UtNet2PathText(graph_path) + " does not exist");
     }
     try {
       auto& env = ProcessEnv();
@@ -574,16 +456,16 @@ struct UtNet2DirectMlSession::Impl {
       devices->Create(adapter.Get());
       auto         options = SessionOptions(devices->dml.Get(), devices->queue.Get());
       Ort::Session created(env, graph_path.c_str(), options);
-      output_scale = CheckGraph(created, graph_path);
+      output_scale = CheckUtNet2Graph(created, graph_path);
       session.emplace(std::move(created));
       dml_memory.emplace("DML", OrtDeviceAllocator, 0, OrtMemTypeDefault);
     } catch (const Ort::Exception& error) {
       Unload();
-      throw std::runtime_error("UtNet2 graph " + PathText(graph_path) +
-                                                         ": ONNX Runtime: " + error.what());
+      throw std::runtime_error("UtNet2 graph " + UtNet2PathText(graph_path) +
+                                          ": ONNX Runtime: " + error.what());
     } catch (const std::runtime_error& error) {
       Unload();
-      throw std::runtime_error("UtNet2 graph " + PathText(graph_path) + ": " + error.what());
+      throw std::runtime_error("UtNet2 graph " + UtNet2PathText(graph_path) + ": " + error.what());
     }
     ran_shapes.clear();
     largest_tile_side = 0;
@@ -617,13 +499,7 @@ struct UtNet2DirectMlSession::Impl {
 
     // Input: float32 to float16 on the host (rows of the planes in parallel), into the upload
     // buffer; then the copy to the input buffer and the first timestamp.
-    const int     input_rows = UtNet2Spec::kInputChannels * tile.height;
-    const cv::Mat input_float(input_rows, tile.width, CV_32F, const_cast<float*>(input.data()));
-    cv::Mat       input_half(input_rows, tile.width, CV_16F, objects.upload.data);
-    cv::parallel_for_(cv::Range(0, input_rows), [&](const cv::Range& rows) {
-      cv::Mat target = input_half.rowRange(rows.start, rows.end);
-      input_float.rowRange(rows.start, rows.end).convertTo(target, CV_16F);
-    });
+    ConvertUtNet2TileInput(input, tile, objects.upload.data);
     auto* copy_in = objects.Begin(0);
     copy_in->CopyBufferRegion(objects.input.resource.Get(), 0, objects.upload.resource.Get(), 0,
                               input_count * 2);
@@ -647,7 +523,7 @@ struct UtNet2DirectMlSession::Impl {
       session->Run(Ort::RunOptions{nullptr}, binding);
       binding.SynchronizeOutputs();
     } catch (const Ort::Exception& error) {
-      std::string text = TileText(tile) + ": ONNX Runtime: " + error.what();
+      std::string text = UtNet2TileText(tile) + ": ONNX Runtime: " + error.what();
       // The input copy must end before a later run resets its command allocator. A failure of
       // this wait (a removed device) is added to the text of the run error.
       try {
@@ -679,46 +555,12 @@ struct UtNet2DirectMlSession::Impl {
         static_cast<double>(ticks) * 1e9 / static_cast<double>(objects.timestamp_frequency)));
 
     // float16 to float32 times output_scale, into the rectangle of the destination, and the
-    // check for values that are not finite: the rows of the three channels in parallel.
-    const auto& target       = crop.destination;
-    const auto  target_plane = static_cast<std::size_t>(target.width) * target.height;
-    const auto  source_rect  = [&](int channel) {
-      auto* rows = static_cast<std::uint8_t*>(objects.readback.data) + channel * readback_plane;
-      return cv::Mat(crop.height, output_width, CV_16F, rows,
-                       row_bytes)(cv::Rect(crop.source_x, 0, crop.width, crop.height));
-    };
-    const auto destination_rect = [&](int channel) {
-      return cv::Mat(target.height, target.width, CV_32F,
-                     target.data.data() + channel * target_plane)(
-          cv::Rect(crop.destination_x, crop.destination_y, crop.width, crop.height));
-    };
-    std::atomic<bool> all_finite{true};
-    cv::parallel_for_(
-        cv::Range(0, UtNet2Spec::kOutputChannels * crop.height), [&](const cv::Range& range) {
-          for (int row = range.start; row < range.end;) {
-            const int channel = row / crop.height;
-            const int first   = row % crop.height;
-            const int last    = std::min(crop.height, first + (range.end - row));
-            cv::Mat   rows    = destination_rect(channel).rowRange(first, last);
-            source_rect(channel).rowRange(first, last).convertTo(rows, CV_32F, output_scale);
-            if (!cv::checkRange(rows, true)) {
-              all_finite.store(false, std::memory_order_relaxed);
-            }
-            row += last - first;
-          }
-        });
-    if (!all_finite.load()) {
-      for (int channel = 0; channel < UtNet2Spec::kOutputChannels; ++channel) {
-        cv::Point first_invalid;
-        if (!cv::checkRange(destination_rect(channel), true, &first_invalid)) {
-          std::ostringstream text;
-          text << TileText(tile) << ": the output has a value that is not finite (FP16 overflow) "
-               << "at channel " << channel << ", output row " << crop.source_y + first_invalid.y
-               << ", output column " << crop.source_x + first_invalid.x;
-          throw std::runtime_error(text.str());
-        }
-      }
-    }
+    // check for values that are not finite.
+    WriteUtNet2OutputCrop(UtNet2Float16OutputRows{.first_row = static_cast<const std::uint8_t*>(
+                                                      objects.readback.data),
+                                                  .row_bytes   = row_bytes,
+                                                  .plane_bytes = readback_plane},
+                          tile, crop, output_scale);
   }
 };
 
@@ -745,7 +587,8 @@ UtNet2DirectMlSession::UtNet2DirectMlSession(std::filesystem::path     graph_pat
     : impl_(std::make_unique<Impl>()) {
   impl_->graph_path = std::move(graph_path);
   if (!std::filesystem::is_regular_file(impl_->graph_path)) {
-    throw std::runtime_error("UtNet2 graph " + PathText(impl_->graph_path) + " does not exist");
+    throw std::runtime_error("UtNet2 graph " + UtNet2PathText(impl_->graph_path) +
+                             " does not exist");
   }
   impl_->adapter = SelectAdapter(preference);
   DXGI_ADAPTER_DESC1 description{};
@@ -764,19 +607,7 @@ auto UtNet2DirectMlSession::operator=(UtNet2DirectMlSession&&) noexcept
 
 void UtNet2DirectMlSession::Run(std::span<const float> input, const PackedTileRect& tile,
                                 const TileOutputCrop& crop) {
-  constexpr int kAlignment = UtNet2Spec::kSizeAlignment;
-  if (tile.width <= 0 || tile.height <= 0 || tile.width % kAlignment != 0 ||
-      tile.height % kAlignment != 0) {
-    throw std::runtime_error(TileText(tile) + ": the height and the width must be positive " +
-                             "multiples of " + std::to_string(kAlignment));
-  }
-  const auto input_count =
-      UtNet2Spec::kInputChannels * static_cast<std::size_t>(tile.width) * tile.height;
-  if (input.size() != input_count) {
-    throw std::runtime_error(TileText(tile) + ": the input has " + std::to_string(input.size()) +
-                             " values, expected " + std::to_string(input_count));
-  }
-  CheckCrop(tile, crop);
+  CheckUtNet2TileRun(input, tile, crop);
   if (!impl_->session) {
     impl_->Load();
   }
@@ -800,6 +631,10 @@ void UtNet2DirectMlSession::Run(std::span<const float> input, const PackedTileRe
 
 auto UtNet2DirectMlSession::IsReadyFor(int width, int height) const -> bool {
   return impl_->session.has_value() && impl_->ran_shapes.contains({width, height});
+}
+
+auto UtNet2DirectMlSession::TileMemory() const -> std::span<const UtNet2TileMemory> {
+  return UtNet2Spec::kDirectMlTileMemory;
 }
 
 auto UtNet2DirectMlSession::DeviceMemory() const -> DeviceMemoryState {

@@ -2,8 +2,10 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Tests of UtNet2DirectMlSession (AI Denoise integration plan, DN2) against the expected outputs
-// of DN0 (alcedo-denoise-lab, release export-utnet2-bayer-dark-loss-10k).
+// Tests of the platform session of the FP16 UtNet2 graph (AI Denoise integration plan, DN2, DN3,
+// DN10) against the expected outputs of DN0 (alcedo-denoise-lab, release
+// export-utnet2-bayer-dark-loss-10k): UtNet2DirectMlSession on Windows (UtNet2DirectMlTest),
+// UtNet2CoreMlSession on macOS (UtNet2CoreMlTest).
 //
 // The folder of the environment variable ALCEDO_AI_DENOISE_TEST_ASSETS holds:
 //   utnet2_bayer_dark_loss_10k_fp16.onnx   the FP16 graph (export_fp16_onnx.py)
@@ -12,7 +14,11 @@
 // Each expected output file holds `input` (4, h, w) and `output` (3, 2h, 2w) in float32: the
 // PyTorch IEEE FP32 output of the model.
 
+#ifdef __APPLE__
+#include "decoders/processor/nn/utnet2_coreml_session.hpp"
+#else
 #include "decoders/processor/nn/utnet2_directml_session.hpp"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -39,12 +45,19 @@
 namespace alcedo::nn {
 namespace {
 
+#ifdef __APPLE__
+using UtNet2PlatformSession = UtNet2CoreMlSession;
+#else
+using UtNet2PlatformSession = UtNet2DirectMlSession;
+#endif
+
 constexpr const char* kAssetsVariable    = "ALCEDO_AI_DENOISE_TEST_ASSETS";
 constexpr const char* kFp16GraphName     = "utnet2_bayer_dark_loss_10k_fp16.onnx";
 constexpr const char* kFp32GraphName     = "utnet2_bayer_dark_loss_10k.onnx";
 // max |session - expected| <= kToleranceRelative x max |expected|. The FP16 graph on DirectML
 // gives 2.8e-3 to 4.1e-3 (fp16_calibration.json of the lab, 2026-11-22); the tolerance is 1.5
-// times the largest, rounded up to one significant digit.
+// times the largest, rounded up to one significant digit. The same tolerance on the Neural Engine
+// (DN10).
 constexpr double      kToleranceRelative = 7e-3;
 
 auto                  AssetsFolder() -> std::optional<std::filesystem::path> {
@@ -118,7 +131,7 @@ auto OutputCount(const PackedTileRect& tile) -> std::size_t {
          UtNet2Spec::kOutputUpscale * tile.width * tile.height;
 }
 
-class UtNet2DirectMlSessionTest : public ::testing::Test {
+class UtNet2SessionTest : public ::testing::Test {
  protected:
   static void TearDownTestSuite() { session_.reset(); }
 
@@ -130,7 +143,7 @@ class UtNet2DirectMlSessionTest : public ::testing::Test {
     }
     folder_ = *folder;
     if (!session_) {
-      session_ = std::make_unique<UtNet2DirectMlSession>(folder_ / kFp16GraphName);
+      session_ = std::make_unique<UtNet2PlatformSession>(folder_ / kFp16GraphName);
     }
   }
 
@@ -141,10 +154,10 @@ class UtNet2DirectMlSessionTest : public ::testing::Test {
   }
 
   std::filesystem::path                                folder_;
-  static inline std::unique_ptr<UtNet2DirectMlSession> session_;
+  static inline std::unique_ptr<UtNet2PlatformSession> session_;
 };
 
-TEST_F(UtNet2DirectMlSessionTest, OutputMatchesPyTorchForEachExpectedOutput) {
+TEST_F(UtNet2SessionTest, OutputMatchesPyTorchForEachExpectedOutput) {
   for (const auto* name : {"random_64", "random_256", "rawnind_crop_512"}) {
     const auto expected   = LoadExpected(folder_, name);
     const auto output     = Run(expected);
@@ -154,7 +167,7 @@ TEST_F(UtNet2DirectMlSessionTest, OutputMatchesPyTorchForEachExpectedOutput) {
   }
 }
 
-TEST_F(UtNet2DirectMlSessionTest, LoadFailsOnDifferentArchitectureMetadata) {
+TEST_F(UtNet2SessionTest, LoadFailsOnDifferentArchitectureMetadata) {
   // The value has the same length, so the protobuf of the copy stays valid.
   auto       bytes = ReadBytes(folder_ / kFp16GraphName);
   const auto value = std::string(UtNet2Spec::kArchitecture);
@@ -165,25 +178,25 @@ TEST_F(UtNet2DirectMlSessionTest, LoadFailsOnDifferentArchitectureMetadata) {
   const auto copy = TempFolder("architecture") / "different_architecture.onnx";
   WriteBytes(copy, bytes);
 
-  const auto message = MessageOf([&] { UtNet2DirectMlSession session(copy); });
+  const auto message = MessageOf([&] { UtNet2PlatformSession session(copy); });
   EXPECT_NE(message.find("`architecture` is `utnet2_bayer_funit33`"), std::string::npos) << message;
   EXPECT_NE(message.find(copy.filename().string()), std::string::npos) << message;
 }
 
-TEST_F(UtNet2DirectMlSessionTest, LoadFailsOnFloat32Graph) {
-  const auto message = MessageOf([&] { UtNet2DirectMlSession session(folder_ / kFp32GraphName); });
+TEST_F(UtNet2SessionTest, LoadFailsOnFloat32Graph) {
+  const auto message = MessageOf([&] { UtNet2PlatformSession session(folder_ / kFp32GraphName); });
   EXPECT_NE(message.find("is not float16"), std::string::npos) << message;
   EXPECT_NE(message.find(kFp32GraphName), std::string::npos) << message;
 }
 
-TEST_F(UtNet2DirectMlSessionTest, LoadFailsOnMissingFile) {
+TEST_F(UtNet2SessionTest, LoadFailsOnMissingFile) {
   const auto absent  = TempFolder("missing") / "absent.onnx";
-  const auto message = MessageOf([&] { UtNet2DirectMlSession session(absent); });
+  const auto message = MessageOf([&] { UtNet2PlatformSession session(absent); });
   EXPECT_NE(message.find("does not exist"), std::string::npos) << message;
   EXPECT_NE(message.find(absent.filename().string()), std::string::npos) << message;
 }
 
-TEST_F(UtNet2DirectMlSessionTest, RunRejectsSizeThatIsNotAMultipleOfSixteen) {
+TEST_F(UtNet2SessionTest, RunRejectsSizeThatIsNotAMultipleOfSixteen) {
   const PackedTileRect tile{.x = 0, .y = 0, .width = 64, .height = 72};
   std::vector<float>   input(std::size_t{UtNet2Spec::kInputChannels} * 64 * 72, 0.1f);
   std::vector<float>   output(OutputCount(tile), 7.0f);
@@ -193,7 +206,7 @@ TEST_F(UtNet2DirectMlSessionTest, RunRejectsSizeThatIsNotAMultipleOfSixteen) {
   EXPECT_TRUE(std::all_of(output.begin(), output.end(), [](float v) { return v == 7.0f; }));
 }
 
-TEST_F(UtNet2DirectMlSessionTest, RunThrowsOnAnOutputThatIsNotFinite) {
+TEST_F(UtNet2SessionTest, RunThrowsOnAnOutputThatIsNotFinite) {
   // 6e4 is a finite float16 value; the activations of the first layers overflow FP16.
   const PackedTileRect tile{.x = 128, .y = 32, .width = 64, .height = 64};
   std::vector<float>   input(std::size_t{UtNet2Spec::kInputChannels} * 64 * 64, 6e4f);
@@ -208,9 +221,9 @@ TEST_F(UtNet2DirectMlSessionTest, RunThrowsOnAnOutputThatIsNotFinite) {
 // The largest difference, relative to the largest value of `one_pass` (3, 1024, 1024), between
 // the one-pass output of the 512 crop and the one-pass output of its top left `size` x `size`
 // packed px, in the output px that do not depend on the bottom and the right border of the
-// smaller input (its size minus the overlap). In exact arithmetic it is 0; on DirectML in FP16 it
-// is the rounding difference of a change of the input shape.
-auto ShapeChangeDifference(UtNet2DirectMlSession& session, const ExpectedOutput& expected,
+// smaller input (its size minus the overlap). In exact arithmetic it is 0; in FP16 on DirectML
+// and on the Neural Engine it is the rounding difference of a change of the input shape.
+auto ShapeChangeDifference(UtNet2PlatformSession& session, const ExpectedOutput& expected,
                            const std::vector<float>& one_pass, int size) -> double {
   const int          full = expected.tile.width;
   std::vector<float> input(std::size_t{4} * size * size);
@@ -241,13 +254,14 @@ auto ShapeChangeDifference(UtNet2DirectMlSession& session, const ExpectedOutput&
   return largest_difference / largest_value;
 }
 
-// DN3: the tile loop on DirectML gives the one-pass output (overlap 96, the last tile shrunk).
+// DN3: the tile loop on the platform session gives the one-pass output (overlap 96, the last
+// tile shrunk).
 // One tile through the loop is the one-pass output bit for bit. With tiles of 256, the tiles
-// have other shapes than the one pass, and DirectML rounds FP16 differently for each shape: the
+// have other shapes than the one pass, and the device rounds FP16 differently for each shape: the
 // tiled output may differ from the one-pass output by the difference that a change of the input
 // shape gives without tiles (measured 1.8e-3 to 2.5e-3 of the largest value, DN3 completion
 // record), with the margin of the DN2 tolerance.
-TEST_F(UtNet2DirectMlSessionTest, TiledOutputEqualsOnePassOnTheExpectedCrop) {
+TEST_F(UtNet2SessionTest, TiledOutputEqualsOnePassOnTheExpectedCrop) {
   const auto             expected = LoadExpected(folder_, "rawnind_crop_512");
   const auto             one_pass = Run(expected);
   const PackedMosaicView mosaic{expected.input, expected.tile.width, expected.tile.height};
@@ -286,9 +300,10 @@ TEST_F(UtNet2DirectMlSessionTest, TiledOutputEqualsOnePassOnTheExpectedCrop) {
   EXPECT_LE(RelativeDifference(tiled, expected.output), kToleranceRelative);
 }
 
-// DN3: DirectML compiles the graph at the first run of each input shape, so the slow-device
-// check measures a tile only when its shape ran on the loaded session.
-TEST_F(UtNet2DirectMlSessionTest, SessionIsReadyOnlyForATileShapeThatRan) {
+// DN3, DN10: DirectML compiles the graph at the first run of each input shape, Core ML creates a
+// session for each shape, so the slow-device check measures a tile only when its shape ran on the
+// loaded session.
+TEST_F(UtNet2SessionTest, SessionIsReadyOnlyForATileShapeThatRan) {
   session_->Release();
   EXPECT_FALSE(session_->IsReadyFor(64, 64));
 
@@ -302,7 +317,7 @@ TEST_F(UtNet2DirectMlSessionTest, SessionIsReadyOnlyForATileShapeThatRan) {
   EXPECT_FALSE(session_->IsReadyFor(64, 64));
 }
 
-TEST_F(UtNet2DirectMlSessionTest, ReleaseFreesTheSessionAndALaterRunLoadsAgain) {
+TEST_F(UtNet2SessionTest, ReleaseFreesTheSessionAndALaterRunLoadsAgain) {
   const auto expected = LoadExpected(folder_, "random_64");
   const auto before   = Run(expected);
   ASSERT_TRUE(session_->IsLoaded());
@@ -315,6 +330,58 @@ TEST_F(UtNet2DirectMlSessionTest, ReleaseFreesTheSessionAndALaterRunLoadsAgain) 
   EXPECT_EQ(after, before);
   EXPECT_LE(RelativeDifference(after, expected.output), kToleranceRelative);
 }
+
+#ifdef __APPLE__
+// DN10: the compiled Core ML model of each tile shape is in its own folder of the model cache. A
+// session of a shape in the cache gives the output of a session that compiled the model.
+TEST_F(UtNet2SessionTest, ModelCacheHoldsEachShapeAndGivesTheOutputOfACompiledSession) {
+  const auto         cache    = TempFolder("model_cache");
+  const auto         expected = LoadExpected(folder_, "random_256");
+  const auto         compiled = Run(expected);
+
+  std::vector<float> filled(compiled.size());
+  {
+    UtNet2CoreMlSession filling(folder_ / kFp16GraphName, cache);
+    filling.Run(expected.input, expected.tile, filled);
+  }
+  ASSERT_TRUE(std::filesystem::is_directory(cache / "256x256"));
+  EXPECT_FALSE(std::filesystem::is_empty(cache / "256x256"));
+  EXPECT_EQ(filled, compiled);
+
+  std::vector<float>  read(compiled.size());
+  UtNet2CoreMlSession reading(folder_ / kFp16GraphName, cache);
+  reading.Run(expected.input, expected.tile, read);
+  EXPECT_EQ(read, compiled);
+
+  // Another shape gets its own folder, so it does not load the model of 256 x 256.
+  const auto         small = LoadExpected(folder_, "random_64");
+  std::vector<float> small_output(OutputCount(small.tile));
+  reading.Run(small.input, small.tile, small_output);
+  EXPECT_TRUE(std::filesystem::is_directory(cache / "64x64"));
+  EXPECT_LE(RelativeDifference(small_output, small.output), kToleranceRelative);
+}
+
+TEST(UtNet2CoreMlModelCacheTest, PreparedFolderIsTheOnlyEntryOfTheRoot) {
+  const auto root = std::filesystem::path(ALCEDO_TEST_TEMP_ROOT) / "model_cache_root";
+  std::filesystem::remove_all(root);
+  const std::string old_version(64, 'a');
+  const std::string version(64, 'b');
+  std::filesystem::create_directories(root / old_version / "1536x1536");
+  std::filesystem::create_directories(root / "other");
+
+  const auto folder = PrepareCoreMlModelCache(root, version);
+  EXPECT_EQ(folder, root / version);
+  EXPECT_TRUE(std::filesystem::is_directory(folder));
+  EXPECT_FALSE(std::filesystem::exists(root / old_version));
+  EXPECT_FALSE(std::filesystem::exists(root / "other"));
+
+  // A version that is not a SHA-256 is never a folder name (it could leave the root).
+  for (const auto* invalid : {"..", "../other", "ABCDEF"}) {
+    EXPECT_THROW((void)PrepareCoreMlModelCache(root, invalid), std::runtime_error) << invalid;
+  }
+  EXPECT_TRUE(std::filesystem::is_directory(folder));
+}
+#endif
 
 }  // namespace
 }  // namespace alcedo::nn

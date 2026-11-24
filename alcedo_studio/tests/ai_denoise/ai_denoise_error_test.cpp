@@ -72,11 +72,19 @@ TEST(AiDenoiseErrorTest, PlatformIsAvailableWhenItsDeviceAndRuntimeLoad) {
   EXPECT_FALSE(no_platform.IsPlatformAvailable());
 }
 
+// The sample RAW files are local files of the developer (sample_images is not in the
+// repository); a test without its file skips.
 TEST(AiDenoiseErrorTest, SensorLayoutOfABayerRawFileIsBayer) {
+  if (!std::filesystem::exists(ALCEDO_AI_DENOISE_TEST_RAW)) {
+    GTEST_SKIP() << "Sample RAW file absent: " << ALCEDO_AI_DENOISE_TEST_RAW;
+  }
   EXPECT_EQ(ReadRawSensorLayout(ALCEDO_AI_DENOISE_TEST_RAW), RawSensorLayout::Bayer);
 }
 
 TEST(AiDenoiseErrorTest, SensorLayoutOfALinearDngIsNotBayer) {
+  if (!std::filesystem::exists(ALCEDO_AI_DENOISE_TEST_LINEAR_DNG)) {
+    GTEST_SKIP() << "Sample DNG file absent: " << ALCEDO_AI_DENOISE_TEST_LINEAR_DNG;
+  }
   // Demosaiced RGB data (LibRaw filters 0): the loader develops it as decoded RGB.
   EXPECT_EQ(ReadRawSensorLayout(ALCEDO_AI_DENOISE_TEST_LINEAR_DNG), RawSensorLayout::Other);
 }

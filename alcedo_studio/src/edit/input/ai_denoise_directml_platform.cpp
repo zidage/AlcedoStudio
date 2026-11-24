@@ -19,7 +19,8 @@ class DirectMlAiDenoisePlatform final : public AiDenoisePlatform {
 
   void               CheckRuntime() override { nn::LoadDirectMlRuntime(); }
 
-  [[nodiscard]] auto CreateSession(const std::filesystem::path& graph_path)
+  [[nodiscard]] auto CreateSession(const std::filesystem::path& graph_path,
+                                   std::string_view /*model_version*/)
       -> std::unique_ptr<nn::UtNet2TileSession> override {
     return std::make_unique<nn::UtNet2DirectMlSession>(graph_path);
   }
