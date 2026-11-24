@@ -18,7 +18,10 @@
   Laptop GPU (`target_time` 0.72 s); the Intel Iris Xe gets the slow-device error; a false
   slow-device error under video memory load is issue #1043 (a stop condition of DN6).
   2026-11-22: DN5 complete (issue #1045): the Develop parameter `ai_denoise`, the denoised input
-  kind, and its Develop passes on CUDA and OpenCL (Metal code written, not built)
+  kind, and its Develop passes on CUDA and OpenCL (Metal code written, not built).
+  2026-11-22: DN6 complete (issue #1048): the model runs in the loader of a full-size render;
+  issue #1043 resolved by the tile size from the video memory of all processes and the
+  slow-device check from the fastest measured tile; 0.56 to 0.72 s for a ready run at 42.2 MP
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -155,11 +158,12 @@ is not installed also has the control that opens the AI Models page.
 
 The slow-device check: the tile loop measures the time of the tile runs. The creation of a
 session and the first run of each tile shape on a session (it compiles the graph; DN3: also on
-DirectML) are not measured. After each measured tile, the loop projects the time of the whole
-photo from the time for each output pixel of the measured tiles. When the projected time is
-above `slow_device_limit` multiplied by the megapixels of the photo, the run stops. A run with
-no measured tile (a photo of one tile on a new session) has no check; the next run has it.
-The check also runs after the last tile (DN3).
+DirectML) are not measured. From the third measured tile on, the loop projects the time of the
+whole photo from the fastest time for each output pixel of the measured tiles (DN6, issue #1043:
+another process that shares the GPU slows single tiles of a fast device). When the projected
+time is above `slow_device_limit` multiplied by the megapixels of the photo, the run stops. The
+check also runs after the last tile (DN3), with the tiles that were measured. A run with no
+measured tile (a photo of one tile on a new session) has no check; the next run has it.
 
 ## 3. Scope
 
@@ -284,7 +288,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN3 | Overlap tile planner, tile loop with float16 tiles, slow-device check, full photo run on DirectML, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 800 to 1200 | complete (#1042) |
 | DN4 | Removed on 2026-11-22 (was: the stored result reader and writer) | | | | removed |
 | DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | U4 | 1000 to 1500 | complete (#1045) |
-| DN6 | Model run in the loader: `DenoiseModelSession`, input preparation, gain match, the denoised entry of the prepared source cache, GPU release, errors | `edit/input`, `decoders/processor/nn` | DN3, DN5 | 800 to 1300 | planned |
+| DN6 | Model run in the loader: `DenoiseModelSession`, input preparation, gain match, the denoised entry of the prepared source cache, GPU release, errors | `edit/input`, `decoders/processor/nn` | DN3, DN5 | 800 to 1300 | complete (#1048) |
 | DN7 | Editor switch, render error with the AI Models control, model version notice | `ui/alcedo_main` | DN6 | 500 to 900 | planned |
 | DN8 | Library action and export errors | `ui/alcedo_main` | DN7 | 300 to 600 | planned |
 | DN9 | Removed on 2026-11-22 (was: the settings section for the stored results) | | | | removed |
@@ -293,7 +297,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | planned |
 | DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | planned |
 
-DN0 to DN3 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
+DN0 to DN3, DN5, and DN6 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
 detailed section in this file before its implementation starts, with the format of DN0 to DN3.
 DN5 can start before DN3 completes: its tests build the denoised prepared input from the DN0
 expected outputs, so the Develop integration can be checked before the tile loop exists.
@@ -1615,23 +1619,322 @@ and record. Largest touched production files: `raw_input_loader.cpp` 778 lines,
 item) is DN7. Until DN6, every full-size render of a document with the switch on reports the
 input error (the switch has no control before DN7).
 
-### DN6 to DN13
+### DN6: model run in the loader
+
+Written on 2026-11-22, before the implementation.
+
+**Objective and deliverables**
+
+A full-size render (editor, export) of a Bayer photo with `ai_denoise` on runs the model on the
+mosaic and renders the denoised input of DN5. The deliverables: the input preparation of the lab
+specification (version 1) and the gain match, the process-wide owner of the platform session
+`DenoiseModelSession`, the denoised entry of the prepared source cache, the release of the model
+session with the editor GPU release and at the editor close, the error kinds of 2.4, and the
+resolution of issue #1043 (a stop condition of DN6, section 8).
+
+**Inputs and prerequisites**
+
+DN3 (tile loop, slow-device check), DN5 (`FromDenoisedBayer`, the input check). Lab
+`docs/alcedo_integration.md`: "Input preparation (version 1)", "Output and gain match".
+
+**Modules, files, and APIs**
+
+| File | Responsibility |
+| --- | --- |
+| `include/edit/input/ai_denoise_input.hpp`, `edit/input/ai_denoise_input.cpp` (new) | `PackBayerForAiDenoise(cfa input)`: the packed RGGB mosaic of the decode area (phase and odd sizes by reflection), the input means of the gain match. `AiDenoiseGainMatch`: the column sums of the camera RGB to linear Rec.2020 matrix, the output sums of a tile, the factor. `AssembleDenoisedPlane`: the F32 RGBA plane of the decode area in the DN5 value domain |
+| `include/edit/input/ai_denoise_model_session.hpp`, `edit/input/ai_denoise_model_session.cpp` (new) | `DenoiseModelSession`: the installed model version, the platform session (created at the first run, released on request), one run at a time, the slow-device result of each device, `AiDenoiseError` with its kind |
+| `include/edit/input/ai_denoise_platform.hpp`, `edit/input/ai_denoise_directml_platform.cpp` (new, Windows) | `AiDenoisePlatform`: the device key (the adapter LUID) and the creation of a platform session; `UtNet2DirectMlSession` on Windows |
+| `include/edit/input/prepared_source_cache.hpp`, `edit/input/prepared_source_cache.cpp` | `AcquireDenoised`: the lookup of the denoised entry (source key, model version, preparation version), on a miss the CFA entry and the run |
+| `include/edit/runtime/renderer.hpp`, `include/edit/runtime/detail/renderer.inl.hpp`, `edit/pipeline/pipeline_executor.cpp` | The denoised input for a full-size render with the switch on; `PipelineExecutor::ReleaseAiDenoiseSession` |
+| `ui/alcedo_main/album_backend/editor_session_render_scheduler_port.cpp`, the application start | The release with the editor GPU release and at the editor close; the model folder of the session |
+| `decoders/processor/nn/utnet2_tile_loop.cpp`, `utnet2_directml_session.cpp` | Issue #1043: the tile size from the local memory that all processes use; the slow-device check from the fastest of the first measured tiles |
+
+**Data rules**
+
+- **Where the model runs.** Only in the renderer, for `DecodeRes::FULL` with `ai_denoise` on
+  and a Bayer CFA input. An X-Trans, direct RGB, or raster input keeps its CFA or RGB input, and
+  the DN5 input check reports "AI Denoise supports Bayer sensors only". A reduced decode
+  (thumbnail, semantic input image) renders the CFA path (D12).
+- **Input preparation (lab version 1).** The area is the decode area of DN5
+  (`BuildDecodeCropRect`). The value of a sample is `(raw - black) / (maximum - black_c)`:
+  `black` is `black_level[c]` plus the pattern black of the position (the CFA Linearize step), and
+  `maximum` is LibRaw `color.maximum` (a new field of `RawLinearizationParams`, filled at the
+  unpack). No clip. A GBRG or BGGR area gets one row at the top, a GRBG or BGGR area one column
+  at the left, and an odd size one row or column at the bottom or the right, each by reflection
+  without the edge pixel; then the mosaic starts with R and is packed to 4 planes (R, G1, G2, B).
+- **Gain match.** `g = sum_c w_c mean_in(c) / sum_c w_c mean_out(c)`: `w_c` the column sums of
+  `XYZ_to_Rec2020 * inverse(cam_xyz)` (LibRaw `color.cam_xyz`, copied into the color context at
+  the unpack), `mean_in(c)` the mean of the prepared samples of color `c` in the area (G: both
+  positions), `mean_out(c)` the mean of output channel `c` in the area. The tile callback adds
+  the output sums of the kept rectangle of each tile inside the area (double precision).
+- **Denoised plane.** Channel `c` of the area: `g * out_c * (maximum - black_level[c]) /
+  (white_level[c] - black_level[c])` (green: entry 1), alpha 1: the value domain of DN5.
+- **Cache.** The denoised entry has its own lookup: the CFA lookup plus the hash of the
+  installed model version. A miss takes the CFA entry (a hit or an unpack), runs the model,
+  releases the CFA lease, and inserts the denoised entry; the CFA entry is then the first
+  candidate of the eviction. The host budget (512 MiB) applies; the denoised entry of 45.4 MP
+  is 726 MiB (F32 RGBA) and a leased entry is never evicted. A batch render (export) runs the
+  model at each render, as it unpacks at each render.
+- **Model version.** The installed version is the SHA-256 of the graph file at
+  `<model folder>/ai-denoise-v1/utnet2_bayer_dark_loss_10k_fp16.onnx`, read again when the size
+  or the time of the file changes. The model folder comes from the application
+  (`semantic/modelDirectory`). No file: `AiDenoiseError` of the kind `ModelNotInstalled`.
+- **Session.** One `DenoiseModelSession` in the process (`ProcessDenoiseModelSession()`); the
+  executors use it unless a test gives its own. A mutex serializes the runs of the editor and
+  the export. The platform session is created at the first run and kept until `Release`. A run
+  error releases the platform session (a removed DirectML device is not used again), and the
+  next run creates it again.
+- **Slow device.** A `DenoiseDeviceTooSlowError` is kept for the device key until the process
+  ends, also after `Release`; a later run on that device throws at once and creates no session.
+- **Release.** The editor GPU release (export, semantic generation) and the editor close call
+  `PipelineExecutor::ReleaseAiDenoiseSession` after `ReleaseBinding`, on the editor worker. The
+  end of an editor GPU release also releases it (the export ran its renders). A binding change
+  (another photo) keeps the session.
+- **Error kinds.** `AiDenoiseError` (a `std::runtime_error`) has `ModelNotInstalled`,
+  `DeviceTooSlow`, and `RunFailed` (ONNX Runtime, DirectML, Direct3D 12, the video memory, a value
+  that is not finite, no platform session on this platform). The renderer passes it through
+  unchanged, so that DN7 and DN8 select the text and the controls.
+- **Issue #1043.** The tile size uses the smaller of the budget of the process and the local
+  memory of the adapter that no process uses (the performance counter
+  `GPU Adapter Memory\Dedicated Usage`; not on a UMA adapter). The slow-device check projects from
+  the fastest of the measured tiles, from the third measured tile on and after the last tile.
+
+**Implementation steps**
+
+1. Issue #1043 in the tile loop and the DirectML session; the measurement under load.
+2. The input preparation, the gain match, the plane assembly, and their tests.
+3. `DenoiseModelSession`, the DirectML platform, and their tests with a test platform.
+4. `AcquireDenoised`, the renderer, the executor release, and their tests.
+5. The release in the editor port and the model folder at the application start.
+6. The real run: a RAW file through the CUDA and OpenCL renderer with the FP16 graph.
+
+**Primary success call chain**
+
+```text
+Renderer::RenderImage (DecodeRes::FULL, ai_denoise on)
+  -> PreparedSourceCache::AcquireDenoised(encoded, installed version) -> miss
+     -> AcquireEncoded (CFA entry) -> DenoiseModelSession::Denoise(cfa input)
+        -> PackBayerForAiDenoise -> DenoiseBayerMosaic(platform session) -> output sums per tile
+        -> gain match factor -> AssembleDenoisedPlane -> RawInputLoader::FromDenoisedBayer
+     -> insert the denoised entry
+  -> CompileDevelopPasses(DenoisedRgb) -> the Develop passes of DN5
+```
+
+**Primary failure call chain**
+
+```text
+no graph file -> AiDenoiseError(ModelNotInstalled) before a lookup -> the render error
+slow device -> DenoiseDeviceTooSlowError -> kept for the device -> AiDenoiseError(DeviceTooSlow)
+run error -> the platform session is released -> AiDenoiseError(RunFailed) -> the render error;
+  no cache entry
+```
+
+**Tests**
+
+| Test | Assertion |
+| --- | --- |
+| `PackedMosaicStartsWithRedForEachBayerPhase` | For RGGB, GBRG, GRBG, BGGR and odd sizes: each packed value is the prepared value of the reflected mosaic position, the plane 0 sample is R |
+| `PreparedValuesUseTheBlackOfEachColorAndTheLibRawMaximum` | Per-color black, pattern black, maximum; values below black and above maximum stay unclipped; the input means |
+| `GainMatchFactorEqualsTheLabValueOnTheExpectedCrop` (DN0 assets) | `rawnind_crop_512` with its `rgb_xyz_matrix`: the factor equals the lab `channel_sums` value within 1e-6 relative |
+| `DenoisedPlaneIsTheGainMatchedOutputInTheWhiteLevelDomain` | The area crop, the factor, the scale to the white level of each channel, alpha 1 |
+| `ModelSessionRunsOneDenoiseAtATime` | Two threads: no overlap of runs in the test platform |
+| `ModelSessionCreatesThePlatformSessionOnceAndAgainAfterRelease` | Session count after runs, `Release`, and the next run |
+| `SlowDeviceResultIsKeptForTheDeviceAfterRelease` | After the slow-device error and `Release`, a run on the device throws `DeviceTooSlow` at once and creates no session; another device runs |
+| `RunErrorReleasesThePlatformSessionAndReportsRunFailed` | Kind, session released, next run creates one |
+| `MissingGraphReportsModelNotInstalled` | Kind, no session |
+| `InstalledModelVersionIsTheSha256OfTheGraphFile` | Version text; a changed file gives a new version |
+| `DenoisedEntryIsReusedAndRunsTheModelOnce` | Two acquires: one run; another model version: a second run; the CFA entry is evicted first |
+| `NonBayerInputKeepsItsCfaEntryWithoutARun` | X-Trans or direct RGB: no run, the input of the CFA entry |
+| `FullSizeRenderWithTheSwitchOnRendersTheModelOutput` (CUDA, OpenCL) | A test platform with a known output: `develop.sensor_linear` is that output; a second render runs no model; a reduced render runs no model |
+| `ModelErrorIsTheRenderErrorWithItsKind` (CUDA, OpenCL) | `AiDenoiseError` of each kind passes out of `Render` |
+| `RawPhotoRendersWithTheFp16GraphOnDirectMl` (CUDA, OpenCL; assets) | A RAW file of the test assets: finite sensor result, channel means within 3% of the CFA render, lower noise |
+
+**Exit criteria**
+
+- [x] The tests pass in `build/debug` on CUDA and OpenCL.
+- [x] Issue #1043: no slow-device error on the RTX 3080 Laptop GPU with another process that
+      holds video memory; the Intel Iris Xe keeps the error. The times are in the record.
+- [x] The touched suites (`UtNet2TileLoopTest`, `UtNet2DirectMlTest`, `GpuDagRawInputTest`, the
+      CUDA and OpenCL Develop tests) have no new failure.
+
+**Expected diff**: 800 to 1300 lines.
+
+##### Phase DN6 completion record (2026-11-22)
+
+**Status:** complete. A full-size render of a Bayer photo with `ai_denoise` on runs the FP16
+graph on DirectML in the loader and renders the denoised input of DN5, on CUDA and OpenCL. The
+input preparation, the gain match, `DenoiseModelSession`, the denoised cache entry, the release
+with the editor GPU release and at the editor close, the error kinds, and issue #1043. Issue
+#1048.
+
+**Primary success call chain:**
+
+```text
+Renderer::RenderImage (DecodeRes::FULL, ai_denoise on)      include/edit/runtime/detail/renderer.inl.hpp
+  -> DenoiseModelSession::InstalledModelVersion (SHA-256 of the graph file, kept by size and time)
+  -> PreparedSourceCache::AcquireDenoised(encoded, version) -> miss    edit/input/prepared_source_cache.cpp
+     -> AcquireEncoded(FULL): the CFA entry (hit or LibRaw unpack); not Bayer CFA -> that lease
+     -> DenoiseModelSession::Denoise(cfa, version) (run mutex)       edit/input/ai_denoise_model_session.cpp
+        -> AiDenoisePlatform::DeviceKey (DirectMlAdapterKey: description and LUID); slow-device map
+        -> PackBayerForAiDenoise (decode area, phase rows and columns by reflection, input means)
+        -> AiDenoiseGainWeights(cam_xyz) -> CreateSession on the first run (UtNet2DirectMlSession)
+        -> nn::DenoiseBayerMosaic (AvailableTileMemory: process budget and adapter memory of all
+           processes) -> each tile: Run -> AiDenoiseOutputSums::AddKept
+        -> AiDenoiseGainFactor -> AssembleDenoisedPlane -> RawInputLoader::FromDenoisedBayer
+     -> the CFA lease ends -> Insert (eviction takes the unleased CFA entry first)
+  -> plan compile (DenoisedRgb) -> RequireDevelopInputForAiDenoise -> the Develop passes of DN5
+Batch render (export): unpack -> Denoise at each render (no cache, as the unpack)
+Editor close, editor GPU release start and end (EditorSessionRenderSchedulerPort, editor worker)
+  -> PipelineExecutor::ReleaseBinding -> PipelineExecutor::ReleaseAiDenoiseSession
+  -> DenoiseModelSession::Release (waits for a run; the slow-device map stays)
+```
+
+**Primary failure call chain:**
+
+```text
+no model folder or no graph file -> InstalledModelVersion throws AiDenoiseError(ModelNotInstalled)
+  before the cache lookup -> the render error; no unpack, no cache entry
+slow device -> DenoiseDeviceTooSlowError -> kept for the device key, the session released
+  -> AiDenoiseError(DeviceTooSlow); a later run on that device throws at once, no session
+ONNX Runtime, DirectML, Direct3D 12, video memory, a value that is not finite, no platform
+  -> the platform session released (a removed device is not used again)
+  -> AiDenoiseError(RunFailed) -> the render error; no denoised entry; the next frame runs again
+X-Trans, direct RGB, raster with the switch on -> the CFA or RGB entry, no run
+  -> RequireDevelopInputForAiDenoise: "AI Denoise supports Bayer sensors only"
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `PackedMosaicStartsWithRedForEachBayerPhase` (4 patterns x 3 sizes, each packed value and its color) | `AiDenoiseLoaderTest` | PASS |
+| `PreparedValuesUseTheBlackOfEachColorAndTheLibRawMaximum` (margins with an odd top margin, pattern black, unclipped values, the means) | `AiDenoiseLoaderTest` | PASS |
+| `PreparationRejectsAnInputThatIsNotAFullSizeBayerCfa` (added) | `AiDenoiseLoaderTest` | PASS |
+| `OutputSumsAddOnlyTheOutputOfTheArea` (added) | `AiDenoiseLoaderTest` | PASS |
+| `DenoisedPlaneIsTheGainMatchedOutputInTheWhiteLevelDomain` | `AiDenoiseLoaderTest` | PASS |
+| `GainMatchFactorEqualsTheLabValueOnTheExpectedCrop` (weights within 1e-5, factor within 1e-6 of the lab `channel_sums` 9.6937e-6) | `AiDenoiseLoaderTest` | PASS |
+| `PackedMosaicEqualsTheLabPreparationOfARawFile` (added: `_DSC0726.ARW` against the lab `prepare_packed_rggb`; largest difference at most 1e-7, means within 1e-6) | `AiDenoiseLoaderTest` | PASS |
+| `InstalledModelVersionIsTheSha256OfTheGraphFile` | `AiDenoiseLoaderTest` | PASS |
+| `MissingGraphReportsModelNotInstalled` | `AiDenoiseLoaderTest` | PASS |
+| `DenoiseGivesTheGainMatchedInputOfTheDecodeArea` (added: two tiles; the plane equals the one-pass plane within 1e-6) | `AiDenoiseLoaderTest` | PASS |
+| `ModelSessionCreatesThePlatformSessionOnceAndAgainAfterRelease` (also a new installed version) | `AiDenoiseLoaderTest` | PASS |
+| `ModelSessionRunsOneDenoiseAtATime` (3 threads, at most 1 tile run at a time) | `AiDenoiseLoaderTest` | PASS |
+| `SlowDeviceResultIsKeptForTheDeviceAfterRelease` | `AiDenoiseLoaderTest` | PASS |
+| `RunErrorReleasesThePlatformSessionAndReportsRunFailed` | `AiDenoiseLoaderTest` | PASS |
+| `PlatformWithoutForwardCodeReportsRunFailed` (added) | `AiDenoiseLoaderTest` | PASS |
+| `DenoisedEntryIsReusedAndRunsTheModelOnce` | `AiDenoiseLoaderTest` | PASS |
+| `NonBayerInputKeepsItsEntryWithoutARun` | `AiDenoiseLoaderTest` | PASS |
+| `FullSizeRenderWithTheSwitchOnRendersTheModelOutput` (one run for two frames, the cached entry, a reduced frame without a run, the switch off, the batch run at each render) | `AiDenoiseRenderTest` (CUDA, OpenCL) | PASS |
+| `ModelErrorIsTheRenderErrorWithItsKind` (each kind out of `Render`; no entry after a run error) | `AiDenoiseRenderTest` (CUDA, OpenCL) | PASS |
+| `RawPhotoRendersWithTheFp16GraphOnDirectMl` (`_DSC0726.ARW`, the product platform; display means of a 512 px crop at 100% within 5% of the CFA render, Laplacian lower; release and a new session) | `AiDenoiseRenderTest` (CUDA, OpenCL) | PASS |
+| `TileSizeSelectionCountsTheVideoMemoryOfOtherProcesses` (added, #1043) | `UtNet2TileLoopTest` | PASS |
+| `SlowDeviceCheckUsesTheFastestMeasuredTile` (added, #1043) | `UtNet2TileLoopTest` | PASS |
+| The DN3 tests with the changed check (the stops after 3 measured tiles) | `UtNet2TileLoopTest`, `UtNet2DirectMlTest` | PASS |
+
+Commands:
+
+```text
+cmd /c "scripts\msvc_env.cmd --build build\debug --target alcedo_main AiDenoiseLoaderTest AiDenoiseRenderTest UtNet2TileLoopTest UtNet2DirectMlTest GpuDagRawInputTest GpuDagCudaDevelopTest GpuDagOpenClDevelopTest GpuDagCudaDrtProductTest GpuDagOpenClDrtProductTest ExecutorIsolationTest ExecutorSnapshotRenderTest"
+lab: python build/tmp/dn6/lab_pack_raw.py alcedo_studio/tests/resources/sample_images/raw/_DSC0726.ARW <assets>
+$env:ALCEDO_AI_DENOISE_TEST_ASSETS = "<folder: the FP16 graph, the DN0 expected outputs, _DSC0726.packed.f32/.txt>"
+ctest --test-dir build/debug -R "^(AiDenoiseLoaderTest|AiDenoiseRenderTest|UtNet2TileLoopTest|UtNet2DirectMlTest|GpuDagRawInputTest)\." -j 1   # 320/320
+ctest --test-dir build/debug -R "^(...|GpuDagCudaDevelopTest|GpuDagOpenClDevelopTest|ExecutorIsolationTest|ExecutorSnapshotRenderTest)\." -j 1   # 391/393
+ctest --test-dir build/debug -R "^(GpuDagCudaDrtProductTest|GpuDagOpenClDrtProductTest)\." -j 1   # 164/164
+cmd /c "scripts\msvc_env.cmd --build build\release-test --target AiDenoiseRenderTest UtNet2PhotoTimingTool"
+AiDenoiseRenderTest --gtest_filter=*RawPhoto*   # the times below; UtNet2PhotoTimingTool for #1043
+```
+
+Suite totals: 17/17 `AiDenoiseLoaderTest`, 6/6 `AiDenoiseRenderTest`, 9/9 `UtNet2TileLoopTest`, 9/9
+`UtNet2DirectMlTest`, 279/279 `GpuDagRawInputTest`; CUDA and OpenCL Develop and executor suites
+391/393: the 2 failures are `DcpProfileMatchesScalarReference` on CUDA and OpenCL (issue #972,
+without DN6 too); DRT product suites 164/164. Full suite: not run (AGENTS.md).
+
+**Times** (release build `build/release-test`, RTX 3080 Laptop GPU, `_DSC0726.ARW` 7952 x 5304 px
+= 42.2 MP of the decode area, 6 tiles of 1536; other programs used 1.6 to 2.2 GiB and up to 61%
+of the GPU at times):
+
+| Run | Tile loop | `Denoise` (preparation, tiles, gain match, plane) |
+| --- | ---: | ---: |
+| Ready session (a cache miss of a photo of a known size), 12 runs | 0.41 to 0.47 s (one 0.67 s) | 0.56 to 0.72 s (one 0.90 s) |
+| First run of a session (session creation 0.35 to 0.96 s; the first tile of each new width compiles) | 0.85 to 1.39 s | 1.36 to 2.51 s |
+| First render of the photo in the editor (unpack, the run above, the Develop passes, the display) | | 2.8 to 4.2 s |
+
+- At 45.4 MP the ready run scales to about 0.62 to 0.77 s; `target_time` is 0.72 s, its 15% limit
+  0.83 s. The host part (preparation, sums, plane) is 0.15 to 0.25 s beside the tile loop.
+- Debug build: the ready run is not measured; the first run takes 1.9 to 2.7 s.
+- Host memory of a 45.4 MP run: the packed mosaic 182 MB, the model output 545 MB, the denoised
+  plane 726 MiB (F32 RGBA) at the same time, beside the CFA entry (91 MB). The plane is the cache
+  entry: it is above the host budget of 512 MiB; a leased entry stays, and the next insertion of
+  another entry evicts it.
+
+**Issue #1043** (release build, `UtNet2PhotoTimingTool`, 45.4 MP):
+
+| Case | Before DN6 | DN6 |
+| --- | --- | --- |
+| Another process holds 4.6 GiB and writes it every 100 ms (6.2 to 7.0 GiB in use before the run) | tiles of 1536 forced: slow-device error in 4 of 4 runs (projected 7.9 to 35 s); the DN6 tile size alone (1024): error in 3 of 4 runs (projected 2.34 to 2.94 s, single tiles of 0.16 s after the thrash) | tiles of 1024 selected, 14 of 14 runs complete, 0.64 to 1.03 s |
+| Two processes started together | (DN3: error in 6 of 7 runs) | both select 1536, 16 of 16 runs complete, 0.75 to 1.27 s |
+| Intel Iris Xe (`--adapter minimum-power`) | stop after the first measured tile | stop after 3 measured tiles: 24.3 MP projected 1.92 to 2.07 s (limit 1.22 s), 45.4 MP 3.54 to 3.73 s (limit 2.27 s), 1.5 to 2.0 s to the stop on a ready session |
+
+The cause was two parts: the DXGI budget of a process does not count the video memory of the
+other processes (a selected tile of 1536 oversubscribed the local memory), and a single slow tile
+of a fast device during the paging of another process stopped the run.
+
+**Changes against the plan text and detail choices:**
+
+- **#1043.** `DeviceMemoryState` has the local memory of the adapter (DXGI
+  `DedicatedVideoMemory`) and its use by all processes (the performance counter `GPU Adapter
+  Memory(luid_...)\Dedicated Usage`, PDH); `AvailableTileMemory` takes the smaller of the free
+  budget and the free local memory, plus the held arena. A UMA adapter (D3D12 architecture
+  `UMA`) uses the budget only. The slow-device check projects from the fastest measured tile
+  from the third measured tile on (`UtNet2Spec::kSlowDeviceMeasuredTiles`), and after the last
+  tile with the tiles that were measured. Sections 2.4 and 9 changed.
+- **The decode area of a Sony file is its default crop** (7952 x 5304 inside the visible
+  7968 x 5320 of LibRaw): the model input is the area that Alcedo develops, so it differs from the
+  lab packing by the 8 px border. The comparison test uses the common area.
+- **`RawLinearizationParams::libraw_maximum`** holds LibRaw `color.maximum` (not hashed: the
+  source key holds the file). The loader copies LibRaw `cam_xyz` into the color context.
+- **Pattern black:** the prepared value subtracts the pattern black of the position, as the CFA
+  Linearize step; the denominator uses `maximum - black_level[c]`. For a file without a pattern
+  black this is the lab preparation.
+- **The installed version is read before the lookup,** so a non-Bayer photo with the switch on
+  and no model reports `ModelNotInstalled`, not the sensor error (the switch is disabled for such a
+  photo in DN7; only a paste can set it).
+- **Release:** also at the end of an editor GPU release (the export ran its own runs), and at the
+  shutdown of the application module host. A binding change keeps the session.
+- **No cancel check** in the product run: one ready run takes about 0.6 s; the frame that needs
+  the result waits for it.
+- **The cache counts** a denoised miss in `misses` and the CFA lookup again in its own counter;
+  `Stats::denoise_runs` counts the model runs.
+- **Link:** the DirectML session names d3d12, dxgi, pdh, and delayimp with `#pragma comment(lib)`,
+  and the delay load of onnxruntime.dll is `$<HOST_LINK:...>`: `EditPipeline` (a CUDA library)
+  passes the link line of EditInput to the device link of nvcc, which cannot open a library by its
+  bare name.
+- **Process instance:** `ProcessDenoiseModelSession()` is called only by `PipelineExecutor` (and the
+  application start and shutdown), all in the executable; renderers get the session from their
+  executor, so a copy of EditInput in a DLL does not make a second instance.
+- The timing tool prints the adapter memory of all processes and the non-local memory of the
+  process.
+
+**Checklist / exit condition:** all three items checked.
+
+**LOC note (grill-code-review):** production: 7 new files 849 lines (`ai_denoise_input.cpp` 290,
+`ai_denoise_model_session.cpp` 196, headers 317), about 300 changed lines in 17 files; tests 1370
+lines (4 new files, the tile loop test); the plan section and this record. Larger than the
+estimate of 800 to 1300 with the tests. The two editor files that this phase touches with 10 lines
+were above 1000 lines before it (`editor_session_render_scheduler_port.cpp` 1149,
+`application_module_host.cpp` 1026); no new file is above 300 lines.
+
+**Remaining gaps:** a real device removal of DirectML (887A0005) is not reproduced: a run error
+releases the session and the next run creates it, but whether the editor backend continues when
+the removal resets the adapter that it shares (a laptop with only the Intel Iris Xe) is not
+measured. The Metal and macOS paths (DN10). The control and the texts of the error kinds (DN7,
+DN8).
+
+### DN7 to DN13
 
 Each of these phases gets its detailed section before its implementation starts. DN4 and DN9
 are removed (2026-11-22, D6). The fixed points that the detailed sections must keep:
 
-- **DN6**: `DenoiseModelSession` is the only owner of the platform session in the process; the
-  editor render and the export use it one run at a time (2.3). The loader runs the model only
-  for a render at the full size (D12) and only on a miss of the prepared source cache. The gain
-  match factor is one value for the whole photo: the tile loop accumulates its sums, and the
-  loader applies the factor before it inserts the cache entry. The editor GPU release holder
-  also releases the model session, on every render backend: DirectML uses the same GPU memory
-  as the CUDA or OpenCL resources of the editor. A model that cannot run gives the render error
-  of 2.4; the loader does not return the photo without the noise reduction.
-  `DenoiseModelSession` keeps a `DenoiseDeviceTooSlowError` for the device (the adapter LUID on
-  Windows) until the process ends, also after the release of the session, and throws it at once
-  for a later run on that device (2.3). The render error carries the error kind (not installed,
-  too slow, run error), so that DN7 and DN8 select the text and the controls.
 - **DN7**: QML rules of the `alcedo-qml-ui` skill. No test for pure UI; the tests are on the C++
   owner of the switch state (the missing model path, the model version notice, the
   `Turn Off AI Denoise` action: one `SetParameter` change that turns the switch off, undo turns
@@ -1681,8 +1984,8 @@ are removed (2026-11-22, D6). The fixed points that the detailed sections must k
 | A photo outside the calibration overflows FP16 | The output check of each tile (DN2, DN10); the margin of the held-out photos in the calibration record | The render reports the error for that photo. The lab calibrates again with the photo and publishes a new FP16 graph (a new model version, D10) |
 | The FP16 output shows a difference against FP32 by eye | The sheets of the DN2 lab work | The user checks the sheets before DN2 completes; a visible difference stops DN2 |
 | The model time in the render is too long for editing on a slower device (Intel Iris Xe: 5.2 s at 45.4 MP in FP16) | The slow-device check of each run (2.4) | The render reports the slow-device error with `Turn Off AI Denoise`; the user decided on 2026-11-22 that a slow device gets this error (U1) |
-| A fast device crosses `slow_device_limit` under load (thermal limit, another GPU process) and gets the error | DN3 timing tool under load; DN6 render time | `slow_device_limit` is about 3 times `target_time`; record the times under load in the DN3 completion record. A false error on the RTX 3080 Laptop GPU or the M4 stops DN6 until the limit or the measurement changes. DN3: a false error when other processes oversubscribe the video memory, issue #1043 |
-| The denoised entries of the prepared source cache use much host memory (545 MB for 45.4 MP in FP32) | DN6 memory record | The cache budget of the prepared source cache applies to the entry; DN6 records the budget use |
+| A fast device crosses `slow_device_limit` under load (thermal limit, another GPU process) and gets the error | DN3 timing tool under load; DN6 render time | `slow_device_limit` is about 3 times `target_time`; record the times under load in the DN3 completion record. A false error on the RTX 3080 Laptop GPU or the M4 stops DN6 until the limit or the measurement changes. DN3: a false error when other processes oversubscribe the video memory, issue #1043. DN6 changed the measurement: the tile size counts the local memory of all processes, and the check uses the fastest of the measured tiles from the third on (DN6 completion record) |
+| The denoised entries of the prepared source cache use much host memory (545 MB for 45.4 MP in FP32; 726 MiB in F32 RGBA, DN6) | DN6 memory record | The cache budget of the prepared source cache applies to the entry; DN6 records the budget use |
 | The process footprint stays high after the release of the Core ML sessions (GPU: up to 4.9 GiB after 5 photos; Neural Engine: 2.0 GiB in the lab tool) | Footprint test of DN10 | Find the owner of the memory before DN10 completes; a release that does not return the memory stops DN10 |
 | A Mac with 8 GB or a GPU with fewer cores takes longer or has too little memory for tiles of 1024 | DN10 run on such a Mac, if the user has one | Record it in the DN10 completion record; the render reports the memory error |
 | A GPU of another vendor gives a different output or time | DN2 tests on that GPU; DN3 timing tool | Record it in the DN3 completion record. A test failure stops DN6 for that vendor |
@@ -1699,8 +2002,8 @@ no longer agrees with the branch.
 | Parameter | Value | Source |
 | --- | --- | --- |
 | `target_time` | The measured FP16 time at 45.4 MP: 0.72 s on the RTX 3080 Laptop GPU (DirectML), 0.60 s on the MacBook Air M4 (Neural Engine). A phase time more than 15% above it stops the phase (DN3, DN10) | User (U1), DN1 additions |
-| `slow_device_limit` | 0.05 s for each megapixel of the mosaic (2.3 s at 45.4 MP), about 3 times `target_time` (RTX 3080 Laptop GPU 0.016 s, M4 0.013 s, Intel Iris Xe 0.114 s for each megapixel) | User (slow devices get the error), DN1 additions |
-| `tile_size` (Windows) | The largest of 768, 1024, and 1536 packed pixels whose DirectML process memory fits in the free local video memory (budget minus usage plus the memory that the session holds): FP16 736, 768, and 2704 MiB (`UtNet2Spec::kDirectMlTileMemory`; FP32: 0.9, 1.0, 3.3 GiB). 1536 is the fastest on the RTX 3080 Laptop GPU (0.45 s at 45.4 MP; 1024: 0.58 s; 768: 0.70 s) | DN1 additions, DN3 |
+| `slow_device_limit` | 0.05 s for each megapixel of the mosaic (2.3 s at 45.4 MP), about 3 times `target_time` (RTX 3080 Laptop GPU 0.016 s, M4 0.013 s, Intel Iris Xe 0.114 s for each megapixel). The projection uses the fastest measured tile from the third measured tile on (`UtNet2Spec::kSlowDeviceMeasuredTiles`) | User (slow devices get the error), DN1 additions, DN6 |
+| `tile_size` (Windows) | The largest of 768, 1024, and 1536 packed pixels whose DirectML process memory fits in the free local video memory (the smaller of the budget of the process minus its usage and, on an adapter with local memory, the local memory minus the use of all processes; then plus the memory that the session holds, DN6): FP16 736, 768, and 2704 MiB (`UtNet2Spec::kDirectMlTileMemory`; FP32: 0.9, 1.0, 3.3 GiB). 1536 is the fastest on the RTX 3080 Laptop GPU (0.45 s at 45.4 MP; 1024: 0.58 s; 768: 0.70 s) | DN1 additions, DN3 |
 | `tile_size` (macOS) | 1536 packed pixels on the Neural Engine (0.60 s at 45.4 MP, peak footprint 2.0 GiB on the M4; 1024: 0.75 s, 1.7 GiB) | DN1 addition, FP16 on the Neural Engine |
 | `tile_overlap` | 96 packed pixels: the tiled output is the one-pass output | DN1 |
 | Session strategy | Windows: one ONNX Runtime session with free height and width, the DirectML memory arena on. macOS: one session for each tile input shape. Kept by `DenoiseModelSession` between renders, released with the editor GPU release and at the editor close | DN1 additions; 2.3 |

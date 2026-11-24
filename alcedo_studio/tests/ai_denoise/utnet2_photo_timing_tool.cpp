@@ -147,9 +147,11 @@ auto LoadPhoto(const std::filesystem::path& folder, const std::string& name) -> 
   throw std::runtime_error("photo " + name + " is not in " + (folder / "manifest.txt").string());
 }
 
-/// The local video memory of the process on the adapter of `preference` (the adapter that the
-/// session selects), read before the session exists.
-auto ProcessVideoMemory(DirectMlAdapterPreference preference) -> std::uint64_t {
+/// The video memory of the process in `segment` on the adapter of `preference` (the adapter that
+/// the session selects).
+auto ProcessVideoMemory(DirectMlAdapterPreference preference,
+                        DXGI_MEMORY_SEGMENT_GROUP segment = DXGI_MEMORY_SEGMENT_GROUP_LOCAL)
+    -> std::uint64_t {
   Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
   if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) {
     return 0;
@@ -169,7 +171,7 @@ auto ProcessVideoMemory(DirectMlAdapterPreference preference) -> std::uint64_t {
       continue;
     }
     DXGI_QUERY_VIDEO_MEMORY_INFO info{};
-    adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info);
+    adapter->QueryVideoMemoryInfo(0, segment, &info);
     return info.CurrentUsage;
   }
 }
@@ -269,7 +271,13 @@ void RunPhoto(UtNet2DirectMlSession& session, const Arguments& arguments, const 
                 << ", \"process_video_mib\": " << Mebibytes(memory.usage_bytes)
                 << ", \"growth_since_before_session_mib\": "
                 << Mebibytes(memory.usage_bytes - usage_before_session)
-                << ", \"budget_mib\": " << Mebibytes(memory.budget_bytes) << ", " << nvml.Text();
+                << ", \"budget_mib\": " << Mebibytes(memory.budget_bytes)
+                << ", \"adapter_local_mib\": " << Mebibytes(memory.adapter_local_bytes)
+                << ", \"adapter_local_usage_mib\": " << Mebibytes(memory.adapter_local_usage_bytes)
+                << ", \"process_non_local_mib\": "
+                << Mebibytes(
+                       ProcessVideoMemory(arguments.adapter, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL))
+                << ", " << nvml.Text();
     } catch (const DenoiseDeviceTooSlowError& error) {
       std::cout << "{\"photo\": \"" << name << "\", \"megapixels\": " << megapixels
                 << ", \"repeat\": " << repeat << ", \"slow_device_error\": \"" << error.what()
@@ -278,7 +286,15 @@ void RunPhoto(UtNet2DirectMlSession& session, const Arguments& arguments, const 
                 << ", \"projected_s\": " << error.ProjectedSeconds()
                 << ", \"limit_s\": " << error.LimitSeconds()
                 << ", \"time_to_stop_s\": " << Seconds(std::chrono::steady_clock::now() - started)
-                << ", \"device_s\": " << Seconds(device_time) << ", " << nvml.Text();
+                << ", \"device_s\": " << Seconds(device_time);
+      const auto memory = session.DeviceMemory();
+      std::cout << ", \"process_video_mib\": " << Mebibytes(memory.usage_bytes)
+                << ", \"budget_mib\": " << Mebibytes(memory.budget_bytes)
+                << ", \"adapter_local_usage_mib\": " << Mebibytes(memory.adapter_local_usage_bytes)
+                << ", \"process_non_local_mib\": "
+                << Mebibytes(
+                       ProcessVideoMemory(arguments.adapter, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL))
+                << ", " << nvml.Text();
     }
     if (arguments.per_tile) {
       std::cout << ", \"tiles_width_height_run_s_device_s\": [" << tiles_text.str() << "]";

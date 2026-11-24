@@ -49,7 +49,20 @@ struct DeviceMemoryState {
   /// The part of `usage_bytes` that the session holds and reuses for its next tiles (its memory
   /// arena), 0 when the session is released.
   std::uint64_t held_bytes   = 0;
+  /// The local video memory of the adapter (DXGI `DedicatedVideoMemory`). 0 for an adapter
+  /// that has no memory of its own (UMA: an integrated GPU uses the system memory), and for a
+  /// session that cannot read it; the selection then uses the budget of the process only.
+  std::uint64_t adapter_local_bytes       = 0;
+  /// The local video memory that all processes use on the adapter, the session included (the
+  /// Windows performance counter `GPU Adapter Memory\Dedicated Usage`). The budget of a process
+  /// does not count the memory of the other processes (issue #1043).
+  std::uint64_t adapter_local_usage_bytes = 0;
 };
+
+/// The device memory that the tile loop can use: the budget of the process minus its current
+/// use, and on an adapter with local memory at most the local memory that no process uses;
+/// then plus the memory that the session holds (it reuses it).
+[[nodiscard]] auto AvailableTileMemory(const DeviceMemoryState& memory) -> std::uint64_t;
 
 /// The interface of a platform session for the tile loop. One call at a time.
 class UtNet2TileSession {
@@ -97,6 +110,9 @@ struct UtNet2TileLoopOptions {
   std::span<const UtNet2TileMemory> tile_memory  = UtNet2Spec::kDirectMlTileMemory;
   /// `slow_device_limit` (plan 2.4, section 9) in seconds for each megapixel of the mosaic.
   double slow_device_limit_seconds_per_megapixel = UtNet2Spec::kSlowDeviceLimitSecondsPerMegapixel;
+  /// The measured tiles before the first slow-device check
+  /// (`UtNet2Spec::kSlowDeviceMeasuredTiles`).
+  int    slow_device_measured_tiles              = UtNet2Spec::kSlowDeviceMeasuredTiles;
 };
 
 /// The record of one run of the tile loop.
@@ -136,11 +152,12 @@ using UtNet2SteadyClock  = std::function<std::chrono::steady_clock::time_point()
 ///
 /// Between tiles, `cancel_requested` runs first: when it returns true the loop returns a record
 /// with `cancelled` set. Then the slow-device check: a tile whose run was measured (the session
-/// was ready for its size before the run, `UtNet2TileSession::IsReadyFor`) adds its time and its
-/// kept output px; the projected time of the photo is the measured time for each kept output px
-/// times the output px of the photo. When it is above the limit of `options` times the
-/// megapixels of the mosaic, the loop throws `DenoiseDeviceTooSlowError` and runs no more tiles.
-/// The check also runs after the last tile. A run without a measured tile has no check.
+/// was ready for its size before the run, `UtNet2TileSession::IsReadyFor`) gives its time for
+/// each kept output px; the projected time of the photo is the fastest of these times times the
+/// output px of the photo. The check starts when `options.slow_device_measured_tiles` tiles were
+/// measured, and it also runs after the last tile. When the projected time is above the limit
+/// of `options` times the megapixels of the mosaic, the loop throws `DenoiseDeviceTooSlowError`
+/// and runs no more tiles. A run without a measured tile has no check.
 ///
 /// Throws `std::invalid_argument` for a view whose size does not match, a mosaic smaller than
 /// 16 packed px on an axis, or tile options that the planner rejects; the errors of the session

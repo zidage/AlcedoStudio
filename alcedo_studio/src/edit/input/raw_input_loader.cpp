@@ -456,6 +456,7 @@ auto LinearizationFromLibRaw(LibRaw& raw) -> RawLinearizationParams {
   }
   params.apply_as_shot_wb =
       (raw.imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_APPLIED) == 0 ? 1 : 0;
+  params.libraw_maximum = static_cast<float>(raw.imgdata.rawdata.color.maximum);
   const int tile_width  = raw.imgdata.rawdata.color.cblack[4];
   const int tile_height = raw.imgdata.rawdata.color.cblack[5];
   const int entries     = tile_width * tile_height;
@@ -494,6 +495,12 @@ void FillColorContext(LibRaw& raw, const LensIdentity& lens, RawRuntimeColorCont
   for (int i = 0; i < 3; ++i) {
     ctx.cam_mul_[i] = raw.imgdata.color.cam_mul[i];
     ctx.pre_mul_[i] = raw.imgdata.color.pre_mul[i];
+  }
+  // The camera matrix of the AI Denoise gain match (rawpy `rgb_xyz_matrix`, DN6).
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) {
+      ctx.cam_xyz_[r * 3 + c] = raw.imgdata.rawdata.color.cam_xyz[r][c];
+    }
   }
   ctx.camera_make_  = raw.imgdata.idata.make;
   ctx.camera_model_ = raw.imgdata.idata.model;
@@ -567,6 +574,10 @@ auto FinishRasterPrepared(PreparedRawInput input, std::uint64_t encoded_hash,
   FillSourceKey(input, encoded_hash, encoded_byte_count);
   input.working_space = SceneWorkingSpace::CameraRgb;
   return input;
+}
+
+auto FullSizeDecodeArea(const RawSensorGeometry& sensor, Extent2D host) -> RectI {
+  return BuildDecodeCropRect(sensor, host, 1);
 }
 
 }  // namespace input_detail

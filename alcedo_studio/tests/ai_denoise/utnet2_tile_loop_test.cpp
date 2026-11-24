@@ -105,7 +105,10 @@ class TestSession final : public UtNet2TileSession {
         }
       }
     }
-    double seconds = seconds_per_megapixel * crop.width * crop.height / 1e6;
+    const double rate    = runs < static_cast<int>(seconds_per_megapixel_by_run.size())
+                               ? seconds_per_megapixel_by_run[runs]
+                               : seconds_per_megapixel;
+    double       seconds = rate * crop.width * crop.height / 1e6;
     if (!ready_) {
       seconds += first_run_seconds;
       ready_ = true;
@@ -124,6 +127,8 @@ class TestSession final : public UtNet2TileSession {
   void               StartNewSession() { ready_ = false; }
 
   double             seconds_per_megapixel = 0.0;
+  /// The rate of the first runs, one value for each run (then `seconds_per_megapixel`).
+  std::vector<double> seconds_per_megapixel_by_run;
   double             first_run_seconds     = 0.0;
   int                runs                  = 0;
   int                wrong_input_values    = 0;
@@ -267,6 +272,41 @@ TEST(UtNet2TileLoopTest, TileSizeSelectionUsesTheLargestThatFits) {
                std::runtime_error);
 }
 
+TEST(UtNet2TileLoopTest, TileSizeSelectionCountsTheVideoMemoryOfOtherProcesses) {
+  constexpr std::uint64_t kMiB = std::uint64_t{1} << 20;
+  // RTX 3080 Laptop GPU (issue #1043): the budget of the process is 4331 MiB, but other processes
+  // use 6250 MiB of the 8016 MiB of the adapter: 1766 MiB are free, enough for tiles of 1024.
+  DeviceMemoryState       memory{.budget_bytes              = 4331 * kMiB,
+                                 .usage_bytes               = 0,
+                                 .held_bytes                = 0,
+                                 .adapter_local_bytes       = 8016 * kMiB,
+                                 .adapter_local_usage_bytes = 6250 * kMiB};
+  EXPECT_EQ(AvailableTileMemory(memory), 1766 * kMiB);
+  EXPECT_EQ(SelectUtNet2TileSize(UtNet2Spec::kDirectMlTileMemory, AvailableTileMemory(memory)),
+            1024);
+
+  // The session holds its arena of tiles of 1536: it counts in both uses, and is available.
+  memory.usage_bytes               = 2704 * kMiB;
+  memory.held_bytes                = 2704 * kMiB;
+  memory.budget_bytes              = 7248 * kMiB;
+  memory.adapter_local_usage_bytes = 5363 * kMiB;
+  EXPECT_EQ(AvailableTileMemory(memory), (8016 - 5363 + 2704) * kMiB);
+  EXPECT_EQ(SelectUtNet2TileSize(UtNet2Spec::kDirectMlTileMemory, AvailableTileMemory(memory)),
+            1536);
+
+  // An adapter without local memory (UMA, Intel Iris Xe): the budget of the process only.
+  memory = {.budget_bytes = 15872 * kMiB, .usage_bytes = 0, .held_bytes = 0};
+  EXPECT_EQ(AvailableTileMemory(memory), 15872 * kMiB);
+
+  // Other processes use more than the local memory: nothing is free.
+  memory = {.budget_bytes              = 4000 * kMiB,
+            .usage_bytes               = 0,
+            .held_bytes                = 0,
+            .adapter_local_bytes       = 8016 * kMiB,
+            .adapter_local_usage_bytes = 8100 * kMiB};
+  EXPECT_EQ(AvailableTileMemory(memory), 0U);
+}
+
 TEST(UtNet2TileLoopTest, TileInputsAreTheMosaicWithReflectionAndTheCropsFormTheOutput) {
   TestClock   clock;
   TestMosaic  mosaic(400, 300);
@@ -328,14 +368,14 @@ TEST(UtNet2TileLoopTest, TileLoopStopsWhenTheProjectedTimeIsAboveTheLimit) {
           NoCancel(), clock.Function(), Options(256));
       ADD_FAILURE() << "the loop ran all tiles";
     } catch (const DenoiseDeviceTooSlowError& error) {
-      EXPECT_EQ(error.TilesRun(), 1);
+      EXPECT_EQ(error.TilesRun(), UtNet2Spec::kSlowDeviceMeasuredTiles);
       EXPECT_EQ(error.TileCount(), 8);
       EXPECT_NEAR(error.ProjectedSeconds(), 0.114 * 0.48, 1e-6);
       EXPECT_NEAR(error.LimitSeconds(), UtNet2Spec::kSlowDeviceLimitSecondsPerMegapixel * 0.48,
                   1e-9);
     }
-    EXPECT_EQ(session.runs, 1);
-    EXPECT_EQ(callbacks, 1);
+    EXPECT_EQ(session.runs, UtNet2Spec::kSlowDeviceMeasuredTiles);
+    EXPECT_EQ(callbacks, UtNet2Spec::kSlowDeviceMeasuredTiles);
   }
   {
     // RTX 3080 Laptop GPU: 0.016 s for each megapixel.
@@ -372,7 +412,7 @@ TEST(UtNet2TileLoopTest, SlowDeviceCheckExcludesTheFirstRunOfASession) {
   EXPECT_EQ(single.tile_count, 1);
   EXPECT_EQ(single.measured_tiles, 0);
 
-  // A slow device on a new session stops after its first measured tile.
+  // A slow device on a new session stops after the first tile and its measured tiles.
   session.seconds_per_megapixel = 0.114;
   session.StartNewSession();
   try {
@@ -380,7 +420,53 @@ TEST(UtNet2TileLoopTest, SlowDeviceCheckExcludesTheFirstRunOfASession) {
                              clock.Function(), Options(256));
     ADD_FAILURE() << "the loop ran all tiles";
   } catch (const DenoiseDeviceTooSlowError& error) {
-    EXPECT_EQ(error.TilesRun(), 2);
+    EXPECT_EQ(error.TilesRun(), 1 + UtNet2Spec::kSlowDeviceMeasuredTiles);
+  }
+}
+
+TEST(UtNet2TileLoopTest, SlowDeviceCheckUsesTheFastestMeasuredTile) {
+  TestClock  clock;
+  TestMosaic mosaic(400, 300);
+  LoopOutput output(mosaic);
+  {
+    // A fast device whose first two tiles wait for another process (issue #1043: 0.16 s for a
+    // tile of 0.03 s): the third tile has the time of the device, and the photo completes.
+    TestSession session(clock, nullptr);
+    session.seconds_per_megapixel        = 0.016;
+    session.seconds_per_megapixel_by_run = {0.09, 0.08};
+    const auto record = DenoiseBayerMosaic(session, mosaic.View(), output.View(), {}, NoCancel(),
+                                           clock.Function(), Options(256));
+    EXPECT_EQ(record.tiles_run, 8);
+    EXPECT_EQ(record.measured_tiles, 8);
+  }
+  {
+    // A slow device whose second tile is faster: the projection uses the fastest tile.
+    TestSession session(clock, nullptr);
+    session.seconds_per_megapixel        = 0.114;
+    session.seconds_per_megapixel_by_run = {0.114, 0.07};
+    try {
+      (void)DenoiseBayerMosaic(session, mosaic.View(), output.View(), {}, NoCancel(),
+                               clock.Function(), Options(256));
+      ADD_FAILURE() << "the loop ran all tiles";
+    } catch (const DenoiseDeviceTooSlowError& error) {
+      EXPECT_EQ(error.TilesRun(), UtNet2Spec::kSlowDeviceMeasuredTiles);
+      EXPECT_NEAR(error.ProjectedSeconds(), 0.07 * 0.48, 1e-6);
+    }
+  }
+  {
+    // A photo of two tiles on a slow device: the check after the last tile.
+    TestMosaic  two_tiles(300, 100);
+    LoopOutput  two_tiles_output(two_tiles);
+    TestSession session(clock, nullptr);
+    session.seconds_per_megapixel = 0.114;
+    try {
+      (void)DenoiseBayerMosaic(session, two_tiles.View(), two_tiles_output.View(), {}, NoCancel(),
+                               clock.Function(), Options(256));
+      ADD_FAILURE() << "the loop has no check after the last tile";
+    } catch (const DenoiseDeviceTooSlowError& error) {
+      EXPECT_EQ(error.TilesRun(), 2);
+      EXPECT_EQ(error.TileCount(), 2);
+    }
   }
 }
 

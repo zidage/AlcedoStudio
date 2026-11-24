@@ -29,9 +29,11 @@
 #include "app/editor_pending_input.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/image_pool_service.hpp"
+#include "app/model_asset_catalog.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/input/ai_denoise_model_session.hpp"
 #include "edit/runtime/lens/lens_calibration_resolver.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
@@ -161,6 +163,11 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   // Every project's editor, thumbnail, and export executors resolve LUT references through
   // the library (plan L4).
   project_->SetLutResources(lut_library_->Resources());
+  // AI Denoise reads its FP16 graph from the AI model folder of the settings, read at each check
+  // of the installed model (integration plan, DN6).
+  alcedo::ProcessDenoiseModelSession()->SetModelFolderProvider([] {
+    return std::filesystem::path(alcedo::ConfiguredSemanticModelDirectory().toStdWString());
+  });
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
   RecordConstruction("LibraryModule", library_.get());
   folders_ =
@@ -858,6 +865,9 @@ void ApplicationModuleHost::ShutdownModules() {
       QString ignored_error;
       (void)project_->handler().PersistProjectForClose(&ignored_error);
     }
+    // No render runs after the export and the editor scheduler ended; the AI Denoise session
+    // ends before ONNX Runtime and DirectML unload.
+    alcedo::ProcessDenoiseModelSession()->Release();
   } catch (...) {
   }
 }

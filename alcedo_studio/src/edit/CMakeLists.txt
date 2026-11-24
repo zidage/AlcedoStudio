@@ -106,14 +106,28 @@ if(ALCEDO_ENABLE_BRUSH_MASK)
 endif()
 
 # CPU RAW unpack / downsample. No CUDA, no ImageBuffer.
+# AI Denoise (integration plan, DN6): the input preparation, the gain match, and the process-wide
+# owner of the model session. The platform session is DirectML on Windows x64 (UtNet2DirectMl);
+# a build without it has no forward code, and a run reports the error.
+if(TARGET UtNet2DirectMl)
+    set(EDIT_INPUT_AI_DENOISE_PLATFORM_SRC ${ALCEDO_SRC_ROOT}/edit/input/ai_denoise_directml_platform.cpp)
+else()
+    set(EDIT_INPUT_AI_DENOISE_PLATFORM_SRC ${ALCEDO_SRC_ROOT}/edit/input/ai_denoise_platform_unavailable.cpp)
+endif()
 def_library(EditInput
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/input/raw_input_loader.cpp
         ${ALCEDO_SRC_ROOT}/edit/input/prepared_source_cache.cpp
         ${ALCEDO_SRC_ROOT}/edit/input/raster_input_loader.cpp
-    PUBLIC_DEPS EditGeometry JSON libraw::raw_r opencv_core Image
-    PRIVATE_DEPS OpenImageIO::OpenImageIO libjpeg-turbo::turbojpeg lcms2::lcms2 Sha256Digest
+        ${ALCEDO_SRC_ROOT}/edit/input/ai_denoise_input.cpp
+        ${ALCEDO_SRC_ROOT}/edit/input/ai_denoise_model_session.cpp
+        ${EDIT_INPUT_AI_DENOISE_PLATFORM_SRC}
+    PUBLIC_DEPS EditGeometry JSON libraw::raw_r opencv_core Image UtNet2TileLoop
+    PRIVATE_DEPS OpenImageIO::OpenImageIO libjpeg-turbo::turbojpeg lcms2::lcms2 Sha256Digest AlcedoLog
 )
+if(TARGET UtNet2DirectMl)
+    target_link_libraries(EditInput PRIVATE UtNet2DirectMl)
+endif()
 
 # GPU-agnostic DAG runtime (parameter arena, texture LRU, KV cache). No CUDA headers.
 set(EDIT_RUNTIME_SRCS

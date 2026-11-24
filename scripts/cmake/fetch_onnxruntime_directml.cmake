@@ -94,8 +94,9 @@ set_target_properties(alcedo::onnxruntime_directml PROPERTIES
     # The session calls Ort::InitApi itself (ORT_API_MANUAL_INIT), so the DLL loads at the first
     # session and not at process start.
     INTERFACE_COMPILE_DEFINITIONS "ORT_API_MANUAL_INIT"
-    INTERFACE_LINK_OPTIONS "/DELAYLOAD:onnxruntime.dll"
-    INTERFACE_LINK_LIBRARIES "delayimp.lib"
+    # The host link only: a CUDA library on the link chain passes its link libraries and options
+    # to the device link of nvcc. delayimp.lib comes from `#pragma comment(lib)` of the session.
+    INTERFACE_LINK_OPTIONS "$<HOST_LINK:/DELAYLOAD:onnxruntime.dll>"
 )
 
 set(ALCEDO_ONNXRUNTIME_DIRECTML_COPY_SCRIPT

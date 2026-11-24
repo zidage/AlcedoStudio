@@ -59,6 +59,21 @@ void CopyTileInput(const PackedMosaicView& mosaic, const PackedTileRect& tile,
 
 }  // namespace
 
+auto AvailableTileMemory(const DeviceMemoryState& memory) -> std::uint64_t {
+  // The memory that the session holds is in both uses; it counts as available because the
+  // session reuses it.
+  const auto free_of = [&](std::uint64_t total, std::uint64_t used) {
+    const auto others = used - std::min(memory.held_bytes, used);
+    return total - std::min(others, total);
+  };
+  auto available = free_of(memory.budget_bytes, memory.usage_bytes);
+  if (memory.adapter_local_bytes != 0) {
+    available =
+        std::min(available, free_of(memory.adapter_local_bytes, memory.adapter_local_usage_bytes));
+  }
+  return available;
+}
+
 DenoiseDeviceTooSlowError::DenoiseDeviceTooSlowError(double projected_seconds, double limit_seconds,
                                                      int tiles_run, int tile_count)
     : std::runtime_error(TooSlowText(projected_seconds, limit_seconds, tiles_run, tile_count)),
@@ -120,10 +135,8 @@ auto DenoiseBayerMosaic(UtNet2TileSession& session, const PackedMosaicView& mosa
   if (options.tile_size != 0) {
     record.tile_size = options.tile_size;
   } else {
-    const auto memory    = session.DeviceMemory();
-    const auto usage     = memory.usage_bytes - std::min(memory.held_bytes, memory.usage_bytes);
-    const auto available = memory.budget_bytes - std::min(usage, memory.budget_bytes);
-    record.tile_size     = SelectUtNet2TileSize(options.tile_memory, available);
+    record.tile_size =
+        SelectUtNet2TileSize(options.tile_memory, AvailableTileMemory(session.DeviceMemory()));
   }
   const auto tiles =
       PlanOverlapTiles(mosaic.width, mosaic.height, record.tile_size, options.overlap, kAlignment);
@@ -132,13 +145,16 @@ auto DenoiseBayerMosaic(UtNet2TileSession& session, const PackedMosaicView& mosa
   const double output_pixels = static_cast<double>(output.width) * output.height;
   const double limit_seconds =
       options.slow_device_limit_seconds_per_megapixel * output_pixels / 1e6;
-  double     measured_seconds  = 0.0;
-  double     measured_pixels   = 0.0;
-  const auto check_slow_device = [&] {
-    if (record.measured_tiles == 0) {
+  // The fastest time for each kept output px of the measured tiles. Another process that shares
+  // the GPU or pages its memory slows single tiles of a fast device (issue #1043); a device that
+  // is too slow is slow in each tile.
+  double     fastest_seconds_per_pixel = 0.0;
+  const auto check_slow_device         = [&](bool last) {
+    if (record.measured_tiles == 0 ||
+        (!last && record.measured_tiles < options.slow_device_measured_tiles)) {
       return;
     }
-    const double projected = measured_seconds / measured_pixels * output_pixels;
+    const double projected = fastest_seconds_per_pixel * output_pixels;
     if (projected > limit_seconds) {
       throw DenoiseDeviceTooSlowError(projected, limit_seconds, record.tiles_run,
                                       record.tile_count);
@@ -152,7 +168,7 @@ auto DenoiseBayerMosaic(UtNet2TileSession& session, const PackedMosaicView& mosa
       record.loop_time = clock() - started;
       return record;
     }
-    check_slow_device();
+    check_slow_device(false);
 
     CopyTileInput(mosaic, tile.input, input);
     const TileOutputCrop crop{
@@ -173,9 +189,12 @@ auto DenoiseBayerMosaic(UtNet2TileSession& session, const PackedMosaicView& mosa
     record.computed_packed_pixels += std::int64_t{tile.input.width} * tile.input.height;
     ++record.tiles_run;
     if (measured) {
+      const double seconds_per_pixel = std::chrono::duration<double>(run_time).count() /
+                                       (static_cast<double>(crop.width) * crop.height);
+      fastest_seconds_per_pixel = record.measured_tiles == 0
+                                      ? seconds_per_pixel
+                                      : std::min(fastest_seconds_per_pixel, seconds_per_pixel);
       ++record.measured_tiles;
-      measured_seconds += std::chrono::duration<double>(run_time).count();
-      measured_pixels += static_cast<double>(crop.width) * crop.height;
     }
     if (on_tile) {
       on_tile(UtNet2TileResult{.index      = record.tiles_run - 1,
@@ -184,7 +203,7 @@ auto DenoiseBayerMosaic(UtNet2TileSession& session, const PackedMosaicView& mosa
                                .kept       = tile.kept});
     }
   }
-  check_slow_device();
+  check_slow_device(true);
   record.loop_time = clock() - started;
   return record;
 }

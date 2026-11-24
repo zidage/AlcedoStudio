@@ -149,17 +149,20 @@ def_library(UtNet2TileLoop
 # render backend). Only this target includes ONNX Runtime headers; its public header has no ONNX
 # Runtime type. onnxruntime.dll is delay-loaded, so the executable that links this target starts
 # without it and the session reports the load error. The session creates its own Direct3D 12
-# device and queue for DirectML (d3d12, dxgi); DirectML.dll is loaded at run time.
+# device and queue for DirectML (d3d12, dxgi); DirectML.dll is loaded at run time. pdh reads the
+# video memory that all processes use on the adapter (issue #1043).
 include("${CMAKE_SOURCE_DIR}/scripts/cmake/fetch_onnxruntime_directml.cmake")
 if(TARGET alcedo::onnxruntime_directml)
+    # The Windows libraries (d3d12, dxgi, pdh, delayimp) are named in the source with
+    # `#pragma comment(lib)`: a CUDA library that links this target through EditInput passes its
+    # link libraries to the device link of nvcc, which cannot find a library by its bare name.
     def_library(UtNet2DirectMl
         SOURCES ${ALCEDO_SRC_ROOT}/decoders/processor/nn/utnet2_directml_session.cpp
         PUBLIC_DEPS UtNet2TileLoop
-        PRIVATE_DEPS alcedo::onnxruntime_directml opencv_core d3d12 dxgi
+        PRIVATE_DEPS alcedo::onnxruntime_directml opencv_core
     )
-    # The delay load applies to the link of the executable, so it is part of the interface.
-    target_link_options(UtNet2DirectMl INTERFACE "/DELAYLOAD:onnxruntime.dll")
-    target_link_libraries(UtNet2DirectMl INTERFACE delayimp.lib)
+    # The delay load applies to the host link of the executable, so it is part of the interface.
+    target_link_options(UtNet2DirectMl INTERFACE "$<HOST_LINK:/DELAYLOAD:onnxruntime.dll>")
 endif()
 
 
