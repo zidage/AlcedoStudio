@@ -236,8 +236,10 @@ name starts with a period. The file type rule is `is_supported_file`
   starts when no scan worker writes the project. The stopped scan runs again after the last
   hold, with its trigger, its waiting callbacks, and its task (#1016).
 - A user import leaves each file that the listing of a mount lists to the scan of that mount
-  (`IsPathOfAMountScan`; decision D10). The synchronous delete of the Nikon HE recovery
-  (`ImageController::DeleteTargets`) refuses while a scan worker writes (#1016).
+  (`IsPathOfAMountScan`; decision D10). The Library snackbar gives the count of these files:
+  on a line under the import result, or alone when the import leaves every file and does not
+  run (`ImportExportHandler::importLeftToMounts`, `importLeftAllToMounts`; #1089). The
+  synchronous delete of the Nikon HE recovery (`ImageController::DeleteTargets`) refuses while a scan worker writes (#1016).
 
 ---
 

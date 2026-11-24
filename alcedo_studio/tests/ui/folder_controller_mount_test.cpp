@@ -11,6 +11,7 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QSignalSpy>
 #include <QThread>
 #include <QUrl>
 #include <QVariantList>
@@ -305,10 +306,41 @@ TEST_F(FolderControllerMountTest, UserImportOfAFileInAMountedFolderLeavesOneElem
     return !backend_.import_export()->ImportRunning() && !backend_.mount_scans()->HasPendingScans();
   }));
   EXPECT_EQ(backend_.import_export()->ImportCompleted(), 1);
+  // #1089: the Library snackbar of the finished import reports the file left to the mount.
+  EXPECT_EQ(backend_.import_export()->ImportLeftToMounts(), 1);
   ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 3; }));
   ProcessEvents(300);
   EXPECT_EQ(ProjectPhotoCount(), 3);
   EXPECT_EQ(Summary().present_count, 2u);
+}
+
+TEST_F(FolderControllerMountTest, UserImportOfOnlyMountedFilesReportsThemAndRunsNoImport) {
+  // #1089: with every file in a mounted folder no import runs, so no import state change
+  // reports the result; the signal gives the Library snackbar the count.
+  ASSERT_NO_FATAL_FAILURE(MountTrip());
+  auto*      import_export = backend_.import_export();
+  QSignalSpy left_all(import_export, &ImportExportHandler::importLeftAllToMounts);
+
+  import_export->StartImport({PathToQString(disk_ / "Trip" / "a.jpg"),
+                              PathToQString(disk_ / "Trip" / "Day1" / "b.jpg")});
+  EXPECT_FALSE(import_export->ImportRunning());
+  ASSERT_EQ(left_all.size(), 1);
+  EXPECT_EQ(left_all.front().front().toInt(), 2);
+  EXPECT_EQ(import_export->ImportLeftToMounts(), 2);
+
+  ProcessEvents(300);
+  EXPECT_EQ(ProjectPhotoCount(), 2);
+  EXPECT_EQ(Summary().present_count, 2u);
+
+  // The next import with no mounted file clears the count, so its snackbar has no mount line.
+  WriteJpeg(temp_dir_ / "Other" / "c.jpg", 3);
+  import_export->StartImport({PathToQString(temp_dir_ / "Other" / "c.jpg")});
+  EXPECT_EQ(import_export->ImportLeftToMounts(), 0);
+  ASSERT_TRUE(WaitFor([&] {
+    return !import_export->ImportRunning() && !backend_.mount_scans()->HasPendingScans();
+  }));
+  EXPECT_EQ(left_all.size(), 1);
+  ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 3; }));
 }
 
 TEST_F(FolderControllerMountTest, NoScanRunsFromTheStartToTheFinalizeOfAUserImport) {
