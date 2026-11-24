@@ -164,10 +164,10 @@ class FakeFolderController final : public QObject {
     calls << QStringLiteral("DeleteFolder:%1").arg(ElementOf(folderUiId));
   }
 
-  /// Adds a mount root named after the directory below the parent row, as a finished mount
-  /// creation does.
-  Q_INVOKABLE void MountFolder(uint parentFolderUiId, const QUrl& directory) {
-    const uint    parent = ElementOf(parentFolderUiId);
+  /// Adds a mount root named after the directory below the library root, as a finished mount
+  /// creation does (#1076).
+  Q_INVOKABLE void MountFolder(const QUrl& directory) {
+    const uint    parent = 0;
     const QString path   = directory.toLocalFile();
     calls << QStringLiteral("MountFolder:%1:%2").arg(parent).arg(path);
     const uint created = next_element_++;
@@ -1001,12 +1001,12 @@ TEST(CollectionsPanelQmlTest, MountRootMenuHasMountCommandsAndNoStructureCommand
   ASSERT_TRUE(QMetaObject::invokeMethod(folder_menu, "close"));
   ProcessEvents(60);
 
-  // An ordinary row keeps its menu and gets Mount Folder Here (issue #1008).
+  // An ordinary row keeps its menu; it has no Mount Folder Here, because an ordinary
+  // collection never holds a mount (#1076).
   open_menu_of(1);
   ASSERT_TRUE(WaitUntil([&] { return ordinary_menu->property("visible").toBool(); }));
   ASSERT_NE(MenuItem(ordinary_menu, "collectionMenuMountFolder"), nullptr);
-  EXPECT_EQ(MenuItem(ordinary_menu, "collectionMenuMountFolder")->property("text").toString(),
-            QStringLiteral("Mount Folder Here..."));
+  EXPECT_FALSE(MenuItem(ordinary_menu, "collectionMenuMountFolder")->property("visible").toBool());
   EXPECT_TRUE(MenuItem(ordinary_menu, "collectionMenuRename")->property("enabled").toBool());
   EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
 }
@@ -1158,9 +1158,9 @@ void MountFolderWith(Harness& h, const QString& directory) {
 
 }  // namespace
 
-// Issue #1008: Mount Folder at the foot of the panel mounts the chosen directory below the
-// selected collection: below the library root (tree depth 1), or inside an ordinary collection.
-TEST(CollectionsPanelQmlTest, MountFolderMountsTheDirectoryBelowTheSelectedCollection) {
+// Issues #1008 and #1076: Mount Folder at the foot of the panel mounts the chosen directory
+// below the library root (tree depth 1), also while an ordinary collection is selected.
+TEST(CollectionsPanelQmlTest, MountFolderMountsTheDirectoryBelowTheLibraryRoot) {
   Harness h(SmallTree(), /*current_element=*/0);
   ASSERT_NE(h.panel, nullptr) << h.warnings.join('\n').toStdString();
   QTemporaryDir first_dir;
@@ -1181,13 +1181,13 @@ TEST(CollectionsPanelQmlTest, MountFolderMountsTheDirectoryBelowTheSelectedColle
   h.fake.SelectFolder(h.fake.UiOf(1));
   ProcessEvents(40);
   MountFolderWith(h, second_dir.path());
-  EXPECT_TRUE(h.fake.calls.contains(QStringLiteral("MountFolder:1:%1").arg(second_dir.path())))
+  EXPECT_TRUE(h.fake.calls.contains(QStringLiteral("MountFolder:0:%1").arg(second_dir.path())))
       << h.fake.calls.join(',').toStdString();
-  const QVariantMap inner_mount = PanelRow(h, 501);
-  ASSERT_FALSE(inner_mount.isEmpty());
-  EXPECT_TRUE(inner_mount.value("mountRoot").toBool());
-  EXPECT_EQ(inner_mount.value("treeDepth").toInt(), 2);
-  EXPECT_EQ(inner_mount.value("parentElementId").toUInt(), 1u);
+  const QVariantMap second_mount = PanelRow(h, 501);
+  ASSERT_FALSE(second_mount.isEmpty());
+  EXPECT_TRUE(second_mount.value("mountRoot").toBool());
+  EXPECT_EQ(second_mount.value("treeDepth").toInt(), 1);
+  EXPECT_EQ(second_mount.value("parentElementId").toUInt(), 0u);
   EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
 }
 

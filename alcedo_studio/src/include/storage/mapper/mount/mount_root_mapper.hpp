@@ -25,6 +25,8 @@ struct MountRootMapperParams {
   std::string     root_path;
   /// `YYYY-MM-DD HH:MM:SS` UTC; empty writes NULL.
   std::string     last_scan_at;
+  /// Empty writes NULL.
+  std::string     volume_name;
 };
 
 /**
@@ -34,7 +36,7 @@ class MountRootMapper
     : public Mapper<MountRootMapper, MountRootRecord, MountRootMapperParams, mount_id_t>,
       public FieldReflectable<MountRootMapper> {
  private:
-  static constexpr uint32_t                                         field_count_ = 5;
+  static constexpr uint32_t                                         field_count_ = 6;
   static constexpr const char*                                      table_name_  = "MountRoot";
   static constexpr const char*                                      primary_key_column_ = "id";
   // Order matches the `MountRoot` table DDL, because duckorm select reads `SELECT *`.
@@ -43,7 +45,8 @@ class MountRootMapper
       FIELD(MountRootMapperParams, root_folder_id, UINT32),
       FIELD(MountRootMapperParams, volume_identity, NULLABLE_STRING),
       FIELD(MountRootMapperParams, root_path, STRING),
-      FIELD(MountRootMapperParams, last_scan_at, NULLABLE_STRING)};
+      FIELD(MountRootMapperParams, last_scan_at, NULLABLE_STRING),
+      FIELD(MountRootMapperParams, volume_name, NULLABLE_STRING)};
 
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> MountRootMapperParams;

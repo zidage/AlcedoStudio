@@ -33,6 +33,30 @@ auto ReadVolumeIdentity(const std::filesystem::path& directory) -> std::string {
   }
 }
 
+auto ReadVolumeLabel(const std::filesystem::path& directory) -> VolumeLabel {
+  std::error_code ec;
+  if (directory.empty() || !std::filesystem::is_directory(directory, ec) || ec) return {};
+  VolumeLabel   label;
+  struct statfs info{};
+  if (::statfs(directory.c_str(), &info) == 0) {
+    label.mount_point = std::filesystem::path(info.f_mntonname);
+  }
+  @autoreleasepool {
+    NSString* path = [NSString stringWithUTF8String:directory.c_str()];
+    if (path == nil) return label;
+    NSURL*    url  = [NSURL fileURLWithPath:path isDirectory:YES];
+    NSString* name = nil;
+    if ([url getResourceValue:&name forKey:NSURLVolumeNameKey error:nil] &&
+        [name isKindOfClass:[NSString class]]) {
+      const char* text = [name UTF8String];
+      if (text != nullptr) {
+        label.name = std::string(text);
+      }
+    }
+  }
+  return label;
+}
+
 auto ListVolumeMountPoints() -> std::vector<VolumeMountPoint> {
   std::vector<VolumeMountPoint> mount_points;
   @autoreleasepool {

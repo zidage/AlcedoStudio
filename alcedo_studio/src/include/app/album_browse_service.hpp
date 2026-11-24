@@ -23,6 +23,7 @@
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/store/semantic/semantic_records.hpp"
 #include "storage/store/sleeve/element_store.hpp"
+#include "type/album_scope.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -100,20 +101,22 @@ class AlbumBrowseService {
   /// Unlike the listing reads, it does not hide a failure: it throws std::runtime_error when the
   /// sleeve service is absent or the statement fails.
   [[nodiscard]] auto ReadProjectOverview() const -> ProjectOverviewCounts;
-  /// Photo count of the whole project and of the subtree of every folder from one statement (see
-  /// ElementStore::ReadFolderImageCounts). Throws like ReadAlbumQuery.
+  /// Photo count of the whole project (All Photos), of the library root row, and of the subtree
+  /// of every folder from one statement (see ElementStore::ReadFolderImageCounts). Throws like
+  /// ReadAlbumQuery.
   /// Thread: may run on a worker thread.
   [[nodiscard]] auto ReadFolderImageCounts() const -> FolderImageCounts;
 
   /**
    * @brief The one library read: Inspector filters and search, sort, groups, statistics, and
-   *        one bounded page of the ordered photo occurrences of @p folder_id.
+   *        one bounded page of the ordered photo occurrences of @p scope: All Photos, a
+   *        folder, or the photos directly in the library root (see AlbumScope).
    *
    * @param filter Merged search and Inspector filter tree; compiled once here.
    * @param active_semantic_model_key Key the caller read once from its owner; the label
    *        filter, groups, sort, and statistics all use it.
    * @param semantic_relevance The embeddings of a natural-language search
-   *        (SleeveFilterService::EmbedSemanticQuery). When set, only the files of @p folder_id
+   *        (SleeveFilterService::EmbedSemanticQuery). When set, only the files of @p scope
    *        that the relevance rule keeps match, and without a selected sort they order by
    *        relevance (see ElementStore::ReadAlbumQuery).
    * @throws std::invalid_argument for invalid options or page bounds.
@@ -123,21 +126,21 @@ class AlbumBrowseService {
    * Thread: may run on a worker thread; reads storage under its connection lock.
    */
   [[nodiscard]] auto ReadAlbumQuery(
-      sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+      const AlbumScope& scope, const std::optional<FilterNode>& filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
       const AlbumQueryRead&                        read,
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> AlbumQueryResult;
   /// Position of @p file_id in the ordered occurrences of the same query (see ReadAlbumQuery).
   [[nodiscard]] auto ReadAlbumFilePosition(
-      sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+      const AlbumScope& scope, const std::optional<FilterNode>& filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
       sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> std::optional<AlbumFilePosition>;
   /// Ordered unique file ids of the occurrences in [@p begin, @p end) of the same query.
   [[nodiscard]] auto ReadAlbumFileIds(
-      sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+      const AlbumScope& scope, const std::optional<FilterNode>& filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key, int64_t begin,
       int64_t                                      end,
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const

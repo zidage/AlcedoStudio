@@ -168,7 +168,8 @@ class ScanInBatchPort final : public MountScanPort {
 class IdleWatcher final : public MountDirectoryWatcher {
  public:
   void SetChangeCallback(ChangeCallback) override {}
-  void SetVolumeCallbacks(VolumeRemovedCallback, VolumeArrivedCallback) override {}
+  void SetVolumeCallbacks(VolumeRemovedCallback, VolumeArrivedCallback,
+                          MountPointArrivedCallback) override {}
   auto Watch(mount_id_t, const std::filesystem::path&, std::span<const std::wstring>)
       -> bool override {
     return false;

@@ -41,8 +41,20 @@
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
+namespace {
 
-auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
+/// True for the photo `e` when no folder other than the library root holds it: the photos of
+/// AlbumScope::LibraryRoot.
+auto HeldOnlyByLibraryRootSql() -> std::string {
+  return std::format(
+      "NOT EXISTS (SELECT 1 FROM FolderContent other_fc WHERE other_fc.element_id = e.id "
+      "AND other_fc.folder_id <> {})",
+      kLibraryRootFolderId);
+}
+
+}  // namespace
+
+auto BuildScopedFileQuery(const AlbumScope&                          album_scope,
                           const std::optional<duckorm::SqlFragment>& extra_filter,
                           const std::optional<duckorm::SqlFragment>& relevance_select)
     -> ScopedFileQuery {
@@ -63,7 +75,7 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
                                extra_filter->binds_.end());
   }
 
-  if (folder_id == 0) {
+  if (album_scope.IsAllPhotos()) {
     scope.from_where_ = std::format(
         "FROM Element e "
         "JOIN FileImage fi ON fi.file_id = e.id "
@@ -73,13 +85,16 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
     return scope;
   }
 
+  const std::string held_only_by_root =
+      album_scope.IsLibraryRoot() ? " AND " + HeldOnlyByLibraryRootSql() : std::string{};
   scope.from_where_ = std::format(
       "FROM FolderContent fc "
       "JOIN Element e ON fc.element_id = e.id "
       "JOIN FileImage fi ON fi.file_id = e.id "
       "JOIN Image i ON i.id = fi.image_id{} "
-      "WHERE fc.folder_id = {} AND e.type = {}{}",
-      relevance_join, folder_id, static_cast<uint32_t>(ElementType::FILE), extra_where);
+      "WHERE fc.folder_id = {} AND e.type = {}{}{}",
+      relevance_join, album_scope.FolderId(), static_cast<uint32_t>(ElementType::FILE),
+      held_only_by_root, extra_where);
   return scope;
 }
 
@@ -88,16 +103,16 @@ namespace {
 namespace album_sql = album_query_sql;
 using album_sql::kMatchSetTable;
 
-/// The relevance select of @p semantic_relevance over @p folder_id on @p conn, or empty without
-/// a natural-language search. The caller holds the connection lock. Throws like
+/// The relevance select of @p semantic_relevance over @p scope on @p conn, or empty without a
+/// natural-language search. The caller holds the connection lock. Throws like
 /// BuildSemanticRelevanceSelect.
-auto RelevanceSelectOf(duckorm::Connection conn, sl_element_id_t folder_id,
+auto RelevanceSelectOf(duckorm::Connection conn, const AlbumScope& scope,
                        const std::optional<SemanticQueryEmbedding>& semantic_relevance)
     -> std::optional<duckorm::SqlFragment> {
   if (!semantic_relevance.has_value()) {
     return std::nullopt;
   }
-  return BuildSemanticRelevanceSelect(conn, folder_id, *semantic_relevance);
+  return BuildSemanticRelevanceSelect(conn, scope, *semantic_relevance);
 }
 
 /// COUNT(*) of @p from_where with the binds of @p binds. Throws std::runtime_error on failure.
@@ -1038,7 +1053,7 @@ auto ElementStore::ListSearchResultPageWithStats(
 }
 
 auto ElementStore::ReadAlbumQuery(
-    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
+    const AlbumScope& album_scope, const std::optional<duckorm::SqlFragment>& extra_filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     const AlbumQueryRead&                        read,
     const std::optional<SemanticQueryEmbedding>& semantic_relevance) const -> AlbumQueryResult {
@@ -1051,7 +1066,7 @@ auto ElementStore::ReadAlbumQuery(
     // The only statement that evaluates the filter and the relevance select; every read below
     // uses its rows.
     const auto scope = BuildScopedFileQuery(
-        folder_id, extra_filter, RelevanceSelectOf(guard.conn_, folder_id, semantic_relevance));
+        album_scope, extra_filter, RelevanceSelectOf(guard.conn_, album_scope, semantic_relevance));
     const MatchSetTable match_set(guard.conn_, scope, options.local_day_time_zone_);
     out = ReadAlbumQueryFromMatchSet(guard.conn_, options, active_semantic_model_key, read,
                                      scope.joins_relevance_);
@@ -1061,7 +1076,7 @@ auto ElementStore::ReadAlbumQuery(
 }
 
 auto ElementStore::ReadAlbumFilePosition(
-    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
+    const AlbumScope& album_scope, const std::optional<duckorm::SqlFragment>& extra_filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
     const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
@@ -1074,7 +1089,7 @@ auto ElementStore::ReadAlbumFilePosition(
   std::optional<AlbumFilePosition> out;
   {
     const auto scope = BuildScopedFileQuery(
-        folder_id, extra_filter, RelevanceSelectOf(guard.conn_, folder_id, semantic_relevance));
+        album_scope, extra_filter, RelevanceSelectOf(guard.conn_, album_scope, semantic_relevance));
     const MatchSetTable match_set(guard.conn_, scope, options.local_day_time_zone_);
     auto                query = album_sql::RelationsPrefix(
         options, active_semantic_model_key, album_sql::EditStateProjection::kNotRead);
@@ -1123,7 +1138,7 @@ auto ElementStore::ReadAlbumFilePosition(
 }
 
 auto ElementStore::ReadAlbumFileIds(
-    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
+    const AlbumScope& album_scope, const std::optional<duckorm::SqlFragment>& extra_filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     int64_t occurrence_begin, int64_t occurrence_end,
     const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
@@ -1142,7 +1157,7 @@ auto ElementStore::ReadAlbumFileIds(
   duckorm::Transaction transaction(guard.conn_);
   {
     const auto scope = BuildScopedFileQuery(
-        folder_id, extra_filter, RelevanceSelectOf(guard.conn_, folder_id, semantic_relevance));
+        album_scope, extra_filter, RelevanceSelectOf(guard.conn_, album_scope, semantic_relevance));
     const MatchSetTable match_set(guard.conn_, scope, options.local_day_time_zone_);
     auto                query = album_sql::RelationsPrefix(
         options, active_semantic_model_key, album_sql::EditStateProjection::kNotRead);
@@ -1232,8 +1247,10 @@ auto ElementStore::ReadFolderImageCounts() const -> FolderImageCounts {
   // `subtree` pairs each folder (the root 0 left out: its row shows the project count) with
   // itself and every folder below it. The count of a folder is the number of distinct photos
   // linked into any folder of its subtree, read through the tables of BuildScopedFileQuery.
-  // One row per folder whose subtree holds a photo, then one row with a NULL folder id for the
-  // whole project.
+  // One row per folder whose subtree holds a photo, one row with the root id for the library
+  // root (#1076), then one row with a NULL folder id for the whole project. The root row counts
+  // each photo that no other folder holds, and each photo that an ordinary (not mounted) folder
+  // holds, so the mount trees are left out.
   static constexpr const char* kFolderCountsQuery =
       "WITH RECURSIVE subtree(anchor_id, folder_id) AS ("
       "SELECT f.id, f.id FROM Element f WHERE f.type = {0} AND f.id <> 0 "
@@ -1247,22 +1264,30 @@ auto ElementStore::ReadFolderImageCounts() const -> FolderImageCounts {
       "JOIN FileImage fi ON fi.file_id = e.id "
       "JOIN Image i ON i.id = fi.image_id "
       "WHERE e.type = {1} GROUP BY s.anchor_id "
+      "UNION ALL SELECT CAST({3} AS BIGINT), COUNT(*) {2} AND ({4} OR EXISTS ("
+      "SELECT 1 FROM FolderContent ordinary_fc "
+      "JOIN Element ordinary_f ON ordinary_f.id = ordinary_fc.folder_id "
+      "WHERE ordinary_fc.element_id = e.id AND ordinary_fc.folder_id <> {3} "
+      "AND ordinary_f.mount_id IS NULL)) "
       "UNION ALL SELECT CAST(NULL AS BIGINT), COUNT(*) {2}";
 
   auto              guard   = database_.GetConnectionGuard();
   auto              db_lock = guard.Lock();
-  const auto        project = BuildScopedFileQuery(0);
-  const auto        sql = std::format(kFolderCountsQuery, static_cast<uint32_t>(ElementType::FOLDER),
-                                      static_cast<uint32_t>(ElementType::FILE), project.from_where_);
+  const auto        project = BuildScopedFileQuery(AlbumScope{});
+  const auto sql = std::format(kFolderCountsQuery, static_cast<uint32_t>(ElementType::FOLDER),
+                               static_cast<uint32_t>(ElementType::FILE), project.from_where_,
+                               kLibraryRootFolderId, HeldOnlyByLibraryRootSql());
 
   FolderImageCounts out;
   for (const auto& row : duckorm::query<FolderPhotoCountRow>(
            guard.conn_, duckorm::SqlFragment{sql, project.binds_.binds_})) {
     const auto count = static_cast<uint64_t>(row.photo_count);
-    if (row.folder_id.has_value()) {
-      out.folder_photo_counts_[static_cast<sl_element_id_t>(*row.folder_id)] = count;
-    } else {
+    if (!row.folder_id.has_value()) {
       out.project_photo_count_ = count;
+    } else if (*row.folder_id == kLibraryRootFolderId) {
+      out.library_root_photo_count_ = count;
+    } else {
+      out.folder_photo_counts_[static_cast<sl_element_id_t>(*row.folder_id)] = count;
     }
   }
   return out;

@@ -326,6 +326,23 @@ auto SortedStrings(const QJsonArray& values) -> QStringList {
   return strings;
 }
 
+// #1076: a mount is always a child of the library root, so library.mount takes no parent.
+TEST_F(AutomationLibraryCommandsTest, MountCommandSchemaHasNoParentId) {
+  InProcessAutomationSession session;
+  const QJsonObject          mount = DescribedCommand(session, QStringLiteral("library.mount"));
+  ASSERT_FALSE(mount.isEmpty());
+  const QJsonObject params = mount.value("params_schema").toObject();
+  EXPECT_EQ(SortedStrings(params.value("required").toArray()), (QStringList{"path"}));
+  EXPECT_TRUE(params.value("properties").toObject().contains("path"));
+  EXPECT_FALSE(params.value("properties").toObject().contains("parent_id"));
+  EXPECT_FALSE(params.value("additionalProperties").toBool(true));
+  EXPECT_FALSE(mount.value("description").toString().contains(QStringLiteral("parent")));
+
+  const QJsonObject mounts = DescribedCommand(session, QStringLiteral("library.mounts"));
+  ASSERT_FALSE(mounts.isEmpty());
+  EXPECT_TRUE(mounts.value("description").toString().contains(QStringLiteral("display name")));
+}
+
 TEST_F(AutomationLibraryCommandsTest, MarkCommandsAreRegisteredWithSchemas) {
   InProcessAutomationSession session;
   const QJsonArray  code_keys{"red", "orange", "yellow", "green", "blue", "purple", "gray"};
@@ -605,7 +622,7 @@ TEST_F(AutomationLibraryCommandsTest, ImportWithMountedCurrentFolderReturnsTheNa
                    .isEmpty());
   const auto project = session.host().project()->handler().project();
   ASSERT_NE(project, nullptr);
-  auto [mount_root, sync] = project->GetSleeveService()->CreateMountRootFolder(0, L"Trip", 1);
+  auto [mount_root, sync] = project->GetSleeveService()->CreateMountRootFolder(L"Trip", 1);
   ASSERT_TRUE(sync.success_) << sync.message_;
   session.host().folders()->ReloadTree(L"/Trip");
   ASSERT_EQ(session.host().folders()->CurrentFolderElementId(), mount_root->element_id_);
@@ -688,6 +705,9 @@ TEST_F(AutomationLibraryCommandsTest, MountSyncAndUnmountReturnTheServiceResults
   EXPECT_EQ(listed.value("present_count").toInt(), 2);
   EXPECT_EQ(listed.value("missing_count").toInt(), 0);
   EXPECT_TRUE(listed.value("last_scan_at").isString());
+  // #1076: the volume values of the Disk section; the first scan reached the volume.
+  EXPECT_TRUE(listed.value("volume_name").isString());
+  EXPECT_FALSE(listed.value("volume_mount_point").toString().isEmpty());
 
   // A mount inside the mounted directory is refused with the name of the rule.
   const auto nested = session.Call(QStringLiteral("library.mount"),

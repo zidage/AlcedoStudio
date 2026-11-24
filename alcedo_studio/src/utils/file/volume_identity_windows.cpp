@@ -102,6 +102,30 @@ auto ReadVolumeIdentity(const std::filesystem::path& directory) -> std::string {
   return ToUtf8(volume_name.data());
 }
 
+auto ReadVolumeLabel(const std::filesystem::path& directory) -> VolumeLabel {
+  std::error_code ec;
+  if (directory.empty() || !std::filesystem::is_directory(directory, ec) || ec) return {};
+  const auto absolute = std::filesystem::absolute(directory, ec);
+  if (ec) return {};
+  const std::wstring&  native = absolute.native();
+
+  // The volume path (`C:\`, `\\server\share\`, or a mount folder) is never longer than the input.
+  std::vector<wchar_t> volume_path(native.size() + 2);
+  if (!::GetVolumePathNameW(native.c_str(), volume_path.data(),
+                            static_cast<DWORD>(volume_path.size()))) {
+    return {};
+  }
+  VolumeLabel label;
+  label.mount_point = std::filesystem::path(volume_path.data());
+  // A volume label has at most 32 characters; MAX_PATH + 1 is the documented buffer size.
+  std::array<wchar_t, MAX_PATH + 1> name{};
+  if (::GetVolumeInformationW(volume_path.data(), name.data(), static_cast<DWORD>(name.size()),
+                              nullptr, nullptr, nullptr, nullptr, 0)) {
+    label.name = ToUtf8(name.data());
+  }
+  return label;
+}
+
 auto ListVolumeMountPoints() -> std::vector<VolumeMountPoint> {
   std::vector<VolumeMountPoint> mount_points;
 

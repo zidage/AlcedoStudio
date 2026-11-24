@@ -166,8 +166,7 @@ class SleeveServiceImpl final : public SleeveService {
   /// See alcedo::ApplyMountTreeChanges. Throws like it, before the sync.
   auto ApplyMountTreeChanges(const MountTreeChanges& changes) -> SyncResult;
   /// See alcedo::CreateMountRootFolder. Throws like it, before the sync.
-  auto CreateMountRootFolder(sl_element_id_t parent_id, const file_name_t& name,
-                             mount_id_t mount_id)
+  auto CreateMountRootFolder(const file_name_t& name, mount_id_t mount_id)
       -> std::pair<std::shared_ptr<SleeveFolder>, SyncResult>;
   /// See alcedo::RemoveMountTree. Throws like it, before the sync.
   auto RemoveMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id,

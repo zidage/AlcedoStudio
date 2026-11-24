@@ -103,9 +103,9 @@ class FolderController final : public QObject {
    * refusal or a failure through the status sink. A row id names the folder row (0 = root).
    */
   ///@{
-  /// Mount the directory @p directory as a new collection in the row @p parentFolderUiId, then
-  /// start its first scan as a task.
-  Q_INVOKABLE void MountFolder(uint parentFolderUiId, const QUrl& directory);
+  /// Mount the directory @p directory as a new collection in the library root, then start its
+  /// first scan as a task.
+  Q_INVOKABLE void MountFolder(const QUrl& directory);
   /// Scan the mount of the row now, with a task from the start.
   Q_INVOKABLE void SynchronizeMount(uint folderUiId);
   /// Remove the mount of the row; its photos stay as ordinary photos.
@@ -134,7 +134,7 @@ class FolderController final : public QObject {
    */
   ///@{
   /// @param first_scan_ended Optional; called with the result of the first scan.
-  auto StartCreateMount(sl_element_id_t parent_folder_id, const std::filesystem::path& directory,
+  auto StartCreateMount(const std::filesystem::path&                         directory,
                         std::function<void(std::exception_ptr, mount_id_t)> done,
                         MountScanEndedCallback first_scan_ended = {}) -> QString;
   auto StartSynchronize(mount_id_t mount_id, MountScanEndedCallback ended = {}) -> QString;

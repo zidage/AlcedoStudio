@@ -249,8 +249,10 @@ MountScanCoordinator::MountScanCoordinator(MountScanCoordinatorDependencies depe
         "MountScanCoordinator: the task list, the clock, and the watcher are required");
   }
   watcher_->SetChangeCallback([this](mount_id_t mount_id) { HandleDirectoryChanged(mount_id); });
-  watcher_->SetVolumeCallbacks([this](mount_id_t mount_id) { HandleVolumeRemoved(mount_id); },
-                               [this] { HandleVolumeArrived(); });
+  watcher_->SetVolumeCallbacks(
+      [this](mount_id_t mount_id) { HandleVolumeRemoved(mount_id); },
+      [this] { HandleVolumeArrived(); },
+      [this](const ArrivedVolume& volume) { HandleMountPointArrived(volume); });
 }
 
 MountScanCoordinator::~MountScanCoordinator() { Stop(); }
@@ -373,9 +375,10 @@ void MountScanCoordinator::ReloadMounts() {
   for (const auto& summary : summaries) {
     listed.insert(summary.record.id);
     auto [it, inserted] = mounts_.try_emplace(summary.record.id);
-    auto& state         = it->second;
-    state.root          = summary.record.root_path;
-    state.title         = i18n::PathToQString(summary.record.root_path.filename());
+    auto& state           = it->second;
+    state.root            = summary.record.root_path;
+    state.volume_identity = summary.record.volume_identity;
+    state.title           = i18n::PathToQString(summary.record.root_path.filename());
     if (inserted) {
       state.reachability = summary.reachability;
     }
@@ -619,6 +622,23 @@ void MountScanCoordinator::HandleVolumeArrived() {
       RequestScan(mount_id, MountScanTrigger::kVolumeChange);
     });
   }
+}
+
+void MountScanCoordinator::HandleMountPointArrived(const ArrivedVolume& volume) {
+  if (!port_) {
+    return;
+  }
+  // The mounts of an unreachable volume are offline, so the watcher holds no watch for them; the
+  // stored identity and root of each mount decide.
+  for (const auto& [mount_id, state] : mounts_) {
+    if ((!volume.identity.empty() && state.volume_identity == volume.identity) ||
+        IsPathAtOrBelow(state.root, volume.mount_point)) {
+      return;
+    }
+  }
+  emit VolumeWithoutMountArrived(QString::fromStdString(volume.name),
+                                 i18n::PathToQString(volume.mount_point),
+                                 volume.has_dcim_directory);
 }
 
 void MountScanCoordinator::StartNextScan() {

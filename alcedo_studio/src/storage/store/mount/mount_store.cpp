@@ -28,7 +28,8 @@ namespace {
 namespace expr = duckorm::expr;
 
 constexpr const char* kMountRootColumns =
-    "SELECT id, root_folder_id, volume_identity, root_path, last_scan_at FROM MountRoot ";
+    "SELECT id, root_folder_id, volume_identity, root_path, last_scan_at, volume_name "
+    "FROM MountRoot ";
 constexpr const char* kSourceFileColumns =
     "SELECT s.element_id, s.byte_size, s.modified_ns, s.fingerprint, s.fingerprint_version, "
     "s.state, s.missing_since FROM SourceFile s ";
@@ -128,6 +129,18 @@ void MountStore::UpdateMountLastScanTime(mount_id_t mount_id, std::time_t last_s
   auto db_lock = guard.Lock();
   RequireOneMountChanged(duckorm::execute_count(guard.conn_, statement), mount_id,
                          "UpdateMountLastScanTime");
+}
+
+void MountStore::UpdateMountVolumeName(mount_id_t mount_id, const std::string& volume_name) {
+  auto statement = expr::raw("UPDATE MountRoot SET volume_name = ");
+  statement.append(NullableTextParam(volume_name));
+  statement.append(expr::raw(" WHERE id = "));
+  statement.append(expr::param(static_cast<int64_t>(mount_id)));
+
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  RequireOneMountChanged(duckorm::execute_count(guard.conn_, statement), mount_id,
+                         "UpdateMountVolumeName");
 }
 
 void MountStore::RemoveMountRoot(mount_id_t mount_id) {
