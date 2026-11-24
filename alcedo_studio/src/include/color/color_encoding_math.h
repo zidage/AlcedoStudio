@@ -53,6 +53,19 @@
 #define CE_LOG    precise::log
 #define CE_LOG2   precise::log2
 #define CE_SQRT   precise::sqrt
+#elif defined(__SLANG__)
+// Slang to SPIR-V, the Vulkan kernels (vulkan_compute_backend_plan.md, sections 4.3 and 9.1).
+// The GLSL.std.450 exp, exp2, log, log2, and pow are less precise than the OpenCL functions, and
+// the curves amplify the difference (ST 2084 near the peak), so the Vulkan branch uses the
+// functions of math.slangh (phase VK3 record).
+#include "vulkan/shader/math.slangh"
+#define CE_INLINE static
+#define CE_POW    AlcedoPow
+#define CE_EXP    AlcedoExp
+#define CE_EXP2   AlcedoExp2
+#define CE_LOG    AlcedoLog
+#define CE_LOG2   AlcedoLog2
+#define CE_SQRT   sqrt
 #else
 #include <cmath>
 #ifdef __CUDACC__

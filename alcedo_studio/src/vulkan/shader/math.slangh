@@ -1,0 +1,152 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+// Math functions of the Slang kernels of the Vulkan backend (vulkan_compute_backend_plan.md,
+// sections 4.3 and phase VK3) that SPIR-V does not have, or does not give with the precision of
+// the OpenCL built-in functions.
+//
+// GLSL.std.450 exp, exp2, log, log2, and pow have looser limits than OpenCL: exp2 has 3 + 2|x|
+// ulp, log2 has only an absolute error of 2^-21 in [0.5, 2], and pow is exp2(y * log2(x)). The
+// shared color curves amplify these errors: the ST 2084 decode subtracts a constant from a power
+// near 1, so one ulp of that power is about 4e-5 of the decoded light near the peak, and the
+// LogC4 decode has about 12 ulp from exp2 of a large argument (phase VK3 record). The functions
+// below reduce the argument exactly and evaluate polynomials of plain arithmetic, about 1 ulp,
+// with the same result on each driver.
+
+#pragma once
+
+static const float kAlcedoLn2Hi = 0.693145751953125f;  // ln 2 with 12 trailing zero bits
+static const float kAlcedoLn2Lo = 1.428606765330187e-06f;
+static const float kAlcedoLn2   = 0.693147180559945f;
+static const float kAlcedoLog2E = 1.442695040888963f;
+
+static float AlcedoInfinity() {
+  return asfloat(0x7f800000u);
+}
+
+// v 2^n for n in [-150, 128], by the bits of the power of two (HLSL ldexp takes a float exponent
+// and can become a multiplication by exp2). A result below the normal range can flush to 0.
+static float AlcedoScaleByPowerOf2(float v, int n) {
+  if (n > 127) {
+    v = v * asfloat(0x7f000000u);  // 2^127
+    n = n - 127;
+  } else if (n < -126) {
+    v = v * asfloat(0x00800000u);  // 2^-126
+    n = n + 126;
+  }
+  return v * asfloat(uint(n + 127) << 23);
+}
+
+// The cube root. SPIR-V has no cbrt: exp2(log2(|x|) / 3) and one Newton step. Its difference from
+// a double-precision cbrt has the size of the difference of the OpenCL cbrt (2 ulp); a second
+// step changes the result by little (VX1, section 9.1). 0 stays 0, and the sign of x stays.
+static float AlcedoCbrt(float x) {
+  if (x == 0.0f) {
+    return 0.0f;
+  }
+  const float a = abs(x);
+  float       r = exp2(log2(a) * (1.0f / 3.0f));
+  r             = r - (r * r * r - a) / (3.0f * r * r);
+  return x < 0.0f ? -r : r;
+}
+
+// exp(r) - 1 for |r| <= 0.35: the Taylor series to r^9 (the next term is below 2e-10 of the sum).
+static float AlcedoExpm1Reduced(float r) {
+  return r * (1.0f +
+              r * (0.5f +
+                   r * (1.6666667e-1f +
+                        r * (4.1666668e-2f +
+                             r * (8.3333338e-3f +
+                                  r * (1.3888889e-3f +
+                                       r * (1.9841270e-4f +
+                                            r * (2.4801587e-5f + r * 2.7557319e-6f))))))));
+}
+
+// ln(1 + u) for u in [-0.25, 0.5]: 2 atanh(s) with s = u / (2 + u), |s| <= 0.2, to s^11.
+static float AlcedoLog1pReduced(float u) {
+  const float s  = u / (2.0f + u);
+  const float s2 = s * s;
+  return 2.0f * s *
+         (1.0f + s2 * (3.3333334e-1f +
+                       s2 * (2.0e-1f + s2 * (1.4285715e-1f +
+                                            s2 * (1.1111111e-1f + s2 * 9.0909094e-2f)))));
+}
+
+// e^x. n = round(x / ln 2), r = x - n ln 2 (Cody and Waite: n * kAlcedoLn2Hi is exact), then
+// 2^n (1 + expm1(r)).
+static float AlcedoExp(float x) {
+  if (x > 88.72284f) {
+    return AlcedoInfinity();
+  }
+  if (x < -103.97208f) {
+    return 0.0f;
+  }
+  const float n = round(x * kAlcedoLog2E);
+  const float r = (x - n * kAlcedoLn2Hi) - n * kAlcedoLn2Lo;
+  return AlcedoScaleByPowerOf2(1.0f + AlcedoExpm1Reduced(r), int(n));
+}
+
+// 2^x. n = round(x), f = x - n (exact), then 2^n (1 + expm1(f ln 2)).
+static float AlcedoExp2(float x) {
+  if (x >= 128.0f) {
+    return AlcedoInfinity();
+  }
+  if (x < -150.0f) {
+    return 0.0f;
+  }
+  const float n = round(x);
+  return AlcedoScaleByPowerOf2(1.0f + AlcedoExpm1Reduced((x - n) * kAlcedoLn2), int(n));
+}
+
+// x = m 2^e with m in [0.75, 1.5), from the bits of x (HLSL frexp gives a float exponent).
+// @pre x is positive and finite.
+static float AlcedoSplitMantissa(float x, out float e) {
+  int bias = 0;
+  if (x < asfloat(0x00800000u)) {  // below the normal range: scale by 2^24 first
+    x    = x * 16777216.0f;
+    bias = 24;
+  }
+  const uint bits     = asuint(x);
+  int        exponent = int((bits >> 23) & 0xffu) - 126;
+  float      m        = asfloat((bits & 0x007fffffu) | 0x3f000000u);  // m in [0.5, 1)
+  if (m < 0.75f) {
+    m        = m * 2.0f;
+    exponent = exponent - 1;
+  }
+  e = float(exponent - bias);
+  return m;
+}
+
+// ln x. ln x = e ln 2 + ln(1 + (m - 1)); m - 1 is exact. 0 gives -inf; a negative value, NaN, and
+// +inf keep the GLSL.std.450 result.
+static float AlcedoLog(float x) {
+  if (!(x > 0.0f) || isinf(x)) {
+    return log(x);
+  }
+  float       e = 0.0f;
+  const float m = AlcedoSplitMantissa(x, e);
+  return e * kAlcedoLn2Hi + (AlcedoLog1pReduced(m - 1.0f) + e * kAlcedoLn2Lo);
+}
+
+// log2 x = e + log2(m).
+static float AlcedoLog2(float x) {
+  if (!(x > 0.0f) || isinf(x)) {
+    return log2(x);
+  }
+  float       e = 0.0f;
+  const float m = AlcedoSplitMantissa(x, e);
+  return e + AlcedoLog1pReduced(m - 1.0f) * kAlcedoLog2E;
+}
+
+// x^y = e^(y ln x). A base that is not positive keeps the GLSL.std.450 result (the curves clamp
+// their input before a power).
+static float AlcedoPow(float x, float y) {
+  if (!(x > 0.0f) || isinf(x)) {
+    return pow(x, y);
+  }
+  if (y == 0.0f) {
+    return 1.0f;
+  }
+  return AlcedoExp(y * AlcedoLog(x));
+}

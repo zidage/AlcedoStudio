@@ -194,12 +194,39 @@ alcedo_register_test_target(PipelineAcceleratorTest edit)
 # GPU with the validation layer (#1036, phase VK2).
 if(ALCEDO_VULKAN_ENABLED)
   add_executable(GpuDagVulkanWorkspaceTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_workspace_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_workspace_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_kernel_dispatch_test.cpp)
   target_include_directories(GpuDagVulkanWorkspaceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagVulkanWorkspaceTest PRIVATE GTest::gtest_main EditRuntimeVulkan)
+  add_dependencies(GpuDagVulkanWorkspaceTest AlcedoVulkanKernels)
   gtest_discover_tests(GpuDagVulkanWorkspaceTest TEST_PREFIX "GpuDagVulkanWorkspaceTest."
     PROPERTIES LABELS "gpu;edit;runtime;vulkan")
   alcedo_register_test_target(GpuDagVulkanWorkspaceTest gpu)
+endif()
+
+# Vulkan against OpenCL on the same GPU (#1036, phase VK3, decision B9): the shared color math
+# and the crop and resize of the Develop pass. The OpenCL side runs the product sources.
+if(ALCEDO_VULKAN_ENABLED AND ALCEDO_OPENCL_ENABLED)
+  add_executable(VulkanColorMathTest ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_color_math_test.cpp)
+  target_include_directories(VulkanColorMathTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(VulkanColorMathTest PRIVATE
+    GTest::gtest_main EditRuntimeVulkan OpenClProgramLibrary)
+  target_compile_definitions(VulkanColorMathTest PRIVATE
+    ALCEDO_COLOR_ENCODING_MATH_H_PATH="${ALCEDO_INCLUDE_DIR}/color/color_encoding_math.h"
+    ALCEDO_OPENCL_OKLAB_CL_PATH="${ALCEDO_SRC_DIR}/edit/runtime/opencl/shader/oklab.cl")
+  add_dependencies(VulkanColorMathTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanColorMathTest TEST_PREFIX "VulkanColorMathTest."
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan;opencl")
+  alcedo_register_test_target(VulkanColorMathTest gpu)
+
+  add_executable(VulkanGeometryTest ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_geometry_test.cpp)
+  target_include_directories(VulkanGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(VulkanGeometryTest PRIVATE
+    GTest::gtest_main EditRuntimeVulkan OpenClGeometryUtils OpenClProgramLibrary)
+  add_dependencies(VulkanGeometryTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanGeometryTest TEST_PREFIX "VulkanGeometryTest."
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan;opencl")
+  alcedo_register_test_target(VulkanGeometryTest gpu)
 endif()
 
 add_executable(PipelineSchedulerRequestIdTest
