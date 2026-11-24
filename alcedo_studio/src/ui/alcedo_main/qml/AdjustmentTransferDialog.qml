@@ -42,6 +42,8 @@ Dialog {
     property real cornerRadius: 0
 
     signal copyAccepted()
+    // Copy mode: save the selection as a preset instead of copying it (edit presets plan D4).
+    signal saveAsPresetRequested()
     signal pasteAccepted(string strategy)
     // Paste mode was closed without pasting. The copied package stays available.
     signal pasteCanceled()
@@ -434,6 +436,21 @@ Dialog {
                     anchors.leftMargin: appTheme.spaceLg
                     anchors.rightMargin: appTheme.spaceLg
                     spacing: appTheme.spaceSm
+
+                    DialogActionButton {
+                        objectName: "adjustmentTransferSaveAsPresetButton"
+                        visible: dialog.copyMode
+                        buttonWidth: contentItem.implicitWidth + 2 * appTheme.spaceLg
+                        buttonHeight: appTheme.iconButtonHitSizeCompact
+                        buttonRadius: appTheme.controlRadiusSmall
+                        font.weight: appTheme.fontWeightRegular
+                        text: qsTr("Save as Preset")
+                        enabled: dialog.dialogModel && dialog.dialogModel.canCopy === true
+                        onClicked: {
+                            dialog.saveAsPresetRequested()
+                            dialog.close()
+                        }
+                    }
 
                     Item {
                         Layout.fillWidth: true

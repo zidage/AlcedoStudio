@@ -120,6 +120,11 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorLutTileMinWidth READ editorLutTileMinWidth CONSTANT)
   Q_PROPERTY(int editorLutTileCompactWidth READ editorLutTileCompactWidth CONSTANT)
   Q_PROPERTY(int editorLutTileIconSize READ editorLutTileIconSize CONSTANT)
+  // Versions panel presets (edit presets plan, PS2): default preset part height, the
+  // smallest Versions part the splitter leaves, and the minimum preset tile width.
+  Q_PROPERTY(int editorPresetPaneHeight READ editorPresetPaneHeight CONSTANT)
+  Q_PROPERTY(int editorVersionsPartMinHeight READ editorVersionsPartMinHeight CONSTANT)
+  Q_PROPERTY(int editorPresetTileMinWidth READ editorPresetTileMinWidth CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
   // collectionsSidebarWidth is the default width; the user drags it in the min..max range.
   Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
@@ -472,6 +477,9 @@ class AppTheme final : public QObject {
   auto        editorLutTileMinWidth() const -> int;
   auto        editorLutTileCompactWidth() const -> int;
   auto        editorLutTileIconSize() const -> int;
+  auto        editorPresetPaneHeight() const -> int;
+  auto        editorVersionsPartMinHeight() const -> int;
+  auto        editorPresetTileMinWidth() const -> int;
   auto        collectionsSidebarWidth() const -> int;
   auto        collectionsSidebarMinWidth() const -> int;
   auto        collectionsSidebarMaxWidth() const -> int;

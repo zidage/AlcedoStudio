@@ -322,6 +322,20 @@ mask). Until the preview is ready, and for a LUT that cannot be applied, the slo
 shows the `editorLutTileIconSize` cube centered on the well. The list layout has
 no preview slot.
 
+**Versions panel presets (edit presets plan, PS2):** the Versions panel has a
+preset part above the Versions part, divided by a 1 px `cardBorderColor`
+splitter line (`textMutedColor` on hover and drag). The preset part has the
+`Presets` header with `plus.svg` (Add Preset...) and `dots.svg` (menu), an
+`AlertBadge` for errors, and the preset browser: tiles in a sunken `bgBaseColor`
+well with `spaceXs` gaps, a `textMutedColor` caption title for each group, and
+the `tray-download.svg` icon only when the folder is empty. A tile is the LUT
+tile structure: a 3:2 image area (`cardSurfaceColor` until PS3 adds previews),
+the name centered below it, outline selection, and the hover well. A preset
+that is not available shows `info.svg` in `alertBadgeFillColor`. Names,
+group titles, tooltips, and error badges are plain text. During a drag between
+the two parts, the accepting part draws its well border in `textColor`, and a
+`bgBaseColor` label with the dragged name follows the pointer.
+
 **Editor filmstrip tiles:** the filmstrip shares the Library selection, and a
 tile has two independent states. (User request 2026-10-28: the former bone well
 with an inset ink frame and a square caption bar read as a rubber band around
@@ -808,6 +822,9 @@ the two side columns read as one family.
 | `editorLutBrowserFilterWidth` | 184 | LUT browser filter sidebar width |
 | `editorLutTileMinWidth` | 128 | Minimum LUT tile width; the grid fits as many columns as this allows |
 | `editorLutTileIconSize` | 36 | LUT tile cube placeholder icon, centered in the preview slot until the preview is ready |
+| `editorPresetPaneHeight` | 240 | Default height of the preset part of the Versions panel (splitter drag; double click restores it) |
+| `editorVersionsPartMinHeight` | 160 | Smallest Versions part that the preset splitter leaves |
+| `editorPresetTileMinWidth` | 104 | Minimum preset tile width; the browser fits as many columns as this allows |
 | `editorAdjustmentHeaderMinHeight` | 58 | Node-name / EXIF header under the scope: EXIF caption line, `spaceXs` gap, compact Mask-tool row |
 | `collectionsSidebarWidth` | 264 | Default width of the left collections column; a double-click on its edge sets it again |
 | `collectionsSidebarMinWidth` | 208 | Narrowest drag-resized collections column |
