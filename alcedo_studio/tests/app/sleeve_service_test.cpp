@@ -1116,7 +1116,7 @@ class MountedFolderStructureTest : public SleeveServiceTests {
     SleeveServiceTests::SetUp();
     project_ = std::make_unique<ProjectService>(db_path_, meta_path_);
     ordinary_folder_id_ = Sleeve().CreateFolder(L"/", L"Ordinary").first->element_id_;
-    auto [root, root_sync] = Sleeve().CreateMountRootFolder(0, L"Trip", kMount);
+    auto [root, root_sync] = Sleeve().CreateMountRootFolder(L"Trip", kMount);
     ASSERT_TRUE(root_sync.success_) << root_sync.message_;
     mount_root_id_ = root->element_id_;
     auto [ids, sync] = Sleeve().Write<std::vector<sl_element_id_t>>([this](FileSystem& fs) {

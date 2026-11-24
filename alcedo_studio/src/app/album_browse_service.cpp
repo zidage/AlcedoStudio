@@ -193,34 +193,34 @@ auto AlbumBrowseService::ElementStoreForRead(std::string_view operation) const -
 }
 
 auto AlbumBrowseService::ReadAlbumQuery(
-    sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+    const AlbumScope& scope, const std::optional<FilterNode>& filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     const AlbumQueryRead&                        read,
     const std::optional<SemanticQueryEmbedding>& semantic_relevance) const -> AlbumQueryResult {
   auto& store = ElementStoreForRead("ReadAlbumQuery");
-  return store.ReadAlbumQuery(folder_id, CompileFilterPredicate(filter), options,
+  return store.ReadAlbumQuery(scope, CompileFilterPredicate(filter), options,
                               active_semantic_model_key, read, semantic_relevance);
 }
 
 auto AlbumBrowseService::ReadAlbumFilePosition(
-    sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+    const AlbumScope& scope, const std::optional<FilterNode>& filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
     const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
     -> std::optional<AlbumFilePosition> {
   auto& store = ElementStoreForRead("ReadAlbumFilePosition");
-  return store.ReadAlbumFilePosition(folder_id, CompileFilterPredicate(filter), options,
+  return store.ReadAlbumFilePosition(scope, CompileFilterPredicate(filter), options,
                                      active_semantic_model_key, file_id, preferred_group,
                                      semantic_relevance);
 }
 
 auto AlbumBrowseService::ReadAlbumFileIds(
-    sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+    const AlbumScope& scope, const std::optional<FilterNode>& filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key, int64_t begin,
     int64_t end, const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
     -> std::vector<sl_element_id_t> {
   auto& store = ElementStoreForRead("ReadAlbumFileIds");
-  return store.ReadAlbumFileIds(folder_id, CompileFilterPredicate(filter), options,
+  return store.ReadAlbumFileIds(scope, CompileFilterPredicate(filter), options,
                                 active_semantic_model_key, begin, end, semantic_relevance);
 }
 

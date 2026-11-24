@@ -30,6 +30,9 @@ struct MountRootRecord {
   std::filesystem::path      root_path;
   /// End of the last completed scan (UTC, seconds); empty before the first scan completes.
   std::optional<std::time_t> last_scan_at;
+  /// The display name of the volume when CreateMount or the last scan that reached it read it
+  /// (ReadVolumeLabel). It stays while the volume is offline. Empty when the volume has no name.
+  std::string                volume_name;
 
   auto                       operator==(const MountRootRecord&) const -> bool = default;
 };

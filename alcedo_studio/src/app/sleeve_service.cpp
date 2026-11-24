@@ -432,11 +432,10 @@ auto SleeveServiceImpl::ApplyMountTreeChanges(const MountTreeChanges& changes) -
   return Write<void>([&changes](FileSystem& fs) { alcedo::ApplyMountTreeChanges(fs, changes); });
 }
 
-auto SleeveServiceImpl::CreateMountRootFolder(sl_element_id_t parent_id, const file_name_t& name,
-                                              mount_id_t mount_id)
+auto SleeveServiceImpl::CreateMountRootFolder(const file_name_t& name, mount_id_t mount_id)
     -> std::pair<std::shared_ptr<SleeveFolder>, SyncResult> {
-  return Write<std::shared_ptr<SleeveFolder>>([parent_id, &name, mount_id](FileSystem& fs) {
-    return alcedo::CreateMountRootFolder(fs, parent_id, name, mount_id);
+  return Write<std::shared_ptr<SleeveFolder>>([&name, mount_id](FileSystem& fs) {
+    return alcedo::CreateMountRootFolder(fs, name, mount_id);
   });
 }
 

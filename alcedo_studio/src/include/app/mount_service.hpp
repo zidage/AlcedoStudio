@@ -33,10 +33,6 @@ namespace alcedo {
 enum class MountError : std::uint8_t {
   /// The directory is inside a mounted directory, or contains one (D12).
   kNestedMount,
-  /// The parent folder of a new mount is a mounted folder (P4).
-  kParentIsMounted,
-  /// The parent folder of a new mount is not a live folder of the library.
-  kParentIsNotAFolder,
   /// The directory does not exist, or is not a directory.
   kDirectoryUnreachable,
   /// No mount has the id.
@@ -77,10 +73,18 @@ enum class MountReachability : std::uint8_t {
   kOffline,
 };
 
-/// One mount as ListMounts reads it.
+/// One mount as ListMounts reads it. The Disk section of the Collections panel groups the
+/// mounts by `record.volume_identity`, and a mount with an empty identity by
+/// @ref volume_mount_point (#1076).
 struct MountSummary {
-  MountRootRecord   record;
-  MountReachability reachability  = MountReachability::kNotScanned;
+  /// The stored mount. `record.volume_name` is the last read name of the volume; it stays while
+  /// the volume is offline.
+  MountRootRecord       record;
+  MountReachability     reachability = MountReachability::kNotScanned;
+  /// The mount point of the volume (a drive such as `E:\` on Windows, the mount path on macOS
+  /// and Linux), as the last scan of this session read it. Empty while @ref reachability is not
+  /// kOnline.
+  std::filesystem::path volume_mount_point;
   /// Mounted files whose source record is present.
   std::size_t       present_count = 0;
   /// Mounted files whose source record is missing.
@@ -180,6 +184,10 @@ using VolumeMountPointList = std::function<std::vector<VolumeMountPoint>()>;
 /// production; a test injects an identity.
 using VolumeIdentityReader = std::function<std::string(const std::filesystem::path&)>;
 
+/// The display name and the mount point of the volume of a directory. ReadVolumeLabel in
+/// production; a test injects a label.
+using VolumeLabelReader    = std::function<VolumeLabel(const std::filesystem::path&)>;
+
 /// Removes the edit data (pipelines and edit history) of the photos that RemoveMissingPhotos
 /// removed. PipelineMgmtService::DeletePipelines in production; MountService cannot depend on
 /// PipelineMgmtService, which depends on ProjectService.
@@ -195,7 +203,10 @@ struct MountMissingPhotoRemoval {
 /**
  * @brief The mounts of one project: create, scan, and remove (Mounted Folder Plan, MF4).
  *
- * @details A mount binds a new collection to a disk directory. A scan makes the collection equal
+ * @details A mount binds a new collection to a disk directory. The collection is always a child of
+ * the library root: an ordinary collection never holds a mount (#1076), so the Collections
+ * section holds the rows that the user arranges and the Disk section the rows that follow the
+ * disk. A scan makes the collection equal
  * to the directory in one direction, from the disk to the library: folders follow the directory
  * tree, a moved file keeps its element, a new file is imported by reference, and a file that is
  * gone becomes missing. The service never writes, renames, moves, or deletes a file of the
@@ -219,25 +230,28 @@ class MountService {
   /// @param list_volumes The mounted volumes; empty takes ListVolumeMountPoints.
   /// @param read_volume_identity The volume identity of a directory; empty takes
   ///        ReadVolumeIdentity.
+  /// @param read_volume_label The name and the mount point of the volume of a directory; empty
+  ///        takes ReadVolumeLabel.
   /// @throws std::invalid_argument when a service is null.
   MountService(std::shared_ptr<Storage> storage, std::shared_ptr<SleeveServiceImpl> sleeve_service,
                std::shared_ptr<ImagePoolService> image_pool_service,
                VolumeMountPointList              list_volumes         = {},
-               VolumeIdentityReader              read_volume_identity = {});
+               VolumeIdentityReader              read_volume_identity = {},
+               VolumeLabelReader                 read_volume_label    = {});
 
   /**
-   * @brief Bind a new collection in the folder @p parent_folder_id to @p directory.
+   * @brief Bind a new collection in the library root to @p directory.
    *
    * The collection takes the name of the directory. The stored root directory is the canonical
-   * path (`std::filesystem::canonical`). The first scan is a separate ScanMount call.
+   * path (`std::filesystem::canonical`), with the identity and the display name of its volume.
+   * The first scan is a separate ScanMount call.
    *
    * @return The id of the new mount.
-   * @throws MountOperationError with kDirectoryUnreachable, kParentIsNotAFolder,
-   *         kParentIsMounted, kNestedMount (the directory is, is inside, or contains a mounted
-   *         directory), or kStorageFailure. A refused or failed call changes nothing.
+   * @throws MountOperationError with kDirectoryUnreachable, kNestedMount (the directory is, is
+   *         inside, or contains a mounted directory), or kStorageFailure. A refused or failed
+   *         call changes nothing.
    */
-  auto CreateMount(sl_element_id_t parent_folder_id, const std::filesystem::path& directory)
-      -> mount_id_t;
+  auto CreateMount(const std::filesystem::path& directory) -> mount_id_t;
 
   /**
    * @brief List the root directory of a mount, compare it with the stored records, and apply the
@@ -258,8 +272,12 @@ class MountService {
    * of a volume, and after the volume is unmounted the empty mount point directory stays. A
    * listing of that directory would make each photo of the mount missing.
    *
+   * A scan that reaches the volume stores the display name of the volume when it changed
+   * (MountRootRecord::volume_name), before batch 1, and keeps its mount point for ListMounts.
+   *
    * @return kOffline with no change when the root directory is unreachable or on another volume;
-   *         kCanceled when the stop request ended the scan; kStorageFailure when a batch failed.
+   *         kCanceled when the stop request ended the scan; kStorageFailure when a batch or the
+   *         write of the volume name failed (MountScanResult::failed_batch is 0 for the name).
    * @throws MountOperationError with kUnknownMount; std::invalid_argument when the request has
    *         no importer.
    */
@@ -322,12 +340,27 @@ class MountService {
   auto RemoveMissingPhotos(mount_id_t mount_id, const MountEditDataRemoval& remove_edit_data)
       -> MountMissingPhotoRemoval;
 
-  /// Every mount in ascending id order, with its reachability and its file counts.
+  /// Every mount in ascending id order, with its reachability, the mount point of its volume,
+  /// and its file counts.
   auto ListMounts() const -> std::vector<MountSummary>;
 
  private:
+  /// What this session knows about a mount: the state of its last scan and, while it is
+  /// kOnline, the mount point of its volume.
+  struct MountSessionState {
+    MountReachability     reachability = MountReachability::kNotScanned;
+    std::filesystem::path volume_mount_point;
+  };
+
   auto FindMount(mount_id_t mount_id) const -> MountRootRecord;
+  /// Set a state other than kOnline; the mount point is cleared.
   void SetReachability(mount_id_t mount_id, MountReachability reachability);
+  /// Set kOnline with @p mount_point as the mount point of the volume.
+  void SetOnline(mount_id_t mount_id, std::filesystem::path mount_point);
+  /// Read the label of the volume of the root of @p mount, set the mount kOnline with the mount
+  /// point, and store the name when it differs from `mount.volume_name`.
+  /// @throws std::runtime_error when the name write fails; the mount is kOnline then.
+  void RecordVolumeReached(const MountRootRecord& mount);
   /// RelocateRoot with the operation lock held. Returns the stored canonical root.
   auto RelocateRootLocked(const MountRootRecord& mount, const std::filesystem::path& directory)
       -> std::filesystem::path;
@@ -346,12 +379,13 @@ class MountService {
   std::shared_ptr<ImagePoolService>                 image_pool_service_;
   VolumeMountPointList                              list_volumes_;
   VolumeIdentityReader                              read_volume_identity_;
+  VolumeLabelReader                                 read_volume_label_;
 
   /// Serializes CreateMount, ScanMount, RemoveMount, RelocateRoot, LocateMissingFile, and
   /// RemoveMissingPhotos.
   std::mutex                                        operation_mutex_;
-  mutable std::mutex                                reachability_mutex_;
-  std::unordered_map<mount_id_t, MountReachability> reachability_;
+  mutable std::mutex                                session_mutex_;
+  std::unordered_map<mount_id_t, MountSessionState> session_states_;
 };
 
 }  // namespace alcedo

@@ -178,11 +178,11 @@ class LibraryFolderSectionQmlTest : public ApplicationModuleHostTestFixture {
   void MountBoth() {
     ASSERT_TRUE(CreateTestProject(backend_));
     ASSERT_TRUE(backend_.mount_scans()->IsStarted());
-    Folders().MountFolder(0, QUrl::fromLocalFile(PathToQString(disk_ / "Trip")));
+    Folders().MountFolder(QUrl::fromLocalFile(PathToQString(disk_ / "Trip")));
     ASSERT_TRUE(WaitFor([this] {
       return RowNamed("RAW").has_value() && !backend_.mount_scans()->HasPendingScans();
     }));
-    Folders().MountFolder(0, QUrl::fromLocalFile(PathToQString(disk_ / "Day")));
+    Folders().MountFolder(QUrl::fromLocalFile(PathToQString(disk_ / "Day")));
     ASSERT_TRUE(WaitFor([this] {
       const auto trip = RowNamed("Trip");
       return RowNamed("Sub").has_value() && trip.has_value() && RowNamed("Notes").has_value() &&

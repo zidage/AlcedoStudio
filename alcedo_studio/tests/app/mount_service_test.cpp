@@ -276,7 +276,7 @@ class MountServiceTest : public ::testing::Test {
 
   /// A mount of `disk_/<name>` in the library root, scanned once.
   auto MountAndScan(const std::wstring& name) -> mount_id_t {
-    const auto mount_id = Mounts().CreateMount(0, disk_ / name);
+    const auto mount_id = Mounts().CreateMount(disk_ / name);
     const auto result   = ScanAndCheckDirectory(mount_id);
     EXPECT_EQ(result.status, MountScanStatus::kComplete) << result.error;
     return mount_id;
@@ -307,7 +307,7 @@ auto CodeOf(const std::function<void()>& operation) -> std::optional<MountError>
 
 TEST_F(MountServiceTest, FirstScanBuildsFoldersAndPhotosOfTheDirectory) {
   WriteTrip(L"Japan");
-  const auto mount_id = Mounts().CreateMount(0, disk_ / "Japan");
+  const auto mount_id = Mounts().CreateMount(disk_ / "Japan");
   const auto result   = ScanAndCheckDirectory(mount_id);
 
   ASSERT_EQ(result.status, MountScanStatus::kComplete) << result.error;
@@ -481,7 +481,7 @@ TEST_F(MountServiceTest, OrdinaryPhotoBelowTheRootIsAdoptedWithItsCollectionLink
   const auto root_id = RootIdOf(file_id);
   SetRating(file_id, 3);
 
-  const auto mount_id = Mounts().CreateMount(0, disk_ / "Japan");
+  const auto mount_id = Mounts().CreateMount(disk_ / "Japan");
   const auto result   = ScanAndCheckDirectory(mount_id);
 
   ASSERT_EQ(result.status, MountScanStatus::kComplete) << result.error;
@@ -530,28 +530,93 @@ TEST_F(MountServiceTest, UnreachableRootSetsOfflineAndChangesNoRecord) {
 
 TEST_F(MountServiceTest, NestedDirectoryIsRefusedInBothDirections) {
   WriteTrip(L"Photos");
-  const auto mount_id      = Mounts().CreateMount(0, disk_ / "Photos");
+  const auto mount_id      = Mounts().CreateMount(disk_ / "Photos");
   const auto root_folder   = MountOf(mount_id).root_folder_id;
   const auto library_count = Sleeve().ListFolderEntries(L"/").size();
 
-  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(0, disk_ / "Photos" / "Day1"); }),
+  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(disk_ / "Photos" / "Day1"); }),
             MountError::kNestedMount);
-  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(0, disk_); }), MountError::kNestedMount);
-  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(0, disk_ / "Photos"); }), MountError::kNestedMount);
-  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(0, disk_ / "Photos" / "Day1" / ".." / "."); }),
+  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(disk_); }), MountError::kNestedMount);
+  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(disk_ / "Photos"); }), MountError::kNestedMount);
+  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(disk_ / "Photos" / "Day1" / ".." / "."); }),
             MountError::kNestedMount);
-  stdfs::create_directories(disk_ / "Other");
-  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(root_folder, disk_ / "Other"); }),
-            MountError::kParentIsMounted);
-  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(0, disk_ / "Absent"); }),
+  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(disk_ / "Absent"); }),
             MountError::kDirectoryUnreachable);
-  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(0, disk_ / "Photos" / "a.jpg"); }),
+  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(disk_ / "Photos" / "a.jpg"); }),
             MountError::kDirectoryUnreachable);
-  EXPECT_EQ(CodeOf([&] { Mounts().CreateMount(9999, disk_ / "Other"); }),
-            MountError::kParentIsNotAFolder);
 
   EXPECT_EQ(Mounts().ListMounts().size(), 1u);
   EXPECT_EQ(Sleeve().ListFolderEntries(L"/").size(), library_count);
+  (void)root_folder;
+}
+
+// #1076: the parent of a mount is always the library root, also while a collection exists and
+// for a second mount.
+TEST_F(MountServiceTest, NewMountIsAChildOfTheLibraryRoot) {
+  WriteTrip(L"Japan");
+  WriteTrip(L"Italy");
+  const auto trip  = CreateCollection(L"Trips");
+  const auto japan = MountAndScan(L"Japan");
+  const auto italy = MountAndScan(L"Italy");
+
+  for (const auto mount_id : {japan, italy}) {
+    const auto folder_id = MountOf(mount_id).root_folder_id;
+    EXPECT_TRUE(IsInFolder(folder_id, kLibraryRootFolderId)) << "mount " << mount_id;
+    EXPECT_FALSE(IsInFolder(folder_id, trip)) << "mount " << mount_id;
+    EXPECT_EQ(ElementOf(folder_id)->mount_id_, mount_id);
+  }
+}
+
+// #1076: CreateMount stores the volume name, each scan that reaches the volume stores a changed
+// name and gives the mount point, and the name stays while the volume is offline.
+TEST_F(MountServiceTest, VolumeNameIsStoredAndStaysWhileTheVolumeIsOffline) {
+  WriteTrip(L"Card");
+  VolumeLabel  label{"EOS_DIGITAL", disk_};
+  int          label_reads = 0;
+  MountService service(
+      project_->GetStorage(), project_->GetSleeveService(), project_->GetImagePoolService(),
+      [] { return std::vector<VolumeMountPoint>{}; }, [](const stdfs::path&) { return "card"; },
+      [&label, &label_reads](const stdfs::path&) {
+        ++label_reads;
+        return label;
+      });
+  const auto mount_id = service.CreateMount(disk_ / "Card");
+  EXPECT_EQ(MountOf(mount_id).volume_name, "EOS_DIGITAL");
+  const auto summary_of = [&service, mount_id] {
+    for (auto& summary : service.ListMounts()) {
+      if (summary.record.id == mount_id) {
+        return summary;
+      }
+    }
+    throw std::runtime_error("no mount with the id");
+  };
+  // No scan ran: the mount point is not known yet.
+  EXPECT_EQ(summary_of().reachability, MountReachability::kNotScanned);
+  EXPECT_TRUE(summary_of().volume_mount_point.empty());
+
+  ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
+            MountScanStatus::kComplete);
+  EXPECT_EQ(summary_of().reachability, MountReachability::kOnline);
+  EXPECT_EQ(summary_of().volume_mount_point, disk_);
+  EXPECT_EQ(summary_of().record.volume_name, "EOS_DIGITAL");
+
+  // The user renamed the volume.
+  label.name = "Trip Card";
+  ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
+            MountScanStatus::kComplete);
+  EXPECT_EQ(MountOf(mount_id).volume_name, "Trip Card");
+
+  // The volume is unplugged: the scan does not read the label, and the name stays.
+  const int reads_before_offline = label_reads;
+  stdfs::rename(disk_ / "Card", disk_ / "Card unplugged");
+  label = VolumeLabel{};
+  ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
+            MountScanStatus::kOffline);
+  EXPECT_EQ(label_reads, reads_before_offline);
+  EXPECT_EQ(summary_of().reachability, MountReachability::kOffline);
+  EXPECT_TRUE(summary_of().volume_mount_point.empty());
+  // The stored row (MountStoreTest covers the reopen of the project).
+  EXPECT_EQ(MountOf(mount_id).volume_name, "Trip Card");
 }
 
 TEST_F(MountServiceTest, SiblingDirectoryWithCommonNamePrefixIsAccepted) {
@@ -571,7 +636,7 @@ TEST_F(MountServiceTest, CanceledScanIsCompletedByTheNextScan) {
   for (int index = 0; index < 5; ++index) {
     WriteJpeg(disk_ / "Roll" / ("frame_" + std::to_string(index) + ".jpg"), 10 + index);
   }
-  const auto        mount_id = Mounts().CreateMount(0, disk_ / "Roll");
+  const auto        mount_id = Mounts().CreateMount(disk_ / "Roll");
   std::atomic<bool> stop{false};
   MountScanRequest  request;
   request.stop_requested      = &stop;
@@ -623,7 +688,7 @@ TEST_F(MountServiceTest, StoppedFirstScanReadsOnlyTheFilesOfItsStoredBatch) {
   for (int index = 0; index < kFileCount; ++index) {
     WriteJpeg(disk_ / "Roll" / ("frame_" + std::to_string(index) + ".jpg"), 20 + index);
   }
-  const auto               mount_id = Mounts().CreateMount(0, disk_ / "Roll");
+  const auto               mount_id = Mounts().CreateMount(disk_ / "Roll");
   std::atomic<bool>        stop{false};
   StopInFirstBatchImporter importer(*import_, stop);
   MountScanRequest         request;
@@ -672,7 +737,7 @@ class FailingImporter final : public MountFileImporter {
 
 TEST_F(MountServiceTest, FailedBatchEndsTheScanAndTheNextScanCompletesIt) {
   WriteTrip(L"Japan");
-  const auto      mount_id = Mounts().CreateMount(0, disk_ / "Japan");
+  const auto      mount_id = Mounts().CreateMount(disk_ / "Japan");
   FailingImporter failing;
   const auto      failed =
       Mounts().ScanMount(MountScanRequest{.mount_id = mount_id, .importer = &failing});
@@ -744,7 +809,7 @@ TEST_F(MountServiceTest, UnmountKeepsPhotosAsOrdinaryPhotos) {
   EXPECT_EQ(CodeOf([&] { Mounts().RemoveMount(mount_id); }), MountError::kUnknownMount);
 
   // The directory can be mounted again; its photos are adopted, not imported a second time.
-  const auto again = Mounts().CreateMount(0, disk_ / "Japan");
+  const auto again = Mounts().CreateMount(disk_ / "Japan");
   const auto scan  = ScanAndCheckDirectory(again);
   EXPECT_EQ(scan.adopted_count, 3u);
   EXPECT_EQ(scan.imported_count, 0u);
@@ -821,7 +886,7 @@ TEST_F(MountServiceTest, SecondScanOfAnUnchangedDirectoryReadsNoFile) {
                   ("frame_" + std::to_string(index) + ".jpg"),
               index);
   }
-  const auto mount_id = Mounts().CreateMount(0, disk_ / "Archive");
+  const auto mount_id = Mounts().CreateMount(disk_ / "Archive");
   const auto first    = ScanAndCheckDirectory(mount_id);
   ASSERT_EQ(first.status, MountScanStatus::kComplete) << first.error;
   ASSERT_EQ(first.imported_count, static_cast<std::size_t>(kFileCount));
@@ -848,7 +913,7 @@ TEST_F(MountServiceTest,
                   ("frame_" + std::to_string(index) + ".jpg"),
               index);
   }
-  const auto mount_id = Mounts().CreateMount(0, disk_ / "Archive");
+  const auto mount_id = Mounts().CreateMount(disk_ / "Archive");
   const auto first =
       Mounts().ScanMount(MountScanRequest{.mount_id = mount_id, .importer = import_.get()});
   ASSERT_EQ(first.status, MountScanStatus::kComplete) << first.error;
@@ -952,7 +1017,7 @@ TEST_F(MountServiceTest, VolumeWithRecordedIdentityIsFoundOnOpen) {
   std::vector<VolumeMountPoint> volumes;
   MountService                  service(project_->GetStorage(), project_->GetSleeveService(),
                                         project_->GetImagePoolService(), [&volumes] { return volumes; });
-  const auto                    mount_id = service.CreateMount(0, disk_ / "E" / "DCIM");
+  const auto                    mount_id = service.CreateMount(disk_ / "E" / "DCIM");
   const auto                    identity = MountOf(mount_id).volume_identity;
   ASSERT_FALSE(identity.empty()) << "the test volume has no identity";
   ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
@@ -984,7 +1049,7 @@ TEST_F(MountServiceTest, VolumeSearchLeavesTheMountOfflineWhenNoVolumeHasTheDire
   std::vector<VolumeMountPoint> volumes;
   MountService                  service(project_->GetStorage(), project_->GetSleeveService(),
                                         project_->GetImagePoolService(), [&volumes] { return volumes; });
-  const auto                    mount_id = service.CreateMount(0, disk_ / "E" / "DCIM");
+  const auto                    mount_id = service.CreateMount(disk_ / "E" / "DCIM");
   const auto                    identity = MountOf(mount_id).volume_identity;
   ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
             MountScanStatus::kComplete);
@@ -1023,7 +1088,7 @@ TEST_F(MountServiceTest, RootOnAnotherVolumeSetsOfflineAndChangesNoRecord) {
       project_->GetStorage(), project_->GetSleeveService(), project_->GetImagePoolService(),
       [] { return std::vector<VolumeMountPoint>{}; },
       [&root_identity](const stdfs::path&) { return root_identity; });
-  const auto mount_id = service.CreateMount(0, disk_ / "Card");
+  const auto mount_id = service.CreateMount(disk_ / "Card");
   ASSERT_EQ(MountOf(mount_id).volume_identity, "card volume");
   ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
             MountScanStatus::kComplete);
@@ -1073,7 +1138,7 @@ TEST_F(MountServiceTest, RootOnAnotherVolumeSearchesForTheRecordedVolume) {
         return IsPathAtOrBelow(directory, card_mount_point) ? std::string("card volume")
                                                                              : std::string("system volume");
       });
-  const auto mount_id = service.CreateMount(0, disk_ / "Card" / "DCIM");
+  const auto mount_id = service.CreateMount(disk_ / "Card" / "DCIM");
   ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
             MountScanStatus::kComplete);
   const auto files = FilesOf(mount_id);

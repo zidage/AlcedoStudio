@@ -197,19 +197,19 @@ void ApplyMountTreeChanges(FileSystem& fs, const MountTreeChanges& changes) {
   }
 }
 
-auto CreateMountRootFolder(FileSystem& fs, sl_element_id_t parent_id, const file_name_t& name,
-                           mount_id_t mount_id) -> std::shared_ptr<SleeveFolder> {
-  // ListFolderContent loads the children of the parent, so Contains sees each name.
-  fs.ListFolderContent(parent_id);
-  const auto parent = std::static_pointer_cast<SleeveFolder>(fs.Get(parent_id));
+auto CreateMountRootFolder(FileSystem& fs, const file_name_t& name, mount_id_t mount_id)
+    -> std::shared_ptr<SleeveFolder> {
+  // ListFolderContent loads the children of the root, so Contains sees each name.
+  fs.ListFolderContent(kLibraryRootFolderId);
+  const auto parent = std::static_pointer_cast<SleeveFolder>(fs.Get(kLibraryRootFolderId));
   if (!IsLive(parent) || parent->type_ != ElementType::FOLDER) {
-    throw std::runtime_error("MountTree: the parent of a mount is not a live folder");
+    throw std::runtime_error("MountTree: the library root cannot be read");
   }
   file_name_t folder_name = name;
   while (parent->Contains(folder_name)) {
     folder_name += L"@";
   }
-  auto folder       = fs.CreateFolderIn(parent_id, folder_name);
+  auto folder       = fs.CreateFolderIn(kLibraryRootFolderId, folder_name);
   folder->mount_id_ = mount_id;
   return folder;
 }

@@ -13,12 +13,12 @@ The parameters are in the table at the end.
 
 ## Mount a folder
 
-1. In the Collections panel, select **All Photos** or a collection. Click **Import** at the foot
-   of the panel, and choose **Mount Folder...**. You can also right-click the row and choose
+1. In the Collections panel, click **Import** at the foot of the panel, and choose
+   **Mount Folder...**. You can also right-click the library root row and choose
    **Mount Folder Here...**.
 2. Choose the directory in the system folder dialog.
-3. A collection with the name of the directory appears below the row. Its first scan runs as a
-   background task, and the photos appear while the scan imports them.
+3. A collection with the name of the directory appears below the library root. Its first scan
+   runs as a background task, and the photos appear while the scan imports them.
 
 **Mount Folder...** and the two import items above it in the **Import** menu all keep the
 files where they are. The difference is who owns the structure:
@@ -32,7 +32,11 @@ While a mounted row is selected, the three items are disabled: a mount cannot ho
 mount or imported photos.
 
 Each mount has its own directory tree, separate from the trees of the other mounts. The parent
-row of a new mount is an ordinary collection or the library root.
+of a mount is always the library root: an ordinary collection never holds a mount. The ordinary
+collections are the rows that you arrange, and the mounts are the rows that follow the disk.
+
+Alcedo Studio records the display name of the volume of each mount when you mount the folder and
+at each scan that reaches the volume. An offline mount keeps the last recorded name.
 
 The root row of a mount shows a folder icon with an arrow; the folders below it show the folder
 icon. The count of a mounted row counts its present and missing photos, in the folder and in all folders below it, as for every collection. The
@@ -107,6 +111,12 @@ color labels, and Delete mark stay editable, and its edits stay.
 - **Remove Missing Photos** in the menu of the mount root removes the missing photos of the mount
   from the project, with their edit history and Versions, after you confirm the count. This is
   the only way that a mounted photo leaves the project.
+
+## Photos of the library root
+
+The count of the library root row counts the photos that no collection holds and the photos of
+the ordinary collections. A mounted photo counts there only when you added it to an ordinary
+collection. **All Photos** counts every photo of the project, the mounted photos included.
 
 ## Rules for mounted collections
 

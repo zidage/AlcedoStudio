@@ -102,9 +102,9 @@ auto RelevanceDirection(const SemanticQueryEmbedding& embedding) -> std::vector<
  * `scored` is materialized because `stats` and `rated` both read it. The vectors are array
  * literals: DuckDB binds have no array type.
  */
-auto BuildRatedCte(sl_element_id_t folder_id, const SemanticQueryEmbedding& embedding,
+auto BuildRatedCte(const AlbumScope& album_scope, const SemanticQueryEmbedding& embedding,
                    int model_dim) -> duckorm::SqlFragment {
-  const auto scope = BuildScopedFileQuery(folder_id);
+  const auto scope = BuildScopedFileQuery(album_scope);
   auto       query = expr::raw(std::format(
       "WITH scoped AS (SELECT e.id AS file_id, fi.image_id AS image_id {}), "
             "scored AS MATERIALIZED (SELECT products.file_id, products.image_id, "
@@ -150,9 +150,9 @@ auto KeepCondition() -> duckorm::SqlFragment {
   return condition;
 }
 
-auto BuildRelevanceSelectWithDim(sl_element_id_t folder_id, const SemanticQueryEmbedding& embedding,
+auto BuildRelevanceSelectWithDim(const AlbumScope& scope, const SemanticQueryEmbedding& embedding,
                                  int model_dim) -> duckorm::SqlFragment {
-  auto query = BuildRatedCte(folder_id, embedding, model_dim);
+  auto query = BuildRatedCte(scope, embedding, model_dim);
   query.append(expr::raw("SELECT file_id, image_id, relevance FROM rated WHERE "));
   query.append(KeepCondition());
   return query;
@@ -161,9 +161,9 @@ auto BuildRelevanceSelectWithDim(sl_element_id_t folder_id, const SemanticQueryE
 
 SemanticVectorSearch::SemanticVectorSearch(Database& db_ctrl) : database_(db_ctrl) {}
 
-auto BuildSemanticRelevanceSelect(duckorm::Connection conn, sl_element_id_t folder_id,
+auto BuildSemanticRelevanceSelect(duckorm::Connection conn, const AlbumScope& scope,
                                   const SemanticQueryEmbedding& embedding) -> duckorm::SqlFragment {
-  return BuildRelevanceSelectWithDim(folder_id, embedding, ValidatedModelDim(conn, embedding));
+  return BuildRelevanceSelectWithDim(scope, embedding, ValidatedModelDim(conn, embedding));
 }
 
 auto SemanticVectorSearch::SearchImageEmbeddings(sl_element_id_t               folder_id,

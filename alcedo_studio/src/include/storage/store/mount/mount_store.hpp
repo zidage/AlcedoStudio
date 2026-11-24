@@ -63,6 +63,13 @@ class MountStore {
   void UpdateMountLastScanTime(mount_id_t mount_id, std::time_t last_scan_at);
 
   /**
+   * @brief Store the display name of the volume of the mount @p mount_id (#1076).
+   * @param volume_name Empty when the volume has no name (stored as NULL).
+   * @throws std::runtime_error when no mount has the id.
+   */
+  void UpdateMountVolumeName(mount_id_t mount_id, const std::string& volume_name);
+
+  /**
    * @brief Remove the row of the mount @p mount_id. Elements, links, and source records stay.
    * @throws std::runtime_error when no mount has the id.
    */
