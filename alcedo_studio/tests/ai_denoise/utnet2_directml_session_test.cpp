@@ -12,9 +12,12 @@
 // Each expected output file holds `input` (4, h, w) and `output` (3, 2h, 2w) in float32: the
 // PyTorch IEEE FP32 output of the model.
 
+#include "decoders/processor/nn/utnet2_directml_session.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -22,28 +25,29 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#include "decoders/processor/nn/utnet2_directml_session.hpp"
 #include "decoders/processor/nn/utnet2_specs.hpp"
+#include "decoders/processor/nn/utnet2_tile_loop.hpp"
 #include "nn/safetensors.hpp"
 
 namespace alcedo::nn {
 namespace {
 
-constexpr const char* kAssetsVariable = "ALCEDO_AI_DENOISE_TEST_ASSETS";
-constexpr const char* kFp16GraphName  = "utnet2_bayer_dark_loss_10k_fp16.onnx";
-constexpr const char* kFp32GraphName  = "utnet2_bayer_dark_loss_10k.onnx";
+constexpr const char* kAssetsVariable    = "ALCEDO_AI_DENOISE_TEST_ASSETS";
+constexpr const char* kFp16GraphName     = "utnet2_bayer_dark_loss_10k_fp16.onnx";
+constexpr const char* kFp32GraphName     = "utnet2_bayer_dark_loss_10k.onnx";
 // max |session - expected| <= kToleranceRelative x max |expected|. The FP16 graph on DirectML
 // gives 2.8e-3 to 4.1e-3 (fp16_calibration.json of the lab, 2026-11-22); the tolerance is 1.5
 // times the largest, rounded up to one significant digit.
 constexpr double      kToleranceRelative = 7e-3;
 
-auto AssetsFolder() -> std::optional<std::filesystem::path> {
+auto                  AssetsFolder() -> std::optional<std::filesystem::path> {
   const char* value = std::getenv(kAssetsVariable);
   if (value == nullptr || *value == '\0') {
     return std::nullopt;
@@ -118,7 +122,7 @@ class UtNet2DirectMlSessionTest : public ::testing::Test {
  protected:
   static void TearDownTestSuite() { session_.reset(); }
 
-  void SetUp() override {
+  void        SetUp() override {
     const auto folder = AssetsFolder();
     if (!folder) {
       GTEST_SKIP() << "Set " << kAssetsVariable
@@ -136,7 +140,7 @@ class UtNet2DirectMlSessionTest : public ::testing::Test {
     return output;
   }
 
-  std::filesystem::path                         folder_;
+  std::filesystem::path                                folder_;
   static inline std::unique_ptr<UtNet2DirectMlSession> session_;
 };
 
@@ -162,14 +166,12 @@ TEST_F(UtNet2DirectMlSessionTest, LoadFailsOnDifferentArchitectureMetadata) {
   WriteBytes(copy, bytes);
 
   const auto message = MessageOf([&] { UtNet2DirectMlSession session(copy); });
-  EXPECT_NE(message.find("`architecture` is `utnet2_bayer_funit33`"), std::string::npos)
-      << message;
+  EXPECT_NE(message.find("`architecture` is `utnet2_bayer_funit33`"), std::string::npos) << message;
   EXPECT_NE(message.find(copy.filename().string()), std::string::npos) << message;
 }
 
 TEST_F(UtNet2DirectMlSessionTest, LoadFailsOnFloat32Graph) {
-  const auto message =
-      MessageOf([&] { UtNet2DirectMlSession session(folder_ / kFp32GraphName); });
+  const auto message = MessageOf([&] { UtNet2DirectMlSession session(folder_ / kFp32GraphName); });
   EXPECT_NE(message.find("is not float16"), std::string::npos) << message;
   EXPECT_NE(message.find(kFp32GraphName), std::string::npos) << message;
 }
@@ -186,7 +188,7 @@ TEST_F(UtNet2DirectMlSessionTest, RunRejectsSizeThatIsNotAMultipleOfSixteen) {
   std::vector<float>   input(std::size_t{UtNet2Spec::kInputChannels} * 64 * 72, 0.1f);
   std::vector<float>   output(OutputCount(tile), 7.0f);
 
-  const auto message = MessageOf([&] { session_->Run(input, tile, output); });
+  const auto           message = MessageOf([&] { session_->Run(input, tile, output); });
   EXPECT_NE(message.find("multiples of 16"), std::string::npos) << message;
   EXPECT_TRUE(std::all_of(output.begin(), output.end(), [](float v) { return v == 7.0f; }));
 }
@@ -197,10 +199,107 @@ TEST_F(UtNet2DirectMlSessionTest, RunThrowsOnAnOutputThatIsNotFinite) {
   std::vector<float>   input(std::size_t{UtNet2Spec::kInputChannels} * 64 * 64, 6e4f);
   std::vector<float>   output(OutputCount(tile));
 
-  const auto message = MessageOf([&] { session_->Run(input, tile, output); });
+  const auto           message = MessageOf([&] { session_->Run(input, tile, output); });
   EXPECT_NE(message.find("not finite"), std::string::npos) << message;
   EXPECT_NE(message.find("UtNet2 tile at (128, 32) of 64 x 64 packed px"), std::string::npos)
       << message;
+}
+
+// The largest difference, relative to the largest value of `one_pass` (3, 1024, 1024), between
+// the one-pass output of the 512 crop and the one-pass output of its top left `size` x `size`
+// packed px, in the output px that do not depend on the bottom and the right border of the
+// smaller input (its size minus the overlap). In exact arithmetic it is 0; on DirectML in FP16 it
+// is the rounding difference of a change of the input shape.
+auto ShapeChangeDifference(UtNet2DirectMlSession& session, const ExpectedOutput& expected,
+                           const std::vector<float>& one_pass, int size) -> double {
+  const int          full = expected.tile.width;
+  std::vector<float> input(std::size_t{4} * size * size);
+  for (int channel = 0; channel < 4; ++channel) {
+    for (int y = 0; y < size; ++y) {
+      std::copy_n(expected.input.begin() + (std::size_t{1} * channel * full + y) * full, size,
+                  input.begin() + (std::size_t{1} * channel * size + y) * size);
+    }
+  }
+  const PackedTileRect tile{.x = 0, .y = 0, .width = size, .height = size};
+  std::vector<float>   output(OutputCount(tile));
+  session.Run(input, tile, output);
+  const int interior           = 2 * (size - UtNet2Spec::kTileOverlap);
+  double    largest_difference = 0.0;
+  double    largest_value      = 0.0;
+  for (int channel = 0; channel < 3; ++channel) {
+    for (int v = 0; v < interior; ++v) {
+      for (int u = 0; u < interior; ++u) {
+        const double small = output[(std::size_t{1} * channel * 2 * size + v) * 2 * size + u];
+        const double large = one_pass[(std::size_t{1} * channel * 2 * full + v) * 2 * full + u];
+        largest_difference = std::max(largest_difference, std::abs(small - large));
+      }
+    }
+  }
+  for (const float value : one_pass) {
+    largest_value = std::max(largest_value, double{std::abs(value)});
+  }
+  return largest_difference / largest_value;
+}
+
+// DN3: the tile loop on DirectML gives the one-pass output (overlap 96, the last tile shrunk).
+// One tile through the loop is the one-pass output bit for bit. With tiles of 256, the tiles
+// have other shapes than the one pass, and DirectML rounds FP16 differently for each shape: the
+// tiled output may differ from the one-pass output by the difference that a change of the input
+// shape gives without tiles (measured 1.8e-3 to 2.5e-3 of the largest value, DN3 completion
+// record), with the margin of the DN2 tolerance.
+TEST_F(UtNet2DirectMlSessionTest, TiledOutputEqualsOnePassOnTheExpectedCrop) {
+  const auto             expected = LoadExpected(folder_, "rawnind_crop_512");
+  const auto             one_pass = Run(expected);
+  const PackedMosaicView mosaic{expected.input, expected.tile.width, expected.tile.height};
+  const auto             run_loop = [&](int tile_size, std::vector<float>& output, int& tiles) {
+    UtNet2TileLoopOptions options;
+    options.tile_size = tile_size;
+    options.slow_device_limit_seconds_per_megapixel = std::numeric_limits<double>::infinity();
+    return DenoiseBayerMosaic(
+        *session_, mosaic, RgbPlanesView{output, 2 * mosaic.width, 2 * mosaic.height},
+        [&](const UtNet2TileResult&) { ++tiles; }, [] { return false; },
+        [] { return std::chrono::steady_clock::now(); }, options);
+  };
+
+  std::vector<float> one_tile(one_pass.size(), -1.0f);
+  int                one_tile_count = 0;
+  EXPECT_EQ(run_loop(512, one_tile, one_tile_count).tile_count, 1);
+  EXPECT_EQ(one_tile, one_pass);
+
+  std::vector<float> tiled(one_pass.size(), -1.0f);
+  int                tiles  = 0;
+  const auto         record = run_loop(256, tiled, tiles);
+  // 512 packed px with tiles of 256 and overlap 96: 5 tiles of each axis.
+  EXPECT_EQ(record.tile_count, 25);
+  EXPECT_EQ(tiles, 25);
+
+  double shape_level = 0.0;
+  for (const int size : {256, 384}) {
+    shape_level = std::max(shape_level, ShapeChangeDifference(*session_, expected, one_pass, size));
+  }
+  const auto difference = RelativeDifference(tiled, one_pass);
+  std::cout << "tiled against one pass: max |difference| = " << difference
+            << " of the largest value; a change of the input shape: " << shape_level << "\n";
+  // 1.5 times the measured level (the rule of the DN2 tolerance); 1e-5 (the FP32 level of DN1)
+  // when the shapes give the same rounding.
+  EXPECT_LE(difference, std::max(1e-5, 1.5 * shape_level));
+  EXPECT_LE(RelativeDifference(tiled, expected.output), kToleranceRelative);
+}
+
+// DN3: DirectML compiles the graph at the first run of each input shape, so the slow-device
+// check measures a tile only when its shape ran on the loaded session.
+TEST_F(UtNet2DirectMlSessionTest, SessionIsReadyOnlyForATileShapeThatRan) {
+  session_->Release();
+  EXPECT_FALSE(session_->IsReadyFor(64, 64));
+
+  const auto expected = LoadExpected(folder_, "random_64");
+  (void)Run(expected);
+  EXPECT_TRUE(session_->IsReadyFor(64, 64));
+  EXPECT_FALSE(session_->IsReadyFor(256, 256));
+  EXPECT_FALSE(session_->IsReadyFor(64, 128));
+
+  session_->Release();
+  EXPECT_FALSE(session_->IsReadyFor(64, 64));
 }
 
 TEST_F(UtNet2DirectMlSessionTest, ReleaseFreesTheSessionAndALaterRunLoadsAgain) {

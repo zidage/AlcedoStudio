@@ -14,7 +14,9 @@
   distillation); a device above `slow_device_limit` gets the slow-device error with the action
   that turns the noise reduction off (2.4, DN3, DN6 to DN8). 2026-11-22: DN2 complete (issue
   #1038, lab PR zidage/alcedo-denoise-lab#4); the user checked the FP16 sheets by eye and
-  accepted FP16
+  accepted FP16. 2026-11-22: DN3 complete (issue #1042): 0.45 s at 45.4 MP on the RTX 3080
+  Laptop GPU (`target_time` 0.72 s); the Intel Iris Xe gets the slow-device error; a false
+  slow-device error under video memory load is issue #1043 (a stop condition of DN6)
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -128,7 +130,9 @@ the time of the DemosaicNet student, DN1 additions).
   or an export runs. It releases the session when the editor closes and when the editor GPU
   release holder releases the editor resources (export, semantic generation).
 - The first run of a session includes its creation (Windows: 0.07 to 0.53 s; macOS: 0.28 to
-  0.46 s for each tile shape, DN1 additions).
+  0.46 s for each tile shape, DN1 additions). On Windows, DirectML also compiles at the first
+  tile of each new tile width of a session: 0.22 to 0.35 s on the RTX 3080 Laptop GPU, 9.4 s for
+  the first tile of a session on the Intel Iris Xe (DN3 completion record).
 - The owner keeps the slow-device result of the device until the process ends. A later run on
   that device gives the slow-device error at once and runs no tile.
 
@@ -148,11 +152,12 @@ Each render error of the model has the control `Turn Off AI Denoise` (2.1, 2.2).
 is not installed also has the control that opens the AI Models page.
 
 The slow-device check: the tile loop measures the time of the tile runs. The creation of a
-session and the first run of a session (it compiles the graph; on macOS, the first run of each
-tile shape) are not measured. After each measured tile, the loop projects the time of the whole
+session and the first run of each tile shape on a session (it compiles the graph; DN3: also on
+DirectML) are not measured. After each measured tile, the loop projects the time of the whole
 photo from the time for each output pixel of the measured tiles. When the projected time is
 above `slow_device_limit` multiplied by the megapixels of the photo, the run stops. A run with
 no measured tile (a photo of one tile on a new session) has no check; the next run has it.
+The check also runs after the last tile (DN3).
 
 ## 3. Scope
 
@@ -274,7 +279,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN0 | Weights file, expected outputs, input and output specification | lab | none | 600 to 900 | complete (#1032) |
 | DN1 | Measurements: tile overlap, PyTorch time, clipped areas, stored formats, ONNX Runtime on DirectML and macOS, FP16 | lab | DN0 | 700 to 1100 | complete (#1033) |
 | DN2 | FP16 rescale calibration and FP16 ONNX graph in the lab release; ONNX Runtime DirectML as a C++ dependency; the DirectML session of UtNet2 with its tests | lab, `cmake`, `decoders/processor/nn` | DN0 | 900 to 1400 | complete (#1038) |
-| DN3 | Overlap tile planner, tile loop with float16 tiles, slow-device check, full photo run on DirectML, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 800 to 1200 | planned |
+| DN3 | Overlap tile planner, tile loop with float16 tiles, slow-device check, full photo run on DirectML, time against `target_time` | `decoders/processor/nn` | DN1, DN2 | 800 to 1200 | complete (#1042) |
 | DN4 | Removed on 2026-11-22 (was: the stored result reader and writer) | | | | removed |
 | DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | U4 | 1000 to 1500 | planned |
 | DN6 | Model run in the loader: `DenoiseModelSession`, input preparation, gain match, the denoised entry of the prepared source cache, GPU release, errors | `edit/input`, `decoders/processor/nn` | DN3, DN5 | 800 to 1300 | planned |
@@ -1154,15 +1159,186 @@ Projected time above slow_device_limit after a measured tile
 
 **Exit criteria**
 
-- [ ] The seven tests pass in `build/debug`.
-- [ ] The time table of the three photos is in the completion record. The 45.4 MP time on the
+- [x] The seven tests pass in `build/debug` (nine with the two added tests).
+- [x] The time table of the three photos is in the completion record. The 45.4 MP time on the
       RTX 3080 Laptop GPU is at most 15% above `target_time` (0.83 s), or the record states the
-      cause and the phase stops (U1).
-- [ ] The Iris Xe run stops with the slow-device error, and the record states its time.
+      cause and the phase stops (U1). (0.45 s.)
+- [x] The Iris Xe run stops with the slow-device error, and the record states its time.
 
 **Expected diff**: 800 to 1200 lines.
 
-**Completion record**: empty until the phase is complete.
+##### Phase DN3 completion record (2026-11-22)
+
+**Status:** complete. The overlap tile planner, the tile loop with the slow-device check, the
+float16 tile input and output in DirectML buffers of the session, the tests, the photo timing
+tool, and the times on the RTX 3080 Laptop GPU and the Intel Iris Xe. Issue #1042. A false
+slow-device error on the RTX 3080 Laptop GPU when other processes hold the video memory is issue
+#1043; section 8 makes it a stop condition of DN6.
+
+**Primary success call chain:**
+
+```text
+DenoiseBayerMosaic(session, packed mosaic, output, on_tile, cancel check, clock)
+                                                    decoders/processor/nn/utnet2_tile_loop.cpp
+  -> UtNet2TileSession::DeviceMemory (DXGI QueryVideoMemoryInfo: budget, usage, held arena)
+  -> SelectUtNet2TileSize(UtNet2Spec::kDirectMlTileMemory, budget - usage + held)
+  -> PlanOverlapTiles (overlap 96, inputs at multiples of 16, last tile shrunk)
+  -> for each tile: cancel check -> slow-device check of the tiles before
+     -> CopyTileInput (reflection past the bottom and the right border)
+     -> UtNet2TileSession::IsReadyFor(shape) (measured or not)
+     -> UtNet2DirectMlSession::Run(input, tile rect, crop of the kept rectangle)
+        -> float32 to float16 (cv::parallel_for_) into the mapped upload buffer
+        -> queue: copy to the DirectML input buffer, timestamp 0
+        -> Ort::IoBinding over the DirectML allocations (CreateGPUAllocationFromD3DResource)
+           -> Ort::Session::Run on the queue of the session (DML1: own ID3D12Device, IDMLDevice,
+              ID3D12CommandQueue) -> SynchronizeOutputs
+        -> queue: timestamp 1, copy of the rows of the kept rectangle to the readback buffer,
+           fence wait
+        -> float16 to float32 times output_scale into the output image, finite check (parallel)
+     -> on_tile(index, input rect, kept rect)
+  -> slow-device check after the last tile -> UtNet2TileLoopRecord
+```
+
+**Primary failure call chain:**
+
+```text
+projected time above slow_device_limit x megapixels after a measured tile
+  -> DenoiseDeviceTooSlowError(projected, limit, tiles run, tile count); no more tiles
+  -> the caller (DN6) keeps the result for the device and reports the slow-device error
+too little local video memory for tiles of 768
+  -> SelectUtNet2TileSize throws "not enough video memory: tiles of 768 packed px need 736 MiB"
+DirectML, ONNX Runtime, or Direct3D 12 failure in a tile (device removed included)
+  -> Run throws std::runtime_error with the tile rectangle, the status text, and the device
+     removed reason; no more tiles
+cancel check true between tiles
+  -> the loop returns the record with `cancelled`; the output image is incomplete
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OverlapTilesCoverTheImageExactlyOnce` (12 sizes; also: each kept rectangle has the overlap of context inside the image) | `UtNet2TileLoopTest` | PASS |
+| `OverlapTileInputsAreMultiplesOfSixteen` (12 lengths x 4 tile sizes; the 45.4 MP width keeps a last tile of 1440) | `UtNet2TileLoopTest` | PASS |
+| `TileSizeSelectionUsesTheLargestThatFits` (also: the loop counts the memory that the session holds) | `UtNet2TileLoopTest` | PASS |
+| `TileInputsAreTheMosaicWithReflectionAndTheCropsFormTheOutput` (added: each input value of each tile, and each output value of a session with a known one-pass output) | `UtNet2TileLoopTest` | PASS |
+| `TileLoopStopsAtCancelRequest` | `UtNet2TileLoopTest` | PASS |
+| `TileLoopStopsWhenTheProjectedTimeIsAboveTheLimit` (0.114 s/MP: stop after tile 1 of 8; 0.016 s/MP: 8 tiles) | `UtNet2TileLoopTest` | PASS |
+| `SlowDeviceCheckExcludesTheFirstRunOfASession` | `UtNet2TileLoopTest` | PASS |
+| `TiledOutputEqualsOnePassOnTheExpectedCrop` (one tile through the loop: bit-equal to one pass; tiles of 256: 2.45e-3, the level of a change of the input shape 2.45e-3) | `UtNet2DirectMlTest` | PASS |
+| `SessionIsReadyOnlyForATileShapeThatRan` (added) | `UtNet2DirectMlTest` | PASS |
+| The 7 DN2 tests on the new device path (3.76e-3 to 4.07e-3, as in DN2) | `UtNet2DirectMlTest` | PASS |
+
+Commands:
+
+```text
+cmd /c "scripts\msvc_env.cmd --build build\debug --target UtNet2TileLoopTest UtNet2DirectMlTest UtNet2PhotoTimingTool"
+$env:ALCEDO_AI_DENOISE_TEST_ASSETS = "<folder: the FP16 graph, the FP32 graph, the 3 expected outputs>"
+ctest --test-dir build/debug -R "UtNet2TileLoopTest|UtNet2DirectMlTest" -j 1 --output-on-failure   # 16/16
+cmd /c "scripts\msvc_env.cmd --build build\release-test --target UtNet2PhotoTimingTool"
+lab: python -I scripts/export/write_raw_inputs.py <folder>     # the packed photos, input preparation 1
+UtNet2PhotoTimingTool --graph <fp16 graph> --inputs <folder> --photos 24mp 36mp 45mp --repeats 3 --tile auto
+UtNet2PhotoTimingTool ... --photos 45mp --tile 1024 (768)          # one process for each tile size
+UtNet2PhotoTimingTool ... --adapter minimum-power [--no-slow-device-check] [--per-tile]
+```
+
+**Time table** (release build, RTX 3080 Laptop GPU 8 GB with about 2.4 GiB used by other
+programs, tiles of 1536 selected from the device memory, median of 3 runs after one run that is
+not measured; GPU 58 to 66 C, SM clock 1725 to 1800 MHz):
+
+| Photo | Tile loop | Sum of `Run` | Device time | DN1 DirectML FP16 (Python, host input and output) | DN1 PyTorch FP32, fastest algorithms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 24.3 MP (6 tiles) | **0.27 s** (0.26 to 0.27) | 0.25 s | 0.19 s | 0.44 s | 0.41 s |
+| 36.2 MP (6 tiles) | **0.36 s** (0.34 to 0.39) | 0.32 s | 0.24 s | 0.55 s | 0.56 s |
+| 45.4 MP (6 tiles) | **0.45 s** (0.44 to 0.48) | 0.42 s | 0.33 s | 0.72 s | 0.69 s |
+
+- **Against `target_time`:** 0.45 s against 0.72 s at 45.4 MP, 37% below. A second process run
+  of the same photo gave 0.41 to 0.43 s.
+- **Against DemosaicNet:** 0.36 s on 36.2 MP; the DemosaicNet student takes 376 ms on 36.3 MP.
+- Tiles of 1024 at 45.4 MP: 0.58 s (0.56 to 0.62), 20 tiles; tiles of 768: 0.70 s (0.68 to
+  0.74), 35 tiles.
+- Local video memory of the process (DXGI `CurrentUsage`, the session creates nothing before):
+  2672 MiB after the 45.4 MP photo and 2699 MiB after the three photos with tiles of 1536; 753
+  MiB (1024) and 730 MiB (768). FP32 in DN1: 3.3, 1.0, 0.9 GiB. `kDirectMlTileMemory` holds
+  2704, 768, and 736 MiB.
+- First photo on a new session (session creation 0.32 to 0.39 s before it): 0.79 s (24.3 MP) and
+  0.98 s (45.4 MP) for the tile loop. The first tile of each new tile width compiles: 0.34 s
+  (1536 x 1536) and 0.22 to 0.35 s (1440 x 1536) of device time; a new height of a known width
+  took no extra time.
+- **Host time:** before the parallel conversions, the tile loop took 0.62 to 0.69 s at 45.4 MP,
+  2.2 times the device time. A tile of 1536 had 8.5 ms for the input conversion, 20 ms for the
+  output conversion, 15 ms for the finite check, and 4.5 ms for the readback, beside 47 ms on the
+  device. With the conversions and the check in `cv::parallel_for_`, the tile loop is 1.39 to
+  1.46 times the device time. The data rule keeps the packed image in DirectML memory only above
+  1.5 times, so the packed image stays in host memory.
+
+**Intel Iris Xe** (the same laptop, `--adapter minimum-power`, tiles of 1536 selected: the
+local budget of this UMA adapter is 15.5 GiB):
+
+| Run | 24.3 MP | 45.4 MP |
+| --- | --- | --- |
+| Slow-device check, ready session | stops after tile 1 of 6 at 0.67 s; projected 1.91 to 1.92 s, limit 1.22 s | stops after tile 1 of 6 at 0.67 to 0.79 s; projected 3.59 to 3.95 s, limit 2.27 s |
+| Slow-device check, new session | the first tile compiles (9.4 s, not measured); stops after tile 2 at 10.1 s; projected 2.11 s | |
+| Without the check | 2.19 to 2.30 s (0.090 to 0.094 s/MP) | 3.95 s (0.087 s/MP), 1714 MiB |
+
+No device removal (887A0005) in the two Iris Xe processes of DN3 (the lab saw it in 2 of 4). The
+question of section 8, whether the render backend of the editor continues after a removal,
+stays with DN6, where the editor render runs beside the session.
+
+**Under load** (issue #1043): two processes that start together both select tiles of 1536. The
+second process then runs its tiles in about 0.45 s and gets the slow-device error in 6 of 7
+runs (projected 2.5 to 3.5 s); with 6.5 GiB used by other programs, one process with tiles of
+1536 got it too. Two processes with tiles of 1536 and 1024 ran at 0.41 to 0.53 s and 0.55 to
+0.69 s, so the cause is the oversubscribed video memory, not the compute of the other process.
+
+**Changes against the plan text and detail choices:**
+
+- `TiledOutputEqualsOnePassOnTheExpectedCrop`: the 1e-5 of the plan is the FP32 level of DN1.
+  DirectML in FP16 rounds differently for each input shape: a one-pass run on a top left crop of
+  256 or 384 packed px differs from the 512 one-pass output by 1.8e-3 to 2.45e-3 of the largest
+  value in the px that do not depend on the border. The test now requires one tile through the
+  loop to be bit-equal to the one pass, and the tiled output to be within 1.5 times that measured
+  level (the rule of the DN2 tolerance; 1e-5 when the level is 0). The exact tile geometry is
+  proven by `TileInputsAreTheMosaicWithReflectionAndTheCropsFormTheOutput` with a test session.
+- The session runs on its own Direct3D 12 device, queue, and DirectML device
+  (`SessionOptionsAppendExecutionProvider_DML1`), in place of `..._DML2`, so that the tile buffers
+  are its own D3D12 buffers (`CreateGPUAllocationFromD3DResource`) bound with `Ort::IoBinding`
+  and copied on the same queue, and so that the queue gives timestamps. The adapter is the first
+  hardware adapter of the DXGI GPU preference (`DirectMlAdapterPreference`; the product uses high
+  performance, the timing tool also minimum power). DirectML.dll is loaded from the folder of the
+  executable for `DMLCreateDevice1` (feature level 5.0). The queue has
+  `D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT`, as the queue that ONNX Runtime creates.
+- The buffers grow to the largest tile and are reused for each tile of any size. The readback
+  copies only the rows of the kept rectangle; the finite check covers the kept rectangle (the
+  values that enter the photo).
+- `IsReadyFor` is true for a tile shape that ran on the loaded session (the first tile of a new
+  width compiles, see above). The DN2 text "the first run of a session" is extended to each
+  shape, as on macOS (2.4 changed).
+- The slow-device check also runs after the last tile: the device is too slow for the next
+  renders, and DN6 keeps the result.
+- Tile size selection: available = budget - usage + the memory that the session holds (the
+  `kDirectMlTileMemory` entry of the largest tile side that the loaded session ran), so a loaded
+  session with its arena keeps its tile size.
+- Files: the planner also has `overlap_tile_jobs.cpp`, the loop has the public header
+  `utnet2_tile_loop.hpp` (the `UtNet2TileSession` interface, the views, the options, the record).
+  `PackedTileRect` moved from the session header to `overlap_tile_jobs.hpp`. The library
+  `UtNet2TileLoop` has no platform dependency; `UtNet2DirectMl` links it and d3d12 and dxgi. The
+  timing tool is `alcedo_studio/tests/ai_denoise/utnet2_photo_timing_tool.cpp` (target
+  `UtNet2PhotoTimingTool`, not a test), beside the tests of AI Denoise; `tests/perf` has no CMake
+  folder. The test target `UtNet2TileLoopTest` is in the `core` and `ci_core` categories.
+- The photos are the packed photos of the lab tool `write_raw_inputs.py` (the DN1 photo list).
+
+**Checklist / exit condition:** all three items checked.
+
+**LOC note (grill-code-review):** 13 files, 1979 added and 152 removed lines (estimate 800 to
+1200). Production: `utnet2_directml_session.cpp` 749 lines (319 in DN2; the Direct3D 12 device,
+the buffers, the timestamps), `utnet2_tile_loop.cpp` 192, `overlap_tile_jobs.cpp` 66, headers
+441. Tests 708 lines, timing tool 311. No file is near 1000 lines.
+
+**Remaining gaps:** issue #1043 (a false slow-device error under video memory load; DN6 stop
+condition). Not measured: AMD GPUs; the DN2 output tests on the Iris Xe (the timing tool ran
+there; the tests select the high-performance adapter); the editor render backend after a
+DirectML device removal (DN6).
 
 ### DN5 to DN13
 
@@ -1231,16 +1407,16 @@ are removed (2026-11-22, D6). The fixed points that the detailed sections must k
 | --- | --- | --- |
 | The measured overlap is near the theoretical 100 packed pixels, so the tile overhead is 1.6 to 2.8 times | DN1 border table | Use the largest tile that the GPU memory permits; give the user the corrected time estimate before DN3 |
 | `onnxruntime-directml` 1.24.4 is the last DirectML package of ONNX Runtime | NuGet and PyPI package lists | Keep the pinned version. The graph uses 6 standard operators of opset 17 (Conv, LeakyRelu, MaxPool, ConvTranspose, Concat, DepthToSpace) |
-| The DirectML memory arena keeps its memory while the session lives (FP32: up to 3.3 GiB) | Used GPU memory of the process in the DN3 timing tool | `DenoiseModelSession` releases the session with the editor GPU release and at the editor close (2.3); select a smaller tile from the free video memory |
+| The DirectML memory arena keeps its memory while the session lives (FP32: up to 3.3 GiB; FP16: 2.7 GiB with tiles of 1536, DN3) | Used GPU memory of the process in the DN3 timing tool | `DenoiseModelSession` releases the session with the editor GPU release and at the editor close (2.3); select a smaller tile from the free video memory |
 | A photo outside the calibration overflows FP16 | The output check of each tile (DN2, DN10); the margin of the held-out photos in the calibration record | The render reports the error for that photo. The lab calibrates again with the photo and publishes a new FP16 graph (a new model version, D10) |
 | The FP16 output shows a difference against FP32 by eye | The sheets of the DN2 lab work | The user checks the sheets before DN2 completes; a visible difference stops DN2 |
 | The model time in the render is too long for editing on a slower device (Intel Iris Xe: 5.2 s at 45.4 MP in FP16) | The slow-device check of each run (2.4) | The render reports the slow-device error with `Turn Off AI Denoise`; the user decided on 2026-11-22 that a slow device gets this error (U1) |
-| A fast device crosses `slow_device_limit` under load (thermal limit, another GPU process) and gets the error | DN3 timing tool under load; DN6 render time | `slow_device_limit` is about 3 times `target_time`; record the times under load in the DN3 completion record. A false error on the RTX 3080 Laptop GPU or the M4 stops DN6 until the limit or the measurement changes |
+| A fast device crosses `slow_device_limit` under load (thermal limit, another GPU process) and gets the error | DN3 timing tool under load; DN6 render time | `slow_device_limit` is about 3 times `target_time`; record the times under load in the DN3 completion record. A false error on the RTX 3080 Laptop GPU or the M4 stops DN6 until the limit or the measurement changes. DN3: a false error when other processes oversubscribe the video memory, issue #1043 |
 | The denoised entries of the prepared source cache use much host memory (545 MB for 45.4 MP in FP32) | DN6 memory record | The cache budget of the prepared source cache applies to the entry; DN6 records the budget use |
 | The process footprint stays high after the release of the Core ML sessions (GPU: up to 4.9 GiB after 5 photos; Neural Engine: 2.0 GiB in the lab tool) | Footprint test of DN10 | Find the owner of the memory before DN10 completes; a release that does not return the memory stops DN10 |
 | A Mac with 8 GB or a GPU with fewer cores takes longer or has too little memory for tiles of 1024 | DN10 run on such a Mac, if the user has one | Record it in the DN10 completion record; the render reports the memory error |
 | A GPU of another vendor gives a different output or time | DN2 tests on that GPU; DN3 timing tool | Record it in the DN3 completion record. A test failure stops DN6 for that vendor |
-| The Intel Iris Xe removes the DirectML device (887A0005 in 2 of 4 lab processes, one in FP32) | DN2 tests and the DN3 timing tool on the Iris Xe | The slow-device check stops the Iris Xe after its first measured tile, so a render runs few tiles there. A device removal gives the render error with `Turn Off AI Denoise`. Record in the DN3 completion record whether the render backend of the editor continues after the removal; if it does not, find the cause before DN6 completes |
+| The Intel Iris Xe removes the DirectML device (887A0005 in 2 of 4 lab processes, one in FP32) | DN2 tests and the DN3 timing tool on the Iris Xe | The slow-device check stops the Iris Xe after its first measured tile, so a render runs few tiles there (DN3: after 0.67 to 0.79 s on a ready session, after 10.1 s on a new session; no removal in 2 processes). A device removal gives the render error with `Turn Off AI Denoise`. Record in the DN3 completion record whether the render backend of the editor continues after the removal; if it does not, find the cause before DN6 completes |
 | Clipped areas of the model output are below the clip threshold | DN1 clipped area table | Stop DN5 until its detailed section states the highlight handling |
 | A JSON change breaks old root ids | `TryDecodeRootState` rejects an old project in the DN5 tests | Keep the keys absent when the noise reduction is off |
 
@@ -1254,7 +1430,7 @@ no longer agrees with the branch.
 | --- | --- | --- |
 | `target_time` | The measured FP16 time at 45.4 MP: 0.72 s on the RTX 3080 Laptop GPU (DirectML), 0.60 s on the MacBook Air M4 (Neural Engine). A phase time more than 15% above it stops the phase (DN3, DN10) | User (U1), DN1 additions |
 | `slow_device_limit` | 0.05 s for each megapixel of the mosaic (2.3 s at 45.4 MP), about 3 times `target_time` (RTX 3080 Laptop GPU 0.016 s, M4 0.013 s, Intel Iris Xe 0.114 s for each megapixel) | User (slow devices get the error), DN1 additions |
-| `tile_size` (Windows) | The largest of 768, 1024, and 1536 packed pixels whose DirectML process memory fits in the free local video memory; DN3 measures the FP16 memory (FP32: 0.9, 1.0, 3.3 GiB). 1536 is the fastest on the RTX 3080 Laptop GPU (FP16: 0.72 s at 45.4 MP with the tiles through host memory) | DN1 additions, DirectML and FP16 on DirectML |
+| `tile_size` (Windows) | The largest of 768, 1024, and 1536 packed pixels whose DirectML process memory fits in the free local video memory (budget minus usage plus the memory that the session holds): FP16 736, 768, and 2704 MiB (`UtNet2Spec::kDirectMlTileMemory`; FP32: 0.9, 1.0, 3.3 GiB). 1536 is the fastest on the RTX 3080 Laptop GPU (0.45 s at 45.4 MP; 1024: 0.58 s; 768: 0.70 s) | DN1 additions, DN3 |
 | `tile_size` (macOS) | 1536 packed pixels on the Neural Engine (0.60 s at 45.4 MP, peak footprint 2.0 GiB on the M4; 1024: 0.75 s, 1.7 GiB) | DN1 addition, FP16 on the Neural Engine |
 | `tile_overlap` | 96 packed pixels: the tiled output is the one-pass output | DN1 |
 | Session strategy | Windows: one ONNX Runtime session with free height and width, the DirectML memory arena on. macOS: one session for each tile input shape. Kept by `DenoiseModelSession` between renders, released with the editor GPU release and at the editor close | DN1 additions; 2.3 |
