@@ -26,7 +26,8 @@ auto SensorFieldMask() -> DirtyFieldMask {
   return DirtyFieldMask{static_cast<std::uint64_t>(DevelopDirty::Demosaic) |
                         static_cast<std::uint64_t>(DevelopDirty::Highlights) |
                         static_cast<std::uint64_t>(DevelopDirty::Lens) |
-                        static_cast<std::uint64_t>(DevelopDirty::Input)};
+                        static_cast<std::uint64_t>(DevelopDirty::Input) |
+                        static_cast<std::uint64_t>(DevelopDirty::Denoise)};
 }
 
 /**

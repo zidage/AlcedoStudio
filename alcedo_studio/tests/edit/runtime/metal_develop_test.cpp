@@ -26,6 +26,7 @@
 #include "decoders/processor/operators/gpu/metal_encode.hpp"
 #include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
+#include "denoised_rgb_test_support.hpp"
 #include "dng_profile_test_support.hpp"
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/geometry/source_geometry.hpp"
@@ -459,6 +460,19 @@ TEST_F(MetalDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquiva
 
 TEST_F(MetalDevelopFixture, RgbDngWarpProducesFinalSensorImageAndReusesPublishedCache) {
   gpu_dag_test::VerifyRgbWarpPublishes<MetalRenderDevice>();
+}
+
+TEST_F(MetalDevelopFixture, DenoisedPlaneBecomesTheSensorImageWithTheCfaClamp) {
+  gpu_dag_test::VerifyDenoisedPlaneBecomesTheSensorImageWithTheCfaClamp<MetalRenderDevice>();
+}
+
+TEST_F(MetalDevelopFixture, FullSizeRenderWithTheSwitchOnAndACfaInputReportsTheError) {
+  gpu_dag_test::VerifyFullSizeRenderWithTheSwitchOnAndACfaInputReportsTheError<MetalRenderDevice>();
+}
+
+TEST_F(MetalDevelopFixture, DenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender) {
+  gpu_dag_test::VerifyDenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender<
+      MetalRenderDevice>();
 }
 
 TEST_F(MetalDevelopFixture, EnabledLensVignettingChangesDevelopSensorPixels) {

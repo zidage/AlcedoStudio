@@ -26,6 +26,7 @@
 #include "decoders/processor/operators/gpu/opencl_raw_programs.hpp"
 #include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
+#include "denoised_rgb_test_support.hpp"
 #include "dng_profile_test_support.hpp"
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/geometry/render_request.hpp"
@@ -277,6 +278,20 @@ TEST_F(OpenClDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquiv
 
 TEST_F(OpenClDevelopFixture, RgbDngWarpProducesFinalSensorImageAndReusesPublishedCache) {
   gpu_dag_test::VerifyRgbWarpPublishes<OpenClRenderDevice>();
+}
+
+TEST_F(OpenClDevelopFixture, DenoisedPlaneBecomesTheSensorImageWithTheCfaClamp) {
+  gpu_dag_test::VerifyDenoisedPlaneBecomesTheSensorImageWithTheCfaClamp<OpenClRenderDevice>();
+}
+
+TEST_F(OpenClDevelopFixture, FullSizeRenderWithTheSwitchOnAndACfaInputReportsTheError) {
+  gpu_dag_test::VerifyFullSizeRenderWithTheSwitchOnAndACfaInputReportsTheError<
+      OpenClRenderDevice>();
+}
+
+TEST_F(OpenClDevelopFixture, DenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender) {
+  gpu_dag_test::VerifyDenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender<
+      OpenClRenderDevice>();
 }
 
 TEST_F(OpenClDevelopFixture, EnabledLensVignettingChangesDevelopSensorPixels) {

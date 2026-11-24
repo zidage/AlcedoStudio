@@ -530,33 +530,37 @@ __global__ void HighlightReconstructKernel(const cv::cuda::PtrStepSz<float3> inp
                   ReconstructChannel(pixel.z, ref.z, params.chrominance[2], weight.z));
 }
 
-__global__ void ClampAndPackRGBAKernel(const cv::cuda::PtrStepSz<float3> input,
-                                       cv::cuda::PtrStepSz<float4> output, const float3 gain,
-                                       const int flip) {
+__global__ void SanitizeAndPackRGBAKernel(const cv::cuda::PtrStepSz<float3> input,
+                                          cv::cuda::PtrStepSz<float4> output, const float3 gain,
+                                          const int flip) {
   const int col = blockIdx.x * blockDim.x + threadIdx.x;
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   if (col >= input.cols || row >= input.rows) {
     return;
   }
 
-  const float3 pixel = ClampRgb(input.ptr(row)[col]);
+  // No pixel reached the clip level: the result of the reconstruct kernel for a pixel below its
+  // soft ramp, which keeps values above 1 (issue #1046).
+  const float3 pixel = MaxRgb(input.ptr(row)[col]);
   StoreOrientedRgba(output, row, col, input.rows, input.cols,
                     make_float4(pixel.x * gain.x, pixel.y * gain.y, pixel.z * gain.z, 1.0f),
                     flip);
 }
 
-__global__ void ClampAndPackRGBAPlanarKernel(const cv::cuda::PtrStepSz<float> red,
-                                             const cv::cuda::PtrStepSz<float> green,
-                                             const cv::cuda::PtrStepSz<float> blue,
-                                             cv::cuda::PtrStepSz<float4> output,
-                                             const float3 gain, const int flip) {
+__global__ void SanitizeAndPackRGBAPlanarKernel(const cv::cuda::PtrStepSz<float> red,
+                                                const cv::cuda::PtrStepSz<float> green,
+                                                const cv::cuda::PtrStepSz<float> blue,
+                                                cv::cuda::PtrStepSz<float4>      output,
+                                                const float3 gain, const int flip) {
   const int col = blockIdx.x * blockDim.x + threadIdx.x;
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   if (col >= red.cols || row >= red.rows) {
     return;
   }
 
-  const float3 pixel = ClampRgb(LoadPlanarRgb(red, green, blue, row, col));
+  // No pixel reached the clip level: the result of the reconstruct kernel for a pixel below its
+  // soft ramp, which keeps values above 1 (issue #1046).
+  const float3 pixel = MaxRgb(LoadPlanarRgb(red, green, blue, row, col));
   StoreOrientedRgba(output, row, col, red.rows, red.cols,
                     make_float4(pixel.x * gain.x, pixel.y * gain.y, pixel.z * gain.z, 1.0f),
                     flip);
@@ -942,7 +946,7 @@ void ApplyHighlightCorrectionAndPackRGBAOriented(const cv::cuda::GpuMat& img, cv
   const float3 gain      = BuildInverseCamMulScale(cam_mul);
 
   if (!correction.any_clipped) {
-    ClampAndPackRGBAKernel<<<blocks, threads, 0, cuda_stream>>>(img, dst, gain, flip);
+    SanitizeAndPackRGBAKernel<<<blocks, threads, 0, cuda_stream>>>(img, dst, gain, flip);
     CUDA_CHECK(cudaGetLastError());
     if (stream == nullptr) {
       WaitForStream(stream);
@@ -986,8 +990,8 @@ void ApplyHighlightCorrectionAndPackRGBAOriented(const cv::cuda::GpuMat& red,
   const float3 gain      = BuildInverseCamMulScale(cam_mul);
 
   if (!correction.any_clipped) {
-    ClampAndPackRGBAPlanarKernel<<<blocks, threads, 0, cuda_stream>>>(red, green, blue, dst, gain,
-                                                                      flip);
+    SanitizeAndPackRGBAPlanarKernel<<<blocks, threads, 0, cuda_stream>>>(red, green, blue, dst,
+                                                                         gain, flip);
     CUDA_CHECK(cudaGetLastError());
     if (stream == nullptr) {
       WaitForStream(stream);

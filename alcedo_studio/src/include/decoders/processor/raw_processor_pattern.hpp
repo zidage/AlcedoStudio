@@ -27,6 +27,10 @@ enum class RawInputKind {
   /// JPEG, PNG, TIFF or OpenEXR pixels decoded by RasterInputLoader. Display-referred or
   /// scene-linear source RGB; the Develop `input` object describes its color.
   RasterRgb,
+  /// Camera RGB of the AI Denoise model for the decode area of a Bayer RAW file, at the full size
+  /// (AI Denoise integration plan, DN5). RawInputLoader::FromDenoisedBayer makes it; LibRaw never
+  /// gives it.
+  DenoisedRgb,
 };
 
 enum class RawCfaKind {

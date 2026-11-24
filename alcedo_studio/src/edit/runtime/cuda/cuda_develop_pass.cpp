@@ -163,6 +163,7 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
     }
     ReleaseTransientSlabsAfterGpuLastUse(device, {linear});
   } else if (input.input_kind == RawInputKind::DebayeredRgb ||
+             input.input_kind == RawInputKind::DenoisedRgb ||
              plan.source.kind == DevelopInputKind::DirectRgb) {
     const auto width  = input.host_extent.width;
     const auto height = input.host_extent.height;

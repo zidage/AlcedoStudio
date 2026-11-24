@@ -9,6 +9,8 @@ typedef struct {
   float black[3];
   float scale[3];
   uint integer_codes;
+  uint clamp_to_range;
+  float range_max[3];
 } RawRgbLinearizationParams;
 
 __kernel void linearize_rgb(global float4* rgba, uint width, uint height,
@@ -21,6 +23,7 @@ __kernel void linearize_rgb(global float4* rgba, uint width, uint height,
     value[c] -= params.black[c];
     if (params.integer_codes) value[c] = fmax(value[c], 0.0f);
     value[c] *= params.scale[c];
+    if (params.clamp_to_range) value[c] = fmin(fmax(value[c], 0.0f), params.range_max[c]);
   }
   value.w = 1.0f;
   rgba[offset + y * width + x] = value;
