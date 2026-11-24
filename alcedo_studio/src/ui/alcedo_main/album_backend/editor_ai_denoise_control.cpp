@@ -52,26 +52,59 @@ auto EditorAiDenoiseControl::available() const -> bool {
   return *available_;
 }
 
+auto EditorAiDenoiseControl::ReadInstalledModel() const -> InstalledModel {
+  InstalledModel model;
+  try {
+    model.version = services_.installed_model_version();
+  } catch (const AiDenoiseError& error) {
+    model.refusal = error.Kind() == AiDenoiseErrorKind::ModelNotInstalled
+                        ? TurnOnRefusal::ModelNotInstalled
+                        : TurnOnRefusal::ModelUnreadable;
+    model.reason  = error.Text();
+  } catch (const std::exception& error) {
+    model.refusal = TurnOnRefusal::ModelUnreadable;
+    model.reason  = std::string("AI Denoise: ") + error.what();
+  }
+  return model;
+}
+
+auto EditorAiDenoiseControl::PrepareTurnOn() const -> TurnOnPreparation {
+  TurnOnPreparation preparation;
+  if (!available()) {
+    preparation.refusal = TurnOnRefusal::PlatformUnavailable;
+    preparation.reason  = "AI Denoise: this computer has no supported device for the model";
+    return preparation;
+  }
+  auto model = ReadInstalledModel();
+  if (model.refusal.has_value()) {
+    preparation.refusal = model.refusal;
+    preparation.reason  = std::move(model.reason);
+    return preparation;
+  }
+  preparation.write = RawDecodeWrite(DevelopAiDenoise{std::move(model.version)});
+  return preparation;
+}
+
+auto EditorAiDenoiseControl::TurnOffWrite() -> EditorParameterWrite {
+  return RawDecodeWrite(std::nullopt);
+}
+
 auto EditorAiDenoiseControl::turnOn() -> QString {
-  if (submitter_ == nullptr || !available()) {
+  if (submitter_ == nullptr) {
     return QStringLiteral("refused");
   }
-  std::string version;
-  try {
-    version = services_.installed_model_version();
-  } catch (const AiDenoiseError& error) {
-    if (error.Kind() == AiDenoiseErrorKind::ModelNotInstalled) {
+  auto preparation = PrepareTurnOn();
+  if (preparation.refusal.has_value()) {
+    if (*preparation.refusal == TurnOnRefusal::ModelNotInstalled) {
       return QStringLiteral("model_not_installed");
     }
-    ALCEDO_LOG_WARN(Render) << error.what();
-    return QStringLiteral("refused");
-  } catch (const std::exception& error) {
-    ALCEDO_LOG_WARN(Render) << "AI Denoise: " << error.what();
+    if (*preparation.refusal == TurnOnRefusal::ModelUnreadable) {
+      ALCEDO_LOG_WARN(Render) << preparation.reason;
+    }
     return QStringLiteral("refused");
   }
-  const bool accepted =
-      submitter_->submitWrite(QString::fromLatin1(kRawDecodeField),
-                              RawDecodeWrite(DevelopAiDenoise{std::move(version)}), true);
+  const bool accepted = submitter_->submitWrite(QString::fromLatin1(kRawDecodeField),
+                                                std::move(*preparation.write), true);
   return accepted ? QStringLiteral("on") : QStringLiteral("refused");
 }
 
@@ -79,8 +112,7 @@ auto EditorAiDenoiseControl::turnOff() -> bool {
   if (submitter_ == nullptr) {
     return false;
   }
-  return submitter_->submitWrite(QString::fromLatin1(kRawDecodeField), RawDecodeWrite(std::nullopt),
-                                 true);
+  return submitter_->submitWrite(QString::fromLatin1(kRawDecodeField), TurnOffWrite(), true);
 }
 
 void EditorAiDenoiseControl::SetImage(std::uint32_t image_id) {

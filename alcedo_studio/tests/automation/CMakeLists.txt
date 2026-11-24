@@ -133,6 +133,13 @@ alcedo_add_automation_test(AutomationLibraryCommandsTest
     LABEL ci_automation_flow
     CATEGORIES ci_automation)
 
+# denoise.* (AI Denoise integration plan, DN13) in an in-process headless session on a CI RAW
+# file. Needs the GPU editor backend; the run with the real model needs
+# ALCEDO_AI_DENOISE_TEST_ASSETS (the folder of the FP16 graph) and skips without it.
+alcedo_add_automation_test(AutomationDenoiseCommandsTest
+    SOURCES automation_denoise_commands_test.cpp
+    LIBRARIES AutomationHostLib)
+
 # adjustments.* parameter rules and the background Paste of library photos in an in-process
 # headless session.
 alcedo_add_automation_test(AutomationAdjustmentCommandsTest
