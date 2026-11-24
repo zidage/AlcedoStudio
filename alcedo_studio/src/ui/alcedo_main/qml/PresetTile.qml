@@ -216,7 +216,16 @@ Item {
                     renameField.selectAll()
                 })
             }
-            onAccepted: finish(true)
+            // The field keeps Enter. TextInput passes a handled Return on to its parents,
+            // and the browser list applies the selected preset on Enter.
+            Keys.onReturnPressed: function (event) {
+                finish(true)
+                event.accepted = true
+            }
+            Keys.onEnterPressed: function (event) {
+                finish(true)
+                event.accepted = true
+            }
             Keys.onEscapePressed: function (event) {
                 finish(false)
                 event.accepted = true
