@@ -486,8 +486,9 @@ auto MountScanChangedPhotos(const MountScanResult& result) -> bool;
  * @brief True when the scan wrote a library change that the project file must hold (#1015).
  *
  * A new, adopted, moved, changed, returned, or missing photo, a folder added or removed, a
- * relocated root, or a failed batch (batches before it can be stored). A file that the scan could
- * not import writes no row, and the next scan tries it again, so it alone does not count.
+ * relocated root, a new volume name (#1088), or a failed batch (batches before it can be
+ * stored). A file that the scan could not import writes no row, and the next scan tries it
+ * again, so it alone does not count.
  */
 auto MountScanStoredChanges(const MountScanResult& result) -> bool;
 

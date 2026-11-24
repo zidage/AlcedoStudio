@@ -155,7 +155,8 @@ auto MountScanStoredChanges(const MountScanResult& result) -> bool {
                  result.changed_in_place_count + result.missing_count + result.returned_count +
                  result.folders_added_count + result.folders_removed_count >
              0 ||
-         result.relocated_root.has_value() || result.failed_batch > 0;
+         result.relocated_root.has_value() || result.volume_name_updated ||
+         result.failed_batch > 0;
 }
 
 auto MountScanResultDetail(const MountScanResult& result) -> QString {

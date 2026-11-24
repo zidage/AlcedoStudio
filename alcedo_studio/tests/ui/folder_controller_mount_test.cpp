@@ -20,10 +20,16 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string>
+#include <system_error>
 #include <vector>
 
 #include "app/mount_service.hpp"
+#include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
+#include "sleeve/storage.hpp"
+#include "storage/store/mount/mount_store.hpp"
+#include "utils/file/volume_identity.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
@@ -279,6 +285,49 @@ TEST_F(FolderControllerMountTest, UnmountLeavesOrdinaryRowsAndPhotos) {
   ASSERT_TRUE(WaitFor([this] { return !RowNamed("Trip").has_value(); }));
   EXPECT_TRUE(Mounts().ListMounts().empty());
   ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 2; }));
+}
+
+// #1088: a scan that only stored a new volume name did not save the project file, so the next
+// open of the .alcd showed the old name.
+TEST_F(FolderControllerMountTest, ScanThatOnlyRenamesTheVolumeSavesTheProjectFile) {
+  ASSERT_NO_FATAL_FAILURE(MountTrip());
+  const auto& handler    = backend_.project()->handler();
+  const auto  mount_id   = Summary().record.id;
+  const auto  volume     = ReadVolumeLabel(disk_ / "Trip").name;
+  const auto  saved_name = [this, &handler]() -> std::optional<std::string> {
+    const auto workspace = temp_dir_ / "volume_name_unpack";
+    std::error_code ec;
+    stdfs::remove_all(workspace, ec);
+    stdfs::create_directories(workspace);
+    stdfs::path db_path;
+    stdfs::path meta_path;
+    if (!project_pack::UnpackProjectToWorkspace(handler.package_path(), workspace,
+                                                "volume_name_unpack", &db_path, &meta_path,
+                                                nullptr)) {
+      return std::nullopt;
+    }
+    std::optional<std::string> name;
+    {
+      ProjectService project(db_path, meta_path, ProjectOpenMode::kLoadExisting);
+      const auto     roots = project.GetStorage()->GetMountStore().ReadMountRoots();
+      if (roots.size() == 1) {
+        name = roots.front().volume_name;
+      }
+    }
+    stdfs::remove_all(workspace, ec);
+    return name;
+  };
+
+  // The volume had another name when the project file was last saved; nothing on the disk
+  // changed since.
+  const std::string old_name = volume + " (old)";
+  handler.project()->GetStorage()->GetMountStore().UpdateMountVolumeName(mount_id, old_name);
+  ASSERT_TRUE(handler.MakeSaveAndPackageJob()(nullptr));
+  ASSERT_EQ(saved_name(), old_name);
+
+  ASSERT_NO_FATAL_FAILURE(Synchronize());
+  EXPECT_EQ(Summary().record.volume_name, volume);
+  EXPECT_EQ(saved_name(), volume);
 }
 
 TEST_F(FolderControllerMountTest, MountInsideAMountedFolderIsRefusedWithNoRow) {
