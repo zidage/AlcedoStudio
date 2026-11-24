@@ -44,6 +44,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
+#include "ui/alcedo_main/album_backend/library_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/library_view_preferences.hpp"
 #include "ui/alcedo_main/album_backend/log_folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
@@ -110,6 +111,8 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(EditorViewportPlaceholder* editorPlaceholder READ editor_placeholder CONSTANT)
   Q_PROPERTY(WorkspaceRouter* workspaceRouter READ workspace_router CONSTANT)
   Q_PROPERTY(EditorBehaviorPreferences* editorBehavior READ editor_behavior CONSTANT)
+  /// Library defaults (the default action of Import Folder, #1077).
+  Q_PROPERTY(LibraryBehaviorPreferences* libraryBehavior READ library_behavior CONSTANT)
   /// Library view settings (the layout of the ungrouped Library grid).
   Q_PROPERTY(LibraryViewPreferences* libraryView READ library_view CONSTANT)
   /// The RAW Import section of Settings > Default Behavior: the look of new RAW imports (#920).
@@ -212,6 +215,9 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto editor_behavior() -> EditorBehaviorPreferences* {
     return editor_behavior_.get();
   }
+  [[nodiscard]] auto library_behavior() -> LibraryBehaviorPreferences* {
+    return library_behavior_.get();
+  }
   [[nodiscard]] auto library_view() -> LibraryViewPreferences* { return library_view_.get(); }
   [[nodiscard]] auto raw_import_look() -> RawImportLookSettingsModel* {
     return raw_import_look_.get();
@@ -310,6 +316,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<LutPreviewController>                lut_preview_;
   std::unique_ptr<WorkspaceRouter>                     workspace_router_;
   std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
+  std::unique_ptr<LibraryBehaviorPreferences>          library_behavior_;
   std::unique_ptr<LibraryViewPreferences>              library_view_;
   std::unique_ptr<RawImportLookSettingsModel>          raw_import_look_;
   std::unique_ptr<LogFolderController>                 log_folder_;

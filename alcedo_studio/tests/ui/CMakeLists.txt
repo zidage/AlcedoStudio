@@ -604,6 +604,9 @@ alcedo_register_test_target(AlbumSectionModelTest ui)
 # Issue 745: justified-rows Library layout geometry, its window model, and the layout setting.
 def_ui_test(JustifiedLayoutTest justified_layout_test.cpp)
 alcedo_register_test_target(JustifiedLayoutTest ui)
+# Issue 1077: the default action of Import Folder.
+def_ui_test(LibraryBehaviorPreferencesTest library_behavior_preferences_test.cpp)
+alcedo_register_test_target(LibraryBehaviorPreferencesTest ui)
 def_ui_test(AlbumBackendLibraryQueryTest album_backend_library_query_test.cpp)
 alcedo_register_test_target(AlbumBackendLibraryQueryTest ui)
 

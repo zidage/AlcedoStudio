@@ -6675,6 +6675,37 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
 </context>
 <context>
+    <name>ImportFolderChoiceCard</name>
+    <message>
+        <source>Import into Collection</source>
+        <translation>导入到影集</translation>
+    </message>
+    <message>
+        <source>Mount Folder</source>
+        <translation>挂载文件夹</translation>
+    </message>
+    <message>
+        <source>Arrange freely</source>
+        <translation>自由整理</translation>
+    </message>
+    <message>
+        <source>Sync folder structure</source>
+        <translation>同步文件夹结构</translation>
+    </message>
+    <message>
+        <source>Disk</source>
+        <translation>磁盘</translation>
+    </message>
+    <message>
+        <source>Library</source>
+        <translation>资料库</translation>
+    </message>
+    <message>
+        <source>Collection</source>
+        <translation>影集</translation>
+    </message>
+</context>
+<context>
     <name>ImportProgressOverlay</name>
     <message>
         <location filename="../qml/ImportProgressOverlay.qml" line="+35"/>
@@ -8323,6 +8354,14 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>Ask every time</source>
         <translation>每次询问</translation>
+    </message>
+    <message>
+        <source>Import</source>
+        <translation>导入</translation>
+    </message>
+    <message>
+        <source>Import Folder</source>
+        <translation>导入文件夹</translation>
     </message>
     <message>
         <source>Create a new layer, then draw</source>

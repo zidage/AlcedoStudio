@@ -41,6 +41,11 @@ Dialog {
     property string pendingSemanticImportPreference: appModules.semanticGeneration.importPreference
     property string pendingAcceleratorBackend: appModules.project.acceleratorBackend
     property string pendingLockedNodeMaskAction: appModules.editorBehavior.lockedNodeMaskAction
+    // Default action of Import Folder: "ask", "import", or "mount" (#1077).
+    property string pendingImportFolderAction: appModules.libraryBehavior.importFolderAction
+    // The card that unchecking Ask every time selects: the last card choice of this run, or
+    // Import into Collection when there was none.
+    property string lastImportFolderCard: "import"
     property string pendingLibraryGridLayout: appModules.libraryView.gridLayout
     // User names of the seven color label codes; an empty entry keeps the color name.
     property var pendingColorLabelNames: Array.from(appModules.libraryView.colorLabelUserNames)
@@ -121,6 +126,9 @@ Dialog {
         pendingSemanticImportPreference = appModules.semanticGeneration.importPreference
         pendingAcceleratorBackend = appModules.project.acceleratorBackend
         pendingLockedNodeMaskAction = appModules.editorBehavior.lockedNodeMaskAction
+        pendingImportFolderAction = appModules.libraryBehavior.importFolderAction
+        if (pendingImportFolderAction !== "ask")
+            lastImportFolderCard = pendingImportFolderAction
         pendingLibraryGridLayout = appModules.libraryView.gridLayout
         pendingColorLabelNames = Array.from(appModules.libraryView.colorLabelUserNames)
         // The stored look, so a value written by another window or by alcedo-cli appears.
@@ -171,6 +179,17 @@ Dialog {
             }
         }
         return 0
+    }
+
+    // Ask every time checked: no card is selected. Unchecked: the card of the last choice.
+    function setImportFolderAsk(ask) {
+        pendingImportFolderAction = ask ? "ask" : lastImportFolderCard
+    }
+
+    // Selecting a card unchecks Ask every time.
+    function selectImportFolderCard(action) {
+        lastImportFolderCard = action
+        pendingImportFolderAction = action
     }
 
     function libraryGridLayoutIndex(layout) {
@@ -236,6 +255,9 @@ Dialog {
         }
         if (appModules.editorBehavior.lockedNodeMaskAction !== pendingLockedNodeMaskAction) {
             appModules.editorBehavior.setLockedNodeMaskAction(pendingLockedNodeMaskAction)
+        }
+        if (appModules.libraryBehavior.importFolderAction !== pendingImportFolderAction) {
+            appModules.libraryBehavior.setImportFolderAction(pendingImportFolderAction)
         }
         if (appModules.libraryView.gridLayout !== pendingLibraryGridLayout) {
             appModules.libraryView.setGridLayout(pendingLibraryGridLayout)
@@ -783,9 +805,67 @@ Dialog {
                                 width: defaultBehaviorScroll.availableWidth
                                 spacing: 18
 
+                                // Default action of Import Folder (#1077). The check and cross
+                                // marks of the cards carry the difference; no caption follows.
                                 SettingsSection {
+                                    objectName: "settingsImportSection"
                                     Layout.fillWidth: true
                                     Layout.topMargin: 26
+                                    Layout.leftMargin: 34
+                                    Layout.rightMargin: 34
+                                    Layout.bottomMargin: 26
+                                    title: qsTr("Import")
+                                    textColor: dialog.textColor
+                                    mutedTextColor: dialog.mutedTextColor
+                                    dividerColor: dialog.dividerColor
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 16
+
+                                        Label {
+                                            Layout.preferredWidth: 160
+                                            Layout.alignment: Qt.AlignTop
+                                            Layout.topMargin: 4
+                                            text: qsTr("Import Folder")
+                                            color: dialog.textColor
+                                            font.pixelSize: appTheme.fontSizeTitle
+                                            font.weight: appTheme.fontWeightStrong
+                                            wrapMode: Text.Wrap
+                                        }
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            Layout.maximumWidth: 520
+                                            spacing: 8
+
+                                            ThemeCheckBox {
+                                                objectName: "settingsImportFolderAskCheck"
+                                                text: qsTr("Ask every time")
+                                                alwaysPrimaryText: true
+                                                checked: dialog.pendingImportFolderAction === "ask"
+                                                onToggled: function(checked) {
+                                                    dialog.setImportFolderAsk(checked)
+                                                }
+                                            }
+
+                                            ImportFolderChoiceCards {
+                                                objectName: "settingsImportFolderCards"
+                                                Layout.fillWidth: true
+                                                cardObjectNamePrefix: "settingsImportFolderCard"
+                                                selectedAction: dialog.pendingImportFolderAction === "ask"
+                                                                ? ""
+                                                                : dialog.pendingImportFolderAction
+                                                onActionSelected: function(action) {
+                                                    dialog.selectImportFolderCard(action)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                SettingsSection {
+                                    Layout.fillWidth: true
                                     Layout.leftMargin: 34
                                     Layout.rightMargin: 34
                                     Layout.bottomMargin: 26
