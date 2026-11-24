@@ -1335,6 +1335,8 @@ auto AppTheme::editorLutTileIconSize() const -> int { return 36; }
 auto AppTheme::editorPresetPaneHeight() const -> int { return 240; }
 auto AppTheme::editorVersionsPartMinHeight() const -> int { return 160; }
 auto AppTheme::editorPresetTileMinWidth() const -> int { return 104; }
+// List rows of the LUT and preset browsers (DESIGN.md "Browser list rows").
+auto AppTheme::editorBrowserListThumbWidth() const -> int { return 48; }
 auto AppTheme::collectionsSidebarWidth() const -> int { return 264; }
 auto AppTheme::collectionsSidebarMinWidth() const -> int { return 208; }
 auto AppTheme::collectionsSidebarMaxWidth() const -> int { return 420; }

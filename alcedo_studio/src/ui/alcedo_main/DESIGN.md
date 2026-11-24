@@ -319,16 +319,30 @@ strength (not the current edit), 256 px on the long edge. The preview slot has
 the 3:2 shape of the filmstrip slot and the full tile content width; the photo
 fits the slot, is centered, and has `controlRadiusSmall` corners (`MultiEffect`
 mask). Until the preview is ready, and for a LUT that cannot be applied, the slot
-shows the `editorLutTileIconSize` cube centered on the well. The list layout has
-no preview slot.
+shows the `editorLutTileIconSize` cube centered on the well. A list row has the
+same preview slot at `editorBrowserListThumbWidth` left of the title (see
+"Browser list rows").
+
+**Browser list rows (LUT and preset browsers):** the toolbar of both browsers has
+the sunken search field (`BrowserSearchField.qml`) and the grid / list switch
+(`BrowserViewModeToggle.qml`). In the list layout every LUT or preset is one row
+across the well with `spaceXs / 2` between rows: a 3:2 preview slot
+(`BrowserPreviewThumb.qml`, the slot of the grid tiles) `editorBrowserListThumbWidth`
+wide and centered on the row, then the name left-aligned in `fontSizeBody`. The
+placeholder icon of the slot shrinks to 60 % of the slot height. Selection,
+applied outline, and hover well are the grid tile states.
 
 **Versions panel presets (edit presets plan, PS2):** the Versions panel has a
 preset part above the Versions part, divided by a 1 px `cardBorderColor`
 splitter line (`textMutedColor` on hover and drag). The preset part has the
 `Presets` header with `plus.svg` (Add Preset...) and `dots.svg` (menu), an
-`AlertBadge` for errors, and the preset browser: tiles in a sunken `bgBaseColor`
-well with `spaceXs` gaps, a `textMutedColor` caption title for each group, and
-the `tray-download.svg` icon only when the folder is empty. A tile is the LUT
+`AlertBadge` for errors, and the preset browser: the search field and the grid /
+list switch above tiles or list rows in a sunken `bgBaseColor` well with
+`spaceXs` gaps, a `textMutedColor` caption title for each group, the
+`tray-download.svg` icon only when the folder is empty, and the `search.svg` icon
+only when no preset matches the search. Each word of the search must occur in the
+group or the name of a preset; the layout is one setting for the Versions panel
+and the Apply Preset dialog. A tile is the LUT
 tile structure: a 3:2 image area (`cardSurfaceColor` until PS3 adds previews),
 the name centered below it, outline selection, and the hover well. A preset
 that is not available shows `info.svg` in `alertBadgeFillColor`. Names,
@@ -825,6 +839,7 @@ the two side columns read as one family.
 | `editorPresetPaneHeight` | 240 | Default height of the preset part of the Versions panel (splitter drag; double click restores it) |
 | `editorVersionsPartMinHeight` | 160 | Smallest Versions part that the preset splitter leaves |
 | `editorPresetTileMinWidth` | 104 | Minimum preset tile width; the browser fits as many columns as this allows |
+| `editorBrowserListThumbWidth` | 48 | Width of the 3:2 preview slot of a LUT or preset list row |
 | `editorAdjustmentHeaderMinHeight` | 58 | Node-name / EXIF header under the scope: EXIF caption line, `spaceXs` gap, compact Mask-tool row |
 | `collectionsSidebarWidth` | 264 | Default width of the left collections column; a double-click on its edge sets it again |
 | `collectionsSidebarMinWidth` | 208 | Narrowest drag-resized collections column |

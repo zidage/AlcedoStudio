@@ -252,6 +252,11 @@ Dialog {
                     objectName: "applyPresetBrowser"
                     model: dialog.presets ? dialog.presets.presets : null
                     previewSource: dialog.previewSource
+                    viewMode: dialog.presets ? String(dialog.presets.browserViewMode) : "grid"
+                    onViewModeRequested: function (mode) {
+                        if (dialog.presets)
+                            dialog.presets.browserViewMode = mode
+                    }
                     onActivated: function (presetId) {
                         dialog.applySelected()
                     }

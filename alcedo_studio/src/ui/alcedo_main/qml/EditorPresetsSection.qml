@@ -161,9 +161,14 @@ ColumnLayout {
         PresetBrowser {
             id: presetBrowser
             anchors.fill: parent
-            visible: browserSlot.height >= appTheme.spaceXl
+            visible: browserSlot.height >= presetBrowser.toolbarHeight + appTheme.spaceXl
             model: root.presets ? root.presets.presets : null
             previewSource: root.presetPreview
+            viewMode: root.presets ? String(root.presets.browserViewMode) : "grid"
+            onViewModeRequested: function (mode) {
+                if (root.presets)
+                    root.presets.browserViewMode = mode
+            }
             dropHighlight: root.versionDropHighlight || presetFileDrop.urls.length > 0
             onActivated: function (presetId) {
                 if (root.canApply)
