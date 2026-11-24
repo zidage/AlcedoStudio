@@ -1,7 +1,7 @@
 # Edit Presets Plan
 
 - Date: 2026-11-24
-- Status: planned
+- Status: PS1A implemented (2026-11-24); PS1B to PS4 planned
 - Tracking issue: #1090
 - Direct prerequisite plans:
   [Phase NM10, Node-aware Adjustment Transfer](../edit/node_mask_editor/phase_nm10_adjustment_transfer_plan.md)
@@ -155,10 +155,10 @@ a check in one function, `ReadPresetFile`, which is the only reader of a preset 
 
 | Rule | Limit | Failure |
 | --- | --- | --- |
-| File kind | A regular file. A symbolic link or a reparse point is refused. | `not a regular file` |
+| File kind | A regular file. A link is refused: a symbolic link, and on Windows each name-surrogate reparse point (a junction or a mount point). The reader opens the link itself, never its target. | `not a regular file` |
 | File size | At most 4 MiB, read from the open handle | `file too large` |
 | Encoding | UTF-8 without errors | `invalid text` |
-| JSON depth | At most 16 levels, checked by the parse callback during the parse | `too deep` |
+| JSON depth | At most 16 levels, checked by a SAX scan that stops at the first deeper value, before the JSON value is built | `too deep` |
 | JSON parse | `nlohmann::json::parse` without exceptions to the caller | `invalid JSON` |
 
 ### 3.2 Package rules
@@ -170,18 +170,21 @@ a check in one function, `ReadPresetFile`, which is the only reader of a preset 
    package without a fingerprint is refused. (`ImportDocumentTransfer` accepts an absent
    fingerprint for other callers.)
 3. Count limits: at most 32 Color Grades, 64 adjustments for each node, 64 Masks for each Grade.
-4. Each string is at most 256 bytes. Each number is finite.
+4. Each string and each object key is at most 256 bytes. Each number is finite. JSON text has no
+   form for a non-finite number: the parser refuses an overflowing number (`1e999`) as `invalid
+   JSON`. A finite number above the float range is refused by the model loaders (#1097).
 
 ### 3.3 References to files
 
-A package can refer to a file in two places (source audit, section 5).
+A package can refer to a file in two places (source audit, section 5). The rules apply to the
+JSON before `ImportDocumentTransfer`, so that a path always fails with the reference rule.
 
 | Field | Rule in a preset file |
 | --- | --- |
 | LMT `cube_path` (`FileLutReference`, an absolute path) | Refused. |
 | LMT `reference` of kind `library` (`relative_path`) | Accepted only when the path is relative, has no root name, and has no `..` part. The LUT library resolves it below its root. |
 | LMT `reference` of kind `official` | Accepted. |
-| `lens_calib.lens_profile_db_path` | Refused when it is not empty. |
+| `lens_calib.lens_profile_db_path` | Accepted only when it is empty or the built-in database (`DevelopPayload` default, the relative path `src/config/lens_calib`). Each capture with Lens Correction carries the default. Each other path is refused. |
 
 Reason: an absolute path lets a preset make the application open any file, and on Windows a UNC
 path makes the system send the credentials of the user to another computer.
@@ -205,9 +208,12 @@ the PS1 completion record. Each missing range check gets its own issue and its f
 
 - QML shows the preset name, the Grade names, and the tooltip with `textFormat: Text.PlainText`.
   Rich text from a file can load remote content.
-- `Add` and `Save` make the file name from the name: no path separator, no control character, no
-  reserved Windows device name, at most 120 characters. A name that exists gets ` 2`, ` 3`. No
-  operation overwrites a file.
+- The file name is the name plus `.alcpreset`. A name is refused, not changed, when it is empty,
+  starts or ends with a space, ends with a dot, has a path separator, a control character, or one
+  of `<>:"|?*`, is a reserved Windows device name, or is longer than 120 characters. In `Add` and
+  `Save`, a name that exists gets ` 2`, ` 3`. A `Rename` to a name that exists is a conflict. No
+  operation overwrites a file: a write goes to a temporary file and a rename that refuses an
+  existing target.
 - The scan reads the preset folder and its direct subfolders only, follows no link, and stops at
   2000 files with an error.
 
@@ -370,8 +376,9 @@ Current files that change: `app/adjustment_transfer_package_builder.{hpp,cpp}`
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
-| PS1 | Preset file with the safety rules, preset library service with the package cache, folder setting | `app/`, settings QML | None | 1500 to 1900 | planned |
-| PS2 | Versions panel with the preset part, drag in both directions, add, one-time apply, rename, delete, `Save as Preset` | `album_backend`, QML | PS1 | 1500 to 1900 | planned |
+| PS1A | Preset file with the safety rules, `SelectPresetItems`, `LoadJson` audit with its fixes | `app/`, `edit/` models | None | 1700 (actual) | complete |
+| PS1B | Preset library service with the scan and the package cache, folder setting | `app/`, `album_backend`, settings QML | PS1A | 1400 | planned |
+| PS2 | Versions panel with the preset part, drag in both directions, add, one-time apply, rename, delete, `Save as Preset` | `album_backend`, QML | PS1B | 1500 to 1900 | planned |
 | PS3 | Preview images in the preset browser | `app/`, `album_backend`, QML | PS2 | 1100 to 1500 | planned |
 | PS4 | `Apply Preset...` for many photos with previews, automation commands | QML, `album_backend`, `app/thumbnail_service`, automation | PS3 | 1400 to 1800 | planned |
 
@@ -437,14 +444,129 @@ Run `MutatedPresetsNeverCrashReaderOrPastePlanner` in `build/debug-asan` also.
 
 **Exit criteria.**
 
-- [ ] Each test above passes in the debug build.
-- [ ] The mutation test passes under AddressSanitizer.
-- [ ] The completion record holds the `LoadJson` audit table and the issue numbers.
-- [ ] No reader of a preset file exists outside `ReadPresetFile`.
+- [x] Each test above passes in the debug build (`SymbolicLinkPresetIsRefused` skips on an
+      account that cannot make a symbolic link; `JunctionPresetIsRefused` checks the same rule).
+- [x] The mutation test passes under AddressSanitizer.
+- [x] The completion record holds the `LoadJson` audit table and the issue numbers.
+- [x] No reader of a preset file exists outside `ReadPresetFile`.
 
-**Expected diff.** 1500 to 1900 lines.
+**Expected diff.** 1500 to 1900 lines. Actual: about 3100 lines (2200 production, 900 tests), so
+the phase was split into PS1A and PS1B, one pull request each (section 8). Phase issue: #1093.
 
-**Completion record.** Empty.
+**Phase split (2026-11-24).** PS1A: `preset_file`, `SelectPresetItems`, the `LoadJson` audit
+and its fixes (#1094, #1095, #1096, #1097), `PresetFileTest`. PS1B: `preset_library_scan`,
+`PresetLibraryService` with the package cache, the module host entry, the settings tile,
+`PresetLibraryServiceTest`.
+
+**Implementation decisions** (detail that this plan did not specify; each agrees with D1 to D9).
+
+| Item | Decision | Reason |
+| --- | --- | --- |
+| Link rule (3.1) | Windows refuses name-surrogate reparse points only (symbolic links, junctions, mount points); other reparse points, such as cloud file placeholders, are read. POSIX opens with `O_NOFOLLOW` and `O_NONBLOCK` and requires `S_ISREG`. | A placeholder of a synchronized folder is a regular file for the user. The risk of 3.1 is a link to another file. |
+| Depth rule (3.1) | A SAX scan (`nlohmann::json::sax_parse`) checks depth, string and key length, and finite numbers, and stops at the first failure; the JSON value is built after the scan. | A hostile file costs one pass and no deep value is built. |
+| Reference rules (3.3) | Applied to the raw JSON before `ImportDocumentTransfer`; `CheckPresetReferences(package)` applies the same rules for `Save`. | A path fails with `file reference` even when a model loader would also refuse it. |
+| Lens database (3.3) | Empty or the built-in default (`src/config/lens_calib`) is accepted. | Each capture with Lens Correction carries the default; "refused when not empty" refused every such preset. |
+| Count limits (3.2) | Checked on the JSON before the package is built; DRT/Post adjustments also have the limit of 64. | No work for an oversized package. |
+| Names (3.5) | An invalid name is refused, not changed. `Rename` to an existing name is a conflict. | No silent change of a user-typed name. |
+| `Add` of several files | The accepted files are added; each refused file is listed in the result (`kRefused`). The accepted text that the reader returned is written, not the source file again. | A bad file never enters the folder, and a good file is not held back by it. |
+| Write | Temporary file `~alcpreset-<random>.tmp` in the target folder, then `QFile::rename`, which refuses an existing target. | No replace and no partial file. |
+| Operation queue (6.3) | All operations run in request order on one worker. `UseRoot` stores the preference on the worker before the folder changes, so operations queued after it use the new folder. Name and reference checks of `Save`, `Rename`, and `Delete` run on the owner thread first and refuse at once. | `LutLibraryService::ReferenceForPath` is an owner-thread API. |
+| Cache (6.2) | `PackageFor` refuses an id that the inventory does not list, without a file read. `PackageFileReadCount()` counts its reads. | No path outside the folder; a measurable cache. |
+| Item summary (6.1) | Not in `PresetEntry`. PS2 builds it with the list model in `album_backend`. | The summary rows are UI text of the Paste confirmation. |
+| Delete | `PresetLibraryServiceOptions::move_to_trash`, default `QFile::moveToTrash`. | Tests do not write into the trash of the user. |
+| Host | `appModules.presetLibrary`; `PackageServiceFactories::preset_library_options` for tests. The settings tile `PresetSettingsSection` is on the LUT settings page, after the camera profiles tile: title, folder field with Browse, Rescan, error badge. | Same pattern as the DCP folder tile. |
+| Float range (#1097) | `json_util::ToFloat` refuses a number outside the float range; the scalar models, HLS, LMT strength, Mask fields, the AI Mask recipe, and the Grade `mix` use it. | The conversion was undefined behavior. |
+
+##### PS1 `LoadJson` audit (2026-11-24)
+
+Scope: each adjustment type of the builtin catalog for Color Grades and DRT/Post, DRT parameters,
+the Develop fields, geometry, Radial and Linear Masks. Brush Masks are not built by default
+(`ALCEDO_ENABLE_BRUSH_MASK` is `OFF`). A value that sets a size, a count, an index, a selector, or
+a loop bound was traced to its consumer.
+
+| Model | Values | Range check | Result |
+| --- | --- | --- | --- |
+| 12 scalar adjustments | value | `SetValue` clamps | safe; float conversion fixed (#1097) |
+| Sharpen | `radius` (tap count), `amount`, `threshold` | radius 0.1 to 64; taps at most 15 | safe |
+| Clarity, Halation | sigma | from constants and geometry; taps capped | safe |
+| CAT02 | `temperature`, `tint` | finite check, clamp | safe |
+| Curve | point count, x order, finite coordinates | none in `LoadJson` | fixed (#1095) |
+| HLS | bin and table lengths; `h_range_table` divisor | reads stop at 8 bins; kernel `fmaxf(w, 1)` | safe; float conversion fixed (#1097) |
+| ColorWheel | `version` | refused unless absent or 2 | safe |
+| LMT | `strength`, encodings, `reference` | 0 to 1; catalog encodings; reference validated | safe; paths refused by 3.3 |
+| DRT | `method`, spaces, EOTF, presets | unknown value is the default | safe |
+| DRT | `peak_luminance` | none | fixed (#1094): 1 to 10000 nits, else the load fails |
+| DRT film print | stock and table ids; sliders | known ids; slider ranges | safe |
+| Develop `raw_decode` | `ai_denoise.model_version` | 64 lowercase hex digits | safe |
+| Develop `color_temp` | `custom_cct`, `custom_tint` | clamped in the color transform only | fixed (#1096): `RawWhiteBalanceWhite` clamps also |
+| Develop `lens_calib` | `user_scale` (divisor), `target_projection` | finite positive; closed set | safe; database path by 3.3 |
+| Geometry | `crop_rect`, rotation, aspect | clamped; normalized | safe |
+| Radial, Linear Mask | radii, transition (divisors), normal | finite and not negative; kernel guards | safe |
+| Mask ranges | color and luminance ranges, opacity | bounded | safe |
+| Color Grade | `mix` | 0 to 1 | safe; float conversion fixed (#1097) |
+
+Tone values without an upper bound (HLS adjustments, ColorWheel offsets, OpenDRT detail
+parameters) set no size, count, index, or loop bound; very large values give inf or NaN pixels.
+#1097 keeps this item open.
+
+##### PS1A completion record (2026-11-24)
+
+**Status:** complete.
+
+**Primary success call chain:**
+
+```text
+ReadPresetFile(path)
+  -> ReadRegularFileBytes: one handle, link refused, size from the handle (<= 4 MiB)
+  -> ParsePresetText: UTF-8 -> SAX scan (depth 16, strings 256 bytes, finite numbers)
+  -> json::parse -> CountLimitError -> fingerprint present -> PackageJsonReferenceError
+  -> ImportDocumentTransfer (keys, schema, model LoadJson) -> fingerprint equal -> canonical text
+  -> PresetFileReadResult{package, canonical_text}
+
+WritePresetFile(package, path)
+  -> ExportDocumentTransfer(package).dump() -> ParsePresetText (the reader accepts it)
+  -> WritePresetText: temporary file -> QFile::rename (refuses an existing target)
+```
+
+**Primary failure call chain:**
+
+```text
+hostile file (link, 100 MiB, 1000 levels, UNC LUT path, unknown field, stale fingerprint)
+  -> the first failed rule returns PresetFileReadResult{rule, message}; no exception leaves
+  -> no package, no file written; the caller reports the message
+```
+
+**What was proven (executed tests, `build/debug`):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `WrittenPresetReadsBackWithEqualFingerprint`, `WriteRefusesToReplaceAnExistingFile` | `PresetFileTest` | PASS |
+| `PresetAboveSizeLimitIsRefusedBeforeParse`, `PresetDeeperThanDepthLimitIsRefused`, `InvalidUtf8TextIsRefused` | `PresetFileTest` | PASS |
+| `PresetWithoutFingerprintIsRefused`, `NonCanonicalPresetIsRefused` | `PresetFileTest` | PASS |
+| `PresetWithUnknownFieldIsRefused`, `PresetWithUnknownAdjustmentTypeIsRefused` | `PresetFileTest` | PASS |
+| `PresetWithAbsoluteLutPathIsRefused`, `PresetWithUncLutPathIsRefused`, `PresetWithParentPathLutReferenceIsRefused`, `PresetWithLensDatabasePathIsRefused`, `PresetWithForeignLensDatabasePathIsRefusedAndBuiltInPathIsAccepted`, `PresetWithLibraryOrOfficialLutReferenceIsAccepted` | `PresetFileTest` | PASS |
+| `PresetWithNonFiniteNumberIsRefused` (refused as `invalid JSON` by the parser), `PresetWithNumberAboveFloatRangeIsRefused`, `PresetAboveGradeCountLimitIsRefused`, `PresetWithLongStringIsRefused` | `PresetFileTest` | PASS |
+| `SymbolicLinkPresetIsRefused` | `PresetFileTest` | SKIPPED: this Windows account cannot make a symbolic link |
+| `JunctionPresetIsRefused`, `FolderIsNotARegularPresetFile`, `PresetNameRulesRefuseFileSystemNames` | `PresetFileTest` | PASS |
+| `PresetSelectionOmitsGeometryAndLensCorrection` | `PresetFileTest` | PASS |
+| `MutatedPresetsNeverCrashReaderOrPastePlanner` (10000 cases, half with a valid fingerprint; 173 s in debug) | `PresetFileTest` | PASS |
+| `CurveModelTest.LoadRefusesCurvesThatTheSplineSolverRefuses` (#1095), `DrtParamsModelLoad.PeakLuminanceOutsideTheDisplayRangeFailsTheLoadAndKeepsTheValue` (#1094), `RawWhiteBalanceWhiteClampsTheCustomWhiteAsTheColorTransformDoes` (#1096) | `GpuDagModelGraphTest` | PASS |
+
+Commands: `cmd /c "scripts\msvc_env.cmd --build build\debug --target PresetFileTest GpuDagModelGraphTest DocumentTransferTest AdjustmentTransferCatalogTest EditorParameterCatalogTest EditorPipelineCommandServiceTest PipelineHistoryApplierTest alcedo_main --parallel 8"`, then each test binary from its `_runtime` folder.
+Suite totals: `PresetFileTest` 24 passed, 1 skipped; `GpuDagModelGraphTest` 213/213;
+`AdjustmentTransferCatalogTest` 13/13; `EditorParameterCatalogTest` 52/52;
+`EditorPipelineCommandServiceTest` 24/24; `PipelineHistoryApplierTest` 15/15;
+`DocumentTransferTest` 36/37: `TransferPackageCarriesOnlyOwnedDevelopKeysAndNoCaches` fails
+before this change too (the Color Wheel `version` key, #484 and #554).
+
+**AddressSanitizer:** `win_debug_asan` (`build/debug-asan`), target `PresetFileTest`
+only: 24 passed, 1 skipped (`SymbolicLinkPresetIsRefused`), no AddressSanitizer report;
+the run with `MutatedPresetsNeverCrashReaderOrPastePlanner` took 15.6 minutes.
+
+**LOC note:** `preset_file.cpp` 715, `preset_file.hpp` 159, `preset_file_test.cpp` about 530; the
+loader fixes add about 110 lines in `edit/`.
+
+**Remaining gaps:** tone values without an upper bound (#1097, see the audit).
 
 ### PS2: Versions panel, drag, and preset commands
 
