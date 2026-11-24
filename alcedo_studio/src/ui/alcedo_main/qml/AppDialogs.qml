@@ -19,7 +19,7 @@ Item {
     property Item blurSource: null
 
     property alias importDialog: importDialogObj
-    property alias importFolderDialog: importFolderDialogObj
+    property alias importFolderFlow: importFolderFlowObj
     property alias settingsDialog: settingsDialogObj
     property alias adjustmentTransferDialog: adjustmentTransferDialogObj
     property alias adjustmentTransferActions: adjustmentTransferActionsObj
@@ -72,33 +72,25 @@ Item {
         }
     }
 
-    FolderDialog {
-        id: importFolderDialogObj
-        title: qsTr("Select Folder to Import")
-        onAccepted: folderImportConfirmDialogObj.openWith(selectedFolder.toString())
-    }
-
-    FolderImportConfirmDialog {
-        id: folderImportConfirmDialogObj
-        parent: Overlay.overlay
-        theme: host
-        host: root.host
+    // Import Folder (#1078): the system folder dialog, then the Import Folder dialog or the
+    // remembered choice.
+    ImportFolderFlow {
+        id: importFolderFlowObj
+        folders: appModules.folders
+        importExport: appModules.importExport
+        libraryBehavior: appModules.libraryBehavior
+        theme: root.host
         blurSource: root.blurSource
-        onConfirmed: {
-            if (dropTargetFolderId >= 0)
-                appModules.importExport.StartFolderImportToFolderAsUser(dropTargetFolderId)
-            else
-                appModules.importExport.StartFolderImportAsUser()
-        }
     }
 
     // Library file drop (issue #757): files only import at once, as Import Images does; a drop
-    // that holds a folder opens the folder dialog with every dropped item as a scan source.
-    function importDroppedUrls(urls, folderId, collectionName) {
+    // that holds a folder opens the Import Folder dialog with every dropped item as a scan
+    // source and the drop target as the destination.
+    function importDroppedUrls(urls, folderId) {
         if (!urls || urls.length === 0)
             return
         if (appModules.importExport.DropHoldsFolder(urls))
-            folderImportConfirmDialogObj.openWithSources(urls, folderId, collectionName)
+            importFolderFlowObj.beginDrop(urls, folderId)
         else
             appModules.importExport.StartImportToFolder(urls, folderId)
     }
@@ -436,7 +428,7 @@ Item {
                || semanticGenerationDialogObj.opened
                || backgroundTasksDialogObj.opened
                || deleteConfirmDialogObj.opened
-               || folderImportConfirmDialogObj.opened
+               || importFolderFlowObj.opened
                || editorCloseConfirmDialogObj.opened
                || welcomeDialogObj.opened
     }

@@ -301,6 +301,44 @@ void ImportExportHandler::StartFolderImportToFolderAsUser(const int folderUiId) 
   StartImportPaths(paths, true, allowed, std::move(dropped_paths));
 }
 
+void ImportExportHandler::StartFolderImportOfFolderAsUser(const QString& folderUrlOrPath,
+                                                          const int      folderUiId) {
+  if (!UserImportAllowed()) {
+    return;
+  }
+  if (import_running_) {
+    status_->SetTaskState(PL_TEXT("Import already running."), 0, true);
+    return;
+  }
+  // The types that the scan allows by default: the stored selection the dialog opens with.
+  folder_scan_->Start(folderUrlOrPath);
+  status_->SetTaskState(PL_TEXT("Scanning folder..."), 0, false);
+  // One import per scan: another Start or a Cancel gives the scan a new serial number, and the
+  // connection then ends without importing.
+  const auto serial = folder_scan_->ScanSerial();
+  auto       done   = std::make_shared<QMetaObject::Connection>();
+  *done             = connect(folder_scan_, &FolderImportScanModel::ScanStateChanged, this,
+                              [this, serial, folderUiId, done]() {
+                    if (folder_scan_->ScanSerial() != serial) {
+                      disconnect(*done);
+                      return;
+                    }
+                    if (!folder_scan_->ScanFinished()) {
+                      return;
+                    }
+                    disconnect(*done);
+                    if (!folder_scan_->FolderValid()) {
+                      status_->SetTaskState(PL_TEXT("The folder could not be read."), 0, false);
+                      return;
+                    }
+                    if (folder_scan_->AllowedFileCount() == 0) {
+                      status_->SetTaskState(PL_TEXT("No files found in this folder."), 0, false);
+                      return;
+                    }
+                    StartFolderImportToFolderAsUser(folderUiId);
+                  });
+}
+
 void ImportExportHandler::StartFolderImport() {
   if (!folder_scan_->ScanFinished()) {
     status_->SetTaskState(PL_TEXT("The folder is still being scanned."), 0, false);

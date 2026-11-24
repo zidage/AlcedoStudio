@@ -41,7 +41,8 @@ Item {
 
     implicitWidth: 220
     implicitHeight: content.implicitHeight + 2 * padding
-    activeFocusOnTab: true
+    // A disabled card (DESIGN.md "Component states") draws in the muted ink.
+    activeFocusOnTab: enabled
 
     Accessible.role: Accessible.RadioButton
     Accessible.name: title
@@ -114,7 +115,7 @@ Item {
                 Layout.alignment: Qt.AlignVCenter
                 sourceSize: Qt.size(16, 16)
                 source: card.mountAction ? "qrc:/panel_icons/folder-symlink.svg"
-                                         : "qrc:/panel_icons/import.svg"
+                                         : "qrc:/panel_icons/tray-download.svg"
                 color: card.selected ? appTheme.textColor : appTheme.iconColor
             }
 
@@ -123,7 +124,7 @@ Item {
                 Layout.alignment: Qt.AlignVCenter
                 text: card.title
                 elide: Text.ElideRight
-                color: appTheme.textColor
+                color: card.enabled ? appTheme.textColor : appTheme.textMutedColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeTitle
                 font.weight: appTheme.fontWeightStrong
@@ -298,8 +299,8 @@ Item {
 
             ShapePath {
                 fillColor: "transparent"
-                strokeColor: mark.checked ? appTheme.editorListSelectedFillColor
-                                          : appTheme.textMutedColor
+                strokeColor: mark.checked && card.enabled ? appTheme.editorListSelectedFillColor
+                                                          : appTheme.textMutedColor
                 // The path is in 24 x 24 icon coordinates; the scale does not widen the stroke.
                 strokeWidth: 2.4 * 13 / 24
                 capStyle: ShapePath.RoundCap
@@ -316,7 +317,7 @@ Item {
             Layout.alignment: Qt.AlignVCenter
             text: mark.text
             elide: Text.ElideRight
-            color: mark.checked ? appTheme.textColor : appTheme.textMutedColor
+            color: mark.checked && card.enabled ? appTheme.textColor : appTheme.textMutedColor
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeCaption
         }

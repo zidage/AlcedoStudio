@@ -2042,6 +2042,18 @@ Alcedo 将改用 %1。</translation>
         <source>AI Denoise could not be turned off: %1</source>
         <translation>无法关闭 AI 降噪：%1</translation>
     </message>
+    <message>
+        <source>Scanning folder...</source>
+        <translation>正在扫描文件夹…</translation>
+    </message>
+    <message>
+        <source>The folder could not be read.</source>
+        <translation>无法读取该文件夹。</translation>
+    </message>
+    <message>
+        <source>No files found in this folder.</source>
+        <translation>此文件夹中没有文件。</translation>
+    </message>
 </context>
 <context>
     <name>AgentSessionCard</name>
@@ -2605,14 +2617,6 @@ Alcedo 将改用 %1。</translation>
         <translation>导入文件夹...</translation>
     </message>
     <message>
-        <source>Mount Folder...</source>
-        <translation>挂载文件夹...</translation>
-    </message>
-    <message>
-        <source>Mount Folder Here...</source>
-        <translation>在此挂载文件夹...</translation>
-    </message>
-    <message>
         <source>Mount Folder</source>
         <translation>挂载文件夹</translation>
     </message>
@@ -2737,6 +2741,26 @@ Alcedo 将改用 %1。</translation>
     <message>
         <source>Rename</source>
         <translation>重命名</translation>
+    </message>
+    <message>
+        <source>Library</source>
+        <translation>资料库</translation>
+    </message>
+    <message>
+        <source>Disk</source>
+        <translation>磁盘</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>Import...</source>
+        <translation>导入...</translation>
+    </message>
+    <message>
+        <source>Mount...</source>
+        <translation>挂载...</translation>
     </message>
 </context>
 <context>
@@ -6589,6 +6613,14 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <source>No matching collections</source>
         <translation>没有匹配的影集</translation>
     </message>
+    <message>
+        <source>L</source>
+        <translation>i</translation>
+    </message>
+    <message>
+        <source>资</source>
+        <translation>料</translation>
+    </message>
 </context>
 <context>
     <name>ImageInspectorPanel</name>
@@ -7065,6 +7097,14 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <source>Show larger photos</source>
         <translation>显示更大的照片</translation>
     </message>
+    <message>
+        <source>Library</source>
+        <translation>资料库</translation>
+    </message>
+    <message>
+        <source>Disk</source>
+        <translation>磁盘</translation>
+    </message>
 </context>
 <context>
     <name>LoadingSpinner</name>
@@ -7516,6 +7556,14 @@ Create a new layer above it and draw the Mask there?</source>
         <location line="+292"/>
         <source>Could not save edits. Resolve the save error, then quit again.</source>
         <translation>无法保存编辑。请先解决保存错误，然后再退出。</translation>
+    </message>
+    <message>
+        <source>L</source>
+        <translation>i</translation>
+    </message>
+    <message>
+        <source>资</source>
+        <translation>料</translation>
     </message>
 </context>
 <context>
@@ -10330,6 +10378,127 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>No OpenDRT look preset has the id %1.</source>
         <translation>没有 ID 为 %1 的 OpenDRT 外观预设。</translation>
+    </message>
+</context>
+<context>
+    <name>CollectionPickerTree</name>
+    <message>
+        <source>Library</source>
+        <translation>资料库</translation>
+    </message>
+    <message>
+        <source>Search collections</source>
+        <translation>搜索影集</translation>
+    </message>
+    <message>
+        <source>New collection</source>
+        <translation>新建影集</translation>
+    </message>
+    <message>
+        <source>Import to</source>
+        <translation>导入到</translation>
+    </message>
+    <message>
+        <source>Collection Name</source>
+        <translation>影集名称</translation>
+    </message>
+    <message>
+        <source>No matching collections</source>
+        <translation>无匹配的影集</translation>
+    </message>
+</context>
+<context>
+    <name>ImportFolderDialog</name>
+    <message>
+        <source>RAW</source>
+        <translation>RAW</translation>
+    </message>
+    <message>
+        <source>JPEG</source>
+        <translation>JPEG</translation>
+    </message>
+    <message>
+        <source>TIFF</source>
+        <translation>TIFF</translation>
+    </message>
+    <message>
+        <source>PNG</source>
+        <translation>PNG</translation>
+    </message>
+    <message>
+        <source>OpenEXR</source>
+        <translation>OpenEXR</translation>
+    </message>
+    <message>
+        <source>The dropped items could not be read.</source>
+        <translation>无法读取拖入的项目。</translation>
+    </message>
+    <message>
+        <source>The folder could not be read.</source>
+        <translation>无法读取该文件夹。</translation>
+    </message>
+    <message>
+        <source>No files found in the dropped items.</source>
+        <translation>拖入的项目中没有文件。</translation>
+    </message>
+    <message>
+        <source>No files found in this folder.</source>
+        <translation>此文件夹中没有文件。</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>Scanning...</source>
+        <translation>正在扫描…</translation>
+    </message>
+    <message>
+        <source>photos</source>
+        <translation>张</translation>
+    </message>
+    <message>
+        <source>%1 subfolders</source>
+        <translation>%1 个子文件夹</translation>
+    </message>
+    <message>
+        <source>Mount to</source>
+        <translation>挂载到</translation>
+    </message>
+    <message>
+        <source>Import to</source>
+        <translation>导入到</translation>
+    </message>
+    <message>
+        <source>Disk</source>
+        <translation>磁盘</translation>
+    </message>
+    <message>
+        <source>Remember my choice</source>
+        <translation>记住我的选项</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Mount %1 photos</source>
+        <translation>挂载 %1 张</translation>
+    </message>
+    <message>
+        <source>Import %1 photos</source>
+        <translation>导入 %1 张</translation>
+    </message>
+</context>
+<context>
+    <name>ImportFolderFlow</name>
+    <message>
+        <source>Select Folder to Mount</source>
+        <translation>选择要挂载的文件夹</translation>
+    </message>
+    <message>
+        <source>Select Folder to Import</source>
+        <translation>选择要导入的文件夹</translation>
     </message>
 </context>
 </TS>

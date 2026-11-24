@@ -51,15 +51,18 @@ Item {
         || appModules.stats.statsFilterLabel.length > 0
         || appModules.stats.statsFilterRating.length > 0
     // The direct child folders of the shown folder, in the order of the Collections tree. The
-    // library root shows none: the sidebar lists its top-level collections.
+    // Library row shows its collections, not the mounts (#1078); All Photos shows none.
     readonly property var folderSectionRows: {
         const folders = appModules.folders
         const current = folders ? Number(folders.currentFolderId) : 0
-        if (current === 0 || !appModules.project.serviceReady || root.libraryFilterActive) {
+        const libraryRoot = current === 0 && !!folders && folders.libraryRootSelected === true
+        if ((current === 0 && !libraryRoot) || !appModules.project.serviceReady
+                || root.libraryFilterActive) {
             return []
         }
         return CollectionTree.orderRows(folders.folders, false).filter(function(row) {
             return Number(row.folderId) !== 0 && Number(row.parentFolderId) === current
+                   && (!libraryRoot || Number(row.mountId || 0) === 0)
         })
     }
     // A folder with child folders and no photo shows the folder section alone, in place of the
@@ -70,27 +73,45 @@ Item {
                                                && !libraryQueryReplacing
 
     // A click on a folder tile shows that folder; the Collections tree selects and reveals it.
-    // Path of a collection for the header breadcrumb (#1028): All Photos, then each collection
-    // down to the collection itself. Each part is { folderId, name }.
-    function collectionPath(folderId) {
+    // Path of a collection for the header breadcrumb (#1028, #1078): All Photos alone; Library,
+    // then each collection down to the collection itself; for a mounted folder the volume, then
+    // the mount root and each folder below it. Each part is { folderId, name }; folderId 0 is
+    // the Library row, and a negative folderId is a part that shows no view (All Photos itself,
+    // a volume).
+    function collectionPath(folderId, libraryRootSelected) {
+        if (Number(folderId) === 0 && !libraryRootSelected) {
+            return [{ folderId: -1, name: qsTr("All Photos") }]
+        }
         const rows = appModules.folders ? appModules.folders.folders : []
         const byFolderId = CollectionTree.rowsByFolderId(rows)
         const path = []
         let current = byFolderId[String(Number(folderId))]
+        let top = null
         let guard = 0
         while (current && Number(current.folderId) !== 0 && guard < 4096) {
             path.unshift({ folderId: Number(current.folderId), name: String(current.name) })
+            top = current
             current = byFolderId[String(Number(current.parentFolderId))]
             ++guard
         }
-        path.unshift({ folderId: 0, name: qsTr("All Photos") })
+        if (top && Number(top.mountId || 0) > 0) {
+            const volume = String(top.mountVolumeName || top.mountPoint || top.mountVolumeRoot
+                                  || qsTr("Disk"))
+            path.unshift({ folderId: -1, name: volume })
+        } else {
+            path.unshift({ folderId: 0, name: qsTr("Library") })
+        }
         return path
     }
 
     function showChildFolder(folderId) {
         if (appModules.folders && appModules.interactionPolicy.canChangeStateAsUser) {
             folderActivationGuardTimer.restart()
-            appModules.folders.SelectFolder(Number(folderId))
+            if (Number(folderId) === 0) {
+                appModules.folders.SelectLibraryRoot()
+            } else if (Number(folderId) > 0) {
+                appModules.folders.SelectFolder(Number(folderId))
+            }
         }
     }
 
@@ -439,7 +460,8 @@ RowLayout {
                     spacing: appTheme.spaceXs
 
                     readonly property var path: root.collectionPath(
-                        Number(appModules.folders.currentFolderId))
+                        Number(appModules.folders.currentFolderId),
+                        appModules.folders.libraryRootSelected === true)
                     readonly property var shownPath: path.length > 4
                         ? [path[0], null].concat(path.slice(-2))
                         : path
@@ -490,7 +512,8 @@ RowLayout {
                                     id: crumbMouse
                                     anchors.fill: parent
                                     hoverEnabled: true
-                                    enabled: !crumb.last
+                                    enabled: !crumb.last && (crumb.folded
+                                                             || Number(crumb.modelData.folderId) >= 0)
                                     cursorShape: crumb.folded ? Qt.ArrowCursor : Qt.PointingHandCursor
                                     onClicked: {
                                         if (!crumb.folded) {

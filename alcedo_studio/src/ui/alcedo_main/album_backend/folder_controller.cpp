@@ -5,10 +5,12 @@
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 
 #include <QDebug>
+#include <QUrl>
 #include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <optional>
+#include <utility>
 
 #include "app/album_browse_service.hpp"
 #include "app/sleeve_error.hpp"
@@ -282,9 +284,10 @@ auto FolderController::RowImageCount(const ExistingFolderEntry& folder) const ->
   if (!image_counts_loaded_) {
     return -1;
   }
-  // The root row is the library view of the whole project.
+  // The root row is the Library row: the photos directly in the root and in the collections,
+  // without the mount trees (#1076). All Photos reads allPhotosCount.
   if (folder.ui_id_ == 0) {
-    return static_cast<qint64>(project_image_count_);
+    return static_cast<qint64>(library_root_image_count_);
   }
   const auto it = image_count_by_folder_.find(folder.element_id_);
   return it != image_count_by_folder_.end() ? static_cast<qint64>(it->second) : 0;
@@ -321,17 +324,15 @@ void FolderController::RefreshImageCounts() {
           if (error.isEmpty()) {
             ApplyMountSummaries(std::move(summaries));
           }
-          ApplyImageCounts(generation, counts.project_photo_count_,
-                           std::move(counts.folder_photo_counts_), error);
+          ApplyImageCounts(generation, std::move(counts), error);
         },
         Qt::QueuedConnection);
   };
   library_->query_worker().Submit(SearchRequestKind::kFolderCounts, std::move(job));
 }
 
-void FolderController::ApplyImageCounts(std::uint64_t generation, uint64_t project_count,
-                                        std::unordered_map<sl_element_id_t, uint64_t> folder_counts,
-                                        const QString&                                error) {
+void FolderController::ApplyImageCounts(std::uint64_t generation, FolderImageCounts counts,
+                                        const QString& error) {
   if (!library_->query_worker().IsCurrent(SearchRequestKind::kFolderCounts, generation)) {
     // A newer read, or a project close, replaced this one.
     return;
@@ -342,9 +343,10 @@ void FolderController::ApplyImageCounts(std::uint64_t generation, uint64_t proje
     image_counts_loaded_ = false;
     image_count_by_folder_.clear();
   } else {
-    image_counts_loaded_   = true;
-    project_image_count_   = project_count;
-    image_count_by_folder_ = std::move(folder_counts);
+    image_counts_loaded_      = true;
+    project_image_count_      = counts.project_photo_count_;
+    library_root_image_count_ = counts.library_root_photo_count_;
+    image_count_by_folder_    = std::move(counts.folder_photo_counts_);
   }
   RebuildFolderView();
 }
@@ -353,8 +355,9 @@ void FolderController::DropImageCounts() {
   if (library_ != nullptr) {
     library_->query_worker().Invalidate(SearchRequestKind::kFolderCounts);
   }
-  image_counts_loaded_ = false;
-  project_image_count_ = 0;
+  image_counts_loaded_      = false;
+  project_image_count_      = 0;
+  library_root_image_count_ = 0;
   image_count_by_folder_.clear();
   mount_summaries_.clear();
   present_mounted_ids_.clear();
@@ -383,7 +386,9 @@ void FolderController::ApplyFolderSelection(uint folderUiId, bool emitSignal) {
   const auto     it           = nodes_by_path_.find(key);
   const uint32_t next_ui_id   = it != nodes_by_path_.end() ? it->second.ui_id_ : 0;
 
-  const bool     id_changed   = current_folder_ui_id_ != next_ui_id;
+  // A folder other than the root is never the Library row.
+  const bool     root_changed = next_ui_id != 0 && std::exchange(library_root_selected_, false);
+  const bool     id_changed   = current_folder_ui_id_ != next_ui_id || root_changed;
   const bool     path_changed = current_folder_path_ != next_path;
   current_folder_ui_id_       = next_ui_id;
   current_folder_path_        = next_path;
@@ -480,7 +485,23 @@ void FolderController::SelectFolder(uint folderUiId) {
     return;
   }
 
+  library_root_selected_ = false;
   ApplyFolderSelection(folderUiId, true);
+  ReloadSelectedScope();
+}
+
+void FolderController::SelectLibraryRoot() {
+  auto& ph = project_->handler();
+  if (ph.project_loading() || !ph.project()) {
+    return;
+  }
+
+  library_root_selected_ = true;
+  ApplyFolderSelection(0, true);
+  ReloadSelectedScope();
+}
+
+void FolderController::ReloadSelectedScope() {
   if (stats_) stats_->ClearFilters();
   if (search_) search_->ClearSearchState(false);
   library_->ReloadCurrentFolder();
@@ -790,7 +811,46 @@ void FolderController::ClearState() {
   current_folder_path_text_ = album_util::RootPathText();
   current_folder_ui_id_     = 0;
   next_folder_ui_id_        = 1;
+  library_root_selected_    = false;
   DropImageCounts();
+  DismissArrivedVolume();
+}
+
+void FolderController::BindMountScans(MountScanCoordinator* mount_scans) {
+  if (mount_scans_ != nullptr) {
+    disconnect(mount_scans_, &MountScanCoordinator::VolumeWithoutMountArrived, this, nullptr);
+  }
+  mount_scans_ = mount_scans;
+  if (mount_scans_ != nullptr) {
+    connect(mount_scans_, &MountScanCoordinator::VolumeWithoutMountArrived, this,
+            &FolderController::SetArrivedVolume);
+  }
+}
+
+void FolderController::SetArrivedVolume(const QString& volumeName, const QString& mountPoint,
+                                        bool hasDcimDirectory) {
+  const auto root = album_util::InputToPath(mountPoint);
+  if (!root.has_value()) {
+    return;
+  }
+  const auto to_url = [](const std::filesystem::path& path) {
+    return QUrl::fromLocalFile(album_util::PathToQString(path));
+  };
+  arrived_volume_ =
+      QVariantMap{{QStringLiteral("name"), volumeName},
+                  {QStringLiteral("mountPoint"), album_util::MountPointDisplay(*root)},
+                  {QStringLiteral("hasDcim"), hasDcimDirectory},
+                  {QStringLiteral("rootUrl"), to_url(*root)},
+                  {QStringLiteral("dcimUrl"), hasDcimDirectory ? to_url(*root / L"DCIM") : QUrl{}}};
+  emit ArrivedVolumeChanged();
+}
+
+void FolderController::DismissArrivedVolume() {
+  if (arrived_volume_.isEmpty()) {
+    return;
+  }
+  arrived_volume_.clear();
+  emit ArrivedVolumeChanged();
 }
 
 }  // namespace alcedo::ui

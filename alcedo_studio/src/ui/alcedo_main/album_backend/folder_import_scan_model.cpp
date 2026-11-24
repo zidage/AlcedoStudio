@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "utils/file/volume_identity.hpp"
 
 namespace alcedo::ui {
 
@@ -159,6 +160,8 @@ void FolderImportScanModel::Start(const QString& folderUrlOrPath) {
   if (!root_opt.has_value()) {
     StopWorker();
     ClearRows();
+    ClearScanFacts();
+    ++scan_serial_;
     root_.clear();
     folder_path_.clear();
     current_directory_.clear();
@@ -187,6 +190,8 @@ void FolderImportScanModel::StartScan(std::vector<std::filesystem::path> sources
                                       std::filesystem::path root, const bool files_are_dropped) {
   StopWorker();
   ClearRows();
+  ClearScanFacts();
+  ++scan_serial_;
 
   root_        = std::move(root);
   folder_path_ = root_.empty() ? QString{} : album_util::PathToQString(root_);
@@ -208,12 +213,13 @@ void FolderImportScanModel::StartScan(std::vector<std::filesystem::path> sources
     std::filesystem::path current_directory = root;
     auto                  last_post         = Clock::now();
     bool                  any_source_valid  = false;
+    int                   subfolder_count   = 0;
     const auto            post_batch        = [&]() {
       QMetaObject::invokeMethod(
           this,
           [this, scan, entries = std::move(batch),
-           directory = RelativeDirectoryText(current_directory, root)]() mutable {
-            AppendBatch(scan, std::move(entries), directory);
+           directory = RelativeDirectoryText(current_directory, root), subfolder_count]() mutable {
+            AppendBatch(scan, std::move(entries), directory, subfolder_count);
           },
           Qt::QueuedConnection);
       batch.clear();
@@ -226,6 +232,18 @@ void FolderImportScanModel::StartScan(std::vector<std::filesystem::path> sources
         post_batch();
       }
     };
+
+    // The volume of the scan root, for the count line of the Import Folder dialog (#1078).
+    if (!root.empty()) {
+      const auto label = ReadVolumeLabel(root);
+      QMetaObject::invokeMethod(
+          this,
+          [this, scan, name = QString::fromStdString(label.name),
+           mount_point = album_util::MountPointDisplay(label.mount_point)]() mutable {
+            SetVolume(scan, std::move(name), std::move(mount_point));
+          },
+          Qt::QueuedConnection);
+    }
 
     for (const auto& source : sources) {
       if (scan->stop_requested_.load()) {
@@ -259,6 +277,8 @@ void FolderImportScanModel::StartScan(std::vector<std::filesystem::path> sources
         std::error_code file_ec;
         if (it->is_regular_file(file_ec) && !file_ec) {
           add(it->path(), false);
+        } else if (std::error_code dir_ec; it->is_directory(dir_ec) && !dir_ec) {
+          ++subfolder_count;
         }
       }
     }
@@ -282,8 +302,8 @@ void FolderImportScanModel::StartScan(std::vector<std::filesystem::path> sources
     }
     QMetaObject::invokeMethod(
         this,
-        [this, scan, sorted = std::move(unique), any_source_valid]() mutable {
-          FinishScan(scan, std::move(sorted), any_source_valid);
+        [this, scan, sorted = std::move(unique), any_source_valid, subfolder_count]() mutable {
+          FinishScan(scan, std::move(sorted), any_source_valid, subfolder_count);
         },
         Qt::QueuedConnection);
   });
@@ -292,6 +312,8 @@ void FolderImportScanModel::StartScan(std::vector<std::filesystem::path> sources
 void FolderImportScanModel::Cancel() {
   StopWorker();
   ClearRows();
+  ClearScanFacts();
+  ++scan_serial_;
   scanning_      = false;
   scan_finished_ = false;
   folder_valid_  = true;
@@ -366,12 +388,29 @@ bool FolderImportScanModel::AddEntry(Entry entry) {
   return entry.dropped_ || CategoryAllowed(allowed_, category);
 }
 
-void FolderImportScanModel::AppendBatch(const std::shared_ptr<Scan>& scan,
-                                        std::vector<Entry>           batch,
-                                        const QString&               current_directory) {
+void FolderImportScanModel::ClearScanFacts() {
+  subfolder_count_ = 0;
+  volume_name_.clear();
+  volume_mount_point_.clear();
+}
+
+void FolderImportScanModel::SetVolume(const std::shared_ptr<Scan>& scan, QString name,
+                                      QString mount_point) {
   if (scan != active_scan_) {
     return;
   }
+  volume_name_        = std::move(name);
+  volume_mount_point_ = std::move(mount_point);
+  emit ScanStateChanged();
+}
+
+void FolderImportScanModel::AppendBatch(const std::shared_ptr<Scan>& scan, std::vector<Entry> batch,
+                                        const QString& current_directory,
+                                        const int      subfolder_count) {
+  if (scan != active_scan_) {
+    return;
+  }
+  subfolder_count_ = subfolder_count;
   if (!batch.empty()) {
     std::vector<uint32_t> new_rows;
     for (auto& entry : batch) {
@@ -393,11 +432,12 @@ void FolderImportScanModel::AppendBatch(const std::shared_ptr<Scan>& scan,
 }
 
 void FolderImportScanModel::FinishScan(const std::shared_ptr<Scan>& scan,
-                                       std::vector<Entry>           sorted_entries,
-                                       const bool                   folder_valid) {
+                                       std::vector<Entry> sorted_entries, const bool folder_valid,
+                                       const int subfolder_count) {
   if (scan != active_scan_) {
     return;
   }
+  subfolder_count_ = subfolder_count;
   // The worker posted this as its last action; joining only waits for its return.
   if (worker_.joinable()) {
     worker_.join();

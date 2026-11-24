@@ -670,6 +670,74 @@ TEST_F(ImportTests, FolderScanRestartAfterCancelListsOnlyTheNewFolder) {
   }
 }
 
+// Issue #1078: with a remembered Import choice, Import Folder scans the folder and imports it
+// into the row without the dialog. The scan reports the folders below the root and the volume
+// of the root for the count line of the dialog.
+TEST_F(ImportTests, FolderImportWithoutTheDialogImportsAfterTheScan) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto source = temp_dir_ / "remembered_import";
+  WriteTextFiles(source / "a", "a_", 2);
+  WriteTextFiles(source / "b" / "c", "c_", 2);
+  int raw_files = 0;
+  for (const auto& raw : CollectRawTestImages("airplane", 2)) {
+    std::filesystem::copy_file(raw, source / "b" / raw.filename());
+    ++raw_files;
+  }
+  ASSERT_GT(raw_files, 0);
+
+  auto* scan = backend.import_export()->FolderScan();
+  ASSERT_NE(scan, nullptr);
+  backend.import_export()->StartFolderImportOfFolderAsUser(PathToQString(source), 0);
+  // The import starts when the scan ends.
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  QSignalSpy started(backend.import_export(), &ImportExportHandler::ImportStateChanged);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (!backend.import_export()->ImportRunning() &&
+         backend.import_export()->ImportCompleted() == 0 &&
+         std::chrono::steady_clock::now() < deadline) {
+    started.wait(100);
+  }
+  ASSERT_TRUE(backend.import_export()->ImportRunning() ||
+              backend.import_export()->ImportCompleted() > 0);
+  EXPECT_EQ(backend.import_export()->ImportTotal(), raw_files);
+  EXPECT_EQ(scan->SubfolderCount(), 3);
+  EXPECT_FALSE(scan->VolumeMountPoint().isEmpty());
+
+  WaitForImportFinished(backend, 120000);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), raw_files);
+  EXPECT_EQ(backend.import_export()->ImportFailed(), 0);
+}
+
+// Issue #1078: another scan of folderScan drops a pending import without the dialog.
+TEST_F(ImportTests, FolderImportWithoutTheDialogEndsWhenAnotherScanStarts) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto source = temp_dir_ / "dropped_pending_import";
+  std::filesystem::create_directories(source);
+  for (const auto& raw : CollectRawTestImages("airplane", 1)) {
+    std::filesystem::copy_file(raw, source / raw.filename());
+  }
+  const auto other = temp_dir_ / "other_scan";
+  WriteTextFiles(other, "other_", 3);
+
+  auto* scan = backend.import_export()->FolderScan();
+  ASSERT_NE(scan, nullptr);
+  backend.import_export()->StartFolderImportOfFolderAsUser(PathToQString(source), 0);
+  const auto serial = scan->ScanSerial();
+  scan->Start(PathToQString(other));
+  EXPECT_NE(scan->ScanSerial(), serial);
+  WaitForScanFinished(*scan);
+  ASSERT_TRUE(scan->ScanFinished());
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportTotal(), 0);
+  EXPECT_EQ(scan->FileCount(), 3);
+}
+
 TEST_F(ImportTests, FolderImportBeforeScanFinishesDoesNotStartAndMissingFolderIsInvalid) {
   ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));

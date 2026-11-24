@@ -91,6 +91,25 @@ void FolderController::AddMountFields(const ExistingFolderEntry& folder, QVarian
   row.insert(QStringLiteral("mountMissingCount"),
              root ? static_cast<qulonglong>(summary->missing_count) : 0ULL);
   row.insert(QStringLiteral("structureEditable"), !folder.mount_id_.has_value());
+  // The Disk section groups the mounts by volume (#1078): the stored identity, else the mount
+  // point of this session, else the root of the directory path.
+  QString volume_key;
+  QString volume_name;
+  QString mount_point;
+  QString volume_root;
+  if (summary != nullptr) {
+    const auto& record = summary->record;
+    volume_name        = QString::fromStdString(record.volume_name);
+    mount_point        = album_util::MountPointDisplay(summary->volume_mount_point);
+    volume_root        = album_util::MountPointDisplay(record.root_path.root_path());
+    volume_key         = !record.volume_identity.empty()
+                             ? QString::fromStdString(record.volume_identity)
+                             : (!mount_point.isEmpty() ? mount_point : volume_root);
+  }
+  row.insert(QStringLiteral("mountVolumeKey"), volume_key);
+  row.insert(QStringLiteral("mountVolumeName"), volume_name);
+  row.insert(QStringLiteral("mountPoint"), mount_point);
+  row.insert(QStringLiteral("mountVolumeRoot"), volume_root);
 }
 
 auto FolderController::FindMountSummary(mount_id_t mount_id) const -> const MountSummary* {
