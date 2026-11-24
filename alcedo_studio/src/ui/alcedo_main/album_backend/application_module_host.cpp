@@ -268,6 +268,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       project_.get(), library_.get(), import_export_.get(), background_tasks_.get(), this);
   RecordConstruction("AdjustmentTransferController", adjustment_transfer_.get());
   adjustment_transfer_->SetInteractionPolicy(interaction_policy_.get());
+  presets_ = std::make_unique<PresetController>(preset_library_.get(),
+                                                adjustment_transfer_->dialog_model());
+  RecordConstruction("PresetController", presets_.get());
   // Phase 5B/5E: wire runtime first-frame ports, direct presentation, and
   // BackgroundTaskController-backed editor_save registration into the session
   // runtime. The session scheduler accepts intents without completing when
@@ -621,6 +624,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     alcedo::LensCalibrationResolver::PreloadDatabase(alcedo::DevelopPayload{}.lens_profile_db_path);
   });
   adjustment_transfer_->SetEditorSession(editor_session_.get());
+  presets_->SetEditorSession(editor_session_.get());
   connect(adjustment_transfer_.get(), &AdjustmentTransferController::PackageChanged,
           editor_session_.get(), [this]() {
             if (editor_session_) {
@@ -1105,6 +1109,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     RecordDestruction("EditorSessionService", editor_session_runtime_->service.get());
     editor_session_runtime_.reset();
   }
+  destroy(presets_, "PresetController");
   destroy(adjustment_transfer_, "AdjustmentTransferController");
   destroy(nikon_he_recovery_, "NikonHeRecoveryController");
   destroy(export_recipe_, "ExportRecipeBuilder");

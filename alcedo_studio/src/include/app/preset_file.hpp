@@ -133,6 +133,16 @@ struct PresetFileWriteResult {
  */
 [[nodiscard]] auto PresetNameError(std::string_view name) -> std::string;
 
+/**
+ * @brief A valid preset name made from @p label, such as a Version name.
+ *
+ * Replaces each character that PresetNameError refuses (a control character, a path separator,
+ * `<>:"|?*`) with `-`, removes leading and trailing spaces and trailing dots, and shortens the text
+ * to kPresetMaxNameLength. An empty result is `Preset`; a reserved device name gets ` Preset`.
+ * A name that the user types is checked with PresetNameError instead, and never changed.
+ */
+[[nodiscard]] auto PresetNameFromLabel(std::string_view label) -> std::string;
+
 /// File name of the preset @p name: the name plus kPresetFileExtension. @p name must be valid.
 [[nodiscard]] auto PresetFileNameFor(std::string_view name) -> std::filesystem::path;
 

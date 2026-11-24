@@ -54,6 +54,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 #include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
+#include "ui/alcedo_main/album_backend/preset_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_launch_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/raw_import_look_settings_model.hpp"
@@ -90,6 +91,8 @@ class ApplicationModuleHost final : public QObject {
       alcedo::CameraProfileLibraryService* cameraProfiles READ camera_profiles CONSTANT)
   /// Preset folder, its inventory, and its package cache (edit presets plan, PS1).
   Q_PROPERTY(alcedo::PresetLibraryService* presetLibrary READ preset_library CONSTANT)
+  /// Preset browser rows and commands of the Versions panel (edit presets plan, PS2).
+  Q_PROPERTY(PresetController* presets READ presets CONSTANT)
   /// Signed AI model package feed and the AI Mask model set install (AI Models plan, AM1).
   Q_PROPERTY(alcedo::AiModelPackageService* aiModelPackages READ ai_model_packages CONSTANT)
   /// LUT browser rows over lutLibrary; one instance shared by every LUT surface (plan 6.4).
@@ -203,6 +206,7 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto adjustment_transfer() -> AdjustmentTransferController* {
     return adjustment_transfer_.get();
   }
+  [[nodiscard]] auto presets() -> PresetController* { return presets_.get(); }
 
   [[nodiscard]] auto editor_session() -> EditorSessionController* { return editor_session_.get(); }
   [[nodiscard]] auto editor_comparison() -> EditorComparisonController* {
@@ -311,6 +315,8 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<ExportRecipeBuilder>                 export_recipe_;
   std::unique_ptr<NikonHeRecoveryController>           nikon_he_recovery_;
   std::unique_ptr<AdjustmentTransferController>        adjustment_transfer_;
+  /// Reads the Copy dialog model of adjustment_transfer_, so it is destroyed before it.
+  std::unique_ptr<PresetController>                    presets_;
   std::unique_ptr<alcedo::EditorSessionRuntime>        editor_session_runtime_;
   std::shared_ptr<EditorSessionRenderSchedulerPort>    editor_session_scheduler_;
   std::unique_ptr<EditorSessionController>             editor_session_;
