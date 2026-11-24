@@ -1,7 +1,7 @@
 # Edit Presets Plan
 
 - Date: 2026-11-24
-- Status: PS1A implemented (2026-11-24); PS1B to PS4 planned
+- Status: PS1A and PS1B implemented (2026-11-24); PS2 to PS4 planned
 - Tracking issue: #1090
 - Direct prerequisite plans:
   [Phase NM10, Node-aware Adjustment Transfer](../edit/node_mask_editor/phase_nm10_adjustment_transfer_plan.md)
@@ -377,7 +377,7 @@ Current files that change: `app/adjustment_transfer_package_builder.{hpp,cpp}`
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | PS1A | Preset file with the safety rules, `SelectPresetItems`, `LoadJson` audit with its fixes | `app/`, `edit/` models | None | 1700 (actual) | complete |
-| PS1B | Preset library service with the scan and the package cache, folder setting | `app/`, `album_backend`, settings QML | PS1A | 1400 | planned |
+| PS1B | Preset library service with the scan and the package cache, folder setting | `app/`, `album_backend`, settings QML | PS1A | 1400 (actual) | complete |
 | PS2 | Versions panel with the preset part, drag in both directions, add, one-time apply, rename, delete, `Save as Preset` | `album_backend`, QML | PS1B | 1500 to 1900 | planned |
 | PS3 | Preview images in the preset browser | `app/`, `album_backend`, QML | PS2 | 1100 to 1500 | planned |
 | PS4 | `Apply Preset...` for many photos with previews, automation commands | QML, `album_backend`, `app/thumbnail_service`, automation | PS3 | 1400 to 1800 | planned |
@@ -567,6 +567,66 @@ the run with `MutatedPresetsNeverCrashReaderOrPastePlanner` took 15.6 minutes.
 loader fixes add about 110 lines in `edit/`.
 
 **Remaining gaps:** tone values without an upper bound (#1097, see the audit).
+
+##### PS1B completion record (2026-11-24)
+
+**Status:** complete.
+
+**Primary success call chain:**
+
+```text
+ApplicationModuleHost -> PresetLibraryService::Start -> Submit(kScan)
+  -> worker: ScanPresetLibraryRoot(worker_root_) -> ReadPresetFile for each file
+  -> owner: Publish -> inventory_ -> PruneCache -> InventoryChanged, OperationFinished
+
+PresetLibraryService::Save(package, name)
+  -> owner: PresetNameError -> ReplaceLutFilePaths (lut_reference_for_path ->
+     LutLibraryService::ReferenceForPath) -> new fingerprint -> CheckPresetReferences
+  -> worker: FreePresetName (" 2", " 3") -> WritePresetFile -> scan
+  -> owner: Publish {affected_ids: [new id]}
+
+PresetLibraryService::PackageFor(id)
+  -> listed entry -> file size and write time equal to the cached read -> cached package
+  -> else ReadPresetFile -> LRU front (64 packages)
+
+Settings > LUTs and Color Management > Presets
+  -> PresetSettingsSection: FolderDialog -> presetLibrary.useRoot(url)
+  -> worker: is_directory -> scan -> SaveRoot (preference) -> worker_root_
+  -> owner: root_, inventory_, cache cleared -> RootChanged, InventoryChanged
+```
+
+**Primary failure call chain:**
+
+```text
+Save of a LUT outside the LUT library / an invalid name
+  -> Refuse on the owner thread: kRefused / kInvalidRequest, lastError, no worker task, no file
+Add of a hostile file -> ReadPresetFile fails -> not written; result kRefused lists it
+UseRoot of a missing folder -> kRootUnavailable; root, preference, inventory unchanged
+Rename to an existing name -> QFile::rename refuses -> kConflict; both files unchanged
+```
+
+**What was proven (executed tests, `build/debug`):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `ScanListsGroupsAndMarksBadFilesNotAvailable`, `ScanStopsAtFileLimitWithError` | `PresetLibraryServiceTest` | PASS |
+| `PackageForReadsFileOnceUntilFileChanges`, `PackageForRefusesIdThatTheInventoryDoesNotList`, `PackageCacheKeepsMostRecentlyUsedPackages` | `PresetLibraryServiceTest` | PASS |
+| `AddCopiesValidFileAndRefusesBadFile`, `SaveNeverOverwrites`, `SaveRefusesInvalidName` | `PresetLibraryServiceTest` | PASS |
+| `SaveWritesLibraryReferenceForLutLibraryFile`, `SaveRefusesLutOutsideLibrary` | `PresetLibraryServiceTest` | PASS |
+| `RenameAndDeleteUpdateInventory`, `OperationsRunInRequestOrder` | `PresetLibraryServiceTest` | PASS |
+| `UseRootScansNewFolderAndStoresPreference`, `UseRootOfMissingFolderKeepsCurrentFolder` | `PresetLibraryServiceTest` | PASS |
+| `alcedo_main` links with the service; `PresetSettingsSection.qml` compiles (qmlcachegen) | `alcedo_main` | PASS |
+
+Commands: `cmd /c "scripts\msvc_env.cmd --build build\debug --target PresetLibraryServiceTest alcedo_main --parallel 8"`, then `PresetLibraryServiceTest.exe`.
+Suite totals: `PresetLibraryServiceTest` 14/14.
+
+**Manual verification:** the Presets tile in Settings is pure UI; the user checks Browse, Rescan,
+and the error badge in the application.
+
+**LOC note:** `preset_library_service.cpp` 490, `preset_library_service.hpp` 258,
+`preset_library_scan.cpp` 126, `preset_library_service_test.cpp` 369.
+
+**Remaining gaps:** none for PS1B. PS2 adds the item summary of an entry (see the decisions).
 
 ### PS2: Versions panel, drag, and preset commands
 

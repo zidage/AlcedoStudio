@@ -462,6 +462,7 @@ target_link_libraries(AlbumBackendLib
         UpdateService
         LutLibraryService
         LutPackageService
+        PresetLibraryService
         CameraProfileLibraryService
         AiModelPackageService
         AiModelDownloadTaskPublisher
@@ -902,6 +903,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdatesSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LutSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CameraProfileFolderTile.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/PresetSettingsSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/DisplayProfileTile.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelsSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelDownloadStatementDialog.qml"

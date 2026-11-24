@@ -2429,6 +2429,25 @@ Alcedo 将改用 %1。</translation>
     </message>
 </context>
 <context>
+    <name>PresetSettingsSection</name>
+    <message>
+        <source>Choose the preset folder</source>
+        <translation>选择预设文件夹</translation>
+    </message>
+    <message>
+        <source>Presets</source>
+        <translation>预设</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>浏览…</translation>
+    </message>
+    <message>
+        <source>Rescan</source>
+        <translation>重新扫描</translation>
+    </message>
+</context>
+<context>
     <name>DisplayProfileTile</name>
     <message>
         <location filename="../qml/DisplayProfileTile.qml" line="+27"/>

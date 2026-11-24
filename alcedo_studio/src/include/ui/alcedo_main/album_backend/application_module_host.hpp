@@ -20,6 +20,7 @@ class QQmlEngine;
 #include "app/download_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/lut_library_service.hpp"
+#include "app/preset_library_service.hpp"
 #include "app/lut_package_service.hpp"
 #include "app/model_download_service.hpp"
 #include "app/update_service.hpp"
@@ -87,6 +88,8 @@ class ApplicationModuleHost final : public QObject {
   /// DCP library folder and its scans (Settings > LUTs and Color Management).
   Q_PROPERTY(
       alcedo::CameraProfileLibraryService* cameraProfiles READ camera_profiles CONSTANT)
+  /// Preset folder, its inventory, and its package cache (edit presets plan, PS1).
+  Q_PROPERTY(alcedo::PresetLibraryService* presetLibrary READ preset_library CONSTANT)
   /// Signed AI model package feed and the AI Mask model set install (AI Models plan, AM1).
   Q_PROPERTY(alcedo::AiModelPackageService* aiModelPackages READ ai_model_packages CONSTANT)
   /// LUT browser rows over lutLibrary; one instance shared by every LUT surface (plan 6.4).
@@ -149,6 +152,8 @@ class ApplicationModuleHost final : public QObject {
     std::function<alcedo::LutLibraryServiceOptions()>     library_options;
     std::function<alcedo::LutPackageServiceOptions()>     package_options;
     std::function<alcedo::AiModelPackageServiceOptions()> ai_model_package_options;
+    /// Preset library options; the host sets the LUT reference lookup when it has none.
+    std::function<alcedo::PresetLibraryServiceOptions()>  preset_library_options;
   };
 
   explicit ApplicationModuleHost(QObject* parent = nullptr, LifecycleObserver observer = {},
@@ -182,6 +187,9 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto lut_packages() -> alcedo::LutPackageService* { return lut_packages_.get(); }
   [[nodiscard]] auto camera_profiles() -> alcedo::CameraProfileLibraryService* {
     return camera_profiles_.get();
+  }
+  [[nodiscard]] auto preset_library() -> alcedo::PresetLibraryService* {
+    return preset_library_.get();
   }
   [[nodiscard]] auto ai_model_packages() -> alcedo::AiModelPackageService* {
     return ai_model_packages_.get();
@@ -284,6 +292,8 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<alcedo::UpdateService>               updates_;
   std::unique_ptr<alcedo::LutLibraryService>           lut_library_;
   std::unique_ptr<alcedo::LutPackageService>           lut_packages_;
+  /// Saves read LUT references from lut_library_, so it is destroyed before lut_library_.
+  std::unique_ptr<alcedo::PresetLibraryService>        preset_library_;
   std::unique_ptr<alcedo::CameraProfileLibraryService> camera_profiles_;
   std::unique_ptr<ProjectModule>                       project_;
   std::unique_ptr<LibraryModule>                       library_;

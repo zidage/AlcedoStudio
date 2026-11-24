@@ -1120,6 +1120,7 @@ Dialog {
                                 library: appModules.lutLibrary
                                 packageService: appModules.lutPackages
                                 cameraProfiles: appModules.cameraProfiles
+                                presetLibrary: appModules.presetLibrary
                                 textColor: dialog.textColor
                                 mutedTextColor: dialog.mutedTextColor
                                 dividerColor: dialog.dividerColor

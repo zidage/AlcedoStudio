@@ -299,6 +299,20 @@ gtest_discover_tests(PresetFileTest
     PROPERTIES LABELS "ci_core_flow;edit")
 alcedo_register_test_target(PresetFileTest app)
 
+# Preset folder owner: scan, package cache, and file operations (edit_presets_plan.md, PS1).
+add_executable(PresetLibraryServiceTest
+    ${ALCEDO_TEST_ROOT}/app/preset_library_service_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
+target_include_directories(PresetLibraryServiceTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(PresetLibraryServiceTest
+    PRIVATE PresetLibraryService PipelineHistoryApplier EditorPipelineCommandService EditGraph
+            GTest::gtest Qt6::Test)
+gtest_discover_tests(PresetLibraryServiceTest
+    TEST_PREFIX "PresetLibraryServiceTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(PresetLibraryServiceTest app)
+
 # NM10.3 read-only Version catalog: inactive-Version replay with no live-state
 # mutation, backbone ordering, instance identity, aggregate Masks row, DRT/Post
 # ownership, and fail-closed replay errors.

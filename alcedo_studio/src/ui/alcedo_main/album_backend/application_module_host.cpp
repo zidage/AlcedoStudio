@@ -160,6 +160,22 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
         std::make_unique<alcedo::LutPackageService>(std::move(lut_package_options), *lut_library_);
   }
   RecordConstruction("LutPackageService", lut_packages_.get());
+  // Scans the preset folder on its worker (edit presets plan, PS1). A saved preset refers to a
+  // LUT of the LUT library by its library reference (plan 3.3).
+  {
+    alcedo::PresetLibraryServiceOptions preset_options =
+        package_services.preset_library_options ? package_services.preset_library_options()
+                                                : alcedo::PresetLibraryServiceOptions{};
+    if (!preset_options.lut_reference_for_path) {
+      preset_options.lut_reference_for_path = [library = lut_library_.get()](
+                                                  const std::filesystem::path& path) {
+        return library->ReferenceForPath(path);
+      };
+    }
+    preset_library_ = std::make_unique<alcedo::PresetLibraryService>(std::move(preset_options));
+  }
+  RecordConstruction("PresetLibraryService", preset_library_.get());
+  preset_library_->Start();
   // Reads the DCP folder setting and starts the first scan on its worker (DCP plan C2).
   camera_profiles_ = std::make_unique<alcedo::CameraProfileLibraryService>();
   RecordConstruction("CameraProfileLibraryService", camera_profiles_.get());
@@ -972,6 +988,9 @@ void ApplicationModuleHost::ShutdownModules() {
     if (ai_model_packages_) {
       ai_model_packages_->Shutdown();
     }
+    if (preset_library_) {
+      preset_library_->Shutdown();
+    }
     if (lut_library_) {
       lut_library_->Shutdown();
     }
@@ -1107,6 +1126,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   RemovePendingWorkspace();
   destroy(camera_profiles_, "CameraProfileLibraryService");
   destroy(lut_packages_, "LutPackageService");
+  destroy(preset_library_, "PresetLibraryService");
   destroy(lut_library_, "LutLibraryService");
   destroy(updates_, "UpdateService");
   destroy(model_download_service_, "ModelDownloadService");
