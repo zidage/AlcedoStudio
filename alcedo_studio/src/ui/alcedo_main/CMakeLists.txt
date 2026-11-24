@@ -991,6 +991,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskRangeSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/RangeSelectorBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAiDenoiseErrorCard.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ViewportRenderAlert.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAiMaskPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorScopePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorTonePanel.qml"

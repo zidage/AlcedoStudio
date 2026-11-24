@@ -11,7 +11,7 @@ Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
 `AdjustmentSlider.qml`, `AlcedoSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
 `ThemeSwitch.qml`, `SkeletonBlock.qml`, `StaggeredGridLoader.qml`,
-`StaggeredGridMark.qml`, `AlertBadge.qml`, `AlcedoScrollBar.qml`
+`StaggeredGridMark.qml`, `AlertBadge.qml`, `AlcedoScrollBar.qml`, `ViewportRenderAlert.qml`
 
 Per-file decisions: `docs/VI/README.md`. That catalog specializes this global
 system for individual QML files and is updated with each approved visual change.
@@ -71,6 +71,7 @@ Monospace (`monoFontFamily`, DM Mono) is limited to these surfaces:
 | Transaction card hash | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` per row |
 | Transaction before/after | `monoFontFamily` + `fontSizeBody` | Delta value line (`0 → +0.35`) |
 | Adjustment header EXIF tokens | `monoFontFamily` + `fontSizeCaption` | Four equal-width cells: `100mm`, `f2.8`, `1/500s`, `ISO 100` |
+| Viewport render alert detail | `monoFontFamily` + `fontSizeCaption` | The raw error text under Show Details (paths, error codes) |
 
 Version and transaction **titles**, times, and section chrome stay on
 `uiFontFamily`. The selected node display name in the adjustment header also stays
@@ -127,6 +128,12 @@ This rule applies to every new or changed message. Existing `dangerColor` text
 in files a change does not touch has not been converted yet; convert it when
 the file is next changed. `dangerColor` itself remains the token for
 destructive buttons, failure status lamps, and error borders.
+
+The viewport render alert (`ViewportRenderAlert.qml`, below) is the one
+exception, chosen by the user for #1056: an error that stops the render of the
+open photo blurs the whole viewport, so the photo-off icon, the title, and the
+neutral text on the blur carry the state, and the message is muted secondary
+text.
 
 ### Hard ban: unrequested status dots
 
@@ -1162,6 +1169,40 @@ cream tones.
 | `maskCoverageTintColor` | `#FF5050` (light red, every theme) | Coverage tint of the viewport composite |
 | `maskCoverageTintOpacity` | 0.5 | Overlay opacity at full coverage |
 
+### Viewport render alert
+
+An error that stops the render of the open photo (the AI Denoise errors of #1050
+first) is shown by `ViewportRenderAlert.qml` over the whole viewport (#1056).
+`BlurredOverlay` blurs the viewport stage and dims it with
+`viewportAlertScrimColor`; a centered column in the style of the workspace empty
+state stands on it, with no card:
+
+| Part | Tokens |
+| --- | --- |
+| Column | `viewportAlertWidth` (380), at most the viewport width less 2 x `spaceLg` |
+| Icon | `photo-off.svg`, `iconOpticalSize`, `viewportAlertSecondaryTextColor` |
+| Title | `headlineFontFamily`, `fontSizeHeadline`, `fontWeightHeading`, `textColor`, centered, wraps; `spaceMd` above |
+| Message | One short translated sentence: `fontSizeTitle`, `viewportAlertSecondaryTextColor`, centered; `spaceXs` above |
+| Show Details | Body text and `chevron-right.svg` (`layerIconGlyphSize`, turns 90 degrees over `motionFadeMs` when open) in `viewportAlertSecondaryTextColor`, `textColor` on hover; `spaceMd` above |
+| Detail | `viewportAlertDetailFillColor` well, 1 px `glassStrokeColor`, `controlRadius`, `spaceSm` / `spaceMd` padding; the raw error text in `monoFontFamily` + `fontSizeCaption` + `textColor`, selectable, wraps anywhere; after `viewportAlertDetailMaxLines` (8) lines it scrolls with an `AlcedoScrollBar` that stays shown |
+| Copy | `clipboard.svg` at the top right of the well (`layerIconHitSize` / `layerIconGlyphSize`); copies the whole detail; the tooltip reads "Copied" for `viewportAlertCopiedMs` |
+| Buttons | `DialogActionButton`, `viewportAlertButtonHeight` (32), `controlRadiusSmall`, `fontSizeBody`, centered; the main action is `light` and stands at the right, a second action is `normal`; `spaceLg` above |
+
+The alert takes the pointer and the wheel of the whole viewport. Show Details
+starts closed for each new error and stays open while the same error is shown
+again. The title and the message come from the caller in the language of the UI;
+the detail is the raw error text in full.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `viewportAlertWidth` | 380 | Width of the column |
+| `viewportAlertButtonHeight` | 32 | Height of the action buttons |
+| `viewportAlertDetailMaxLines` | 8 | Detail lines before the well scrolls |
+| `viewportAlertCopiedMs` | 1500 | Time the Copy tooltip reads "Copied" |
+| `viewportAlertScrimColor` | black at 140/255 | Dim over the blurred viewport; keeps white text readable over a bright photo |
+| `viewportAlertSecondaryTextColor` | `textColor` at 170/255 | Icon, message, Show Details, Copy |
+| `viewportAlertDetailFillColor` | black at 97/255 | Detail well |
+
 ### AI Mask tool panel
 
 `EditorAiMaskPanel.qml` covers the adjustment pages while an AI Mask edit is
@@ -1676,6 +1717,7 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | `AppMenuItem.qml` | Shared dark menu row (state gutter, wrapping label, sub-menu arrow, hover wash) |
 | `AppMenuSeparator.qml` | Shared 1 px menu group divider |
 | `AlertBadge.qml` | Warning and error message: wrapped white caption text on an `alertBadgeFillColor` badge; hidden while empty |
+| `ViewportRenderAlert.qml` | Error that stops the render of the open photo (#1056): blurs and dims the editor viewport and shows a centered column; see "Viewport render alert". The caller maps its error to `title`, `message`, `detail`, and one or two actions. `EditorAiDenoiseErrorCard.qml` uses it |
 | `SkeletonBlock.qml` | Content placeholder: `bgBaseColor` block with the moving `hoverColor` band (Motion); `animated: false` draws a static tile |
 | `StaggeredGridLoader.qml` | Library loading: a grid of rounded tiles with a diagonal wave (Motion, "Library loading"); `rows: 0` fills the height as a placeholder grid, a fixed 3 x 3 grid with `scaleDepth` is the compact mark |
 | `StaggeredGridMark.qml` | The compact 3 x 3 staggered grid as one shader quad on the shared `appTheme.loadingWavePhase` clock: the loading mark of a photo (Library card, justified tile, Editor filmstrip card) and of the Library over a kept result |

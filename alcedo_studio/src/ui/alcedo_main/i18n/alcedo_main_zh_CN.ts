@@ -5117,6 +5117,41 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <source>Turn Off AI Denoise</source>
         <translation>关闭 AI 降噪</translation>
     </message>
+    <message>
+        <source>The model file is not in the AI model folder.</source>
+        <translation>AI 模型文件夹中没有该模型文件。</translation>
+    </message>
+    <message>
+        <source>This photo would take too long on this GPU.</source>
+        <translation>此照片在此 GPU 上耗时过长。</translation>
+    </message>
+    <message>
+        <source>AI Denoise supports Bayer RAW photos only.</source>
+        <translation>AI 降噪仅支持 Bayer RAW 照片。</translation>
+    </message>
+    <message>
+        <source>The model stopped while processing this photo.</source>
+        <translation>模型处理此照片时出错。</translation>
+    </message>
+</context>
+<context>
+    <name>ViewportRenderAlert</name>
+    <message>
+        <source>Hide Details</source>
+        <translation>隐藏详细信息</translation>
+    </message>
+    <message>
+        <source>Show Details</source>
+        <translation>显示详细信息</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>复制</translation>
+    </message>
+    <message>
+        <source>Copied</source>
+        <translation>已复制</translation>
+    </message>
 </context>
 <context>
     <name>EditorRawDecodePanel</name>
