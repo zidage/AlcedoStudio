@@ -148,6 +148,13 @@ alcedo_add_automation_test(AutomationAdjustmentCommandsTest
     LABEL ci_automation_flow
     CATEGORIES ci_automation)
 
+# presets.list, presets.save, and presets.apply (edit presets plan, PS4B).
+alcedo_add_automation_test(AutomationPresetCommandsTest
+    SOURCES automation_preset_commands_test.cpp
+    LIBRARIES AutomationHostLib
+    LABEL ci_automation_flow
+    CATEGORIES ci_automation)
+
 # lut.list through the command registry, with a temporary LUT library root.
 alcedo_add_automation_test(AutomationLutCommandsTest
     SOURCES automation_lut_commands_test.cpp

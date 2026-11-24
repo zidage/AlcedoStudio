@@ -8,6 +8,7 @@
 #include <QString>
 #include <QStringList>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <list>
@@ -118,6 +119,9 @@ class PresetLibraryService final : public QObject {
     std::string              message;
     /// Save, Add, and Rename: ids of the new or renamed preset files.
     std::vector<std::string> affected_ids;
+    /// The request of the operation (LastSubmittedRequest after its call); 0 for a refusal on
+    /// the calling thread.
+    std::uint64_t            request = 0;
   };
 
   explicit PresetLibraryService(PresetLibraryServiceOptions options, QObject* parent = nullptr);
@@ -137,6 +141,14 @@ class PresetLibraryService final : public QObject {
   [[nodiscard]] auto    last_error() const -> QString { return last_error_; }
   [[nodiscard]] auto    entry_count() const -> int { return static_cast<int>(Entries().size()); }
   [[nodiscard]] auto    LastResult() const -> const OperationResult& { return last_result_; }
+  /**
+   * @brief The request of the last operation that this thread queued, from 1.
+   *
+   * The worker runs the operations in request order, so a caller that queues one (an automation
+   * save) can find its own completion among those of other callers: the OperationFinished whose
+   * LastResult().request is this value.
+   */
+  [[nodiscard]] auto    LastSubmittedRequest() const -> std::uint64_t { return last_request_; }
 
   /// The published entries in id order. Valid until the next InventoryChanged.
   [[nodiscard]] auto    Entries() const -> const std::vector<PresetEntry>& {
@@ -245,6 +257,7 @@ class PresetLibraryService final : public QObject {
   std::list<CachedPackage>    cache_;
   std::size_t                 package_file_reads_ = 0;
   std::size_t                 pending_operations_ = 0;
+  std::uint64_t               last_request_       = 0;
   OperationResult             last_result_;
   QString                     last_error_;
   bool                        shut_down_ = false;
