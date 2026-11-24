@@ -201,7 +201,10 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     return request;
   }
   if (requested_render_type == RenderType::THUMBNAIL) {
-    presentation_mode = FramePresentationMode::ViewportTransformed;
+    presentation_mode    = FramePresentationMode::ViewportTransformed;
+    // Empty for a thumbnail; a preview render of a library photo (ThumbnailService::RenderPreview)
+    // sets the SDR encoding of a browser tile for an HDR document.
+    request.output_color = options_.export_output_color_;
     finish(desc.decode_res_, true, ExecutorRole::Batch,
            static_cast<int>(desc.max_edge_), false, std::nullopt);
     return request;

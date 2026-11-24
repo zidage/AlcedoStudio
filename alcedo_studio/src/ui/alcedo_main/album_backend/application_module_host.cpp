@@ -52,6 +52,7 @@
 #include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/justified_layout_model.hpp"
+#include "ui/alcedo_main/album_backend/library_preset_preview_source.hpp"
 #include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
@@ -271,6 +272,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   presets_ = std::make_unique<PresetController>(preset_library_.get(),
                                                 adjustment_transfer_->dialog_model());
   RecordConstruction("PresetController", presets_.get());
+  // Apply Preset to library photos takes the multi-target Paste (edit presets plan, PS4).
+  presets_->SetAdjustmentTransfer(adjustment_transfer_.get());
   // Phase 5B/5E: wire runtime first-frame ports, direct presentation, and
   // BackgroundTaskController-backed editor_save registration into the session
   // runtime. The session scheduler accepts intents without completing when
@@ -704,6 +707,17 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   preset_preview_->SetLibrary(preset_library_.get());
   preset_preview_->SetEditorSession(editor_session_.get());
   RecordConstruction("PresetPreviewController", preset_preview_.get());
+  // The previews of the Apply Preset dialog on its first library photo (plan PS4, step 3), on the
+  // thumbnail executors of the open project. A provider of its own: the display ids of the two
+  // controllers are independent.
+  preset_dialog_preview_ = std::make_unique<PresetPreviewController>();
+  preset_dialog_preview_->SetImageStore(SharedPresetDialogPreviewImageStore());
+  preset_dialog_preview_->SetOwnedSource(std::make_unique<LibraryPresetPreviewSource>(
+      preset_library_.get(),
+      [project = project_.get()] { return project->handler().pipeline_service(); },
+      [project = project_.get()] { return project->handler().thumbnail_service(); }));
+  preset_dialog_preview_->SetLibrary(preset_library_.get());
+  RecordConstruction("PresetPreviewController", preset_dialog_preview_.get());
   workspace_router_ = std::make_unique<WorkspaceRouter>(editor_session_.get(), this);
   workspace_router_->SetInteractionPolicy(interaction_policy_.get());
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
@@ -1094,6 +1108,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(library_behavior_, "LibraryBehaviorPreferences");
   destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");
+  destroy(preset_dialog_preview_, "PresetPreviewController");
   destroy(preset_preview_, "PresetPreviewController");
   destroy(lut_preview_, "LutPreviewController");
   destroy(lut_target_, "LutLibraryController");
@@ -1184,6 +1199,8 @@ void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
                            new BrowserPreviewImageProvider(SharedLutPreviewImageStore()));
   engine->addImageProvider(QString::fromUtf8(kPresetPreviewImageProviderId),
                            new BrowserPreviewImageProvider(SharedPresetPreviewImageStore()));
+  engine->addImageProvider(QString::fromUtf8(kPresetDialogPreviewImageProviderId),
+                           new BrowserPreviewImageProvider(SharedPresetDialogPreviewImageStore()));
   if (editor_placeholder_image_) {
     engine->addImageProvider(QString::fromUtf8(kEditorPlaceholderImageProviderId),
                              new EditorPlaceholderImageProvider(editor_placeholder_image_));
@@ -1212,6 +1229,9 @@ void ApplicationModuleHost::AttachDisplayWindow(QWindow* window) {
   }
   if (preset_preview_) {
     preset_preview_->SetDisplayWindow(window);
+  }
+  if (preset_dialog_preview_) {
+    preset_dialog_preview_->SetDisplayWindow(window);
   }
   if (library_) {
     library_->SetDisplayWindow(window);

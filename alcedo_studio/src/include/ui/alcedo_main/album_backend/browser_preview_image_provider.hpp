@@ -20,6 +20,8 @@ namespace alcedo::ui {
 inline constexpr const char* kLutPreviewImageProviderId    = "alcedo-lut-preview";
 /// Provider of the preset browser previews (edit presets plan, PS3).
 inline constexpr const char* kPresetPreviewImageProviderId = "alcedo-preset-preview";
+/// Provider of the preset previews of the Apply Preset dialog (edit presets plan, PS4).
+inline constexpr const char* kPresetDialogPreviewImageProviderId = "alcedo-preset-dialog-preview";
 
 /**
  * @brief Display table of the browser tile previews that tiles show now: one table per image
@@ -88,5 +90,8 @@ class BrowserPreviewImageProvider final : public QQuickImageProvider {
 [[nodiscard]] auto SharedLutPreviewImageStore() -> std::shared_ptr<BrowserPreviewImageStore>;
 /// The store that the application preset preview provider reads.
 [[nodiscard]] auto SharedPresetPreviewImageStore() -> std::shared_ptr<BrowserPreviewImageStore>;
+/// The store that the application preset dialog preview provider reads.
+[[nodiscard]] auto SharedPresetDialogPreviewImageStore()
+    -> std::shared_ptr<BrowserPreviewImageStore>;
 
 }  // namespace alcedo::ui

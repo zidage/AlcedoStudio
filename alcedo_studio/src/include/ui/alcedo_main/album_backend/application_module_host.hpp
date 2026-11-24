@@ -104,6 +104,8 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(LutPreviewController* lutPreview READ lut_preview CONSTANT)
   /// Preset browser previews of the open photo (edit presets plan, PS3).
   Q_PROPERTY(PresetPreviewController* presetPreview READ preset_preview CONSTANT)
+  /// Preset previews of the first library photo of the Apply Preset dialog (plan, PS4).
+  Q_PROPERTY(PresetPreviewController* presetDialogPreview READ preset_dialog_preview CONSTANT)
   Q_PROPERTY(SemanticGenerationController* semanticGeneration READ semantic_generation CONSTANT)
   Q_PROPERTY(
       alcedo::AiProviderProfileController* aiProviderProfiles READ ai_provider_profiles CONSTANT)
@@ -227,6 +229,9 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto lut_target() -> LutLibraryController* { return lut_target_.get(); }
   [[nodiscard]] auto lut_preview() -> LutPreviewController* { return lut_preview_.get(); }
   [[nodiscard]] auto preset_preview() -> PresetPreviewController* { return preset_preview_.get(); }
+  [[nodiscard]] auto preset_dialog_preview() -> PresetPreviewController* {
+    return preset_dialog_preview_.get();
+  }
   [[nodiscard]] auto workspace_router() -> WorkspaceRouter* { return workspace_router_.get(); }
   [[nodiscard]] auto editor_behavior() -> EditorBehaviorPreferences* {
     return editor_behavior_.get();
@@ -335,6 +340,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<LutLibraryController>                lut_target_;
   std::unique_ptr<LutPreviewController>                lut_preview_;
   std::unique_ptr<PresetPreviewController>             preset_preview_;
+  std::unique_ptr<PresetPreviewController>             preset_dialog_preview_;
   std::unique_ptr<WorkspaceRouter>                     workspace_router_;
   std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
   std::unique_ptr<LibraryBehaviorPreferences>          library_behavior_;

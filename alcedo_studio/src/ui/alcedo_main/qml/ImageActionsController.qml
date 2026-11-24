@@ -14,6 +14,7 @@ Item {
     property var selectionState: null
     property var imageContextMenu: null
     property var adjustmentTransferDialog: null
+    property var applyPresetDialog: null
     property var deleteConfirmDialog: null
 
     property var pendingDeleteTargets: []
@@ -710,5 +711,24 @@ Item {
         adjustmentTransferDialog.mode = "copy"
         adjustmentTransferDialog.sourceTitle = result.sourceTitle ? String(result.sourceTitle) : ""
         adjustmentTransferDialog.open()
+    }
+
+    // Apply Preset... of the image menu (edit presets plan 2.3): the targets of Paste
+    // Adjustments. A Paste that the policy blocks leaves the dialog closed and shows the reason.
+    function requestApplyPreset() {
+        const targets = root.pendingAdjustmentPasteTargets
+        if (!applyPresetDialog || !targets || targets.length === 0) {
+            return
+        }
+        const policy = appModules.interactionPolicy
+        if (policy && policy.canPasteAdjustments !== true) {
+            const reason = String(policy.pasteAdjustmentsReason || "")
+            if (reason.length > 0) {
+                host.showSnackbar(reason)
+            }
+            return
+        }
+        applyPresetDialog.targets = targets
+        applyPresetDialog.open()
     }
 }

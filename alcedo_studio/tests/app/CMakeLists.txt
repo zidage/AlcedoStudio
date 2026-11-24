@@ -1100,7 +1100,8 @@ alcedo_register_test_target(ExecutorIsolationTest app)
 add_executable(ThumbnailCommittedRenderTest ${ALCEDO_TEST_ROOT}/app/thumbnail_committed_render_test.cpp)
 target_include_directories(ThumbnailCommittedRenderTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ThumbnailCommittedRenderTest ThumbnailService SemanticInputImageService
-  ProjectService ImportService EditorWorkingDocument GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  ProjectService ImportService EditorWorkingDocument BrowserPreviewImage AdjustmentTransferService
+  EditorPipelineCommandService GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(ThumbnailCommittedRenderTest TEST_PREFIX "ThumbnailCommittedRenderTest.")
 alcedo_register_test_target(ThumbnailCommittedRenderTest app)
 

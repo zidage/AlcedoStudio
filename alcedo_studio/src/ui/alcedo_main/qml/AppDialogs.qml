@@ -25,6 +25,7 @@ Item {
     property alias settingsDialog: settingsDialogObj
     property alias adjustmentTransferDialog: adjustmentTransferDialogObj
     property alias adjustmentTransferActions: adjustmentTransferActionsObj
+    property alias applyPresetDialog: applyPresetDialogObj
     property alias imageContextMenu: imageContextMenuObj
     property alias nikonHeRecoveryDialog: nikonHeRecoveryDialogObj
     property alias semanticGenerationDialog: semanticGenerationDialogObj
@@ -153,6 +154,22 @@ Item {
         }
     }
 
+    // Apply Preset... of the image menu (edit presets plan 2.3). A started apply reports its
+    // library targets through onPasteFinished below, as Paste Adjustments does.
+    ApplyPresetDialog {
+        id: applyPresetDialogObj
+        blurSource: root.blurSource
+        cornerRadius: host.windowCornerRadius
+        presets: appModules.presets
+        editorPreview: appModules.presetPreview
+        libraryPreview: appModules.presetDialogPreview
+        editorSession: appModules.editorSession
+        onMessageRequested: function(message) {
+            host.showSnackbar(message)
+        }
+        onClosed: host.pendingAdjustmentPasteTargets = []
+    }
+
     // Save as Preset of the Copy dialog: the snackbar names the saved preset or the failure.
     // The Versions panel reports its own preset operations.
     Connections {
@@ -271,6 +288,11 @@ Item {
                          && host.pendingAdjustmentPasteTargets.length > 0
             },
             {
+                id: "apply-preset",
+                label: qsTr("Apply Preset..."),
+                enabled: host.pendingAdjustmentPasteTargets.length > 0
+            },
+            {
                 id: "delete",
                 label: Number(appModules.folders.currentFolderId) === 0 ? qsTr("Delete") : qsTr("Remove from Album"),
                 // Blocked while a running task holds a DeleteImages lock on the
@@ -308,6 +330,10 @@ Item {
             }
             if (actionId === "paste-adjustments") {
                 adjustmentTransferActionsObj.requestPasteAdjustments()
+                return
+            }
+            if (actionId === "apply-preset") {
+                root.imageActionsController.requestApplyPreset()
                 return
             }
             if (actionId === "delete") {
@@ -448,6 +474,7 @@ Item {
     function anyDialogOpened() {
         return settingsDialogObj.opened
                || adjustmentTransferDialogObj.opened
+               || applyPresetDialogObj.opened
                || nikonHeRecoveryDialogObj.opened
                || semanticGenerationDialogObj.opened
                || backgroundTasksDialogObj.opened

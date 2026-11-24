@@ -301,6 +301,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/preset_list_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/preset_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/preset_preview_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_preset_preview_source.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/controllers/image_controller.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/application_module_host.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_module.hpp"
@@ -407,6 +408,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/preset_list_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/preset_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/preset_preview_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/library_preset_preview_source.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/controllers/image_controller.hpp"
 )
 
@@ -1006,6 +1008,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorComparisonView.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorComparisonPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentStack.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ApplyPresetDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentHeader.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LockedNodeMaskPromptDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDragSlider.qml"

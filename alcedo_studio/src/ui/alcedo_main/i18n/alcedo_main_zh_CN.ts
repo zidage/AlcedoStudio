@@ -1236,6 +1236,10 @@
 <context>
     <name>Alcedo</name>
     <message>
+        <source>Paste is unavailable.</source>
+        <translation>粘贴不可用。</translation>
+    </message>
+    <message>
         <source>The preset library is unavailable.</source>
         <translation>预设库不可用。</translation>
     </message>
@@ -2133,6 +2137,10 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>AppDialogs</name>
     <message>
+        <source>Apply Preset...</source>
+        <translation>应用预设...</translation>
+    </message>
+    <message>
         <source>Preset saved.</source>
         <translation>预设已存储。</translation>
     </message>
@@ -2462,6 +2470,45 @@ Alcedo 将改用 %1。</translation>
     <message>
         <source>Rescan</source>
         <translation>重新扫描</translation>
+    </message>
+</context>
+<context>
+    <name>ApplyPresetDialog</name>
+    <message>
+        <source>The preset cannot be applied</source>
+        <translation>无法应用预设</translation>
+    </message>
+    <message>
+        <source>Apply Preset</source>
+        <translation>应用预设</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>Open File...</source>
+        <translation>打开文件...</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Apply</source>
+        <translation>应用</translation>
+    </message>
+    <message>
+        <source>Apply Preset File</source>
+        <translation>应用预设文件</translation>
+    </message>
+    <message>
+        <source>Alcedo presets (*.alcpreset)</source>
+        <translation>Alcedo 预设 (*.alcpreset)</translation>
+    </message>
+    <message>
+        <source>All Files (*)</source>
+        <translation>所有文件 (*)</translation>
     </message>
 </context>
 <context>

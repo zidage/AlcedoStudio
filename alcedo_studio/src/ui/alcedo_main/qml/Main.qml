@@ -499,6 +499,7 @@ ApplicationWindow {
         imageActionsController.selectionState = selectionStateObj
         imageActionsController.imageContextMenu = appDialogs.imageContextMenu
         imageActionsController.adjustmentTransferDialog = appDialogs.adjustmentTransferDialog
+        imageActionsController.applyPresetDialog = appDialogs.applyPresetDialog
         imageActionsController.deleteConfirmDialog = appDialogs.deleteConfirmDialog
         projectLaunchController.welcomeDialog = appDialogs.welcomeDialog
         projectLaunchController.start()

@@ -28,9 +28,11 @@
 #include <utility>
 #include <vector>
 
+#include "app/browser_preview_render.hpp"
 #include "app/editor_working_document.hpp"
 #include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
+#include "app/preset_preview_image.hpp"
 #include "app/project_service.hpp"
 #include "app/semantic_input_image_service.hpp"
 #include "app/thumbnail_service.hpp"
@@ -50,6 +52,7 @@
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
+#include "support/document_transfer_test_support.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
 #include "support/test_temp_directory.hpp"
 #include "type/type.hpp"
@@ -548,6 +551,92 @@ TEST_F(ThumbnailCommittedRenderTest, DiskCacheEntriesAreLabelledWithTheRenderedC
   EXPECT_LT(committed_error, kJpegDifference) << "the head label holds the committed pixels";
 
   pipelines->ReleaseEditorLease(ids.first);
+}
+
+// Edit presets plan PS4 (step 3): the Apply Preset dialog renders a preset on a library photo on
+// the thumbnail executors. The preview is the preset applied to the import root with the sensor
+// settings of the active Version; the memory and disk caches of the thumbnails keep their entries.
+TEST_F(ThumbnailCommittedRenderTest, LibraryPreviewRenderDoesNotWriteThumbnailCache) {
+  if (!std::filesystem::exists(LinearDngPath())) {
+    GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
+  }
+  ProjectService project(db_path_, meta_path_);
+  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  const auto     ids       = ImportLinearDng(project, pipelines);
+  ASSERT_NE(ids.first, 0u);
+  const auto  committed = pipelines->AcquireCommittedSnapshot(ids.first);
+  const auto* exposure =
+      committed->Document().PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
+  ASSERT_NE(exposure, nullptr);
+  const double stored_ev = exposure->ToJson().at("exposure_ev").get<double>();
+  const auto   package   = test::MakeExposureTransferPackage(stored_ev + 2.0);
+
+  cv::Mat      thumbnail_pixels;
+  cv::Mat      preview_pixels;
+  {
+    ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(),
+                                pipelines, project.GetStorage(), project.GetProjectUUID(),
+                                cache_root_);
+    const auto       thumbnail =
+        RequestThumbnail(thumbnails, ids.first, ids.second, ThumbnailResolution::k256);
+    ASSERT_NE(thumbnail.guard, nullptr) << thumbnail.message;
+    thumbnail_pixels = ThumbnailPixels(thumbnail);
+
+    std::promise<ThumbnailPreviewResult> done;
+    auto                                 done_future = done.get_future();
+    std::string                          built_sensor_key;
+    ThumbnailPreviewRequest              request;
+    request.element_id     = ids.first;
+    request.image_id       = ids.second;
+    request.resolution     = ThumbnailResolution::k256;
+    request.build_document = [&](const std::shared_ptr<const PipelineGraphSnapshot>& current) {
+      const auto history = pipelines->LoadHistorySnapshot(ids.first);
+      built_sensor_key   = PresetPreviewSensorKey(current->Document());
+      auto document =
+          BuildPresetPreviewDocument(*history.graph_, *history.root_, current, ids.first, package);
+      auto output_color = BrowserPreviewOutputColor(document->Document());
+      return ThumbnailPreviewDocument{std::move(document), std::move(output_color)};
+    };
+    request.on_complete = [&done](ThumbnailPreviewResult result) {
+      done.set_value(std::move(result));
+    };
+    thumbnails.RenderPreview(std::move(request));
+    ASSERT_EQ(done_future.wait_for(120s), std::future_status::ready);
+    const auto preview = done_future.get();
+    ASSERT_EQ(preview.status, ThumbnailRequestStatus::kReady) << preview.message;
+    ASSERT_NE(preview.pixels, nullptr);
+    preview_pixels = HostPixels(*preview.pixels);
+    EXPECT_EQ(built_sensor_key, PresetPreviewSensorKey(committed->Document()))
+        << "the preview takes the sensor settings of the active Version";
+
+    // The memory entry of the photo is the one of the thumbnail request.
+    const auto again =
+        RequestThumbnail(thumbnails, ids.first, ids.second, ThumbnailResolution::k256);
+    EXPECT_EQ(again.guard, thumbnail.guard);
+    thumbnails.ReleaseThumbnail(ids.first);
+    thumbnails.ReleaseThumbnail(ids.first);
+    thumbnails.FlushDiskCacheMetadata();
+  }  // the destructor waits for the queued disk write of the thumbnail
+
+  ASSERT_FALSE(preview_pixels.empty());
+  EXPECT_EQ(preview_pixels.type(), CV_8UC4);
+  EXPECT_EQ(std::max(preview_pixels.cols, preview_pixels.rows), 256);
+  const double preset_difference = MeanAbsoluteDifference(preview_pixels, thumbnail_pixels);
+  std::cout << "[PS4 pixels] +2 EV preset preview vs the thumbnail, mean absolute difference "
+            << preset_difference << '\n';
+  EXPECT_GT(preset_difference, kDistinctStateDifference) << "the preview must show the preset";
+
+  // A new service reads the disk cache: it has the thumbnail entry only, with the thumbnail.
+  ThumbnailService reopened(project.GetSleeveService(), project.GetImagePoolService(), pipelines,
+                            project.GetStorage(), project.GetProjectUUID(), cache_root_);
+  EXPECT_EQ(reopened.GetDiskCacheStats().total_entries, 1u);
+  const auto hits_before = reopened.GetDiskCacheStats().hit_count;
+  const auto from_disk =
+      ThumbnailPixels(RequestThumbnail(reopened, ids.first, ids.second, ThumbnailResolution::k256));
+  reopened.ReleaseThumbnail(ids.first);
+  EXPECT_EQ(reopened.GetDiskCacheStats().hit_count, hits_before + 1);
+  EXPECT_LT(MeanAbsoluteDifference(from_disk, thumbnail_pixels), kJpegDifference)
+      << "the disk entry of the photo holds the thumbnail, not the preview";
 }
 
 TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersWhileTheEditorHoldsTheRenderLockOfTheImage) {

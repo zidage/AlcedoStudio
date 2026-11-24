@@ -33,6 +33,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "support/document_transfer_test_support.hpp"
+#include "support/preset_test_support.hpp"
 #include "support/test_temp_directory.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_dialog_model.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_list_models.hpp"
@@ -45,112 +46,16 @@ namespace alcedo::ui::test {
 namespace {
 
 namespace fs = std::filesystem;
-using alcedo::EditorSessionIdentity;
-using alcedo::EditorSessionResult;
-using alcedo::EditorSessionResultKind;
-using alcedo::EditorSessionState;
+using alcedo::test::HistorySessionBackend;
 
-constexpr sl_element_id_t   kElementId = 7;
-
-/// Open photo whose history is a real CommitGraph over the default document. Paste runs the real
-/// root-relative Paste of AdjustmentTransferService, as the editor history port does.
-class HistorySessionBackend final : public alcedo::IEditorSessionBackend {
- public:
-  HistorySessionBackend()
-      : graph_(std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(kElementId))),
-        root_document_(std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument())) {}
-
-  [[nodiscard]] auto state() const -> EditorSessionState override { return state_; }
-  [[nodiscard]] auto identity() const -> EditorSessionIdentity override { return identity_; }
-  [[nodiscard]] auto active() const -> bool override {
-    return state_ != EditorSessionState::NoImage;
-  }
-  [[nodiscard]] auto has_image() const -> bool override {
-    return identity_.element_id > 0 && alcedo::EditorSessionHasImage(state_);
-  }
-  [[nodiscard]] auto last_error() const -> std::string override { return {}; }
-  void               SetPresentationSinkId(alcedo::PresentationSinkId) override {}
-  void               SetPresentationSize(int, int) override {}
-  auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
-    identity_.element_id = element_id;
-    identity_.image_id   = image_id;
-    state_ = element_id == 0 ? EditorSessionState::NoImage : EditorSessionState::Interactive;
-    NotifyChange();
-    return Result(EditorSessionResultKind::StateChanged, {});
-  }
-  auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
-    return Open(element_id, image_id);
-  }
-  auto Close(bool) -> EditorSessionResult override { return Open(0, 0); }
-  auto Shutdown() -> EditorSessionResult override { return Open(0, 0); }
-  auto Discard() -> EditorSessionResult override {
-    return Result(EditorSessionResultKind::Accepted, {});
-  }
-  auto Undo() -> EditorSessionResult override {
-    return Result(EditorSessionResultKind::Accepted, {});
-  }
-  auto Redo() -> EditorSessionResult override {
-    return Result(EditorSessionResultKind::Accepted, {});
-  }
-
-  auto SnapshotHistorySource(std::shared_ptr<const CommitGraph>*      graph,
-                             std::shared_ptr<const PipelineDocument>* root_document, std::string*)
-      -> bool override {
-    *graph         = std::make_shared<const CommitGraph>(*graph_);
-    *root_document = root_document_;
-    return true;
-  }
-
-  auto PasteAdjustments(const AdjustmentTransferPackage& package, std::string version_display_name,
-                        std::optional<EditCommitAttribution> attribution)
-      -> EditorSessionResult override {
-    const auto pasted = AdjustmentTransferService::PasteAsRootRelativeVersion(
-        *graph_, *root_document_, package, std::move(version_display_name), {},
-        std::move(attribution));
-    return pasted.pasted ? Result(EditorSessionResultKind::Accepted, "Pasted")
-                         : Result(EditorSessionResultKind::Failed, pasted.error);
-  }
-
-  [[nodiscard]] auto graph() -> CommitGraph& { return *graph_; }
-  [[nodiscard]] auto root_document() const -> const PipelineDocument& { return *root_document_; }
-
- private:
-  auto Result(EditorSessionResultKind kind, std::string message) const -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind     = kind;
-    result.state    = state_;
-    result.identity = identity_;
-    result.message  = std::move(message);
-    return result;
-  }
-
-  std::shared_ptr<CommitGraph>      graph_;
-  std::shared_ptr<PipelineDocument> root_document_;
-  EditorSessionState                state_ = EditorSessionState::NoImage;
-  EditorSessionIdentity             identity_{};
-};
-
-class MemoryPresetPreferences final : public PresetLibraryPreferences {
- public:
-  explicit MemoryPresetPreferences(fs::path root) : root_(std::move(root)) {}
-  [[nodiscard]] auto LoadRoot() const -> std::optional<fs::path> override { return root_; }
-  [[nodiscard]] auto SaveRoot(const fs::path& root) -> bool override {
-    root_ = root;
-    return true;
-  }
-
- private:
-  fs::path root_;
-};
+constexpr sl_element_id_t kElementId = 7;
 
 void WriteBytes(const fs::path& path, const std::string& bytes) {
-  fs::create_directories(path.parent_path());
-  std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-  stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  alcedo::test::WritePresetBytes(path, bytes);
 }
 
 auto PresetText(double exposure_ev) -> std::string {
-  return ExportDocumentTransfer(alcedo::test::MakeExposureTransferPackage(exposure_ev)).dump();
+  return alcedo::test::ExposurePresetText(exposure_ev);
 }
 
 /// File names below @p folder, recursive, in sorted order.
@@ -185,14 +90,8 @@ class PresetControllerTest : public ::testing::Test {
 
   /// Starts the service on root_ and the controller over it.
   void StartLibrary() {
-    PresetLibraryServiceOptions options;
-    options.preferences   = std::make_unique<MemoryPresetPreferences>(root_);
-    options.default_root  = root_;
-    options.move_to_trash = [](const fs::path& path, std::string*) {
-      std::error_code error;
-      return fs::remove(path, error);
-    };
-    library_ = std::make_unique<PresetLibraryService>(std::move(options));
+    library_ =
+        std::make_unique<PresetLibraryService>(alcedo::test::PresetLibraryOptionsOn(root_));
     library_->Start();
     ASSERT_TRUE(WaitUntilIdle());
     controller_ = std::make_unique<PresetController>(library_.get(), &dialog_,
@@ -222,7 +121,7 @@ class PresetControllerTest : public ::testing::Test {
 
   alcedo::test::TestTempDirectory       directory_;
   fs::path                              root_ = directory_ / "presets";
-  HistorySessionBackend                 backend_;
+  HistorySessionBackend                 backend_{kElementId};
   EditorSessionController               session_{&backend_};
   AdjustmentTransferDialogModel         dialog_;
   std::unique_ptr<PresetLibraryService> library_;
