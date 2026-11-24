@@ -127,6 +127,53 @@ TEST(AiDenoiseModelSessionTest, DenoiseGivesTheGainMatchedInputOfTheDecodeArea) 
   EXPECT_LE(largest, 1e-6) << largest;
 }
 
+TEST(AiDenoiseModelSessionTest, DenoiseOfADarkPhotoReturnsItsExposureAfterTheInputCurve) {
+  const TestModelFolder folder("dark_photo");
+  auto                  record  = std::make_shared<TestPlatformRecord>();
+  auto                  session = MakeTestModelSession(record, folder);
+  const auto            version = session->InstalledModelVersion();
+  // RGGB with even sizes: every 2 x 2 cell is inside the area, so the output of the test session
+  // (the R, G1, and B sample of each cell) has the means of the input.
+  const auto            input   = ai_denoise_test::MakeDarkBayerInput(600, 204);
+  const auto            mosaic  = PackBayerForAiDenoise(input);
+  const auto            curve   = AiDenoiseInputCurveFor(mosaic.input_means);
+  ASSERT_GT(curve.gain, 4.0);
+  const auto denoised = session->Denoise(input, version);
+  EXPECT_EQ(session->Stats().last_input_gain, curve.gain);
+
+  // The test session returns its input, so the result is the prepared input of each cell in the
+  // white level domain: the inverse curve returns the exposure of the photo.
+  const auto* actual    = reinterpret_cast<const float*>(denoised.pixels.bytes.get());
+  const auto& lin       = input.linearization;
+  const auto  plane     = static_cast<std::size_t>(mosaic.width) * mosaic.height;
+  double      largest   = 0.0;
+  bool        shoulder  = false;
+  bool        above_one = false;
+  for (int y = 0; y < 204; ++y) {
+    for (int x = 0; x < 600; ++x) {
+      for (int c = 0; c < 3; ++c) {
+        const double prepared =
+            mosaic.planes[ai_denoise_test::kChannelOfOutput[c] * plane +
+                          static_cast<std::size_t>(y / 2) * mosaic.width + x / 2];
+        const double scale = (lin.libraw_maximum - lin.black_level[c]) /
+                             (static_cast<double>(lin.white_level[c]) - lin.black_level[c]);
+        const double expected = prepared * scale;
+        const double value    = actual[(static_cast<std::size_t>(y) * 600 + x) * 4 + c];
+        largest   = std::max(largest, std::abs(value - expected) / (std::abs(expected) + 1e-3));
+        shoulder  = shoulder || curve.Apply(prepared) > kAiDenoiseCurveKnee;
+        above_one = above_one || prepared > 1.0;
+      }
+    }
+  }
+  EXPECT_TRUE(shoulder);
+  EXPECT_TRUE(above_one);
+  EXPECT_LE(largest, 1e-5) << largest;
+
+  // A photo at the training level runs without the curve.
+  (void)session->Denoise(MakeBayerInput(64, 48, BayerPattern("RGGB")), version);
+  EXPECT_EQ(session->Stats().last_input_gain, 1.0);
+}
+
 TEST(AiDenoiseModelSessionTest, ModelSessionCreatesThePlatformSessionOnceAndAgainAfterRelease) {
   const TestModelFolder folder("session_lifetime");
   auto                  record  = std::make_shared<TestPlatformRecord>();

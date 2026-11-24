@@ -40,7 +40,80 @@ auto Fail(const std::string& text) -> std::runtime_error {
   return std::runtime_error("AI Denoise input: " + text);
 }
 
+/// The value of the shoulder at x = 1 minus 1, for the shoulder width @p shoulder.
+auto ShoulderError(double gain, double shoulder) -> double {
+  return kAiDenoiseCurveKnee + shoulder * std::log1p((gain - kAiDenoiseCurveKnee) / shoulder) - 1.0;
+}
+
 }  // namespace
+
+auto AiDenoiseInputCurve::Apply(double x) const -> double {
+  if (IsIdentity()) {
+    return x;
+  }
+  const double knee_x = kAiDenoiseCurveKnee / gain;
+  if (x <= knee_x) {
+    return gain * x;
+  }
+  if (x <= 1.0) {
+    return kAiDenoiseCurveKnee + shoulder * std::log1p(gain * (x - knee_x) / shoulder);
+  }
+  return 1.0 + tail_slope * (x - 1.0);
+}
+
+auto AiDenoiseInputCurve::Invert(double y) const -> double {
+  if (IsIdentity()) {
+    return y;
+  }
+  const double knee_x = kAiDenoiseCurveKnee / gain;
+  if (y <= kAiDenoiseCurveKnee) {
+    return y / gain;
+  }
+  if (y <= 1.0) {
+    return knee_x + shoulder / gain * std::expm1((y - kAiDenoiseCurveKnee) / shoulder);
+  }
+  return 1.0 + (y - 1.0) / tail_slope;
+}
+
+auto AiDenoiseInputCurveOfGain(double gain) -> AiDenoiseInputCurve {
+  if (!std::isfinite(gain)) {
+    throw Fail("the input gain " + std::to_string(gain) + " is not finite");
+  }
+  AiDenoiseInputCurve curve;
+  if (gain <= 1.0) {
+    return curve;
+  }
+  // The shoulder value at x = 1 rises with the width: from the knee (width 0) toward the gain
+  // (the line). Bisection for the width that gives 1.
+  double narrow = 0.0;
+  double wide   = 1.0;
+  for (int i = 0; i < 200 && ShoulderError(gain, wide) < 0.0; ++i) {
+    narrow = wide;
+    wide *= 2.0;
+  }
+  for (int i = 0; i < 200; ++i) {
+    const double middle = 0.5 * (narrow + wide);
+    if (middle <= narrow || middle >= wide) {
+      break;
+    }
+    (ShoulderError(gain, middle) < 0.0 ? narrow : wide) = middle;
+  }
+  curve.gain       = gain;
+  curve.shoulder   = wide;
+  curve.tail_slope = gain / (1.0 + (gain - kAiDenoiseCurveKnee) / wide);
+  return curve;
+}
+
+auto AiDenoiseInputCurveFor(const std::array<double, 3>& input_means) -> AiDenoiseInputCurve {
+  const double level = (input_means[0] + input_means[1] + input_means[2]) / 3.0;
+  if (!std::isfinite(level)) {
+    throw Fail("the input level " + std::to_string(level) + " is not finite");
+  }
+  const double gain = level * kAiDenoiseMaxInputGain <= kAiDenoiseTargetInputLevel
+                          ? kAiDenoiseMaxInputGain
+                          : kAiDenoiseTargetInputLevel / level;
+  return AiDenoiseInputCurveOfGain(std::clamp(gain, 1.0, kAiDenoiseMaxInputGain));
+}
 
 auto PackBayerForAiDenoise(const PreparedRawInput& cfa) -> AiDenoisePackedMosaic {
   if (cfa.input_kind != RawInputKind::BayerRaw || cfa.cfa_pattern.kind != RawCfaKind::Bayer2x2 ||
@@ -155,6 +228,55 @@ auto PackBayerForAiDenoise(const PreparedRawInput& cfa) -> AiDenoisePackedMosaic
   return mosaic;
 }
 
+void ApplyAiDenoiseInputCurve(AiDenoisePackedMosaic& mosaic, const AiDenoiseInputCurve& curve) {
+  if (!mosaic.curve.IsIdentity()) {
+    throw Fail("the input already has an exposure curve");
+  }
+  mosaic.curve = curve;
+  if (curve.IsIdentity()) {
+    return;
+  }
+  const auto plane = static_cast<std::size_t>(mosaic.width) * mosaic.height;
+  // The sums of each packed row, added in row order (the same means for each thread count).
+  struct RowSums {
+    std::array<double, 3> sums{};
+    std::array<double, 3> counts{};
+  };
+  std::vector<RowSums> row_sums(static_cast<std::size_t>(mosaic.height));
+  cv::parallel_for_(cv::Range(0, mosaic.height), [&](const cv::Range& rows) {
+    for (int py = rows.start; py < rows.end; ++py) {
+      RowSums& row = row_sums[static_cast<std::size_t>(py)];
+      for (int channel = 0; channel < 4; ++channel) {
+        const int  ay       = 2 * py + channel / 2 - mosaic.added_top;
+        const bool area_row = ay >= 0 && ay < mosaic.area_height;
+        const int  color    = channel == 0 ? 0 : (channel == 3 ? 2 : 1);
+        float*     values =
+            mosaic.planes.data() + channel * plane + static_cast<std::size_t>(py) * mosaic.width;
+        for (int px = 0; px < mosaic.width; ++px) {
+          const auto value = static_cast<float>(curve.Apply(values[px]));
+          values[px]       = value;
+          const int ax     = 2 * px + channel % 2 - mosaic.added_left;
+          if (area_row && ax >= 0 && ax < mosaic.area_width) {
+            row.sums[color] += value;
+            row.counts[color] += 1.0;
+          }
+        }
+      }
+    }
+  });
+  std::array<double, 3> sums{};
+  std::array<double, 3> counts{};
+  for (const auto& row : row_sums) {
+    for (int c = 0; c < 3; ++c) {
+      sums[c] += row.sums[c];
+      counts[c] += row.counts[c];
+    }
+  }
+  for (int c = 0; c < 3; ++c) {
+    mosaic.input_means[c] = sums[c] / counts[c];
+  }
+}
+
 auto AiDenoiseGainWeights(const float (&cam_xyz)[9]) -> std::array<double, 3> {
   cv::Matx33d camera_from_xyz;
   for (int i = 0; i < 9; ++i) {
@@ -247,17 +369,22 @@ auto AssembleDenoisedPlane(const nn::RgbPlanesView& output, const AiDenoisePacke
       output.data.size() != 3 * static_cast<std::size_t>(output.width) * output.height) {
     throw Fail("the model output does not match the packed mosaic");
   }
-  std::array<float, 3> scale{};
+  std::array<double, 3> scale{};
   for (int c = 0; c < 3; ++c) {
     const double white_range =
         static_cast<double>(linearization.white_level[c]) - linearization.black_level[c];
     if (!(white_range > 0.0)) {
       throw Fail("the white level of color " + std::to_string(c) + " is not above its black level");
     }
-    scale[c] = static_cast<float>(
-        gain * (static_cast<double>(linearization.libraw_maximum) - linearization.black_level[c]) /
-        white_range);
+    scale[c] = (static_cast<double>(linearization.libraw_maximum) - linearization.black_level[c]) /
+               white_range;
   }
+  const AiDenoiseInputCurve& curve = mosaic.curve;
+  // The gain-matched output is in the domain of the curve; the inverse curve returns it to the
+  // prepared values.
+  const auto                 value = [&](float output, int c) {
+    return static_cast<float>(curve.Invert(gain * output) * scale[c]);
+  };
 
   HostImagePlane plane;
   plane.extent            = Extent2D{static_cast<std::uint32_t>(mosaic.area_width),
@@ -277,9 +404,9 @@ auto AssembleDenoisedPlane(const nn::RgbPlanesView& output, const AiDenoisePacke
       const float* g = r + source_plane;
       const float* b = g + source_plane;
       for (int x = 0; x < mosaic.area_width; ++x) {
-        row[4 * x + 0] = r[x] * scale[0];
-        row[4 * x + 1] = g[x] * scale[1];
-        row[4 * x + 2] = b[x] * scale[2];
+        row[4 * x + 0] = value(r[x], 0);
+        row[4 * x + 1] = value(g[x], 1);
+        row[4 * x + 2] = value(b[x], 2);
         row[4 * x + 3] = 1.0f;
       }
     }
