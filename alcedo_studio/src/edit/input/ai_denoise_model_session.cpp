@@ -187,6 +187,25 @@ auto DenoiseModelSession::Stats() const -> DenoiseModelSessionStats {
   return stats_;
 }
 
+auto DenoiseModelSession::IsPlatformAvailable() -> bool {
+  std::call_once(platform_check_once_, [this] {
+    if (!platform_) {
+      ALCEDO_LOG_INFO(Render) << "AI Denoise: this platform has no forward code for the model";
+      return;
+    }
+    try {
+      const auto device = platform_->DeviceKey();
+      platform_->CheckRuntime();
+      platform_available_ = true;
+      ALCEDO_LOG_INFO(Render) << "AI Denoise: the model can run on " << device;
+    } catch (const std::exception& error) {
+      ALCEDO_LOG_WARN(Render) << "AI Denoise: the model cannot run on this computer: "
+                              << error.what();
+    }
+  });
+  return platform_available_;
+}
+
 auto ProcessDenoiseModelSession() -> const std::shared_ptr<DenoiseModelSession>& {
   static const std::shared_ptr<DenoiseModelSession> session =
       std::make_shared<DenoiseModelSession>(CreateProductAiDenoisePlatform());

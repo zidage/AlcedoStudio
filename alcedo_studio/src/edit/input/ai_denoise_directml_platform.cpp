@@ -17,6 +17,8 @@ class DirectMlAiDenoisePlatform final : public AiDenoisePlatform {
  public:
   [[nodiscard]] auto DeviceKey() -> std::string override { return nn::DirectMlAdapterKey(); }
 
+  void               CheckRuntime() override { nn::LoadDirectMlRuntime(); }
+
   [[nodiscard]] auto CreateSession(const std::filesystem::path& graph_path)
       -> std::unique_ptr<nn::UtNet2TileSession> override {
     return std::make_unique<nn::UtNet2DirectMlSession>(graph_path);

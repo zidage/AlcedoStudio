@@ -121,6 +121,7 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           QVariantMap raw;
           raw.insert(QStringLiteral("method"), String(value.method));
           raw.insert(QStringLiteral("highlights_reconstruct"), value.highlights_reconstruct);
+          raw.insert(QStringLiteral("ai_denoise"), value.ai_denoise);
           map.insert(QStringLiteral("raw"), raw);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelOdtValue>) {
           QVariantMap open_drt;

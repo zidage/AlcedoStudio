@@ -15,6 +15,7 @@
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/input/ai_denoise_error.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
 #include "type/type.hpp"
 
@@ -29,6 +30,8 @@ enum class EditorRenderEventKind : std::uint8_t {
   RenderReused,
   RenderRejected,
   BusyChanged,
+  /// The AI Denoise error of the open photo was set or cleared (integration plan, DN7).
+  AiDenoiseErrorChanged,
 };
 
 struct EditorRenderEvent {
@@ -124,6 +127,14 @@ class EditorSessionRenderController final {
   /// Aggregate coordinator busy state.
   [[nodiscard]] auto render_busy() const -> bool;
 
+  /**
+   * @brief The AI Denoise error of the last frame of the open photo (integration plan, DN7).
+   *
+   * A failed frame whose message has an AI Denoise error sets it; a ready frame of the photo and
+   * the load of another photo clear it. Each change emits `AiDenoiseErrorChanged`.
+   */
+  [[nodiscard]] auto ai_denoise_error() const -> std::optional<AiDenoiseRenderError>;
+
   /// Coordinator diagnostics pass-through.
   [[nodiscard]] auto render_diagnostics() const -> EditorRenderCoordinatorDiagnostics;
 
@@ -156,6 +167,11 @@ class EditorSessionRenderController final {
   /// Emit a FirstFrameReady event when image acquisition and rendering finish.
   /// The facade applies the Interactive lifecycle transition in its handler.
   void                TryEnterInteractiveFromFirstFrame(const EditorSessionIdentity& identity);
+  /// Record the end of the first frame (its time) once and enter Interactive.
+  void                CompleteFirstFrame();
+  /// Set or clear @ref ai_denoise_error_; emits `AiDenoiseErrorChanged` when it changes.
+  void                SetAiDenoiseError(std::optional<AiDenoiseRenderError> error,
+                                        const EditorSessionIdentity& identity, EditorSessionState state);
   /// Check if a render result matches the active first-frame request and the
   /// provided identity.
   [[nodiscard]] auto  MatchesActiveFirstFrame(const EditorRenderResult&    render_result,
@@ -209,6 +225,7 @@ class EditorSessionRenderController final {
   bool                                                 last_notified_render_busy_ = false;
   std::optional<std::chrono::steady_clock::time_point> first_frame_route_time_{};
   double                                               first_frame_time_ms_ = -1.0;
+  std::optional<AiDenoiseRenderError>                  ai_denoise_error_;
   std::atomic<bool>                                    geometry_overlay_active_{false};
   mutable std::mutex                                   probe_source_mutex_;
   std::function<std::optional<MaskCoverageProbe>()>    probe_source_;

@@ -9,6 +9,7 @@
 
 #include "decoders/processor/raw_rgb_linearization_params.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/input/ai_denoise_error.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/develop_compile_source.hpp"
 
@@ -39,7 +40,9 @@ namespace alcedo {
  * While the switch is on, a full-size render needs the denoised input; a reduced input
  * (thumbnail, semantic input image) renders the CFA path without the model. A denoised input
  * needs the switch on.
- * @throws std::runtime_error with the reason; the caller reports it as the render error.
+ * @throws AiDenoiseError of the kind `SensorNotSupported` for a photo that is not a Bayer RAW
+ *         file (D14); std::runtime_error with the reason for an input that does not agree with
+ *         the switch. The caller reports it as the render error.
  */
 inline void RequireDevelopInputForAiDenoise(const DevelopPayload&       params,
                                             const DevelopCompileSource& source) {
@@ -56,7 +59,8 @@ inline void RequireDevelopInputForAiDenoise(const DevelopPayload&       params,
   if (source.kind == DevelopInputKind::BayerCfa) {
     throw std::runtime_error("AI Denoise is on and the prepared input is not denoised");
   }
-  throw std::runtime_error("AI Denoise supports Bayer sensors only");
+  throw AiDenoiseError(AiDenoiseErrorKind::SensorNotSupported,
+                       "AI Denoise supports Bayer sensors only");
 }
 
 }  // namespace alcedo

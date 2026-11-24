@@ -277,6 +277,9 @@ struct DevelopRawDecodeUpdate {
   std::optional<bool>        highlights_reconstruct;
   std::optional<bool>        use_camera_wb;
   std::optional<float>       user_wb;
+  /// The AI Denoise switch (integration plan, DN7): absent keeps it; an empty inner value turns
+  /// it off; a value turns it on with the recorded model version.
+  std::optional<std::optional<DevelopAiDenoise>> ai_denoise;
 };
 
 /**
@@ -401,8 +404,9 @@ class DevelopParamsModel final
 
   /**
    * @brief Apply RAW decode fields atomically and mark only changed field groups dirty.
-   * @throws std::logic_error for a raster document, which has no RAW decode; the payload is
-   *         unchanged.
+   * @throws std::logic_error for a raster document, which has no RAW decode;
+   *         std::invalid_argument when the AI Denoise version is not a SHA-256 in 64 lowercase
+   *         hexadecimal digits. The payload is unchanged in both cases.
    */
   void               ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update);
 

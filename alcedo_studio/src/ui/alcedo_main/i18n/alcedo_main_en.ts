@@ -3443,6 +3443,33 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorAiDenoiseErrorCard</name>
+    <message>
+        <source>AI Denoise model not installed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>This GPU is too slow for AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise does not support this sensor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Manage</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Turn Off AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>EditorRawDecodePanel</name>
     <message>
         <location filename="../qml/EditorRawDecodePanel.qml" line="+35"/>
@@ -3451,12 +3478,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>Neural Engine</source>
+        <source>Neural</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="-2"/>
-        <source>Default</source>
+        <source>Auto</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -3598,6 +3625,18 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <source>Display referred</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not supported for X-Trans sensors</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not supported for this sensor</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

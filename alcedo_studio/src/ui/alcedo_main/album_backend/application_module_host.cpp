@@ -34,6 +34,8 @@
 #include "app/project_service.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/input/ai_denoise_model_session.hpp"
+#include "edit/input/raw_sensor_layout.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/lens/lens_calibration_resolver.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
@@ -164,8 +166,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   // the library (plan L4).
   project_->SetLutResources(lut_library_->Resources());
   // AI Denoise reads its FP16 graph from the AI model folder of the settings, read at each check
-  // of the installed model (integration plan, DN6).
-  alcedo::ProcessDenoiseModelSession()->SetModelFolderProvider([] {
+  // of the installed model (integration plan, DN6). The session of the executors is reached
+  // through PipelineExecutor: on Windows the executors are in a DLL with their own copy.
+  alcedo::PipelineExecutor::ProcessAiDenoiseSession()->SetModelFolderProvider([] {
     return std::filesystem::path(alcedo::ConfiguredSemanticModelDirectory().toStdWString());
   });
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
@@ -369,6 +372,39 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   ai_mask_tool_ =
       std::make_unique<EditorAiMaskTool>(editor_session_.get(), std::move(ai_mask_services), this);
   RecordConstruction("EditorAiMaskTool", ai_mask_tool_.get());
+  // AI Denoise integration plan, DN7: the switch of the RAW Decode card.
+  EditorAiDenoiseControl::Services ai_denoise_services;
+  ai_denoise_services.platform_available = [] {
+    return alcedo::PipelineExecutor::ProcessAiDenoiseSession()->IsPlatformAvailable();
+  };
+  ai_denoise_services.installed_model_version = [] {
+    return alcedo::PipelineExecutor::ProcessAiDenoiseSession()->InstalledModelVersion();
+  };
+  ai_denoise_services.image_path = [this](std::uint32_t image_id) -> std::filesystem::path {
+    if (project_ == nullptr || project_->handler().project() == nullptr) {
+      return {};
+    }
+    auto pool = project_->handler().project()->GetImagePoolService();
+    if (!pool) {
+      return {};
+    }
+    try {
+      return pool->Read<std::filesystem::path>(
+          image_id, [](const std::shared_ptr<alcedo::Image>& image) {
+            return image ? std::filesystem::path(image->image_path_) : std::filesystem::path{};
+          });
+    } catch (const std::exception&) {
+      return {};
+    }
+  };
+  ai_denoise_services.read_sensor_layout = &alcedo::ReadRawSensorLayout;
+  ai_denoise_ = std::make_unique<EditorAiDenoiseControl>(std::move(ai_denoise_services),
+                                                         editor_session_.get(), this);
+  RecordConstruction("EditorAiDenoiseControl", ai_denoise_.get());
+  QObject::connect(editor_session_.get(), &EditorSessionController::StateChanged, ai_denoise_.get(),
+                   [session = editor_session_.get(), control = ai_denoise_.get()] {
+                     control->SetImage(session->has_image() ? session->image_id() : 0U);
+                   });
   // A published inventory or root can change which LUT bytes the open image renders.
   QObject::connect(lut_library_.get(), &alcedo::LutLibraryService::InventoryChanged,
                    editor_session_.get(),
@@ -867,7 +903,7 @@ void ApplicationModuleHost::ShutdownModules() {
     }
     // No render runs after the export and the editor scheduler ended; the AI Denoise session
     // ends before ONNX Runtime and DirectML unload.
-    alcedo::ProcessDenoiseModelSession()->Release();
+    alcedo::PipelineExecutor::ProcessAiDenoiseSession()->Release();
   } catch (...) {
   }
 }
@@ -905,6 +941,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(lut_preview_, "LutPreviewController");
   destroy(lut_target_, "LutLibraryController");
   destroy(lut_browser_, "LutLibraryModel");
+  destroy(ai_denoise_, "EditorAiDenoiseControl");
   destroy(ai_mask_tool_, "EditorAiMaskTool");
   destroy(editor_comparison_, "EditorComparisonController");
   destroy(editor_session_, "EditorSessionController");

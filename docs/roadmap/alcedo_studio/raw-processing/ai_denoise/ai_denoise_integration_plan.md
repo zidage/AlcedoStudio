@@ -21,7 +21,10 @@
   kind, and its Develop passes on CUDA and OpenCL (Metal code written, not built).
   2026-11-22: DN6 complete (issue #1048): the model runs in the loader of a full-size render;
   issue #1043 resolved by the tile size from the video memory of all processes and the
-  slow-device check from the fastest measured tile; 0.56 to 0.72 s for a ready run at 42.2 MP
+  slow-device check from the fastest measured tile; 0.56 to 0.72 s for a ready run at 42.2 MP.
+  2026-11-22: DN7 complete (issue #1050): the editor switch with the locked Method track, the
+  labels `Auto` and `Neural`, and the viewport card of each model error with
+  `Turn Off AI Denoise`; the user removed the model version notice (D10)
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -61,7 +64,7 @@ the time of the DemosaicNet student, DN1 additions).
 | D7 | Removed on 2026-11-22 with the stored result file (was: the folder of the stored results in the settings). | 2026-11-22 |
 | D8 | Removed on 2026-11-22 with the stored result file (was: the deletion of the stored result file with the RAW file). | 2026-11-22 |
 | D9 | A project package (`.alcd`) holds the Develop parameter of the noise reduction and no denoised image. A project opened on another computer runs the model there. Changed on 2026-11-22. | 2026-11-22 |
-| D10 | The Develop parameter records the model version (the SHA-256 of the FP16 graph) when the user turns the noise reduction on. The render uses the installed model, and its content key holds the installed version. When the installed version differs from the recorded version, the RAW Decode panel states it: the result can differ from the earlier result. Replaced on 2026-11-22 (was: a stored result keeps the result of its model version). | 2026-11-22 |
+| D10 | The Develop parameter records the model version (the SHA-256 of the FP16 graph) when the user turns the noise reduction on. The render uses the installed model, and its content key holds the installed version. The editor shows no notice when the installed version differs from the recorded version (the user removed the notice on 2026-11-22, DN7). Replaced on 2026-11-22 (was: a stored result keeps the result of its model version). | 2026-11-22 |
 | D11 | The Develop node keeps its structure: one root node, no input port. The noise reduction is a parameter of the Develop node. The loader runs the model on the mosaic and gives the result to the Develop passes as a second prepared input of the same RAW file. Changed on 2026-11-22 (the loader runs the model in place of a read of the stored result). | 2026-11-22 |
 | D12 | A thumbnail and a semantic input image render from the reduced mosaic without the model (the Legacy demosaic, as now). The editor and the export run the model at the full size. When the model cannot run (not installed, no supported device, a run error), the editor and the export report the error and do not render the photo without the noise reduction. Changed on 2026-11-22. | 2026-11-22 |
 | D13 | Platform order: Windows (DirectML, for each render backend and each GPU with Direct3D 12), then macOS (Core ML on the Neural Engine of Apple silicon), then Linux. On a platform without its forward phase, the application does not show the noise reduction control. Changed on 2026-11-22 from the backend order CUDA, Metal, OpenCL. | 2026-11-22 |
@@ -95,13 +98,15 @@ the time of the DemosaicNet student, DN1 additions).
 
 ### 2.1 Editor
 
-- The RAW Decode panel gets one switch, `AI Denoise`, above the demosaic method.
+- The RAW Decode panel gets one switch, `AI Denoise`, above the demosaic method. The method
+  labels are `Auto`, `Legacy`, and `Neural` (DN7).
 - The switch is visible when the platform has a forward phase (D13) and the photo is a Bayer
   RAW file. On Windows, the switch does not depend on the render backend (CUDA or OpenCL): the
   model runs on DirectML. For an X-Trans or a monochrome photo, the switch is disabled and its
   tooltip states that the sensor type is not supported.
-- When the switch is on, the demosaic method control is disabled, because the model also does the
-  demosaic.
+- When the switch is on, the demosaic method control shows one locked segment `AI Denoise`,
+  because the model also does the demosaic. When the switch goes off, the control shows the
+  stored method again (DN7, the mock approved on 2026-11-22).
 - When the user turns the switch on and the model is not installed, the editor opens the AI Models
   page of the settings, as the AI Mask tool does. The switch stays off.
 - When the user turns the switch on, the edit history gets one `SetParameter` change with the
@@ -112,8 +117,8 @@ the time of the DemosaicNet student, DN1 additions).
 - Each render error of the model (2.4) has the control `Turn Off AI Denoise`. It writes one
   `SetParameter` change that turns the switch off and renders the photo again without the
   model. Undo turns the switch on again; the next render runs the model again.
-- When the installed model version differs from the version in the parameter, the RAW Decode
-  panel states it under the switch.
+- The editor shows no notice when the installed model version differs from the version in the
+  parameter (user, 2026-11-22).
 
 ### 2.2 Library, paste, and export
 
@@ -289,7 +294,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN4 | Removed on 2026-11-22 (was: the stored result reader and writer) | | | | removed |
 | DN5 | Develop parameter, denoised input kind, pass list, content keys (upload on CUDA, Metal, OpenCL) | `edit` | U4 | 1000 to 1500 | complete (#1045) |
 | DN6 | Model run in the loader: `DenoiseModelSession`, input preparation, gain match, the denoised entry of the prepared source cache, GPU release, errors | `edit/input`, `decoders/processor/nn` | DN3, DN5 | 800 to 1300 | complete (#1048) |
-| DN7 | Editor switch, render error with the AI Models control, model version notice | `ui/alcedo_main` | DN6 | 500 to 900 | planned |
+| DN7 | Editor switch, render error with the AI Models control | `ui/alcedo_main`, `app`, `edit/input` | DN6 | 900 to 1400 | complete (#1050) |
 | DN8 | Library action and export errors | `ui/alcedo_main` | DN7 | 300 to 600 | planned |
 | DN9 | Removed on 2026-11-22 (was: the settings section for the stored results) | | | | removed |
 | DN10 | macOS forward code: the Core ML session of UtNet2 on the Neural Engine in ONNX Runtime (C++), the osx-arm64 library | `cmake`, `decoders/processor/nn` | DN3 | 600 to 1000 | planned |
@@ -297,7 +302,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | planned |
 | DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | planned |
 
-DN0 to DN3, DN5, and DN6 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
+DN0 to DN3 and DN5 to DN7 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
 detailed section in this file before its implementation starts, with the format of DN0 to DN3.
 DN5 can start before DN3 completes: its tests build the denoised prepared input from the DN0
 expected outputs, so the Develop integration can be checked before the tile loop exists.
@@ -1930,15 +1935,302 @@ the removal resets the adapter that it shares (a laptop with only the Intel Iris
 measured. The Metal and macOS paths (DN10). The control and the texts of the error kinds (DN7,
 DN8).
 
-### DN7 to DN13
+### DN7: editor switch and render errors
+
+Written on 2026-11-22, before the implementation. The user approved the panel design of the mock
+on 2026-11-22 and removed the model version notice (D10, 2.1).
+
+**Objective and deliverables**
+
+The RAW Decode card of the editor gets the `AI Denoise` switch, and the viewport shows each
+model error of a render with its controls. The deliverables: the `ai_denoise` key in the
+`raw_decode` field (write, history, undo, paste), the switch and the locked Method track, the
+labels `Auto` and `Neural`, the Bayer check of the open photo, the platform check, the typed
+render error from the render to the viewport, the error card with `Manage` and
+`Turn Off AI Denoise`, and the entry of a photo whose first frame fails with a model error.
+
+**Inputs and prerequisites**
+
+DN6 (`DenoiseModelSession`, `AiDenoiseError`). The approved mock of 2026-11-22.
+
+**Product rules** (2.1 is the specification; these are the details of the implementation)
+
+- The switch row is the first row of the RAW Decode card, above `Method`. It is hidden when the
+  platform has no forward code (D13): no platform (macOS, Linux until DN10 and DN11), no hardware
+  adapter with Direct3D 12, or `onnxruntime.dll` or `DirectML.dll` does not load. The check runs
+  once in the process.
+- The Method labels are `Auto` (value `default`), `Legacy`, and `Neural` (value
+  `neural_engine`). The stored values do not change. Reason: on macOS the model runs on the Apple
+  Neural Engine, while the Neural demosaic runs on the GPU.
+- While the switch is on, the Method track shows one selected segment `AI Denoise` that takes no
+  input. The stored `demosaic_method` stays; when the switch goes off, the track shows it again.
+- A photo that is not a Bayer RAW file (X-Trans, monochrome, linear DNG, four-color CFA): the
+  switch is disabled; its tooltip is `Not supported for X-Trans sensors` or
+  `Not supported for this sensor`. The editor reads the sensor layout of the open photo from the
+  LibRaw metadata of the file on a worker thread (no unpack). A file that cannot be read keeps the
+  switch enabled; the render then reports its own error.
+- The switch on: the control reads the installed model version. No model: the AI Models page of
+  the settings opens, and the switch stays off (no history change). A model: one `raw_decode`
+  change with `ai_denoise: {"model_version": <installed>}`.
+- The switch off and `Turn Off AI Denoise`: one `raw_decode` change with `ai_denoise: null`.
+- The error card is in the center of the viewport while the last frame of the open photo failed
+  with a model error, until a frame of that photo is ready. It shows the title of the kind and
+  the text of the error:
+
+  | Kind | Title | Controls |
+  | --- | --- | --- |
+  | `ModelNotInstalled` | AI Denoise model not installed | `Manage` (opens the AI Models page), `Turn Off AI Denoise` |
+  | `DeviceTooSlow` | This GPU is too slow for AI Denoise | `Turn Off AI Denoise` |
+  | `SensorNotSupported` | AI Denoise does not support this sensor | `Turn Off AI Denoise` |
+  | `RunFailed` | AI Denoise failed | `Turn Off AI Denoise` |
+
+- A first frame that fails with a model error opens the photo (the session enters Interactive,
+  as after a first frame) so that the card and `Turn Off AI Denoise` can act on it. A first frame
+  that fails with another error keeps the present behavior.
+- No model version notice (the user removed it on 2026-11-22). The parameter still records the
+  version (D10).
+
+**Data rules**
+
+- **`raw_decode` owns `ai_denoise`.** `DevelopFieldOwnedKeys("raw_decode")` gets `ai_denoise`, so
+  the history, the undo, and the paste of the RAW Decode item carry it.
+  `DevelopRawDecodeUpdate::ai_denoise` is `std::optional<std::optional<DevelopAiDenoise>>`: absent
+  keeps the switch, an empty inner value turns it off.
+- **Parse.** A write: `ai_denoise` an object (`model_version` of 64 lowercase hexadecimal digits)
+  turns it on, `null` turns it off, absent keeps it. A complete value (history replay, paste):
+  absent turns it off, because the Model JSON has the key only while the switch is on. A
+  `raw_decode` value of an old history entry has no key and the document has none either, so
+  the replay of an old project is unchanged.
+- **Typed render error.** `AiDenoiseError` moves to `edit/input/ai_denoise_error.hpp` (no
+  dependencies) and gets the kind `SensorNotSupported` (the Bayer check of DN5). Its `what()` is
+  `AI Denoise error (<kind token>): <text>`; `Text()` is the text. `ParseAiDenoiseRenderError`
+  finds the marker in a render message and returns the kind and the text. The render message
+  keeps this form through the scheduler, the coordinator, and the session without a change of
+  their callback signatures (the form of `kPresentationSuspendedMessage`). DN8 reads the export
+  error with the same function.
+- **Error state.** `EditorSessionRenderController` keeps the model error of the open photo: set by
+  a failed frame of that photo whose message has the marker, cleared by a ready frame of that
+  photo and by the load of another photo. A change emits `AiDenoiseErrorChanged`; the session
+  service then notifies a change; `EditorSessionController` publishes `aiDenoiseError`
+  (`kind`, `text`, empty without an error).
+- **Switch owner.** `EditorAiDenoiseControl` (album backend, `appModules.editorAiDenoise`): the
+  platform check, the sensor layout of the open photo, `turnOn()` and `turnOff()` through the
+  `IEditorAdjustmentSubmitter` of the editor session, and the signal that opens the AI Models
+  page. It keeps no copy of the switch state: the panel reads the switch from the panel
+  projection (`raw.ai_denoise`).
+
+**Modules, files, and APIs**
+
+| File | Responsibility |
+| --- | --- |
+| `include/edit/input/ai_denoise_error.hpp` (new, header only: the editor session reads it without `EditInput`) | `AiDenoiseErrorKind`, `AiDenoiseError`, `ParseAiDenoiseRenderError` |
+| `include/edit/input/ai_denoise_model_session.hpp`, `.cpp` | Include the error header; `IsPlatformAvailable()` |
+| `include/edit/input/ai_denoise_platform.hpp`, `ai_denoise_directml_platform.cpp`, `decoders/processor/nn/utnet2_directml_session.*` | `AiDenoisePlatform::CheckRuntime`; `nn::LoadDirectMlRuntime` |
+| `include/edit/input/raw_sensor_layout.hpp`, `edit/input/raw_sensor_layout.cpp` (new) | `ReadRawSensorLayout(path)`: Bayer, X-Trans, or another layout from the LibRaw metadata |
+| `include/edit/runtime/develop_ai_denoise.hpp` | The Bayer check throws `AiDenoiseError(SensorNotSupported)` |
+| `include/edit/graph/develop_node_model.hpp`, `.cpp` | `DevelopRawDecodeUpdate::ai_denoise` |
+| `app/editor_parameter_write_parse.cpp`, `app/pipeline_history_applier.cpp`, `app/editor_panel_projection.cpp`, `include/app/editor_panel_projection.hpp`, `app/editor_parameter_catalog.cpp` | Parse, owned key, projection, labels |
+| `app/editor_session_render_controller.cpp`, `app/editor_session_service.cpp`, their headers, `include/app/editor_session_types.hpp` | The error state, the first frame with a model error, the change notification |
+| `ui/alcedo_main/album_backend/editor_session_controller.*`, `editor_panel_presentation.cpp` | `aiDenoiseError`; `raw.ai_denoise` in the snapshot |
+| `ui/alcedo_main/album_backend/editor_ai_denoise_control.*` (new), `application_module_host.cpp` | The switch owner and its services |
+| `qml/EditorRawDecodePanel.qml`, `qml/EditorAiDenoiseErrorCard.qml` (new), `qml/EditorWorkspace.qml`, `qml/EditorAdjustmentStack.qml`, the `.ts` files | The switch, the locked track, the card |
+
+**Primary success call chain**
+
+```text
+switch on (EditorRawDecodePanel) -> EditorAiDenoiseControl::turnOn
+  -> DenoiseModelSession::InstalledModelVersion -> IEditorAdjustmentSubmitter::submitWrite
+     ("raw_decode", DevelopRawDecodeUpdate{ai_denoise = {version}}, settled)
+  -> ApplyEditorParameterWrite -> DevelopParamsModel::ApplyRawDecodeUpdate (DevelopDirty::Denoise)
+  -> one history commit -> render with the model (DN6) -> panel projection raw.ai_denoise
+Turn Off AI Denoise (card) -> EditorAiDenoiseControl::turnOff -> the same write with ai_denoise
+  off -> render without the model -> FrameReady -> the error state clears -> the card hides
+```
+
+**Primary failure call chain**
+
+```text
+render -> AiDenoiseError (what(): marker, kind, text) -> PipelineScheduler TaskOutcome message
+  -> EditorRenderCoordinator Failed -> EditorSessionRenderController::NotifyRenderResult
+  -> ParseAiDenoiseRenderError -> error state set -> AiDenoiseErrorChanged -> NotifyChange
+  -> EditorSessionController::aiDenoiseError -> EditorAiDenoiseErrorCard
+first frame (Loading) with the marker -> the photo opens (Interactive) with the error state
+switch on without a model -> aiModelsPageRequested -> Settings, AI Models; no write
+```
+
+**Implementation steps**
+
+1. The error header, the kind `SensorNotSupported`, the parse function, the platform check.
+2. The `ai_denoise` key of `raw_decode`: update, parse, owned key, projection, labels.
+3. The error state in the render controller, the first frame, the session notification, the Qt
+   property.
+4. `ReadRawSensorLayout`, `EditorAiDenoiseControl`, the module host.
+5. QML: the switch, the locked track, the card, the translations.
+
+**Tests**
+
+| Test | Assertion |
+| --- | --- |
+| `RenderMessageKeepsTheKindAndTheTextOfTheError` | Each kind: `what()` has the marker; the parse of a message with text before it gives the kind and the text; a message without the marker gives none |
+| `BayerCheckReportsSensorNotSupported` | The DN5 check throws `AiDenoiseError` of the kind `SensorNotSupported` |
+| `RawDecodeWriteTurnsAiDenoiseOnAndOff` | Write with the object, with null, and without the key: the switch and the version of the Model, the dirty mask |
+| `RawDecodeValueWithoutTheKeyTurnsAiDenoiseOff` | A complete value without the key turns it off; with the key turns it on; an invalid version is rejected and the Model is unchanged |
+| `RawDecodeOwnedJsonHasTheKeyOnlyWhileOn` | `FieldOwnedParameterJson("raw_decode", ...)` |
+| `PanelProjectionReportsTheSwitch` | `EditorPanelRawDecodeValue::ai_denoise` |
+| `PasteOfRawDecodeCarriesTheSwitch` | The package of the RAW Decode item has the key; the paste turns it on in the target, and a paste without the key turns it off |
+| `TurnOffAiDenoiseIsOneChangeAndUndoTurnsItOn` (session) | The write is one commit; the next render request is of a document without the key; undo turns it on and the next request has it |
+| `FirstFrameWithAModelErrorOpensThePhotoWithTheError` (session) | State Interactive, the error kind and text; a ready frame clears it; another failed frame without the marker leaves no error |
+| `FirstFrameWithAnotherErrorFailsAsBefore` (session) | State Failed, no AI Denoise error |
+| `TurnOnWithoutAModelRequestsTheAiModelsPageAndWritesNothing` | `EditorAiDenoiseControl` with a fake submitter |
+| `TurnOnWritesTheInstalledVersionAndTurnOffWritesNull` | The written update |
+| `SensorLayoutOfTheTestRawFiles` | A Bayer ARW is Bayer; a missing file reports an error |
+
+No QML test: the panel and the card are pure UI (repository rule).
+
+**Exit criteria**
+
+- [x] The tests pass in `build/debug`.
+- [x] The touched suites (the app editor tests, `EditorRawDecodePanelQmlTest`, `AiDenoiseLoaderTest`,
+      `DevelopAiDenoiseInputTest`) have no new failure.
+- [ ] The application starts; the RAW Decode card shows the switch on Windows. (The production
+      window of `MainQmlWorkflowTest` loads the changed QML without a warning; the running
+      application is not checked by eye, see the record.)
+
+**Expected diff**: 900 to 1400 lines.
+
+##### Phase DN7 completion record (2026-11-22)
+
+**Status:** complete. The RAW Decode card has the `AI Denoise` switch with the locked Method
+track and the labels `Auto` and `Neural`; the viewport shows each model error of a render with
+`Turn Off AI Denoise` (and `Manage` for a missing model); a first frame with a model error opens
+the photo. The switch is the `ai_denoise` key of the `raw_decode` field, so the history, the undo,
+and the paste carry it. Issue #1050.
+
+**Primary success call chain:**
+
+```text
+switch on (EditorRawDecodePanel.setAiDenoise) -> EditorAiDenoiseControl::turnOn
+  -> DenoiseModelSession::InstalledModelVersion
+  -> IEditorAdjustmentSubmitter::submitWrite("raw_decode",
+       DevelopRawDecodeUpdate{ai_denoise = DevelopAiDenoise{version}}, settled)
+  -> EditorSessionController -> EditorSessionService (one settled commit)
+  -> ApplyEditorParameterWrite -> DevelopParamsModel::ApplyRawDecodeUpdate (DevelopDirty::Denoise)
+  -> render with the model (DN6) -> panel projection raw.ai_denoise -> the locked Method track
+Turn Off AI Denoise (EditorAiDenoiseErrorCard) -> EditorAiDenoiseControl::turnOff
+  -> the same write with an empty ai_denoise -> render without the model -> FrameReady
+  -> EditorSessionRenderController::SetAiDenoiseError(nullopt) -> AiDenoiseErrorChanged
+  -> EditorSessionService::NotifyChange -> EditorSessionController::SyncAiDenoiseError -> card hidden
+undo -> ParseEditorParameterValue("raw_decode", stored Model JSON with the key) -> switch on
+open photo -> StateChanged -> EditorAiDenoiseControl::SetImage -> QThreadPool: ReadRawSensorLayout
+  (LibRaw open_file, no unpack) -> sensorLayout (bayer, xtrans, other) -> switch enabled or not
+```
+
+**Primary failure call chain:**
+
+```text
+render -> AiDenoiseError (what(): "AI Denoise error (<kind>): <text>") -> PipelineScheduler
+  TaskOutcome message -> EditorRenderCoordinator Failed -> EditorSessionRenderController
+  ::NotifyRenderResult -> ParseAiDenoiseRenderError -> SetAiDenoiseError -> AiDenoiseErrorChanged
+  -> EditorSessionController.aiDenoiseError {kind, text} -> EditorAiDenoiseErrorCard
+first frame (Loading) with the marker -> CompleteFirstFrame -> Interactive with the error
+first frame with another error -> RenderFailed -> session Failed (unchanged)
+switch on without a model -> turnOn returns model_not_installed -> host.openAiModelSettings();
+  no write; the switch returns to off
+X-Trans or monochrome photo with the switch on (a paste) -> RequireDevelopInputForAiDenoise
+  -> AiDenoiseError(SensorNotSupported) -> the card; the switch stays enabled to turn it off
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RenderMessageKeepsTheKindAndTheTextOfTheError` (each kind; text before the marker) | `AiDenoiseLoaderTest` | PASS |
+| `MessageWithoutAnAiDenoiseErrorHasNone` (added) | `AiDenoiseLoaderTest` | PASS |
+| `PlatformIsAvailableWhenItsDeviceAndRuntimeLoad` (added: one check; a runtime load error; no platform) | `AiDenoiseLoaderTest` | PASS |
+| `SensorLayoutOfTheTestRawFiles`, as `SensorLayoutOfABayerRawFileIsBayer`, `SensorLayoutOfALinearDngIsNotBayer`, `SensorLayoutOfAFileThatLibRawCannotOpenIsAnError` | `AiDenoiseLoaderTest` | PASS |
+| `BayerCheckReportsSensorNotSupported`, in `InputCheckRejectsAFullSizeInputThatIsNotDenoised` | `GpuDagRawInputTest` (`DevelopAiDenoiseInputTest`) | PASS |
+| `RawDecodeWriteTurnsAiDenoiseOnAndOff` (the key absent keeps the switch; the method stays) | `EditorAiDenoiseSwitchTest` | PASS |
+| `TypedWriteOfTheSwitchUsesTheRawDecodeUpdate` (added) | `EditorAiDenoiseSwitchTest` | PASS |
+| `RawDecodeValueWithoutTheKeyTurnsAiDenoiseOff` (an invalid version leaves the Model unchanged) | `EditorAiDenoiseSwitchTest` | PASS |
+| `RawDecodeOwnedJsonHasTheKeyOnlyWhileOn` | `EditorAiDenoiseSwitchTest` | PASS |
+| `PanelProjectionReportsTheSwitch`, as `PanelProjectionReportsTheSwitchAndKeepsTheMethod` | `EditorAiDenoiseSwitchTest` | PASS |
+| `PasteOfRawDecodeCarriesTheSwitch` (the inverse turns it off; an item without the key turns it off) | `EditorAiDenoiseSwitchTest` | PASS |
+| `TurnOffAiDenoiseIsOneChangeAndUndoTurnsItOn` (the next frame request renders the switch off; one undo returns to the head of the switch on and the next request has it) | `EditorAiDenoiseSessionTest` | PASS |
+| `FirstFrameWithAModelErrorOpensThePhotoWithTheError` (a failed frame without the marker keeps the error) | `EditorAiDenoiseSessionTest` | PASS |
+| `ReadyFrameClearsTheErrorOfThePhoto` (added) | `EditorAiDenoiseSessionTest` | PASS |
+| `FirstFrameWithAnotherErrorFailsAsBefore` | `EditorAiDenoiseSessionTest` | PASS |
+| `TurnOnWithoutAModelRequestsTheAiModelsPageAndWritesNothing` | `EditorAiDenoiseControlTest` | PASS |
+| `TurnOnWritesTheInstalledVersionAndTurnOffWritesNull` (only the switch is written, settled) | `EditorAiDenoiseControlTest` | PASS |
+| `TurnOnIsRefusedWithoutAPlatformOrAReadableModel`, `PlatformIsCheckedOnce` (added) | `EditorAiDenoiseControlTest` | PASS |
+| `SensorLayoutOfTheOpenPhotoIsReadOnAWorkerThread`, `LayoutOfAPhotoThatIsNoLongerOpenIsIgnored` (added) | `EditorAiDenoiseControlTest` | PASS |
+| The labels `Auto` and `Neural` with the stored values | `EditorParameterCatalogTest` | PASS |
+
+Commands:
+
+```text
+cmd /c "scripts\msvc_env.cmd --build build\debug --target AiDenoiseLoaderTest EditorAiDenoiseSwitchTest EditorAiDenoiseSessionTest EditorAiDenoiseControlTest EditorHistoryMoveDuringInputTest EditorRawDecodePanelQmlTest EditorPipelineCommandServiceTest EditorParameterCatalogTest EditorPanelProjectionTest DocumentTransferTest GpuDagRawInputTest EditorSessionRenderControllerTest EditorRenderCoordinatorTest MainQmlWorkflowTest alcedo_main"
+ctest --test-dir build/debug -R "^(AiDenoiseLoaderTest|EditorAiDenoiseSwitchTest|EditorAiDenoiseSessionTest|EditorAiDenoiseControlTest|EditorHistoryMoveDuringInputTest|EditorRawDecodePanelQmlTest|EditorPipelineCommandServiceTest|EditorParameterCatalogTest|EditorPanelProjectionTest|DocumentTransferTest)\." -j 4   # 179/180, 2 skipped
+ctest --test-dir build/debug -R "^(GpuDagRawInputTest\.DevelopAiDenoiseInputTest|EditorSessionRenderControllerTest|EditorRenderCoordinatorTest)\." -j 4   # 59/59
+ctest --test-dir build/debug -R "^MainQmlWorkflowTest\." -j 1   # 4/5
+```
+
+Suite totals: 179/180 of the editor and loader suites: the failure is
+`DocumentTransferTest.TransferPackageCarriesOnlyOwnedDevelopKeysAndNoCaches` (the Color Wheel
+`version` key, issues #484 and #554, without DN7 too); the 2 skipped tests need the DN6 lab assets.
+59/59 of the render controller, the coordinator, and the DN5 input tests. `MainQmlWorkflowTest`
+4/5: the failure is the removed `toggleByUser` (issue #722); the production window loads the
+changed `EditorWorkspace.qml` and `EditorRawDecodePanel.qml` without a QML warning. Full suite:
+not run (AGENTS.md).
+
+**Changes against the plan text and detail choices:**
+
+- **Issue #1052 (a DN6 defect, found in the user test of DN7).** The editor render reported
+  "no AI model folder is set" with the model installed: `ProcessDenoiseModelSession()` is a
+  static of the static library `EditInput`, so the EditPipeline DLL (`PipelineExecutor`) and the
+  application each have an instance, and the application set the folder on its own. The DN6
+  record ("one instance") is wrong for the Windows DLL build. `PipelineExecutor::
+  ProcessAiDenoiseSession()` returns the instance of the executors; the application sets the
+  folder, reads the installed model, checks the platform, and releases the session through it.
+  Test: `AiDenoiseRenderTest.ExecutorsUseTheSessionWhoseModelFolderTheApplicationSets` (PASS).
+- **The error header is header only.** `EditorSessionRenderController` reads the render message
+  without linking `EditInput` (LibRaw, ONNX Runtime); a first build failed at the link of the
+  session library.
+- **`turnOn()` returns a word** (`on`, `model_not_installed`, `refused`) and the panel opens the AI
+  Models page through the host: a QML `Connections` handler does not reach a PascalCase C++ signal
+  in the compiled module.
+- **`sensorLayout`** is a word (`bayer`, `xtrans`, `other`, empty while unknown); the panel selects
+  the translated tooltip. The read is LibRaw `open_file` on `QThreadPool`; a result for a photo
+  that is no longer open is dropped by its image id.
+- **The switch stays enabled for a photo that is not Bayer while it is on** (a paste can set it),
+  so the user can turn it off from the panel too.
+- **The quality-base frame after a first frame with a model error** is routed as after any first
+  frame: it fails at once for a missing model or a slow device; after a run error it runs the
+  model again, which can clear a temporary video memory error.
+- **The status label `Preparing image viewport`** is hidden while the card shows.
+- The card is not tested by a QML test (repository rule: no test for pure UI). The application
+  was not started by hand on this computer (it would take the screen of the user).
+
+**Checklist / exit condition:** the tests pass; the touched suites have no new failure; the
+production window loads the changed QML. The switch in the running application is not checked
+by eye.
+
+**LOC note (grill-code-review):** production 1011 lines (new: `EditorAiDenoiseControl` 226,
+`ai_denoise_error.hpp` 125, `EditorAiDenoiseErrorCard.qml` 113, `raw_sensor_layout` 85), tests 837
+lines, plan 172 lines: above the estimate of 900 to 1400 with the tests. The changed files above
+1000 lines were above it before DN7 (`editor_session_service.cpp` 3973 with 18 lines of DN7,
+`editor_session_controller.cpp` 2362 with 20, `application_module_host.cpp` 1061 with 34,
+`EditorWorkspace.qml` 1118 with 22); the new logic is in its own owners.
+
+**Remaining gaps:** the library action and the export errors (DN8; the export executor uses the
+same instance through the default of `PipelineExecutor`, which reads the export error
+with `ParseAiDenoiseRenderError`); the macOS and Linux platforms (DN10, DN11) show no switch until
+then.
+
+### DN8 to DN13
 
 Each of these phases gets its detailed section before its implementation starts. DN4 and DN9
 are removed (2026-11-22, D6). The fixed points that the detailed sections must keep:
 
-- **DN7**: QML rules of the `alcedo-qml-ui` skill. No test for pure UI; the tests are on the C++
-  owner of the switch state (the missing model path, the model version notice, the
-  `Turn Off AI Denoise` action: one `SetParameter` change that turns the switch off, undo turns
-  it on, and the next render runs without the model).
 - **DN8**: the library action uses `LibraryMutationOperations::ResolveTargets` and writes one
   Version for each Bayer target; it runs no model. The export reports a model error for that
   photo and continues. The `Turn Off AI Denoise` control of the queue item writes the change

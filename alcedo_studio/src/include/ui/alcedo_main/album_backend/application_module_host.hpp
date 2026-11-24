@@ -28,6 +28,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/ai_model_download_task_publisher.hpp"
 #include "ui/alcedo_main/album_backend/application_close_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_ai_denoise_control.hpp"
 #include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
 #include "ui/alcedo_main/album_backend/editor_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/editor_comparison_controller.hpp"
@@ -100,6 +101,7 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(EditorComparisonController* editorComparison READ editor_comparison CONSTANT)
   /// The AI Mask tool of the open image (SM9 MVP).
   Q_PROPERTY(EditorAiMaskTool* aiMaskTool READ ai_mask_tool CONSTANT)
+  Q_PROPERTY(EditorAiDenoiseControl* editorAiDenoise READ editor_ai_denoise CONSTANT)
   Q_PROPERTY(WorkspaceRouter* workspaceRouter READ workspace_router CONSTANT)
   Q_PROPERTY(EditorBehaviorPreferences* editorBehavior READ editor_behavior CONSTANT)
   /// Library view settings (the layout of the ungrouped Library grid).
@@ -190,6 +192,7 @@ class ApplicationModuleHost final : public QObject {
     return editor_comparison_.get();
   }
   [[nodiscard]] auto ai_mask_tool() -> EditorAiMaskTool* { return ai_mask_tool_.get(); }
+  [[nodiscard]] auto editor_ai_denoise() -> EditorAiDenoiseControl* { return ai_denoise_.get(); }
   [[nodiscard]] auto lut_browser() -> LutLibraryModel* { return lut_browser_.get(); }
   [[nodiscard]] auto lut_target() -> LutLibraryController* { return lut_target_.get(); }
   [[nodiscard]] auto lut_preview() -> LutPreviewController* { return lut_preview_.get(); }
@@ -285,6 +288,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<EditorSessionController>             editor_session_;
   std::unique_ptr<EditorComparisonController>          editor_comparison_;
   std::unique_ptr<EditorAiMaskTool>                    ai_mask_tool_;
+  std::unique_ptr<EditorAiDenoiseControl>              ai_denoise_;
   std::unique_ptr<LutLibraryModel>                     lut_browser_;
   std::unique_ptr<LutLibraryController>                lut_target_;
   std::unique_ptr<LutPreviewController>                lut_preview_;

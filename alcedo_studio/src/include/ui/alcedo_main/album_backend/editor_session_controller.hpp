@@ -156,6 +156,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Aggregate coordinator diagnostics (reason, replace/cancel counts, last
   // rejection, last submitted role). Never includes pipeline task pointers.
   Q_PROPERTY(QVariantMap renderDiagnostics READ render_diagnostics NOTIFY RenderDiagnosticsChanged)
+  // AI Denoise integration plan, DN7: the model error of the last frame of the open photo,
+  // {kind, text} with kind model_not_installed, device_too_slow, run_failed, or
+  // sensor_not_supported; empty after a ready frame. The viewport error card reads it.
+  Q_PROPERTY(QVariantMap aiDenoiseError READ ai_denoise_error NOTIFY AiDenoiseErrorChanged)
   /// Phase 6C-7: read-only field-value snapshot for panel loading. Keys are
   /// stable field identifiers (e.g. "exposure", "contrast"); values are the
   /// parsed JSON params. Published after open, checkout, undo, redo, recovery,
@@ -244,6 +248,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString     last_error() const;
   [[nodiscard]] double      first_frame_time_ms() const;
   [[nodiscard]] QVariantMap render_diagnostics() const;
+  [[nodiscard]] QVariantMap ai_denoise_error() const { return ai_denoise_error_; }
   // Phase 7A R4: typed result of the last history/Version operation, owned by
   // EditorHistoryOperationPublisher (not ad-hoc controller fields).
   [[nodiscard]] QString     last_history_message() const {
@@ -507,6 +512,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void HistoryChanged();
   void RenderBusyChanged();
   void RenderDiagnosticsChanged();
+  void AiDenoiseErrorChanged();
   // Phase 6C-7: emitted when the backend adjustment snapshot is published.
   void AdjustmentSnapshotChanged();
   void ActionAvailabilityChanged();
@@ -545,6 +551,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     ApplyOpenLocal(uint elementId, uint imageId);
   void                     ApplyCloseLocal();
   void                     SyncViewportIdentity();
+  /// Publish the AI Denoise error of the backend when it changed (DN7).
+  void                     SyncAiDenoiseError();
   void                     SyncViewportDisplayConfig();
   void                     SyncAlbumHdrFlagFromSnapshot();
   /// Show the open photo's edit state (head commit time and name of the active Version) on
@@ -649,6 +657,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                 exif_aperture_text_ = QString::fromUtf8("\xE2\x80\x94");
   QString                 exif_focal_text_    = QString::fromUtf8("\xE2\x80\x94");
   QString                 exif_lens_make_;
+  /// The last published AI Denoise error, for the change signal of the property.
+  QVariantMap             ai_denoise_error_;
   QString                 exif_lens_model_;
   QString                 camera_make_;
   QString                 camera_model_;

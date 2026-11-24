@@ -21,6 +21,7 @@
 #include "app/editor_session_service.hpp"
 #include "app/version_name_rules.hpp"
 #include "edit/frame_presentation_types.hpp"
+#include "edit/input/ai_denoise_error.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/album_catalog.hpp"
@@ -345,6 +346,7 @@ void EditorSessionController::OnBackendChanged() {
   }
   SyncIdentityFromBackend();
   SyncViewportIdentity();
+  SyncAiDenoiseError();
   ApplyActionAvailability();
 
   const auto state = session_state();
@@ -418,6 +420,22 @@ void EditorSessionController::OnBackendChanged() {
     SyncAlbumEditStateFromHistory();
     emit HistoryChanged();
   }
+}
+
+void EditorSessionController::SyncAiDenoiseError() {
+  QVariantMap error;
+  if (const auto current = session_backend_ ? session_backend_->ai_denoise_error() : std::nullopt;
+      current.has_value()) {
+    const auto kind = alcedo::AiDenoiseErrorKindToken(current->kind);
+    error.insert(QStringLiteral("kind"),
+                 QString::fromUtf8(kind.data(), static_cast<qsizetype>(kind.size())));
+    error.insert(QStringLiteral("text"), QString::fromStdString(current->text));
+  }
+  if (error == ai_denoise_error_) {
+    return;
+  }
+  ai_denoise_error_ = std::move(error);
+  emit AiDenoiseErrorChanged();
 }
 
 void EditorSessionController::OnRenderProgressChanged() {

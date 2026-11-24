@@ -417,8 +417,19 @@ void EditorSessionRenderController::NotifyRenderResult(
   }
 
   if (render_result.kind == EditorRenderResultKind::Failed) {
+    // A model error of AI Denoise (DN7) is shown on the photo with the control that turns the
+    // noise reduction off, so a first frame that fails with it still opens the photo.
+    auto       denoise_error  = ParseAiDenoiseRenderError(render_result.message);
+    const bool denoise_failed = denoise_error.has_value();
+    if (denoise_failed) {
+      SetAiDenoiseError(std::move(denoise_error), identity, state);
+    }
     if (state == EditorSessionState::Loading &&
         MatchesActiveFirstFrame(render_result, identity, image_load_request)) {
+      if (denoise_failed) {
+        CompleteFirstFrame();
+        return;
+      }
       EditorRenderEvent event;
       event.kind         = EditorRenderEventKind::RenderFailed;
       event.operation_id = render_result.intent.operation_id;
@@ -430,26 +441,13 @@ void EditorSessionRenderController::NotifyRenderResult(
     return;
   }
 
+  if (render_result.kind == EditorRenderResultKind::FrameReady) {
+    SetAiDenoiseError(std::nullopt, identity, state);
+  }
+
   if (MatchesActiveFirstFrame(render_result, identity, image_load_request)) {
     if (render_result.kind == EditorRenderResultKind::FrameReady) {
-      bool                  should_try_interactive = false;
-      EditorSessionIdentity first_frame_identity;
-      {
-        std::scoped_lock lock(mutex_);
-        if (first_frame_ready_) {
-          return;
-        }
-        first_frame_ready_ = true;
-        if (first_frame_route_time_.has_value()) {
-          const auto elapsed   = std::chrono::steady_clock::now() - *first_frame_route_time_;
-          first_frame_time_ms_ = std::chrono::duration<double, std::milli>(elapsed).count();
-        }
-        first_frame_identity   = pending_session_identity_;
-        should_try_interactive = true;
-      }
-      if (should_try_interactive) {
-        TryEnterInteractiveFromFirstFrame(first_frame_identity);
-      }
+      CompleteFirstFrame();
     }
     return;
   }
@@ -553,6 +551,8 @@ void EditorSessionRenderController::ResetForNewImage() {
   pending_image_load_request_ = {};
   first_frame_route_time_.reset();
   first_frame_time_ms_ = -1.0;
+  // The error belongs to the photo; the session publishes the new image with its state change.
+  ai_denoise_error_.reset();
 }
 
 void EditorSessionRenderController::MarkImageAcquired() {
@@ -588,6 +588,46 @@ void EditorSessionRenderController::CancelSession(
           on_idle(ImageLoadRequestId{request});
         }
       });
+}
+
+void EditorSessionRenderController::CompleteFirstFrame() {
+  EditorSessionIdentity first_frame_identity;
+  {
+    std::scoped_lock lock(mutex_);
+    if (first_frame_ready_) {
+      return;
+    }
+    first_frame_ready_ = true;
+    if (first_frame_route_time_.has_value()) {
+      const auto elapsed   = std::chrono::steady_clock::now() - *first_frame_route_time_;
+      first_frame_time_ms_ = std::chrono::duration<double, std::milli>(elapsed).count();
+    }
+    first_frame_identity = pending_session_identity_;
+  }
+  TryEnterInteractiveFromFirstFrame(first_frame_identity);
+}
+
+void EditorSessionRenderController::SetAiDenoiseError(std::optional<AiDenoiseRenderError> error,
+                                                      const EditorSessionIdentity&        identity,
+                                                      EditorSessionState                  state) {
+  {
+    std::scoped_lock lock(mutex_);
+    if (ai_denoise_error_ == error) {
+      return;
+    }
+    ai_denoise_error_ = std::move(error);
+  }
+  EditorRenderEvent event;
+  event.kind     = EditorRenderEventKind::AiDenoiseErrorChanged;
+  event.state    = state;
+  event.identity = identity;
+  EmitEvent(std::move(event));
+}
+
+auto EditorSessionRenderController::ai_denoise_error() const
+    -> std::optional<AiDenoiseRenderError> {
+  std::scoped_lock lock(mutex_);
+  return ai_denoise_error_;
 }
 
 void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(

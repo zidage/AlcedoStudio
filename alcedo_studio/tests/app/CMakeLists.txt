@@ -177,6 +177,20 @@ gtest_discover_tests(EditorPipelineCommandServiceTest
     TEST_PREFIX "EditorPipelineCommandServiceTest.")
 alcedo_register_test_target(EditorPipelineCommandServiceTest app)
 
+# AI Denoise integration plan, DN7: the switch as the ai_denoise key of the raw_decode field
+# (write, history value, owned JSON, panel projection, paste).
+add_executable(EditorAiDenoiseSwitchTest
+    ${ALCEDO_TEST_ROOT}/app/editor_ai_denoise_switch_test.cpp)
+target_include_directories(EditorAiDenoiseSwitchTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorAiDenoiseSwitchTest
+    PRIVATE GTest::gtest_main AdjustmentTransferService PipelineHistoryApplier
+            EditorPipelineCommandService EditorPanelProjection EditGraph EditMaskCore EditRuntime
+            JSON)
+gtest_discover_tests(EditorAiDenoiseSwitchTest
+    TEST_PREFIX "EditorAiDenoiseSwitchTest.")
+alcedo_register_test_target(EditorAiDenoiseSwitchTest app)
+
 add_executable(EditorPanelProjectionTest
     ${ALCEDO_TEST_ROOT}/app/editor_panel_projection_test.cpp)
 target_include_directories(EditorPanelProjectionTest

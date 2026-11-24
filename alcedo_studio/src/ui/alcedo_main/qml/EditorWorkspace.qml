@@ -13,6 +13,7 @@ Item {
     property var host: null
     property var workspaceRouter: appModules.workspaceRouter
     property var editorSession: appModules.editorSession
+    property var aiDenoise: appModules.editorAiDenoise
     property var interactionPolicy: appModules.interactionPolicy
     property Item blurSource: null
     // True while the workspace width follows the collections sidebar fold (WorkspaceHost). The
@@ -291,6 +292,7 @@ Item {
                         objectName: "editorViewportStatus"
                         anchors.centerIn: parent
                         visible: root.hasImage && !editorViewportItem.presentationAvailable
+                                 && !aiDenoiseErrorCard.visible
                         text: qsTr("Preparing image viewport")
                         color: root.colMuted
                         font.pixelSize: appTheme.fontSizeSection
@@ -329,6 +331,25 @@ Item {
                                  && root.adjustmentRenderBusy
                         running: visible
                         z: 3
+                    }
+
+                    // The AI Denoise error of the open photo (AI Denoise plan, DN7). It stays until
+                    // a frame of the photo is ready.
+                    EditorAiDenoiseErrorCard {
+                        id: aiDenoiseErrorCard
+                        anchors.centerIn: parent
+                        error: root.hasImage && root.editorSession
+                               ? root.editorSession.aiDenoiseError : ({})
+                        controlsEnabled: root.editorEditControlsEnabled
+                        z: 4
+                        onManageRequested: {
+                            if (root.host && root.host.openAiModelSettings)
+                                root.host.openAiModelSettings()
+                        }
+                        onTurnOffRequested: {
+                            if (root.aiDenoise)
+                                root.aiDenoise.turnOff()
+                        }
                     }
 
                     // Crop rotation label (text overlay, not QSG).
@@ -1025,6 +1046,7 @@ Item {
                 nodeController: historyVersionsRail.nodeController
                 comparison: root.comparison
                 host: root.host
+                aiDenoise: root.aiDenoise
                 controlsEnabled: root.editorEditControlsEnabled
                 expanded: !root.host || root.host.editorAdjustmentStackExpanded !== false
             }

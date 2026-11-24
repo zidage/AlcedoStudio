@@ -31,6 +31,13 @@ class AiDenoisePlatform {
   [[nodiscard]] virtual auto DeviceKey() -> std::string = 0;
 
   /**
+   * @brief Load the runtime libraries of the platform (Windows: onnxruntime.dll, DirectML.dll).
+   *        Creates no session. The default has nothing to load.
+   * @throws std::runtime_error with the load error.
+   */
+  virtual void               CheckRuntime() {}
+
+  /**
    * @brief Load the FP16 graph at @p graph_path into a new platform session.
    * @throws std::runtime_error with the error of the runtime (ONNX Runtime, DirectML, Direct3D
    *         12) or of the graph check.

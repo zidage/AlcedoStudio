@@ -399,6 +399,45 @@ alcedo_ui_gtest_discover_tests(EditorHistoryMoveDuringInputTest
   PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
 alcedo_register_test_target(EditorHistoryMoveDuringInputTest ui)
 
+# AI Denoise integration plan, DN7: the model error of the open photo and the switch through the
+# production session facade over the real history port.
+add_executable(EditorAiDenoiseSessionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_ai_denoise_session_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorAiDenoiseSessionTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorAiDenoiseSessionTest
+  EditorSessionService
+  EditorComparisonService
+  AiMaskAnalysisImage
+  LutPreviewImage
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorAiDenoiseSessionTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorAiDenoiseSessionTest
+  TEST_PREFIX "EditorAiDenoiseSessionTest."
+  PROPERTIES LABELS "editor_session")
+alcedo_register_test_target(EditorAiDenoiseSessionTest ui)
+
 # Checkpoint storage owns Mini-Git materialization and recovery.
 # Same direct-adapter link rule as history port: avoid AlbumBackendLib for unit runs.
 add_executable(EditorSessionCheckpointStoreTest
@@ -493,6 +532,10 @@ alcedo_ui_gtest_discover_tests(EditorComparisonLargeRawPairTest
   TEST_PREFIX "EditorComparisonLargeRawPairTest."
   PROPERTIES LABELS "editor_session;editor_comparison")
 alcedo_register_test_target(EditorComparisonLargeRawPairTest ui)
+
+# AI Denoise integration plan, DN7: the switch owner of the editor.
+def_ui_test(EditorAiDenoiseControlTest editor_ai_denoise_control_test.cpp)
+alcedo_register_test_target(EditorAiDenoiseControlTest ui)
 
 def_ui_test(AlbumBackendImportTest   album_backend_import_test.cpp)
 alcedo_register_test_target(AlbumBackendImportTest ui)
