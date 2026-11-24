@@ -37,6 +37,9 @@ enum class BackgroundTaskKind {
   AgentControl,
   /// A scan of a mounted folder (Mounted Folder Plan, MF7).
   MountScan,
+  /// Turn Off AI Denoise of an export queue item, written into the stored history of its photo
+  /// (AI Denoise integration plan, DN8).
+  AiDenoiseSwitch,
 };
 
 /// Lifecycle state of a single background task record.

@@ -322,6 +322,8 @@ auto BackgroundTaskController::KindToString(BackgroundTaskKind kind) -> QString 
       return QStringLiteral("agentControl");
     case BackgroundTaskKind::MountScan:
       return QStringLiteral("mountScan");
+    case BackgroundTaskKind::AiDenoiseSwitch:
+      return QStringLiteral("aiDenoiseSwitch");
   }
   return QStringLiteral("unknown");
 }

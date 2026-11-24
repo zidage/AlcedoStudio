@@ -1383,6 +1383,38 @@ Alcedo will use %1 instead.</translation>
         <source>The agent gave control back to you.</source>
         <translation type="unfinished">The agent gave control back to you.</translation>
     </message>
+    <message>
+        <source>AI Denoise is already being changed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise is being changed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Turn Off AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No valid image was selected.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Pipeline service is unavailable.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The editor did not accept the change.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise could not be turned off: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>AgentSessionCard</name>
@@ -1542,6 +1574,10 @@ Alcedo will use %1 instead.</translation>
         <source>Agent</source>
         <translation type="unfinished">Agent</translation>
     </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>BackgroundTasksDialog</name>
@@ -1661,6 +1697,10 @@ Alcedo will use %1 instead.</translation>
     <message>
         <source>Other Tasks</source>
         <translation type="unfinished">Other Tasks</translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -4383,6 +4423,30 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+36"/>
         <source>Export Progress</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise model not installed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>This GPU is too slow for AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise does not support this sensor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Manage</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Turn Off AI Denoise</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

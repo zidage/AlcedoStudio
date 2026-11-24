@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -38,6 +39,14 @@ class ProjectModule;
 class SemanticGenerationController;
 class StatsEngine;
 class IUiStatusSink;
+
+/**
+ * @brief The exportItemStatuses value of a finished export task: `succeeded`; `missing` when its
+ *        photo or source file is gone (#1018); `ai_denoise` when @p message holds an AI Denoise
+ *        render error (ParseAiDenoiseRenderError, integration plan DN8); `failed` otherwise.
+ */
+[[nodiscard]] auto ExportItemStatusOf(bool succeeded, bool source_missing, std::string_view message)
+    -> QString;
 
 /// Handles file import and image export workflows.
 class ImportExportHandler final : public QObject {
@@ -72,6 +81,10 @@ class ImportExportHandler final : public QObject {
   Q_PROPERTY(bool exportInFlight READ ExportInFlight NOTIFY ExportStateChanged)
   Q_PROPERTY(QString exportStatus READ ExportStatus NOTIFY ExportStateChanged)
   Q_PROPERTY(QVariantMap exportItemStatuses READ ExportItemStatuses NOTIFY ExportStateChanged)
+  /// The AI Denoise error of each photo of the last run whose status is `ai_denoise`, keyed like
+  /// exportItemStatuses: {kind (the token of AiDenoiseErrorKind), text}.
+  Q_PROPERTY(QVariantMap exportItemAiDenoiseErrors READ ExportItemAiDenoiseErrors NOTIFY
+                 ExportStateChanged)
   Q_PROPERTY(int exportTotal READ ExportTotal NOTIFY ExportStateChanged)
   Q_PROPERTY(int exportCompleted READ ExportCompleted NOTIFY ExportStateChanged)
   Q_PROPERTY(int exportSucceeded READ ExportSucceeded NOTIFY ExportStateChanged)
@@ -220,10 +233,14 @@ class ImportExportHandler final : public QObject {
     return export_error_summary_text_.Render();
   }
   /// The state of each photo of the last export run, keyed "elementId:imageId": queued, running,
-  /// succeeded, failed, or missing (the photo is not in the project or its source file does not
-  /// exist; the other photos of the run export as usual).
+  /// succeeded, failed, missing (the photo is not in the project or its source file does not
+  /// exist), or ai_denoise (its render failed with an AI Denoise error); the other photos of the
+  /// run export as usual.
   [[nodiscard]] auto ExportItemStatuses() const -> QVariantMap { return export_item_statuses_; }
   [[nodiscard]] auto export_item_statuses() const -> QVariantMap { return export_item_statuses_; }
+  [[nodiscard]] auto ExportItemAiDenoiseErrors() const -> QVariantMap {
+    return export_item_ai_denoise_errors_;
+  }
   /// The number of the export run that ExportItemStatuses describes: 0 before the first run,
   /// then a new number each time a run fills ExportItemStatuses with its queued photos.
   [[nodiscard]] auto ExportRunId() const -> quint64 { return export_run_id_; }
@@ -351,6 +368,7 @@ class ImportExportHandler final : public QObject {
   i18n::LocalizedText           export_status_text_{};
   i18n::LocalizedText           export_error_summary_text_{};
   QVariantMap                   export_item_statuses_{};
+  QVariantMap                   export_item_ai_denoise_errors_{};
   quint64                       export_run_id_           = 0;
   int                           export_total_           = 0;
   int                           export_completed_        = 0;

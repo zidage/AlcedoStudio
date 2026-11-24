@@ -2018,6 +2018,38 @@ Alcedo 将改用 %1。</translation>
         <source>Activate an AI model in Settings before generating labels.</source>
         <translation>请先在设置中激活 AI 模型，再生成标签。</translation>
     </message>
+    <message>
+        <source>AI Denoise is already being changed.</source>
+        <translation>AI 降噪正在更改中。</translation>
+    </message>
+    <message>
+        <source>AI Denoise is being changed.</source>
+        <translation>正在更改 AI 降噪。</translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation>AI 降噪</translation>
+    </message>
+    <message>
+        <source>Turn Off AI Denoise</source>
+        <translation>关闭 AI 降噪</translation>
+    </message>
+    <message>
+        <source>No valid image was selected.</source>
+        <translation>未选择有效的图像。</translation>
+    </message>
+    <message>
+        <source>Pipeline service is unavailable.</source>
+        <translation>管线服务不可用。</translation>
+    </message>
+    <message>
+        <source>The editor did not accept the change.</source>
+        <translation>编辑器未接受此更改。</translation>
+    </message>
+    <message>
+        <source>AI Denoise could not be turned off: %1</source>
+        <translation>无法关闭 AI 降噪：%1</translation>
+    </message>
 </context>
 <context>
     <name>AgentSessionCard</name>
@@ -2219,6 +2251,10 @@ Alcedo 将改用 %1。</translation>
         <source>Ratings</source>
         <translation>评分</translation>
     </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation>AI 降噪</translation>
+    </message>
 </context>
 <context>
     <name>BackgroundTasksDialog</name>
@@ -2358,6 +2394,10 @@ Alcedo 将改用 %1。</translation>
     <message>
         <source>Ratings</source>
         <translation>评分</translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation>AI 降噪</translation>
     </message>
 </context>
 <context>
@@ -6158,6 +6198,30 @@ Refresh the library afterwards; they are listed under the User category. Import 
     <message>
         <source>Max edge (px)</source>
         <translation>最长边（像素）</translation>
+    </message>
+    <message>
+        <source>AI Denoise model not installed</source>
+        <translation>未安装 AI 降噪模型</translation>
+    </message>
+    <message>
+        <source>This GPU is too slow for AI Denoise</source>
+        <translation>此 GPU 运行 AI 降噪太慢</translation>
+    </message>
+    <message>
+        <source>AI Denoise does not support this sensor</source>
+        <translation>AI 降噪不支持此传感器</translation>
+    </message>
+    <message>
+        <source>AI Denoise failed</source>
+        <translation>AI 降噪失败</translation>
+    </message>
+    <message>
+        <source>Manage</source>
+        <translation>管理</translation>
+    </message>
+    <message>
+        <source>Turn Off AI Denoise</source>
+        <translation>关闭 AI 降噪</translation>
     </message>
 </context>
 <context>

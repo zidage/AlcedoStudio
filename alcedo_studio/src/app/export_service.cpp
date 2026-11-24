@@ -413,6 +413,7 @@ void ExportService::ExportAll(
 
       const bool export_ok      = result.success_;
       const bool source_missing = result.source_missing_;
+      std::string failure_message = export_ok ? std::string{} : result.message_;
 
       // Store result
       {
@@ -440,6 +441,7 @@ void ExportService::ExportAll(
               .task_finished_       = true,
               .task_success_        = export_ok,
               .task_source_missing_ = source_missing,
+              .task_message_        = std::move(failure_message),
           });
         } catch (...) {
         }

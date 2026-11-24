@@ -25,6 +25,7 @@
 #include <system_error>
 #include <vector>
 
+#include "app/ai_denoise_history_write.hpp"
 #include "app/editor_adjustment_context.hpp"
 #include "app/editor_pending_input.hpp"
 #include "app/editor_session_bootstrap.hpp"
@@ -56,6 +57,7 @@
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "utils/diagnostics/app_logging.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -403,6 +405,53 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   ai_denoise_ = std::make_unique<EditorAiDenoiseControl>(std::move(ai_denoise_services),
                                                          editor_session_.get(), this);
   RecordConstruction("EditorAiDenoiseControl", ai_denoise_.get());
+  // AI Denoise integration plan, DN8: Turn Off AI Denoise of an export queue item. Several photos
+  // get the switch through Copy and Paste Adjustments (the RAW Decode item).
+  ExportAiDenoiseControl::Services export_denoise_services;
+  export_denoise_services.user_refusal = [this] {
+    return UserStateChangeRefusal(interaction_policy_.get());
+  };
+  export_denoise_services.stored_history_writer =
+      [this]() -> ExportAiDenoiseControl::StoredHistoryWriter {
+    auto pipeline = project_ != nullptr ? project_->handler().pipeline_service() : nullptr;
+    if (!pipeline) {
+      return {};
+    }
+    return [pipeline = std::move(pipeline)](
+               sl_element_id_t element_id, const std::optional<alcedo::DevelopAiDenoise>& denoise) {
+      return alcedo::WriteAiDenoiseSwitchToStoredHistory(*pipeline, element_id, denoise);
+    };
+  };
+  export_denoise_services.editor_element_id = [session = editor_session_.get()] {
+    return session->has_image() ? static_cast<sl_element_id_t>(session->element_id())
+                                : sl_element_id_t{0};
+  };
+  export_denoise_services.turn_off_editor_photo = [control = ai_denoise_.get()] {
+    return control->turnOff();
+  };
+  export_denoise_services.refresh_written_photo =
+      [this](sl_element_id_t element_id, const alcedo::AiDenoiseHistoryWrite& write) {
+        const auto* item     = library_->FindAlbumItem(element_id);
+        const auto  image_id = item != nullptr ? item->image_id : image_id_t{0};
+        library_->SetAlbumItemEditState(element_id, 0, write.head_created_at_ns,
+                                        QString::fromStdString(write.version_name));
+        if (auto thumbnails = project_->handler().thumbnail_service()) {
+          try {
+            thumbnails->InvalidateThumbnail(element_id);
+          } catch (const std::exception& error) {
+            ALCEDO_LOG_WARN(Render)
+                << "AI Denoise: thumbnail of " << element_id << ": " << error.what();
+          }
+        }
+        if (image_id != 0 && !library_->thumbs().RefreshCurrentThumbnail(element_id, image_id)) {
+          library_->thumbs().UpdateThumbnailState(element_id, QString(), false, false);
+        }
+        // The write changes stored edits; an edit-ordered library shows them.
+        library_->NoteEditHistoryChanged(editor_session_->active());
+      };
+  export_ai_denoise_ = std::make_unique<ExportAiDenoiseControl>(
+      std::move(export_denoise_services), background_tasks_.get(), export_queue_.get(), this);
+  RecordConstruction("ExportAiDenoiseControl", export_ai_denoise_.get());
   // AI Denoise integration plan, DN14: the image of the viewport before the first frame.
   editor_placeholder_image_ = std::make_shared<EditorPlaceholderImage>([this] {
     const auto store = library_ != nullptr ? library_->thumbs().image_store() : nullptr;
@@ -1015,6 +1064,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(lut_target_, "LutLibraryController");
   destroy(lut_browser_, "LutLibraryModel");
   destroy(editor_placeholder_, "EditorViewportPlaceholder");
+  destroy(export_ai_denoise_, "ExportAiDenoiseControl");
   destroy(ai_denoise_, "EditorAiDenoiseControl");
   destroy(ai_mask_tool_, "EditorAiMaskTool");
   destroy(editor_comparison_, "EditorComparisonController");

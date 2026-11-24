@@ -13,7 +13,11 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <initializer_list>
+#include <string>
 #include <utility>
+
+#include "edit/input/ai_denoise_error.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -172,6 +176,53 @@ TEST(ExportQueueTest, PhotoAddedDuringARunKeepsItsOwnRun) {
   queue.ApplyExportState(1, Statuses({{"1:10", "succeeded"}, {"2:20", "succeeded"}}));
   ASSERT_EQ(queue.Count(), 1);
   EXPECT_EQ(queue.Entries()[0].element_id, 1u);
+}
+
+// AI Denoise integration plan, DN8: the status of a task whose render failed with a model error.
+TEST(ExportQueueTest, ItemStatusOfAnAiDenoiseErrorIsAiDenoise) {
+  const std::string model_error =
+      AiDenoiseError(AiDenoiseErrorKind::DeviceTooSlow, "projected 9.1 s").what();
+  EXPECT_EQ(ExportItemStatusOf(true, false, {}), QStringLiteral("succeeded"));
+  EXPECT_EQ(ExportItemStatusOf(false, true, model_error), QStringLiteral("missing"));
+  EXPECT_EQ(ExportItemStatusOf(false, false, "ExportService: encode failed"),
+            QStringLiteral("failed"));
+  EXPECT_EQ(ExportItemStatusOf(false, false, model_error), QStringLiteral("ai_denoise"));
+  // The render path can put text before the error.
+  EXPECT_EQ(ExportItemStatusOf(false, false, "Pipeline render failed: " + model_error),
+            QStringLiteral("ai_denoise"));
+  // A succeeded task has no message to read.
+  EXPECT_EQ(ExportItemStatusOf(true, false, model_error), QStringLiteral("succeeded"));
+}
+
+// DN8: a photo whose model run failed stays in the queue; Turn Off AI Denoise returns it to
+// Queued, and the next run takes it.
+TEST(ExportQueueTest, AiDenoiseEntriesStayInTheQueueAndReturnToQueued) {
+  ExportQueue queue(nullptr, nullptr);
+  queue.AddTargets(
+      QVariantList{Item(1, 10, QStringLiteral("a.arw")), Item(2, 20, QStringLiteral("b.arw"))});
+  queue.ApplyExportState(1, Statuses({{"1:10", "queued"}, {"2:20", "queued"}}));
+  queue.ApplyExportState(1, Statuses({{"1:10", "ai_denoise"}, {"2:20", "succeeded"}}));
+  ASSERT_EQ(queue.Count(), 1);
+  EXPECT_EQ(StatusKeyOfLabel(queue, QStringLiteral("a.arw")), QStringLiteral("1:10"));
+
+  QSignalSpy changed(&queue, &ExportQueue::QueueChanged);
+  EXPECT_FALSE(queue.ReturnToQueued(9)) << "no entry of the element";
+  EXPECT_TRUE(queue.ReturnToQueued(1));
+  EXPECT_EQ(changed.count(), 1);
+  EXPECT_TRUE(StatusKeyOfLabel(queue, QStringLiteral("a.arw")).isEmpty()) << "Queued";
+  EXPECT_EQ(queue.Entries()[0].run_id, 0u);
+  EXPECT_TRUE(queue.ReturnToQueued(1));
+  EXPECT_EQ(changed.count(), 1) << "an entry that is already queued publishes nothing";
+
+  // Another state change of the finished run keeps the entry and does not show its old status.
+  queue.ApplyExportState(1, Statuses({{"1:10", "ai_denoise"}, {"2:20", "succeeded"}}));
+  ASSERT_EQ(queue.Count(), 1);
+  EXPECT_TRUE(StatusKeyOfLabel(queue, QStringLiteral("a.arw")).isEmpty());
+
+  queue.ApplyExportState(2, Statuses({{"1:10", "queued"}}));
+  EXPECT_EQ(queue.Entries()[0].run_id, 2u);
+  queue.ApplyExportState(2, Statuses({{"1:10", "succeeded"}}));
+  EXPECT_EQ(queue.Count(), 0);
 }
 
 TEST(ExportQueueTest, RemoveAndClearPublishOnlyWhenEntriesChange) {
