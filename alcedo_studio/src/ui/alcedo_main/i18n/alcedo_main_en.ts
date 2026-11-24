@@ -3443,6 +3443,45 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorRenderProgress</name>
+    <message>
+        <source>Reading RAW</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Developing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 / %2 tiles</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sensor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Lens and geometry</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Color</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Color Grade %1 of %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Display</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>EditorAiDenoiseErrorCard</name>
     <message>
         <source>AI Denoise model not installed</source>

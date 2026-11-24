@@ -103,6 +103,25 @@ class PreparedSourceCache {
                                      const DenoiseFn&             denoise) -> Lease;
 
   /**
+   * @brief True when @ref AcquireEncoded of @p encoded and @p decode_res would find an entry:
+   *        the acquire then reads no RAW file (DN14, the step `Reading RAW`).
+   *
+   * Changes no entry, no use order, and no stats.
+   */
+  [[nodiscard]] auto HoldsEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)
+      -> bool;
+
+  /**
+   * @brief True when @ref AcquireDenoised with these arguments would find its entry: the acquire
+   *        then runs no model (DN14, the step `AI Denoise`).
+   *
+   * Changes no entry, no use order, and no stats.
+   */
+  [[nodiscard]] auto HoldsDenoised(std::span<const std::byte>   encoded,
+                                   std::string_view             model_version,
+                                   const std::array<double, 9>& xyz_to_camera) -> bool;
+
+  /**
    * @brief Host byte budget for unleased entries. Zero means unlimited.
    *
    * Insertion of a leased miss never fails because the budget is full. Unleased entries

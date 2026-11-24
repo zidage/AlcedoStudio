@@ -170,6 +170,23 @@ auto PreparedSourceCache::AcquireDenoised(std::span<const std::byte>   encoded,
   return Insert(lookup, std::move(denoised));
 }
 
+auto PreparedSourceCache::HoldsEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)
+    -> bool {
+  const auto lookup = PreparedSourceLookup{
+      HashEncoded(encoded), encoded.size(), DecodeResToDownsamplePasses(decode_res),
+      kRawInputPreparationVersion};
+  return entries_.contains(lookup);
+}
+
+auto PreparedSourceCache::HoldsDenoised(std::span<const std::byte>   encoded,
+                                        std::string_view             model_version,
+                                        const std::array<double, 9>& xyz_to_camera) -> bool {
+  const auto lookup = PreparedSourceLookup{
+      HashEncoded(encoded), encoded.size(), DecodeResToDownsamplePasses(DecodeRes::FULL),
+      kRawInputPreparationVersion, HashAiDenoiseRun(model_version, xyz_to_camera)};
+  return entries_.contains(lookup);
+}
+
 void PreparedSourceCache::Clear() {
   entries_.clear();
   bytes_used_ = 0;

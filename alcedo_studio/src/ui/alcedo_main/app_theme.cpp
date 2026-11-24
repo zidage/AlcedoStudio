@@ -1313,6 +1313,16 @@ auto AppTheme::viewportAlertSecondaryTextColor() const -> QColor {
   return WithAlpha(textColor(), 170);
 }
 auto AppTheme::viewportAlertDetailFillColor() const -> QColor { return QColor(0, 0, 0, 97); }
+// Viewport render progress (DESIGN.md "Viewport render progress", DN14). The pill and the bar
+// stand on the photo, so they are dark and white tints that read on a bright and a dark photo.
+auto AppTheme::viewportProgressPillHeight() const -> int { return 26; }
+auto AppTheme::viewportProgressDotSize() const -> int { return 6; }
+auto AppTheme::viewportProgressBarHeight() const -> int { return 3; }
+auto AppTheme::viewportProgressSegmentGap() const -> int { return 2; }
+auto AppTheme::viewportProgressFadeMs() const -> int { return 200; }
+auto AppTheme::viewportProgressPillColor() const -> QColor { return QColor(18, 18, 18, 184); }
+auto AppTheme::viewportProgressTrackColor() const -> QColor { return QColor(255, 255, 255, 36); }
+auto AppTheme::viewportProgressFillColor() const -> QColor { return QColor(255, 255, 255, 230); }
 // LUT browser rail page (DESIGN.md "LUT browser"): filter card + tile grid card.
 auto AppTheme::editorLutBrowserPanelWidth() const -> int { return 560; }
 auto AppTheme::editorLutBrowserPanelWidthMin() const -> int { return 280; }

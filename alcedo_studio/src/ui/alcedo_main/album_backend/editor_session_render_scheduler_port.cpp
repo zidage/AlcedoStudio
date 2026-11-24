@@ -714,6 +714,7 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
         return token && token->IsCancelled();
       };
     }
+    task.render_progress_ = job.request.intent.render_progress;
     const auto request_for_trace = job.request;
     task.on_complete_            = [this, job, request_for_trace](bool success,
                                                        std::string message) mutable {

@@ -44,6 +44,7 @@ add_executable(AiDenoiseLoaderTest
   ${ALCEDO_TEST_ROOT}/ai_denoise/ai_denoise_input_test.cpp
   ${ALCEDO_TEST_ROOT}/ai_denoise/ai_denoise_model_session_test.cpp
   ${ALCEDO_TEST_ROOT}/ai_denoise/ai_denoise_error_test.cpp
+  ${ALCEDO_TEST_ROOT}/ai_denoise/render_progress_test.cpp
 )
 target_include_directories(AiDenoiseLoaderTest PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(AiDenoiseLoaderTest PRIVATE GTest::gtest_main EditInput EditGraph Image
