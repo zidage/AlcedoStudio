@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -25,6 +26,7 @@
 
 #include "../edit/graph/test_camera_profile.hpp"
 #include "ai_denoise_test_support.hpp"
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/ai_denoise_model_session.hpp"
 #include "edit/input/ai_denoise_platform.hpp"
@@ -60,6 +62,15 @@ auto              DenoiseDocument(bool on) -> std::shared_ptr<PipelineDocument> 
     document->Develop()->Params().ApplyAiDenoiseUpdate(DevelopAiDenoise{kRecordedVersion});
   }
   return document;
+}
+
+/// The camera matrix of the gain match of @p document: the matrix of its render at D65 (#1055).
+auto DenoiseCamera(const PipelineDocument& document) -> std::array<double, 9> {
+  const auto resolved = ResolveDevelopXyzToCameraD65(document.Develop()->Params().Params());
+  if (!resolved.ok) {
+    throw std::runtime_error("the test document has no camera matrix");
+  }
+  return resolved.xyz_to_camera;
 }
 
 auto MakeEncodedImage(std::uint8_t tag) -> std::shared_ptr<ImageBuffer> {
@@ -108,33 +119,54 @@ void VerifyFullSizeRenderWithTheSwitchOnRendersTheModelOutput() {
   auto                  record  = std::make_shared<TestPlatformRecord>();
   auto                  session = MakeTestModelSession(record, folder);
   RendererType renderer(ExecutorRole::Interactive, MakeUnpacker(), nullptr, nullptr, session);
-  const auto   image = MakeEncodedImage(21);
-  const test::RenderSnapshotSource on_source(DenoiseDocument(true));
+  const auto            image       = MakeEncodedImage(21);
+  const auto            on_document = DenoiseDocument(true);
+  const test::RenderSnapshotSource on_source(on_document);
 
   const cv::Mat denoised = RenderHost(renderer, on_source, image, DecodeRes::FULL);
   EXPECT_TRUE(cv::checkRange(denoised));
   EXPECT_EQ(session->Stats().denoise_runs, 1U);
-  // The cache holds the denoised input of the installed version; a second frame runs no model.
+  // The cache holds the denoised input of the installed version and of the camera matrix of the
+  // render at D65; a second frame runs no model.
   (void)RenderHost(renderer, on_source, image, DecodeRes::FULL);
   EXPECT_EQ(session->Stats().denoise_runs, 1U);
   auto&      buffer = image->GetBuffer();
   const auto encoded =
       std::span<const std::byte>{reinterpret_cast<const std::byte*>(buffer.data()), buffer.size()};
   const auto lease = renderer.SourceCache().AcquireDenoised(
-      encoded, session->InstalledModelVersion(), [](const PreparedRawInput&) -> PreparedRawInput {
+      encoded, session->InstalledModelVersion(), DenoiseCamera(*on_document),
+      [](const PreparedRawInput&) -> PreparedRawInput {
         throw std::logic_error("the denoised entry is not cached");
       });
   EXPECT_EQ(lease.Get().input_kind, RawInputKind::DenoisedRgb);
 
+  // A white balance change keeps the denoised input; another camera profile (another D65 matrix)
+  // runs the model again (#1055).
+  {
+    auto&      develop  = on_document->Develop()->Params();
+    const auto original = develop.Params();
+    auto       payload  = original;
+    payload.wb_mode     = "custom";
+    payload.custom_cct  = 3800.0f;
+    develop.ReplaceParams(payload);
+    EXPECT_TRUE(cv::checkRange(RenderHost(renderer, on_source, image, DecodeRes::FULL)));
+    EXPECT_EQ(session->Stats().denoise_runs, 1U);
+    payload.camera_profile.color_matrix_2[0] *= 1.05;
+    develop.ReplaceParams(payload);
+    EXPECT_TRUE(cv::checkRange(RenderHost(renderer, on_source, image, DecodeRes::FULL)));
+    EXPECT_EQ(session->Stats().denoise_runs, 2U);
+    develop.ReplaceParams(original);
+  }
+
   // A reduced render (thumbnail, semantic input image) runs no model.
   EXPECT_TRUE(cv::checkRange(RenderHost(renderer, on_source, image, DecodeRes::HALF)));
-  EXPECT_EQ(session->Stats().denoise_runs, 1U);
+  EXPECT_EQ(session->Stats().denoise_runs, 2U);
 
   // The switch off renders the CFA path: other pixels.
   RendererType off_renderer(ExecutorRole::Interactive, MakeUnpacker(), nullptr, nullptr, session);
   const test::RenderSnapshotSource off_source(DenoiseDocument(false));
   const cv::Mat cfa = RenderHost(off_renderer, off_source, image, DecodeRes::FULL);
-  EXPECT_EQ(session->Stats().denoise_runs, 1U);
+  EXPECT_EQ(session->Stats().denoise_runs, 2U);
   ASSERT_EQ(cfa.type(), denoised.type());
   // The CFA path loses its demosaic border; compare the centre.
   const cv::Rect centre(cfa.cols / 4, cfa.rows / 4, cfa.cols / 2, cfa.rows / 2);
@@ -145,7 +177,7 @@ void VerifyFullSizeRenderWithTheSwitchOnRendersTheModelOutput() {
   RendererType batch(ExecutorRole::Batch, MakeUnpacker(), nullptr, nullptr, session);
   EXPECT_TRUE(cv::checkRange(RenderHost(batch, on_source, image, DecodeRes::FULL)));
   EXPECT_TRUE(cv::checkRange(RenderHost(batch, on_source, image, DecodeRes::FULL)));
-  EXPECT_EQ(session->Stats().denoise_runs, 3U);
+  EXPECT_EQ(session->Stats().denoise_runs, 4U);
 }
 
 template <class RendererType>
@@ -279,10 +311,11 @@ void VerifyRawPhotoRendersWithTheFp16GraphOnDirectMl() {
                                    encoded.size()},
         DecodeRes::FULL);
     const auto          version = session->InstalledModelVersion();
+    const auto          camera  = DenoiseCamera(*DenoiseDocument(true));
     std::vector<double> times;
     for (int run = 0; run < 3; ++run) {
       const auto begin  = std::chrono::steady_clock::now();
-      const auto result = session->Denoise(cfa_input, version);
+      const auto result = session->Denoise(cfa_input, version, camera);
       times.push_back(
           std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count());
       EXPECT_EQ(result.input_kind, RawInputKind::DenoisedRgb);

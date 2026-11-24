@@ -277,14 +277,14 @@ void ApplyAiDenoiseInputCurve(AiDenoisePackedMosaic& mosaic, const AiDenoiseInpu
   }
 }
 
-auto AiDenoiseGainWeights(const float (&cam_xyz)[9]) -> std::array<double, 3> {
+auto AiDenoiseGainWeights(const std::array<double, 9>& xyz_to_camera) -> std::array<double, 3> {
   cv::Matx33d camera_from_xyz;
   for (int i = 0; i < 9; ++i) {
-    camera_from_xyz.val[i] = cam_xyz[i];
+    camera_from_xyz.val[i] = xyz_to_camera[static_cast<std::size_t>(i)];
   }
   const double determinant = cv::determinant(camera_from_xyz);
   if (!std::isfinite(determinant) || std::abs(determinant) < 1e-12) {
-    throw Fail("the camera matrix (LibRaw cam_xyz) is singular");
+    throw Fail("the camera matrix is singular");
   }
   const cv::Matx33d xyz_from_camera = camera_from_xyz.inv();
   cv::Matx33d       xyz_to_rec2020;
@@ -298,7 +298,7 @@ auto AiDenoiseGainWeights(const float (&cam_xyz)[9]) -> std::array<double, 3> {
   for (int c = 0; c < 3; ++c) {
     weights[c] = rec2020_from_camera(0, c) + rec2020_from_camera(1, c) + rec2020_from_camera(2, c);
     if (!std::isfinite(weights[c])) {
-      throw Fail("the camera matrix (LibRaw cam_xyz) is not finite");
+      throw Fail("the camera matrix is not finite");
     }
   }
   return weights;

@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -33,6 +34,8 @@
 namespace alcedo::gpu_dag_test {
 
 inline const std::string kDenoiseTestModelVersion(64, 'd');
+/// The camera matrix of the gain match of the test inputs (only their key reads it).
+inline constexpr std::array<double, 9> kDenoiseTestXyzToCamera = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 
 /// U16 plane of @p width x @p height from @p samples (row major).
 inline auto              MakeU16Plane(std::uint32_t width, std::uint32_t height,
@@ -97,8 +100,9 @@ void VerifyDenoisedPlaneBecomesTheSensorImageWithTheCfaClamp() {
     const auto sample = [&](std::uint32_t x, std::uint32_t y, int c) {
       return samples[(x + 2 * y + static_cast<std::uint32_t>(c)) % samples.size()];
     };
-    const auto input = RawInputLoader::FromDenoisedBayer(
-        cfa, MakeRgbaPlane(kWidth, kHeight, sample), kDenoiseTestModelVersion);
+    const auto input =
+        RawInputLoader::FromDenoisedBayer(cfa, MakeRgbaPlane(kWidth, kHeight, sample),
+                                          kDenoiseTestModelVersion, kDenoiseTestXyzToCamera);
     const auto document = DenoiseDocument(highlights);
     const auto plan     = GraphCompiler::Compile(document, input.CompileSource(), RenderRequest{});
     Device     device;
@@ -259,8 +263,8 @@ void VerifyDenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender() {
   const auto cfa =
       RawInputLoader::FromUnpackedCfa(MakeU16Plane(kSize, kSize, mosaic), MakeRggbPattern(),
                                       linearization, FullSensor(kSize, kSize), DecodeRes::FULL);
-  const auto denoised =
-      RawInputLoader::FromDenoisedBayer(cfa, denoised_plane, kDenoiseTestModelVersion);
+  const auto denoised = RawInputLoader::FromDenoisedBayer(
+      cfa, denoised_plane, kDenoiseTestModelVersion, kDenoiseTestXyzToCamera);
 
   const auto render = [](const PreparedRawInput& input, const PipelineDocument& document) {
     const auto plan = GraphCompiler::Compile(document, input.CompileSource(), RenderRequest{});

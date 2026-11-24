@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -87,7 +88,8 @@ class PreparedSourceCache {
    * @brief Return the leased AI Denoise input of @p encoded at full size (integration plan, DN6).
    *
    * The entry has its own lookup: the full-size lookup of the source and the hash of
-   * @p model_version (the installed model). On a miss, takes the full-size entry
+   * @p model_version (the installed model) and @p xyz_to_camera (the camera matrix of the gain
+   * match, HashAiDenoiseRun). On a miss, takes the full-size entry
    * (@ref AcquireEncoded). A Bayer CFA input runs @p denoise, the lease of the CFA entry ends
    * (the entry is then the first to be evicted), and the result is inserted. Another input
    * (X-Trans, direct RGB, raster) runs no model: the lease of its own entry is returned, and
@@ -95,9 +97,10 @@ class PreparedSourceCache {
    *
    * @throws whatever the unpacker or @p denoise throws; then no denoised entry is inserted.
    */
-  [[nodiscard]] auto AcquireDenoised(std::span<const std::byte> encoded,
-                                     std::string_view model_version, const DenoiseFn& denoise)
-      -> Lease;
+  [[nodiscard]] auto AcquireDenoised(std::span<const std::byte>   encoded,
+                                     std::string_view             model_version,
+                                     const std::array<double, 9>& xyz_to_camera,
+                                     const DenoiseFn&             denoise) -> Lease;
 
   /**
    * @brief Host byte budget for unleased entries. Zero means unlimited.

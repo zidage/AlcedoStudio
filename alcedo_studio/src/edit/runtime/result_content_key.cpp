@@ -54,8 +54,8 @@ auto MixPreparedSource(ContentHash& hash, const PreparedSourceKey& key) -> void 
   hash.MixI32(key.orientation_flip);
   hash.MixU32(key.preparation_version);
   // Only an AI Denoise input has a model hash, so the keys of every other input stay as before.
-  if (key.denoise_model_hash != 0) {
-    hash.MixU64(key.denoise_model_hash);
+  if (key.denoise_hash != 0) {
+    hash.MixU64(key.denoise_hash);
   }
 }
 

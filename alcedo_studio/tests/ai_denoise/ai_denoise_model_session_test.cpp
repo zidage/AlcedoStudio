@@ -9,7 +9,11 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <span>
 #include <string>
@@ -19,6 +23,7 @@
 #include "ai_denoise_test_support.hpp"
 #include "edit/input/ai_denoise_input.hpp"
 #include "edit/input/prepared_source_cache.hpp"
+#include "edit/input/raster_input_loader.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "utils/hash/sha256.hpp"
 
@@ -26,6 +31,7 @@ namespace alcedo {
 namespace {
 
 using ai_denoise_test::BayerPattern;
+using ai_denoise_test::kTestXyzToCamera;
 using ai_denoise_test::MakeBayerInput;
 using ai_denoise_test::MakeTestModelSession;
 using ai_denoise_test::TestModelFolder;
@@ -67,7 +73,7 @@ TEST(AiDenoiseModelSessionTest, MissingGraphReportsModelNotInstalled) {
               AiDenoiseErrorKind::ModelNotInstalled);
     EXPECT_EQ(ErrorKindOf([&] {
                 (void)session->Denoise(MakeBayerInput(32, 32, BayerPattern("RGGB")),
-                                       std::string(64, 'a'));
+                                       std::string(64, 'a'), kTestXyzToCamera);
               }),
               AiDenoiseErrorKind::RunFailed);
   }
@@ -86,12 +92,12 @@ TEST(AiDenoiseModelSessionTest, DenoiseGivesTheGainMatchedInputOfTheDecodeArea) 
   // GRBG with an odd size: a column at the left and a row at the bottom are added. Packed 300 x
   // 102: two tiles of 256.
   const auto            input    = MakeBayerInput(599, 203, BayerPattern("GRBG"));
-  const auto            denoised = session->Denoise(input, version);
+  const auto            denoised = session->Denoise(input, version, kTestXyzToCamera);
 
   EXPECT_EQ(denoised.input_kind, RawInputKind::DenoisedRgb);
   EXPECT_EQ(denoised.host_extent.width, 599U);
   EXPECT_EQ(denoised.host_extent.height, 203U);
-  EXPECT_EQ(denoised.source_key.denoise_model_hash, HashAiDenoiseModelVersion(version));
+  EXPECT_EQ(denoised.source_key.denoise_hash, HashAiDenoiseRun(version, kTestXyzToCamera));
   EXPECT_GT(record->tile_runs.load(), 1);
 
   // The expected plane: the test output (the packed input times 1e5 at each 2 x 2 cell) with the
@@ -114,8 +120,8 @@ TEST(AiDenoiseModelSessionTest, DenoiseGivesTheGainMatchedInputOfTheDecodeArea) 
   const nn::RgbPlanesView view{output, width, height};
   AiDenoiseOutputSums     sums(mosaic);
   sums.AddKept(view, {0, 0, mosaic.width, mosaic.height});
-  const double gain     = AiDenoiseGainFactor(AiDenoiseGainWeights(input.color_context.cam_xyz_),
-                                              mosaic.input_means, sums.Means());
+  const double gain =
+      AiDenoiseGainFactor(AiDenoiseGainWeights(kTestXyzToCamera), mosaic.input_means, sums.Means());
   const auto   expected = AssembleDenoisedPlane(view, mosaic, gain, input.linearization);
   const auto*  actual   = reinterpret_cast<const float*>(denoised.pixels.bytes.get());
   const auto*  wanted   = reinterpret_cast<const float*>(expected.bytes.get());
@@ -138,7 +144,7 @@ TEST(AiDenoiseModelSessionTest, DenoiseOfADarkPhotoReturnsItsExposureAfterTheInp
   const auto            mosaic  = PackBayerForAiDenoise(input);
   const auto            curve   = AiDenoiseInputCurveFor(mosaic.input_means);
   ASSERT_GT(curve.gain, 4.0);
-  const auto denoised = session->Denoise(input, version);
+  const auto denoised = session->Denoise(input, version, kTestXyzToCamera);
   EXPECT_EQ(session->Stats().last_input_gain, curve.gain);
 
   // The test session returns its input, so the result is the prepared input of each cell in the
@@ -170,7 +176,7 @@ TEST(AiDenoiseModelSessionTest, DenoiseOfADarkPhotoReturnsItsExposureAfterTheInp
   EXPECT_LE(largest, 1e-5) << largest;
 
   // A photo at the training level runs without the curve.
-  (void)session->Denoise(MakeBayerInput(64, 48, BayerPattern("RGGB")), version);
+  (void)session->Denoise(MakeBayerInput(64, 48, BayerPattern("RGGB")), version, kTestXyzToCamera);
   EXPECT_EQ(session->Stats().last_input_gain, 1.0);
 }
 
@@ -182,8 +188,8 @@ TEST(AiDenoiseModelSessionTest, ModelSessionCreatesThePlatformSessionOnceAndAgai
   const auto            input   = MakeBayerInput(64, 48, BayerPattern("RGGB"));
   EXPECT_FALSE(session->IsSessionLoaded());
 
-  (void)session->Denoise(input, version);
-  (void)session->Denoise(input, version);
+  (void)session->Denoise(input, version, kTestXyzToCamera);
+  (void)session->Denoise(input, version, kTestXyzToCamera);
   EXPECT_EQ(record->sessions_created.load(), 1);
   EXPECT_EQ(record->sessions_alive.load(), 1);
   EXPECT_TRUE(session->IsSessionLoaded());
@@ -193,11 +199,11 @@ TEST(AiDenoiseModelSessionTest, ModelSessionCreatesThePlatformSessionOnceAndAgai
   EXPECT_FALSE(session->IsSessionLoaded());
   EXPECT_EQ(record->sessions_alive.load(), 0);
 
-  (void)session->Denoise(input, version);
+  (void)session->Denoise(input, version, kTestXyzToCamera);
   EXPECT_EQ(record->sessions_created.load(), 2);
 
   // Another installed model version loads the graph again.
-  (void)session->Denoise(input, std::string(64, 'e'));
+  (void)session->Denoise(input, std::string(64, 'e'), kTestXyzToCamera);
   EXPECT_EQ(record->sessions_created.load(), 3);
   EXPECT_EQ(record->sessions_alive.load(), 1);
 }
@@ -211,7 +217,7 @@ TEST(AiDenoiseModelSessionTest, ModelSessionRunsOneDenoiseAtATime) {
   const auto               input   = MakeBayerInput(400, 300, BayerPattern("RGGB"));
   std::vector<std::thread> threads;
   for (int i = 0; i < 3; ++i) {
-    threads.emplace_back([&] { (void)session->Denoise(input, version); });
+    threads.emplace_back([&] { (void)session->Denoise(input, version, kTestXyzToCamera); });
   }
   for (auto& thread : threads) {
     thread.join();
@@ -229,7 +235,7 @@ TEST(AiDenoiseModelSessionTest, SlowDeviceResultIsKeptForTheDeviceAfterRelease) 
   const auto            version = session->InstalledModelVersion();
   const auto            input   = MakeBayerInput(400, 300, BayerPattern("RGGB"));
 
-  EXPECT_EQ(ErrorKindOf([&] { (void)session->Denoise(input, version); }),
+  EXPECT_EQ(ErrorKindOf([&] { (void)session->Denoise(input, version, kTestXyzToCamera); }),
             AiDenoiseErrorKind::DeviceTooSlow);
   EXPECT_EQ(record->sessions_created.load(), 1);
   EXPECT_EQ(record->tile_runs.load(), 1);
@@ -237,14 +243,14 @@ TEST(AiDenoiseModelSessionTest, SlowDeviceResultIsKeptForTheDeviceAfterRelease) 
 
   session->Release();
   // A later run on that device stops at once: no session, no tile.
-  EXPECT_EQ(ErrorKindOf([&] { (void)session->Denoise(input, version); }),
+  EXPECT_EQ(ErrorKindOf([&] { (void)session->Denoise(input, version, kTestXyzToCamera); }),
             AiDenoiseErrorKind::DeviceTooSlow);
   EXPECT_EQ(record->sessions_created.load(), 1);
   EXPECT_EQ(record->tile_runs.load(), 1);
 
   // Another device runs its tiles.
   record->device_key = "test device B";
-  EXPECT_EQ(ErrorKindOf([&] { (void)session->Denoise(input, version); }),
+  EXPECT_EQ(ErrorKindOf([&] { (void)session->Denoise(input, version, kTestXyzToCamera); }),
             AiDenoiseErrorKind::DeviceTooSlow);
   EXPECT_EQ(record->sessions_created.load(), 2);
   EXPECT_EQ(record->tile_runs.load(), 2);
@@ -258,7 +264,7 @@ TEST(AiDenoiseModelSessionTest, RunErrorReleasesThePlatformSessionAndReportsRunF
   const auto version           = session->InstalledModelVersion();
   const auto input             = MakeBayerInput(400, 300, BayerPattern("RGGB"));
   try {
-    (void)session->Denoise(input, version);
+    (void)session->Denoise(input, version, kTestXyzToCamera);
     ADD_FAILURE() << "the run error was not reported";
   } catch (const AiDenoiseError& error) {
     EXPECT_EQ(error.Kind(), AiDenoiseErrorKind::RunFailed);
@@ -267,8 +273,44 @@ TEST(AiDenoiseModelSessionTest, RunErrorReleasesThePlatformSessionAndReportsRunF
   EXPECT_FALSE(session->IsSessionLoaded());
   EXPECT_EQ(record->sessions_alive.load(), 0);
   // The next run creates the session again.
-  (void)session->Denoise(input, version);
+  (void)session->Denoise(input, version, kTestXyzToCamera);
   EXPECT_EQ(record->sessions_created.load(), 2);
+}
+
+// #1055: LibRaw leaves `cam_xyz` zero for many DNG files (it uses the DNG ColorMatrix only for
+// rgb_cam) and for cameras newer than its table. The run takes the camera matrix of the render.
+TEST(AiDenoiseModelSessionTest, PhotoWithoutLibRawCamXyzDenoisesWithTheCameraMatrixOfTheRender) {
+  const std::filesystem::path files[] = {ALCEDO_AI_DENOISE_TEST_DNG_WITHOUT_CAM_XYZ,
+                                         ALCEDO_AI_DENOISE_TEST_RAW_WITHOUT_CAM_XYZ};
+  const TestModelFolder       folder("without_cam_xyz");
+  auto                        record  = std::make_shared<TestPlatformRecord>();
+  auto                        session = MakeTestModelSession(record, folder);
+  const auto                  version = session->InstalledModelVersion();
+  int                         tested  = 0;
+  for (const auto& path : files) {
+    if (!std::filesystem::exists(path)) {
+      continue;
+    }
+    SCOPED_TRACE(path.string());
+    ASSERT_TRUE(ai_denoise_test::LibRawCamXyzIsSingular(path));
+    std::ifstream     stream(path, std::ios::binary);
+    std::vector<char> encoded((std::istreambuf_iterator<char>(stream)),
+                              std::istreambuf_iterator<char>());
+    const auto        input =
+        LoadEncodedImage(std::as_bytes(std::span(encoded.data(), encoded.size())), DecodeRes::FULL);
+    ASSERT_EQ(input.input_kind, RawInputKind::BayerRaw);
+
+    const auto camera  = ai_denoise_test::ImportedXyzToCamera(path);
+    const auto weights = AiDenoiseGainWeights(camera);
+    EXPECT_GT(weights[0] + weights[1] + weights[2], 0.0);
+    const auto denoised = session->Denoise(input, version, camera);
+    EXPECT_EQ(denoised.input_kind, RawInputKind::DenoisedRgb);
+    EXPECT_EQ(denoised.source_key.denoise_hash, HashAiDenoiseRun(version, camera));
+    ++tested;
+  }
+  if (tested == 0) {
+    GTEST_SKIP() << "The sample photos without a LibRaw cam_xyz are not in this checkout.";
+  }
 }
 
 TEST(AiDenoiseModelSessionTest, PlatformWithoutForwardCodeReportsRunFailed) {
@@ -277,7 +319,8 @@ TEST(AiDenoiseModelSessionTest, PlatformWithoutForwardCodeReportsRunFailed) {
   session.SetModelFolderProvider([path = folder.Folder()] { return path; });
   const auto version = session.InstalledModelVersion();
   EXPECT_EQ(ErrorKindOf([&] {
-              (void)session.Denoise(MakeBayerInput(32, 32, BayerPattern("RGGB")), version);
+              (void)session.Denoise(MakeBayerInput(32, 32, BayerPattern("RGGB")), version,
+                                    kTestXyzToCamera);
             }),
             AiDenoiseErrorKind::RunFailed);
 }
@@ -308,17 +351,20 @@ TEST(AiDenoiseModelSessionTest, DenoisedEntryIsReusedAndRunsTheModelOnce) {
                                                                 [](std::byte* p) { delete[] p; });
     std::fill_n(reinterpret_cast<float*>(storage.get()), rgba.ByteCount() / 4, 0.25f);
     rgba.bytes = std::const_pointer_cast<const std::byte>(storage);
-    return RawInputLoader::FromDenoisedBayer(cfa, std::move(rgba), std::string(64, 'a'));
+    return RawInputLoader::FromDenoisedBayer(cfa, std::move(rgba), std::string(64, 'a'),
+                                             kTestXyzToCamera);
   };
   const std::string version_a(64, 'a');
   const std::string version_b(64, 'b');
 
   {
-    const auto lease = cache.AcquireDenoised(EncodedBytes(encoded), version_a, denoise);
+    const auto lease =
+        cache.AcquireDenoised(EncodedBytes(encoded), version_a, kTestXyzToCamera, denoise);
     EXPECT_EQ(lease.Get().input_kind, RawInputKind::DenoisedRgb);
   }
   {
-    const auto lease = cache.AcquireDenoised(EncodedBytes(encoded), version_a, denoise);
+    const auto lease =
+        cache.AcquireDenoised(EncodedBytes(encoded), version_a, kTestXyzToCamera, denoise);
     EXPECT_EQ(lease.Get().input_kind, RawInputKind::DenoisedRgb);
   }
   EXPECT_EQ(runs, 1);
@@ -326,7 +372,7 @@ TEST(AiDenoiseModelSessionTest, DenoisedEntryIsReusedAndRunsTheModelOnce) {
   EXPECT_EQ(cache.GetStats().denoise_runs, 1U);
 
   // Another installed model version is another entry; the CFA entry is still cached.
-  (void)cache.AcquireDenoised(EncodedBytes(encoded), version_b, denoise);
+  (void)cache.AcquireDenoised(EncodedBytes(encoded), version_b, kTestXyzToCamera, denoise);
   EXPECT_EQ(runs, 2);
   EXPECT_EQ(unpacks, 1);
 
@@ -335,11 +381,29 @@ TEST(AiDenoiseModelSessionTest, DenoisedEntryIsReusedAndRunsTheModelOnce) {
   const std::size_t denoised_bytes = std::size_t{64} * 48 * 16;
   cache.SetHostByteBudget(denoised_bytes);
   EXPECT_EQ(cache.EntryCount(), 1U);
-  (void)cache.AcquireDenoised(EncodedBytes(encoded), version_b, denoise);
+  (void)cache.AcquireDenoised(EncodedBytes(encoded), version_b, kTestXyzToCamera, denoise);
   EXPECT_EQ(runs, 2);
   // The switch off: the CFA entry is unpacked again.
   (void)cache.AcquireEncoded(EncodedBytes(encoded), DecodeRes::FULL);
   EXPECT_EQ(unpacks, 2);
+
+  // Another camera matrix of the gain match (another camera profile) is another entry (#1055).
+  auto other_camera = kTestXyzToCamera;
+  other_camera[0] += 0.05;
+  (void)cache.AcquireDenoised(EncodedBytes(encoded), version_b, other_camera, denoise);
+  EXPECT_EQ(runs, 3);
+  EXPECT_EQ(unpacks, 2);
+}
+
+TEST(AiDenoiseModelSessionTest, DenoiseHashCoversTheModelVersionAndTheCameraMatrix) {
+  const std::string version(64, 'a');
+  auto              other_camera = kTestXyzToCamera;
+  other_camera[4] -= 0.01;
+  const auto hash = HashAiDenoiseRun(version, kTestXyzToCamera);
+  EXPECT_NE(hash, 0U);
+  EXPECT_EQ(hash, HashAiDenoiseRun(version, kTestXyzToCamera));
+  EXPECT_NE(hash, HashAiDenoiseRun(std::string(64, 'b'), kTestXyzToCamera));
+  EXPECT_NE(hash, HashAiDenoiseRun(version, other_camera));
 }
 
 TEST(AiDenoiseModelSessionTest, NonBayerInputKeepsItsEntryWithoutARun) {
@@ -357,7 +421,7 @@ TEST(AiDenoiseModelSessionTest, NonBayerInputKeepsItsEntryWithoutARun) {
   const std::vector<std::byte> encoded(64, std::byte{3});
   int                          runs = 0;
   const auto lease = cache.AcquireDenoised(EncodedBytes(encoded), std::string(64, 'a'),
-                                           [&](const PreparedRawInput& input) {
+                                           kTestXyzToCamera, [&](const PreparedRawInput& input) {
                                              ++runs;
                                              return input;
                                            });

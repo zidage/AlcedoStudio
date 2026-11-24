@@ -59,13 +59,15 @@ class RawInputLoader {
    * `black_level[c]`, 1 is `white_level[c]` of @p cfa's linearization; values outside [0, 1] are
    * kept. The result copies the linearization, color context, DNG warp, orientation, and encoded
    * identity of @p cfa; its sensor geometry is the plane, and its source key holds the hash of
-   * @p model_version.
+   * @p model_version and @p xyz_to_camera, the camera matrix of the gain match (HashAiDenoiseRun).
    * @throws std::runtime_error when @p cfa is not a full-size Bayer CFA input, when @p denoised is
    *         not tightly packed F32 RGBA of the decode area, or when @p model_version is not 64
    *         lowercase hexadecimal digits.
    */
   [[nodiscard]] static auto FromDenoisedBayer(const PreparedRawInput& cfa, HostImagePlane denoised,
-                                              std::string_view model_version) -> PreparedRawInput;
+                                              std::string_view             model_version,
+                                              const std::array<double, 9>& xyz_to_camera)
+      -> PreparedRawInput;
 
   [[nodiscard]] static auto TryLoadEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)
       -> std::optional<PreparedRawInput>;

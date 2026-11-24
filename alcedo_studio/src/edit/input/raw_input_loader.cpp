@@ -496,12 +496,6 @@ void FillColorContext(LibRaw& raw, const LensIdentity& lens, RawRuntimeColorCont
     ctx.cam_mul_[i] = raw.imgdata.color.cam_mul[i];
     ctx.pre_mul_[i] = raw.imgdata.color.pre_mul[i];
   }
-  // The camera matrix of the AI Denoise gain match (rawpy `rgb_xyz_matrix`, DN6).
-  for (int r = 0; r < 3; ++r) {
-    for (int c = 0; c < 3; ++c) {
-      ctx.cam_xyz_[r * 3 + c] = raw.imgdata.rawdata.color.cam_xyz[r][c];
-    }
-  }
   ctx.camera_make_  = raw.imgdata.idata.make;
   ctx.camera_model_ = raw.imgdata.idata.model;
 
@@ -666,7 +660,9 @@ auto RawInputLoader::FromDirectRgb(HostImagePlane plane, RawSensorGeometry senso
 }
 
 auto RawInputLoader::FromDenoisedBayer(const PreparedRawInput& cfa, HostImagePlane denoised,
-                                       std::string_view model_version) -> PreparedRawInput {
+                                       std::string_view             model_version,
+                                       const std::array<double, 9>& xyz_to_camera)
+    -> PreparedRawInput {
   if (cfa.input_kind != RawInputKind::BayerRaw || cfa.cfa_pattern.kind != RawCfaKind::Bayer2x2) {
     throw std::runtime_error("RawInputLoader::FromDenoisedBayer: a Bayer CFA input is required");
   }
@@ -703,7 +699,7 @@ auto RawInputLoader::FromDenoisedBayer(const PreparedRawInput& cfa, HostImagePla
   auto result =
       FinishPrepared(std::move(input), DecodeRes::FULL, cfa.source_key.encoded_content_hash,
                      cfa.source_key.encoded_byte_count);
-  result.source_key.denoise_model_hash = HashAiDenoiseModelVersion(model_version);
+  result.source_key.denoise_hash = HashAiDenoiseRun(model_version, xyz_to_camera);
   return result;
 }
 

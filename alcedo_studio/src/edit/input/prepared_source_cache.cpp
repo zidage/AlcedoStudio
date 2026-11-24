@@ -145,12 +145,13 @@ auto PreparedSourceCache::Insert(const PreparedSourceLookup& lookup, PreparedRaw
   return MakeLease(it->second);
 }
 
-auto PreparedSourceCache::AcquireDenoised(std::span<const std::byte> encoded,
-                                          std::string_view model_version, const DenoiseFn& denoise)
-    -> Lease {
+auto PreparedSourceCache::AcquireDenoised(std::span<const std::byte>   encoded,
+                                          std::string_view             model_version,
+                                          const std::array<double, 9>& xyz_to_camera,
+                                          const DenoiseFn&             denoise) -> Lease {
   auto lookup = PreparedSourceLookup{
       HashEncoded(encoded), encoded.size(), DecodeResToDownsamplePasses(DecodeRes::FULL),
-      kRawInputPreparationVersion, HashAiDenoiseModelVersion(model_version)};
+      kRawInputPreparationVersion, HashAiDenoiseRun(model_version, xyz_to_camera)};
   if (auto it = entries_.find(lookup); it != entries_.end()) {
     ++stats_.hits;
     return MakeLease(it->second);
