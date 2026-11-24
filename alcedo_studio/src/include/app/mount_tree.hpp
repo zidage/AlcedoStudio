@@ -91,15 +91,16 @@ auto ReadMountTree(FileSystem& fs, sl_element_id_t root_folder_id, mount_id_t mo
 void ApplyMountTreeChanges(FileSystem& fs, const MountTreeChanges& changes);
 
 /**
- * @brief Create the root folder of the mount @p mount_id in the folder @p parent_id.
+ * @brief Create the root folder of the mount @p mount_id in the library root
+ *        (kLibraryRootFolderId). An ordinary collection never holds a mount (#1076).
  *
- * The folder takes @p name, or `name@`, `name@@`, ... when the parent holds an element with that
- * name. The relative paths of the mount start below this folder, so its name is free.
+ * The folder takes @p name, or `name@`, `name@@`, ... when the library root holds an element
+ * with that name. The relative paths of the mount start below this folder, so its name is free.
  *
- * @throws std::runtime_error when @p parent_id is not a live folder.
+ * @throws std::runtime_error when the library root cannot be read.
  */
-auto CreateMountRootFolder(FileSystem& fs, sl_element_id_t parent_id, const file_name_t& name,
-                           mount_id_t mount_id) -> std::shared_ptr<SleeveFolder>;
+auto CreateMountRootFolder(FileSystem& fs, const file_name_t& name, mount_id_t mount_id)
+    -> std::shared_ptr<SleeveFolder>;
 
 /**
  * @brief Make each file of the mount an ordinary file and delete the folders of the mount.

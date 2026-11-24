@@ -1236,14 +1236,6 @@
         <translation>该文件夹位于已挂载的文件夹内，或包含已挂载的文件夹。</translation>
     </message>
     <message>
-        <source>A mounted folder cannot hold another mount.</source>
-        <translation>已挂载的文件夹内不能再挂载文件夹。</translation>
-    </message>
-    <message>
-        <source>The collection no longer exists.</source>
-        <translation>该收藏夹已不存在。</translation>
-    </message>
-    <message>
         <source>The folder cannot be reached.</source>
         <translation>无法访问该文件夹。</translation>
     </message>

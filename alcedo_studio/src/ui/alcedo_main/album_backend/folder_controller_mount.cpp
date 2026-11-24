@@ -53,10 +53,6 @@ auto MountCommandErrorText(std::exception_ptr error) -> QString {
     switch (e.Code()) {
       case MountError::kNestedMount:
         return Tr("The folder is inside a mounted folder or holds one.");
-      case MountError::kParentIsMounted:
-        return Tr("A mounted folder cannot hold another mount.");
-      case MountError::kParentIsNotAFolder:
-        return Tr("The collection no longer exists.");
       case MountError::kDirectoryUnreachable:
         return Tr("The folder cannot be reached.");
       case MountError::kUnknownMount:
@@ -217,8 +213,7 @@ auto FolderController::MountCommandRefusal() const -> QString {
   return {};
 }
 
-auto FolderController::StartCreateMount(sl_element_id_t              parent_folder_id,
-                                        const std::filesystem::path& directory,
+auto FolderController::StartCreateMount(const std::filesystem::path& directory,
                                         std::function<void(std::exception_ptr, mount_id_t)> done,
                                         MountScanEndedCallback first_scan_ended) -> QString {
   if (auto refusal = MountCommandRefusal(); !refusal.isEmpty()) {
@@ -227,9 +222,7 @@ auto FolderController::StartCreateMount(sl_element_id_t              parent_fold
   auto mounts  = project_->handler().project()->GetMountService();
   auto created = std::make_shared<mount_id_t>(0);
   mount_scans_->RunMountOperation(
-      [mounts, parent_folder_id, directory, created] {
-        *created = mounts->CreateMount(parent_folder_id, directory);
-      },
+      [mounts, directory, created] { *created = mounts->CreateMount(directory); },
       [this, created, done = std::move(done),
        first_scan_ended = std::move(first_scan_ended)](std::exception_ptr error) mutable {
         if (!error) {
@@ -378,15 +371,14 @@ void FolderController::ReportMountCommand(std::exception_ptr         error,
   status_->ScheduleIdleTaskStateReset(1200);
 }
 
-void FolderController::MountFolder(uint parentFolderUiId, const QUrl& directory) {
-  const auto parent         = FolderElementIdForUiId(parentFolderUiId);
+void FolderController::MountFolder(const QUrl& directory) {
   const auto directory_path = ToPath(directory);
-  if (!parent.has_value() || !directory_path.has_value()) {
+  if (!directory_path.has_value()) {
     status_->SetTaskState(PL_TEXT("The folder cannot be reached."), 0, false);
     return;
   }
   const auto refusal =
-      StartCreateMount(*parent, *directory_path, [this](std::exception_ptr error, mount_id_t) {
+      StartCreateMount(*directory_path, [this](std::exception_ptr error, mount_id_t) {
         ReportMountCommand(error, PL_TEXT("Folder mounted."));
       });
   if (!refusal.isEmpty()) {

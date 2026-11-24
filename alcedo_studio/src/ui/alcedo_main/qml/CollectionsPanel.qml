@@ -618,7 +618,6 @@ ColumnLayout {
 
     // ── Mounted folders ─────────────────────────────────────────────────────
 
-    property int pendingMountFolderId: -1
     property int pendingLocateFolderId: -1
     property int pendingRemoveMissingFolderId: -1
 
@@ -634,11 +633,11 @@ ColumnLayout {
         rowMenu.popup()
     }
 
+    // A mount is always a child of the library root (#1076); the row only enables the request.
     function requestMountFolder(row) {
         if (!row || !structureEditable(row) || !backendInteractive) {
             return
         }
-        pendingMountFolderId = Number(row.folderId)
         mountFolderDialog.open()
     }
 
@@ -1824,6 +1823,9 @@ ColumnLayout {
         AppMenuItem {
             objectName: "collectionMenuMountFolder"
             text: qsTr("Mount Folder Here...")
+            // An ordinary collection never holds a mount (#1076).
+            visible: rowMenu.targetIsRoot
+            height: visible ? implicitHeight : 0
             onTriggered: panel.requestMountFolder(rowMenu.targetRow)
         }
         AppMenuItem {
@@ -1906,13 +1908,10 @@ ColumnLayout {
         objectName: "collectionMountFolderDialog"
         title: qsTr("Mount Folder")
         onAccepted: {
-            const folderId = panel.pendingMountFolderId
-            panel.pendingMountFolderId = -1
-            if (folderId >= 0 && panel.foldersModule) {
-                panel.foldersModule.MountFolder(folderId, selectedFolder)
+            if (panel.foldersModule) {
+                panel.foldersModule.MountFolder(selectedFolder)
             }
         }
-        onRejected: panel.pendingMountFolderId = -1
     }
 
     FolderDialog {

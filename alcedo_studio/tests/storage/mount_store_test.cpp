@@ -22,6 +22,7 @@
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "sleeve/storage.hpp"
+#include "storage/store/database.hpp"
 #include "support/test_temp_directory.hpp"
 #include "type/hash_type.hpp"
 #include "type/mount_records.hpp"
@@ -127,6 +128,57 @@ TEST_F(MountStoreTest, MountRootLocationAndScanTimeUpdatesSurviveProjectReopen) 
   Mounts().UpdateMountRootLocation(record.id, record.root_path, record.volume_identity);
   Reopen();
   EXPECT_EQ(Mounts().ReadMountRoots(), std::vector<MountRootRecord>{record});
+}
+
+// #1076: the last read volume name; an empty name is stored as NULL and reads empty.
+TEST_F(MountStoreTest, MountVolumeNameUpdateSurvivesProjectReopen) {
+  auto record        = MakeMountRoot(1, 10);
+  record.volume_name = "EOS_DIGITAL";
+  Mounts().InsertMountRoot(record);
+  Reopen();
+  EXPECT_EQ(Mounts().ReadMountRoots(), std::vector<MountRootRecord>{record});
+
+  record.volume_name = "\u5916\u4ed8\u3051 SSD";
+  Mounts().UpdateMountVolumeName(record.id, record.volume_name);
+  Reopen();
+  EXPECT_EQ(Mounts().ReadMountRoots(), std::vector<MountRootRecord>{record});
+
+  record.volume_name.clear();
+  Mounts().UpdateMountVolumeName(record.id, record.volume_name);
+  Reopen();
+  EXPECT_EQ(Mounts().ReadMountRoots(), std::vector<MountRootRecord>{record});
+  EXPECT_THROW(Mounts().UpdateMountVolumeName(2, "Other"), std::runtime_error);
+}
+
+// #1076: a project file written before the volume_name column opens; its mounts read an empty
+// name, and the column takes a name after the open.
+TEST_F(MountStoreTest, MountRootTableWithoutTheVolumeNameColumnGainsIt) {
+  storage_.reset();
+  {
+    Database db(db_path_);
+    auto     guard = db.GetConnectionGuard();
+    auto     lock  = guard.Lock();
+    for (const char* sql : {"ALTER TABLE MountRoot DROP COLUMN volume_name;",
+                            "INSERT INTO MountRoot VALUES (1, 10, 'volume', 'D:/Photos', NULL);"}) {
+      duckdb_result result;
+      ASSERT_EQ(duckdb_query(guard.conn_, sql, &result), DuckDBSuccess)
+          << duckdb_result_error(&result);
+      duckdb_destroy_result(&result);
+    }
+  }
+  storage_ = std::make_unique<Storage>(db_path_);
+
+  MountRootRecord expected;
+  expected.id              = 1;
+  expected.root_folder_id  = 10;
+  expected.volume_identity = "volume";
+  expected.root_path       = std::filesystem::path(L"D:/Photos");
+  EXPECT_EQ(Mounts().ReadMountRoots(), std::vector<MountRootRecord>{expected});
+
+  expected.volume_name = "Photos SSD";
+  Mounts().UpdateMountVolumeName(1, expected.volume_name);
+  Reopen();
+  EXPECT_EQ(Mounts().ReadMountRoots(), std::vector<MountRootRecord>{expected});
 }
 
 TEST_F(MountStoreTest, RemovedMountRootIsAbsentAfterProjectReopen) {

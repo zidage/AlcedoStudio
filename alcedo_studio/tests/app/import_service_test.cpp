@@ -598,7 +598,7 @@ TEST_F(ImportServiceTests, ImportIntoAMountedFolderIsRefusedBeforeAnySourceRead)
   auto           import_service = std::make_unique<ImportServiceImpl>(
       fs_service, project.GetImagePoolService(),
       std::make_shared<PipelineMgmtService>(project.GetStorage()));
-  auto [mount_root, sync] = fs_service->CreateMountRootFolder(0, L"Trip", 1);
+  auto [mount_root, sync] = fs_service->CreateMountRootFolder(L"Trip", 1);
   ASSERT_TRUE(sync.success_) << sync.message_;
   MountRootRecord mount;
   mount.id             = 1;

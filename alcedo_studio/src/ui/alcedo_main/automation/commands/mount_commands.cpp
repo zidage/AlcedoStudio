@@ -19,8 +19,6 @@
 
 #include "app/mount_service.hpp"
 #include "app/project_service.hpp"
-#include "app/sleeve_service.hpp"
-#include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/automation/automation_command_support.hpp"
@@ -33,10 +31,6 @@ auto MountErrorName(MountError code) -> QString {
   switch (code) {
     case MountError::kNestedMount:
       return QStringLiteral("nested_mount");
-    case MountError::kParentIsMounted:
-      return QStringLiteral("parent_is_mounted");
-    case MountError::kParentIsNotAFolder:
-      return QStringLiteral("parent_is_not_a_folder");
     case MountError::kDirectoryUnreachable:
       return QStringLiteral("directory_unreachable");
     case MountError::kUnknownMount:
@@ -139,13 +133,16 @@ auto ReachabilityName(MountReachability reachability) -> QString {
 }
 
 auto MountJson(const MountSummary& summary) -> QJsonObject {
-  QJsonObject mount{{"mount_id", static_cast<double>(summary.record.id)},
-                    {"folder_id", static_cast<double>(summary.record.root_folder_id)},
-                    {"path", ui::album_util::PathToQString(summary.record.root_path)},
-                    {"volume_identity", QString::fromStdString(summary.record.volume_identity)},
-                    {"state", ReachabilityName(summary.reachability)},
-                    {"present_count", static_cast<double>(summary.present_count)},
-                    {"missing_count", static_cast<double>(summary.missing_count)}};
+  QJsonObject mount{
+      {"mount_id", static_cast<double>(summary.record.id)},
+      {"folder_id", static_cast<double>(summary.record.root_folder_id)},
+      {"path", ui::album_util::PathToQString(summary.record.root_path)},
+      {"volume_identity", QString::fromStdString(summary.record.volume_identity)},
+      {"volume_name", QString::fromStdString(summary.record.volume_name)},
+      {"volume_mount_point", ui::album_util::PathToQString(summary.volume_mount_point)},
+      {"state", ReachabilityName(summary.reachability)},
+      {"present_count", static_cast<double>(summary.present_count)},
+      {"missing_count", static_cast<double>(summary.missing_count)}};
   mount.insert("last_scan_at", summary.record.last_scan_at.has_value()
                                    ? QJsonValue(QDateTime::fromSecsSinceEpoch(
                                                     *summary.record.last_scan_at, QTimeZone::UTC)
@@ -199,9 +196,11 @@ auto RegisterAutomationMountCommands(AutomationCommandRegistry& registry,
   mounts.method      = QStringLiteral("library.mounts");
   mounts.description = QStringLiteral(
       "Returns the mounted folders of the open project: the mount id, the folder id of the mount "
-      "root collection, the disk directory, the volume identity, the state of the last scan of "
-      "this session ('not_scanned', 'online', 'offline'), the counts of present and missing "
-      "photos, and the end of the last complete scan (UTC).");
+      "root collection, the disk directory, the volume identity, the last read display name of "
+      "the volume (empty when it has none), the mount point of the volume when a scan of this "
+      "session reached it (empty otherwise), the state of the last scan of this session "
+      "('not_scanned', 'online', 'offline'), the counts of present and missing photos, and the "
+      "end of the last complete scan (UTC).");
   mounts.params_schema = AutomationClosedParamsSchema();
   mounts.result_schema = AutomationObjectSchema(
       QJsonObject{{"mounts", QJsonObject{{"type", "array"}}}}, QJsonArray{"mounts"});
@@ -232,18 +231,16 @@ auto RegisterAutomationMountCommands(AutomationCommandRegistry& registry,
   AutomationCommandSpec mount;
   mount.method      = QStringLiteral("library.mount");
   mount.description = QStringLiteral(
-      "Mounts the disk directory 'path' as a new collection in the folder 'parent_id' (the root "
-      "folder without it), then waits for the first scan, which imports the supported files of "
-      "the directory and its subdirectories by reference. Alcedo Studio never writes to the "
-      "directory. Returns the mount id, the folder id of the new collection, and the scan "
-      "counts. A large directory needs a larger 'timeout_ms'; after a timeout the scan "
-      "continues and library.mounts shows its result. A refused mount answers -32002 "
-      "(rejected) with data.error 'nested_mount', 'parent_is_mounted', "
-      "'parent_is_not_a_folder', or 'directory_unreachable'.");
+      "Mounts the disk directory 'path' as a new collection in the library root, then waits "
+      "for the first scan, which imports the supported files of the directory and its "
+      "subdirectories by reference. Alcedo Studio never writes to the directory. Returns the "
+      "mount id, the folder id of the new collection, and the scan counts. A large directory "
+      "needs a larger 'timeout_ms'; after a timeout the scan continues and library.mounts shows "
+      "its result. A refused mount answers -32002 (rejected) with data.error 'nested_mount' or "
+      "'directory_unreachable'.");
   mount.changes_state = true;
   mount.params_schema = AutomationClosedParamsSchema(
-      QJsonObject{{"path", QJsonObject{{"type", "string"}}}, {"parent_id", MountIdSchema()}},
-      QJsonArray{"path"});
+      QJsonObject{{"path", QJsonObject{{"type", "string"}}}}, QJsonArray{"path"});
   mount.result_schema =
       AutomationObjectSchema(QJsonObject{{"mount_id", QJsonObject{{"type", "integer"}}},
                                          {"folder_id", QJsonObject{{"type", "integer"}}},
@@ -252,23 +249,6 @@ auto RegisterAutomationMountCommands(AutomationCommandRegistry& registry,
   mount.handler = [host](const QJsonObject& params, AutomationReply reply) {
     const auto project = AutomationEnteredProject(host, reply);
     if (!project) {
-      return;
-    }
-    // The root folder without 'parent_id', as library.folders lists it.
-    std::optional<sl_element_id_t> parent_id;
-    if (params.contains("parent_id")) {
-      parent_id = AutomationElementIdParam(params, QStringLiteral("parent_id"), reply);
-      if (!parent_id.has_value()) {
-        return;
-      }
-    } else if (const auto sleeve = project->GetSleeveService()) {
-      if (const auto root = sleeve->ResolveFolder(ui::album_util::RootFsPath())) {
-        parent_id = root->element_id_;
-      }
-    }
-    if (!parent_id.has_value()) {
-      SendAutomationOwnerError(reply, AutomationErrorCode::Failed,
-                               QStringLiteral("The library cannot be read."));
       return;
     }
     const auto directory = ui::album_util::InputToPath(params.value("path").toString());
@@ -280,7 +260,7 @@ auto RegisterAutomationMountCommands(AutomationCommandRegistry& registry,
     QPointer<AutomationCommandWait> wait     = new AutomationCommandWait(std::move(reply), host);
     auto                            mount_id = std::make_shared<mount_id_t>(0);
     const auto                      refusal  = host->folders()->StartCreateMount(
-        *parent_id, *directory,
+        *directory,
         [wait, mount_id](std::exception_ptr error, mount_id_t created) {
           *mount_id = created;
           if (error && wait) {

@@ -26,19 +26,28 @@ auto MountRootMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> Moun
   auto*       volume_identity = std::get_if<std::unique_ptr<std::string>>(&data[2]);
   auto*       root_path       = std::get_if<std::unique_ptr<std::string>>(&data[3]);
   auto*       last_scan_at    = std::get_if<std::unique_ptr<std::string>>(&data[4]);
+  auto*       volume_name     = std::get_if<std::unique_ptr<std::string>>(&data[5]);
   if (id == nullptr || root_folder_id == nullptr || volume_identity == nullptr ||
-      root_path == nullptr || last_scan_at == nullptr || *root_path == nullptr) {
+      root_path == nullptr || last_scan_at == nullptr || volume_name == nullptr ||
+      *root_path == nullptr) {
     throw std::runtime_error("MountRootMapper: a MountRoot cell has an unexpected type");
   }
-  return {*id, *root_folder_id, *volume_identity ? std::move(**volume_identity) : std::string{},
-          std::move(**root_path), *last_scan_at ? std::move(**last_scan_at) : std::string{}};
+  return {*id,
+          *root_folder_id,
+          *volume_identity ? std::move(**volume_identity) : std::string{},
+          std::move(**root_path),
+          *last_scan_at ? std::move(**last_scan_at) : std::string{},
+          *volume_name ? std::move(**volume_name) : std::string{}};
 }
 
 auto MountRootMapper::ToParams(const MountRootRecord& source) -> MountRootMapperParams {
-  return {source.id, source.root_folder_id, source.volume_identity,
+  return {source.id,
+          source.root_folder_id,
+          source.volume_identity,
           conv::ToBytes(source.root_path.wstring()),
           source.last_scan_at.has_value() ? FormatUtcTimestampText(*source.last_scan_at)
-                                          : std::string{}};
+                                          : std::string{},
+          source.volume_name};
 }
 
 auto MountRootMapper::FromParams(MountRootMapperParams&& param) -> MountRootRecord {
@@ -50,6 +59,7 @@ auto MountRootMapper::FromParams(MountRootMapperParams&& param) -> MountRootReco
   if (!param.last_scan_at.empty()) {
     record.last_scan_at = ParseUtcTimestampText(param.last_scan_at);
   }
+  record.volume_name = std::move(param.volume_name);
   return record;
 }
 

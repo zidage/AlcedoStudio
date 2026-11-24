@@ -64,7 +64,7 @@ class MountTreeTest : public ::testing::Test {
   }
 
   auto MountRoot() -> sl_element_id_t {
-    auto [folder, sync] = sleeve_->CreateMountRootFolder(0, L"Trip", kMount);
+    auto [folder, sync] = sleeve_->CreateMountRootFolder(L"Trip", kMount);
     EXPECT_TRUE(sync.success_) << sync.message_;
     return folder->element_id_;
   }

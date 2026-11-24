@@ -104,7 +104,7 @@ class FolderControllerMountTest : public ApplicationModuleHostTestFixture {
   void MountTrip() {
     ASSERT_TRUE(CreateTestProject(backend_));
     ASSERT_TRUE(backend_.mount_scans()->IsStarted());
-    Folders().MountFolder(0, QUrl::fromLocalFile(PathToQString(disk_ / "Trip")));
+    Folders().MountFolder(QUrl::fromLocalFile(PathToQString(disk_ / "Trip")));
     // A row counts the photos of its own folder: the root row counts the project.
     ASSERT_TRUE(WaitFor([this] {
       return RowNamed("Trip").has_value() && RowNamed("Day1").has_value() &&
@@ -246,7 +246,7 @@ TEST_F(FolderControllerMountTest, UnmountLeavesOrdinaryRowsAndPhotos) {
 TEST_F(FolderControllerMountTest, MountInsideAMountedFolderIsRefusedWithNoRow) {
   ASSERT_NO_FATAL_FAILURE(MountTrip());
   const auto rows_before = Folders().Folders().size();
-  Folders().MountFolder(0, QUrl::fromLocalFile(PathToQString(disk_ / "Trip" / "Day1")));
+  Folders().MountFolder(QUrl::fromLocalFile(PathToQString(disk_ / "Trip" / "Day1")));
   ASSERT_TRUE(WaitFor([this] { return !backend_.mount_scans()->HasPendingScans(); }));
   ProcessEvents(300);
   EXPECT_EQ(Folders().Folders().size(), rows_before);

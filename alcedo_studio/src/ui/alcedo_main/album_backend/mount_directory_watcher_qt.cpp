@@ -8,6 +8,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <set>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -25,10 +26,12 @@ namespace {
 class QtMountDirectoryWatcher final : public MountDirectoryWatcher {
  public:
   QtMountDirectoryWatcher(std::size_t directory_limit, MountTableReader read_mount_table,
-                          std::chrono::milliseconds poll_interval)
+                          std::chrono::milliseconds poll_interval,
+                          ArrivedVolumeReader       read_arrived_volume)
       : directory_limit_(directory_limit),
-        read_mount_table_(read_mount_table ? std::move(read_mount_table)
-                                           : MountTableReader(&ListMountPointPaths)) {
+        mount_table_(std::move(read_mount_table)),
+        read_arrived_volume_(read_arrived_volume ? std::move(read_arrived_volume)
+                                                 : ArrivedVolumeReader(&ReadArrivedVolume)) {
     QObject::connect(&watcher_, &QFileSystemWatcher::directoryChanged, &watcher_,
                      [this](const QString& path) {
                        const auto it = mount_of_path_.find(path);
@@ -42,15 +45,17 @@ class QtMountDirectoryWatcher final : public MountDirectoryWatcher {
 
   void SetChangeCallback(ChangeCallback callback) override { on_change_ = std::move(callback); }
 
-  void SetVolumeCallbacks(VolumeRemovedCallback removed, VolumeArrivedCallback arrived) override {
-    on_volume_removed_ = std::move(removed);
-    on_volume_arrived_ = std::move(arrived);
-    if (!on_volume_removed_ && !on_volume_arrived_) {
+  void SetVolumeCallbacks(VolumeRemovedCallback removed, VolumeArrivedCallback arrived,
+                          MountPointArrivedCallback mount_point_arrived) override {
+    on_volume_removed_      = std::move(removed);
+    on_volume_arrived_      = std::move(arrived);
+    on_mount_point_arrived_ = std::move(mount_point_arrived);
+    if (!on_volume_removed_ && !on_volume_arrived_ && !on_mount_point_arrived_) {
       poll_timer_.stop();
       return;
     }
     // The table of this call is the state that the first poll compares with.
-    mount_points_ = ReadMountTable();
+    mount_table_.Start();
     poll_timer_.start();
   }
 
@@ -111,34 +116,18 @@ class QtMountDirectoryWatcher final : public MountDirectoryWatcher {
   }
 
  private:
-  auto ReadMountTable() const -> std::set<std::filesystem::path> {
-    const auto paths = read_mount_table_();
-    return {paths.begin(), paths.end()};
-  }
-
   /// Compare the mount table with the last read. A mount point that is gone removes the watch of
   /// each mount whose root is at or below it; a new mount point is an arrival.
   void PollMountTable() {
-    auto                    current = ReadMountTable();
+    const auto              changes = mount_table_.Poll();
     std::vector<mount_id_t> removed_mounts;
-    bool                    arrived = false;
-    for (const auto& mount_point : mount_points_) {
-      if (current.contains(mount_point)) {
-        continue;
-      }
+    for (const auto& mount_point : changes.removed) {
       for (const auto& [mount_id, root] : root_of_mount_) {
         if (IsPathAtOrBelow(root, mount_point)) {
           removed_mounts.push_back(mount_id);
         }
       }
     }
-    for (const auto& mount_point : current) {
-      if (!mount_points_.contains(mount_point)) {
-        arrived = true;
-        break;
-      }
-    }
-    mount_points_ = std::move(current);
 
     for (const auto mount_id : removed_mounts) {
       Unwatch(mount_id);
@@ -149,32 +138,83 @@ class QtMountDirectoryWatcher final : public MountDirectoryWatcher {
         on_volume_removed_(mount_id);
       }
     }
-    if (arrived && on_volume_arrived_) {
+    if (!changes.arrived.empty() && on_volume_arrived_) {
       on_volume_arrived_();
+    }
+    if (on_mount_point_arrived_) {
+      for (const auto& mount_point : changes.arrived) {
+        on_mount_point_arrived_(read_arrived_volume_(mount_point));
+      }
     }
   }
 
   std::size_t                                           directory_limit_;
-  MountTableReader                                      read_mount_table_;
+  MountTableComparison                                  mount_table_;
+  ArrivedVolumeReader                                   read_arrived_volume_;
   QFileSystemWatcher                                    watcher_;
   QTimer                                                poll_timer_;
   ChangeCallback                                        on_change_;
   VolumeRemovedCallback                                 on_volume_removed_;
   VolumeArrivedCallback                                 on_volume_arrived_;
+  MountPointArrivedCallback                             on_mount_point_arrived_;
   std::unordered_map<QString, mount_id_t>               mount_of_path_;
   std::unordered_map<mount_id_t, QStringList>           paths_of_mount_;
   std::unordered_map<mount_id_t, std::filesystem::path> root_of_mount_;
-  std::set<std::filesystem::path>                       mount_points_;
   std::size_t                                           watched_count_ = 0;
 };
 
 }  // namespace
 
+auto ReadArrivedVolume(const std::filesystem::path& mount_point) -> ArrivedVolume {
+  ArrivedVolume volume;
+  volume.mount_point = mount_point;
+  volume.name        = ReadVolumeLabel(mount_point).name;
+  volume.identity    = ReadVolumeIdentity(mount_point);
+  std::error_code ec;
+  volume.has_dcim_directory = std::filesystem::is_directory(mount_point / "DCIM", ec) && !ec;
+  return volume;
+}
+
+MountTableComparison::MountTableComparison(MountTableReader read_mount_table)
+    : read_mount_table_(read_mount_table ? std::move(read_mount_table)
+                                         : MountTableReader(&ListMountPointPaths)) {}
+
+void MountTableComparison::Start() {
+  mount_points_ = read_mount_table_();
+  started_      = true;
+}
+
+auto MountTableComparison::Poll() -> Changes {
+  Changes changes;
+  if (!started_) {
+    return changes;
+  }
+  auto                            current = read_mount_table_();
+  const std::set<std::filesystem::path> last(mount_points_.begin(), mount_points_.end());
+  const std::set<std::filesystem::path> now(current.begin(), current.end());
+  // The order of the system list; a mount point that the list holds twice is reported once.
+  std::set<std::filesystem::path> reported;
+  for (const auto& mount_point : current) {
+    if (!last.contains(mount_point) && reported.insert(mount_point).second) {
+      changes.arrived.push_back(mount_point);
+    }
+  }
+  reported.clear();
+  for (const auto& mount_point : mount_points_) {
+    if (!now.contains(mount_point) && reported.insert(mount_point).second) {
+      changes.removed.push_back(mount_point);
+    }
+  }
+  mount_points_ = std::move(current);
+  return changes;
+}
+
 auto CreateQtMountDirectoryWatcher(std::size_t directory_limit, MountTableReader read_mount_table,
-                                   std::chrono::milliseconds poll_interval)
+                                   std::chrono::milliseconds poll_interval,
+                                   ArrivedVolumeReader       read_arrived_volume)
     -> std::unique_ptr<MountDirectoryWatcher> {
   return std::make_unique<QtMountDirectoryWatcher>(directory_limit, std::move(read_mount_table),
-                                                   poll_interval);
+                                                   poll_interval, std::move(read_arrived_volume));
 }
 
 #ifndef _WIN32

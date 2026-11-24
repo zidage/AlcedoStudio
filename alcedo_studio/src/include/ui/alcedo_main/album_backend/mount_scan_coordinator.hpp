@@ -16,6 +16,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -159,7 +160,9 @@ struct MountScanCoordinatorDependencies {
  * Volume events (#1020): the removal of the volume of a watched mount, or the cancel of that
  * removal, requests a scan of the mount at once; the scan finds the mount offline or watches it
  * again. The arrival of a volume requests a scan of each offline mount after the volume arrival
- * delay; a connected drive brings its mount online and its missing photos return.
+ * delay; a connected drive brings its mount online and its missing photos return. A new mount
+ * point whose volume holds no mount of the project emits VolumeWithoutMountArrived (#1076): no
+ * mount has the identity of the volume, and no mount root is at or below the mount point.
  *
  * One scan runs at a time. A request for the mount of the running scan sets its "scan again"
  * flag: when the scan ends, one more scan of that mount starts. Production interleaving: the
@@ -298,12 +301,21 @@ class MountScanCoordinator final : public QObject {
  signals:
   /// The worker that BeginStop stopped has ended; HasStoppedWorker is false.
   void StoppedWorkerEnded();
+  /// A volume that holds no mount of the open project arrived (#1076). Emitted only while the
+  /// coordinator is started.
+  /// @param volumeName The display name of the volume; empty when it has none.
+  /// @param mountPoint The mount point (`E:\` on Windows, the mount path on macOS and Linux).
+  /// @param hasDcimDirectory True when the root of the volume holds a `DCIM` directory.
+  void VolumeWithoutMountArrived(const QString& volumeName, const QString& mountPoint,
+                                 bool hasDcimDirectory);
 
  private:
   friend class MountScanHold;
 
   struct MountState {
     std::filesystem::path           root;
+    /// MountRootRecord::volume_identity; empty when the volume has none.
+    std::string                     volume_identity;
     QString                         title;
     std::optional<MountScanTrigger> queued;
     std::optional<MountScanTrigger> scan_again;
@@ -362,6 +374,7 @@ class MountScanCoordinator final : public QObject {
   void HandleDirectoryChanged(mount_id_t mount_id);
   void HandleVolumeRemoved(mount_id_t mount_id);
   void HandleVolumeArrived();
+  void HandleMountPointArrived(const ArrivedVolume& volume);
   /// Start the next queued operation, else the next queued scan, when the worker is free.
   void StartNextScan();
   void StartOperation(PendingOperation pending);
