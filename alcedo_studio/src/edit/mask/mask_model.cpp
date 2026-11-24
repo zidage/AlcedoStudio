@@ -17,6 +17,7 @@
 #include <utility>
 #include <variant>
 
+#include "edit/operators/models/json_read.hpp"
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_stroke.hpp"
 #endif
@@ -94,7 +95,7 @@ auto TranslationFromJson(const nlohmann::json& json, std::string_view owner) -> 
 auto ReadRequiredFloat(const nlohmann::json& json, const char* key, std::string_view owner)
     -> float {
   RequireNumber(json, key, owner);
-  const auto value = json[key].get<float>();
+  const auto value = json_util::ToFloat(json[key], key);
   RequireFinite(value, key);
   return value;
 }

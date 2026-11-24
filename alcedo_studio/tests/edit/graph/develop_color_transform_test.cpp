@@ -474,6 +474,32 @@ auto Apply(const std::array<float, 9>& m, const std::array<double, 3>& rgb)
           m[6] * rgb[0] + m[7] * rgb[1] + m[8] * rgb[2]};
 }
 
+// The film print As Shot light reads the white through RawWhiteBalanceWhite; it uses the clamp of
+// the color transform, so a stored custom value outside the range never reaches it (#1096).
+TEST(GpuDagModelGraph, RawWhiteBalanceWhiteClampsTheCustomWhiteAsTheColorTransformDoes) {
+  auto payload        = DualIlluminantPayload();
+  payload.custom_cct  = -5.0f;
+  payload.custom_tint = 1.0e6f;
+  const auto low      = RawWhiteBalanceWhite(payload);
+  ASSERT_TRUE(low.has_value());
+  EXPECT_EQ(low->cct, kWhiteBalanceCctMin);
+  EXPECT_EQ(low->tint, kWhiteBalanceTintMax);
+
+  payload.custom_cct  = 1.0e9f;
+  payload.custom_tint = -1.0e6f;
+  const auto high     = RawWhiteBalanceWhite(payload);
+  ASSERT_TRUE(high.has_value());
+  EXPECT_EQ(high->cct, kWhiteBalanceCctMax);
+  EXPECT_EQ(high->tint, kWhiteBalanceTintMin);
+
+  payload.custom_cct  = 5000.0f;
+  payload.custom_tint = 10.0f;
+  const auto inside   = RawWhiteBalanceWhite(payload);
+  ASSERT_TRUE(inside.has_value());
+  EXPECT_DOUBLE_EQ(inside->cct, 5000.0);
+  EXPECT_DOUBLE_EQ(inside->tint, 10.0);
+}
+
 }  // namespace
 
 TEST(GradeCat02WhiteBalanceTest, AcesWhiteCctTintMatchesModelDefault) {

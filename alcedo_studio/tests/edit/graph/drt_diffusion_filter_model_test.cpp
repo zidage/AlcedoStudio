@@ -113,5 +113,24 @@ TEST(DrtDiffusionFilterModel, ShapeScalesOnlyScatterFractionWithStrength) {
   EXPECT_TRUE(IsDiffusionFilterActive(0.01f));
 }
 
+// A peak luminance outside 1 to 10000 nits can stop the ACES 2.0 reach search; LoadJson refuses
+// it and keeps the current value (#1094).
+TEST(DrtParamsModelLoad, PeakLuminanceOutsideTheDisplayRangeFailsTheLoadAndKeepsTheValue) {
+  auto        document = CreateDefaultPipelineDocument();
+  auto&       params   = document.Drt()->Params();
+  const auto  base     = params.ToJson();
+  const float before   = params.PeakLuminance();
+  for (const double peak : {0.0, -100.0, 0.5, 10000.5, 1e8, 1e39}) {
+    auto json              = base;
+    json["peak_luminance"] = peak;
+    EXPECT_THROW(params.LoadJson(json), std::runtime_error) << peak;
+    EXPECT_EQ(params.PeakLuminance(), before) << peak;
+  }
+  auto json              = base;
+  json["peak_luminance"] = 1000.0;
+  params.LoadJson(json);
+  EXPECT_EQ(params.PeakLuminance(), 1000.0f);
+}
+
 }  // namespace
 }  // namespace alcedo

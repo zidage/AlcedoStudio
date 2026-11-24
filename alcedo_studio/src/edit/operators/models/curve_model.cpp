@@ -4,7 +4,12 @@
 
 #include "edit/operators/models/curve_model.hpp"
 
+#include <stdexcept>
+#include <string>
 #include <utility>
+
+#include "edit/operators/models/json_read.hpp"
+#include "edit/operators/models/tone_curve_spline.hpp"
 
 namespace alcedo {
 
@@ -48,15 +53,37 @@ auto PointsToJson(const std::vector<CurvePoint>& points) -> nlohmann::json {
   return json;
 }
 
+auto CoordinateFromJson(const nlohmann::json& item, const char* key) -> float {
+  if (!item.is_object() || !item.contains(key) || !item.at(key).is_number()) {
+    return 0.0f;
+  }
+  return json_util::ToFloat(item.at(key), key);
+}
+
+/**
+ * The points of @p key. A channel with two or more points must be a valid spline input
+ * (tone_curve::FindToneCurvePointsError), so that a stored curve never fails at render (#1095).
+ * The size limit applies before the points are read.
+ * @throws std::invalid_argument for an invalid channel.
+ */
 auto PointsFromJson(const nlohmann::json& json, std::string_view key) -> std::vector<CurvePoint> {
   std::vector<CurvePoint> points;
   const std::string       name{key};
-  if (json.contains(name) && json[name].is_array()) {
-    for (const auto& item : json[name]) {
-      CurvePoint point;
-      point.x = item.value("x", 0.0f);
-      point.y = item.value("y", 0.0f);
-      points.push_back(point);
+  if (!json.contains(name) || !json[name].is_array()) {
+    return points;
+  }
+  const auto& items = json[name];
+  if (items.size() > tone_curve::kMaxControlPoints) {
+    throw std::invalid_argument("curve " + name + " has more than " +
+                                std::to_string(tone_curve::kMaxControlPoints) + " points");
+  }
+  points.reserve(items.size());
+  for (const auto& item : items) {
+    points.push_back({CoordinateFromJson(item, "x"), CoordinateFromJson(item, "y")});
+  }
+  if (points.size() >= tone_curve::kMinControlPoints) {
+    if (const auto error = tone_curve::FindToneCurvePointsError(points); error.has_value()) {
+      throw std::invalid_argument("curve " + name + ": " + *error);
     }
   }
   return points;
