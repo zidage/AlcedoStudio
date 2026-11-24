@@ -86,23 +86,24 @@ collection links. Alcedo Studio writes no sidecar file.
 The Collections panel has the command **Mount Folder** in the same menu as **New Collection**.
 
 Issue #1008 (review of the mock, 2026-11-20) keeps the name **Mount Folder** and adds
-an entry point: the primary button at the foot of the Collections panel mounts the directory
-below the selected collection. The row menu of the library root and of an ordinary row has
-**Mount Folder Here...**. The two imports share one two-segment button below it (**Import
+an entry point: the primary button at the foot of the Collections panel mounts the directory.
+The row menu of the library root has **Mount Folder Here...**. Since #1076 (2026-11-23) the
+parent of a mount is always the library root, so an ordinary row has no such item. The two imports share one two-segment button below it (**Import
 Images**, **Import Folder**), so "Mount" names only the mount and "Import" only the one-time
 imports. The three actions are disabled while a mounted row is selected. **Add to** lists the
 root anchor and the ordinary collections only.
 
 1. The command opens the system folder dialog.
-2. The application creates a collection with the name of the directory, below the row where the
-   user opened the menu. An ordinary row and the library root are valid parents.
+2. The application creates a collection with the name of the directory, below the library root
+   (#1076). An ordinary collection never holds a mount: the Collections section of the sidebar
+   holds the rows that the user arranges, and the Disk section (#1078) holds the mounts, grouped
+   by volume.
 3. The first scan starts as a background task with the kind `MountScan`.
 4. Photos appear in the collection while the scan imports them.
 
 The command reports a named error, with no change to the project, when:
 
 - the directory is inside a mounted directory, or contains one;
-- the parent row is mounted;
 - the directory does not exist.
 
 ### 2.2 Collections panel rows
@@ -193,6 +194,16 @@ name starts with a period. The file type rule is `is_supported_file`
   equals the root directory plus the relative path.
 - **Names.** Element names of a mount use Unicode normalization form C. The comparison of
   relative paths is exact.
+- **Parent.** The parent of each mount root is the library root (#1076). There is no migration:
+  only development test projects hold a mount below an ordinary collection, and they are
+  created again.
+- **Volume name.** `MountRoot.volume_name` holds the display name of the volume as
+  `CreateMount` or the last scan that reached the volume read it (`ReadVolumeLabel`). An offline
+  mount keeps it. The mount point of the volume is session state of `MountService`, like the
+  reachability.
+- **Counts.** The library root row counts the photos that no folder other than the root holds
+  and the photos of the ordinary collections; a mounted photo counts only through an ordinary
+  collection. All Photos counts every photo (#1076).
 - **Compatibility.** A project of file version 0.10.0 or 0.11.0 opens. Each element has a null
   `mount_id`. The edit history root id of each image is unchanged, because the root id uses the
   element id, the pipeline document, and the RAW color context only
@@ -1079,8 +1090,9 @@ appeared during the work. Each one agrees with the approved decisions.
   resolved, the real case on Windows). The nested check and the adoption input compare whole
   path elements (`IsPathAtOrBelow`, `MountRelativePathOf` in `SourceFileUtils`), without case on
   Windows; the names below the root keep their spelling.
-- Errors. `MountOperationError` holds a `MountError`: `kNestedMount`, `kParentIsMounted`,
-  `kDirectoryUnreachable`, and also `kParentIsNotAFolder`, `kUnknownMount`, `kStorageFailure`.
+- Errors. `MountOperationError` holds a `MountError`: `kNestedMount`,
+  `kDirectoryUnreachable`, `kUnknownMount`, and `kStorageFailure`. #1076 removed
+  `kParentIsMounted` and `kParentIsNotAFolder` with the parent parameter of `CreateMount`.
   `ScanMount` returns `MountScanResult` with `kComplete`, `kOffline`, `kCanceled`, or
   `kStorageFailure`, the failed batch number, the counts, and `fingerprint_read_count`.
 - `MountScanRequest::new_file_batch_size` (default 500) lets a test use small batches. The stop
@@ -1889,6 +1901,87 @@ Not covered: a real eject, a canceled eject, and a connected drive were not run 
 ```
 
 ---
+
+### Change record: mounts at the library root, volume names, root-only photos (#1076)
+
+Date: 2026-11-23. Issue #1076; closes #999. Parent of the sidebar work #1077 and #1078.
+
+**Product rules.**
+
+- The parent of a mount is always the library root. `MountService::CreateMount(directory)`,
+  `FolderController::MountFolder(const QUrl&)`, `FolderController::StartCreateMount(directory,
+  ...)`, and `SleeveServiceImpl::CreateMountRootFolder(name, mount_id)` have no parent
+  parameter. `library.mount` has no `parent_id`. An ordinary collection cannot hold a mount
+  root, so the delete of #999 cannot occur.
+- `FolderImageCounts::library_root_photo_count_` is the count of the root row;
+  `project_photo_count_` stays the All Photos total.
+- `AlbumScope` (`type/album_scope.hpp`) is the scope of the library reads: `AlbumScope(0)` is
+  All Photos as before, `AlbumScope(id)` is a folder, and `AlbumScope::LibraryRoot()` is the
+  photos that no folder other than the root holds. Each photo has a link in the root, so "home
+  folder is the root" is "no other link". `ReadAlbumQuery`, `ReadAlbumFilePosition`,
+  `ReadAlbumFileIds`, `BuildScopedFileQuery`, and `BuildSemanticRelevanceSelect` take it; a
+  folder id converts to it, so the other callers keep their folder id.
+- `MountRootRecord::volume_name` and the column `MountRoot.volume_name`, added through
+  `mount_schema_query` (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`), so a project file that
+  exists opens with an empty name. `MountSummary::volume_mount_point` is the mount point of the
+  last scan of this session; it is empty while the mount is not online.
+- `ReadVolumeLabel` (`utils/file/volume_identity.hpp`): `GetVolumeInformationW` and
+  `GetVolumePathNameW` on Windows, `NSURLVolumeNameKey` and `statfs` on macOS, the
+  `/dev/disk/by-label` entry (or the last component of the mount point) and the longest
+  `/proc/self/mounts` entry of the device on Linux. `MountService` takes it as the injectable
+  `VolumeLabelReader`.
+- Arrival of a volume with no mount: `SetVolumeCallbacks` has a third callback,
+  `MountPointArrivedCallback`, that reports each new mount point with `ArrivedVolume` (mount
+  point, name, identity, `DCIM` flag). The Windows watcher compares the drive list at each
+  device interface notification and every `kMountTablePollInterval`, because the drive letter
+  can come after the notification. `MountScanCoordinator` emits `VolumeWithoutMountArrived`
+  when no mount has the identity and no mount root is at or below the mount point.
+
+**Decisions made in the work.**
+
+- The issue text places the "no mount" check in the watcher. The watcher knows only the watched
+  mounts, and the mounts of an arriving volume are offline and unwatched, so the check is in
+  `MountScanCoordinator`, which holds the stored root and identity of each mount. The watcher
+  test checks the report of the arrival with its name and `DCIM` flag; the coordinator test
+  checks the decision.
+- The mount point is not stored. The issue asks for the stored name only; the mount point of an
+  online mount comes from the scan of this session, and the Disk section groups an offline mount
+  by its identity.
+- A Windows volume without a label has an empty name; the Disk section shows the mount point
+  then. The Linux reader uses the last component of the mount point, as the issue states.
+- A scan writes the name only when it differs from the stored one. A failed name write ends the
+  scan with `kStorageFailure` and `failed_batch` 0, before batch 1.
+- The row menu item **Mount Folder Here...** shows only on the library root row. The sidebar
+  sections of #1078 replace the menus.
+
+**Call chains.**
+
+```text
+Mount: Import menu or root row menu -> FolderDialog -> FolderController::MountFolder(url)
+  -> StartCreateMount -> MountScanCoordinator::RunMountOperation (worker)
+  -> MountService::CreateMount: canonical, nested check, ReadVolumeIdentity, ReadVolumeLabel
+  -> SleeveServiceImpl::CreateMountRootFolder(name, id) -> alcedo::CreateMountRootFolder
+     (kLibraryRootFolderId) -> MountStore::InsertMountRoot (volume_name)
+Scan that reaches the volume: MountService::ScanMount -> ListRootOnRecordedVolume
+  -> RecordVolumeReached: ReadVolumeLabel -> SetOnline(mount point)
+     -> MountStore::UpdateMountVolumeName when the name changed -> MountScanRun::Execute
+Counts: FolderController::RefreshImageCounts (worker) -> AlbumBrowseService::ReadFolderImageCounts
+  -> ElementStore::ReadFolderImageCounts: subtree rows, the root row (id 0), the project row
+Root row photos: AlbumBrowseService::ReadAlbumQuery(AlbumScope::LibraryRoot(), ...)
+  -> ElementStore::ReadAlbumQuery -> BuildScopedFileQuery: fc.folder_id = 0 AND no other link
+New mount point: QtMountDirectoryWatcher::PollMountTable or WinMountDirectoryWatcher
+  (timer, DBT_DEVICEARRIVAL) -> MountTableComparison::Poll -> ReadArrivedVolume
+  -> MountScanCoordinator::HandleMountPointArrived -> VolumeWithoutMountArrived
+```
+
+**Tests.** MountServiceTest (NewMountIsAChildOfTheLibraryRoot,
+VolumeNameIsStoredAndStaysWhileTheVolumeIsOffline), MountStoreTest
+(MountVolumeNameUpdateSurvivesProjectReopen, MountRootTableWithoutTheVolumeNameColumnGainsIt),
+AlbumQueryTest (LibraryRootCountLeavesOutTheMountTrees,
+LibraryRootScopeListsOnlyThePhotosThatNoOtherFolderHolds), MountDirectoryWatcherTest
+(NewMountPointIsReportedWithItsNameAndTheDcimFlag, ArrivedVolumeHasTheDcimFlagOfItsRoot),
+MountScanCoordinatorTest (VolumeWithoutAMountIsReportedAndTheVolumeOfAMountIsNot),
+AutomationLibraryCommandsTest (MountCommandSchemaHasNoParentId).
 
 ## 9. Cross-phase acceptance matrix
 
