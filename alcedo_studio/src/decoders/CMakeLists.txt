@@ -137,6 +137,21 @@ if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(CudaDemosaicNetEntry PUBLIC HAVE_CUDA)
 endif()
 
+# AI Denoise: the ONNX Runtime session of the FP16 UtNet2 graph on DirectML (Windows x64, for each
+# render backend). Only this target includes ONNX Runtime headers; its public header has no ONNX
+# Runtime type. onnxruntime.dll is delay-loaded, so the executable that links this target starts
+# without it and the session reports the load error.
+include("${CMAKE_SOURCE_DIR}/scripts/cmake/fetch_onnxruntime_directml.cmake")
+if(TARGET alcedo::onnxruntime_directml)
+    def_library(UtNet2DirectMl
+        SOURCES ${ALCEDO_SRC_ROOT}/decoders/processor/nn/utnet2_directml_session.cpp
+        PRIVATE_DEPS alcedo::onnxruntime_directml opencv_core
+    )
+    # The delay load applies to the link of the executable, so it is part of the interface.
+    target_link_options(UtNet2DirectMl INTERFACE "/DELAYLOAD:onnxruntime.dll")
+    target_link_libraries(UtNet2DirectMl INTERFACE delayimp.lib)
+endif()
+
 
 # ==============================================================================
 # 4. Decoding & IO

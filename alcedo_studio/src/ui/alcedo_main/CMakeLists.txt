@@ -1379,6 +1379,12 @@ if(ALCEDO_BUILD_SEMANTIC_SIDECAR AND TARGET alcedo_mind_sidecar)
     add_dependencies(alcedo_main alcedo_mind_sidecar_runtime_copy)
 endif()
 
+# ONNX Runtime DirectML of AI Denoise (decoders/CMakeLists.txt). The copy fails when the
+# DirectML.dll of the AI Mask sidecar differs from the DirectML.dll of the package.
+if(COMMAND alcedo_copy_onnxruntime_directml_runtime AND TARGET alcedo_main)
+    alcedo_copy_onnxruntime_directml_runtime(alcedo_main)
+endif()
+
 # aria2c is bundled next to alcedo_main for accelerated model downloads.
 include("${CMAKE_SOURCE_DIR}/scripts/cmake/fetch_aria2.cmake")
 if(ALCEDO_ARIA2C_BINARY AND TARGET alcedo_main)

@@ -1225,6 +1225,14 @@ if(TARGET ${ALCEDO_MAIN_BIN})
             )
         endif()
 
+        # ONNX Runtime DirectML of AI Denoise. alcedo_main delay-loads onnxruntime.dll, so the
+        # runtime dependency scan does not list it. DirectML.dll is the same file as the one of
+        # the sidecar (checked by the build copy, copy_onnxruntime_directml_runtime.cmake).
+        if(ALCEDO_ONNXRUNTIME_DIRECTML_RUNTIME_DLLS)
+            install(FILES ${ALCEDO_ONNXRUNTIME_DIRECTML_RUNTIME_DLLS}
+                DESTINATION "${CMAKE_INSTALL_BINDIR}")
+        endif()
+
         if(ALCEDO_ARIA2C_BINARY)
             install(FILES "${ALCEDO_ARIA2C_BINARY}"
                 DESTINATION "${CMAKE_INSTALL_BINDIR}"
