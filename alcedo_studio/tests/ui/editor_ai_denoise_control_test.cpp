@@ -135,6 +135,72 @@ TEST(EditorAiDenoiseControlTest, TurnOnIsRefusedWithoutAPlatformOrAReadableModel
   EXPECT_TRUE(submitter.calls.empty());
 }
 
+// DN13: the write of `denoise.set` of alcedo-cli comes from the control, without a submit.
+TEST(EditorAiDenoiseControlTest, PrepareTurnOnGivesWriteOfInstalledVersionWithoutSubmit) {
+  RecordingSubmitter     submitter;
+  EditorAiDenoiseControl control(Services([] { return kVersion; }), &submitter);
+
+  auto                   preparation = control.PrepareTurnOn();
+  EXPECT_FALSE(preparation.refusal.has_value());
+  ASSERT_TRUE(preparation.write.has_value());
+  const RecordingSubmitter::Call call{QStringLiteral("raw_decode"), *preparation.write, true};
+  const auto                     on = SwitchOf(call);
+  ASSERT_TRUE(on.has_value() && on->has_value());
+  EXPECT_EQ((*on)->model_version, kVersion);
+
+  const RecordingSubmitter::Call off_call{QStringLiteral("raw_decode"),
+                                          EditorAiDenoiseControl::TurnOffWrite(), true};
+  const auto                     off = SwitchOf(off_call);
+  ASSERT_TRUE(off.has_value());
+  EXPECT_FALSE(off->has_value());
+  EXPECT_TRUE(submitter.calls.empty());
+}
+
+TEST(EditorAiDenoiseControlTest, PrepareTurnOnRefusesPlatformBeforeReadingModel) {
+  RecordingSubmitter submitter;
+  int                reads    = 0;
+  auto               services = Services([&reads] {
+    ++reads;
+    return kVersion;
+  });
+  services.platform_available = [] { return false; };
+  EditorAiDenoiseControl control(std::move(services), &submitter);
+
+  const auto             preparation = control.PrepareTurnOn();
+  ASSERT_TRUE(preparation.refusal.has_value());
+  EXPECT_EQ(*preparation.refusal, EditorAiDenoiseControl::TurnOnRefusal::PlatformUnavailable);
+  EXPECT_FALSE(preparation.write.has_value());
+  EXPECT_FALSE(preparation.reason.empty());
+  EXPECT_EQ(reads, 0);
+  // The installed model is still readable for denoise.status.
+  EXPECT_EQ(control.ReadInstalledModel().version, kVersion);
+  EXPECT_EQ(reads, 1);
+}
+
+TEST(EditorAiDenoiseControlTest, ReadInstalledModelReportsMissingAndUnreadableModels) {
+  RecordingSubmitter     submitter;
+  EditorAiDenoiseControl missing(Services([]() -> std::string {
+                                   throw AiDenoiseError(AiDenoiseErrorKind::ModelNotInstalled,
+                                                        "AI Denoise: the model is not installed");
+                                 }),
+                                 &submitter);
+  const auto             not_installed = missing.ReadInstalledModel();
+  ASSERT_TRUE(not_installed.refusal.has_value());
+  EXPECT_EQ(*not_installed.refusal, EditorAiDenoiseControl::TurnOnRefusal::ModelNotInstalled);
+  EXPECT_EQ(not_installed.reason, "AI Denoise: the model is not installed");
+  EXPECT_TRUE(not_installed.version.empty());
+  EXPECT_EQ(missing.PrepareTurnOn().refusal,
+            std::optional{EditorAiDenoiseControl::TurnOnRefusal::ModelNotInstalled});
+
+  EditorAiDenoiseControl unreadable(
+      Services([]() -> std::string { throw std::runtime_error("disk error"); }), &submitter);
+  const auto failed = unreadable.ReadInstalledModel();
+  ASSERT_TRUE(failed.refusal.has_value());
+  EXPECT_EQ(*failed.refusal, EditorAiDenoiseControl::TurnOnRefusal::ModelUnreadable);
+  EXPECT_EQ(failed.reason, "AI Denoise: disk error");
+  EXPECT_TRUE(submitter.calls.empty());
+}
+
 TEST(EditorAiDenoiseControlTest, PlatformIsCheckedOnce) {
   RecordingSubmitter submitter;
   int                checks   = 0;

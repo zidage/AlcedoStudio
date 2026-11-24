@@ -33,7 +33,10 @@
   one session for each tile shape, a model cache for each model version), 45.4 MP in 0.55 s on
   the M4; the DN5 Metal code built and run. 2026-11-23: DN12 complete (issue #1072): the AI
   model feed lists the AI Denoise package next to the AI Mask set; the render reads the graph
-  from the installed package
+  from the installed package. 2026-11-23: DN13 complete (issue #1074): `alcedo-cli` has
+  `denoise.status` and `denoise.set`, a failed run reaches an agent as
+  `data.ai_denoise_error`, `docs/ai_denoise.md` is the user page, and the alcedo skill uses AI
+  Denoise on its own only for a high ISO photo with clearly visible noise (user)
 - Source revision of the audit: `main` at `61d59bc98`
 - Model source: [alcedo-denoise-lab](https://github.com/zidage/alcedo-denoise-lab), `docs/plan.md`
   steps 7 and 8
@@ -309,7 +312,7 @@ The topology is from `raw_denoiser.py` of the authors (commit `e80fb7b1`), read 
 | DN10 | macOS forward code: the Core ML session of UtNet2 on the Neural Engine in ONNX Runtime (C++), the osx-arm64 library | `cmake`, `decoders/processor/nn` | DN3 | 600 to 1000 | complete (#1069) |
 | DN11 | Linux forward code | `opencl` or ONNX Runtime WebGPU | DN3 | 1400 to 1900 | last (2026-11-22: the only Linux environment is WSL) |
 | DN12 | Feed with more than one package, denoise model package, AI Models card | `app`, `scripts/ai_models` | DN7 | 900 to 1400 | complete (#1072) |
-| DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | planned |
+| DN13 | `alcedo-cli` denoise commands, user documentation | automation, `docs` | DN8 | 400 to 800 | complete (#1074) |
 | DN14 | Render feedback in the editor: placeholder image before the first frame, the step of the render (Reading RAW, AI Denoise tile k of n, Developing group k of n) in a pill and a segmented bar | `ui/alcedo_main`, `app`, `edit/input`, `edit/runtime` | DN7 | 900 to 1400 | complete (#1059) |
 
 Order of the remaining phases: DN14, DN8, DN10, DN12, DN13, and DN11 last (DN11 last and DN14
@@ -317,7 +320,7 @@ added by the user on 2026-11-22; DN14 before DN8 by the user on 2026-11-23).
 DN10 is complete (2026-11-23): the DN2 graph runs in Alcedo Studio on the Neural Engine of the
 M4 in 0.55 s at 45.4 MP.
 
-DN0 to DN3, DN5 to DN8, DN10, and DN14 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
+DN0 to DN3, DN5 to DN8, DN10, DN12 to DN14 have detailed sections below. DN5 to DN13 depend on U4 (closed). Each gets its
 detailed section in this file before its implementation starts, with the format of DN0 to DN3.
 DN5 can start before DN3 completes: its tests build the denoised prepared input from the DN0
 expected outputs, so the Develop integration can be checked before the tile loop exists.
@@ -3294,6 +3297,172 @@ and the public files verify.
 
 **Remaining gaps:** the card and an install from the live feed were not checked in the running
 application; the macOS build was not built for this phase (no macOS-only code changed).
+
+### DN13: alcedo-cli commands and user documentation
+
+Written on 2026-11-23, before the implementation. The user asked on 2026-11-23 that `alcedo-cli`
+exposes AI Denoise, and that the alcedo agent skill uses it on its own only when the ISO is high
+and the noise clearly affects the picture.
+
+**Objective and deliverables**
+
+- `denoise.status` and `denoise.set` of `alcedo-cli` for the photo that the editor has open.
+- The AI Denoise error of a frame as structured error data (`data.ai_denoise_error`) in every
+  command that reports a render error.
+- The user documentation `docs/ai_denoise.md`.
+- The command reference `denoise.md`, the rule of the agent skill, a workflow, and the limits in
+  [alcedo-skills](https://github.com/zidage/alcedo-skills).
+
+**Inputs and prerequisites**
+
+DN7 (`EditorAiDenoiseControl`, the `raw_decode` key `ai_denoise`, the AI Denoise error of the
+editor session), DN8 (several photos through Copy and Paste of the RAW Decode item, the export
+item status `ai_denoise`), DN12 (the model package), the automation command registry and
+`OperationWait` of AU10.
+
+**Product rules**
+
+- **One photo, one switch.** `denoise.set` is the switch of the RAW Decode panel: one
+  `raw_decode` commit with the author `agent` and the `note`, on with the installed model version
+  (D10), off with no version. It answers after the frame of the commit. Several photos use
+  `adjustments.copy` and `adjustments.paste` of the `raw_decode` item (2.2); the CLI has no batch
+  command of its own (user rule of DN8).
+- **Refusals before a change** (`-32002`, `data.refusal`): `platform_unavailable` (D13),
+  `model_not_installed`, `model_unreadable`, `sensor_not_supported` for a known sensor that is
+  not Bayer (D14; the switch of the panel is disabled for it). An unknown sensor is accepted, as
+  by the panel; the render reports `sensor_not_supported`.
+- **A failed run keeps the commit**, as a failed frame of `editor.set` does: `-32007` with
+  `head_commit`, `enabled`, and `ai_denoise_error`. `denoise.set` with `enabled: false` is the
+  `Turn Off AI Denoise` of the agent (2.4, 1.4: the CLI renders no photo without the model while
+  the switch is on).
+- **The agent skill.** The skill turns AI Denoise on when the user asks for noise reduction. On
+  its own only when both hold: `iso` of `library.info` is 3200 or more, and a preview of a
+  detail at about full resolution shows noise that clearly hurts the picture. It reads
+  `denoise.status` first, does not install the model, compares the same region before and after,
+  turns the switch off at once after an AI Denoise error, and pastes the switch only onto the
+  photos that meet the rule.
+
+**Files**
+
+- `src/include/ui/alcedo_main/automation/automation_denoise_commands.hpp`,
+  `src/ui/alcedo_main/automation/commands/denoise_commands.cpp` (new)
+- `src/include/ui/alcedo_main/album_backend/editor_ai_denoise_control.hpp`,
+  `src/ui/alcedo_main/album_backend/editor_ai_denoise_control.cpp`: `ReadInstalledModel`,
+  `PrepareTurnOn`, `TurnOffWrite`; `turnOn` and `turnOff` use them.
+- `src/include/ui/alcedo_main/automation/automation_command_support.hpp`, `.cpp`:
+  `AutomationOwnerErrorData`.
+- `src/ui/alcedo_main/automation/commands/editor_commands.cpp`: the committed failure of
+  `editor.set`, `editor.undo`, `editor.redo`, and `editor.batch_set` carries it.
+- `automation_host_session.cpp`, `src/ui/alcedo_main/CMakeLists.txt`.
+- `tests/automation/automation_denoise_commands_test.cpp` (new), `automation_in_process_session.hpp`,
+  `tests/automation/CMakeLists.txt`, `tests/ui/editor_ai_denoise_control_test.cpp`.
+- `docs/ai_denoise.md` (new).
+- alcedo-skills: `SKILL.md`, `references/reference/denoise.md` (new), `README.md`,
+  `commands.json`, `references/workflows.md`, `references/limits.md`, `references/cli.md`,
+  `references/reference/editor.md`, `references/reference/render.md`.
+
+**Required tests**
+
+| Test | Assertion |
+| --- | --- |
+| `EditorAiDenoiseControlTest.PrepareTurnOnGivesWriteOfInstalledVersionWithoutSubmit` | The write of on has the installed version, off has none, nothing is submitted |
+| `EditorAiDenoiseControlTest.PrepareTurnOnRefusesPlatformBeforeReadingModel` | No platform: refusal without a model read; the model is still readable |
+| `EditorAiDenoiseControlTest.ReadInstalledModelReportsMissingAndUnreadableModels` | The two refusals and their text |
+| `AutomationDenoiseCommandsTest.StatusWithoutPhotoReportsPlatformAndMissingModel` | `available`, `model_not_installed`, `photo` null; `denoise.set` is `-32001` |
+| `AutomationDenoiseCommandsTest.StatusReportsVersionOfInstalledGraph` | The version is the SHA-256 of the graph file |
+| `AutomationDenoiseCommandsTest.SetRejectsUnknownAndMissingParameters` | `-32602` |
+| `AutomationDenoiseCommandsTest.TurnOnWithoutModelIsRefusedWithoutCommit` | The refusal of the platform or of the missing model; no commit; the photo of a CI ARW is `bayer` |
+| `AutomationDenoiseCommandsTest.FailedModelRunKeepsCommitAndReportsErrorUntilTurnedOff` | A graph that is not ONNX: `-32007` with `run_failed`, one agent commit with the note; `denoise.status` and `render.preview` report the error; off renders and clears it |
+| `AutomationDenoiseCommandsTest.TurnOnWithModelRendersDenoisedPhoto` | With the DN2 graph: on with the version, no commit for a second write, `render.preview` writes the file |
+
+**Exit criteria**
+
+The tests pass on Windows (DirectML); the reference pages pass
+`generate_cli_reference.py --check` with the `commands.json` of this build; the skill text
+states the rule of the user.
+
+##### Phase DN13 completion record (2026-11-23)
+
+**Status:** complete (issue #1074). `alcedo-cli` has `denoise.status` and `denoise.set`; a failed
+AI Denoise run reaches an agent as `data.ai_denoise_error`; `docs/ai_denoise.md` is the user
+page; the alcedo skill has the command reference and the rule of the user.
+
+**Primary success call chain:**
+
+```text
+alcedo-cli call denoise.set {"enabled":true,"note":...}
+  -> AutomationCommandRegistry::Dispatch (GUI: agent control) -> denoise.set handler
+  -> EditorAiDenoiseControl::sensor_layout (known and not Bayer: refusal)
+  -> EditorAiDenoiseControl::PrepareTurnOn -> available() -> ReadInstalledModel
+     -> DenoiseModelSession::InstalledModelVersion (SHA-256 of the graph)
+     -> DevelopRawDecodeUpdate{ai_denoise = {version}}
+  -> FieldOwnerParameterTarget(document, selected node, "raw_decode") (the Develop node)
+  -> EditorSessionController::EnqueueTargetedFieldWrite(settled, attribution agent + note)
+  -> OperationWait (commit, then a presented frame of the render, which runs the model in the
+     loader, DN6) -> AfterQueuedChanges
+  -> result {photo: PhotoJson (RecordedModelVersion from the Develop JSON, the error of
+     IEditorSessionBackend::ai_denoise_error), head_commit}
+denoise.status -> available(), ReadInstalledModel, PhotoJson of the open photo
+Several photos: adjustments.copy {"node_id":"develop","item":"raw_decode"} -> adjustments.paste
+```
+
+**Primary failure call chain:**
+
+```text
+no editor photo -> -32001
+platform without a device / no model / unreadable graph / known sensor not Bayer
+  -> -32002 data.refusal (platform_unavailable, model_not_installed, model_unreadable,
+     sensor_not_supported); nothing is written
+model run fails in the frame -> EditorSessionRenderController sets the AI Denoise error
+  -> OperationWait committed failure -> SendSetFailure -> -32007 with data.head_commit,
+     data.enabled true, data.ai_denoise_error {kind, text}
+  -> agent: denoise.set {"enabled":false} -> frame without the model -> error cleared
+editor.set / editor.batch_set / render.preview while the run fails
+  -> AutomationOwnerErrorData(message) -> ParseAiDenoiseRenderError -> data.ai_denoise_error
+```
+
+**What was proven (executed tests):**
+
+| Required test | Target | Result |
+| --- | --- | --- |
+| `PrepareTurnOnGivesWriteOfInstalledVersionWithoutSubmit`, `PrepareTurnOnRefusesPlatformBeforeReadingModel`, `ReadInstalledModelReportsMissingAndUnreadableModels` (and the 6 DN7 tests) | `EditorAiDenoiseControlTest` | 9/9 PASS |
+| `StatusWithoutPhotoReportsPlatformAndMissingModel`, `StatusReportsVersionOfInstalledGraph`, `SetRejectsUnknownAndMissingParameters`, `TurnOnWithoutModelIsRefusedWithoutCommit` | `AutomationDenoiseCommandsTest` | PASS |
+| `FailedModelRunKeepsCommitAndReportsErrorUntilTurnedOff` (DirectML, a graph that is not ONNX: ONNX Runtime "Protobuf parsing failed", `run_failed`) | `AutomationDenoiseCommandsTest` | PASS (ran, not skipped) |
+| `TurnOnWithModelRendersDenoisedPhoto` (the DN2 graph of the lab, CUDA editor backend, DirectML) | `AutomationDenoiseCommandsTest` | PASS (ran, not skipped) |
+| Callers of the changed code: `AutomationAdjustmentCommandsTest`, `AutomationProjectCommandsTest`, `AutomationLibraryCommandsTest`, `AutomationCommandRegistryTest`, `AutomationEditorCommandsTest`, `ExportAiDenoiseControlTest` | | PASS |
+| `AutomationReferenceDocsTest` (2 tests) | compares with the checkout of `ALCEDO_SKILLS_DIR` (another alcedo-skills branch without `denoise.*`) | FAIL as expected; its build copy gave the `denoise.*` entries of `commands.json` |
+| `generate_cli_reference.py --check` on the alcedo-skills branch | | the `denoise.*` blocks are current; it fails only on `labels.*` without pages, as on alcedo-skills `main` (zidage/alcedo-skills#24) |
+
+Commands: `cmd /c "scripts\msvc_env.cmd --build build\debug --target EditorAiDenoiseControlTest
+AutomationDenoiseCommandsTest AutomationReferenceDocsTest ..."`; with
+`ALCEDO_AI_DENOISE_TEST_ASSETS=D:\Projects\alcedo-denoise-lab\models\export\dark_area_loss`:
+`ctest --test-dir build/debug -j 1 -R "^AutomationDenoiseCommandsTest\."` (6/6) and the caller
+suites (65 tests: 63 pass, the 2 reference tests above).
+
+**Changes against the plan text and detail choices:**
+
+- The commands work on the open editor photo only. A batch command was not added: several
+  photos use Copy and Paste of the `raw_decode` item (2.2, the user rule of DN8).
+- `PhotoJson` reads the AI Denoise error from the session backend, not from the `aiDenoiseError`
+  property of the controller: the property follows at the next change notification, after the
+  frame that answers `denoise.set` (found by the first run of
+  `FailedModelRunKeepsCommitAndReportsErrorUntilTurnedOff`).
+- `ai_denoise_error` is added to the owner error data of every command
+  (`AutomationOwnerErrorData`), so `render.preview`, `editor.set`, `editor.undo`, `editor.redo`,
+  and `editor.batch_set` report it without changes of their own.
+- The threshold of the skill rule is ISO 3200 or more, together with noise that the agent sees in
+  a detail at about full resolution. The skill does not install the model.
+- The `commands.json` of the alcedo-skills branch gets only the `denoise.*` entries; the other
+  commands of this build that skills `main` lacks belong to their own skills branches.
+- The reference examples show the commands without a recorded output: the release build was not
+  built for this phase.
+
+**Checklist / exit condition:** the required tests pass on Windows (DirectML); the reference
+blocks of `denoise.*` are current; the skill states the rule of the user.
+
+**Remaining gaps:** no run of the commands from the `alcedo-cli` program against a release
+build (the in-process registry path is the path of every socket request); the macOS build was
+not built for this phase (no macOS-only code changed).
 
 ### DN11 to DN13
 
