@@ -1232,6 +1232,10 @@
 <context>
     <name>Alcedo</name>
     <message>
+        <source>%1 is no longer connected.</source>
+        <translation>%1 已断开连接。</translation>
+    </message>
+    <message>
         <source>The folder is inside a mounted folder or holds one.</source>
         <translation>该文件夹位于已挂载的文件夹内，或包含已挂载的文件夹。</translation>
     </message>
