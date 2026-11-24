@@ -132,7 +132,7 @@ Rectangle {
             Layout.alignment: Qt.AlignHCenter
             compact: true
             actionName: qsTr("Import")
-            iconSrc: "qrc:/panel_icons/import.svg"
+            iconSrc: "qrc:/panel_icons/tray-download.svg"
             iconColorDefault: rail.theme ? rail.theme.filledActionInk(true) : appTheme.bgBaseColor
             fillIdle: rail.theme ? rail.theme.filledActionFill(true, false, false)
                                  : appTheme.textColor

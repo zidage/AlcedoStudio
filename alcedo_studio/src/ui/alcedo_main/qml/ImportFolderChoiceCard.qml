@@ -115,7 +115,7 @@ Item {
                 Layout.alignment: Qt.AlignVCenter
                 sourceSize: Qt.size(16, 16)
                 source: card.mountAction ? "qrc:/panel_icons/folder-symlink.svg"
-                                         : "qrc:/panel_icons/import.svg"
+                                         : "qrc:/panel_icons/tray-download.svg"
                 color: card.selected ? appTheme.textColor : appTheme.iconColor
             }
 

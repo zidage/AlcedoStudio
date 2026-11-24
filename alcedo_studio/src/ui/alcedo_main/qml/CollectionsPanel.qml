@@ -1827,27 +1827,27 @@ ColumnLayout {
                 color: appTheme.dividerColor
             }
 
-            // Foot of the panel: one Import button. Its menu has Import Images, Import Folder,
-            // and Mount Folder (#1028; the actions of #1008).
+            // Foot of the panel: one Import button (#1078 mock): the tray icon, the label, and an
+            // up caret for its menu of Import Images and Import Folder.
             Button {
                 id: importButton
                 objectName: "collectionsImportButton"
                 Layout.fillWidth: true
                 Layout.topMargin: appTheme.spaceSm
-                Layout.preferredHeight: 36
+                Layout.preferredHeight: 34
                 text: qsTr("Import")
-                icon.source: "qrc:/panel_icons/import.svg"
-                icon.width: 16
-                icon.height: 16
                 // Neutral filled action: the light list well with its ink (colours from the
                 // Main shell). The button stays enabled: its menu shows which actions apply.
                 readonly property color inkColor: theme.filledActionInk(enabled)
-                icon.color: inkColor
                 Material.foreground: inkColor
-                display: AbstractButton.TextBesideIcon
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeTitle
                 font.weight: appTheme.fontWeightStrong
+                padding: 0
+                topInset: 0
+                bottomInset: 0
+                leftInset: 0
+                rightInset: 0
                 enabled: panel.backendInteractive
                 onClicked: panel.openImportMenu(importButton)
 
@@ -1862,14 +1862,44 @@ ColumnLayout {
                     }
                 }
 
-                contentItem: IconLabel {
-                    spacing: importButton.spacing
-                    mirrored: importButton.mirrored
-                    display: importButton.display
-                    icon: importButton.icon
-                    text: importButton.text
-                    font: importButton.font
-                    color: importButton.inkColor
+                contentItem: Item {
+                    implicitWidth: importContent.implicitWidth
+                    implicitHeight: 34
+
+                    Row {
+                        id: importContent
+                        anchors.centerIn: parent
+                        spacing: appTheme.spaceSm
+
+                        IconImage {
+                            objectName: "collectionsImportButtonIcon"
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 16
+                            height: 16
+                            sourceSize: Qt.size(16, 16)
+                            source: "qrc:/panel_icons/tray-download.svg"
+                            color: importButton.inkColor
+                        }
+
+                        Label {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: importButton.text
+                            font: importButton.font
+                            color: importButton.inkColor
+                        }
+
+                        // The menu opens above the button.
+                        IconImage {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 12
+                            height: 12
+                            sourceSize: Qt.size(12, 12)
+                            source: "qrc:/panel_icons/chevron-right.svg"
+                            rotation: -90
+                            opacity: 0.7
+                            color: importButton.inkColor
+                        }
+                    }
                 }
             }
         }
