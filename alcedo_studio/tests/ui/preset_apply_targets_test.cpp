@@ -260,12 +260,12 @@ TEST_F(PresetApplyTargetsTest, ApplyOfUnavailablePresetStartsNoPaste) {
 }
 
 // Time record of plan PS4 (exit criterion): Apply Preset... on 200 photos against Paste
-// Adjustments of the same package on the same photos, in alternating rounds so that the growth of
-// the histories is equal for both. A record, not a check: run it on demand in the release build
-// with --gtest_also_run_disabled_tests.
+// Adjustments of the same package on the same photos. Each run adds one Version to each photo, and
+// a run takes longer with more Versions, so the runs go in the order Paste, Preset, Preset, Paste:
+// the two paths then have the same mean number of Versions. A record, not a check: run it on
+// demand in the release build with --gtest_also_run_disabled_tests.
 TEST_F(PresetApplyTargetsTest, DISABLED_RecordApplyPresetTimeAgainstPasteFor200Photos) {
   constexpr std::size_t kPhotos = 200;
-  constexpr int         kRounds = 3;
   ASSERT_TRUE(StartHost(kPhotos));
   const auto package = host_->preset_library()->PackageFor("Warm.alcpreset");
   ASSERT_TRUE(package.Ok()) << package.message;
@@ -274,38 +274,35 @@ TEST_F(PresetApplyTargetsTest, DISABLED_RecordApplyPresetTimeAgainstPasteFor200P
   const auto timed = [this](auto start) -> double {
     QElapsedTimer timer;
     timer.start();
-    const auto result = RunApply(start);
-    const double ms   = static_cast<double>(timer.nsecsElapsed()) / 1e6;
+    const auto   result = RunApply(start);
+    const double ms     = static_cast<double>(timer.nsecsElapsed()) / 1e6;
     EXPECT_TRUE(result.has_value());
     if (result.has_value()) {
       EXPECT_EQ(result->value("appliedCount").toInt(), static_cast<int>(kPhotos));
     }
     return ms;
   };
-  std::vector<double> paste_ms;
-  std::vector<double> preset_ms;
-  for (int round = 0; round < kRounds; ++round) {
-    paste_ms.push_back(timed([&] {
+  const auto paste = [&] {
+    return timed([&] {
       return host_->adjustment_transfer()->PastePackageToTargets(
           *package.package, targets, QStringLiteral("Pasted Adjustments"));
-    }));
-    preset_ms.push_back(timed([&] {
-      return host_->presets()->ApplyToTargets(QStringLiteral("Warm.alcpreset"), targets);
-    }));
-  }
-  const auto median = [](std::vector<double> values) {
-    std::sort(values.begin(), values.end());
-    return values[values.size() / 2];
+    });
   };
-  const double paste  = median(paste_ms);
-  const double preset = median(preset_ms);
-  std::cout << "[PS4 time] " << kPhotos << " photos, median of " << kRounds
-            << " rounds: Paste Adjustments " << paste << " ms, Apply Preset " << preset
-            << " ms, ratio " << preset / paste << '\n';
-  for (int round = 0; round < kRounds; ++round) {
-    std::cout << "[PS4 time] round " << round << ": Paste " << paste_ms[round] << " ms, Preset "
-              << preset_ms[round] << " ms\n";
-  }
+  const auto preset = [&] {
+    return timed([&] {
+      return host_->presets()->ApplyToTargets(QStringLiteral("Warm.alcpreset"), targets);
+    });
+  };
+  const double paste_first  = paste();
+  const double preset_first = preset();
+  const double preset_last  = preset();
+  const double paste_last   = paste();
+  const double paste_mean   = (paste_first + paste_last) / 2.0;
+  const double preset_mean  = (preset_first + preset_last) / 2.0;
+  std::cout << "[PS4 time] " << kPhotos << " photos, runs Paste " << paste_first << " ms, Preset "
+            << preset_first << " ms, Preset " << preset_last << " ms, Paste " << paste_last
+            << " ms\n[PS4 time] mean Paste Adjustments " << paste_mean << " ms, Apply Preset "
+            << preset_mean << " ms, ratio " << preset_mean / paste_mean << '\n';
 }
 
 // Plan PS4 step 3: the Apply Preset dialog shows the previews of its first library photo, rendered
