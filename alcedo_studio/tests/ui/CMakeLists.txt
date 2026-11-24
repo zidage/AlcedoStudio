@@ -208,7 +208,7 @@ target_link_libraries(EditorSessionHistoryPortTest
   ProfileToneCurve
   AdjustmentTransferService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   EditorWorkingDocument
   EditorSessionEditController
@@ -248,7 +248,7 @@ target_include_directories(EditorComparisonInputsTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorComparisonInputsTest
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -289,7 +289,7 @@ target_link_libraries(EditorComparisonServiceTest
   EditorSessionService
   EditorComparisonService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -332,7 +332,7 @@ target_link_libraries(EditorMaskCoveragePreviewTest
   AiMaskEditSession
   EditorComparisonService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -371,7 +371,7 @@ target_link_libraries(EditorHistoryMoveDuringInputTest
   EditorSessionService
   EditorComparisonService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -410,7 +410,7 @@ target_link_libraries(EditorAiDenoiseSessionTest
   EditorSessionService
   EditorComparisonService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -680,6 +680,11 @@ alcedo_register_test_target(AdjustmentTransferControllerTest ui)
 # Preset commands of the Versions panel (edit presets plan, PS2).
 def_ui_test(PresetControllerTest preset_controller_test.cpp)
 alcedo_register_test_target(PresetControllerTest ui)
+
+# Preset browser previews of the open photo (edit presets plan, PS3).
+def_ui_test(PresetPreviewControllerTest preset_preview_controller_test.cpp)
+target_link_libraries(PresetPreviewControllerTest PRIVATE BrowserPreviewImage)
+alcedo_register_test_target(PresetPreviewControllerTest ui)
 
 # Phase 0: deterministic editor RHI checks (backend parse, fixtures, lease schema).
 add_executable(EditorRhiContractsTest

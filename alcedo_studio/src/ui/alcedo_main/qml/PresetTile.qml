@@ -1,12 +1,16 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.impl
+import QtQuick.Effects
 import QtQuick.Layouts
 
 // One preset of the preset browser (edit presets plan 2.1): an image area and the
-// name below it. PS2 shows a neutral image area; PS3 binds the preview image of the
-// open photo. A preset that is not available shows the warning icon only, and its
-// tooltip gives the reason. Names and tooltips are plain text (plan 3.5).
+// name below it. The image area shows the preview of the preset on the open photo
+// (plan 2.4): the tile watches its preset on previewSource while it exists, so only
+// instantiated tiles render a preview. The area stays neutral until the preview is
+// ready. A preset that is not available, and a preset whose preview failed, show the
+// warning icon; the tooltip of an unavailable preset gives the reason. Names and
+// tooltips are plain text (plan 3.5).
 //
 // Input: click selects, double click and Enter apply, right click opens the menu of
 // the browser. A press that moves more than the system drag distance starts the
@@ -18,6 +22,8 @@ Item {
     property string presetId: ""
     property string name: ""
     property bool available: true
+    // PresetPreviewController: watch, unwatch, previewUrl, previewFailed, revision.
+    property var previewSource: null
     property bool selected: false
     property bool renaming: false
     // Plain-text summary of the package; read by the browser when the tooltip opens.
@@ -35,6 +41,37 @@ Item {
 
     readonly property bool hovered: tileMouse.containsMouse
     readonly property real imageAspect: 1.5
+
+    // Preview: the preset this tile watches on the preview controller.
+    readonly property string previewPresetId: available && !!previewSource ? presetId : ""
+    property string watchedPresetId: ""
+    readonly property string previewUrl: watchedPresetId.length > 0 && !!previewSource
+                                         ? String(previewSource.previewUrl(watchedPresetId,
+                                                                           previewSource.revision) || "")
+                                         : ""
+    readonly property bool previewFailed: watchedPresetId.length > 0 && !!previewSource
+                                          && previewSource.previewFailed(watchedPresetId,
+                                                                         previewSource.revision) === true
+    readonly property bool previewPainted: previewUrl.length > 0
+                                           && previewImage.status === Image.Ready
+                                           && previewImage.implicitWidth > 0
+                                           && previewImage.implicitHeight > 0
+
+    function syncPreviewWatch() {
+        if (previewPresetId === watchedPresetId)
+            return
+        if (watchedPresetId.length > 0 && previewSource)
+            previewSource.unwatch(watchedPresetId)
+        watchedPresetId = previewPresetId
+        if (watchedPresetId.length > 0)
+            previewSource.watch(watchedPresetId)
+    }
+    onPreviewPresetIdChanged: syncPreviewWatch()
+    Component.onCompleted: syncPreviewWatch()
+    Component.onDestruction: {
+        if (watchedPresetId.length > 0 && previewSource)
+            previewSource.unwatch(watchedPresetId)
+    }
 
     implicitHeight: tileColumn.implicitHeight + appTheme.spaceSm * 2
     Accessible.role: Accessible.ListItem
@@ -59,18 +96,61 @@ Item {
         spacing: appTheme.spaceXs
 
         Rectangle {
+            id: imageArea
             objectName: "presetTileImageArea"
             Layout.fillWidth: true
             Layout.preferredHeight: Math.round(width / tile.imageAspect)
             radius: appTheme.controlRadiusSmall
             color: appTheme.cardSurfaceColor
 
+            // The photo fits into the 3:2 area, as in the LUT browser.
+            Item {
+                id: previewPhoto
+                objectName: "presetTilePreview"
+                readonly property real fitScale: tile.previewPainted
+                                                 ? Math.min(imageArea.width / previewImage.implicitWidth,
+                                                            imageArea.height / previewImage.implicitHeight)
+                                                 : 1
+                width: tile.previewPainted ? Math.round(previewImage.implicitWidth * fitScale)
+                                           : imageArea.width
+                height: tile.previewPainted ? Math.round(previewImage.implicitHeight * fitScale)
+                                            : imageArea.height
+                x: Math.round((imageArea.width - width) / 2)
+                y: Math.round((imageArea.height - height) / 2)
+                visible: tile.previewUrl.length > 0
+
+                Rectangle {
+                    id: previewMask
+                    anchors.fill: parent
+                    radius: appTheme.controlRadiusSmall
+                    visible: false
+                    layer.enabled: true
+                }
+
+                Image {
+                    id: previewImage
+                    objectName: "presetTilePreviewImage"
+                    anchors.fill: parent
+                    source: tile.previewUrl
+                    asynchronous: true
+                    // Every shown preview has its own URL; the controller keeps the pixels.
+                    cache: false
+                    fillMode: Image.PreserveAspectFit
+                    opacity: tile.previewPainted ? 1 : 0
+                    layer.enabled: tile.previewPainted
+                    layer.effect: MultiEffect {
+                        maskEnabled: true
+                        maskSource: previewMask
+                    }
+                }
+            }
+
             ColorImage {
                 objectName: "presetTileUnavailableIcon"
                 anchors.centerIn: parent
                 width: appTheme.editorLutTileIconSize
                 height: appTheme.editorLutTileIconSize
-                visible: !tile.available
+                visible: !tile.available || (tile.previewFailed && !tile.previewPainted)
                 source: "qrc:/panel_icons/info.svg"
                 sourceSize.width: appTheme.editorLutTileIconSize * 2
                 sourceSize.height: appTheme.editorLutTileIconSize * 2

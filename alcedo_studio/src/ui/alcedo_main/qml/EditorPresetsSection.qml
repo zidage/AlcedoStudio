@@ -14,6 +14,8 @@ ColumnLayout {
     objectName: "editorPresetsSection"
 
     property var presets: null
+    // PresetPreviewController: the tile previews on the open photo.
+    property var presetPreview: null
     // An apply to the open photo is possible (a photo is open and Versions can change).
     property bool canApply: false
     // A Version drag is over this part and a drop here saves a preset.
@@ -152,6 +154,7 @@ ColumnLayout {
         Layout.fillHeight: true
         visible: height > 0
         model: root.presets ? root.presets.presets : null
+        previewSource: root.presetPreview
         dropHighlight: root.versionDropHighlight || presetFileDrop.urls.length > 0
         onActivated: function (presetId) {
             if (root.canApply)

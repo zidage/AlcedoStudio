@@ -13,6 +13,7 @@
 #include "app/editor_session_types.hpp"
 #include "app/lut_preview_image.hpp"
 #include "app/pipeline_service.hpp"
+#include "app/preset_preview_image.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_checkpoint.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_mutation.hpp"
@@ -343,8 +344,36 @@ auto EditorSessionHistoryPort::BuildLutPreviewDocument(
     const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
     const alcedo::LmtUpdate& write, std::shared_ptr<const alcedo::PipelineGraphSnapshot>* preview,
     std::string* error) -> bool {
+  return BuildRootPreviewDocument(
+      guard, captured_current, "LUT preview",
+      [&](const alcedo::CommitGraph& graph, const alcedo::LoadedRootState& root) {
+        return alcedo::BuildLutPreviewDocument(graph, root, captured_current, guard.element_id,
+                                               write);
+      },
+      preview, error);
+}
+
+auto EditorSessionHistoryPort::BuildPresetPreviewDocument(
+    const alcedo::EditorHistoryGuardHandle&                     guard,
+    const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
+    const alcedo::AdjustmentTransferPackage&                    package,
+    std::shared_ptr<const alcedo::PipelineGraphSnapshot>* preview, std::string* error) -> bool {
+  return BuildRootPreviewDocument(
+      guard, captured_current, "preset preview",
+      [&](const alcedo::CommitGraph& graph, const alcedo::LoadedRootState& root) {
+        return alcedo::BuildPresetPreviewDocument(graph, root, captured_current, guard.element_id,
+                                                  package);
+      },
+      preview, error);
+}
+
+auto EditorSessionHistoryPort::BuildRootPreviewDocument(
+    const alcedo::EditorHistoryGuardHandle&                     guard,
+    const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current, const char* noun,
+    const RootPreviewBuilder& build, std::shared_ptr<const alcedo::PipelineGraphSnapshot>* preview,
+    std::string* error) -> bool {
   if (preview == nullptr) {
-    if (error) *error = "The LUT preview document requires output storage";
+    if (error) *error = std::string{"The "} + noun + " document requires output storage";
     return false;
   }
   if (!guard.valid) {
@@ -355,7 +384,8 @@ auto EditorSessionHistoryPort::BuildLutPreviewDocument(
   auto             state = state_->EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
   if (!state->graph || !state->root || !state->document) {
-    if (error) *error = "Editor history root is unavailable for the LUT preview document";
+    if (error)
+      *error = std::string{"Editor history root is unavailable for the "} + noun + " document";
     return false;
   }
   if (captured_current && captured_current->Lineage() != state->document->Lineage()) {
@@ -363,8 +393,7 @@ auto EditorSessionHistoryPort::BuildLutPreviewDocument(
     return false;
   }
   try {
-    *preview = alcedo::BuildLutPreviewDocument(*state->graph, *state->root, captured_current,
-                                               guard.element_id, write);
+    *preview = build(*state->graph, *state->root);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;

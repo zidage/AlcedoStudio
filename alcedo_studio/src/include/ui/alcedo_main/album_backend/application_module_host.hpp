@@ -20,9 +20,9 @@ class QQmlEngine;
 #include "app/download_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/lut_library_service.hpp"
-#include "app/preset_library_service.hpp"
 #include "app/lut_package_service.hpp"
 #include "app/model_download_service.hpp"
+#include "app/preset_library_service.hpp"
 #include "app/update_service.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 #include "ui/alcedo_main/album_backend/agent_control_owner.hpp"
@@ -30,12 +30,12 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/application_close_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_ai_denoise_control.hpp"
-#include "ui/alcedo_main/album_backend/editor_viewport_placeholder.hpp"
 #include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
 #include "ui/alcedo_main/album_backend/editor_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/editor_comparison_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
+#include "ui/alcedo_main/album_backend/editor_viewport_placeholder.hpp"
 #include "ui/alcedo_main/album_backend/export_ai_denoise_control.hpp"
 #include "ui/alcedo_main/album_backend/export_queue.hpp"
 #include "ui/alcedo_main/album_backend/export_recipe_builder.hpp"
@@ -43,9 +43,9 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
+#include "ui/alcedo_main/album_backend/library_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
-#include "ui/alcedo_main/album_backend/library_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/library_view_preferences.hpp"
 #include "ui/alcedo_main/album_backend/log_folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
@@ -55,6 +55,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
 #include "ui/alcedo_main/album_backend/preset_controller.hpp"
+#include "ui/alcedo_main/album_backend/preset_preview_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_launch_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/raw_import_look_settings_model.hpp"
@@ -101,6 +102,8 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(LutLibraryController* lutTarget READ lut_target CONSTANT)
   /// Previews of every LUT on the open photo for the LUT browser tiles (issue #598).
   Q_PROPERTY(LutPreviewController* lutPreview READ lut_preview CONSTANT)
+  /// Preset browser previews of the open photo (edit presets plan, PS3).
+  Q_PROPERTY(PresetPreviewController* presetPreview READ preset_preview CONSTANT)
   Q_PROPERTY(SemanticGenerationController* semanticGeneration READ semantic_generation CONSTANT)
   Q_PROPERTY(
       alcedo::AiProviderProfileController* aiProviderProfiles READ ai_provider_profiles CONSTANT)
@@ -223,6 +226,7 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto lut_browser() -> LutLibraryModel* { return lut_browser_.get(); }
   [[nodiscard]] auto lut_target() -> LutLibraryController* { return lut_target_.get(); }
   [[nodiscard]] auto lut_preview() -> LutPreviewController* { return lut_preview_.get(); }
+  [[nodiscard]] auto preset_preview() -> PresetPreviewController* { return preset_preview_.get(); }
   [[nodiscard]] auto workspace_router() -> WorkspaceRouter* { return workspace_router_.get(); }
   [[nodiscard]] auto editor_behavior() -> EditorBehaviorPreferences* {
     return editor_behavior_.get();
@@ -330,6 +334,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<LutLibraryModel>                     lut_browser_;
   std::unique_ptr<LutLibraryController>                lut_target_;
   std::unique_ptr<LutPreviewController>                lut_preview_;
+  std::unique_ptr<PresetPreviewController>             preset_preview_;
   std::unique_ptr<WorkspaceRouter>                     workspace_router_;
   std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
   std::unique_ptr<LibraryBehaviorPreferences>          library_behavior_;

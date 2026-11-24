@@ -1,7 +1,7 @@
 # Edit Presets Plan
 
 - Date: 2026-11-24
-- Status: PS1A, PS1B, and PS2 implemented (2026-11-24); PS3 and PS4 planned
+- Status: PS1A, PS1B, PS2, and PS3 implemented (2026-11-24); PS4 planned
 - Tracking issue: #1090
 - Direct prerequisite plans:
   [Phase NM10, Node-aware Adjustment Transfer](../edit/node_mask_editor/phase_nm10_adjustment_transfer_plan.md)
@@ -380,7 +380,7 @@ Current files that change: `app/adjustment_transfer_package_builder.{hpp,cpp}`
 | PS1B | Preset library service with the scan and the package cache, folder setting | `app/`, `album_backend`, settings QML | PS1A | 1400 (actual) | complete |
 | PS2A | `PresetController`, `PresetListModel`, package summary, `PresetNameFromLabel`, `PresetControllerTest` | `app/`, `album_backend` | PS1B | 1300 (actual) | complete |
 | PS2B | Versions panel with the preset part, drag in both directions, add, one-time apply, rename, delete, `Save as Preset` | QML, `AppTheme`, `.ts` | PS2A | 1200 (actual) | complete |
-| PS3 | Preview images in the preset browser | `app/`, `album_backend`, QML | PS2 | 1100 to 1500 | planned |
+| PS3 | Preview images in the preset browser | `app/`, `album_backend`, QML | PS2 | 1550 net (actual) | complete |
 | PS4 | `Apply Preset...` for many photos with previews, automation commands | QML, `album_backend`, `app/thumbnail_service`, automation | PS3 | 1400 to 1800 | planned |
 
 Each phase is one pull request. If an estimate grows above 2000 lines during the work, split the
@@ -818,13 +818,109 @@ of 2.4 for the open photo.
 
 **Exit criteria.**
 
-- [ ] Each test above passes with the render through Auto to OpenCL.
+- [ ] Each test above passes with the render through Auto to OpenCL. The tests pass; they render
+      through the recording image port of the session tests, not through a GPU (completion record).
 - [ ] The user confirms the previews in the running application.
-- [ ] The LUT preview tests still pass (`LutLibraryModelTest`).
+- [x] The LUT preview tests still pass (`LutLibraryModelTest`).
 
-**Expected diff.** 1100 to 1500 lines.
+**Expected diff.** 1100 to 1500 lines. Actual: about 2200 inserted and 640 deleted lines. About
+600 of the inserted lines are the queue, LRU, and display code of `LutPreviewController`, moved
+into the shared base class (step 3); the net is about 1550 lines (1000 production, 600 tests), so
+the phase stays one pull request.
 
-**Completion record.** Empty.
+**Implementation decisions** (detail that this plan did not specify; each agrees with D1 to D9).
+
+| Item | Decision | Reason |
+| --- | --- | --- |
+| Shared preview code | `BrowserPreviewController` (`album_backend`, a `QObject` base class) owns the watch counts, the request queue, the render in flight, the LRU of 200 images, the failed keys, the shown display images, and the display destination. `LutPreviewController` and `PresetPreviewController` derive from it and give only the image id, the entry key, the viewport state, and the render submission. The LUT controller keeps its public API, so `LutPreviewControllerTest` is unchanged except for type names. | Step 3: one copy of the queue and LRU code. The base class has owned state; the derived classes have no access to it. |
+| Image store | `LutPreviewImageStore` became `BrowserPreviewImageStore` with a provider id (`browser_preview_image_provider.{hpp,cpp}`). The application registers one `BrowserPreviewImageProvider` for `alcedo-lut-preview` and one for `alcedo-preset-preview`. | Step 4: the display ICC conversion is the same code for both. |
+| Render size and encoding | `MakeLutPreviewRenderRequest`, `LutPreviewOutputColor`, and `kLutPreviewLongEdge` moved to `app/browser_preview_render` as `MakeBrowserPreviewRenderRequest`, `BrowserPreviewOutputColor`, and `kBrowserPreviewLongEdge`. The library `LutPreviewImage` became `BrowserPreviewImage` (LUT document, preset document, render request). | Step 2: the shared name when both use it. |
+| Session result | `EditorLutPreviewStatus`, `EditorLutPreviewResult`, and `EditorLutPreviewCompletion` became `EditorBrowserPreview*`. The result has `sensor_key`, set for a preset preview. `RenderLutPreview` and `RenderPresetPreview` share `EditorSessionService::RenderBrowserPreviewOnOwner`; the history port shares `BuildRootPreviewDocument`. | One owner path for both previews; the checks and messages stay the same. |
+| Sensor key | `PresetPreviewSensorKey(document)`: the XXH3 hash of the Develop parameters JSON without the seven white-balance fields, that is, exactly the fields that `UseSensorSettingsFrom` takes from the current Version. The controller reads it from `EditorSessionController::pipeline_document()`, once per published document, and refreshes on `StateChanged`. | A content key, not the field revisions: a checkout of another Version with equal sensor settings keeps the previews. |
+| Rendered sensor key | The session computes the sensor key of the document that it renders and returns it; the controller stores the pixels under that key (`RenderedEntryKey`) and shows them only when the tile key is equal. Interleaving: the GUI submits a sensor edit (session command 1), a tile is watched and the controller computes its key from the published document, which does not have the edit yet, and submits the preview (command 2); the owner reduces 1, then 2, so the preview has the new settings. Without the rendered key these pixels would stay under the key of the old settings and show after an Undo. `PreviewIsStoredUnderTheSensorKeyThatTheSessionRendered` drives this order. | The rule for consistency mechanisms in `AGENTS.md`: the interleaving is real and has a test. |
+| Entry key | Preset id, fingerprint, and sensor key. The id is part of the key, so two files with equal content render twice. | A key without the id would need a refresh of every watched entry after each render. |
+| Package read | `PackageFor` runs when the render starts, on the GUI thread, as an apply does. A file that fails a rule since the scan fails the preview of its key (no render); the tile shows the warning icon and stays in the list. | Plan 2.4 failure rule; the cache of 6.2 makes the second read free. |
+| Failure icon | `PresetTile` shows the warning icon of an unavailable preset also when `previewFailed(id)` is true and no preview is painted. `previewFailed` is a new invokable of the base class; the LUT tiles do not use it. | Plan 2.4. No new theme token and no new string. |
+
+##### PS3 completion record (2026-11-24)
+
+**Status:** complete for the code and the tests; the preview images in the running application
+are the user's check (pure UI), and no test renders a preset preview on a GPU.
+
+**Primary success call chain:**
+
+```text
+PresetTile created or scrolled into view (QML)
+  -> PresetPreviewController::watch(presetId)            [BrowserPreviewController]
+  -> KeyFor = image id | preset id | fingerprint (PresetLibraryService::FindEntry)
+             | PresetPreviewSensorKey(EditorSessionController::pipeline_document())
+  -> LRU hit: Show -> BrowserPreviewImageStore::Put -> image://alcedo-preset-preview/<id>
+  -> miss: Enqueue -> Pump (one in flight, not while renderBusy)
+  -> PresetPreviewController::StartRender -> PresetLibraryService::PackageFor (cached package)
+  -> IEditorSessionBackend::RenderPresetPreview {image id, package}
+  -> owner: RenderBrowserPreviewOnOwner -> PresetPreviewSensorKey(CurrentPreview)
+  -> EditorSessionHistoryPort::BuildPresetPreviewDocument -> BuildPresetPreviewDocument
+       (root replay -> DocumentTransferPlanner::Plan -> ApplyPipelineEditBatch
+        -> UseSensorSettingsFrom(current))
+  -> IEditorImageRenderPort::ScheduleImages (MakeBrowserPreviewRenderRequest, 256 px)
+  -> completion {Completed, image, sensor_key} -> queued to the GUI thread
+  -> OnRendered: RenderedEntryKey -> CachePut -> Show -> revision -> tile Image
+```
+
+**Primary failure call chain:**
+
+```text
+Render failed / document refused / package fails a rule
+  -> EditorBrowserPreviewResult{Failed} (or StartRender completes Failed without a render)
+  -> OnRendered: failed key, no retry for this photo -> revision
+  -> PresetTile: previewFailed -> warning icon; the preset stays listed and usable
+Session not interactive / another image / command refused
+  -> Rejected or StartRender false -> nothing stored; the next Refresh renders again
+Photo switch -> Refresh: every preview hidden, queue and failed keys cleared
+```
+
+**What was proven (executed tests, `build/debug`):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `PreviewDocumentEqualsPasteResultExceptSensorSettings` (canonical JSON of the preview equals a real `PasteAsRootRelativeVersion` result with the same sensor settings; no commit) | `PresetPreviewImageTest` | PASS |
+| `PreviewDocumentKeepsDemosaicAndDenoiseOfCurrentVersion` | `PresetPreviewImageTest` | PASS |
+| `PreviewOfAnotherImageOrAnEmptyPresetIsRefused` | `PresetPreviewImageTest` | PASS |
+| `SensorKeyFollowsSensorSettingsAndIgnoresWhiteBalanceAndLook` | `PresetPreviewImageTest` | PASS |
+| `PreviewKeyChangesWithFingerprintImageAndSensorSettings` | `PresetPreviewControllerTest` | PASS |
+| `OneRenderRunsAtATimeAndWaitsForViewport` | `PresetPreviewControllerTest` | PASS |
+| `FailedPreviewIsNotRetriedAndTileStaysAvailable` (also: a package that fails a rule) | `PresetPreviewControllerTest` | PASS |
+| `PreviewIsStoredUnderTheSensorKeyThatTheSessionRendered` | `PresetPreviewControllerTest` | PASS |
+| `PresetWithoutFingerprintOrPhotoHasNoPreview` | `PresetPreviewControllerTest` | PASS |
+| `PresetPreviewRendersThePresetOnTheRootWithTheWorkingSensorKey` (session and real history port) | `EditorComparisonServiceTest` | PASS |
+| `PresetPreviewIsRefusedForAnotherImageOrWithoutAPackage` | `EditorComparisonServiceTest` | PASS |
+| LUT previews on the shared base class (8 `LutPreviewControllerTest` cases) | `LutLibraryModelTest` | PASS |
+| Preset commands (caller of the preset browser) | `PresetControllerTest` | PASS |
+| Versions panel with the new tile bindings; no QML error of the preset files in the log | `EditorVersionsPanelQmlTest` | PASS |
+| `alcedo_main` links; the changed QML compiles (qmlcachegen) | `alcedo_main` | PASS |
+
+The session tests render through the recording image port of `EditorComparisonServiceTest`; they
+check the document, the render request, and the result, not GPU pixels. The GPU path is the image
+render port of the LUT previews, unchanged.
+
+Commands: `cmd /c "scripts\msvc_env.cmd --build build\debug --target PresetPreviewImageTest PresetPreviewControllerTest EditorComparisonServiceTest LutLibraryModelTest PresetControllerTest EditorVersionsPanelQmlTest alcedo_main --parallel 8"`,
+then each test binary from its `_runtime` folder (`EditorVersionsPanelQmlTest` with
+`QT_QPA_PLATFORM=offscreen` and `QT_FORCE_STDERR_LOGGING=1`).
+Suite totals: `PresetPreviewImageTest` 4/4, `PresetPreviewControllerTest` 5/5,
+`EditorComparisonServiceTest` 29/29, `LutLibraryModelTest` 33/33, `PresetControllerTest` 9/9,
+`EditorVersionsPanelQmlTest` 20/20. No full suite run.
+
+**Checklist / exit condition:** the LUT tests pass; the GPU render of a preset preview and the
+user check in the application are open (boxes above).
+
+**LOC note:** `browser_preview_controller.cpp` 284, `browser_preview_controller.hpp` 195,
+`preset_preview_controller.cpp` 178, `lut_preview_controller.cpp` 134 (was 349),
+`preset_preview_image.cpp` 87, `PresetTile.qml` 299, `preset_preview_controller_test.cpp` 290,
+`preset_preview_image_test.cpp` 202. `editor_session_service.cpp` is 4041 lines (above 1000 before
+this phase); the two previews now share one owner function there instead of adding a copy.
+
+**Remaining gaps:** the previews in the running application are not checked yet (pure UI, plan
+section 11). PS4 gives the dialog a preview source for a library photo.
 
 ### PS4: `Apply Preset...` for many photos, and automation
 

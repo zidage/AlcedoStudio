@@ -11,8 +11,9 @@ import Alcedo.Main 1.0
 // copies. A selection by click changes selectedPresetId only: the rows are not
 // rebuilt and the list does not scroll.
 //
-// previewSource is the photo of the preview images (PS3). An empty preset folder
-// shows the drop icon only.
+// previewSource is the preview controller of the photo of the preview images
+// (PresetPreviewController, plan 2.4); each tile watches its preset on it. An empty
+// preset folder shows the drop icon only.
 Item {
     id: root
     objectName: "presetBrowser"
@@ -187,6 +188,7 @@ Item {
                         presetId: String(root.roleAt(row, PresetListModel.PresetIdRole) || "")
                         name: String(root.roleAt(row, PresetListModel.NameRole) || "")
                         available: root.roleAt(row, PresetListModel.AvailableRole) === true
+                        previewSource: root.previewSource
                         selected: presetId.length > 0 && presetId === root.selectedPresetId
                         renaming: presetId.length > 0 && presetId === root.renamePresetId
                         summary: root.hoverSummaryId === presetId ? root.hoverSummary : ""

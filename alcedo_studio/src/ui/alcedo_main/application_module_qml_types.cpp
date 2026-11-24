@@ -56,6 +56,8 @@ void RegisterApplicationModuleTypes() {
                                                "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<PresetListModel>("Alcedo.Main", 1, 0, "PresetListModel",
                                               "Owned by PresetController");
+  qmlRegisterUncreatableType<PresetPreviewController>(
+      "Alcedo.Main", 1, 0, "PresetPreviewController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorSessionController>(
       "Alcedo.Main", 1, 0, "EditorSessionController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorComparisonController>(
