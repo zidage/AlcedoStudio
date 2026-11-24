@@ -461,6 +461,23 @@ auto FolderController::FolderElementIdForUiId(uint folderUiId) const
   }
 }
 
+auto FolderController::FolderUiIdForElementId(const sl_element_id_t elementId) const
+    -> std::optional<uint> {
+  // The root node does not store its element id (EnsureRootNode), so the sleeve resolves it.
+  if (FolderElementIdForUiId(0) == elementId) {
+    return 0u;
+  }
+  if (elementId == 0) {
+    return std::nullopt;
+  }
+  for (const auto& [key, node] : nodes_by_path_) {
+    if (node.element_id_ == elementId) {
+      return node.ui_id_;
+    }
+  }
+  return std::nullopt;
+}
+
 void FolderController::ReloadTree(const std::filesystem::path& preferredFolderPath) {
   ResetTreeState();
 

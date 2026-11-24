@@ -12,6 +12,7 @@
 #include <QStandardPaths>
 #include <algorithm>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -310,6 +311,16 @@ void ImportExportHandler::StartFolderImportOfFolderAsUser(const QString& folderU
     status_->SetTaskState(PL_TEXT("Import already running."), 0, true);
     return;
   }
+  // #1086: the destination is the project and the collection element chosen now. A row id only
+  // names a row of the current tree, and a reload during the scan gives it to another row.
+  const std::weak_ptr<ProjectService> project = project_->handler().project();
+  const auto destination = folderUiId >= 0 && !project.expired()
+                               ? folders_->FolderElementIdForUiId(static_cast<uint>(folderUiId))
+                               : std::nullopt;
+  if (!destination.has_value()) {
+    status_->SetTaskState(PL_TEXT("The collection is no longer in the library."), 0, false);
+    return;
+  }
   // The types that the scan allows by default: the stored selection the dialog opens with.
   folder_scan_->Start(folderUrlOrPath);
   status_->SetTaskState(PL_TEXT("Scanning folder..."), 0, false);
@@ -317,26 +328,42 @@ void ImportExportHandler::StartFolderImportOfFolderAsUser(const QString& folderU
   // connection then ends without importing.
   const auto serial = folder_scan_->ScanSerial();
   auto       done   = std::make_shared<QMetaObject::Connection>();
-  *done             = connect(folder_scan_, &FolderImportScanModel::ScanStateChanged, this,
-                              [this, serial, folderUiId, done]() {
-                    if (folder_scan_->ScanSerial() != serial) {
-                      disconnect(*done);
-                      return;
-                    }
-                    if (!folder_scan_->ScanFinished()) {
-                      return;
-                    }
-                    disconnect(*done);
-                    if (!folder_scan_->FolderValid()) {
-                      status_->SetTaskState(PL_TEXT("The folder could not be read."), 0, false);
-                      return;
-                    }
-                    if (folder_scan_->AllowedFileCount() == 0) {
-                      status_->SetTaskState(PL_TEXT("No files found in this folder."), 0, false);
-                      return;
-                    }
-                    StartFolderImportToFolderAsUser(folderUiId);
-                  });
+  *done             = connect(
+      folder_scan_, &FolderImportScanModel::ScanStateChanged, this,
+      [this, serial, project, destination_id = destination.value(), done]() {
+        if (folder_scan_->ScanSerial() != serial) {
+          disconnect(*done);
+          return;
+        }
+        if (!folder_scan_->ScanFinished()) {
+          return;
+        }
+        disconnect(*done);
+        // A project switch, or a reload of the same file, makes a new ProjectService; the old
+        // one has then expired or differs from the open one.
+        const auto open_project = project.lock();
+        if (!open_project || open_project != project_->handler().project() ||
+            project_->handler().project_loading()) {
+          status_->SetTaskState(
+              PL_TEXT("The project changed, so the folder was not imported."), 0, false);
+          return;
+        }
+        if (!folder_scan_->FolderValid()) {
+          status_->SetTaskState(PL_TEXT("The folder could not be read."), 0, false);
+          return;
+        }
+        if (folder_scan_->AllowedFileCount() == 0) {
+          status_->SetTaskState(PL_TEXT("No files found in this folder."), 0, false);
+          return;
+        }
+        const auto row = folders_->FolderUiIdForElementId(destination_id);
+        if (!row.has_value()) {
+          status_->SetTaskState(PL_TEXT("The collection is no longer in the library."), 0,
+                                false);
+          return;
+        }
+        StartFolderImportToFolderAsUser(static_cast<int>(row.value()));
+      });
 }
 
 void ImportExportHandler::StartFolderImport() {

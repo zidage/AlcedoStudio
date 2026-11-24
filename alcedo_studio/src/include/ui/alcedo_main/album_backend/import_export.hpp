@@ -138,7 +138,9 @@ class ImportExportHandler final : public QObject {
   /// Import Folder with a remembered choice (#1078): scan @p folderUrlOrPath with the stored type
   /// selection of folderScan, then StartFolderImportToFolderAsUser into the folder row
   /// @p folderUiId, without the dialog. A later Start or Cancel of folderScan drops the pending
-  /// import.
+  /// import. The import stays bound to the open project and to the collection element of the
+  /// row at the call (#1086): a tree reload finds that collection again, and a project switch or
+  /// a delete of that collection drops the pending import.
   Q_INVOKABLE void StartFolderImportOfFolderAsUser(const QString& folderUrlOrPath, int folderUiId);
   Q_INVOKABLE void        CancelImport();
   Q_INVOKABLE void        StartExport(const QString& outputDirUrlOrPath);
