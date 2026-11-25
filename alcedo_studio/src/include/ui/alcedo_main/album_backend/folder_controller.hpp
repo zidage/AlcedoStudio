@@ -90,6 +90,11 @@ class FolderController final : public QObject {
   [[nodiscard]] auto CurrentFolderElementId() const -> std::optional<sl_element_id_t>;
   [[nodiscard]] auto FolderElementIdForUiId(uint folderUiId) const
       -> std::optional<sl_element_id_t>;
+  /// The loaded folder row of the collection element @p elementId, or nothing when no loaded row
+  /// shows it. A tree reload gives rows new ids, so a caller that keeps a collection across
+  /// reloads keeps its element id and finds the row here.
+  [[nodiscard]] auto FolderUiIdForElementId(sl_element_id_t elementId) const
+      -> std::optional<uint>;
   /// Library path of the folder row @p folderUiId (0 = the root collection), or nothing when no
   /// loaded row has that id.
   [[nodiscard]] auto FolderFsPathForUiId(uint folderUiId) const

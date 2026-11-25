@@ -2054,6 +2054,10 @@ Alcedo 将改用 %1。</translation>
         <source>No files found in this folder.</source>
         <translation>此文件夹中没有文件。</translation>
     </message>
+    <message>
+        <source>The project changed, so the folder was not imported.</source>
+        <translation>项目已切换，因此未导入该文件夹。</translation>
+    </message>
 </context>
 <context>
     <name>AgentSessionCard</name>
