@@ -820,6 +820,14 @@ TEST_F(MountScanCoordinatorTest, ScanSavesTheProjectOnlyWhenItStoredChanges) {
   coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
   ASSERT_TRUE(WaitForScans(4));
   EXPECT_EQ(port_->SaveCount(), 2);
+
+  // #1088: a scan that only stored a new volume name.
+  MountScanResult renamed;
+  renamed.volume_name_updated = true;
+  port_->SetNextResult(renamed);
+  coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
+  ASSERT_TRUE(WaitForScans(5));
+  EXPECT_EQ(port_->SaveCount(), 3);
 }
 
 TEST_F(MountScanCoordinatorTest, StoppedScanSavesItsStoredBatchesBeforeItsWorkerEnds) {

@@ -199,7 +199,8 @@ name starts with a period. The file type rule is `is_supported_file`
   created again.
 - **Volume name.** `MountRoot.volume_name` holds the display name of the volume as
   `CreateMount` or the last scan that reached the volume read it (`ReadVolumeLabel`). An offline
-  mount keeps it. The mount point of the volume is session state of `MountService`, like the
+  mount keeps it. A scan that stores a new name reports `MountScanResult::volume_name_updated`,
+  and the coordinator saves the project file for it (#1088). The mount point of the volume is session state of `MountService`, like the
   reachability.
 - **Counts.** The library root row counts the photos that no folder other than the root holds
   and the photos of the ordinary collections; a mounted photo counts only through an ordinary
