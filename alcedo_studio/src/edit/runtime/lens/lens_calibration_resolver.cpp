@@ -475,7 +475,14 @@ auto FindBestLens(const lfDatabase* db, const lfCamera* camera, const LensInputM
     return nullptr;
   }
 
-  const char*       lens_maker  = input.lens_maker_.empty() ? nullptr : input.lens_maker_.c_str();
+  const char* lens_maker = input.lens_maker_.empty() ? nullptr : input.lens_maker_.c_str();
+  if (input.lens_selected_) {
+    // A catalog selection is a Lensfun profile name: every word must match, and no camera is
+    // given, so Lensfun does not reject the profile for its mount.
+    return TakeBestRankedLens(lf_db_find_lenses(db, nullptr, lens_maker, input.lens_model_.c_str(),
+                                                LF_SEARCH_SORT_AND_UNIQUIFY),
+                              input);
+  }
   const std::string search_name = LensfunSearchName(input.lens_model_);
   constexpr int     flags       = LF_SEARCH_SORT_AND_UNIQUIFY | LF_SEARCH_LOOSE;
   return TakeBestRankedLens(
@@ -641,6 +648,7 @@ auto LensCalibrationResolver::Resolve(const DevelopPayload&         develop,
   meta.cam_model_         = context.camera_model_;
   meta.lens_maker_        = develop.lens_maker.empty() ? context.lens_make_ : develop.lens_maker;
   meta.lens_model_        = develop.lens_model.empty() ? context.lens_model_ : develop.lens_model;
+  meta.lens_selected_     = !develop.lens_model.empty();
   meta.focal_length_mm_   = context.focal_length_mm_;
   meta.aperture_f_number_ = context.aperture_f_number_;
   meta.distance_m_        = context.focus_distance_m_;

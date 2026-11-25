@@ -29,6 +29,11 @@ struct LensInputMeta {
   float       distance_m_        = 0.0f;
   float       focal_35mm_mm_     = 0.0f;
   float       crop_factor_hint_  = 0.0f;
+  /// True when @c lens_maker_ and @c lens_model_ are a catalog selection, which names a Lensfun
+  /// profile exactly. The search then accepts a profile of any mount: the selection names the lens
+  /// on the camera, for example an adapted lens. False for the RAW lens name, which matches only
+  /// profiles whose mount fits the camera.
+  bool        lens_selected_     = false;
 };
 
 /**
@@ -99,7 +104,8 @@ class LensCalibrationResolver {
    *
    * Uses the prepared RAW camera, lens, focal length, aperture, and focus distance. A non-empty
    * @c DevelopPayload::lens_maker or @c lens_model is a user catalog selection and replaces the
-   * RAW lens name. The result is sized for @p extent.
+   * RAW lens name; a selected profile of another mount than the camera applies too
+   * (@ref LensInputMeta::lens_selected_). The result is sized for @p extent.
    *
    * A disabled setting, missing lens identity, missing or unloadable Lensfun database, unknown
    * lens, or profile with no requested correction returns @c std::nullopt. Lens correction is

@@ -522,6 +522,57 @@ TEST(LensCalibDevelopResolve, ExifNameFocalRangeRejectsProfileWithOtherFocalLeng
   EXPECT_FALSE(LensCalibrationResolver::ShotLensProfile(meta, LensDatabasePath()).has_value());
 }
 
+// A catalog selection names the lens on the camera, also a lens of another mount on an adapter.
+// The Lensfun search used to reject such a profile for its mount, so a selected Tamron, Pentax, or
+// Canon lens corrected nothing on a Sony E camera.
+TEST(LensCalibDevelopResolve, CatalogSelectionOfAnotherMountResolvesOnTheCamera) {
+  const char* selections[][2] = {
+      {"Tamron", "Tamron SP 15-30mm f/2.8 Di VC USD (A012)"},
+      {"Pentax", "HD Pentax-D FA 15-30mm f/2.8 ED SDM WR"},
+      {"Canon", "Canon RF 15-30mm F4.5-6.3 IS STM"},
+  };
+  for (const auto& selection : selections) {
+    LensInputMeta meta;
+    meta.cam_maker_         = "Sony";
+    meta.cam_model_         = "ILCE-7RM3";
+    meta.lens_maker_        = selection[0];
+    meta.lens_model_        = selection[1];
+    meta.focal_length_mm_   = 15.0f;
+    meta.aperture_f_number_ = 10.0f;
+    meta.lens_selected_     = true;
+    const auto result =
+        LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), false);
+    ASSERT_EQ(result.status_, LensProfileStatus::Resolved) << selection[1];
+    EXPECT_EQ(result.matched_lens_maker_, selection[0]);
+    EXPECT_EQ(result.matched_lens_model_, selection[1]);
+    EXPECT_EQ(result.params_.apply_distortion, 1) << selection[1];
+
+    // The RAW lens name keeps the mount check.
+    meta.lens_selected_ = false;
+    EXPECT_EQ(LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), false).status_,
+              LensProfileStatus::LensNotInDatabase)
+        << selection[1];
+  }
+
+  // Develop marks the payload lens as a selection.
+  RawRuntimeColorContext context;
+  context.valid_             = true;
+  context.camera_make_       = "Sony";
+  context.camera_model_      = "ILCE-7RM3";
+  context.lens_model_        = "E 15-30mm F2.8";
+  context.focal_length_mm_   = 15.0f;
+  context.aperture_f_number_ = 10.0f;
+  DevelopPayload payload;
+  payload.lens_enabled         = true;
+  payload.lens_profile_db_path = LensDatabasePath();
+  EXPECT_FALSE(
+      LensCalibrationResolver::Resolve(payload, context, Extent2D{96, 64}, false).has_value());
+  payload.lens_maker = "Tamron";
+  payload.lens_model = "Tamron SP 15-30mm f/2.8 Di VC USD (A012)";
+  const auto runtime = LensCalibrationResolver::Resolve(payload, context, Extent2D{96, 64}, false);
+  ASSERT_TRUE(runtime.has_value());
+  EXPECT_EQ(runtime->apply_distortion, 1);
+}
 // Issue #714: the Panasonic maker note names the lens with the Lensfun model name.
 TEST(LensCalibDevelopResolve, PanasonicMakerNoteLensNameMatchesLensfunProfile) {
   ExpectProfileMatches({"Panasonic", "DC-G9", "", "LEICA DG 12-60/F2.8-4.0", 32.0f, 8.0f,
