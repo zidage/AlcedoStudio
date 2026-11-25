@@ -199,7 +199,8 @@ name starts with a period. The file type rule is `is_supported_file`
   created again.
 - **Volume name.** `MountRoot.volume_name` holds the display name of the volume as
   `CreateMount` or the last scan that reached the volume read it (`ReadVolumeLabel`). An offline
-  mount keeps it. The mount point of the volume is session state of `MountService`, like the
+  mount keeps it. A scan that stores a new name reports `MountScanResult::volume_name_updated`,
+  and the coordinator saves the project file for it (#1088). The mount point of the volume is session state of `MountService`, like the
   reachability.
 - **Counts.** The library root row counts the photos that no folder other than the root holds
   and the photos of the ordinary collections; a mounted photo counts only through an ordinary
@@ -236,8 +237,10 @@ name starts with a period. The file type rule is `is_supported_file`
   starts when no scan worker writes the project. The stopped scan runs again after the last
   hold, with its trigger, its waiting callbacks, and its task (#1016).
 - A user import leaves each file that the listing of a mount lists to the scan of that mount
-  (`IsPathOfAMountScan`; decision D10). The synchronous delete of the Nikon HE recovery
-  (`ImageController::DeleteTargets`) refuses while a scan worker writes (#1016).
+  (`IsPathOfAMountScan`; decision D10). The Library snackbar gives the count of these files:
+  on a line under the import result, or alone when the import leaves every file and does not
+  run (`ImportExportHandler::importLeftToMounts`, `importLeftAllToMounts`; #1089). The
+  synchronous delete of the Nikon HE recovery (`ImageController::DeleteTargets`) refuses while a scan worker writes (#1016).
 
 ---
 
@@ -1982,6 +1985,40 @@ LibraryRootScopeListsOnlyThePhotosThatNoOtherFolderHolds), MountDirectoryWatcher
 (NewMountPointIsReportedWithItsNameAndTheDcimFlag, ArrivedVolumeHasTheDcimFlagOfItsRoot),
 MountScanCoordinatorTest (VolumeWithoutAMountIsReportedAndTheVolumeOfAMountIsNot),
 AutomationLibraryCommandsTest (MountCommandSchemaHasNoParentId).
+
+### Change record: the arrival card follows its volume (#1087)
+
+Status: done on 2026-11-24.
+
+- Arrival decision: a mount hides the card of an arriving volume when the two identities are
+  equal. A mount root at or below the mount point hides it only when the mount or the volume has
+  an empty identity. A card that replaces another volume at the same mount point therefore gets
+  its own card.
+- Eject: `SetVolumeCallbacks` has a fourth callback, `MountPointRemovedCallback`, for each mount
+  point that is gone from the mount table. The Windows watcher also reads the drive list at the
+  device interface removal (`DBT_DEVICEREMOVECOMPLETE`). `MountScanCoordinator` emits
+  `MountPointRemoved`, and `FolderController` closes the card of that mount point.
+- Card action: `VolumeWithoutMountArrived` carries the identity, and `FolderController` keeps it
+  with the mount point. **Import...** and **Mount...** call `FolderController::TakeArrivedVolume`,
+  which closes the card and asks `MountScanCoordinator::IsArrivedVolumeAt`: the mount point is a
+  directory and its identity equals the card's. On a mismatch the status line shows
+  "%1 is no longer connected." and the action stops. This also covers a swap between two reads of
+  the mount table, where the same mount point is in both reads and neither change is reported.
+
+```text
+Eject: WinMountDirectoryWatcher (DBT_DEVICEREMOVECOMPLETE, timer) or
+  QtMountDirectoryWatcher::PollMountTable -> MountTableComparison::Poll (removed)
+  -> MountScanCoordinator::HandleMountPointRemoved -> MountPointRemoved
+  -> FolderController::HandleMountPointRemoved -> DismissArrivedVolume
+Card button: CollectionsPanel.openVolumeCard -> FolderController::TakeArrivedVolume
+  -> MountScanCoordinator::IsArrivedVolumeAt (is_directory, ReadVolumeIdentity)
+  -> importFolderRequested -> ImportFolderFlow.begin
+```
+
+**Tests.** MountScanCoordinatorTest (ReplacementVolumeAtTheSameMountPointGetsItsOwnCard),
+MountDirectoryWatcherTest (QtWatcherReportsTheVolumeEventsOfTheMountTable),
+CollectionsPanelQmlTest (VolumeCardOpensTheImportFolderSteps). A physical card swap is
+untested.
 
 ## 9. Cross-phase acceptance matrix
 

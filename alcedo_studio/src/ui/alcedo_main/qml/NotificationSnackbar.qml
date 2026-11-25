@@ -38,18 +38,22 @@ Popup {
         NumberAnimation { property: "opacity"; from: 1.0; to: 0.0; duration: 120 }
     }
 
+    readonly property int defaultDurationMs: 2600
+
     Timer {
         id: snackbarTimer
-        interval: 2600
+        interval: root.defaultDurationMs
         repeat: false
         onTriggered: root.close()
     }
 
-    function show(messageText) {
+    // durationMs: how long the message stays; the default when it is not a positive number.
+    function show(messageText, durationMs) {
         if (!messageText || String(messageText).trim().length === 0) {
             return
         }
         root.message = String(messageText)
+        snackbarTimer.interval = durationMs > 0 ? durationMs : root.defaultDurationMs
         snackbarTimer.restart()
         if (!root.opened) {
             root.open()
