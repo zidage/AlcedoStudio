@@ -169,7 +169,7 @@ class IdleWatcher final : public MountDirectoryWatcher {
  public:
   void SetChangeCallback(ChangeCallback) override {}
   void SetVolumeCallbacks(VolumeRemovedCallback, VolumeArrivedCallback,
-                          MountPointArrivedCallback) override {}
+                          MountPointArrivedCallback, MountPointRemovedCallback) override {}
   auto Watch(mount_id_t, const std::filesystem::path&, std::span<const std::wstring>)
       -> bool override {
     return false;
