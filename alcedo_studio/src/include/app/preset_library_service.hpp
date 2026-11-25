@@ -94,7 +94,7 @@ class PresetLibraryService final : public QObject {
   Q_PROPERTY(int entryCount READ entry_count NOTIFY InventoryChanged)
 
  public:
-  enum class Operation { kNone, kScan, kUseRoot, kSave, kAdd, kRename, kDelete };
+  enum class Operation { kNone, kScan, kUseRoot, kSave, kAdd, kRename, kDelete, kExport };
   Q_ENUM(Operation)
 
   enum class Status {
@@ -194,6 +194,17 @@ class PresetLibraryService final : public QObject {
    */
   auto             Save(const AdjustmentTransferPackage& package, std::string_view name) -> Status;
   /**
+   * @brief Write @p package as a preset file at @p path, outside the preset list (issue #1124).
+   *
+   * The same checks on the calling thread as Save. On the worker the file is written with
+   * PresetFileWriteMode::kReplace: the system save dialog has asked before it replaces a file.
+   * The folder is scanned again when @p path is in it. No id is affected.
+   *
+   * @return kOk when the export is queued, else the refusal; a refusal is also the last result.
+   */
+  auto             Export(const AdjustmentTransferPackage& package,
+                          const std::filesystem::path&     path) -> Status;
+  /**
    * @brief Copy preset files into the folder.
    *
    * Each source is read with ReadPresetFile; the accepted text, not the source file, is written.
@@ -234,6 +245,14 @@ class PresetLibraryService final : public QObject {
   void               Publish(WorkerResult worker_result);
   /// Record a refusal on the calling thread and announce it.
   auto               Refuse(Operation operation, Status status, std::string message) -> Status;
+  /**
+   * @brief The written preset of @p package for Save and Export, on the calling thread.
+   *
+   * Library references in place of LUT paths, the fingerprint, and CheckPresetReferences. Null
+   * after a refusal of @p operation.
+   */
+  auto               PresetForWrite(Operation operation, const AdjustmentTransferPackage& package)
+      -> std::shared_ptr<const AdjustmentTransferPackage>;
   /// Worker: scan the worker folder into @p worker_result.
   void               ScanWorkerRoot(WorkerResult* worker_result) const;
   /// Worker: the first free file name for @p name in @p folder, or the reason why none exists.

@@ -25,6 +25,15 @@
 namespace alcedo::ui {
 
 /**
+ * @brief Default file name of an exported Version (issue #1124).
+ *
+ * `<photo file name without extension>_<Version name>.alcpreset`, made valid with
+ * PresetNameFromLabel; only the Version name when @p photoFileName is empty.
+ */
+[[nodiscard]] auto VersionExportFileName(const QString& photoFileName, const QString& versionName)
+    -> QString;
+
+/**
  * @brief QML commands of the preset browser (edit presets plan 6.1, `appModules.presets`).
  *
  * Routes each command to its owner: preset file changes to PresetLibraryService, an apply to the
@@ -52,16 +61,21 @@ class PresetController final : public QObject {
 
  public:
   /// Opens a folder in the file manager. Returns false when the system refuses.
-  using OpenUrl = std::function<bool(const QUrl&)>;
+  using OpenUrl        = std::function<bool(const QUrl&)>;
+  /// Asks for a file to write in the system save dialog: (title, suggested path, name filter).
+  /// Returns the chosen native path, or an empty string when the user cancels.
+  using ChooseSaveFile =
+      std::function<QString(const QString&, const QString&, const QString&)>;
 
   /**
    * @param library Owner of the preset folder; must outlive this object.
    * @param copy_dialog Selection of the Copy dialog, for Save as Preset; may be null.
    * @param open_url Defaults to QDesktopServices::openUrl. Tests pass a stand-in.
+   * @param choose_save_file Defaults to QFileDialog::getSaveFileName. Tests pass a stand-in.
    */
   PresetController(alcedo::PresetLibraryService*  library,
                    AdjustmentTransferDialogModel* copy_dialog, OpenUrl open_url = {},
-                   QObject* parent = nullptr);
+                   ChooseSaveFile choose_save_file = {}, QObject* parent = nullptr);
 
   [[nodiscard]] auto      presets() -> PresetListModel* { return presets_; }
   [[nodiscard]] auto      library() -> alcedo::PresetLibraryService* { return library_; }
@@ -84,6 +98,17 @@ class PresetController final : public QObject {
    * (PresetNameFromLabel). The service makes the name unique.
    */
   Q_INVOKABLE QVariantMap SaveVersionAsPreset(const QString& versionId);
+  /**
+   * @brief Export the Version @p versionId of the open photo as a preset file (issue #1124).
+   *
+   * The same package as SaveVersionAsPreset. Opens the system save dialog in the folder of the
+   * last export (else Documents) with VersionExportFileName, then queues
+   * PresetLibraryService::Export to the chosen file; the file does not enter the preset folder.
+   *
+   * @return `{success, message?, pending}`, or `{success: true, canceled: true}` when the user
+   *         closes the dialog. @ref operationFinished reports the write as `export`.
+   */
+  Q_INVOKABLE QVariantMap ExportVersion(const QString& versionId);
   /// Save the selection of the Copy dialog as a preset named after the selected Version.
   Q_INVOKABLE QVariantMap SaveDialogSelectionAsPreset();
   /// Copy the `.alcpreset` files of @p urls (local file URLs or paths) into the folder.
@@ -136,7 +161,8 @@ class PresetController final : public QObject {
   /**
    * @brief A file operation of the service ended.
    *
-   * `{operation: "scan"|"useRoot"|"save"|"add"|"rename"|"delete", success, message, presetIds}`;
+   * `{operation: "scan"|"useRoot"|"save"|"add"|"rename"|"delete"|"export", success, message,
+   * presetIds}`;
    * presetIds lists the new or renamed presets.
    */
   void OperationFinished(const QVariantMap& result);
@@ -148,6 +174,10 @@ class PresetController final : public QObject {
   /// The checked package of the listed, available preset @p presetId and its name; null with
   /// @p error otherwise.
   auto ListedPackage(const QString& presetId, QString* name, QString* error)
+      -> std::shared_ptr<const alcedo::AdjustmentTransferPackage>;
+  /// The preset package of the Version @p versionId of the open photo (every transferable item
+  /// except Crop and Rotate and Lens Correction) and its Version name; null with @p error.
+  auto VersionPackage(const QString& versionId, QString* versionName, QString* error)
       -> std::shared_ptr<const alcedo::AdjustmentTransferPackage>;
   auto PasteIntoEditor(const alcedo::AdjustmentTransferPackage& package, const QString& name)
       -> QVariantMap;
@@ -163,7 +193,8 @@ class PresetController final : public QObject {
   QPointer<EditorSessionController>       editor_session_;
   QPointer<AdjustmentTransferController>  adjustment_transfer_;
   OpenUrl                                 open_url_;
-  PresetListModel*                        presets_        = nullptr;  // owned child
+  ChooseSaveFile                          choose_save_file_;
+  PresetListModel*                       presets_        = nullptr;  // owned child
   double                                  browser_height_ = 0.0;
   QString                                 browser_view_mode_;
 };

@@ -64,9 +64,6 @@ Item {
     // Display rows: {kind: "title", text} or {kind: "tiles", rows: [model row, ...]}.
     // Built on a model, column, or query change only.
     property var displayRows: []
-    // Summary of the hovered tile, read from the model when the pointer enters it.
-    property string hoverSummaryId: ""
-    property string hoverSummary: ""
 
     function roleAt(row, role) {
         const _revision = root.dataRevision
@@ -169,7 +166,6 @@ Item {
         ignoreUnknownSignals: true
         function onModelReset() {
             root.dataRevision += 1
-            root.hoverSummaryId = ""
             root.rebuildRows()
         }
     }
@@ -312,12 +308,9 @@ Item {
                             previewSource: root.previewSource
                             selected: presetId.length > 0 && presetId === root.selectedPresetId
                             renaming: presetId.length > 0 && presetId === root.renamePresetId
-                            summary: root.hoverSummaryId === presetId ? root.hoverSummary : ""
+                            reason: available ? ""
+                                              : String(root.roleAt(row, PresetListModel.ReasonRole) || "")
 
-                            onSummaryRequested: {
-                                root.hoverSummaryId = presetId
-                                root.hoverSummary = String(root.roleAt(row, PresetListModel.SummaryRole) || "")
-                            }
                             onClicked: {
                                 rowsView.forceActiveFocus()
                                 root.selectedPresetId = presetId

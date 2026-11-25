@@ -77,12 +77,12 @@ The user did not specify these items. This plan decides them.
 ```
 
 - The top part is the preset browser. The bottom part is the current Versions list with its
-  current header, draft row, and row actions.
+  current header and draft row. A right click on a Version card opens its menu (issue #1124).
 - The splitter height is stored in `QSettings`. The top part can collapse to its header.
 - Header menu `[...]`: `Apply Preset File...`, `Refresh`, `Show Folder`.
 - Header button `[+]`: `Add Preset...` opens a file dialog for `.alcpreset` files.
-- A preset tile shows the preview image and the name. The tooltip shows the item summary of the
-  package (the same rows as the Paste confirmation). The name and the tooltip are plain text.
+- A preset tile shows the preview image and the name. It has no tooltip with the item summary
+  (issue #1124). The name and the tooltip are plain text.
 - A tile that is not available shows the warning icon only. Its tooltip shows the reason.
 - Tile context menu: `Apply`, `Rename`, `Show in Folder`, `Delete`.
 - An empty preset folder shows the drop icon only, with no text.
@@ -1173,6 +1173,23 @@ full suite run.
 **Remaining gaps:** none for PS4B.
 
 ---
+
+### Follow-up: Version context menu and preset tooltip (issue #1124)
+
+Status: implemented 2026-11-24 on `feature/version-context-menu-export`.
+
+| Item | Decision | Reason |
+| --- | --- | --- |
+| Preset tooltip | An available preset has no tooltip; the item summary is not shown. An unavailable preset keeps its tooltip with the reason. The `summary` role of `PresetListModel` and `PresetPackageSummaryText` are removed. | User request. The warning icon of an unavailable preset has no other text. |
+| Version card | The Rename and Remove buttons are removed. A right click opens `editorVersionMenu`: `Rename Version`, `Export Version...`, `Remove Version`, with the old button conditions. Rename and Export start in the menu `onClosed`. | User request. The menu gives focus back on close (same cause as #1120). |
+| Export Version | `PresetController::ExportVersion` builds the package of a drag-saved preset (D4), opens `QFileDialog::getSaveFileName`, and queues `PresetLibraryService::Export`. The file does not enter the preset list unless the chosen folder is the preset folder (then the folder is scanned). | "Export a Version" in the panel of presets: a shareable `.alcpreset` file. |
+| Default file name | `<photo file name without extension>_<Version name>.alcpreset`, made valid with `PresetNameFromLabel` (`VersionExportFileName`). The dialog opens in the folder of the last export (`presets/exportFolder`), else Documents. | User request. |
+| Replace | `PresetFileWriteMode::kReplace`: the temporary file is renamed over an existing regular file. The save dialog has asked before. Save and Add keep `kCreateNew`. | A confirmed overwrite must not fail with "exists". |
+| Drop guide text | The band of the Versions list says `Drag here to apply this preset` (拖到这里，使用该预设), the expanded overlay `Release to apply this preset`. | User request. |
+
+Tests: `PresetControllerTest.ExportVersionWritesPresetFileAtChosenPathAndReplacesIt`,
+`ExportVersionCanceledInDialogWritesNothing`, `VersionExportFileNameTest`, and the Versions panel
+QML tests that use the card menu instead of the buttons.
 
 ## 10. Cross-phase acceptance matrix
 

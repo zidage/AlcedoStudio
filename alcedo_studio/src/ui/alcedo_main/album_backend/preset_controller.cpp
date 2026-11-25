@@ -6,8 +6,10 @@
 
 #include <QDesktopServices>
 #include <QDir>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QStringList>
 #include <exception>
 #include <filesystem>
@@ -28,6 +30,7 @@ namespace {
 
 constexpr auto kBrowserHeightKey   = "presets/browserHeight";
 constexpr auto kBrowserViewModeKey = "presets/browserViewMode";
+constexpr auto kExportFolderKey    = "presets/exportFolder";
 
 auto           IsBrowserViewMode(const QString& view_mode) -> bool {
   return view_mode == QStringLiteral("grid") || view_mode == QStringLiteral("list");
@@ -60,6 +63,8 @@ auto OperationName(alcedo::PresetLibraryService::Operation operation) -> QString
       return QStringLiteral("rename");
     case Operation::kDelete:
       return QStringLiteral("delete");
+    case Operation::kExport:
+      return QStringLiteral("export");
     case Operation::kNone:
       break;
   }
@@ -85,16 +90,31 @@ auto LocalPath(const QVariant& value) -> std::filesystem::path {
 
 }  // namespace
 
+auto VersionExportFileName(const QString& photoFileName, const QString& versionName) -> QString {
+  const QString photo_name = QFileInfo(photoFileName).completeBaseName();
+  const QString label =
+      photo_name.isEmpty() ? versionName : photo_name + QLatin1Char('_') + versionName;
+  const auto name = alcedo::PresetNameFromLabel(label.toStdString());
+  return QString::fromStdWString(alcedo::PresetFileNameFor(name).wstring());
+}
+
 PresetController::PresetController(alcedo::PresetLibraryService*  library,
                                    AdjustmentTransferDialogModel* copy_dialog, OpenUrl open_url,
-                                   QObject* parent)
+                                   ChooseSaveFile choose_save_file, QObject* parent)
     : QObject(parent),
       library_(library),
       copy_dialog_(copy_dialog),
       open_url_(std::move(open_url)),
+      choose_save_file_(std::move(choose_save_file)),
       presets_(new PresetListModel(library, this)) {
   if (!open_url_) {
     open_url_ = [](const QUrl& url) { return QDesktopServices::openUrl(url); };
+  }
+  if (!choose_save_file_) {
+    choose_save_file_ = [](const QString& title, const QString& suggested_path,
+                           const QString& name_filter) {
+      return QFileDialog::getSaveFileName(nullptr, title, suggested_path, name_filter);
+    };
   }
   browser_height_ = QSettings().value(QString::fromLatin1(kBrowserHeightKey), 0.0).toDouble();
   browser_view_mode_ = QSettings().value(QString::fromLatin1(kBrowserViewModeKey)).toString();
@@ -134,41 +154,95 @@ void PresetController::SetAdjustmentTransfer(AdjustmentTransferController* adjus
   adjustment_transfer_ = adjustment_transfer;
 }
 
-auto PresetController::SaveVersionAsPreset(const QString& versionId) -> QVariantMap {
-  if (library_ == nullptr) {
-    return ErrorResult(Tr("The preset library is unavailable."));
-  }
+auto PresetController::VersionPackage(const QString& versionId, QString* versionName,
+                                      QString* error)
+    -> std::shared_ptr<const alcedo::AdjustmentTransferPackage> {
   if (editor_session_ == nullptr || !editor_session_->has_image()) {
-    return ErrorResult(Tr("No photo is open."));
+    *error = Tr("No photo is open.");
+    return nullptr;
   }
   alcedo::version_ref_id_t version_id;
   try {
     version_id = alcedo::version_ref_id_t::FromString(versionId.toStdString());
   } catch (...) {
-    return ErrorResult(Tr("Source Version identity is invalid."));
+    *error = Tr("Source Version identity is invalid.");
+    return nullptr;
   }
   std::shared_ptr<const alcedo::CommitGraph>      graph;
   std::shared_ptr<const alcedo::PipelineDocument> root_document;
-  std::string                                     error;
-  if (!editor_session_->SnapshotHistorySource(&graph, &root_document, &error)) {
-    return ErrorResult(QString::fromStdString(error));
+  std::string                                     read_error;
+  if (!editor_session_->SnapshotHistorySource(&graph, &root_document, &read_error)) {
+    *error = QString::fromStdString(read_error);
+    return nullptr;
   }
   // The replay reads the Version from the immutable history; the active Version stays.
   auto read = alcedo::AdjustmentTransferCatalogService::ReadVersion(*graph, *root_document,
-                                                                    version_id, &error);
+                                                                    version_id, &read_error);
   if (!read.has_value()) {
-    return ErrorResult(QString::fromStdString(error));
+    *error = QString::fromStdString(read_error);
+    return nullptr;
   }
   const auto selection = alcedo::SelectPresetItems(read->document);
   if (selection.nodes.empty()) {
-    return ErrorResult(Tr("No transferable adjustments."));
+    *error = Tr("No transferable adjustments.");
+    return nullptr;
   }
   try {
-    const auto package = alcedo::AdjustmentTransferPackageBuilder::Build(read->document, selection);
-    return SavePackage(package, QString::fromStdString(read->version.display_name));
+    auto package = std::make_shared<const alcedo::AdjustmentTransferPackage>(
+        alcedo::AdjustmentTransferPackageBuilder::Build(read->document, selection));
+    *versionName = QString::fromStdString(read->version.display_name);
+    return package;
   } catch (const std::exception& e) {
-    return ErrorResult(QString::fromUtf8(e.what()));
+    *error = QString::fromUtf8(e.what());
+    return nullptr;
   }
+}
+
+auto PresetController::SaveVersionAsPreset(const QString& versionId) -> QVariantMap {
+  if (library_ == nullptr) {
+    return ErrorResult(Tr("The preset library is unavailable."));
+  }
+  QString    version_name;
+  QString    error;
+  const auto package = VersionPackage(versionId, &version_name, &error);
+  if (!package) {
+    return ErrorResult(error);
+  }
+  return SavePackage(*package, version_name);
+}
+
+auto PresetController::ExportVersion(const QString& versionId) -> QVariantMap {
+  if (library_ == nullptr) {
+    return ErrorResult(Tr("The preset library is unavailable."));
+  }
+  QString    version_name;
+  QString    error;
+  const auto package = VersionPackage(versionId, &version_name, &error);
+  if (!package) {
+    return ErrorResult(error);
+  }
+  QSettings settings;
+  QString   folder = settings.value(QString::fromLatin1(kExportFolderKey)).toString();
+  if (folder.isEmpty() || !QFileInfo(folder).isDir()) {
+    folder = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+  }
+  const QString suggested_path = QDir(folder).filePath(
+      VersionExportFileName(editor_session_->image_file_name(), version_name));
+  const QString chosen = choose_save_file_(Tr("Export Version"), suggested_path,
+                                           Tr("Alcedo presets (*.alcpreset)"));
+  if (chosen.isEmpty()) {
+    QVariantMap result = SuccessResult();
+    result.insert("canceled", true);
+    return result;
+  }
+  settings.setValue(QString::fromLatin1(kExportFolderKey), QFileInfo(chosen).absolutePath());
+  if (library_->Export(*package, std::filesystem::path(chosen.toStdWString())) !=
+      alcedo::PresetLibraryService::Status::kOk) {
+    return ErrorResult(QString::fromStdString(library_->LastResult().message));
+  }
+  QVariantMap result = SuccessResult();
+  result.insert("pending", true);
+  return result;
 }
 
 auto PresetController::SaveDialogSelectionAsPreset() -> QVariantMap {

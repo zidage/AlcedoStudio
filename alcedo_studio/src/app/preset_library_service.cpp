@@ -349,29 +349,9 @@ auto PresetLibraryService::Save(const AdjustmentTransferPackage& package, std::s
   if (auto error = PresetNameError(name); !error.empty()) {
     return Refuse(Operation::kSave, Status::kInvalidRequest, std::move(error));
   }
-  // The written preset is a new value: the package with library references in place of paths.
-  auto preset = std::make_shared<AdjustmentTransferPackage>(package);
-  try {
-    for (auto& grade : preset->color_grades_) {
-      if (auto error = ReplaceLutFilePaths(&grade.adjustments,
-                                           "the Color Grade '" + grade.display_name + "'",
-                                           options_.lut_reference_for_path);
-          !error.empty()) {
-        return Refuse(Operation::kSave, Status::kRefused, std::move(error));
-      }
-    }
-    if (auto error = ReplaceLutFilePaths(&preset->drt_post_.adjustments, "DRT/Post",
-                                         options_.lut_reference_for_path);
-        !error.empty()) {
-      return Refuse(Operation::kSave, Status::kRefused, std::move(error));
-    }
-    preset->fingerprint_ = DocumentTransferFingerprint(*preset);
-  } catch (const std::exception& e) {
-    return Refuse(Operation::kSave, Status::kRefused, e.what());
-  }
-  if (const auto references = CheckPresetReferences(*preset); !references.Ok()) {
-    return Refuse(Operation::kSave, Status::kRefused,
-                  references.message + ". Save the preset without this item.");
+  auto preset = PresetForWrite(Operation::kSave, package);
+  if (!preset) {
+    return last_result_.status;
   }
   Submit(Operation::kSave, [this, preset, name = std::string{name}] {
     WorkerResult worker_result;
@@ -394,6 +374,68 @@ auto PresetLibraryService::Save(const AdjustmentTransferPackage& package, std::s
     return worker_result;
   });
   return Status::kOk;
+}
+
+auto PresetLibraryService::Export(const AdjustmentTransferPackage& package, const fs::path& path)
+    -> Status {
+  if (path.empty() || !path.is_absolute() || !path.has_filename()) {
+    return Refuse(Operation::kExport, Status::kInvalidRequest, "No export file is selected.");
+  }
+  auto preset = PresetForWrite(Operation::kExport, package);
+  if (!preset) {
+    return last_result_.status;
+  }
+  Submit(Operation::kExport, [this, preset, path] {
+    WorkerResult worker_result;
+    const auto   written = WritePresetFile(*preset, path, PresetFileWriteMode::kReplace);
+    if (!written.Ok()) {
+      worker_result.result.status  = StatusForRule(written.rule);
+      worker_result.result.message = written.message;
+      return worker_result;
+    }
+    // A file written into the preset folder is a preset of the list.
+    const auto relative = path.parent_path().lexically_normal().lexically_relative(
+        worker_root_.lexically_normal());
+    if (!relative.empty() && *relative.begin() != "..") {
+      ScanWorkerRoot(&worker_result);
+    }
+    return worker_result;
+  });
+  return Status::kOk;
+}
+
+auto PresetLibraryService::PresetForWrite(Operation operation,
+                                          const AdjustmentTransferPackage& package)
+    -> std::shared_ptr<const AdjustmentTransferPackage> {
+  // The written preset is a new value: the package with library references in place of paths.
+  auto preset = std::make_shared<AdjustmentTransferPackage>(package);
+  try {
+    for (auto& grade : preset->color_grades_) {
+      if (auto error = ReplaceLutFilePaths(&grade.adjustments,
+                                           "the Color Grade '" + grade.display_name + "'",
+                                           options_.lut_reference_for_path);
+          !error.empty()) {
+        Refuse(operation, Status::kRefused, std::move(error));
+        return nullptr;
+      }
+    }
+    if (auto error = ReplaceLutFilePaths(&preset->drt_post_.adjustments, "DRT/Post",
+                                         options_.lut_reference_for_path);
+        !error.empty()) {
+      Refuse(operation, Status::kRefused, std::move(error));
+      return nullptr;
+    }
+    preset->fingerprint_ = DocumentTransferFingerprint(*preset);
+  } catch (const std::exception& e) {
+    Refuse(operation, Status::kRefused, e.what());
+    return nullptr;
+  }
+  if (const auto references = CheckPresetReferences(*preset); !references.Ok()) {
+    Refuse(operation, Status::kRefused,
+           references.message + ". Save the preset without this item.");
+    return nullptr;
+  }
+  return preset;
 }
 
 void PresetLibraryService::Add(std::vector<fs::path> sources) {

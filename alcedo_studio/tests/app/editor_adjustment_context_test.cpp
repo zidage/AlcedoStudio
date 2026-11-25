@@ -284,6 +284,21 @@ TEST(EditorAdjustmentContextTest, ImageExifDisplayCopiesLensMakeAndModel) {
   EXPECT_EQ(from_image.lens_model, "Canon EF 70-200mm f/2.8L IS II USM");
 }
 
+// Issue #1127: the file name of the image stays in the display when the image has EXIF; the
+// editor uses it for the default name of an exported Version.
+TEST(EditorAdjustmentContextTest, ImageExifDisplayKeepsFileNameWithAndWithoutExif) {
+  Image image;
+  image.image_name_ = L"DSC_0001.ARW";
+  EXPECT_EQ(ReadEditorImageExifDisplay(image).file_name, L"DSC_0001.ARW");
+
+  image.exif_display_.iso_ = 200;
+  image.has_exif_display_.store(true);
+  const auto with_exif = ReadEditorImageExifDisplay(image);
+  EXPECT_EQ(with_exif.file_name, L"DSC_0001.ARW");
+  ASSERT_TRUE(with_exif.iso.has_value());
+  EXPECT_EQ(*with_exif.iso, 200u);
+}
+
 TEST(EditorAdjustmentContextTest, ContextCopiesCallerExifAndDoesNotRereadOnNodeChange) {
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());

@@ -11,8 +11,9 @@ import "FileDrop.js" as FileDrop
 // Naming is inline (Enter commits, Escape cancels, focus-loss commits only
 // non-empty changed text). Create / branch use a draft row under the Versions
 // header; rename edits the card title in place. There is no modal naming
-// dialog. Active selection is outline-only; removal uses a labeled trash
-// action, never a stop-playback glyph.
+// dialog. Active selection is outline-only. A right click on a card opens its menu:
+// Rename, Export Version (a preset file at a path from the system save dialog), and
+// Remove.
 //
 // List scroll is restorable from the rail across Loader teardown (Phase 7A R6).
 //
@@ -479,6 +480,21 @@ Item {
         root.restoreListScroll()
     }
 
+    // Export Version: the system save dialog, then the Version as a preset file (#1124).
+    // A failure shows in the error badge of the preset part.
+    function exportVersion(versionId) {
+        if (root.canSavePresets)
+            presetsSection.report(root.presets.ExportVersion(versionId))
+    }
+
+    function openVersionMenu(versionId, displayName, active, sceneX, sceneY) {
+        versionMenu.versionId = versionId
+        versionMenu.displayName = displayName
+        versionMenu.versionActive = active
+        versionMenu.parent = Overlay.overlay
+        versionMenu.openAt(sceneX, sceneY)
+    }
+
     Timer {
         id: draftFocusTimer
         interval: 0
@@ -624,6 +640,46 @@ Item {
                 if (root.presets)
                     root.presets.browserHeight = appTheme.editorPresetPaneHeight
             }
+        }
+    }
+
+    // Right click on a Version card. Rename and Export start when the menu has closed: on
+    // close the menu gives the focus back to the item that had it before, which would end an
+    // inline rename at once, and the save dialog must not open under a closing menu.
+    AppContextMenu {
+        id: versionMenu
+        objectName: "editorVersionMenu"
+        property string versionId: ""
+        property string displayName: ""
+        property bool versionActive: false
+        property string actionAfterClose: ""
+        onClosed: {
+            const action = actionAfterClose
+            actionAfterClose = ""
+            if (action === "rename")
+                root.openRenameVersion(versionId, displayName)
+            else if (action === "export")
+                root.exportVersion(versionId)
+        }
+        AppMenuItem {
+            objectName: "editorVersionMenuRenameItem"
+            text: qsTr("Rename Version")
+            enabled: root.canMutateVersions && root.editorSession.actions.canRenameVersion
+            onTriggered: versionMenu.actionAfterClose = "rename"
+        }
+        AppMenuItem {
+            objectName: "editorVersionMenuExportItem"
+            text: qsTr("Export Version...")
+            enabled: root.canSavePresets
+            onTriggered: versionMenu.actionAfterClose = "export"
+        }
+        AppMenuItem {
+            objectName: "editorVersionMenuRemoveItem"
+            text: qsTr("Remove Version")
+            enabled: root.versionCheckoutEnabled && !versionMenu.versionActive
+                     && !!root.historyModel && root.historyModel.versions.count > 1
+                     && !!root.editorSession && root.editorSession.actions.canRemoveVersion
+            onTriggered: root.removeVersionPreservingScroll(versionMenu.versionId)
         }
     }
 
@@ -929,15 +985,15 @@ Item {
                 }
             }
 
-            // A selected preset or a preset drag: the band says that a drop here adds a
-            // Version. It sits above the list (z) and takes no input.
+            // A selected preset or a preset drag: the band says that a drop here applies the
+            // preset. It sits above the list (z) and takes no input.
             DropGuideOverlay {
                 objectName: "editorVersionsDropGuide"
                 anchors.fill: parent
                 shown: root.versionsDropGuideShown
                 expanded: root.dragOverVersions || presetFileDrop.url.length > 0
-                bandText: qsTr("Drag here to add a Version")
-                expandedText: qsTr("Release to add a Version")
+                bandText: qsTr("Drag here to apply this preset")
+                expandedText: qsTr("Release to apply this preset")
                 detailText: root.dragKind === "preset" ? root.dragName : ""
             }
 
@@ -996,9 +1052,11 @@ Item {
                     ListView.onReused: {}
 
                     MouseArea {
+                        objectName: "editorVersionCardMouseArea"
                         anchors.fill: parent
                         z: 0
                         enabled: !versionCard.renaming
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                         // A drag of the row saves a preset; the list must not flick instead.
                         preventStealing: true
                         property point pressPoint: Qt.point(0, 0)
@@ -1006,6 +1064,11 @@ Item {
                         onPressed: function (mouse) {
                             pressPoint = Qt.point(mouse.x, mouse.y)
                             dragged = false
+                            if (mouse.button === Qt.RightButton) {
+                                const scene = mapToItem(null, mouse.x, mouse.y)
+                                root.openVersionMenu(versionId, displayName, versionActive,
+                                                     scene.x, scene.y)
+                            }
                         }
                         onPositionChanged: function (mouse) {
                             if (!(mouse.buttons & Qt.LeftButton) || !root.canSavePresets)
@@ -1034,8 +1097,9 @@ Item {
                         // Do not block checkout on draftSubmitPending: a stuck
                         // pending bit after async create must not freeze the list.
                         // Save-checkpoint leases already disable canCheckoutVersion.
-                        onClicked: {
-                            if (!dragged && root.versionCheckoutEnabled && !versionActive)
+                        onClicked: function (mouse) {
+                            if (mouse.button === Qt.LeftButton && !dragged
+                                    && root.versionCheckoutEnabled && !versionActive)
                                 root.checkoutVersionPreservingScroll(versionId)
                         }
                     }
@@ -1043,10 +1107,10 @@ Item {
                     ColumnLayout {
                         id: versionCardColumn
                         anchors.left: parent.left
-                        anchors.right: actionRow.left
+                        anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.leftMargin: appTheme.spaceMd
-                        anchors.rightMargin: appTheme.spaceXs
+                        anchors.rightMargin: appTheme.spaceMd
                         spacing: appTheme.spaceXs
 
                         Label {
@@ -1183,50 +1247,6 @@ Item {
                                                                     : appTheme.uiFontFamily
                                 font.pixelSize: appTheme.fontSizeCaption
                             }
-                        }
-                    }
-
-                    Row {
-                        id: actionRow
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.rightMargin: appTheme.spaceXs
-                        spacing: appTheme.spaceXs
-                        z: 2
-
-                        IconActionButton {
-                            objectName: "editorRenameVersionButton"
-                            compact: true
-                            enabled: root.canMutateVersions && root.editorSession.actions.canRenameVersion
-                            iconSrc: "qrc:/panel_icons/edit.svg"
-                            iconColorDefault: root.colText
-                            iconColorMuted: root.colMuted
-                            fillIdle: root.colCardSurface
-                            fillHover: appTheme.buttonHoveredFillColor
-                            fillPressed: appTheme.buttonPressedFillColor
-                            fillSelected: appTheme.buttonSelectedFillColor
-                            focusRingColor: root.colText
-                            actionName: qsTr("Rename Version")
-                            onClicked: root.openRenameVersion(versionId, displayName)
-                        }
-
-                        IconActionButton {
-                            objectName: "editorRemoveVersionButton"
-                            compact: true
-                            enabled: root.versionCheckoutEnabled && !versionActive
-                                     && root.historyModel && root.historyModel.versions.count > 1
-                                     && root.editorSession
-                                     && root.editorSession.actions.canRemoveVersion
-                            iconSrc: "qrc:/panel_icons/trash.svg"
-                            iconColorDefault: root.colText
-                            iconColorMuted: root.colMuted
-                            fillIdle: root.colCardSurface
-                            fillHover: appTheme.buttonHoveredFillColor
-                            fillPressed: appTheme.buttonPressedFillColor
-                            fillSelected: appTheme.buttonSelectedFillColor
-                            focusRingColor: root.colText
-                            actionName: qsTr("Remove Version")
-                            onClicked: root.removeVersionPreservingScroll(versionId)
                         }
                     }
                 }

@@ -12,15 +12,9 @@
 #include <cstddef>
 #include <vector>
 
-#include "app/adjustment_transfer_types.hpp"
 #include "app/preset_library_service.hpp"
 
 namespace alcedo::ui {
-
-/// Plain-text summary of @p package for a preset tooltip: one line for each node,
-/// `<node>: <item>, <item>`, with the node and item names of the Copy dialog.
-[[nodiscard]] auto PresetPackageSummaryText(const alcedo::AdjustmentTransferPackage& package)
-    -> QString;
 
 /**
  * @brief Rows of the preset browser over the inventory of PresetLibraryService (edit presets
@@ -28,9 +22,7 @@ namespace alcedo::ui {
  *
  * The service owns the entries; the model keeps only their display order (the folder itself
  * first, then each group by name, each name in case-insensitive order) and resets on each
- * InventoryChanged. The summary role reads the package through PresetLibraryService::PackageFor,
- * so it costs a file read only when the package cache does not hold it; QML reads it when a
- * tooltip opens. Owner thread only.
+ * InventoryChanged. No role reads a preset file. Owner thread only.
  */
 class PresetListModel final : public QAbstractListModel {
   Q_OBJECT
@@ -43,7 +35,6 @@ class PresetListModel final : public QAbstractListModel {
     GroupRole,
     AvailableRole,
     ReasonRole,
-    SummaryRole,
     FingerprintRole,
   };
   Q_ENUM(Role)
