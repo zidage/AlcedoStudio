@@ -31,13 +31,14 @@ Item {
     // pair; cleared by manual picks. Derived on snapshot load: detection
     // available AND (empty maker/model OR pair equals the detected entry).
     property bool lensAutoDetect: true
-    // Image EXIF lens identity published by the session (empty when missing).
-    readonly property string exifLensMake: editorSession
-            && editorSession.exifLensMake !== undefined
-            ? String(editorSession.exifLensMake) : ""
-    readonly property string exifLensModel: editorSession
-            && editorSession.exifLensModel !== undefined
-            ? String(editorSession.exifLensModel) : ""
+    // Lensfun profile that the Auto setting uses for the image, published by
+    // the session (empty when no profile matches).
+    readonly property string autoLensMake: editorSession
+            && editorSession.autoLensMake !== undefined
+            ? String(editorSession.autoLensMake) : ""
+    readonly property string autoLensModel: editorSession
+            && editorSession.autoLensModel !== undefined
+            ? String(editorSession.autoLensModel) : ""
 
     readonly property var rawDefaults: parameterCatalog.uiDefault("raw_decode")
     // The AI Denoise switch of the open photo, read from the snapshot (load-only).
@@ -549,8 +550,8 @@ Item {
                         enabled: root.controlsEnabled
                         controlsEnabled: root.controlsEnabled
                         catalog: lensCatalog
-                        exifLensMake: root.exifLensMake
-                        exifLensModel: root.exifLensModel
+                        autoLensMake: root.autoLensMake
+                        autoLensModel: root.autoLensModel
                         selectedBrand: root.selectedLensBrandValue
                         selectedValue: root.selectedLensModelValue
                         autoEngaged: root.lensAutoDetect

@@ -446,16 +446,40 @@ auto TakeBestRankedLens(const lfLens** lenses, const LensInputMeta& input) -> co
   return best;
 }
 
+/**
+ * @brief Lens name for the Lensfun search, with the aperture written as Lensfun writes it.
+ *
+ * Lensfun reads the focal range and the aperture from the searched name only when the aperture
+ * has a lower-case "f" ("15-30mm f/2.8", "15-30mm f2.8"). EXIF names write an upper-case "F"
+ * ("E 15-30mm F2.8"). Without the values, Lensfun compares only the words, and a lens with other
+ * focal lengths can match: "E 15-30mm F2.8" matched the Zeiss "E 21mm F2.8". This function writes
+ * an "F" that starts a word and comes before a digit or "/" as "f".
+ */
+auto LensfunSearchName(std::string name) -> std::string {
+  for (std::size_t i = 0; i + 1 < name.size(); ++i) {
+    if (name[i] != 'F') {
+      continue;
+    }
+    const auto previous = i == 0 ? ' ' : static_cast<unsigned char>(name[i - 1]);
+    const auto next     = static_cast<unsigned char>(name[i + 1]);
+    if (std::isalnum(previous) == 0 && (std::isdigit(next) != 0 || next == '/')) {
+      name[i] = 'f';
+    }
+  }
+  return name;
+}
+
 auto FindBestLens(const lfDatabase* db, const lfCamera* camera, const LensInputMeta& input)
     -> const lfLens* {
   if (!db || input.lens_model_.empty()) {
     return nullptr;
   }
 
-  const char*   lens_maker = input.lens_maker_.empty() ? nullptr : input.lens_maker_.c_str();
-  constexpr int flags      = LF_SEARCH_SORT_AND_UNIQUIFY | LF_SEARCH_LOOSE;
+  const char*       lens_maker  = input.lens_maker_.empty() ? nullptr : input.lens_maker_.c_str();
+  const std::string search_name = LensfunSearchName(input.lens_model_);
+  constexpr int     flags       = LF_SEARCH_SORT_AND_UNIQUIFY | LF_SEARCH_LOOSE;
   return TakeBestRankedLens(
-      lf_db_find_lenses(db, camera, lens_maker, input.lens_model_.c_str(), flags), input);
+      lf_db_find_lenses(db, camera, lens_maker, search_name.c_str(), flags), input);
 }
 
 /**
@@ -885,18 +909,17 @@ void LensCalibrationResolver::PreloadDatabase(const std::filesystem::path& datab
   (void)GetLensfunDb(ResolveDbRootPath(database_path));
 }
 
-auto LensCalibrationResolver::FixedLensProfile(const LensInputMeta&         meta,
-                                               const std::filesystem::path& database_path)
+auto LensCalibrationResolver::ShotLensProfile(const LensInputMeta&         meta,
+                                              const std::filesystem::path& database_path)
     -> std::optional<LensProfileName> {
-  if (meta.cam_model_.empty()) {
+  if (meta.lens_model_.empty() && meta.cam_model_.empty()) {
     return std::nullopt;
   }
   lfDatabase* db = GetLensfunDb(ResolveDbRootPath(database_path));
   if (!db) {
     return std::nullopt;
   }
-  const lfLens* lens =
-      FindFixedLens(db, FindFixedLensCamera(db, meta.cam_maker_, meta.cam_model_), meta);
+  const lfLens* lens = FindShotLens(db, meta).lens_;
   if (!lens) {
     return std::nullopt;
   }

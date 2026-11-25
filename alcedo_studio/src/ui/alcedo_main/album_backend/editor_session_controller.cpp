@@ -621,18 +621,18 @@ void EditorSessionController::RefreshImageExifDisplay() {
 }
 
 void EditorSessionController::ApplyImageIdentity(const alcedo::EditorImageExifDisplay& display) {
-  const auto lens_make    = QString::fromStdString(display.lens_make);
-  const auto lens_model   = QString::fromStdString(display.lens_model);
+  const auto lens_make    = QString::fromStdString(display.auto_lens_make);
+  const auto lens_model   = QString::fromStdString(display.auto_lens_model);
   const auto camera_make  = QString::fromStdString(display.camera_make);
   const auto camera_model = QString::fromStdString(display.camera_model);
   const auto file_name    = QString::fromStdWString(display.file_name);
-  if (exif_lens_make_ == lens_make && exif_lens_model_ == lens_model &&
+  if (auto_lens_make_ == lens_make && auto_lens_model_ == lens_model &&
       camera_make_ == camera_make && camera_model_ == camera_model &&
       image_file_name_ == file_name) {
     return;
   }
-  exif_lens_make_  = lens_make;
-  exif_lens_model_ = lens_model;
+  auto_lens_make_  = lens_make;
+  auto_lens_model_ = lens_model;
   camera_make_     = camera_make;
   camera_model_    = camera_model;
   image_file_name_ = file_name;

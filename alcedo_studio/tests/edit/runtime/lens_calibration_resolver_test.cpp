@@ -504,6 +504,24 @@ TEST(LensCalibDevelopResolve, RenamedSony16To50ProfileMatchesVersionOneAndTwoNam
   }
 }
 
+// The EXIF lens name writes the aperture with an upper-case "F". Lensfun reads the focal range
+// from the searched name only with a lower-case "f"; without it, "E 15-30mm F2.8" matched the Zeiss
+// "E 21mm F2.8" by its words. The database has no profile for this lens.
+TEST(LensCalibDevelopResolve, ExifNameFocalRangeRejectsProfileWithOtherFocalLengths) {
+  LensInputMeta meta;
+  meta.cam_maker_         = "Sony";
+  meta.cam_model_         = "ILCE-7RM3";
+  meta.lens_model_        = "E 15-30mm F2.8";
+  meta.focal_length_mm_   = 15.0f;
+  meta.aperture_f_number_ = 10.0f;
+  meta.distance_m_        = 10.0f;
+  const auto result =
+      LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), false);
+  EXPECT_EQ(result.status_, LensProfileStatus::LensNotInDatabase)
+      << "matched " << result.matched_lens_maker_ << " / " << result.matched_lens_model_;
+  EXPECT_FALSE(LensCalibrationResolver::ShotLensProfile(meta, LensDatabasePath()).has_value());
+}
+
 // Issue #714: the Panasonic maker note names the lens with the Lensfun model name.
 TEST(LensCalibDevelopResolve, PanasonicMakerNoteLensNameMatchesLensfunProfile) {
   ExpectProfileMatches({"Panasonic", "DC-G9", "", "LEICA DG 12-60/F2.8-4.0", 32.0f, 8.0f,
@@ -601,18 +619,31 @@ TEST(LensCalibDevelopResolve, InterchangeableLensCameraWithoutLensNameHasNoLensI
             LensProfileStatus::MissingLensIdentity);
 }
 
-TEST(LensCalibDevelopResolve, FixedLensProfileNamesOnlyBuiltInLenses) {
-  const auto gfx = LensCalibrationResolver::FixedLensProfile(
+// The auto-detect control shows the profile that ResolveProfile matches, so enabling the correction
+// writes the lens that the render uses.
+TEST(LensCalibDevelopResolve, ShotLensProfileNamesTheProfileThatResolveProfileMatches) {
+  const auto gfx = LensCalibrationResolver::ShotLensProfile(
       NamelessLensShot("Fujifilm", "GFX100RF", 35.0f, 7.1f), LensDatabasePath());
   ASSERT_TRUE(gfx.has_value());
   EXPECT_EQ(gfx->maker_, "Fujifilm");
   EXPECT_EQ(gfx->model_, "GFX100RF & compatibles (Standard)");
 
-  EXPECT_FALSE(LensCalibrationResolver::FixedLensProfile(
+  auto named        = NamelessLensShot("Sony", "ILCE-7M4", 50.0f, 1.4f);
+  named.lens_model_ = "FE 50mm F1.4 GM";
+  const auto sony   = LensCalibrationResolver::ShotLensProfile(named, LensDatabasePath());
+  ASSERT_TRUE(sony.has_value());
+  EXPECT_EQ(sony->maker_, "Sony");
+  EXPECT_EQ(sony->model_, "FE 50mm f/1.4 GM");
+  const auto resolved =
+      LensCalibrationResolver::ResolveProfile(named, AllCorrectionsSettings(), false);
+  EXPECT_EQ(resolved.matched_lens_maker_, sony->maker_);
+  EXPECT_EQ(resolved.matched_lens_model_, sony->model_);
+
+  EXPECT_FALSE(LensCalibrationResolver::ShotLensProfile(
                    NamelessLensShot("Fujifilm", "GFX100S", 35.0f, 4.0f), LensDatabasePath())
                    .has_value());
-  EXPECT_FALSE(LensCalibrationResolver::FixedLensProfile(NamelessLensShot("", "", 35.0f, 4.0f),
-                                                         LensDatabasePath())
+  EXPECT_FALSE(LensCalibrationResolver::ShotLensProfile(NamelessLensShot("", "", 35.0f, 4.0f),
+                                                        LensDatabasePath())
                    .has_value());
 }
 

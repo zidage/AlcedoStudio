@@ -141,15 +141,16 @@ class LensCalibrationResolver {
   static void               PreloadDatabase(const std::filesystem::path& database_path);
 
   /**
-   * @brief Profile of the built-in lens of the camera in @p meta.
+   * @brief Profile that @ref ResolveProfile matches for the lens and camera in @p meta.
    *
-   * Uses the camera maker and model, and the focal length and aperture to order several profiles
-   * on the camera mount. Returns @c std::nullopt for a camera with interchangeable lenses, a
-   * camera that the database does not list, or a database that does not load. Loads the database
-   * named by @p database_path on first use, as @ref ResolveProfile does.
+   * This is the profile of Lens Calibration Auto: the lens name decides, and a fixed-lens camera
+   * without a matching lens name gets the profile of its built-in lens. The focal length and
+   * aperture order profiles with equal match scores. Returns @c std::nullopt when no profile
+   * matches or the database does not load. Loads the database named by @p database_path on first
+   * use, as @ref ResolveProfile does.
    */
-  [[nodiscard]] static auto FixedLensProfile(const LensInputMeta&         meta,
-                                             const std::filesystem::path& database_path)
+  [[nodiscard]] static auto ShotLensProfile(const LensInputMeta&         meta,
+                                            const std::filesystem::path& database_path)
       -> std::optional<LensProfileName>;
 
   /// First existing Lensfun database directory of the default search, or an empty path.
