@@ -5852,6 +5852,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Exported %1 image(s).</source>
         <translation type="unfinished"></translation>
     </message>
+    <message numerus="yes">
+        <source>%n photo(s) are already in the mounted folder and will not be imported this time.</source>
+        <translation>
+            <numerusform>%n photo is already in the mounted folder and will not be imported this time.</numerusform>
+            <numerusform>%n photos are already in the mounted folder and will not be imported this time.</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>ShortcutCaptureField</name>

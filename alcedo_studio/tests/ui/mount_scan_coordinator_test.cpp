@@ -120,10 +120,12 @@ class ManualWatcher final : public MountDirectoryWatcher {
  public:
   void SetChangeCallback(ChangeCallback callback) override { on_change_ = std::move(callback); }
   void SetVolumeCallbacks(VolumeRemovedCallback removed, VolumeArrivedCallback arrived,
-                          MountPointArrivedCallback mount_point_arrived) override {
+                          MountPointArrivedCallback mount_point_arrived,
+                          MountPointRemovedCallback mount_point_removed) override {
     on_volume_removed_      = std::move(removed);
     on_volume_arrived_      = std::move(arrived);
     on_mount_point_arrived_ = std::move(mount_point_arrived);
+    on_mount_point_removed_ = std::move(mount_point_removed);
   }
   auto Watch(mount_id_t mount_id, const stdfs::path& root, std::span<const std::wstring>)
       -> bool override {
@@ -161,6 +163,12 @@ class ManualWatcher final : public MountDirectoryWatcher {
       on_mount_point_arrived_(volume);
     }
   }
+  /// A mount point is gone from the mount table (#1087).
+  void RemoveMountPoint(const stdfs::path& mount_point) {
+    if (on_mount_point_removed_) {
+      on_mount_point_removed_(mount_point);
+    }
+  }
 
   bool                              fail_registration_ = false;
   std::set<mount_id_t>              watched_;
@@ -171,6 +179,7 @@ class ManualWatcher final : public MountDirectoryWatcher {
   VolumeRemovedCallback     on_volume_removed_;
   VolumeArrivedCallback     on_volume_arrived_;
   MountPointArrivedCallback on_mount_point_arrived_;
+  MountPointRemovedCallback on_mount_point_removed_;
 };
 
 /// A scan port that counts the scans. A scan can wait until the test lets it continue: a wait
@@ -329,7 +338,11 @@ class MountScanCoordinatorTest : public ::testing::Test {
     dependencies.clock         = std::move(clock);
     dependencies.watcher       = std::move(watcher);
     dependencies.on_scan_ended = [this](mount_id_t, const MountScanResult&) { ++ended_count_; };
-    coordinator_               = std::make_unique<MountScanCoordinator>(std::move(dependencies));
+    dependencies.read_volume_identity = [this](const stdfs::path& mount_point) {
+      const auto it = volume_identities_.find(mount_point);
+      return it == volume_identities_.end() ? std::string{} : it->second;
+    };
+    coordinator_ = std::make_unique<MountScanCoordinator>(std::move(dependencies));
   }
 
   /// Start the coordinator and wait for the scan of the project open.
@@ -352,6 +365,8 @@ class MountScanCoordinatorTest : public ::testing::Test {
   ManualClock*                          clock_       = nullptr;
   ManualWatcher*                        watcher_     = nullptr;
   int                                   ended_count_ = 0;
+  /// The volume identity of each mount point for IsArrivedVolumeAt; empty when it is not listed.
+  std::map<stdfs::path, std::string>    volume_identities_;
   std::unique_ptr<MountScanCoordinator> coordinator_;
 };
 
@@ -710,6 +725,59 @@ TEST_F(MountScanCoordinatorTest, VolumeWithoutAMountIsReportedAndTheVolumeOfAMou
   EXPECT_TRUE(reports[0].has_dcim_directory);
 }
 
+// #1087: two volumes with different identities use the same mount point, one after the other.
+// The mount of the first volume does not hide the card of the second, the eject of each one is
+// reported, and the values of a card of the first volume do not match the second.
+TEST_F(MountScanCoordinatorTest, ReplacementVolumeAtTheSameMountPointGetsItsOwnCard) {
+  const auto mount_point = temp_dir_ / "E";
+  stdfs::create_directories(mount_point);
+  auto first                   = MountSummaryOf(kMount, mount_point / "Japan");
+  first.record.volume_identity = "first volume";
+  port_ = std::make_shared<CountingScanPort>(std::vector<MountSummary>{first});
+  std::vector<QString> card_identities;
+  std::vector<QString> removed;
+  QObject::connect(coordinator_.get(), &MountScanCoordinator::VolumeWithoutMountArrived,
+                   [&card_identities](const QString&, const QString&, bool,
+                                      const QString& identity) {
+                     card_identities.push_back(identity);
+                   });
+  QObject::connect(coordinator_.get(), &MountScanCoordinator::MountPointRemoved,
+                   [&removed](const QString& path) { removed.push_back(path); });
+
+  // No project: no report.
+  watcher_->RemoveMountPoint(mount_point);
+  EXPECT_TRUE(removed.empty());
+  StartAndWaitForTheOpenScan();
+
+  // The volume of the mount: no card.
+  volume_identities_[mount_point] = "first volume";
+  watcher_->ArriveMountPoint(ArrivedVolume{mount_point, "FIRST", "first volume", true});
+  EXPECT_TRUE(card_identities.empty());
+  watcher_->RemoveMountPoint(mount_point);
+  ASSERT_EQ(removed.size(), 1U);
+  EXPECT_EQ(removed[0], i18n::PathToQString(mount_point));
+
+  // A volume without a mount at the same mount point: the mount root is below it, but the
+  // identities differ.
+  volume_identities_[mount_point] = "second volume";
+  watcher_->ArriveMountPoint(ArrivedVolume{mount_point, "SECOND", "second volume", true});
+  ASSERT_EQ(card_identities.size(), 1U);
+  EXPECT_EQ(card_identities[0], QStringLiteral("second volume"));
+  EXPECT_TRUE(coordinator_->IsArrivedVolumeAt(mount_point, "second volume"));
+
+  // A third volume replaced the second between two reads of the mount table: the card of the
+  // second volume does not take its files.
+  volume_identities_[mount_point] = "third volume";
+  EXPECT_FALSE(coordinator_->IsArrivedVolumeAt(mount_point, "second volume"));
+  // A card of a volume without an identity matches only a volume without one.
+  EXPECT_FALSE(coordinator_->IsArrivedVolumeAt(mount_point, ""));
+  volume_identities_.erase(mount_point);
+  EXPECT_TRUE(coordinator_->IsArrivedVolumeAt(mount_point, ""));
+  // The mount point is gone.
+  stdfs::remove(mount_point);
+  EXPECT_FALSE(coordinator_->IsArrivedVolumeAt(mount_point, ""));
+}
+
 TEST_F(MountScanCoordinatorTest, UserCancelEndsTheScanWithoutAnotherScan) {
   StartAndWaitForTheOpenScan();
   port_->HoldScans();
@@ -752,6 +820,14 @@ TEST_F(MountScanCoordinatorTest, ScanSavesTheProjectOnlyWhenItStoredChanges) {
   coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
   ASSERT_TRUE(WaitForScans(4));
   EXPECT_EQ(port_->SaveCount(), 2);
+
+  // #1088: a scan that only stored a new volume name.
+  MountScanResult renamed;
+  renamed.volume_name_updated = true;
+  port_->SetNextResult(renamed);
+  coordinator_->RequestScan(kMount, MountScanTrigger::kActivation);
+  ASSERT_TRUE(WaitForScans(5));
+  EXPECT_EQ(port_->SaveCount(), 3);
 }
 
 TEST_F(MountScanCoordinatorTest, StoppedScanSavesItsStoredBatchesBeforeItsWorkerEnds) {

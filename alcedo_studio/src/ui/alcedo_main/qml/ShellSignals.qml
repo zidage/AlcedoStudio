@@ -15,6 +15,15 @@ Item {
     property var deleteConfirmDialog: null
 
     property bool importSessionObserved: false
+    // A snackbar that reports files left to a mounted folder stays longer than the default.
+    readonly property int leftToMountsSnackbarMs: 5000
+
+    // The files of a user import that are already in a mounted folder: the scan of that
+    // folder imports them, so the import leaves them out (#1016, #1089).
+    function leftToMountsText(fileCount) {
+        return qsTr("%n photo(s) are already in the mounted folder and will not be imported this time.",
+                    "", fileCount)
+    }
 
     Connections {
         target: languageManager
@@ -107,8 +116,22 @@ Item {
                 return
             }
             root.importSessionObserved = false
+            if (!root.host) {
+                return
+            }
+            const imported = qsTr("Imported %1 image(s).").arg(appModules.importExport.importCompleted)
+            const leftToMounts = appModules.importExport.importLeftToMounts
+            if (leftToMounts > 0) {
+                root.host.showSnackbar(imported + "\n" + root.leftToMountsText(leftToMounts),
+                                       root.leftToMountsSnackbarMs)
+            } else {
+                root.host.showSnackbar(imported)
+            }
+        }
+        // #1089: no import runs, so the import state change above does not report these files.
+        function onImportLeftAllToMounts(fileCount) {
             if (root.host) {
-                root.host.showSnackbar(qsTr("Imported %1 image(s).").arg(appModules.importExport.importCompleted))
+                root.host.showSnackbar(root.leftToMountsText(fileCount), root.leftToMountsSnackbarMs)
             }
         }
         function onExportFinished(succeeded, failed, skipped) {
