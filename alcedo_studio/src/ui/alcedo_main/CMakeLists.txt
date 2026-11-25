@@ -874,7 +874,9 @@ endif()
 set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/Main.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/TopToolbar.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/WindowBackdropDragArea.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WindowCaptionButtons.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/WindowCaptionLayer.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/InspectorToggleButton.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WindowResizeHandles.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/NotificationSnackbar.qml"

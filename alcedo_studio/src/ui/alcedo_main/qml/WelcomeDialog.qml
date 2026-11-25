@@ -29,6 +29,8 @@ Dialog {
     y: 0
 
     property Item blurSource: null
+    // Main window: a drag on the backdrop around the card moves it.
+    property var windowHost: null
     property var adapter: null
     property var recentProjects: []
     property var languageOptions: []
@@ -298,6 +300,11 @@ Dialog {
                      && dialog.updateService.enabled
                      && dialog.updateService.unchecked
             onTriggered: dialog.updateService.CheckForUpdates()
+        }
+
+        WindowBackdropDragArea {
+            host: dialog.windowHost
+            card: shell
         }
 
         Rectangle {
