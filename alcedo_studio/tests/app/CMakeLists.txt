@@ -299,6 +299,20 @@ gtest_discover_tests(PresetFileTest
     PROPERTIES LABELS "ci_core_flow;edit")
 alcedo_register_test_target(PresetFileTest app)
 
+# Preset preview document and sensor key (edit_presets_plan.md, PS3): the preview equals a real
+# Paste except for the sensor settings, which come from the current Version.
+add_executable(PresetPreviewImageTest
+    ${ALCEDO_TEST_ROOT}/app/preset_preview_image_test.cpp)
+target_include_directories(PresetPreviewImageTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(PresetPreviewImageTest
+    PRIVATE GTest::gtest_main BrowserPreviewImage AdjustmentTransferService PipelineHistoryApplier
+            EditorPipelineCommandService PipelineHistory EditGraph EditMaskCore EditRuntime)
+gtest_discover_tests(PresetPreviewImageTest
+    TEST_PREFIX "PresetPreviewImageTest."
+    PROPERTIES LABELS "ci_core_flow;edit")
+alcedo_register_test_target(PresetPreviewImageTest app)
+
 # Preset folder owner: scan, package cache, and file operations (edit_presets_plan.md, PS1).
 add_executable(PresetLibraryServiceTest
     ${ALCEDO_TEST_ROOT}/app/preset_library_service_test.cpp

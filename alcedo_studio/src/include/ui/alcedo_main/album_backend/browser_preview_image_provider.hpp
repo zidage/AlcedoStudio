@@ -16,14 +16,18 @@
 
 namespace alcedo::ui {
 
-inline constexpr const char* kLutPreviewImageProviderId = "alcedo-lut-preview";
+/// Provider of the LUT browser previews (issue #598).
+inline constexpr const char* kLutPreviewImageProviderId    = "alcedo-lut-preview";
+/// Provider of the preset browser previews (edit presets plan, PS3).
+inline constexpr const char* kPresetPreviewImageProviderId = "alcedo-preset-preview";
 
 /**
- * @brief Display table of the LUT previews that tiles show now (issue #598).
+ * @brief Display table of the browser tile previews that tiles show now: one table per image
+ *        provider (the LUT previews and the preset previews).
  *
- * Keys are display ids that LutPreviewController assigns when a tile starts to show a preview;
- * they are not content keys. The LRU of rendered previews is in LutPreviewController. QImage
- * implicit sharing keeps the pixels alive after LRU eviction.
+ * Keys are display ids that the BrowserPreviewController of the provider assigns when a tile
+ * starts to show a preview; they are not content keys. The LRU of rendered previews is in the
+ * controller. QImage implicit sharing keeps the pixels alive after LRU eviction.
  *
  * An entry holds the source pixels and their encoding. GetForDisplay converts them to the display
  * destination of the main window (Windows display ICC plan, W5); the owner of the display ids
@@ -31,8 +35,12 @@ inline constexpr const char* kLutPreviewImageProviderId = "alcedo-lut-preview";
  *
  * Thread: any thread. The image provider reads on the QML image thread.
  */
-class LutPreviewImageStore {
+class BrowserPreviewImageStore {
  public:
+  /// @p provider_id is the host part of the URLs that @ref Put returns, such as
+  /// kLutPreviewImageProviderId.
+  explicit BrowserPreviewImageStore(QString provider_id);
+
   /// Store @p image with the pixels of @p encoding under @p display_id and return its URL; empty
   /// for id 0 or a null image.
   [[nodiscard]] auto        Put(std::uint64_t display_id, QImage image,
@@ -47,8 +55,10 @@ class LutPreviewImageStore {
   void                      SetDestination(std::shared_ptr<const DisplayDestination> destination);
   [[nodiscard]] auto        Destination() const -> std::shared_ptr<const DisplayDestination>;
   [[nodiscard]] auto        size() const -> std::size_t;
-  [[nodiscard]] static auto MakeUrl(std::uint64_t display_id) -> QString;
-  /// Parse the provider id of a URL (the part after `image://alcedo-lut-preview/`).
+  [[nodiscard]] auto        provider_id() const -> const QString& { return provider_id_; }
+  /// URL of @p display_id: `image://<provider id>/<display id>`.
+  [[nodiscard]] auto        MakeUrl(std::uint64_t display_id) const -> QString;
+  /// Parse the provider id of a URL (the part after `image://<provider id>/`).
   [[nodiscard]] static auto ParseProviderId(const QString& id, std::uint64_t* display_id) -> bool;
 
  private:
@@ -57,23 +67,26 @@ class LutPreviewImageStore {
     ViewerDisplayConfig encoding{};
   };
 
+  const QString                            provider_id_;
   mutable std::mutex                       mutex_;
   std::unordered_map<std::uint64_t, Entry> images_;
   DisplayImageConverter                    converter_;
 };
 
-/// `image://alcedo-lut-preview/<display id>`: the LUT preview that a tile shows.
-class LutPreviewImageProvider final : public QQuickImageProvider {
+/// `image://<provider id>/<display id>`: the browser preview that a tile shows.
+class BrowserPreviewImageProvider final : public QQuickImageProvider {
  public:
-  explicit LutPreviewImageProvider(std::shared_ptr<LutPreviewImageStore> store);
+  explicit BrowserPreviewImageProvider(std::shared_ptr<BrowserPreviewImageStore> store);
 
   QImage requestImage(const QString& id, QSize* size, const QSize& requestedSize) override;
 
  private:
-  std::shared_ptr<LutPreviewImageStore> store_;
+  std::shared_ptr<BrowserPreviewImageStore> store_;
 };
 
-/// The store that the application image provider reads.
-[[nodiscard]] auto SharedLutPreviewImageStore() -> std::shared_ptr<LutPreviewImageStore>;
+/// The store that the application LUT preview provider reads.
+[[nodiscard]] auto SharedLutPreviewImageStore() -> std::shared_ptr<BrowserPreviewImageStore>;
+/// The store that the application preset preview provider reads.
+[[nodiscard]] auto SharedPresetPreviewImageStore() -> std::shared_ptr<BrowserPreviewImageStore>;
 
 }  // namespace alcedo::ui

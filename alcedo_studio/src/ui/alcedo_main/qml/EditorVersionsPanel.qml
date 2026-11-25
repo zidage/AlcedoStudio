@@ -34,6 +34,9 @@ Item {
     // PresetController: the preset part and its commands.
     property var presets: typeof appModules !== "undefined" && appModules
                           ? appModules.presets : null
+    // PresetPreviewController: the preset tile previews of the open photo.
+    property var presetPreview: typeof appModules !== "undefined" && appModules
+                                ? appModules.presetPreview : null
     property bool versionCheckoutEnabled: true
     property string versionCheckoutDisabledReason: ""
     // EditorComparisonController; the header Compare action opens Version comparison.
@@ -542,6 +545,7 @@ Item {
         height: root.presetsHeight
         clip: true
         presets: root.presets
+        presetPreview: root.presetPreview
         canApply: root.canApplyPresets
         versionDropHighlight: root.dragOverPresets
         onApplyRequested: function (presetId) { root.applyPreset(presetId) }

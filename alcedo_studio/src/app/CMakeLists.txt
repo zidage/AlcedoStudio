@@ -511,14 +511,20 @@ def_library(AiMaskAnalysisImage
     PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory xxHash ${ALCEDO_OPENCV_CORE_DEPS}
 )
 
-# The LUT browser preview of one LUT: the import root with the LUT on its primary Color Grade,
-# rendered at a long edge of 256 (issue #598).
-def_library(LutPreviewImage
+# The browser tile previews, rendered at a long edge of 256: the LUT preview (the import root with
+# the LUT on its primary Color Grade, issue #598) and the preset preview (the import root with the
+# preset applied by the Paste planner, edit presets plan PS3).
+def_library(BrowserPreviewImage
     SOURCES
+        "${ALCEDO_APP_ROOT}/browser_preview_render.cpp"
         "${ALCEDO_APP_ROOT}/lut_preview_image.cpp"
+        "${ALCEDO_APP_ROOT}/preset_preview_image.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/browser_preview_render.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_preview_image.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/preset_preview_image.hpp"
     PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory EditorParameterWrite
-                ${ALCEDO_OPENCV_CORE_DEPS}
+                AdjustmentTransferService ${ALCEDO_OPENCV_CORE_DEPS}
+    PRIVATE_DEPS PipelineHistoryApplier xxHash JSON
 )
 
 # The open editor comparison: captured working values, selected sources, and the image job of the
@@ -781,7 +787,7 @@ def_library(EditorSessionService
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
                  EditorSerialFrameAdmission EditorMaskCreationController EditorComparisonService
-                 AiMaskAnalysisImage LutPreviewImage
+                 AiMaskAnalysisImage BrowserPreviewImage
 )
 # The session header holds the coverage preview by value.
 target_link_libraries(EditorSessionService PUBLIC EditorMaskCoveragePreview)

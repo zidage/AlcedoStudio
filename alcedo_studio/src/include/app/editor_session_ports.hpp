@@ -354,6 +354,31 @@ class IEditorHistoryPort {
     return false;
   }
 
+  /**
+   * @brief Build the frozen preset browser preview document of the held image without changing
+   *        its history (BuildPresetPreviewDocument, edit presets plan 2.4).
+   *
+   * Replays the immutable root, applies @p package with the Paste planner, and gives the result
+   * the sensor settings of @p captured_current. Moves no head, writes no commit, WAL record, or
+   * checkpoint, and does not touch the working document, its dirty state, or the published
+   * previews. Session owner thread.
+   *
+   * @param captured_current Preview of the working values. It must belong to the held image and to
+   *        the lineage of its working document.
+   * @return true with @p preview set; false with @p error set and @p preview unchanged. Default
+   *         ports reject.
+   */
+  virtual auto BuildPresetPreviewDocument(
+      const EditorHistoryGuardHandle& /*guard*/,
+      const std::shared_ptr<const PipelineGraphSnapshot>& /*captured_current*/,
+      const AdjustmentTransferPackage& /*package*/,
+      std::shared_ptr<const PipelineGraphSnapshot>* /*preview*/, std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "The preset preview document is not supported by this history port";
+    }
+    return false;
+  }
+
   /// Read only the active Version identity. This avoids constructing the
   /// Versions/commits projection when a consumer only needs a layout key or
   /// stale-session check.
