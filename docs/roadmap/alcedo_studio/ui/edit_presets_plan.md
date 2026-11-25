@@ -1,7 +1,8 @@
 # Edit Presets Plan
 
 - Date: 2026-11-24
-- Status: PS1A, PS1B, PS2, PS3, and PS4A implemented (2026-11-24); PS4B in progress
+- Status: PS1A, PS1B, PS2, PS3, PS4A, and PS4B implemented (2026-11-24); the user checks in the
+  running application are open
 - Tracking issue: #1090
 - Direct prerequisite plans:
   [Phase NM10, Node-aware Adjustment Transfer](../edit/node_mask_editor/phase_nm10_adjustment_transfer_plan.md)
@@ -382,7 +383,7 @@ Current files that change: `app/adjustment_transfer_package_builder.{hpp,cpp}`
 | PS2B | Versions panel with the preset part, drag in both directions, add, one-time apply, rename, delete, `Save as Preset` | QML, `AppTheme`, `.ts` | PS2A | 1200 (actual) | complete |
 | PS3 | Preview images in the preset browser | `app/`, `album_backend`, QML | PS2 | 1550 net (actual) | complete |
 | PS4A | `Apply Preset...` for many photos with previews: dialog, routing of the targets, library-photo previews (steps PS4.1 to PS4.3) | QML, `album_backend`, `app/thumbnail_service` | PS3 | 1700 (actual) | complete |
-| PS4B | Automation commands `presets.list`, `presets.save`, `presets.apply` (step PS4.4) | automation, alcedo-skills | PS4A | 700 | planned |
+| PS4B | Automation commands `presets.list`, `presets.save`, `presets.apply` (step PS4.4) | automation, alcedo-skills | PS4A | 1350 with the record (actual) | complete |
 
 Each phase is one pull request. If an estimate grows above 2000 lines during the work, split the
 phase and update this table first.
@@ -964,8 +965,8 @@ presets.
 
 **Exit criteria.**
 
-- [ ] Each test above passes.
-- [ ] Time record: `Apply Preset...` on 200 photos against `Paste Adjustments` of the same package
+- [x] Each test above passes (PS4A and PS4B completion records).
+- [x] Time record: `Apply Preset...` on 200 photos against `Paste Adjustments` of the same package
       on the same photos, release build. The preset time is not above the Paste time by more than
       5%.
 - [ ] The user confirms the dialog in the running application.
@@ -1083,6 +1084,93 @@ its own), `preset_apply_targets_test.cpp` 336, `preset_test_support.hpp` 153.
 
 **Remaining gaps:** the dialog and the context menu entry have no automated test (pure UI, plan
 section 11).
+
+**PS4B implementation decisions** (detail that step 4 did not specify).
+
+| Item | Decision | Reason |
+| --- | --- | --- |
+| Shared agent Paste | `automation_agent_paste.{hpp,cpp}` holds the target resolution (`element_ids` or the library selection), the Version name rule, the result schema, and `StartAgentPaste` (editor photo through the session, the other photos in the AdjustmentPaste task, agent attribution). `adjustments.paste` and `presets.apply` call it. | One agent Paste, as `PastePackageToTargets` is one GUI Paste. |
+| Package lifetime | The agent Paste holds the package as `shared_ptr<const AdjustmentTransferPackage>`; the `adjustments.copy` store holds the same type. | The cache package of `PackageFor` and a copied package go through one path without a copy. |
+| `presets.list` | Scans the folder (`Refresh`) and answers with the inventory of that scan, in the order of `PresetListModel`; `details` adds the node and item names of `SummarizeTransferPackage`. Needs no project. | D9: no file watcher; the browser scans when it opens. |
+| `presets.save` | Reads the source as Copy Adjustments does (`ReadSourceHistory`: the editor session for the open photo), takes the items of a save by drag (`SelectPresetItems`, D4), and answers when the worker wrote the file. `PresetLibraryService` numbers each queued operation (`LastSubmittedRequest`, `OperationResult::request`), so the answer is the result of its own save when a GUI operation waits before it. | One worker queue for the GUI and the agent. |
+| `presets.apply` | `preset_id` (the published inventory, `PackageFor`) or `file` (`ReadPresetFile` one time, R8). The default Version name is the preset name or the file stem. | Step 4; the routing of PS4A. |
+| Errors | Unknown id: -32602 `/preset_id`. A preset that is not available or a file that fails a rule: -32002 with the reason. Both or neither source: -32602. | The error classes of `adjustments.paste`. |
+
+##### PS4B completion record (2026-11-24)
+
+**Status:** complete. The alcedo-skills reference is zidage/alcedo-skills#31.
+
+**Primary success call chain:**
+
+```text
+alcedo-cli call presets.apply {preset_id | file, element_ids?, version_name?, note?}
+  -> AutomationCommandRegistry (changes_state: agent control in a GUI session)
+  -> preset_commands: AutomationEnteredProject -> ReadAppliedPreset
+       -> preset_id: FindEntry, available, PresetLibraryService::PackageFor (one read)
+       -> file: ReadPresetFile (the folder and the cache do not change)
+  -> AgentPasteVersionName -> AgentPasteTargets (element_ids or the library selection)
+  -> StartAgentPaste(package, ids, name, {author agent, note})
+       -> photo open in the editor: EditorSessionController::RequestPasteAdjustmentPackage
+          -> OperationWait (after the save checkpoint) -> answer.editor
+       -> other photos: AdjustmentTransferApplyCoordinator::StartApplyToTargets
+          -> {task_id, target_count} -> tasks.wait -> {applied_ids, failures}
+alcedo-cli call presets.save {element_id, version_id?, name?}
+  -> ReadSourceHistory -> RequestedVersion -> ReadVersion -> SelectPresetItems -> Build
+  -> PresetLibraryService::Save (request n) -> worker WritePresetFile -> scan
+  -> OperationFinished with LastResult().request == n -> {preset_id, name, nodes}
+alcedo-cli call presets.list {details?}
+  -> PresetLibraryService::Refresh (request n) -> worker scan -> OperationFinished (request n)
+  -> {folder, presets[folder first, then groups], error?}
+```
+
+**Primary failure call chain:**
+
+```text
+Unknown preset id / both or neither source / bad name / unknown photo
+  -> -32602 with the pointer; no Paste starts, no file is written
+Preset not available / file fails a rule (a LUT outside the library) / nothing to save
+  -> -32002 with the reason; the history of each photo does not change
+Another Paste or an editor save runs, or the policy refuses Paste
+  -> -32005 with the reason; nothing starts
+No project / no element_ids in the headless host
+  -> -32001
+One photo fails in the background task
+  -> failure row in the task result; the other photos get their Versions
+```
+
+**What was proven (executed tests, `build/debug`):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `PresetsApplyCommandStoresAgentAttribution` (3 photos; each head commit has the author `agent` and the note; the Version is named after the preset) | `AutomationPresetCommandsTest` | PASS |
+| `PresetsListShowsFolderPresetsBeforeGroupsWithReasons` | `AutomationPresetCommandsTest` | PASS |
+| `PresetsListScansFolderForFilesAddedAfterStart` | `AutomationPresetCommandsTest` | PASS |
+| `PresetsSaveAnswersItsOwnPresetWithoutGeometryAndLens` (a GUI save queued first; the file has no geometry and no lens correction; `/name` refusal) | `AutomationPresetCommandsTest` | PASS |
+| `PresetsApplyFileLeavesLibraryUnchanged` (folder listing, inventory, and read count do not change) | `AutomationPresetCommandsTest` | PASS |
+| `PresetsApplyRefusesUnknownPresetBothSourcesAndHostileFile` (no commit, no Paste) | `AutomationPresetCommandsTest` | PASS |
+| `PresetsSaveAndApplyWithoutProjectAreNotReady` | `AutomationPresetCommandsTest` | PASS |
+| `adjustments.paste` over the shared agent Paste | `AutomationAdjustmentCommandsTest` | PASS (4/4) |
+| Request numbers of the service | `PresetLibraryServiceTest` | PASS (14/14) |
+| Callers of PS4A | `PresetControllerTest`, `PresetApplyTargetsTest` | PASS (9/9, 7/7) |
+| The three schemas in the skills reference; the `adjustments.paste` schema does not change | `AutomationReferenceDocsTest` output + `generate_cli_reference.py --check` | the `presets.*` blocks pass; `labels.*` fails as on alcedo-skills `main` (alcedo-skills#24) |
+| The reference examples | `alcedo-cli` against `alcedo_main --headless`, `build/release` | save, list, list with details, apply with `tasks.wait`, and the refusal of an id without `.alcpreset` |
+
+Commands: `cmd /c "scripts\msvc_env.cmd --build build\debug --target AutomationPresetCommandsTest AutomationAdjustmentCommandsTest AutomationReferenceDocsTest PresetLibraryServiceTest PresetControllerTest PresetApplyTargetsTest"`,
+then each test binary from its `_runtime` folder;
+`python scripts/automation/generate_cli_reference.py --skills-dir <alcedo-skills branch> --check`.
+Suite totals: `AutomationPresetCommandsTest` 7/7, `AutomationAdjustmentCommandsTest` 4/4,
+`PresetLibraryServiceTest` 14/14, `PresetControllerTest` 9/9, `PresetApplyTargetsTest` 7/7. No
+full suite run.
+
+**Checklist / exit condition:** step 4 done; the PS4 tests pass. The user check of the dialog
+(PS4A) is open.
+
+**LOC note:** diff 1226 insertions and 210 deletions in 13 files with this record.
+`preset_commands.cpp` 428, `automation_agent_paste.cpp` 244, `adjustment_commands.cpp` 591 (was
+736; the agent Paste moved to `automation_agent_paste.cpp`), `automation_preset_commands_test.cpp`
+306.
+
+**Remaining gaps:** none for PS4B.
 
 ---
 

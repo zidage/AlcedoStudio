@@ -174,10 +174,11 @@ void PresetLibraryService::Submit(Operation operation, std::function<WorkerResul
     return;
   }
   ++pending_operations_;
+  const std::uint64_t request = ++last_request_;
   if (pending_operations_ == 1) {
     emit OperationStateChanged();
   }
-  worker_.Submit([this, operation, work = std::move(work)] {
+  worker_.Submit([this, operation, request, work = std::move(work)] {
     WorkerResult worker_result;
     try {
       worker_result = work();
@@ -186,6 +187,7 @@ void PresetLibraryService::Submit(Operation operation, std::function<WorkerResul
       worker_result.result.message = e.what();
     }
     worker_result.result.operation = operation;
+    worker_result.result.request   = request;
     QMetaObject::invokeMethod(
         this,
         [this, worker_result = std::move(worker_result)]() mutable {
