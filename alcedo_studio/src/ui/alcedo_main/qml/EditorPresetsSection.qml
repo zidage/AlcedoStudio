@@ -245,6 +245,16 @@ ColumnLayout {
         objectName: "editorPresetTileMenu"
         property string presetId: ""
         property bool available: false
+        // Rename starts when the menu has closed. On close the menu gives the focus back
+        // to the item that had it before, and its window gives the activation back to the
+        // main window; a rename field that already had the focus would lose it and commit.
+        property string renameAfterClose: ""
+        onClosed: {
+            const presetId = renameAfterClose
+            renameAfterClose = ""
+            if (presetId.length > 0)
+                presetBrowser.renamePresetId = presetId
+        }
         AppMenuItem {
             objectName: "editorPresetTileApplyItem"
             text: qsTr("Apply")
@@ -254,7 +264,7 @@ ColumnLayout {
         AppMenuItem {
             objectName: "editorPresetTileRenameItem"
             text: qsTr("Rename")
-            onTriggered: presetBrowser.renamePresetId = tileMenu.presetId
+            onTriggered: tileMenu.renameAfterClose = tileMenu.presetId
         }
         AppMenuItem {
             objectName: "editorPresetTileShowItem"
