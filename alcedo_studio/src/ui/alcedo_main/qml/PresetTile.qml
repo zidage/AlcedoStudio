@@ -135,7 +135,8 @@ Item {
                 font.weight: tile.selected ? appTheme.fontWeightStrong : appTheme.fontWeightRegular
             }
 
-            // Inline rename: Enter commits, Escape cancels, focus loss commits.
+            // Inline rename: Enter commits, Escape cancels, focus loss in the active window
+            // commits.
             TextField {
                 id: renameField
                 objectName: "presetTileRenameField"
@@ -169,15 +170,23 @@ Item {
                     else
                         tile.renameCanceled()
                 }
+                function takeFocus() {
+                    renameField.forceActiveFocus()
+                    renameField.selectAll()
+                }
                 onVisibleChanged: {
                     if (!visible)
                         return
                     finished = false
                     text = tile.name
-                    Qt.callLater(function () {
-                        renameField.forceActiveFocus()
-                        renameField.selectAll()
-                    })
+                    Qt.callLater(renameField.takeFocus)
+                }
+                // A window that is activated again (after a menu or another application)
+                // gives the focus back to an open rename.
+                readonly property bool windowActive: Window.active
+                onWindowActiveChanged: {
+                    if (windowActive && visible && !finished && !activeFocus)
+                        takeFocus()
                 }
                 // The field keeps Enter. TextInput passes a handled Return on to its parents,
                 // and the browser list applies the selected preset on Enter.
@@ -193,7 +202,13 @@ Item {
                     finish(false)
                     event.accepted = true
                 }
-                onEditingFinished: finish(true)
+                // A focus loss commits when the focus has settled on another item of the
+                // active window. A focus loss because the window went inactive keeps the
+                // rename open, and so does a focus that comes back at once.
+                onEditingFinished: Qt.callLater(function () {
+                    if (!renameField.activeFocus && renameField.windowActive)
+                        renameField.finish(true)
+                })
             }
         }
     }
