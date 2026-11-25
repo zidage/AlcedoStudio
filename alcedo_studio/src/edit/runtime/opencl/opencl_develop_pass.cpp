@@ -88,9 +88,9 @@ auto AcquireRgba(OpenClRenderWorkspace& workspace, const GraphValueId& id, std::
 void ExecuteOpenClLensCalibration(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                   const PreparedRawInput& input,
                                   const DevelopPayload&   develop_params) {
-  const auto runtime = LensCalibrationResolver::Resolve(develop_params, input.color_context,
-                                                        plan.source.develop_output_extent,
-                                                        input.dng_warp_rectilinear.has_value());
+  const auto runtime = LensCalibrationResolver::Resolve(
+      develop_params, input.color_context, plan.source.develop_output_extent,
+      dng::CorrectionsOf(input.dng_warp_rectilinear));
   if (!runtime.has_value()) {
     return;
   }
