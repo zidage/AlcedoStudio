@@ -52,7 +52,14 @@ void ForEachIndexInParallel(std::size_t count, std::size_t workers, const Prepar
       prepare(index);
     }
   };
-  std::vector<std::jthread> threads;
+  // std::thread with an explicit join: Apple libc++ has no std::jthread under -std=c++20.
+  std::vector<std::thread> threads;
+  struct JoinAll {
+    std::vector<std::thread>& threads;
+    ~JoinAll() {
+      for (auto& thread : threads) thread.join();
+    }
+  } join_all{threads};
   for (std::size_t worker = 1; worker < std::min(workers, count); ++worker) {
     threads.emplace_back(run);
   }
