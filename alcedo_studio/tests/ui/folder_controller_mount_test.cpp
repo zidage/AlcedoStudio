@@ -11,6 +11,7 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QSignalSpy>
 #include <QThread>
 #include <QUrl>
 #include <QVariantList>
@@ -20,10 +21,16 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string>
+#include <system_error>
 #include <vector>
 
 #include "app/mount_service.hpp"
+#include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
+#include "sleeve/storage.hpp"
+#include "storage/store/mount/mount_store.hpp"
+#include "utils/file/volume_identity.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
@@ -281,6 +288,49 @@ TEST_F(FolderControllerMountTest, UnmountLeavesOrdinaryRowsAndPhotos) {
   ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 2; }));
 }
 
+// #1088: a scan that only stored a new volume name did not save the project file, so the next
+// open of the .alcd showed the old name.
+TEST_F(FolderControllerMountTest, ScanThatOnlyRenamesTheVolumeSavesTheProjectFile) {
+  ASSERT_NO_FATAL_FAILURE(MountTrip());
+  const auto& handler    = backend_.project()->handler();
+  const auto  mount_id   = Summary().record.id;
+  const auto  volume     = ReadVolumeLabel(disk_ / "Trip").name;
+  const auto  saved_name = [this, &handler]() -> std::optional<std::string> {
+    const auto workspace = temp_dir_ / "volume_name_unpack";
+    std::error_code ec;
+    stdfs::remove_all(workspace, ec);
+    stdfs::create_directories(workspace);
+    stdfs::path db_path;
+    stdfs::path meta_path;
+    if (!project_pack::UnpackProjectToWorkspace(handler.package_path(), workspace,
+                                                "volume_name_unpack", &db_path, &meta_path,
+                                                nullptr)) {
+      return std::nullopt;
+    }
+    std::optional<std::string> name;
+    {
+      ProjectService project(db_path, meta_path, ProjectOpenMode::kLoadExisting);
+      const auto     roots = project.GetStorage()->GetMountStore().ReadMountRoots();
+      if (roots.size() == 1) {
+        name = roots.front().volume_name;
+      }
+    }
+    stdfs::remove_all(workspace, ec);
+    return name;
+  };
+
+  // The volume had another name when the project file was last saved; nothing on the disk
+  // changed since.
+  const std::string old_name = volume + " (old)";
+  handler.project()->GetStorage()->GetMountStore().UpdateMountVolumeName(mount_id, old_name);
+  ASSERT_TRUE(handler.MakeSaveAndPackageJob()(nullptr));
+  ASSERT_EQ(saved_name(), old_name);
+
+  ASSERT_NO_FATAL_FAILURE(Synchronize());
+  EXPECT_EQ(Summary().record.volume_name, volume);
+  EXPECT_EQ(saved_name(), volume);
+}
+
 TEST_F(FolderControllerMountTest, MountInsideAMountedFolderIsRefusedWithNoRow) {
   ASSERT_NO_FATAL_FAILURE(MountTrip());
   const auto rows_before = Folders().Folders().size();
@@ -305,10 +355,41 @@ TEST_F(FolderControllerMountTest, UserImportOfAFileInAMountedFolderLeavesOneElem
     return !backend_.import_export()->ImportRunning() && !backend_.mount_scans()->HasPendingScans();
   }));
   EXPECT_EQ(backend_.import_export()->ImportCompleted(), 1);
+  // #1089: the Library snackbar of the finished import reports the file left to the mount.
+  EXPECT_EQ(backend_.import_export()->ImportLeftToMounts(), 1);
   ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 3; }));
   ProcessEvents(300);
   EXPECT_EQ(ProjectPhotoCount(), 3);
   EXPECT_EQ(Summary().present_count, 2u);
+}
+
+TEST_F(FolderControllerMountTest, UserImportOfOnlyMountedFilesReportsThemAndRunsNoImport) {
+  // #1089: with every file in a mounted folder no import runs, so no import state change
+  // reports the result; the signal gives the Library snackbar the count.
+  ASSERT_NO_FATAL_FAILURE(MountTrip());
+  auto*      import_export = backend_.import_export();
+  QSignalSpy left_all(import_export, &ImportExportHandler::importLeftAllToMounts);
+
+  import_export->StartImport({PathToQString(disk_ / "Trip" / "a.jpg"),
+                              PathToQString(disk_ / "Trip" / "Day1" / "b.jpg")});
+  EXPECT_FALSE(import_export->ImportRunning());
+  ASSERT_EQ(left_all.size(), 1);
+  EXPECT_EQ(left_all.front().front().toInt(), 2);
+  EXPECT_EQ(import_export->ImportLeftToMounts(), 2);
+
+  ProcessEvents(300);
+  EXPECT_EQ(ProjectPhotoCount(), 2);
+  EXPECT_EQ(Summary().present_count, 2u);
+
+  // The next import with no mounted file clears the count, so its snackbar has no mount line.
+  WriteJpeg(temp_dir_ / "Other" / "c.jpg", 3);
+  import_export->StartImport({PathToQString(temp_dir_ / "Other" / "c.jpg")});
+  EXPECT_EQ(import_export->ImportLeftToMounts(), 0);
+  ASSERT_TRUE(WaitFor([&] {
+    return !import_export->ImportRunning() && !backend_.mount_scans()->HasPendingScans();
+  }));
+  EXPECT_EQ(left_all.size(), 1);
+  ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 3; }));
 }
 
 TEST_F(FolderControllerMountTest, NoScanRunsFromTheStartToTheFinalizeOfAUserImport) {

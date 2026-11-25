@@ -144,6 +144,8 @@ struct MountScanResult {
   /// The new root directory when the scan found the recorded volume under a new mount point
   /// (MountScanRequest::find_moved_volume) and relocated the root before the listing.
   std::optional<std::filesystem::path> relocated_root;
+  /// True when the scan reached the volume and stored its new display name (#1088).
+  bool                                 volume_name_updated = false;
 };
 
 /// The progress of the new file batches of one scan.
@@ -359,8 +361,9 @@ class MountService {
   void SetOnline(mount_id_t mount_id, std::filesystem::path mount_point);
   /// Read the label of the volume of the root of @p mount, set the mount kOnline with the mount
   /// point, and store the name when it differs from `mount.volume_name`.
+  /// @return True when the name was stored.
   /// @throws std::runtime_error when the name write fails; the mount is kOnline then.
-  void RecordVolumeReached(const MountRootRecord& mount);
+  auto RecordVolumeReached(const MountRootRecord& mount) -> bool;
   /// RelocateRoot with the operation lock held. Returns the stored canonical root.
   auto RelocateRootLocked(const MountRootRecord& mount, const std::filesystem::path& directory)
       -> std::filesystem::path;
