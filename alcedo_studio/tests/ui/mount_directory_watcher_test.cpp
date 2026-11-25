@@ -111,20 +111,27 @@ TEST(MountDirectoryWatcherTest, QtWatcherReportsTheVolumeEventsOfTheMountTable) 
 
   auto                     watcher = CreateQtMountDirectoryWatcher(
       kMountWatcherDirectoryLimit, [&table] { return table; }, std::chrono::milliseconds(5));
-  std::vector<mount_id_t> removed;
-  int                     arrivals = 0;
+  std::vector<mount_id_t>  removed;
+  std::vector<stdfs::path> removed_mount_points;
+  int                      arrivals = 0;
   watcher->SetChangeCallback([](mount_id_t) {});
-  watcher->SetVolumeCallbacks([&removed](mount_id_t mount_id) { removed.push_back(mount_id); },
-                              [&arrivals] { ++arrivals; }, {});
+  watcher->SetVolumeCallbacks(
+      [&removed](mount_id_t mount_id) { removed.push_back(mount_id); },
+      [&arrivals] { ++arrivals; }, {},
+      [&removed_mount_points](const stdfs::path& mount_point) {
+        removed_mount_points.push_back(mount_point);
+      });
   ASSERT_TRUE(watcher->Watch(1, card / "DCIM", {}));
   ASSERT_TRUE(watcher->Watch(2, disk / "Photos", {}));
 
-  // The card is unmounted: only the mount on the card loses its watch.
+  // The card is unmounted: only the mount on the card loses its watch, and the mount point of
+  // the card is reported as gone (#1087).
   table = {temp_dir.Path(), disk};
   ASSERT_TRUE(WaitUntil([&removed] { return !removed.empty(); }));
   QThread::msleep(50);
   QCoreApplication::processEvents();
   EXPECT_EQ(removed, (std::vector<mount_id_t>{1}));
+  EXPECT_EQ(removed_mount_points, (std::vector<stdfs::path>{card}));
   EXPECT_EQ(arrivals, 0);
 
   // The card is mounted again.
@@ -164,7 +171,7 @@ TEST(MountDirectoryWatcherTest, NewMountPointIsReportedWithItsNameAndTheDcimFlag
   watcher->SetChangeCallback([](mount_id_t) {});
   watcher->SetVolumeCallbacks(
       [](mount_id_t) {}, [&arrivals] { ++arrivals; },
-      [&arrived](const ArrivedVolume& volume) { arrived.push_back(volume); });
+      [&arrived](const ArrivedVolume& volume) { arrived.push_back(volume); }, {});
 
   table = {temp_dir.Path(), card, disk};
   ASSERT_TRUE(WaitUntil([&arrived] { return arrived.size() >= 2; }));

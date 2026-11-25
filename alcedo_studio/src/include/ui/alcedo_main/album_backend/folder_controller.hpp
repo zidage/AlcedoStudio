@@ -74,7 +74,7 @@ class FolderController final : public QObject {
   void BindCollaborators(StatsEngine* stats, SearchController* search,
                          ImportExportHandler* import_export);
   /// The scan coordinator of the application; the mount commands run on its worker. Its
-  /// VolumeWithoutMountArrived sets arrivedVolume.
+  /// VolumeWithoutMountArrived sets arrivedVolume, and its MountPointRemoved closes the card.
   void               BindMountScans(MountScanCoordinator* mount_scans);
 
   /// Loads the whole folder tree and starts one photo count read (RefreshImageCounts).
@@ -90,6 +90,11 @@ class FolderController final : public QObject {
   [[nodiscard]] auto CurrentFolderElementId() const -> std::optional<sl_element_id_t>;
   [[nodiscard]] auto FolderElementIdForUiId(uint folderUiId) const
       -> std::optional<sl_element_id_t>;
+  /// The loaded folder row of the collection element @p elementId, or nothing when no loaded row
+  /// shows it. A tree reload gives rows new ids, so a caller that keeps a collection across
+  /// reloads keeps its element id and finds the row here.
+  [[nodiscard]] auto FolderUiIdForElementId(sl_element_id_t elementId) const
+      -> std::optional<uint>;
   /// Library path of the folder row @p folderUiId (0 = the root collection), or nothing when no
   /// loaded row has that id.
   [[nodiscard]] auto FolderFsPathForUiId(uint folderUiId) const
@@ -103,9 +108,17 @@ class FolderController final : public QObject {
   Q_INVOKABLE void SelectLibraryRoot();
   /// Closes the card of the arrived volume: arrivedVolume becomes empty.
   Q_INVOKABLE void DismissArrivedVolume();
+  /// Closes the card for Import or Mount of its volume (#1087). True when the volume of the card
+  /// is still at its mount point (MountScanCoordinator::IsArrivedVolumeAt); else it reports that
+  /// the volume is no longer connected through the status sink and returns false, and the card
+  /// action stops.
+  Q_INVOKABLE bool TakeArrivedVolume();
   /// Takes a volume that arrived with no mount (MountScanCoordinator::VolumeWithoutMountArrived).
   void             SetArrivedVolume(const QString& volumeName, const QString& mountPoint,
-                                    bool hasDcimDirectory);
+                                    bool hasDcimDirectory, const QString& volumeIdentity);
+  /// Closes the card when its mount point is @p mountPoint
+  /// (MountScanCoordinator::MountPointRemoved).
+  void             HandleMountPointRemoved(const QString& mountPoint);
   /// Creates a folder inside the current folder.
   Q_INVOKABLE void CreateFolder(const QString& folderName);
   /// Creates a folder inside @p parentFolderUiId (0 = top level). Returns the element id of
@@ -295,6 +308,9 @@ class FolderController final : public QObject {
   /// With current_folder_ui_id_ 0: the Library row rather than All Photos.
   bool                                                        library_root_selected_    = false;
   QVariantMap                                                 arrived_volume_{};
+  /// The mount point and the identity of the volume of the card (#1087).
+  std::filesystem::path                                       arrived_mount_point_{};
+  std::string                                                 arrived_identity_{};
   std::unordered_map<sl_element_id_t, uint64_t>               image_count_by_folder_{};
   /// The mounts of the newest applied count read.
   std::vector<MountSummary>                                   mount_summaries_{};

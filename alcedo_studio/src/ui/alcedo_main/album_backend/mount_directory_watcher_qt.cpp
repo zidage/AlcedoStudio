@@ -46,11 +46,14 @@ class QtMountDirectoryWatcher final : public MountDirectoryWatcher {
   void SetChangeCallback(ChangeCallback callback) override { on_change_ = std::move(callback); }
 
   void SetVolumeCallbacks(VolumeRemovedCallback removed, VolumeArrivedCallback arrived,
-                          MountPointArrivedCallback mount_point_arrived) override {
+                          MountPointArrivedCallback mount_point_arrived,
+                          MountPointRemovedCallback mount_point_removed) override {
     on_volume_removed_      = std::move(removed);
     on_volume_arrived_      = std::move(arrived);
     on_mount_point_arrived_ = std::move(mount_point_arrived);
-    if (!on_volume_removed_ && !on_volume_arrived_ && !on_mount_point_arrived_) {
+    on_mount_point_removed_ = std::move(mount_point_removed);
+    if (!on_volume_removed_ && !on_volume_arrived_ && !on_mount_point_arrived_ &&
+        !on_mount_point_removed_) {
       poll_timer_.stop();
       return;
     }
@@ -138,6 +141,11 @@ class QtMountDirectoryWatcher final : public MountDirectoryWatcher {
         on_volume_removed_(mount_id);
       }
     }
+    if (on_mount_point_removed_) {
+      for (const auto& mount_point : changes.removed) {
+        on_mount_point_removed_(mount_point);
+      }
+    }
     if (!changes.arrived.empty() && on_volume_arrived_) {
       on_volume_arrived_();
     }
@@ -157,6 +165,7 @@ class QtMountDirectoryWatcher final : public MountDirectoryWatcher {
   VolumeRemovedCallback                                 on_volume_removed_;
   VolumeArrivedCallback                                 on_volume_arrived_;
   MountPointArrivedCallback                             on_mount_point_arrived_;
+  MountPointRemovedCallback                             on_mount_point_removed_;
   std::unordered_map<QString, mount_id_t>               mount_of_path_;
   std::unordered_map<mount_id_t, QStringList>           paths_of_mount_;
   std::unordered_map<mount_id_t, std::filesystem::path> root_of_mount_;

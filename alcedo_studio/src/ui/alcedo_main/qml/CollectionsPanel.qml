@@ -1944,13 +1944,14 @@ ColumnLayout {
     readonly property int volumeCardHeight: 108
 
     // The Import... and Mount... buttons of the volume card: the Import Folder dialog for DCIM,
-    // or the system folder dialog at the volume root when the volume has no DCIM.
+    // or the system folder dialog at the volume root when the volume has no DCIM. The action
+    // stops when the volume of the card is no longer at its mount point (#1087).
     function openVolumeCard(action) {
         const volume = arrivedVolume
         const dcim = volume.hasDcim === true && volume.dcimUrl ? String(volume.dcimUrl) : ""
         const root = volume.rootUrl ? String(volume.rootUrl) : ""
-        if (foldersModule) {
-            foldersModule.DismissArrivedVolume()
+        if (!foldersModule || !foldersModule.TakeArrivedVolume()) {
+            return
         }
         importFolderRequested(action, dcim, dcim.length > 0 ? "" : root)
     }
