@@ -202,12 +202,13 @@ TEST_F(FolderControllerMountTest, MountedRowReportsMountedAndNotStructureEditabl
   EXPECT_TRUE(Folders().CurrentFolderMounted());
 
   // Each mounted photo is present and stays in the library.
-  QVariantList ids;
+  QVariantList targets;
   for (const auto id : Summary().present_element_ids) {
-    ids.push_back(static_cast<qulonglong>(id));
+    targets.push_back(QVariantMap{{QStringLiteral("elementId"), static_cast<qulonglong>(id)}});
   }
-  EXPECT_EQ(ids.size(), 2);
-  EXPECT_TRUE(Folders().HoldsPresentMountedPhoto(ids));
+  EXPECT_EQ(targets.size(), 2);
+  EXPECT_TRUE(Folders().HoldsMountedPhoto(targets));
+  EXPECT_FALSE(Folders().HoldsMountedPhoto({}));
 }
 
 TEST_F(FolderControllerMountTest, OfflineMountRowReportsOfflineUntilLocateFolder) {
@@ -240,6 +241,9 @@ TEST_F(FolderControllerMountTest, RemoveMissingPhotosRemovesTheMissingPhotoOfThe
   const auto missing_id = Summary().missing_element_ids.front();
   EXPECT_TRUE(Folders().IsMissingMountedPhoto(static_cast<uint>(missing_id)));
   EXPECT_TRUE(backend_.library()->thumbs().IsStoredMissingSource(missing_id));
+  // A missing mounted photo also keeps Delete disabled: it leaves only through Remove Missing.
+  EXPECT_TRUE(Folders().HoldsMountedPhoto(
+      {QVariantMap{{QStringLiteral("elementId"), static_cast<qulonglong>(missing_id)}}}));
 
   Folders().RemoveMissingPhotos(RowNamed("Trip")->value("folderId").toUInt());
   ASSERT_TRUE(WaitFor([this] {

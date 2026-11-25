@@ -199,7 +199,7 @@ Item {
         adjustmentTransfer: appModules.adjustmentTransfer
         adjustmentTransferDialog: adjustmentTransferDialogObj
         interactionPolicy: appModules.interactionPolicy
-        pendingTargets: host.pendingAdjustmentPasteTargets
+        pendingTargets: root.imageActionsController.pendingAdjustmentPasteTargets
         onMessageRequested: function(message) {
             host.showSnackbar(message)
         }
@@ -241,6 +241,9 @@ Item {
 
     // A mounted photo leaves the library only through Remove Missing Photos of its mount, and a
     // mounted folder keeps its photos while their files are present.
+    // The target list goes to C++ in one call. The image menu reads the target lists from
+    // imageActionsController, not through the aliases of host (issue #1132): through an alias a
+    // list is a reference to the property, and each length or element read copies the whole list.
     function deleteKeepsMountedPhotos() {
         const folders = appModules.folders
         if (folders.currentFolderMounted === true) {
@@ -249,11 +252,7 @@ Item {
         if (Number(folders.currentFolderId) !== 0) {
             return false
         }
-        const ids = host.pendingDeleteTargets.map(function(target) {
-            return Number(target.elementId)
-        })
-        return folders.HoldsPresentMountedPhoto(ids)
-               || ids.some(function(id) { return folders.IsMissingMountedPhoto(id) })
+        return folders.HoldsMountedPhoto(root.imageActionsController.pendingDeleteTargets)
     }
 
     FileDialog {
@@ -274,7 +273,7 @@ Item {
         currentRating: Math.max(0, Math.min(5, Number(host.pendingRatingTarget.rating || 0)))
         collectionRows: appModules.folders.folders ? appModules.folders.folders : []
         currentCollectionId: Number(appModules.folders.currentFolderId)
-        addToEnabled: host.pendingDeleteTargets.length > 0
+        addToEnabled: root.imageActionsController.pendingDeleteTargets.length > 0
         actions: root.filmstripDiscardActions().concat(root.mountedPhotoActions()).concat([
             {
                 id: "copy-adjustments",
@@ -285,12 +284,12 @@ Item {
                 id: "paste-adjustments",
                 label: qsTr("Paste Adjustments"),
                 enabled: appModules.adjustmentTransfer.packageAvailable
-                         && host.pendingAdjustmentPasteTargets.length > 0
+                         && root.imageActionsController.pendingAdjustmentPasteTargets.length > 0
             },
             {
                 id: "apply-preset",
                 label: qsTr("Apply Preset..."),
-                enabled: host.pendingAdjustmentPasteTargets.length > 0
+                enabled: root.imageActionsController.pendingAdjustmentPasteTargets.length > 0
             },
             {
                 id: "delete",
@@ -298,7 +297,7 @@ Item {
                 // Blocked while a running task holds a DeleteImages lock on the
                 // selected images. The reason is exposed on the policy controller
                 // as pendingDeleteReason.
-                enabled: host.pendingDeleteTargets.length > 0
+                enabled: root.imageActionsController.pendingDeleteTargets.length > 0
                           && appModules.interactionPolicy.canDeletePendingTargets
                           && !root.deleteKeepsMountedPhotos()
             }
