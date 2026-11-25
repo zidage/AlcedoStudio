@@ -49,12 +49,24 @@ void RequireEditableFolder(FileSystem& fs, const sl_element_id_t folder_id) {
   }
 }
 
-/// Throws SleeveOperationError when a live file of @p file_ids is mounted (P7, MF5 data rules).
-/// A mounted file with no source record counts as present: the scan that gave it the mount id
-/// found its file, and a failed later batch of that scan can leave the record unwritten. Ids that
-/// name no live file pass, as in FileSystem::DeleteFilesEverywhere.
-void RequireRemovableFromLibrary(FileSystem& fs, MountStore& mount_store,
-                                 std::span<const sl_element_id_t> file_ids) {
+/// The file elements of @p file_ids; an id that names no file is left out.
+auto FileElements(FileSystem& fs, std::span<const sl_element_id_t> file_ids)
+    -> std::vector<std::shared_ptr<SleeveFile>> {
+  std::vector<std::shared_ptr<SleeveFile>> files;
+  files.reserve(file_ids.size());
+  for (const auto file_id : file_ids) {
+    auto element = fs.Get(file_id);
+    if (!element || element->type_ != ElementType::FILE) {
+      continue;
+    }
+    files.push_back(std::static_pointer_cast<SleeveFile>(element));
+  }
+  return files;
+}
+
+/// The ids of @p file_ids that name a live mounted file, in the order of @p file_ids.
+auto MountedFileIds(FileSystem& fs, std::span<const sl_element_id_t> file_ids)
+    -> std::vector<sl_element_id_t> {
   std::vector<sl_element_id_t> mounted_ids;
   for (const auto file_id : file_ids) {
     std::shared_ptr<SleeveElement> file;
@@ -68,6 +80,16 @@ void RequireRemovableFromLibrary(FileSystem& fs, MountStore& mount_store,
       mounted_ids.push_back(file_id);
     }
   }
+  return mounted_ids;
+}
+
+/// Throws SleeveOperationError when a live file of @p file_ids is mounted (P7, MF5 data rules).
+/// A mounted file with no source record counts as present: the scan that gave it the mount id
+/// found its file, and a failed later batch of that scan can leave the record unwritten. Ids that
+/// name no live file pass, as in FileSystem::DeleteFilesEverywhere.
+void RequireRemovableFromLibrary(FileSystem& fs, MountStore& mount_store,
+                                 std::span<const sl_element_id_t> file_ids) {
+  const auto mounted_ids = MountedFileIds(fs, file_ids);
   if (mounted_ids.empty()) {
     return;
   }
@@ -343,20 +365,31 @@ auto SleeveServiceImpl::DeleteFilesEverywhere(std::span<const sl_element_id_t> f
   return Write<std::vector<std::shared_ptr<SleeveFile>>>(
       [this, file_ids](FileSystem& fs) -> std::vector<std::shared_ptr<SleeveFile>> {
         RequireRemovableFromLibrary(fs, storage_->GetMountStore(), file_ids);
-        std::vector<std::shared_ptr<SleeveFile>> files;
-        files.reserve(file_ids.size());
-
-        const auto deleted_ids = fs.DeleteFilesEverywhere(file_ids);
-        files.reserve(deleted_ids.size());
-        for (const auto file_id : deleted_ids) {
-          auto element = fs.Get(file_id);
-          if (!element || element->type_ != ElementType::FILE) {
-            continue;
-          }
-          files.push_back(std::static_pointer_cast<SleeveFile>(element));
-        }
-        return files;
+        return FileElements(fs, fs.DeleteFilesEverywhere(file_ids));
       });
+}
+
+auto SleeveServiceImpl::DeleteFilesEverywhereKeepingMounted(
+    std::span<const sl_element_id_t> file_ids) -> std::pair<LibraryRemoval, SyncResult> {
+  return Write<LibraryRemoval>([this, file_ids](FileSystem& fs) -> LibraryRemoval {
+    LibraryRemoval out;
+    out.kept_mounted_ids_ = MountedFileIds(fs, file_ids);
+    const std::unordered_set<sl_element_id_t> kept(out.kept_mounted_ids_.begin(),
+                                                   out.kept_mounted_ids_.end());
+    std::vector<sl_element_id_t>              removable_ids;
+    removable_ids.reserve(file_ids.size());
+    for (const auto file_id : file_ids) {
+      if (!kept.contains(file_id)) {
+        removable_ids.push_back(file_id);
+      }
+    }
+    if (removable_ids.empty() && !kept.empty()) {
+      // Only mounted photos: the request is refused with the reason of the strict delete.
+      RequireRemovableFromLibrary(fs, storage_->GetMountStore(), file_ids);
+    }
+    out.deleted_files_ = FileElements(fs, fs.DeleteFilesEverywhere(removable_ids));
+    return out;
+  });
 }
 
 auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,

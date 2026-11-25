@@ -240,11 +240,10 @@ Item {
     }
 
     // A mounted photo leaves the library only through Remove Missing Photos of its mount, and a
-    // mounted folder keeps its photos while their files are present.
-    // The target list goes to C++ in one call. The image menu reads the target lists from
-    // imageActionsController, not through the aliases of host (issue #1132): through an alias a
-    // list is a reference to the property, and each length or element read copies the whole list.
-    function deleteKeepsMountedPhotos() {
+    // mounted folder keeps its photos while their files are present. The menu reads the clicked
+    // photo only (#1135): a delete of a selection deletes the other photos and keeps the
+    // mounted ones.
+    function clickedPhotoStaysMounted() {
         const folders = appModules.folders
         if (folders.currentFolderMounted === true) {
             return true
@@ -252,7 +251,7 @@ Item {
         if (Number(folders.currentFolderId) !== 0) {
             return false
         }
-        return folders.HoldsMountedPhoto(root.imageActionsController.pendingDeleteTargets)
+        return folders.IsMountedPhoto(Number(root.imageActionsController.menuClickedItem.elementId))
     }
 
     FileDialog {
@@ -273,7 +272,7 @@ Item {
         currentRating: Math.max(0, Math.min(5, Number(host.pendingRatingTarget.rating || 0)))
         collectionRows: appModules.folders.folders ? appModules.folders.folders : []
         currentCollectionId: Number(appModules.folders.currentFolderId)
-        addToEnabled: root.imageActionsController.pendingDeleteTargets.length > 0
+        addToEnabled: Number(root.imageActionsController.menuClickedItem.elementId) > 0
         actions: root.filmstripDiscardActions().concat(root.mountedPhotoActions()).concat([
             {
                 id: "copy-adjustments",
@@ -284,22 +283,22 @@ Item {
                 id: "paste-adjustments",
                 label: qsTr("Paste Adjustments"),
                 enabled: appModules.adjustmentTransfer.packageAvailable
-                         && root.imageActionsController.pendingAdjustmentPasteTargets.length > 0
+                         && Number(root.imageActionsController.menuClickedItem.elementId) > 0
             },
             {
                 id: "apply-preset",
                 label: qsTr("Apply Preset..."),
-                enabled: root.imageActionsController.pendingAdjustmentPasteTargets.length > 0
+                enabled: Number(root.imageActionsController.menuClickedItem.elementId) > 0
             },
             {
                 id: "delete",
                 label: Number(appModules.folders.currentFolderId) === 0 ? qsTr("Delete") : qsTr("Remove from Album"),
-                // Blocked while a running task holds a DeleteImages lock on the
-                // selected images. The reason is exposed on the policy controller
-                // as pendingDeleteReason.
-                enabled: root.imageActionsController.pendingDeleteTargets.length > 0
-                          && appModules.interactionPolicy.canDeletePendingTargets
-                          && !root.deleteKeepsMountedPhotos()
+                // Blocked while a running task holds a DeleteImages lock on the clicked
+                // image (the focused image; the reason is focusedDeleteReason). The delete of
+                // a selection skips each other locked or mounted image.
+                enabled: Number(root.imageActionsController.menuClickedItem.elementId) > 0
+                          && appModules.interactionPolicy.canDeleteFocused
+                          && !root.clickedPhotoStaysMounted()
             }
         ])
         onRatingRequested: function(rating) {
@@ -328,6 +327,7 @@ Item {
                 return
             }
             if (actionId === "paste-adjustments") {
+                root.imageActionsController.preparePasteTargets()
                 adjustmentTransferActionsObj.requestPasteAdjustments()
                 return
             }
