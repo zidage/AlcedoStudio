@@ -836,20 +836,25 @@ void FolderController::ClearState() {
 void FolderController::BindMountScans(MountScanCoordinator* mount_scans) {
   if (mount_scans_ != nullptr) {
     disconnect(mount_scans_, &MountScanCoordinator::VolumeWithoutMountArrived, this, nullptr);
+    disconnect(mount_scans_, &MountScanCoordinator::MountPointRemoved, this, nullptr);
   }
   mount_scans_ = mount_scans;
   if (mount_scans_ != nullptr) {
     connect(mount_scans_, &MountScanCoordinator::VolumeWithoutMountArrived, this,
             &FolderController::SetArrivedVolume);
+    connect(mount_scans_, &MountScanCoordinator::MountPointRemoved, this,
+            &FolderController::HandleMountPointRemoved);
   }
 }
 
 void FolderController::SetArrivedVolume(const QString& volumeName, const QString& mountPoint,
-                                        bool hasDcimDirectory) {
+                                        bool hasDcimDirectory, const QString& volumeIdentity) {
   const auto root = album_util::InputToPath(mountPoint);
   if (!root.has_value()) {
     return;
   }
+  arrived_mount_point_ = *root;
+  arrived_identity_    = volumeIdentity.toStdString();
   const auto to_url = [](const std::filesystem::path& path) {
     return QUrl::fromLocalFile(album_util::PathToQString(path));
   };
@@ -867,7 +872,38 @@ void FolderController::DismissArrivedVolume() {
     return;
   }
   arrived_volume_.clear();
+  arrived_mount_point_.clear();
+  arrived_identity_.clear();
   emit ArrivedVolumeChanged();
+}
+
+bool FolderController::TakeArrivedVolume() {
+  if (arrived_volume_.isEmpty()) {
+    return false;
+  }
+  const auto    mount_point = arrived_mount_point_;
+  const auto    identity    = arrived_identity_;
+  const QString name        = arrived_volume_.value(QStringLiteral("name")).toString();
+  const QString shown       = name.isEmpty()
+                                  ? arrived_volume_.value(QStringLiteral("mountPoint")).toString()
+                                  : name;
+  DismissArrivedVolume();
+  // A volume that replaced the one of the card at the same mount point has other files.
+  if (mount_scans_ == nullptr || !mount_scans_->IsArrivedVolumeAt(mount_point, identity)) {
+    status_->SetTaskState(PL_TEXT("%1 is no longer connected.", shown), 0, false);
+    return false;
+  }
+  return true;
+}
+
+void FolderController::HandleMountPointRemoved(const QString& mountPoint) {
+  if (arrived_volume_.isEmpty()) {
+    return;
+  }
+  const auto removed = album_util::InputToPath(mountPoint);
+  if (removed.has_value() && *removed == arrived_mount_point_) {
+    DismissArrivedVolume();
+  }
 }
 
 }  // namespace alcedo::ui

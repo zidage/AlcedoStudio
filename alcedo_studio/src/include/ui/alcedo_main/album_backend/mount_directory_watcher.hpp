@@ -55,7 +55,8 @@ using ArrivedVolumeReader = std::function<ArrivedVolume(const std::filesystem::p
  * The watcher also reports the volume events (#1020): the removal of the volume of a watched
  * mount, and the arrival of a volume, so an offline mount gets a scan when its drive is
  * connected again. It reports each new mount point of the mount table with the values of its
- * volume (#1076), so the owner of the mounts can show a volume that holds no mount.
+ * volume (#1076), so the owner of the mounts can show a volume that holds no mount, and each
+ * mount point that is gone (#1087), so the owner closes the card of that volume.
  *
  * Thread safety: create, call, and destroy on one thread with an event loop (the UI thread).
  * The callbacks run on that thread.
@@ -72,6 +73,8 @@ class MountDirectoryWatcher {
   /// A mount point is new in the mount table. The watcher does not know whether the volume
   /// holds a mount; the owner of the mounts compares it with them.
   using MountPointArrivedCallback = std::function<void(const ArrivedVolume&)>;
+  /// A mount point is gone from the mount table (#1087): its volume was ejected or pulled out.
+  using MountPointRemovedCallback = std::function<void(const std::filesystem::path&)>;
 
   virtual ~MountDirectoryWatcher()                        = default;
 
@@ -82,7 +85,8 @@ class MountDirectoryWatcher {
   /// of this call is the state that the first comparison uses, so a mount point that exists
   /// now is not reported.
   virtual void SetVolumeCallbacks(VolumeRemovedCallback removed, VolumeArrivedCallback arrived,
-                                  MountPointArrivedCallback mount_point_arrived) = 0;
+                                  MountPointArrivedCallback mount_point_arrived,
+                                  MountPointRemovedCallback mount_point_removed) = 0;
 
   /**
    * @brief Watch the root directory @p root of the mount @p mount_id and the directories
@@ -125,7 +129,8 @@ class MountDirectoryWatcher {
  * removes each watched mount whose root is at or below it.
  *
  * Each new mount point goes to the MountPointArrivedCallback with the values of
- * ReadArrivedVolume.
+ * ReadArrivedVolume, and each mount point that is gone to the MountPointRemovedCallback. On
+ * Windows the removal of a volume device also reads the drive list.
  */
 auto CreatePlatformMountDirectoryWatcher() -> std::unique_ptr<MountDirectoryWatcher>;
 
