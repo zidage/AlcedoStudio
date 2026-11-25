@@ -72,6 +72,10 @@ class ImportExportHandler final : public QObject {
   Q_PROPERTY(bool importCanceling READ ImportCanceling NOTIFY ImportStateChanged)
   /// Subset of importFailed: files left unread because the import was canceled.
   Q_PROPERTY(int importCanceled READ ImportCanceled NOTIFY ImportStateChanged)
+  /// The files of the last user import that are already in a mounted folder (#1016, decision
+  /// D10): the import leaves them to the scan of that folder. Set each time an import starts,
+  /// also when it leaves every file and so does not run.
+  Q_PROPERTY(int importLeftToMounts READ ImportLeftToMounts NOTIFY ImportStateChanged)
   /// Subsets of importTotal, importCompleted and importFailed: files with a RAW extension. The
   /// import dialog draws one ring for these files and one for the other files.
   Q_PROPERTY(int importRawTotal READ ImportRawTotal NOTIFY ImportStateChanged)
@@ -211,6 +215,7 @@ class ImportExportHandler final : public QObject {
   [[nodiscard]] int  ImportExcluded() const { return import_excluded_; }
   [[nodiscard]] bool ImportCanceling() const { return import_canceling_; }
   [[nodiscard]] int  ImportCanceled() const { return import_canceled_; }
+  [[nodiscard]] int  ImportLeftToMounts() const { return import_left_to_mounts_; }
   [[nodiscard]] int  ImportRawTotal() const { return import_raw_total_; }
   [[nodiscard]] int  ImportRawCompleted() const { return import_raw_completed_; }
   [[nodiscard]] int  ImportRawFailed() const { return import_raw_failed_; }
@@ -288,6 +293,10 @@ class ImportExportHandler final : public QObject {
   // QML Connections maps a handler onFoo to the signal foo, so a signal that starts with an
   // uppercase letter needs a lowercase twin for QML.
   void exportFinished(int succeeded, int failed, int skipped);
+  /// Emitted when a user import starts and every one of its @p fileCount files is already in a
+  /// mounted folder: no import runs, so no import state change reports the result.
+  void ImportLeftAllToMounts(int fileCount);
+  void importLeftAllToMounts(int fileCount);
 
  private:
   enum class ImportPhaseState { Idle, Preparing, Reading, Finalizing };
@@ -365,6 +374,7 @@ class ImportExportHandler final : public QObject {
   int                           import_unsupported_ = 0;
   int                           import_excluded_    = 0;
   int                           import_canceled_    = 0;
+  int                           import_left_to_mounts_ = 0;
   int                           import_raw_total_     = 0;
   int                           import_raw_completed_ = 0;
   int                           import_raw_failed_    = 0;

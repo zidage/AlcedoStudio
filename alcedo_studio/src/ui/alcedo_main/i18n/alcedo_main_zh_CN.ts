@@ -1360,8 +1360,8 @@
         <translation>已暂停</translation>
     </message>
     <message>
-        <source>%1 file(s) are in a mounted folder. The scan of that folder adds them.</source>
-        <translation>%1 个文件位于挂载文件夹中，将由该文件夹的扫描添加。</translation>
+        <source>%1 file(s) are already in a mounted folder and will not be imported this time.</source>
+        <translation>%1 个文件已在挂载的文件夹中，本次不会导入。</translation>
     </message>
     <message>
         <source>A mounted folder is being scanned. Please try again.</source>
@@ -8475,6 +8475,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+23"/>
         <source>Exported %1 image(s).</source>
         <translation>已导出 %1 张图像。</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n photo(s) are already in the mounted folder and will not be imported this time.</source>
+        <translation>
+            <numerusform>%n 张照片已在挂载的文件夹中，本次不会导入。</numerusform>
+        </translation>
     </message>
 </context>
 <context>

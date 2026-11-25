@@ -513,8 +513,8 @@ ApplicationWindow {
     }
 
 
-    function showSnackbar(messageText) {
-        notificationSnackbar.show(messageText)
+    function showSnackbar(messageText, durationMs) {
+        notificationSnackbar.show(messageText, durationMs)
     }
 
     function requestSaveProject() {

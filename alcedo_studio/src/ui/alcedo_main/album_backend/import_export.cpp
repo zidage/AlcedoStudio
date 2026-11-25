@@ -419,14 +419,19 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
     return;
   }
   // #1016, decision D10: one file has one element. The scan of a mount imports the files of its
-  // directory as mounted photos, so the user import leaves them to it.
-  if (const auto left_to_scans = RemoveMountScanPaths(paths); left_to_scans > 0) {
-    status_->SetServiceMessage(
-        PL_TEXT("%1 file(s) are in a mounted folder. The scan of that folder adds them.",
-                static_cast<qulonglong>(left_to_scans)));
-    if (paths.empty()) {
-      return;
-    }
+  // directory as mounted photos, so the user import leaves them to it. The Library snackbar
+  // reports the count (#1089).
+  import_left_to_mounts_ = static_cast<int>(RemoveMountScanPaths(paths));
+  if (import_left_to_mounts_ > 0 && paths.empty()) {
+    status_->SetTaskState(
+        PL_TEXT("%1 file(s) are already in a mounted folder and will not be imported this time.",
+                import_left_to_mounts_),
+        0, false);
+    emit ImportStateChanged();
+    emit importStateChanged();
+    emit ImportLeftAllToMounts(import_left_to_mounts_);
+    emit importLeftAllToMounts(import_left_to_mounts_);
+    return;
   }
 
   if (!preserveTarget) {
