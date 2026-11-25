@@ -452,6 +452,15 @@ def_library(AdjustmentTransferService
     PRIVATE_DEPS EditorAdjustmentPipeline EditorPipelineCommandService
 )
 
+# Preset files (edit_presets_plan.md, PS1A): the only reader of a preset file, with the safety
+# rules of plan section 3, and the writer.
+def_library(PresetFile
+    SOURCES
+        "${ALCEDO_APP_ROOT}/preset_file.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/preset_file.hpp"
+    PUBLIC_DEPS AdjustmentTransferService Qt6::Core
+)
+
 # The AI Denoise switch written into the stored history of an image that the editor does not hold
 # (AI Denoise integration plan, DN8): Turn Off AI Denoise of an export queue item.
 def_library(AiDenoiseHistoryWrite

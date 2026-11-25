@@ -17,6 +17,7 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
+#include "edit/operators/models/json_read.hpp"
 #include "type/hash_type.hpp"
 
 namespace alcedo {
@@ -165,7 +166,7 @@ auto ColorGradeEntryFromJson(const nlohmann::json& json) -> TransferColorGradeVa
     if (!json.at("mix").is_number()) {
       Fail("color grade mix must be a number");
     }
-    grade.mix = json.at("mix").get<float>();
+    grade.mix = json_util::ToFloat(json.at("mix"), "color grade mix");
   }
   if (!json.contains("adjustments") || !json.at("adjustments").is_array()) {
     Fail("color grade requires an adjustments array");

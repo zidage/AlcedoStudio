@@ -85,4 +85,14 @@ struct AiMaskTransferExclusion {
 [[nodiscard]] auto SelectAllTransferableItems(const PipelineDocument& document)
     -> AdjustmentTransferSelection;
 
+/**
+ * @brief Selection of a preset that a Version makes (edit presets plan, D4).
+ *
+ * Equal to @ref SelectAllTransferableItems without the Geometry and Lens Correction items: a crop
+ * and a lens profile belong to one photo and one lens. A node with no remaining item is left out.
+ * Reads @p document only.
+ */
+[[nodiscard]] auto SelectPresetItems(const PipelineDocument& document)
+    -> AdjustmentTransferSelection;
+
 }  // namespace alcedo

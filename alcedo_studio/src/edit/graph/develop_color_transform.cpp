@@ -745,10 +745,15 @@ auto RawWhiteBalanceWhite(const DevelopPayload& develop)
   if (develop.input.has_value() || !ResolveDevelopColorTransform(develop).ok) {
     return std::nullopt;
   }
-  const bool custom = IsCustomWbMode(develop.wb_mode);
-  return WhiteBalanceTemperatureTint{
-      .cct  = static_cast<double>(custom ? develop.custom_cct : develop.as_shot_cct),
-      .tint = static_cast<double>(custom ? develop.custom_tint : develop.as_shot_tint)};
+  // A custom white uses the clamp of ResolveDevelopColorTransform, so both readers agree and a
+  // stored value outside the range never reaches a consumer (#1096).
+  if (IsCustomWbMode(develop.wb_mode)) {
+    return WhiteBalanceTemperatureTint{
+        .cct  = ClampFinite(develop.custom_cct, kCustomCCTMin, kCustomCCTMax),
+        .tint = ClampFinite(develop.custom_tint, kCustomTintMin, kCustomTintMax)};
+  }
+  return WhiteBalanceTemperatureTint{.cct  = static_cast<double>(develop.as_shot_cct),
+                                     .tint = static_cast<double>(develop.as_shot_tint)};
 }
 
 auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransformResult {

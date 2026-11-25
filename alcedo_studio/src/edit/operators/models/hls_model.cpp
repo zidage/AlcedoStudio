@@ -28,9 +28,9 @@ auto VecFromJson(const nlohmann::json& json, HlsVec3 fallback) -> HlsVec3 {
     return fallback;
   }
   HlsVec3 vec;
-  vec.h = json[0].is_number() ? json[0].get<float>() : fallback.h;
-  vec.l = json[1].is_number() ? json[1].get<float>() : fallback.l;
-  vec.s = json[2].is_number() ? json[2].get<float>() : fallback.s;
+  vec.h = json[0].is_number() ? json_util::ToFloat(json[0], "h") : fallback.h;
+  vec.l = json[1].is_number() ? json_util::ToFloat(json[1], "l") : fallback.l;
+  vec.s = json[2].is_number() ? json_util::ToFloat(json[2], "s") : fallback.s;
   return vec;
 }
 
@@ -137,7 +137,7 @@ void HlsModel::LoadJson(const nlohmann::json& json) {
       const auto& bins = json["hue_bins"];
       for (int i = 0; i < kHlsHueBinCount && i < static_cast<int>(bins.size()); ++i) {
         if (bins[i].is_number()) {
-          payload.hue_bins[static_cast<std::size_t>(i)] = bins[i].get<float>();
+          payload.hue_bins[static_cast<std::size_t>(i)] = json_util::ToFloat(bins[i], "hue_bins");
         }
       }
     }
@@ -152,7 +152,8 @@ void HlsModel::LoadJson(const nlohmann::json& json) {
       const auto& table = json["h_range_table"];
       for (int i = 0; i < kHlsHueBinCount && i < static_cast<int>(table.size()); ++i) {
         if (table[i].is_number()) {
-          payload.h_range_table[static_cast<std::size_t>(i)] = table[i].get<float>();
+          payload.h_range_table[static_cast<std::size_t>(i)] =
+              json_util::ToFloat(table[i], "h_range_table");
         }
       }
     }

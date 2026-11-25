@@ -4,17 +4,34 @@
 
 #pragma once
 
+#include <cfloat>
+#include <cmath>
+#include <stdexcept>
 #include <string>
 
 #include "json.hpp"
 
 namespace alcedo::json_util {
 
+/**
+ * @brief @p number as a float.
+ *
+ * @throws std::invalid_argument when the value is outside the float range, so that no conversion
+ *         is undefined (#1097). JSON text has no non-finite number.
+ */
+inline auto ToFloat(const nlohmann::json& number, const char* key) -> float {
+  const double value = number.get<double>();
+  if (!std::isfinite(value) || std::fabs(value) > static_cast<double>(FLT_MAX)) {
+    throw std::invalid_argument(std::string{key} + " is outside the float range");
+  }
+  return static_cast<float>(value);
+}
+
 inline auto ReadFloat(const nlohmann::json& json, const char* key, float fallback) -> float {
   if (!json.contains(key) || !json[key].is_number()) {
     return fallback;
   }
-  return json[key].get<float>();
+  return ToFloat(json[key], key);
 }
 
 inline auto ReadDouble(const nlohmann::json& json, const char* key, double fallback) -> double {
@@ -43,7 +60,7 @@ inline void ReadNumberArray(const nlohmann::json& json, const char* key, float* 
   const auto& values = json[key];
   for (int i = 0; i < count && i < static_cast<int>(values.size()); ++i) {
     if (values[i].is_number()) {
-      dest[i] = values[i].get<float>();
+      dest[i] = ToFloat(values[i], key);
     }
   }
 }

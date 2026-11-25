@@ -285,6 +285,20 @@ gtest_discover_tests(DocumentTransferTest
     PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(DocumentTransferTest app)
 
+# Preset files: the safety rules of edit_presets_plan.md section 3, the writer, the preset item
+# selection, and a mutation run of the reader and the Paste planner (PS1).
+add_executable(PresetFileTest
+    ${ALCEDO_TEST_ROOT}/app/preset_file_test.cpp)
+target_include_directories(PresetFileTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(PresetFileTest
+    PRIVATE GTest::gtest_main PresetFile AdjustmentTransferService
+            PipelineHistoryApplier EditorPipelineCommandService EditGraph EditMaskCore EditRuntime)
+gtest_discover_tests(PresetFileTest
+    TEST_PREFIX "PresetFileTest."
+    PROPERTIES LABELS "ci_core_flow;edit")
+alcedo_register_test_target(PresetFileTest app)
+
 # NM10.3 read-only Version catalog: inactive-Version replay with no live-state
 # mutation, backbone ordering, instance identity, aggregate Masks row, DRT/Post
 # ownership, and fail-closed replay errors.
