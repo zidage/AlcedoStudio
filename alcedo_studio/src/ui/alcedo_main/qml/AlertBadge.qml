@@ -29,6 +29,8 @@ Rectangle {
         anchors.topMargin: appTheme.spaceXs
         anchors.bottomMargin: appTheme.spaceXs
         text: root.text
+        // Messages can name files and presets from other people (edit presets plan 3.5).
+        textFormat: Text.PlainText
         color: appTheme.alertBadgeTextColor
         wrapMode: Text.Wrap
         verticalAlignment: Text.AlignVCenter

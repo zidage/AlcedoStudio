@@ -365,6 +365,10 @@
 <context>
     <name>AdjustmentTransferDialog</name>
     <message>
+        <source>Save as Preset</source>
+        <translation>存储为预设</translation>
+    </message>
+    <message>
         <location filename="../qml/AdjustmentTransferDialog.qml" line="+70"/>
         <source>Other</source>
         <translation>其他</translation>
@@ -1231,6 +1235,34 @@
 </context>
 <context>
     <name>Alcedo</name>
+    <message>
+        <source>The preset library is unavailable.</source>
+        <translation>预设库不可用。</translation>
+    </message>
+    <message>
+        <source>No photo is open.</source>
+        <translation>没有打开的照片。</translation>
+    </message>
+    <message>
+        <source>Source Version identity is invalid.</source>
+        <translation>来源版本的标识无效。</translation>
+    </message>
+    <message>
+        <source>No source Version is loaded.</source>
+        <translation>没有载入来源版本。</translation>
+    </message>
+    <message>
+        <source>No preset file selected.</source>
+        <translation>没有选择预设文件。</translation>
+    </message>
+    <message>
+        <source>The preset is not in the preset folder.</source>
+        <translation>该预设不在预设文件夹中。</translation>
+    </message>
+    <message>
+        <source>The folder cannot be opened: %1</source>
+        <translation>无法打开文件夹：%1</translation>
+    </message>
     <message>
         <source>%1 is no longer connected.</source>
         <translation>%1 已断开连接。</translation>
@@ -2109,6 +2141,10 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>AppDialogs</name>
     <message>
+        <source>Preset saved.</source>
+        <translation>预设已存储。</translation>
+    </message>
+    <message>
         <source>Locate Photo...</source>
         <translation>定位照片...</translation>
     </message>
@@ -2434,6 +2470,87 @@ Alcedo 将改用 %1。</translation>
     <message>
         <source>Rescan</source>
         <translation>重新扫描</translation>
+    </message>
+</context>
+<context>
+    <name>EditorPresetsSection</name>
+    <message>
+        <source>The preset operation failed</source>
+        <translation>预设操作失败</translation>
+    </message>
+    <message>
+        <source>Presets</source>
+        <translation>预设</translation>
+    </message>
+    <message>
+        <source>Add Preset...</source>
+        <translation>添加预设...</translation>
+    </message>
+    <message>
+        <source>Preset actions</source>
+        <translation>预设操作</translation>
+    </message>
+    <message>
+        <source>Apply Preset File...</source>
+        <translation>应用预设文件...</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>刷新</translation>
+    </message>
+    <message>
+        <source>Show Folder</source>
+        <translation>显示文件夹</translation>
+    </message>
+    <message>
+        <source>Apply</source>
+        <translation>应用</translation>
+    </message>
+    <message>
+        <source>Rename</source>
+        <translation>重命名</translation>
+    </message>
+    <message>
+        <source>Show in Folder</source>
+        <translation>在文件夹中显示</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>Add Preset</source>
+        <translation>添加预设</translation>
+    </message>
+    <message>
+        <source>Alcedo presets (*.alcpreset)</source>
+        <translation>Alcedo 预设 (*.alcpreset)</translation>
+    </message>
+    <message>
+        <source>All Files (*)</source>
+        <translation>所有文件 (*)</translation>
+    </message>
+    <message>
+        <source>Apply Preset File</source>
+        <translation>应用预设文件</translation>
+    </message>
+</context>
+<context>
+    <name>PresetBrowser</name>
+    <message>
+        <source>Presets</source>
+        <translation>预设</translation>
+    </message>
+    <message>
+        <source>No presets</source>
+        <translation>没有预设</translation>
+    </message>
+</context>
+<context>
+    <name>PresetTile</name>
+    <message>
+        <source>Rename Preset</source>
+        <translation>重命名预设</translation>
     </message>
 </context>
 <context>

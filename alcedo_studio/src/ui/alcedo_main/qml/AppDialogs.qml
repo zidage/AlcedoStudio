@@ -17,6 +17,8 @@ Item {
     property var imageActionsController: null
     property var selectionState: null
     property Item blurSource: null
+    // A Save as Preset of the Copy dialog waits for the write of its preset file.
+    property bool pendingDialogPresetSave: false
 
     property alias importDialog: importDialogObj
     property alias importFolderFlow: importFolderFlowObj
@@ -133,12 +135,34 @@ Item {
                 host.showSnackbar(result.message)
             }
         }
+        // The preset file is written later; a failure of the write is reported then.
+        onSaveAsPresetRequested: {
+            const result = appModules.presets.SaveDialogSelectionAsPreset()
+            if (result && result.success === true) {
+                root.pendingDialogPresetSave = true
+            } else if (result && result.message) {
+                host.showSnackbar(String(result.message))
+            }
+        }
         onPasteAccepted: function(strategy) {
             adjustmentTransferActionsObj.applyPaste(strategy)
             host.pendingAdjustmentPasteTargets = []
         }
         onPasteCanceled: {
             host.pendingAdjustmentPasteTargets = []
+        }
+    }
+
+    // Save as Preset of the Copy dialog: the snackbar names the saved preset or the failure.
+    // The Versions panel reports its own preset operations.
+    Connections {
+        target: appModules.presets
+        function onOperationFinished(result) {
+            if (String(result.operation || "") !== "save" || !root.pendingDialogPresetSave)
+                return
+            root.pendingDialogPresetSave = false
+            host.showSnackbar(result.success === true ? qsTr("Preset saved.")
+                                                      : String(result.message || ""))
         }
     }
 

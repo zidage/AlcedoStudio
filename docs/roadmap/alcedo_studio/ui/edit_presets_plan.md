@@ -1,7 +1,7 @@
 # Edit Presets Plan
 
 - Date: 2026-11-24
-- Status: PS1A and PS1B implemented (2026-11-24); PS2 to PS4 planned
+- Status: PS1A, PS1B, and PS2 implemented (2026-11-24); PS3 and PS4 planned
 - Tracking issue: #1090
 - Direct prerequisite plans:
   [Phase NM10, Node-aware Adjustment Transfer](../edit/node_mask_editor/phase_nm10_adjustment_transfer_plan.md)
@@ -378,7 +378,8 @@ Current files that change: `app/adjustment_transfer_package_builder.{hpp,cpp}`
 | --- | --- | --- | --- | ---: | --- |
 | PS1A | Preset file with the safety rules, `SelectPresetItems`, `LoadJson` audit with its fixes | `app/`, `edit/` models | None | 1700 (actual) | complete |
 | PS1B | Preset library service with the scan and the package cache, folder setting | `app/`, `album_backend`, settings QML | PS1A | 1400 (actual) | complete |
-| PS2 | Versions panel with the preset part, drag in both directions, add, one-time apply, rename, delete, `Save as Preset` | `album_backend`, QML | PS1B | 1500 to 1900 | planned |
+| PS2A | `PresetController`, `PresetListModel`, package summary, `PresetNameFromLabel`, `PresetControllerTest` | `app/`, `album_backend` | PS1B | 1300 (actual) | complete |
+| PS2B | Versions panel with the preset part, drag in both directions, add, one-time apply, rename, delete, `Save as Preset` | QML, `AppTheme`, `.ts` | PS2A | 1200 (actual) | complete |
 | PS3 | Preview images in the preset browser | `app/`, `album_backend`, QML | PS2 | 1100 to 1500 | planned |
 | PS4 | `Apply Preset...` for many photos with previews, automation commands | QML, `album_backend`, `app/thumbnail_service`, automation | PS3 | 1400 to 1800 | planned |
 
@@ -682,9 +683,105 @@ ctest --test-dir build/debug -R "PresetController|AdjustmentTransferController" 
 - [ ] The user confirms the five actions of 2.2 in the running application.
 - [ ] Each preset string in QML uses plain text format.
 
-**Expected diff.** 1500 to 1900 lines.
+**Expected diff.** 1500 to 1900 lines. Actual: about 2500 lines (1750 production, 470 tests,
+the rest plan, `DESIGN.md`, and `.ts` entries), so the phase was split into PS2A (the C++ owners
+and `PresetControllerTest`) and PS2B (the QML, the theme tokens, the translations), one pull
+request each (section 8).
 
-**Completion record.** Empty.
+**Implementation decisions** (detail that this plan did not specify; each agrees with D1 to D9).
+
+| Item | Decision | Reason |
+| --- | --- | --- |
+| Item summary | `SummarizeTransferPackage(package)` in `adjustment_transfer_catalog` gives the node and item names of the Copy dialog from the package alone; `PresetListModel` makes one line per node. The summary role reads the package through `PackageFor` when a tooltip opens. | A preset package has no source document, so the dialog rows cannot be used. No file read for tiles that are not hovered. |
+| Name of a saved preset | `PresetNameFromLabel` makes the Version name a valid preset name: each refused character becomes `-`, spaces and trailing dots are removed, the length is cut to 120, empty is `Preset`. A name that the user types (Rename) is still refused, not changed (3.5). | A Version name such as `Warm/Cool` must not refuse a save by drag. |
+| Name of a one-time Version | The file name without the extension. | D7 for a preset that has no entry. |
+| Splitter height | `PresetController.browserHeight`, stored in `presets/browserHeight` (QSettings). 0 means `editorPresetPaneHeight`. | The QML `Settings` type needs a plugin of the static Qt build; the controller owns the other preset state already. |
+| Preset part | `EditorPresetsSection.qml` holds the header, the error badge, the browser, the tile menu, the file dialogs, and the file drop. `EditorVersionsPanel.qml` holds the splitter and the drag between the parts. | `EditorVersionsPanel.qml` is above 900 lines; the drag needs both parts, the rest does not. |
+| Drag | A panel-level drag in the pattern of `CollectionsPanel.qml`: the row or tile `MouseArea` starts it after `Qt.styleHints.startDragDistance` and reports scene positions; the panel tests the drop part on release. The rows keep `preventStealing`, so a drag does not flick the list. | No system drag object is needed inside one panel. Risk row of section 12. |
+| Agent control | An apply is refused by `EditorSessionController::PasteAdjustmentPackage`; save, add, rename, and delete change preset files only and stay available. | The policy protects project state. |
+| Rename after a save | Only a save by drag from the panel puts the new tile into rename. A save from the Copy dialog reports through the snackbar. | The dialog closes; a rename field in a closed rail page is not visible. |
+| Plain text | `AlertBadge` shows its text as plain text for all callers. Preset tiles use their own `ToolTip` with a plain-text content item, not the shared attached tooltip. | 3.5. |
+
+##### PS2 completion record (2026-11-24)
+
+**Status:** complete for the code and the tests; the check of the five actions of 2.2 in the
+running application is the user's (pure UI).
+
+**Primary success call chain:**
+
+```text
+Drag a Version row onto the preset part
+  -> EditorVersionsPanel.finishDrag -> PresetController::SaveVersionAsPreset(versionId)
+  -> EditorSessionController::SnapshotHistorySource -> AdjustmentTransferCatalogService::ReadVersion
+  -> SelectPresetItems -> AdjustmentTransferPackageBuilder::Build
+  -> PresetNameFromLabel -> PresetLibraryService::Save -> worker: WritePresetFile -> scan
+  -> owner: InventoryChanged (PresetListModel reset) -> OperationFinished
+  -> PresetController::OperationFinished {save, presetIds} -> the new tile enters rename
+
+Double click / Enter / drag a preset tile onto the Versions list
+  -> PresetController::ApplyToEditor(id) -> PresetLibraryService::FindEntry, PackageFor
+  -> EditorSessionController::PasteAdjustmentPackage(package, entry name)
+  -> (current chain) ApplyPaste -> PasteLiveRootRelativeVersion -> new active Version
+
+Drop one .alcpreset on the Versions list / Apply Preset File...
+  -> PresetController::ApplyFileToEditor(url) -> ReadPresetFile -> PasteAdjustmentPackage
+
+Copy dialog Save as Preset
+  -> AppDialogs -> PresetController::SaveDialogSelectionAsPreset
+  -> AdjustmentTransferDialogModel::BuildPackage -> PresetLibraryService::Save -> snackbar
+```
+
+**Primary failure call chain:**
+
+```text
+Preset not available / not listed / hostile one-time file
+  -> FindEntry, entry.available, or ReadPresetFile refuses -> {success:false, message}
+  -> no Paste starts; the commit graph, the Versions, and the active Version are unchanged
+Agent holds control -> PasteAdjustmentPackage refuses with the policy message; no history change
+Save refused (LUT outside the library, invalid name) -> PresetLibraryService::Refuse
+  -> {success:false, message} -> the error badge of the preset part; no file
+```
+
+**What was proven (executed tests, `build/debug`):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `SaveVersionAsPresetWritesAllItemsExceptGeometryAndLens` | `PresetControllerTest` | PASS |
+| `SaveVersionAsPresetReadsVersionThatIsNotActive` | `PresetControllerTest` | PASS |
+| `ApplyToEditorCreatesActiveVersionNamedAfterPreset` | `PresetControllerTest` | PASS |
+| `ApplyFileToEditorLeavesLibraryUnchanged` | `PresetControllerTest` | PASS |
+| `ApplyOfUnavailablePresetChangesNoHistory` (an unavailable entry, an unlisted id, a one-time file with an absolute LUT path) | `PresetControllerTest` | PASS |
+| `ApplyIsRefusedWhileAgentHoldsControl` | `PresetControllerTest` | PASS |
+| `SaveDialogSelectionSavesOnlyTheSelectedItems` (step 6) | `PresetControllerTest` | PASS |
+| `ListModelShowsFolderPresetsBeforeGroupsWithPlainSummary` | `PresetControllerTest` | PASS |
+| `PresetNameFromLabelTest.LabelBecomesValidPresetName` | `PresetControllerTest` | PASS |
+| `alcedo_main` links; the new and changed QML compiles (qmlcachegen) | `alcedo_main` | PASS |
+| Paste of the Copy dialog (caller of the shared dialog model) | `AdjustmentTransferControllerTest` | PASS |
+| Version card click, rename, draft, and scroll with the new card input and the preset part loaded; no QML error from the new files in the log | `EditorVersionsPanelQmlTest` | PASS |
+
+The editor session of these tests is an `EditorSessionController` over a backend with a real
+`CommitGraph`; its Paste is `AdjustmentTransferService::PasteAsRootRelativeVersion`, the operation
+that the editor history port runs.
+
+Commands: `cmd /c "scripts\msvc_env.cmd --build build\debug --target PresetControllerTest AdjustmentTransferControllerTest EditorVersionsPanelQmlTest alcedo_main --parallel 8"`,
+then each test binary from its `_runtime` folder.
+Suite totals: `PresetControllerTest` 9/9, `AdjustmentTransferControllerTest` 4/4,
+`EditorVersionsPanelQmlTest` 20/20. The QML panel tests do not fail on a QML binding error
+(#526), so the log was searched for errors of the new files: none.
+
+**Checklist / exit condition:**
+
+- [x] Each test above passes.
+- [ ] The user confirms the five actions of 2.2 in the running application.
+- [x] Each preset string in QML uses plain text format.
+
+**LOC note:** `preset_controller.cpp` 314, `preset_controller.hpp` 126, `preset_list_model.cpp`
+122, `PresetBrowser.qml` 238, `PresetTile.qml` 219, `EditorPresetsSection.qml` 274,
+`EditorVersionsPanel.qml` 1218 (+274: drag, splitter, drop target; above 1000 lines before this
+phase too, the preset part went to its own file), `preset_controller_test.cpp` 465.
+
+**Remaining gaps:** the QML drag, splitter, and drop have no automated test (pure UI, plan
+section 11).
 
 ### PS3: Preview images
 

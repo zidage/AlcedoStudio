@@ -1331,6 +1331,10 @@ auto AppTheme::editorLutTileMinWidth() const -> int { return 128; }
 // Narrowest single tile column the docked filter sidebar leaves beside it.
 auto AppTheme::editorLutTileCompactWidth() const -> int { return 88; }
 auto AppTheme::editorLutTileIconSize() const -> int { return 36; }
+// Versions panel presets (DESIGN.md "Versions panel presets").
+auto AppTheme::editorPresetPaneHeight() const -> int { return 240; }
+auto AppTheme::editorVersionsPartMinHeight() const -> int { return 160; }
+auto AppTheme::editorPresetTileMinWidth() const -> int { return 104; }
 auto AppTheme::collectionsSidebarWidth() const -> int { return 264; }
 auto AppTheme::collectionsSidebarMinWidth() const -> int { return 208; }
 auto AppTheme::collectionsSidebarMaxWidth() const -> int { return 420; }
