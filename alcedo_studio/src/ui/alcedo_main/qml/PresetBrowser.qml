@@ -125,9 +125,10 @@ Item {
         Accessible.role: Accessible.List
         Accessible.name: qsTr("Presets")
 
+        // Enter applies the selected preset, but not while a tile shows its rename field.
         Keys.onPressed: function (event) {
             if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                    && root.selectedPresetId.length > 0) {
+                    && root.selectedPresetId.length > 0 && root.renamePresetId.length === 0) {
                 root.activated(root.selectedPresetId)
                 event.accepted = true
             }
