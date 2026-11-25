@@ -92,10 +92,12 @@ struct LensFixture {
   const char* catalog_lens_model;
 };
 
+// Float fields compare within 4 ULP: the Lensfun auto-scale search rounds differently on arm64 and
+// x64 (resolved_scale 1.03895819 and 1.03895831 for the DNG warp fixture).
 void ExpectFloatField(const nlohmann::json& expected, const char* name, float actual,
                       const std::string& context) {
   ASSERT_TRUE(expected.contains(name)) << context << " missing " << name;
-  EXPECT_EQ(expected.at(name).get<float>(), actual) << context << " field " << name;
+  EXPECT_FLOAT_EQ(expected.at(name).get<float>(), actual) << context << " field " << name;
 }
 
 void ExpectIntField(const nlohmann::json& expected, const char* name, std::int32_t actual,
@@ -111,7 +113,7 @@ void ExpectFloatArray(const nlohmann::json& expected, const char* name, const fl
   const auto& values = expected.at(name);
   ASSERT_EQ(values.size(), N) << context << " field " << name;
   for (std::size_t i = 0; i < N; ++i) {
-    EXPECT_EQ(values.at(i).get<float>(), actual[i])
+    EXPECT_FLOAT_EQ(values.at(i).get<float>(), actual[i])
         << context << " field " << name << "[" << i << "]";
   }
 }
