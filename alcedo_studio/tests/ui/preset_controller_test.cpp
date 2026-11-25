@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QFileInfo>
 #include <QSignalSpy>
 #include <QTest>
 #include <filesystem>
@@ -94,8 +95,12 @@ class PresetControllerTest : public ::testing::Test {
         std::make_unique<PresetLibraryService>(alcedo::test::PresetLibraryOptionsOn(root_));
     library_->Start();
     ASSERT_TRUE(WaitUntilIdle());
-    controller_ = std::make_unique<PresetController>(library_.get(), &dialog_,
-                                                     [](const QUrl&) { return true; });
+    controller_ = std::make_unique<PresetController>(
+        library_.get(), &dialog_, [](const QUrl&) { return true; },
+        [this](const QString&, const QString& suggested_path, const QString&) {
+          suggested_path_ = suggested_path;
+          return chosen_path_;
+        });
     controller_->SetEditorSession(&session_);
   }
 
@@ -126,6 +131,9 @@ class PresetControllerTest : public ::testing::Test {
   AdjustmentTransferDialogModel         dialog_;
   std::unique_ptr<PresetLibraryService> library_;
   std::unique_ptr<PresetController>     controller_;
+  // The system save dialog of ExportVersion: the path it suggested and the path it returns.
+  QString                               suggested_path_;
+  QString                               chosen_path_;
 };
 
 /// A package with exposure, a rotation, and Lens Correction: a Version made from it has all
@@ -334,7 +342,59 @@ TEST_F(PresetControllerTest, ApplyIsRefusedWhileAgentHoldsControl) {
   session_.SetInteractionPolicy(nullptr);
 }
 
-TEST_F(PresetControllerTest, ListModelShowsFolderPresetsBeforeGroupsWithPlainSummary) {
+// Issue #1124: Export Version writes the package of a drag-saved preset (no Crop and Rotate,
+// no Lens Correction) to the file of the save dialog, replaces a file there that the dialog
+// confirmed, and adds no preset to the folder.
+TEST_F(PresetControllerTest, ExportVersionWritesPresetFileAtChosenPathAndReplacesIt) {
+  StartLibrary();
+  const auto version = AddVersion(PackageWithGeometryAndLens(1.5), "Look A");
+  const auto target  = directory_ / "shared" / "Look A.alcpreset";
+  fs::create_directories(target.parent_path());
+  WriteBytes(target, "not a preset");
+  chosen_path_ = QString::fromStdWString(target.wstring());
+  QSignalSpy finished(controller_.get(), &PresetController::OperationFinished);
+
+  const auto result = controller_->ExportVersion(QString::fromStdString(version.ToString()));
+  ASSERT_TRUE(result.value("success").toBool()) << result.value("message").toString().toStdString();
+  EXPECT_TRUE(result.value("pending").toBool());
+  EXPECT_EQ(QFileInfo(suggested_path_).fileName(), QStringLiteral("Look A.alcpreset"));
+  ASSERT_TRUE(finished.wait(20000));
+  const auto done = finished.takeLast().front().toMap();
+  EXPECT_EQ(done.value("operation").toString(), QStringLiteral("export"));
+  ASSERT_TRUE(done.value("success").toBool()) << done.value("message").toString().toStdString();
+
+  const auto read = ReadPresetFile(target);
+  ASSERT_TRUE(read.Ok()) << read.message;
+  EXPECT_FALSE(read.package->develop_.geometry.has_value());
+  EXPECT_FALSE(read.package->develop_.lens_calib.has_value());
+  EXPECT_EQ(ExposureOf(*read.package), std::optional<double>{1.5});
+  EXPECT_EQ(FolderListing(target.parent_path()), (std::vector<std::string>{"Look A.alcpreset"}));
+  EXPECT_TRUE(FolderListing(root_).empty());
+  EXPECT_TRUE(EntryIds(*library_).empty());
+}
+
+TEST_F(PresetControllerTest, ExportVersionCanceledInDialogWritesNothing) {
+  StartLibrary();
+  const auto version = AddVersion(alcedo::test::MakeExposureTransferPackage(0.5), "Look A");
+  chosen_path_.clear();
+
+  const auto result = controller_->ExportVersion(QString::fromStdString(version.ToString()));
+  EXPECT_TRUE(result.value("success").toBool());
+  EXPECT_TRUE(result.value("canceled").toBool());
+  EXPECT_FALSE(library_->busy());
+  EXPECT_TRUE(FolderListing(root_).empty());
+}
+
+TEST(VersionExportFileNameTest, PhotoNameThenVersionNameMadeValid) {
+  EXPECT_EQ(VersionExportFileName(QStringLiteral("DSC_0001.ARW"), QStringLiteral("Look A")),
+            QStringLiteral("DSC_0001_Look A.alcpreset"));
+  EXPECT_EQ(VersionExportFileName(QStringLiteral("trip.day1.NEF"), QStringLiteral("Warm/Cool")),
+            QStringLiteral("trip.day1_Warm-Cool.alcpreset"));
+  EXPECT_EQ(VersionExportFileName(QString(), QStringLiteral("Look A")),
+            QStringLiteral("Look A.alcpreset"));
+}
+
+TEST_F(PresetControllerTest, ListModelShowsFolderPresetsBeforeGroups) {
   WriteBytes(root_ / "Zed.alcpreset", PresetText(0.5));
   WriteBytes(root_ / "Film" / "amber.alcpreset", PresetText(1.0));
   WriteBytes(root_ / "Apple.alcpreset", PresetText(-0.5));
@@ -349,8 +409,6 @@ TEST_F(PresetControllerTest, ListModelShowsFolderPresetsBeforeGroupsWithPlainSum
   EXPECT_EQ(ids, (QStringList{QStringLiteral("Apple.alcpreset"), QStringLiteral("Zed.alcpreset"),
                               QStringLiteral("Film/amber.alcpreset")}));
   EXPECT_EQ(model->roleAt(2, PresetListModel::GroupRole).toString(), QStringLiteral("Film"));
-  const auto summary = model->roleAt(0, PresetListModel::SummaryRole).toString();
-  EXPECT_NE(summary.indexOf(QStringLiteral("Exposure")), -1) << summary.toStdString();
   EXPECT_EQ(model->rowOfPreset(QStringLiteral("Zed.alcpreset")), 1);
 }
 

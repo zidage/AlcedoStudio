@@ -146,24 +146,38 @@ struct PresetFileWriteResult {
 /// File name of the preset @p name: the name plus kPresetFileExtension. @p name must be valid.
 [[nodiscard]] auto PresetFileNameFor(std::string_view name) -> std::filesystem::path;
 
+/// What a preset write does with a file that exists at its path.
+enum class PresetFileWriteMode {
+  /// Refuse an existing file (kTargetExists): the preset folder never loses a file.
+  kCreateNew,
+  /// Replace an existing regular file: an export to a path that the user confirmed in the system
+  /// save dialog.
+  kReplace,
+};
+
 /**
- * @brief Write @p package as a new preset file at @p path.
+ * @brief Write @p package as a preset file at @p path.
  *
  * Makes the canonical dump of ExportDocumentTransfer, applies ParsePresetText to it, so that the
  * reader accepts each written file, then writes a temporary file in the folder of @p path and
- * renames it to @p path. The rename refuses an existing file; no file is replaced. A failure
- * leaves no new file. Never throws.
+ * renames it to @p path. With kCreateNew the rename refuses an existing file and no file is
+ * replaced; with kReplace the rename replaces it. A failure leaves no new file and keeps an
+ * existing file. Never throws.
  */
 [[nodiscard]] auto WritePresetFile(const AdjustmentTransferPackage& package,
-                                   const std::filesystem::path&     path) -> PresetFileWriteResult;
+                                   const std::filesystem::path&     path,
+                                   PresetFileWriteMode mode = PresetFileWriteMode::kCreateNew)
+    -> PresetFileWriteResult;
 
 /**
- * @brief Write the accepted preset text @p canonical_text as a new file at @p path.
+ * @brief Write the accepted preset text @p canonical_text as a file at @p path.
  *
- * The same temporary file and rename as WritePresetFile. The caller has the text from an
+ * The same temporary file, rename, and @p mode as WritePresetFile. The caller has the text from an
  * accepted PresetFileReadResult. Never throws.
  */
 [[nodiscard]] auto WritePresetText(std::string_view             canonical_text,
-                                   const std::filesystem::path& path) -> PresetFileWriteResult;
+                                   const std::filesystem::path& path,
+                                   PresetFileWriteMode mode = PresetFileWriteMode::kCreateNew)
+    -> PresetFileWriteResult;
 
 }  // namespace alcedo

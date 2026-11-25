@@ -689,13 +689,20 @@ auto PresetFileNameFor(std::string_view name) -> fs::path {
   return PathFromUtf8(std::string{name} + std::string{kPresetFileExtension});
 }
 
-auto WritePresetText(std::string_view canonical_text, const fs::path& path)
-    -> PresetFileWriteResult {
+auto WritePresetText(std::string_view canonical_text, const fs::path& path,
+                     PresetFileWriteMode mode) -> PresetFileWriteResult {
   try {
     std::error_code error;
-    if (fs::exists(fs::symlink_status(path, error))) {
+    const auto      existing = fs::symlink_status(path, error);
+    if (mode == PresetFileWriteMode::kCreateNew && fs::exists(existing)) {
       return WriteFailure(PresetFileRule::kTargetExists,
                           "the file " + PathText(path.filename()) + " exists");
+    }
+    // A replace writes over a regular file only, never through a link or over a folder.
+    if (mode == PresetFileWriteMode::kReplace && fs::exists(existing) &&
+        !fs::is_regular_file(existing)) {
+      return WriteFailure(PresetFileRule::kWriteFailed,
+                          PathText(path) + " is not a regular file");
     }
     const fs::path temporary =
         path.parent_path() / PathFromUtf8("~alcpreset-" + RandomSuffix() + ".tmp");
@@ -708,6 +715,17 @@ auto WritePresetText(std::string_view canonical_text, const fs::path& path)
         return WriteFailure(PresetFileRule::kWriteFailed,
                             "cannot write a file in " + PathText(path.parent_path()));
       }
+    }
+    if (mode == PresetFileWriteMode::kReplace) {
+      // std::filesystem::rename replaces an existing file in one step.
+      fs::rename(temporary, path, error);
+      if (error) {
+        std::error_code remove_error;
+        fs::remove(temporary, remove_error);
+        return WriteFailure(PresetFileRule::kWriteFailed,
+                            "cannot write " + PathText(path) + ": " + error.message());
+      }
+      return {};
     }
     // QFile::rename refuses an existing target, so that no file is replaced.
     QFile file(ToQString(temporary));
@@ -725,8 +743,8 @@ auto WritePresetText(std::string_view canonical_text, const fs::path& path)
   }
 }
 
-auto WritePresetFile(const AdjustmentTransferPackage& package, const fs::path& path)
-    -> PresetFileWriteResult {
+auto WritePresetFile(const AdjustmentTransferPackage& package, const fs::path& path,
+                     PresetFileWriteMode mode) -> PresetFileWriteResult {
   std::string text;
   try {
     text = ExportDocumentTransfer(package).dump();
@@ -737,7 +755,7 @@ auto WritePresetFile(const AdjustmentTransferPackage& package, const fs::path& p
   if (!parsed.Ok()) {
     return WriteFailure(parsed.rule, parsed.message);
   }
-  return WritePresetText(parsed.canonical_text, path);
+  return WritePresetText(parsed.canonical_text, path, mode);
 }
 
 }  // namespace alcedo

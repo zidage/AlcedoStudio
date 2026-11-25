@@ -8,8 +8,8 @@ import QtQuick.Layouts
 // watches its preset on previewSource while it exists, so only instantiated tiles
 // render a preview. The area stays neutral until the preview is
 // ready. A preset that is not available, and a preset whose preview failed, show the
-// warning icon; the tooltip of an unavailable preset gives the reason. Names and
-// tooltips are plain text (plan 3.5).
+// warning icon. Only an unavailable preset has a tooltip, with the reason; an available
+// preset shows no item summary (issue #1124). Names and tooltips are plain text (plan 3.5).
 //
 // Input: click selects, double click and Enter apply, right click opens the menu of
 // the browser. A press that moves more than the system drag distance starts the
@@ -27,13 +27,12 @@ Item {
     property bool renaming: false
     // List layout: a compact row with a small image area left of the name.
     property bool listMode: false
-    // Plain-text summary of the package; read by the browser when the tooltip opens.
-    property string summary: ""
+    // Why the preset is not available; empty for an available preset.
+    property string reason: ""
 
     signal clicked()
     signal activated()
     signal contextRequested(real sceneX, real sceneY)
-    signal summaryRequested()
     signal dragStarted(real sceneX, real sceneY)
     signal dragMoved(real sceneX, real sceneY)
     signal dragFinished(real sceneX, real sceneY)
@@ -74,7 +73,7 @@ Item {
                     + (listMode ? appTheme.spaceSm + appTheme.spaceXs : appTheme.spaceSm * 2)
     Accessible.role: Accessible.ListItem
     Accessible.name: tile.name
-    Accessible.description: tile.available ? "" : tile.summary
+    Accessible.description: tile.reason
 
     Rectangle {
         objectName: "presetTileChrome"
@@ -262,21 +261,17 @@ Item {
             if (mouse.button === Qt.LeftButton && tile.available)
                 tile.activated()
         }
-        onContainsMouseChanged: {
-            if (containsMouse)
-                tile.summaryRequested()
-        }
     }
 
-    // Its own tooltip, not the shared attached one: the summary comes from a file, so the
-    // content item shows it as plain text.
+    // Its own tooltip, not the shared attached one: the reason names a file, so the content
+    // item shows it as plain text.
     ToolTip {
         objectName: "presetTileToolTip"
-        visible: tile.hovered && !tileMouse.dragging && tile.summary.length > 0
+        visible: tile.hovered && !tileMouse.dragging && tile.reason.length > 0
         delay: 1000
         timeout: 8000
         contentItem: Label {
-            text: tile.summary
+            text: tile.reason
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             color: appTheme.textColor

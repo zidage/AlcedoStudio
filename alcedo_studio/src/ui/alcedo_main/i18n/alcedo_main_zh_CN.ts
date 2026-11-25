@@ -1236,6 +1236,14 @@
 <context>
     <name>Alcedo</name>
     <message>
+        <source>Export Version</source>
+        <translation>导出版本</translation>
+    </message>
+    <message>
+        <source>Alcedo presets (*.alcpreset)</source>
+        <translation>Alcedo 预设 (*.alcpreset)</translation>
+    </message>
+    <message>
         <source>Paste is unavailable.</source>
         <translation>粘贴不可用。</translation>
     </message>
@@ -5918,12 +5926,16 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <translation>对比版本</translation>
     </message>
     <message>
-        <source>Drag here to add a Version</source>
-        <translation>拖到这里，新建版本</translation>
+        <source>Drag here to apply this preset</source>
+        <translation>拖到这里，使用该预设</translation>
     </message>
     <message>
-        <source>Release to add a Version</source>
-        <translation>松开即新建版本</translation>
+        <source>Release to apply this preset</source>
+        <translation>松开即使用该预设</translation>
+    </message>
+    <message>
+        <source>Export Version...</source>
+        <translation>导出版本…</translation>
     </message>
 </context>
 <context>

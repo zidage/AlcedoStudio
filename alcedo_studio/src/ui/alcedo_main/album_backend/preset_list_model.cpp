@@ -4,26 +4,10 @@
 
 #include "ui/alcedo_main/album_backend/preset_list_model.hpp"
 
-#include <QStringList>
 #include <algorithm>
 #include <numeric>
 
-#include "app/adjustment_transfer_catalog.hpp"
-
 namespace alcedo::ui {
-
-auto PresetPackageSummaryText(const alcedo::AdjustmentTransferPackage& package) -> QString {
-  QStringList lines;
-  for (const auto& node : alcedo::SummarizeTransferPackage(package)) {
-    QStringList items;
-    for (const auto& item : node.item_names) {
-      items.push_back(QString::fromStdString(item));
-    }
-    lines.push_back(QString::fromStdString(node.display_name) + QStringLiteral(": ") +
-                    items.join(QStringLiteral(", ")));
-  }
-  return lines.join(QLatin1Char('\n'));
-}
 
 PresetListModel::PresetListModel(alcedo::PresetLibraryService* library, QObject* parent)
     : QAbstractListModel(parent), library_(library) {
@@ -87,23 +71,14 @@ auto PresetListModel::data(const QModelIndex& index, int role) const -> QVariant
       return QString::fromStdString(entry->reason);
     case FingerprintRole:
       return QString::fromStdString(entry->fingerprint);
-    case SummaryRole: {
-      if (!entry->available) {
-        return QString::fromStdString(entry->reason);
-      }
-      const auto package = library_->PackageFor(entry->id);
-      return package.Ok() ? PresetPackageSummaryText(*package.package)
-                          : QString::fromStdString(package.message);
-    }
     default:
       return {};
   }
 }
 
 auto PresetListModel::roleNames() const -> QHash<int, QByteArray> {
-  return {{PresetIdRole, "presetId"},      {NameRole, "name"},     {GroupRole, "group"},
-          {AvailableRole, "available"},    {ReasonRole, "reason"}, {SummaryRole, "summary"},
-          {FingerprintRole, "fingerprint"}};
+  return {{PresetIdRole, "presetId"},   {NameRole, "name"},     {GroupRole, "group"},
+          {AvailableRole, "available"}, {ReasonRole, "reason"}, {FingerprintRole, "fingerprint"}};
 }
 
 auto PresetListModel::rowOfPreset(const QString& presetId) const -> int {
