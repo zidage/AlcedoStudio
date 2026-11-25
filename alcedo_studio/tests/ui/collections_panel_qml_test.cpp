@@ -163,6 +163,17 @@ class FakeFolderController final : public QObject {
     emit ArrivedVolumeChanged();
   }
 
+  /// FolderController::TakeArrivedVolume: closes the card; true while the volume of the card is
+  /// at its mount point (arrived_volume_present).
+  Q_INVOKABLE bool TakeArrivedVolume() {
+    calls << QStringLiteral("TakeArrivedVolume");
+    arrived_volume_.clear();
+    emit ArrivedVolumeChanged();
+    return arrived_volume_present;
+  }
+
+  bool arrived_volume_present = true;
+
   Q_INVOKABLE uint CreateFolderIn(uint parentFolderUiId, const QString& name) {
     const uint parent = ElementOf(parentFolderUiId);
     calls << QStringLiteral("CreateFolderIn:%1:%2").arg(parent).arg(name);
@@ -1732,7 +1743,7 @@ TEST(CollectionsPanelQmlTest, VolumeCardOpensTheImportFolderSteps) {
   const QString dcim = QUrl::fromLocalFile(dir.path() + QStringLiteral("/DCIM")).toString();
   EXPECT_EQ(h.window->property("lastImportSignal").toString(), QStringLiteral("folder:import"));
   EXPECT_EQ(h.window->property("lastImportFolderUrl").toString(), dcim);
-  EXPECT_TRUE(h.fake.calls.contains(QStringLiteral("DismissArrivedVolume")));
+  EXPECT_TRUE(h.fake.calls.contains(QStringLiteral("TakeArrivedVolume")));
   EXPECT_TRUE(WaitUntil([&] { return card() == nullptr; }));
   auto* dialog = FlowDialog(h);
   ASSERT_NE(dialog, nullptr);
@@ -1754,6 +1765,19 @@ TEST(CollectionsPanelQmlTest, VolumeCardOpensTheImportFolderSteps) {
             QUrl::fromLocalFile(dir.path()).toString());
   ASSERT_TRUE(QMetaObject::invokeMethod(folder_dialog, "reject"));
   ProcessEvents(40);
+
+  // #1087: the volume of the card is gone or was replaced; the button closes the card and opens
+  // no step.
+  h.window->setProperty("lastImportSignal", QString());
+  h.fake.arrived_volume_present = false;
+  h.fake.SetArrivedVolume(QStringLiteral("SanDisk"), dir.path(), true);
+  ASSERT_TRUE(WaitUntil([&] { return card() != nullptr && card()->height() > 0.0; }));
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      FindItem(card(), QStringLiteral("collectionsVolumeCardImport")), "clicked"));
+  ProcessEvents(60);
+  EXPECT_TRUE(WaitUntil([&] { return card() == nullptr; }));
+  EXPECT_TRUE(h.window->property("lastImportSignal").toString().isEmpty());
+  EXPECT_FALSE(dialog->property("opened").toBool());
 }
 
 // Issue #1078: the destination tree lists Library and the ordinary collections. A search keeps

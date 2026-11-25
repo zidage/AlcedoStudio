@@ -594,17 +594,22 @@ TEST_F(MountServiceTest, VolumeNameIsStoredAndStaysWhileTheVolumeIsOffline) {
   EXPECT_EQ(summary_of().reachability, MountReachability::kNotScanned);
   EXPECT_TRUE(summary_of().volume_mount_point.empty());
 
-  ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
-            MountScanStatus::kComplete);
+  const auto first = service.ScanMount({.mount_id = mount_id, .importer = import_.get()});
+  ASSERT_EQ(first.status, MountScanStatus::kComplete);
+  EXPECT_FALSE(first.volume_name_updated);
   EXPECT_EQ(summary_of().reachability, MountReachability::kOnline);
   EXPECT_EQ(summary_of().volume_mount_point, disk_);
   EXPECT_EQ(summary_of().record.volume_name, "EOS_DIGITAL");
 
-  // The user renamed the volume.
-  label.name = "Trip Card";
-  ASSERT_EQ(service.ScanMount({.mount_id = mount_id, .importer = import_.get()}).status,
-            MountScanStatus::kComplete);
+  // The user renamed the volume. #1088: the result reports the stored name, so the project file
+  // is saved.
+  label.name           = "Trip Card";
+  const auto renamed   = service.ScanMount({.mount_id = mount_id, .importer = import_.get()});
+  ASSERT_EQ(renamed.status, MountScanStatus::kComplete);
+  EXPECT_TRUE(renamed.volume_name_updated);
   EXPECT_EQ(MountOf(mount_id).volume_name, "Trip Card");
+  const auto unchanged = service.ScanMount({.mount_id = mount_id, .importer = import_.get()});
+  EXPECT_FALSE(unchanged.volume_name_updated);
 
   // The volume is unplugged: the scan does not read the label, and the name stays.
   const int reads_before_offline = label_reads;
