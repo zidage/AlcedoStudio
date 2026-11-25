@@ -29,6 +29,11 @@ struct LensInputMeta {
   float       distance_m_        = 0.0f;
   float       focal_35mm_mm_     = 0.0f;
   float       crop_factor_hint_  = 0.0f;
+  /// True when @c lens_maker_ and @c lens_model_ are a catalog selection, which names a Lensfun
+  /// profile exactly. The search then accepts a profile of any mount: the selection names the lens
+  /// on the camera, for example an adapted lens. False for the RAW lens name, which matches only
+  /// profiles whose mount fits the camera.
+  bool        lens_selected_     = false;
 };
 
 /**
@@ -99,7 +104,8 @@ class LensCalibrationResolver {
    *
    * Uses the prepared RAW camera, lens, focal length, aperture, and focus distance. A non-empty
    * @c DevelopPayload::lens_maker or @c lens_model is a user catalog selection and replaces the
-   * RAW lens name. The result is sized for @p extent.
+   * RAW lens name; a selected profile of another mount than the camera applies too
+   * (@ref LensInputMeta::lens_selected_). The result is sized for @p extent.
    *
    * A disabled setting, missing lens identity, missing or unloadable Lensfun database, unknown
    * lens, or profile with no requested correction returns @c std::nullopt. Lens correction is
@@ -141,15 +147,16 @@ class LensCalibrationResolver {
   static void               PreloadDatabase(const std::filesystem::path& database_path);
 
   /**
-   * @brief Profile of the built-in lens of the camera in @p meta.
+   * @brief Profile that @ref ResolveProfile matches for the lens and camera in @p meta.
    *
-   * Uses the camera maker and model, and the focal length and aperture to order several profiles
-   * on the camera mount. Returns @c std::nullopt for a camera with interchangeable lenses, a
-   * camera that the database does not list, or a database that does not load. Loads the database
-   * named by @p database_path on first use, as @ref ResolveProfile does.
+   * This is the profile of Lens Calibration Auto: the lens name decides, and a fixed-lens camera
+   * without a matching lens name gets the profile of its built-in lens. The focal length and
+   * aperture order profiles with equal match scores. Returns @c std::nullopt when no profile
+   * matches or the database does not load. Loads the database named by @p database_path on first
+   * use, as @ref ResolveProfile does.
    */
-  [[nodiscard]] static auto FixedLensProfile(const LensInputMeta&         meta,
-                                             const std::filesystem::path& database_path)
+  [[nodiscard]] static auto ShotLensProfile(const LensInputMeta&         meta,
+                                            const std::filesystem::path& database_path)
       -> std::optional<LensProfileName>;
 
   /// First existing Lensfun database directory of the default search, or an empty path.

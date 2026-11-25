@@ -5,7 +5,7 @@ import QtTest
 // LensCatalogPicker standalone: two-tier searchable menu against an inline
 // fixture catalog (mix of interchangeable lenses and a fixed-lens camera).
 // Verifies fold behavior, normalized fuzzy matching ("70-200" → "…70200mm…"),
-// multi-token queries, brand filtering, pick signals, detection mapping, and
+// multi-token queries, brand filtering, pick signals, Auto profile row, and
 // revealDetected() filter clearing.
 Item {
     id: outer
@@ -189,36 +189,38 @@ Item {
                 compare(pickSpy.signalArguments[0][1], "Nikkor Z 70-200mm f/2.8 VR S")
             }
 
-            function test_detectedEntryFromExifIdentity() {
-                const p = reload({ exifLensMake: "Canon",
-                                   exifLensModel: "Canon EF 70-200mm f/2.8L IS II USM" })
+            function test_detectedEntryFromAutoProfile() {
+                const p = reload({ autoLensMake: "Canon",
+                                   autoLensModel: "Canon EF 70-200mm f/2.8L IS II USM" })
                 verify(p.detectionAvailable)
                 compare(p.detectedEntry.brand, "Canon")
                 compare(p.detectedEntry.value, "Canon EF 70-200mm f/2.8L IS II USM")
             }
 
-            function test_detectionFallsBackToContainment() {
-                // Real EXIF LensModel strings often omit the maker prefix.
-                const p = reload({ exifLensMake: "Nikon",
-                                   exifLensModel: "Z 70-200mm f/2.8 VR S" })
-                verify(p.detectionAvailable)
-                compare(p.detectedEntry.brand, "Nikon")
-                compare(p.detectedEntry.value, "Nikkor Z 70-200mm f/2.8 VR S")
+            function test_detectionNeedsTheExactProfileRow() {
+                // Text that only resembles a row selects no row: the render
+                // would not use that lens.
+                const partial = reload({ autoLensMake: "Nikon",
+                                         autoLensModel: "Z 70-200mm f/2.8 VR S" })
+                verify(!partial.detectionAvailable)
+                const otherBrand = reload({ autoLensMake: "Sony",
+                                            autoLensModel: "Nikkor Z 70-200mm f/2.8 VR S" })
+                verify(!otherBrand.detectionAvailable)
             }
 
             function test_detectionFailureMeansNull() {
-                const p = reload({ exifLensMake: "Acme",
-                                   exifLensModel: "Acme Mystery Lens 9000" })
+                const p = reload({ autoLensMake: "Acme",
+                                   autoLensModel: "Acme Mystery Lens 9000" })
                 verify(!p.detectionAvailable)
                 compare(p.detectedEntry, null)
                 // Missing EXIF model entirely: still no detection.
-                const p2 = reload({ exifLensMake: "Canon", exifLensModel: "" })
+                const p2 = reload({ autoLensMake: "Canon", autoLensModel: "" })
                 verify(!p2.detectionAvailable)
             }
 
             function test_revealDetectedClearsFiltersAndHighlights() {
-                const p = reload({ exifLensMake: "Canon",
-                                   exifLensModel: "Canon EF 70-200mm f/2.8L IS II USM" })
+                const p = reload({ autoLensMake: "Canon",
+                                   autoLensModel: "Canon EF 70-200mm f/2.8L IS II USM" })
                 p.brandFilter = "Nikon"
                 p.brandQuery = "nik"
                 p.lensQuery = "nikkor"

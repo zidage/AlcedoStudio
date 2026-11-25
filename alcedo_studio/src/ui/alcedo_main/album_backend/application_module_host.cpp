@@ -606,19 +606,20 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     } catch (const std::exception&) {
       return {};
     }
-    // A fixed-lens camera (GFX100RF, Ricoh GR III) writes no lens name. Lens Correction then uses
-    // the profile of the built-in lens (#960), so Auto names that profile too.
-    if (display.lens_model.empty() && !display.camera_model.empty()) {
-      alcedo::LensInputMeta meta;
-      meta.cam_maker_         = display.camera_make;
-      meta.cam_model_         = display.camera_model;
-      meta.focal_length_mm_   = display.focal_mm.value_or(0.0f);
-      meta.aperture_f_number_ = display.aperture.value_or(0.0f);
-      if (const auto profile = alcedo::LensCalibrationResolver::FixedLensProfile(
-              meta, alcedo::DevelopPayload{}.lens_profile_db_path)) {
-        display.lens_make  = profile->maker_;
-        display.lens_model = profile->model_;
-      }
+    // Auto names the profile that Lens Correction matches for the image lens, so enabling the
+    // correction with Auto checked writes the lens that the render already uses. A fixed-lens
+    // camera without a lens name gets its built-in lens profile (#960).
+    alcedo::LensInputMeta meta;
+    meta.cam_maker_         = display.camera_make;
+    meta.cam_model_         = display.camera_model;
+    meta.lens_maker_        = display.lens_make;
+    meta.lens_model_        = display.lens_model;
+    meta.focal_length_mm_   = display.focal_mm.value_or(0.0f);
+    meta.aperture_f_number_ = display.aperture.value_or(0.0f);
+    if (const auto profile = alcedo::LensCalibrationResolver::ShotLensProfile(
+            meta, alcedo::DevelopPayload{}.lens_profile_db_path)) {
+      display.auto_lens_make  = profile->maker_;
+      display.auto_lens_model = profile->model_;
     }
     return display;
   });

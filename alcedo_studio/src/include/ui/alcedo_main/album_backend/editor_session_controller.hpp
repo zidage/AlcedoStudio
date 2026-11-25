@@ -121,10 +121,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_PROPERTY(QString exifIsoText READ exif_iso_text NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifApertureText READ exif_aperture_text NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifFocalText READ exif_focal_text NOTIFY ImageExifChanged)
-  /// RAW lens identity for the Lens Calibration auto-detect control. Empty when
-  /// the image EXIF carries no lens maker/model. Same lifetime as exifLineText.
-  Q_PROPERTY(QString exifLensMake READ exif_lens_make NOTIFY ImageExifChanged)
-  Q_PROPERTY(QString exifLensModel READ exif_lens_model NOTIFY ImageExifChanged)
+  /// Lensfun profile that Lens Calibration Auto uses for the image, for the auto-detect control.
+  /// Empty when no profile matches the image lens. Same lifetime as exifLineText.
+  Q_PROPERTY(QString autoLensMake READ auto_lens_make NOTIFY ImageExifChanged)
+  Q_PROPERTY(QString autoLensModel READ auto_lens_model NOTIFY ImageExifChanged)
   /// Camera identity of the image RAW color context, for the DCP match of the Camera Profile
   /// section. Empty for an image without one (a raster image). Same lifetime as exifLineText.
   Q_PROPERTY(QString cameraMake READ camera_make NOTIFY ImageExifChanged)
@@ -225,8 +225,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString    exif_iso_text() const { return exif_iso_text_; }
   [[nodiscard]] QString    exif_aperture_text() const { return exif_aperture_text_; }
   [[nodiscard]] QString    exif_focal_text() const { return exif_focal_text_; }
-  [[nodiscard]] QString    exif_lens_make() const { return exif_lens_make_; }
-  [[nodiscard]] QString    exif_lens_model() const { return exif_lens_model_; }
+  [[nodiscard]] QString    auto_lens_make() const { return auto_lens_make_; }
+  [[nodiscard]] QString    auto_lens_model() const { return auto_lens_model_; }
   [[nodiscard]] QString    camera_make() const { return camera_make_; }
   [[nodiscard]] QString    camera_model() const { return camera_model_; }
   [[nodiscard]] QString    image_file_name() const { return image_file_name_; }
@@ -664,11 +664,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                 exif_iso_text_      = QString::fromUtf8("\xE2\x80\x94");
   QString                 exif_aperture_text_ = QString::fromUtf8("\xE2\x80\x94");
   QString                 exif_focal_text_    = QString::fromUtf8("\xE2\x80\x94");
-  QString                 exif_lens_make_;
+  QString                 auto_lens_make_;
   /// The last published AI Denoise error, for the change signal of the property.
   QVariantMap             ai_denoise_error_;
   QVariantMap             render_progress_;
-  QString                 exif_lens_model_;
+  QString                 auto_lens_model_;
   QString                 camera_make_;
   QString                 camera_model_;
   QString                 image_file_name_;

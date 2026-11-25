@@ -46,11 +46,15 @@ struct EditorImageExifDisplay {
   std::optional<std::uint64_t>       iso;
   std::optional<float>               aperture;
   std::optional<float>               focal_mm;
-  /// RAW lens identity used by the Lens Calibration auto-detect control.
-  /// These are not header tokens; empty means the EXIF field is missing. For a fixed-lens camera
-  /// without a lens name, the editor host fills in the Lensfun profile of the built-in lens.
+  /// RAW lens identity of the image metadata. These are not header tokens; empty means the EXIF
+  /// field is missing.
   std::string                        lens_make;
   std::string                        lens_model;
+  /// Lensfun profile that Lens Calibration Auto uses for the image (the profile that
+  /// `LensCalibrationResolver::ShotLensProfile` names for the lens and camera identity), for the
+  /// auto-detect control. The editor host fills it in; empty when no profile matches.
+  std::string                        auto_lens_make;
+  std::string                        auto_lens_model;
   /// Camera identity of the image RAW color context (`RawRuntimeColorContext::camera_make_` and
   /// `camera_model_`, the import values that the image root also records). The Camera Profile
   /// section matches DCP files with it (dcp_camera_profile_plan.md, section 2.4). For a DNG
