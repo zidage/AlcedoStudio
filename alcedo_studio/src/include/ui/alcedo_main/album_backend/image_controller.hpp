@@ -54,6 +54,10 @@ class ImageController final : public QObject {
     int                          failed_count_  = 0;
     std::vector<sl_element_id_t> deleted_element_ids_{};
     std::vector<sl_element_id_t> failed_element_ids_{};
+    /// The mounted photos that stay in the library; not in failed_element_ids_ (#1135).
+    std::vector<sl_element_id_t> kept_mounted_element_ids_{};
+    /// The photos left out of the delete because a running task locks them (#1135).
+    std::vector<sl_element_id_t> locked_element_ids_{};
     QString                      message_{};
     /// Set when the sleeve service refused the delete; nothing was deleted.
     std::optional<SleeveError>   refusal_{};
@@ -253,14 +257,17 @@ class ImageController final : public QObject {
 
   // A validated delete: the targets with the ids that the library rows supply, and the scope.
   struct DeleteBatch {
-    sl_element_id_t           folder_id_           = 0;
-    bool                      delete_from_library_ = false;
-    std::vector<DeleteTarget> targets_{};
+    sl_element_id_t              folder_id_           = 0;
+    bool                         delete_from_library_ = false;
+    std::vector<DeleteTarget>    targets_{};
+    /// The requested photos that a running task locks; they are not in targets_.
+    std::vector<sl_element_id_t> locked_element_ids_{};
   };
 
   // What the delete job wrote. Produced on the thread that runs the job.
   struct DeleteBatchOutcome {
     std::vector<sl_element_id_t> deleted_element_ids_{};
+    std::vector<sl_element_id_t> kept_mounted_element_ids_{};
     bool                         save_ok_ = true;
     std::optional<SleeveError>   refusal_{};
   };

@@ -71,6 +71,9 @@ struct AlbumDeleteResult {
   std::vector<AlbumFileView>         deleted_files_{};
   std::vector<std::filesystem::path> failed_paths_{};
   std::vector<sl_element_id_t>       failed_element_ids_{};
+  /// A delete from the library: the mounted photos of the request. They stay in the library,
+  /// and the other photos of the request are deleted (#1135).
+  std::vector<sl_element_id_t>       kept_mounted_element_ids_{};
   /// Set when SleeveServiceImpl refused the request (Mounted Folder Plan, MF5). The refused
   /// request changed nothing; each of its ids is in failed_element_ids_.
   std::optional<SleeveError>         refusal_{};

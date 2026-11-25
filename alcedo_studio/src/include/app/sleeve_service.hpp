@@ -32,6 +32,13 @@ struct SyncResult {
   std::string message_         = "";
 };
 
+/// What SleeveServiceImpl::DeleteFilesEverywhereKeepingMounted deleted and kept.
+struct LibraryRemoval {
+  std::vector<std::shared_ptr<SleeveFile>> deleted_files_{};
+  /// The live mounted files of the request, in its order. They stay in the library.
+  std::vector<sl_element_id_t>             kept_mounted_ids_{};
+};
+
 class SleeveService {
  public:
   virtual ~SleeveService() = default;
@@ -141,8 +148,13 @@ class SleeveServiceImpl final : public SleeveService {
                              sl_element_id_t                  folder_id)
       -> std::pair<std::vector<std::shared_ptr<SleeveFile>>, SyncResult>;
   auto DeleteFileEverywhere(sl_element_id_t file_id) -> SyncResult;
+  /// Refuses the whole request when one live file of @p file_ids is mounted.
   auto DeleteFilesEverywhere(std::span<const sl_element_id_t> file_ids)
       -> std::pair<std::vector<std::shared_ptr<SleeveFile>>, SyncResult>;
+  /// Deletes the ordinary files of @p file_ids from the library; the mounted files stay
+  /// (#1135). Throws like DeleteFilesEverywhere when every id names a mounted file.
+  auto DeleteFilesEverywhereKeepingMounted(std::span<const sl_element_id_t> file_ids)
+      -> std::pair<LibraryRemoval, SyncResult>;
   auto DuplicateFileToFolder(sl_element_id_t file_id, sl_element_id_t folder_id)
       -> std::pair<std::shared_ptr<SleeveFile>, SyncResult>;
   auto DeletePath(const std::filesystem::path& target_path) -> SyncResult;

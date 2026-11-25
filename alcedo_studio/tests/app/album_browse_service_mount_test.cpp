@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -80,16 +81,14 @@ class AlbumBrowseServiceMountTest : public ::testing::Test {
 };
 
 TEST_F(AlbumBrowseServiceMountTest, DeleteOfAPresentMountedPhotoIsRefused) {
-  const auto root_before = EntryIds(L"/");
-  const auto trip_before = EntryIds(L"/Trip");
+  const auto root_before  = EntryIds(L"/");
+  const auto trip_before  = EntryIds(L"/Trip");
 
   // Remove from Library (folder 0) of a mounted photo whose file is present.
-  const auto from_library =
-      Browse().DeleteFilesInFolderByElementIds(0, {ordinary_file_id_, mounted_file_id_});
+  const auto from_library = Browse().DeleteFilesInFolderByElementIds(0, {mounted_file_id_});
   EXPECT_EQ(from_library.refusal_, SleeveError::kMountedPhotoIsPresent);
   EXPECT_TRUE(from_library.deleted_files_.empty());
-  EXPECT_EQ(from_library.failed_element_ids_,
-            (std::vector<sl_element_id_t>{ordinary_file_id_, mounted_file_id_}));
+  EXPECT_EQ(from_library.failed_element_ids_, std::vector<sl_element_id_t>{mounted_file_id_});
   EXPECT_EQ(Browse().DeleteFilesByElementIds({mounted_file_id_}).refusal_,
             SleeveError::kMountedPhotoIsPresent);
 
@@ -100,6 +99,25 @@ TEST_F(AlbumBrowseServiceMountTest, DeleteOfAPresentMountedPhotoIsRefused) {
   EXPECT_TRUE(from_mount.deleted_files_.empty());
 
   EXPECT_EQ(EntryIds(L"/"), root_before);
+  EXPECT_EQ(EntryIds(L"/Trip"), trip_before);
+}
+
+// #1135: a delete from the library of ordinary and mounted photos deletes the ordinary photos;
+// the mounted photos stay, and they are not failures.
+TEST_F(AlbumBrowseServiceMountTest, DeleteFromLibraryKeepsTheMountedPhotosOfTheRequest) {
+  const auto trip_before = EntryIds(L"/Trip");
+
+  const auto result =
+      Browse().DeleteFilesInFolderByElementIds(0, {ordinary_file_id_, mounted_file_id_});
+  EXPECT_FALSE(result.refusal_.has_value());
+  ASSERT_EQ(result.deleted_files_.size(), 1u);
+  EXPECT_EQ(result.deleted_files_.front().element_id_, ordinary_file_id_);
+  EXPECT_EQ(result.kept_mounted_element_ids_, std::vector<sl_element_id_t>{mounted_file_id_});
+  EXPECT_TRUE(result.failed_element_ids_.empty());
+
+  const auto root_after = EntryIds(L"/");
+  EXPECT_EQ(std::count(root_after.begin(), root_after.end(), ordinary_file_id_), 0);
+  EXPECT_EQ(std::count(root_after.begin(), root_after.end(), mounted_file_id_), 1);
   EXPECT_EQ(EntryIds(L"/Trip"), trip_before);
 }
 

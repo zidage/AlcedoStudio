@@ -219,8 +219,17 @@ void AnswerDelete(AutomationCommandWait* wait, const QVariantMap& result) {
   }
   const QJsonArray failed =
       QJsonArray::fromVariantList(result.value(QStringLiteral("failedElementIds")).toList());
-  wait->SendResult(
-      QJsonObject{{"deleted_ids", deleted}, {"failed_ids", failed}, {"message", message}});
+  // The photos that the delete left out (#1135): the mounted photos of a delete from the
+  // project, and the photos that a running task holds.
+  QJsonArray skipped =
+      QJsonArray::fromVariantList(result.value(QStringLiteral("keptMountedElementIds")).toList());
+  for (const QVariant& id : result.value(QStringLiteral("lockedElementIds")).toList()) {
+    skipped.push_back(QJsonValue::fromVariant(id));
+  }
+  wait->SendResult(QJsonObject{{"deleted_ids", deleted},
+                               {"failed_ids", failed},
+                               {"skipped_ids", skipped},
+                               {"message", message}});
 }
 
 /// Answers the library.thumbnails request of @p batch with every item.
@@ -1457,9 +1466,11 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   remove.description = QStringLiteral(
       "Deletes 'element_ids'. With scope 'project' the photos leave the project; this needs the "
       "root folder as the current folder. With scope 'album' they leave the current album. "
-      "Answers -32002 (rejected) while a task holds the photos: a mark, rating, or paste "
-      "adjustments batch that is saving, or another delete. Send it again after tasks.wait. "
-      "A delete that the mounted folder rules refuse answers -32002 with data.error "
+      "A photo that a task holds (a mark, rating, or paste adjustments batch that is saving) "
+      "and a mounted photo in a delete from the project stay; 'skipped_ids' lists them, and the "
+      "other photos are deleted. Answers -32002 (rejected) when a task holds every photo or "
+      "another delete runs. Send it again after tasks.wait. A delete that the mounted folder "
+      "rules refuse for every photo answers -32002 with data.error "
       "'mounted_folder_structure_is_read_only', 'mounted_photo_is_present', or "
       "'mounted_photo_is_missing'; the Delete mark stays available. Other start failures answer "
       "-32007 (failed).");
@@ -1471,8 +1482,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
       QJsonArray{"element_ids", "scope"});
   remove.result_schema =
       AutomationObjectSchema(QJsonObject{{"deleted_ids", QJsonObject{{"type", "array"}}},
-                                         {"failed_ids", QJsonObject{{"type", "array"}}}},
-                             QJsonArray{"deleted_ids", "failed_ids"});
+                                         {"failed_ids", QJsonObject{{"type", "array"}}},
+                                         {"skipped_ids", QJsonObject{{"type", "array"}}}},
+                             QJsonArray{"deleted_ids", "failed_ids", "skipped_ids"});
   remove.handler = [host](const QJsonObject& params, AutomationReply reply) {
     const auto project = AutomationEnteredProject(host, reply);
     if (!project) {

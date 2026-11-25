@@ -46,6 +46,50 @@ auto IsRootFolderPath(const std::filesystem::path& path) -> bool {
   return normalized.empty() || !normalized.has_relative_path();
 }
 
+/// Appends the files of @p files that have an image to out.deleted_files_.
+void AppendFileViews(const std::vector<std::shared_ptr<SleeveFile>>& files,
+                     sl_element_id_t folder_id, AlbumDeleteResult& out) {
+  out.deleted_files_.reserve(out.deleted_files_.size() + files.size());
+  for (const auto& file : files) {
+    if (file && file->image_id_ != 0) {
+      out.deleted_files_.push_back(BuildFileView({}, file, folder_id));
+    }
+  }
+}
+
+/// Puts each id of @p requested_ids that the request neither deleted nor kept as a mounted
+/// photo into out.failed_element_ids_.
+void CollectFailedIds(const std::vector<sl_element_id_t>& requested_ids, AlbumDeleteResult& out) {
+  std::unordered_set<sl_element_id_t> done_ids;
+  done_ids.reserve((out.deleted_files_.size() + out.kept_mounted_element_ids_.size()) * 2 + 1);
+  for (const auto& file : out.deleted_files_) {
+    done_ids.insert(file.element_id_);
+  }
+  done_ids.insert(out.kept_mounted_element_ids_.begin(), out.kept_mounted_element_ids_.end());
+  for (const auto element_id : requested_ids) {
+    if (!done_ids.contains(element_id)) {
+      out.failed_element_ids_.push_back(element_id);
+    }
+  }
+}
+
+/// Deletes @p delete_ids from the library. The mounted photos of the request stay, and the
+/// others are deleted (#1135); a request of only mounted photos is refused.
+void DeleteFromLibrary(SleeveServiceImpl& sleeve, const std::vector<sl_element_id_t>& delete_ids,
+                       AlbumDeleteResult& out) {
+  try {
+    auto [removal, sync] = sleeve.DeleteFilesEverywhereKeepingMounted(delete_ids);
+    if (sync.success_) {
+      AppendFileViews(removal.deleted_files_, 0, out);
+      out.kept_mounted_element_ids_ = std::move(removal.kept_mounted_ids_);
+    }
+  } catch (const SleeveOperationError& e) {
+    out.refusal_ = e.Code();
+  } catch (...) {
+  }
+  CollectFailedIds(delete_ids, out);
+}
+
 }  // namespace
 
 auto AlbumBrowseService::ListFolders(const std::filesystem::path& folder_path) const
@@ -428,31 +472,7 @@ auto AlbumBrowseService::DeleteFilesByElementIds(const std::vector<sl_element_id
     delete_ids.push_back(element_id);
   }
 
-  try {
-    auto [deleted_files, sync] = sleeve_service_->DeleteFilesEverywhere(delete_ids);
-    if (sync.success_) {
-      out.deleted_files_.reserve(deleted_files.size());
-      for (const auto& file : deleted_files) {
-        if (file && file->image_id_ != 0) {
-          out.deleted_files_.push_back(BuildFileView({}, file, 0));
-        }
-      }
-    }
-  } catch (const SleeveOperationError& e) {
-    out.refusal_ = e.Code();
-  } catch (...) {
-  }
-
-  std::unordered_set<sl_element_id_t> deleted_ids;
-  deleted_ids.reserve(out.deleted_files_.size() * 2 + 1);
-  for (const auto& file : out.deleted_files_) {
-    deleted_ids.insert(file.element_id_);
-  }
-  for (const auto element_id : delete_ids) {
-    if (!deleted_ids.contains(element_id)) {
-      out.failed_element_ids_.push_back(element_id);
-    }
-  }
+  DeleteFromLibrary(*sleeve_service_, delete_ids, out);
 
   if (filter_service_ && !out.deleted_files_.empty()) {
     filter_service_->InvalidateResultCache();
@@ -481,32 +501,19 @@ auto AlbumBrowseService::DeleteFilesInFolderByElementIds(
     delete_ids.push_back(element_id);
   }
 
-  try {
-    auto [deleted_files, sync] =
-        folder_id == 0 ? sleeve_service_->DeleteFilesEverywhere(delete_ids)
-                       : sleeve_service_->DeleteFilesFromFolder(delete_ids, folder_id);
-    if (sync.success_) {
-      out.deleted_files_.reserve(deleted_files.size());
-      for (const auto& file : deleted_files) {
-        if (file && file->image_id_ != 0) {
-          out.deleted_files_.push_back(BuildFileView({}, file, folder_id));
-        }
+  if (folder_id == 0) {
+    DeleteFromLibrary(*sleeve_service_, delete_ids, out);
+  } else {
+    try {
+      auto [deleted_files, sync] = sleeve_service_->DeleteFilesFromFolder(delete_ids, folder_id);
+      if (sync.success_) {
+        AppendFileViews(deleted_files, folder_id, out);
       }
+    } catch (const SleeveOperationError& e) {
+      out.refusal_ = e.Code();
+    } catch (...) {
     }
-  } catch (const SleeveOperationError& e) {
-    out.refusal_ = e.Code();
-  } catch (...) {
-  }
-
-  std::unordered_set<sl_element_id_t> deleted_ids;
-  deleted_ids.reserve(out.deleted_files_.size() * 2 + 1);
-  for (const auto& file : out.deleted_files_) {
-    deleted_ids.insert(file.element_id_);
-  }
-  for (const auto element_id : delete_ids) {
-    if (!deleted_ids.contains(element_id)) {
-      out.failed_element_ids_.push_back(element_id);
-    }
+    CollectFailedIds(delete_ids, out);
   }
 
   if (filter_service_ && !out.deleted_files_.empty()) {
