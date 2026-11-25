@@ -66,6 +66,14 @@ void RequireExactObjectKeys(const nlohmann::json& j, std::initializer_list<const
   }
 }
 
+/// Throw unless @p json is a pipeline edit batch that PipelineEditBatch accepts.
+void RequirePipelineEditBatch(const nlohmann::json& json) {
+  if (!IsPipelineEditBatchJson(json)) {
+    throw std::runtime_error("EditCommit: payload must be a pipeline edit batch");
+  }
+  (void)PipelineEditBatch::FromJSON(json);
+}
+
 auto WallClockNowNs() -> std::uint64_t {
   const auto now = std::chrono::system_clock::now().time_since_epoch();
   return static_cast<std::uint64_t>(
@@ -88,21 +96,53 @@ auto EditCommit::MakePipelineEditAtTimestamp(root_id_t root_id, head_commit_hash
                                             std::uint64_t created_at_ns,
                                             PipelineEditBatch payload) -> EditCommit {
   payload.Validate();
+  auto canonical = payload.CanonicalJSON();
+  RequirePipelineEditBatch(canonical);
   EditCommit commit;
   commit.root_id_           = root_id;
   commit.first_parent_hash_ = std::move(first_parent);
   commit.created_at_ns_     = created_at_ns;
-  commit.edit_payload_      = payload.CanonicalJSON();
-  commit.ValidateStructure();
+  commit.payload_           = ValidatedPayload(std::move(canonical));
   commit.FinalizeHash();
   return commit;
 }
 
+EditCommit::EditCommit() {
+  // A default commit is a placeholder with an empty object payload, which is not a batch.
+  static const auto empty_payload = ValidatedPayload(nlohmann::json::object());
+  payload_                        = empty_payload;
+}
+
+auto EditCommit::ValidatedPayload(nlohmann::json json) -> std::shared_ptr<const Payload> {
+  auto payload  = std::make_shared<Payload>();
+  payload->text = json.dump();
+  payload->json = std::move(json);
+  std::call_once(payload->parsed_once, [] {});
+  return payload;
+}
+
+auto EditCommit::GetPayloadJSON() const -> const nlohmann::json& {
+  const auto& payload = *payload_;
+  std::call_once(payload.parsed_once, [&payload] {
+    try {
+      auto json = nlohmann::json::parse(payload.text);
+      RequirePipelineEditBatch(json);
+      payload.json = std::move(json);
+    } catch (const std::exception& e) {
+      payload.parse_error = std::make_exception_ptr(
+          std::runtime_error(std::string("EditCommit: stored payload is invalid: ") + e.what()));
+    }
+  });
+  if (payload.parse_error) {
+    std::rethrow_exception(payload.parse_error);
+  }
+  return payload.json;
+}
+
 void EditCommit::ValidateStructure() const {
-  if (!IsPipelineEditBatchJson(edit_payload_)) {
+  if (!IsPipelineEditBatchJson(GetPayloadJSON())) {
     throw std::runtime_error("EditCommit: payload must be a pipeline edit batch");
   }
-  (void)PipelineEditBatch::FromJSON(edit_payload_);
 }
 
 auto EditCommit::CanonicalHashInput() const -> std::vector<std::uint8_t> {
@@ -114,7 +154,7 @@ auto EditCommit::CanonicalHashInput() const -> std::vector<std::uint8_t> {
   AppendOptionalHash(bytes, std::nullopt);  // empty second parent
   AppendU64LE(bytes, created_at_ns_);
   AppendU8(bytes, 0);  // fixed edit marker (0)
-  const std::string payload_text = edit_payload_.dump();
+  const auto& payload_text = payload_->text;
   AppendBytes(bytes, payload_text.data(), payload_text.size());
   return bytes;
 }
@@ -134,7 +174,7 @@ auto EditCommit::ToJSON() const -> nlohmann::json {
   j["second_parent_hash"] = std::string{};
   j["created_at_ns"]      = created_at_ns_;
   j["kind"]               = "edit";
-  j["edit_payload"]       = edit_payload_;
+  j["edit_payload"]       = GetPayloadJSON();
   return j;
 }
 
@@ -169,11 +209,28 @@ auto EditCommit::FromJSON(const nlohmann::json& j) -> EditCommit {
   commit.root_id_           = Hash128::FromString(j.at("root_id").get<std::string>());
   commit.first_parent_hash_ = HeadCommitHashFromStorage(j.at("first_parent_hash").get<std::string>());
   commit.created_at_ns_     = j.at("created_at_ns").get<std::uint64_t>();
-  commit.edit_payload_      = j.at("edit_payload");
+  const auto& payload_json  = j.at("edit_payload");
+  RequirePipelineEditBatch(payload_json);
+  commit.payload_ = ValidatedPayload(payload_json);
+  if (commit.ComputeCommitHash() != commit.commit_hash_) {
+    throw std::runtime_error("EditCommit: stored commit_hash does not match payload");
+  }
+  return commit;
+}
 
-  commit.ValidateStructure();
-  const auto expected = commit.ComputeCommitHash();
-  if (expected != commit.commit_hash_) {
+auto EditCommit::FromStoredRow(commit_hash_t commit_hash, root_id_t root_id,
+                               head_commit_hash_t first_parent, std::uint64_t created_at_ns,
+                               std::string payload_text) -> EditCommit {
+  auto payload  = std::make_shared<Payload>();
+  payload->text = std::move(payload_text);
+  EditCommit commit;
+  commit.commit_hash_       = commit_hash;
+  commit.root_id_           = root_id;
+  commit.first_parent_hash_ = std::move(first_parent);
+  commit.created_at_ns_     = created_at_ns;
+  commit.payload_           = std::move(payload);
+  // The stored text is the hash input, so a changed byte of any field fails here.
+  if (commit.ComputeCommitHash() != commit.commit_hash_) {
     throw std::runtime_error("EditCommit: stored commit_hash does not match payload");
   }
   return commit;

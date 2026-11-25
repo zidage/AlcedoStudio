@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_set>
@@ -59,6 +60,37 @@ struct EncodedImageRoot {
 struct ImageHistorySnapshot {
   std::shared_ptr<const CommitGraph>     graph_;
   std::shared_ptr<const LoadedRootState> root_;
+};
+
+/// One image of PipelineMgmtService::LoadHistorySnapshots.
+struct ImageHistorySnapshotRead {
+  sl_element_id_t                     element_id = 0;
+  /// The stored history; empty when @ref error is set.
+  std::optional<ImageHistorySnapshot> snapshot;
+  /// Why the history of the image cannot be read; empty when it is read.
+  std::string                         error;
+};
+
+/**
+ * @brief The new history of one image, built off storage by
+ *        PipelineMgmtService::PrepareHistoryWrite for PersistHistoryWrites.
+ *
+ * Algorithm output that nothing else owns: the capture of the edited graph with the checkpoint of
+ * its replayed document, and the history it was edited from.
+ */
+struct PreparedHistoryWrite {
+  ImageHistorySnapshot              base;
+  CommitGraphMaterialization        materialization;
+  std::shared_ptr<PipelineDocument> document;
+};
+
+/// The result of one write of PipelineMgmtService::PersistHistoryWrites.
+struct HistoryWriteResult {
+  sl_element_id_t                              element_id = 0;
+  /// The published committed snapshot; null when @ref error is set.
+  std::shared_ptr<const PipelineGraphSnapshot> snapshot;
+  /// Why the history was not written; empty when it was.
+  std::string                                  error;
 };
 
 /**
@@ -181,6 +213,19 @@ class PipelineMgmtService final {
   [[nodiscard]] auto LoadHistorySnapshot(sl_element_id_t id) -> ImageHistorySnapshot;
 
   /**
+   * @brief @ref LoadHistorySnapshot for each of @p ids, with the storage queries shared by all.
+   *
+   * One storage session reads the histories and roots of all images; the roots decode after it.
+   * An image that cannot be read (held by the editor, no root, invalid rows) gets an error in its
+   * entry and does not stop the others. The entries follow the order of @p ids.
+   *
+   * Thread: any thread; storage reads run on the calling thread.
+   * @throws std::runtime_error when a storage query fails.
+   */
+  [[nodiscard]] auto LoadHistorySnapshots(std::span<const sl_element_id_t> ids)
+      -> std::vector<ImageHistorySnapshotRead>;
+
+  /**
    * @brief Persist @p graph, an edited copy of @p base, as the history of its image in one
    *        storage transaction, and publish its committed snapshot.
    *
@@ -199,6 +244,33 @@ class PipelineMgmtService final {
    */
   auto               PersistHistory(const ImageHistorySnapshot& base, const CommitGraph& graph)
       -> std::shared_ptr<const PipelineGraphSnapshot>;
+
+  /**
+   * @brief The build phase of @ref PersistHistory: replay the active Version of @p graph from the
+   *        root of @p base, validate the document, and capture the history with its checkpoint.
+   *
+   * Reads no storage and no service state, so several images prepare on several threads.
+   * @pre @p base came from @ref LoadHistorySnapshot for the same image as @p graph.
+   * @throws std::invalid_argument when @p base is empty; std::runtime_error when @p graph belongs
+   *         to another image or root, or when replay or validation fails.
+   */
+  [[nodiscard]] static auto PrepareHistoryWrite(const ImageHistorySnapshot& base,
+                                                const CommitGraph& graph) -> PreparedHistoryWrite;
+
+  /**
+   * @brief The write phase of @ref PersistHistory for several images in one storage transaction,
+   *        then the publication of each committed snapshot.
+   *
+   * An image that the editor holds, or whose stored history no longer equals the materialized
+   * state of its base, gets an error in its entry and is not written. A failed write of the
+   * transaction leaves storage unchanged and gives its error to every image of it. The entries
+   * follow the order of @p writes; the documents of @p writes move into the snapshots.
+   *
+   * Thread: any thread; storage writes run on the calling thread.
+   * @pre Each image appears in at most one write.
+   */
+  auto                      PersistHistoryWrites(std::span<PreparedHistoryWrite> writes)
+      -> std::vector<HistoryWriteResult>;
 
   /// Test/instrumentation: committed snapshots built from storage since construction.
   [[nodiscard]] auto CommittedSnapshotStorageLoadCount() const -> std::size_t {
