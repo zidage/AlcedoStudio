@@ -5,9 +5,10 @@ import QtQuick
 // WindowCaptionLayer.qml hosts them above every popup (issue 1140); macOS uses
 // the system traffic lights instead (see Main.qml nativeTrafficLightsEnabled).
 //
-// Each cell spans the band above the toolbar and the toolbar's height, so the
-// pointer can be thrown into the screen corner of a maximized window. The icons
-// sit on the toolbar's centre line. The close cell follows the window corner.
+// Each button paints a rounded tile as tall as the toolbar, with the icon on
+// the toolbar's centre line. Its press area is taller: it reaches the window's
+// top edge, and for close also the right edge, so the pointer can be thrown
+// into the screen corner of a maximized window.
 // CaptionButton stays a nested inline component — file-level inline
 // components are rejected by qmlcachegen (see InspectorPanel.qml).
 Row {
@@ -21,7 +22,10 @@ Row {
     // Edge strips left to the window resize handles: no press is taken there.
     property real inputTopInset: 0
     property real inputRightInset: 0
-    readonly property int buttonWidth: 46
+    // Gap between the close tile and the window's right edge, the same as the
+    // window margin around the toolbar.
+    property real edgeGap: appTheme.spaceMd
+    readonly property int buttonWidth: 42
     readonly property int iconSize: 10
     height: topBand + toolbarHeight
     spacing: 0
@@ -30,8 +34,8 @@ Row {
         id: capBtn
         property string iconName: "minimize"
         property bool danger: false
-        property real cornerRadius: 0
-        property real inputRightInset: 0
+        // Press area to the right of the tile (close reaches the window edge).
+        property real trailingInput: 0
         readonly property bool hovered: capMA.containsMouse
         readonly property bool pressed: capMA.pressed
         readonly property color hoverColor: root.theme ? root.theme.colHover : "#1A1A1A"
@@ -40,12 +44,15 @@ Row {
                                            ? "#FFFFFF"
                                            : (root.theme ? root.theme.colText : "#E0E0E0")
         signal activated()
-        width: root.buttonWidth
+        width: root.buttonWidth + capBtn.trailingInput
         height: root.height
 
         Rectangle {
-            anchors.fill: parent
-            topRightRadius: capBtn.cornerRadius
+            id: tile
+            y: root.topBand
+            width: root.buttonWidth
+            height: root.toolbarHeight
+            radius: root.theme ? root.theme.panelRadius : 10
             color: capBtn.pressed
                    ? (capBtn.danger ? Qt.darker(capBtn.dangerColor, 1.15)
                                     : Qt.lighter(capBtn.hoverColor, 1.3))
@@ -56,8 +63,8 @@ Row {
 
         Canvas {
             id: captionIcon
-            x: Math.round((capBtn.width - width) / 2)
-            y: Math.round(root.topBand + (root.toolbarHeight - height) / 2)
+            x: Math.round((tile.width - width) / 2)
+            y: Math.round(tile.y + (tile.height - height) / 2)
             width: root.iconSize
             height: root.iconSize
             antialiasing: true
@@ -108,7 +115,7 @@ Row {
             id: capMA
             anchors.fill: parent
             anchors.topMargin: root.inputTopInset
-            anchors.rightMargin: capBtn.inputRightInset
+            anchors.rightMargin: capBtn.trailingInput > 0 ? root.inputRightInset : 0
             hoverEnabled: true
             cursorShape: Qt.ArrowCursor
             onClicked: capBtn.activated()
@@ -129,8 +136,7 @@ Row {
         objectName: "windowCaptionClose"
         iconName: "close"
         danger: true
-        cornerRadius: root.host ? root.host.windowCornerRadius : 0
-        inputRightInset: root.inputRightInset
+        trailingInput: root.edgeGap
         onActivated: if (root.host) root.host.close()
     }
 }
