@@ -17,13 +17,15 @@ Item {
     property var applyPresetDialog: null
     property var deleteConfirmDialog: null
 
+    // The targets of Delete, set when Delete is picked in the image menu (resolveMenuTargets).
     property var pendingDeleteTargets: []
     property var pendingRatingTarget: ({})
-    // Every image the context menu acts on. A rating picked from the menu goes
-    // to all of them when more than one is selected.
-    property var pendingRatingTargets: []
     property var pendingAdjustmentSource: ({})
+    // The targets of Paste Adjustments, set when Paste is picked in the image menu.
     property var pendingAdjustmentPasteTargets: []
+    // The photo that the image menu was opened on. The menu reads the state of this photo only;
+    // a command resolves its targets when it runs (#1135).
+    property var menuClickedItem: ({})
     property var focusedImageTarget: ({})
     property var focusedImageInspection: ({ success: false, tiles: [] })
     // Where the shared image menu was last opened from ("library" |
@@ -53,20 +55,15 @@ Item {
                                     ? String(appModules.workspaceRouter.workspace || "library")
                                     : "library"
 
-    // Push the focused image element id and the pending delete targets into the
-    // interaction-policy controller so its cached Q_PROPERTYs (which the inspector
-    // edit checks and the delete action bind to) re-evaluate on PolicyChanged.
+    // Push the focused image element id into the interaction-policy controller so its cached
+    // Q_PROPERTYs (which the inspector edit checks and the Delete action of the image menu bind
+    // to) re-evaluate on PolicyChanged. The image menu focuses the clicked image.
     // focusedImageTarget is the reliable elementId source (focusedImageInspection
     // may omit it on the success branch).
     Binding {
         target: appModules.interactionPolicy
         property: "focusedElementId"
         value: root.focusedImageTarget ? Number(root.focusedImageTarget.elementId || 0) : 0
-    }
-    Binding {
-        target: appModules.interactionPolicy
-        property: "pendingDeleteTargets"
-        value: root.pendingDeleteTargets
     }
 
     function selectionItemFromThumbnailRow(row) {
@@ -162,13 +159,25 @@ Item {
         if (!clickedItem) {
             return
         }
-        root.menuOrigin = origin === "editor-filmstrip" ? "editor-filmstrip" : "library"
-        const targets = appModules.libraryMutations.ResolveTargets(clickedItem)
-        if (!targets || targets.length === 0) {
+        const elementId = Number(clickedItem.elementId || 0)
+        if (elementId <= 0) {
             return
         }
+        root.menuOrigin = origin === "editor-filmstrip" ? "editor-filmstrip" : "library"
+        // The menu reads the clicked photo only, so it opens in the same time for any
+        // selection size. A command resolves its targets when it runs (#1135).
+        root.menuClickedItem = {
+            elementId: elementId,
+            fileId: Number(clickedItem.fileId || elementId),
+            imageId: Number(clickedItem.imageId || 0),
+            folderId: Number(clickedItem.folderId || 0),
+            scopeType: clickedItem.scopeType ? String(clickedItem.scopeType) : "",
+            fileName: clickedItem.fileName ? String(clickedItem.fileName) : "",
+            isHdr: clickedItem.isHdr === true
+        }
+        root.pendingDeleteTargets = []
+        root.pendingAdjustmentPasteTargets = []
         root.setFocusedImage(clickedItem)
-        root.pendingDeleteTargets = targets
         const ratingResult = appModules.images.GetImageRating(
             Number(clickedItem.elementId),
             Number(clickedItem.imageId))
@@ -181,18 +190,34 @@ Item {
                     ? Number(ratingResult.rating)
                     : Number(clickedItem.rating || 0)
         }
-        root.pendingRatingTargets = targets
         root.pendingAdjustmentSource = {
             elementId: Number(clickedItem.elementId),
             fileId: Number(clickedItem.fileId || clickedItem.elementId),
             imageId: Number(clickedItem.imageId),
             fileName: clickedItem.fileName ? clickedItem.fileName : qsTr("(unnamed)")
         }
-        root.pendingAdjustmentPasteTargets = targets
         imageContextMenu.openAt(sceneX, sceneY)
     }
 
+    // The images a command of the image menu acts on (LibraryMutationOperations::ResolveTargets):
+    // the whole selection when it holds the clicked image, otherwise the clicked image alone.
+    // Each command calls it once when it runs; an image that the command cannot change is
+    // skipped by the command itself.
+    function resolveMenuTargets() {
+        if (Number(root.menuClickedItem.elementId || 0) <= 0) {
+            return []
+        }
+        const targets = appModules.libraryMutations.ResolveTargets(root.menuClickedItem)
+        return targets ? targets : []
+    }
+
+    // Paste Adjustments of the image menu: EditorAdjustmentTransferActions reads these targets.
+    function preparePasteTargets() {
+        root.pendingAdjustmentPasteTargets = root.resolveMenuTargets()
+    }
+
     function requestDeleteConfirmation() {
+        root.pendingDeleteTargets = root.resolveMenuTargets()
         const count = root.pendingDeleteTargets.length
         if (count <= 0) {
             return
@@ -213,17 +238,19 @@ Item {
 
     // "Add to" > "Export Queue" in the image menu.
     function addTargetsToExportQueue() {
-        if (!root.pendingDeleteTargets || root.pendingDeleteTargets.length === 0) {
+        const targets = root.resolveMenuTargets()
+        if (targets.length === 0) {
             return
         }
-        appModules.exportQueue.AddTargets(root.pendingDeleteTargets)
+        appModules.exportQueue.AddTargets(targets)
     }
 
     function runAddTargetsToAlbum(targetFolderId) {
-        if (!root.pendingDeleteTargets || root.pendingDeleteTargets.length === 0) {
+        const targets = root.resolveMenuTargets()
+        if (targets.length === 0) {
             return
         }
-        const result = appModules.images.AddImagesToFolder(root.pendingDeleteTargets, Number(targetFolderId))
+        const result = appModules.images.AddImagesToFolder(targets, Number(targetFolderId))
         if (result && result.message) {
             host.showSnackbar(result.message)
         }
@@ -553,9 +580,8 @@ Item {
         // A slider produces only valid values; the clamp keeps the old QML behavior.
         const normalizedRating = Math.max(0, Math.min(5, Number(rating)))
         // A rating picked from the menu goes to every target when several are selected.
-        const targets = root.pendingRatingTargets && root.pendingRatingTargets.length > 1
-                ? root.pendingRatingTargets
-                : [root.pendingRatingTarget]
+        const menuTargets = root.resolveMenuTargets()
+        const targets = menuTargets.length > 1 ? menuTargets : [root.pendingRatingTarget]
         const result = appModules.libraryMutations.RateTargetsAsUser(targets, normalizedRating)
         if (result && result.batch === true) {
             // Batch path: the library shows the new stars at once; the save runs as a
@@ -716,8 +742,8 @@ Item {
     // Apply Preset... of the image menu (edit presets plan 2.3): the targets of Paste
     // Adjustments. A Paste that the policy blocks leaves the dialog closed and shows the reason.
     function requestApplyPreset() {
-        const targets = root.pendingAdjustmentPasteTargets
-        if (!applyPresetDialog || !targets || targets.length === 0) {
+        const targets = root.resolveMenuTargets()
+        if (!applyPresetDialog || targets.length === 0) {
             return
         }
         const policy = appModules.interactionPolicy

@@ -152,9 +152,10 @@ class FolderController final : public QObject {
   Q_INVOKABLE void RemoveMissingPhotos(uint folderUiId);
   /// True when @p elementId is a mounted photo whose file is missing (the Locate item).
   Q_INVOKABLE bool IsMissingMountedPhoto(uint elementId) const;
-  /// True when @p elementIds holds a mounted photo whose file is present: such a photo stays in
-  /// the library, so Remove from Library is disabled.
-  Q_INVOKABLE bool HoldsPresentMountedPhoto(const QVariantList& elementIds) const;
+  /// True when @p elementId is a mounted photo, present or missing: a present one stays in the
+  /// library, and a missing one leaves it only through Remove Missing Photos. The image menu
+  /// disables Delete when it is opened on such a photo (#1135).
+  Q_INVOKABLE bool IsMountedPhoto(uint elementId) const;
   /// The directory where the file dialog of Locate opens for @p elementId: the last directory
   /// of the photo when it exists, else the root directory of its mount.
   Q_INVOKABLE QUrl MissingPhotoLocateFolder(uint elementId) const;

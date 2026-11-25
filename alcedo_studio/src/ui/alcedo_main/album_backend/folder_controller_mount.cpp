@@ -180,10 +180,9 @@ auto FolderController::IsMissingMountedPhoto(uint elementId) const -> bool {
   return missing_mounted_ids_.contains(static_cast<sl_element_id_t>(elementId));
 }
 
-auto FolderController::HoldsPresentMountedPhoto(const QVariantList& elementIds) const -> bool {
-  return std::any_of(elementIds.begin(), elementIds.end(), [this](const QVariant& id) {
-    return present_mounted_ids_.contains(static_cast<sl_element_id_t>(id.toULongLong()));
-  });
+auto FolderController::IsMountedPhoto(uint elementId) const -> bool {
+  const auto element_id = static_cast<sl_element_id_t>(elementId);
+  return present_mounted_ids_.contains(element_id) || missing_mounted_ids_.contains(element_id);
 }
 
 auto FolderController::MissingPhotoLocateFolder(uint elementId) const -> QUrl {
