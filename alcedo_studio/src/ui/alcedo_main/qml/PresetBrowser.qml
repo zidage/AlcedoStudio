@@ -51,6 +51,8 @@ Item {
         appTheme.iconOpticalSizeCompact + appTheme.spaceSm,
         appTheme.iconButtonHitSizeCompact - appTheme.spaceSm)
     readonly property real toolbarHeight: toolbar.implicitHeight + appTheme.spaceXs
+    // The area of the presets under the toolbar; an owner puts a drop guide in it.
+    readonly property Item well: wellSlot
     readonly property int tileGap: listMode ? appTheme.spaceXs / 2 : appTheme.spaceXs
     readonly property int columns: listMode
                                    ? 1

@@ -1011,6 +1011,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorPresetsSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/PresetBrowser.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/PresetTile.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/DropGuideOverlay.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ApplyPresetDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorComparisonCanvas.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorComparisonView.qml"

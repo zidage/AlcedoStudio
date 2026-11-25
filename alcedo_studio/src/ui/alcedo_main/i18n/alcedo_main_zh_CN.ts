@@ -2522,6 +2522,14 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>EditorPresetsSection</name>
     <message>
+        <source>Drag here to save as a preset</source>
+        <translation>拖到这里，存储为预设</translation>
+    </message>
+    <message>
+        <source>Release to save as a preset</source>
+        <translation>松开即存储为预设</translation>
+    </message>
+    <message>
         <source>The preset operation failed</source>
         <translation>预设操作失败</translation>
     </message>
@@ -5908,6 +5916,14 @@ Refresh the library afterwards; they are listed under the User category. Import 
     <message>
         <source>Compare Versions</source>
         <translation>对比版本</translation>
+    </message>
+    <message>
+        <source>Drag here to add a Version</source>
+        <translation>拖到这里，新建版本</translation>
+    </message>
+    <message>
+        <source>Release to add a Version</source>
+        <translation>松开即新建版本</translation>
     </message>
 </context>
 <context>
