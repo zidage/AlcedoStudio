@@ -188,6 +188,37 @@ TEST_F(PresetApplyTargetsTest, ApplyToTargetsRoutesOpenPhotoThroughEditorSession
   host_->adjustment_transfer()->SetEditorSession(host_->editor_session());
 }
 
+// Issue #1111: the targets are read and written in chunks of several photos. An apply larger
+// than one chunk, with a failing target inside a chunk, applies every other photo once and
+// reports the results in the order of the targets.
+TEST_F(PresetApplyTargetsTest, ApplyToManyTargetsAppliesEachPhotoOnceInTargetOrder) {
+  constexpr std::size_t kPhotos = 70;
+  ASSERT_TRUE(StartHost(kPhotos));
+  constexpr uint kMissingId = 999999;
+  QVariantList   targets    = Targets(0, 35);
+  targets.push_back(QVariantMap{{"elementId", kMissingId}, {"imageId", kMissingId}});
+  targets.append(Targets(35, kPhotos - 35));
+
+  const auto result = RunApply([this, &targets] {
+    return host_->presets()->ApplyToTargets(QStringLiteral("Warm.alcpreset"), targets);
+  });
+
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->value("appliedCount").toInt(), static_cast<int>(kPhotos));
+  const auto failures = result->value("failures").toList();
+  ASSERT_EQ(failures.size(), 1);
+  EXPECT_EQ(failures.front().toMap().value("elementId").toUInt(), kMissingId);
+  const auto applied = result->value("appliedIds").toList();
+  ASSERT_EQ(applied.size(), static_cast<qsizetype>(kPhotos));
+  for (std::size_t i = 0; i < kPhotos; ++i) {
+    const auto element_id = project_.images_.at(i).file_id_;
+    EXPECT_EQ(applied.at(static_cast<qsizetype>(i)).toUInt(), static_cast<uint>(element_id));
+    const auto history = Pipelines()->LoadHistorySnapshot(element_id);
+    EXPECT_EQ(history.graph_->GetActiveVersionRef().display_name, "Warm") << element_id;
+    EXPECT_EQ(CountOf(StoredVersionNames(*Pipelines(), element_id), "Warm"), 1) << element_id;
+  }
+}
+
 TEST_F(PresetApplyTargetsTest, OneFailedTargetIsReportedAndOtherTargetsApply) {
   ASSERT_TRUE(StartHost(2));
   constexpr uint kMissingId = 999999;

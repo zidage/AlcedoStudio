@@ -543,6 +543,67 @@ TEST_F(PipelineMapperTests,
   pipelines.ReleaseEditorLease(751);
 }
 
+/// Commit an exposure change on @p graph as the head of its active Version.
+void CommitExposure(CommitGraph& graph, float exposure) {
+  auto commit = EditCommit::MakePipelineEdit(
+      graph.GetRootId(), std::nullopt, MakeExposureBatch(kDefaultPipelineExposureEv, exposure));
+  const auto head = commit.GetCommitHash();
+  ASSERT_TRUE(graph.InsertCommit(std::move(commit)));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), head);
+}
+
+// Issue #1111: library writes of several images read their histories in one call and persist in
+// one transaction. A write whose stored history changed after the read, or whose image the editor
+// took, fails alone; the other writes are stored and published.
+TEST_F(PipelineMapperTests, PersistHistoryWritesFailsOnlyTheWritesThatCannotBeStored) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorage());
+  for (const sl_element_id_t id : {761u, 762u, 763u}) {
+    InitializeDefaultRoot(pipelines, id);
+  }
+
+  const std::vector<sl_element_id_t> ids{761, 762, 763, 769};
+  auto                               reads = pipelines.LoadHistorySnapshots(ids);
+  ASSERT_EQ(reads.size(), 4u);
+  for (std::size_t index = 0; index < 3; ++index) {
+    EXPECT_EQ(reads[index].element_id, ids[index]);
+    ASSERT_TRUE(reads[index].snapshot.has_value()) << reads[index].error;
+  }
+  EXPECT_FALSE(reads[3].snapshot.has_value());
+  EXPECT_FALSE(reads[3].error.empty()) << "image 769 has no history root";
+
+  // Another writer changes image 762 after the read.
+  {
+    const auto  other = pipelines.LoadHistorySnapshot(762);
+    CommitGraph graph = *other.graph_;
+    CommitExposure(graph, 1.0f);
+    (void)pipelines.PersistHistory(other, graph);
+  }
+
+  std::vector<PreparedHistoryWrite> writes;
+  for (std::size_t index = 0; index < 3; ++index) {
+    CommitGraph graph = *reads[index].snapshot->graph_;
+    CommitExposure(graph, 2.0f);
+    writes.push_back(PipelineMgmtService::PrepareHistoryWrite(*reads[index].snapshot, graph));
+  }
+  auto       lease   = pipelines.AcquireEditorLease(763);
+
+  const auto results = pipelines.PersistHistoryWrites(writes);
+  ASSERT_EQ(results.size(), 3u);
+  ASSERT_NE(results[0].snapshot, nullptr) << results[0].error;
+  EXPECT_FLOAT_EQ(DocumentExposure(results[0].snapshot->Document()), 2.0f);
+  EXPECT_EQ(results[1].snapshot, nullptr);
+  EXPECT_NE(results[1].error.find("changed before the new history was written"), std::string::npos)
+      << results[1].error;
+  EXPECT_EQ(results[2].snapshot, nullptr);
+  EXPECT_NE(results[2].error.find("open in the editor"), std::string::npos) << results[2].error;
+  pipelines.ReleaseEditorLease(763);
+
+  EXPECT_FLOAT_EQ(DocumentExposure(pipelines.AcquireCommittedSnapshot(761)->Document()), 2.0f);
+  EXPECT_FLOAT_EQ(DocumentExposure(pipelines.AcquireCommittedSnapshot(762)->Document()), 1.0f);
+  EXPECT_EQ(StoredEditState(project, 763)->materialized_head_commit_hash, std::nullopt);
+}
+
 TEST_F(PipelineMapperTests, ReopenWithMatchingCheckpointSkipsReplay) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());

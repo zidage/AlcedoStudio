@@ -93,15 +93,14 @@ auto CommitGraph::FromParts(ImageEditState state, std::vector<VersionRef> versio
   CommitGraph graph;
   graph.state_ = std::move(state);
 
+  // Each EditCommit factory already checked the hash of the commit against its content, so the
+  // graph checks only how the commits link to the root, to each other, and to the Versions.
+  graph.commits_.reserve(commits.size());
   for (auto& commit : commits) {
-    commit.ValidateStructure();
     if (commit.GetRootId() != graph.state_.root_id) {
       throw std::runtime_error("CommitGraph: commit root_id does not match image root");
     }
     const auto hash = commit.GetCommitHash();
-    if (commit.ComputeCommitHash() != hash) {
-      throw std::runtime_error("CommitGraph: commit hash does not match content");
-    }
     graph.commits_.emplace(hash, std::move(commit));
   }
 
@@ -129,7 +128,7 @@ auto CommitGraph::FromParts(ImageEditState state, std::vector<VersionRef> versio
 }
 
 void CommitGraph::ValidateCommitAgainstGraph(const EditCommit& commit) const {
-  commit.ValidateStructure();
+  // The payload of a commit is validated by its factory (or on first use for a stored commit).
   if (commit.GetRootId() != state_.root_id) {
     throw std::runtime_error("CommitGraph: commit root_id does not match graph root");
   }

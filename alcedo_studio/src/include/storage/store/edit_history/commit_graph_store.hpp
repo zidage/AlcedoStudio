@@ -11,6 +11,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "edit/graph/pipeline_document.hpp"
@@ -35,8 +37,25 @@ namespace alcedo {
  */
 struct MaterializedHistoryLabel {
   root_id_t                root_id{};
+  version_ref_id_t         active_version_id{};
   head_commit_hash_t       head_commit_hash;
   transaction_chain_hash_t transaction_chain_hash{};
+};
+
+/// The stored history of one image read by CommitGraphStore::LoadGraphs.
+struct StoredGraphRead {
+  sl_element_id_t            element_id = 0;
+  /// The validated graph; empty when the image has no edit state or @ref error is set.
+  std::optional<CommitGraph> graph;
+  /// Why the stored rows of the image do not form a valid graph; empty when they do.
+  std::string                error;
+};
+
+/// The stored immutable root row of one image (CommitGraphStore::ListRootSerializedPipelineStates).
+struct StoredRootPipelineState {
+  sl_element_id_t element_id = 0;
+  /// Serialized EncodePipelineRootState document, not parsed.
+  std::string     serialized_pipeline_state;
 };
 
 /**
@@ -65,7 +84,6 @@ class CommitGraphStore {
  public:
   explicit CommitGraphStore(duckorm::Connection& conn);
 
-  auto InsertCommitIfAbsent(const EditCommit& commit) -> bool;
   auto GetCommit(const commit_hash_t& commit_hash) -> std::optional<EditCommit>;
   auto CountCommits() -> std::uint64_t;
   auto CountCommitsForRoot(const root_id_t& root_id) -> std::uint64_t;
@@ -83,18 +101,55 @@ class CommitGraphStore {
   auto GetMaterializedHistoryLabel(sl_element_id_t element_id)
       -> std::optional<MaterializedHistoryLabel>;
 
+  /// @ref GetMaterializedHistoryLabel for each of @p element_ids in one query; an image without
+  /// edit state has no entry.
+  auto ListMaterializedHistoryLabels(std::span<const sl_element_id_t> element_ids)
+      -> std::unordered_map<sl_element_id_t, MaterializedHistoryLabel>;
+
   /// Read the immutable root state and verify that it belongs to the requested image.
   auto GetRootSerializedPipelineState(sl_element_id_t element_id, const root_id_t& root_id)
       -> std::optional<nlohmann::json>;
 
+  /// The stored root rows of @p root_ids in one query, by root id; a missing root has no entry.
+  auto ListRootSerializedPipelineStates(std::span<const root_id_t> root_ids)
+      -> std::unordered_map<root_id_t, StoredRootPipelineState>;
+
+  /// Hashes of every stored commit of @p root_ids; reads no payload.
+  auto ListCommitHashesForRoots(std::span<const root_id_t> root_ids)
+      -> std::unordered_set<commit_hash_t>;
+
   /// Atomically materialize commits, their attribution, Version refs, and ImageEditState from a
   /// validated capture. Fails before commit when the capture is inconsistent; prior rows remain
-  /// unchanged.
+  /// unchanged. One capture of @ref MaterializeAll.
   void Materialize(const CommitGraphMaterialization& materialization);
 
+  /**
+   * @brief Materialize the captures of several images in one transaction.
+   *
+   * Writes only what storage does not hold yet: the commits whose hash is not stored (a hash
+   * names one immutable content), their attribution, the new or changed Version refs, and the
+   * ImageEditState of each image. The statements are shared by all captures, so the cost of a
+   * capture that adds one commit and one Version does not grow with the history of its image.
+   *
+   * @pre Each image appears in at most one capture.
+   * @throws std::runtime_error when a capture is inconsistent or a write fails; then no row of
+   *         any capture changes.
+   */
+  void MaterializeAll(std::span<const CommitGraphMaterialization* const> materializations);
+
   /// Reload a graph and the attribution of its commits with full structural and
-  /// materialized-state validation.
+  /// materialized-state validation. One image of @ref LoadGraphs.
+  /// @throws std::runtime_error when the stored rows do not form a valid graph.
   auto LoadGraph(sl_element_id_t element_id) -> std::optional<CommitGraph>;
+
+  /**
+   * @brief Reload the graphs of @p element_ids with the queries shared by all images.
+   *
+   * Validates each graph like @ref LoadGraph. An image whose rows are invalid gets an error in
+   * its entry and does not stop the others. The entries follow the order of @p element_ids.
+   * @throws std::runtime_error when a query fails.
+   */
+  auto LoadGraphs(std::span<const sl_element_id_t> element_ids) -> std::vector<StoredGraphRead>;
 
   /// List every element_id that has an ImageEditState row.
   auto ListImageElementIds() -> std::vector<sl_element_id_t>;
@@ -161,12 +216,12 @@ class CommitGraphStore {
   VersionRefMapper     version_ref_mapper_;
   ImageEditStateMapper image_edit_state_mapper_;
 
-  void UpsertVersionRef(const VersionRef& version_ref);
-  void UpsertImageEditState(const ImageEditState& state);
-  void                 InsertAttributionIfAbsent(const commit_hash_t&         commit_hash,
-                                                 const EditCommitAttribution& attribution);
-  auto                 ListAttributionsForRoot(const root_id_t& root_id)
-      -> std::unordered_map<commit_hash_t, EditCommitAttribution>;
+  /// Insert the attribution of each new commit of @p attributions, in multi-row statements.
+  void                 InsertAttributionsIfAbsent(
+                      std::span<const std::pair<commit_hash_t, const EditCommitAttribution*>> attributions);
+  /// The attribution rows of the commits of @p root_ids, by root id and commit hash.
+  auto ListAttributionsForRoots(std::span<const root_id_t> root_ids)
+      -> std::unordered_map<root_id_t, std::unordered_map<commit_hash_t, EditCommitAttribution>>;
   void        InsertRootSerializedPipelineStates(std::span<const EncodedRootPipeline> roots);
   static auto EncodeRootPipelineForGraph(const CommitGraph&                   graph,
                                          const PipelineDocument&              root_document,
