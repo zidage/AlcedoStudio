@@ -74,6 +74,9 @@ requirements and do not depend on a task-specific skill being activated.
   protected members do not.
 - Name types, functions, variables, and tests after the data they represent or the operation they
   perform. Apply the terminology rules below to identifiers as well as prose.
+- Use `std::thread` with an explicit join, and `std::atomic<bool>` for a stop request. Apple
+  libc++ does not declare `std::jthread` or `std::stop_token` under `-std=c++20`;
+  `scripts/check_std_jthread.py` fails CI on a use.
 
 ### Include the defining header; do not forward-declare by default
 
