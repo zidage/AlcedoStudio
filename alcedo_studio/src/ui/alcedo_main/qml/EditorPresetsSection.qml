@@ -20,6 +20,9 @@ ColumnLayout {
     property bool canApply: false
     // A Version drag is over this part and a drop here saves a preset.
     property bool versionDropHighlight: false
+    // A Version drag runs (the drop guide shows its band), and the dragged name.
+    property bool versionDragActive: false
+    property string versionDragName: ""
     property string errorText: ""
     readonly property alias browser: presetBrowser
     readonly property real headerHeight: header.implicitHeight
@@ -215,6 +218,18 @@ ColumnLayout {
                     drop.accept(Qt.CopyAction)
                     root.addFiles(dropped)
                 }
+            }
+
+            // A Version drag: the band says that a drop here saves a preset.
+            DropGuideOverlay {
+                objectName: "editorPresetsDropGuide"
+                parent: presetBrowser.well
+                anchors.fill: parent
+                shown: root.versionDragActive
+                expanded: root.versionDropHighlight
+                bandText: qsTr("Drag here to save as a preset")
+                expandedText: qsTr("Release to save as a preset")
+                detailText: root.versionDragName
             }
         }
     }

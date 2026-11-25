@@ -21,7 +21,9 @@ import "FileDrop.js" as FileDrop
 // row onto the preset part saves a preset; a drag of a preset tile onto the Versions
 // list applies it as a new Version. Escape cancels the drag; a drop outside the
 // accepting part does nothing. A .alcpreset file dropped on the Versions list is
-// applied one time.
+// applied one time. A drop guide (DropGuideOverlay) shows where a drop goes: on the
+// Versions list while a preset is selected or dragged, on the preset part while a
+// Version is dragged.
 Item {
     id: root
     objectName: "editorVersionsPageBody"
@@ -116,6 +118,18 @@ Item {
     readonly property bool dragOverVersions: root.dragKind === "preset"
                                              && root.pointInside(versionsListWell, root.dragPoint)
 
+    // Drop guide of the Versions list: a selected preset shows its band until an apply
+    // of that preset succeeds; a preset drag shows it until the drop. A Version drag
+    // shows the band of the preset part instead.
+    readonly property string selectedPresetId: presetsSection.browser.selectedPresetId
+    property string dropGuideDismissedPresetId: ""
+    readonly property bool versionsDropGuideShown:
+        root.canApplyPresets
+        && (root.dragKind === "preset"
+            || (root.dragKind.length === 0 && root.selectedPresetId.length > 0
+                && root.selectedPresetId !== root.dropGuideDismissedPresetId))
+    onSelectedPresetIdChanged: root.dropGuideDismissedPresetId = ""
+
     function pointInside(item, point) {
         const local = item.mapFromItem(root, point.x, point.y)
         return local.x >= 0 && local.y >= 0 && local.x < item.width && local.y < item.height
@@ -164,7 +178,10 @@ Item {
         if (!root.canApplyPresets)
             return
         root.captureListScroll()
-        presetsSection.report(root.presets.ApplyToEditor(presetId))
+        const result = root.presets.ApplyToEditor(presetId)
+        presetsSection.report(result)
+        if (result && result.success === true)
+            root.dropGuideDismissedPresetId = presetId
         root.restoreListScroll()
     }
 
@@ -548,6 +565,8 @@ Item {
         presetPreview: root.presetPreview
         canApply: root.canApplyPresets
         versionDropHighlight: root.dragOverPresets
+        versionDragActive: root.dragKind === "version" && root.canSavePresets
+        versionDragName: root.dragKind === "version" ? root.dragName : ""
         onApplyRequested: function (presetId) { root.applyPreset(presetId) }
         onApplyFileRequested: function (url) { root.applyPresetFile(url) }
         onPresetDragStarted: function (presetId, name, sceneX, sceneY) {
@@ -908,6 +927,18 @@ Item {
                     drop.accept(Qt.CopyAction)
                     root.applyPresetFile(dropped)
                 }
+            }
+
+            // A selected preset or a preset drag: the band says that a drop here adds a
+            // Version. It sits above the list (z) and takes no input.
+            DropGuideOverlay {
+                objectName: "editorVersionsDropGuide"
+                anchors.fill: parent
+                shown: root.versionsDropGuideShown
+                expanded: root.dragOverVersions || presetFileDrop.url.length > 0
+                bandText: qsTr("Drag here to add a Version")
+                expandedText: qsTr("Release to add a Version")
+                detailText: root.dragKind === "preset" ? root.dragName : ""
             }
 
             ListView {
