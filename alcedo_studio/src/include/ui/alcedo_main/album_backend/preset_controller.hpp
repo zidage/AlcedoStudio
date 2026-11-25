@@ -11,10 +11,13 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
+#include <filesystem>
 #include <functional>
+#include <memory>
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/preset_library_service.hpp"
+#include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_dialog_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/preset_list_model.hpp"
@@ -26,7 +29,9 @@ namespace alcedo::ui {
  *
  * Routes each command to its owner: preset file changes to PresetLibraryService, an apply to the
  * open photo to EditorSessionController::PasteAdjustmentPackage (the Paste of the Versions
- * panel), and Save as Preset of the Copy dialog to AdjustmentTransferDialogModel::BuildPackage.
+ * panel), an apply to library photos to AdjustmentTransferController::PastePackageToTargets (the
+ * multi-target Paste of the Apply Preset dialog), and Save as Preset of the Copy dialog to
+ * AdjustmentTransferDialogModel::BuildPackage.
  * Owns the preset list model and the stored height of the preset part; keeps no package and no
  * entry of its own. Owner (GUI) thread only.
  *
@@ -61,6 +66,8 @@ class PresetController final : public QObject {
   void                    SetBrowserHeight(double height);
   /// The session of the open photo: the source of Save by drag and the target of an apply.
   void                    SetEditorSession(EditorSessionController* editor_session);
+  /// The owner of the multi-target Paste, for an apply to library photos (plan 2.3).
+  void                    SetAdjustmentTransfer(AdjustmentTransferController* adjustment_transfer);
 
   /**
    * @brief Save the Version @p versionId of the open photo as a preset (plan 2.2, D4).
@@ -85,6 +92,29 @@ class PresetController final : public QObject {
    * extension.
    */
   Q_INVOKABLE QVariantMap ApplyFileToEditor(const QVariant& url);
+  /**
+   * @brief Apply the listed preset @p presetId to the photos @p targetEntries (plan 2.3, R6).
+   *
+   * Each target gets one new Version named after the preset. The package is read one time
+   * (PresetLibraryService::PackageFor) for all targets. The routing is the multi-target Paste
+   * (AdjustmentTransferController::PastePackageToTargets): the photo open in the editor goes
+   * through the editor session, the others through the AdjustmentPaste background task, whose
+   * result AdjustmentTransferController::PasteFinished reports.
+   *
+   * @param targetEntries `{elementId, imageId}` maps, as the image context menu gives them.
+   * @return `{success, message?, pending}` at once; a refused preset starts nothing.
+   */
+  Q_INVOKABLE QVariantMap ApplyToTargets(const QString&      presetId,
+                                         const QVariantList& targetEntries);
+  /**
+   * @brief Apply the preset file @p url one time to the photos @p targetEntries (R8).
+   *
+   * Reads the file with ReadPresetFile; it does not enter the folder, the inventory, or the
+   * package cache. The Versions are named after the file name without the extension. Otherwise
+   * as @ref ApplyToTargets.
+   */
+  Q_INVOKABLE QVariantMap ApplyFileToTargets(const QVariant&     url,
+                                             const QVariantList& targetEntries);
   Q_INVOKABLE QVariantMap Rename(const QString& presetId, const QString& name);
   /// Move the preset @p presetId to the system trash (plan D8).
   Q_INVOKABLE QVariantMap Delete(const QString& presetId);
@@ -108,8 +138,14 @@ class PresetController final : public QObject {
   void operationFinished(const QVariantMap& result);
 
  private:
+  /// The checked package of the listed, available preset @p presetId and its name; null with
+  /// @p error otherwise.
+  auto ListedPackage(const QString& presetId, QString* name, QString* error)
+      -> std::shared_ptr<const alcedo::AdjustmentTransferPackage>;
   auto PasteIntoEditor(const alcedo::AdjustmentTransferPackage& package, const QString& name)
       -> QVariantMap;
+  auto PasteIntoTargets(const alcedo::AdjustmentTransferPackage& package,
+                        const QVariantList& targetEntries, const QString& name) -> QVariantMap;
   auto SavePackage(const alcedo::AdjustmentTransferPackage& package, const QString& label)
       -> QVariantMap;
   auto OpenFolder(const std::filesystem::path& folder) -> QVariantMap;
@@ -118,6 +154,7 @@ class PresetController final : public QObject {
   QPointer<alcedo::PresetLibraryService>  library_;
   QPointer<AdjustmentTransferDialogModel> copy_dialog_;
   QPointer<EditorSessionController>       editor_session_;
+  QPointer<AdjustmentTransferController>  adjustment_transfer_;
   OpenUrl                                 open_url_;
   PresetListModel*                        presets_        = nullptr;  // owned child
   double                                  browser_height_ = 0.0;

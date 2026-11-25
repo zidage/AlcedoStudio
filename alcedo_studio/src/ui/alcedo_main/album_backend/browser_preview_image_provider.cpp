@@ -112,4 +112,10 @@ auto SharedPresetPreviewImageStore() -> std::shared_ptr<BrowserPreviewImageStore
   return store;
 }
 
+auto SharedPresetDialogPreviewImageStore() -> std::shared_ptr<BrowserPreviewImageStore> {
+  static auto store = std::make_shared<BrowserPreviewImageStore>(
+      QString::fromUtf8(kPresetDialogPreviewImageProviderId));
+  return store;
+}
+
 }  // namespace alcedo::ui

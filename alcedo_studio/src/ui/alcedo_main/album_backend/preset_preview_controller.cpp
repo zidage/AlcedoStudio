@@ -4,10 +4,12 @@
 
 #include "ui/alcedo_main/album_backend/preset_preview_controller.hpp"
 
+#include <QDebug>
 #include <utility>
 
 #include "app/preset_preview_image.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -76,6 +78,12 @@ class EditorSessionPresetPreviewSource final : public PresetPreviewSource {
 
 }  // namespace
 
+auto PresetPreviewSource::ShowLibraryPhoto(sl_element_id_t /*element_id*/, image_id_t /*image_id*/,
+                                           std::string* error) -> bool {
+  if (error != nullptr) *error = "The previews follow the photo that is open in the editor";
+  return false;
+}
+
 PresetPreviewController::PresetPreviewController(QObject* parent)
     : BrowserPreviewController(SharedPresetPreviewImageStore(), parent) {}
 
@@ -113,10 +121,32 @@ void PresetPreviewController::SetLibrary(alcedo::PresetLibraryService* library) 
 
 void PresetPreviewController::SetSource(PresetPreviewSource* source) {
   session_source_.reset();
-  source_ = source;
+  source_          = source;
+  follows_session_ = false;
+}
+
+void PresetPreviewController::SetOwnedSource(std::unique_ptr<PresetPreviewSource> source) {
+  session_source_  = std::move(source);
+  source_          = session_source_.get();
+  follows_session_ = false;
+  Refresh();
+}
+
+auto PresetPreviewController::showLibraryPhoto(uint elementId, uint imageId) -> bool {
+  if (source_ == nullptr) return false;
+  std::string error;
+  const bool  shown = source_->ShowLibraryPhoto(static_cast<sl_element_id_t>(elementId),
+                                                static_cast<image_id_t>(imageId), &error);
+  if (!shown) {
+    qCWarning(alcedo::diag::editorLog).noquote()
+        << LogName() << "of photo" << elementId << "not shown:" << QString::fromStdString(error);
+  }
+  Refresh();
+  return shown;
 }
 
 void PresetPreviewController::RebuildSessionSource() {
+  if (!follows_session_) return;
   session_source_ = std::make_unique<EditorSessionPresetPreviewSource>(session_, library_);
   source_         = session_source_.get();
 }

@@ -112,6 +112,10 @@ void PresetController::SetEditorSession(EditorSessionController* editor_session)
   editor_session_ = editor_session;
 }
 
+void PresetController::SetAdjustmentTransfer(AdjustmentTransferController* adjustment_transfer) {
+  adjustment_transfer_ = adjustment_transfer;
+}
+
 auto PresetController::SaveVersionAsPreset(const QString& versionId) -> QVariantMap {
   if (library_ == nullptr) {
     return ErrorResult(Tr("The preset library is unavailable."));
@@ -197,24 +201,39 @@ auto PresetController::AddFiles(const QVariantList& urls) -> QVariantMap {
   return result;
 }
 
-auto PresetController::ApplyToEditor(const QString& presetId) -> QVariantMap {
+auto PresetController::ListedPackage(const QString& presetId, QString* name, QString* error)
+    -> std::shared_ptr<const alcedo::AdjustmentTransferPackage> {
   if (library_ == nullptr) {
-    return ErrorResult(Tr("The preset library is unavailable."));
+    *error = Tr("The preset library is unavailable.");
+    return nullptr;
   }
   const auto  id    = presetId.toStdString();
   const auto* entry = library_->FindEntry(id);
   if (entry == nullptr) {
-    return ErrorResult(Tr("The preset is not in the preset folder."));
+    *error = Tr("The preset is not in the preset folder.");
+    return nullptr;
   }
   if (!entry->available) {
-    return ErrorResult(QString::fromStdString(entry->reason));
+    *error = QString::fromStdString(entry->reason);
+    return nullptr;
   }
-  const QString name    = QString::fromStdString(entry->name);
-  const auto    package = library_->PackageFor(id);
+  *name              = QString::fromStdString(entry->name);
+  const auto package = library_->PackageFor(id);
   if (!package.Ok()) {
-    return ErrorResult(QString::fromStdString(package.message));
+    *error = QString::fromStdString(package.message);
+    return nullptr;
   }
-  return PasteIntoEditor(*package.package, name);
+  return package.package;
+}
+
+auto PresetController::ApplyToEditor(const QString& presetId) -> QVariantMap {
+  QString    name;
+  QString    error;
+  const auto package = ListedPackage(presetId, &name, &error);
+  if (!package) {
+    return ErrorResult(error);
+  }
+  return PasteIntoEditor(*package, name);
 }
 
 auto PresetController::ApplyFileToEditor(const QVariant& url) -> QVariantMap {
@@ -228,6 +247,41 @@ auto PresetController::ApplyFileToEditor(const QVariant& url) -> QVariantMap {
     return ErrorResult(QString::fromStdString(read.message));
   }
   return PasteIntoEditor(*read.package, QString::fromStdWString(path.stem().wstring()));
+}
+
+auto PresetController::ApplyToTargets(const QString& presetId, const QVariantList& targetEntries)
+    -> QVariantMap {
+  QString    name;
+  QString    error;
+  // One read for every target (plan 6.2): the multi-target Paste takes this one package.
+  const auto package = ListedPackage(presetId, &name, &error);
+  if (!package) {
+    return ErrorResult(error);
+  }
+  return PasteIntoTargets(*package, targetEntries, name);
+}
+
+auto PresetController::ApplyFileToTargets(const QVariant& url, const QVariantList& targetEntries)
+    -> QVariantMap {
+  const auto path = LocalPath(url);
+  if (path.empty()) {
+    return ErrorResult(Tr("No preset file selected."));
+  }
+  auto read = alcedo::ReadPresetFile(path);
+  if (!read.Ok()) {
+    return ErrorResult(QString::fromStdString(read.message));
+  }
+  return PasteIntoTargets(*read.package, targetEntries,
+                          QString::fromStdWString(path.stem().wstring()));
+}
+
+auto PresetController::PasteIntoTargets(const alcedo::AdjustmentTransferPackage& package,
+                                        const QVariantList& targetEntries, const QString& name)
+    -> QVariantMap {
+  if (adjustment_transfer_ == nullptr) {
+    return ErrorResult(Tr("Paste is unavailable."));
+  }
+  return adjustment_transfer_->PastePackageToTargets(package, targetEntries, name);
 }
 
 auto PresetController::PasteIntoEditor(const alcedo::AdjustmentTransferPackage& package,

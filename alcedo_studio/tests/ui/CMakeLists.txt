@@ -681,6 +681,10 @@ alcedo_register_test_target(AdjustmentTransferControllerTest ui)
 def_ui_test(PresetControllerTest preset_controller_test.cpp)
 alcedo_register_test_target(PresetControllerTest ui)
 
+# Apply Preset for many photos and the dialog previews of a library photo (edit presets plan, PS4).
+def_ui_test(PresetApplyTargetsTest preset_apply_targets_test.cpp)
+alcedo_register_test_target(PresetApplyTargetsTest ui)
+
 # Preset browser previews of the open photo (edit presets plan, PS3).
 def_ui_test(PresetPreviewControllerTest preset_preview_controller_test.cpp)
 target_link_libraries(PresetPreviewControllerTest PRIVATE BrowserPreviewImage)

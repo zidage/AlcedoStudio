@@ -1,7 +1,7 @@
 # Edit Presets Plan
 
 - Date: 2026-11-24
-- Status: PS1A, PS1B, PS2, and PS3 implemented (2026-11-24); PS4 planned
+- Status: PS1A, PS1B, PS2, PS3, and PS4A implemented (2026-11-24); PS4B in progress
 - Tracking issue: #1090
 - Direct prerequisite plans:
   [Phase NM10, Node-aware Adjustment Transfer](../edit/node_mask_editor/phase_nm10_adjustment_transfer_plan.md)
@@ -381,7 +381,8 @@ Current files that change: `app/adjustment_transfer_package_builder.{hpp,cpp}`
 | PS2A | `PresetController`, `PresetListModel`, package summary, `PresetNameFromLabel`, `PresetControllerTest` | `app/`, `album_backend` | PS1B | 1300 (actual) | complete |
 | PS2B | Versions panel with the preset part, drag in both directions, add, one-time apply, rename, delete, `Save as Preset` | QML, `AppTheme`, `.ts` | PS2A | 1200 (actual) | complete |
 | PS3 | Preview images in the preset browser | `app/`, `album_backend`, QML | PS2 | 1550 net (actual) | complete |
-| PS4 | `Apply Preset...` for many photos with previews, automation commands | QML, `album_backend`, `app/thumbnail_service`, automation | PS3 | 1400 to 1800 | planned |
+| PS4A | `Apply Preset...` for many photos with previews: dialog, routing of the targets, library-photo previews (steps PS4.1 to PS4.3) | QML, `album_backend`, `app/thumbnail_service` | PS3 | 1700 (actual) | complete |
+| PS4B | Automation commands `presets.list`, `presets.save`, `presets.apply` (step PS4.4) | automation, alcedo-skills | PS4A | 700 | planned |
 
 Each phase is one pull request. If an estimate grows above 2000 lines during the work, split the
 phase and update this table first.
@@ -969,9 +970,119 @@ presets.
       5%.
 - [ ] The user confirms the dialog in the running application.
 
-**Expected diff.** 1400 to 1800 lines.
+**Expected diff.** 1400 to 1800 lines. With the tests, the shared test builders, the `.ts`
+entries, and this record the estimate passed 2000 lines, so the phase has two pull requests
+(section 8, issue #1109): PS4A (steps 1 to 3) and PS4B (step 4).
 
-**Completion record.** Empty.
+**Implementation decisions** (detail that this plan did not specify; each agrees with D1 to D9).
+
+| Item | Decision | Reason |
+| --- | --- | --- |
+| Shared routing (step 2) | `AdjustmentTransferController::PastePackageToTargets(package, targetEntries, versionName)` holds the agent control refusal, the target collection, the editor-photo routing, and the start of the background task. `Paste` and `PresetController::ApplyToTargets`/`ApplyFileToTargets` call it. `PresetController::SetAdjustmentTransfer` gives the preset controller its owner. | One function for both controllers; the coordinator keeps its rule that a target is never open in the editor. |
+| Result report | The result of the library targets is `AdjustmentTransferController::PasteFinished`, which the snackbar of `AppDialogs` already shows. The dialog closes when the apply starts and shows the start message. | Plan 2.3: the result report is the current one. |
+| Refusal in the dialog | A preset that is not available, not listed, or a file that fails a rule keeps the dialog open with the reason in an `AlertBadge`. `Apply` is enabled only for an available tile; a double click on a tile is `Apply`. | Plan 2.6. |
+| Policy | `requestApplyPreset()` refuses with the Paste reason (`canPasteAdjustments`), as `requestPasteAdjustments()` does; the menu item needs targets only. | The apply is a Paste. |
+| Thumbnail operation (step 3) | `ThumbnailService::RenderPreview(ThumbnailPreviewRequest)`: the caller document builder runs on the lookup worker with the committed snapshot; the decode and render stages and the batch executors are the ones of a thumbnail at the 256 tier (EIGHTH decode). The pixels (RGBA8) go to the caller only: no guard enters the memory cache, the request has no disk key, and `CancelPending`/`InvalidateThumbnail` do not end it. | Risk row of section 12 resolved: the service renders a caller document without a cache write. |
+| Output color | A `THUMBNAIL` render now takes `TaskOptions::export_output_color_` (empty for every thumbnail), so a preview of an HDR document renders with the SDR encoding of `BrowserPreviewOutputColor`. | A tile is an 8-bit SDR image, as for the editor previews. |
+| Library preview source | `LibraryPresetPreviewSource` (`album_backend`) implements `PresetPreviewSource` with `ShowLibraryPhoto(element, image)`. A second `PresetPreviewController` owns it (`SetOwnedSource`) and is `appModules.presetDialogPreview`; its images come from the provider `image://alcedo-preset-dialog-preview/`, because the display ids of two controllers are independent. `PresetPreviewController::showLibraryPhoto` hands the photo to the source. | Step 3: the same controller code for the editor and the dialog. |
+| Sensor key of a library photo | `ShowLibraryPhoto` reads the committed snapshot of the photo (`AcquireCommittedSnapshot`) on the GUI thread one time, when the dialog opens; the render reads it again on the worker and returns the sensor key of what it rendered (the PS3 rule). | The entry key needs the sensor key at once; one storage read per dialog open. |
+| Viewport | The library source reports no viewport render: the thumbnail executors render beside the editor, as thumbnails do. | The rule of 2.4 protects the editor executor, which these renders do not use. |
+| First target in the editor | The dialog uses the editor previews (`appModules.presetPreview`) when the editor holds the first target: `LoadHistorySnapshot` refuses a photo that the editor holds. | The editor session owns the history of that photo. |
+| Tiles | The dialog creates its `PresetBrowser` in a `Loader` that is active only while the dialog is open, so the tiles watch previews only then. The dialog scans the folder when it opens (D9). | No render for a closed dialog. |
+
+**Problems found:** #1110 (the preview LRU key has the image id only; image ids repeat across
+projects), #1111 (the time of a multi-target Paste grows with each Version of the photos).
+
+##### PS4A completion record (2026-11-24)
+
+**Status:** complete for the code, the tests, and the time record; the dialog in the running
+application is the user's check (pure UI).
+
+**Primary success call chain:**
+
+```text
+Image context menu Apply Preset... (AppDialogs, action apply-preset)
+  -> ImageActionsController.requestApplyPreset (canPasteAdjustments, targets of Paste)
+  -> ApplyPresetDialog.open: PresetController::Refresh; first target not in the editor:
+     PresetPreviewController::showLibraryPhoto (appModules.presetDialogPreview)
+       -> LibraryPresetPreviewSource::ShowLibraryPhoto -> AcquireCommittedSnapshot -> sensor key
+  -> PresetTile watch -> BrowserPreviewController::Pump -> PresetPreviewController::StartRender
+       -> PresetLibraryService::PackageFor -> LibraryPresetPreviewSource::RenderPresetPreview
+       -> ThumbnailService::RenderPreview: lookup worker: LoadHistorySnapshot
+          -> BuildPresetPreviewDocument(root, package, committed) -> BrowserPreviewOutputColor
+       -> decode (EIGHTH) -> batch executor render (THUMBNAIL, output color) -> RGBA8 pixels
+       -> RGBA32F browser result (rendered sensor key) -> GUI thread: LRU -> Show
+       -> image://alcedo-preset-dialog-preview/<id>
+  -> Apply / double click: PresetController::ApplyToTargets(presetId, targets)
+       -> ListedPackage: FindEntry, available, PackageFor (one read for all targets)
+       -> AdjustmentTransferController::PastePackageToTargets(package, targets, preset name)
+       -> photo open in the editor: EditorSessionController::PasteAdjustmentPackage
+       -> other photos: AdjustmentTransferApplyCoordinator::StartApplyToTargets
+          -> worker: LoadHistorySnapshot -> PasteAsRootRelativeVersion -> PersistHistory
+          -> GUI thread: FinishApply (thumbnail refresh) -> PasteFinished -> snackbar
+  -> Open File...: PresetController::ApplyFileToTargets -> ReadPresetFile -> the same Paste
+```
+
+**Primary failure call chain:**
+
+```text
+Preset not listed / not available / file fails a rule / agent holds control
+  -> ListedPackage, ReadPresetFile, or UserStateChangeRefusal refuses -> {success:false, message}
+  -> the dialog stays open with the reason (AlertBadge); no Paste starts, no history changes
+One target cannot be pasted (no history, unknown photo)
+  -> coordinator: failure row {elementId, message}; the other targets are persisted
+  -> PasteFinished {appliedIds, failures} -> snackbar
+Preview render fails (no RAW file, document refused)
+  -> ThumbnailPreviewResult kError -> EditorBrowserPreviewResult Failed -> failed key
+  -> PresetTile: warning icon; the preset stays usable
+```
+
+**What was proven (executed tests, `build/debug` unless stated):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `ApplyToTargetsCreatesOneVersionPerTargetNamedAfterPreset` | `PresetApplyTargetsTest` | PASS |
+| `ApplyToTargetsReadsPresetFileOnce` (20 targets, one file read) | `PresetApplyTargetsTest` | PASS |
+| `ApplyToTargetsRoutesOpenPhotoThroughEditorSession` (the stored history of the open photo does not change) | `PresetApplyTargetsTest` | PASS |
+| `OneFailedTargetIsReportedAndOtherTargetsApply` | `PresetApplyTargetsTest` | PASS |
+| `ApplyFileToTargetsLeavesLibraryUnchanged` | `PresetApplyTargetsTest` | PASS |
+| `ApplyOfUnavailablePresetStartsNoPaste` | `PresetApplyTargetsTest` | PASS |
+| `DialogPreviewRendersPresetOnLibraryPhoto` (GPU render of the sample linear DNG through the thumbnail executors, Auto to OpenCL; the editor previews render nothing) | `PresetApplyTargetsTest` | PASS |
+| `LibraryPreviewRenderDoesNotWriteThumbnailCache` (same memory guard after the preview; a reopened service has the thumbnail disk entry only; the +2 EV preview differs from the thumbnail by a mean of 51.8 levels) | `ThumbnailCommittedRenderTest` | PASS |
+| Thumbnail renders after the scheduler change (all 13 cases) | `ThumbnailCommittedRenderTest` | PASS |
+| Preset commands with the shared test builders | `PresetControllerTest` | PASS (9/9) |
+| Preset previews of the editor | `PresetPreviewControllerTest` | PASS (5/5) |
+| Paste Adjustments over `PastePackageToTargets` | `AdjustmentTransferControllerTest` | PASS (4/4) |
+| `alcedo_main` links; the new and changed QML compiles (qmlcachegen) | `alcedo_main` | PASS |
+| Time record, release build: `DISABLED_RecordApplyPresetTimeAgainstPasteFor200Photos` | `PresetApplyTargetsTest` (`build/release`) | Paste 10285 ms, Apply Preset 9996 ms (means of the runs Paste, Preset, Preset, Paste); ratio 0.97 |
+
+Commands: `cmd /c "scripts\msvc_env.cmd --build build\debug --target ThumbnailCommittedRenderTest PresetControllerTest PresetApplyTargetsTest PresetPreviewControllerTest AdjustmentTransferControllerTest --parallel 8"`,
+`... --target alcedo_main`, then each test binary from its `_runtime` folder with
+`QT_QPA_PLATFORM=offscreen`. Time record: `build/release` configured with
+`-DALCEDO_BUILD_TESTS=ON`, `--target PresetApplyTargetsTest`, then
+`PresetApplyTargetsTest.exe --gtest_also_run_disabled_tests --gtest_filter=*RecordApplyPresetTime*`.
+Suite totals: `PresetApplyTargetsTest` 7/7, `ThumbnailCommittedRenderTest` 13/13,
+`PresetControllerTest` 9/9, `PresetPreviewControllerTest` 5/5,
+`AdjustmentTransferControllerTest` 4/4. No full suite run.
+
+The first time record ran Paste before Preset in each round and gave a ratio of 1.26: each run
+adds a Version to each photo, and a run takes about 3 s longer per Version (#1111). The record
+now orders the runs so that both paths have the same mean Version count.
+
+**Checklist / exit condition (PS4A part):**
+
+- [x] Each test of PS4A above passes (`PresetsApplyCommandStoresAgentAttribution` is PS4B).
+- [x] Time record: Apply Preset is not above Paste by more than 5% (ratio 0.97).
+- [ ] The user confirms the dialog in the running application.
+
+**LOC note:** `ApplyPresetDialog.qml` 327, `library_preset_preview_source.cpp` 151,
+`library_preset_preview_source.hpp` 86, `preset_controller.cpp` 367, `thumbnail_service.cpp`
+1079 (was 989; above 1000 lines after this phase: the preview operation reuses the stages of the
+file instead of a copy; a split of the rendition stages into their own file is a refactor of
+its own), `preset_apply_targets_test.cpp` 336, `preset_test_support.hpp` 153.
+
+**Remaining gaps:** the dialog and the context menu entry have no automated test (pure UI, plan
+section 11).
 
 ---
 

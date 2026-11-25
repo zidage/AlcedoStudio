@@ -14,6 +14,7 @@
 
 #include "app/editor_session_service.hpp"
 #include "app/preset_library_service.hpp"
+#include "type/type.hpp"
 #include "ui/alcedo_main/album_backend/browser_preview_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
@@ -48,6 +49,15 @@ class PresetPreviewSource {
   virtual auto               RenderPresetPreview(EditorPresetPreviewRequest     request,
                                                  EditorBrowserPreviewCompletion on_complete, std::string* error)
       -> bool = 0;
+  /**
+   * @brief Show the previews on the library photo @p element_id, image @p image_id.
+   *
+   * Only a source of a library photo (LibraryPresetPreviewSource) has a photo to choose; the
+   * default refuses, because the source of the editor follows the open photo.
+   * @return false with @p error when the source refuses the photo.
+   */
+  virtual auto ShowLibraryPhoto(sl_element_id_t element_id, image_id_t image_id, std::string* error)
+      -> bool;
 };
 
 /**
@@ -86,6 +96,18 @@ class PresetPreviewController final : public BrowserPreviewController {
   /// Use @p source (not owned; must outlive this object or be replaced) instead of the session
   /// and library. The caller calls @ref Refresh when the source changes.
   void SetSource(PresetPreviewSource* source);
+  /// Use @p source and own it: the source of a library photo (the Apply Preset dialog).
+  void             SetOwnedSource(std::unique_ptr<PresetPreviewSource> source);
+
+  /**
+   * @brief Show the previews on the library photo @p elementId, image @p imageId (the first
+   *        target of the Apply Preset dialog, plan 2.3).
+   *
+   * Hands the photo to the source (PresetPreviewSource::ShowLibraryPhoto), then renders the
+   * watched tiles again. A refused photo shows no previews and is written to the log.
+   * @return false when the source refuses the photo.
+   */
+  Q_INVOKABLE bool showLibraryPhoto(uint elementId, uint imageId);
 
  protected:
   [[nodiscard]] auto PreviewImageId() const -> std::uint64_t override;
@@ -103,8 +125,12 @@ class PresetPreviewController final : public BrowserPreviewController {
 
   QPointer<EditorSessionController>      session_;
   QPointer<alcedo::PresetLibraryService> library_;
+  /// The source that this controller owns: the session source, or the one of SetOwnedSource.
   std::unique_ptr<PresetPreviewSource>   session_source_;
-  PresetPreviewSource*                   source_ = nullptr;
+  PresetPreviewSource*                   source_          = nullptr;
+  /// False after SetSource or SetOwnedSource: SetEditorSession and SetLibrary then keep the
+  /// source and only follow the change signals.
+  bool                                   follows_session_ = true;
 };
 
 }  // namespace alcedo::ui
