@@ -148,58 +148,68 @@ ColumnLayout {
         text: root.errorText
     }
 
-    PresetBrowser {
-        id: presetBrowser
+    // The slot takes the height under the header, so the header stays at the top. The
+    // splitter can shrink the part to its header; the browser shows when the slot has
+    // room for it. The slot decides, not the browser: a layout gives no height to a
+    // hidden item, so a browser hidden at height 0 never shows again.
+    Item {
+        id: browserSlot
+        objectName: "editorPresetsBrowserSlot"
         Layout.fillWidth: true
         Layout.fillHeight: true
-        visible: height > 0
-        model: root.presets ? root.presets.presets : null
-        previewSource: root.presetPreview
-        dropHighlight: root.versionDropHighlight || presetFileDrop.urls.length > 0
-        onActivated: function (presetId) {
-            if (root.canApply)
-                root.applyRequested(presetId)
-        }
-        onContextRequested: function (presetId, sceneX, sceneY) {
-            tileMenu.presetId = presetId
-            tileMenu.available = presetBrowser.roleAt(presetBrowser.model.rowOfPreset(presetId),
-                                                      PresetListModel.AvailableRole) === true
-            tileMenu.parent = Overlay.overlay
-            tileMenu.openAt(sceneX, sceneY)
-        }
-        onPresetDragStarted: function (presetId, name, sceneX, sceneY) {
-            root.presetDragStarted(presetId, name, sceneX, sceneY)
-        }
-        onPresetDragMoved: function (sceneX, sceneY) { root.presetDragMoved(sceneX, sceneY) }
-        onPresetDragFinished: function (sceneX, sceneY) { root.presetDragFinished(sceneX, sceneY) }
-        onRenameCommitted: function (presetId, name) { root.commitRename(presetId, name) }
-        onRenameCanceled: presetBrowser.renamePresetId = ""
 
-        // Drop of .alcpreset files from the system: Add (plan 2.2). The action is Copy, so
-        // the file manager keeps the source files.
-        DropArea {
-            id: presetFileDrop
-            objectName: "editorPresetsFileDropArea"
+        PresetBrowser {
+            id: presetBrowser
             anchors.fill: parent
-            keys: ["text/uri-list"]
-            property var urls: []
-            onEntered: function (drag) {
-                urls = root.presets ? root.presetFileUrls(drag) : []
-                if (urls.length > 0)
-                    drag.accept(Qt.CopyAction)
-                else
-                    drag.accepted = false
+            visible: browserSlot.height >= appTheme.spaceXl
+            model: root.presets ? root.presets.presets : null
+            previewSource: root.presetPreview
+            dropHighlight: root.versionDropHighlight || presetFileDrop.urls.length > 0
+            onActivated: function (presetId) {
+                if (root.canApply)
+                    root.applyRequested(presetId)
             }
-            onExited: urls = []
-            onDropped: function (drop) {
-                const dropped = urls.length > 0 ? urls : root.presetFileUrls(drop)
-                urls = []
-                if (dropped.length === 0) {
-                    drop.accepted = false
-                    return
+            onContextRequested: function (presetId, sceneX, sceneY) {
+                tileMenu.presetId = presetId
+                tileMenu.available = presetBrowser.roleAt(presetBrowser.model.rowOfPreset(presetId),
+                                                          PresetListModel.AvailableRole) === true
+                tileMenu.parent = Overlay.overlay
+                tileMenu.openAt(sceneX, sceneY)
+            }
+            onPresetDragStarted: function (presetId, name, sceneX, sceneY) {
+                root.presetDragStarted(presetId, name, sceneX, sceneY)
+            }
+            onPresetDragMoved: function (sceneX, sceneY) { root.presetDragMoved(sceneX, sceneY) }
+            onPresetDragFinished: function (sceneX, sceneY) { root.presetDragFinished(sceneX, sceneY) }
+            onRenameCommitted: function (presetId, name) { root.commitRename(presetId, name) }
+            onRenameCanceled: presetBrowser.renamePresetId = ""
+
+            // Drop of .alcpreset files from the system: Add (plan 2.2). The action is Copy, so
+            // the file manager keeps the source files.
+            DropArea {
+                id: presetFileDrop
+                objectName: "editorPresetsFileDropArea"
+                anchors.fill: parent
+                keys: ["text/uri-list"]
+                property var urls: []
+                onEntered: function (drag) {
+                    urls = root.presets ? root.presetFileUrls(drag) : []
+                    if (urls.length > 0)
+                        drag.accept(Qt.CopyAction)
+                    else
+                        drag.accepted = false
                 }
-                drop.accept(Qt.CopyAction)
-                root.addFiles(dropped)
+                onExited: urls = []
+                onDropped: function (drop) {
+                    const dropped = urls.length > 0 ? urls : root.presetFileUrls(drop)
+                    urls = []
+                    if (dropped.length === 0) {
+                        drop.accepted = false
+                        return
+                    }
+                    drop.accept(Qt.CopyAction)
+                    root.addFiles(dropped)
+                }
             }
         }
     }
