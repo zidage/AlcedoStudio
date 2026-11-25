@@ -499,7 +499,7 @@ auto MountService::ScanMount(const MountScanRequest& request) -> MountScanResult
     return result;
   }
   try {
-    RecordVolumeReached(mount);
+    result.volume_name_updated = RecordVolumeReached(mount);
   } catch (const std::exception& e) {
     result.status = MountScanStatus::kStorageFailure;
     result.error  = e.what();
@@ -850,13 +850,15 @@ void MountService::SetOnline(mount_id_t mount_id, std::filesystem::path mount_po
   session_states_[mount_id] = MountSessionState{MountReachability::kOnline, std::move(mount_point)};
 }
 
-void MountService::RecordVolumeReached(const MountRootRecord& mount) {
+auto MountService::RecordVolumeReached(const MountRootRecord& mount) -> bool {
   auto label = read_volume_label_(mount.root_path);
   SetOnline(mount.id, std::move(label.mount_point));
   // An unchanged name is not written again, so a scan that finds no change writes nothing.
-  if (label.name != mount.volume_name) {
-    storage_->GetMountStore().UpdateMountVolumeName(mount.id, label.name);
+  if (label.name == mount.volume_name) {
+    return false;
   }
+  storage_->GetMountStore().UpdateMountVolumeName(mount.id, label.name);
+  return true;
 }
 
 }  // namespace alcedo
