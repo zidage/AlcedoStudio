@@ -20,6 +20,7 @@ class QQmlEngine;
 #include "app/download_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/lut_library_service.hpp"
+#include "app/preset_library_service.hpp"
 #include "app/lut_package_service.hpp"
 #include "app/model_download_service.hpp"
 #include "app/update_service.hpp"
@@ -53,6 +54,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 #include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
+#include "ui/alcedo_main/album_backend/preset_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_launch_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/raw_import_look_settings_model.hpp"
@@ -87,6 +89,10 @@ class ApplicationModuleHost final : public QObject {
   /// DCP library folder and its scans (Settings > LUTs and Color Management).
   Q_PROPERTY(
       alcedo::CameraProfileLibraryService* cameraProfiles READ camera_profiles CONSTANT)
+  /// Preset folder, its inventory, and its package cache (edit presets plan, PS1).
+  Q_PROPERTY(alcedo::PresetLibraryService* presetLibrary READ preset_library CONSTANT)
+  /// Preset browser rows and commands of the Versions panel (edit presets plan, PS2).
+  Q_PROPERTY(PresetController* presets READ presets CONSTANT)
   /// Signed AI model package feed and the AI Mask model set install (AI Models plan, AM1).
   Q_PROPERTY(alcedo::AiModelPackageService* aiModelPackages READ ai_model_packages CONSTANT)
   /// LUT browser rows over lutLibrary; one instance shared by every LUT surface (plan 6.4).
@@ -149,6 +155,8 @@ class ApplicationModuleHost final : public QObject {
     std::function<alcedo::LutLibraryServiceOptions()>     library_options;
     std::function<alcedo::LutPackageServiceOptions()>     package_options;
     std::function<alcedo::AiModelPackageServiceOptions()> ai_model_package_options;
+    /// Preset library options; the host sets the LUT reference lookup when it has none.
+    std::function<alcedo::PresetLibraryServiceOptions()>  preset_library_options;
   };
 
   explicit ApplicationModuleHost(QObject* parent = nullptr, LifecycleObserver observer = {},
@@ -183,6 +191,9 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto camera_profiles() -> alcedo::CameraProfileLibraryService* {
     return camera_profiles_.get();
   }
+  [[nodiscard]] auto preset_library() -> alcedo::PresetLibraryService* {
+    return preset_library_.get();
+  }
   [[nodiscard]] auto ai_model_packages() -> alcedo::AiModelPackageService* {
     return ai_model_packages_.get();
   }
@@ -195,6 +206,7 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto adjustment_transfer() -> AdjustmentTransferController* {
     return adjustment_transfer_.get();
   }
+  [[nodiscard]] auto presets() -> PresetController* { return presets_.get(); }
 
   [[nodiscard]] auto editor_session() -> EditorSessionController* { return editor_session_.get(); }
   [[nodiscard]] auto editor_comparison() -> EditorComparisonController* {
@@ -284,6 +296,8 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<alcedo::UpdateService>               updates_;
   std::unique_ptr<alcedo::LutLibraryService>           lut_library_;
   std::unique_ptr<alcedo::LutPackageService>           lut_packages_;
+  /// Saves read LUT references from lut_library_, so it is destroyed before lut_library_.
+  std::unique_ptr<alcedo::PresetLibraryService>        preset_library_;
   std::unique_ptr<alcedo::CameraProfileLibraryService> camera_profiles_;
   std::unique_ptr<ProjectModule>                       project_;
   std::unique_ptr<LibraryModule>                       library_;
@@ -301,6 +315,8 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<ExportRecipeBuilder>                 export_recipe_;
   std::unique_ptr<NikonHeRecoveryController>           nikon_he_recovery_;
   std::unique_ptr<AdjustmentTransferController>        adjustment_transfer_;
+  /// Reads the Copy dialog model of adjustment_transfer_, so it is destroyed before it.
+  std::unique_ptr<PresetController>                    presets_;
   std::unique_ptr<alcedo::EditorSessionRuntime>        editor_session_runtime_;
   std::shared_ptr<EditorSessionRenderSchedulerPort>    editor_session_scheduler_;
   std::unique_ptr<EditorSessionController>             editor_session_;

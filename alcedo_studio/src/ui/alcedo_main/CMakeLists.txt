@@ -297,6 +297,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_dialog_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_list_models.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_apply_coordinator.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/preset_list_model.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/preset_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/controllers/image_controller.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/application_module_host.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_module.hpp"
@@ -399,6 +401,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_dialog_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_list_models.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_apply_coordinator.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/preset_list_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/preset_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/controllers/image_controller.hpp"
 )
 
@@ -462,6 +466,7 @@ target_link_libraries(AlbumBackendLib
         UpdateService
         LutLibraryService
         LutPackageService
+        PresetLibraryService
         CameraProfileLibraryService
         AiModelPackageService
         AiModelDownloadTaskPublisher
@@ -902,6 +907,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdatesSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LutSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CameraProfileFolderTile.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/PresetSettingsSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/DisplayProfileTile.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelsSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelDownloadStatementDialog.qml"

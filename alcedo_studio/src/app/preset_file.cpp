@@ -657,6 +657,34 @@ auto PresetNameError(std::string_view name) -> std::string {
   return {};
 }
 
+auto PresetNameFromLabel(std::string_view label) -> std::string {
+  QString name = QString::fromUtf8(label.data(), static_cast<qsizetype>(label.size()));
+  for (auto& c : name) {
+    if (c.unicode() < 0x20 || c.unicode() == 0x7F || QStringView{u"/\\<>:\"|?*"}.contains(c)) {
+      c = QLatin1Char('-');
+    }
+  }
+  const auto trim = [](QString text) {
+    text = text.trimmed();
+    while (text.endsWith(QLatin1Char('.')) || text.endsWith(QLatin1Char(' '))) {
+      text.chop(1);
+    }
+    return text;
+  };
+  name = trim(name);
+  if (static_cast<std::size_t>(name.size()) > kPresetMaxNameLength) {
+    name = trim(name.left(static_cast<qsizetype>(kPresetMaxNameLength)));
+  }
+  if (name.isEmpty()) {
+    return "Preset";
+  }
+  std::string result = name.toStdString();
+  if (IsReservedDeviceName(result)) {
+    result += " Preset";
+  }
+  return result;
+}
+
 auto PresetFileNameFor(std::string_view name) -> fs::path {
   return PathFromUtf8(std::string{name} + std::string{kPresetFileExtension});
 }

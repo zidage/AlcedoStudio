@@ -500,4 +500,37 @@ auto AdjustmentTransferCatalogService::BuildNodeDescriptors(const PipelineDocume
   }
 }
 
+auto SummarizeTransferPackage(const AdjustmentTransferPackage& package)
+    -> std::vector<AdjustmentTransferPackageNodeSummary> {
+  std::vector<AdjustmentTransferPackageNodeSummary> nodes;
+  const auto& develop = package.develop_;
+  if (!develop.Empty()) {
+    AdjustmentTransferPackageNodeSummary row{std::string{kDevelopRowDisplayName}, {}};
+    if (develop.raw_decode.has_value()) row.item_names.emplace_back("RAW Decode");
+    if (develop.color_temp.has_value()) row.item_names.emplace_back("White Balance");
+    if (develop.lens_calib.has_value()) row.item_names.emplace_back("Lens Correction");
+    if (develop.geometry.has_value()) row.item_names.emplace_back("Crop and Rotate");
+    nodes.push_back(std::move(row));
+  }
+  for (const auto& grade : package.color_grades_) {
+    AdjustmentTransferPackageNodeSummary row{grade.display_name, {}};
+    if (grade.enabled.has_value()) row.item_names.emplace_back("Enabled");
+    if (grade.mix.has_value()) row.item_names.emplace_back("Mix");
+    for (const auto& adjustment : grade.adjustments) {
+      row.item_names.push_back(AdjustmentDisplayName(adjustment.type));
+    }
+    if (grade.masks.has_value()) row.item_names.emplace_back("Masks");
+    nodes.push_back(std::move(row));
+  }
+  if (!package.drt_post_.Empty()) {
+    AdjustmentTransferPackageNodeSummary row{std::string{kDrtPostRowDisplayName}, {}};
+    if (package.drt_post_.params.has_value()) row.item_names.emplace_back("Display Transform");
+    for (const auto& adjustment : package.drt_post_.adjustments) {
+      row.item_names.push_back(AdjustmentDisplayName(adjustment.type));
+    }
+    nodes.push_back(std::move(row));
+  }
+  return nodes;
+}
+
 }  // namespace alcedo

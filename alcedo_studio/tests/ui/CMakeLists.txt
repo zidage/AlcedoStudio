@@ -677,6 +677,10 @@ alcedo_register_test_target(AdjustmentTransferDialogModelTest ui)
 def_ui_test(AdjustmentTransferControllerTest adjustment_transfer_controller_test.cpp)
 alcedo_register_test_target(AdjustmentTransferControllerTest ui)
 
+# Preset commands of the Versions panel (edit presets plan, PS2).
+def_ui_test(PresetControllerTest preset_controller_test.cpp)
+alcedo_register_test_target(PresetControllerTest ui)
+
 # Phase 0: deterministic editor RHI checks (backend parse, fixtures, lease schema).
 add_executable(EditorRhiContractsTest
     ${ALCEDO_TEST_ROOT}/ui/editor_rhi_contracts_test.cpp
