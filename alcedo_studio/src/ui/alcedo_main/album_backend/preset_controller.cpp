@@ -26,7 +26,12 @@
 namespace alcedo::ui {
 namespace {
 
-constexpr auto kBrowserHeightKey = "presets/browserHeight";
+constexpr auto kBrowserHeightKey   = "presets/browserHeight";
+constexpr auto kBrowserViewModeKey = "presets/browserViewMode";
+
+auto           IsBrowserViewMode(const QString& view_mode) -> bool {
+  return view_mode == QStringLiteral("grid") || view_mode == QStringLiteral("list");
+}
 
 auto           ErrorResult(const QString& message) -> QVariantMap {
   return {{"success", false}, {"message", message}};
@@ -92,6 +97,10 @@ PresetController::PresetController(alcedo::PresetLibraryService*  library,
     open_url_ = [](const QUrl& url) { return QDesktopServices::openUrl(url); };
   }
   browser_height_ = QSettings().value(QString::fromLatin1(kBrowserHeightKey), 0.0).toDouble();
+  browser_view_mode_ = QSettings().value(QString::fromLatin1(kBrowserViewModeKey)).toString();
+  if (!IsBrowserViewMode(browser_view_mode_)) {
+    browser_view_mode_ = QStringLiteral("grid");
+  }
   if (library_ != nullptr) {
     connect(library_, &alcedo::PresetLibraryService::OperationFinished, this,
             &PresetController::PublishOperation);
@@ -106,6 +115,15 @@ void PresetController::SetBrowserHeight(double height) {
   browser_height_ = height;
   QSettings().setValue(QString::fromLatin1(kBrowserHeightKey), height);
   emit BrowserHeightChanged();
+}
+
+void PresetController::SetBrowserViewMode(const QString& view_mode) {
+  if (!IsBrowserViewMode(view_mode) || view_mode == browser_view_mode_) {
+    return;
+  }
+  browser_view_mode_ = view_mode;
+  QSettings().setValue(QString::fromLatin1(kBrowserViewModeKey), view_mode);
+  emit BrowserViewModeChanged();
 }
 
 void PresetController::SetEditorSession(EditorSessionController* editor_session) {

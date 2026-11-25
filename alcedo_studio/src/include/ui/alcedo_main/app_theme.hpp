@@ -125,6 +125,8 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorPresetPaneHeight READ editorPresetPaneHeight CONSTANT)
   Q_PROPERTY(int editorVersionsPartMinHeight READ editorVersionsPartMinHeight CONSTANT)
   Q_PROPERTY(int editorPresetTileMinWidth READ editorPresetTileMinWidth CONSTANT)
+  // List rows of the LUT and preset browsers: width of the 3:2 preview slot left of the name.
+  Q_PROPERTY(int editorBrowserListThumbWidth READ editorBrowserListThumbWidth CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
   // collectionsSidebarWidth is the default width; the user drags it in the min..max range.
   Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
@@ -480,6 +482,7 @@ class AppTheme final : public QObject {
   auto        editorPresetPaneHeight() const -> int;
   auto        editorVersionsPartMinHeight() const -> int;
   auto        editorPresetTileMinWidth() const -> int;
+  auto        editorBrowserListThumbWidth() const -> int;
   auto        collectionsSidebarWidth() const -> int;
   auto        collectionsSidebarMinWidth() const -> int;
   auto        collectionsSidebarMaxWidth() const -> int;

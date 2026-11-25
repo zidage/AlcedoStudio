@@ -2592,6 +2592,32 @@ Alcedo 将改用 %1。</translation>
         <source>No presets</source>
         <translation>没有预设</translation>
     </message>
+    <message>
+        <source>Search Presets</source>
+        <translation>搜索预设</translation>
+    </message>
+    <message>
+        <source>No presets match</source>
+        <translation>没有匹配的预设</translation>
+    </message>
+</context>
+<context>
+    <name>BrowserSearchField</name>
+    <message>
+        <source>Clear search</source>
+        <translation>清除搜索</translation>
+    </message>
+</context>
+<context>
+    <name>BrowserViewModeToggle</name>
+    <message>
+        <source>Grid view</source>
+        <translation>网格视图</translation>
+    </message>
+    <message>
+        <source>List view</source>
+        <translation>列表视图</translation>
+    </message>
 </context>
 <context>
     <name>PresetTile</name>

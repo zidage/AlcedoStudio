@@ -1,13 +1,12 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Controls.impl
-import QtQuick.Effects
 import QtQuick.Layouts
 
 // One preset of the preset browser (edit presets plan 2.1): an image area and the
-// name below it. The image area shows the preview of the preset on the open photo
-// (plan 2.4): the tile watches its preset on previewSource while it exists, so only
-// instantiated tiles render a preview. The area stays neutral until the preview is
+// name below it, or in the list layout a small image area left of the name. The
+// image area shows the preview of the preset on the open photo (plan 2.4): the tile
+// watches its preset on previewSource while it exists, so only instantiated tiles
+// render a preview. The area stays neutral until the preview is
 // ready. A preset that is not available, and a preset whose preview failed, show the
 // warning icon; the tooltip of an unavailable preset gives the reason. Names and
 // tooltips are plain text (plan 3.5).
@@ -26,6 +25,8 @@ Item {
     property var previewSource: null
     property bool selected: false
     property bool renaming: false
+    // List layout: a compact row with a small image area left of the name.
+    property bool listMode: false
     // Plain-text summary of the package; read by the browser when the tooltip opens.
     property string summary: ""
 
@@ -52,10 +53,6 @@ Item {
     readonly property bool previewFailed: watchedPresetId.length > 0 && !!previewSource
                                           && previewSource.previewFailed(watchedPresetId,
                                                                          previewSource.revision) === true
-    readonly property bool previewPainted: previewUrl.length > 0
-                                           && previewImage.status === Image.Ready
-                                           && previewImage.implicitWidth > 0
-                                           && previewImage.implicitHeight > 0
 
     function syncPreviewWatch() {
         if (previewPresetId === watchedPresetId)
@@ -73,7 +70,8 @@ Item {
             previewSource.unwatch(watchedPresetId)
     }
 
-    implicitHeight: tileColumn.implicitHeight + appTheme.spaceSm * 2
+    implicitHeight: tileColumn.implicitHeight
+                    + (listMode ? appTheme.spaceSm + appTheme.spaceXs : appTheme.spaceSm * 2)
     Accessible.role: Accessible.ListItem
     Accessible.name: tile.name
     Accessible.description: tile.available ? "" : tile.summary
@@ -87,150 +85,116 @@ Item {
         border.color: appTheme.graphSelectionOutlineColor
     }
 
-    ColumnLayout {
+    // Grid: the image area above the name. List: a small image area left of it.
+    GridLayout {
         id: tileColumn
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.top: tile.listMode ? undefined : parent.top
+        anchors.verticalCenter: tile.listMode ? parent.verticalCenter : undefined
         anchors.margins: appTheme.spaceSm
-        spacing: appTheme.spaceXs
+        anchors.topMargin: tile.listMode ? 0 : appTheme.spaceSm
+        columns: tile.listMode ? 2 : 1
+        columnSpacing: appTheme.spaceSm
+        rowSpacing: appTheme.spaceXs
 
-        Rectangle {
+        // The photo fits into the 3:2 area, as in the LUT browser. A preset that is not
+        // available, and a failed preview, show the warning icon.
+        BrowserPreviewThumb {
             id: imageArea
             objectName: "presetTileImageArea"
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.round(width / tile.imageAspect)
-            radius: appTheme.controlRadiusSmall
+            namePrefix: "presetTile"
+            readonly property real slotWidth: tile.listMode ? appTheme.editorBrowserListThumbWidth
+                                                            : width
+            Layout.fillWidth: !tile.listMode
+            Layout.preferredWidth: tile.listMode ? appTheme.editorBrowserListThumbWidth : -1
+            Layout.preferredHeight: Math.round(slotWidth / tile.imageAspect)
+            Layout.alignment: Qt.AlignVCenter
             color: appTheme.cardSurfaceColor
+            previewUrl: tile.previewUrl
+            placeholderSource: !tile.available || tile.previewFailed ? "qrc:/panel_icons/info.svg" : ""
+            placeholderColor: appTheme.alertBadgeFillColor
+        }
 
-            // The photo fits into the 3:2 area, as in the LUT browser.
-            Item {
-                id: previewPhoto
-                objectName: "presetTilePreview"
-                readonly property real fitScale: tile.previewPainted
-                                                 ? Math.min(imageArea.width / previewImage.implicitWidth,
-                                                            imageArea.height / previewImage.implicitHeight)
-                                                 : 1
-                width: tile.previewPainted ? Math.round(previewImage.implicitWidth * fitScale)
-                                           : imageArea.width
-                height: tile.previewPainted ? Math.round(previewImage.implicitHeight * fitScale)
-                                            : imageArea.height
-                x: Math.round((imageArea.width - width) / 2)
-                y: Math.round((imageArea.height - height) / 2)
-                visible: tile.previewUrl.length > 0
+        ColumnLayout {
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            spacing: 0
 
-                Rectangle {
-                    id: previewMask
-                    anchors.fill: parent
+            Label {
+                objectName: "presetTileName"
+                Layout.fillWidth: true
+                visible: !tile.renaming
+                horizontalAlignment: tile.listMode ? Text.AlignLeft : Text.AlignHCenter
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                textFormat: Text.PlainText
+                text: tile.name
+                color: tile.available ? appTheme.textColor : appTheme.textMutedColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: tile.listMode ? appTheme.fontSizeBody : appTheme.fontSizeCaption
+                font.weight: tile.selected ? appTheme.fontWeightStrong : appTheme.fontWeightRegular
+            }
+
+            // Inline rename: Enter commits, Escape cancels, focus loss commits.
+            TextField {
+                id: renameField
+                objectName: "presetTileRenameField"
+                Layout.fillWidth: true
+                visible: tile.renaming
+                color: appTheme.textColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: tile.listMode ? appTheme.fontSizeBody : appTheme.fontSizeCaption
+                selectByMouse: true
+                leftPadding: appTheme.spaceXs
+                rightPadding: appTheme.spaceXs
+                topPadding: 0
+                bottomPadding: 0
+                selectionColor: appTheme.editorListSelectedFillColor
+                selectedTextColor: appTheme.editorListSelectedInkColor
+                Accessible.name: qsTr("Rename Preset")
+                background: Rectangle {
                     radius: appTheme.controlRadiusSmall
-                    visible: false
-                    layer.enabled: true
+                    color: appTheme.bgBaseColor
+                    border.width: 1
+                    border.color: renameField.activeFocus ? appTheme.textColor : appTheme.cardBorderColor
                 }
 
-                Image {
-                    id: previewImage
-                    objectName: "presetTilePreviewImage"
-                    anchors.fill: parent
-                    source: tile.previewUrl
-                    asynchronous: true
-                    // Every shown preview has its own URL; the controller keeps the pixels.
-                    cache: false
-                    fillMode: Image.PreserveAspectFit
-                    opacity: tile.previewPainted ? 1 : 0
-                    layer.enabled: tile.previewPainted
-                    layer.effect: MultiEffect {
-                        maskEnabled: true
-                        maskSource: previewMask
-                    }
+                property bool finished: false
+                function finish(commit) {
+                    if (finished || !tile.renaming)
+                        return
+                    finished = true
+                    if (commit)
+                        tile.renameCommitted(text.trim())
+                    else
+                        tile.renameCanceled()
                 }
+                onVisibleChanged: {
+                    if (!visible)
+                        return
+                    finished = false
+                    text = tile.name
+                    Qt.callLater(function () {
+                        renameField.forceActiveFocus()
+                        renameField.selectAll()
+                    })
+                }
+                // The field keeps Enter. TextInput passes a handled Return on to its parents,
+                // and the browser list applies the selected preset on Enter.
+                Keys.onReturnPressed: function (event) {
+                    finish(true)
+                    event.accepted = true
+                }
+                Keys.onEnterPressed: function (event) {
+                    finish(true)
+                    event.accepted = true
+                }
+                Keys.onEscapePressed: function (event) {
+                    finish(false)
+                    event.accepted = true
+                }
+                onEditingFinished: finish(true)
             }
-
-            ColorImage {
-                objectName: "presetTileUnavailableIcon"
-                anchors.centerIn: parent
-                width: appTheme.editorLutTileIconSize
-                height: appTheme.editorLutTileIconSize
-                visible: !tile.available || (tile.previewFailed && !tile.previewPainted)
-                source: "qrc:/panel_icons/info.svg"
-                sourceSize.width: appTheme.editorLutTileIconSize * 2
-                sourceSize.height: appTheme.editorLutTileIconSize * 2
-                color: appTheme.alertBadgeFillColor
-            }
-        }
-
-        Label {
-            objectName: "presetTileName"
-            Layout.fillWidth: true
-            visible: !tile.renaming
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-            textFormat: Text.PlainText
-            text: tile.name
-            color: tile.available ? appTheme.textColor : appTheme.textMutedColor
-            font.family: appTheme.uiFontFamily
-            font.pixelSize: appTheme.fontSizeCaption
-            font.weight: tile.selected ? appTheme.fontWeightStrong : appTheme.fontWeightRegular
-        }
-
-        // Inline rename: Enter commits, Escape cancels, focus loss commits.
-        TextField {
-            id: renameField
-            objectName: "presetTileRenameField"
-            Layout.fillWidth: true
-            visible: tile.renaming
-            color: appTheme.textColor
-            font.family: appTheme.uiFontFamily
-            font.pixelSize: appTheme.fontSizeCaption
-            selectByMouse: true
-            leftPadding: appTheme.spaceXs
-            rightPadding: appTheme.spaceXs
-            topPadding: 0
-            bottomPadding: 0
-            selectionColor: appTheme.editorListSelectedFillColor
-            selectedTextColor: appTheme.editorListSelectedInkColor
-            Accessible.name: qsTr("Rename Preset")
-            background: Rectangle {
-                radius: appTheme.controlRadiusSmall
-                color: appTheme.bgBaseColor
-                border.width: 1
-                border.color: renameField.activeFocus ? appTheme.textColor : appTheme.cardBorderColor
-            }
-
-            property bool finished: false
-            function finish(commit) {
-                if (finished || !tile.renaming)
-                    return
-                finished = true
-                if (commit)
-                    tile.renameCommitted(text.trim())
-                else
-                    tile.renameCanceled()
-            }
-            onVisibleChanged: {
-                if (!visible)
-                    return
-                finished = false
-                text = tile.name
-                Qt.callLater(function () {
-                    renameField.forceActiveFocus()
-                    renameField.selectAll()
-                })
-            }
-            // The field keeps Enter. TextInput passes a handled Return on to its parents,
-            // and the browser list applies the selected preset on Enter.
-            Keys.onReturnPressed: function (event) {
-                finish(true)
-                event.accepted = true
-            }
-            Keys.onEnterPressed: function (event) {
-                finish(true)
-                event.accepted = true
-            }
-            Keys.onEscapePressed: function (event) {
-                finish(false)
-                event.accepted = true
-            }
-            onEditingFinished: finish(true)
         }
     }
 

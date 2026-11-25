@@ -46,6 +46,9 @@ class PresetController final : public QObject {
   /// Height of the preset part of the Versions panel, in pixels; stored in `presets/browserHeight`.
   Q_PROPERTY(
       double browserHeight READ browser_height WRITE SetBrowserHeight NOTIFY BrowserHeightChanged)
+  /// Layout of the preset browsers, "grid" or "list"; stored in `presets/browserViewMode`.
+  Q_PROPERTY(QString browserViewMode READ browser_view_mode WRITE SetBrowserViewMode NOTIFY
+                 BrowserViewModeChanged)
 
  public:
   /// Opens a folder in the file manager. Returns false when the system refuses.
@@ -64,6 +67,9 @@ class PresetController final : public QObject {
   [[nodiscard]] auto      library() -> alcedo::PresetLibraryService* { return library_; }
   [[nodiscard]] auto      browser_height() const -> double { return browser_height_; }
   void                    SetBrowserHeight(double height);
+  [[nodiscard]] auto      browser_view_mode() const -> QString { return browser_view_mode_; }
+  /// Ignores a value other than "grid" and "list".
+  void                    SetBrowserViewMode(const QString& view_mode);
   /// The session of the open photo: the source of Save by drag and the target of an apply.
   void                    SetEditorSession(EditorSessionController* editor_session);
   /// The owner of the multi-target Paste, for an apply to library photos (plan 2.3).
@@ -126,6 +132,7 @@ class PresetController final : public QObject {
 
  signals:
   void BrowserHeightChanged();
+  void BrowserViewModeChanged();
   /**
    * @brief A file operation of the service ended.
    *
@@ -158,6 +165,7 @@ class PresetController final : public QObject {
   OpenUrl                                 open_url_;
   PresetListModel*                        presets_        = nullptr;  // owned child
   double                                  browser_height_ = 0.0;
+  QString                                 browser_view_mode_;
 };
 
 }  // namespace alcedo::ui
