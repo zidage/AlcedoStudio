@@ -102,6 +102,7 @@ Item {
         id: settingsDialogObj
         objectName: "settingsDialog"
         z: 30
+        windowHost: root.host
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
         languageOptions: host.languageOptions
@@ -410,9 +411,12 @@ Item {
         onConfirmed: root.imageActionsController.runDeleteTargets()
     }
 
+    // Above Settings and Welcome (z 30): the window's close button stays usable
+    // while they are open, and the Save / Discard question must show on top.
     EditorCloseConfirmDialog {
         id: editorCloseConfirmDialogObj
         parent: Overlay.overlay
+        z: 40
         theme: root.host
         host: root.host
         blurSource: root.blurSource
@@ -432,6 +436,7 @@ Item {
         id: welcomeDialogObj
         objectName: "welcomeDialog"
         z: 30
+        windowHost: root.host
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
         adapter: welcomePreviewAdapterObj

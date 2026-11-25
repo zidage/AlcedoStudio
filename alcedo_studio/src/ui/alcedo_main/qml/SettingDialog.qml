@@ -19,6 +19,8 @@ Dialog {
     y: 0
 
     property Item blurSource: null
+    // Main window: a drag on the backdrop around the card moves it.
+    property var windowHost: null
     property var languageOptions: []
     property color primaryAccent: appTheme.accentColor
     property color secondaryAccent: appTheme.accentSecondaryColor
@@ -423,6 +425,11 @@ Dialog {
     contentItem: Item {
         implicitWidth: dialog.width
         implicitHeight: dialog.height
+
+        WindowBackdropDragArea {
+            host: dialog.windowHost
+            card: shell
+        }
 
         Rectangle {
             id: shell

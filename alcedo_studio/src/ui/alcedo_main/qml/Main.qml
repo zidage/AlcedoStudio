@@ -737,6 +737,7 @@ ApplicationWindow {
 
         TopToolbar {
             id: topToolbar
+            Layout.rightMargin: windowCaptionLayer.reservedWidth
             theme: root
             host: root
         }
@@ -962,8 +963,20 @@ ApplicationWindow {
     }
 
     WindowResizeHandles {
+        id: windowResizeHandles
         host: root
         active: root.visibility === Window.Windowed && !root.nativeTrafficLightsEnabled
+    }
+
+    // Drawn caption buttons and the toolbar drag strip, above every popup so a
+    // modal dialog cannot take the window's controls away (issue 1140).
+    WindowCaptionLayer {
+        id: windowCaptionLayer
+        host: root
+        theme: root
+        toolbar: topToolbar
+        active: !root.nativeTrafficLightsEnabled
+        resizeInset: windowResizeHandles.active ? windowResizeHandles.edge : 0
     }
 
     // Workspace-scoped commands: the registry scope string tracks the router's
