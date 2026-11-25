@@ -520,6 +520,142 @@ TEST(LensCalibDevelopResolve, ExifNameFocalRangeRejectsProfileWithOtherFocalLeng
   EXPECT_EQ(result.status_, LensProfileStatus::LensNotInDatabase)
       << "matched " << result.matched_lens_maker_ << " / " << result.matched_lens_model_;
   EXPECT_FALSE(LensCalibrationResolver::ShotLensProfile(meta, LensDatabasePath()).has_value());
+
+  // The search by words, which follows when the first search finds nothing, also keeps the named
+  // focal range: a shot at 21 mm fits the Zeiss range, but its name states 21 mm, not 15-30 mm.
+  meta.focal_length_mm_ = 21.0f;
+  EXPECT_EQ(LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), false).status_,
+            LensProfileStatus::LensNotInDatabase);
+}
+
+namespace {
+
+/// A RAW lens name of a Panasonic DC-S5M2 shot, without a lens maker, as the Sigma L-mount
+/// lenses write it.
+auto S5M2Shot(const char* lens_model, float focal_length_mm) -> LensInputMeta {
+  LensInputMeta meta;
+  meta.cam_maker_         = "Panasonic";
+  meta.cam_model_         = "DC-S5M2";
+  meta.lens_model_        = lens_model;
+  meta.focal_length_mm_   = focal_length_mm;
+  meta.aperture_f_number_ = 2.8f;
+  meta.distance_m_        = 10.0f;
+  return meta;
+}
+
+constexpr const char* kSigma28To70Profile = "28-70mm F2.8 DG DN | Contemporary 021";
+
+}  // namespace
+
+// Issue #1142: the Sigma L-mount EXIF name writes spaces around the dash. Lensfun read
+// "28 - 70mm f2.8" as a 70 mm lens and matched the Sigma 70mm f/2.8 DG Macro.
+TEST(LensCalibDevelopResolve, FocalRangeWithSpacesOrEnDashMatchesItsProfile) {
+  const char* names[] = {
+      "28 - 70mm F2.8 DG DN | Contemporary 021",
+      "28-70mm F2.8 DG DN | Contemporary 021",
+      "28\xE2\x80\x93"
+      "70mm F2.8 DG DN | Contemporary 021",
+      "  28 -70mm  F2.8 DG DN | Contemporary 021 ",
+  };
+  for (const char* name : names) {
+    for (const float focal_mm : {28.0f, 50.0f, 70.0f}) {
+      const auto meta = S5M2Shot(name, focal_mm);
+      const auto result =
+          LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), false);
+      ASSERT_EQ(result.status_, LensProfileStatus::Resolved) << name << " at " << focal_mm;
+      EXPECT_EQ(result.matched_lens_maker_, "Sigma") << name << " at " << focal_mm;
+      EXPECT_EQ(result.matched_lens_model_, kSigma28To70Profile) << name << " at " << focal_mm;
+      EXPECT_EQ(result.params_.apply_distortion, 1) << name << " at " << focal_mm;
+
+      const auto shown = LensCalibrationResolver::ShotLensProfile(meta, LensDatabasePath());
+      ASSERT_TRUE(shown.has_value()) << name << " at " << focal_mm;
+      EXPECT_EQ(shown->model_, kSigma28To70Profile) << name << " at " << focal_mm;
+    }
+  }
+}
+
+// A profile whose focal range does not contain the shooting focal length names another lens: a
+// shot at 28 mm is not a shot with a 70 mm prime, whatever the words of the name.
+TEST(LensCalibDevelopResolve, ShotFocalLengthOutsideTheProfileRangeRejectsTheProfile) {
+  const char* macro = "70mm F2.8 DG Macro | Art 018";
+  const auto  at_28 = LensCalibrationResolver::ResolveProfile(S5M2Shot(macro, 28.0f),
+                                                              AllCorrectionsSettings(), false);
+  EXPECT_EQ(at_28.status_, LensProfileStatus::LensNotInDatabase)
+      << "matched " << at_28.matched_lens_maker_ << " / " << at_28.matched_lens_model_;
+  EXPECT_FALSE(LensCalibrationResolver::ShotLensProfile(S5M2Shot(macro, 28.0f), LensDatabasePath())
+                   .has_value());
+
+  const auto at_70 = LensCalibrationResolver::ResolveProfile(S5M2Shot(macro, 70.0f),
+                                                             AllCorrectionsSettings(), false);
+  ASSERT_EQ(at_70.status_, LensProfileStatus::Resolved);
+  EXPECT_EQ(at_70.matched_lens_model_, "Sigma 70mm f/2.8 DG Macro | Art 018");
+}
+
+// Lensfun compares the aperture only with a value that the profile XML states, and most profiles
+// state none. The names state it: an f/2 lens is not the f/3.5-5.6 lens of the same focal range.
+TEST(LensCalibDevelopResolve, NamedApertureRejectsProfileOfAnotherAperture) {
+  const LensMatchCase lenses[] = {
+      {"SONY", "ILCE-1M2", "", "FE 28-70mm F2 GM", 28.0f, 2.0f, "", "", false},
+      {"NIKON CORPORATION", "NIKON Z 8", "", "Viltrox AF 35mm f/1.2 LAB Z", 35.0f, 1.2f, "", "",
+       false},
+      {"NIKON CORPORATION", "NIKON D300", "", "18-125mm f/3.8-5.6", 86.0f, 5.6f, "", "", false},
+  };
+  for (const auto& lens : lenses) {
+    const auto result =
+        LensCalibrationResolver::ResolveProfile(MetaFor(lens), AllCorrectionsSettings(), false);
+    EXPECT_EQ(result.status_, LensProfileStatus::LensNotInDatabase)
+        << lens.lens_model << " matched " << result.matched_lens_maker_ << " / "
+        << result.matched_lens_model_;
+  }
+}
+
+// RAW names that the checks of auto-detect keep matching: a short name whose profile name adds
+// words, and a shot whose recorded focal length (0.2 mm) is no measurement.
+TEST(LensCalibDevelopResolve, ShortRawNameAndUnmeasuredFocalLengthKeepTheirProfiles) {
+  const struct {
+    LensMatchCase lens;
+    const char*   expected_model;
+  } cases[] = {
+      {{"NIKON CORPORATION", "NIKON D7000", "", "17-55mm f/2.8", 35.0f, 2.8f, "", "", false},
+       "Nikon AF-S DX Zoom-Nikkor 17-55mm f/2.8G IF-ED"},
+      {{"SONY", "ILCE-7M5", "", "24-70mm F2.8 DG DN II | Art 024", 0.2f, 2.8f, "", "", false},
+       "24-70mm F2.8 DG DN II | Art 024"},
+  };
+  for (const auto& c : cases) {
+    const auto result =
+        LensCalibrationResolver::ResolveProfile(MetaFor(c.lens), AllCorrectionsSettings(), false);
+    ASSERT_EQ(result.status_, LensProfileStatus::Resolved) << c.lens.lens_model;
+    EXPECT_EQ(result.matched_lens_model_, c.expected_model) << c.lens.lens_model;
+  }
+}
+
+TEST(LensCalibDevelopResolve, PanasonicS5M2DngWithSigma28To70ResolvesItsProfile) {
+  const auto sample_path =
+      std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "lumix" / "s5ii" / "P2625177.dng";
+  if (!std::filesystem::exists(sample_path)) {
+    GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
+  }
+  const auto prepared = RawInputLoader::LoadEncoded(ReadBytes(sample_path), DecodeRes::EIGHTH);
+  EXPECT_EQ(prepared.color_context.lens_model_, "28 - 70mm F2.8 DG DN | Contemporary 021");
+
+  LensInputMeta meta;
+  meta.cam_maker_         = prepared.color_context.camera_make_;
+  meta.cam_model_         = prepared.color_context.camera_model_;
+  meta.lens_maker_        = prepared.color_context.lens_make_;
+  meta.lens_model_        = prepared.color_context.lens_model_;
+  meta.focal_length_mm_   = prepared.color_context.focal_length_mm_;
+  meta.aperture_f_number_ = prepared.color_context.aperture_f_number_;
+  const auto shown        = LensCalibrationResolver::ShotLensProfile(meta, LensDatabasePath());
+  ASSERT_TRUE(shown.has_value());
+  EXPECT_EQ(shown->model_, kSigma28To70Profile);
+
+  DevelopPayload payload;
+  payload.lens_enabled         = true;
+  payload.lens_profile_db_path = LensDatabasePath();
+  const auto runtime           = LensCalibrationResolver::Resolve(
+      payload, prepared.color_context, prepared.CompileSource().develop_output_extent, false);
+  ASSERT_TRUE(runtime.has_value());
+  EXPECT_EQ(runtime->apply_distortion, 1);
 }
 
 // A catalog selection names the lens on the camera, also a lens of another mount on an adapter.
