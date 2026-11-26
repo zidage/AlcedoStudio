@@ -133,6 +133,59 @@ TEST_F(ImportServiceTests, ImportSingleFileTest) {
   import_service->SyncImports(snapshot, L"");
 }
 
+// Sleeve Node Cache Plan SN7: the new file element refers to its Image by id only, so the node
+// cache can drop the element without freeing the Image of the pool.
+TEST_F(ImportServiceTests, ImportedFileElementHoldsItsImageIdAndNoImage) {
+  sl_element_id_t element_id = 0;
+  image_id_t      image_id   = 0;
+  {
+    ProjectService                 project(db_path_, meta_path_);
+    auto                           fs_service       = project.GetSleeveService();
+    auto                           img_pool_service = project.GetImagePoolService();
+    std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+        fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
+
+    std::vector<image_path_t>  paths{TEST_IMG_PATH "/raw/airplane/_DSC1704.NEF"};
+    auto                       import_job = std::make_shared<ImportJob>();
+    std::promise<ImportResult> final_result;
+    auto                       final_result_future = final_result.get_future();
+    import_job->on_finished_                       = [&final_result](const ImportResult& result) {
+      final_result.set_value(result);
+    };
+    import_job = import_service->ImportToFolder(paths, L"", {}, import_job);
+    ASSERT_NE(import_job, nullptr);
+    final_result_future.wait();
+    ASSERT_EQ(final_result_future.get().imported_, 1u);
+
+    const auto snapshot = import_job->import_log_->Snapshot();
+    ASSERT_EQ(snapshot.created_.size(), 1u);
+    element_id = snapshot.created_.front().element_id_;
+    image_id   = snapshot.created_.front().image_id_;
+    ASSERT_NE(element_id, 0u);
+    ASSERT_NE(image_id, 0u);
+
+    const auto file = fs_service->Read<std::shared_ptr<SleeveFile>>([element_id](FileSystem& fs) {
+      return std::dynamic_pointer_cast<SleeveFile>(fs.Get(element_id));
+    });
+    ASSERT_NE(file, nullptr);
+    EXPECT_EQ(file->image_id_, image_id);
+    EXPECT_EQ(file->GetImage(), nullptr) << "the element links no Image";
+    EXPECT_TRUE(img_pool_service->Contains(image_id)) << "the image pool owns the Image";
+
+    import_service->SyncImports(snapshot, L"");
+    project.SaveProject(meta_path_);
+  }
+
+  // The stored element keeps the image id, and the image row exists.
+  ProjectService project(db_path_, meta_path_);
+  const auto     stored_image_id =
+      project.GetSleeveService()->Read<image_id_t>([element_id](FileSystem& fs) {
+        return std::static_pointer_cast<SleeveFile>(fs.Get(element_id))->image_id_;
+      });
+  EXPECT_EQ(stored_image_id, image_id);
+  EXPECT_NE(project.GetStorage()->GetImageStore().GetImageById(image_id), nullptr);
+}
+
 TEST_F(ImportServiceTests, ImportInvalidFileTest) {
   ProjectService                 project(db_path_, meta_path_);
   auto                           fs_service       = project.GetSleeveService();

@@ -375,32 +375,39 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     }
     const std::wstring file_name = image_path.filename().wstring();
 
-    std::shared_ptr<SleeveElement> element = nullptr;
-    try {
-      element = fs_service_->Write_NoSync<std::shared_ptr<SleeveElement>>(
-          [&placement, file_index, &file_name](FileSystem& fs) {
-            return placement(fs, file_index, file_name);
-          });
-    } catch (...) {
-      CountFailedFile(*progress_ptr, raw_extension);
-      report_progress();
-      continue;
-    }
-    if (!element) {
-      CountFailedFile(*progress_ptr, raw_extension);
-      report_progress();
-      continue;
-    }
-    // Create the corresponding image file
-    auto sleeve_file   = std::static_pointer_cast<SleeveFile>(element);
-
-    // MetadataExtractor sets image_type_ from the file content.
-    auto image_handler = image_pool_service_->CreateAndReturnPinned([&](Image& image) {
+    // MetadataExtractor sets image_type_ from the file content. The image pool owns the new
+    // Image until SyncImports stores it; the metadata task below holds it pinned.
+    auto image_handler           = image_pool_service_->CreateAndReturnPinned([&](Image& image) {
       image.image_path_ = image_path;
       image.image_name_ = file_name;
     });
-
     if (!image_handler) {
+      CountFailedFile(*progress_ptr, raw_extension);
+      report_progress();
+      continue;
+    }
+    const auto      image_id   = image_handler.Get()->image_id_;
+
+    // The file element and its image id are created in one fs_lock_ scope, so a sync on another
+    // thread writes the element with its image id (#1169). The element holds the id only, not
+    // the Image (Sleeve Node Cache Plan, SN7): the node cache can then drop a clean file element.
+    sl_element_id_t element_id = 0;
+    try {
+      element_id = fs_service_->Write_NoSync<sl_element_id_t>(
+          [&placement, file_index, &file_name, image_id](FileSystem& fs) -> sl_element_id_t {
+            const auto element = placement(fs, file_index, file_name);
+            if (!element) {
+              return 0;
+            }
+            std::static_pointer_cast<SleeveFile>(element)->image_id_ = image_id;
+            return element->element_id_;
+          });
+    } catch (...) {
+      element_id = 0;
+    }
+    if (element_id == 0) {
+      // No element refers to the Image: the next SyncWithStorage drops it.
+      image_pool_service_->Remove(image_id);
       CountFailedFile(*progress_ptr, raw_extension);
       report_progress();
       continue;
@@ -408,14 +415,9 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
 
     auto image_handler_ptr =
         std::make_shared<ImagePoolManager::PinnedImageHandle>(std::move(image_handler));
-    auto image_ptr = image_handler_ptr->Get();
-
-    // Link the image to the SleeveFile
-    sleeve_file->SetImage(image_ptr);
     const auto placeholders_created = progress_ptr->placeholders_created_.fetch_add(1) + 1;
     if (import_log) {
-      import_log->AddPlaceholder(image_ptr->image_id_, sleeve_file->element_id_, file_name,
-                                 image_path);
+      import_log->AddPlaceholder(image_id, element_id, file_name, image_path);
     }
 
     if (job) {
@@ -423,7 +425,6 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     }
     root_writer->AddOutstandingEncode();
 
-    const auto element_id       = sleeve_file->element_id_;
     const auto pipeline_service = pipeline_service_;
     const auto file_categories  = any_category_paths.contains(image_path.native())
                                       ? kAllImportCategories
