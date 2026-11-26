@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "app/album_browse_service.hpp"
 #include "app/mount_service.hpp"
 #include "storage/store/sleeve/element_store.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
@@ -41,6 +42,12 @@ using MountCommandDone = std::function<void(std::exception_ptr error)>;
 auto                   MountCommandErrorText(std::exception_ptr error) -> QString;
 
 /// Owns lazy folder-tree state and handles folder CRUD operations.
+///
+/// The sidebar tree (Sleeve Node Cache Plan, SN8): ReloadTree reads the tree with
+/// AlbumBrowseService::ListFolderTree on the library query worker, so the UI thread does not
+/// wait on the file system lock of the sleeve while a scan or an import writes. The rows of the
+/// last applied read stay until the next read is applied on the UI thread. The element id of a
+/// row and of the current folder comes from these rows, not from a path resolve.
 ///
 /// Mounted folders (Mounted Folder Plan, MF6 and MF8): each row of `folders` carries the mount
 /// fields `mountId` (0 for an ordinary row), `mountRoot`, `mountOffline`, `mountMissingCount`, and
@@ -68,7 +75,7 @@ class FolderController final : public QObject {
  public:
   FolderController(ProjectModule* project, LibraryModule* library, IUiStatusSink* status,
                    QObject* parent = nullptr);
-  /// Waits for a running photo count read, which posts its result to this object.
+  /// Waits for a running photo count read and tree read, which post their results to this object.
   ~FolderController() override;
 
   void BindCollaborators(StatsEngine* stats, SearchController* search,
@@ -77,8 +84,19 @@ class FolderController final : public QObject {
   /// VolumeWithoutMountArrived sets arrivedVolume, and its MountPointRemoved closes the card.
   void               BindMountScans(MountScanCoordinator* mount_scans);
 
-  /// Loads the whole folder tree and starts one photo count read (RefreshImageCounts).
-  void               ReloadTree(const std::filesystem::path& preferredFolderPath);
+  /// Starts one read of the whole folder tree on the library query worker and returns. The
+  /// current rows stay until the result is applied on the UI thread; a newer call replaces a
+  /// read that did not apply yet. The apply selects @p preferredFolderPath, or the root when the
+  /// new tree has no such folder, and then starts one photo count read (RefreshImageCounts).
+  /// When the selected folder changes (a deleted or removed folder), it also clears the
+  /// Inspector filters and reloads the Library.
+  ///
+  /// @param preferredFolderPath The folder to select after the read. Empty keeps the selection:
+  ///   the path of an earlier call whose read did not apply yet, else the current folder. A
+  ///   selection by the user (SelectFolder, SelectLibraryRoot) before the apply replaces it.
+  void               ReloadTree(const std::filesystem::path& preferredFolderPath = {});
+  /// True from a ReloadTree call until the result of its read is applied (or ClearState).
+  [[nodiscard]] auto tree_read_pending() const -> bool { return tree_read_pending_; }
   /// Reads the photo count of every folder and of the whole project on the library query
   /// worker, with one statement grouped by folder id, and republishes `folders` with the
   /// counts on the UI thread. Callers that add photos to a folder or remove them call it after
@@ -87,7 +105,11 @@ class FolderController final : public QObject {
   void               RebuildFolderView();
   void               ApplyFolderSelection(uint folderUiId, bool emitSignal);
   [[nodiscard]] auto CurrentFolderFsPath() const -> std::filesystem::path;
+  /// The element id of the row of the current folder (kLibraryRootFolderId for the root), or
+  /// nothing when no project is open or no row shows the current folder. Reads the rows only.
   [[nodiscard]] auto CurrentFolderElementId() const -> std::optional<sl_element_id_t>;
+  /// The element id of the row @p folderUiId, or nothing when no project is open or no row has
+  /// that id. Reads the rows only.
   [[nodiscard]] auto FolderElementIdForUiId(uint folderUiId) const
       -> std::optional<sl_element_id_t>;
   /// The loaded folder row of the collection element @p elementId, or nothing when no loaded row
@@ -247,13 +269,21 @@ class FolderController final : public QObject {
   void               ReportFolderEditDone(const i18n::LocalizedText& message, bool save_ok) const;
   /// Clears the Inspector filters and the search and reloads the Library for a new selection.
   void               ReloadSelectedScope();
-  /// Reads the whole folder tree with one AlbumBrowseService::ListFolderTree call and fills the
-  /// nodes and the child lists. A failed read writes one warning and keeps the root node only;
-  /// the next EnsurePathExpanded reads the tree again.
-  void               LoadTree();
+  /// Takes the result of the tree read @p generation on the UI thread: replaces the nodes and the
+  /// child lists with @p folders, selects the target of ReloadTree, and starts a count read. A
+  /// failed read (@p error) writes one warning and keeps the root node only; the next selection
+  /// by the user reads the tree again. A read that ClearState or a newer ReloadTree replaced
+  /// changes nothing.
+  void               ApplyTree(std::uint64_t generation, std::vector<AlbumFolderView> folders,
+                               const QString& error);
+  /// Element id of the node of the current folder; nothing when no node shows it.
+  [[nodiscard]] auto SelectedNodeElementId() const -> std::optional<sl_element_id_t>;
+  /// Clears the Inspector filters and reloads the Library after a tree read moved the selection
+  /// to another folder.
+  void               ReloadScopeOfMovedSelection();
   void               EnsureRootNode();
   void               ResetTreeState();
-  /// Marks the folders on @p folderPath expanded; reads the tree first when it is not loaded.
+  /// Marks the folders on @p folderPath expanded.
   void               EnsurePathExpanded(const std::filesystem::path& folderPath);
   void               AppendVisibleEntries(const std::filesystem::path&      folderPath,
                                           std::vector<ExistingFolderEntry>& out) const;
@@ -295,8 +325,13 @@ class FolderController final : public QObject {
   std::unordered_map<std::wstring, FolderNodeState>           nodes_by_path_{};
   std::unordered_map<std::wstring, std::vector<std::wstring>> child_keys_by_path_{};
   std::unordered_map<uint32_t, std::wstring>                  path_key_by_ui_id_{};
-  /// True after a LoadTree call that read the tree, until the next ResetTreeState.
+  /// True after an applied tree read that succeeded, until the next ResetTreeState.
   bool                                                        tree_loaded_ = false;
+  /// True from ReloadTree until its read is applied.
+  bool                                                        tree_read_pending_ = false;
+  /// The folder that the pending tree read selects when it is applied; nothing keeps the
+  /// current folder.
+  std::optional<std::filesystem::path>                        reload_selection_path_{};
   std::vector<ExistingFolderEntry>                            folder_entries_{};
   QVariantList                                                folders_{};
   std::filesystem::path                                       current_folder_path_{};

@@ -625,6 +625,7 @@ TEST_F(AutomationLibraryCommandsTest, ImportWithMountedCurrentFolderReturnsTheNa
   auto [mount_root, sync] = project->GetSleeveService()->CreateMountRootFolder(L"Trip", 1);
   ASSERT_TRUE(sync.success_) << sync.message_;
   session.host().folders()->ReloadTree(L"/Trip");
+  ASSERT_TRUE(ui::test::WaitForFolderTree(*session.host().folders()));
   ASSERT_EQ(session.host().folders()->CurrentFolderElementId(), mount_root->element_id_);
 
   const QString raw_root = QStringLiteral(TEST_IMG_PATH) + QStringLiteral("/ci_rawfiles");

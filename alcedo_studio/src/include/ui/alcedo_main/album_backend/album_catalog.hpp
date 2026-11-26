@@ -39,6 +39,8 @@ class IAlbumCatalog {
   virtual auto view_state() -> AlbumViewState&             = 0;
   virtual auto view_state() const -> const AlbumViewState& = 0;
 
+  /// Starts a read of the folder tree (FolderController::ReloadTree). An empty
+  /// @p preferredFolderPath keeps the current selection.
   virtual void ReloadFolderTree(const std::filesystem::path& preferredFolderPath = {}) = 0;
   virtual void ReloadCurrentFolder()                                                   = 0;
   virtual bool LoadThumbnailWindow(const std::optional<FilterNode>& statsFilter, bool reset) = 0;

@@ -298,8 +298,7 @@ void LibraryModule::ReloadFolderTree(const std::filesystem::path& preferredFolde
     return;
   }
 
-  folders_->ReloadTree(preferredFolderPath.empty() ? folders_->current_folder_path()
-                                                      : preferredFolderPath);
+  folders_->ReloadTree(preferredFolderPath);
 }
 
 void LibraryModule::ReloadCurrentFolder() { RequestLibraryRefresh(); }
