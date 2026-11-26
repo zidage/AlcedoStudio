@@ -12,6 +12,7 @@ namespace alcedo {
 
 NodeCache::~NodeCache() {
   dirty_.Clear();
+  clean_files_.Clear();
   for (auto& page : pages_) {
     if (!page.elements) {
       continue;
@@ -24,12 +25,16 @@ NodeCache::~NodeCache() {
   }
 }
 
-auto NodeCache::Find(sl_element_id_t id) const -> std::shared_ptr<SleeveElement> {
+auto NodeCache::Find(sl_element_id_t id) -> std::shared_ptr<SleeveElement> {
   const auto page = id / kPageSlots;
   if (page >= pages_.size() || !pages_[page].elements) {
     return nullptr;
   }
-  return (*pages_[page].elements)[id % kPageSlots];
+  const auto& slot = (*pages_[page].elements)[id % kPageSlots];
+  if (slot && ListFor(slot->type_, slot->SyncState()) == &clean_files_) {
+    clean_files_.MoveToBack(*slot);
+  }
+  return slot;
 }
 
 auto NodeCache::Contains(sl_element_id_t id) const -> bool {
@@ -66,8 +71,8 @@ void NodeCache::Insert(std::shared_ptr<SleeveElement> element) {
   }
 
   element->cache_ = this;
-  if (IsDirty(*element)) {
-    dirty_.PushBack(*element);
+  if (auto* list = ListFor(element->type_, element->SyncState())) {
+    list->PushBack(*element);
   }
   if (element->type_ == ElementType::FOLDER) {
     folder_ids_.insert(id);
@@ -78,33 +83,32 @@ void NodeCache::Insert(std::shared_ptr<SleeveElement> element) {
 }
 
 void NodeCache::Erase(sl_element_id_t id) {
-  const auto page_index = id / kPageSlots;
-  if (page_index >= pages_.size() || !pages_[page_index].elements) {
+  if (!Contains(id)) {
     return;
   }
-  auto& page = pages_[page_index];
-  auto& slot = (*page.elements)[id % kPageSlots];
-  if (!slot) {
-    return;
-  }
-  if (IsDirty(*slot) && slot->SyncState() != SyncFlag::DELETED) {
+  const auto& slot = Slot(id);
+  if (IsDirty(slot->SyncState()) && slot->SyncState() != SyncFlag::DELETED) {
     throw std::logic_error("NodeCache: the element " + std::to_string(id) +
                            " has a change that no sync wrote");
   }
+  Release(id);
+}
 
-  if (slot->dirty_hook_.IsLinked()) {
-    dirty_.Erase(*slot);
+auto NodeCache::EvictToLimit() -> std::size_t {
+  std::size_t evicted = 0;
+  // Each element is visited at most once: a held element moves to the back and the walk ends
+  // after the elements that were in the list at its start.
+  for (auto remaining = clean_files_.Size(); clean_files_.Size() > limit_ && remaining > 0;
+       --remaining) {
+    auto* oldest = clean_files_.Front();
+    if (Slot(oldest->element_id_).use_count() > 1) {
+      clean_files_.MoveToBack(*oldest);
+      continue;
+    }
+    Release(oldest->element_id_);
+    ++evicted;
   }
-  if (slot->type_ == ElementType::FOLDER) {
-    folder_ids_.erase(id);
-  }
-  slot->cache_ = nullptr;
-  slot.reset();
-  --size_;
-  if (--page.used == 0) {
-    page.elements.reset();
-    --page_count_;
-  }
+  return evicted;
 }
 
 auto NodeCache::DirtyElements() const -> std::vector<std::shared_ptr<SleeveElement>> {
@@ -116,22 +120,47 @@ auto NodeCache::DirtyElements() const -> std::vector<std::shared_ptr<SleeveEleme
   return elements;
 }
 
-void NodeCache::OnSyncFlagChanged(SleeveElement& element) {
-  const bool dirty  = IsDirty(element);
-  const bool listed = element.dirty_hook_.IsLinked();
-  if (dirty && !listed) {
-    dirty_.PushBack(element);
-  } else if (!dirty && listed) {
-    dirty_.Erase(element);
+void NodeCache::OnSyncFlagChanged(SleeveElement& element, SyncFlag old_flag) {
+  auto* old_list = ListFor(element.type_, old_flag);
+  auto* new_list = ListFor(element.type_, element.SyncState());
+  if (old_list == new_list) {
+    return;
   }
+  if (old_list != nullptr) {
+    old_list->Erase(element);
+  }
+  if (new_list != nullptr) {
+    new_list->PushBack(element);
+  }
+}
+
+auto NodeCache::ListFor(ElementType type, SyncFlag flag) -> ElementList* {
+  if (IsDirty(flag)) {
+    return &dirty_;
+  }
+  return type == ElementType::FILE ? &clean_files_ : nullptr;
 }
 
 auto NodeCache::Slot(sl_element_id_t id) const -> const std::shared_ptr<SleeveElement>& {
   return (*pages_[id / kPageSlots].elements)[id % kPageSlots];
 }
 
-auto NodeCache::IsDirty(const SleeveElement& element) -> bool {
-  return element.SyncState() != SyncFlag::SYNCED;
+void NodeCache::Release(sl_element_id_t id) {
+  auto& page = pages_[id / kPageSlots];
+  auto& slot = (*page.elements)[id % kPageSlots];
+  if (auto* list = ListFor(slot->type_, slot->SyncState())) {
+    list->Erase(*slot);
+  }
+  if (slot->type_ == ElementType::FOLDER) {
+    folder_ids_.erase(id);
+  }
+  slot->cache_ = nullptr;
+  slot.reset();
+  --size_;
+  if (--page.used == 0) {
+    page.elements.reset();
+    --page_count_;
+  }
 }
 
 }  // namespace alcedo

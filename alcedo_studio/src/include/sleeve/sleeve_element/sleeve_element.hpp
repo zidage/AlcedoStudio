@@ -71,7 +71,8 @@ class SleeveElement {
    * @brief The only writer of the sync flag.
    *
    * When a NodeCache holds the element, the cache moves the element into its dirty list
-   * (UNSYNC, MODIFIED, DELETED) or out of it (SYNCED) in the same call.
+   * (UNSYNC, MODIFIED, DELETED) or out of it (SYNCED) in the same call. A file that becomes
+   * SYNCED enters the eviction list of the cache.
    */
   void               SetSyncFlag(SyncFlag flag);
   /// SYNCED becomes MODIFIED; every other flag stays. Use after a change to a stored element.
@@ -84,7 +85,8 @@ class SleeveElement {
   /// The cache that holds the element, from NodeCache::Insert to NodeCache::Erase or the
   /// destruction of the cache. nullptr for an element that no cache holds.
   NodeCache*                       cache_     = nullptr;
-  /// The link of the element in the dirty list of its cache.
-  IntrusiveListHook<SleeveElement> dirty_hook_;
+  /// The link of the element in one list of its cache: the dirty list for a dirty element, the
+  /// eviction list for a clean file, no list for a clean folder (NodeCache).
+  IntrusiveListHook<SleeveElement> list_hook_;
 };
 };  // namespace alcedo

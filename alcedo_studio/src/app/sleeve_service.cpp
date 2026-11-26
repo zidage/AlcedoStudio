@@ -365,17 +365,17 @@ auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,
   RequireEditableFolder(*fs_, folder_id);
   auto       duplicated  = fs_->DuplicateFileToFolder(file_id, folder_id);
   SyncResult sync_result = Sync();
-  if (!duplicated || !sync_result.success_) {
-    return {duplicated, sync_result};
+  if (duplicated && sync_result.success_) {
+    try {
+      ClonePipelineForDuplicate(*storage_, file_id, duplicated->element_id_);
+    } catch (const std::exception& e) {
+      sync_result.success_ = false;
+      sync_result.message_ = e.what();
+    }
   }
 
-  try {
-    ClonePipelineForDuplicate(*storage_, file_id, duplicated->element_id_);
-  } catch (const std::exception& e) {
-    sync_result.success_ = false;
-    sync_result.message_ = e.what();
-  }
-
+  // The end of this fs_lock_ scope, as in Read and Write (SN7).
+  fs_->EvictToLimit();
   return {duplicated, sync_result};
 }
 

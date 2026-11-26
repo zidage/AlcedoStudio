@@ -52,7 +52,7 @@ void SleeveElement::SetSyncFlag(SyncFlag flag) {
   const auto old_flag = sync_flag_;
   sync_flag_          = flag;
   if (cache_ != nullptr && old_flag != flag) {
-    cache_->OnSyncFlagChanged(*this);
+    cache_->OnSyncFlagChanged(*this, old_flag);
   }
 }
 

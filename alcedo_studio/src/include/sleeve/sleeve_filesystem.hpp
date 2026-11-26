@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -197,6 +198,15 @@ class FileSystem {
   }
   /// The in-memory nodes. Reads memory only.
   [[nodiscard]] auto Nodes() const -> const NodeCache& { return nodes_; }
+  /**
+   * @brief Removes the least recently used clean file elements that no caller holds, down to the
+   *        limit (NodeCache::EvictToLimit). Returns the number of removed elements.
+   * @pre Call under the lock that serializes this file system, at the end of its scope, while
+   *      the result of the operation still holds its elements.
+   */
+  auto               EvictToLimit() -> std::size_t { return nodes_.EvictToLimit(); }
+  /// Sets the limit of clean file elements (NodeCache::SetLimit). Evicts nothing.
+  void               SetCleanFileLimit(std::size_t limit) { nodes_.SetLimit(limit); }
 
   auto ApplyFilterToFolder(const std::filesystem::path&       folder_path,
                            const std::shared_ptr<FilterCombo> filter)
