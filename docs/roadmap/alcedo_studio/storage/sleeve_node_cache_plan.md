@@ -2,7 +2,7 @@
 
 Date: 2026-11-26
 
-Status: **in progress**. SN1, SN2, SN3, and SN4 are complete (2026-11-26). SN5 to SN8 are
+Status: **in progress**. SN1, SN2, SN3, SN4, and SN5 are complete (2026-11-26). SN6 to SN8 are
 planned.
 
 Parent: [Roadmap](../../README.md).
@@ -216,7 +216,7 @@ and the tests.
 | SN2 | `NodeCache` with the page table and the dirty list. One sync transaction. | `NodeCache`, `SleeveElement`, `SleeveServiceImpl::Sync` | SN1 | 1100 to 1500 | complete |
 | SN3 | All folders load with one query. One tree read for the sidebar. | `NodeStorageHandler`, `PathResolver`, `FolderController` | SN2 | 700 to 1000 | complete |
 | SN4 | File entries leave the folders. File names are labels. Project file 0.15.0. | `SleeveFolder`, `FileSystem`, project version | SN3 | 1200 to 1700 | complete |
-| SN5 | The mount tree read and the import use row queries. | `mount_tree.cpp`, `import_service.cpp` | SN4 | 600 to 900 | planned |
+| SN5 | The mount tree read and the import use row queries. | `mount_tree.cpp`, `import_service.cpp` | SN4 | 600 to 900 | complete |
 | SN6 | Measured memory and time of the 80,000-photo project. Decision for SN7 and SN8. | `project_open_benchmark.cpp` | SN5 | 150 to 300 | planned |
 | SN7 | Eviction of clean file elements under a limit. Runs when SN6 requires it. | `NodeCache` | SN6 | 400 to 600 | planned |
 | SN8 | The sidebar tree read runs on the query worker. Runs when SN6 requires it. | `FolderController` | SN6 | 300 to 500 | planned |
@@ -998,9 +998,128 @@ does not change.
 
 **Exit criteria.**
 
-- [ ] The tests above pass.
+- [x] The tests above pass.
 
-**Completion record.** Use the template of section 9.
+**Completion record.**
+
+```text
+Phase / date / status: SN5 / 2026-11-26 / complete. Issue #1162 (sub-issue of #1152).
+Source revision and branch: 53535cce4 on refact/sleeve-mount-rows, stacked on 93cde0256
+  (SN4 PR #1161).
+Actual changed modules: FolderEntryStore, NodeStorageHandler, FileSystem, mount_tree.cpp,
+  SleeveServiceImpl, MountService, and the tests MountTreeTest, SleeveServiceTest, and
+  ImportServiceTest.
+Implemented behavior:
+  - FolderEntryStore::ReadMountFileFolders(mount_id): one duckorm statement, FolderContent joined
+    with the folder element (type FOLDER, mount_id = the mount) and the file element (type FILE),
+    ordered by file id and folder id. Each MountFileFolderRow carries the stored mount id of the
+    file.
+  - NodeStorageHandler::MountFileLinks(mount_id, folders): the stored rows of the given folders
+    that no pending change of the folder decides, then the pending file links of the folders. A
+    file that the cache holds is decided from memory (mount id, DELETED); another file from its
+    stored mount id. No statement when each folder is UNSYNC. FileSystem::ListMountFileLinks
+    gives it by folder id.
+  - NodeStorageHandler::LiveFileIds(root, ids): the live files of the ids in their first order;
+    the cache decides a cached id, one HeldFiles read of the library root decides the others
+    (each live file has its root link, D2). FileSystem::LinkFilesToFolder uses it.
+  - FileSystem::UnlinkFilesFromFolder loads no element: HeldFiles gives live files only, so the
+    Get loop is removed.
+  - mount_tree.cpp: ReadMountFolders walks the resident child folders (memory only).
+    ReadMountTree adds home_folders from ListMountFileLinks. ApplyMountTreeChanges keeps a
+    MountLinkIndex (file to folders, folder to files) that the placements and the removals
+    update. PlaceFile loads the placed file only; its unlinks collect by folder and go to one
+    UnlinkFilesFromFolder call for each folder. RemoveFolder moves the mounted files of the index
+    with LinkFilesToFolder and UnlinkFilesFromFolder. RemoveMountTree loads the files that it
+    converts (it changes them).
+  - SleeveServiceImpl::ReadMountFolders; MountScanRun::ReadRecords, ImportNewFiles, and
+    MountService::LocateMissingFile read the folders only. A scan with no change sends no sleeve
+    statement and loads no file element.
+  - app/import_service.cpp: unchanged. Its two Write_NoSync sites stay; the placement reads
+    memory only.
+Decisions made during the work:
+  - ReadMountFileFolders does not filter on the mount id of the file. A dirty file whose mount id
+    changed in memory (an adoption before a failed sync) has a stored row with another mount id;
+    the row and the cache then decide it. Ordinary files in mounted folders are few.
+  - Step 2 "home_folders from the query plus the pending sets": a stored row of a folder with a
+    pending change for that file is skipped, and the pending link adds it again, so a link is
+    never in the result twice.
+  - Step 3: RemoveFolder needed a link without an element load, so FileSystem::LinkFilesToFolder
+    is new. It validates the ids with the root membership instead of loading each element.
+  - Step 4 asks for a count of statements. duckorm and Database have no statement counter, and a
+    counter for tests only would be a new global state. The test uses the observables of the
+    node cache instead: after an import into a library with 10,000 stored files the cache holds
+    the two folders and the new file, and the dirty list holds the new file and the two folders
+    that link it, so the sync writes three elements. The placement path has no store read.
+  - The import test turns off the stored-project invariant check: its 10,000 stored files are
+    sleeve elements with no Image row.
+  - Tests added beyond the plan: MountFileFolderRowsHoldTheFileLinksOfTheMountFoldersOnly (the
+    store query), ReadMountTreeAppliesThePendingChangesOfTheWrite (pending link, pending unlink,
+    DELETED, a mount id changed in memory both ways), RemovedFolderMovesItsFilesWithNoFileElementLoad,
+    and SleeveServiceTests.BatchLinkAndUnlinkTakeLiveFilesOnlyAndLoadNoFileElement.
+Explicitly unimplemented items: none of SN5. RemoveMountTree loads each file of the mount, one
+  element read each, because it changes each file (plan step 3).
+Primary success call chain:
+  MountService::ScanMount -> MountScanRun::Execute -> ReadRecords
+    -> SleeveServiceImpl::ReadMountFolders -> alcedo::ReadMountFolders   (Read, memory only)
+  -> ApplyFirstBatch -> SleeveServiceImpl::ApplyMountTreeChanges        (Write, fs_lock_)
+    -> alcedo::ReadMountTree -> FileSystem::ListMountFileLinks
+         -> NodeStorageHandler::MountFileLinks
+         -> FolderEntryStore::ReadMountFileFolders                       (one statement)
+    -> PlaceFile -> FileSystem::Get(placed file) -> RenameFile, LinkFileToFolder
+    -> FileSystem::UnlinkFilesFromFolder for each left folder           (one HeldFiles read each)
+    -> RemoveFolder -> LinkFilesToFolder (one root read) -> UnlinkFilesFromFolder -> RemoveFolderFrom
+    -> SleeveServiceImpl::Sync -> ElementStore::WriteSync               (one transaction)
+Primary failure and restore call chain:
+  ApplyMountTreeChanges -> ReadMountFileFolders throws (DuckDB error)
+    -> no element changed (the read runs first) -> Write returns the exception
+    -> MountScanRun::Execute catch -> MountScanStatus::kStorageFailure, the next scan reads again
+  A later step throws after a change (for example a missing directory of a placement)
+    -> the tree holds a part of the changes in memory with their flags, as before SN5
+       (Mounted Folder Plan, MF4 completion record); the next scan computes the rest again
+Build and test commands with exit codes (macOS arm64, build/macos-debug, Ninja):
+  cmake --build build/macos-debug --target MountTreeTest MountServiceTest SleeveServiceTest
+    SleeveFSTest ImportServiceTest AlbumBrowseServiceMountTest MountStoreTest
+    SleeveFilesystemCiTest AlbumQueryTest FolderControllerMountTest AlbumBackendFolderTest
+    AutomationLibraryCommandsTest CollectionsPanelQmlTest LibraryFolderSectionQmlTest
+    ProjectOpenBenchmark alcedo_main -j 8                                     exit 0
+  <Target> --gtest_brief=1 for each target below (QT_QPA_PLATFORM=offscreen)     exit 0,
+    ImportServiceTest exit 1 (#1156)
+  python scripts/check_storage_boundary.py (Windows)                           exit 0
+Discovered / passed / failed / skipped counts:
+  MountTreeTest 14 / 14 / 0 / 0, with MountFileFolderRowsHoldTheFileLinksOfTheMountFoldersOnly,
+    ReadMountTreeLoadsNoFileElement (1,000 files), ReadMountTreeAppliesThePendingChangesOfTheWrite,
+    PlacementOfOneFileLoadsOneFileElement (10,000 files), and
+    RemovedFolderMovesItsFilesWithNoFileElementLoad (1,010 files)
+  SleeveServiceTest 46 / 46 / 0 / 0, with
+    SleeveServiceTests.BatchLinkAndUnlinkTakeLiveFilesOnlyAndLoadNoFileElement
+  ImportServiceTest 17 / 16 / 1 / 0, with
+    ImportServiceTests.ImportIntoALibraryWithTenThousandFilesLoadsNoStoredFileElement;
+    ImportServiceTests.BatchCancelTest fails before SN2 too (#1156). The run used
+    raw/airplane/_DSC1704.NEF and 70 of the batch_import files, copied to the Mac for the run.
+  MountServiceTest 29 / 29 / 0 / 0
+  SleeveFSTest 13 / 13 / 0 / 0
+  AlbumBrowseServiceMountTest 4 / 4 / 0 / 0
+  AlbumBackendFolderTest 16 / 16 / 0 / 0
+  AutomationLibraryCommandsTest 18 / 18 / 0 / 0
+  MountStoreTest 17 / 17 / 0 / 0
+  SleeveFilesystemCiTest 2 / 2 / 0 / 0
+  AlbumQueryTest 39 / 38 / 0 / 1 (the timing profile skips without ALCEDO_ALBUM_QUERY_PROFILE)
+  FolderControllerMountTest 11 / 11 / 0 / 0, CollectionsPanelQmlTest 30 / 30 / 0 / 0,
+    LibraryFolderSectionQmlTest 8 / 8 / 0 / 0; the logs have no "FAIL!" (#526)
+  The last five suites ran before the move of the live-file check into
+    NodeStorageHandler::LiveFileIds; the first eight ran again after it.
+Manual verification: none. The application was not started.
+Performance or resource evidence, if required: not required for SN5. The node cache after a
+  tree read of 1,000 mounted files holds 4 folders; after a placement in a mount with 10,000
+  files it holds 4 folders and the placed file (the tests above). SN6 measures the 80,000-photo
+  project.
+Evidence path: the counts above. The Mac logs under build/tmp/sn5/ were removed at the end of
+  the task.
+Remaining defects or unavailable platforms: Windows (MSVC) and Linux not built: the Windows
+  machine was in use. sleeve/sleeve_filesystem.cpp: 600 to 603 lines (LinkFilesToFolder and
+  ListMountFileLinks, with the batch unlink shorter; D7); app/mount_tree.cpp: 226 to 306 lines;
+  sleeve/node_storage_handler.cpp: 237 to 303 lines.
+```
 
 ### SN6: Measurement
 
