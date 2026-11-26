@@ -2,7 +2,7 @@
 
 Date: 2026-11-26
 
-Status: **in progress**. SN1 is complete (2026-11-26). SN2 to SN8 are planned.
+Status: **in progress**. SN1 and SN2 are complete (2026-11-26). SN3 to SN8 are planned.
 
 Parent: [Roadmap](../../README.md).
 
@@ -212,7 +212,7 @@ and the tests.
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | SN1 | The folder listing reads folders only. A failed listing writes a log line. | `FolderEntryStore`, `AlbumBrowseService`, `FolderController` | None | 350 to 500 | complete |
-| SN2 | `NodeCache` with the page table and the dirty list. One sync transaction. | `NodeCache`, `SleeveElement`, `SleeveServiceImpl::Sync` | SN1 | 1100 to 1500 | planned |
+| SN2 | `NodeCache` with the page table and the dirty list. One sync transaction. | `NodeCache`, `SleeveElement`, `SleeveServiceImpl::Sync` | SN1 | 1100 to 1500 | complete |
 | SN3 | All folders load with one query. One tree read for the sidebar. | `NodeStorageHandler`, `PathResolver`, `FolderController` | SN2 | 700 to 1000 | planned |
 | SN4 | File entries leave the folders. File names are labels. Project file 0.15.0. | `SleeveFolder`, `FileSystem`, project version | SN3 | 1200 to 1700 | planned |
 | SN5 | The mount tree read and the import use row queries. | `mount_tree.cpp`, `import_service.cpp` | SN4 | 600 to 900 | planned |
@@ -394,12 +394,147 @@ only and commits once.
 
 **Exit criteria.**
 
-- [ ] The tests above pass. `SleeveFSTest`, `SleeveServiceTest`, `MountTreeTest`,
-      `MountServiceTest`, `ImportServiceTest`, and `AlbumQueryTest` pass.
-- [ ] No first-party file outside `sleeve/sleeve_element/` writes the sync flag field.
-- [ ] `sleeve/sleeve_filesystem.cpp` has fewer lines than at the audit revision.
+- [x] The tests above pass. `SleeveFSTest`, `SleeveServiceTest`, `MountTreeTest`,
+      `MountServiceTest`, `ImportServiceTest`, and `AlbumQueryTest` pass. In
+      `ImportServiceTest`, `BatchCancelTest` fails before SN2 too (#1156).
+- [x] No first-party file outside `sleeve/sleeve_element/` writes the sync flag field.
+- [x] `sleeve/sleeve_filesystem.cpp` has fewer lines than at the audit revision.
 
-**Completion record.** Use the template of section 9.
+**Completion record.**
+
+```text
+Phase / date / status: SN2 / 2026-11-26 / complete. Issue #1155 (sub-issue of #1152).
+Source revision and branch: d00438089 (SN1 PR #1154 plus an LF conversion commit) on
+  refact/sleeve-node-cache.
+Actual changed modules: IntrusiveList (new), NodeCache (new), NodeStorageHandler (own files),
+  SleeveElement, SleeveFolder, PathResolver, FileSystem, Storage, ElementStore,
+  SleeveServiceImpl, mount_tree.cpp, mount_service.cpp, AlbumBrowseService, NodeCacheTest (new),
+  SleeveServiceTest, SleeveFSTest, ImportServiceTest, AlbumQueryTest, LibraryBuildMemoryTest.
+Implemented behavior:
+  - include/utils/intrusive_list.hpp: IntrusiveListHook<T> and IntrusiveList<T, &T::hook>:
+    PushBack, Erase, MoveToBack, Front, Clear, iteration. No allocation. A copied hook is
+    unlinked.
+  - NodeCache (include/sleeve/node_cache.hpp, sleeve/node_cache.cpp): page table of
+    4096 std::shared_ptr<SleeveElement> slots per page, indexed by the element id. A page is
+    allocated at the first insert into its range and released when its last slot empties.
+    Find, Contains, Insert, Erase, ForEachFolder, DirtyElements, DirtyCount, Size, PageCount.
+    The destructor clears the back pointer of each held element.
+  - The dirty list: each element has one IntrusiveListHook and a back pointer to its cache.
+    SleeveElement::SetSyncFlag is the only writer of sync_flag_ (now private) and calls
+    NodeCache::OnSyncFlagChanged, which moves the element into the list (UNSYNC, MODIFIED,
+    DELETED) or out of it (SYNCED). Insert puts a dirty element into the list.
+  - Erase refuses a dirty element whose flag is not DELETED (std::logic_error), so a change
+    that no sync wrote cannot leave the cache. Insert refuses an element of another cache and a
+    different element in an occupied slot; the element that the slot holds is a no-op.
+  - NodeStorageHandler moved to include/sleeve/node_storage_handler.hpp and
+    sleeve/node_storage_handler.cpp. It holds NodeCache&. GetElement does one Find.
+    GarbageCollect is removed.
+  - FileSystem::storage_ is NodeCache nodes_. The 4 direct writes are Insert calls. The scans of
+    DeleteFileEverywhere, DeleteFilesEverywhere, and RenameFile use ForEachFolder.
+    GetModifiedElements, GetUnsyncedElements, GetDeletedElements, and GarbageCollect are removed;
+    FileSystem::DirtyElements, FileSystem::MarkWritten, and FileSystem::Nodes (const) are new.
+    SyncToDB (deprecated, SleeveManager) walks the dirty list.
+  - ElementStore::WriteSync(inserts, updates, deletes): one duckorm::Transaction around
+    InsertElementBatchRows, UpdateElementRows, and RemoveElementBatchRows (the row functions of
+    AddElements, UpdateElements, and RemoveElements, now private static). It changes no element.
+    RemoveElements now also runs in one transaction.
+  - SleeveServiceImpl::Sync: splits the dirty list by flag, calls WriteSync once, and then
+    FileSystem::MarkWritten: a DELETED element leaves the cache, each other element becomes
+    SYNCED and a folder clears its pending content changes. elements_synced_ is the size of the
+    dirty list.
+Decisions made during the work:
+  - NodeCache::OnSyncFlagChanged takes the element only. The list membership is the old state,
+    so the old flag is not needed.
+  - SleeveElement::MarkModified() (SYNCED becomes MODIFIED) replaces each copy of that check in
+    SleeveFolder, PathResolver, FileSystem, mount_tree.cpp, and AlbumQueryTest.
+    SleeveElement::IsLive() replaces the reads of sync_flag_ != DELETED.
+  - The copy constructor and the copy assignment of SleeveElement are deleted: the cache keeps
+    the address of each element. No code copied an element by value.
+  - NodeCache keeps the ids of its folders in a std::unordered_set, so ForEachFolder reads no
+    file slot. A project has some thousands of folders.
+  - node_cache.cpp is in the SleeveElement library: SleeveElement::SetSyncFlag calls the cache,
+    and SleeveFS links SleeveElement. sleeve_element.hpp forward-declares NodeCache, because
+    node_cache.hpp includes sleeve_element.hpp (an include cycle; the element holds a pointer
+    only, and sleeve_element.cpp includes node_cache.hpp).
+  - Sync calls FileSystem::DirtyElements and FileSystem::MarkWritten instead of a NodeCache
+    reference, so FileSystem stays the only writer of its cache (P10).
+  - FileSystem::IsInNodeMap (SN1) is FileSystem::Nodes().Contains: a const reference to the
+    cache, for reads only.
+  - A DELETED element that never had a row (created and deleted before a sync) goes into the
+    delete group, as before SN2. The element has no record of a stored row, and the delete
+    statements remove nothing for it. Plan step 8 said "erased only"; that needs a new field,
+    for no measured cost.
+  - The page entry member is `elements`, not `slots`: Qt defines `slots` as an empty macro, and
+    the member disappeared in the Qt translation units (clang -Wmissing-declarations in the
+    first Mac build of alcedo_main). The struct then had two layouts.
+  - SyncAfterOneRenameWritesOneElementWithTenThousandInMemory expects 2 written elements: the
+    folder and the root. ResolveForWrite marks the parent MODIFIED, and the remove and the add
+    of the folder id cancel in the pending sets, so the update of the root writes its Element
+    row only. The test name keeps the plan name.
+  - FailedSyncLeavesDatabaseUnchangedAndRetrySucceeds makes the delete step fail with
+    ALTER TABLE SourceFile RENAME TO SourceFileAside on the project connection
+    (StorageTestAccess), and the repair renames it back. A DuckDB DELETE does not fail on a
+    row value, so "a row that StorageTestAccess makes invalid" was not possible.
+  - Test names: the fixture of the plan name SleeveServiceTest is SleeveServiceTests in the
+    source.
+Explicitly unimplemented items: none of SN2. ElementStore::AddElements, UpdateElements,
+  RemoveElements, AddElement, and UpdateElement stay for their test callers and SyncToDB.
+Primary success call chain:
+  SleeveServiceImpl::Write(operation)                                  (fs_lock_)
+    -> operation(FileSystem&) -> element.SetSyncFlag / MarkModified
+         -> NodeCache::OnSyncFlagChanged -> dirty_.PushBack            (no allocation)
+    -> SleeveServiceImpl::Sync
+         -> FileSystem::DirtyElements -> NodeCache::DirtyElements      (list walk)
+         -> split by SyncState: inserts, updates, deletes
+         -> ElementStore::WriteSync                                    (one transaction)
+              -> InsertElementBatchRows, UpdateElementRows, RemoveElementBatchRows, commit
+         -> FileSystem::MarkWritten
+              -> DELETED: NodeCache::Erase (slot, folder id set, page release)
+              -> other: SleeveFolder::MarkContentSynced, SetSyncFlag(SYNCED) -> dirty_.Erase
+    -> SyncResult{success_ = true, elements_synced_ = dirty list size}
+Primary failure and restore call chain:
+  ElementStore::WriteSync: a statement or the commit throws
+    -> duckorm::Transaction destructor: ROLLBACK (no row of the three groups stays)
+    -> FileSystem::MarkWritten does not run: each element keeps its flag, its pending content
+       changes, and its place in the dirty list; no element leaves the cache
+    -> SyncResult{success_ = false, message_ = DuckDB text}
+    -> the next Write (or Sync) writes the same elements
+Build and test commands with exit codes (macOS arm64, build/macos-debug, Ninja):
+  cmake build/macos-debug                                                      exit 0
+  cmake --build build/macos-debug --target NodeCacheTest SleeveFSTest SleeveServiceTest
+    MountTreeTest MountServiceTest AlbumBrowseServiceMountTest ImportServiceTest AlbumQueryTest
+    SleeveFilesystemCiTest MountStoreTest AiStorageControllerTest alcedo_main -j 8 -- -k 0
+                                                                               exit 0
+  <Target> --gtest_brief=1 for each target below                               exit 0
+Discovered / passed / failed / skipped counts:
+  NodeCacheTest 7 / 7 / 0 / 0
+  SleeveFSTest 13 / 13 / 0 / 0
+  SleeveServiceTest 34 / 34 / 0 / 0, with
+    SleeveServiceTests.SyncAfterOneRenameWritesOneElementWithTenThousandInMemory and
+    SleeveServiceTests.FailedSyncLeavesDatabaseUnchangedAndRetrySucceeds
+  MountTreeTest 9 / 9 / 0 / 0
+  MountServiceTest 29 / 29 / 0 / 0
+  AlbumBrowseServiceMountTest 3 / 3 / 0 / 0
+  ImportServiceTest 16 / 15 / 1 / 0: ImportServiceTests.BatchCancelTest fails at the source
+    revision before SN2 too (5 of 5 runs; issue #1156). The Mac had no batch_import folder; the
+    run used 70 of its 164 files and raw/airplane/_DSC1704.NEF, copied for the run.
+  AlbumQueryTest 39 / 38 / 0 / 1 (the timing profile skips without ALCEDO_ALBUM_QUERY_PROFILE)
+  SleeveFilesystemCiTest 2 / 2 / 0 / 0
+  MountStoreTest 17 / 17 / 0 / 0
+  AiStorageControllerTest 20 / 20 / 0 / 0
+Manual verification: none. The application was not started.
+Performance or resource evidence, if required: not required for SN2. The sync of one rename
+  with 10,000 clean elements in memory writes 2 elements (the test above).
+Evidence path: the counts above. The Mac logs under build/tmp/sn2/ were removed at the end of
+  the task.
+Remaining defects or unavailable platforms: Windows (MSVC) not built: the Windows machine was
+  in use. LibraryBuildMemoryTest is Windows-only and was not built; its change uses only the
+  APIs that the Mac build compiled. Linux not built.
+  The Mac checkout had no alcedo_studio/tests/resources/temp_folder (gitignored), so
+  SleeveFSTest could not create its database until the folder was made.
+  storage/store/sleeve/element_store.cpp grows from 1415 to 1448 lines (WriteSync and the two
+  row functions, plan step 7); D7 holds for sleeve/sleeve_filesystem.cpp (785 to 749 lines).
+```
 
 ### SN3: Resident folder tree with one query
 
