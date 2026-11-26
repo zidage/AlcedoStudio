@@ -4,6 +4,7 @@
 
 #include "sleeve/node_storage_handler.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -135,45 +136,53 @@ void NodeStorageHandler::LoadFolderTree() {
   }
 }
 
-void NodeStorageHandler::EnsureChildrenLoaded(const std::shared_ptr<SleeveFolder>& folder) {
-  if (folder->ChildrenLoaded()) {
-    return;
-  }
+auto NodeStorageHandler::IsDeletedInCache(sl_element_id_t id) const -> bool {
+  const auto cached = nodes_.Find(id);
+  return cached && !cached->IsLive();
+}
 
-  try {
-    auto folder_content = element_store_.GetFolderContent(folder->element_id_);
-    // Load the children that are not in memory with one query for the folder instead of
-    // one GetElementById per child. Elements already in memory keep their live state.
-    std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>> loaded_children;
-    for (auto& child : element_store_.GetFolderChildren(folder->element_id_)) {
-      if (!nodes_.Contains(child->element_id_)) {
-        loaded_children.emplace(child->element_id_, std::move(child));
-      }
-    }
-    for (auto& content_id : folder_content) {
-      std::shared_ptr<SleeveElement> content;
-      if (auto it = loaded_children.find(content_id); it != loaded_children.end()) {
-        content = it->second;
-        nodes_.Insert(content);
-      } else {
-        content = GetElement(content_id);
-      }
-      // The child folders came with LoadFolderTree, and the folder entries are the current
-      // ones: a stored link to a folder or to a removed file is not a child any more.
-      if (!content || !content->IsLive() || content->type_ != ElementType::FILE ||
-          folder->ContentRemovedSinceSync().contains(content_id)) {
-        continue;
-      }
-      // DB-backed children already carry persisted ref counts. Reloading the in-memory
-      // folder map must not add an extra parent reference or the next write will trigger
-      // a bogus copy-on-write clone.
-      folder->AddElementToMap(content, false, false);
-    }
-    folder->MarkChildrenLoaded();
-  } catch (const std::exception& e) {
-    ALCEDO_LOG_WARN(Library) << "NodeStorageHandler: the children of folder " << folder->element_id_
-                             << " did not load: " << e.what();
+auto NodeStorageHandler::FileIds(const SleeveFolder& folder) const -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> file_ids;
+  if (folder.SyncState() != SyncFlag::UNSYNC) {
+    file_ids = folder_entry_store_.ReadFolderFiles(folder.element_id_);
   }
+  const auto& unlinked = folder.ContentRemovedSinceSync();
+  std::erase_if(file_ids,
+                [&](sl_element_id_t id) { return unlinked.contains(id) || IsDeletedInCache(id); });
+  // A pending add is a file link unless the id names a child folder.
+  for (const auto id : folder.ContentAddedSinceSync()) {
+    if (!folder.HoldsChildFolder(id) && !IsDeletedInCache(id)) {
+      file_ids.push_back(id);
+    }
+  }
+  std::sort(file_ids.begin(), file_ids.end());
+  file_ids.erase(std::unique(file_ids.begin(), file_ids.end()), file_ids.end());
+  return file_ids;
+}
+
+auto NodeStorageHandler::HeldFiles(const SleeveFolder&              folder,
+                                   std::span<const sl_element_id_t> file_ids) const
+    -> std::unordered_set<sl_element_id_t> {
+  std::unordered_set<sl_element_id_t> held;
+  std::vector<sl_element_id_t>        unknown;
+  for (const auto id : file_ids) {
+    if (IsDeletedInCache(id) || folder.HoldsChildFolder(id)) {
+      continue;
+    }
+    if (const auto pending = folder.PendingMembership(id); pending.has_value()) {
+      if (*pending) {
+        held.insert(id);
+      }
+      continue;
+    }
+    unknown.push_back(id);
+  }
+  if (!unknown.empty() && folder.SyncState() != SyncFlag::UNSYNC) {
+    for (const auto id : folder_entry_store_.ReadHeldFiles(folder.element_id_, unknown)) {
+      held.insert(id);
+    }
+  }
+  return held;
 }
 
 auto NodeStorageHandler::ChildFolders(const SleeveFolder& folder) const

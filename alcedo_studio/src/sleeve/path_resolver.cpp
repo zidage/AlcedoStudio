@@ -74,25 +74,15 @@ auto PathResolver::Resolve(const std::filesystem::path& path) -> std::shared_ptr
   }
 
   for (const auto& part : visit_path) {
-    if (current->type_ == ElementType::FILE) {
-      // TODO: add customized exception class
-      throw std::runtime_error("Path Resolver: Illegal path.");
-    }
-
-    std::shared_ptr<SleeveFolder> folder = std::static_pointer_cast<SleeveFolder>(current);
-    // The child folders are resident. Only a name that no child folder holds can be a file, and
-    // only then do the file entries of the folder load.
-    auto next_id = folder->GetElementIdByName(part.wstring());
-    if (!next_id.has_value() && !folder->ChildrenLoaded()) {
-      storage_handler_.EnsureChildrenLoaded(folder);
-      next_id = folder->GetElementIdByName(part.wstring());
-    }
+    // The child folders are resident and a file has no path.
+    const auto folder  = std::static_pointer_cast<SleeveFolder>(current);
+    const auto next_id = folder->GetElementIdByName(part.wstring());
     if (!next_id.has_value()) {
       throw std::runtime_error("Path Resolver: Illegal path. Target does not exist");
     }
 
     current = storage_handler_.GetElement(next_id.value());
-    if (!current->IsLive()) {
+    if (!current->IsLive() || current->type_ != ElementType::FOLDER) {
       throw std::runtime_error("Path Resolver: Illegal path. Target does not exist");
     }
   }
@@ -137,8 +127,6 @@ auto PathResolver::ResolveForWrite(const std::filesystem::path& path)
     }
 
     std::shared_ptr<SleeveFolder> folder = std::static_pointer_cast<SleeveFolder>(current);
-    storage_handler_.EnsureChildrenLoaded(folder);
-
     if (folder->IsShared()) {
       folder = std::static_pointer_cast<SleeveFolder>(
           CoWHandler(current, std::static_pointer_cast<SleeveFolder>(current_parent)));
@@ -153,11 +141,6 @@ auto PathResolver::ResolveForWrite(const std::filesystem::path& path)
   if (current->type_ == ElementType::FOLDER && current->IsShared()) {
     current = CoWHandler(current, std::static_pointer_cast<SleeveFolder>(current_parent));
   }
-  // A write checks names against all entries of the folder it changes. The file entries stay in
-  // the name map of a folder until SN4, so the target folder loads them here.
-  if (current->type_ == ElementType::FOLDER) {
-    storage_handler_.EnsureChildrenLoaded(std::static_pointer_cast<SleeveFolder>(current));
-  }
   current->MarkModified();
   // directory_cache_.RecordAccess(path.wstring(), current->element_id_);
   return current;
@@ -167,10 +150,12 @@ auto PathResolver::CoWHandler(const std::shared_ptr<SleeveElement>& to_copy,
                               const std::shared_ptr<SleeveFolder>&  parent_folder)
     -> std::shared_ptr<SleeveElement> {
   auto old_id = to_copy->element_id_;
-  // The copy is a new element with no stored entries, so it takes all entries of the source:
-  // the source loads its file entries before the copy.
+  // The copy is a new element with no stored rows, so it takes the members of the source: the
+  // child folders from memory, and the file links from one read of the source (before any
+  // change, so a failed read changes nothing).
+  std::vector<sl_element_id_t> file_ids;
   if (to_copy->type_ == ElementType::FOLDER) {
-    storage_handler_.EnsureChildrenLoaded(std::static_pointer_cast<SleeveFolder>(to_copy));
+    file_ids = storage_handler_.FileIds(static_cast<const SleeveFolder&>(*to_copy));
   }
   to_copy->DecrementRefCount();
   auto copied = to_copy->Copy(id_gen_.GenerateID());
@@ -183,6 +168,9 @@ auto PathResolver::CoWHandler(const std::shared_ptr<SleeveElement>& to_copy,
       if (element && element->type_ == ElementType::FOLDER) {
         element->IncrementRefCount();
       }
+    }
+    for (const auto file_id : file_ids) {
+      copied_folder->RecordFileLinked(file_id);
     }
   }
   parent_folder->UpdateElementMap(copied->element_name_, old_id, copied->element_id_);
@@ -205,8 +193,11 @@ auto PathResolver::Tree(const std::filesystem::path& path) -> std::wstring {
     throw std::runtime_error("Filesystem: Cannot call Tree() on a file node");
   }
 
-  auto dfs_stack    = std::stack<TreeNode>();
-  const auto push_children = [&dfs_stack](std::vector<sl_element_id_t> children, int depth) {
+  auto       dfs_stack     = std::stack<TreeNode>();
+  const auto push_children = [this, &dfs_stack](const SleeveFolder& folder, int depth) {
+    auto        children      = storage_handler_.FileIds(folder);
+    const auto& child_folders = folder.ListElements();
+    children.insert(children.end(), child_folders.begin(), child_folders.end());
     std::sort(children.begin(), children.end(), std::greater<sl_element_id_t>{});
     for (auto& e : children) {
       dfs_stack.push({e, depth, false});
@@ -214,10 +205,7 @@ auto PathResolver::Tree(const std::filesystem::path& path) -> std::wstring {
   };
 
   auto visit_folder = std::static_pointer_cast<SleeveFolder>(start_node);
-  storage_handler_.EnsureChildrenLoaded(visit_folder);
-
-  auto contains = visit_folder->ListElements();
-  push_children(std::vector<sl_element_id_t>(contains.begin(), contains.end()), 0);
+  push_children(*visit_folder, 0);
 
   tree_str << visit_folder->element_name_ << L"id:" << std::to_wstring(visit_folder->element_id_)
            << L"\n";
@@ -234,11 +222,7 @@ auto PathResolver::Tree(const std::filesystem::path& path) -> std::wstring {
       }
       tree_str << L"├── " << next_visit_element->element_name_ << L" id:"
                << std::to_wstring(next_visit_element->element_id_) << L"\n";
-      auto sub_folder = std::static_pointer_cast<SleeveFolder>(next_visit_element);
-      storage_handler_.EnsureChildrenLoaded(sub_folder);
-      contains = sub_folder->ListElements();
-      push_children(std::vector<sl_element_id_t>(contains.begin(), contains.end()),
-                    next_visit.depth_ + 1);
+      push_children(static_cast<const SleeveFolder&>(*next_visit_element), next_visit.depth_ + 1);
     } else {
       for (int i = 0; i < next_visit.depth_; ++i) {
         tree_str << L"    ";

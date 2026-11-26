@@ -700,6 +700,14 @@ auto SortedIds(const std::unordered_set<sl_element_id_t>& ids) -> std::vector<sl
   return sorted;
 }
 
+/// The `FolderContent` rows of a folder that has no stored row yet: its child folders and its
+/// pending links (the file links are not in memory, Sleeve Node Cache Plan, SN4).
+auto NewFolderContentIds(const SleeveFolder& folder) -> std::vector<sl_element_id_t> {
+  std::unordered_set<sl_element_id_t> ids(folder.ContentAddedSinceSync());
+  ids.insert(folder.ListElements().begin(), folder.ListElements().end());
+  return SortedIds(ids);
+}
+
 /// Clear the pending folder content changes of the folders in @p elements. Runs after the
 /// transaction that wrote their rows committed.
 void MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>> elements) {
@@ -734,7 +742,7 @@ void ElementStore::InsertElementRows(duckorm::Connection&                  conn,
     FileMapper(conn).Insert({file->element_id_, file->image_id_});
   } else if (element->type_ == ElementType::FOLDER) {
     auto folder = std::static_pointer_cast<SleeveFolder>(element);
-    FolderMapper(conn).InsertFolderContents(folder->element_id_, folder->ListElements());
+    FolderMapper(conn).InsertFolderContents(folder->element_id_, NewFolderContentIds(*folder));
   }
 }
 
@@ -763,7 +771,7 @@ void ElementStore::InsertElementBatchRows(
   for (const auto& element : elements) {
     if (element->type_ == ElementType::FOLDER) {
       const auto folder = std::static_pointer_cast<SleeveFolder>(element);
-      folder_mapper.InsertFolderContents(folder->element_id_, folder->ListElements());
+      folder_mapper.InsertFolderContents(folder->element_id_, NewFolderContentIds(*folder));
     }
   }
 }

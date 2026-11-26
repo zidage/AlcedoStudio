@@ -69,7 +69,6 @@ struct AlbumFolderEditResult {
 
 struct AlbumDeleteResult {
   std::vector<AlbumFileView>         deleted_files_{};
-  std::vector<std::filesystem::path> failed_paths_{};
   std::vector<sl_element_id_t>       failed_element_ids_{};
   /// A delete from the library: the mounted photos of the request. They stay in the library,
   /// and the other photos of the request are deleted (#1135).
@@ -95,8 +94,6 @@ class AlbumBrowseService {
   /// parents is in the result under each. Empty when the sleeve service is absent. A failed read
   /// writes one warning with the error text and throws the error.
   [[nodiscard]] auto ListFolderTree() const -> std::vector<AlbumFolderView>;
-  [[nodiscard]] auto ListFilesInFolder(const std::filesystem::path& folder_path) const
-      -> std::vector<AlbumFileView>;
   [[nodiscard]] auto ListFilesInFolderById(sl_element_id_t folder_id) const
       -> std::vector<AlbumFileView>;
   /// One page of the files of @p folder_id that match @p filter (all files when empty), in
@@ -186,8 +183,6 @@ class AlbumBrowseService {
   [[nodiscard]] auto MoveFolder(const std::filesystem::path& folder_path,
                                 const std::filesystem::path& new_parent_path)
       -> AlbumFolderEditResult;
-  [[nodiscard]] auto DeleteFiles(const std::vector<std::filesystem::path>& file_paths)
-      -> AlbumDeleteResult;
   [[nodiscard]] auto DeleteFilesByElementIds(const std::vector<sl_element_id_t>& element_ids)
       -> AlbumDeleteResult;
   [[nodiscard]] auto DeleteFilesInFolderByElementIds(

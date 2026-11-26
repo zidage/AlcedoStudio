@@ -5,28 +5,16 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 
 #include <algorithm>
-#include <cstddef>
 #include <memory>
 #include <optional>
-#include <set>
 #include <stdexcept>
-#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
-#include "sleeve/sleeve_element/sleeve_element_factory.hpp"
-#include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "type/type.hpp"
-#include "utils/string/convert.hpp"
 
 namespace alcedo {
-/**
- * @brief Construct a new Sleeve Folder:: Sleeve Folder object
- *
- * @param id
- * @param element_name
- */
 SleeveFolder::SleeveFolder(sl_element_id_t id, file_name_t element_name)
     : SleeveElement(id, element_name), file_count_(0), folder_count_(0) {
   indicies_cache_[default_filter_] = {};
@@ -37,20 +25,13 @@ SleeveFolder::~SleeveFolder() {}
 
 auto SleeveFolder::Copy(sl_element_id_t new_id) const -> std::shared_ptr<SleeveElement> {
   auto copy       = std::make_shared<SleeveFolder>(new_id, element_name_);
-  // Copy the name-id map and filter map
   copy->contents_ = {contents_};
-  // Only copy indicies cache under default filter
   copy->indicies_cache_[copy->default_filter_] =
       std::vector<sl_element_id_t>(indicies_cache_.at(default_filter_));
-  copy->children_loaded_ = children_loaded_;
-  copy->mount_id_        = mount_id_;
+  copy->mount_id_ = mount_id_;
   return copy;
 }
-/**
- * @brief Add an element reference to the folder
- *
- * @param element
- */
+
 void SleeveFolder::AddElementToMap(const std::shared_ptr<SleeveElement> element) {
   AddElementToMap(element, true, true);
 }
@@ -61,13 +42,16 @@ void SleeveFolder::AddElementToMap(const std::shared_ptr<SleeveElement> element,
 
 void SleeveFolder::AddElementToMap(const std::shared_ptr<SleeveElement> element, bool change_sync,
                                    bool increment_ref_count) {
+  if (element->type_ != ElementType::FOLDER) {
+    throw std::invalid_argument("SleeveFolder: a folder holds no file entry; link the file");
+  }
   if (auto existing = GetElementIdByName(element->element_name_); existing.has_value()) {
     if (existing.value() == element->element_id_) {
       return;
     }
     throw std::runtime_error("SleeveFolder: Name already exists in folder");
   }
-  if (ContainsElementId(element->element_id_)) {
+  if (HoldsChildFolder(element->element_id_)) {
     return;
   }
   contents_[element->element_name_] = element->element_id_;
@@ -97,18 +81,50 @@ void SleeveFolder::RecordContentRemoved(sl_element_id_t element_id) {
   }
 }
 
+void SleeveFolder::RecordFileLinked(sl_element_id_t file_id) {
+  content_removed_since_sync_.erase(file_id);
+  content_added_since_sync_.insert(file_id);
+  MarkModified();
+}
+
+void SleeveFolder::RecordFileUnlinked(sl_element_id_t file_id) {
+  content_added_since_sync_.erase(file_id);
+  content_removed_since_sync_.insert(file_id);
+  MarkModified();
+}
+
+auto SleeveFolder::PendingMembership(sl_element_id_t element_id) const -> std::optional<bool> {
+  if (content_added_since_sync_.contains(element_id)) {
+    return true;
+  }
+  if (content_removed_since_sync_.contains(element_id)) {
+    return false;
+  }
+  return std::nullopt;
+}
+
+void SleeveFolder::DropPendingChanges(const std::unordered_set<sl_element_id_t>& element_ids) {
+  // The smaller set drives the walk: a delete of a few files in a large pending import, or a
+  // delete of many files with few pending changes.
+  const auto drop_from = [&element_ids](std::unordered_set<sl_element_id_t>& pending) {
+    if (pending.size() <= element_ids.size()) {
+      std::erase_if(pending,
+                    [&element_ids](sl_element_id_t id) { return element_ids.contains(id); });
+      return;
+    }
+    for (const auto id : element_ids) {
+      pending.erase(id);
+    }
+  };
+  drop_from(content_added_since_sync_);
+  drop_from(content_removed_since_sync_);
+}
+
 void SleeveFolder::MarkContentSynced() {
   content_added_since_sync_.clear();
   content_removed_since_sync_.clear();
 }
 
-/**
- * @brief Update a name-id mapping
- *
- * @param name
- * @param old_id
- * @param new_id
- */
 void SleeveFolder::UpdateElementMap(const file_name_t& name, const sl_element_id_t old_id,
                                     const sl_element_id_t new_id) {
   contents_.erase(name);
@@ -127,68 +143,40 @@ void SleeveFolder::UpdateElementMap(const file_name_t& name, const sl_element_id
   MarkModified();
 }
 
-/**
- * @brief Get an element's id from the _contents table
- *
- * @param name
- * @return std::optional<sl_element_id_t>
- */
 auto SleeveFolder::GetElementIdByName(const file_name_t& name) const
     -> std::optional<sl_element_id_t> {
-  if (!Contains(name)) {
+  const auto it = contents_.find(name);
+  if (it == contents_.end()) {
     return std::nullopt;
   }
-  return contents_.at(name);
+  return it->second;
 }
 
-/**
- * @brief List all the elements within this folder
- *
- * @return std::shared_ptr<std::vector<sl_element_id_t>>
- */
 auto SleeveFolder::ListElements() const -> const std::vector<sl_element_id_t>& {
-  const auto& default_list = indicies_cache_.at(default_filter_);
-  return default_list;
+  return indicies_cache_.at(default_filter_);
 }
 
-auto SleeveFolder::ContainsElementId(sl_element_id_t element_id) const -> bool {
-  const auto& default_list = indicies_cache_.at(default_filter_);
-  return std::find(default_list.begin(), default_list.end(), element_id) != default_list.end();
+auto SleeveFolder::HoldsChildFolder(sl_element_id_t folder_id) const -> bool {
+  const auto& child_folders = indicies_cache_.at(default_filter_);
+  return std::find(child_folders.begin(), child_folders.end(), folder_id) != child_folders.end();
 }
 
 auto SleeveFolder::Clear() -> bool {
-  // TODO: Add Implementation
   for (const auto id : indicies_cache_[default_filter_]) {
     RecordContentRemoved(id);
   }
   contents_.clear();
   indicies_cache_.clear();
   indicies_cache_[default_filter_] = {};
-  children_loaded_                 = true;
-
   return true;
 }
 
-/**
- * @brief Check whether the folder contains the element of the given name
- *
- * @param name
- * @return true
- * @return false
- */
 auto SleeveFolder::Contains(const file_name_t& name) const -> bool {
-  return contents_.count(name) != 0;
+  return contents_.contains(name);
 }
 
-/**
- * @brief Remove a name-id mapping from the _contents table
- *
- * @param name
- * @return sl_element_id_t
- */
 void SleeveFolder::RemoveNameFromMap(const file_name_t& name) {
   auto  removed_id    = contents_.at(name);
-  // Also remove from default filter index
   auto& default_index = indicies_cache_[default_filter_];
   default_index.erase(std::remove(default_index.begin(), default_index.end(), removed_id),
                       default_index.end());
@@ -196,67 +184,6 @@ void SleeveFolder::RemoveNameFromMap(const file_name_t& name) {
   RecordContentRemoved(removed_id);
   // Mark this folder as modified so the updated content list is persisted on next sync.
   MarkModified();
-}
-
-auto SleeveFolder::RemoveElementById(sl_element_id_t element_id) -> bool {
-  auto removed = false;
-  for (auto it = contents_.begin(); it != contents_.end();) {
-    if (it->second == element_id) {
-      it      = contents_.erase(it);
-      removed = true;
-    } else {
-      ++it;
-    }
-  }
-
-  auto& default_index = indicies_cache_[default_filter_];
-  const auto old_size = default_index.size();
-  default_index.erase(std::remove(default_index.begin(), default_index.end(), element_id),
-                      default_index.end());
-  removed |= default_index.size() != old_size;
-
-  if (removed) {
-    RecordContentRemoved(element_id);
-  }
-  if (removed) {
-    MarkModified();
-  }
-  return removed;
-}
-
-auto SleeveFolder::RemoveElementsById(const std::unordered_set<sl_element_id_t>& element_ids)
-    -> size_t {
-  if (element_ids.empty()) {
-    return 0;
-  }
-  std::unordered_set<sl_element_id_t> removed_ids;
-  for (auto it = contents_.begin(); it != contents_.end();) {
-    if (element_ids.contains(it->second)) {
-      removed_ids.insert(it->second);
-      it = contents_.erase(it);
-    } else {
-      ++it;
-    }
-  }
-
-  auto&       default_index = indicies_cache_[default_filter_];
-  std::size_t kept          = 0;
-  for (const auto element_id : default_index) {
-    if (element_ids.contains(element_id)) {
-      removed_ids.insert(element_id);
-    } else {
-      default_index[kept++] = element_id;
-    }
-  }
-  default_index.resize(kept);
-
-  for (const auto element_id : removed_ids) {
-    RecordContentRemoved(element_id);
-  }
-  if (!removed_ids.empty()) {
-    MarkModified();
-  }
-  return removed_ids.size();
 }
 
 void SleeveFolder::CreateIndex(const std::vector<std::shared_ptr<SleeveElement>>& filtered_elements,
@@ -283,5 +210,4 @@ void SleeveFolder::DecrementFileCount() { --file_count_; }
 void SleeveFolder::IncrementFolderCount() { ++folder_count_; }
 
 void SleeveFolder::DecrementFolderCount() { --folder_count_; }
-auto SleeveFolder::ContentSize() -> size_t { return contents_.size(); }
 };  // namespace alcedo

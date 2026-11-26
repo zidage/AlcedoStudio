@@ -89,7 +89,9 @@ class MountStoreTest : public ::testing::Test {
           std::make_shared<SleeveFile>(file_id, L"IMG_" + std::to_wstring(file_id) + L".ARW");
       file->image_id_ = file_id;
       file->mount_id_ = mount_id;
-      folder->AddElementToMap(file);
+      // A folder holds no file entry; the insert of the new folder writes its pending links.
+      file->IncrementRefCount();
+      folder->RecordFileLinked(file->element_id_);
       elements.push_back(file);
     }
     storage_->GetElementStore().AddElements(elements);

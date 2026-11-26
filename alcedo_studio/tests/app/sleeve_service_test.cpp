@@ -45,6 +45,28 @@ auto ContainsId(const std::vector<sl_element_id_t>& ids, sl_element_id_t id) -> 
   return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
+/// The live files named @p name in the folder at @p folder_path. A file has no path (a file
+/// name is a label, Sleeve Node Cache Plan SN4), so a test finds a file by its folder and name.
+auto FilesNamed(SleeveServiceImpl& service, const std::filesystem::path& folder_path,
+                const file_name_t& name) -> std::vector<std::shared_ptr<SleeveFile>> {
+  std::vector<std::shared_ptr<SleeveFile>> files;
+  for (const auto& entry : service.ListFolderEntries(folder_path)) {
+    if (entry->type_ == ElementType::FILE && entry->element_name_ == name) {
+      files.push_back(std::static_pointer_cast<SleeveFile>(entry));
+    }
+  }
+  return files;
+}
+
+/// The id of the one live file named @p name in the folder at @p folder_path; 0 when the folder
+/// holds no such file. Fails the test when it holds more than one.
+auto FileIdNamed(SleeveServiceImpl& service, const std::filesystem::path& folder_path,
+                 const file_name_t& name) -> sl_element_id_t {
+  const auto files = FilesNamed(service, folder_path, name);
+  EXPECT_LE(files.size(), 1u) << conv::ToBytes(name);
+  return files.empty() ? 0 : files.front()->element_id_;
+}
+
 auto RunDuckDbSql(const std::filesystem::path& db_path, const std::string& sql) -> bool {
   duckdb_database   db;
   duckdb_connection conn;
@@ -233,29 +255,27 @@ TEST_F(SleeveServiceTests, InitAndCreateTest) {
   EXPECT_NE(write_result.first, nullptr);
   EXPECT_TRUE(write_result.second.success_);
 
-  service->Write<std::shared_ptr<SleeveElement>>(
+  const auto created = service->Write<std::shared_ptr<SleeveElement>>(
       [](FileSystem& fs) { return fs.Create(L"/Folder", L"File", ElementType::FILE); });
+  ASSERT_TRUE(created.second.success_);
 
-  auto file = service->Read<std::shared_ptr<SleeveElement>>(
-      [](FileSystem& fs) { return fs.Get(L"/Folder/File", false); });
-  ASSERT_NE(file, nullptr);
-  EXPECT_EQ(file->element_name_, L"File");
+  EXPECT_EQ(FileIdNamed(*service, L"/Folder", L"File"), created.first->element_id_);
+  // A file has no path: the name is a label.
+  EXPECT_THROW(service->Read<std::shared_ptr<SleeveElement>>(
+                   [](FileSystem& fs) { return fs.Get(L"/Folder/File", false); }),
+               std::runtime_error);
 }
 
 TEST_F(SleeveServiceTests, DeleteTest) {
   ProjectService project(db_path_, meta_path_);
   auto           service = project.GetSleeveService();
 
-  service->Write<std::shared_ptr<SleeveElement>>(
+  const auto     created = service->Write<std::shared_ptr<SleeveElement>>(
       [](FileSystem& fs) { return fs.Create(L"", L"File", ElementType::FILE); });
-  service->Write<bool>([](FileSystem& fs) {
-    fs.Delete(L"/File");
-    return true;
-  });
+  ASSERT_TRUE(created.second.success_);
+  ASSERT_TRUE(service->DeleteElement(created.first->element_id_).success_);
 
-  EXPECT_THROW(service->Read<std::shared_ptr<SleeveElement>>(
-                   [](FileSystem& fs) { return fs.Get(L"/File", false); }),
-               std::runtime_error);
+  EXPECT_EQ(FileIdNamed(*service, L"/", L"File"), 0u);
 }
 
 TEST_F(SleeveServiceTests, CopyTest) {
@@ -293,12 +313,10 @@ TEST_F(SleeveServiceTests, SaveLoadTest) {
   }
 
   ProjectService reloaded_project(db_path_, meta_path_);
-  // reloaded_project.LoadProject(meta_path_);
   auto           reloaded_service = reloaded_project.GetSleeveService();
-  auto           file             = reloaded_service->Read<std::shared_ptr<SleeveElement>>(
-      [](FileSystem& fs) { return fs.Get(L"/Folder/File", false); });
-  ASSERT_NE(file, nullptr);
-  EXPECT_EQ(file->element_name_, L"File");
+  const auto     files            = FilesNamed(*reloaded_service, L"/Folder", L"File");
+  ASSERT_EQ(files.size(), 1u);
+  EXPECT_EQ(files.front()->element_name_, L"File");
 }
 
 TEST_F(SleeveServiceTests, ResolveAndListImmediateChildrenByPath) {
@@ -435,25 +453,23 @@ TEST_F(SleeveServiceTests, AlbumMembershipWriteDoesNotTriggerFileCow) {
     return true;
   });
 
-  const auto edited = service->Write_NoSync<std::shared_ptr<SleeveFile>>([](FileSystem& fs) {
-    auto file = std::static_pointer_cast<SleeveFile>(fs.Get(L"/AlbumA/Shared.arw", true));
+  const auto file_id = file.first->element_id_;
+  const auto edited = service->Write_NoSync<std::shared_ptr<SleeveFile>>([file_id](FileSystem& fs) {
+    auto file = std::static_pointer_cast<SleeveFile>(fs.Get(file_id));
     file->SetLastModifiedTime();
     return file;
   });
   ASSERT_NE(edited, nullptr);
-  EXPECT_EQ(edited->element_id_, file.first->element_id_);
+  EXPECT_EQ(edited->element_id_, file_id);
 
-  const auto from_root    = service->Read<std::shared_ptr<SleeveFile>>([](FileSystem& fs) {
-    return std::static_pointer_cast<SleeveFile>(fs.Get(L"/Shared.arw", false));
-  });
-  const auto from_album_b = service->Read<std::shared_ptr<SleeveFile>>([](FileSystem& fs) {
-    return std::static_pointer_cast<SleeveFile>(fs.Get(L"/AlbumB/Shared.arw", false));
-  });
-
-  EXPECT_EQ(from_root->element_id_, file.first->element_id_);
-  EXPECT_EQ(from_album_b->element_id_, file.first->element_id_);
-  EXPECT_EQ(from_root->last_modified_time_, edited->last_modified_time_);
-  EXPECT_EQ(from_album_b->last_modified_time_, edited->last_modified_time_);
+  const auto from_root    = FilesNamed(*service, L"/", L"Shared.arw");
+  const auto from_album_b = FilesNamed(*service, L"/AlbumB", L"Shared.arw");
+  ASSERT_EQ(from_root.size(), 1u);
+  ASSERT_EQ(from_album_b.size(), 1u);
+  EXPECT_EQ(from_root.front()->element_id_, file_id);
+  EXPECT_EQ(from_album_b.front()->element_id_, file_id);
+  EXPECT_EQ(from_root.front()->last_modified_time_, edited->last_modified_time_);
+  EXPECT_EQ(from_album_b.front()->last_modified_time_, edited->last_modified_time_);
 }
 
 TEST_F(SleeveServiceTests, SharedAlbumFileEditIsVisibleFromRootAndOtherAlbums) {
@@ -477,24 +493,20 @@ TEST_F(SleeveServiceTests, SharedAlbumFileEditIsVisibleFromRootAndOtherAlbums) {
       fs.LinkFileToFolder(file_id, album_b->element_id_);
     });
 
-    modified_time           = service->Write_NoSync<std::time_t>([](FileSystem& fs) {
-      auto album_file =
-          std::static_pointer_cast<SleeveFile>(fs.Get(L"/AlbumA/SharedEdit.arw", true));
+    modified_time           = service->Write_NoSync<std::time_t>([file_id](FileSystem& fs) {
+      const auto album_file = fs.Get(file_id);
       album_file->SetLastModifiedTime();
       return album_file->last_modified_time_;
     });
 
-    const auto from_root    = service->Read<std::shared_ptr<SleeveFile>>([](FileSystem& fs) {
-      return std::static_pointer_cast<SleeveFile>(fs.Get(L"/SharedEdit.arw", false));
-    });
-    const auto from_album_b = service->Read<std::shared_ptr<SleeveFile>>([](FileSystem& fs) {
-      return std::static_pointer_cast<SleeveFile>(fs.Get(L"/AlbumB/SharedEdit.arw", false));
-    });
-
-    EXPECT_EQ(from_root->element_id_, file_id);
-    EXPECT_EQ(from_album_b->element_id_, file_id);
-    EXPECT_EQ(from_root->last_modified_time_, modified_time);
-    EXPECT_EQ(from_album_b->last_modified_time_, modified_time);
+    const auto from_root    = FilesNamed(*service, L"/", L"SharedEdit.arw");
+    const auto from_album_b = FilesNamed(*service, L"/AlbumB", L"SharedEdit.arw");
+    ASSERT_EQ(from_root.size(), 1u);
+    ASSERT_EQ(from_album_b.size(), 1u);
+    EXPECT_EQ(from_root.front()->element_id_, file_id);
+    EXPECT_EQ(from_album_b.front()->element_id_, file_id);
+    EXPECT_EQ(from_root.front()->last_modified_time_, modified_time);
+    EXPECT_EQ(from_album_b.front()->last_modified_time_, modified_time);
   }
 }
 
@@ -516,7 +528,7 @@ TEST_F(SleeveServiceTests, DeletingAlbumFolderKeepsLinkedLibraryFiles) {
     const auto root_ids = service->Read<std::vector<sl_element_id_t>>(
         [](FileSystem& fs) { return fs.ListFolderContent(0); });
     EXPECT_TRUE(ContainsId(root_ids, file_id));
-    EXPECT_EQ(service->ResolveFile(L"/KeepAfterAlbumDelete.arw")->element_id_, file_id);
+    EXPECT_EQ(FileIdNamed(*service, L"/", L"KeepAfterAlbumDelete.arw"), file_id);
     EXPECT_THROW(service->ResolveFolder(L"/Album"), std::runtime_error);
 
     project.SaveProject(meta_path_);
@@ -528,7 +540,7 @@ TEST_F(SleeveServiceTests, DeletingAlbumFolderKeepsLinkedLibraryFiles) {
       [](FileSystem& fs) { return fs.ListFolderContent(0); });
 
   EXPECT_TRUE(ContainsId(root_ids, file_id));
-  EXPECT_EQ(service->ResolveFile(L"/KeepAfterAlbumDelete.arw")->element_id_, file_id);
+  EXPECT_EQ(FileIdNamed(*service, L"/", L"KeepAfterAlbumDelete.arw"), file_id);
   EXPECT_THROW(service->ResolveFolder(L"/Album"), std::runtime_error);
 }
 
@@ -550,23 +562,27 @@ TEST_F(SleeveServiceTests, FolderCopyWriteKeepsNestedFileIdentity) {
                 return true;
               }).second.success_);
 
-  const auto written = service->Write_NoSync<std::shared_ptr<SleeveFile>>([](FileSystem& fs) {
-    auto file = std::static_pointer_cast<SleeveFile>(fs.Get(L"/Subfolder/Linux.arw", true));
+  // The write below the shared folder copies the folder (CoW); the copy keeps the file link.
+  const auto file_id = created.first->element_id_;
+  const auto written = service->Write<std::shared_ptr<SleeveFile>>([file_id](FileSystem& fs) {
+    fs.Get(L"/Subfolder", true);
+    auto file = std::static_pointer_cast<SleeveFile>(fs.Get(file_id));
     file->SetLastModifiedTime();
     return file;
   });
-  ASSERT_NE(written, nullptr);
+  ASSERT_TRUE(written.second.success_);
 
-  const auto from_original = service->ResolveFile(L"/Folder/Subfolder/Linux.arw");
-  const auto from_copied   = service->ResolveFile(L"/Subfolder/Linux.arw");
-  ASSERT_NE(from_original, nullptr);
-  ASSERT_NE(from_copied, nullptr);
+  const auto from_original = FilesNamed(*service, L"/Folder/Subfolder", L"Linux.arw");
+  const auto from_copied   = FilesNamed(*service, L"/Subfolder", L"Linux.arw");
+  ASSERT_EQ(from_original.size(), 1u);
+  ASSERT_EQ(from_copied.size(), 1u);
+  EXPECT_NE(service->ResolveFolder(L"/Folder/Subfolder")->element_id_,
+            service->ResolveFolder(L"/Subfolder")->element_id_);
 
-  EXPECT_EQ(from_original->element_id_, written->element_id_);
-  EXPECT_EQ(from_copied->element_id_, written->element_id_);
-  EXPECT_EQ(from_original->last_modified_time_, written->last_modified_time_);
-  EXPECT_EQ(from_copied->last_modified_time_, written->last_modified_time_);
-  EXPECT_EQ(from_original->ref_count_, 1u);
+  EXPECT_EQ(from_original.front()->element_id_, file_id);
+  EXPECT_EQ(from_copied.front()->element_id_, file_id);
+  EXPECT_EQ(from_original.front()->last_modified_time_, written.first->last_modified_time_);
+  EXPECT_EQ(from_original.front()->ref_count_, 1u);
 }
 
 TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsPipelineIndependent) {
@@ -589,11 +605,15 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsPipelineIndepende
   ASSERT_TRUE(duplicated.second.success_);
   ASSERT_NE(duplicated.first, nullptr);
 
+  // The duplicate keeps the name: a file name is a label (SN4).
   const auto duplicate_id = duplicated.first->element_id_;
   EXPECT_NE(duplicate_id, source_id);
-  EXPECT_EQ(service->ResolveFile(L"/Source.arw")->element_id_, source_id);
-  EXPECT_EQ(service->ResolveFile(L"/Source.arw@")->element_id_, duplicate_id);
-  EXPECT_EQ(service->ResolveFile(L"/Album/Source.arw@")->element_id_, duplicate_id);
+  EXPECT_EQ(duplicated.first->element_name_, L"Source.arw");
+  const auto root_files = FilesNamed(*service, L"/", L"Source.arw");
+  ASSERT_EQ(root_files.size(), 2u);
+  EXPECT_EQ(root_files[0]->element_id_, source_id);
+  EXPECT_EQ(root_files[1]->element_id_, duplicate_id);
+  EXPECT_EQ(FileIdNamed(*service, L"/Album", L"Source.arw"), duplicate_id);
 
   EXPECT_FLOAT_EQ(ReadStoredExposure(*storage, source_id), 2.5f);
   EXPECT_FLOAT_EQ(ReadStoredExposure(*storage, duplicate_id), 2.5f);
@@ -641,13 +661,12 @@ TEST_F(SleeveServiceTests, ImportAndCopyDoNotCreateLegacyHistory) {
             2);
 
   ProjectService reopened(db_path_, meta_path_);
-  auto           service = reopened.GetSleeveService();
-  const auto     source  = service->ResolveFile(L"/Source.arw");
-  const auto     copy    = service->ResolveFile(L"/Album/Source.arw@");
-  ASSERT_NE(source, nullptr);
-  ASSERT_NE(copy, nullptr);
-  EXPECT_EQ(source->element_id_, source_id);
-  EXPECT_EQ(copy->element_id_, duplicate_id);
+  auto           service    = reopened.GetSleeveService();
+  const auto     root_files = FilesNamed(*service, L"/", L"Source.arw");
+  ASSERT_EQ(root_files.size(), 2u);
+  EXPECT_EQ(root_files[0]->element_id_, source_id);
+  EXPECT_EQ(root_files[1]->element_id_, duplicate_id);
+  EXPECT_EQ(FileIdNamed(*service, L"/Album", L"Source.arw"), duplicate_id);
 }
 
 TEST_F(SleeveServiceTests, ReloadedRootMembershipKeepsLibraryFile) {
@@ -669,7 +688,7 @@ TEST_F(SleeveServiceTests, ReloadedRootMembershipKeepsLibraryFile) {
       [](FileSystem& fs) { return fs.ListFolderContent(0); });
 
   EXPECT_TRUE(ContainsId(root_ids, file_id));
-  EXPECT_EQ(service->ResolveFile(L"/RootOnly.arw")->element_id_, file_id);
+  EXPECT_EQ(FileIdNamed(*service, L"/", L"RootOnly.arw"), file_id);
 }
 
 TEST_F(SleeveServiceTests, ReloadedAlbumMembershipKeepsSharedFileIdentity) {
@@ -702,8 +721,8 @@ TEST_F(SleeveServiceTests, ReloadedAlbumMembershipKeepsSharedFileIdentity) {
   EXPECT_TRUE(ContainsId(root_ids, file_id));
   ASSERT_EQ(album_ids.size(), 1u);
   EXPECT_EQ(album_ids.front(), file_id);
-  EXPECT_EQ(service->ResolveFile(L"/AlbumImport.arw")->element_id_, file_id);
-  EXPECT_EQ(service->ResolveFile(L"/Album/AlbumImport.arw")->element_id_, file_id);
+  EXPECT_EQ(FileIdNamed(*service, L"/", L"AlbumImport.arw"), file_id);
+  EXPECT_EQ(FileIdNamed(*service, L"/Album", L"AlbumImport.arw"), file_id);
 }
 
 TEST_F(SleeveServiceTests, ReloadedAlbumUnlinkKeepsRootMembershipOnly) {
@@ -736,8 +755,8 @@ TEST_F(SleeveServiceTests, ReloadedAlbumUnlinkKeepsRootMembershipOnly) {
 
   EXPECT_TRUE(ContainsId(root_ids, file_id));
   EXPECT_FALSE(ContainsId(album_ids, file_id));
-  EXPECT_EQ(service->ResolveFile(L"/UnlinkOnly.arw")->element_id_, file_id);
-  EXPECT_THROW(service->ResolveFile(L"/Album/UnlinkOnly.arw"), std::runtime_error);
+  EXPECT_EQ(FileIdNamed(*service, L"/", L"UnlinkOnly.arw"), file_id);
+  EXPECT_EQ(FileIdNamed(*service, L"/Album", L"UnlinkOnly.arw"), 0u);
 }
 
 TEST_F(SleeveServiceTests, DuplicateLinkIsIdempotentAndPersistsAsSingleMembership) {
@@ -804,7 +823,7 @@ TEST_F(SleeveServiceTests, DeletingFromAlbumOnlyUnlinksMembership) {
 
   service->Write<bool>([&](FileSystem& fs) {
     fs.LinkFileToFolder(file.first->element_id_, album->element_id_);
-    fs.Delete(L"/Album/KeepInRoot.arw");
+    fs.UnlinkFileFromFolder(file.first->element_id_, album->element_id_);
     return true;
   });
 
@@ -815,8 +834,8 @@ TEST_F(SleeveServiceTests, DeletingFromAlbumOnlyUnlinksMembership) {
 
   EXPECT_TRUE(ContainsId(root_ids, file.first->element_id_));
   EXPECT_FALSE(ContainsId(album_ids, file.first->element_id_));
-  EXPECT_NE(service->ResolveFile(L"/KeepInRoot.arw"), nullptr);
-  EXPECT_THROW(service->ResolveFile(L"/Album/KeepInRoot.arw"), std::runtime_error);
+  EXPECT_NE(FileIdNamed(*service, L"/", L"KeepInRoot.arw"), 0u);
+  EXPECT_EQ(FileIdNamed(*service, L"/Album", L"KeepInRoot.arw"), 0u);
 }
 
 TEST_F(SleeveServiceTests, DeletingFromRootDeletesFileEverywhereAndPersists) {
@@ -833,7 +852,7 @@ TEST_F(SleeveServiceTests, DeletingFromRootDeletesFileEverywhereAndPersists) {
 
     const auto deleted = service->Write<bool>([&](FileSystem& fs) {
       fs.LinkFileToFolder(file.first->element_id_, album->element_id_);
-      fs.Delete(L"/DeleteEverywhere.arw");
+      fs.Delete(file.first->element_id_);
       return true;
     });
     ASSERT_TRUE(deleted.second.success_);
@@ -857,7 +876,7 @@ TEST_F(SleeveServiceTests, DeletingFromRootDeletesFileEverywhereAndPersists) {
 
   const auto album_entries = reloaded_service->ListFolderEntries(L"/Album");
   EXPECT_TRUE(album_entries.empty());
-  EXPECT_THROW(reloaded_service->ResolveFile(L"/DeleteEverywhere.arw"), std::runtime_error);
+  EXPECT_EQ(FileIdNamed(*reloaded_service, L"/", L"DeleteEverywhere.arw"), 0u);
 }
 
 // Library search plan, Phase S6: a sync writes only the FolderContent rows of the children added
@@ -1059,7 +1078,7 @@ TEST_F(SleeveServiceTests, RenamedFolderKeepsIdChildrenAndMembershipAfterReload)
 
     EXPECT_EQ(service->ResolveFolder(L"/Trip")->element_id_, album_id);
     EXPECT_EQ(service->ResolveFolder(L"/Trip/Child")->element_id_, child_id);
-    EXPECT_EQ(service->ResolveFile(L"/Trip/Renamed.arw")->element_id_, file_id);
+    EXPECT_EQ(FileIdNamed(*service, L"/Trip", L"Renamed.arw"), file_id);
     EXPECT_THROW(service->ResolveFolder(L"/Album"), std::runtime_error);
     EXPECT_THROW(service->ResolveFolder(L"/Album/Child"), std::runtime_error);
 
@@ -1070,7 +1089,7 @@ TEST_F(SleeveServiceTests, RenamedFolderKeepsIdChildrenAndMembershipAfterReload)
   auto           service = reloaded_project.GetSleeveService();
   EXPECT_EQ(service->ResolveFolder(L"/Trip")->element_id_, album_id);
   EXPECT_EQ(service->ResolveFolder(L"/Trip/Child")->element_id_, child_id);
-  EXPECT_EQ(service->ResolveFile(L"/Trip/Renamed.arw")->element_id_, file_id);
+  EXPECT_EQ(FileIdNamed(*service, L"/Trip", L"Renamed.arw"), file_id);
   EXPECT_THROW(service->ResolveFolder(L"/Album"), std::runtime_error);
   const auto root_ids = service->Read<std::vector<sl_element_id_t>>(
       [](FileSystem& fs) { return fs.ListFolderContent(0); });
@@ -1098,7 +1117,7 @@ TEST_F(SleeveServiceTests, MovedFolderKeepsIdChildrenAndMembershipAfterReload) {
 
     EXPECT_EQ(service->ResolveFolder(L"/B/Inner")->element_id_, inner_id);
     EXPECT_EQ(service->ResolveFolder(L"/B/Inner/Leaf")->element_id_, leaf_id);
-    EXPECT_EQ(service->ResolveFile(L"/B/Inner/Moved.arw")->element_id_, file_id);
+    EXPECT_EQ(FileIdNamed(*service, L"/B/Inner", L"Moved.arw"), file_id);
     EXPECT_THROW(service->ResolveFolder(L"/A/Inner"), std::runtime_error);
     EXPECT_THROW(service->ResolveFolder(L"/A/Inner/Leaf"), std::runtime_error);
     const auto a_ids = service->Read<std::vector<sl_element_id_t>>(
@@ -1113,7 +1132,7 @@ TEST_F(SleeveServiceTests, MovedFolderKeepsIdChildrenAndMembershipAfterReload) {
     auto           service = reloaded_project.GetSleeveService();
     EXPECT_EQ(service->ResolveFolder(L"/B/Inner")->element_id_, inner_id);
     EXPECT_EQ(service->ResolveFolder(L"/B/Inner/Leaf")->element_id_, leaf_id);
-    EXPECT_EQ(service->ResolveFile(L"/B/Inner/Moved.arw")->element_id_, file_id);
+    EXPECT_EQ(FileIdNamed(*service, L"/B/Inner", L"Moved.arw"), file_id);
     EXPECT_THROW(service->ResolveFolder(L"/A/Inner"), std::runtime_error);
 
     // Moving to the root path makes it a top-level folder.
@@ -1296,13 +1315,11 @@ TEST_F(MountedFolderStructureTest, EachStructureOperationOnAMountedFolderReturns
         read_only, [&] { (void)Sleeve().DeleteFileFromFolder(present_file_id_, mount_root_id_); });
     ExpectSleeveError(read_only,
                       [&] { (void)Sleeve().DeleteFilesFromFolder(home_link_ids, mount_root_id_); });
-    ExpectSleeveError(read_only, [&] { (void)Sleeve().DeletePath(L"/Trip/present.nef"); });
   }
   {
     SCOPED_TRACE("remove from library");
     ExpectSleeveError(present, [&] { (void)Sleeve().DeleteFileEverywhere(present_file_id_); });
     ExpectSleeveError(present, [&] { (void)Sleeve().DeleteElement(present_file_id_); });
-    ExpectSleeveError(present, [&] { (void)Sleeve().DeletePath(L"/present.nef"); });
     // One mounted photo refuses the whole request: the ordinary photo stays too.
     ExpectSleeveError(present, [&] { (void)Sleeve().DeleteFilesEverywhere(present_ids); });
     ExpectSleeveError(SleeveError::kMountedPhotoIsMissing,
@@ -1324,7 +1341,7 @@ TEST_F(MountedFolderStructureTest, MountedFileLinksIntoAnOrdinaryCollection) {
   EXPECT_EQ(entries[0]->element_id_, present_file_id_);
   EXPECT_EQ(entries[0]->mount_id_, kMount);
   // The home link stays, and the link to an ordinary collection is free to remove.
-  EXPECT_EQ(Sleeve().ResolveFile(L"/Trip/present.nef")->element_id_, present_file_id_);
+  EXPECT_EQ(FileIdNamed(Sleeve(), L"/Trip", L"present.nef"), present_file_id_);
   ASSERT_TRUE(Sleeve().DeleteFileFromFolder(present_file_id_, ordinary_folder_id_).success_);
   EXPECT_TRUE(Sleeve().ListFolderEntries(L"/Ordinary").empty());
 }
@@ -1590,8 +1607,8 @@ TEST_F(SleeveServiceTests, OpenLoadsNestedFoldersWithOneTreeRead) {
   EXPECT_EQ(dirty, 0u) << "the load marks no folder modified";
   EXPECT_FALSE(file_loaded);
 
-  // Each element read joins Element: an element read throws, and a file entry load writes a
-  // "did not load" warning. (FolderContent has indexes, so DuckDB refuses to rename it.)
+  // Each element read joins Element, so an element read throws. (FolderContent has indexes, so
+  // DuckDB refuses to rename it.)
   ExecuteOnProjectDatabase(reopened, "ALTER TABLE Element RENAME TO ElementAside");
   std::size_t                  resolved = 0;
   std::vector<AlbumFolderView> tree;
@@ -1712,7 +1729,7 @@ TEST_F(SleeveServiceTests, CopyOnWriteOfSharedFolderAfterOpenKeepsItsFiles) {
   };
   EXPECT_EQ(entry_names(L"/B/Shared"), (std::vector<std::wstring>{L"Inner", L"New", L"Photo.ARW"}));
   EXPECT_EQ(entry_names(L"/A/Shared"), (std::vector<std::wstring>{L"Inner", L"Photo.ARW"}));
-  EXPECT_EQ(service->ResolveFile(L"/B/Shared/Photo.ARW")->element_id_, file_id);
+  EXPECT_EQ(FileIdNamed(*service, L"/B/Shared", L"Photo.ARW"), file_id);
 }
 
 // Sleeve Node Cache Plan SN3: a stored folder link that closes a cycle is skipped at the open
@@ -1747,6 +1764,207 @@ TEST_F(SleeveServiceTests, FolderEdgeCycleIsSkippedWithWarning) {
   EXPECT_THROW((void)service->ResolveFolder(L"/A/B/A"), std::runtime_error);
   EXPECT_TRUE(warnings.Containing("its own ancestor").empty())
       << "the resident tree has no cycle after the load";
+}
+
+namespace {
+/// The file ids of the folder @p folder_id (FileSystem::ListFileIds) under the read lock.
+auto FolderFileIds(SleeveServiceImpl& service, sl_element_id_t folder_id)
+    -> std::vector<sl_element_id_t> {
+  return service.Read<std::vector<sl_element_id_t>>(
+      [folder_id](FileSystem& fs) { return fs.ListFileIds(folder_id); });
+}
+
+/// The ids of @p files.
+auto IdsOf(const std::vector<std::shared_ptr<SleeveFile>>& files) -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> ids;
+  for (const auto& file : files) {
+    ids.push_back(file->element_id_);
+  }
+  return ids;
+}
+}  // namespace
+
+// Sleeve Node Cache Plan SN4: a file name is a label, so two cameras that gave the same name to
+// two photos put both photos into one collection, and both stay after a reopen.
+TEST_F(SleeveServiceTests, TwoFilesWithEqualNamesLinkIntoOneFolder) {
+  sl_element_id_t first_id  = 0;
+  sl_element_id_t second_id = 0;
+  sl_element_id_t album_id  = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    album_id               = service->CreateFolder(L"/", L"Album").first->element_id_;
+    first_id               = service->CreateFileInLibrary(L"DSC_0001.NEF").first->element_id_;
+    second_id              = service->CreateFileInLibrary(L"DSC_0001.NEF").first->element_id_;
+    ASSERT_TRUE(service->LinkFileToFolder(first_id, album_id).success_);
+    const auto linked = service->LinkFileToFolder(second_id, album_id);
+    ASSERT_TRUE(linked.success_) << linked.message_;
+    EXPECT_EQ(FolderFileIds(*service, album_id),
+              (std::vector<sl_element_id_t>{first_id, second_id}));
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService reopened(db_path_, meta_path_);
+  auto           service = reopened.GetSleeveService();
+  EXPECT_EQ(IdsOf(FilesNamed(*service, L"/Album", L"DSC_0001.NEF")),
+            (std::vector<sl_element_id_t>{first_id, second_id}));
+  EXPECT_EQ(IdsOf(FilesNamed(*service, L"/", L"DSC_0001.NEF")),
+            (std::vector<sl_element_id_t>{first_id, second_id}));
+  EXPECT_EQ(FolderContentRowIds(reopened, album_id).size(), 2u);
+}
+
+// Sleeve Node Cache Plan SN4: a link and an unlink of one file in one write leave no row.
+TEST_F(SleeveServiceTests, LinkAndUnlinkInOneWriteLeaveNoRow) {
+  ProjectService project(db_path_, meta_path_);
+  auto           service  = project.GetSleeveService();
+  const auto     album_id = service->CreateFolder(L"/", L"Album").first->element_id_;
+  const auto     file_id  = service->CreateFileInLibrary(L"Photo.ARW").first->element_id_;
+
+  const auto     result   = service->Write<void>([&](FileSystem& fs) {
+    fs.LinkFileToFolder(file_id, album_id);
+    fs.UnlinkFileFromFolder(file_id, album_id);
+  });
+  ASSERT_TRUE(result.success_) << result.message_;
+
+  EXPECT_TRUE(FolderContentRowIds(project, album_id).empty());
+  EXPECT_TRUE(FolderFileIds(*service, album_id).empty());
+  EXPECT_EQ(FolderContentRowIds(project, 0).count(file_id), 1u) << "the root link stays";
+}
+
+// Sleeve Node Cache Plan SN4: the pending link decides the membership of an unlink, so the unlink
+// of a file that the same write linked reads no row. With the Element table renamed away, a
+// membership read would throw.
+TEST_F(SleeveServiceTests, UnlinkOfAFileLinkedInTheSameWriteNeedsNoRow) {
+  ProjectService project(db_path_, meta_path_);
+  auto           service  = project.GetSleeveService();
+  const auto     album_id = service->CreateFolder(L"/", L"Album").first->element_id_;
+  const auto     file_id  = service->CreateFileInLibrary(L"Photo.ARW").first->element_id_;
+
+  const auto     result   = service->Write<void>([&](FileSystem& fs) {
+    fs.LinkFileToFolder(file_id, album_id);
+    ExecuteOnProjectDatabase(project, "ALTER TABLE Element RENAME TO ElementAside");
+    EXPECT_NO_THROW(fs.UnlinkFileFromFolder(file_id, album_id));
+    ExecuteOnProjectDatabase(project, "ALTER TABLE ElementAside RENAME TO Element");
+  });
+  ASSERT_TRUE(result.success_) << result.message_;
+  EXPECT_TRUE(FolderContentRowIds(project, album_id).empty());
+}
+
+// Sleeve Node Cache Plan SN4: a link of a file that the folder holds keeps the stored row (the
+// insert ignores an existing row), so the row keeps its rowid and no duplicate appears.
+TEST_F(SleeveServiceTests, RepeatedLinkKeepsOneRow) {
+  sl_element_id_t album_id = 0;
+  sl_element_id_t file_id  = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    album_id               = service->CreateFolder(L"/", L"Album").first->element_id_;
+    file_id                = service->CreateFileInLibrary(L"Photo.ARW").first->element_id_;
+    ASSERT_TRUE(service->LinkFileToFolder(file_id, album_id).success_);
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService reopened(db_path_, meta_path_);
+  auto           service = reopened.GetSleeveService();
+  const auto     before  = FolderContentRowIds(reopened, album_id);
+  ASSERT_EQ(before.size(), 1u);
+  const auto relinked = service->LinkFileToFolder(file_id, album_id);
+  ASSERT_TRUE(relinked.success_) << relinked.message_;
+  EXPECT_EQ(FolderContentRowIds(reopened, album_id), before);
+  EXPECT_EQ(FolderFileIds(*service, album_id), (std::vector<sl_element_id_t>{file_id}));
+}
+
+// Sleeve Node Cache Plan SN4: a folder holds no file entry, so a link into a folder with 10,000
+// files loads only the linked file, and the unlink of one file loads no other file.
+TEST_F(SleeveServiceTests, LinkIntoFolderWithTenThousandFilesLoadsNoFileElement) {
+  constexpr int   kFileCount = 10'000;
+  sl_element_id_t album_id   = 0;
+  sl_element_id_t member_id  = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    album_id               = service->CreateFolder(L"/", L"Album").first->element_id_;
+    const auto created     = service->Write<void>([&](FileSystem& fs) {
+      for (int i = 0; i < kFileCount; ++i) {
+        const auto file = fs.CreateFileInLibrary(L"IMG_" + std::to_wstring(i) + L".ARW");
+        fs.LinkFileToFolder(file->element_id_, album_id);
+        member_id = file->element_id_;
+      }
+    });
+    ASSERT_TRUE(created.success_) << created.message_;
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService reopened(db_path_, meta_path_);
+  auto           service  = reopened.GetSleeveService();
+  const auto     new_file = service->CreateFileInLibrary(L"IMG_0.ARW").first;
+  const auto     linked   = service->LinkFileToFolder(new_file->element_id_, album_id);
+  ASSERT_TRUE(linked.success_) << linked.message_;
+  const auto unlinked = service->DeleteFileFromFolder(member_id, album_id);
+  ASSERT_TRUE(unlinked.success_) << unlinked.message_;
+
+  // The root, the album, the new file, and the unlinked file.
+  EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().Size(); }), 4u);
+  const auto members = FolderFileIds(*service, album_id);
+  EXPECT_EQ(members.size(), static_cast<std::size_t>(kFileCount));
+  EXPECT_TRUE(ContainsId(members, new_file->element_id_));
+  EXPECT_FALSE(ContainsId(members, member_id));
+  EXPECT_EQ(FolderContentRowIds(reopened, album_id).size(), static_cast<std::size_t>(kFileCount));
+}
+
+// Sleeve Node Cache Plan SN4: a failed membership read of an unlink changes nothing; the file
+// stays a member and no element becomes dirty.
+TEST_F(SleeveServiceTests, FailedMembershipReadLeavesTheUnlinkUndone) {
+  sl_element_id_t album_id = 0;
+  sl_element_id_t file_id  = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    album_id               = service->CreateFolder(L"/", L"Album").first->element_id_;
+    file_id                = service->CreateFileInLibrary(L"Photo.ARW").first->element_id_;
+    ASSERT_TRUE(service->LinkFileToFolder(file_id, album_id).success_);
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService reopened(db_path_, meta_path_);
+  auto           service = reopened.GetSleeveService();
+  // The file element loads first, so only the membership read meets the renamed table.
+  ASSERT_NE(service->Read<std::shared_ptr<SleeveElement>>(
+                [file_id](FileSystem& fs) { return fs.Get(file_id); }),
+            nullptr);
+  ExecuteOnProjectDatabase(reopened, "ALTER TABLE Element RENAME TO ElementAside");
+  EXPECT_THROW((void)service->DeleteFileFromFolder(file_id, album_id), std::exception);
+  ExecuteOnProjectDatabase(reopened, "ALTER TABLE ElementAside RENAME TO Element");
+
+  EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().DirtyCount(); }), 0u);
+  EXPECT_EQ(FolderFileIds(*service, album_id), (std::vector<sl_element_id_t>{file_id}));
+}
+
+// Sleeve Node Cache Plan SN4: a library root with equal file names, and with a file that has the
+// name of a folder, reopens with every file and every folder.
+TEST_F(SleeveServiceTests, ProjectWithEqualRootNamesReopensWithAllFiles) {
+  std::vector<sl_element_id_t> equal_ids;
+  sl_element_id_t              trip_file_id   = 0;
+  sl_element_id_t              trip_folder_id = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    trip_folder_id         = service->CreateFolder(L"/", L"Trip").first->element_id_;
+    for (int i = 0; i < 3; ++i) {
+      equal_ids.push_back(service->CreateFileInLibrary(L"IMG_0001.JPG").first->element_id_);
+    }
+    trip_file_id = service->CreateFileInLibrary(L"Trip").first->element_id_;
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService reopened(db_path_, meta_path_);
+  auto           service = reopened.GetSleeveService();
+  EXPECT_EQ(IdsOf(FilesNamed(*service, L"/", L"IMG_0001.JPG")), equal_ids);
+  EXPECT_EQ(FileIdNamed(*service, L"/", L"Trip"), trip_file_id);
+  EXPECT_EQ(service->ResolveFolder(L"/Trip")->element_id_, trip_folder_id);
+  EXPECT_EQ(TreePaths(reopened.GetAlbumBrowseService()->ListFolderTree()),
+            (std::vector<std::wstring>{L"/Trip"}));
+  EXPECT_EQ(FolderFileIds(*service, 0).size(), 4u);
 }
 
 }  // namespace alcedo

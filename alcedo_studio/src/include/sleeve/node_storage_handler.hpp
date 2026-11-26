@@ -6,6 +6,8 @@
 
 #include <filesystem>
 #include <memory>
+#include <span>
+#include <unordered_set>
 #include <vector>
 
 #include "sleeve/node_cache.hpp"
@@ -31,8 +33,9 @@ struct FolderTreeEntry {
  * @details Each loaded element goes into the cache. An element that the cache holds keeps its
  * live object, so the changes of the current write stay visible. All folders are resident:
  * LoadFolderTree puts each folder into the cache when the project opens, and each folder then
- * holds the names and ids of its child folders. File entries of a folder load on demand
- * (EnsureChildrenLoaded). Not thread-safe: the FileSystem owner serializes the calls.
+ * holds the names and ids of its child folders. A folder holds no file entry: the file members
+ * of a folder are its `FolderContent` rows plus its pending sets (FileIds, HeldFiles), and these
+ * reads load no file element. Not thread-safe: the FileSystem owner serializes the calls.
  */
 class NodeStorageHandler {
  public:
@@ -51,16 +54,30 @@ class NodeStorageHandler {
    * folder that the root does not reach, uses an explicit stack. A link to a folder on the
    * current walk path closes a cycle: the load skips the link and writes one warning with both
    * ids. A link whose child name the parent already holds for another folder is skipped with one
-   * warning. The file entries of each folder stay unloaded.
+   * warning. No file element loads.
    * @throws The store error of FolderEntryStore::ReadFolderTree, after one error log line with
    *         its text; the cache then holds the root only.
    */
   void LoadFolderTree();
-  /// Load the file entries of @p folder into the node cache and the folder. The child folders
-  /// are resident (LoadFolderTree), so a stored link to a folder adds nothing, and a file whose
-  /// removal no sync wrote stays removed. A failed load writes one warning with the folder id and
-  /// the error text and leaves the folder unloaded.
-  void EnsureChildrenLoaded(const std::shared_ptr<SleeveFolder>& folder);
+  /**
+   * @brief The ids of the live files that @p folder holds, in id order: its stored file rows
+   *        with the pending sets applied (section 3.3 of the plan). Loads no element.
+   *
+   * @details One FolderEntryStore::ReadFolderFiles statement; none for a folder with no stored
+   * row (UNSYNC). A file that the cache holds as DELETED is not in the result.
+   * @throws The store error of the read. Nothing changes.
+   */
+  auto FileIds(const SleeveFolder& folder) const -> std::vector<sl_element_id_t>;
+  /**
+   * @brief The ids of @p file_ids that @p folder holds as live files. Loads no element.
+   *
+   * @details A pending link or unlink decides an id from memory. The other ids go to one
+   * FolderEntryStore::ReadHeldFiles statement; no statement when memory decides each id or the
+   * folder has no stored row (UNSYNC).
+   * @throws The store error of the read. Nothing changes.
+   */
+  auto HeldFiles(const SleeveFolder& folder, std::span<const sl_element_id_t> file_ids) const
+      -> std::unordered_set<sl_element_id_t>;
   /**
    * @brief The element @p id: the cached element, or the stored element, which then goes into
    *        the cache.
@@ -84,6 +101,9 @@ class NodeStorageHandler {
   auto FolderTree(const SleeveFolder& root) const -> std::vector<FolderTreeEntry>;
 
  private:
+  /// True when the cache holds @p id as a DELETED element. Reads memory only.
+  auto              IsDeletedInCache(sl_element_id_t id) const -> bool;
+
   ElementStore&     element_store_;
   FolderEntryStore& folder_entry_store_;
   NodeCache&        nodes_;

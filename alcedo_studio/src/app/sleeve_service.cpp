@@ -229,24 +229,12 @@ auto SleeveServiceImpl::ResolveFolder(const std::filesystem::path& path)
   return std::static_pointer_cast<SleeveFolder>(element);
 }
 
-auto SleeveServiceImpl::ResolveFile(const std::filesystem::path& path)
-    -> std::shared_ptr<SleeveFile> {
-  auto element = ResolveElement(path);
-  if (!element || element->type_ != ElementType::FILE || !element->IsLive()) {
-    throw std::runtime_error("SleeveService: Target path is not a file.");
-  }
-  auto file = std::dynamic_pointer_cast<SleeveFile>(element);
-  if (!file) {
-    throw std::runtime_error("SleeveService: Failed to resolve file pointer.");
-  }
-  return file;
-}
-
 auto SleeveServiceImpl::ListFolderEntries(const std::filesystem::path& folder_path)
     -> std::vector<std::shared_ptr<SleeveElement>> {
   return Read<std::vector<std::shared_ptr<SleeveElement>>>([folder_path](FileSystem& fs) {
     std::vector<std::shared_ptr<SleeveElement>> entries;
-    const auto                                  ids = fs.ListFolderContent(folder_path, false);
+    const auto                                  folder = fs.Get(folder_path, false);
+    const auto                                  ids    = fs.ListFolderContent(folder->element_id_);
     entries.reserve(ids.size());
     for (const auto id : ids) {
       auto element = fs.Get(id);
@@ -392,19 +380,9 @@ auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,
 }
 
 auto SleeveServiceImpl::DeletePath(const std::filesystem::path& target_path) -> SyncResult {
-  return Write<void>([this, target_path](FileSystem& fs) {
-    // FileSystem::Delete removes a file of the root from the library and unlinks a file of any
-    // other folder from that folder.
-    const auto target = fs.Get(target_path, false);
-    if (target->type_ == ElementType::FOLDER) {
-      RequireEditableStructure(*target);
-    } else if (const auto parent = fs.Get(target_path.parent_path(), false);
-               parent->element_id_ == 0) {
-      RequireRemovableFromLibrary(fs, storage_->GetMountStore(),
-                                  std::span(&target->element_id_, 1));
-    } else {
-      RequireEditableStructure(*parent);
-    }
+  return Write<void>([target_path](FileSystem& fs) {
+    // A path names a folder only (a file name is a label); a file leaves by its id.
+    RequireEditableStructure(*fs.Get(target_path, false));
     fs.Delete(target_path);
   });
 }

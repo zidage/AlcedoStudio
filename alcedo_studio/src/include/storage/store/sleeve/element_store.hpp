@@ -416,8 +416,6 @@ class ElementStore {
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> std::vector<sl_element_id_t>;
 
-  void EnsureChildrenLoaded(sl_element_id_t folder_id);
-
   [[nodiscard]] auto GetPipelineJsonByElementId(sl_element_id_t element_id)
       -> std::optional<nlohmann::json>;
   void UpdatePipelineJsonByElementId(sl_element_id_t element_id, const nlohmann::json& document);
