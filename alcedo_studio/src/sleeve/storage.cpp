@@ -7,12 +7,15 @@
 #include <exception>
 #include <memory>
 #include <unordered_map>
+#include <vector>
+
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
 NodeStorageHandler::NodeStorageHandler(
-    ElementStore&                                                   element_store,
+    ElementStore& element_store, FolderEntryStore& folder_entry_store,
     std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>>& storage)
-    : element_store_(element_store), storage_(storage) {}
+    : element_store_(element_store), folder_entry_store_(folder_entry_store), storage_(storage) {}
 
 void NodeStorageHandler::AddToStorage(std::shared_ptr<SleeveElement> new_element) {
   storage_[new_element->element_id_] = new_element;
@@ -61,9 +64,40 @@ void NodeStorageHandler::EnsureChildrenLoaded(std::shared_ptr<SleeveFolder> fold
       folder->AddElementToMap(content, false, false);
     }
     folder->MarkChildrenLoaded();
-  } catch (std::exception& e) {
-    // TODO: LOG
+  } catch (const std::exception& e) {
+    ALCEDO_LOG_WARN(Library) << "NodeStorageHandler: the children of folder " << folder->element_id_
+                             << " did not load: " << e.what();
   }
+}
+
+auto NodeStorageHandler::ChildFolders(const SleeveFolder& folder)
+    -> std::vector<std::shared_ptr<SleeveFolder>> {
+  std::vector<std::shared_ptr<SleeveFolder>> folders;
+  const auto add_live_folder = [&folders](const std::shared_ptr<SleeveElement>& element) {
+    if (element && element->type_ == ElementType::FOLDER &&
+        element->sync_flag_ != SyncFlag::DELETED) {
+      folders.push_back(std::static_pointer_cast<SleeveFolder>(element));
+    }
+  };
+
+  if (folder.ChildrenLoaded()) {
+    for (const auto child_id : folder.ListElements()) {
+      add_live_folder(GetElement(child_id));
+    }
+    return folders;
+  }
+
+  auto stored_folders = folder_entry_store_.ReadChildFolders(folder.element_id_);
+  folders.reserve(stored_folders.size());
+  for (auto& stored : stored_folders) {
+    if (const auto it = storage_.find(stored->element_id_); it != storage_.end()) {
+      add_live_folder(it->second);
+      continue;
+    }
+    storage_[stored->element_id_] = stored;
+    folders.push_back(std::move(stored));
+  }
+  return folders;
 }
 
 void NodeStorageHandler::GarbageCollect() {
@@ -82,6 +116,7 @@ void NodeStorageHandler::GarbageCollect() {
 Storage::Storage(std::filesystem::path db_path)
     : database_(db_path),
       element_store_(database_),
+      folder_entry_store_(database_),
       image_store_(database_.GetConnectionGuard()),
       mount_store_(database_),
       semantic_models_(database_),
@@ -96,6 +131,8 @@ auto Storage::OpenSession() -> StorageSession { return StorageSession(database_)
 auto Storage::Maintenance() -> StorageMaintenance& { return maintenance_; }
 
 auto Storage::GetElementStore() -> ElementStore& { return element_store_; }
+
+auto Storage::GetFolderEntryStore() -> FolderEntryStore& { return folder_entry_store_; }
 
 auto Storage::GetImageStore() -> ImageStore& { return image_store_; }
 

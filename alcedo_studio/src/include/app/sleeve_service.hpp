@@ -130,6 +130,10 @@ class SleeveServiceImpl final : public SleeveService {
   auto ResolveFile(const std::filesystem::path& path) -> std::shared_ptr<SleeveFile>;
   auto ListFolderEntries(const std::filesystem::path& folder_path)
       -> std::vector<std::shared_ptr<SleeveElement>>;
+  /// The live child folders of the folder at @p folder_path under the read lock; loads no file
+  /// element (see FileSystem::ListChildFolders). Throws as that function does.
+  auto ListChildFolders(const std::filesystem::path& folder_path)
+      -> std::vector<std::shared_ptr<SleeveFolder>>;
   /** @name User operations
    * Each checks its target before any change and throws SleeveOperationError (Mounted Folder
    * Plan, MF5): a folder that gains, loses, or changes an element must pass

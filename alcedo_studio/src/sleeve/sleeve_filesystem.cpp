@@ -34,7 +34,8 @@ FileSystem::FileSystem(std::filesystem::path db_path, Storage& storage_service,
     : id_gen_(start_id),
       db_path_(db_path),
       storage_service_(storage_service),
-      storage_handler_(storage_service_.GetElementStore(), storage_),
+      storage_handler_(storage_service_.GetElementStore(), storage_service_.GetFolderEntryStore(),
+                       storage_),
       resolver_(storage_handler_, id_gen_) {
   root_ = nullptr;
 }
@@ -459,6 +460,10 @@ void FileSystem::ReleaseChildFolders(const std::shared_ptr<SleeveFolder>& folder
   }
 }
 
+auto FileSystem::ListChildFolders(const std::filesystem::path& folder_path)
+    -> std::vector<std::shared_ptr<SleeveFolder>> {
+  return storage_handler_.ChildFolders(*resolver_.ResolveFolder(folder_path));
+}
 auto FileSystem::LiveFolder(sl_element_id_t folder_id) -> std::shared_ptr<SleeveFolder> {
   auto element = Get(folder_id);
   if (!element || element->type_ != ElementType::FOLDER ||

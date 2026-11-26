@@ -292,6 +292,12 @@ auto SleeveServiceImpl::ListFolderEntries(const std::filesystem::path& folder_pa
   });
 }
 
+auto SleeveServiceImpl::ListChildFolders(const std::filesystem::path& folder_path)
+    -> std::vector<std::shared_ptr<SleeveFolder>> {
+  return Read<std::vector<std::shared_ptr<SleeveFolder>>>(
+      [&folder_path](FileSystem& fs) { return fs.ListChildFolders(folder_path); });
+}
+
 auto SleeveServiceImpl::CreateFolder(const std::filesystem::path& parent_path,
                                      const file_name_t&           name)
     -> std::pair<std::shared_ptr<SleeveFolder>, SyncResult> {

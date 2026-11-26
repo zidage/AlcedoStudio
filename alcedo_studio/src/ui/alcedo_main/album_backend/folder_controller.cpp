@@ -143,7 +143,11 @@ void FolderController::LoadChildren(const std::filesystem::path& parentPath) {
       child.mount_id_   = folder.mount_id_;
       child_keys.push_back(PathKey(child.folder_path_));
     }
-  } catch (...) {
+  } catch (const std::exception& e) {
+    // The folder stays unloaded, so the next expand reads it again.
+    qCWarning(diag::libraryLog).noquote()
+        << "FolderController: the children of" << QString::fromStdWString(parentPath.wstring())
+        << "did not load:" << e.what();
     return;
   }
 

@@ -5,6 +5,7 @@
 #include "app/album_browse_service.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <mutex>
 #include <stdexcept>
 #include <string_view>
@@ -12,6 +13,7 @@
 #include <utility>
 
 #include "storage/query/filter_compiler.hpp"
+#include "utils/logging/log.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -100,20 +102,16 @@ auto AlbumBrowseService::ListFolders(const std::filesystem::path& folder_path) c
   }
 
   try {
-    const auto entries = sleeve_service_->ListFolderEntries(folder_path);
-    folders.reserve(entries.size());
-    for (const auto& entry : entries) {
-      if (!entry || entry->type_ != ElementType::FOLDER || entry->sync_flag_ == SyncFlag::DELETED) {
-        continue;
-      }
-      auto folder = std::dynamic_pointer_cast<SleeveFolder>(entry);
-      if (!folder) {
-        continue;
-      }
+    const auto child_folders = sleeve_service_->ListChildFolders(folder_path);
+    folders.reserve(child_folders.size());
+    for (const auto& folder : child_folders) {
       folders.push_back(BuildFolderView(folder_path, folder));
     }
-  } catch (...) {
-    return {};
+  } catch (const std::exception& e) {
+    ALCEDO_LOG_WARN(Library) << "AlbumBrowseService: the folders of "
+                             << conv::ToBytes(folder_path.generic_wstring())
+                             << " did not list: " << e.what();
+    throw;
   }
 
   return folders;
