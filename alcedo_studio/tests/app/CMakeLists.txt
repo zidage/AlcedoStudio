@@ -403,12 +403,17 @@ target_link_libraries(ImportThroughputBenchmark
 alcedo_copy_duckdb_fts_extension(ImportThroughputBenchmark)
 alcedo_register_test_target(ImportThroughputBenchmark app)
 
-# Benchmark only: reads ALCEDO_PROJECT_OPEN_BENCH_FILE and is not registered with ctest.
+# Benchmark only: reads ALCEDO_PROJECT_OPEN_BENCH_FILE, ALCEDO_SLEEVE_BENCH_MOUNT_DIR, and
+# ALCEDO_SLEEVE_BENCH_PROJECT_DIR, and is not registered with ctest.
 add_executable(ProjectOpenBenchmark ${ALCEDO_TEST_ROOT}/app/project_open_benchmark.cpp)
-target_include_directories(ProjectOpenBenchmark PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(ProjectOpenBenchmark PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ProjectOpenBenchmark
   ImportService ProjectService PipelineMgmtService ThumbnailService ExportService
   SleeveFilterService GTest::gtest_main)
+if(WIN32)
+  # GetProcessMemoryInfo for the memory of the node cache measurement.
+  target_link_libraries(ProjectOpenBenchmark psapi)
+endif()
 alcedo_copy_duckdb_fts_extension(ProjectOpenBenchmark)
 alcedo_register_test_target(ProjectOpenBenchmark app)
 
