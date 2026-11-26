@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include "decoders/dng_warp_rectilinear.hpp"
 #include "decoders/processor/raw_color_context.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/develop_node_model.hpp"
@@ -111,24 +112,28 @@ class LensCalibrationResolver {
    * lens, or profile with no requested correction returns @c std::nullopt. Lens correction is
    * then skipped for that image; no other backend or algorithm runs.
    *
-   * @param dng_geometry_applied True when the DNG OpcodeList3 warp already corrected geometry.
-   *        Distortion, TCA, projection, and crop are then off; vignetting can still apply.
+   * @param dng_warp What the DNG OpcodeList3 warp of the image corrects
+   *        (@ref dng::CorrectionsOf). A warp that corrects distortion turns off distortion, TCA,
+   *        projection, and crop; a warp that corrects only lateral chromatic aberration turns off
+   *        TCA. Vignetting can apply in both cases.
    * @throws std::runtime_error when the setting is enabled and @p extent is empty.
    */
   [[nodiscard]] static auto Resolve(const DevelopPayload&         develop,
                                     const RawRuntimeColorContext& context, Extent2D extent,
-                                    bool dng_geometry_applied) -> std::optional<LensCalibGpuParams>;
+                                    dng::WarpCorrections dng_warp)
+      -> std::optional<LensCalibGpuParams>;
 
   /**
    * @brief Match a Lensfun profile and interpolate its coefficients for @p meta.
    *
    * Loads the database named by @p settings on first use or when the directory changes. Prints
    * one line to standard output for each matched profile. The image size fields of the result
-   * are zero; call @ref BindImageExtent before a kernel uses the result.
+   * are zero; call @ref BindImageExtent before a kernel uses the result. @p dng_warp turns off
+   * corrections as in @ref Resolve.
    */
   [[nodiscard]] static auto ResolveProfile(const LensInputMeta&          meta,
                                            const LensCorrectionSettings& settings,
-                                           bool dng_geometry_applied) -> LensProfileResolution;
+                                           dng::WarpCorrections dng_warp) -> LensProfileResolution;
 
   /**
    * @brief Size a resolved profile for a @p width x @p height image.

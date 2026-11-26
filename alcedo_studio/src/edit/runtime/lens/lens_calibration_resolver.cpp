@@ -915,7 +915,7 @@ auto ResolveScaleForImageSize(const LensInputMeta& meta, const std::filesystem::
 
 auto LensCalibrationResolver::Resolve(const DevelopPayload&         develop,
                                       const RawRuntimeColorContext& context, Extent2D extent,
-                                      bool dng_geometry_applied)
+                                      dng::WarpCorrections dng_warp)
     -> std::optional<LensCalibGpuParams> {
   if (!develop.lens_enabled) {
     return std::nullopt;
@@ -948,7 +948,7 @@ auto LensCalibrationResolver::Resolve(const DevelopPayload&         develop,
   settings.projection_enabled_ = develop.projection_enabled;
   settings.target_projection_  = develop.target_projection;
 
-  const auto profile           = ResolveProfile(meta, settings, dng_geometry_applied);
+  const auto profile           = ResolveProfile(meta, settings, dng_warp);
   if (profile.status_ != LensProfileStatus::Resolved) {
     return std::nullopt;
   }
@@ -961,7 +961,8 @@ auto LensCalibrationResolver::Resolve(const DevelopPayload&         develop,
 
 auto LensCalibrationResolver::ResolveProfile(const LensInputMeta&          meta,
                                              const LensCorrectionSettings& settings,
-                                             bool dng_geometry_applied) -> LensProfileResolution {
+                                             dng::WarpCorrections          dng_warp)
+    -> LensProfileResolution {
   LensProfileResolution result;
   if (!IsFinitePositive(meta.focal_length_mm_) ||
       (meta.lens_model_.empty() && meta.cam_model_.empty())) {
@@ -1025,7 +1026,10 @@ auto LensCalibrationResolver::ResolveProfile(const LensInputMeta&          meta,
   lfLensCalibCrop crop{};
   const bool      crop_ok =
       lf_lens_interpolate_crop(lens, crop_factor, meta.focal_length_mm_, &crop) != 0;
-  const bool         dng_geometry_wins = dng_geometry_applied;
+  // A DNG warp that corrects distortion owns the geometry. Camera Raw also writes a warp that
+  // corrects only lateral chromatic aberration (issue #1144); Lensfun then corrects the rest.
+  const bool         dng_geometry_wins = dng_warp.distortion;
+  const bool         dng_tca_wins      = dng_warp.distortion || dng_warp.lateral_ca;
 
   LensCalibGpuParams runtime{};
   result.matched_meta_          = meta;
@@ -1053,7 +1057,7 @@ auto LensCalibrationResolver::ResolveProfile(const LensInputMeta&          meta,
         distortion.Model == LF_DIST_MODEL_PTLENS))
           ? 1
           : 0;
-  runtime.apply_tca = (!dng_geometry_wins && settings.apply_tca_ && tca_ok &&
+  runtime.apply_tca = (!dng_tca_wins && settings.apply_tca_ && tca_ok &&
                        (tca.Model == LF_TCA_MODEL_LINEAR || tca.Model == LF_TCA_MODEL_POLY3))
                           ? 1
                           : 0;
