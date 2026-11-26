@@ -182,6 +182,9 @@ class SleeveServiceImpl final : public SleeveService {
    * sync writes them.
    */
   ///@{
+  /// See alcedo::ReadMountFolders: memory only, no file element and no store read.
+  auto ReadMountFolders(sl_element_id_t root_folder_id, mount_id_t mount_id)
+      -> std::vector<MountTreeFolder>;
   /// See ReadMountTree.
   auto ReadMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id) -> MountTree;
   /// See alcedo::ApplyMountTreeChanges. Throws like it, before the sync.

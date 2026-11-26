@@ -6,16 +6,32 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/mapper/sleeve/element/element_mapper.hpp"
 #include "storage/mapper/sleeve/element/folder_mapper.hpp"
 
 namespace alcedo {
+namespace {
+
+/// One row of FolderEntryStore::ReadMountFileFolders. `Element.mount_id` is NULL for an
+/// ordinary file.
+struct MountFileFolderQueryRow {
+  int64_t                file_id   = 0;
+  int64_t                folder_id = 0;
+  std::optional<int64_t> file_mount_id;
+  using Columns =
+      duckorm::RowColumns<&MountFileFolderQueryRow::file_id, &MountFileFolderQueryRow::folder_id,
+                          &MountFileFolderQueryRow::file_mount_id>;
+};
+
+}  // namespace
 
 FolderEntryStore::FolderEntryStore(Database& database) : database_(database) {}
 
@@ -67,6 +83,36 @@ auto FolderEntryStore::ReadHeldFiles(sl_element_id_t                  folder_id,
   auto condition = duckorm::SqlFragment{" AND ", {}};
   condition.append(duckorm::expr::in_list(duckorm::expr::col("fc.element_id"), file_ids));
   return ReadFileRows(folder_id, std::move(condition));
+}
+
+auto FolderEntryStore::ReadMountFileFolders(mount_id_t mount_id) const
+    -> std::vector<MountFileFolderRow> {
+  duckorm::SqlFragment query{
+      "SELECT fc.element_id, fc.folder_id, fe.mount_id FROM FolderContent fc "
+      "JOIN Element mf ON mf.id = fc.folder_id "
+      "JOIN Element fe ON fe.id = fc.element_id WHERE mf.type = ",
+      {}};
+  query.append(duckorm::expr::param(static_cast<int64_t>(ElementType::FOLDER)));
+  query.append(duckorm::SqlFragment{" AND mf.mount_id = ", {}});
+  query.append(duckorm::expr::param(static_cast<int64_t>(mount_id)));
+  query.append(duckorm::SqlFragment{" AND fe.type = ", {}});
+  query.append(duckorm::expr::param(static_cast<int64_t>(ElementType::FILE)));
+  query.append(duckorm::SqlFragment{" ORDER BY fc.element_id, fc.folder_id", {}});
+
+  std::vector<MountFileFolderRow> links;
+  auto                            guard   = database_.GetConnectionGuard();
+  auto                            db_lock = guard.Lock();
+  for (const auto& row : duckorm::query<MountFileFolderQueryRow>(guard.conn_, query)) {
+    links.push_back(MountFileFolderRow{
+        .file_id   = static_cast<sl_element_id_t>(row.file_id),
+        .folder_id = static_cast<sl_element_id_t>(row.folder_id),
+        .file_mount_id =
+            row.file_mount_id.has_value()
+                ? std::optional<mount_id_t>(static_cast<mount_id_t>(*row.file_mount_id))
+                : std::nullopt,
+    });
+  }
+  return links;
 }
 
 auto FolderEntryStore::ReadFileRows(sl_element_id_t folder_id, duckorm::SqlFragment condition) const

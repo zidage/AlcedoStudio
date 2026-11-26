@@ -812,6 +812,72 @@ TEST_F(ImportServiceTests, ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoin
   EXPECT_TRUE(modified_after_sync.empty());
 }
 
+// Sleeve Node Cache Plan SN5: the placement of an imported file reads memory only, so an import
+// into a library with 10,000 stored files loads none of them, and its sync writes the new file
+// and the two folders that link it.
+TEST_F(ImportServiceTests, ImportIntoALibraryWithTenThousandFilesLoadsNoStoredFileElement) {
+  constexpr int   kStoredFileCount = 10'000;
+  sl_element_id_t album_id         = 0;
+  // The stored files are sleeve elements with no Image row: the test measures the node cache,
+  // so the image binding rule of the stored project does not apply.
+  check_storage_invariants_        = false;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    album_id               = service->CreateFolder(L"/", L"Imports").first->element_id_;
+    const auto created     = service->Write<void>([&](FileSystem& fs) {
+      for (int i = 0; i < kStoredFileCount; ++i) {
+        const auto file = fs.CreateFileInLibrary(L"IMG_" + std::to_wstring(i) + L".NEF");
+        fs.LinkFileToFolder(file->element_id_, album_id);
+      }
+    });
+    ASSERT_TRUE(created.success_) << created.message_;
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService                 project(db_path_, meta_path_);
+  auto                           fs_service       = project.GetSleeveService();
+  auto                           img_pool_service = project.GetImagePoolService();
+  std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+      fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
+  const auto cached_count = [&fs_service] {
+    return fs_service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().Size(); });
+  };
+  // The library root and the album.
+  ASSERT_EQ(cached_count(), 2u);
+
+  std::vector<image_path_t>  paths{TEST_IMG_PATH "/raw/airplane/_DSC1704.NEF"};
+  auto                       import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> final_result;
+  auto                       final_result_future = final_result.get_future();
+  import_job->on_finished_                       = [&final_result](const ImportResult& result) {
+    final_result.set_value(result);
+  };
+  import_job = import_service->ImportToFolder(paths, L"/Imports", {}, import_job);
+  ASSERT_NE(import_job, nullptr);
+  final_result_future.wait();
+  ASSERT_EQ(final_result_future.get().imported_, 1u);
+
+  EXPECT_EQ(cached_count(), 3u);
+  const auto dirty = fs_service->Read<std::vector<std::shared_ptr<SleeveElement>>>(
+      [](FileSystem& fs) { return fs.DirtyElements(); });
+  std::unordered_set<sl_element_id_t> dirty_ids;
+  for (const auto& element : dirty) {
+    dirty_ids.insert(element->element_id_);
+  }
+  const auto  snapshot = import_job->import_log_->Snapshot();
+  const auto& created  = snapshot.created_;
+  ASSERT_EQ(created.size(), 1u);
+  EXPECT_EQ(dirty_ids,
+            (std::unordered_set<sl_element_id_t>{0, album_id, created.front().element_id_}));
+
+  import_service->SyncImports(snapshot, L"/Imports");
+  EXPECT_EQ(cached_count(), 3u);
+  EXPECT_EQ(fs_service->Read<std::size_t>(
+                [album_id](FileSystem& fs) { return fs.ListFileIds(album_id).size(); }),
+            static_cast<std::size_t>(kStoredFileCount + 1));
+}
+
 namespace {
 
 /// A RAW import look that differs from the product Default in every value (#918).

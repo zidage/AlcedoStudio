@@ -9,6 +9,7 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -183,6 +184,71 @@ auto NodeStorageHandler::HeldFiles(const SleeveFolder&              folder,
     }
   }
   return held;
+}
+
+auto NodeStorageHandler::LiveFileIds(const SleeveFolder&              root,
+                                     std::span<const sl_element_id_t> ids) const
+    -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> stored_ids;
+  for (const auto id : ids) {
+    if (!nodes_.Contains(id)) {
+      stored_ids.push_back(id);
+    }
+  }
+  // Each live file has its link in the library root (D2).
+  const auto                          live_stored = HeldFiles(root, stored_ids);
+  std::vector<sl_element_id_t>        live_ids;
+  std::unordered_set<sl_element_id_t> seen;
+  for (const auto id : ids) {
+    const auto cached = nodes_.Find(id);
+    const bool live =
+        cached ? cached->type_ == ElementType::FILE && cached->IsLive() : live_stored.contains(id);
+    if (live && seen.insert(id).second) {
+      live_ids.push_back(id);
+    }
+  }
+  return live_ids;
+}
+
+auto NodeStorageHandler::MountFileLinks(mount_id_t                                     mount_id,
+                                        std::span<const std::shared_ptr<SleeveFolder>> folders)
+    -> std::vector<FileLink> {
+  const auto is_mount_file = [mount_id](const SleeveElement& element) {
+    return element.type_ == ElementType::FILE && element.IsLive() && element.mount_id_ == mount_id;
+  };
+  std::unordered_map<sl_element_id_t, const SleeveFolder*> folder_at;
+  bool                                                     any_stored = false;
+  for (const auto& folder : folders) {
+    folder_at.emplace(folder->element_id_, folder.get());
+    any_stored = any_stored || folder->SyncState() != SyncFlag::UNSYNC;
+  }
+
+  std::vector<FileLink> links;
+  if (any_stored) {
+    for (const auto& row : folder_entry_store_.ReadMountFileFolders(mount_id)) {
+      const auto folder = folder_at.find(row.folder_id);
+      // A pending change of the folder decides the file below.
+      if (folder == folder_at.end() || folder->second->PendingMembership(row.file_id).has_value()) {
+        continue;
+      }
+      const auto cached = nodes_.Find(row.file_id);
+      if (cached ? is_mount_file(*cached) : row.file_mount_id == mount_id) {
+        links.push_back(FileLink{row.file_id, row.folder_id});
+      }
+    }
+  }
+  for (const auto& folder : folders) {
+    for (const auto id : folder->ContentAddedSinceSync()) {
+      if (folder->HoldsChildFolder(id) || IsDeletedInCache(id)) {
+        continue;
+      }
+      if (is_mount_file(*GetElement(id))) {
+        links.push_back(FileLink{id, folder->element_id_});
+      }
+    }
+  }
+  std::sort(links.begin(), links.end());
+  return links;
 }
 
 auto NodeStorageHandler::ChildFolders(const SleeveFolder& folder) const

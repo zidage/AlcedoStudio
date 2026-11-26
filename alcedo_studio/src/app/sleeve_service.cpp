@@ -409,6 +409,13 @@ auto SleeveServiceImpl::RenameFolder(const std::filesystem::path& folder_path,
   });
 }
 
+auto SleeveServiceImpl::ReadMountFolders(sl_element_id_t root_folder_id, mount_id_t mount_id)
+    -> std::vector<MountTreeFolder> {
+  return Read<std::vector<MountTreeFolder>>([root_folder_id, mount_id](FileSystem& fs) {
+    return alcedo::ReadMountFolders(fs, root_folder_id, mount_id);
+  });
+}
+
 auto SleeveServiceImpl::ReadMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id)
     -> MountTree {
   return Read<MountTree>([root_folder_id, mount_id](FileSystem& fs) {

@@ -11,6 +11,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -118,37 +119,28 @@ auto FileSystem::UnlinkFilesFromFolder(std::span<const sl_element_id_t> file_ids
     throw std::runtime_error("Filesystem: Root file removal must use DeleteFilesEverywhere");
   }
   auto                                folder = LiveFolder(folder_id);
-
-  std::vector<sl_element_id_t>        live_file_ids;
-  std::unordered_set<sl_element_id_t> seen;
-  live_file_ids.reserve(file_ids.size());
-  seen.reserve(file_ids.size() * 2 + 1);
+  // One read for the batch, before any change: a failed read changes nothing. The read gives
+  // only live files, so no file element loads.
+  const auto                          held   = storage_handler_.HeldFiles(*folder, file_ids);
+  std::vector<sl_element_id_t>        removed_ids;
+  std::unordered_set<sl_element_id_t> removed;
   for (const auto file_id : file_ids) {
-    if (file_id == 0 || !seen.insert(file_id).second) {
-      continue;
-    }
-    std::shared_ptr<SleeveElement> file;
-    try {
-      file = Get(file_id);
-    } catch (...) {
-      continue;
-    }
-    if (file && file->type_ == ElementType::FILE && file->IsLive()) {
-      live_file_ids.push_back(file_id);
-    }
-  }
-
-  // One read for the batch, before any change: a failed read changes nothing.
-  const auto                   held = storage_handler_.HeldFiles(*folder, live_file_ids);
-  std::vector<sl_element_id_t> removed_ids;
-  removed_ids.reserve(held.size());
-  for (const auto file_id : live_file_ids) {
-    if (held.contains(file_id)) {
+    if (held.contains(file_id) && removed.insert(file_id).second) {
       folder->RecordFileUnlinked(file_id);
       removed_ids.push_back(file_id);
     }
   }
   return removed_ids;
+}
+
+auto FileSystem::LinkFilesToFolder(std::span<const sl_element_id_t> file_ids,
+                                   sl_element_id_t folder_id) -> std::vector<sl_element_id_t> {
+  auto       folder     = LiveFolder(folder_id);
+  const auto linked_ids = storage_handler_.LiveFileIds(*root_, file_ids);
+  for (const auto file_id : linked_ids) {
+    folder->RecordFileLinked(file_id);
+  }
+  return linked_ids;
 }
 
 auto FileSystem::DuplicateFileToFolder(sl_element_id_t file_id, sl_element_id_t folder_id)
@@ -249,6 +241,17 @@ auto FileSystem::ListFolderContent(sl_element_id_t folder_id) -> std::vector<sl_
 
 auto FileSystem::ListFileIds(sl_element_id_t folder_id) -> std::vector<sl_element_id_t> {
   return storage_handler_.FileIds(*LiveFolder(folder_id));
+}
+
+auto FileSystem::ListMountFileLinks(mount_id_t                       mount_id,
+                                    std::span<const sl_element_id_t> folder_ids)
+    -> std::vector<FileLink> {
+  std::vector<std::shared_ptr<SleeveFolder>> folders;
+  folders.reserve(folder_ids.size());
+  for (const auto folder_id : folder_ids) {
+    folders.push_back(LiveFolder(folder_id));
+  }
+  return storage_handler_.MountFileLinks(mount_id, folders);
 }
 
 void FileSystem::Delete(std::filesystem::path target) {
