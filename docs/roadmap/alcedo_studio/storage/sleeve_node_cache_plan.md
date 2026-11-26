@@ -2,8 +2,8 @@
 
 Date: 2026-11-26
 
-Status: **in progress**. SN1, SN2, SN3, SN4, and SN5 are complete (2026-11-26). SN6 to SN8 are
-planned.
+Status: **in progress**. SN1 to SN6 are complete (2026-11-26). SN6 measured that SN7 and SN8 run;
+both are planned.
 
 Parent: [Roadmap](../../README.md).
 
@@ -217,9 +217,9 @@ and the tests.
 | SN3 | All folders load with one query. One tree read for the sidebar. | `NodeStorageHandler`, `PathResolver`, `FolderController` | SN2 | 700 to 1000 | complete |
 | SN4 | File entries leave the folders. File names are labels. Project file 0.15.0. | `SleeveFolder`, `FileSystem`, project version | SN3 | 1200 to 1700 | complete |
 | SN5 | The mount tree read and the import use row queries. | `mount_tree.cpp`, `import_service.cpp` | SN4 | 600 to 900 | complete |
-| SN6 | Measured memory and time of the 80,000-photo project. Decision for SN7 and SN8. | `project_open_benchmark.cpp` | SN5 | 150 to 300 | planned |
-| SN7 | Eviction of clean file elements under a limit. Runs when SN6 requires it. | `NodeCache` | SN6 | 400 to 600 | planned |
-| SN8 | The sidebar tree read runs on the query worker. Runs when SN6 requires it. | `FolderController` | SN6 | 300 to 500 | planned |
+| SN6 | Measured memory and time of the 80,000-photo project. Decision for SN7 and SN8. | `project_open_benchmark.cpp` | SN5 | 150 to 300 | complete |
+| SN7 | Eviction of clean file elements under a limit, and no Image link in imported file elements. SN6 requires it. | `NodeCache`, `ImportServiceImpl` | SN6 | 400 to 600 | planned |
+| SN8 | The sidebar tree read runs on the query worker. SN6 requires it. | `FolderController` | SN6 | 300 to 500 | planned |
 
 Each phase is one pull request. Before each phase, read `AGENTS.md` and the applicable skills
 again.
@@ -1144,9 +1144,114 @@ Remaining defects or unavailable platforms: Windows (MSVC) and Linux not built: 
 
 **Exit criteria.**
 
-- [ ] The numbers and the two decisions are in the completion record and in #1148.
+- [x] The numbers and the two decisions are in the completion record and in #1148.
 
-**Completion record.** Use the template of section 9.
+**Completion record.**
+
+```text
+Phase / date / status: SN6 / 2026-11-26 / complete. Issue #1164 (sub-issue of #1152).
+Source revision and branch: test/sleeve-node-measurement, stacked on 8b2dcf1cc (SN5 PR #1163).
+Actual changed modules: tests/app/project_open_benchmark.cpp (a second test) and the CMake
+  entry of ProjectOpenBenchmark (the tests directory for StorageTestAccess; psapi on Windows).
+  No production code changed.
+Implemented behavior:
+  ProjectOpenBenchmark.MountedDirectoryReportsNodeCacheMemoryAndSidebarReadWait reads
+  ALCEDO_SLEEVE_BENCH_MOUNT_DIR and ALCEDO_SLEEVE_BENCH_PROJECT_DIR and skips without them.
+  With no project in the project directory it creates one, mounts the directory, and runs the
+  first scan (the import of each photo). It then opens the project, reads the sidebar tree and
+  the folder counts, reads the first library page (1,000 rows, groups, statistics, match ids)
+  of 50 folders that hold photos in sidebar order, and scans the mount again. After each step it
+  prints the node cache (elements, files, folders, dirty, pages), the private bytes, the resident
+  set, the heap bytes (HeapSummary of the process heap on Windows), and the DuckDB buffer bytes
+  (duckdb_memory()). During each scan a second thread reads AlbumBrowseService::ListFolderTree
+  every 20 ms and keeps the time of each read: the wait on fs_lock_ plus the read, as on the GUI
+  thread. At the end it prints the rows of each table (StorageMaintenance::ReadDataSummary), the
+  persistent blocks of each table with the overflow string blocks (pragma_storage_info), the used
+  and free blocks of the file, the heap bytes of one file element and one folder element (a fill
+  of a separate NodeCache with the real file names and the real folder tree), and the heap bytes
+  of one Image read from the image store (2,000 Images).
+Explicitly unimplemented items:
+  - The project of the user was not available. The data set is D:\Courses\cs_courses (80,147
+    JPEG files of 151,685 files in 9,501 directories); the scan imports 80,577 files (JPEG, PNG,
+    TIFF, WebP) in 207 folders.
+  - The debug build ran the open, the browse, and the second scan on a copy of the Release
+    project, not the import (the Release import takes 7 to 8.5 minutes).
+  - The sidebar probe is a second thread, not the GUI thread. No GUI and no thumbnail ran.
+Primary success call chain:
+  benchmark -> ProjectService(kCreateNew) -> MountService::CreateMount
+    -> MountService::ScanMount(importer = ImportServiceImpl)        (batches of 500, fs_lock_)
+         || SidebarReadProbe thread: AlbumBrowseService::ListFolderTree
+              -> SleeveServiceImpl::ListFolderTree -> Read (fs_lock_) -> FileSystem::ListFolderTree
+    -> ReportState: FileSystem::Nodes() (Read), GetProcessMemoryInfo, HeapSummary, duckdb_memory()
+  -> ProjectService(kLoadExisting) -> FileSystem::InitRoot -> LoadFolderTree   (one query)
+  -> ReadAlbumQuery x 50 -> second ScanMount with the probe -> ReportTables -> MeasureElementBytes
+Primary failure and restore call chain:
+  A scan status other than kComplete, or a first scan that imports nothing -> ASSERT fails, the
+    project directory keeps the partial project; delete it to measure again.
+  A project directory that holds a project -> the import step is skipped and the rest runs on it.
+Build and test commands with exit codes (Windows, MSVC):
+  cmd /c "scripts\msvc_env.cmd --build build\release-test --target ProjectOpenBenchmark"    exit 0
+  cmd /c "scripts\msvc_env.cmd --build build\debug --target ProjectOpenBenchmark"           exit 0
+  ProjectOpenBenchmark.exe --gtest_filter=*Mounted* with the two variables:
+    Release run 1 (project), run 2 (project2), run 3 (project3)                    exit 0 each
+    Debug on a copy of project3 (project3_debug)                                   exit 0
+Discovered / passed / failed / skipped counts: ProjectOpenBenchmark 2 / 1 / 0 / 1 in each run
+  (OpensPackedProjectAndReportsPerStepLatency skips without ALCEDO_PROJECT_OPEN_BENCH_FILE).
+Manual verification: none. The application was not started.
+Performance or resource evidence (Release, run 3 unless named):
+  First scan (import of 80,577 files):  430 s (456 s, 508 s in runs 2 and 1)
+    Sidebar reads during it:            13,265; median 0.33 ms, p95 0.95 ms, largest 50.3 ms,
+                                        1 read over 50 ms (runs 2 and 1: largest 30.4 ms and
+                                        45.6 ms, none over 50 ms)
+    After it:                           80,786 nodes (80,577 files, 209 folders), 20 pages,
+                                        private 836 MB, heap 599 MB, DuckDB buffer 145 MB
+    Images that the file nodes hold:    80,577; 79,553 with no other owner (the image pool keeps
+                                        its 1,024)
+    Close:                              import service and pipeline service free 0.4 MB, the
+                                        project service frees 568 MB of heap
+  Open of the project:                  72 ms; tree store read 5.4 ms; sidebar tree read 0.13 ms
+                                        (208 folders); folder counts read 182 ms
+    After it:                           209 nodes (folders only), private 378 MB, heap 57 MB,
+                                        DuckDB buffer 19.5 MB
+  Browse of 50 folders:                 786 ms in all, slowest 32 ms; 209 nodes after it
+  Second scan (no change on the disk):  1.30 s, 80,575 unchanged, 2 imported again (#1165)
+    Sidebar reads during it:            40; largest 0.47 ms
+    After it:                           211 nodes (2 files), heap 116 MB, DuckDB buffer 75 MB
+  Heap bytes of one element:            file 207, folder 1,775 (block headers left out)
+  Heap bytes of one Image (store read): 6,799
+  Node memory after the import:         80,577 x 207 B + 79,553 x 6,799 B = about 533 MB, in line
+                                        with the 568 MB that the project close frees
+  Node memory after the second scan:    0.35 MB; with every file resident and no Image, 16 MB
+  Database file:                        3,022 MB = 1,521 MB used + 1,502 MB free blocks; used:
+                                        ImageEditState 482, PipelineRoot 473, PipelineParam 459,
+                                        Image 62, all other tables 6 (#1166)
+  Debug build (copy of project3): open 103 ms, sidebar tree read 1.6 ms, browse 499 ms (slowest
+    20 ms), second scan 10.5 s with sidebar reads of at most 8.6 ms; file element 385 heap
+    bytes, folder 3,498, Image 13,826 (the debug heap counts its block headers).
+Decisions:
+  SN7 runs. After the import the nodes use about 533 MB, more than 64 MB. 97 % of it is the
+    Image that ImportServiceImpl links into each new file element (SleeveFile::SetImage); the
+    link is the only owner of 79,553 of the 80,577 Images. No production code outside
+    sleeve_view.cpp and sleeve_manager.cpp reads SleeveFile::GetImage, and neither has a caller.
+  SN8 runs. One sidebar read during the import waited 50.3 ms, more than 50 ms (1 read of
+    13,265 in run 3). The read itself takes 0.13 to 0.38 ms; the rest is the wait on fs_lock_
+    while an import batch writes.
+  The 4 GB: the services of this benchmark hold at most 836 MB private (after the import). The
+    largest owner is the file nodes with their Images (533 MB). The project open holds 378 MB
+    private, of it 57 MB heap. An Image also holds exif_json_ (parsed), image_data_, and
+    thumbnail_, so in the application a node that keeps its Image also keeps a thumbnail that
+    the thumbnail service loaded into it. That is not measured (no thumbnail ran); SN7 removes
+    the node references and measures again.
+  The 1.6 GB: three copies of the pipeline state of each photo (about 6 KB each) are 93 % of the
+    used blocks, and half of the file is free blocks: issue #1166.
+  Other finding: two JPEG files get a file element with no Image row, count as imported, and
+    are imported again on each scan: issue #1165.
+Evidence path: build/tmp/sn6/release_run1.log, release_run2.log, release_run3.log,
+  debug_run1.log; projects under build/tmp/sn6/.
+Remaining defects or unavailable platforms: macOS and Linux not built (the memory reads have
+  macOS and Linux branches that did not compile here). The debug import and a run with the GUI
+  and thumbnails are not measured. tests/app/project_open_benchmark.cpp: 180 to 764 lines.
+```
 
 ### SN7: Eviction of clean file elements (conditional)
 
@@ -1160,7 +1265,14 @@ Remaining defects or unavailable platforms: Windows (MSVC) and Linux not built: 
 - The check of `use_count()` runs under `fs_lock_`. A caller gets a new reference to a cached
   element only under that lock, so a count of 1 stays 1 during the walk.
 - `EvictToLimit` runs at the end of `Read`, `Write`, and `Write_NoSync`.
-- The limit comes from SN6. It is a constant in `node_cache.hpp`.
+- The limit comes from SN6. It is a constant in `node_cache.hpp`: 262,144 clean file elements.
+  SN6 measured 207 heap bytes for one file element with no Image (Release), so the limit holds
+  about 64 MB with the heap block headers.
+- The import links no Image into a new file element (`SleeveFile::SetImage` in
+  `ImportServiceImpl`). SN6 measured that this link holds 97 % of the node memory after an import
+  (79,553 Images of 6,799 bytes that no other owner holds) and that no production code reads it.
+  Without the link the eviction of a clean file element frees its element only, and the limit
+  above bounds the memory.
 
 **Tests and evidence.**
 
@@ -1169,7 +1281,9 @@ Remaining defects or unavailable platforms: Windows (MSVC) and Linux not built: 
   equals the held pointer.
 - `NodeCacheTest.ModifiedElementStaysUntilSync`.
 - `NodeCacheTest.FoldersStayResident`.
-- The memory of the SN6 benchmark before and after goes into the pull request description.
+- A test of the import: a new file element holds no Image, and its image id is set.
+- The memory of the SN6 benchmark before and after goes into the pull request description. The
+  node memory after the import of 80,577 files is at most 64 MB (SN6: about 533 MB).
 
 **Completion record.** Use the template of section 9.
 
@@ -1270,8 +1384,8 @@ Remaining defects or unavailable platforms:
 | Parameter | Meaning | Value | Source |
 | --- | --- | --- | --- |
 | Page size | Slots in one page of the page table | 4096 slots, 64 KiB | This plan (P4) |
-| Node size | Memory of one file element at the audit revision | 400 to 450 bytes | Estimate from the field layout |
-| Eviction limit | Largest number of clean file elements in the cache | Set in SN6 | Measurement |
+| Node size | Memory of one file element | 400 to 450 bytes at the audit revision (estimate); 207 heap bytes without block headers after SN5, plus 6,799 for an Image that the element holds (Release) | Field layout; SN6 measurement |
+| Eviction limit | Largest number of clean file elements in the cache | 262,144 (about 64 MB at 207 heap bytes each) | SN6 measurement |
 | SN7 threshold | Node memory after the mount scan that starts SN7 | 64 MB | This plan |
 | SN8 threshold | Wait of one sidebar read on `fs_lock_` that starts SN8 | 50 ms | This plan |
 | Project file version | Version that SN4 writes | 0.15.0, minimum 0.10.0 | User (D9) |
