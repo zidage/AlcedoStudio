@@ -9,7 +9,7 @@ endif()
 #set(CMAKE_CXX_COMPILER "clang++")
 # Compiler flags.
 
-project(alcedo VERSION 0.3.6 LANGUAGES C CXX)
+project(alcedo VERSION 0.3.7 LANGUAGES C CXX)
 
 # Update metadata is compiled into the application. Release builds must set a
 # real Ed25519 public key. An empty key disables network update checks instead
@@ -1231,12 +1231,21 @@ if(TARGET ${ALCEDO_MAIN_BIN})
             )
         endif()
 
-        # ONNX Runtime DirectML of AI Denoise. alcedo_main delay-loads onnxruntime.dll, so the
-        # runtime dependency scan does not list it. DirectML.dll is the same file as the one of
-        # the sidecar (checked by the build copy, copy_onnxruntime_directml_runtime.cmake).
+        # ONNX Runtime DirectML of AI Denoise. The application delay-loads onnxruntime.dll.
+        # Check the sidecar copy again at install time because it can be rebuilt separately.
         if(ALCEDO_ONNXRUNTIME_DIRECTML_RUNTIME_DLLS)
-            install(FILES ${ALCEDO_ONNXRUNTIME_DIRECTML_RUNTIME_DLLS}
-                DESTINATION "${CMAKE_INSTALL_BINDIR}")
+            string(JOIN "|" _ort_dlls ${ALCEDO_ONNXRUNTIME_DIRECTML_RUNTIME_DLLS})
+            set(_sidecar_directml "")
+            if(ALCEDO_BUILD_SEMANTIC_SIDECAR AND ALCEDO_MIND_BINARY)
+                set(_sidecar_directml "${ALCEDO_MIND_TARGET_DIR}/DirectML.dll")
+            endif()
+            install(CODE
+                "set(ALCEDO_ORT_DLLS \"${_ort_dlls}\")
+                 set(ALCEDO_ORT_DEST_DIR \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
+                 set(ALCEDO_SIDECAR_DIRECTML \"${_sidecar_directml}\")
+                 include(\"${ALCEDO_ONNXRUNTIME_DIRECTML_COPY_SCRIPT}\")
+                "
+            )
         endif()
 
         if(ALCEDO_ARIA2C_BINARY)
@@ -1320,6 +1329,14 @@ if(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
         set(_cuda_bin_dir "${CUDAToolkit_BIN_DIR}")
     endif()
 
+    set(_directml_scan_library "")
+    set(_directml_exclude_name "")
+    if(ALCEDO_ONNXRUNTIME_DIRECTML_RUNTIME_DLLS)
+        # The app and sidecar each have a build-side copy. Scan the installed DLL once.
+        set(_directml_scan_library "LIBRARIES \"\${_bindir}/DirectML.dll\"")
+        set(_directml_exclude_name "\"^directml[.]dll$\"")
+    endif()
+
     install(CODE
         "message(STATUS \"[alcedo] Installing runtime DLL dependencies...\")
          set(_bindir \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
@@ -1336,12 +1353,14 @@ if(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
          )
          file(GET_RUNTIME_DEPENDENCIES
              EXECUTABLES ${ALCEDO_RUNTIME_EXES}
+             ${_directml_scan_library}
              DIRECTORIES \${_search_dirs}
              RESOLVED_DEPENDENCIES_VAR _resolved
              UNRESOLVED_DEPENDENCIES_VAR _unresolved
              PRE_EXCLUDE_REGEXES
                \"api-ms-win-.*\"
                \"ext-ms-.*\"
+               ${_directml_exclude_name}
              POST_EXCLUDE_REGEXES
                \".*[\\\\\\\\/][Ww][Ii][Nn][Dd][Oo][Ww][Ss][\\\\\\\\/].*\"
                \".*[\\\\\\\\/][Ss][Yy][Ss][Tt][Ee][Mm]32[\\\\\\\\/].*\"
