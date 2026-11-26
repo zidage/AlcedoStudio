@@ -4,9 +4,9 @@
 
 #include "app/sleeve_service.hpp"
 
-#include <algorithm>
 #include <stdexcept>
 #include <unordered_set>
+#include <vector>
 
 #include "edit/graph/pipeline_document.hpp"
 #include "storage/store/mount/mount_store.hpp"
@@ -75,8 +75,7 @@ auto MountedFileIds(FileSystem& fs, std::span<const sl_element_id_t> file_ids)
     } catch (const std::exception&) {
       continue;
     }
-    if (file && file->type_ == ElementType::FILE && file->sync_flag_ != SyncFlag::DELETED &&
-        file->mount_id_.has_value()) {
+    if (file && file->type_ == ElementType::FILE && file->IsLive() && file->mount_id_.has_value()) {
       mounted_ids.push_back(file_id);
     }
   }
@@ -114,28 +113,6 @@ auto ElementTypeLabel(const ElementType type) -> const char* {
       return "folder";
   }
   return "unknown";
-}
-
-void RemoveIdsFrom(std::vector<std::shared_ptr<SleeveElement>>& elements,
-                   const std::unordered_set<sl_element_id_t>&   blocked_ids) {
-  elements.erase(std::remove_if(elements.begin(), elements.end(),
-                                [&blocked_ids](const std::shared_ptr<SleeveElement>& element) {
-                                  return !element || blocked_ids.contains(element->element_id_);
-                                }),
-                 elements.end());
-}
-
-auto CollectIds(const std::vector<std::shared_ptr<SleeveElement>>& elements)
-    -> std::unordered_set<sl_element_id_t> {
-  std::unordered_set<sl_element_id_t> ids;
-  ids.reserve(elements.size());
-  for (const auto& element : elements) {
-    if (!element) {
-      continue;
-    }
-    ids.insert(element->element_id_);
-  }
-  return ids;
 }
 
 void LogSyncElement(const char* bucket, const std::shared_ptr<SleeveElement>& element) {
@@ -178,44 +155,35 @@ SleeveServiceImpl::SleeveServiceImpl(std::shared_ptr<Storage> storage_service,
 auto SleeveServiceImpl::Sync() -> SyncResult {
   SyncResult result{true, 0, ""};
   try {
-    auto&      element_ctrl      = storage_->GetElementStore();
-    auto       modified_elements = fs_->GetModifiedElements();
-    auto       unsynced_elements = fs_->GetUnsyncedElements();
-    auto       garbage_elements  = fs_->GetDeletedElements();
-
-    const auto deleted_ids       = CollectIds(garbage_elements);
-    RemoveIdsFrom(unsynced_elements, deleted_ids);
-
-    auto       skip_modified_ids = deleted_ids;
-    const auto unsynced_ids      = CollectIds(unsynced_elements);
-    skip_modified_ids.insert(unsynced_ids.begin(), unsynced_ids.end());
-    RemoveIdsFrom(modified_elements, skip_modified_ids);
-
-    // Sync unsynced elements first, batched into a single transaction instead of
-    // one autocommit transaction per element.
-    for (auto& element : unsynced_elements) {
-      LogSyncElement("Unsynced", element);
+    // The dirty list holds each changed element once with its current flag, so the three
+    // groups do not overlap. An element that a write created and deleted is in the deletes.
+    const auto                                  dirty = fs_->DirtyElements();
+    std::vector<std::shared_ptr<SleeveElement>> inserts;
+    std::vector<std::shared_ptr<SleeveElement>> updates;
+    std::vector<std::shared_ptr<SleeveElement>> deletes;
+    for (const auto& element : dirty) {
+      switch (element->SyncState()) {
+        case SyncFlag::UNSYNC:
+          LogSyncElement("Unsynced", element);
+          inserts.push_back(element);
+          break;
+        case SyncFlag::MODIFIED:
+          LogSyncElement("Modified", element);
+          updates.push_back(element);
+          break;
+        case SyncFlag::DELETED:
+          LogSyncElement("Deleted", element);
+          deletes.push_back(element);
+          break;
+        case SyncFlag::SYNCED:
+          break;
+      }
     }
-    element_ctrl.AddElements(unsynced_elements);
-    result.elements_synced_ += static_cast<uint32_t>(unsynced_elements.size());
-
-    // Then sync modified elements, also batched into a single transaction.
-    for (auto& element : modified_elements) {
-      LogSyncElement("Modified", element);
-    }
-    element_ctrl.UpdateElements(modified_elements);
-    result.elements_synced_ += static_cast<uint32_t>(modified_elements.size());
-
-    // Finally, delete the deleted elements.
-    // TODO: This should be done periodically instead of every sync.
-    for (auto& element : garbage_elements) {
-      LogSyncElement("Deleted", element);
-    }
-    element_ctrl.RemoveElements(garbage_elements);
-    result.elements_synced_ += static_cast<uint32_t>(garbage_elements.size());
-    // Perform garbage collection in the storage
-    // The same goes to here, this should be done periodically
-    fs_->GarbageCollect();
+    // One transaction: a failure leaves the database and the dirty list unchanged, and the
+    // next sync writes the same elements.
+    storage_->GetElementStore().WriteSync(inserts, updates, deletes);
+    fs_->MarkWritten(dirty);
+    result.elements_synced_ = static_cast<uint32_t>(dirty.size());
   } catch (std::exception& e) {
     result.success_ = false;
     result.message_ = e.what();
@@ -255,8 +223,7 @@ auto SleeveServiceImpl::ResolveElement(const std::filesystem::path& path)
 auto SleeveServiceImpl::ResolveFolder(const std::filesystem::path& path)
     -> std::shared_ptr<SleeveFolder> {
   auto element = ResolveElement(path);
-  if (!element || element->type_ != ElementType::FOLDER ||
-      element->sync_flag_ == SyncFlag::DELETED) {
+  if (!element || element->type_ != ElementType::FOLDER || !element->IsLive()) {
     throw std::runtime_error("SleeveService: Target path is not a folder.");
   }
   return std::static_pointer_cast<SleeveFolder>(element);
@@ -265,7 +232,7 @@ auto SleeveServiceImpl::ResolveFolder(const std::filesystem::path& path)
 auto SleeveServiceImpl::ResolveFile(const std::filesystem::path& path)
     -> std::shared_ptr<SleeveFile> {
   auto element = ResolveElement(path);
-  if (!element || element->type_ != ElementType::FILE || element->sync_flag_ == SyncFlag::DELETED) {
+  if (!element || element->type_ != ElementType::FILE || !element->IsLive()) {
     throw std::runtime_error("SleeveService: Target path is not a file.");
   }
   auto file = std::dynamic_pointer_cast<SleeveFile>(element);
@@ -283,7 +250,7 @@ auto SleeveServiceImpl::ListFolderEntries(const std::filesystem::path& folder_pa
     entries.reserve(ids.size());
     for (const auto id : ids) {
       auto element = fs.Get(id);
-      if (!element || element->sync_flag_ == SyncFlag::DELETED) {
+      if (!element || !element->IsLive()) {
         continue;
       }
       entries.push_back(std::move(element));
@@ -494,7 +461,7 @@ auto SleeveServiceImpl::DeleteMissingMountedFiles(mount_id_t                    
         for (const auto file_id : file_ids) {
           const auto file   = fs.Get(file_id);
           const auto record = mounts.ReadSourceFile(file_id);
-          if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED ||
+          if (!file || file->type_ != ElementType::FILE || !file->IsLive() ||
               file->mount_id_ != mount_id || !record.has_value() ||
               record->state != SourceFileState::kMissing) {
             throw std::invalid_argument("SleeveServiceImpl: the element " +

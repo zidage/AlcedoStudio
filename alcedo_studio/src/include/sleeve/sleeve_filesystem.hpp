@@ -8,25 +8,24 @@
 #include <memory>
 #include <span>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "path_resolver.hpp"
+#include "sleeve/node_cache.hpp"
+#include "sleeve/node_storage_handler.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
-#include "storage/image_pool/image_pool_manager.hpp"
 #include "sleeve/storage.hpp"
+#include "storage/image_pool/image_pool_manager.hpp"
 #include "type/type.hpp"
 #include "utils/id/id_generator.hpp"
 
 namespace alcedo {
 class FileSystem {
-  using NodeMapping = std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>>;
-
  private:
-  // A mapping between node id and pointers to actual nodes.
-  NodeMapping                          storage_;
+  /// The in-memory nodes and the dirty list (Sleeve Node Cache Plan, SN2).
+  NodeCache                            nodes_;
   std::shared_ptr<SleeveFolder>        root_;
 
   // ID Generation
@@ -122,8 +121,8 @@ class FileSystem {
    */
   auto ListChildFolders(const std::filesystem::path& folder_path)
       -> std::vector<std::shared_ptr<SleeveFolder>>;
-  /// True when the node map holds the element @p id. Reads memory only.
-  [[nodiscard]] auto IsInNodeMap(sl_element_id_t id) const -> bool { return storage_.contains(id); }
+  /// The in-memory nodes. Reads memory only.
+  [[nodiscard]] auto Nodes() const -> const NodeCache& { return nodes_; }
 
   auto ApplyFilterToFolder(const std::filesystem::path&       folder_path,
                            const std::shared_ptr<FilterCombo> filter)
@@ -139,11 +138,18 @@ class FileSystem {
 
   auto GetCurrentID() -> sl_element_id_t { return id_gen_.GetCurrentID(); }
 
-  auto GetModifiedElements() -> std::vector<std::shared_ptr<SleeveElement>>;
-  auto GetUnsyncedElements() -> std::vector<std::shared_ptr<SleeveElement>>;
-  auto GetDeletedElements() -> std::vector<std::shared_ptr<SleeveElement>>;
-
-  void GarbageCollect() { storage_handler_.GarbageCollect(); }
+  /// The elements with a change that no sync wrote, in the order they changed (the dirty list
+  /// of the node cache). Reads memory only.
+  [[nodiscard]] auto DirtyElements() const -> std::vector<std::shared_ptr<SleeveElement>> {
+    return nodes_.DirtyElements();
+  }
+  /**
+   * @brief Records that a committed transaction wrote @p written. A DELETED element leaves the
+   *        node cache; each other element becomes SYNCED and a folder clears its pending content
+   *        changes.
+   * @pre Each element of @p written is in the node cache. Call only after the commit.
+   */
+  void MarkWritten(std::span<const std::shared_ptr<SleeveElement>> written);
 
   auto Tree(const std::filesystem::path& path) -> std::wstring;
 };

@@ -130,7 +130,7 @@ auto AlbumBrowseService::ListFilesInFolder(const std::filesystem::path& folder_p
     const auto entries   = sleeve_service_->ListFolderEntries(folder_path);
     files.reserve(entries.size());
     for (const auto& entry : entries) {
-      if (!entry || entry->type_ != ElementType::FILE || entry->sync_flag_ == SyncFlag::DELETED) {
+      if (!entry || entry->type_ != ElementType::FILE || !entry->IsLive()) {
         continue;
       }
       auto file = std::dynamic_pointer_cast<SleeveFile>(entry);
@@ -544,8 +544,7 @@ auto AlbumBrowseService::LinkFilesToFolder(const std::vector<sl_element_id_t>& e
       const auto file = sleeve_service_->Read<std::shared_ptr<SleeveFile>>(
           [element_id](FileSystem& fs) -> std::shared_ptr<SleeveFile> {
             const auto element = fs.Get(element_id);
-            if (!element || element->type_ != ElementType::FILE ||
-                element->sync_flag_ == SyncFlag::DELETED) {
+            if (!element || element->type_ != ElementType::FILE || !element->IsLive()) {
               return nullptr;
             }
             return std::dynamic_pointer_cast<SleeveFile>(element);

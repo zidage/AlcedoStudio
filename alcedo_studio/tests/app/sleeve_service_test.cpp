@@ -125,6 +125,34 @@ void ExecuteOnProjectDatabase(ProjectService& project, const std::string& sql) {
   }
 }
 
+/// The first value of the first row of @p sql on the project's connection.
+auto QueryProjectInt64(ProjectService& project, const std::string& sql) -> int64_t {
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
+  auto          lock  = guard.Lock();
+  duckdb_result result;
+  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+    const std::string error = duckdb_result_error(&result);
+    duckdb_destroy_result(&result);
+    throw std::runtime_error(error);
+  }
+  const int64_t value = duckdb_row_count(&result) > 0 ? duckdb_value_int64(&result, 0, 0) : 0;
+  duckdb_destroy_result(&result);
+  return value;
+}
+
+/// The number of Element rows with the id @p id.
+auto ElementRowCount(ProjectService& project, sl_element_id_t id) -> int64_t {
+  return QueryProjectInt64(project,
+                           "SELECT COUNT(*) FROM Element WHERE id = " + std::to_string(id));
+}
+
+/// The number of Element rows with the id @p id and the name @p name.
+auto NamedElementRowCount(ProjectService& project, sl_element_id_t id, const std::string& name)
+    -> int64_t {
+  return QueryProjectInt64(project, "SELECT COUNT(*) FROM Element WHERE id = " +
+                                        std::to_string(id) + " AND element_name = '" + name + "'");
+}
+
 /// The folder names of a listing in ascending order.
 auto SortedFolderNames(const std::vector<AlbumFolderView>& folders) -> std::vector<std::wstring> {
   std::vector<std::wstring> names;
@@ -1329,7 +1357,7 @@ TEST_F(MountedFolderStructureTest, ListChildFoldersLeavesFileElementsUnloaded) {
   const auto loaded_files = Sleeve().Read<std::vector<sl_element_id_t>>([&](FileSystem& fs) {
     std::vector<sl_element_id_t> loaded;
     for (const auto id : file_ids) {
-      if (fs.IsInNodeMap(id)) {
+      if (fs.Nodes().Contains(id)) {
         loaded.push_back(id);
       }
     }
@@ -1361,6 +1389,99 @@ TEST_F(SleeveServiceTests, ListChildFoldersKeepsFoldersWhenOneRowHasNoElement) {
   EXPECT_EQ(SortedFolderNames(browse->ListFolders(L"/")),
             (std::vector<std::wstring>{L"Kept", L"Other"}));
   EXPECT_TRUE(browse->ListFolders(L"/Kept").empty());
+}
+
+// Sleeve Node Cache Plan SN2: a sync walks the dirty list of the node cache, so the clean
+// elements in memory do not add work to the sync of one change.
+TEST_F(SleeveServiceTests, SyncAfterOneRenameWritesOneElementWithTenThousandInMemory) {
+  constexpr int  kFileCount = 10'000;
+  ProjectService project(db_path_, meta_path_);
+  auto           service       = project.GetSleeveService();
+  const auto [folder, created] = service->CreateFolder(L"/", L"Trip");
+  ASSERT_TRUE(created.success_) << created.message_;
+  const auto import_result = service->Write<void>([](FileSystem& fs) {
+    for (int i = 0; i < kFileCount; ++i) {
+      fs.CreateFileInLibrary(L"IMG_" + std::to_wstring(i) + L".ARW");
+    }
+  });
+  ASSERT_TRUE(import_result.success_) << import_result.message_;
+  ASSERT_EQ(import_result.elements_synced_, static_cast<uint32_t>(kFileCount + 1))
+      << "the files and the root, whose content changed";
+
+  const auto [in_memory, dirty_before] = service->Read<std::pair<std::size_t, std::size_t>>(
+      [](FileSystem& fs) { return std::pair{fs.Nodes().Size(), fs.Nodes().DirtyCount()}; });
+  ASSERT_GE(in_memory, static_cast<std::size_t>(kFileCount + 2));
+  ASSERT_EQ(dirty_before, 0u);
+
+  const auto rename_result = service->RenameFolder(L"/Trip", L"Trip 2024");
+  ASSERT_TRUE(rename_result.success_) << rename_result.message_;
+  // The folder row gets the new name. The root is the parent on the write path: it becomes
+  // MODIFIED, and its content change of the rename cancels, so its update writes the row only.
+  EXPECT_EQ(rename_result.elements_synced_, 2u);
+  EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().DirtyCount(); }), 0u);
+  EXPECT_EQ(NamedElementRowCount(project, folder->element_id_, "Trip 2024"), 1);
+}
+
+// Sleeve Node Cache Plan SN2: the inserts, the updates, and the deletes of one sync commit in one
+// transaction. A failure in the delete step leaves the database and the dirty list unchanged.
+TEST_F(SleeveServiceTests, FailedSyncLeavesDatabaseUnchangedAndRetrySucceeds) {
+  ProjectService project(db_path_, meta_path_);
+  auto           service              = project.GetSleeveService();
+  const auto [folder, folder_created] = service->CreateFolder(L"/", L"Old");
+  ASSERT_TRUE(folder_created.success_) << folder_created.message_;
+  const auto [removed, removed_created] = service->CreateFileInLibrary(L"Removed.ARW");
+  ASSERT_TRUE(removed_created.success_) << removed_created.message_;
+  const auto folder_id  = folder->element_id_;
+  const auto removed_id = removed->element_id_;
+  ASSERT_EQ(ElementRowCount(project, removed_id), 1);
+
+  // The file delete removes the SourceFile rows of the file; without the table that statement
+  // fails after the insert and the update ran in the same transaction.
+  ExecuteOnProjectDatabase(project, "ALTER TABLE SourceFile RENAME TO SourceFileAside");
+  sl_element_id_t added_id      = 0;
+  const auto      failed_result = service->Write<void>([&](FileSystem& fs) {
+    added_id = fs.CreateFileInLibrary(L"Added.ARW")->element_id_;
+    fs.RenameFolder(L"/Old", L"New");
+    fs.DeleteFileEverywhere(removed_id);
+  });
+  ASSERT_FALSE(failed_result.success_);
+  EXPECT_NE(failed_result.message_.find("SourceFile"), std::string::npos) << failed_result.message_;
+
+  EXPECT_EQ(ElementRowCount(project, added_id), 0) << "the insert rolled back";
+  EXPECT_EQ(NamedElementRowCount(project, folder_id, "Old"), 1) << "the update rolled back";
+  EXPECT_EQ(ElementRowCount(project, removed_id), 1) << "the delete rolled back";
+  EXPECT_EQ(FolderContentRowIds(project, 0).count(added_id), 0u);
+  EXPECT_EQ(FolderContentRowIds(project, 0).count(removed_id), 1u);
+
+  const auto dirty = service->Read<std::map<sl_element_id_t, SyncFlag>>([](FileSystem& fs) {
+    std::map<sl_element_id_t, SyncFlag> flags;
+    for (const auto& element : fs.DirtyElements()) {
+      flags[element->element_id_] = element->SyncState();
+    }
+    return flags;
+  });
+  EXPECT_EQ(dirty, (std::map<sl_element_id_t, SyncFlag>{{0, SyncFlag::MODIFIED},
+                                                        {folder_id, SyncFlag::MODIFIED},
+                                                        {removed_id, SyncFlag::DELETED},
+                                                        {added_id, SyncFlag::UNSYNC}}))
+      << "each element keeps its flag and its place in the dirty list";
+
+  ExecuteOnProjectDatabase(project, "ALTER TABLE SourceFileAside RENAME TO SourceFile");
+  const auto retry_result = service->Write<void>([](FileSystem&) {});
+  ASSERT_TRUE(retry_result.success_) << retry_result.message_;
+  EXPECT_EQ(retry_result.elements_synced_, 4u);
+
+  EXPECT_EQ(ElementRowCount(project, added_id), 1);
+  EXPECT_EQ(NamedElementRowCount(project, folder_id, "New"), 1);
+  EXPECT_EQ(ElementRowCount(project, removed_id), 0);
+  const auto root_rows = FolderContentRowIds(project, 0);
+  EXPECT_EQ(root_rows.count(added_id), 1u);
+  EXPECT_EQ(root_rows.count(removed_id), 0u);
+  EXPECT_EQ(
+      service->Read<bool>([removed_id](FileSystem& fs) { return fs.Nodes().Contains(removed_id); }),
+      false)
+      << "the deleted element leaves the node cache after the commit";
+  EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().DirtyCount(); }), 0u);
 }
 
 }  // namespace alcedo

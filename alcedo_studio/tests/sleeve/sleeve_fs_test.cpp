@@ -397,7 +397,7 @@ TEST(SleeveFSTest, DeletingFromAlbumOnlyUnlinksMembership) {
     EXPECT_EQ(from_root->element_id_, file->element_id_);
     EXPECT_TRUE(ContainsId(fs.ListFolderContent(0), file->element_id_));
     EXPECT_FALSE(ContainsId(fs.ListFolderContent(album->element_id_), file->element_id_));
-    EXPECT_NE(file->sync_flag_, SyncFlag::DELETED);
+    EXPECT_NE(file->SyncState(), SyncFlag::DELETED);
     EXPECT_THROW(fs.Get(L"/Album/KeepInRoot.arw", false), std::runtime_error);
   } catch (std::exception& e) {
     std::cout << e.what() << std::endl;
@@ -423,7 +423,7 @@ TEST(SleeveFSTest, DeletingFromRootDeletesFileEverywhere) {
 
     fs.Delete(L"/DeleteEverywhere.arw");
 
-    EXPECT_EQ(file->sync_flag_, SyncFlag::DELETED);
+    EXPECT_EQ(file->SyncState(), SyncFlag::DELETED);
     EXPECT_FALSE(ContainsId(fs.ListFolderContent(0), file->element_id_));
     EXPECT_FALSE(ContainsId(fs.ListFolderContent(album_a->element_id_), file->element_id_));
     EXPECT_FALSE(ContainsId(fs.ListFolderContent(album_b->element_id_), file->element_id_));
@@ -471,13 +471,13 @@ TEST(SleeveFSTest, DeleteFilesEverywhereRemovesBatchFromEveryFolderAndKeepsOther
     const auto album_b_content = fs.ListFolderContent(album_b->element_id_);
     for (const auto id : deleted_ids) {
       EXPECT_TRUE(ContainsId(removed, id));
-      EXPECT_EQ(fs.Get(id)->sync_flag_, SyncFlag::DELETED);
+      EXPECT_EQ(fs.Get(id)->SyncState(), SyncFlag::DELETED);
       EXPECT_FALSE(ContainsId(root_content, id));
       EXPECT_FALSE(ContainsId(album_a_content, id));
       EXPECT_FALSE(ContainsId(album_b_content, id));
     }
     for (const auto id : kept_ids) {
-      EXPECT_NE(fs.Get(id)->sync_flag_, SyncFlag::DELETED);
+      EXPECT_NE(fs.Get(id)->SyncState(), SyncFlag::DELETED);
       EXPECT_EQ(CountId(root_content, id), 1U);
       EXPECT_EQ(CountId(album_a_content, id), 1U);
     }

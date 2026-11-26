@@ -5,11 +5,7 @@
 #pragma once
 
 #include <filesystem>
-#include <memory>
-#include <unordered_map>
 
-#include "sleeve/sleeve_element/sleeve_element.hpp"
-#include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/image/image_store.hpp"
@@ -25,34 +21,6 @@
 #include "type/type.hpp"
 
 namespace alcedo {
-
-class NodeStorageHandler {
- private:
-  ElementStore&                                                   element_store_;
-  FolderEntryStore&                                               folder_entry_store_;
-
-  std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>>& storage_;
-
- public:
-  NodeStorageHandler(ElementStore& element_store, FolderEntryStore& folder_entry_store,
-                     std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>>& storage);
-  void AddToStorage(std::shared_ptr<SleeveElement> new_element);
-  /// Load every child of @p folder into the node map and the folder. A failed load writes one
-  /// warning with the folder id and the error text and leaves the folder unloaded.
-  void EnsureChildrenLoaded(std::shared_ptr<SleeveFolder> folder);
-  auto GetElement(sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
-  /**
-   * @brief The live child folders of @p folder. Loads no file element.
-   *
-   * @details A folder with loaded children answers from memory, so the changes of the current
-   * write are in the result. Otherwise one FolderEntryStore statement reads the child folders:
-   * a folder that the node map already holds keeps its live object, and each other folder goes
-   * into the map. The folder itself stays unloaded. Deleted folders are not in the result.
-   * @throws The store error of FolderEntryStore::ReadChildFolders.
-   */
-  auto ChildFolders(const SleeveFolder& folder) -> std::vector<std::shared_ptr<SleeveFolder>>;
-  void GarbageCollect();
-};
 
 /**
  * @brief The stores of one project database.

@@ -14,6 +14,7 @@
 #include <future>
 #include <memory>
 #include <unordered_set>
+#include <vector>
 
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
@@ -29,6 +30,16 @@
 #include "type/type.hpp"
 
 namespace alcedo {
+namespace {
+/// The dirty elements of the node cache whose flag is @p flag.
+auto DirtyElementsWithFlag(const FileSystem& fs, SyncFlag flag)
+    -> std::vector<std::shared_ptr<SleeveElement>> {
+  auto elements = fs.DirtyElements();
+  std::erase_if(elements, [flag](const auto& element) { return element->SyncState() != flag; });
+  return elements;
+}
+}  // namespace
+
 TEST_F(ImportServiceTests, InitTest) {
   {
     ProjectService project(db_path_, meta_path_);
@@ -736,14 +747,10 @@ TEST_F(ImportServiceTests, ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoin
   ASSERT_NE(root_file_id, 0u);
   ASSERT_EQ(album_file_id, root_file_id);
 
-  const auto unsynced_before_sync =
-      fs_service->Read<std::vector<std::shared_ptr<SleeveElement>>>([](FileSystem& fs) {
-        return fs.GetUnsyncedElements();
-      });
-  const auto modified_before_sync =
-      fs_service->Read<std::vector<std::shared_ptr<SleeveElement>>>([](FileSystem& fs) {
-        return fs.GetModifiedElements();
-      });
+  const auto unsynced_before_sync = fs_service->Read<std::vector<std::shared_ptr<SleeveElement>>>(
+      [](FileSystem& fs) { return DirtyElementsWithFlag(fs, SyncFlag::UNSYNC); });
+  const auto modified_before_sync = fs_service->Read<std::vector<std::shared_ptr<SleeveElement>>>(
+      [](FileSystem& fs) { return DirtyElementsWithFlag(fs, SyncFlag::MODIFIED); });
 
   std::unordered_set<sl_element_id_t> unsynced_ids;
   for (const auto& element : unsynced_before_sync) {
@@ -796,14 +803,10 @@ TEST_F(ImportServiceTests, ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoin
   EXPECT_TRUE(found_root_membership);
   EXPECT_TRUE(found_album_membership);
 
-  const auto unsynced_after_sync =
-      fs_service->Read<std::vector<std::shared_ptr<SleeveElement>>>([](FileSystem& fs) {
-        return fs.GetUnsyncedElements();
-      });
-  const auto modified_after_sync =
-      fs_service->Read<std::vector<std::shared_ptr<SleeveElement>>>([](FileSystem& fs) {
-        return fs.GetModifiedElements();
-      });
+  const auto unsynced_after_sync = fs_service->Read<std::vector<std::shared_ptr<SleeveElement>>>(
+      [](FileSystem& fs) { return DirtyElementsWithFlag(fs, SyncFlag::UNSYNC); });
+  const auto modified_after_sync = fs_service->Read<std::vector<std::shared_ptr<SleeveElement>>>(
+      [](FileSystem& fs) { return DirtyElementsWithFlag(fs, SyncFlag::MODIFIED); });
 
   EXPECT_TRUE(unsynced_after_sync.empty());
   EXPECT_TRUE(modified_after_sync.empty());

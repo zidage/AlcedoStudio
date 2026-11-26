@@ -66,7 +66,7 @@ auto PathResolver::Resolve(const std::filesystem::path& path) -> std::shared_ptr
   auto                           cached_id  = directory_cache_.AccessElement(path.wstring());
   if (cached_id.has_value()) {
     auto cached = storage_handler_.GetElement(cached_id.value());
-    if (!cached || cached->sync_flag_ == SyncFlag::DELETED) {
+    if (!cached || !cached->IsLive()) {
       directory_cache_.RemoveRecord(path.wstring());
       throw std::runtime_error("Path Resolver: Illegal path. Target does not exist");
     }
@@ -88,7 +88,7 @@ auto PathResolver::Resolve(const std::filesystem::path& path) -> std::shared_ptr
     }
 
     current = storage_handler_.GetElement(next_id.value());
-    if (current->sync_flag_ == SyncFlag::DELETED) {
+    if (!current->IsLive()) {
       throw std::runtime_error("Path Resolver: Illegal path. Target does not exist");
     }
   }
@@ -154,15 +154,13 @@ auto PathResolver::ResolveForWrite(const std::filesystem::path& path)
   if (current->type_ == ElementType::FOLDER && current->IsShared()) {
     current = CoWHandler(current, std::static_pointer_cast<SleeveFolder>(current_parent));
   }
-  if (current->sync_flag_ == SyncFlag::SYNCED) {
-    current->SetSyncFlag(SyncFlag::MODIFIED);
-  }
+  current->MarkModified();
   // directory_cache_.RecordAccess(path.wstring(), current->element_id_);
   return current;
 }
 
-auto PathResolver::CoWHandler(const std::shared_ptr<SleeveElement> to_copy,
-                              const std::shared_ptr<SleeveFolder>  parent_folder)
+auto PathResolver::CoWHandler(const std::shared_ptr<SleeveElement>& to_copy,
+                              const std::shared_ptr<SleeveFolder>&  parent_folder)
     -> std::shared_ptr<SleeveElement> {
   auto old_id = to_copy->element_id_;
   to_copy->DecrementRefCount();
@@ -182,9 +180,7 @@ auto PathResolver::CoWHandler(const std::shared_ptr<SleeveElement> to_copy,
   parent_folder->UpdateElementMap(copied->element_name_, old_id, copied->element_id_);
   copied->IncrementRefCount();
   storage_handler_.AddToStorage(copied);
-  if (to_copy->sync_flag_ == SyncFlag::SYNCED) {
-    to_copy->SetSyncFlag(SyncFlag::MODIFIED);
-  }
+  to_copy->MarkModified();
   return copied;
 }
 

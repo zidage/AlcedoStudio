@@ -12,10 +12,9 @@
 #include <vector>
 
 #include "dentry_cache_manager.hpp"
+#include "sleeve/node_storage_handler.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
-#include "storage/store/sleeve/element_store.hpp"
-#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
 #include "utils/id/id_generator.hpp"
@@ -28,8 +27,8 @@ class PathResolver {
   NodeStorageHandler&                  storage_handler_;
   IncrID::IDGenerator<uint32_t>&       id_gen_;
 
-  auto                                 CoWHandler(const std::shared_ptr<SleeveElement> to_copy,
-                                                  const std::shared_ptr<SleeveFolder>  parent_folder)
+  auto                                 CoWHandler(const std::shared_ptr<SleeveElement>& to_copy,
+                                                  const std::shared_ptr<SleeveFolder>&  parent_folder)
       -> std::shared_ptr<SleeveElement>;
 
  public:
