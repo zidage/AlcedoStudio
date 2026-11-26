@@ -40,14 +40,26 @@ class PathResolver {
   auto IsSubpath(const std::filesystem::path& base, const std::filesystem::path& target) -> bool;
   auto Contains(const std::filesystem::path& path, ElementType type) -> bool;
   auto Contains(const std::filesystem::path& path) -> bool;
+  /**
+   * @brief The live element at @p path. Each part reads the resident child folders of its
+   *        folder. Only a part that names no child folder loads the file entries of its folder
+   *        (NodeStorageHandler::EnsureChildrenLoaded), so a folder path reads memory only. The
+   *        file entries of the result are not loaded.
+   * @throws std::runtime_error when a part names no live element or a part below a file.
+   */
   auto Resolve(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;
   /**
-   * @brief The live folder at @p path, found through NodeStorageHandler::ChildFolders at each
-   *        part of the path. Loads no file element and no children of a folder on the path.
-   * @throws std::runtime_error when a part of the path names no live folder, and the store error
-   *         of a child folder read.
+   * @brief The live folder at @p path, from the resident child folders of each folder on the
+   *        path. Reads memory only and loads no file entry.
+   * @throws std::runtime_error when a part of the path names no live folder.
    */
   auto ResolveFolder(const std::filesystem::path& path) -> std::shared_ptr<SleeveFolder>;
+  /**
+   * @brief The element at @p path for a change: a shared folder on the path is copied (CoW),
+   *        the result is marked modified, and each folder on the path and a folder result have
+   *        their file entries loaded, so the name checks of a write see every entry.
+   * @throws std::runtime_error when a part names no element or a part below a file.
+   */
   auto ResolveForWrite(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;
   void Invalidate(const std::filesystem::path& path);
   /// Removes every cached path. A rename or a move changes the path of a whole subtree.

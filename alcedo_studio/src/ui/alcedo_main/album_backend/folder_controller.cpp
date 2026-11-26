@@ -81,7 +81,7 @@ void FolderController::ResetTreeState() {
   nodes_by_path_.clear();
   child_keys_by_path_.clear();
   path_key_by_ui_id_.clear();
-  loaded_paths_.clear();
+  tree_loaded_ = false;
   folder_entries_.clear();
   folders_.clear();
   next_folder_ui_id_ = 1;
@@ -110,99 +110,62 @@ auto FolderController::EnsureNode(const std::filesystem::path& folderPath,
   return it->second;
 }
 
-void FolderController::LoadChildren(const std::filesystem::path& parentPath) {
-  qCDebug(diag::libraryLog).noquote()
-      << "FolderController: loading children of" << QString::fromStdWString(parentPath.wstring());
+void FolderController::LoadTree() {
   auto proj = project_->handler().project();
   if (!proj) {
     return;
   }
-
   auto browse = proj->GetAlbumBrowseService();
   if (!browse) {
     return;
   }
 
-  const auto parent_key = PathKey(parentPath);
-  const auto parent_it  = nodes_by_path_.find(parent_key);
-  if (parent_it == nodes_by_path_.end()) {
-    return;
-  }
-  if (loaded_paths_.contains(parent_key)) {
-    return;
-  }
-
-  std::vector<std::wstring> child_keys;
+  std::vector<AlbumFolderView> folders;
   try {
-    const auto folders = browse->ListFolders(parentPath);
-    child_keys.reserve(folders.size());
-    for (const auto& folder : folders) {
-      auto& child =
-          EnsureNode(folder.folder_path_, folder.folder_name_, parent_it->second.depth_ + 1);
-      child.element_id_ = folder.folder_id_;
-      child.mount_id_   = folder.mount_id_;
-      child_keys.push_back(PathKey(child.folder_path_));
-    }
+    folders = browse->ListFolderTree();
   } catch (const std::exception& e) {
-    // The folder stays unloaded, so the next expand reads it again.
+    // The tree stays unloaded, so the next selection reads it again.
     qCWarning(diag::libraryLog).noquote()
-        << "FolderController: the children of" << QString::fromStdWString(parentPath.wstring())
-        << "did not load:" << e.what();
+        << "FolderController: the folder tree did not load:" << e.what();
     return;
   }
 
-  child_keys_by_path_[parent_key] = std::move(child_keys);
-  loaded_paths_.insert(parent_key);
-}
-
-void FolderController::LoadSubtree(const std::filesystem::path& folderPath) {
-  const auto key     = PathKey(folderPath);
-  const auto node_it = nodes_by_path_.find(key);
-  if (node_it == nodes_by_path_.end()) {
-    return;
-  }
-  node_it->second.expanded_ = true;
-  LoadChildren(folderPath);
-
-  const auto child_it = child_keys_by_path_.find(key);
-  if (child_it == child_keys_by_path_.end()) {
-    return;
-  }
-  const auto child_keys = child_it->second;
-  for (const auto& child_key : child_keys) {
-    const auto child_node = nodes_by_path_.find(child_key);
-    if (child_node != nodes_by_path_.end()) {
-      LoadSubtree(child_node->second.folder_path_);
+  // Parents come before their children, so the parent node of each folder exists.
+  for (const auto& folder : folders) {
+    const auto parent_key = PathKey(folder.folder_path_.parent_path());
+    const auto parent_it  = nodes_by_path_.find(parent_key);
+    if (parent_it == nodes_by_path_.end()) {
+      continue;
     }
+    const int depth   = parent_it->second.depth_ + 1;
+    auto&     child   = EnsureNode(folder.folder_path_, folder.folder_name_, depth);
+    child.element_id_ = folder.folder_id_;
+    child.mount_id_   = folder.mount_id_;
+    child_keys_by_path_[parent_key].push_back(PathKey(child.folder_path_));
   }
+  tree_loaded_ = true;
 }
 
 void FolderController::EnsurePathExpanded(const std::filesystem::path& folderPath) {
   EnsureRootNode();
+  if (!tree_loaded_) {
+    LoadTree();
+  }
 
   auto normalized = folderPath.lexically_normal();
   if (normalized.empty()) {
     normalized = album_util::RootFsPath();
   }
 
-  auto current                             = album_util::RootFsPath();
-  auto current_key                         = PathKey(current);
-  nodes_by_path_.at(current_key).expanded_ = true;
-  LoadChildren(current);
-
+  auto current                                  = album_util::RootFsPath();
+  nodes_by_path_.at(PathKey(current)).expanded_ = true;
   for (const auto& part : normalized.relative_path()) {
     current /= part;
-    const auto next_key = PathKey(current);
-    if (!nodes_by_path_.contains(next_key)) {
-      LoadChildren(current.parent_path().empty() ? album_util::RootFsPath()
-                                                 : current.parent_path());
-    }
-    auto it = nodes_by_path_.find(next_key);
+    auto it = nodes_by_path_.find(PathKey(current));
     if (it == nodes_by_path_.end()) {
       break;
     }
     it->second.expanded_ = true;
-    LoadChildren(current);
   }
 }
 
@@ -484,16 +447,16 @@ auto FolderController::FolderUiIdForElementId(const sl_element_id_t elementId) c
 
 void FolderController::ReloadTree(const std::filesystem::path& preferredFolderPath) {
   ResetTreeState();
+  LoadTree();
 
   auto target_path = preferredFolderPath.empty() ? album_util::RootFsPath() : preferredFolderPath;
-  EnsurePathExpanded(target_path);
-
   if (!nodes_by_path_.contains(PathKey(target_path))) {
     target_path = album_util::RootFsPath();
-    EnsurePathExpanded(target_path);
   }
-  // The sidebar tree and the "Add to" menu list every folder, so the whole tree loads here.
-  LoadSubtree(album_util::RootFsPath());
+  // The sidebar tree and the "Add to" menu list every folder, so each folder shows expanded.
+  for (auto& [key, node] : nodes_by_path_) {
+    node.expanded_ = true;
+  }
 
   auto node_it = nodes_by_path_.find(PathKey(target_path));
   ApplyFolderSelection(node_it != nodes_by_path_.end() ? node_it->second.ui_id_ : 0, true);
@@ -825,7 +788,7 @@ void FolderController::ClearState() {
   nodes_by_path_.clear();
   child_keys_by_path_.clear();
   path_key_by_ui_id_.clear();
-  loaded_paths_.clear();
+  tree_loaded_ = false;
   folder_entries_.clear();
   folders_.clear();
   current_folder_path_      = album_util::RootFsPath();

@@ -12,10 +12,13 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <random>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "../support/storage_test_access.hpp"
@@ -33,6 +36,7 @@
 #include "support/test_temp_directory.hpp"
 #include "type/mount_records.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "utils/logging/log.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -1482,6 +1486,267 @@ TEST_F(SleeveServiceTests, FailedSyncLeavesDatabaseUnchangedAndRetrySucceeds) {
       false)
       << "the deleted element leaves the node cache after the commit";
   EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().DirtyCount(); }), 0u);
+}
+
+namespace {
+/// The warnings of the Library category while a WarningCapture is alive.
+std::mutex               captured_warnings_mutex;
+std::vector<std::string> captured_warnings;
+
+void                     CaptureLibraryWarning(const log::Record& record) noexcept {
+  if (record.level == log::Level::Warn && record.category == log::Category::Library) {
+    std::lock_guard lock(captured_warnings_mutex);
+    captured_warnings.emplace_back(record.message);
+  }
+}
+
+/// Installs CaptureLibraryWarning for its lifetime and restores the default handler.
+class WarningCapture {
+ public:
+  WarningCapture() {
+    std::lock_guard lock(captured_warnings_mutex);
+    captured_warnings.clear();
+    log::SetHandler(&CaptureLibraryWarning);
+  }
+  ~WarningCapture() { log::SetHandler(nullptr); }
+  WarningCapture(const WarningCapture&)                                  = delete;
+  auto               operator=(const WarningCapture&) -> WarningCapture& = delete;
+
+  /// The captured warnings that contain @p text.
+  [[nodiscard]] auto Containing(const std::string& text) const -> std::vector<std::string> {
+    std::lock_guard          lock(captured_warnings_mutex);
+    std::vector<std::string> matches;
+    for (const auto& warning : captured_warnings) {
+      if (warning.find(text) != std::string::npos) {
+        matches.push_back(warning);
+      }
+    }
+    return matches;
+  }
+};
+
+/// The generic paths of a folder tree listing, in the order of the listing.
+auto TreePaths(const std::vector<AlbumFolderView>& folders) -> std::vector<std::wstring> {
+  std::vector<std::wstring> paths;
+  paths.reserve(folders.size());
+  for (const auto& folder : folders) {
+    paths.push_back(folder.folder_path_.generic_wstring());
+  }
+  return paths;
+}
+
+/// The folder id at @p path in a folder tree listing; 0 when the listing has no such path.
+auto TreeFolderId(const std::vector<AlbumFolderView>& folders, const std::wstring& path)
+    -> sl_element_id_t {
+  for (const auto& folder : folders) {
+    if (folder.folder_path_.generic_wstring() == path) {
+      return folder.folder_id_;
+    }
+  }
+  return 0;
+}
+}  // namespace
+
+// Sleeve Node Cache Plan SN3: the project open loads every folder, and the path of each folder
+// then resolves from memory. With the Element table renamed away, a store read of an element
+// fails, so a resolve with no error and no warning read no store.
+TEST_F(SleeveServiceTests, OpenLoadsNestedFoldersWithOneTreeRead) {
+  constexpr int kDepth            = 40;
+  constexpr int kSiblingsPerLevel = 49;  // 40 chain folders + 40 * 49 siblings = 2,000 folders
+  std::vector<std::wstring> folder_paths;
+  sl_element_id_t           deepest_file_id = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    const auto     created = service->Write<void>([&](FileSystem& fs) {
+      sl_element_id_t parent_id   = 0;
+      std::wstring    parent_path = L"";
+      for (int level = 1; level <= kDepth; ++level) {
+        for (int sibling = 0; sibling < kSiblingsPerLevel; ++sibling) {
+          const auto name = L"Sibling " + std::to_wstring(level) + L"." + std::to_wstring(sibling);
+          fs.CreateFolderIn(parent_id, name);
+          folder_paths.push_back(parent_path + L"/" + name);
+        }
+        const auto name = L"Level " + std::to_wstring(level);
+        parent_id       = fs.CreateFolderIn(parent_id, name)->element_id_;
+        parent_path += L"/" + name;
+        folder_paths.push_back(parent_path);
+      }
+      deepest_file_id = fs.Create(parent_path, L"Deep.ARW", ElementType::FILE)->element_id_;
+    });
+    ASSERT_TRUE(created.success_) << created.message_;
+    project.SaveProject(meta_path_);
+  }
+  ASSERT_EQ(folder_paths.size(), 2'000u);
+
+  ProjectService reopened(db_path_, meta_path_);
+  auto           service = reopened.GetSleeveService();
+  const auto [in_memory, dirty, file_loaded] =
+      service->Read<std::tuple<std::size_t, std::size_t, bool>>([&](FileSystem& fs) {
+        return std::tuple{fs.Nodes().Size(), fs.Nodes().DirtyCount(),
+                          fs.Nodes().Contains(deepest_file_id)};
+      });
+  EXPECT_EQ(in_memory, 2'001u) << "the root and the 2,000 folders, and no file";
+  EXPECT_EQ(dirty, 0u) << "the load marks no folder modified";
+  EXPECT_FALSE(file_loaded);
+
+  // Each element read joins Element: an element read throws, and a file entry load writes a
+  // "did not load" warning. (FolderContent has indexes, so DuckDB refuses to rename it.)
+  ExecuteOnProjectDatabase(reopened, "ALTER TABLE Element RENAME TO ElementAside");
+  std::size_t                  resolved = 0;
+  std::vector<AlbumFolderView> tree;
+  std::vector<std::string>     load_warnings;
+  {
+    WarningCapture warnings;
+    for (const auto& path : folder_paths) {
+      EXPECT_NO_THROW({
+        const auto folder = service->ResolveFolder(path);
+        EXPECT_EQ(folder->element_name_, std::filesystem::path(path).filename().wstring());
+        ++resolved;
+      }) << conv::ToBytes(path);
+    }
+    tree          = reopened.GetAlbumBrowseService()->ListFolderTree();
+    load_warnings = warnings.Containing("did not load");
+  }
+  ExecuteOnProjectDatabase(reopened, "ALTER TABLE ElementAside RENAME TO Element");
+
+  EXPECT_EQ(resolved, folder_paths.size());
+  EXPECT_TRUE(load_warnings.empty()) << load_warnings.front();
+  auto listed   = TreePaths(tree);
+  auto expected = folder_paths;
+  ASSERT_EQ(listed.size(), expected.size());
+  // A parent is listed before each of its children.
+  std::set<std::wstring> seen{L"/"};
+  for (const auto& path : listed) {
+    EXPECT_TRUE(seen.contains(std::filesystem::path(path).parent_path().generic_wstring()))
+        << conv::ToBytes(path);
+    seen.insert(path);
+  }
+  std::sort(listed.begin(), listed.end());
+  std::sort(expected.begin(), expected.end());
+  EXPECT_EQ(listed, expected);
+}
+
+// Sleeve Node Cache Plan SN3: a folder with two parents (copy-on-write sharing) is a child of
+// both after the open, and the load keeps its stored reference count.
+TEST_F(SleeveServiceTests, FolderWithTwoParentsAppearsUnderBoth) {
+  sl_element_id_t shared_id = 0;
+  sl_element_id_t inner_id  = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    const auto     created = service->Write<void>([&](FileSystem& fs) {
+      const auto a = fs.CreateFolderIn(0, L"A");
+      fs.CreateFolderIn(0, L"B");
+      shared_id = fs.CreateFolderIn(a->element_id_, L"Shared")->element_id_;
+      inner_id  = fs.CreateFolderIn(shared_id, L"Inner")->element_id_;
+      fs.Copy(L"/A/Shared", L"/B");
+    });
+    ASSERT_TRUE(created.success_) << created.message_;
+    // The stored reference count of a folder with two parents.
+    ExecuteOnProjectDatabase(
+        project, "UPDATE Element SET ref_count = 2 WHERE id = " + std::to_string(shared_id));
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService reopened(db_path_, meta_path_);
+  const auto     tree = reopened.GetAlbumBrowseService()->ListFolderTree();
+  EXPECT_EQ(TreePaths(tree), (std::vector<std::wstring>{L"/A", L"/A/Shared", L"/A/Shared/Inner",
+                                                        L"/B", L"/B/Shared", L"/B/Shared/Inner"}));
+  EXPECT_EQ(TreeFolderId(tree, L"/A/Shared"), shared_id);
+  EXPECT_EQ(TreeFolderId(tree, L"/B/Shared"), shared_id);
+  EXPECT_EQ(TreeFolderId(tree, L"/B/Shared/Inner"), inner_id);
+
+  auto service = reopened.GetSleeveService();
+  EXPECT_EQ(service->ResolveFolder(L"/B/Shared")->element_id_, shared_id);
+  EXPECT_EQ(service->ResolveFolder(L"/A/Shared")->ref_count_, 2u);
+  EXPECT_EQ(service->ResolveFolder(L"/A/Shared/Inner")->ref_count_, 1u);
+  EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().DirtyCount(); }), 0u);
+}
+
+// Sleeve Node Cache Plan SN3: the first write below a shared folder after the open copies it
+// with every entry, also the file entries that were not loaded yet.
+TEST_F(SleeveServiceTests, CopyOnWriteOfSharedFolderAfterOpenKeepsItsFiles) {
+  sl_element_id_t shared_id = 0;
+  sl_element_id_t file_id   = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    const auto     created = service->Write<void>([&](FileSystem& fs) {
+      const auto a = fs.CreateFolderIn(0, L"A");
+      fs.CreateFolderIn(0, L"B");
+      shared_id = fs.CreateFolderIn(a->element_id_, L"Shared")->element_id_;
+      fs.CreateFolderIn(shared_id, L"Inner");
+      file_id = fs.Create(L"/A/Shared", L"Photo.ARW", ElementType::FILE)->element_id_;
+      fs.Copy(L"/A/Shared", L"/B");
+    });
+    ASSERT_TRUE(created.success_) << created.message_;
+    ExecuteOnProjectDatabase(
+        project, "UPDATE Element SET ref_count = 2 WHERE id = " + std::to_string(shared_id));
+    project.SaveProject(meta_path_);
+  }
+
+  {
+    ProjectService reopened(db_path_, meta_path_);
+    auto           service = reopened.GetSleeveService();
+    ASSERT_FALSE(
+        service->Read<bool>([file_id](FileSystem& fs) { return fs.Nodes().Contains(file_id); }));
+    const auto sync = service->CreateFolder(L"/B/Shared", L"New").second;
+    ASSERT_TRUE(sync.success_) << sync.message_;
+    reopened.SaveProject(meta_path_);
+  }
+
+  ProjectService reopened(db_path_, meta_path_);
+  auto           service = reopened.GetSleeveService();
+  const auto     copy_id = service->ResolveFolder(L"/B/Shared")->element_id_;
+  EXPECT_NE(copy_id, shared_id) << "the write below /B/Shared copied the shared folder";
+  EXPECT_EQ(service->ResolveFolder(L"/A/Shared")->element_id_, shared_id);
+
+  const auto entry_names = [&](const std::filesystem::path& path) {
+    std::vector<std::wstring> names;
+    for (const auto& entry : service->ListFolderEntries(path)) {
+      names.push_back(entry->element_name_);
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+  };
+  EXPECT_EQ(entry_names(L"/B/Shared"), (std::vector<std::wstring>{L"Inner", L"New", L"Photo.ARW"}));
+  EXPECT_EQ(entry_names(L"/A/Shared"), (std::vector<std::wstring>{L"Inner", L"Photo.ARW"}));
+  EXPECT_EQ(service->ResolveFile(L"/B/Shared/Photo.ARW")->element_id_, file_id);
+}
+
+// Sleeve Node Cache Plan SN3: a stored folder link that closes a cycle is skipped at the open
+// with one warning that names both folders; the other links load.
+TEST_F(SleeveServiceTests, FolderEdgeCycleIsSkippedWithWarning) {
+  sl_element_id_t a_id = 0;
+  sl_element_id_t b_id = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    const auto     created = service->Write<void>([&](FileSystem& fs) {
+      a_id = fs.CreateFolderIn(0, L"A")->element_id_;
+      b_id = fs.CreateFolderIn(a_id, L"B")->element_id_;
+    });
+    ASSERT_TRUE(created.success_) << created.message_;
+    ExecuteOnProjectDatabase(project, "INSERT INTO FolderContent VALUES (" + std::to_string(b_id) +
+                                          ", " + std::to_string(a_id) + ")");
+    project.SaveProject(meta_path_);
+  }
+
+  WarningCapture warnings;
+  ProjectService reopened(db_path_, meta_path_);
+  const auto     cycle_link     = std::to_string(b_id) + " -> " + std::to_string(a_id);
+  const auto     cycle_warnings = warnings.Containing("closes a cycle");
+  ASSERT_EQ(cycle_warnings.size(), 1u);
+  EXPECT_NE(cycle_warnings.front().find(cycle_link), std::string::npos) << cycle_warnings.front();
+
+  const auto tree = reopened.GetAlbumBrowseService()->ListFolderTree();
+  EXPECT_EQ(TreePaths(tree), (std::vector<std::wstring>{L"/A", L"/A/B"}));
+  auto service = reopened.GetSleeveService();
+  EXPECT_EQ(service->ResolveFolder(L"/A/B")->element_id_, b_id);
+  EXPECT_THROW((void)service->ResolveFolder(L"/A/B/A"), std::runtime_error);
+  EXPECT_TRUE(warnings.Containing("its own ancestor").empty())
+      << "the resident tree has no cycle after the load";
 }
 
 }  // namespace alcedo

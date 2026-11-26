@@ -55,6 +55,8 @@ auto FileSystem::InitRoot() -> bool {
   root_ = std::static_pointer_cast<SleeveFolder>(root);
   if (root_->SyncState() == SyncFlag::UNSYNC) {
     root_->MarkChildrenLoaded();
+  } else {
+    storage_handler_.LoadFolderTree();
   }
   resolver_.SetRoot(root_);
   return true;
@@ -450,10 +452,6 @@ void FileSystem::ReleaseChildFolders(const std::shared_ptr<SleeveFolder>& folder
   }
 }
 
-auto FileSystem::ListChildFolders(const std::filesystem::path& folder_path)
-    -> std::vector<std::shared_ptr<SleeveFolder>> {
-  return storage_handler_.ChildFolders(*resolver_.ResolveFolder(folder_path));
-}
 auto FileSystem::LiveFolder(sl_element_id_t folder_id) -> std::shared_ptr<SleeveFolder> {
   auto element = Get(folder_id);
   if (!element || element->type_ != ElementType::FOLDER || !element->IsLive()) {

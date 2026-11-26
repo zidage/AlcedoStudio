@@ -80,9 +80,13 @@ auto PathResolver::Resolve(const std::filesystem::path& path) -> std::shared_ptr
     }
 
     std::shared_ptr<SleeveFolder> folder = std::static_pointer_cast<SleeveFolder>(current);
-    storage_handler_.EnsureChildrenLoaded(folder);
-
+    // The child folders are resident. Only a name that no child folder holds can be a file, and
+    // only then do the file entries of the folder load.
     auto next_id = folder->GetElementIdByName(part.wstring());
+    if (!next_id.has_value() && !folder->ChildrenLoaded()) {
+      storage_handler_.EnsureChildrenLoaded(folder);
+      next_id = folder->GetElementIdByName(part.wstring());
+    }
     if (!next_id.has_value()) {
       throw std::runtime_error("Path Resolver: Illegal path. Target does not exist");
     }
@@ -93,10 +97,6 @@ auto PathResolver::Resolve(const std::filesystem::path& path) -> std::shared_ptr
     }
   }
   directory_cache_.RecordAccess(path.wstring(), current->element_id_);
-
-  if (current->type_ == ElementType::FOLDER) {
-    storage_handler_.EnsureChildrenLoaded(std::static_pointer_cast<SleeveFolder>(current));
-  }
   return current;
 }
 
@@ -108,14 +108,13 @@ auto PathResolver::ResolveFolder(const std::filesystem::path& path)
     if (name.empty() || name == L".") {
       continue;
     }
-    const auto children = storage_handler_.ChildFolders(*current);
-    const auto next = std::find_if(children.begin(), children.end(), [&name](const auto& child) {
-      return child->element_name_ == name;
-    });
-    if (next == children.end()) {
+    const auto next_id = current->GetElementIdByName(name);
+    const auto next    = next_id.has_value() ? storage_handler_.GetElement(next_id.value())
+                                             : std::shared_ptr<SleeveElement>{};
+    if (!next || next->type_ != ElementType::FOLDER || !next->IsLive()) {
       throw std::runtime_error("Path Resolver: Illegal path. Target folder does not exist");
     }
-    current = *next;
+    current = std::static_pointer_cast<SleeveFolder>(next);
   }
   return current;
 }
@@ -154,6 +153,11 @@ auto PathResolver::ResolveForWrite(const std::filesystem::path& path)
   if (current->type_ == ElementType::FOLDER && current->IsShared()) {
     current = CoWHandler(current, std::static_pointer_cast<SleeveFolder>(current_parent));
   }
+  // A write checks names against all entries of the folder it changes. The file entries stay in
+  // the name map of a folder until SN4, so the target folder loads them here.
+  if (current->type_ == ElementType::FOLDER) {
+    storage_handler_.EnsureChildrenLoaded(std::static_pointer_cast<SleeveFolder>(current));
+  }
   current->MarkModified();
   // directory_cache_.RecordAccess(path.wstring(), current->element_id_);
   return current;
@@ -163,13 +167,17 @@ auto PathResolver::CoWHandler(const std::shared_ptr<SleeveElement>& to_copy,
                               const std::shared_ptr<SleeveFolder>&  parent_folder)
     -> std::shared_ptr<SleeveElement> {
   auto old_id = to_copy->element_id_;
+  // The copy is a new element with no stored entries, so it takes all entries of the source:
+  // the source loads its file entries before the copy.
+  if (to_copy->type_ == ElementType::FOLDER) {
+    storage_handler_.EnsureChildrenLoaded(std::static_pointer_cast<SleeveFolder>(to_copy));
+  }
   to_copy->DecrementRefCount();
   auto copied = to_copy->Copy(id_gen_.GenerateID());
   // Increment every child's ref count
   if (copied->type_ == ElementType::FOLDER) {
-    auto copied_folder = std::static_pointer_cast<SleeveFolder>(copied);
-    storage_handler_.EnsureChildrenLoaded(copied_folder);
-    auto& contents = copied_folder->ListElements();
+    auto  copied_folder = std::static_pointer_cast<SleeveFolder>(copied);
+    auto& contents      = copied_folder->ListElements();
     for (auto& e : contents) {
       auto element = storage_handler_.GetElement(e);
       if (element && element->type_ == ElementType::FOLDER) {
