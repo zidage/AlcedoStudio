@@ -4,21 +4,27 @@
 #ifndef ALCEDO_DNG_PROFILE_GPU_MATH_H
 #define ALCEDO_DNG_PROFILE_GPU_MATH_H
 
-// One implementation for the host reference, CUDA, OpenCL C and Metal.
+// One implementation for the host reference, CUDA, OpenCL C, Metal, and Slang (the Vulkan
+// kernels).
 // The sRGB value axis comes from color/color_encoding_math.h. OpenCL programs list it before this
 // file; Metal shaders include it first.
 #if !defined(__OPENCL_VERSION__) && !defined(__OPENCL_C_VERSION__) && !defined(__METAL_VERSION__)
 #include "color/color_encoding_math.h"
 #endif
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
-#define DNG_GLOBAL __global
-#define DNG_INLINE static inline
+#define DNG_CONST_FLOAT_PTR __global const float*
+#define DNG_INLINE          static inline
 #elif defined(__METAL_VERSION__)
-#define DNG_GLOBAL device
-#define DNG_INLINE static inline
+#define DNG_CONST_FLOAT_PTR device const float*
+#define DNG_INLINE          static inline
+#elif defined(__SLANG__)
+// Slang has no const pointee and no `unsigned` (the tables are read through a device address).
+#define DNG_CONST_FLOAT_PTR float*
+#define DNG_INLINE          static
+#define unsigned            uint
 #else
 #include <cmath>
-#define DNG_GLOBAL
+#define DNG_CONST_FLOAT_PTR const float*
 #ifdef __CUDACC__
 #define DNG_INLINE static __host__ __device__ inline
 #else
@@ -36,10 +42,10 @@ DNG_INLINE DngRgb DngMakeRgb(float r, float g, float b) {
   c.b = b;
   return c;
 }
-DNG_INLINE float DngMin(float a, float b) { return a < b ? a : b; }
-DNG_INLINE float DngMax(float a, float b) { return a > b ? a : b; }
+DNG_INLINE float  DngMin(float a, float b) { return a < b ? a : b; }
+DNG_INLINE float  DngMax(float a, float b) { return a > b ? a : b; }
 DNG_INLINE float  DngClamp(float x, float lo, float hi) { return DngMin(hi, DngMax(lo, x)); }
-DNG_INLINE DngRgb DngMatrixRgb(DngRgb c, DNG_GLOBAL const float* m) {
+DNG_INLINE DngRgb DngMatrixRgb(DngRgb c, DNG_CONST_FLOAT_PTR m) {
   return DngMakeRgb(m[0] * c.r + m[1] * c.g + m[2] * c.b, m[3] * c.r + m[4] * c.g + m[5] * c.b,
                     m[6] * c.r + m[7] * c.g + m[8] * c.b);
 }
@@ -48,7 +54,7 @@ DNG_INLINE DngRgb DngMatrixRgb(DngRgb c, DNG_GLOBAL const float* m) {
  * Lookup coordinates stop at the table boundary; positive scene headroom is retained.
  * Table layout: [value][hue][saturation][hue_degrees, saturation_scale, value_scale].
  */
-DNG_INLINE DngRgb DngApplyHueSatMap(DngRgb rgb, DNG_GLOBAL const float* data, unsigned descriptor) {
+DNG_INLINE DngRgb DngApplyHueSatMap(DngRgb rgb, DNG_CONST_FLOAT_PTR data, unsigned descriptor) {
   const unsigned offset = (unsigned)data[descriptor];
   if (offset == 0) return rgb;
   const unsigned hd = (unsigned)data[descriptor + 1], sd = (unsigned)data[descriptor + 2];
@@ -69,7 +75,7 @@ DNG_INLINE DngRgb DngApplyHueSatMap(DngRgb rgb, DNG_GLOBAL const float* data, un
       h = 4.0f + (rgb.r - rgb.g) / delta;
     if (h < 0.0f) h += 6.0f;
   }
-  const float    encoded_v = encoding ? CeSrgbEncode(v) : v;
+  const float    encoded_v = encoding != 0 ? CeSrgbEncode(v) : v;
   const float    hx = h * ((float)hd / 6.0f), sx = DngClamp(s, 0.0f, 1.0f) * (float)(sd - 1);
   const float    vx = DngClamp(encoded_v, 0.0f, 1.0f) * (float)(vd - 1);
   const unsigned h0 = (unsigned)hx % hd, h1 = (h0 + 1) % hd;
@@ -81,16 +87,18 @@ DNG_INLINE DngRgb DngApplyHueSatMap(DngRgb rgb, DNG_GLOBAL const float* data, un
   for (unsigned vi = 0; vi < 2; ++vi)
     for (unsigned hi = 0; hi < 2; ++hi)
       for (unsigned si = 0; si < 2; ++si) {
-        const float weight = (vi ? vw : 1.0f - vw) * (hi ? hw : 1.0f - hw) * (si ? sw : 1.0f - sw);
+        const float weight =
+            (vi != 0 ? vw : 1.0f - vw) * (hi != 0 ? hw : 1.0f - hw) * (si != 0 ? sw : 1.0f - sw);
         const unsigned at =
-            offset + (((vi ? v1 : v0) * hd + (hi ? h1 : h0)) * sd + (si ? s1 : s0)) * 3;
+            offset +
+            (((vi != 0 ? v1 : v0) * hd + (hi != 0 ? h1 : h0)) * sd + (si != 0 ? s1 : s0)) * 3;
         for (unsigned channel = 0; channel < 3; ++channel)
           correction[channel] += weight * data[at + channel];
       }
   h += correction[0] / 60.0f;
   h -= 6.0f * (float)floor(h / 6.0f);
-  s                     = DngClamp(s * correction[1], 0.0f, 1.0f);
-  v                     = encoding ? CeSrgbDecode(encoded_v * correction[2]) : v * correction[2];
+  s = DngClamp(s * correction[1], 0.0f, 1.0f);
+  v = encoding != 0 ? CeSrgbDecode(encoded_v * correction[2]) : v * correction[2];
   const unsigned sector = (unsigned)h;
   const float    f = h - (float)sector, p = v * (1.0f - s), q = v * (1.0f - s * f),
               t = v * (1.0f - s * (1.0f - f));
@@ -111,7 +119,7 @@ DNG_INLINE DngRgb DngApplyHueSatMap(DngRgb rgb, DNG_GLOBAL const float* data, un
 }
 
 /// AP1 -> linear ProPhoto D50 -> HueSatMap -> baseline exposure -> LookTable -> AP1.
-DNG_INLINE DngRgb DngApplyColorProfile(DngRgb ap1, DNG_GLOBAL const float* data) {
+DNG_INLINE DngRgb DngApplyColorProfile(DngRgb ap1, DNG_CONST_FLOAT_PTR data) {
   if (data[0] == 0.0f) return ap1;
   DngRgb c = DngMatrixRgb(ap1, data + 12);
   c        = DngApplyHueSatMap(c, data, 2);
@@ -121,6 +129,9 @@ DNG_INLINE DngRgb DngApplyColorProfile(DngRgb ap1, DNG_GLOBAL const float* data)
   c = DngApplyHueSatMap(c, data, 7);
   return DngMatrixRgb(c, data + 21);
 }
-#undef DNG_GLOBAL
+#undef DNG_CONST_FLOAT_PTR
 #undef DNG_INLINE
+#if defined(__SLANG__)
+#undef unsigned
+#endif
 #endif

@@ -4,7 +4,10 @@
 
 // The kernel group dng_warp: the DNG OpcodeList3 WarpRectilinear kernel warp_rectilinear_rgba32f
 // of opencl_shader/geometry_camera.cl (plan phase VK5), on RGBA32F storage images. The name, the
-// bindings, and the push constant layout are in include/vulkan/vulkan_dng_warp_kernels.hpp.
+// bindings, and the push constant layout are in include/vulkan/vulkan_dng_warp_kernels.hpp. The
+// bilinear sample is the one of geometry_sample.slangh (phase VK7).
+
+#include "geometry_sample.slangh"
 
 // WarpRectilinearPushConstants: 92 bytes, the OpenCL OpenClImageWarpParams with one array for
 // each coefficient set. A kernel selects a set with constant indices (plan section 4.2).
@@ -79,34 +82,6 @@ static float2 WarpRectilinearSource(int x, int y, int plane, WarpRectilinearPush
   return float2(cx + m * (dxr + dxt), cy + m * (dyr + dyt));
 }
 
-// The texel at (x, y), or the border outside the image.
-static float4 ReadBorder(int width, int height, int x, int y, float4 border) {
-  if (x < 0 || y < 0 || x >= width || y >= height) {
-    return border;
-  }
-  return source[uint2(uint(x), uint(y))];
-}
-
-// Bilinear sample at the position (sx, sy) of texel centers at half-integer coordinates (the
-// OpenCL BilinearSample of geometry_camera.cl).
-static float4 BilinearSample(int width, int height, float sx, float sy, float4 border) {
-  const float  px  = sx - 0.5f;
-  const float  py  = sy - 0.5f;
-  const int    x0  = int(floor(px));
-  const int    y0  = int(floor(py));
-  const float  fx  = px - float(x0);
-  const float  fy  = py - float(y0);
-  const float4 p00 = ReadBorder(width, height, x0, y0, border);
-  const float4 p10 = ReadBorder(width, height, x0 + 1, y0, border);
-  const float4 p01 = ReadBorder(width, height, x0, y0 + 1, border);
-  const float4 p11 = ReadBorder(width, height, x0 + 1, y0 + 1, border);
-  const float  w00 = (1.0f - fx) * (1.0f - fy);
-  const float  w10 = fx * (1.0f - fy);
-  const float  w01 = (1.0f - fx) * fy;
-  const float  w11 = fx * fy;
-  return p00 * w00 + p10 * w10 + p01 * w01 + p11 * w11;
-}
-
 // Each channel samples at the position of its plane; alpha samples at the green position.
 [shader("compute")]
 [numthreads(16, 16, 1)]
@@ -123,11 +98,12 @@ void warp_rectilinear_rgba32f(uint3 id: SV_DispatchThreadID,
   const float2 blue   = WarpRectilinearSource(x, y, 2, push);
   const int    width  = int(push.width);
   const int    height = int(push.height);
-  const float4 g      = BilinearSample(width, height, green.x + 0.5f, green.y + 0.5f, border);
+  const float4 g =
+      BilinearSample(source, width, height, green.x + 0.5f, green.y + 0.5f, border);
   float4       out_value;
-  out_value.x = BilinearSample(width, height, red.x + 0.5f, red.y + 0.5f, border).x;
+  out_value.x = BilinearSample(source, width, height, red.x + 0.5f, red.y + 0.5f, border).x;
   out_value.y = g.y;
-  out_value.z = BilinearSample(width, height, blue.x + 0.5f, blue.y + 0.5f, border).z;
+  out_value.z = BilinearSample(source, width, height, blue.x + 0.5f, blue.y + 0.5f, border).z;
   out_value.w = g.w;
   destination[id.xy] = out_value;
 }

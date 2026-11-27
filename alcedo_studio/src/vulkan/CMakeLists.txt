@@ -81,6 +81,22 @@ alcedo_add_slang_kernels(AlcedoVulkanKernels
     INCLUDE_DIRS "${ALCEDO_SRC_ROOT}"
 )
 
+# Phase VK7: the geometry resample and the camera color (OpenCL program
+# opencl_dag_geometry_camera), and the raster input kernels (opencl_dag_display_to_ap1). They
+# include the shared color headers under src/include.
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP geometry_camera
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/geometry_camera.slang"
+    KERNELS geometry_resample_rgba32f camera_color_acescc
+    INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
+)
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP display_to_ap1
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/display_to_ap1.slang"
+    KERNELS linearize_raster_rgba display_to_ap1_acescc display_to_ap0_linear
+    INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
+)
+
 set(_alcedo_vulkan_context_sources
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_api_counters.cpp"
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_compute_pipeline_cache.cpp"

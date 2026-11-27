@@ -412,9 +412,12 @@ if(ALCEDO_VULKAN_ENABLED)
         SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/lens/vulkan/vulkan_lens_calib.cpp
         PUBLIC_DEPS EditRuntimeVulkan EditRuntimeLens
     )
-    # The pass encoders of the Vulkan backend (#1036): the Develop pass from phase VK6.
+    # The pass encoders of the Vulkan backend (#1036): the Develop pass from phase VK6; the
+    # geometry resample, the camera color, and the raster input passes from phase VK7.
     def_library(EditRuntimeVulkanPasses
         SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_develop_pass.cpp
+                ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_display_to_ap1_pass.cpp
+                ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_geometry_camera_pass.cpp
         PUBLIC_DEPS EditRuntimeVulkan EditInput
         PRIVATE_DEPS RawProcessorOpVulkan EditRuntimeLensVulkan EditRuntimeLens PreviewPerformance
     )

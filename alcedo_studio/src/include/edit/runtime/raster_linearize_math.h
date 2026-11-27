@@ -5,8 +5,8 @@
 #define ALCEDO_RASTER_LINEARIZE_MATH_H
 
 // Raster input linearization (LinearizeRaster, raster_image_input_plan.md section 6.2), shared by
-// the host reference, CUDA, OpenCL C and Metal. Code values become display-linear light in the
-// source primaries with 1.0 = 100 nits; scene-linear input passes through.
+// the host reference, CUDA, OpenCL C, Metal, and Slang. Code values become display-linear light in
+// the source primaries with 1.0 = 100 nits; scene-linear input passes through.
 //
 // The host packs the parameters into one float buffer (raster_linearize_params.cpp):
 //   header (ALCEDO_RL_HEADER_SIZE floats), then the 4096-entry sampled curves it references.
@@ -18,18 +18,25 @@
 #endif
 
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
-#define RL_GLOBAL __global
-#define RL_INLINE static inline
-#define RL_POW    pow
-#define RL_FLOOR  floor
+#define RL_CONST_FLOAT_PTR __global const float*
+#define RL_INLINE          static inline
+#define RL_POW             pow
+#define RL_FLOOR           floor
 #elif defined(__METAL_VERSION__)
-#define RL_GLOBAL device
-#define RL_INLINE static inline
-#define RL_POW    pow
-#define RL_FLOOR  floor
+#define RL_CONST_FLOAT_PTR device const float*
+#define RL_INLINE          static inline
+#define RL_POW             pow
+#define RL_FLOOR           floor
+#elif defined(__SLANG__)
+// Slang: no const pointee; the math.slangh pow (included by color_encoding_math.h), because the
+// GLSL.std.450 pow is less precise than the OpenCL pow (plan #1036, phase VK3 record).
+#define RL_CONST_FLOAT_PTR float*
+#define RL_INLINE          static
+#define RL_POW             AlcedoPow
+#define RL_FLOOR           floor
 #else
 #include <cmath>
-#define RL_GLOBAL
+#define RL_CONST_FLOAT_PTR const float*
 #ifdef __CUDACC__
 #define RL_INLINE static __host__ __device__ inline
 #else
@@ -84,7 +91,7 @@ RL_INLINE float RlPow0(float base, float exponent) {
 /// HLG inverse OETF of a signal clamped to [0, 1].
 RL_INLINE float RlHlgInverseOetf(float v) { return CeHlgDecode(RlMin(v, 1.0f)); }
 
-RL_INLINE float RlIccParametric(float x, RL_GLOBAL const float* c) {
+RL_INLINE float RlIccParametric(float x, RL_CONST_FLOAT_PTR c) {
   const float g = c[3], a = c[4], b = c[5], cc = c[6], d = c[7], e = c[8], f = c[9];
   switch ((int)c[2]) {
     case 0:
@@ -102,18 +109,18 @@ RL_INLINE float RlIccParametric(float x, RL_GLOBAL const float* c) {
   }
 }
 
-RL_INLINE float RlSampled(float x, RL_GLOBAL const float* p, RL_GLOBAL const float* c) {
-  RL_GLOBAL const float* table = p + (int)c[10];
-  const float position = RlMin(RlMax(x, 0.0f), 1.0f) * (float)(ALCEDO_RL_SAMPLED_ENTRIES - 1);
-  const int   lower    = (int)RL_FLOOR(position);
-  const int   upper    = lower + 1 < ALCEDO_RL_SAMPLED_ENTRIES ? lower + 1 : lower;
-  const float t        = position - (float)lower;
+RL_INLINE float RlSampled(float x, RL_CONST_FLOAT_PTR p, RL_CONST_FLOAT_PTR c) {
+  RL_CONST_FLOAT_PTR table = p + (int)c[10];
+  const float position     = RlMin(RlMax(x, 0.0f), 1.0f) * (float)(ALCEDO_RL_SAMPLED_ENTRIES - 1);
+  const int   lower        = (int)RL_FLOOR(position);
+  const int   upper        = lower + 1 < ALCEDO_RL_SAMPLED_ENTRIES ? lower + 1 : lower;
+  const float t            = position - (float)lower;
   return table[lower] * (1.0f - t) + table[upper] * t;
 }
 
 /// Linear light of one channel, relative to the curve's own maximum.
-RL_INLINE float RlEvaluateChannel(float x, RL_GLOBAL const float* p, int channel) {
-  RL_GLOBAL const float* c = p + ALCEDO_RL_CHANNELS + channel * ALCEDO_RL_CHANNEL_STRIDE;
+RL_INLINE float RlEvaluateChannel(float x, RL_CONST_FLOAT_PTR p, int channel) {
+  RL_CONST_FLOAT_PTR c = p + ALCEDO_RL_CHANNELS + channel * ALCEDO_RL_CHANNEL_STRIDE;
   switch ((int)c[0]) {
     case ALCEDO_RL_LINEAR:
       return x;
@@ -142,7 +149,7 @@ RL_INLINE float RlEvaluateChannel(float x, RL_GLOBAL const float* p, int channel
  * Linearize one pixel. @p r, @p g, @p b are stored code values (integer codes as floats, or
  * float samples); the result is display-linear (1.0 = 100 nits) or scene-linear source RGB.
  */
-RL_INLINE RlRgb RlLinearize(float r, float g, float b, RL_GLOBAL const float* p) {
+RL_INLINE RlRgb RlLinearize(float r, float g, float b, RL_CONST_FLOAT_PTR p) {
   const float in_scale = p[ALCEDO_RL_INPUT_SCALE];
   r *= in_scale;
   g *= in_scale;
@@ -163,7 +170,7 @@ RL_INLINE RlRgb RlLinearize(float r, float g, float b, RL_GLOBAL const float* p)
                    RlEvaluateChannel(RlMax(b, 0.0f), p, 2) * out_scale);
 }
 
-#undef RL_GLOBAL
+#undef RL_CONST_FLOAT_PTR
 #undef RL_INLINE
 #undef RL_POW
 #undef RL_FLOOR

@@ -5,8 +5,8 @@
 #define ALCEDO_DISPLAY_TO_AP1_MATH_H
 
 // Raster input color conversion to the ACEScc AP1 working space, shared by the host reference,
-// CUDA, OpenCL C and Metal (docs/roadmap/alcedo_studio/edit/raster_image_input_plan.md, 5.3 and
-// 5.5).
+// CUDA, OpenCL C, Metal, and Slang (docs/roadmap/alcedo_studio/edit/raster_image_input_plan.md,
+// 5.3 and 5.5).
 //
 // Display-referred branch: the OpenColorIO 2.5.1 ACES 2.0 output transform inverse of
 // aces2_reference_math.h. Scene-linear branch: one 3x3 matrix and the ACES 1.3 reference gamut
@@ -25,16 +25,21 @@
 #endif
 
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
-#define D2A_GLOBAL __global
-#define D2A_INLINE static inline
-#define D2A_POW    pow
+#define D2A_CONST_FLOAT_PTR __global const float*
+#define D2A_INLINE          static inline
+#define D2A_POW             pow
 #elif defined(__METAL_VERSION__)
-#define D2A_GLOBAL device
-#define D2A_INLINE static inline
-#define D2A_POW    pow
+#define D2A_CONST_FLOAT_PTR device const float*
+#define D2A_INLINE          static inline
+#define D2A_POW             pow
+#elif defined(__SLANG__)
+// Slang: no const pointee; the math.slangh pow (included by aces2_reference_math.h).
+#define D2A_CONST_FLOAT_PTR float*
+#define D2A_INLINE          static
+#define D2A_POW             AlcedoPow
 #else
 #include <cmath>
-#define D2A_GLOBAL
+#define D2A_CONST_FLOAT_PTR const float*
 #ifdef __CUDACC__
 #define D2A_INLINE static __host__ __device__ inline
 #else
@@ -102,7 +107,7 @@ D2A_INLINE A2rFloat3 D2aReferenceGamutCompress(A2rFloat3 c) {
  * [0, forward limit]. Scene-linear input goes through the source-to-AP1 matrix and the ACES 1.3
  * reference gamut compression.
  */
-D2A_INLINE A2rFloat3 D2aSourceToAcesccAp1(A2rFloat3 source_rgb, D2A_GLOBAL const float* p) {
+D2A_INLINE A2rFloat3 D2aSourceToAcesccAp1(A2rFloat3 source_rgb, D2A_CONST_FLOAT_PTR p) {
   A2rFloat3 ap1;
   if (p[ALCEDO_D2A_BRANCH] != 0.0f) {
     ap1 = D2aReferenceGamutCompress(A2rMul(p + ALCEDO_D2A_SOURCE_TO_TARGET, source_rgb));
@@ -116,7 +121,7 @@ D2A_INLINE A2rFloat3 D2aSourceToAcesccAp1(A2rFloat3 source_rgb, D2A_GLOBAL const
   return A2rMake3(CeAcesccEncode(ap1.x), CeAcesccEncode(ap1.y), CeAcesccEncode(ap1.z));
 }
 
-#undef D2A_GLOBAL
+#undef D2A_CONST_FLOAT_PTR
 #undef D2A_INLINE
 #undef D2A_POW
 #endif

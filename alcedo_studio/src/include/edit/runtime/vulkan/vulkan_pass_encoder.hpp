@@ -8,6 +8,8 @@
 
 #include "edit/runtime/pass_encoder.hpp"
 #include "edit/runtime/vulkan/vulkan_develop_pass.hpp"
+#include "edit/runtime/vulkan/vulkan_display_to_ap1_pass.hpp"
+#include "edit/runtime/vulkan/vulkan_geometry_camera_pass.hpp"
 
 namespace alcedo {
 
@@ -27,6 +29,30 @@ struct PassEncoder<VulkanBackend, GpuPassKind::UploadRgb> {
   static void Encode(VulkanRenderDevice& device, const ExecutionPlan& plan,
                      const PreparedRawInput& input, const PipelineDocument& document) {
     ExecuteVulkanDevelop(device, plan, input, document);
+  }
+};
+
+template <>
+struct PassEncoder<VulkanBackend, GpuPassKind::GeometryResample> {
+  static void Encode(VulkanRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument&) {
+    ExecuteVulkanGeometryResample(device, plan);
+  }
+};
+
+template <>
+struct PassEncoder<VulkanBackend, GpuPassKind::CameraToAp1> {
+  static void Encode(VulkanRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document) {
+    ExecuteVulkanCameraColor(device, plan, document);
+  }
+};
+
+template <>
+struct PassEncoder<VulkanBackend, GpuPassKind::DisplayToAp1> {
+  static void Encode(VulkanRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput& input, const PipelineDocument& document) {
+    ExecuteVulkanDisplayToAp1(device, plan, input, document);
   }
 };
 
