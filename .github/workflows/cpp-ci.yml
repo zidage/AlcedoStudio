@@ -7,6 +7,26 @@ on:
   schedule:
     - cron: "23 19 * * 2,5"
   workflow_dispatch:
+    # The inputs of the file management fuzz (#1193). The schedule runs it with the defaults.
+    inputs:
+      seed:
+        description: "File management fuzz: the seed (empty: a random 64-bit seed)"
+        required: false
+        default: ""
+      steps:
+        description: "File management fuzz: the most steps of each phase"
+        required: false
+        default: "2000"
+      mode:
+        description: "File management fuzz: all (watcher-off, watcher-on, volumes), or one phase"
+        type: choice
+        required: false
+        default: all
+        options: [all, watcher-off, watcher-on, concurrent, volumes]
+      inject_failure:
+        description: "File management fuzz, test only: the first operation of this kind fails"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -175,6 +195,7 @@ jobs:
             -DALCEDO_FILM_PRINT_RESOURCE_DIR="${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
 
       - name: Build CI targets
+        id: build
         run: cmake --build --preset macos_arm_metal_ci --parallel 4
 
       - name: Record test start time
@@ -183,6 +204,38 @@ jobs:
 
       - name: Test
         run: ctest --preset macos_arm_metal_ci --output-on-failure
+
+      # The file management fuzz (#1188, #1193): 20 minutes over the watcher-off and watcher-on
+      # modes and one hdiutil volume sequence, with the build tree of this job. Only the
+      # schedule and workflow_dispatch run it; pull requests and pushes do not. The step summary
+      # has the seed and the replay commands.
+      - name: File management fuzz
+        id: file_fuzz
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        timeout-minutes: 50
+        env:
+          FUZZ_SEED: ${{ inputs.seed }}
+          FUZZ_STEPS: ${{ inputs.steps }}
+          FUZZ_MODE: ${{ inputs.mode }}
+          FUZZ_INJECT_FAILURE: ${{ inputs.inject_failure }}
+        run: bash scripts/file_fuzz/ci_run.sh build/macos-arm-metal-ci
+
+      - name: Upload file management fuzz failure
+        if: ${{ failure() && steps.file_fuzz.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: file-fuzz-failure
+          path: |
+            build/macos-arm-metal-ci/file-fuzz/*/ops.jsonl
+            build/macos-arm-metal-ci/file-fuzz/*/steps.jsonl
+            build/macos-arm-metal-ci/file-fuzz/*/summary.json
+            build/macos-arm-metal-ci/file-fuzz/*/failure.json
+            build/macos-arm-metal-ci/file-fuzz/*/logs/
+            build/macos-arm-metal-ci/file-fuzz/*/project/
+            build/macos-arm-metal-ci/file-fuzz/*/shrink/shrunk.jsonl
+            build/macos-arm-metal-ci/file-fuzz/*/confirm/failure.json
+            build/macos-arm-metal-ci/file-fuzz/*/confirm/logs/
+          if-no-files-found: ignore
 
       # Storage concurrent access (#809) with ThreadSanitizer on the first-party code. The tree
       # builds only the test target and its libraries. The steps do not use the CI build tree,
