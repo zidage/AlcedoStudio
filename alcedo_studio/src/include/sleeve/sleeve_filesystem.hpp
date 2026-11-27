@@ -183,13 +183,13 @@ class FileSystem {
   auto ListMountFileLinks(mount_id_t mount_id, std::span<const sl_element_id_t> folder_ids)
       -> std::vector<FileLink>;
   /**
-   * @brief The live child folders of the folder at @p folder_path, in the order of its entries.
-   *        Reads memory only: all folders are resident (Sleeve Node Cache Plan, SN3).
+   * @brief The live child folders of the folder at @p folder_path as entries at
+   *        @p folder_path / name, in the order of its entries. Reads memory only: all folders
+   *        are resident (Sleeve Node Cache Plan, SN3).
    * @throws std::runtime_error when @p folder_path names no live folder.
    */
-  auto ListChildFolders(const std::filesystem::path& folder_path)
-      -> std::vector<std::shared_ptr<SleeveFolder>> {
-    return storage_handler_.ChildFolders(*resolver_.ResolveFolder(folder_path));
+  auto ListChildFolders(const std::filesystem::path& folder_path) -> std::vector<FolderTreeEntry> {
+    return storage_handler_.ChildFolderEntries(*resolver_.ResolveFolder(folder_path), folder_path);
   }
   /// Every live folder below the root at each of its paths, parents before children. Reads
   /// memory only (see NodeStorageHandler::FolderTree).

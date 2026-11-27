@@ -611,7 +611,9 @@ Implemented behavior:
   - NodeStorageHandler::ChildFolders reads memory only (folder entries and NodeCache::Find).
     NodeStorageHandler::FolderTree(root): every live folder at each of its paths, parents before
     children, in the order of the folder entries; a folder with two parents is listed under
-    each. FolderTreeEntry{path_, folder_} is the entry type.
+    each. FolderTreeEntry{path_, folder_} is the entry type. Since #1178 the entry holds
+    values that the read copies under fs_lock_ (path_, folder_id_, name_, mount_id_), and
+    ListChildFolders returns the same type.
   - PathResolver::Resolve reads the folder entries for each part; only a part that names no
     child folder loads the file entries of its folder. The result folder no longer loads its
     file entries. PathResolver::ResolveFolder reads memory only.

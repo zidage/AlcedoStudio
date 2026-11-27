@@ -542,13 +542,12 @@ auto MeasureElementBytes(const std::vector<FolderTreeEntry>& tree,
   folder_by_path[std::filesystem::path(L"/")] = root;
   std::size_t folders                         = 1;
   for (const auto& entry : tree) {
-    if (entry.folder_ == nullptr || folder_by_path.contains(entry.path_)) {
+    if (folder_by_path.contains(entry.path_)) {
       continue;
     }
     auto parent_it = folder_by_path.find(entry.path_.parent_path());
     auto parent    = parent_it == folder_by_path.end() ? root : parent_it->second;
-    auto folder    = std::static_pointer_cast<SleeveFolder>(
-        make(ElementType::FOLDER, entry.folder_->element_name_));
+    auto folder    = std::static_pointer_cast<SleeveFolder>(make(ElementType::FOLDER, entry.name_));
     if (parent->Contains(folder->element_name_)) {
       continue;
     }

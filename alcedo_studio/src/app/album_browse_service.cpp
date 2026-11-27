@@ -29,6 +29,15 @@ auto BuildFolderView(const std::filesystem::path&         parent_path,
   return out;
 }
 
+auto BuildFolderView(const FolderTreeEntry& entry) -> AlbumFolderView {
+  AlbumFolderView out;
+  out.folder_id_   = entry.folder_id_;
+  out.folder_name_ = entry.name_;
+  out.folder_path_ = entry.path_;
+  out.mount_id_    = entry.mount_id_;
+  return out;
+}
+
 auto BuildFileView(const std::filesystem::path&       parent_path,
                    const std::shared_ptr<SleeveFile>& file, sl_element_id_t folder_id)
     -> AlbumFileView {
@@ -104,8 +113,8 @@ auto AlbumBrowseService::ListFolders(const std::filesystem::path& folder_path) c
   try {
     const auto child_folders = sleeve_service_->ListChildFolders(folder_path);
     folders.reserve(child_folders.size());
-    for (const auto& folder : child_folders) {
-      folders.push_back(BuildFolderView(folder_path, folder));
+    for (const auto& entry : child_folders) {
+      folders.push_back(BuildFolderView(entry));
     }
   } catch (const std::exception& e) {
     ALCEDO_LOG_WARN(Library) << "AlbumBrowseService: the folders of "
@@ -127,7 +136,7 @@ auto AlbumBrowseService::ListFolderTree() const -> std::vector<AlbumFolderView> 
     const auto tree = sleeve_service_->ListFolderTree();
     folders.reserve(tree.size());
     for (const auto& entry : tree) {
-      folders.push_back(BuildFolderView(entry.path_.parent_path(), entry.folder_));
+      folders.push_back(BuildFolderView(entry));
     }
   } catch (const std::exception& e) {
     ALCEDO_LOG_WARN(Library) << "AlbumBrowseService: the folder tree did not list: " << e.what();
