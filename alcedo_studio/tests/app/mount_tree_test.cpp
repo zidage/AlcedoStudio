@@ -207,7 +207,9 @@ TEST_F(MountTreeTest, AppliedChangesAddPlaceAndRemoveFoldersAndSurviveReopen) {
   EXPECT_THROW(Element(day1), std::exception);
 }
 
-TEST_F(MountTreeTest, PlacedFileTakesAFreeNameWhenTheLibraryHoldsItsName) {
+// Sleeve Node Cache Plan SN4: a file name is a label, so a placed file takes the name of its file
+// on the disk when another photo of the library holds it.
+TEST_F(MountTreeTest, PlacedFileTakesItsDiskNameWhenTheLibraryHoldsIt) {
   const auto       root     = MountRoot();
   const auto       day2     = AddFolder(root, L"Day2", kMount);
   const auto       ordinary = AddFile(L"a.jpg", 0, std::nullopt);
@@ -218,34 +220,25 @@ TEST_F(MountTreeTest, PlacedFileTakesAFreeNameWhenTheLibraryHoldsItsName) {
   ASSERT_TRUE(sleeve_->ApplyMountTreeChanges(changes).success_);
   Reopen();
 
-  EXPECT_EQ(Element(mounted)->element_name_, L"a.jpg@");
+  EXPECT_EQ(Element(mounted)->element_name_, L"a.jpg");
   EXPECT_EQ(Element(ordinary)->element_name_, L"a.jpg");
-  EXPECT_EQ(Children(day2), (std::map<std::wstring, sl_element_id_t>{{L"a.jpg@", mounted}}));
+  EXPECT_EQ(Children(day2), (std::map<std::wstring, sl_element_id_t>{{L"a.jpg", mounted}}));
   EXPECT_EQ(HomeFolders(root, mounted), std::vector<sl_element_id_t>{day2});
-
-  // A placement with the name that the file already holds keeps it.
-  changes.placements = {{mounted, L"Day2", L"a.jpg"}};
-  ASSERT_TRUE(sleeve_->ApplyMountTreeChanges(changes).success_);
-  EXPECT_EQ(Element(mounted)->element_name_, L"a.jpg@");
 }
 
-TEST_F(MountTreeTest, NewFolderTakesItsDirectoryNameFromAFileThatHeldIt) {
-  const auto root = MountRoot();
-  AddFile(L"a.jpg", 0, std::nullopt);
-  const auto       mounted = AddFile(L"x.jpg", root, kMount);
-  MountTreeChanges changes{.mount_id = kMount, .root_folder_id = root};
-  changes.placements = {{mounted, L"", L"a.jpg"}};
-  ASSERT_TRUE(sleeve_->ApplyMountTreeChanges(changes).success_);
-  ASSERT_EQ(Element(mounted)->element_name_, L"a.jpg@");
+// Sleeve Node Cache Plan SN4: only folder names are unique among the child folders of a parent,
+// so a new folder takes the name of its directory and a file with that name keeps its name.
+TEST_F(MountTreeTest, NewFolderTakesTheNameOfAFileInItsParent) {
+  const auto       root    = MountRoot();
+  const auto       mounted = AddFile(L"a.jpg", root, kMount);
 
-  // A directory named like the free name of the file.
   MountTreeChanges folder_changes{.mount_id = kMount, .root_folder_id = root};
-  folder_changes.folders_to_add = {L"a.jpg@"};
+  folder_changes.folders_to_add = {L"a.jpg"};
   ASSERT_TRUE(sleeve_->ApplyMountTreeChanges(folder_changes).success_);
   Reopen();
 
-  EXPECT_EQ(FolderPaths(root), std::vector<std::wstring>{L"a.jpg@"});
-  EXPECT_EQ(Element(mounted)->element_name_, L"a.jpg@@");
+  EXPECT_EQ(FolderPaths(root), std::vector<std::wstring>{L"a.jpg"});
+  EXPECT_EQ(Element(mounted)->element_name_, L"a.jpg");
   EXPECT_EQ(HomeFolders(root, mounted), std::vector<sl_element_id_t>{root});
 }
 

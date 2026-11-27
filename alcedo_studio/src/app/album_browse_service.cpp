@@ -137,35 +137,6 @@ auto AlbumBrowseService::ListFolderTree() const -> std::vector<AlbumFolderView> 
   return folders;
 }
 
-auto AlbumBrowseService::ListFilesInFolder(const std::filesystem::path& folder_path) const
-    -> std::vector<AlbumFileView> {
-  std::vector<AlbumFileView> files;
-  if (!sleeve_service_) {
-    return files;
-  }
-
-  try {
-    const auto folder    = sleeve_service_->ResolveFolder(folder_path);
-    const auto folder_id = folder ? folder->element_id_ : 0;
-    const auto entries   = sleeve_service_->ListFolderEntries(folder_path);
-    files.reserve(entries.size());
-    for (const auto& entry : entries) {
-      if (!entry || entry->type_ != ElementType::FILE || !entry->IsLive()) {
-        continue;
-      }
-      auto file = std::dynamic_pointer_cast<SleeveFile>(entry);
-      if (!file || file->image_id_ == 0) {
-        continue;
-      }
-      files.push_back(BuildFileView(folder_path, file, folder_id));
-    }
-  } catch (...) {
-    return {};
-  }
-
-  return files;
-}
-
 auto AlbumBrowseService::ListFilesInFolderById(sl_element_id_t folder_id) const
     -> std::vector<AlbumFileView> {
   return ListFilesInFolderById(folder_id, 0, 0);
@@ -421,53 +392,6 @@ auto AlbumBrowseService::MoveFolder(const std::filesystem::path& folder_path,
   }
 
   out.status_ = AlbumFolderEditStatus::Done;
-  return out;
-}
-
-auto AlbumBrowseService::DeleteFiles(const std::vector<std::filesystem::path>& file_paths)
-    -> AlbumDeleteResult {
-  AlbumDeleteResult out;
-  if (!sleeve_service_ || file_paths.empty()) {
-    return out;
-  }
-
-  std::unordered_set<std::wstring> seen;
-  seen.reserve(file_paths.size() * 2 + 1);
-
-  for (const auto& path : file_paths) {
-    const auto normalized = path.lexically_normal().wstring();
-    if (normalized.empty() || !seen.insert(normalized).second) {
-      continue;
-    }
-
-    try {
-      const auto file = sleeve_service_->ResolveFile(path);
-      if (!file || file->image_id_ == 0) {
-        out.failed_paths_.push_back(path);
-        continue;
-      }
-
-      const auto parent_folder = sleeve_service_->ResolveFolder(path.parent_path());
-      const auto folder_id     = parent_folder ? parent_folder->element_id_ : 0;
-      const auto view          = BuildFileView(path.parent_path(), file, folder_id);
-      const auto sync          = sleeve_service_->DeletePath(path);
-      if (!sync.success_) {
-        out.failed_paths_.push_back(path);
-        continue;
-      }
-      out.deleted_files_.push_back(view);
-    } catch (const SleeveOperationError& e) {
-      out.refusal_ = e.Code();
-      out.failed_paths_.push_back(path);
-    } catch (...) {
-      out.failed_paths_.push_back(path);
-    }
-  }
-
-  if (filter_service_ && !out.deleted_files_.empty()) {
-    filter_service_->InvalidateResultCache();
-  }
-
   return out;
 }
 

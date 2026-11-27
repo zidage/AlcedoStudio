@@ -184,7 +184,7 @@ auto FilmGrainHistoryChainHash(const root_id_t& root_id, const std::vector<EditC
 }  // namespace
 
 TEST(PipelineHistoryFormatTable, PublishedConstantsIdentifyTheDocumentHistoryCutover) {
-  EXPECT_EQ(kProjectFileVersion, "0.12.0");
+  EXPECT_EQ(kProjectFileVersion, "0.15.0");
   EXPECT_EQ(kMinSupportedProjectFileVersion, "0.10.0");
   EXPECT_EQ(kMaxSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kPackedProjectFormatVersion, 7u);

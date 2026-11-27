@@ -77,23 +77,6 @@ auto LiveFileOfMount(FileSystem& fs, sl_element_id_t file_id) -> std::shared_ptr
   return file;
 }
 
-/// A mounted file can hold a free name of FileSystem::RenameFile (`name@`) that a new directory
-/// has on the disk. A folder takes the name of its directory (P3), so the file takes the next
-/// free name.
-void FreeNameForFolder(FileSystem& fs, sl_element_id_t parent_id, const std::wstring& name,
-                       mount_id_t mount_id) {
-  fs.ListFolderContent(parent_id);
-  const auto parent = std::static_pointer_cast<SleeveFolder>(fs.Get(parent_id));
-  const auto holder = parent->GetElementIdByName(name);
-  if (!holder.has_value()) {
-    return;
-  }
-  const auto element = fs.Get(*holder);
-  if (IsLive(element) && element->type_ == ElementType::FILE && element->mount_id_ == mount_id) {
-    fs.RenameFile(*holder, name + L"@", parent_id);
-  }
-}
-
 void PlaceFile(FileSystem& fs, const MountTree& tree, const MountFolderIndex& folders,
                mount_id_t mount_id, const MountTreeFilePlacement& placement) {
   const auto target = folders.At(placement.directory);
@@ -109,7 +92,7 @@ void PlaceFile(FileSystem& fs, const MountTree& tree, const MountFolderIndex& fo
       }
     }
   }
-  fs.RenameFile(placement.file_id, placement.file_name, target);
+  fs.RenameFile(placement.file_id, placement.file_name);
   fs.LinkFileToFolder(placement.file_id, target);
 }
 
@@ -118,15 +101,18 @@ void RemoveFolder(FileSystem& fs, MountFolderIndex& folders, mount_id_t mount_id
   if (directory.empty() || !folders.Contains(directory)) {
     return;
   }
-  const auto folder_id = folders.At(directory);
-  const auto parent_id = folders.At(SplitRelativePath(directory).first);
-  for (const auto child_id : fs.ListFolderContent(folder_id)) {
+  const auto                   folder_id = folders.At(directory);
+  const auto                   parent_id = folders.At(SplitRelativePath(directory).first);
+  std::vector<sl_element_id_t> moved_ids;
+  for (const auto child_id : fs.ListFileIds(folder_id)) {
     auto child = fs.Get(child_id);
-    if (IsLive(child) && child->type_ == ElementType::FILE && child->mount_id_ == mount_id) {
+    if (IsLive(child) && child->mount_id_ == mount_id) {
       fs.LinkFileToFolder(child_id, parent_id);
-      fs.UnlinkFileFromFolder(child_id, folder_id);
+      moved_ids.push_back(child_id);
     }
   }
+  // One membership read for the whole folder.
+  fs.UnlinkFilesFromFolder(moved_ids, folder_id);
   fs.RemoveFolderFrom(parent_id, folder_id);
   folders.Remove(directory);
 }
@@ -178,8 +164,7 @@ void ApplyMountTreeChanges(FileSystem& fs, const MountTreeChanges& changes) {
     }
     const auto [parent_directory, name] = SplitRelativePath(directory);
     const auto parent_id                = folders.At(parent_directory);
-    FreeNameForFolder(fs, parent_id, name, changes.mount_id);
-    auto folder       = fs.CreateFolderIn(parent_id, name);
+    auto       folder                   = fs.CreateFolderIn(parent_id, name);
     folder->mount_id_ = changes.mount_id;
     folders.Add(directory, folder->element_id_);
   }
@@ -193,8 +178,7 @@ void ApplyMountTreeChanges(FileSystem& fs, const MountTreeChanges& changes) {
 
 auto CreateMountRootFolder(FileSystem& fs, const file_name_t& name, mount_id_t mount_id)
     -> std::shared_ptr<SleeveFolder> {
-  // ListFolderContent loads the children of the root, so Contains sees each name.
-  fs.ListFolderContent(kLibraryRootFolderId);
+  // The child folders of the root are resident, and only folder names are unique (D8).
   const auto parent = std::static_pointer_cast<SleeveFolder>(fs.Get(kLibraryRootFolderId));
   if (!IsLive(parent) || parent->type_ != ElementType::FOLDER) {
     throw std::runtime_error("MountTree: the library root cannot be read");

@@ -127,7 +127,8 @@ class SleeveServiceImpl final : public SleeveService {
   auto GetCurrentID() const -> sl_element_id_t;
   auto ResolveElement(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;
   auto ResolveFolder(const std::filesystem::path& path) -> std::shared_ptr<SleeveFolder>;
-  auto ResolveFile(const std::filesystem::path& path) -> std::shared_ptr<SleeveFile>;
+  /// The live child folders and the live files of the folder at @p folder_path, under the read
+  /// lock. Reads the file ids with one store read and loads each file element of the folder.
   auto ListFolderEntries(const std::filesystem::path& folder_path)
       -> std::vector<std::shared_ptr<SleeveElement>>;
   /// The live child folders of the folder at @p folder_path under the read lock; loads no file
@@ -164,6 +165,7 @@ class SleeveServiceImpl final : public SleeveService {
       -> std::pair<LibraryRemoval, SyncResult>;
   auto DuplicateFileToFolder(sl_element_id_t file_id, sl_element_id_t folder_id)
       -> std::pair<std::shared_ptr<SleeveFile>, SyncResult>;
+  /// Removes the folder at @p target_path (FileSystem::Delete). A path names a folder only.
   auto DeletePath(const std::filesystem::path& target_path) -> SyncResult;
   auto DeleteElement(sl_element_id_t target_id) -> SyncResult;
   /// See FileSystem::RenameFolder. Throws like it; syncs the change before it returns.

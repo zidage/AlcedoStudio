@@ -2,7 +2,8 @@
 
 Date: 2026-11-26
 
-Status: **in progress**. SN1, SN2, and SN3 are complete (2026-11-26). SN4 to SN8 are planned.
+Status: **in progress**. SN1, SN2, SN3, and SN4 are complete (2026-11-26). SN5 to SN8 are
+planned.
 
 Parent: [Roadmap](../../README.md).
 
@@ -214,7 +215,7 @@ and the tests.
 | SN1 | The folder listing reads folders only. A failed listing writes a log line. | `FolderEntryStore`, `AlbumBrowseService`, `FolderController` | None | 350 to 500 | complete |
 | SN2 | `NodeCache` with the page table and the dirty list. One sync transaction. | `NodeCache`, `SleeveElement`, `SleeveServiceImpl::Sync` | SN1 | 1100 to 1500 | complete |
 | SN3 | All folders load with one query. One tree read for the sidebar. | `NodeStorageHandler`, `PathResolver`, `FolderController` | SN2 | 700 to 1000 | complete |
-| SN4 | File entries leave the folders. File names are labels. Project file 0.15.0. | `SleeveFolder`, `FileSystem`, project version | SN3 | 1200 to 1700 | planned |
+| SN4 | File entries leave the folders. File names are labels. Project file 0.15.0. | `SleeveFolder`, `FileSystem`, project version | SN3 | 1200 to 1700 | complete |
 | SN5 | The mount tree read and the import use row queries. | `mount_tree.cpp`, `import_service.cpp` | SN4 | 600 to 900 | planned |
 | SN6 | Measured memory and time of the 80,000-photo project. Decision for SN7 and SN8. | `project_open_benchmark.cpp` | SN5 | 150 to 300 | planned |
 | SN7 | Eviction of clean file elements under a limit. Runs when SN6 requires it. | `NodeCache` | SN6 | 400 to 600 | planned |
@@ -791,13 +792,187 @@ FileSystem::UnlinkFileFromFolder -> FolderEntryStore::ReadHeldFiles throws
 
 **Exit criteria.**
 
-- [ ] The tests above pass. `SleeveFSTest`, `SleeveServiceTest`, `MountTreeTest`,
+- [x] The tests above pass. `SleeveFSTest`, `SleeveServiceTest`, `MountTreeTest`,
       `MountServiceTest`, `ImportServiceTest`, `AlbumQueryTest`, and the project package tests
-      pass.
-- [ ] `sleeve/sleeve_filesystem.cpp` and `sleeve/sleeve_element/sleeve_folder.cpp` have fewer
+      pass. In `ImportServiceTest`, `BatchCancelTest` fails before SN2 too (#1156).
+- [x] `sleeve/sleeve_filesystem.cpp` and `sleeve/sleeve_element/sleeve_folder.cpp` have fewer
       lines than after SN3.
 
-**Completion record.** Use the template of section 9.
+**Completion record.**
+
+```text
+Phase / date / status: SN4 / 2026-11-26 / complete. Issue #1160 (sub-issue of #1152).
+Source revision and branch: cd3703e95 on refact/sleeve-file-entries, stacked on c68736175
+  (SN3 PR #1159).
+Actual changed modules: FolderEntryStore, SleeveFolder, NodeStorageHandler, PathResolver,
+  FileSystem, ElementStore (new folder rows), SleeveServiceImpl, AlbumBrowseService,
+  mount_tree.cpp, pipeline_history_format.hpp, and the tests SleeveServiceTest, SleeveFSTest,
+  SleeveFilesystemCiTest, MountTreeTest, MountStoreTest, FilterServiceTest,
+  LibrarySearchColumnsTest, ProjectServiceTest, and the version tests of ProjectCompatibilityTest,
+  CommitGraphTest, PipelineDocumentCheckpointTest, PipelineEditBatchTest,
+  EditorMiniGitMaterializerTest, and BrushSourceFormatBoundaryTest.
+Implemented behavior:
+  - FolderEntryStore::ReadFolderFiles(folder_id) and ReadHeldFiles(folder_id, file_ids): one
+    duckorm statement each, FolderContent joined with Element where type is FILE, id order.
+    ReadHeldFiles with no ids sends no statement.
+  - SleeveFolder holds its child folders only (contents_ and the default index). AddElementToMap
+    takes a folder and throws std::invalid_argument for a file. RecordFileLinked and
+    RecordFileUnlinked write the pending sets; PendingMembership reads them; DropPendingChanges
+    forgets the ids of deleted files. HoldsChildFolder replaces ContainsElementId.
+    RemoveElementById, RemoveElementsById, ContentSize, children_loaded_, ChildrenLoaded, and
+    MarkChildrenLoaded are removed.
+  - Pending set rule: for a child folder, an add and a remove of one id cancel (memory holds every
+    child folder). For a file, the last link or unlink wins (the id moves to its set): the insert
+    ignores an existing row and the delete ignores a missing row, so no link or unlink needs a
+    read to keep the sets correct.
+  - NodeStorageHandler::EnsureChildrenLoaded is removed. FileIds(folder): the stored file rows,
+    minus the pending unlinks, plus the pending links that are not child folders, sorted; one
+    read, none for an UNSYNC folder. HeldFiles(folder, ids): a pending change decides an id from
+    memory; the other ids go to one ReadHeldFiles read. Both drop an id that the cache holds as
+    DELETED.
+  - PathResolver: a path names folders only. Resolve reads the resident child folders and throws
+    for a part that names no live child folder. ResolveForWrite loads nothing. CoWHandler reads
+    FileIds of the source before any change and records each id as a pending link of the copy.
+    Tree lists the folders and the files (FileIds and an element load per file; diagnostics).
+  - FileSystem: Create gives a folder the first free name among the child folders; a file keeps
+    its name and gets the root link and the destination link as pending links. LinkFileToFolder
+    records the link only. UnlinkFileFromFolder uses HeldFiles and throws for a file that is not a
+    member. UnlinkFilesFromFolder sends at most one read. DuplicateFileToFolder keeps the name.
+    DeleteFileEverywhere and DeleteFilesEverywhere call DropPendingChanges on each folder and set
+    DELETED. RenameFile(file_id, name) sets the name and the flag. ListFolderContent(folder_id)
+    gives the child folder ids and then the file ids; ListFileIds(folder_id) gives the file ids.
+    LiveFile is a new private check.
+  - ElementStore: the insert of a new folder writes its child folders and its pending links
+    (NewFolderContentIds). The update writes the pending sets, as before.
+  - SleeveServiceImpl::ResolveFile, the file branch of DeletePath, AlbumBrowseService::
+    ListFilesInFolder(path), AlbumBrowseService::DeleteFiles(paths), AlbumDeleteResult::
+    failed_paths_, FileSystem::ListFolderContent(path, write), the file branches of
+    FileSystem::Delete(path) and FileSystem::Copy, and the dead declaration
+    ElementStore::EnsureChildrenLoaded are removed.
+  - mount_tree.cpp: FreeNameForFolder is removed. RemoveFolder reads ListFileIds and unlinks the
+    mounted files with one UnlinkFilesFromFolder call. CreateMountRootFolder reads the resident
+    child folders of the root.
+  - kProjectFileVersion and kMaxSupportedProjectFileVersion are 0.15.0; the format comment
+    records the reason.
+Decisions made during the work:
+  - Step 3 needed no duckorm change: FolderMapper::InsertFolderContents already writes
+    `ON CONFLICT DO NOTHING` (primary key (folder_id, element_id)).
+  - The cancel rule of the pending sets cannot apply to files: a link of a file that has a row,
+    and then an unlink in the same write, would cancel and keep the row. The last-change rule
+    above writes the correct rows with no read.
+  - ListFolderContent(folder_id) gives the child folders and the file ids, not the child folders
+    only (step 7): ReadMountTree needs both kinds, and the ids come with no element load. The
+    path form had one caller (ListFolderEntries) and is removed.
+  - SleeveServiceImpl::ListFolderEntries(path) stays: it resolves the folder and loads the file
+    elements of that folder. Its production caller ListFilesInFolder(path) is removed; tests use
+    it to find a file by its folder and name.
+  - Step 9 says "archive". The legacy code rule archives whole files; these functions were parts
+    of files that stay, so they are deleted. DeletePath and FileSystem::Delete(path) now name a
+    folder only; a file leaves by its id (DeleteElement, DeleteFileEverywhere).
+  - RenameFile has no folder parameter: with no name rule, the folder had no use.
+  - A new file and a duplicate get one reference count increment, as the root link gave before,
+    so the stored ref_count of a file stays 1.
+  - FileIds and HeldFiles send no statement for an UNSYNC folder: element ids are not reused, so
+    a folder with no row has no FolderContent row.
+  - The legacy SleeveBase (sleeve_base.cpp, compiled into SleeveFS, no production caller, no
+    registered test) still compiles. Its file creation calls AddElementToMap with a file, which
+    now throws std::invalid_argument.
+  - PlaceFile of mount_tree.cpp unlinks a moved file from each other home folder with
+    UnlinkFileFromFolder: one membership read for each moved file. A scan places only moved,
+    adopted, and returned files; SN5 changes the mount scan to row queries.
+  - The project version range is [0.10.0, 0.15.0], so ProjectVersionIsSupported("0.13.0") is now
+    true; no build wrote 0.13.0 or 0.14.0. The tests of a refused newer version use 0.16.0.
+  - The test data has no 0.12.0 project file. Version012ProjectOpensAndTheNextSaveWritesVersion015
+    saves a project with this build and writes 0.12.0 into its metadata: SN4 changes no table, so
+    the database is the one that a 0.12.0 build writes.
+  - Tests added beyond the plan: FailedMembershipReadLeavesTheUnlinkUndone (the failure chain),
+    MountTreeTest.PlacedFileTakesItsDiskNameWhenTheLibraryHoldsIt and
+    NewFolderTakesTheNameOfAFileInItsParent (replace the two free-name tests),
+    SleeveFSTest.CopyRefusesAFilePathAndLinksNothing (replaces the file path copy test).
+    FolderCopyWriteKeepsNestedFileIdentity now checks that a copy-on-write copy keeps its file.
+  - Test names: the fixture of the plan name SleeveServiceTest is SleeveServiceTests.
+Explicitly unimplemented items: none of SN4. ReadMountTree still loads each file element of the
+  mount (SN5).
+Primary success call chain:
+  SleeveServiceImpl::LinkFileToFolder(file_id, folder_id)                    (Write, fs_lock_)
+    -> FileSystem::LinkFileToFolder -> LiveFile (NodeCache or one element read), LiveFolder
+    -> SleeveFolder::RecordFileLinked -> pending link, MODIFIED -> dirty list
+    -> SleeveServiceImpl::Sync -> ElementStore::WriteSync -> UpdateElementRows
+         -> FolderMapper::InsertFolderContents (ON CONFLICT DO NOTHING)       (one transaction)
+  SleeveServiceImpl::DeleteFileFromFolder(file_id, folder_id)
+    -> FileSystem::UnlinkFileFromFolder
+    -> NodeStorageHandler::HeldFiles -> pending set, else FolderEntryStore::ReadHeldFiles
+    -> SleeveFolder::RecordFileUnlinked -> Sync -> FolderMapper::RemoveFolderContents
+  FileSystem::ListFileIds(folder_id) -> NodeStorageHandler::FileIds
+    -> FolderEntryStore::ReadFolderFiles (one statement) + pending sets      (no element load)
+Primary failure and restore call chain:
+  FileSystem::UnlinkFileFromFolder -> NodeStorageHandler::HeldFiles
+    -> FolderEntryStore::ReadHeldFiles throws (DuckDB error)
+    -> no pending set and no flag changed (the read runs before any change)
+    -> SleeveServiceImpl::Write returns the exception to the caller; the dirty list is empty
+  A build that accepts 0.10.0 to 0.12.0 opens a 0.15.0 project
+    -> ProjectVersionIsSupported is false -> the open fails with the version message, so the
+       build never loads a root with equal file names
+Build and test commands with exit codes (macOS arm64, build/macos-debug, Ninja):
+  cmake --build build/macos-debug --target SleeveFSTest SleeveServiceTest NodeCacheTest
+    MountTreeTest MountServiceTest AlbumBrowseServiceMountTest ImportServiceTest AlbumQueryTest
+    SleeveFilesystemCiTest MountStoreTest AiStorageControllerTest ProjectOpenBenchmark
+    ProjectServiceTest ProjectCompatibilityTest ProjectPackageBackendTest CommitGraphTest
+    PipelineDocumentCheckpointTest PipelineEditBatchTest EditorMiniGitMaterializerTest
+    FilterServiceTest LibrarySearchColumnsTest CiRawWorkflowTest AutomationLibraryCommandsTest
+    CollectionsPanelQmlTest LibraryFolderSectionQmlTest AlbumBackendFolderTest
+    FolderControllerMountTest alcedo_main -j 8 -- -k 0                         exit 0
+  <Target> --gtest_brief=1 for each target below (QT_QPA_PLATFORM=offscreen)     exit 0,
+    ImportServiceTest exit 1 (#1156), PipelineDocumentCheckpointTest exit 1 (#553)
+  python scripts/check_storage_boundary.py (Windows)                           exit 0
+Discovered / passed / failed / skipped counts:
+  SleeveServiceTest 45 / 45 / 0 / 0, with SleeveServiceTests.TwoFilesWithEqualNamesLinkIntoOneFolder,
+    LinkAndUnlinkInOneWriteLeaveNoRow, UnlinkOfAFileLinkedInTheSameWriteNeedsNoRow,
+    RepeatedLinkKeepsOneRow, LinkIntoFolderWithTenThousandFilesLoadsNoFileElement,
+    FailedMembershipReadLeavesTheUnlinkUndone, and ProjectWithEqualRootNamesReopensWithAllFiles
+  ProjectServiceTest 11 / 11 / 0 / 0, with
+    ProjectServiceUUIDTests.Version012ProjectOpensAndTheNextSaveWritesVersion015
+  ProjectCompatibilityTest 6 / 6 / 0 / 0 (0.10.0 and 0.11.0 projects save as 0.15.0)
+  ProjectPackageBackendTest 7 / 7 / 0 / 0
+  SleeveFSTest 13 / 13 / 0 / 0
+  MountTreeTest 9 / 9 / 0 / 0
+  MountServiceTest 29 / 29 / 0 / 0
+  AlbumBrowseServiceMountTest 4 / 4 / 0 / 0
+  AlbumQueryTest 39 / 38 / 0 / 1 (the timing profile skips without ALCEDO_ALBUM_QUERY_PROFILE)
+  SleeveFilesystemCiTest 2 / 2 / 0 / 0
+  MountStoreTest 17 / 17 / 0 / 0
+  NodeCacheTest 7 / 7 / 0 / 0
+  AiStorageControllerTest 20 / 20 / 0 / 0
+  AutomationLibraryCommandsTest 18 / 18 / 0 / 0
+  CommitGraphTest 52 / 52 / 0 / 0
+  PipelineEditBatchTest 24 / 24 / 0 / 0
+  EditorMiniGitMaterializerTest 17 / 17 / 0 / 0
+  FilterServiceTest 44 / 33 / 0 / 11 (the RAW batch fixtures are not on the Mac)
+  LibrarySearchColumnsTest 15 / 15 / 0 / 0
+  CiRawWorkflowTest 3 / 3 / 0 / 0
+  CollectionsPanelQmlTest 30 / 30 / 0 / 0, LibraryFolderSectionQmlTest 8 / 8 / 0 / 0,
+    AlbumBackendFolderTest 16 / 16 / 0 / 0, FolderControllerMountTest 11 / 11 / 0 / 0; the logs
+    have no "FAIL!" and no QtTest compare failure (#526)
+  ImportServiceTest 16 / 15 / 1 / 0: ImportServiceTests.BatchCancelTest fails before SN2 too
+    (#1156). The run used raw/airplane/_DSC1704.NEF and 70 of the batch_import files, copied to
+    the Mac for the run.
+  PipelineDocumentCheckpointTest 24 / 21 / 3 / 0: the three Existing*Root* tests fail at
+    c68736175 without this change too (#553, comment of 2026-11-26).
+  The UI suites, CommitGraphTest, PipelineEditBatchTest, EditorMiniGitMaterializerTest,
+    FilterServiceTest, LibrarySearchColumnsTest, CiRawWorkflowTest, ProjectPackageBackendTest,
+    AiStorageControllerTest, and ImportServiceTest ran before the final formatting and the batch
+    unlink of RemoveFolder; the suites of the changed code ran again after it.
+Manual verification: none. The application was not started.
+Performance or resource evidence, if required: not required for SN4. A link into a folder with
+  10,000 files and the unlink of one of them leave 4 elements in the node cache (the test above).
+Evidence path: the counts above. The Mac logs under build/tmp/sn4/ were removed at the end of
+  the task.
+Remaining defects or unavailable platforms: Windows (MSVC) and Linux not built: the Windows
+  machine was in use. BrushSourceFormatBoundaryTest needs ALCEDO_ENABLE_BRUSH_MASK, which is off
+  on the Mac; only its version literals changed. AutomationLibraryE2ETest was not run.
+  sleeve/sleeve_filesystem.cpp: 747 to 600 lines; sleeve/sleeve_element/sleeve_folder.cpp: 287 to
+  213 lines (D7).
+```
 
 ### SN5: Row queries for the mount scan and the import
 

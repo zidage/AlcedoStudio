@@ -39,8 +39,11 @@ class FileSystem {
   PathResolver                         resolver_;
   ///@}
 
-  /// The live folder @p folder_id with its children loaded; throws std::runtime_error otherwise.
+  /// The live folder @p folder_id; throws std::runtime_error otherwise.
   auto LiveFolder(sl_element_id_t folder_id) -> std::shared_ptr<SleeveFolder>;
+  /// The live file @p file_id (loaded when the cache does not hold it); throws
+  /// std::runtime_error otherwise.
+  auto LiveFile(sl_element_id_t file_id) -> std::shared_ptr<SleeveElement>;
   /// Decrement the child folders of a folder that lost its last parent, recursively.
   void ReleaseChildFolders(const std::shared_ptr<SleeveFolder>& folder);
 
@@ -57,18 +60,52 @@ class FileSystem {
    */
   auto InitRoot() -> bool;
 
+  /**
+   * @brief Creates an element named @p filename in the folder at @p dest. A folder gets the
+   *        first name of `filename`, `filename@`, ... that no child folder of @p dest holds. A
+   *        file keeps @p filename (a label) and is linked to @p dest and to the library root.
+   * @throws std::runtime_error when @p dest names no folder.
+   */
   auto Create(std::filesystem::path dest, std::wstring filename, ElementType type)
       -> std::shared_ptr<SleeveElement>;
+  /// Creates a file named @p name in the library root. Any name is accepted (a label).
   auto CreateFileInLibrary(file_name_t name) -> std::shared_ptr<SleeveFile>;
+  /**
+   * @brief Links the file @p file_id to the folder @p folder_id. Records the link only: the
+   *        sync keeps an existing row, so a repeated link needs no read and keeps one row. Loads
+   *        no other file element; the name of the file has no rule.
+   * @throws std::runtime_error when @p file_id is not a live file or @p folder_id is not a live
+   *         folder.
+   */
   void LinkFileToFolder(sl_element_id_t file_id, sl_element_id_t folder_id);
+  /**
+   * @brief Unlinks the file @p file_id from the folder @p folder_id. The pending sets decide the
+   *        membership from memory; otherwise one FolderEntryStore::ReadHeldFiles read does.
+   * @throws std::runtime_error when @p folder_id is the root, when an id names no live element of
+   *         its kind, or when the file is not a member, and the store error of the read. A throw
+   *         changes nothing.
+   */
   void UnlinkFileFromFolder(sl_element_id_t file_id, sl_element_id_t folder_id);
+  /**
+   * @brief Unlinks each live file of @p file_ids that the folder holds, with at most one store
+   *        read for the whole batch. Ids that name no live file or no member are ignored.
+   * @return The unlinked ids, in the order of @p file_ids.
+   * @throws std::runtime_error when @p folder_id is the root or not a live folder, and the store
+   *         error of the read. A throw changes nothing.
+   */
   auto UnlinkFilesFromFolder(std::span<const sl_element_id_t> file_ids,
                              sl_element_id_t folder_id) -> std::vector<sl_element_id_t>;
+  /// A new file with the name and the image of the file @p file_id, linked to @p folder_id and
+  /// to the library root.
   auto DuplicateFileToFolder(sl_element_id_t file_id, sl_element_id_t folder_id)
       -> std::shared_ptr<SleeveFile>;
+  /// Marks the file DELETED and forgets its pending links. The sync removes the element and all
+  /// its rows.
   void DeleteFileEverywhere(sl_element_id_t file_id);
   auto DeleteFilesEverywhere(std::span<const sl_element_id_t> file_ids)
       -> std::vector<sl_element_id_t>;
+  /// Removes the folder at @p target from its parent. Child folders that no other parent holds
+  /// go with it; the files stay in the library.
   void Delete(std::filesystem::path target);
   void Delete(sl_element_id_t target_id);
   /**
@@ -94,16 +131,11 @@ class FileSystem {
   auto CreateFolderIn(sl_element_id_t parent_id, const file_name_t& name)
       -> std::shared_ptr<SleeveFolder>;
   /**
-   * @brief Gives the file @p file_id the first name of @p base_name, `base_name@`,
-   *        `base_name@@`, ... that no other element holds in the library root, in the folder
-   *        @p folder_id, or in a loaded folder that holds the file. Each loaded folder that holds
-   *        the file keeps it under the new name. The file keeps its id and its links.
-   * @return The name of the file after the call; no change when that is its current name.
-   * @throws std::runtime_error when @p file_id is not a live file, @p folder_id is not a live
-   *         folder, or @p base_name is empty.
+   * @brief Gives the file @p file_id the name @p name. A file name is a label: other files can
+   *        hold it. The file keeps its id and its links. No change when the file holds the name.
+   * @throws std::runtime_error when @p file_id is not a live file or @p name is empty.
    */
-  auto RenameFile(sl_element_id_t file_id, const file_name_t& base_name, sl_element_id_t folder_id)
-      -> file_name_t;
+  void RenameFile(sl_element_id_t file_id, const file_name_t& name);
   /**
    * @brief Removes the folder @p folder_id from its parent @p parent_id, as Delete does. Child
    *        folders that no other parent holds are deleted with it; files stay in the library.
@@ -113,9 +145,18 @@ class FileSystem {
   void RemoveFolderFrom(sl_element_id_t parent_id, sl_element_id_t folder_id);
   auto Get(std::filesystem::path target, bool write) -> std::shared_ptr<SleeveElement>;
   auto Get(sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
-  auto ListFolderContent(const std::filesystem::path& folder_path, bool write = false)
-      -> std::vector<sl_element_id_t>;
+  /**
+   * @brief The members of the folder @p folder_id: its child folder ids in the order of their
+   *        entries, then its file ids (ListFileIds). Loads no file element.
+   * @throws std::runtime_error when @p folder_id is not a live folder, and the store error.
+   */
   auto ListFolderContent(sl_element_id_t folder_id) -> std::vector<sl_element_id_t>;
+  /**
+   * @brief The ids of the live files that the folder @p folder_id holds, in id order: one store
+   *        read with the pending changes of the current write applied. Loads no file element.
+   * @throws std::runtime_error when @p folder_id is not a live folder, and the store error.
+   */
+  auto ListFileIds(sl_element_id_t folder_id) -> std::vector<sl_element_id_t>;
   /**
    * @brief The live child folders of the folder at @p folder_path, in the order of its entries.
    *        Reads memory only: all folders are resident (Sleeve Node Cache Plan, SN3).
@@ -137,6 +178,8 @@ class FileSystem {
                            const std::shared_ptr<FilterCombo> filter)
       -> std::vector<std::shared_ptr<SleeveElement>>;
 
+  /// Adds the folder at @p from as a child folder of the folder at @p dest (copy-on-write: the
+  /// folder gets a second parent).
   void Copy(std::filesystem::path from, std::filesystem::path dest);
 
   [[deprecated("Deprecated, use the one from SleeveService instead")]] void SyncToDB();

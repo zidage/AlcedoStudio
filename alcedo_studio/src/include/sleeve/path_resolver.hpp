@@ -41,11 +41,10 @@ class PathResolver {
   auto Contains(const std::filesystem::path& path, ElementType type) -> bool;
   auto Contains(const std::filesystem::path& path) -> bool;
   /**
-   * @brief The live element at @p path. Each part reads the resident child folders of its
-   *        folder. Only a part that names no child folder loads the file entries of its folder
-   *        (NodeStorageHandler::EnsureChildrenLoaded), so a folder path reads memory only. The
-   *        file entries of the result are not loaded.
-   * @throws std::runtime_error when a part names no live element or a part below a file.
+   * @brief The live folder at @p path. Each part reads the resident child folders of its folder,
+   *        so the call reads memory only. A path names folders only: a file name is a label with
+   *        no uniqueness rule, so a file has no path (Sleeve Node Cache Plan, SN4).
+   * @throws std::runtime_error when a part names no live child folder.
    */
   auto Resolve(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;
   /**
@@ -55,16 +54,18 @@ class PathResolver {
    */
   auto ResolveFolder(const std::filesystem::path& path) -> std::shared_ptr<SleeveFolder>;
   /**
-   * @brief The element at @p path for a change: a shared folder on the path is copied (CoW),
-   *        the result is marked modified, and each folder on the path and a folder result have
-   *        their file entries loaded, so the name checks of a write see every entry.
-   * @throws std::runtime_error when a part names no element or a part below a file.
+   * @brief The folder at @p path for a change: a shared folder on the path is copied (CoW), and
+   *        the result is marked modified. A copy gets the child folders and the file links of
+   *        its source (one FileIds read of the source).
+   * @throws std::runtime_error when a part names no child folder.
    */
   auto ResolveForWrite(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;
   void Invalidate(const std::filesystem::path& path);
   /// Removes every cached path. A rename or a move changes the path of a whole subtree.
   void InvalidateAll();
 
+  /// A text listing of the folders and the files below @p path, for diagnostics. Reads the file
+  /// ids of each folder from the store and loads each file element.
   auto Tree(const std::filesystem::path& path) -> std::wstring;
 };
 };  // namespace alcedo

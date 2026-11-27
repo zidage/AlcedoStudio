@@ -42,7 +42,8 @@ struct MountTreeFilePlacement {
   sl_element_id_t file_id = 0;
   /// Relative path of the home folder; empty for the mount root.
   std::wstring    directory;
-  /// File name on the disk. The element takes the first free name of FileSystem::RenameFile.
+  /// File name on the disk. The element takes it with FileSystem::RenameFile (a file name is a
+  /// label, so other files can hold it).
   file_name_t     file_name;
 };
 
@@ -77,10 +78,10 @@ auto ReadMountTree(FileSystem& fs, sl_element_id_t root_folder_id, mount_id_t mo
 /**
  * @brief Apply @p changes to the sleeve tree in memory. The caller syncs the tree afterwards.
  *
- * - A new folder gets the mount id and the name of its directory. A mounted file of the parent
- *   that holds that name takes the next free name.
+ * - A new folder gets the mount id and the name of its directory. A file with that name in the
+ *   parent keeps its name (only folder names are unique among the child folders of a parent).
  * - A placed file gets the mount id, is linked into the folder of its directory, loses each other
- *   mounted folder of the mount, and gets the name of FileSystem::RenameFile.
+ *   mounted folder of the mount, and gets the name of its file on the disk.
  * - Before a folder is removed, each mounted file that it still holds moves to its parent (the
  *   nearest folder that stays; Mounted Folder Plan, section 2.4).
  *
@@ -94,7 +95,7 @@ void ApplyMountTreeChanges(FileSystem& fs, const MountTreeChanges& changes);
  * @brief Create the root folder of the mount @p mount_id in the library root
  *        (kLibraryRootFolderId). An ordinary collection never holds a mount (#1076).
  *
- * The folder takes @p name, or `name@`, `name@@`, ... when the library root holds an element
+ * The folder takes @p name, or `name@`, `name@@`, ... when the library root holds a child folder
  * with that name. The relative paths of the mount start below this folder, so its name is free.
  *
  * @throws std::runtime_error when the library root cannot be read.

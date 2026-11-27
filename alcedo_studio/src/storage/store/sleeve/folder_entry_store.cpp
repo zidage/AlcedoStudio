@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
+#include <utility>
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
@@ -49,6 +51,45 @@ auto FolderEntryStore::ReadFolderTree() const -> FolderTreeRows {
     tree.folders_.push_back(std::static_pointer_cast<SleeveFolder>(std::move(row)));
   }
   return tree;
+}
+
+auto FolderEntryStore::ReadFolderFiles(sl_element_id_t folder_id) const
+    -> std::vector<sl_element_id_t> {
+  return ReadFileRows(folder_id, duckorm::SqlFragment{});
+}
+
+auto FolderEntryStore::ReadHeldFiles(sl_element_id_t                  folder_id,
+                                     std::span<const sl_element_id_t> file_ids) const
+    -> std::vector<sl_element_id_t> {
+  if (file_ids.empty()) {
+    return {};
+  }
+  auto condition = duckorm::SqlFragment{" AND ", {}};
+  condition.append(duckorm::expr::in_list(duckorm::expr::col("fc.element_id"), file_ids));
+  return ReadFileRows(folder_id, std::move(condition));
+}
+
+auto FolderEntryStore::ReadFileRows(sl_element_id_t folder_id, duckorm::SqlFragment condition) const
+    -> std::vector<sl_element_id_t> {
+  duckorm::SqlFragment query{
+      "SELECT fc.folder_id, fc.element_id FROM FolderContent fc "
+      "JOIN Element e ON e.id = fc.element_id WHERE fc.folder_id = ",
+      {}};
+  query.append(duckorm::expr::param(static_cast<int64_t>(folder_id)));
+  query.append(duckorm::SqlFragment{" AND e.type = ", {}});
+  query.append(duckorm::expr::param(static_cast<int64_t>(ElementType::FILE)));
+  query.append(std::move(condition));
+  query.append(duckorm::SqlFragment{" ORDER BY fc.element_id", {}});
+
+  auto                         guard   = database_.GetConnectionGuard();
+  auto                         db_lock = guard.Lock();
+  const auto                   rows    = FolderMapper(guard.conn_).GetByQuery(query);
+  std::vector<sl_element_id_t> file_ids;
+  file_ids.reserve(rows.size());
+  for (const auto& [_, file_id] : rows) {
+    file_ids.push_back(file_id);
+  }
+  return file_ids;
 }
 
 }  // namespace alcedo

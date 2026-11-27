@@ -814,7 +814,7 @@ TEST_F(LibrarySearchColumnsTest, ReopenedFolderListsFilesWithTheirBoundImages) {
   }
 
   ProjectService project(db_path_, meta_path_);
-  const auto     files = project.GetAlbumBrowseService()->ListFilesInFolder(L"/");
+  const auto     files = project.GetAlbumBrowseService()->ListFilesInFolderById(0);
   ASSERT_EQ(files.size(), 2u);
   std::map<sl_element_id_t, AlbumFileView> files_by_id;
   for (const auto& file : files) {

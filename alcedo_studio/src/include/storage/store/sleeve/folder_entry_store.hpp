@@ -5,10 +5,12 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/store/database.hpp"
 #include "type/type.hpp"
 
@@ -26,7 +28,7 @@ struct FolderTreeRows {
 
 /**
  * @brief Reads of the folder structure (`Element` joined with `FolderContent`) that load no
- *        file element (Sleeve Node Cache Plan, SN1 and SN3).
+ *        file element (Sleeve Node Cache Plan, SN1, SN3, and SN4).
  *
  * @details The store has no state. Each operation takes the connection and the database lock of
  * the Database owner for the whole operation, so it is safe to call from any thread. A
@@ -47,7 +49,28 @@ class FolderEntryStore {
    */
   auto ReadFolderTree() const -> FolderTreeRows;
 
+  /**
+   * @brief The ids of the file elements that have a `FolderContent` row in @p folder_id, in id
+   *        order, with one statement (Sleeve Node Cache Plan, SN4). Loads no element.
+   * @throws std::runtime_error with the DuckDB message when the statement fails.
+   */
+  auto ReadFolderFiles(sl_element_id_t folder_id) const -> std::vector<sl_element_id_t>;
+
+  /**
+   * @brief The ids of @p file_ids that name a file element with a `FolderContent` row in
+   *        @p folder_id, in id order, with one statement. Loads no element. An empty
+   *        @p file_ids gives an empty result and sends no statement.
+   * @throws std::runtime_error with the DuckDB message when the statement fails.
+   */
+  auto ReadHeldFiles(sl_element_id_t folder_id, std::span<const sl_element_id_t> file_ids) const
+      -> std::vector<sl_element_id_t>;
+
  private:
+  /// The file ids of the rows of @p folder_id that @p condition also selects (an extra
+  /// predicate on `fc.element_id`, or an empty fragment).
+  auto ReadFileRows(sl_element_id_t folder_id, duckorm::SqlFragment condition) const
+      -> std::vector<sl_element_id_t>;
+
   Database& database_;
 };
 
