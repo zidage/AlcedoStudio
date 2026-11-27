@@ -1,0 +1,628 @@
+# Sleeve Node Cache Plan
+
+Date: 2026-11-26
+
+Status: **planned**. No phase has implementation evidence.
+
+Parent: [Roadmap](../../README.md).
+
+Direct prerequisites: the storage boundary of the
+[Storage Query Boundary Plan](storage_query_boundary_plan.md) and the mount records of the
+[Mounted Folder Plan](mounted_folder_plan.md). This plan changes the cache rules of the sleeve file
+system inside that boundary. It keeps both plans.
+
+Tracking issue: [#1148](https://github.com/zidage/AlcedoStudio/issues/1148).
+
+Source audit revision: `f4d364746` on `main`.
+
+Unless a path starts with `alcedo_studio/` or `docs/`, it is relative to `alcedo_studio/src/`.
+Test paths are relative to `alcedo_studio/`.
+
+Section 10 defines the terms and the parameters that this plan uses.
+
+---
+
+## 1. Decision record
+
+### 1.1 User goal
+
+A project with more than 100,000 photos and a deep folder tree must open, show its sidebar tree,
+and accept writes with a cost that depends on the folders and on the changed elements. Today the
+cost depends on every photo of the project.
+
+The sleeve file system keeps its design: the database is the persistent store and the query
+engine, and `FileSystem` holds the in-memory nodes with their structure, path resolution, and
+copy-on-write rules. This plan changes the cache rules only.
+
+### 1.2 Approved decisions
+
+| Id | Decision |
+| --- | --- |
+| D1 | `FileSystem`, `PathResolver`, `NodeStorageHandler`, the copy-on-write rules, and the `SleeveService` API stay. |
+| D2 | A link stays the membership model: one file has one element id, and each folder that holds the file has one `FolderContent` row. The row of the library root (folder 0) for each photo stays. Old projects open with no data change. |
+| D3 | The rule that a file name is unique in the library root can change. The root was the link target of each photo only to make the count of all photos simple. |
+| D4 | Node eviction (issue step 4) is decided after a measurement. The measurement is a phase of this plan. |
+| D5 | The sidebar tree read can move off the GUI thread. The risk of defects must stay low. |
+| D6 | The node container can be a page table indexed by element id. |
+| D7 | New code goes into new files. `sleeve/sleeve_filesystem.cpp` and `storage/store/sleeve/element_store.cpp` get smaller or keep their size. |
+| D8 | A file name is a label. Only folder names are unique among the child folders of one parent. A file that holds a name with `@` today keeps that name. |
+| D9 | The project file version becomes 0.15.0. Version 0.10.0 stays the minimum. The versions 0.13.0 and 0.14.0 stay unused. |
+
+### 1.3 Decisions made in this plan
+
+| Id | Decision | Reason |
+| --- | --- | --- |
+| P1 | All folders are resident. One query loads all folder elements and all folder-to-folder edges when the project opens. | A project has at most some thousands of folders. A deep tree then costs one query, and path resolution of a folder reads memory only. |
+| P2 | A folder holds its child folders in memory. File membership is the `FolderContent` rows plus the pending changes of the folder (`ContentAddedSinceSync`, `ContentRemovedSinceSync`). | The two sets exist today. They are the difference between memory and the database before a sync. |
+| P3 | SN4 removes the file name map and all file name checks (D8). | One element has one name. A name that is unique in each holder folder makes a link fail when two cameras gave the same name. The root rule prevented that failure at the cost of one name entry for each photo. |
+| P4 | The node container is a page table: a vector of pages, and each page holds 4096 `std::shared_ptr<SleeveElement>` slots. The index is the element id. | Element ids are `uint32_t` values from one increasing generator. A lookup has no hash and no node allocation. |
+| P5 | Each element has one intrusive list hook. An element is in the dirty list, in the eviction list, or in no list (a resident folder, or a clean element before SN7). | One hook has no allocation. An element in the dirty list cannot be evicted. |
+| P6 | `SleeveElement::SetSyncFlag` is the only writer of the sync flag. It moves the element between the lists. | 62 lines in 12 source files read or write `sync_flag_` today, and some write the field directly. One writer makes the dirty list complete. |
+| P7 | `Sync()` writes the inserts, the updates, and the deletes in one transaction. It marks the elements `SYNCED` after the commit. | Today the three groups commit separately. A failure between two groups leaves a part of the change in the database. |
+| P8 | Bulk reads return rows (ids, names, folder ids) from a store query. They do not load elements into the cache. | A scan of a large mount then leaves the cache unchanged, so strict LRU order is sufficient. |
+| P9 | The sidebar tree read uses no stored copy of the tree and no new consistency mechanism without the evidence that `AGENTS.md` requires. SN8 states the rule. | `AGENTS.md` prohibits a copy of owner state for convenience, and a generation without an executable interleaving. The first proposal in the discussion (a published tree copy with a counter) does not satisfy these rules. |
+| P10 | The container type is private to `NodeCache`. `FileSystem` reads and writes nodes through `NodeCache` operations. | A later container change touches one file. |
+
+| P11 | SN4 writes the new project file version (D9). | A build before this plan loads the root with `SleeveFolder::AddElementToMap`, which throws on the second equal name. Its tree is then empty with no message. The new version makes that build refuse the project with the version message. |
+
+### 1.4 Rejected options that must not return
+
+- A file name that is unique in the library root, or in each folder that holds the file.
+
+- The database as the only source of truth with no in-memory node tree.
+- A published copy of the folder tree with a change counter for the GUI thread.
+- A cache of file directory entries (name to id). Under P3 no reader needs one.
+- An adaptive eviction policy (ARC, 2Q, W-TinyLFU). P8 removes the scan problem that such a policy
+  solves.
+- A new hash map dependency. P4 uses the properties of the element id.
+
+---
+
+## 2. Current source audit
+
+Each row is a verified source fact at the audit revision unless the row says "estimate".
+
+| Area | Current owner and path | Current behavior | Required change |
+| --- | --- | --- | --- |
+| Node map | `FileSystem::storage_`, `include/sleeve/sleeve_filesystem.hpp` | `std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>>`. `FileSystem` writes `storage_[id]` in 4 places and scans all entries in `DeleteFileEverywhere`, `DeleteFilesEverywhere`, `RenameFile`, and the three `Get*Elements` functions. | `NodeCache` owns the container (SN2). |
+| Node loader | `NodeStorageHandler`, `include/sleeve/storage.hpp`, `sleeve/storage.cpp` | Shares one header with `Storage`. `GetElement` does `contains` and then `at`. | Own files (SN2). |
+| Folder load | `NodeStorageHandler::EnsureChildrenLoaded` | Two queries for each folder. It loads each child element, files included. A `std::exception` ends the load with no log line (`// TODO: LOG`). | Child folders only (SN3, SN4). Log (SN1). |
+| Folder content | `SleeveFolder`, `sleeve/sleeve_element/sleeve_folder.cpp` | `ContainsElementId` is a linear search in a vector. `AddElementToMap` calls it for each child, so the load of a folder with n children costs n squared comparisons. `RemoveElementById` scans the name map by value. | File entries leave the folder (SN4). |
+| Root links | `FileSystem::Create`, `DuplicateFileToFolder`, `RenameFile` | Each file is a child of root 0. A new name gets `@` until it is unique in the root and in the target folder. `RenameFile` also scans all loaded folders. | P3 (SN4). |
+| Sidebar tree | `FolderController::ReloadTree`, `LoadSubtree`, `LoadChildren`, `ui/alcedo_main/album_backend/folder_controller.cpp` | Recursive. One `AlbumBrowseService::ListFolders` call for each folder on the GUI thread. `LoadChildren` returns on any exception, and the folder stays unloaded. | One tree read (SN3). |
+| Folder listing | `AlbumBrowseService::ListFolders`, `app/album_browse_service.cpp` | Calls `SleeveServiceImpl::ListFolderEntries`, which loads all entries of the folder, and keeps the folders. Returns `{}` on any exception. | Folder query and log (SN1). |
+| Sync | `SleeveServiceImpl::Sync`, `app/sleeve_service.cpp` | Three scans of the node map. Two id sets. `AddElements`, `UpdateElements`, and `RemoveElements` commit separately. | Dirty list and one transaction (SN2). |
+| Writes with no sync | `SleeveServiceImpl::Write_NoSync`, used in `app/import_service.cpp` | Import leaves dirty elements in memory until a later sync. The statement of #1148 that no dirty element exists outside a write is incorrect for import. | The dirty list holds them (SN2). |
+| Mount tree read | `ReadMountTree`, `app/mount_tree.cpp` | Lists each folder of the mount and calls `fs.Get` for each child, so it loads each file element of the mount. | One store query (SN5). |
+| Path access to files | `AlbumBrowseService::ListFilesInFolder(path)`, `AlbumBrowseService::DeleteFiles(paths)`, `SleeveServiceImpl::ResolveFile` | Callers are tests only. Production code addresses a file by its id. | Archive (SN4). |
+| Callers that pass elements | `sleeve/*.cpp`, `app/mount_tree.cpp` | Many functions take `const std::shared_ptr<T>` by value where they do not keep the pointer. | `T&` in touched functions. |
+| Existing LRU type | `LRUCache<K, V>`, `include/utils/cache/lru_cache.hpp` | A `std::list` plus a map of iterators: two allocations for each entry. `Evict` removes the last entry with no check. `access_count_` never increases. | Stays for its current users. `NodeCache` does not use it. |
+| Async sidebar read | `FolderController`, `library_->query_worker()`, `SearchRequestKind::kFolderCounts` | The folder counts and the mount summaries already run on the query worker. | SN8 can use the same worker. |
+| Tests | `tests/sleeve/sleeve_fs_test.cpp` (`SleeveFSTest`), `tests/app/sleeve_service_test.cpp` (`SleeveServiceTest`), `tests/app/mount_tree_test.cpp` (`MountTreeTest`), `tests/app/album_browse_service_mount_test.cpp` (`AlbumBrowseServiceMountTest`), `tests/app/project_open_benchmark.cpp` | 5 lines in 2 test files read `sync_flag_`. Some tests address files by path. | Update with each phase. |
+
+Memory estimate (inference from the field layout, not measured): one file element with its
+control block, its name, its map node, and its name entry in the root uses 400 to 450 bytes.
+80,000 photos then use about 35 MB. The 4 GB of the 80,000-photo project has another owner. SN6
+measures it.
+
+---
+
+## 3. Target architecture
+
+### 3.1 Owners
+
+| Owner | Holds | Changes | Error surface |
+| --- | --- | --- | --- |
+| `NodeCache` (proposed) | The page table, the dirty list, the eviction list, the size limit | Inserts a node, removes a deleted node, moves a node between lists, evicts | None. Its operations do not read the database. |
+| `NodeStorageHandler` | A reference to `NodeCache` and to the stores | Loads a missing element by id. Loads the folder tree once. | Throws the store error. The caller logs the folder id and the text. |
+| `FolderEntryStore` (proposed) | No state. duckorm statements on `Element` and `FolderContent`. | Reads child folders, folder edges, file membership, and mount file locations as rows | Throws the duckorm error. |
+| `SleeveFolder` | The names and ids of its child folders. The pending membership changes. | Through `FileSystem` operations | Throws on a duplicate folder name. |
+| `FileSystem` | `NodeCache`, `NodeStorageHandler`, `PathResolver`, the id generator | All structure operations | `std::runtime_error`, as today. |
+| `SleeveServiceImpl` | `fs_lock_`, the sync operation | One transaction for each sync | `SyncResult`, as today. |
+
+### 3.2 Node states
+
+```text
+                 SetSyncFlag(UNSYNC | MODIFIED | DELETED)
+   clean  ------------------------------------------------>  dirty list
+     ^                                                           |
+     |        Sync commit: SetSyncFlag(SYNCED), or erase         |
+     +-----------------------------------------------------------+
+
+   clean folder : in no list (resident)
+   clean file   : in no list before SN7, in the eviction list after SN7
+```
+
+An element has a back pointer to its `NodeCache` from the insert to the removal. `SetSyncFlag`
+calls `NodeCache::OnSyncFlagChanged` through that pointer. An element with no cache (a row that a
+store just read) changes its flag only.
+
+### 3.3 File membership
+
+```text
+FolderHoldsFile(folder, file)
+  = file in folder.ContentAddedSinceSync
+    or (FolderEntryStore row (folder, file) exists
+        and file not in folder.ContentRemovedSinceSync)
+```
+
+A batch operation sends one query for all its ids. A link inserts its row with a statement that
+ignores an existing `(folder_id, element_id)` row, so a repeated link needs no read.
+
+### 3.4 Primary call chains
+
+Project open:
+
+```text
+SleeveServiceImpl ctor -> FileSystem::InitRoot
+  -> NodeStorageHandler::LoadFolderTree
+       -> FolderEntryStore::ReadFolderTree          (one query: folders and edges)
+       -> NodeCache::Insert for each folder
+       -> SleeveFolder child map for each edge      (explicit stack, visited set)
+```
+
+Write:
+
+```text
+SleeveServiceImpl::Write -> operation(FileSystem&)
+  -> element.SetSyncFlag(...) -> NodeCache: element enters the dirty list
+SleeveServiceImpl::Sync
+  -> NodeCache::DirtyElements()                     (list walk, no table scan)
+  -> ElementStore::WriteSync(inserts, updates, deletes)   (one transaction)
+  -> commit -> SetSyncFlag(SYNCED) or NodeCache::Erase
+```
+
+Sync failure:
+
+```text
+ElementStore::WriteSync throws -> transaction rollback
+  -> each element keeps its flag and its place in the dirty list
+  -> SyncResult{success_ = false, message_}
+  -> the next sync writes the same elements
+```
+
+---
+
+## 4. File and API map
+
+Proposed files:
+
+| File | Content |
+| --- | --- |
+| `include/utils/intrusive_list.hpp` | `IntrusiveListHook` and `IntrusiveList<T, &T::hook>`: push back, erase, move to back, front, iteration. No allocation. |
+| `include/sleeve/node_cache.hpp`, `sleeve/node_cache.cpp` | `NodeCache`: `Find(id)`, `Insert(element)`, `Erase(id)`, `OnSyncFlagChanged(element, old, new)`, `DirtyElements()`, `ForEachFolder(fn)`, `Size()`, and from SN7 `SetLimit(n)` and `EvictToLimit()`. |
+| `include/sleeve/node_storage_handler.hpp`, `sleeve/node_storage_handler.cpp` | `NodeStorageHandler`, moved out of `include/sleeve/storage.hpp` and `sleeve/storage.cpp`. Adds `LoadFolderTree()`. |
+| `include/storage/store/sleeve/folder_entry_store.hpp`, `storage/store/sleeve/folder_entry_store.cpp` | `FolderEntryStore`: `ReadChildFolders(folder_id)`, `ReadFolderTree()`, `ReadHeldFiles(folder_id, file_ids)`, `ReadMountFileFolders(mount_id)`. All statements use duckorm. `Storage` gives the store through `GetFolderEntryStore()`. |
+| `tests/sleeve/node_cache_test.cpp`, `tests/storage/folder_entry_store_test.cpp` | Tests of the two new owners. |
+
+Current files that change: `include/sleeve/sleeve_filesystem.hpp`, `sleeve/sleeve_filesystem.cpp`,
+`include/sleeve/sleeve_element/sleeve_element.hpp`, `sleeve/sleeve_element/sleeve_element.cpp`,
+`include/sleeve/sleeve_element/sleeve_folder.hpp`, `sleeve/sleeve_element/sleeve_folder.cpp`,
+`sleeve/path_resolver.cpp`, `include/sleeve/storage.hpp`, `sleeve/storage.cpp`,
+`storage/store/sleeve/element_store.cpp`, `app/sleeve_service.cpp`,
+`app/album_browse_service.cpp`, `app/mount_tree.cpp`, `app/import_service.cpp`,
+`ui/alcedo_main/album_backend/folder_controller.cpp`, and the CMake lists of `sleeve`, `storage`,
+and the tests.
+
+---
+
+## 5. Phase summary
+
+| Phase | Result | Main modules | Dependency | Expected diff | Status |
+| --- | --- | --- | --- | ---: | --- |
+| SN1 | The folder listing reads folders only. A failed listing writes a log line. | `FolderEntryStore`, `AlbumBrowseService`, `FolderController` | None | 350 to 500 | planned |
+| SN2 | `NodeCache` with the page table and the dirty list. One sync transaction. | `NodeCache`, `SleeveElement`, `SleeveServiceImpl::Sync` | SN1 | 1100 to 1500 | planned |
+| SN3 | All folders load with one query. One tree read for the sidebar. | `NodeStorageHandler`, `PathResolver`, `FolderController` | SN2 | 700 to 1000 | planned |
+| SN4 | File entries leave the folders. File names are labels. Project file 0.15.0. | `SleeveFolder`, `FileSystem`, project version | SN3 | 1200 to 1700 | planned |
+| SN5 | The mount tree read and the import use row queries. | `mount_tree.cpp`, `import_service.cpp` | SN4 | 600 to 900 | planned |
+| SN6 | Measured memory and time of the 80,000-photo project. Decision for SN7 and SN8. | `project_open_benchmark.cpp` | SN5 | 150 to 300 | planned |
+| SN7 | Eviction of clean file elements under a limit. Runs when SN6 requires it. | `NodeCache` | SN6 | 400 to 600 | planned |
+| SN8 | The sidebar tree read runs on the query worker. Runs when SN6 requires it. | `FolderController` | SN6 | 300 to 500 | planned |
+
+Each phase is one pull request. Before each phase, read `AGENTS.md` and the applicable skills
+again.
+
+---
+
+## 6. Detailed phases
+
+### SN1: Folder-only listing and visible failures
+
+**Objective and deliverables.** The sidebar tree load reads no file element. One bad row in a
+folder keeps the other folders listed. Each failed listing writes one warning.
+
+**Modules, files, and APIs.**
+
+- `FolderEntryStore::ReadChildFolders(sl_element_id_t folder_id) -> std::vector<std::shared_ptr<SleeveElement>>`
+  (proposed). One statement: `Element` joined with `FolderContent` where `folder_id` is the
+  parameter and `type` is FOLDER.
+- `FileSystem::ListChildFolders(path)` and `SleeveServiceImpl::ListChildFolders(path)`. They put
+  the folders into the node map when the map does not hold them, and return the live folders.
+- `AlbumBrowseService::ListFolders` calls `ListChildFolders`.
+
+**Implementation steps.**
+
+1. Add `FolderEntryStore` with `ReadChildFolders` and register it in `Storage`.
+2. Add `FileSystem::ListChildFolders`. An element that is in the node map keeps its live state.
+3. Change `AlbumBrowseService::ListFolders` to the new call. Its catch logs the folder path and
+   the exception text with `ALCEDO_LOG_WARN(Library)` and returns the folders that it has.
+4. `NodeStorageHandler::EnsureChildrenLoaded` logs the folder id and the exception text.
+5. `FolderController::LoadChildren` logs with `qCWarning(diag::libraryLog)` and leaves the folder
+   unloaded, so the next expand reads it again.
+
+**Tests and evidence.**
+
+- `SleeveServiceTest.ListChildFoldersLeavesFileElementsUnloaded`: a project with files in the
+  root and one mount. After the listing of the root, a `Read` finds no file element in memory.
+- `SleeveServiceTest.ListChildFoldersKeepsFoldersWhenOneRowHasNoElement`: a `FolderContent` row
+  of the root with no `Element` row. The listing returns the other folders.
+
+**Exit criteria.**
+
+- [ ] Both tests pass in the debug build.
+- [ ] `SleeveFSTest`, `SleeveServiceTest`, and `AlbumBrowseServiceMountTest` pass.
+
+**Completion record.** Use the template of section 9.
+
+### SN2: NodeCache, dirty list, one sync transaction
+
+**Objective and deliverables.** `NodeCache` owns all nodes. `Sync()` visits the dirty elements
+only and commits once.
+
+**Data rules and invariants.**
+
+- An element with flag `UNSYNC`, `MODIFIED`, or `DELETED` that is in the cache is in the dirty
+  list. An element with flag `SYNCED` is not in the dirty list.
+- `sync_flag_` is private. `SleeveElement::SyncState()` reads it. `SetSyncFlag` writes it.
+- The page table allocates a page at the first insert into its id range and releases a page when
+  its last slot empties.
+- `NodeCache::Erase` requires an element that is in no list or in the dirty list with flag
+  `DELETED`.
+
+**Implementation steps.**
+
+1. Add `include/utils/intrusive_list.hpp`.
+2. Add `NodeCache` with the page table (P4), `Find`, `Insert`, `Erase`, `ForEachFolder`, and
+   `Size`. `Insert` sets the back pointer of the element and puts a dirty element into the dirty
+   list.
+3. Move `NodeStorageHandler` to its own files. It holds `NodeCache&`. `GetElement` does one
+   `Find`.
+4. Replace `FileSystem::storage_` with `NodeCache`. Replace the 4 direct writes with `Insert`.
+   Replace the scans of `DeleteFileEverywhere`, `DeleteFilesEverywhere`, and `RenameFile` with
+   `ForEachFolder`.
+5. Make `sync_flag_` private. Change each reader to `SyncState()` and each direct write to
+   `SetSyncFlag`.
+6. Remove `GetModifiedElements`, `GetUnsyncedElements`, `GetDeletedElements`, and
+   `GarbageCollect` from `FileSystem`. Add `NodeCache::DirtyElements()`.
+7. Add `ElementStore::WriteSync(inserts, updates, deletes)` in `element_store.cpp`. It opens one
+   `duckorm::Transaction`, calls the row functions that `AddElements`, `UpdateElements`, and
+   `RemoveElements` use today, and commits. Remove the three separate commits from the sync path.
+8. Rewrite `SleeveServiceImpl::Sync`: split the dirty list by flag (a `DELETED` element that was
+   `UNSYNC` has no database row and is erased only), call `WriteSync`, then mark and erase.
+9. Change touched functions that take `const std::shared_ptr<T>` by value and do not keep the
+   pointer to `T&`.
+
+**Primary failure and restore call chain.** Section 3.4, "Sync failure".
+
+**Tests and evidence.**
+
+- `NodeCacheTest.InsertFindEraseAcrossPageBoundaries`: ids 1, 4095, 4096, 4097, and 1,000,000.
+- `NodeCacheTest.PageIsReleasedWhenItsLastElementIsErased`.
+- `NodeCacheTest.FlagChangeMovesElementIntoAndOutOfDirtyList`: each flag transition.
+- `SleeveServiceTest.SyncAfterOneRenameWritesOneElementWithTenThousandInMemory`: 10,000 synced
+  elements, one folder rename, `SyncResult::elements_synced_` equals the changed elements.
+- `SleeveServiceTest.FailedSyncLeavesDatabaseUnchangedAndRetrySucceeds`: a sync with one insert,
+  one update, and one delete, where the delete step fails (a row that `StorageTestAccess` makes
+  invalid). The database holds none of the three changes. The next sync after the repair writes
+  all three.
+
+**Exit criteria.**
+
+- [ ] The tests above pass. `SleeveFSTest`, `SleeveServiceTest`, `MountTreeTest`,
+      `MountServiceTest`, `ImportServiceTest`, and `AlbumQueryTest` pass.
+- [ ] No first-party file outside `sleeve/sleeve_element/` writes the sync flag field.
+- [ ] `sleeve/sleeve_filesystem.cpp` has fewer lines than at the audit revision.
+
+**Completion record.** Use the template of section 9.
+
+### SN3: Resident folder tree with one query
+
+**Objective and deliverables.** The project open loads all folders with one query. The sidebar
+reads the tree with one service call.
+
+**Data rules and invariants.**
+
+- After `InitRoot`, each live folder element is in `NodeCache` and each parent holds the names
+  and ids of its child folders.
+- A folder can have more than one parent (the copy-on-write reference count). The load adds one
+  child entry for each edge and does not change `ref_count_`.
+- The tree walk uses an explicit stack and a visited set of folder ids. An edge to a visited
+  folder on the current path is a cycle: the load skips the edge and writes one warning with both
+  ids.
+
+**Implementation steps.**
+
+1. Add `FolderEntryStore::ReadFolderTree()`: the folder elements and the edges
+   `(parent_id, child_id)` where both ends are folders.
+2. Add `NodeStorageHandler::LoadFolderTree()` and call it from `FileSystem::InitRoot`.
+3. Give `SleeveFolder` a child folder map that is complete after the load. `PathResolver::Resolve`
+   and `ResolveForWrite` read it for each path part.
+4. Keep `EnsureChildrenLoaded` for file entries until SN4. It no longer loads folders.
+5. Add `SleeveServiceImpl::ListFolderTree()` and `AlbumBrowseService::ListFolderTree()`. The
+   result is a vector of `AlbumFolderView` values in parent-before-child order.
+6. `FolderController::ReloadTree` calls `ListFolderTree` once and fills `nodes_by_path_` and
+   `child_keys_by_path_`. `LoadSubtree` and `LoadChildren` then read these maps.
+7. `library.folders` of `ui/alcedo_main/automation/commands/library_commands.cpp` uses the same
+   call.
+
+**Tests and evidence.**
+
+- `SleeveServiceTest.OpenLoadsNestedFoldersWithOneTreeRead`: a tree of depth 40 and 2,000
+  folders. After open, each folder path resolves with no store read (a counter in the test store
+  wrapper stays at the value after open).
+- `SleeveServiceTest.FolderWithTwoParentsAppearsUnderBoth`.
+- `SleeveServiceTest.FolderEdgeCycleIsSkippedWithWarning`: rows from `StorageTestAccess`.
+- `AlbumBrowseServiceMountTest`: the existing mount tree assertions pass with `ListFolderTree`.
+
+**Exit criteria.**
+
+- [ ] The tests above pass. `CollectionsPanelQmlTest` and `LibraryFolderSectionQmlTest` pass.
+- [ ] `project_open_benchmark` reports the tree read time. The value goes into the record.
+
+**Completion record.** Use the template of section 9.
+
+### SN4: File entries on demand, file names as labels
+
+**Objective and deliverables.** A folder holds no file entry in memory. The library accepts equal
+file names. The project file version is 0.15.0.
+
+**Inputs and prerequisites.** SN3 is merged. D8 and D9 apply.
+
+**Data rules and invariants.**
+
+- File membership follows section 3.3.
+- A folder name is unique among the child folders of its parent. A file name has no uniqueness
+  rule. A file and a folder in one parent can have the same name.
+- `ContentAddedSinceSync` and `ContentRemovedSinceSync` hold file ids and folder ids, as today.
+- A project of version 0.10.0 to 0.12.0 opens with no data change. The next save writes 0.15.0.
+
+**Implementation steps.**
+
+1. Add `FolderEntryStore::ReadHeldFiles(folder_id, file_ids)`: the ids of `file_ids` that have a
+   row in the folder.
+2. Remove file entries from `SleeveFolder::contents_` and from the default index.
+   `AddElementToMap` for a file records the pending add only. Remove `ContainsElementId` for
+   files, `RemoveElementById`, and `RemoveElementsById`; add `RecordFileLinked(id)` and
+   `RecordFileUnlinked(id)`.
+3. `FileSystem::LinkFileToFolder`: record the link. The sync inserts the row with a statement that
+   ignores an existing row. When duckorm has no such statement form, add it to duckorm in this
+   phase with a test in `DuckormStatementTest`.
+4. `UnlinkFileFromFolder` and `UnlinkFilesFromFolder`: one `ReadHeldFiles` call plus the pending
+   sets give the members. The single form throws for a file that is not a member, as today.
+5. `Create`, `CreateFileInLibrary`, `DuplicateFileToFolder`, `RenameFile`: remove the name loops
+   for files. `RenameFile` sets the name and the flag.
+6. `DeleteFileEverywhere` and `DeleteFilesEverywhere`: remove the ids from the pending sets of
+   each folder with `ForEachFolder`, then set `DELETED`. `ElementStore::RemoveElements` already
+   removes the rows.
+7. `ListFolderContent` returns child folder ids. Add `FileSystem::ListFileIds(folder_id)`, which
+   reads the ids from the store and applies the pending sets. Change each caller to the call that
+   it needs.
+8. Remove `EnsureChildrenLoaded` and `SleeveFolder::children_loaded_`.
+9. Move `AlbumBrowseService::ListFilesInFolder(path)`, `AlbumBrowseService::DeleteFiles(paths)`,
+   `SleeveServiceImpl::ResolveFile`, and the file branch of `FileSystem::Delete(path)` to the
+   archive location that the legacy code rule of the repository names. Change their tests to the
+   id operations.
+10. Remove `FreeNameForFolder` from `app/mount_tree.cpp`.
+11. Set `kProjectFileVersion` and `kMaxSupportedProjectFileVersion` to `0.15.0` in
+    `include/edit/history/pipeline_history_format.hpp` and extend the version comment.
+
+**Primary failure and restore call chain.**
+
+```text
+FileSystem::UnlinkFileFromFolder -> FolderEntryStore::ReadHeldFiles throws
+  -> no pending set changed, no flag changed
+  -> SleeveServiceImpl::Write returns the exception to the caller, as today
+```
+
+**Tests and evidence.**
+
+- `SleeveServiceTest.TwoFilesWithEqualNamesLinkIntoOneFolder`.
+- `SleeveServiceTest.LinkAndUnlinkInOneWriteLeaveNoRow` and
+  `SleeveServiceTest.UnlinkOfAFileLinkedInTheSameWriteNeedsNoRow`: the pending sets cancel.
+- `SleeveServiceTest.RepeatedLinkKeepsOneRow`.
+- `SleeveServiceTest.LinkIntoFolderWithTenThousandFilesLoadsNoFileElement`.
+- `SleeveServiceTest.ProjectWithEqualRootNamesReopensWithAllFiles`.
+- A project file of version 0.12.0 from the test data opens, and its saved metadata reads 0.15.0.
+
+**Exit criteria.**
+
+- [ ] The tests above pass. `SleeveFSTest`, `SleeveServiceTest`, `MountTreeTest`,
+      `MountServiceTest`, `ImportServiceTest`, `AlbumQueryTest`, and the project package tests
+      pass.
+- [ ] `sleeve/sleeve_filesystem.cpp` and `sleeve/sleeve_element/sleeve_folder.cpp` have fewer
+      lines than after SN3.
+
+**Completion record.** Use the template of section 9.
+
+### SN5: Row queries for the mount scan and the import
+
+**Objective and deliverables.** A scan of a mount with 80,000 files loads no file element that it
+does not change.
+
+**Implementation steps.**
+
+1. Add `FolderEntryStore::ReadMountFileFolders(mount_id)`: rows `(file_id, folder_id)` for the
+   files of the mount in the folders of the mount.
+2. `ReadMountTree` takes its folders from the resident tree and `home_folders` from the query plus
+   the pending sets of the mount folders.
+3. `PlaceFile`, `RemoveFolder`, and `RemoveMountTree` call `fs.Get` only for a file that they
+   change.
+4. In `app/import_service.cpp`, keep the two `Write_NoSync` sites. Confirm with a test that a
+   batch of n files sends a number of statements that does not grow with the files of the library.
+
+**Tests and evidence.**
+
+- `MountTreeTest.ReadMountTreeLoadsNoFileElement`.
+- `MountTreeTest.PlacementOfOneFileLoadsOneFileElement` in a mount with 10,000 files.
+- The existing `MountTreeTest` and `MountServiceTest` cases pass.
+
+**Exit criteria.**
+
+- [ ] The tests above pass.
+
+**Completion record.** Use the template of section 9.
+
+### SN6: Measurement
+
+**Objective and deliverables.** Numbers that decide SN7 and SN8, and the owner of the 4 GB.
+
+**Implementation steps.**
+
+1. Extend `tests/app/project_open_benchmark.cpp` with: the open time, the tree read time,
+   `NodeCache::Size()` and the resident set size after open, after a browse of 50 folders, and
+   after a scan of the mount.
+2. Run it on the 80,000-photo project of the user in the debug build and in the release build.
+   Follow the measurement rules of the repository for other jobs on the machine.
+3. Record the wait of the GUI thread on `fs_lock_` during a mount scan (the time around each
+   sidebar read).
+4. Record the table sizes of the 1.6 GB project file with `StorageMaintenance`.
+
+**Decision rules.**
+
+- SN7 runs when the nodes use more than 64 MB after the mount scan.
+- SN8 runs when one sidebar read waits more than 50 ms.
+- A finding about the 4 GB or the 1.6 GB that has another owner becomes its own issue.
+
+**Exit criteria.**
+
+- [ ] The numbers and the two decisions are in the completion record and in #1148.
+
+**Completion record.** Use the template of section 9.
+
+### SN7: Eviction of clean file elements (conditional)
+
+**Objective and deliverables.** `NodeCache` keeps at most the limit of clean file elements.
+
+**Data rules and invariants.**
+
+- A clean file element is in the eviction list. `Find` moves it to the back.
+- A folder, a dirty element, and an element with `use_count() > 1` stay. The eviction walk moves a
+  referenced element to the back.
+- The check of `use_count()` runs under `fs_lock_`. A caller gets a new reference to a cached
+  element only under that lock, so a count of 1 stays 1 during the walk.
+- `EvictToLimit` runs at the end of `Read`, `Write`, and `Write_NoSync`.
+- The limit comes from SN6. It is a constant in `node_cache.hpp`.
+
+**Tests and evidence.**
+
+- `NodeCacheTest.ReadingMoreFilesThanTheLimitKeepsTheCacheAtTheLimit`.
+- `NodeCacheTest.ElementHeldByACallerStaysAndKeepsItsIdentity`: the pointer from a second `Find`
+  equals the held pointer.
+- `NodeCacheTest.ModifiedElementStaysUntilSync`.
+- `NodeCacheTest.FoldersStayResident`.
+- The memory of the SN6 benchmark before and after goes into the pull request description.
+
+**Completion record.** Use the template of section 9.
+
+### SN8: Sidebar tree read on the query worker (conditional)
+
+**Objective and deliverables.** The GUI thread does not wait on `fs_lock_` for the sidebar tree.
+
+**Rules.**
+
+- The read stays `AlbumBrowseService::ListFolderTree()` through the owner. Its result is the value
+  that the function returns. No type stores a second copy of the tree.
+- The job runs on `library_->query_worker()`, as the folder counts do. The result goes to the GUI
+  thread with a queued call and `FolderController` applies it there.
+- A stale-result check (`IsCurrent` with a new `SearchRequestKind`) needs the evidence of
+  `AGENTS.md`: the two operations, the two events, and a test that drives the real path. Without
+  that evidence the controller applies each result in arrival order.
+
+**Tests and evidence.**
+
+- `CollectionsPanelQmlTest` and `LibraryFolderSectionQmlTest` pass.
+- The SN6 wait measurement after the change goes into the pull request description.
+- The user confirms in the application that the tree stays usable during a mount scan.
+
+**Completion record.** Use the template of section 9.
+
+---
+
+## 7. Cross-phase acceptance matrix
+
+| Behavior | Expected result | Phase |
+| --- | --- | --- |
+| Open a project with 80,000 photos in the root | The tree shows. No file element is in memory. | SN1, SN3 |
+| A folder row with no element | The other folders show. One warning names the folder. | SN1 |
+| Rename one folder in a large project | The sync writes the changed elements only. | SN2 |
+| A sync fails in its last step | The database holds no part of the change. The retry writes all of it. | SN2 |
+| A tree of depth 40 | One query at open. Each path resolves from memory. | SN3 |
+| A folder edge that closes a cycle | The load ends. One warning names both folders. | SN3 |
+| Two photos with one name in one collection | Both are members. | SN4 |
+| A project of version 0.12.0 | Opens. The save writes 0.15.0. | SN4 |
+| A build before this plan opens a 0.15.0 project | The build refuses the project with the version message. | SN4 |
+| Scan of a mount with no change | No file element is loaded. | SN5 |
+| An element that a caller holds | It keeps its identity while the caller holds it. | SN7 |
+
+---
+
+## 8. Build, evidence, risks
+
+**Build and run.** Use the debug build and the MSVC wrapper of the `alcedo-msvc-cmake` skill:
+`cmd /c "scripts\msvc_env.cmd --build build\debug --target <Target>"` from PowerShell. Run the
+named targets of each phase. Do not run the full suite. Confirm that the test list contains each
+new test name before a pass is recorded. Put temporary logs under the build directory.
+
+**Risks and stop conditions.**
+
+| Risk | Detection | Response |
+| --- | --- | --- |
+| A reader of `sync_flag_` or a writer outside `SetSyncFlag` remains | The build fails after the field is private | Change the site in SN2. |
+| A caller needs the file entries of a folder as elements | A compile error or a failing test in SN4 | Give the caller `ListFileIds` or a row query. Do not load all elements. |
+| duckorm has no insert that ignores an existing row | SN4 step 3 | Add the statement form to duckorm in SN4. Stop when that pushes SN4 over 2000 lines, and split it. |
+| The copy-on-write count changes with the tree load | `SleeveFSTest.CoWTest1` and `CoWTest2` fail | The load must not change `ref_count_`. |
+| A phase estimate passes 2000 lines | During the work | Stop and split the phase in this plan. |
+| SN8 needs a stale-result check with no interleaving evidence | SN8 | Apply results in arrival order. |
+
+---
+
+## 9. Completion record template
+
+```text
+Phase / date / status:
+Source revision and branch:
+Actual changed modules:
+Implemented behavior:
+Explicitly unimplemented items:
+Primary success call chain:
+Primary failure and restore call chain:
+Build and test commands with exit codes:
+Discovered / passed / failed / skipped counts:
+Manual verification:
+Performance or resource evidence, if required:
+Evidence path:
+Remaining defects or unavailable platforms:
+```
+
+---
+
+## 10. Terms and parameters
+
+| Term | Meaning |
+| --- | --- |
+| Element, node | One `SleeveElement`: a file or a folder with an element id. |
+| Link | One `FolderContent` row `(folder_id, element_id)`. |
+| Resident | In `NodeCache` for the lifetime of the open project. |
+| Dirty | Sync flag `UNSYNC`, `MODIFIED`, or `DELETED`. |
+| Clean | Sync flag `SYNCED`. |
+| Pending sets | `ContentAddedSinceSync` and `ContentRemovedSinceSync` of a folder. |
+| Row query | A store read that returns ids and values and loads no element. |
+
+| Parameter | Meaning | Value | Source |
+| --- | --- | --- | --- |
+| Page size | Slots in one page of the page table | 4096 slots, 64 KiB | This plan (P4) |
+| Node size | Memory of one file element at the audit revision | 400 to 450 bytes | Estimate from the field layout |
+| Eviction limit | Largest number of clean file elements in the cache | Set in SN6 | Measurement |
+| SN7 threshold | Node memory after the mount scan that starts SN7 | 64 MB | This plan |
+| SN8 threshold | Wait of one sidebar read on `fs_lock_` that starts SN8 | 50 ms | This plan |
+| Project file version | Version that SN4 writes | 0.15.0, minimum 0.10.0 | User (D9) |

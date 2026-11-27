@@ -29,6 +29,8 @@ use their own top-level category.
 - [Library Search Performance, Recall, and Project Size Plan](alcedo_studio/storage/library_search_and_project_size_plan.md)
 - [Mounted Folder Plan](alcedo_studio/storage/mounted_folder_plan.md): a collection that mirrors
   a disk directory through a one-way scan; tracking issue #991
+- [Sleeve Node Cache Plan](alcedo_studio/storage/sleeve_node_cache_plan.md): resident folder
+  tree, file entries on demand, and a dirty list for the sleeve file system; tracking issue #1148
 
 ## Alcedo Studio — Image editing pipeline
 
