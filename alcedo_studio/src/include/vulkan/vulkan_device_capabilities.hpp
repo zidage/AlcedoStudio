@@ -57,6 +57,8 @@ struct VulkanDeviceCapabilities {
   VkPhysicalDeviceType                             device_type    = VK_PHYSICAL_DEVICE_TYPE_OTHER;
   uint32_t                                         api_version    = 0;
   uint32_t                                         driver_version = 0;
+  /// `pipelineCacheUUID`: pipeline cache data of another value is from another driver.
+  std::array<uint8_t, VK_UUID_SIZE>                pipeline_cache_uuid{};
   /// The LUID of the adapter (Windows). VK18 matches the display device to DXGI with it.
   std::optional<std::array<uint8_t, VK_LUID_SIZE>> luid;
   /// Names of the device extensions, sorted.

@@ -19,6 +19,12 @@
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_program_library.hpp"
 #endif
+#ifdef HAVE_VULKAN
+#include <algorithm>
+
+#include "vulkan/vulkan_context.hpp"
+#include "vulkan/vulkan_kernel_catalog.hpp"
+#endif
 #ifdef HAVE_METAL
 #include <alcedo/metal/Metal.hpp>
 
@@ -108,6 +114,46 @@ void VerifyOpenCl(const QString& bin) {
 }
 #endif
 
+#ifdef HAVE_VULKAN
+// Creates the pipeline of each kernel of the kernel folder that the application uses: the
+// packaged folder next to the executable when it has an asset list, else the build folder.
+void VerifyVulkan(const QString& bin) {
+  namespace vk        = alcedo::vulkan;
+  const auto packaged = bin + "/vulkan";
+  if (QFile::exists(packaged + "/runtime-assets.sha256")) {
+    (void)VerifyAssets(packaged);
+  }
+  const uint64_t validation_errors_before = vk::VulkanContext::ValidationErrorCount();
+  auto& context     = vk::VulkanContext::Create(vk::VulkanInitializationOptions::FromEnvironment());
+  auto& modules     = context.ShaderModules();
+  const auto folder = modules.Folder();
+  std::cout << "Vulkan device=" << context.Capabilities().name
+            << " api=" << vk::FormatVulkanApiVersion(context.Capabilities().api_version)
+            << " kernels=" << folder.folder.string() << std::endl;
+
+  const auto names = modules.KernelNames();
+  Require(!names.empty(), "No Vulkan kernels in " + folder.folder.string());
+  const auto catalog = vk::VulkanKernelCatalog();
+  for (const auto& descriptor : catalog) {
+    Require(std::find(names.begin(), names.end(), descriptor.kernel) != names.end(),
+            "Vulkan kernel is absent from the kernel inventory: " + descriptor.kernel);
+  }
+  for (const auto& name : names) {
+    Require(std::any_of(catalog.begin(), catalog.end(),
+                        [&name](const auto& descriptor) { return descriptor.kernel == name; }),
+            "Vulkan kernel has no descriptor in VulkanKernelCatalog: " + name);
+  }
+  for (const auto& descriptor : catalog) {
+    (void)context.ComputePipelines().Pipeline(descriptor);
+    std::cout << "Vulkan kernel=" << descriptor.kernel << std::endl;
+  }
+  vk::VulkanContext::Destroy();
+  Require(vk::VulkanContext::ValidationErrorCount() == validation_errors_before,
+          "The Vulkan validation layer reported errors");
+  std::cout << "gpu.kernels.ok=vulkan kernels=" << catalog.size() << std::endl;
+}
+#endif
+
 #ifdef HAVE_METAL
 void VerifyMetal(const QString& bin) {
   auto       pool   = NS::TransferPtr(NS::AutoreleasePool::alloc()->init());
@@ -148,10 +194,16 @@ int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
   try {
     const auto args = app.arguments();
-    Require(args.size() == 2, "Usage: alcedo-gpu-check --opencl|--metal");
+    Require(args.size() == 2, "Usage: alcedo-gpu-check --opencl|--metal|--vulkan");
 #ifdef HAVE_OPENCL
     if (args[1] == "--opencl") {
       VerifyOpenCl(app.applicationDirPath());
+      return 0;
+    }
+#endif
+#ifdef HAVE_VULKAN
+    if (args[1] == "--vulkan") {
+      VerifyVulkan(app.applicationDirPath());
       return 0;
     }
 #endif

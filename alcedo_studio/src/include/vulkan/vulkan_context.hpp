@@ -5,7 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,7 +17,10 @@
 #include <vma/vk_mem_alloc.h>
 // clang-format on
 
+#include "vulkan/vulkan_compute_pipeline_cache.hpp"
 #include "vulkan/vulkan_device_capabilities.hpp"
+#include "vulkan/vulkan_kernel_inventory.hpp"
+#include "vulkan/vulkan_shader_module_registry.hpp"
 
 namespace alcedo::vulkan {
 
@@ -26,9 +31,15 @@ struct VulkanInitializationOptions {
   /// Enables `VK_LAYER_KHRONOS_validation` when the layer is installed. A validation error is
   /// written to the `alcedo.gpu` log and counted (`VulkanContext::ValidationErrorCount`).
   bool                      enable_validation_layer = false;
+  /// The folders of the kernel modules. Empty: `VulkanKernelFolderCandidatesOfThisProcess()`.
+  std::optional<VulkanKernelFolderCandidates> kernel_folders;
+  /// The file of the `VkPipelineCache` data (plan section 4.1: in the application cache folder).
+  /// Empty: the pipeline cache is not read from or written to a file.
+  std::filesystem::path                       pipeline_cache_file;
 
   /// The options of the application: `device_name_filter` from the environment variable
   /// `ALCEDO_VULKAN_DEVICE`, and the validation layer in a debug build (`NDEBUG` not defined).
+  /// `pipeline_cache_file` stays empty: the application gives its cache folder.
   [[nodiscard]] static auto FromEnvironment() -> VulkanInitializationOptions;
 };
 
@@ -43,7 +54,8 @@ struct VulkanPipelineQueue {
 
 /**
  * @brief The process owner of the Vulkan instance, the physical device, the pipeline device with
- * its queue, and the VMA allocator of the pipeline device (plan section 4.1).
+ * its queue, the VMA allocator, the shader module registry, and the compute pipeline cache of the
+ * pipeline device (plan section 4.1).
  *
  * There is one context in each process. `Create` makes it, `Instance` reads it, and `Destroy`
  * releases it (application shutdown, the device restore procedure of plan section 9.5, and tests
@@ -121,6 +133,13 @@ class VulkanContext {
   [[nodiscard]] auto ValidationLayerEnabled() const -> bool {
     return debug_messenger_ != VK_NULL_HANDLE;
   }
+  /// The shader modules of the pipeline device (kernel folder of the options).
+  [[nodiscard]] auto ShaderModules() -> VulkanShaderModuleRegistry& { return *shader_modules_; }
+  /// The compute pipelines of the pipeline device. `Destroy` writes its data to the
+  /// `pipeline_cache_file` of the options.
+  [[nodiscard]] auto ComputePipelines() -> VulkanComputePipelineCache& {
+    return *compute_pipelines_;
+  }
 
  private:
   VulkanContext() = default;
@@ -133,6 +152,7 @@ class VulkanContext {
   void                     SelectPhysicalDevice(const VulkanInitializationOptions& options);
   void                     CreatePipelineDevice();
   void                     CreatePipelineAllocator();
+  void                     CreateKernelObjects(const VulkanInitializationOptions& options);
   /// Destroys the objects in the reverse order of creation. Safe on a partly created context.
   void                     Release() noexcept;
 
@@ -144,6 +164,8 @@ class VulkanContext {
   VolkDeviceTable          pipeline_device_functions_{};
   std::vector<std::string> pipeline_device_extensions_;
   VmaAllocator             pipeline_allocator_ = VK_NULL_HANDLE;
+  std::unique_ptr<VulkanShaderModuleRegistry> shader_modules_;
+  std::unique_ptr<VulkanComputePipelineCache> compute_pipelines_;
   bool                     loader_initialized_ = false;
 };
 

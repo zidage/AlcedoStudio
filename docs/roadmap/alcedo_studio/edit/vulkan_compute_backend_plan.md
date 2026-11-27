@@ -6,7 +6,7 @@ Status: planned. Experiments VX1 to VX5 come first. VX1, VX2, VX3, and VX5 are c
 (2026-11-22, sections 9.1, 9.2, 9.3, and 9.5); VX5 has no restore run of a lost device (section
 9.5). VX4 does not run: the neural networks use ONNX Runtime (user decision 2026-11-22, A5). VX2
 changed B5 to two devices and stopped VK18 until the plan has a new resize design (section 9.2).
-VK0 is complete (2026-11-23, #1063).
+VK0 is complete (2026-11-23, #1063). VK1 is complete (2026-11-23, #1065).
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -545,7 +545,7 @@ test of its kernels (B9).
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | VK0 | Build option, dependencies, `VulkanContext`, enum values | root CMake, `src/vulkan/`, `pipeline_accelerator` | VX1, VX2 | 1300 to 1700 | complete (#1063) |
-| VK1 | Slang build rule, shader module registry, compute pipeline cache, kernel check tool | `src/vulkan/`, `tools/gpu_kernel_check.cpp` | VK0 | 1300 to 1700 | planned |
+| VK1 | Slang build rule, shader module registry, compute pipeline cache, kernel check tool | `src/vulkan/`, `tools/gpu_kernel_check.cpp` | VK0 | 1300 to 1700 | complete (#1065) |
 | VK2 | `VulkanBackend`, `VulkanCommandContext`, workspace instance | `edit/runtime/vulkan/` | VK1, VX3, VX5 | 1600 to 1900 | planned |
 | VK3 | Shared kernel modules, geometry utilities, comparison test support | `edit/runtime/vulkan/shader/`, `src/vulkan/` | VK2 | 1500 to 1900 | planned |
 | VK4 | RAW operators: linearize, CFA clamp, reference space, RCD, X-Trans, pack | `decoders/processor/operators/gpu/` | VK3 | 1400 to 1800 | planned |
@@ -863,13 +863,121 @@ ctest --test-dir build/debug -R "Vulkan(ShaderModuleRegistry|ComputePipelineCach
 
 **Exit criteria.**
 
-- [ ] A Slang error stops the build with the file and the line.
-- [ ] The listed tests pass on both local devices.
-- [ ] `gpu_kernel_check --vulkan` exits with 0 for the test kernel.
+- [x] A Slang error stops the build with the file and the line.
+- [x] The listed tests pass on both local devices.
+- [x] `gpu_kernel_check --vulkan` exits with 0 for the test kernel.
 
 **Expected diff.** 1300 to 1700 lines.
 
-**Completion record.** (empty)
+**Completion record.**
+
+##### Phase VK1 completion record (2026-11-23)
+
+**Status:** complete. Issue #1065. Branch `feature/vulkan-vk1-kernels` on the VK0 branch
+`feature/vulkan-vk0-context` (pull request #1064).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Build function | `alcedo_add_slang_kernels(target, sources)` in `src/vulkan/CMakeLists.txt` | `alcedo_add_slang_kernels(<target> GROUP <group> SOURCE <file> KERNELS <kernel>... [INCLUDE_DIRS] [OUTPUT_DIR])` in `src/cmake/AlcedoSlangKernels.cmake`. `<target>` collects the groups (`AlcedoVulkanKernels`); each group is the custom target `<target>_<group>`. | Kernel groups of later phases are in `edit/` and use the same function. The build rule test includes the same file. The kernel list gives the `-entry` arguments, so a listed kernel that the source does not have stops the build. |
+| Tools | VK0 record: "VK1 adds `find_package(Vulkan)` for `slangc` and `spirv-val`" | `alcedo_find_slang_tools()`: `find_program` for `slangc` and `spirv-val` with the hint `$ENV{VULKAN_SDK}/Bin`; the configure stops when one is absent and writes the `slangc` version. No `find_package(Vulkan)`. | `FindVulkan` has no `slangc` component, and the build links no Vulkan loader (VK0). |
+| Build steps | `slangc`, then `spirv-val` | `slangc` writes the module and a depfile into `<binary dir>/slang_kernels/<group>/`; `spirv-val` checks that module; a script step (`write_slang_kernel_inventory.cmake`) then copies it to the kernel folder and writes the inventory. CMake converts the `slangc` depfile for Ninja. | A module that `spirv-val` rejects never reaches the kernel folder. A change of an included header builds the module again (`HeaderChangeBuildsTheModuleAgain`). |
+| Inventory | "an asset inventory: kernel name, group file, checksum" | One file `<group>.kernels` for each group, one line `<kernel>\t<group>.spv\t<SHA-256>` for each kernel. `VulkanKernelInventory::Read` reads every `.kernels` file of the kernel folder and rejects a malformed line (file and line number) and a kernel name in two files (both files). | No CMake step must collect the groups of all folders. The uniqueness rule of the kernel name is checked where the names meet. |
+| Kernel folders | Packaged path first, then the build tree path | Build folder `<build>/shaders/vulkan` (`ALCEDO_VULKAN_KERNEL_BUILD_ROOT`, a compile definition of `VulkanContext`). Packaged folder `<executable folder>/vulkan`; it is selected only when it has `runtime-assets.sha256`, and then it is the only source (`ResolveVulkanKernelFolder`, as `ResolveOpenClSourcePath`). | Test executables run from `<Target>_runtime/` and the build tool from `alcedo_studio/src`; both have no packaged folder and read the build folder. The install rule of the `.spv` files stays in VK19 (section 7). |
+| Module load | Read `.spv` and `vkCreateShaderModule` | The registry reads the inventory at the first request, not at `VulkanContext::Create`. At the first request of a group it checks the SHA-256 of the file against the inventory and reads the `OpEntryPoint` names (`ReadSpirvEntryPointNames`); the requested kernel must be one of them. One `VkShaderModule` for each group. | A context needs no kernels (the VK0 tests do not build them). A stale module or an inventory that names a kernel the module does not have fails with the path, before `vkCreateComputePipelines` gets a wrong entry point name. |
+| Pipeline key | Kernel name, binding list, specialization values | Key = kernel name and the specialization values sorted by constant id. The binding list and the push constant size are properties of the kernel: another value for a known kernel throws `std::logic_error`. A binding of a buffer type, a binding number or constant id used two times, and a push constant size that is not a multiple of 4 or above `maxPushConstantsSize` throw `std::invalid_argument` before a Vulkan call. | Section 4.2: one set of images, buffers as device addresses. A wrong layout is an error of the caller, not a second pipeline. |
+| Pipeline form | none | `VK_PIPELINE_CREATE_DISPATCH_BASE_BIT` on each pipeline. The descriptor set layout has `VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR`; a kernel without bindings has no set layout. | Section 4.2: an export dispatch is divided into row bands with `vkCmdDispatchBase`. |
+| Disk store | `StoreToDisk()` and `LoadFromDisk()` | The constructor reads the file (a `VkPipelineCache` gets its data at creation) and `StoredDataStatus()` reports `NoFile`, `Loaded`, `DifferentDriver`, or `Damaged`. `StoreToDisk()` writes it; `VulkanContext::Destroy` calls it (a failure is a log warning). File: a header of the application (magic, format version, data size, SHA-256 of the data), then the data of `vkGetPipelineCacheData`. The data is given to the driver only when the file is complete and its `VkPipelineCacheHeaderVersionOne` has the vendor, the device, and the `pipelineCacheUUID` of the device. The write goes to a temporary file and a rename. | Some drivers do not check the data that they get. `VulkanDeviceCapabilities` gets `pipeline_cache_uuid` for the comparison. |
+| Cache file path | "the application cache folder" | `VulkanInitializationOptions::pipeline_cache_file`. `FromEnvironment` leaves it empty, so no file is read or written. The application path that creates the context (VK17 `PipelineExecutor`, VK18 `main`) sets it to a file in `QStandardPaths::AppLocalDataLocation`. | `VulkanContext` has no Qt dependency. No application path creates the context before VK17. |
+| Counters | Model `opencl_api_counters.cpp` | `VulkanApiCounters` with `ReadVulkanApiCounters` and `VulkanApiCounterDelta`. Always on (relaxed atomic increments), no enable flag. VK1 notes module loads, pipeline creations, and cache hits; the dispatch, transfer, submit, and wait counters are for the backend of VK2. | The counted calls cost much more than an increment, and the tests of section 4.2 need the counts in every build. |
+| Test kernel | One kernel `test_fill.slang` | Group `test_fill` with two kernels: `test_fill` (a buffer through its device address, specialization constant 0 adds a value) and `test_fill_image` (an RGBA32F storage image at binding 0). Names, binding, and push constant structs are in `vulkan_test_fill_kernels.hpp`. | The image kernel proves the push descriptor path that each image pass of VK3 and later uses; the specialization constant proves the second cache key. |
+| Kernel list of the check tool | "loads each packaged kernel and creates its pipeline" | `VulkanKernelCatalog()` (`vulkan_kernel_catalog.hpp`) has the descriptor of each kernel. `alcedo-gpu-check --vulkan` requires that the inventory and the catalog have the same kernels, creates each pipeline, and requires no validation error. It checks `runtime-assets.sha256` when the packaged folder has it. | A pipeline needs the layout of its kernel, and the layout comes from the group header. A new kernel group adds its descriptors to the catalog. |
+
+**Primary success call chain:**
+
+```text
+build: alcedo_add_slang_kernels(AlcedoVulkanKernels GROUP test_fill ...)
+  -> slangc (section 4.3 arguments, -entry test_fill -entry test_fill_image, -depfile)
+  -> spirv-val --target-env vulkan1.3 --scalar-block-layout
+  -> write_slang_kernel_inventory.cmake -> shaders/vulkan/test_fill.spv, test_fill.kernels
+run: VulkanContext::Create -> CreateKernelObjects
+       -> VulkanShaderModuleRegistry(device, VulkanKernelFolderCandidatesOfThisProcess())
+       -> VulkanComputePipelineCache(device, registry, pipeline_cache_file)
+            -> ReadStoredPipelineCacheData -> vkCreatePipelineCache
+  -> VulkanComputePipelineCache::Pipeline(FillBufferDescriptor())
+       -> check bindings, push constant size, specialization -> key not found
+       -> VulkanShaderModuleRegistry::Module("test_fill")
+            -> ResolveVulkanKernelFolder -> VulkanKernelInventory::Read -> Find
+            -> read test_fill.spv -> SHA-256 = inventory -> ReadSpirvEntryPointNames
+            -> vkCreateShaderModule (NoteVulkanModuleLoad)
+       -> vkCreateDescriptorSetLayout (push descriptor, when bindings) -> vkCreatePipelineLayout
+       -> vkCreateComputePipelines (DISPATCH_BASE, specialization) (NoteVulkanPipelineCreation)
+  -> second Pipeline(...) -> same entry (NoteVulkanPipelineCacheHit)
+  -> test: bind, push constants, dispatch, submit, read back the written value
+VulkanContext::Destroy -> VulkanComputePipelineCache::StoreToDisk -> WriteStoredPipelineCacheData
+```
+
+**Primary failure call chain:**
+
+```text
+Pipeline({"absent_kernel", ...})
+  -> VulkanShaderModuleRegistry::Module -> VulkanKernelInventory::Find
+  -> std::runtime_error "Vulkan: the kernel absent_kernel is not in the kernel inventory.
+     Kernel folder: <folder>. Searched folders: <packaged folder>; <build folder>."
+  -> no module, no layout, no pipeline, no cache entry; a later request runs again
+build: Slang error in <file>.slang
+  -> slangc prints "<file>.slang(<line>): error ..." and exits with an error -> the build stops
+  -> spirv-val and the inventory step do not run; the kernel folder keeps no new module
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `VulkanShaderModuleRegistryTest.PackagedPathIsUsedBeforeTheBuildTreePath` | `VulkanShaderModuleRegistryTest` | PASS (RTX 3080 Laptop GPU and Iris Xe) |
+| `VulkanShaderModuleRegistryTest.AbsentKernelReportsItsNameAndTheSearchedPaths` | `VulkanShaderModuleRegistryTest` | PASS (both) |
+| `VulkanComputePipelineCacheTest.SecondRequestForOneKernelCreatesNoPipeline` | `VulkanComputePipelineCacheTest` | PASS (both): 1 creation and 1 module load, then 0 and 0 with 1 cache hit |
+| `VulkanComputePipelineCacheTest.FillKernelWritesTheRequestedValueToEachElement` | `VulkanComputePipelineCacheTest` | PASS (both): 1000 elements, not a multiple of the workgroup size |
+| `VulkanComputePipelineCacheTest.StoredCacheDataFromADifferentDriverIsReplaced` | `VulkanComputePipelineCacheTest` | PASS (both): `DifferentDriver`, then the stored file has the cache UUID of the device, and the next context reports `Loaded` |
+| 4 more registry tests: one module for a group, a module that differs from its inventory checksum, an inventory kernel without an entry point, and the module counter of each failure | `VulkanShaderModuleRegistryTest` | PASS (both) |
+| 6 `VulkanKernelInventoryTest` tests: the build folder has the `test_fill` inventory, packaged folder with and without the asset list, malformed line (file and line number), a kernel name in two inventories, the entry points of the module | `VulkanShaderModuleRegistryTest` | PASS |
+| 7 more cache tests: a specialization value gives a second pipeline that adds the value, the image kernel writes each texel of a 37 x 21 RGBA32F image through a push descriptor, a buffer binding is rejected with no Vulkan object, another push constant size for a known kernel is rejected, an absent kernel leaves no pipeline, each catalog kernel has a pipeline and the catalog equals the inventory, a damaged cache file is reported and not used; `VulkanPipelineCacheStoreTest.AbsentFileGivesNoFileAndNoData` | `VulkanComputePipelineCacheTest` | PASS (both) |
+| A Slang error stops the build with the file and the line | `VulkanSlangBuildRuleTest.SlangErrorStopsTheBuildWithTheFileAndTheLine` (ctest, `cmake -P`, no GPU) | PASS: the output has `kernel_with_undefined_name.slang(7): error`, and no module or inventory is written |
+| The build rule writes the module and the inventory; a header change builds again | `VulkanSlangBuildRuleTest.ValidGroupWritesTheModuleAndOneInventoryLineForEachKernel`, `HeaderChangeBuildsTheModuleAgain` | PASS |
+| Validation errors | `TearDown` of each GPU test | 0 on both devices |
+| `alcedo-gpu-check --vulkan` exits with 0 for the test kernel | `alcedo_gpu_check` (build folder) | PASS on both devices: `gpu.kernels.ok=vulkan kernels=2`, exit 0 |
+| VK0 tests and the caller suite | `VulkanContextTest`, `VulkanRequirementsTest`, `PipelineAcceleratorTest` | PASS (4/4 with 1 skipped: the test for a build without Vulkan) |
+
+Commands (worktree `build/debug`, `ALCEDO_ENABLE_VULKAN=ON`):
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target VulkanShaderModuleRegistryTest VulkanComputePipelineCacheTest VulkanContextTest VulkanRequirementsTest alcedo_gpu_check
+ctest --test-dir build/debug -R "Vulkan(ShaderModuleRegistry|ComputePipelineCache|Context|Requirements|SlangBuildRule)Test" -j 1 --output-on-failure
+    default device (RTX 3080 Laptop GPU): 47/47
+ALCEDO_VULKAN_DEVICE=Iris ctest ... -R "Vulkan(ShaderModuleRegistry|ComputePipelineCache|Context|Requirements)Test": 44/44
+build/debug/alcedo_studio/src/alcedo-gpu-check.exe --vulkan        (default device and Iris): exit 0
+cmd /c scripts\msvc_env.cmd --build build\debug --target PipelineAcceleratorTest
+ctest --test-dir build/debug -R "PipelineAcceleratorTest" -j 1: 4/4 (1 skipped)
+```
+
+The full test suite was not run (repository rule). A configure with the option `OFF` was not run
+again: the new targets and the `--vulkan` code are inside `ALCEDO_VULKAN_ENABLED` and `HAVE_VULKAN`,
+and the one shared change outside them is the condition of `alcedo_gpu_check` in
+`src/tools/CMakeLists.txt`, which adds `ALCEDO_VULKAN_ENABLED`.
+
+**Checklist / exit condition:** all three exit criteria are met.
+
+**LOC note:** 2812 added lines in 32 files (estimate 1300 to 1700): 1759 lines of production code,
+headers, CMake, and the kernel, and 1053 lines of tests. The estimate did not include the GPU test
+support (`vulkan_test_device.hpp`, 271 lines: buffers, a storage image, one submission, barriers),
+which the tests need until the backend of VK2 exists, and the build rule test project (172 lines).
+The largest file is `vulkan_compute_pipeline_cache_test.cpp` (334 lines).
+
+**Remaining gaps:** none for VK1. The install of the kernel folder and its asset list is VK19
+(section 7). The application path that gives `pipeline_cache_file` comes with the first
+application path that creates the context (VK17).
 
 ### Phase VK2: `VulkanBackend`, `VulkanCommandContext`, render workspace
 
