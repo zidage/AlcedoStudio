@@ -10,18 +10,22 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 
 #include "decoders/processor/operators/gpu/vulkan_raw_encode.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/develop_raster_input.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/lens/lens_calibration_resolver.hpp"
 #include "edit/runtime/lens/vulkan/vulkan_lens_calib.hpp"
+#include "edit/runtime/raster_develop_params.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "edit/runtime/vulkan/vulkan_buffer_view.hpp"
+#include "edit/runtime/vulkan/vulkan_display_to_ap1_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_dng_warp.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
 
@@ -88,13 +92,17 @@ void RequireSupportedInput(VulkanRenderDevice& device, const ExecutionPlan& plan
   if (develop == nullptr) {
     throw Fail("missing develop node");
   }
-  if (input.input_kind == RawInputKind::RasterRgb) {
-    throw Fail(
-        "a raster input needs the raster linearization of phase VK7; the Vulkan backend has no "
-        "raster input yet (#1036)");
-  }
   const auto width  = input.host_extent.width;
   const auto height = input.host_extent.height;
+  if (input.input_kind == RawInputKind::RasterRgb) {
+    const auto raster = RequireRasterInput(document, kOperation);
+    RequireRasterPixelsMatchDescription(input, raster.source_color_, kOperation);
+    if (input.pixels.format == HostPixelFormat::U16Cfa ||
+        input.pixels.stride_bytes != width * HostPixelFormatBytesPerPixel(input.pixels.format)) {
+      throw Fail("expected tightly packed raster input");
+    }
+    return;
+  }
   if (input.input_kind == RawInputKind::DebayeredRgb ||
       plan.source.kind == DevelopInputKind::DirectRgb) {
     if (input.pixels.format != HostPixelFormat::F32Rgba ||
@@ -154,6 +162,37 @@ void EncodeRgbInput(VulkanRenderDevice& device, const PreparedRawInput& input, b
       input.rgb_linearization.has_value() ? std::span<const float, 4>(input.linearization.cam_mul)
                                           : std::span<const float, 4>(identity),
       input.sensor.orientation_flip);
+}
+
+/// `RasterRgb` (phase VK7): the upload at native depth, `LinearizeRaster` to RGBA32F, then the
+/// crop and the orientation into @p decoded.
+void EncodeRasterInput(VulkanRenderDevice& device, const PreparedRawInput& input,
+                       const PipelineDocument& document, VulkanBackend::Texture2D& decoded) {
+  auto&      backend = device.Workspace().Device();
+  auto&      context = device.CommandContext();
+  const auto width   = input.host_extent.width;
+  const auto height  = input.host_extent.height;
+  const auto params  = PackRasterLinearize(
+      ResolveEffectiveRasterDescription(RequireRasterInput(document, kOperation)),
+      input.pixels.format);
+  const auto param_bytes = std::as_bytes(std::span<const float>(params));
+  auto       source      = backend.CreateBuffer(input.pixels.ByteCount());
+  auto       parameters  = backend.CreateBuffer(param_bytes.size());
+  auto linear = backend.CreateBuffer(static_cast<std::size_t>(width) * height * 4 * sizeof(float));
+  {
+    diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
+    backend.UploadBufferRange(source, 0, input.pixels.Span(), context);
+    backend.UploadBufferRange(parameters, 0, param_bytes, context);
+  }
+  {
+    diag::PreviewSubStageInterval linearize(diag::PreviewSubStageKind::Linearize);
+    EncodeVulkanLinearizeRaster(backend, context, {&source, 0}, input.pixels.format, width, height,
+                                {&parameters, 0}, params.size(), {&linear, 0});
+  }
+  const std::array<float, 4> identity{1.0F, 1.0F, 1.0F, 1.0F};
+  vulkan::raw::EncodeCopyRgbaCropInverseOrient(backend, context, {&linear, 0}, decoded,
+                                               CropOrFull(input, width, height), width, height,
+                                               identity, input.sensor.orientation_flip);
 }
 
 /// CFA input with the legacy demosaic (RCD for Bayer, the X-Trans interpolation of VK4).
@@ -300,8 +339,10 @@ void ExecuteVulkanDevelop(VulkanRenderDevice& device, const ExecutionPlan& plan,
                                        : sensor_id;
 
   auto&              decoded     = AcquireRgba(workspace, demosaic_id, out_w, out_h);
-  if (input.input_kind == RawInputKind::DebayeredRgb ||
-      plan.source.kind == DevelopInputKind::DirectRgb) {
+  if (input.input_kind == RawInputKind::RasterRgb) {
+    EncodeRasterInput(device, input, document, decoded.Texture());
+  } else if (input.input_kind == RawInputKind::DebayeredRgb ||
+             plan.source.kind == DevelopInputKind::DirectRgb) {
     EncodeRgbInput(device, input, hlr, decoded.Texture());
   } else {
     EncodeCfaInput(device, input, hlr, decoded.Texture());

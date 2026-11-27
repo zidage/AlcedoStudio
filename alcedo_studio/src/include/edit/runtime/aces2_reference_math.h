@@ -11,9 +11,9 @@
 
 // The OpenColorIO 2.5.1 ACES 2.0 output transform (Renderer_ACES_OutputTransform20::fwd and
 // ::inv) with the closed-form gamut boundary of the OCIO GPU shader generator, shared by the host,
-// CUDA, OpenCL C and Metal (docs/roadmap/alcedo_studio/edit/lut_color_encoding_plan.md, section
-// 7). This is the reference transform, not Alcedo's own ACES 2.0 DRT (odt_funcs.cuh), which
-// differs from it on purpose.
+// CUDA, OpenCL C, Metal, and Slang (docs/roadmap/alcedo_studio/edit/lut_color_encoding_plan.md,
+// section 7). This is the reference transform, not Alcedo's own ACES 2.0 DRT (odt_funcs.cuh),
+// which differs from it on purpose.
 //
 // Both directions read one float block with the layout below. The host fills it
 // (aces2_reference_runtime.cpp) for one display primaries and peak luminance. Display RGB is
@@ -22,30 +22,45 @@
 // OpenCL programs list this file before display_to_ap1_math.h; Metal shaders include it first.
 
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
-#define A2R_GLOBAL __global
-#define A2R_INLINE static inline
-#define A2R_POW    pow
-#define A2R_SQRT   sqrt
-#define A2R_ATAN2  atan2
-#define A2R_COS    cos
-#define A2R_SIN    sin
-#define A2R_LOG10  log10
-#define A2R_FABS   fabs
-#define A2R_FLOOR  floor
+#define A2R_CONST_FLOAT_PTR __global const float*
+#define A2R_INLINE          static inline
+#define A2R_POW             pow
+#define A2R_SQRT            sqrt
+#define A2R_ATAN2           atan2
+#define A2R_COS             cos
+#define A2R_SIN             sin
+#define A2R_LOG10           log10
+#define A2R_FABS            fabs
+#define A2R_FLOOR           floor
 #elif defined(__METAL_VERSION__)
-#define A2R_GLOBAL device
-#define A2R_INLINE static inline
-#define A2R_POW    pow
-#define A2R_SQRT   sqrt
-#define A2R_ATAN2  atan2
-#define A2R_COS    cos
-#define A2R_SIN    sin
-#define A2R_LOG10  log10
-#define A2R_FABS   fabs
-#define A2R_FLOOR  floor
+#define A2R_CONST_FLOAT_PTR device const float*
+#define A2R_INLINE          static inline
+#define A2R_POW             pow
+#define A2R_SQRT            sqrt
+#define A2R_ATAN2           atan2
+#define A2R_COS             cos
+#define A2R_SIN             sin
+#define A2R_LOG10           log10
+#define A2R_FABS            fabs
+#define A2R_FLOOR           floor
+#elif defined(__SLANG__)
+// Slang (the Vulkan kernels): no const pointee. GLSL.std.450 pow, log10, sin, cos, and atan2 are
+// less precise than the OpenCL functions, so the math.slangh functions take their place (plan
+// #1036, phase VK3 and VK5 records).
+#include "vulkan/shader/math.slangh"
+#define A2R_CONST_FLOAT_PTR float*
+#define A2R_INLINE          static
+#define A2R_POW             AlcedoPow
+#define A2R_SQRT            sqrt
+#define A2R_ATAN2           AlcedoAtan2
+#define A2R_COS             AlcedoCos
+#define A2R_SIN             AlcedoSin
+#define A2R_LOG10           AlcedoLog10
+#define A2R_FABS            abs
+#define A2R_FLOOR           floor
 #else
 #include <cmath>
-#define A2R_GLOBAL
+#define A2R_CONST_FLOAT_PTR const float*
 #ifdef __CUDACC__
 #define A2R_INLINE static __host__ __device__ inline
 #else
@@ -144,7 +159,7 @@ A2R_INLINE float     A2rClamp(float x, float lo, float hi) { return A2rMin(hi, A
 A2R_INLINE float     A2rSign(float x) { return x > 0.0f ? 1.0f : (x < 0.0f ? -1.0f : 0.0f); }
 A2R_INLINE float     A2rLerp(float a, float b, float t) { return (b - a) * t + a; }
 
-A2R_INLINE A2rFloat3 A2rMul(A2R_GLOBAL const float* m, A2rFloat3 v) {
+A2R_INLINE A2rFloat3 A2rMul(A2R_CONST_FLOAT_PTR m, A2rFloat3 v) {
   return A2rMake3(m[0] * v.x + m[1] * v.y + m[2] * v.z, m[3] * v.x + m[4] * v.y + m[5] * v.z,
                   m[6] * v.x + m[7] * v.y + m[8] * v.z);
 }
@@ -167,8 +182,8 @@ A2R_INLINE float A2rConeCompressInv(float v) {
 }
 
 /// RGB to Aab with the matrices at @p rgb_to_cam16 and @p cone_to_aab (OCIO RGB_to_Aab).
-A2R_INLINE A2rFloat3 A2rRgbToAab(A2rFloat3 rgb, A2R_GLOBAL const float* rgb_to_cam16,
-                                 A2R_GLOBAL const float* cone_to_aab) {
+A2R_INLINE A2rFloat3 A2rRgbToAab(A2rFloat3 rgb, A2R_CONST_FLOAT_PTR rgb_to_cam16,
+                                 A2R_CONST_FLOAT_PTR cone_to_aab) {
   const A2rFloat3 lms = A2rMul(rgb_to_cam16, rgb);
   const A2rFloat3 rgb_a =
       A2rMake3(A2rConeCompressFwd(lms.x), A2rConeCompressFwd(lms.y), A2rConeCompressFwd(lms.z));
@@ -176,7 +191,7 @@ A2R_INLINE A2rFloat3 A2rRgbToAab(A2rFloat3 rgb, A2R_GLOBAL const float* rgb_to_c
 }
 
 /// Aab to JMh (h in degrees, [0, 360)). Non-positive A is black (OCIO Aab_to_JMh).
-A2R_INLINE A2rFloat3 A2rAabToJmh(A2rFloat3 aab, A2R_GLOBAL const float* p) {
+A2R_INLINE A2rFloat3 A2rAabToJmh(A2rFloat3 aab, A2R_CONST_FLOAT_PTR p) {
   if (aab.x <= 0.0f) return A2rMake3(0.0f, 0.0f, 0.0f);
   const float J = 100.0f * A2R_POW(aab.x, p[ALCEDO_A2R_CZ]);
   const float M = (J == 0.0f) ? 0.0f : A2R_SQRT(aab.y * aab.y + aab.z * aab.z);
@@ -189,8 +204,8 @@ A2R_INLINE A2rFloat3 A2rAabToJmh(A2rFloat3 aab, A2R_GLOBAL const float* p) {
 /// JMh to RGB with the matrices at @p aab_to_cone and @p cam16_to_rgb (OCIO JMh_to_Aab followed
 /// by Aab_to_RGB).
 A2R_INLINE A2rFloat3 A2rJmhToRgb(A2rFloat3 jmh, float cos_hr, float sin_hr,
-                                 A2R_GLOBAL const float* aab_to_cone,
-                                 A2R_GLOBAL const float* cam16_to_rgb, A2R_GLOBAL const float* p) {
+                                 A2R_CONST_FLOAT_PTR aab_to_cone, A2R_CONST_FLOAT_PTR cam16_to_rgb,
+                                 A2R_CONST_FLOAT_PTR p) {
   const A2rFloat3 aab =
       A2rMake3(A2R_POW(jmh.x * 0.01f, p[ALCEDO_A2R_INV_CZ]), jmh.y * cos_hr, jmh.y * sin_hr);
   const A2rFloat3 rgb_a = A2rMul(aab_to_cone, aab);
@@ -203,7 +218,7 @@ A2R_INLINE A2rFloat3 A2rJmhToRgb(A2rFloat3 jmh, float cos_hr, float sin_hr,
 // Table lookups
 // ---------------------------------------------------------------------------------------------
 
-A2R_INLINE float A2rReachMaxM(float h, A2R_GLOBAL const float* p) {
+A2R_INLINE float A2rReachMaxM(float h, A2R_CONST_FLOAT_PTR p) {
   const float i_base = A2R_FLOOR(h);
   const int   i_lo   = (int)i_base + ALCEDO_A2R_TABLE_BASE_INDEX;
   const float lo     = p[ALCEDO_A2R_REACH_TABLE + i_lo];
@@ -212,11 +227,11 @@ A2R_INLINE float A2rReachMaxM(float h, A2R_GLOBAL const float* p) {
 }
 
 /// Cusp J, cusp M and upper hull gamma inverse at hue @p h.
-A2R_INLINE A2rFloat3 A2rCuspSample(float h, A2R_GLOBAL const float* p) {
-  A2R_GLOBAL const float* hues = p + ALCEDO_A2R_HUE_TABLE;
-  int                     i    = (int)h + ALCEDO_A2R_TABLE_BASE_INDEX;
-  int                     i_lo = i + (int)p[ALCEDO_A2R_HUE_SEARCH_LO];
-  int                     i_hi = i + (int)p[ALCEDO_A2R_HUE_SEARCH_HI];
+A2R_INLINE A2rFloat3 A2rCuspSample(float h, A2R_CONST_FLOAT_PTR p) {
+  A2R_CONST_FLOAT_PTR hues = p + ALCEDO_A2R_HUE_TABLE;
+  int                 i    = (int)h + ALCEDO_A2R_TABLE_BASE_INDEX;
+  int                 i_lo = i + (int)p[ALCEDO_A2R_HUE_SEARCH_LO];
+  int                 i_hi = i + (int)p[ALCEDO_A2R_HUE_SEARCH_HI];
   if (i_lo < ALCEDO_A2R_TABLE_LOWER_WRAP_INDEX) i_lo = ALCEDO_A2R_TABLE_LOWER_WRAP_INDEX;
   if (i_hi > ALCEDO_A2R_TABLE_UPPER_WRAP_INDEX) i_hi = ALCEDO_A2R_TABLE_UPPER_WRAP_INDEX;
   while (i_lo + 1 < i_hi) {
@@ -228,9 +243,9 @@ A2R_INLINE A2rFloat3 A2rCuspSample(float h, A2R_GLOBAL const float* p) {
     i = (i_lo + i_hi) / 2;
   }
   if (i_hi < 1) i_hi = 1;
-  A2R_GLOBAL const float* lo = p + ALCEDO_A2R_CUSP_TABLE + 3 * (i_hi - 1);
-  A2R_GLOBAL const float* hi = p + ALCEDO_A2R_CUSP_TABLE + 3 * i_hi;
-  const float             t  = (h - hues[i_hi - 1]) / (hues[i_hi] - hues[i_hi - 1]);
+  A2R_CONST_FLOAT_PTR lo = p + ALCEDO_A2R_CUSP_TABLE + 3 * (i_hi - 1);
+  A2R_CONST_FLOAT_PTR hi = p + ALCEDO_A2R_CUSP_TABLE + 3 * i_hi;
+  const float         t  = (h - hues[i_hi - 1]) / (hues[i_hi] - hues[i_hi - 1]);
   return A2rMake3(A2rLerp(lo[0], hi[0], t), A2rLerp(lo[1], hi[1], t), A2rLerp(lo[2], hi[2], t));
 }
 
@@ -293,7 +308,7 @@ A2R_INLINE float A2rRemapM(float M, float gamut_boundary_m, float reach_boundary
 /// OCIO compressGamut<inverse> for a JMh with positive M and J at most limit J max. @p jx is the
 /// J that sets the focus gain: J itself in the forward direction, an estimate in the inverse.
 A2R_INLINE A2rFloat3 A2rCompressGamut(A2rFloat3 jmh, float jx, A2rFloat3 cusp, float reach_max_m,
-                                      int inverse, A2R_GLOBAL const float* p) {
+                                      int inverse, A2R_CONST_FLOAT_PTR p) {
   const float limit_j_max = p[ALCEDO_A2R_LIMIT_J_MAX];
   if (jmh.y <= 0.0f || jmh.x > limit_j_max) return A2rMake3(jmh.x, 0.0f, jmh.z);
   const float focus_j =
@@ -320,7 +335,7 @@ A2R_INLINE A2rFloat3 A2rCompressGamut(A2rFloat3 jmh, float jx, A2rFloat3 cusp, f
 
 /// Forward tonescale from the achromatic response A of the scene color to the tonemapped J
 /// (OCIO tonescale_A_to_J_fwd). @p a must be positive.
-A2R_INLINE float A2rTonescaleForwardFromA(float a, A2R_GLOBAL const float* p) {
+A2R_INLINE float A2rTonescaleForwardFromA(float a, A2R_CONST_FLOAT_PTR p) {
   const float f_l_n = p[ALCEDO_A2R_AP0_F_L_N];
   // A -> Y (nits): _A_to_Y.
   const float y_in  = A2rConeCompressInv(p[ALCEDO_A2R_AP0_A_W_J] * a) / f_l_n;
@@ -334,7 +349,7 @@ A2R_INLINE float A2rTonescaleForwardFromA(float a, A2R_GLOBAL const float* p) {
 }
 
 /// Inverse tonescale from the tonemapped J to the scene J (OCIO tonescale_inv).
-A2R_INLINE float A2rTonescaleInverse(float J, A2R_GLOBAL const float* p) {
+A2R_INLINE float A2rTonescaleInverse(float J, A2R_CONST_FLOAT_PTR p) {
   const float a_w_j = p[ALCEDO_A2R_AP0_A_W_J];
   const float f_l_n = p[ALCEDO_A2R_AP0_F_L_N];
   // J -> Y (nits): _J_to_Y.
@@ -381,7 +396,7 @@ A2R_INLINE float A2rChromaCompressNorm(float cos_hr, float sin_hr, float scale) 
 
 /// OCIO chroma_compress_fwd: scene M at scene J to the compressed M at the tonemapped J @p j_ts.
 A2R_INLINE float A2rChromaCompressForward(float J, float M, float j_ts, float m_norm,
-                                          float reach_max_m, A2R_GLOBAL const float* p) {
+                                          float reach_max_m, A2R_CONST_FLOAT_PTR p) {
   if (M == 0.0f) return M;
   const float model_gamma_inv = p[ALCEDO_A2R_MODEL_GAMMA_INV];
   const float nJ              = j_ts / p[ALCEDO_A2R_LIMIT_J_MAX];
@@ -397,7 +412,7 @@ A2R_INLINE float A2rChromaCompressForward(float J, float M, float j_ts, float m_
 
 /// OCIO chroma_compress_inv: compressed M at the tonemapped J @p j_ts to the scene M at @p J.
 A2R_INLINE float A2rChromaCompressInverse(float j_ts, float m_cp, float J, float m_norm,
-                                          float reach_max_m, A2R_GLOBAL const float* p) {
+                                          float reach_max_m, A2R_CONST_FLOAT_PTR p) {
   if (m_cp == 0.0f) return m_cp;
   const float model_gamma_inv = p[ALCEDO_A2R_MODEL_GAMMA_INV];
   const float nJ              = j_ts / p[ALCEDO_A2R_LIMIT_J_MAX];
@@ -422,7 +437,7 @@ A2R_INLINE float A2rChromaCompressInverse(float j_ts, float m_cp, float J, float
  * clamp. A color whose achromatic response is not positive returns black (OCIO returns NaN for a
  * negative response).
  */
-A2R_INLINE A2rFloat3 A2rAp0ToDisplay(A2rFloat3 ap0, A2R_GLOBAL const float* p) {
+A2R_INLINE A2rFloat3 A2rAp0ToDisplay(A2rFloat3 ap0, A2R_CONST_FLOAT_PTR p) {
   const A2rFloat3 aab =
       A2rRgbToAab(ap0, p + ALCEDO_A2R_AP0_RGB_TO_CAM16, p + ALCEDO_A2R_AP0_CONE_TO_AAB);
   if (aab.x <= 0.0f) return A2rMake3(0.0f, 0.0f, 0.0f);
@@ -453,7 +468,7 @@ A2R_INLINE A2rFloat3 A2rAp0ToDisplay(A2rFloat3 ap0, A2R_GLOBAL const float* p) {
  * nits) to ACES2065-1 (AP0) scene-linear RGB. The limiting RGB is clamped to [0, peak / 100]
  * first; the result is not clamped. Matches OCIO's inverse FIXED_FUNCTION_ACES_OUTPUT_TRANSFORM_20.
  */
-A2R_INLINE A2rFloat3 A2rDisplayToAp0(A2rFloat3 display_rgb, A2R_GLOBAL const float* p) {
+A2R_INLINE A2rFloat3 A2rDisplayToAp0(A2rFloat3 display_rgb, A2R_CONST_FLOAT_PTR p) {
   const A2rFloat3 limit_rgb = A2rMul(p + ALCEDO_A2R_DISPLAY_TO_LIMIT, display_rgb);
   const float     input_max = p[ALCEDO_A2R_INPUT_MAX];
   const A2rFloat3 clamped =
@@ -484,7 +499,7 @@ A2R_INLINE A2rFloat3 A2rDisplayToAp0(A2rFloat3 display_rgb, A2R_GLOBAL const flo
                      p + ALCEDO_A2R_AP0_CAM16_TO_RGB, p);
 }
 
-#undef A2R_GLOBAL
+#undef A2R_CONST_FLOAT_PTR
 #undef A2R_INLINE
 #undef A2R_POW
 #undef A2R_SQRT

@@ -225,6 +225,30 @@ if(ALCEDO_VULKAN_ENABLED AND (ALCEDO_OPENCL_ENABLED OR ALCEDO_METAL_ENABLED))
     DISCOVERY_TIMEOUT 60
     PROPERTIES LABELS "gpu;edit;runtime;vulkan")
   alcedo_register_test_target(VulkanDevelopTest gpu)
+
+  # GeometryResample, CameraToAp1, the raster input, and DisplayToAp1 of Vulkan against the host
+  # evaluation, OpenColorIO, and the reference backend (#1036, phase VK7). Only test targets link
+  # OpenColorIO.
+  add_executable(VulkanGeometryColorTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_geometry_color_test.cpp)
+  target_include_directories(VulkanGeometryColorTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(VulkanGeometryColorTest PRIVATE
+    GTest::gtest_main EditRuntimeVulkanPasses EditInput EditGraph EditRuntimeDrt Image
+    opencv_imgproc Qt6::Gui OpenColorIO::OpenColorIO)
+  if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(VulkanGeometryColorTest PRIVATE EditRuntimeOpenCl OpenClProgramLibrary)
+  else()
+    target_link_libraries(VulkanGeometryColorTest PRIVATE
+      EditRuntimeMetal EditRuntimeLens RawProcessorOp)
+    add_dependencies(VulkanGeometryColorTest GpuDagMetalShaders RawProcessorOpMetalShaders)
+  endif()
+  target_compile_definitions(VulkanGeometryColorTest PRIVATE
+    ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
+  add_dependencies(VulkanGeometryColorTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanGeometryColorTest TEST_PREFIX "VulkanGeometryColorTest."
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan;color")
+  alcedo_register_test_target(VulkanGeometryColorTest gpu)
 endif()
 
 # Vulkan against OpenCL on the same GPU (#1036, phase VK3, decision B9): the shared color math

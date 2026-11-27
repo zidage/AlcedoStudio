@@ -37,56 +37,14 @@
 #include "edit/runtime/texture_format.hpp"
 #include "edit/runtime/vulkan/vulkan_develop_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_pass_encoder.hpp"
+#include "vulkan/vulkan_context.hpp"
+#include "vulkan_reference_backend_support.hpp"
 #include "vulkan_workspace_test_support.hpp"
-
-#if defined(HAVE_OPENCL)
-#include "../../vulkan/vulkan_opencl_comparison.hpp"
-#include "edit/runtime/opencl/opencl_backend.hpp"
-#include "edit/runtime/opencl/opencl_develop_pass.hpp"
-#elif defined(HAVE_METAL)
-#include "edit/runtime/metal/metal_backend.hpp"
-#include "edit/runtime/metal/metal_develop_pass.hpp"
-#else
-#error "VulkanDevelopTest needs OpenCL or Metal as its reference backend."
-#endif
 
 namespace alcedo {
 namespace {
 
-#if defined(HAVE_OPENCL)
-using ReferenceRenderDevice             = OpenClRenderDevice;
-constexpr const char* kReferenceBackend = "OpenCL";
-
-void ExecuteReferenceDevelop(ReferenceRenderDevice& device, const ExecutionPlan& plan,
-                             const PreparedRawInput& input, const PipelineDocument& document) {
-  ExecuteOpenClDevelop(device, plan, input, document);
-}
-
-/// OpenCL on the GPU of the Vulkan context; an empty text when it is available.
-auto PrepareReferenceBackend() -> std::string {
-  return vulkan_opencl_comparison::PrepareOpenClOnTheVulkanDevice();
-}
-#else
-using ReferenceRenderDevice             = MetalRenderDevice;
-constexpr const char* kReferenceBackend = "Metal";
-
-void ExecuteReferenceDevelop(ReferenceRenderDevice& device, const ExecutionPlan& plan,
-                             const PreparedRawInput& input, const PipelineDocument& document) {
-  ExecuteMetalDevelop(device, plan, input, document);
-}
-
-/// The system default Metal device: the GPU of MoltenVK on a computer with one GPU.
-auto PrepareReferenceBackend() -> std::string {
-  try {
-    if (BindSystemDefaultMetalPresentationDevice() == nullptr) {
-      return "no Metal device";
-    }
-  } catch (const std::exception& error) {
-    return std::string("no Metal device: ") + error.what();
-  }
-  return {};
-}
-#endif
+using namespace vulkan_reference;
 
 constexpr const char* kClippedBayerRaw = "raw/street/_DSC0155.NEF";
 constexpr const char* kXTransRaw       = "raw/xtrans_edge/DSCF0019.RAF";
@@ -123,21 +81,6 @@ auto MakeDocument(bool highlights_reconstruct) -> PipelineDocument {
   return document;
 }
 
-/// The RGBA32F values of the image @p id of @p device after the render.
-template <class Device>
-auto DownloadImage(Device& device, const GraphValueId& id) -> std::vector<float> {
-  auto* lease = device.Workspace().Images().Find(id);
-  if (lease == nullptr || lease->Empty()) {
-    ADD_FAILURE() << "the render has no image " << id.producer.Value();
-    return {};
-  }
-  const auto&        texture = lease->Texture();
-  std::vector<float> values(static_cast<std::size_t>(texture.Width()) * texture.Height() * 4);
-  device.Workspace().Device().DownloadTexture2D(
-      texture, std::as_writable_bytes(std::span<float>(values)), device.CommandContext());
-  return values;
-}
-
 /// One Develop on a new render device of @p Device; returns `develop.sensor_linear`.
 template <class Device, class Execute>
 auto RenderDevelop(const PipelineDocument& document, const PreparedRawInput& input, Execute execute)
@@ -166,99 +109,6 @@ auto RenderVulkan(const PipelineDocument& document, const PreparedRawInput& inpu
 auto RenderReference(const PipelineDocument& document, const PreparedRawInput& input)
     -> std::vector<float> {
   return RenderDevelop<ReferenceRenderDevice>(document, input, ExecuteReferenceDevelop);
-}
-
-/// The distance bands of a texel to the nearest image edge, for the report of a difference.
-constexpr std::array<std::uint32_t, 3> kBorderBands = {4, 16, 64};
-
-struct Difference {
-  double                     largest     = 0.0;
-  std::size_t                largest_at  = 0;
-  std::size_t                above       = 0;
-  std::size_t                differing   = 0;
-  double                     sum_squares = 0.0;
-  /// Values above the tolerance with an edge distance below 4, 16, 64, and from 64.
-  std::array<std::size_t, 4> above_by_band{};
-};
-
-/// The largest difference of a value: @p border for a texel whose edge distance is below
-/// @p border_band, @p interior for the others.
-/// @p rms above 0 also bounds the root mean square of the differences of all values.
-struct Tolerance {
-  double        interior    = 0.0;
-  double        border      = 0.0;
-  std::uint32_t border_band = 0;
-  double        rms         = 0.0;
-};
-
-constexpr auto Uniform(double tolerance) -> Tolerance { return {tolerance, tolerance, 0, 0.0}; }
-
-/// |vulkan - reference| / max(1, |reference|) for each value; NaN on one side only is above.
-/// @p width of 0: no border bands, the interior tolerance for each value.
-auto           Compare(std::span<const float> reference, std::span<const float> vulkan,
-                       const Tolerance& tolerance, std::uint32_t width = 0) -> Difference {
-  Difference        result;
-  const std::size_t height = width == 0 ? 0 : reference.size() / 4 / width;
-  for (std::size_t i = 0; i < reference.size(); ++i) {
-    const double a = reference[i];
-    const double b = vulkan[i];
-    double       d = 0.0;
-    if (std::isnan(a) || std::isnan(b)) {
-      d = (std::isnan(a) && std::isnan(b)) ? 0.0 : INFINITY;
-    } else if (a != b) {
-      d = std::abs(b - a) / std::max(1.0, std::abs(a));
-    }
-    if (d > 0.0) {
-      ++result.differing;
-      result.sum_squares += d * d;
-    }
-    if (d > result.largest) {
-      result.largest    = d;
-      result.largest_at = i;
-    }
-    if (d == 0.0) {
-      continue;
-    }
-    std::size_t edge = SIZE_MAX;
-    if (width != 0) {
-      const std::size_t x = (i / 4) % width;
-      const std::size_t y = (i / 4) / width;
-      edge                = std::min({x, y, width - 1 - x, height - 1 - y});
-    }
-    if (d > (edge < tolerance.border_band ? tolerance.border : tolerance.interior)) {
-      ++result.above;
-      std::size_t band = 0;
-      while (band < kBorderBands.size() && edge >= kBorderBands[band]) {
-        ++band;
-      }
-      ++result.above_by_band[band];
-    }
-  }
-  return result;
-}
-
-void ExpectEqualToReference(const std::string& label, std::span<const float> reference,
-                            std::span<const float> vulkan, std::uint32_t width,
-                            const Tolerance& tolerance) {
-  ASSERT_FALSE(reference.empty()) << label;
-  ASSERT_EQ(reference.size(), vulkan.size()) << label;
-  const auto        result = Compare(reference, vulkan, tolerance, width);
-  const std::size_t texel  = result.largest_at / 4;
-  const auto        rms    = std::sqrt(result.sum_squares / static_cast<double>(reference.size()));
-  std::printf(
-      "%s: %s against Vulkan, %zu values, %zu differ, largest %.3g at (%zu, %zu) channel %zu "
-      "(%s %.9g, Vulkan %.9g), rms %.3g, %zu above %.3g (border %.3g below %u) (edge distance "
-      "<4: %zu, <16: %zu, <64: %zu, >=64: %zu)\n",
-      label.c_str(), kReferenceBackend, reference.size(), result.differing, result.largest,
-      texel % width, texel / width, result.largest_at % 4, kReferenceBackend,
-      static_cast<double>(reference[result.largest_at]),
-      static_cast<double>(vulkan[result.largest_at]), rms, result.above, tolerance.interior,
-      tolerance.border, tolerance.border_band, result.above_by_band[0], result.above_by_band[1],
-      result.above_by_band[2], result.above_by_band[3]);
-  EXPECT_EQ(result.above, 0U) << label << ": largest difference " << result.largest;
-  if (tolerance.rms > 0.0) {
-    EXPECT_LE(rms, tolerance.rms) << label;
-  }
 }
 
 class VulkanDevelopTest : public vulkan_workspace_test::VulkanWorkspaceFixture {
@@ -290,17 +140,30 @@ class VulkanDevelopTest : public vulkan_workspace_test::VulkanWorkspaceFixture {
 };
 
 // The tolerances of the measurement of this phase (plan, VK6 completion record).
+/// The demosaic and highlight cases where the two backends round the RCD steps differently: the
+/// bound is the root mean square; the largest value only catches a gross error.
+constexpr Tolerance kRoundingDemosaicTolerance = {0.5, 0.5, 0, 2.5e-4};
+
+/// The tolerance of the demosaic and highlight cases on the GPU of the Vulkan context.
+auto                DemosaicTolerance() -> Tolerance {
 #if defined(HAVE_OPENCL)
-/// The demosaic and highlight cases against OpenCL (B9): the RCD tolerance of VK4.
-constexpr Tolerance kDemosaicTolerance = Uniform(1.0e-4);
+  // Intel Iris Xe: on a clipped Bayer RAW the red and blue RCD steps of the Intel Vulkan and
+  // OpenCL drivers differ by up to 0.058 at about 2600 of 24 million texels (rms 1.4e-5; 1.2e-4
+  // with the highlight reconstruction, which spreads them). Accepted by the user 2026-11-27
+  // (#1213). Other GPUs: the RCD tolerance of VK4 against OpenCL (B9).
+  constexpr std::uint32_t kIntelVendorId = 0x8086;
+  if (vulkan::VulkanContext::Instance().Capabilities().vendor_id == kIntelVendorId) {
+    return kRoundingDemosaicTolerance;
+  }
+  return Uniform(1.0e-4);
 #else
-/// The demosaic and highlight cases against Metal. The Metal RAW kernels have fast math and
-/// contract products into FMAs, the OpenCL and Vulkan kernels do not: on the Apple M4 the RCD and
-/// X-Trans results of Metal differ from Vulkan by up to 0.47 (rms 1.3e-4) at a few edges of the
-/// image. With Metal built without fast math and contraction, the two were equal bit for bit
-/// (VK6 record). The bound is the root mean square; the largest value only catches a gross error.
-constexpr Tolerance kDemosaicTolerance = {0.5, 0.5, 0, 2.5e-4};
+  // Metal: the Metal RAW kernels have fast math and contract products into FMAs, the OpenCL and
+  // Vulkan kernels do not: on the Apple M4 the RCD and X-Trans results of Metal differ from Vulkan
+  // by up to 0.47 (rms 1.3e-4) at a few edges of the image. With Metal built without fast math and
+  // contraction, the two were equal bit for bit (VK6 record).
+  return kRoundingDemosaicTolerance;
 #endif
+}
 constexpr Tolerance kDevelopTolerance = Uniform(1.0e-4);
 constexpr Tolerance kLensTolerance    = Uniform(5.0e-4);
 /// 1e-5 inside (the DNG warp tolerance of VK5); 8 ulp of a coordinate below 16384 in the border
@@ -312,14 +175,14 @@ TEST_F(VulkanDevelopTest, BayerRawEqualsTheReferenceBackend) {
   const auto input = RequireSample(kClippedBayerRaw);
   ASSERT_NE(input, nullptr);
   ASSERT_EQ(input->cfa_pattern.kind, RawCfaKind::Bayer2x2);
-  ExpectBothHighlightModesEqual("Bayer NEF", *input, kDemosaicTolerance);
+  ExpectBothHighlightModesEqual("Bayer NEF", *input, DemosaicTolerance());
 }
 
 TEST_F(VulkanDevelopTest, XTransRawEqualsTheReferenceBackend) {
   const auto input = RequireSample(kXTransRaw);
   ASSERT_NE(input, nullptr);
   ASSERT_EQ(input->cfa_pattern.kind, RawCfaKind::XTrans6x6);
-  ExpectBothHighlightModesEqual("X-Trans RAF", *input, kDemosaicTolerance);
+  ExpectBothHighlightModesEqual("X-Trans RAF", *input, DemosaicTolerance());
 }
 
 TEST_F(VulkanDevelopTest, LinearDngEqualsTheReferenceBackend) {
@@ -447,7 +310,7 @@ TEST_F(VulkanDevelopTest, ScratchIsReleasedAndTheOutputIsReusedByASecondDevelop)
   EXPECT_EQ(DownloadImage(device, plan.sensor_linear_output), first);
 }
 
-TEST_F(VulkanDevelopTest, NeuralEngineAndRasterInputFailWithTheirPhase) {
+TEST_F(VulkanDevelopTest, NeuralEngineAndRasterPixelsWithoutRasterInputFail) {
   const auto pattern = gpu_dag_test::MakeRggbPattern();
   const auto cfa     = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(96, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
@@ -474,9 +337,10 @@ TEST_F(VulkanDevelopTest, NeuralEngineAndRasterInputFailWithTheirPhase) {
   raster.input_kind = RawInputKind::RasterRgb;
   try {
     ExecuteVulkanDevelop(device, plan, raster, MakeDocument(false));
-    ADD_FAILURE() << "the raster input did not fail";
+    ADD_FAILURE() << "raster pixels of a document without a raster input did not fail";
   } catch (const std::runtime_error& error) {
-    EXPECT_NE(std::string(error.what()).find("VK7"), std::string::npos) << error.what();
+    // Phase VK7: the raster input runs; the document needs its raster input object.
+    EXPECT_NE(std::string(error.what()).find("no raster input"), std::string::npos) << error.what();
   }
   EXPECT_FALSE(device.CommandContext().IsRecording());
   EXPECT_EQ(backend.BufferCreateCount(), 0U);

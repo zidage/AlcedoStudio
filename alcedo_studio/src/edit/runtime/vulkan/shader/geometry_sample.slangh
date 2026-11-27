@@ -1,0 +1,78 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+// The texel reads of the geometry kernels (plan #1036, phases VK5 and VK7): the ReadBorder,
+// BilinearSample, CubicWeight, and BicubicSample functions of opencl_shader/geometry_camera.cl on
+// an RGBA32F storage image. Texel centers are at half-integer coordinates; a texel outside the
+// image reads `border`.
+
+#pragma once
+
+// The texel at (x, y) of `image`, or `border` outside the width x height image.
+static float4 ReadBorder(RWTexture2D<float4> image, int width, int height, int x, int y,
+                         float4 border) {
+  if (x < 0 || y < 0 || x >= width || y >= height) {
+    return border;
+  }
+  return image[uint2(uint(x), uint(y))];
+}
+
+// Bilinear sample at the position (sx, sy).
+static float4 BilinearSample(RWTexture2D<float4> image, int width, int height, float sx, float sy,
+                             float4 border) {
+  const float  px  = sx - 0.5f;
+  const float  py  = sy - 0.5f;
+  const int    x0  = int(floor(px));
+  const int    y0  = int(floor(py));
+  const float  fx  = px - float(x0);
+  const float  fy  = py - float(y0);
+  const float4 p00 = ReadBorder(image, width, height, x0, y0, border);
+  const float4 p10 = ReadBorder(image, width, height, x0 + 1, y0, border);
+  const float4 p01 = ReadBorder(image, width, height, x0, y0 + 1, border);
+  const float4 p11 = ReadBorder(image, width, height, x0 + 1, y0 + 1, border);
+  const float  w00 = (1.0f - fx) * (1.0f - fy);
+  const float  w10 = fx * (1.0f - fy);
+  const float  w01 = (1.0f - fx) * fy;
+  const float  w11 = fx * fy;
+  return p00 * w00 + p10 * w10 + p01 * w01 + p11 * w11;
+}
+
+// The Catmull-Rom weight of a tap at distance x.
+static float CubicWeight(float x) {
+  x = abs(x);
+  if (x < 1.0f) {
+    return ((1.5f * x - 2.5f) * x) * x + 1.0f;
+  }
+  if (x < 2.0f) {
+    return (((-0.5f * x + 2.5f) * x) - 4.0f) * x + 2.0f;
+  }
+  return 0.0f;
+}
+
+// Bicubic sample of 4 x 4 taps at the position (sx, sy), divided by the sum of the weights;
+// `border` when the sum is not above 1e-8.
+static float4 BicubicSample(RWTexture2D<float4> image, int width, int height, float sx, float sy,
+                            float4 border) {
+  const float px   = sx - 0.5f;
+  const float py   = sy - 0.5f;
+  const int   x0   = int(floor(px));
+  const int   y0   = int(floor(py));
+  const float fx   = px - float(x0);
+  const float fy   = py - float(y0);
+  float4      acc  = float4(0.0f);
+  float       wsum = 0.0f;
+  for (int j = -1; j <= 2; ++j) {
+    const float wy = CubicWeight(float(j) - fy);
+    for (int i = -1; i <= 2; ++i) {
+      const float wx = CubicWeight(float(i) - fx);
+      const float w  = wx * wy;
+      acc += ReadBorder(image, width, height, x0 + i, y0 + j, border) * w;
+      wsum += w;
+    }
+  }
+  if (wsum <= 1.0e-8f) {
+    return border;
+  }
+  return acc / wsum;
+}

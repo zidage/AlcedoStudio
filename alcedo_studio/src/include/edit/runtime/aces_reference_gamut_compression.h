@@ -4,13 +4,19 @@
 #ifndef ALCEDO_ACES_REFERENCE_GAMUT_COMPRESSION_H
 #define ALCEDO_ACES_REFERENCE_GAMUT_COMPRESSION_H
 
-// ACES 1.3 Reference Gamut Compression shared by the host, CUDA, OpenCL C, and Metal.
+// ACES 1.3 Reference Gamut Compression shared by the host, CUDA, OpenCL C, Metal, and Slang (the
+// Vulkan kernels).
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
 #define ACES_RGC_INLINE static inline
 #define ACES_RGC_POW    pow
 #elif defined(__METAL_VERSION__)
 #define ACES_RGC_INLINE static inline
 #define ACES_RGC_POW    pow
+#elif defined(__SLANG__)
+// The GLSL.std.450 pow is less precise than the OpenCL pow (plan #1036, phase VK3 record).
+#include "vulkan/shader/math.slangh"
+#define ACES_RGC_INLINE static
+#define ACES_RGC_POW    AlcedoPow
 #else
 #include <cmath>
 #ifdef __CUDACC__
@@ -39,10 +45,9 @@ ACES_RGC_INLINE float AcesRgcCompressDistance(float distance, float limit, float
   const float power = 1.2f;
   if (distance < threshold) return distance;
   const float threshold_difference = limit - threshold;
-  const float one_minus_threshold   = 1.0f - threshold;
-  const float inner = ACES_RGC_POW(one_minus_threshold / threshold_difference, -power);
-  const float denominator =
-      ACES_RGC_POW(AcesRgcMax(inner - 1.0f, 0.0f), 1.0f / power);
+  const float one_minus_threshold  = 1.0f - threshold;
+  const float inner       = ACES_RGC_POW(one_minus_threshold / threshold_difference, -power);
+  const float denominator = ACES_RGC_POW(AcesRgcMax(inner - 1.0f, 0.0f), 1.0f / power);
   if (denominator <= 1.0e-6f) return threshold;
   const float scale      = threshold_difference / denominator;
   const float normalized = (distance - threshold) / scale;

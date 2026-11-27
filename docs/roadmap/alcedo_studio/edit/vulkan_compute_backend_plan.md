@@ -595,8 +595,8 @@ test of its kernels (B9).
 | VK3 | Kernel dispatch, shared color math, geometry utilities, comparison test support | `edit/runtime/vulkan/`, `src/vulkan/shader/`, `color_encoding_math.h` | VK2 | 1300 to 1700 | complete (#1080) |
 | VK4 | RAW operators: linearize, CFA clamp, reference space, RCD, X-Trans, pack | `decoders/processor/operators/gpu/` | VK3 | 1400 to 1800 | complete (#1196) |
 | VK5 | RAW operators: highlight reconstruction, lens calibration, DNG warp | `decoders/processor/operators/gpu/`, `edit/runtime/lens/vulkan/` | VK4 | 1500 to 1900 | complete (#1203) |
-| VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | complete on the Apple M4, Windows runs open (#1209) |
-| VK7 | GeometryResample, CameraToAp1, UploadRgb, DisplayToAp1 | `edit/runtime/vulkan/` | VK6 | 1100 to 1500 | planned |
+| VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | complete (#1209) |
+| VK7 | GeometryResample, CameraToAp1, raster input (UploadRgb), DisplayToAp1 | `edit/runtime/vulkan/`, shared color headers | VK6 | 1100 to 1500 | complete (#1211) |
 | VK8 | Primary grade point kernels and LUT resources | `edit/runtime/vulkan/` | VK7 | 1400 to 1800 | planned |
 | VK9 | Primary grade neighbor kernels | `edit/runtime/vulkan/` | VK8 | 800 to 1200 | planned |
 | VK10 | Local tone | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | planned |
@@ -2071,8 +2071,8 @@ macOS:   source ~/Projects/vulkan_tools/env.sh
 **Exit criteria.**
 
 - [x] The listed tests pass on the Apple M4 with no validation error.
-- [ ] The listed tests pass on both Windows devices against OpenCL, or the record names the runs
-      that did not take place. (The record names them: not run.)
+- [x] The listed tests pass on both Windows devices against OpenCL, or the record names the runs
+      that did not take place. (Windows runs of 2026-11-27 below; Iris Xe with the bound of #1213.)
 - [x] The OpenCL, CUDA, and Metal results are unchanged: VK6 changes no shared kernel source.
 
 **Expected diff.** 1400 to 1800 lines.
@@ -2208,6 +2208,278 @@ the Windows runs did not take place.
 **Remaining gaps:** the Windows runs of `VulkanDevelopTest` against OpenCL on the RTX 3080 Laptop
 GPU and Iris Xe (B9), and of the VK0 to VK5 suites after the `VulkanContext` change.
 
+**Windows runs (2026-11-27, during VK7, on the VK7 branch).** RTX 3080 Laptop GPU: the VK0 to VK7
+suites pass (131 tests, 130 PASS, 1 skipped), `VulkanDevelopTest` 9 of 9 against OpenCL:
+
+| Case | OpenCL against Vulkan, RTX 3080 | Iris Xe |
+| --- | --- | --- |
+| Bayer NEF, highlight reconstruction off / on | 3.1e-5 / 3.7e-6 | 0.0495, rms 1.4e-5 / 0.30 at x = 4, rms 1.2e-4 (#1213, accepted) |
+| X-Trans RAF, off / on | equal / 8.7e-7 | 1.2e-7 / 8.5e-7 |
+| Linear DNG, off / on | equal / 5.8e-7 | equal / 1.2e-7 |
+| WarpRectilinear of a real DNG | 1.8e-7 | inside below 1e-5, border 9.8e-4 (1 ulp) |
+| Lens vignetting, distortion, TCA | 5.8e-7 | 8.0e-7 |
+
+Iris Xe: the RCD stage alone differs between the Iris Xe Vulkan and OpenCL drivers on this
+clipped NEF in the red and blue planes (1441 and 1176 values above 1e-4, largest 0.058), the green
+plane is equal, and neither Iris Xe backend gives the RTX 3080 result there; the VK4 RCD test uses
+a NEF without large clipped areas (#1213). The user accepted the difference of 0.058 (2026-11-27).
+`VulkanDevelopTest` therefore bounds the demosaic cases on an Intel GPU (vendor id 0x8086) by the
+rule of the Metal comparison: rms 2.5e-4, largest 0.5. Other GPUs keep 1e-4 against OpenCL. With
+it, `VulkanDevelopTest` passes 9 of 9 on both devices, and the second exit criterion is met.
+
+### Phase VK7: GeometryResample, CameraToAp1, raster input, DisplayToAp1
+
+**Objective and deliverables.** The Vulkan backend writes `develop.image` (ACEScc AP1, the input
+of the Color Grades) for a RAW input and for a raster input, in the order of the OpenCL passes:
+`PassEncoder<VulkanBackend, GeometryResample | CameraToAp1 | DisplayToAp1>` and the raster branch
+of `ExecuteVulkanDevelop`. The work runs on the Apple M4 with MoltenVK (user request 2026-11-27:
+VK7 on the Mac; the Windows computer is in use). The reference backend on that computer is Metal
+(VK6 rule).
+
+**Inputs and prerequisites.** VK6 (`ExecuteVulkanDevelop`, `develop.sensor_linear`). VK4
+(`EncodeCopyRgbaCropInverseOrient`). VK2 (the parameter arena and the node value cache of the
+workspace). VK3 (`color_encoding_math.h` in Slang, `math.slangh`).
+
+**Source audit of the VK7 entry (2026-11-27).**
+
+| OpenCL entry | Kernels and shared code | VK7 decision |
+| --- | --- | --- |
+| `ExecuteOpenClGeometryResample` (`opencl_develop_pass.cpp`): alias of `develop.sensor_linear` when `encode_geometry_resample` is false, else one resample into `geometry.scene_source` | `geometry_resample_rgba32f` (`geometry_camera.cl`): bilinear or bicubic (Catmull-Rom weights, normalized) sample at `render_to_decoded` of each texel center, border color outside | VK7. The bilinear and bicubic sample functions move to `geometry_sample.slangh`, shared with the DNG warp kernel of VK5 (same code). |
+| `ExecuteOpenClCameraColor`: the `camera_to_ap1` matrix in the parameter arena (slot `camera_color`), the DNG profile tables in the node value cache (`UploadDngProfileGpuData`) | `camera_color_acescc`: matrix, `DngApplyColorProfile` (`dng_profile_gpu_math.h`), `AcesReferenceGamutCompress` (`aces_reference_gamut_compression.h`), `CeAcesccEncode` | VK7. The two headers get a `__SLANG__` branch. |
+| Raster branch of `ExecuteOpenClDevelop`: upload at native depth, `LinearizeRaster` to RGBA32F, crop and orientation | `linearize_raster_rgba` (`display_to_ap1.cl`), `RlLinearize` (`raster_linearize_math.h`) | VK7. U8 and U16 samples are read from 32-bit words (the `LoadU16` rule of VK4: no 8-bit or 16-bit storage feature). |
+| `ExecuteOpenClDisplayToAp1`: the block of `ResolveDisplayToAp1Block` in the parameter arena (slot `display_to_ap1`) | `display_to_ap1_acescc`, `display_to_ap0_linear` (only the OpenColorIO test calls the second), `D2aSourceToAcesccAp1` (`display_to_ap1_math.h`), the ACES 2.0 inverse of `aces2_reference_math.h` | VK7, both kernels. The two headers get a `__SLANG__` branch. |
+
+**Modules, files, and APIs.**
+
+- `edit/runtime/vulkan/shader/geometry_camera.slang` (group `geometry_camera`: kernels
+  `geometry_resample_rgba32f`, `camera_color_acescc`) and `geometry_sample.slangh`;
+  `edit/runtime/vulkan/shader/display_to_ap1.slang` (group `display_to_ap1`: kernels
+  `linearize_raster_rgba`, `display_to_ap1_acescc`, `display_to_ap0_linear`).
+- `include/vulkan/vulkan_geometry_camera_kernels.hpp`, `include/vulkan/vulkan_display_to_ap1_kernels.hpp`:
+  names, bindings, push constant layouts; the descriptors go into `VulkanKernelCatalog()`.
+- `inc/edit/runtime/vulkan/vulkan_geometry_camera_pass.hpp`, `edit/runtime/vulkan/vulkan_geometry_camera_pass.cpp`
+  (target `EditRuntimeVulkanPasses`): `ExecuteVulkanGeometryResample(VulkanRenderDevice&, const ExecutionPlan&)`,
+  `ExecuteVulkanCameraColor(VulkanRenderDevice&, const ExecutionPlan&, const PipelineDocument&)`.
+- `inc/edit/runtime/vulkan/vulkan_display_to_ap1_pass.hpp`, `edit/runtime/vulkan/vulkan_display_to_ap1_pass.cpp`:
+  `ExecuteVulkanDisplayToAp1(...)`, and the encode functions `EncodeVulkanLinearizeRaster(...)`
+  and `EncodeVulkanDisplayToAp1(..., DisplayToAp1Output)` that the Develop raster branch and the
+  tests call.
+- `vulkan_pass_encoder.hpp`: the three new `PassEncoder` specializations.
+- `math.slangh`: `AlcedoLog10` for `A2R_LOG10`.
+- Test: `tests/edit/runtime/vulkan_geometry_color_test.cpp` (`VulkanGeometryColorTest`), built
+  when Vulkan and OpenCL or Metal are enabled (the rule of `VulkanDevelopTest`).
+
+**Data rules and invariants.**
+
+- A pass reads the shared parameters by device address: the parameter arena buffer of the
+  workspace plus the binding offset (`camera_color`, `display_to_ap1`), the DNG profile tables of
+  the node value cache. The arena and the cache keep the buffers alive past the submission
+  (VK2 rule), as in OpenCL.
+- `geometry.scene_source` is an alias of `develop.sensor_linear` when the plan has no resample; the
+  pass then records nothing.
+- The raster branch scratch (the upload at native depth, the linearize parameters, the RGBA32F
+  plane) is a set of `VulkanBackend::Buffer` objects of the call (VK6 rule).
+- Every pass records into the open recording and submits nothing.
+- A missing input image, a call outside `BeginRender`, a document without a Develop node or
+  without a raster input (DisplayToAp1), an unresolved color transform (CameraToAp1), or a raster
+  plane that is not tightly packed fails with `std::runtime_error` and the message of the OpenCL
+  pass before a command is recorded.
+- Kernel math: `pow`, `log10`, `sin`, `cos`, `atan2` of the shared headers map to the
+  `math.slangh` functions in the `__SLANG__` branch (the VK3 and VK5 rules: GLSL.std.450 is less
+  precise than OpenCL).
+
+**Implementation steps.**
+
+1. `__SLANG__` branches of the five headers; `AlcedoLog10`.
+2. The two kernel groups and their headers; the catalog.
+3. The pass functions, the encode functions, the raster branch, the pass encoders.
+4. `VulkanGeometryColorTest`.
+5. Runs: Apple M4 (MoltenVK). The Windows runs against OpenCL wait until the Windows computer is
+   free (section 11).
+
+**Tests and evidence.**
+
+- `VulkanGeometryColorTest.GeometryResampleEqualsTheHostSampleAndTheReferenceBackend` (crop,
+  rotation, viewport, and scale of the OpenCL geometry test; bilinear and bicubic)
+- `VulkanGeometryColorTest.GeometryWithoutResampleAliasesTheSensorImage`
+- `VulkanGeometryColorTest.CameraColorWithADcpProfileMatchesTheScalarProfile` (the synthetic DCP
+  of `VerifyDcpCameraProfile` on its CI ARW: `ExpectCameraPassMatchesScalarProfile`, 3e-4)
+- `VulkanGeometryColorTest.RawDevelopImageEqualsTheReferenceBackend` (`raw/street/_DSC0155.NEF`,
+  Develop, GeometryResample, CameraToAp1)
+- `VulkanGeometryColorTest.RasterDevelopOutputMatchesTheHostEvaluationForEachRasterKind` (the
+  eight fixtures of the Metal and OpenCL raster tests, `ExpectAcesccNear`, 3e-4) and against the
+  reference backend
+- `VulkanGeometryColorTest.Aces2InverseMatchesOcioCpuProcessor` and
+  `AcesccOutputMatchesHostEvaluationForBothBranches` (the OpenCL DisplayToAp1 test cases and
+  tolerances)
+- `VulkanGeometryColorTest.PassesRecordIntoTheOpenRecordingWithoutASubmission`
+- `VulkanGeometryColorTest.InvalidRequestsFailBeforeACommand`
+
+**Build and run commands.**
+
+```text
+macOS:   source ~/Projects/vulkan_tools/env.sh
+         cmake --build build/macos-vulkan --target AlcedoVulkanKernels VulkanGeometryColorTest
+               VulkanDevelopTest alcedo_gpu_check
+         ctest --test-dir build/macos-vulkan -R "Vulkan" -j 1 --output-on-failure
+Windows: cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanGeometryColorTest
+         ctest --test-dir build/debug -R "VulkanGeometryColorTest" -j 1 --output-on-failure
+```
+
+**Exit criteria.**
+
+- [x] The listed tests pass on the Apple M4 with no validation error.
+- [x] The listed tests pass on both Windows devices against OpenCL, or the record names the runs
+      that did not take place. (RTX 3080 Laptop GPU and Iris Xe: 9 of 9.)
+- [x] The OpenCL, CUDA, and Metal results are unchanged: the shared headers keep their OpenCL,
+      CUDA, Metal, and host expansion (record).
+
+**Expected diff.** 1100 to 1500 lines.
+
+##### Phase VK7 completion record (2026-11-27)
+
+**Status:** complete on the Apple M4 (MoltenVK), the RTX 3080 Laptop GPU, and Iris Xe. Issue
+#1211. Branch `feature/vulkan-vk7-geometry-camera-raster` on the VK6 branch
+`feature/vulkan-vk6-develop-pass` (pull request #1210). The work was done on the Mac (user
+request); the Windows build and runs followed the same day when the Windows computer was free
+(user request), on the committed branch.
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Pointers of the shared headers | A `__SLANG__` branch | Each header names its table pointer with one macro (`DNG_CONST_FLOAT_PTR`, `RL_CONST_FLOAT_PTR`, `A2R_CONST_FLOAT_PTR`, `D2A_CONST_FLOAT_PTR`) in place of `X_GLOBAL const float*`. The expansion for OpenCL, Metal, CUDA, and the host is the old text; Slang gets `float*`. `dng_profile_gpu_math.h` maps `unsigned` to `uint` in its Slang branch and removes the mapping at its end; its `uint` conditions are `!= 0`. | slangc rejects `const T*` (error 20017: use `Ptr<T, Access.Read>`) and has no `unsigned`. A macro of the whole type keeps one text for every backend. |
+| ACES 2.0 inverse math | `math.slangh` functions | `AlcedoPow`, `AlcedoAtan2`, `AlcedoCos`, `AlcedoSin`, and a new `AlcedoLog10` (split `log10 2`, exact for every exponent) | The VK3 and VK5 rules. |
+| Bilinear and bicubic sample | Shared with the DNG warp | `geometry_sample.slangh` takes the image as a parameter; `dng_warp.slang` uses it. | One code; the VK6 warp results did not change (below). |
+| Arena address | Not in the plan | `ParameterSlotAddress` (`vulkan_parameter_address.hpp`): the device address of a slot after a range check. `EncodeVulkanDisplayToAp1` takes the parameter buffer and an offset, so the pass (arena) and the tests (own buffer) call one function. | The arena buffer is `const` for a reader; a `VulkanBufferView` needs a mutable buffer. |
+| Reference comparison helpers | Not in the plan | The reference backend wrappers and `Compare` of `VulkanDevelopTest` moved to `tests/edit/runtime/vulkan_reference_backend_support.hpp` with the geometry, camera, and DisplayToAp1 wrappers. | Two test files use them. |
+| Camera color comparison | A tolerance | Both backends run the camera pass on the `geometry.scene_source` of Vulkan. Bound: rms 1e-5; each value that differs by more than 1e-4 must equal the host evaluation within 3e-4 (the scalar tolerance of `ExpectCameraPassMatchesScalarProfile`). | 3 of 56 million values differ by up to 0.039 in ACEScc (one texel near black, linear 5e-4 to 8e-4 after the HueSatMap); Vulkan equals the host value bit for bit there and Metal (fast math) leaves it. |
+| RAW fixture | `raw/street/_DSC0155.NEF` | The CI Sony ARW of `VerifyDcpCameraProfile` for the camera test and the end-to-end RAW test | It is in the repository (LFS) on every computer and has an imported camera profile; the NEF test RAW is a local copy. |
+| VK6 test of the raster input | Fails with VK7 | `VulkanDevelopTest.NeuralEngineAndRasterPixelsWithoutRasterInputFail`: raster pixels of a document without a raster input object fail with the message of `RequireRasterInput` | The raster branch runs from this phase. |
+
+**Measured differences on the Apple M4** (logs `build/tmp/vulkan_backend/vk7/` of the Mac
+worktree; relative difference `|vulkan - reference| / max(1, |reference|)`):
+
+| Case | Against | Largest | rms | Tolerance |
+| --- | --- | --- | --- | --- |
+| Geometry bilinear (crop, 15 degrees, viewport) | host sample | 1.2e-7 | | 1.5e-4 (OpenCL test) |
+| Geometry bicubic | host sample | 0 | | 1.5e-4 |
+| Geometry bilinear; bicubic | Metal | 2.9e-6; 4.3e-6 | 2.8e-7; 3.5e-7 | 1e-5 |
+| Camera color, synthetic DCP, CI ARW (14.1 MP) | host, sparse grid | in 3e-4 | | 3e-4 |
+| Camera color, the same input on both | Metal | 0.039 (3 values above 1e-4, equal to the host on Vulkan) | 5.3e-6 | rms 1e-5, the host rule |
+| `develop.image` of the CI ARW, the whole chain | Metal | 0.0106 | 5.0e-6 | rms 2.5e-4 (VK6 demosaic rule) |
+| Raster fixtures (8), `develop.image` | host evaluation | in tolerance | | `ExpectAcesccNear` 3e-4 |
+| Raster fixtures (8) | Metal | 4.5e-4 (HLG TIFF), 8e-5 or less for the others | 1.6e-5 or less | `ExpectAcesccNear` 3e-4 |
+| ACES 2.0 inverse, 5 displays, 33^3 grid | OpenColorIO 2.5.1 | `ExpectMatchesOcio` | | the OpenCL test rule |
+| DisplayToAp1 ACEScc, display and scene branch | host evaluation | in 2e-4 | | 2e-4 (OpenCL test) |
+| VK6 `VulkanDevelopTest` (after the warp refactor) | Metal | the VK6 values, unchanged | | VK6 |
+
+**Primary success call chain:**
+
+```text
+PlanExecutor<VulkanBackend> (VK17) or VulkanGeometryColorTest
+  -> PassEncoder<VulkanBackend, UploadRgb>::Encode -> ExecuteVulkanDevelop
+       -> RasterRgb: RequireRasterInput, RequireRasterPixelsMatchDescription, packed check
+       -> EncodeRasterInput: PackRasterLinearize -> UploadBufferRange (pixels, parameters)
+          -> EncodeVulkanLinearizeRaster -> EncodeCopyRgbaCropInverseOrient (identity scale)
+  -> PassEncoder<VulkanBackend, GeometryResample>::Encode -> ExecuteVulkanGeometryResample
+       -> no resample: AliasImageFrom(geometry.scene_source, develop.sensor_linear)
+       -> else AcquireImageForWrite -> RecordKernelDispatch(geometry_resample_rgba32f)
+  -> PassEncoder<VulkanBackend, CameraToAp1>::Encode -> ExecuteVulkanCameraColor
+       -> ResolveDevelopColorTransform -> arena slot camera_color -> UploadDirty
+       -> PackDngProfileGpuData -> UploadDngProfileGpuData (node value cache)
+       -> RecordKernelDispatch(camera_color_acescc) into develop.image
+  -> or PassEncoder<VulkanBackend, DisplayToAp1>::Encode -> ExecuteVulkanDisplayToAp1
+       -> ResolveDisplayToAp1Block -> arena slot display_to_ap1 -> UploadDirty
+       -> EncodeVulkanDisplayToAp1(AcesccAp1) into develop.image
+  -> nothing is submitted; EndRender submits the recording
+```
+
+**Primary failure call chain:**
+
+```text
+render not open, no develop.sensor_linear, no geometry.scene_source, no Develop node, an
+unresolved color transform, a document without a raster input, raster pixels that do not match
+the description or are not tightly packed
+  -> std::runtime_error "ExecuteVulkan...: ..." before an allocation or a command
+a parameter block outside its buffer, a texture that is not RGBA32F, a CFA format for the raster
+linearization
+  -> std::invalid_argument from the encode function; nothing is recorded
+```
+
+**What was proven (executed tests, Apple M4, MoltenVK 1.4.2, validation layer 1.4.363):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `GeometryResampleEqualsTheHostSampleAndTheReferenceBackend` | `VulkanGeometryColorTest` | PASS |
+| `GeometryWithoutResampleAliasesTheSensorImage` | `VulkanGeometryColorTest` | PASS |
+| `CameraColorWithADcpProfileMatchesTheScalarProfile` | `VulkanGeometryColorTest` | PASS |
+| `RawDevelopImageEqualsTheReferenceBackend` | `VulkanGeometryColorTest` | PASS |
+| `RasterDevelopOutputMatchesTheHostEvaluationForEachRasterKind` | `VulkanGeometryColorTest` | PASS |
+| `Aces2InverseMatchesOcioCpuProcessor`, `AcesccOutputMatchesHostEvaluationForBothBranches` | `VulkanGeometryColorTest` | PASS |
+| `PassesRecordIntoTheOpenRecordingWithoutASubmission` (0 submissions and waits, then 1 submission) | `VulkanGeometryColorTest` | PASS |
+| `InvalidRequestsFailBeforeACommand` (no buffer, no texture, no recording) | `VulkanGeometryColorTest` | PASS |
+| VK0 to VK6 suites and VK7 | `ctest -R "Vulkan\|PipelineAccelerator"` | 95 tests, 93 PASS, 2 skipped (Windows only) |
+| `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | PASS: `gpu.kernels.ok=vulkan kernels=32` |
+| Validation errors | `TearDown` of each GPU test | 0 |
+| Metal and host builds of the changed headers | Metal libraries `camera_color`, `display_to_ap1`, `drt` rebuilt; host evaluation in the tests | the Metal results of the VK6 and VK7 comparisons are the ones above |
+| Windows: MSVC build of the Vulkan targets, the OpenCL tests, and the CUDA tests of the changed headers | `scripts\msvc_env.cmd --build build\debug` | PASS, no warning |
+
+Commands:
+
+```text
+macOS:  source ~/Projects/vulkan_tools/env.sh
+        cmake --build build/macos-vulkan --target AlcedoVulkanKernels VulkanRequirementsTest
+              VulkanContextTest VulkanShaderModuleRegistryTest VulkanComputePipelineCacheTest
+              GpuDagVulkanWorkspaceTest PipelineAcceleratorTest VulkanDevelopTest
+              VulkanGeometryColorTest alcedo_gpu_check
+        ctest --test-dir build/macos-vulkan -R "Vulkan|PipelineAccelerator" -j 1     95: 93 PASS, 2 skipped
+        build/macos-vulkan/.../alcedo-gpu-check --vulkan                            exit 0
+```
+
+**Finding outside this phase.** As in VK6, the product Metal kernels with fast math leave the host
+value where the result is sensitive: one CI ARW texel near black differs by 0.039 in ACEScc after
+the HueSatMap of a DCP profile. VK7 changes nothing in Metal.
+
+**LOC note:** about 2080 added and 300 removed lines without the plan: the kernels 267 (and 40
+in `dng_warp.slang`), the passes and kernel headers about 720, the shared header changes about
+250 (mostly the macro rename and the alignment of clang-format), CMake and the catalog 52, the
+tests 884 (the new test 663, the moved helpers 221; 150 lines removed from `VulkanDevelopTest`).
+Above the estimate of 1100 to 1500: the shared header changes and the moved test helpers were not
+in it.
+
+**Windows runs (2026-11-27):** `VulkanGeometryColorTest` against OpenCL on the same GPU
+(`ALCEDO_VULKAN_DEVICE=RTX` or `Iris`, validation layer on, 0 validation errors):
+
+| Case | RTX 3080 Laptop GPU | Iris Xe |
+| --- | --- | --- |
+| Geometry bilinear: host; OpenCL | 2.9e-6; equal | 2.9e-6; equal |
+| Geometry bicubic: host; OpenCL | 4.4e-6; 1.8e-7 | 4.4e-6; 1.8e-7 |
+| Camera color with a DCP profile, the same input on both | 4.8e-7, rms 3.1e-8, 0 values above 1e-4 | 4.8e-7, rms 3.3e-8, 0 above 1e-4 |
+| `develop.image` of the CI ARW, the whole chain | 4.2e-7, rms 2.9e-8 | 6.3e-7, rms 2.9e-8 |
+| Raster fixtures (8) against OpenCL | 9.0e-5 or less | 7.5e-4 (HLG TIFF), 7.9e-5 or less for the others |
+| Result | 9 of 9 PASS | 9 of 9 PASS |
+
+With OpenCL as the reference the camera color differences are 4.8e-7: the 0.039 of the Apple M4 is
+the fast math of the product Metal kernel. The suites: RTX 3080, 131 tests, 130 PASS, 1 skipped (a
+test for a build without Vulkan); Iris Xe, 130 PASS and `VulkanDevelopTest.BayerRawEqualsTheReferenceBackend`
+FAIL, a VK4 RCD finding on a clipped NEF (#1213, VK6 record; accepted, the Intel bound of the VK6
+record makes it pass). `alcedo-gpu-check --vulkan`:
+`gpu.kernels.ok=vulkan kernels=32` on both devices.
+
+The OpenCL and CUDA tests of the changed headers (OpenCL on Iris Xe, the device of the OpenCL
+test default): `GpuDagOpenClDisplayToAp1Test` 4 of 4, `GpuDagOpenClRasterDevelopTest` 4 of 4,
+`GpuDagCudaDisplayToAp1Test` 5 of 5, `GpuDagCudaRasterDevelopTest` 9 of 9, `GpuDagOpenClDevelopTest`
+(DCP, Canon DNG, Sony, geometry, converted DNG) 5 of 6. The failure
+`OpenClDevelopFixture.DcpProfileMatchesScalarReference` (display change 0.004808, limit 0.005) is
+#972: the binary of the main checkout without VK7 gives the same value.
+
+A stale binary first failed `EachCatalogKernelHasAPipeline` (the old kernel catalog): a phase that
+adds kernels rebuilds every Vulkan test target, not only its own.
+
+**Remaining gaps:** none.
+
 ### Phases VK3 to VK23: scope of each phase
 
 Each entry gives the objective, the OpenCL model, and the main tests. The detailed section replaces
@@ -2219,7 +2491,7 @@ the entry before the implementation.
 | VK4 | Detailed section above | | |
 | VK5 | Detailed section above | | |
 | VK6 | Detailed section above | | |
-| VK7 | GeometryResample, CameraToAp1, UploadRgb, DisplayToAp1 | `geometry_camera.cl`, `display_to_ap1.cl`, `opencl_display_to_ap1_pass.cpp` | `develop.image` equals OpenCL for a RAW and for a raster input. |
+| VK7 | Detailed section above | | |
 | VK8 | `VulkanGradeOps` point kernels, LUT images by content key | `opencl_primary_grade_pass.cpp`, `primary_grade.cl` | Each adjustment equals OpenCL. LUT resources are reused by content key. |
 | VK9 | Neighbor kernels of the primary grade | `primary_grade_neighbor.cl` | Detail adjustments equal OpenCL. |
 | VK10 | `VulkanLocalToneOps` | `opencl_local_tone_pass.cpp`, `local_tone.cl` | Local tone equals OpenCL at full size and for a region of interest. |

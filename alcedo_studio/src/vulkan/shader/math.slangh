@@ -139,6 +139,21 @@ static float AlcedoLog2(float x) {
   return e + AlcedoLog1pReduced(m - 1.0f) * kAlcedoLog2E;
 }
 
+static const float kAlcedoLog10TwoHi = 0.301025390625f;  // log10 2 with 12 trailing zero bits
+static const float kAlcedoLog10TwoLo = 4.6050389811980175e-06f;
+static const float kAlcedoLog10E     = 0.434294481903252f;
+
+// log10 x = e log10 2 + ln(m) log10 e (phase VK7: the ACES 2.0 inverse of the raster input).
+static float AlcedoLog10(float x) {
+  if (!(x > 0.0f) || isinf(x)) {
+    return log10(x);
+  }
+  float       e = 0.0f;
+  const float m = AlcedoSplitMantissa(x, e);
+  return e * kAlcedoLog10TwoHi +
+         (AlcedoLog1pReduced(m - 1.0f) * kAlcedoLog10E + e * kAlcedoLog10TwoLo);
+}
+
 // x^y = e^(y ln x). A base that is not positive keeps the GLSL.std.450 result (the curves clamp
 // their input before a power).
 static float AlcedoPow(float x, float y) {

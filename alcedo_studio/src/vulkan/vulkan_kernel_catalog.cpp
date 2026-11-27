@@ -6,7 +6,9 @@
 
 #include "vulkan/vulkan_color_math_check_kernels.hpp"
 #include "vulkan/vulkan_debayer_rcd_kernels.hpp"
+#include "vulkan/vulkan_display_to_ap1_kernels.hpp"
 #include "vulkan/vulkan_dng_warp_kernels.hpp"
+#include "vulkan/vulkan_geometry_camera_kernels.hpp"
 #include "vulkan/vulkan_geometry_kernels.hpp"
 #include "vulkan/vulkan_highlight_kernels.hpp"
 #include "vulkan/vulkan_lens_calib_kernels.hpp"
@@ -35,6 +37,11 @@ auto VulkanKernelCatalog() -> std::vector<VulkanKernelDescriptor> {
       dng_warp_kernels::WarpRectilinearDescriptor(),
       lens_calib_kernels::VignettingDescriptor(),
       lens_calib_kernels::WarpDescriptor(),
+      geometry_camera_kernels::GeometryResampleDescriptor(),
+      geometry_camera_kernels::CameraColorDescriptor(),
+      display_to_ap1_kernels::LinearizeRasterDescriptor(),
+      display_to_ap1_kernels::DisplayToAp1Descriptor(display_to_ap1_kernels::kDisplayToAp1),
+      display_to_ap1_kernels::DisplayToAp1Descriptor(display_to_ap1_kernels::kDisplayToAp0Linear),
   };
   for (const auto kernel : debayer_rcd_kernels::kRcdKernels) {
     catalog.push_back(debayer_rcd_kernels::Descriptor(kernel));
