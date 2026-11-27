@@ -226,6 +226,37 @@ TEST(SleeveFSTest, DeleteTest2) {
   }
 }
 
+// #1179: a path cache record of a deleted folder does not hide a new folder at the same path.
+TEST(SleeveFSTest, PathOfADeletedFolderResolvesToTheNewFolder) {
+  {
+    Storage    storage_service{db_path};
+    FileSystem fs{db_path, storage_service, 0};
+    fs.InitRoot();
+
+    // Delete by path.
+    fs.Create(L"", L"A", ElementType::FOLDER);
+    const auto old_b = fs.Create(L"/A", L"B", ElementType::FOLDER);
+    ASSERT_EQ(fs.Get(L"/A/B", false)->element_id_, old_b->element_id_);
+    fs.Delete(L"/A");
+    EXPECT_THROW(fs.Get(L"/A/B", false), std::runtime_error);
+    fs.Create(L"", L"A", ElementType::FOLDER);
+    const auto new_b = fs.Create(L"/A", L"B", ElementType::FOLDER);
+    EXPECT_EQ(fs.Get(L"/A/B", false)->element_id_, new_b->element_id_);
+    EXPECT_EQ(fs.Get(L"/A/B", false)->element_id_, new_b->element_id_);
+
+    // Delete by id.
+    const auto c     = fs.Create(L"/A", L"C", ElementType::FOLDER);
+    const auto old_d = fs.Create(L"/A/C", L"D", ElementType::FOLDER);
+    ASSERT_EQ(fs.Get(L"/A/C/D", false)->element_id_, old_d->element_id_);
+    fs.Delete(c->element_id_);
+    EXPECT_THROW(fs.Get(L"/A/C/D", false), std::runtime_error);
+    fs.Create(L"/A", L"C", ElementType::FOLDER);
+    const auto new_d = fs.Create(L"/A/C", L"D", ElementType::FOLDER);
+    EXPECT_EQ(fs.Get(L"/A/C/D", false)->element_id_, new_d->element_id_);
+  }
+  CleanupTestFiles();
+}
+
 TEST(SleeveFSTest, CopyTest1) {
   try {
     Storage storage_service{db_path};

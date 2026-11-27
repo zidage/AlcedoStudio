@@ -78,6 +78,7 @@ auto FileSystem::Create(std::filesystem::path dest, std::wstring filename, Eleme
   nodes_.Insert(new_element);
   if (type == ElementType::FOLDER) {
     dest_folder->AddElementToMap(new_element);
+    resolver_.InvalidateAll();
     return new_element;
   }
   // Each file has one link in the library root (D2), which holds the stored reference count of
@@ -272,31 +273,17 @@ void FileSystem::Delete(std::filesystem::path target) {
       std::static_pointer_cast<SleeveFolder>(resolver_.ResolveForWrite(parent));
   delete_node->DecrementRefCount();
 
-  if (delete_node->ref_count_ <= 0) {
-    // Mark the node as deleted in storage handler
-    // Album membership does not own files. Removing a folder only decrements nested folder
-    // identities that participate in folder-tree CoW; file children remain live library files.
-    if (delete_node->type_ == ElementType::FOLDER) {
-      auto  delete_folder = std::static_pointer_cast<SleeveFolder>(delete_node);
-      auto& children      = delete_folder->ListElements();
-      for (auto& child_id : children) {
-        auto child = storage_handler_.GetElement(child_id);
-        if (!child || !child->IsLive() || child->type_ != ElementType::FOLDER) {
-          continue;
-        }
-        child->DecrementRefCount();
-        if (child->ref_count_ <= 0) {
-          // Recursively decrement
-          std::filesystem::path child_path =
-              target / child->element_name_;  // Construct child's path for resolver
-          Delete(child_path);
-        }
-      }
-    }
+  // Album membership does not own files. Removing a folder only decrements nested folder
+  // identities that participate in folder-tree CoW; file children remain live library files.
+  // The release goes by id, as in Delete(sl_element_id_t): the path of a child passes through the
+  // folder that is now deleted, so it does not resolve.
+  if (delete_node->ref_count_ <= 0 && delete_node->type_ == ElementType::FOLDER) {
+    ReleaseChildFolders(std::static_pointer_cast<SleeveFolder>(delete_node));
   }
 
   parent_write_node->RemoveNameFromMap(delete_node_name.wstring());
-  resolver_.Invalidate(target);
+  // The records of the paths under the target name deleted folders too.
+  resolver_.InvalidateAll();
 }
 
 void FileSystem::Delete(sl_element_id_t target_id) {
@@ -341,6 +328,7 @@ void FileSystem::Delete(sl_element_id_t target_id) {
   if (!remove_from_folder(root_, remove_from_folder)) {
     throw std::runtime_error("Filesystem: Deleting node does not exist");
   }
+  resolver_.InvalidateAll();
 }
 
 void FileSystem::ReleaseChildFolders(const std::shared_ptr<SleeveFolder>& folder) {

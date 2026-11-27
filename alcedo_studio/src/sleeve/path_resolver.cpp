@@ -65,12 +65,19 @@ auto PathResolver::Resolve(const std::filesystem::path& path) -> std::shared_ptr
 
   auto                           cached_id  = directory_cache_.AccessElement(path.wstring());
   if (cached_id.has_value()) {
-    auto cached = storage_handler_.GetElement(cached_id.value());
-    if (!cached || !cached->IsLive()) {
-      directory_cache_.RemoveRecord(path.wstring());
-      throw std::runtime_error("Path Resolver: Illegal path. Target does not exist");
+    // The sync removes a deleted element from the node cache and from the store, so the element
+    // of an old record may not load. Such a record goes, and the walk from the root gives the
+    // folder that holds the path now.
+    std::shared_ptr<SleeveElement> cached;
+    try {
+      cached = storage_handler_.GetElement(cached_id.value());
+    } catch (const std::exception&) {
+      cached.reset();
     }
-    return cached;
+    if (cached && cached->IsLive() && cached->type_ == ElementType::FOLDER) {
+      return cached;
+    }
+    directory_cache_.RemoveRecord(path.wstring());
   }
 
   for (const auto& part : visit_path) {
@@ -174,6 +181,8 @@ auto PathResolver::CoWHandler(const std::shared_ptr<SleeveElement>& to_copy,
     }
   }
   parent_folder->UpdateElementMap(copied->element_name_, old_id, copied->element_id_);
+  // A record of this path names the source, which stays live while another folder holds it.
+  directory_cache_.Flush();
   copied->IncrementRefCount();
   storage_handler_.AddToStorage(copied);
   to_copy->MarkModified();
