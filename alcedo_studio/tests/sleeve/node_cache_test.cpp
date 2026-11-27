@@ -173,6 +173,145 @@ TEST(NodeCacheTest, ElementOutlivesItsCacheAndChangesItsFlagOnly) {
   EXPECT_EQ(next.DirtyCount(), 1u) << "the detached element can enter a new cache";
 }
 
+/// The ids of @p ids that the cache holds.
+auto HeldIds(const NodeCache& cache, const std::vector<sl_element_id_t>& ids)
+    -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> held;
+  for (const auto id : ids) {
+    if (cache.Contains(id)) {
+      held.push_back(id);
+    }
+  }
+  return held;
+}
+
+// Sleeve Node Cache Plan SN7: the cache keeps at most the limit of clean file elements, and the
+// least recently used of them leave first.
+TEST(NodeCacheTest, ReadingMoreFilesThanTheLimitKeepsTheCacheAtTheLimit) {
+  NodeCache cache;
+  EXPECT_EQ(cache.Limit(), NodeCache::kCleanFileLimit);
+  cache.SetLimit(3);
+  std::vector<sl_element_id_t>              ids = {1, 2, 3, 4, 4096, 5000};
+  std::vector<std::weak_ptr<SleeveElement>> observed;
+  for (const auto id : ids) {
+    auto element = MakeFile(id);
+    observed.push_back(element);
+    cache.Insert(std::move(element));
+  }
+  ASSERT_EQ(cache.CleanFileCount(), ids.size());
+  EXPECT_EQ(cache.Size(), ids.size()) << "SetLimit evicts nothing";
+
+  // A Find makes the element the most recently used: id 1 then outlives ids 2, 3, and 4.
+  ASSERT_NE(cache.Find(1), nullptr);
+  EXPECT_EQ(cache.EvictToLimit(), 3u);
+
+  EXPECT_EQ(cache.Size(), 3u);
+  EXPECT_EQ(cache.CleanFileCount(), 3u);
+  EXPECT_EQ(HeldIds(cache, ids), (std::vector<sl_element_id_t>{1, 4096, 5000}));
+  EXPECT_TRUE(observed[1].expired()) << "an evicted element that no caller holds is freed";
+  EXPECT_TRUE(observed[2].expired());
+  EXPECT_TRUE(observed[3].expired());
+  EXPECT_EQ(cache.PageCount(), 2u) << "page 1 still holds ids 4096 and 5000";
+
+  // A store load of an evicted id puts a new element into the free slot.
+  cache.Insert(MakeFile(2));
+  EXPECT_EQ(cache.Size(), 4u);
+  EXPECT_EQ(cache.EvictToLimit(), 1u);
+  EXPECT_EQ(HeldIds(cache, ids), (std::vector<sl_element_id_t>{1, 2, 5000}))
+      << "id 4096 is now the least recently used";
+  EXPECT_EQ(cache.EvictToLimit(), 0u) << "a cache at the limit evicts nothing";
+}
+
+TEST(NodeCacheTest, ElementHeldByACallerStaysAndKeepsItsIdentity) {
+  NodeCache cache;
+  cache.SetLimit(1);
+  auto held = MakeFile(10);
+  cache.Insert(held);
+  cache.Insert(MakeFile(11));
+  cache.Insert(MakeFile(12));
+
+  // Id 10 is the least recently used, but the caller holds it: it moves to the back.
+  EXPECT_EQ(cache.EvictToLimit(), 2u);
+  EXPECT_EQ(HeldIds(cache, {10, 11, 12}), (std::vector<sl_element_id_t>{10}));
+  EXPECT_EQ(cache.Find(10), held) << "a second Find gives the held object";
+
+  // When the callers hold more clean files than the limit, the walk ends and evicts nothing.
+  auto other = MakeFile(13);
+  cache.Insert(other);
+  EXPECT_EQ(cache.EvictToLimit(), 0u);
+  EXPECT_EQ(cache.Size(), 2u);
+  EXPECT_EQ(cache.Find(13), other);
+
+  // After the caller lets the element go, the next eviction frees it.
+  std::weak_ptr<SleeveElement> observed = held;
+  held.reset();
+  EXPECT_EQ(cache.EvictToLimit(), 1u);
+  EXPECT_TRUE(observed.expired());
+  EXPECT_EQ(HeldIds(cache, {10, 13}), (std::vector<sl_element_id_t>{13}));
+}
+
+TEST(NodeCacheTest, ModifiedElementStaysUntilSync) {
+  NodeCache cache;
+  cache.SetLimit(0);
+  cache.Insert(MakeFile(20));
+  cache.Insert(MakeFile(21, SyncFlag::UNSYNC));
+  cache.Insert(MakeFile(22, SyncFlag::DELETED));
+  cache.Find(20)->MarkModified();
+  EXPECT_EQ(cache.CleanFileCount(), 0u);
+  EXPECT_EQ(cache.DirtyCount(), 3u);
+
+  EXPECT_EQ(cache.EvictToLimit(), 0u);
+  EXPECT_EQ(DirtyIds(cache), (std::vector<sl_element_id_t>{21, 22, 20}))
+      << "a dirty element stays and keeps its place in the dirty list";
+
+  // The commit of the sync: the written files become clean and can then leave.
+  cache.Find(20)->SetSyncFlag(SyncFlag::SYNCED);
+  cache.Find(21)->SetSyncFlag(SyncFlag::SYNCED);
+  cache.Erase(22);
+  EXPECT_EQ(cache.DirtyCount(), 0u);
+  EXPECT_EQ(cache.CleanFileCount(), 2u);
+  EXPECT_EQ(cache.EvictToLimit(), 2u);
+  EXPECT_EQ(cache.Size(), 0u);
+  EXPECT_EQ(cache.PageCount(), 0u);
+}
+
+TEST(NodeCacheTest, FoldersStayResident) {
+  NodeCache cache;
+  cache.SetLimit(0);
+  cache.Insert(MakeFolder(0));
+  cache.Insert(MakeFolder(30));
+  cache.Insert(MakeFile(31));
+  cache.Insert(MakeFolder(32, SyncFlag::MODIFIED));
+  cache.Find(32)->SetSyncFlag(SyncFlag::SYNCED);
+  EXPECT_EQ(cache.CleanFileCount(), 1u) << "a clean folder is in no list";
+
+  EXPECT_EQ(cache.EvictToLimit(), 1u);
+  EXPECT_EQ(HeldIds(cache, {0, 30, 31, 32}), (std::vector<sl_element_id_t>{0, 30, 32}));
+  std::vector<sl_element_id_t> visited;
+  cache.ForEachFolder([&visited](SleeveFolder& folder) { visited.push_back(folder.element_id_); });
+  std::sort(visited.begin(), visited.end());
+  EXPECT_EQ(visited, (std::vector<sl_element_id_t>{0, 30, 32}));
+}
+
+TEST(NodeCacheTest, EraseOfACleanFileRemovesItFromTheEvictionList) {
+  NodeCache cache;
+  cache.SetLimit(1);
+  cache.Insert(MakeFile(40));
+  cache.Insert(MakeFile(41));
+  cache.Erase(40);
+  EXPECT_EQ(cache.CleanFileCount(), 1u);
+  EXPECT_EQ(cache.EvictToLimit(), 0u);
+  EXPECT_TRUE(cache.Contains(41));
+
+  // An element that leaves the cache is detached: its flag changes reach no list.
+  auto detached = MakeFile(42);
+  cache.Insert(detached);
+  cache.Erase(42);
+  detached->MarkModified();
+  EXPECT_EQ(cache.DirtyCount(), 0u);
+  EXPECT_EQ(cache.CleanFileCount(), 1u);
+}
+
 TEST(NodeCacheTest, ForEachFolderVisitsFoldersOnly) {
   NodeCache cache;
   cache.Insert(MakeFolder(0));

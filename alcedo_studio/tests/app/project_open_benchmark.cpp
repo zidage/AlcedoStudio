@@ -469,8 +469,12 @@ auto CountImagesHeldByNodes(SleeveServiceImpl& sleeve) -> HeldImages {
   return sleeve.Read<HeldImages>([](FileSystem& fs) {
     HeldImages held;
     for (const auto id : fs.ListFileIds(kLibraryRootFolderId)) {
-      const auto element = fs.Nodes().Find(id);
-      if (!element || element->type_ != ElementType::FILE) {
+      if (!fs.Nodes().Contains(id)) {
+        continue;
+      }
+      // The cache holds the element, so Get loads nothing.
+      const auto element = fs.Get(id);
+      if (element->type_ != ElementType::FILE) {
         continue;
       }
       const auto image = std::static_pointer_cast<SleeveFile>(element)->GetImage();

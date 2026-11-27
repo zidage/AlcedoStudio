@@ -69,14 +69,21 @@ class SleeveServiceImpl final : public SleeveService {
                     const std::filesystem::path&   db_path,
                     sl_element_id_t                start_id = 0);
 
+  // Each fs_lock_ scope ends with FileSystem::EvictToLimit (Sleeve Node Cache Plan, SN7), after
+  // the result is complete: an element that the result holds stays in the cache, so the caller
+  // keeps its identity. An operation that throws skips the eviction; the next scope applies it.
+
   template <typename TResult>
   auto Read(std::function<TResult(FileSystem&)> operation) -> TResult {
     std::lock_guard<std::mutex> lock(fs_lock_);
     if constexpr (std::is_void_v<TResult>) {
       operation(*fs_);
+      fs_->EvictToLimit();
       return;
     } else {
-      return operation(*fs_);
+      TResult result = operation(*fs_);
+      fs_->EvictToLimit();
+      return result;
     }
   }
 
@@ -88,10 +95,13 @@ class SleeveServiceImpl final : public SleeveService {
 
     if constexpr (std::is_void_v<TResult>) {
       operation(*fs_);
-      return Sync();  // void: only return SyncResult
+      SyncResult sync_result = Sync();  // void: only return SyncResult
+      fs_->EvictToLimit();
+      return sync_result;
     } else {
       TResult    result      = operation(*fs_);
       SyncResult sync_result = Sync();
+      fs_->EvictToLimit();
       return {result, sync_result};
     }
   }
@@ -102,9 +112,11 @@ class SleeveServiceImpl final : public SleeveService {
 
     if constexpr (std::is_void_v<TResult>) {
       operation(*fs_);
+      fs_->EvictToLimit();
       return;
     } else {
       TResult result = operation(*fs_);
+      fs_->EvictToLimit();
       return result;
     }
   }

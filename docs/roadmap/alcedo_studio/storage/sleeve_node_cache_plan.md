@@ -2,8 +2,8 @@
 
 Date: 2026-11-26
 
-Status: **in progress**. SN1 to SN6 are complete (2026-11-26). SN6 measured that SN7 and SN8 run;
-both are planned.
+Status: **in progress**. SN1 to SN7 are complete (2026-11-26). SN6 measured that SN7 and SN8 run;
+SN8 is planned.
 
 Parent: [Roadmap](../../README.md).
 
@@ -133,6 +133,7 @@ measures it.
 
    clean folder : in no list (resident)
    clean file   : in no list before SN7, in the eviction list after SN7
+                  (NodeCache::EvictToLimit removes the least recently used, unheld ones)
 ```
 
 An element has a back pointer to its `NodeCache` from the insert to the removal. `SetSyncFlag`
@@ -218,7 +219,7 @@ and the tests.
 | SN4 | File entries leave the folders. File names are labels. Project file 0.15.0. | `SleeveFolder`, `FileSystem`, project version | SN3 | 1200 to 1700 | complete |
 | SN5 | The mount tree read and the import use row queries. | `mount_tree.cpp`, `import_service.cpp` | SN4 | 600 to 900 | complete |
 | SN6 | Measured memory and time of the 80,000-photo project. Decision for SN7 and SN8. | `project_open_benchmark.cpp` | SN5 | 150 to 300 | complete |
-| SN7 | Eviction of clean file elements under a limit, and no Image link in imported file elements. SN6 requires it. | `NodeCache`, `ImportServiceImpl` | SN6 | 400 to 600 | planned |
+| SN7 | Eviction of clean file elements under a limit, and no Image link in imported file elements. SN6 requires it. | `NodeCache`, `ImportServiceImpl` | SN6 | 400 to 600 | complete |
 | SN8 | The sidebar tree read runs on the query worker. SN6 requires it. | `FolderController` | SN6 | 300 to 500 | planned |
 
 Each phase is one pull request. Before each phase, read `AGENTS.md` and the applicable skills
@@ -1264,7 +1265,8 @@ Remaining defects or unavailable platforms: macOS and Linux not built (the memor
   referenced element to the back.
 - The check of `use_count()` runs under `fs_lock_`. A caller gets a new reference to a cached
   element only under that lock, so a count of 1 stays 1 during the walk.
-- `EvictToLimit` runs at the end of `Read`, `Write`, and `Write_NoSync`.
+- `EvictToLimit` runs at the end of `Read`, `Write`, and `Write_NoSync`, and of the other
+  `fs_lock_` scope that reads elements (`DuplicateFileToFolder`).
 - The limit comes from SN6. It is a constant in `node_cache.hpp`: 262,144 clean file elements.
   SN6 measured 207 heap bytes for one file element with no Image (Release), so the limit holds
   about 64 MB with the heap block headers.
@@ -1285,7 +1287,128 @@ Remaining defects or unavailable platforms: macOS and Linux not built (the memor
 - The memory of the SN6 benchmark before and after goes into the pull request description. The
   node memory after the import of 80,577 files is at most 64 MB (SN6: about 533 MB).
 
-**Completion record.** Use the template of section 9.
+**Exit criteria.**
+
+- [x] The clean file elements stay at the limit; a held, dirty, or folder element stays.
+- [x] An imported file element holds no Image and has its image id.
+- [x] The node memory after the import of 80,577 files is at most 64 MB.
+
+**Implementation decisions.**
+
+- One list hook (`SleeveElement::list_hook_`, renamed from `dirty_hook_`) serves both lists (P5).
+  The flag and the type decide the list (`NodeCache::ListFor`), so `OnSyncFlagChanged` takes the
+  old flag and moves the element from the list of the old flag to the list of the new flag.
+- `NodeCache::Find` is not `const`: it moves a clean file to the back. `Contains` stays `const`
+  and does not change the order.
+- The eviction walk visits each element of the list at most once. When callers hold more clean
+  files than the limit, the list stays above the limit and the walk ends.
+- `FileSystem::EvictToLimit` and `FileSystem::SetCleanFileLimit` forward to the cache.
+  `SleeveServiceImpl` calls `EvictToLimit` after the result of the operation is complete, so
+  the elements of the result stay. An operation that throws skips the eviction.
+- The import creates the Image first and then creates the file element and sets its image id in
+  one `Write_NoSync` call. The old order set the image id after the lock was released, so a sync
+  on another thread could store the element with image id 0 and mark it clean (#1169); with
+  eviction the element would then load again with image id 0 in the same session. When the
+  placement fails, `ImagePoolService::Remove` drops the new Image.
+- `SleeveFile::image_` stays for the legacy loader `SleeveManager::LoadToPath` and `SleeveView`,
+  which have no production caller.
+
+**Completion record.**
+
+```text
+Phase / date / status: SN7 / 2026-11-26 / complete. Issue #1168 (sub-issue of #1152); fixes #1169.
+Source revision and branch: refact/sleeve-node-eviction, stacked on b24db314a (SN6 PR #1167).
+Actual changed modules: sleeve/node_cache.cpp, include/sleeve/node_cache.hpp (eviction list,
+  SetLimit, EvictToLimit, CleanFileCount), sleeve_element (list_hook_, OnSyncFlagChanged with
+  the old flag), include/sleeve/sleeve_filesystem.hpp (EvictToLimit, SetCleanFileLimit),
+  include/app/sleeve_service.hpp and app/sleeve_service.cpp (eviction at the end of each
+  fs_lock_ scope), app/import_service.cpp (image id in the creating scope, no SetImage),
+  include/sleeve/sleeve_element/sleeve_file.hpp (comments; line endings to LF in a separate
+  commit), tests/sleeve/node_cache_test.cpp, tests/app/sleeve_service_test.cpp,
+  tests/app/import_service_test.cpp, tests/app/project_open_benchmark.cpp (Find is not const).
+Implemented behavior:
+  NodeCache keeps each clean file element in the eviction list, least recently used first.
+  EvictToLimit removes the clean files that only the cache holds until 262,144 remain. Folders
+  stay resident, dirty elements stay in the dirty list, and an element that a caller holds stays
+  with its identity. An evicted file loads again from the store with the fields that its sync
+  wrote. The import links no Image into a new file element.
+Callers checked (user request: other features must not break):
+  - SleeveFile::GetImage: no production reader (sleeve_view.cpp, sleeve_manager.cpp have no
+    production caller; the benchmark counts the held Images).
+  - Library grid, the All Photos root view, semantic search and labels (CLIP), thumbnails, and
+    export read the image id (SleeveFile::image_id_ or the FileImage rows), not the Image.
+  - No production object keeps a std::weak_ptr or a long-lived reference to a file element
+    (only the legacy SleeveBase and SleeveView). Every element access is inside a Read, Write,
+    or Write_NoSync scope of SleeveServiceImpl, or the DuplicateFileToFolder lock scope.
+  - The fields that a load restores (name, times, ref count, mount id, image id) are the fields
+    that a sync writes. Each writer of a file field marks the element modified under the lock
+    (RenameFile, PlaceFile, the import placements); the file ref count changes on new or deleted
+    elements only.
+  - The image pool keeps an UNSYNCED Image until SyncWithStorage (IsEvictable), so the removal
+    of the element link loses no unsaved Image.
+Explicitly unimplemented items:
+  - The exact interleaving of #1169 (a sync between the placement and the image id write) has
+    no deterministic test: the import has no hook between the two steps. The fix removes the
+    window; ImportedFileElementHoldsItsImageIdAndNoImage checks the stored result.
+  - The SN6 project has 80,577 files, fewer than the limit, so the benchmark evicts nothing.
+    The eviction is proven by the unit and service tests, and by a run of the caller suites with
+    a limit of 2 (below).
+Primary success call chain:
+  SleeveServiceImpl::Read / Write / Write_NoSync (fs_lock_)
+    -> operation(FileSystem&) -> NodeStorageHandler::GetElement -> NodeCache::Find (to the back)
+         or ElementStore::GetElementById -> NodeCache::Insert (clean file: eviction list)
+    -> [Write] Sync -> FileSystem::MarkWritten -> SetSyncFlag(SYNCED) -> eviction list
+    -> FileSystem::EvictToLimit -> NodeCache::EvictToLimit (use_count 1: Release; else back)
+  ImportServiceImpl::CreatePlaceholdersAndSubmit
+    -> ImagePoolService::CreateAndReturnPinned (UNSYNCED Image)
+    -> Write_NoSync { placement -> file->image_id_ = id } -> metadata task -> SyncImports
+Primary failure and restore call chain:
+  A placement that throws or returns null -> ImagePoolService::Remove(image id) -> the file
+    counts as failed; the next SyncWithStorage drops the Image (no Image row without a file).
+  An operation that throws -> no eviction in that scope; the next scope applies the limit.
+  A sync that fails -> the elements stay dirty (dirty list), so no change leaves the cache.
+Build and test commands with exit codes (Windows, MSVC):
+  cmd /c "scripts\msvc_env.cmd --build build\debug --target NodeCacheTest SleeveServiceTest
+    ImportServiceTest MountTreeTest AlbumBrowseServiceMountTest ProjectOpenBenchmark"   exit 0
+  cmd /c "scripts\msvc_env.cmd --build build\debug --target MountServiceTest AlbumQueryTest
+    FilterServiceTest LibraryConcurrentAccessTest ImportContentClassificationTest
+    SemanticGenerationServiceTest ProjectServiceTest LibraryHistoryAndExportTest
+    ExportServiceTest"                                                                 exit 0
+  cmd /c "scripts\msvc_env.cmd --build build\release-test --target ProjectOpenBenchmark"  exit 0
+  Each test binary run directly from its _runtime folder                    exit 0 (see counts)
+Discovered / passed / failed / skipped counts (debug, limit 262,144):
+  NodeCacheTest 12/12/0/0 (new: ReadingMoreFilesThanTheLimitKeepsTheCacheAtTheLimit,
+    ElementHeldByACallerStaysAndKeepsItsIdentity, ModifiedElementStaysUntilSync,
+    FoldersStayResident, EraseOfACleanFileRemovesItFromTheEvictionList)
+  SleeveServiceTest 47/47/0/0 (new: EvictedFileReloadsItsStoredFieldsAndHeldFileKeepsItsIdentity)
+  ImportServiceTest 18/18/0/0 (new: ImportedFileElementHoldsItsImageIdAndNoImage)
+  MountTreeTest 14/14/0/0, AlbumBrowseServiceMountTest 4/4/0/0, MountServiceTest 29/29/0/0,
+  AlbumQueryTest 39/38/0/1 (LargeLibraryPagesStayBoundedAndRecordTimings skips without its
+  data), FilterServiceTest 44/44/0/0, LibraryConcurrentAccessTest 1/1/0/0,
+  ImportContentClassificationTest 11/11/0/0, SemanticGenerationServiceTest 16/16/0/0,
+  ProjectServiceTest 11/11/0/0, LibraryHistoryAndExportTest 11/11/0/0, ExportServiceTest 7/7/0/0
+  Run with kCleanFileLimit = 2 (a local build, reverted): the same 13 app suites pass, except
+  SleeveServiceTests.SyncAfterOneRenameWritesOneElementWithTenThousandInMemory, whose
+  precondition is 10,000 elements in memory (ASSERT_GE fails at 4 of 10,002, as expected).
+  The full suite was not run.
+Manual verification: none. The application was not started.
+Performance or resource evidence (Release, ProjectOpenBenchmark *Mounted*, new project):
+                                SN6 run 3          SN7
+  First scan (import, 80,577)   430 s              427 s
+  Images that the nodes hold    80,577             0
+  After the import: heap        599 MB             216 MB
+                    private     836 MB             354 MB
+  Project close frees (heap)    568 MB             185 MB
+  Node memory after the import  about 533 MB       80,577 x 207 B = about 16.7 MB (< 64 MB)
+  Open / tree read / sidebar    72 / 5.4 / 0.13 ms 65 / 4.5 / 0.14 ms
+  Sidebar reads during import   max 50.3 ms        max 31.0 ms (13,480 reads, none over 50 ms)
+  Second scan                   1.30 s             1.25 s, 2 imported again (#1165, unchanged)
+Evidence path: build/tmp/sn7/release_run1.log, build/tmp/sn7/*.log; project build/tmp/sn7/project1.
+Remaining defects or unavailable platforms: macOS and Linux not built. A run with the GUI and
+  thumbnails is not measured. #1165 still reproduces. LOC: sleeve/node_cache.cpp 137 to 166
+  lines, include/sleeve/node_cache.hpp 113 to 163 lines; the content diff is about 420 added
+  and 90 removed lines.
+```
 
 ### SN8: Sidebar tree read on the query worker (conditional)
 

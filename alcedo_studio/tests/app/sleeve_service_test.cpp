@@ -1445,6 +1445,92 @@ TEST_F(SleeveServiceTests, SyncAfterOneRenameWritesOneElementWithTenThousandInMe
 
 // Sleeve Node Cache Plan SN2: the inserts, the updates, and the deletes of one sync commit in one
 // transaction. A failure in the delete step leaves the database and the dirty list unchanged.
+// Sleeve Node Cache Plan SN7: each fs_lock_ scope ends with the eviction of clean file elements.
+// An evicted file loads again with the fields that the sync wrote, a change to it reaches the
+// database before it can leave, and an element that a caller holds keeps its identity.
+TEST_F(SleeveServiceTests, EvictedFileReloadsItsStoredFieldsAndHeldFileKeepsItsIdentity) {
+  constexpr int  kFileCount = 6;
+  ProjectService project(db_path_, meta_path_);
+  auto           service = project.GetSleeveService();
+  service->Read<void>([](FileSystem& fs) { fs.SetCleanFileLimit(2); });
+  const auto [folder, created] = service->CreateFolder(L"/", L"Trip");
+  ASSERT_TRUE(created.success_) << created.message_;
+  const auto folder_id = folder->element_id_;
+
+  const auto import_write =
+      service->Write<std::vector<sl_element_id_t>>([folder_id](FileSystem& fs) {
+        std::vector<sl_element_id_t> ids;
+        for (int i = 0; i < kFileCount; ++i) {
+          auto file       = fs.CreateFileInLibrary(L"IMG_" + std::to_wstring(i) + L".ARW");
+          file->image_id_ = static_cast<image_id_t>(100 + i);
+          fs.LinkFileToFolder(file->element_id_, folder_id);
+          ids.push_back(file->element_id_);
+        }
+        return ids;
+      });
+  const auto& ids = import_write.first;
+  ASSERT_TRUE(import_write.second.success_) << import_write.second.message_;
+  const auto clean_files = [&service] {
+    return service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().CleanFileCount(); });
+  };
+  EXPECT_EQ(clean_files(), 2u) << "the write ends with the eviction";
+
+  // The caller holds the first file across later scopes that load every file.
+  const auto held = service->Read<std::shared_ptr<SleeveElement>>(
+      [&ids](FileSystem& fs) { return fs.Get(ids.front()); });
+  ASSERT_NE(held, nullptr);
+  service->Read<void>([&ids](FileSystem& fs) {
+    for (const auto id : ids) {
+      (void)fs.Get(id);
+    }
+  });
+  EXPECT_EQ(clean_files(), 2u);
+  EXPECT_EQ(service->Read<std::shared_ptr<SleeveElement>>(
+                [&ids](FileSystem& fs) { return fs.Get(ids.front()); }),
+            held)
+      << "the held element stays in the cache";
+
+  // A rename of an evicted file loads it, and the sync writes the change before it can leave.
+  // The clean files leave in the order of their last use, so file 1 is out of the cache.
+  constexpr int kRenamed   = 1;
+  const auto    renamed_id = ids[kRenamed];
+  const auto    is_cached  = [&service](sl_element_id_t id) {
+    return service->Read<bool>([id](FileSystem& fs) { return fs.Nodes().Contains(id); });
+  };
+  ASSERT_FALSE(is_cached(renamed_id));
+  const auto rename_result = service->Write<void>(
+      [renamed_id](FileSystem& fs) { fs.RenameFile(renamed_id, L"Renamed.ARW"); });
+  ASSERT_TRUE(rename_result.success_) << rename_result.message_;
+  service->Read<void>([&ids](FileSystem& fs) {
+    for (const auto id : ids) {
+      (void)fs.Get(id);
+    }
+  });
+  ASSERT_FALSE(is_cached(renamed_id)) << "the renamed file left the cache after its sync";
+
+  // Each file loads again with its stored name, image id, and folder link.
+  const auto loaded =
+      service->Read<std::vector<std::pair<file_name_t, image_id_t>>>([&ids](FileSystem& fs) {
+        std::vector<std::pair<file_name_t, image_id_t>> fields;
+        for (const auto id : ids) {
+          const auto file = std::static_pointer_cast<SleeveFile>(fs.Get(id));
+          fields.emplace_back(file->element_name_, file->image_id_);
+        }
+        return fields;
+      });
+  ASSERT_EQ(loaded.size(), ids.size());
+  for (int i = 0; i < kFileCount; ++i) {
+    const auto expected_name =
+        i == kRenamed ? file_name_t{L"Renamed.ARW"} : L"IMG_" + std::to_wstring(i) + L".ARW";
+    EXPECT_EQ(loaded[i].first, expected_name) << "file " << i;
+    EXPECT_EQ(loaded[i].second, static_cast<image_id_t>(100 + i)) << "file " << i;
+  }
+  EXPECT_EQ(service->Read<std::vector<sl_element_id_t>>(
+                [folder_id](FileSystem& fs) { return fs.ListFileIds(folder_id); }),
+            ids);
+  EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().DirtyCount(); }), 0u);
+}
+
 TEST_F(SleeveServiceTests, FailedSyncLeavesDatabaseUnchangedAndRetrySucceeds) {
   ProjectService project(db_path_, meta_path_);
   auto           service              = project.GetSleeveService();
