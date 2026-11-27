@@ -397,6 +397,7 @@ if(ALCEDO_VULKAN_ENABLED)
     def_library(EditRuntimeVulkan
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_backend.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_buffer_view.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_command_context.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_geometry.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_kernel_dispatch.cpp

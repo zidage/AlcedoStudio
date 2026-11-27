@@ -1,0 +1,108 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+// Shared RAW helpers of the Vulkan RAW kernels: the Slang form of
+// decoders/processor/operators/gpu/opencl_shader/raw_utils_opencl.cl (plan phase VK4). The structs
+// have the layout of the OpenCL structs (scalar layout, plan section 4.2).
+
+#pragma once
+
+// WBParams: 204 bytes.
+struct WBParams {
+  float black_level[4];
+  float white_level[4];
+  float wb_multipliers[4];
+  int   apply_white_balance;
+  int   black_tile_width;
+  int   black_tile_height;
+  float pattern_black[36];
+};
+
+// PatternParams: 160 bytes.
+struct PatternParams {
+  int width;
+  int height;
+  int tile_width;
+  int tile_height;
+  int raw_fc[36];
+};
+
+// The parameter record of to_linear_ref_u16_to_f32 (364 bytes) is a WBParams at its address and a
+// PatternParams at kPatternParamsOffset (the host struct ToLinearRefParameters of
+// vulkan_raw_core_kernels.hpp). See the record rule below.
+static const uint64_t kPatternParamsOffset = 204;
+
+static int BayerCellIndex(int y, int x) {
+  return ((y & 1) << 1) | (x & 1);
+}
+
+// Record rule of the RAW kernels: a record in a buffer has no member that is a struct. A kernel
+// finds each record with integer address arithmetic on the uint64_t address (plan section 4.2),
+// so each field access is one access chain on the record pointer. With a nested struct
+// (`params->pattern.width`) slangc writes an access chain of an access chain, and
+// vkCreateComputePipelines of the Intel driver (Iris Xe) stops with an access violation on the
+// module, for every entry point of it (VK4 record).
+
+// The CFA tiles that a coordinate of a kernel can be left of or above the image. The X-Trans
+// reads reach at most 4 texels outside.
+static const int kWrapBiasTiles = 64;
+
+// `coord` modulo `period` (positive) for a coordinate of at least -kWrapBiasTiles * period, with
+// an unsigned remainder of a positive value. The RAW kernels do not use the signed remainder of
+// the OpenCL form `(coord % period + period) % period`: the NVIDIA driver (RTX 3080 Laptop GPU,
+// Vulkan) gave the OpSRem of a negative coordinate that comes from the invocation id the unsigned
+// result, so the X-Trans color of x = -1 was wrong (plan phase VK4 record).
+static int WrapCoord(int coord, int period) {
+  return int(uint(coord + kWrapBiasTiles * period) % uint(period));
+}
+
+static int WrapPatternCoord(int coord, int period) {
+  return WrapCoord(coord, period);
+}
+
+static int XTransCellIndex(int y, int x) {
+  return WrapPatternCoord(y, 6) * 6 + WrapPatternCoord(x, 6);
+}
+
+static int RawColorAt(PatternParams* params, int y, int x) {
+  if (params->tile_width == 6) {
+    return params->raw_fc[XTransCellIndex(y, x)];
+  }
+  return params->raw_fc[BayerCellIndex(y, x)];
+}
+
+static float PatternBlackAt(WBParams* wb, int y, int x) {
+  if (wb->black_tile_width <= 0 || wb->black_tile_height <= 0) {
+    return 0.0f;
+  }
+  const int ty = WrapCoord(y, wb->black_tile_height);
+  const int tx = WrapCoord(x, wb->black_tile_width);
+  return wb->pattern_black[ty * wb->black_tile_width + tx];
+}
+
+static float Clamp01(float v) {
+  return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+
+static float NormalizeSample(float sample, float black, float white) {
+  const float denom = white - black;
+  if (denom <= 0.0f) {
+    return 0.0f;
+  }
+  return Clamp01((sample - black) / denom);
+}
+
+static float RelativeWBMultiplier(WBParams* wb, int color_idx) {
+  if (wb->apply_white_balance == 0) {
+    return 1.0f;
+  }
+  const float green = wb->wb_multipliers[1];
+  if (green <= 0.0f) {
+    return 1.0f;
+  }
+  if (color_idx == 0 || color_idx == 2) {
+    return wb->wb_multipliers[color_idx] / green;
+  }
+  return 1.0f;
+}
