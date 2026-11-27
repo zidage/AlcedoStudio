@@ -247,12 +247,14 @@ class FolderController final : public QObject {
   void               ReportFolderEditDone(const i18n::LocalizedText& message, bool save_ok) const;
   /// Clears the Inspector filters and the search and reloads the Library for a new selection.
   void               ReloadSelectedScope();
-  /// Loads the children of @p folderPath and of every folder below it.
-  void               LoadSubtree(const std::filesystem::path& folderPath);
+  /// Reads the whole folder tree with one AlbumBrowseService::ListFolderTree call and fills the
+  /// nodes and the child lists. A failed read writes one warning and keeps the root node only;
+  /// the next EnsurePathExpanded reads the tree again.
+  void               LoadTree();
   void               EnsureRootNode();
   void               ResetTreeState();
+  /// Marks the folders on @p folderPath expanded; reads the tree first when it is not loaded.
   void               EnsurePathExpanded(const std::filesystem::path& folderPath);
-  void               LoadChildren(const std::filesystem::path& parentPath);
   void               AppendVisibleEntries(const std::filesystem::path&      folderPath,
                                           std::vector<ExistingFolderEntry>& out) const;
   [[nodiscard]] auto TryGetPathForUiId(uint folderUiId) const
@@ -293,7 +295,8 @@ class FolderController final : public QObject {
   std::unordered_map<std::wstring, FolderNodeState>           nodes_by_path_{};
   std::unordered_map<std::wstring, std::vector<std::wstring>> child_keys_by_path_{};
   std::unordered_map<uint32_t, std::wstring>                  path_key_by_ui_id_{};
-  std::unordered_set<std::wstring>                            loaded_paths_{};
+  /// True after a LoadTree call that read the tree, until the next ResetTreeState.
+  bool                                                        tree_loaded_ = false;
   std::vector<ExistingFolderEntry>                            folder_entries_{};
   QVariantList                                                folders_{};
   std::filesystem::path                                       current_folder_path_{};

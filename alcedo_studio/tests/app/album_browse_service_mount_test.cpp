@@ -140,5 +140,29 @@ TEST_F(AlbumBrowseServiceMountTest, LinkAndFolderEditsOfAMountedFolderReturnTheN
   EXPECT_EQ(EntryIds(L"/Trip"), std::vector<sl_element_id_t>{mounted_file_id_});
 }
 
+// Sleeve Node Cache Plan SN3: the folder tree read gives each folder its mount, before and after
+// the project opens again from its files.
+TEST_F(AlbumBrowseServiceMountTest, FolderTreeGivesEachFolderItsMountAfterReopen) {
+  const auto expect_tree = [this](const char* when) {
+    const auto tree = Browse().ListFolderTree();
+    ASSERT_EQ(tree.size(), 2u) << when;
+    EXPECT_EQ(tree[0].folder_path_.generic_wstring(), L"/Album") << when;
+    EXPECT_EQ(tree[0].folder_id_, album_id_) << when;
+    EXPECT_EQ(tree[0].mount_id_, std::nullopt) << when;
+    EXPECT_EQ(tree[1].folder_path_.generic_wstring(), L"/Trip") << when;
+    EXPECT_EQ(tree[1].folder_id_, mount_root_id_) << when;
+    EXPECT_EQ(tree[1].mount_id_, std::optional<mount_id_t>{kMount}) << when;
+  };
+  expect_tree("before the reopen");
+
+  project_->SaveProject(meta_path_);
+  project_.reset();
+  project_ = std::make_unique<ProjectService>(db_path_, meta_path_);
+  expect_tree("after the reopen");
+  const auto mounted_file_loaded =
+      Sleeve().Read<bool>([this](FileSystem& fs) { return fs.Nodes().Contains(mounted_file_id_); });
+  EXPECT_FALSE(mounted_file_loaded) << "the tree read loads no file of the mount";
+}
+
 }  // namespace
 }  // namespace alcedo

@@ -90,6 +90,11 @@ class AlbumBrowseService {
   /// path and the error text and throws the error, so a caller can read the folder again.
   [[nodiscard]] auto ListFolders(const std::filesystem::path& folder_path) const
       -> std::vector<AlbumFolderView>;
+  /// Every folder of the library at each of its paths, parents before children, from one
+  /// SleeveServiceImpl::ListFolderTree call (Sleeve Node Cache Plan, SN3). A folder with two
+  /// parents is in the result under each. Empty when the sleeve service is absent. A failed read
+  /// writes one warning with the error text and throws the error.
+  [[nodiscard]] auto ListFolderTree() const -> std::vector<AlbumFolderView>;
   [[nodiscard]] auto ListFilesInFolder(const std::filesystem::path& folder_path) const
       -> std::vector<AlbumFileView>;
   [[nodiscard]] auto ListFilesInFolderById(sl_element_id_t folder_id) const

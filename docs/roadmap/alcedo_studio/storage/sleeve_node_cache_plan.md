@@ -2,7 +2,7 @@
 
 Date: 2026-11-26
 
-Status: **in progress**. SN1 and SN2 are complete (2026-11-26). SN3 to SN8 are planned.
+Status: **in progress**. SN1, SN2, and SN3 are complete (2026-11-26). SN4 to SN8 are planned.
 
 Parent: [Roadmap](../../README.md).
 
@@ -213,7 +213,7 @@ and the tests.
 | --- | --- | --- | --- | ---: | --- |
 | SN1 | The folder listing reads folders only. A failed listing writes a log line. | `FolderEntryStore`, `AlbumBrowseService`, `FolderController` | None | 350 to 500 | complete |
 | SN2 | `NodeCache` with the page table and the dirty list. One sync transaction. | `NodeCache`, `SleeveElement`, `SleeveServiceImpl::Sync` | SN1 | 1100 to 1500 | complete |
-| SN3 | All folders load with one query. One tree read for the sidebar. | `NodeStorageHandler`, `PathResolver`, `FolderController` | SN2 | 700 to 1000 | planned |
+| SN3 | All folders load with one query. One tree read for the sidebar. | `NodeStorageHandler`, `PathResolver`, `FolderController` | SN2 | 700 to 1000 | complete |
 | SN4 | File entries leave the folders. File names are labels. Project file 0.15.0. | `SleeveFolder`, `FileSystem`, project version | SN3 | 1200 to 1700 | planned |
 | SN5 | The mount tree read and the import use row queries. | `mount_tree.cpp`, `import_service.cpp` | SN4 | 600 to 900 | planned |
 | SN6 | Measured memory and time of the 80,000-photo project. Decision for SN7 and SN8. | `project_open_benchmark.cpp` | SN5 | 150 to 300 | planned |
@@ -577,10 +577,154 @@ reads the tree with one service call.
 
 **Exit criteria.**
 
-- [ ] The tests above pass. `CollectionsPanelQmlTest` and `LibraryFolderSectionQmlTest` pass.
-- [ ] `project_open_benchmark` reports the tree read time. The value goes into the record.
+- [x] The tests above pass. `CollectionsPanelQmlTest` and `LibraryFolderSectionQmlTest` pass.
+- [x] `project_open_benchmark` reports the tree read time. The value goes into the record.
 
-**Completion record.** Use the template of section 9.
+**Completion record.**
+
+```text
+Phase / date / status: SN3 / 2026-11-26 / complete. Issue #1158 (sub-issue of #1152).
+Source revision and branch: a36d1ce96 on refact/sleeve-folder-tree, stacked on 26387aae2
+  (SN2 PR #1157).
+Actual changed modules: FolderEntryStore, NodeStorageHandler, PathResolver, FileSystem,
+  SleeveServiceImpl, AlbumBrowseService, FolderController, library.folders
+  (library_commands.cpp), SleeveServiceTest, AlbumBrowseServiceMountTest,
+  AutomationLibraryCommandsTest, ProjectOpenBenchmark.
+Implemented behavior:
+  - FolderEntryStore::ReadFolderTree: every Element row of type FOLDER (id order) and every
+    FolderContent row whose two ends are folders (parent, then child order), under one database
+    lock. The result type is FolderTreeRows. ReadChildFolders (SN1) has no caller and is removed.
+  - NodeStorageHandler::LoadFolderTree, called by FileSystem::InitRoot for a stored root: puts
+    each folder into the NodeCache (the root keeps its object) and adds one child entry for each
+    link with AddElementToMap(child, false, false): no reference count change, no pending content
+    change, no MODIFIED flag. The walk starts at the root and then at each folder that the root
+    does not reach, with an explicit stack and a state per folder (on the walk path, done). A link
+    to a folder on the walk path closes a cycle: skipped, one warning
+    "the folder link <parent> -> <child> closes a cycle of folders". A link whose child name the
+    parent holds for another folder is skipped with one warning. A failed read writes one error
+    line and throws, so the project open fails with the store message.
+  - NodeStorageHandler::EnsureChildrenLoaded adds file entries only: a stored link to a folder
+    adds nothing (the folder entries are resident and current), and a file in
+    ContentRemovedSinceSync stays removed.
+  - NodeStorageHandler::ChildFolders reads memory only (folder entries and NodeCache::Find).
+    NodeStorageHandler::FolderTree(root): every live folder at each of its paths, parents before
+    children, in the order of the folder entries; a folder with two parents is listed under
+    each. FolderTreeEntry{path_, folder_} is the entry type.
+  - PathResolver::Resolve reads the folder entries for each part; only a part that names no
+    child folder loads the file entries of its folder. The result folder no longer loads its
+    file entries. PathResolver::ResolveFolder reads memory only.
+  - PathResolver::ResolveForWrite loads the file entries of each folder on the path (as before)
+    and now also of a folder result, so the name checks of a write see every entry while file
+    entries stay in the name map (until SN4).
+  - PathResolver::CoWHandler loads the file entries of the source folder before the copy.
+  - FileSystem::ListFolderTree, SleeveServiceImpl::ListFolderTree (read lock), and
+    AlbumBrowseService::ListFolderTree (AlbumFolderView values; logs and rethrows a failure).
+  - FolderController: LoadTree calls ListFolderTree once and fills nodes_by_path_ and
+    child_keys_by_path_. ReloadTree marks every node expanded (the old LoadSubtree result).
+    EnsurePathExpanded only marks the nodes of the path expanded; it calls LoadTree when the last
+    read failed (tree_loaded_ false), so a failed read is retried at the next selection.
+    LoadChildren, LoadSubtree, and loaded_paths_ are removed.
+  - library.folders: one ListFolderTree call; the parent id and the depth come from the listed
+    parent path. A failed read answers Failed, "The folder tree cannot be read."
+Decisions made during the work:
+  - "One query" (P1) is one store call: two statements under one database lock, the folders and
+    the links. One statement with the link column would need a new mapper for an
+    element-plus-parent row.
+  - CoWHandler loads the source first. The bug: after an open, the first write below a shared
+    folder copied it while its file entries were not loaded; the old code then loaded the
+    entries of the new id (none) and marked the copy loaded, so the copy lost its files.
+    CopyOnWriteOfSharedFolderAfterOpenKeepsItsFiles covers it, and fails with the load removed
+    (Mac probe run: "{ Inner, New }" against "{ Inner, New, Photo.ARW }").
+  - ResolveForWrite keeps the file entry loads of SN2 and adds the result folder. Before SN3 the
+    final Resolve of a folder loaded its entries, and write callers (Create, Copy) relied on it.
+  - FolderTree also skips a folder that is on its own walk path, with one warning, so a cycle
+    that a later write made cannot loop the sidebar read.
+  - OpenLoadsNestedFoldersWithOneTreeRead has no counting store wrapper: the test renames the
+    Element table aside after the open. Each element read joins Element, so a store read throws,
+    and a file entry load writes a "did not load" warning; the test resolves the 2,000 paths and
+    lists the tree with no throw and no such warning. FolderContent cannot be renamed (DuckDB
+    refuses: its two indexes depend on it). The open itself reads the tree with one
+    ReadFolderTree call (source; no counter).
+  - FolderWithTwoParentsAppearsUnderBoth writes the stored reference count 2 with SQL: a copy
+    with FileSystem::Copy increments the count in memory and does not mark the folder modified,
+    so the count of 2 is not stored by the copy (as before SN3).
+  - Tests added beyond the plan: CopyOnWriteOfSharedFolderAfterOpenKeepsItsFiles,
+    AlbumBrowseServiceMountTest.FolderTreeGivesEachFolderItsMountAfterReopen,
+    AutomationLibraryCommandsTest.FoldersListsEachFolderAfterItsParentWithParentIdAndDepth.
+  - Test names: the fixture of the plan name SleeveServiceTest is SleeveServiceTests.
+Explicitly unimplemented items: none of SN3. File entries stay in the folder name map until SN4;
+  EnsureChildrenLoaded still reads all rows of the folder (GetFolderContent and
+  GetFolderChildren) and keeps the file rows.
+Primary success call chain:
+  ProjectService open -> SleeveServiceImpl ctor -> FileSystem::InitRoot
+    -> NodeCache::Insert(root)
+    -> NodeStorageHandler::LoadFolderTree
+         -> FolderEntryStore::ReadFolderTree           (one lock: folders, folder links)
+         -> NodeCache::Insert for each folder
+         -> walk from the root, then from each unreached folder (explicit stack)
+              -> SleeveFolder::AddElementToMap(child, false, false) for each link
+  FolderController::ReloadTree -> LoadTree
+    -> AlbumBrowseService::ListFolderTree -> SleeveServiceImpl::ListFolderTree (fs_lock_)
+         -> FileSystem::ListFolderTree -> NodeStorageHandler::FolderTree   (memory only)
+    -> nodes_by_path_, child_keys_by_path_ -> RebuildFolderView
+  SleeveServiceImpl::ResolveFolder(path) -> PathResolver::Resolve
+    -> SleeveFolder::GetElementIdByName per part -> NodeCache::Find        (memory only)
+Primary failure and restore call chain:
+  FolderEntryStore::ReadFolderTree throws (DuckDB error)
+    -> NodeStorageHandler::LoadFolderTree: one error log line, rethrow
+    -> FileSystem::InitRoot -> SleeveServiceImpl ctor -> the project open fails with the message
+  A stored link closes a cycle
+    -> LoadFolderTree skips the link, one warning with both ids; the other links load
+  ListFolderTree throws in the sidebar
+    -> AlbumBrowseService: one warning, rethrow -> FolderController::LoadTree: one warning, root
+       node only, tree_loaded_ false -> the next selection (EnsurePathExpanded) reads it again
+Build and test commands with exit codes (macOS arm64, build/macos-debug, Ninja):
+  cmake --build build/macos-debug --target SleeveServiceTest AlbumBrowseServiceMountTest
+    NodeCacheTest SleeveFSTest MountTreeTest MountServiceTest ImportServiceTest AlbumQueryTest
+    SleeveFilesystemCiTest MountStoreTest AiStorageControllerTest ProjectOpenBenchmark
+    CollectionsPanelQmlTest LibraryFolderSectionQmlTest AlbumBackendFolderTest
+    FolderControllerMountTest AutomationLibraryCommandsTest alcedo_main -j 8 -- -k 0   exit 0
+  <Target> --gtest_brief=1 for each target below (QT_QPA_PLATFORM=offscreen)     exit 0,
+    ImportServiceTest exit 1 (BatchCancelTest, #1156)
+Discovered / passed / failed / skipped counts:
+  SleeveServiceTest 38 / 38 / 0 / 0, with SleeveServiceTests.OpenLoadsNestedFoldersWithOneTreeRead,
+    SleeveServiceTests.FolderWithTwoParentsAppearsUnderBoth,
+    SleeveServiceTests.CopyOnWriteOfSharedFolderAfterOpenKeepsItsFiles, and
+    SleeveServiceTests.FolderEdgeCycleIsSkippedWithWarning
+  AlbumBrowseServiceMountTest 4 / 4 / 0 / 0, with FolderTreeGivesEachFolderItsMountAfterReopen
+  AutomationLibraryCommandsTest 18 / 18 / 0 / 0, with
+    FoldersListsEachFolderAfterItsParentWithParentIdAndDepth
+  CollectionsPanelQmlTest 30 / 30 / 0 / 0
+  LibraryFolderSectionQmlTest 8 / 8 / 0 / 0
+  AlbumBackendFolderTest 16 / 16 / 0 / 0
+  FolderControllerMountTest 11 / 11 / 0 / 0
+  NodeCacheTest 7 / 7 / 0 / 0
+  SleeveFSTest 13 / 13 / 0 / 0
+  MountTreeTest 9 / 9 / 0 / 0
+  MountServiceTest 29 / 29 / 0 / 0
+  AlbumQueryTest 39 / 38 / 0 / 1 (the timing profile skips without ALCEDO_ALBUM_QUERY_PROFILE)
+  SleeveFilesystemCiTest 2 / 2 / 0 / 0
+  MountStoreTest 17 / 17 / 0 / 0
+  AiStorageControllerTest 20 / 20 / 0 / 0
+  ImportServiceTest 16 / 15 / 1 / 0: ImportServiceTests.BatchCancelTest fails before SN2 too
+    (#1156). The run used raw/airplane/_DSC1704.NEF and 70 of the 164 batch_import files,
+    copied to the Mac for the run.
+  The QML and controller logs have no "FAIL!" and no QtTest compare failure (#526).
+Manual verification: none. The application was not started.
+Performance or resource evidence, if required: ProjectOpenBenchmark on a copy of a user project
+  (v31.alcd: 3 folders, 86 photos), 3 rounds, Mac debug build:
+    folder_tree_query (FolderEntryStore::ReadFolderTree, the open's store read) 0.72 to 0.77 ms
+    folder_tree (AlbumBrowseService::ListFolderTree, the sidebar read)        0.004 to 0.014 ms
+    project_service (the open, tree load included)                            17 to 37 ms
+  The 80,000-photo project is on the Windows machine; SN6 measures it.
+Evidence path: the counts above. The Mac logs under build/tmp/sn3/ were removed at the end of
+  the task.
+Remaining defects or unavailable platforms: Windows (MSVC) and Linux not built: the Windows
+  machine was in use. AutomationLibraryE2ETest was not run: it starts alcedo_main processes.
+  The Mac checkout had no tests/resources/temp_folder and no RAW test files; both were made for
+  the run and removed after it.
+  sleeve/sleeve_filesystem.cpp: 749 to 747 lines (D7).
+```
 
 ### SN4: File entries on demand, file names as labels
 
@@ -768,7 +912,7 @@ does not change.
 | Rename one folder in a large project | The sync writes the changed elements only. | SN2 |
 | A sync fails in its last step | The database holds no part of the change. The retry writes all of it. | SN2 |
 | A tree of depth 40 | One query at open. Each path resolves from memory. | SN3 |
-| A folder edge that closes a cycle | The load ends. One warning names both folders. | SN3 |
+| A folder edge that closes a cycle | The load skips the edge. One warning names both folders. | SN3 |
 | Two photos with one name in one collection | Both are members. | SN4 |
 | A project of version 0.12.0 | Opens. The save writes 0.15.0. | SN4 |
 | A build before this plan opens a 0.15.0 project | The build refuses the project with the version message. | SN4 |

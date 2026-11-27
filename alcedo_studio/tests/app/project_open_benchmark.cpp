@@ -35,6 +35,7 @@
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
 #include "app/thumbnail_service.hpp"
+#include "sleeve/storage.hpp"
 
 namespace alcedo {
 namespace {
@@ -144,8 +145,11 @@ TEST(ProjectOpenBenchmark, OpensPackedProjectAndReportsPerStepLatency) {
     size_t                folder_count   = 0;
     size_t                file_count     = 0;
     size_t                page_count     = 0;
-    timer.Run("folder_tree",
-              [&] { folder_count = browse->ListFolders(std::filesystem::path(L"/")).size(); });
+    // The store read of the project open (NodeStorageHandler::LoadFolderTree), run once more,
+    // and the sidebar read of the resident tree.
+    timer.Run("folder_tree_query",
+              [&] { (void)project->GetStorage()->GetFolderEntryStore().ReadFolderTree(); });
+    timer.Run("folder_tree", [&] { folder_count = browse->ListFolderTree().size(); });
     timer.Run("folder_stats", [&] { (void)filter->BuildFolderStats(root_folder_id); });
     timer.Run("file_count", [&] { file_count = browse->CountFilesInFolderById(root_folder_id); });
     timer.Run("first_file_page",

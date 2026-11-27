@@ -117,6 +117,26 @@ auto AlbumBrowseService::ListFolders(const std::filesystem::path& folder_path) c
   return folders;
 }
 
+auto AlbumBrowseService::ListFolderTree() const -> std::vector<AlbumFolderView> {
+  std::vector<AlbumFolderView> folders;
+  if (!sleeve_service_) {
+    return folders;
+  }
+
+  try {
+    const auto tree = sleeve_service_->ListFolderTree();
+    folders.reserve(tree.size());
+    for (const auto& entry : tree) {
+      folders.push_back(BuildFolderView(entry.path_.parent_path(), entry.folder_));
+    }
+  } catch (const std::exception& e) {
+    ALCEDO_LOG_WARN(Library) << "AlbumBrowseService: the folder tree did not list: " << e.what();
+    throw;
+  }
+
+  return folders;
+}
+
 auto AlbumBrowseService::ListFilesInFolder(const std::filesystem::path& folder_path) const
     -> std::vector<AlbumFileView> {
   std::vector<AlbumFileView> files;

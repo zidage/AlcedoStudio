@@ -22,6 +22,7 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -91,16 +92,23 @@ auto RootFolderId(ProjectService& project) -> std::optional<sl_element_id_t> {
   return root->element_id_;
 }
 
-/// Depth-first folder list below @p folder_path, parents before children.
-void AppendFolders(const AlbumBrowseService& browse, const std::filesystem::path& folder_path,
-                   sl_element_id_t parent_id, int depth, QJsonArray* folders) {
-  for (const auto& folder : browse.ListFolders(folder_path)) {
+/// The folders below the root @p root_id, parents before children, from one folder tree read.
+void AppendFolders(const AlbumBrowseService& browse, sl_element_id_t root_id, QJsonArray* folders) {
+  // The id and the depth of each listed path; the tree lists a parent before its children.
+  std::map<std::filesystem::path, std::pair<sl_element_id_t, int>> listed{
+      {ui::album_util::RootFsPath(), {root_id, 0}}};
+  for (const auto& folder : browse.ListFolderTree()) {
+    const auto parent = listed.find(folder.folder_path_.parent_path());
+    if (parent == listed.end()) {
+      continue;
+    }
+    const auto [parent_id, parent_depth] = parent->second;
     folders->push_back(QJsonObject{{"folder_id", static_cast<double>(folder.folder_id_)},
                                    {"parent_id", static_cast<double>(parent_id)},
                                    {"name", QString::fromStdWString(folder.folder_name_)},
                                    {"path", PathText(folder.folder_path_)},
-                                   {"depth", depth}});
-    AppendFolders(browse, folder.folder_path_, folder.folder_id_, depth + 1, folders);
+                                   {"depth", parent_depth + 1}});
+    listed.emplace(folder.folder_path_, std::pair{folder.folder_id_, parent_depth + 1});
   }
 }
 
@@ -874,7 +882,13 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                                 {"name", ""},
                                 {"path", PathText(ui::album_util::RootFsPath())},
                                 {"depth", 0}}};
-    AppendFolders(*browse, ui::album_util::RootFsPath(), *root_id, 1, &list);
+    try {
+      AppendFolders(*browse, *root_id, &list);
+    } catch (const std::exception&) {
+      SendAutomationOwnerError(reply, AutomationErrorCode::Failed,
+                               QStringLiteral("The folder tree cannot be read."));
+      return;
+    }
     reply.SendResult(QJsonObject{{"folders", list}});
   };
   RegisterOrFail(registry, std::move(folders), &ok, error);

@@ -49,6 +49,12 @@ class FileSystem {
   FileSystem(std::filesystem::path db_path, Storage& storage_service,
              sl_element_id_t start_id);
 
+  /**
+   * @brief Puts the root into the node cache. For a stored root, loads every folder with one
+   *        NodeStorageHandler::LoadFolderTree call; a new root has no stored folder.
+   * @throws std::runtime_error when the root is already set, and the store error of the folder
+   *         tree read (NodeStorageHandler::LoadFolderTree logs it).
+   */
   auto InitRoot() -> bool;
 
   auto Create(std::filesystem::path dest, std::wstring filename, ElementType type)
@@ -111,16 +117,19 @@ class FileSystem {
       -> std::vector<sl_element_id_t>;
   auto ListFolderContent(sl_element_id_t folder_id) -> std::vector<sl_element_id_t>;
   /**
-   * @brief The live child folders of the folder at @p folder_path. Loads no file element: the
-   *        path walk and the listing read folders only (Sleeve Node Cache Plan, SN1).
-   *
-   * Folders that the node map holds keep their live state; the other read folders go into the
-   * map. Order is unspecified.
-   * @throws std::runtime_error when @p folder_path names no live folder, and the store error of
-   *         a child folder read.
+   * @brief The live child folders of the folder at @p folder_path, in the order of its entries.
+   *        Reads memory only: all folders are resident (Sleeve Node Cache Plan, SN3).
+   * @throws std::runtime_error when @p folder_path names no live folder.
    */
   auto ListChildFolders(const std::filesystem::path& folder_path)
-      -> std::vector<std::shared_ptr<SleeveFolder>>;
+      -> std::vector<std::shared_ptr<SleeveFolder>> {
+    return storage_handler_.ChildFolders(*resolver_.ResolveFolder(folder_path));
+  }
+  /// Every live folder below the root at each of its paths, parents before children. Reads
+  /// memory only (see NodeStorageHandler::FolderTree).
+  [[nodiscard]] auto ListFolderTree() const -> std::vector<FolderTreeEntry> {
+    return storage_handler_.FolderTree(*root_);
+  }
   /// The in-memory nodes. Reads memory only.
   [[nodiscard]] auto Nodes() const -> const NodeCache& { return nodes_; }
 

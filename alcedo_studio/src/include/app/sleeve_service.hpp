@@ -134,6 +134,9 @@ class SleeveServiceImpl final : public SleeveService {
   /// element (see FileSystem::ListChildFolders). Throws as that function does.
   auto ListChildFolders(const std::filesystem::path& folder_path)
       -> std::vector<std::shared_ptr<SleeveFolder>>;
+  /// Every live folder of the library at each of its paths, parents before children, under the
+  /// read lock (see FileSystem::ListFolderTree). Reads memory only.
+  auto ListFolderTree() -> std::vector<FolderTreeEntry>;
   /** @name User operations
    * Each checks its target before any change and throws SleeveOperationError (Mounted Folder
    * Plan, MF5): a folder that gains, loses, or changes an element must pass
