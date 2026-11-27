@@ -24,10 +24,14 @@ class Storage;
 
 namespace alcedo::ui {
 
-/// Owns the Mini-Git materializer used by editor save checkpoints. It accepts
-/// an immutable capture and owns only materializer/storage instances and its
-/// worker lifetime; history, journal writers, task state, and thumbnail calls
-/// remain in their respective ports.
+/// Runs the Mini-Git materialization of editor save checkpoints. It accepts an
+/// immutable capture and owns only its worker lifetime; history, journal writers,
+/// task state, and thumbnail calls remain in their respective ports.
+///
+/// The store lives for the application and the Storage belongs to the open project,
+/// so each call builds its materializer from the Storage that storage_service returns
+/// at that call and releases it on return. A project switch or close therefore closes
+/// the database of the previous project (issue #1175).
 class EditorSessionCheckpointStore final : public alcedo::IEditorCheckpointStore {
  public:
   struct Services {
@@ -62,13 +66,12 @@ class EditorSessionCheckpointStore final : public alcedo::IEditorCheckpointStore
                                   alcedo::EditorMaterializeCallback callback) -> bool override;
 
  private:
-  auto EnsureMaterializer() -> std::shared_ptr<alcedo::EditorMiniGitMaterializer>;
+  /// Materializer on the Storage of the open project; null when no project is open.
+  auto MakeMaterializer() -> std::unique_ptr<alcedo::EditorMiniGitMaterializer>;
   auto ResolveJournalPath(sl_element_id_t element_id, std::string* error) -> std::filesystem::path;
 
   Services                                           services_{};
   mutable std::mutex                                 mutex_;
-  std::shared_ptr<alcedo::EditorMiniGitMaterializer> materializer_;
-  std::shared_ptr<alcedo::Storage>            materializer_storage_;
   // std::thread (not jthread): Apple libc++ on the CI deployment target still
   // omits std::jthread even under -std=c++20. Destructor joins workers_ explicitly.
   std::vector<std::thread>                           workers_;
