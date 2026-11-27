@@ -55,6 +55,17 @@ if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(RawProcessorOp PUBLIC HAVE_OPENCL)
 endif()
 
+# --- RawProcessorOpVulkan: the Vulkan RAW encode functions (#1036, phase VK4) ---
+# The Vulkan forms of the OpenCL RAW encode functions before the highlight reconstruction. The
+# kernels are the groups raw_core, debayer_rcd, xtrans_interpolate, and raw_pack of
+# src/vulkan/CMakeLists.txt.
+if(ALCEDO_VULKAN_ENABLED)
+    def_library(RawProcessorOpVulkan
+        SOURCES ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/vulkan_raw_encode.cpp
+        PUBLIC_DEPS EditRuntimeVulkan
+    )
+endif()
+
 # --- Accelerator Backend Selection ---
 def_library(AcceleratorBackend
     SOURCES ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_accelerator.cpp

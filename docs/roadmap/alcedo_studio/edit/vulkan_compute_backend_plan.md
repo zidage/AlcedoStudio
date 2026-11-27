@@ -7,7 +7,7 @@ Status: planned. Experiments VX1 to VX5 come first. VX1, VX2, VX3, and VX5 are c
 9.5). VX4 does not run: the neural networks use ONNX Runtime (user decision 2026-11-22, A5). VX2
 changed B5 to two devices and stopped VK18 until the plan has a new resize design (section 9.2).
 VK0 is complete (2026-11-23, #1063). VK1 is complete (2026-11-23, #1065). VK2 is complete
-(2026-11-23, #1067). VK3 is complete (2026-11-23, #1080).
+(2026-11-23, #1067). VK3 is complete (2026-11-23, #1080). VK4 is complete (2026-11-27, #1196).
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -309,6 +309,17 @@ VulkanContext                      process owner of instance, pipeline device, d
   struct (`p + k`) is prohibited: the Intel driver 101.7092 stops in `vkCreateComputePipelines`
   on that form after inlining (VX1). Pointer arithmetic on a pointer to `float` or `uint` is
   permitted.
+- A record in a buffer has no member that is a struct. Two structs of one parameter range are two
+  records, each found with address arithmetic. With a nested struct (`params->pattern.width`)
+  `slangc` writes an access chain of an access chain, and the Intel driver stops in
+  `vkCreateComputePipelines` for every entry point of the module (VK4 record). A push constant
+  block can have a struct member.
+- A kernel does not index a push constant array with a loop counter: it uses constant indices.
+  With the loop form the Intel driver wrote the input values unchanged (VK4 record).
+- A kernel does not take the signed remainder of a coordinate that can be negative. It adds a
+  positive multiple of the period and takes an unsigned remainder. The NVIDIA driver gave the
+  `OpSRem` of a negative coordinate that comes from the invocation id the unsigned result (VK4
+  record).
 - Buffer data has the scalar layout (`scalarBlockLayout`, `slangc -fvk-use-scalar-layout`), so a
   struct of a shared header has the layout of the host C++ struct.
 - Descriptor sets use `VK_KHR_push_descriptor`. A kernel has one set. The set holds images only.
@@ -371,6 +382,12 @@ functions, and the shared curves amplify the difference. The `__SLANG__` branch 
 `color_encoding_math.h` maps its `CE_*` macros to the functions of `vulkan/shader/math.slangh`
 (about 1 ulp; VK3 record), so each kernel group that includes the header has `src/` and
 `src/include/` in its include folders.
+
+`slangc` writes no `NoContraction` decoration, also not for `precise` or `-fp-mode precise`, and
+the NVIDIA driver fuses products into FMAs and combines the adds of a sum. A kernel whose OpenCL
+program has `#pragma OPENCL FP_CONTRACT OFF` uses `AlcedoExactMul` for each multiply and
+`AlcedoExactAdd` for each sum of three or more terms (`math.slangh`: an `OpFMul` or `OpFAdd` with
+`NoContraction` from a `spirv_asm` block). Today that is the RCD group (VK4 record).
 
 ### 4.4 Primary call chains
 
@@ -560,7 +577,7 @@ test of its kernels (B9).
 | VK1 | Slang build rule, shader module registry, compute pipeline cache, kernel check tool | `src/vulkan/`, `tools/gpu_kernel_check.cpp` | VK0 | 1300 to 1700 | complete (#1065) |
 | VK2 | `VulkanBackend`, `VulkanCommandContext`, workspace instance | `edit/runtime/vulkan/` | VK1, VX3, VX5 | 1600 to 1900 | complete (#1067) |
 | VK3 | Kernel dispatch, shared color math, geometry utilities, comparison test support | `edit/runtime/vulkan/`, `src/vulkan/shader/`, `color_encoding_math.h` | VK2 | 1300 to 1700 | complete (#1080) |
-| VK4 | RAW operators: linearize, CFA clamp, reference space, RCD, X-Trans, pack | `decoders/processor/operators/gpu/` | VK3 | 1400 to 1800 | planned |
+| VK4 | RAW operators: linearize, CFA clamp, reference space, RCD, X-Trans, pack | `decoders/processor/operators/gpu/` | VK3 | 1400 to 1800 | complete (#1196) |
 | VK5 | RAW operators: highlight reconstruction, lens calibration, DNG warp | `decoders/processor/operators/gpu/`, `edit/runtime/lens/vulkan/` | VK4 | 1500 to 1900 | planned |
 | VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | planned |
 | VK7 | GeometryResample, CameraToAp1, UploadRgb, DisplayToAp1 | `edit/runtime/vulkan/` | VK6 | 1100 to 1500 | planned |
@@ -1436,6 +1453,264 @@ to 1700. The largest file is `vulkan_opencl_comparison.hpp` (247 lines).
 DRT modules of the scope entry are in VK12, the grain hash in VK14. The PRNG sources without a
 caller are issue #1081.
 
+### Phase VK4: RAW operators: linearize, CFA clamp, RCD, X-Trans, pack
+
+**Objective and deliverables.** The Develop pass of VK6 can record each RAW stage before the
+highlight reconstruction on Vulkan: the linearization of an RGB input and of a CFA plane, the CFA
+clamp, the RCD and X-Trans demosaic, and the pack of the demosaic result into the RGBA32F image of
+the graph with the crop, the inverse white balance, and the orientation. Each stage gives the
+OpenCL result on the same GPU for a real Bayer RAW and a real X-Trans RAW (B9).
+
+**Inputs and prerequisites.** VK3 (`RecordKernelDispatch`, the comparison support). The kernel
+rules of sections 4.2 and 4.3: buffers are device addresses in the push constants, parameter
+records are in a buffer, a parameter record is found with `uint64_t` address arithmetic.
+
+**Source audit of the VK4 entry (2026-11-27).** The scope entry named `opencl_encode.cpp`,
+`to_linear_ref.cl`, `cvt_ref_space.cl`, `debayer_rcd.cl`, and `xtrans_interpolate.cl`. The callers
+on the VK3 branch (`opencl_develop_pass.cpp`, the only product caller of the RAW encode functions)
+show:
+
+| OpenCL entry point or kernel | Product caller | VK4 decision |
+| --- | --- | --- |
+| `EncodeLinearizeRgb` (`linearize_rgb`) | Develop pass, `DebayeredRgb` and `DirectRgb` input | VK4 |
+| `EncodeToLinearRef` (`to_linear_ref_u16_to_f32`) | Develop pass, CFA input | VK4 |
+| `EncodeCfaClamp01` (`cfa_clamp01_f32`) | Develop pass, CFA input without highlight reconstruction | VK4 |
+| `EncodeBayerRcd` (5 kernels) | Develop pass, legacy demosaic of a Bayer CFA | VK4 |
+| `EncodeXTrans` (2 kernels) | Develop pass, legacy demosaic of an X-Trans CFA | VK4 |
+| `EncodePackPlanesCropInverseOrient` (`pack_planes_crop_inverse_orient`) | Develop pass, RCD without highlight reconstruction | VK4 |
+| `EncodeCopyRgbaCropInverseOrient` (`copy_rgba_crop_inverse_orient`) | Develop pass: X-Trans, RGB input, raster input, neural output | VK4 |
+| `EncodeHighlightReconstruct`, `EncodeHighlightReconstructPlanarAndPack` | Develop pass with highlight reconstruction | VK5 (scope entry of VK5) |
+| `EncodeCopyRgbCropInverseOrient` (`copy_rgb_crop_inverse_orient`) | none | not ported |
+| `to_linear_ref_f32`, `rcd_merge_rgba`, `apply_inverse_cam_mul_rgba32f` | none (`apply_inverse_cam_mul_rgba32f` has a program check of `opencl_runtime_test.cpp` only) | not ported |
+
+The four sources without a caller are reported in a follow-up issue (completion record).
+
+**Modules, files, and APIs.**
+
+- `inc/edit/runtime/vulkan/vulkan_buffer_view.hpp`, `edit/runtime/vulkan/vulkan_buffer_view.cpp`
+  (target `EditRuntimeVulkan`): `VulkanBufferView` (a `VulkanBackend::Buffer` and a byte offset,
+  the form of `OpenClBufferView`) and `RequireBufferRange(view, bytes, alignment, operation,
+  label)`, which gives the device address of the range and throws `std::invalid_argument` with the
+  values when the range is outside the buffer or the offset is not aligned.
+- `inc/decoders/processor/operators/gpu/vulkan_raw_encode.hpp`,
+  `decoders/processor/operators/gpu/vulkan_raw_encode.cpp` (new target `RawProcessorOpVulkan`):
+  `vulkan::raw::EncodeLinearizeRgb`, `EncodeToLinearRef`, `EncodeCfaClamp01`, `EncodeBayerRcd`,
+  `EncodeXTrans`, `EncodePackPlanesCropInverseOrient`, `EncodeCopyRgbaCropInverseOrient`. Each one
+  takes `VulkanBackend&`, `VulkanCommandContext&`, the buffer views, and the parameters of the
+  OpenCL function. The pack functions write a `VulkanBackend::Texture2D` (RGBA32F, the size of the
+  oriented crop) and also take the source height, so they can check the crop. `EncodeToLinearRef`
+  and `EncodeXTrans` take a parameter view of `kToLinearRefParameterBytes` or
+  `kXTransParameterBytes` and record the upload of their parameter record into it.
+- Kernel groups (Slang in `decoders/processor/operators/gpu/vulkan_shader/`, one header for each
+  group in `inc/vulkan/`):
+
+  | Group | Kernels | Header |
+  | --- | --- | --- |
+  | `raw_core` | `linearize_rgb`, `to_linear_ref_u16_to_f32`, `cfa_clamp01_f32` | `vulkan_raw_core_kernels.hpp` |
+  | `debayer_rcd` | `rcd_init_and_vh`, `rcd_green_at_rb`, `rcd_pq_dir`, `rcd_rb_at_rb`, `rcd_rb_at_g` | `vulkan_debayer_rcd_kernels.hpp` |
+  | `xtrans_interpolate` | `xtrans_green`, `xtrans_rgba` | `vulkan_xtrans_kernels.hpp` |
+  | `raw_pack` | `pack_planes_crop_inverse_orient`, `copy_rgba_crop_inverse_orient` | `vulkan_raw_pack_kernels.hpp` |
+
+  The kernel names are the OpenCL kernel names, so the audit of a later phase can find each
+  kernel in both backends.
+- `VulkanKernelCatalog()`: the descriptors of the four groups.
+- Test: `tests/raw/vulkan_raw_operators_test.cpp` (`VulkanRawOperatorsTest`), when Vulkan and
+  OpenCL are both enabled.
+
+**Data rules and invariants.**
+
+- The RAW intermediate data (the CFA plane, the linear plane, the RCD planes, the X-Trans green
+  plane and RGBA buffer) are buffers, as in OpenCL. The pack output is the storage image of the
+  graph. A kernel reads and writes a buffer through its device address (section 4.2).
+- The parameter record of `to_linear_ref_u16_to_f32` (`WBParams` and `PatternParams`, 364 bytes)
+  and of the X-Trans kernels (`XTransParams`, 172 bytes) are above the 128 bytes that every
+  Vulkan device has for push constants, so they are in a buffer. The other kernels have their
+  parameters in the push constants. Each record has the layout of the OpenCL struct (scalar layout).
+- A U16 CFA sample is read from the 32-bit word that contains it, so the stage needs no 16-bit
+  storage feature. The offset of the CFA view is a multiple of 2 bytes.
+- An encode function records into the open recording of the command context. It does not submit
+  and does not wait (section 4.2). A request with a range outside its buffer, an offset that is not
+  aligned to its element, a destination texture of another format or size, or a crop outside the
+  source fails with `std::invalid_argument` before a command is recorded.
+- The orientation rule is the rule of `cvt_ref_space.cl`: flip 3 turns 180 degrees, flip 5 and 6
+  turn 90 degrees and exchange the width and the height, every other value keeps the orientation.
+- Each kernel is a per-texel kernel with a bounded footprint (RCD 9 x 9, X-Trans radius 4), so a
+  workgroup is far below 1 ms (section 4.2).
+
+**Implementation steps.**
+
+1. Add `VulkanBufferView` and `RequireBufferRange`.
+2. Add the four kernel groups, their headers, their catalog entries, and the build rules.
+3. Add `vulkan_raw_encode.hpp/.cpp` and the target `RawProcessorOpVulkan`.
+4. Add `VulkanRawOperatorsTest`: one stage at a time, the same host input on OpenCL (the product
+   encode functions) and on Vulkan, and the input of the next stage is the OpenCL output of the
+   stage before.
+5. Run the tests on both devices with the validation layer, and `alcedo-gpu-check --vulkan`.
+
+**Primary success call chain.**
+
+```text
+vulkan::raw::EncodeToLinearRef(backend, command_context, cfa_u16, linear, parameters, width,
+                               height, linearization, pattern)
+  -> RequireBufferRange (each view: size, alignment) -> device addresses
+  -> pack ToLinearRefParameters (the WBParams and PatternParams of the OpenCL function)
+  -> VulkanBackend::UploadBufferRange(parameters) (recorded copy, NoteWrite)
+  -> RecordKernelDispatch(raw_core_kernels::ToLinearRefDescriptor(), {}, push constants with the
+                          three addresses, 16 x 16 groups)
+       -> BeginCommand (barrier after the upload) -> vkCmdBindPipeline -> vkCmdPushConstants
+       -> vkCmdDispatch -> NoteWrite
+vulkan::raw::EncodeBayerRcd -> 5 dispatches in the order of OpenCL, a barrier before each
+vulkan::raw::EncodePackPlanesCropInverseOrient -> check crop and texture size
+  -> RecordKernelDispatch(PackPlanesDescriptor(), {0: destination}, push constants)
+caller (VK6, the test): VulkanBackend::Submit or a download
+```
+
+**Primary failure call chain.**
+
+```text
+encode with a range outside its buffer, an unaligned offset, a crop outside the source, or a
+destination texture that is not RGBA32F of the oriented crop size
+  -> std::invalid_argument with the operation, the view, and the values
+  -> no upload, no pipeline request, no command, no recording
+```
+
+**Tests and evidence.**
+
+- `VulkanRawOperatorsTest.LinearizeRgbOfALinearDngEqualsOpenCl` (with integer codes and with
+  float codes)
+- `VulkanRawOperatorsTest.ToLinearRefOfABayerRawEqualsOpenCl` (tolerance 1e-5, the tolerance of
+  `OpenClDevelopLinearizeMatchesCudaReferenceWithinTolerance`)
+- `VulkanRawOperatorsTest.ToLinearRefOfAnXTransRawEqualsOpenCl`
+- `VulkanRawOperatorsTest.ToLinearRefAtAnOddCfaOffsetEqualsOpenCl` (a CFA view at offset 2 bytes)
+- `VulkanRawOperatorsTest.CfaClampOfABayerRawEqualsOpenCl` (tolerance 0)
+- `VulkanRawOperatorsTest.BayerRcdOfARealRawEqualsOpenCl`
+- `VulkanRawOperatorsTest.XTransOfARealRawEqualsOpenClForThreePassesAndOnePass`
+- `VulkanRawOperatorsTest.PackPlanesWithTheCropOfTheRawAndEachOrientationEqualsOpenCl`
+  (tolerance 0)
+- `VulkanRawOperatorsTest.CopyRgbaWithTheCropOfTheRawAndEachOrientationEqualsOpenCl`
+  (tolerance 0)
+- `VulkanRawOperatorsTest.RawStagesRecordIntoOneRecordingWithoutASubmission`
+- `VulkanRawOperatorsTest.InvalidRequestIsRejectedBeforeACommand`
+
+The RCD and X-Trans tolerances come from the measurement of this phase; the OpenCL tests compare
+these stages with CUDA at 2e-3 (green of X-Trans) or check only that the result changes (RCD).
+The completion record gives the measured differences and the reason for each tolerance (RCD
+1e-4 relative above 1, X-Trans 1e-5).
+
+**Build and run commands.**
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanRawOperatorsTest alcedo_gpu_check
+ctest --test-dir build/debug -R "VulkanRawOperatorsTest" -j 1 --output-on-failure
+ALCEDO_VULKAN_DEVICE=Iris: the same ctest command
+```
+
+**Exit criteria.**
+
+- [x] The listed tests pass on both local devices with no validation error.
+- [x] `alcedo-gpu-check --vulkan` creates the pipeline of each catalog kernel.
+- [x] The OpenCL, CUDA, and Metal results are unchanged: VK4 changes no shared kernel source.
+
+**Expected diff.** 1400 to 1800 lines.
+
+##### Phase VK4 completion record (2026-11-27)
+
+**Status:** complete. Issue #1196. Branch `feature/vulkan-vk4-raw-operators` on the VK3 branch
+`feature/vulkan-vk3-shared-kernels` (pull request #1083).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Rounding of the RCD kernels | Port of `debayer_rcd.cl` | Each float multiply is `Mul` (`AlcedoExactMul`) and each sum of three or more terms is a chain of `Add` (`AlcedoExactAdd`): an `OpFMul` or `OpFAdd` with `NoContraction` from a `spirv_asm` block of `math.slangh`. A division stays `OpFDiv`. | The OpenCL program has `FP_CONTRACT OFF`. `slangc` 2025.17.2 writes no `NoContraction`, also not for `precise`. The RCD direction weights select between two estimates where they cross 0.5, so a change of one ulp in a weight can change a texel by a large amount. Measured on the Bayer RAW (RTX 3080 Laptop GPU, 24.5 megapixels): plain port, 64219 R values above 1e-5, largest 9.7e-2; with `Mul`, 17239 values, largest 2.6e-3; with `Mul` and `Add` in the 40-term statistic, 0 values above 1e-5. A CPU evaluation of `rcd_green_at_rb` (no FMA, IEEE division) gave the OpenCL values at the texels that differed, so the Vulkan port was the side that changed. The rest of the `Add` chains changed no value of this RAW; they keep the same rule for each sum of the group. |
+| Division in RCD | | `OpFDiv` | At the 1-ulp level the OpenCL division of the NVIDIA driver is not correctly rounded either: the CPU result equals Vulkan at some texels and OpenCL at others. A corrected Vulkan division (`fma` residual step) did not reduce the largest difference (8.1e-6 against 8.5e-6), so it was removed. |
+| RCD tolerance | From the measurement | 1e-4, `ScaledDifference` (relative above 1) | No OpenCL test has an RCD tolerance (the OpenCL Develop test checks only that highlight reconstruction changes the result). Measured largest difference 8.5e-6 on the RTX 3080 Laptop GPU (a clipped texel near 1.0) and 3.6e-7 on Iris Xe. The cause is one ulp of a quotient (row above), amplified by the selections; 1e-4 gives a margin of 12 over the measurement and is far below the 1e-3 to 1e-1 of a kernel defect (rows above). |
+| X-Trans pattern lookup | `(x % period + period) % period` (OpenCL) | `WrapCoord`: `uint(coord + 64 period) % uint(period)` in `raw_utils.slangh`, for the X-Trans color and the pattern black | On the RTX 3080 Laptop GPU the X-Trans RGBA differed from OpenCL at x = 0 only (8522 values, largest 2.1e-2). A CPU model reproduced the Vulkan values exactly when the color of x = -1 came from an unsigned remainder. The SPIR-V has `OpSRem %int`, so the driver evaluates it as unsigned. With `WrapCoord` the X-Trans result equals OpenCL exactly on that GPU. Rule added to section 4.2. |
+| Parameter record of `to_linear_ref_u16_to_f32` | One record | A `WBParams` at the parameter address and a `PatternParams` at `kPatternParamsOffset` = 204, each a flat record found with address arithmetic. The host struct `ToLinearRefParameters` keeps both (static assert of the offset). | With one Slang struct with two struct members, `vkCreateComputePipelines` of the Intel driver (Iris Xe) stopped with an access violation for every entry point of the `raw_core` module (bisect with the VX1 runner: reads of two fields of the nested `PatternParams` were enough; one field alone created). Flat records create on both devices. Rule added to section 4.2. |
+| `linearize_rgb` channels | A loop over the three channels (OpenCL) | One call of `LinearizeChannel` for each channel with constant indices into a local copy of the parameters | With the loop that indexed the push constant arrays with the loop counter, the Iris Xe result was the input value for every RGB channel (alpha correct). Rule added to section 4.2. |
+| Kernel groups | Four groups | As planned: `raw_core`, `debayer_rcd`, `xtrans_interpolate`, `raw_pack`, 12 kernels, OpenCL kernel names. One push constant layout for the five RCD kernels (80 bytes) and one for both X-Trans kernels (32 bytes). | One layout for each group of related kernels keeps the encode function short; each kernel reads the planes of its OpenCL arguments. `LinearizeRgbPushConstants` and `RcdPushConstants` have a `reserved` field: the C++ struct with a device address has the size of a multiple of 8. |
+| Pack functions | OpenCL signatures | Also the source height, and a check of the destination texture (RGBA32F, the oriented crop size) | The crop check needs the height; the OpenCL functions do not check. |
+| `RcdPlanes` | Five buffer views | A struct of the five views | The call has the views by name. |
+| Not ported | Audit table | `EncodeCopyRgbCropInverseOrient`, `to_linear_ref_f32`, `rcd_merge_rgba`, `apply_inverse_cam_mul_rgba32f` | No product caller: issue #1201. |
+
+**Primary success call chain:**
+
+```text
+VulkanRawOperatorsTest (VK6: the Develop pass)
+  -> RawInputLoader::LoadEncoded (real NEF, RAF, linear DNG) -> host U16 CFA or F32 RGBA
+  -> VulkanBackend::CreateBuffer, UploadBufferRange (recorded copy)
+  -> vulkan::raw::EncodeToLinearRef(backend, command_context, cfa_u16, linear, parameters, ...)
+       -> RequireBufferRange (each view: buffer, alignment, size) -> device addresses
+       -> MakeToLinearRefParameters -> UploadBufferRange(parameters) (recorded, NoteWrite)
+       -> RecordKernelDispatch(raw_core_kernels::ToLinearRefDescriptor(), {}, push constants,
+                               16 x 16 groups) -> BeginCommand (barrier) -> vkCmdDispatch
+  -> EncodeCfaClamp01 -> EncodeBayerRcd (5 dispatches, a barrier before each)
+     or EncodeXTrans (parameter upload, 2 dispatches)
+  -> EncodePackPlanesCropInverseOrient or EncodeCopyRgbaCropInverseOrient
+       -> PackParams (crop inside the source, RGBA32F texture of the oriented crop size)
+       -> RecordKernelDispatch(..., {0: destination}, ...) -> PrepareImage -> push descriptor
+  -> VulkanBackend::DownloadTexture2D or DownloadBufferRange (submit, wait, copy)
+  -> ExpectEqualWithinTolerance(OpenCL::Encode* result on the same GPU, Vulkan result)
+```
+
+**Primary failure call chain:**
+
+```text
+encode with a range outside its buffer, an offset that is not aligned to its element, a view
+without a buffer, a parameter range smaller than its record, an empty crop or a crop outside the
+source, or a destination that is not RGBA32F of the oriented crop size
+  -> std::invalid_argument with the function, the view, and the values
+  -> no upload, no pipeline request, no dispatch, no recording
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `LinearizeRgbOfALinearDngEqualsOpenCl` (24 megapixels, integer codes on and off) | `VulkanRawOperatorsTest` | PASS (RTX 3080 Laptop GPU and Iris Xe): 0 difference |
+| `ToLinearRefOfABayerRawEqualsOpenCl` (Nikon NEF, 6064 x 4040) | `VulkanRawOperatorsTest` | PASS: 0 (RTX 3080), 0 (Iris Xe) |
+| `ToLinearRefOfAnXTransRawEqualsOpenCl` (Fujifilm RAF, 7872 x 5196) | `VulkanRawOperatorsTest` | PASS: 0 (RTX 3080), 1.2e-7 (Iris Xe, 1 ulp) |
+| `ToLinearRefAtAnOddCfaOffsetEqualsOpenCl` (512 rows at a CFA offset of 2 bytes; equal to the result at offset 0) | `VulkanRawOperatorsTest` | PASS (both): 0 |
+| `CfaClampOfABayerRawEqualsOpenCl` (values moved to [-0.5, 1.5]) | `VulkanRawOperatorsTest` | PASS (both): 0 |
+| `BayerRcdOfARealRawEqualsOpenCl` | `VulkanRawOperatorsTest` | PASS: R 2.4e-7, G 1.2e-7, B 8.5e-6 (RTX 3080); R 1.8e-7, G 1.8e-7, B 3.6e-7 (Iris Xe) |
+| `XTransOfARealRawEqualsOpenClForThreePassesAndOnePass` (green and RGBA) | `VulkanRawOperatorsTest` | PASS: 0 (RTX 3080); green 0, RGBA 1.2e-7 (Iris Xe) |
+| `PackPlanesWithTheCropOfTheRawAndEachOrientationEqualsOpenCl` (crop of the NEF, flip 0, 3, 5, 6) | `VulkanRawOperatorsTest` | PASS (both): 0 |
+| `CopyRgbaWithTheCropOfTheRawAndEachOrientationEqualsOpenCl` (crop of the RAF, flip 0, 3, 5, 6) | `VulkanRawOperatorsTest` | PASS (both): 0 |
+| `RawStagesRecordIntoOneRecordingWithoutASubmission` (8 dispatches, 0 submissions and waits, 1 upload of 364 bytes, then one submission; every texel written) | `VulkanRawOperatorsTest` | PASS (both) |
+| `InvalidRequestIsRejectedBeforeACommand` (10 requests: 0 dispatches, 0 pipeline requests, 0 uploads, no recording) | `VulkanRawOperatorsTest` | PASS (both) |
+| Validation errors | `TearDown` of each GPU test | 0 on both devices |
+| `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | PASS on both devices: `gpu.kernels.ok=vulkan kernels=17`, exit 0 |
+| VK0 to VK3 suites after the catalog and `math.slangh` change | `ctest -R Vulkan` (94 tests with VK4) | PASS on both devices (1 skipped: the accelerator test for a build without Vulkan) |
+
+Commands (worktree `build/debug`, `ALCEDO_ENABLE_VULKAN=ON`, logs in
+`build/tmp/vulkan_backend/vk4/`):
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanRawOperatorsTest GpuDagVulkanWorkspaceTest VulkanColorMathTest VulkanGeometryTest VulkanComputePipelineCacheTest VulkanShaderModuleRegistryTest VulkanContextTest VulkanRequirementsTest PipelineAcceleratorTest alcedo_gpu_check
+ctest --test-dir build/debug -R "Vulkan" -j 1                          default device: 94/94 (1 skipped)
+ALCEDO_VULKAN_DEVICE=Iris ctest --test-dir build/debug -R "Vulkan" -j 1  94/94 (1 skipped)
+build/debug/alcedo_studio/src/alcedo-gpu-check.exe --vulkan              both devices: exit 0
+VulkanRawOperatorsTest.exe (direct runs on both devices for the measured differences)
+build/vx1/vx1_runner.exe --case pipeline (pipeline creation bisect on Iris Xe, probe modules)
+```
+
+The OpenCL, CUDA, and Metal tests did not run: VK4 changes no OpenCL, CUDA, Metal, or shared
+kernel source and no shared C++ code (the changed shared files are CMake lists, the Vulkan kernel
+catalog, and the Vulkan-only `math.slangh`). The full test suite was not run (repository rule).
+
+**Checklist / exit condition:** all three exit criteria are met.
+
+**LOC note:** 2617 lines in 15 new files and 6 existing files: 1812 lines of production code,
+headers, and kernels (943 of them Slang kernels, the ports of about 870 lines of OpenCL C), 754
+lines of tests and test support, and 52 lines of CMake. Above the estimate of 1400 to 1800: the
+estimate did not count the test support of a real RAW comparison (OpenCL buffers and images, 209
+lines) and the exact-rounding form of RCD. The largest file is `vulkan_raw_operators_test.cpp`
+(545 lines).
+
+**Remaining gaps:** none for VK4. The highlight reconstruction, the lens calibration, and the DNG
+warp are VK5. The four OpenCL kernels without a caller are issue #1201.
+
 ### Phases VK3 to VK23: scope of each phase
 
 Each entry gives the objective, the OpenCL model, and the main tests. The detailed section replaces
@@ -1444,7 +1719,7 @@ the entry before the implementation.
 | Phase | Objective | OpenCL model | Main tests |
 | --- | --- | --- | --- |
 | VK3 | Detailed section above | | |
-| VK4 | RAW encode entry points: `EncodeLinearizeRgb`, `EncodeToLinearRef`, `EncodeCfaClamp01`, `EncodeBayerRcd`, `EncodeXTrans`, pack and copy with crop and orientation | `opencl_encode.cpp`, `to_linear_ref.cl`, `cvt_ref_space.cl`, `debayer_rcd.cl`, `xtrans_interpolate.cl` | Each stage equals OpenCL on a real Bayer RAW and a real X-Trans RAW. |
+| VK4 | Detailed section above | | |
 | VK5 | Highlight reconstruction, lens calibration, DNG rectilinear warp | `highlight_reconstruct.cl`, `opencl_lens_calib_ops.cpp`, `lens_calib.cl` | Clipped highlights equal OpenCL. Lens results equal `opencl_lens_calib_test.cpp` cases. |
 | VK6 | `PassEncoder<VulkanBackend, UploadRaw>` with the Develop steps and the scratch lifetime rule of `PlanExecutor` | `opencl_develop_pass.cpp` | `develop.sensor_linear` equals OpenCL. A stable render allocates nothing. |
 | VK7 | GeometryResample, CameraToAp1, UploadRgb, DisplayToAp1 | `geometry_camera.cl`, `display_to_ap1.cl`, `opencl_display_to_ap1_pass.cpp` | `develop.image` equals OpenCL for a RAW and for a raster input. |

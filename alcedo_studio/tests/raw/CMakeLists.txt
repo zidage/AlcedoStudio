@@ -54,3 +54,17 @@ if(ALCEDO_CUDA_ENABLED AND ALCEDO_OPENCL_ENABLED)
   gtest_discover_tests(OpenClCudaFullPipelineBenchmark TEST_PREFIX "OpenClCudaBenchmark.")
   alcedo_register_test_target(OpenClCudaFullPipelineBenchmark raw gpu)
 endif()
+
+# The Vulkan RAW encode functions against the OpenCL ones on the same GPU, on a real Bayer RAW and
+# a real X-Trans RAW (#1036, phase VK4, decision B9). The OpenCL side runs the product functions.
+if(ALCEDO_VULKAN_ENABLED AND ALCEDO_OPENCL_ENABLED)
+  add_executable(VulkanRawOperatorsTest ${ALCEDO_TEST_ROOT}/raw/vulkan_raw_operators_test.cpp)
+  target_include_directories(VulkanRawOperatorsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(VulkanRawOperatorsTest PRIVATE
+    GTest::gtest_main RawProcessorOpVulkan RawProcessorOp OpenClProgramLibrary EditInput)
+  add_dependencies(VulkanRawOperatorsTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanRawOperatorsTest TEST_PREFIX "VulkanRawOperatorsTest."
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "gpu;raw;vulkan;opencl")
+  alcedo_register_test_target(VulkanRawOperatorsTest gpu)
+endif()

@@ -150,3 +150,26 @@ static float AlcedoPow(float x, float y) {
   }
   return AlcedoExp(y * AlcedoLog(x));
 }
+
+// x * y as one rounded multiply that the driver does not fuse with an add or a subtract into an
+// FMA: the OpFMul has the SPIR-V NoContraction decoration. This is the Slang form of the OpenCL
+// `#pragma OPENCL FP_CONTRACT OFF` (phase VK4). slangc 2025.17.2 writes no NoContraction for
+// `precise` or for `-fp-mode precise`, so a kernel that needs the OpenCL rounding of each product
+// calls this function for each multiply.
+static float AlcedoExactMul(float x, float y) {
+  return spirv_asm {
+    %product:$$float = OpFMul $x $y;
+    OpDecorate %product NoContraction;
+    result:$$float = OpCopyObject %product;
+  };
+}
+
+// x + y as one rounded add with the SPIR-V NoContraction decoration: the driver does not fuse it
+// with a multiply and does not combine it with another add (phase VK4, see AlcedoExactMul).
+static float AlcedoExactAdd(float x, float y) {
+  return spirv_asm {
+    %sum:$$float = OpFAdd $x $y;
+    OpDecorate %sum NoContraction;
+    result:$$float = OpCopyObject %sum;
+  };
+}
