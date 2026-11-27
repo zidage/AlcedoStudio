@@ -18,7 +18,7 @@ namespace alcedo::vulkan {
  *
  * Owners: `VulkanShaderModuleRegistry` notes module loads, `VulkanComputePipelineCache` notes
  * pipeline creations and cache hits. The render backend notes dispatches, transfers, submissions,
- * and waits.
+ * waits, and the creation and destruction of its buffers and images (staging buffers included).
  */
 struct VulkanApiCounters {
   uint64_t module_loads        = 0;  ///< `vkCreateShaderModule`
@@ -29,6 +29,9 @@ struct VulkanApiCounters {
   uint64_t download_bytes      = 0;  ///< device to host bytes
   uint64_t submits             = 0;  ///< `vkQueueSubmit2`
   uint64_t waits               = 0;  ///< host waits for a fence
+  uint64_t buffer_creations    = 0;  ///< `VkBuffer` objects that the render backend created
+  uint64_t image_creations     = 0;  ///< `VkImage` objects that the render backend created
+  uint64_t destroyed_resources = 0;  ///< buffers and images that the render backend destroyed
 };
 
 /// The counters of the process since its start. Thread safe.
@@ -47,5 +50,8 @@ void NoteVulkanUpload(uint64_t bytes) noexcept;
 void NoteVulkanDownload(uint64_t bytes) noexcept;
 void NoteVulkanSubmit() noexcept;
 void NoteVulkanWait() noexcept;
+void NoteVulkanBufferCreation() noexcept;
+void NoteVulkanImageCreation() noexcept;
+void NoteVulkanResourceDestruction() noexcept;
 
 }  // namespace alcedo::vulkan

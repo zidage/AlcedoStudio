@@ -190,6 +190,18 @@ endif()
 gtest_discover_tests(PipelineAcceleratorTest TEST_PREFIX "PipelineAcceleratorTest.")
 alcedo_register_test_target(PipelineAcceleratorTest edit)
 
+# VulkanBackend, VulkanCommandContext, and the shared device and workspace templates on the local
+# GPU with the validation layer (#1036, phase VK2).
+if(ALCEDO_VULKAN_ENABLED)
+  add_executable(GpuDagVulkanWorkspaceTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_workspace_test.cpp)
+  target_include_directories(GpuDagVulkanWorkspaceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagVulkanWorkspaceTest PRIVATE GTest::gtest_main EditRuntimeVulkan)
+  gtest_discover_tests(GpuDagVulkanWorkspaceTest TEST_PREFIX "GpuDagVulkanWorkspaceTest."
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan")
+  alcedo_register_test_target(GpuDagVulkanWorkspaceTest gpu)
+endif()
+
 add_executable(PipelineSchedulerRequestIdTest
     ${ALCEDO_TEST_ROOT}/renderer/pipeline_scheduler_request_id_test.cpp)
 target_include_directories(PipelineSchedulerRequestIdTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})

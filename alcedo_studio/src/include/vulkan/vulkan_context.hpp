@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -43,8 +44,8 @@ struct VulkanInitializationOptions {
   [[nodiscard]] static auto FromEnvironment() -> VulkanInitializationOptions;
 };
 
-/// The queue of the pipeline device. The pipeline thread is the only user of @ref queue (plan
-/// section 4.2: each queue has one user thread).
+/// The queue of the pipeline device. The render devices submit to @ref queue only through
+/// `VulkanContext::SubmitToPipelineQueue`, which holds the queue lock (plan section 4.2).
 struct VulkanPipelineQueue {
   VkDevice device       = VK_NULL_HANDLE;
   VkQueue  queue        = VK_NULL_HANDLE;
@@ -118,6 +119,17 @@ class VulkanContext {
     return capabilities_;
   }
   [[nodiscard]] auto PipelineQueue() const -> const VulkanPipelineQueue& { return pipeline_queue_; }
+  /**
+   * @brief Submits @p submit to the pipeline queue with @p fence, under the queue lock.
+   *
+   * Several render devices (editor, thumbnails, export) run on threads of their own and share the
+   * pipeline queue. A `VkQueue` needs external synchronization, so each submission to it goes
+   * through this function. The lock covers `vkQueueSubmit2` only; the caller waits for @p fence
+   * without the lock.
+   *
+   * @throws VulkanError When `vkQueueSubmit2` fails.
+   */
+  void               SubmitToPipelineQueue(const VkSubmitInfo2& submit, VkFence fence);
   /// The device-level functions of the pipeline device.
   [[nodiscard]] auto PipelineDeviceFunctions() const -> const VolkDeviceTable& {
     return pipeline_device_functions_;
@@ -161,6 +173,7 @@ class VulkanContext {
   VkPhysicalDevice         physical_device_ = VK_NULL_HANDLE;
   VulkanDeviceCapabilities capabilities_;
   VulkanPipelineQueue      pipeline_queue_;
+  std::mutex               pipeline_queue_mutex_;
   VolkDeviceTable          pipeline_device_functions_{};
   std::vector<std::string> pipeline_device_extensions_;
   VmaAllocator             pipeline_allocator_ = VK_NULL_HANDLE;
