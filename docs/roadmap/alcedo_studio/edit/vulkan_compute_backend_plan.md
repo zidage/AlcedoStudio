@@ -8,7 +8,8 @@ Status: planned. Experiments VX1 to VX5 come first. VX1, VX2, VX3, and VX5 are c
 changed B5 to two devices and stopped VK18 until the plan has a new resize design (section 9.2).
 VK0 is complete (2026-11-23, #1063). VK1 is complete (2026-11-23, #1065). VK2 is complete
 (2026-11-23, #1067). VK3 is complete (2026-11-23, #1080). VK4 is complete (2026-11-27, #1196).
-VK5 is complete (2026-11-27, #1203).
+VK5 is complete (2026-11-27, #1203). VK6 is complete on the Apple M4 with MoltenVK
+(2026-11-27, #1209); its Windows runs against OpenCL are open.
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -79,7 +80,9 @@ The plan author made these decisions. Each one agrees with A1 to A7.
 
 ### 1.4 Exclusions
 
-- macOS. The Metal backend keeps its kernels and its display path. MoltenVK is not used.
+- macOS. The Metal backend keeps its kernels and its display path. MoltenVK is not a product
+  path. The compute phases also run on an Apple M4 with MoltenVK as a development check (user
+  request 2026-11-27, VK6); the reference backend of the comparison tests there is Metal.
 - Linux packaging and a Linux editor backend. The Vulkan code must compile without a Windows API
   outside the window surface, but this plan adds no Linux target.
 - The Rust sidecar and its ONNX Runtime (A6).
@@ -397,6 +400,11 @@ and `AlcedoAtan2` of `math.slangh` (the single-precision Cephes forms, about 1 u
 |x| < 8192). Today that is the lens group: with the built-in functions the lens projections
 differed from OpenCL by up to 4e-2 at up to 9937 values of a 640 x 480 image (VK5 record).
 
+MoltenVK compiles the kernels with the Metal fast math option unless the instance sets
+`MVK_CONFIG_FAST_MATH_ENABLED` to 0. `VulkanContext` sets it on macOS through
+`VK_EXT_layer_settings`; with it the Develop pass on an Apple M4 is equal to Metal without fast
+math and FP contraction bit for bit (VK6 record).
+
 ### 4.4 Primary call chains
 
 Success, host output (export, thumbnail, test):
@@ -587,7 +595,7 @@ test of its kernels (B9).
 | VK3 | Kernel dispatch, shared color math, geometry utilities, comparison test support | `edit/runtime/vulkan/`, `src/vulkan/shader/`, `color_encoding_math.h` | VK2 | 1300 to 1700 | complete (#1080) |
 | VK4 | RAW operators: linearize, CFA clamp, reference space, RCD, X-Trans, pack | `decoders/processor/operators/gpu/` | VK3 | 1400 to 1800 | complete (#1196) |
 | VK5 | RAW operators: highlight reconstruction, lens calibration, DNG warp | `decoders/processor/operators/gpu/`, `edit/runtime/lens/vulkan/` | VK4 | 1500 to 1900 | complete (#1203) |
-| VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | planned |
+| VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | complete on the Apple M4, Windows runs open (#1209) |
 | VK7 | GeometryResample, CameraToAp1, UploadRgb, DisplayToAp1 | `edit/runtime/vulkan/` | VK6 | 1100 to 1500 | planned |
 | VK8 | Primary grade point kernels and LUT resources | `edit/runtime/vulkan/` | VK7 | 1400 to 1800 | planned |
 | VK9 | Primary grade neighbor kernels | `edit/runtime/vulkan/` | VK8 | 800 to 1200 | planned |
@@ -1956,6 +1964,250 @@ function, test), so the pull request can be read one operator at a time. The lar
 **Remaining gaps:** none for VK5. The Develop pass that calls these functions is VK6. The OpenCL
 kernel and the count without a caller are in issue #1201.
 
+### Phase VK6: Develop pass (UploadRaw, UploadRgb)
+
+**Objective and deliverables.** `PassEncoder<VulkanBackend, UploadRaw>` and
+`PassEncoder<VulkanBackend, UploadRgb>` write `develop.sensor_linear` from a prepared RAW input
+with the RAW operators of VK4 and VK5, in the order of `ExecuteOpenClDevelop`. The result equals
+the result of the reference backend on the same GPU (B9). The work runs on the Apple M4 with
+MoltenVK too (user request 2026-11-27: VK6 on the Mac, to find out if the Vulkan backend runs
+there); on that computer the reference backend is Metal, because the build has OpenCL on Windows
+only.
+
+**Inputs and prerequisites.** VK4 and VK5 (the encode functions, `FillBufferRange`,
+`CopyTexture2DRegion`, `EncodeCropResize`). VK2 (`VulkanRenderDevice`, the workspace, `Wait`).
+The kernel rules of section 4.2.
+
+**Source audit of the VK6 entry (2026-11-27).** `ExecuteOpenClDevelop` (`opencl_develop_pass.cpp`)
+has four input branches and two stages after them:
+
+| OpenCL branch or stage | Kernels | VK6 decision |
+| --- | --- | --- |
+| CFA input, legacy demosaic: upload, `ToLinearRef`, `CfaClamp01` without highlight reconstruction, RCD or X-Trans, then the pack or the highlight reconstruction and the pack | VK4, VK5 | VK6 |
+| CFA input, Neural Engine demosaic (`EncodeNeural`) | DemosaicNet (VK16, deferred by A5) | VK6 fails with an error that names the method and the Vulkan backend (B8). No other demosaic method runs. |
+| `DebayeredRgb` or `DirectRgb` input: upload, `LinearizeRgb`, optional highlight reconstruction, crop and orientation | VK4, VK5 | VK6 |
+| `RasterRgb` input: `LinearizeRaster` (`display_to_ap1.cl`) | VK7 | VK6 fails with an error that names VK7. |
+| DNG `WarpRectilinear` (`develop.sensor_unwarped` to `develop.sensor_linear`) | VK5 | VK6 |
+| `GpuPassKind::Lens` (`ExecuteOpenClLensCalibration`: copy to a buffer, wait, the lens operations of the OpenCL context queue, resize, copy back) | VK5 | VK6, recorded into the open recording without a wait |
+
+**Modules, files, and APIs.**
+
+- `inc/edit/runtime/vulkan/vulkan_develop_pass.hpp`, `edit/runtime/vulkan/vulkan_develop_pass.cpp`
+  (new target `EditRuntimeVulkanPasses`, the target of the later pass encoders too):
+  `ExecuteVulkanDevelop(VulkanRenderDevice&, const ExecutionPlan&, const PreparedRawInput&,
+  const PipelineDocument&)`.
+- `inc/edit/runtime/vulkan/vulkan_pass_encoder.hpp`: the two `PassEncoder` specializations.
+- `VulkanBackend::SynchronizeRecordedWork(command_context)`: submits the open recording and waits
+  for it, without a change of the render state; `PlanExecutor` calls it after the Develop pass so
+  that the Develop scratch is destroyed before the geometry pass allocates.
+- macOS: `VulkanContext` loads the Homebrew or bundle Vulkan loader when `volkInitialize` finds
+  none, enables `VK_KHR_portability_enumeration` on the instance and `VK_KHR_portability_subset`
+  on a device that lists it. No other code is specific to macOS.
+- Test: `tests/edit/runtime/vulkan_develop_test.cpp` (`VulkanDevelopTest`), built when Vulkan and
+  OpenCL or Metal are enabled. The reference backend is OpenCL when the build has OpenCL, else
+  Metal.
+
+**Data rules and invariants.**
+
+- The Develop scratch (the CFA upload, the linear plane, the demosaic planes, the RGBA buffers,
+  the highlight masks and statistics, the parameter records) is a set of `VulkanBackend::Buffer`
+  objects of the pass, created for one Develop and released at the end of the function. A
+  released buffer stays alive until the batch that uses it completes (VK2), so the release needs
+  no wait. This is the Vulkan form of the OpenCL `ExactRelease` slabs. A stable render runs no
+  Develop pass (`PlanExecutor` binds the published `develop.sensor_linear`), so it creates no
+  scratch.
+- The whole Develop pass records into the open recording; it submits nothing. The OpenCL lens
+  stage waits for the queue twice, the Vulkan stage does not.
+- The peak memory is the sum of the scratch of the branch, because nothing is destroyed before
+  the submission completes. The OpenCL pass destroys each slab after its last kernel. For a
+  45.7 megapixel Bayer RAW with highlight reconstruction the difference is the U16 upload, the
+  linear plane, and the RCD weights, which OpenCL releases before the highlight stage (about
+  460 MB of 1.55 GB). The export split of VK17 can release the scratch of a completed
+  submission.
+- The lens scratch textures (the warp texture and the crop texture) come from
+  `VulkanBackend::CreateTexture2D` and follow the same release rule.
+- An input without a Develop node, a call outside `BeginRender`, an empty CFA, or a CFA plane that
+  is not tightly packed fails with `std::runtime_error` before a command is recorded, with the
+  messages of the OpenCL pass.
+
+**Implementation steps.**
+
+1. macOS loader and portability extensions; the Mac build and the VK0 to VK2 tests on MoltenVK.
+2. `SynchronizeRecordedWork`.
+3. `ExecuteVulkanDevelop` and the pass encoders.
+4. `VulkanDevelopTest` against OpenCL (Windows) and Metal (macOS).
+5. Runs: Apple M4 (MoltenVK), RTX 3080 Laptop GPU and Iris Xe when the GPU of the Windows computer
+   is free (section 11).
+
+**Tests and evidence.**
+
+- `VulkanDevelopTest.BayerRawEqualsTheReferenceBackend` (`raw/street/_DSC0155.NEF`, highlight
+  reconstruction off and on)
+- `VulkanDevelopTest.XTransRawEqualsTheReferenceBackend` (`raw/xtrans_edge/DSCF0019.RAF`, off and
+  on)
+- `VulkanDevelopTest.LinearDngEqualsTheReferenceBackend` (`raw/linear_dng/mfzoty.dng`, the
+  `DebayeredRgb` branch, off and on)
+- `VulkanDevelopTest.DngWarpOfARealDngEqualsTheReferenceBackend` (the DNG of VK5)
+- `VulkanDevelopTest.LensCalibrationEqualsTheReferenceBackend` (a `DirectRgb` position ramp with
+  the Lensfun profile of the OpenCL vignetting test, vignetting and distortion)
+- `VulkanDevelopTest.DevelopRecordsIntoOneRecordingWithoutASubmission`
+- `VulkanDevelopTest.ScratchIsReleasedAndTheOutputIsReusedByASecondDevelop`
+- `VulkanDevelopTest.NeuralEngineAndRasterInputFailWithTheirPhase`
+- `VulkanDevelopTest.InvalidRequestIsRejectedBeforeACommand`
+
+Tolerances come from the measurement of this phase. The completion record gives the measured
+differences and the reason for each tolerance.
+
+**Build and run commands.**
+
+```text
+Windows: cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanDevelopTest
+         ctest --test-dir build/debug -R "VulkanDevelopTest" -j 1 --output-on-failure
+macOS:   source ~/Projects/vulkan_tools/env.sh
+         cmake --build build/macos-vulkan --target AlcedoVulkanKernels VulkanDevelopTest
+         ctest --test-dir build/macos-vulkan -R "Vulkan" -j 1 --output-on-failure
+```
+
+**Exit criteria.**
+
+- [x] The listed tests pass on the Apple M4 with no validation error.
+- [ ] The listed tests pass on both Windows devices against OpenCL, or the record names the runs
+      that did not take place. (The record names them: not run.)
+- [x] The OpenCL, CUDA, and Metal results are unchanged: VK6 changes no shared kernel source.
+
+**Expected diff.** 1400 to 1800 lines.
+
+##### Phase VK6 completion record (2026-11-27)
+
+**Status:** complete on the Apple M4 (MoltenVK). Issue #1209. Branch
+`feature/vulkan-vk6-develop-pass` on the VK5 branch `feature/vulkan-vk5-highlight-lens-warp`
+(pull request #1205). The Windows runs against OpenCL did not take place: during the session the
+RTX 3080 Laptop GPU was at 100 % load from an application of the user, and the GPU runs yield to
+the user's work (section 11). MSVC build of the Vulkan targets: PASS (`AlcedoVulkanKernels VulkanContextTest GpuDagVulkanWorkspaceTest VulkanDevelopTest alcedo_gpu_check`, exit 0); the Windows tests did not run.
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| MoltenVK fast math | Not in the plan | `VulkanContext` sets the MoltenVK setting `MVK_CONFIG_FAST_MATH_ENABLED` to 0 (never) through `VK_EXT_layer_settings` at instance creation on macOS. Rule added to section 4.3. | MoltenVK compiles each kernel with the Metal fast math option by default. With it the X-Trans result of Vulkan was equal to fast-math Metal within 1.2e-7, and the RCD result differed from strict Metal by up to 0.13; without it Vulkan was equal to strict Metal bit for bit (next row). |
+| Reference backend on the Mac | Metal | Metal, the product Develop pass. The test chooses OpenCL when the build has OpenCL, else Metal, at compile time. | The macOS build has no OpenCL. |
+| Proof of the Vulkan result on the Mac | Not in the plan | A local experiment (not committed): Metal built without fast math and without FP contraction (`-fno-fast-math -ffp-contract=off` in the common Metal flags). Measured differences of `develop.sensor_linear` below. | The product Metal RAW kernels have fast math and contraction, the OpenCL kernels have neither (`FP_CONTRACT OFF` in the RCD program). Equality with strict Metal shows that MoltenVK runs the SPIR-V of VK4 and VK5 with the float rules of OpenCL. |
+| Tolerance against product Metal | Not in the plan | The demosaic cases (Bayer, X-Trans): root mean square 2.5e-4, largest value 0.5. The other cases: the tolerances of the OpenCL reference. | Product Metal differs from strict Vulkan by up to 0.468 (Bayer, at x = 4) and 0.143 (X-Trans), with an rms of 1.3e-4 at most. A wrong kernel gives an rms of 1e-2 or more. |
+| DNG warp comparison | The DNG of VK5 | The WarpRectilinear of that DNG on a position ramp of its sensor size (8680 x 5778, 3 sets), as a `DirectRgb` input with `dng_warp_rectilinear` | Plan section 11. On the DNG pixels the differences from Metal were up to 3.9e-3 inside the image, the position rounding of the source coordinate times the gradient of the image. |
+| Warp border tolerance | 8 ulp of the largest coordinate (VK5) | 8 ulp of a coordinate below 16384 (7.8e-3) for texels with an edge distance below 16, 1e-5 for the others | The texels above 1e-5 were all in the 4-pixel border band, with a difference of 9.77e-4: 1 ulp of a source coordinate near 8671, because the footprint reads 0 outside the source. |
+| Develop scratch | Buffers of the pass | As planned: `VulkanBackend::Buffer` objects of the call (CFA upload, linear plane, one parameter buffer with 256-byte aligned records, RCD planes or X-Trans buffers, highlight masks and statistics); the lens warp and crop textures from `CreateTexture2D`. A buffer is reset after its last recorded use; it is destroyed when its batch completes. | No transient arena slab can give a `VulkanBufferView` (a view needs the `Buffer` object), and the release needs no wait. |
+| `SynchronizeRecordedWork` | Submit and wait | `SubmitRecording` and `WaitBatches` of the backend; the render submission in flight does not change | The Develop scratch rule of `PlanExecutor`. |
+| Vulkan loader on macOS | Not in the plan | `volkInitialize` first; then `<bundle>/Contents/Frameworks/libvulkan.1.dylib`, `/opt/homebrew/lib/libvulkan.1.dylib`, `/usr/local/lib/libvulkan.1.dylib` with `volkInitializeCustom`. The error names each path. | dlopen of a bare name does not search the Homebrew folders. |
+| Portability | Not in the plan | `VK_KHR_portability_enumeration` and `VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR` when the loader lists the extension; `VK_KHR_portability_subset` on a device that lists it. The device list of `VulkanContextTest` does the same. | Without them the loader reports no driver (`VK_ERROR_INCOMPATIBLE_DRIVER`). |
+| Not ported | Source audit | The Neural Engine demosaic and the raster input fail with an error that names the decision A5 or the phase VK7 before a command is recorded | B8. |
+
+**Measured differences of `develop.sensor_linear` on the Apple M4** (`ScaledAboveOne`, logs
+`build/tmp/vulkan_backend/vk6/` of the Mac worktree):
+
+| Case | Product Metal against strict Vulkan (the test) | Metal without fast math against MoltenVK with fast math | Strict Metal against strict Vulkan |
+| --- | --- | --- | --- |
+| Bayer NEF (`_DSC0155`, 24.4 MP) | 0.468, rms 5.9e-5 | 0.133, rms 2.5e-5 | 0 (equal) |
+| Bayer NEF, highlight reconstruction | 0.428, rms 1.3e-4 | 0.428, rms 1.2e-4 | 9.5e-7, rms 2.0e-8 |
+| X-Trans RAF (`DSCF0019`, 40.1 MP) | 0.143, rms 9.5e-5 | 0.143, rms 9.5e-5 | 0 (equal) |
+| X-Trans RAF, highlight reconstruction | 0.143, rms 9.5e-5 | 0.143, rms 9.5e-5 | 9.5e-7, rms 1.8e-9 |
+| Linear DNG (`mfzoty`, `DebayeredRgb`), off; on | 0; 5.8e-7 | not run | 0; 5.8e-7 |
+| WarpRectilinear on the ramp (3 sets) | 2.1e-6 rms, border 9.8e-4, inside below 1e-5 | not run | 2.2e-6 rms, border 9.8e-4, inside below 1e-5 |
+| Lens: vignetting, distortion, TCA on the 640 x 480 ramp | 8.3e-7 | 8.7e-7 | 1.2e-6 |
+
+The product Metal against MoltenVK with fast math (the first run, before the setting): X-Trans
+1.2e-7, the linear DNG 0, the Bayer RAW 0.468.
+
+**Primary success call chain:**
+
+```text
+PlanExecutor<VulkanBackend> (VK17) or VulkanDevelopTest
+  -> PassEncoder<VulkanBackend, UploadRaw | UploadRgb>::Encode -> ExecuteVulkanDevelop
+       -> RequireSupportedInput (render open, Develop node, not raster, not Neural Engine, packed)
+       -> AcquireImageForWrite(develop.sensor_unwarped or develop.sensor_linear, RGBA32F)
+       -> CFA: UploadBufferRange(CFA) -> EncodeToLinearRef -> [EncodeCfaClamp01]
+               -> EncodeBayerRcd -> EncodePackPlanesCropInverseOrient
+                  | EncodeHighlightReconstructPlanarAndPack
+               -> or EncodeXTrans -> [EncodeHighlightReconstruct] -> EncodeCopyRgbaCropInverseOrient
+       -> RGB: UploadBufferRange -> EncodeLinearizeRgb -> [EncodeHighlightReconstruct]
+               -> EncodeCopyRgbaCropInverseOrient
+       -> DNG warp: AcquireImageForWrite(develop.sensor_linear) -> EncodeWarpRectilinear
+       -> Lens: LensCalibrationResolver::Resolve -> ResolveLensCalibrationSteps
+               -> CreateTexture2D (warp, crop) -> EncodeLensCalibration
+       -> the scratch buffers retire; nothing is submitted
+  -> PlanExecutor: SynchronizeRecordedWork -> the scratch is destroyed
+```
+
+**Primary failure call chain:**
+
+```text
+render not open, no Develop node, raster input (VK7), Neural Engine method (A5), empty CFA,
+CFA or RGB plane not tightly packed
+  -> std::runtime_error "ExecuteVulkanDevelop: ..." before an allocation or a command
+an allocation above the memory limit, or an invalid view in an encode function
+  -> std::runtime_error or std::invalid_argument; the buffers of the call retire with the open
+     recording; PlanExecutor cancels the render (VK2 rule)
+```
+
+**What was proven (executed tests, Apple M4, MoltenVK 1.4.2, validation layer 1.4.363):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `BayerRawEqualsTheReferenceBackend` (off, on) | `VulkanDevelopTest` | PASS against Metal (rms 5.9e-5, 1.3e-4) |
+| `XTransRawEqualsTheReferenceBackend` (off, on) | `VulkanDevelopTest` | PASS against Metal (rms 9.5e-5) |
+| `LinearDngEqualsTheReferenceBackend` (off, on) | `VulkanDevelopTest` | PASS: 0, 5.8e-7 |
+| `DngWarpOfARealDngEqualsTheReferenceBackend` | `VulkanDevelopTest` | PASS: inside below 1e-5, border 9.8e-4 |
+| `LensCalibrationEqualsTheReferenceBackend` | `VulkanDevelopTest` | PASS: 8.3e-7 |
+| `DevelopRecordsIntoOneRecordingWithoutASubmission` (0 submissions, 0 waits, then 1 submission) | `VulkanDevelopTest` | PASS |
+| `ScratchIsReleasedAndTheOutputIsReusedByASecondDevelop` (1 texture, 11 buffers; after the wait 0 retired and only the output live; a second Develop creates no texture and gives equal values) | `VulkanDevelopTest` | PASS |
+| `NeuralEngineAndRasterInputFailWithTheirPhase`, `InvalidRequestIsRejectedBeforeACommand` | `VulkanDevelopTest` | PASS |
+| VK0 to VK2 suites on MoltenVK | `ctest -R "Vulkan\|PipelineAccelerator"` | 86 tests, 84 PASS, 2 skipped (Windows only) |
+| `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | PASS: `gpu.kernels.ok=vulkan kernels=27` |
+| Validation errors | `TearDown` of each GPU test | 0 |
+| The VK3 to VK5 comparison tests | | not built on macOS: they need OpenCL |
+| Windows: `VulkanDevelopTest` against OpenCL on the RTX 3080 Laptop GPU and Iris Xe | | not run (see the status) |
+
+Mac setup (development only, no product change): Homebrew `molten-vk` 1.4.2, `vulkan-loader`,
+`vulkan-headers`, `vulkan-volk`, `vulkan-validationlayers`, `vulkan-tools`, `spirv-tools`
+(1.4.363); Slang 2025.17.2 (the version of the Windows SDK) and VulkanMemoryAllocator 3.3.0 (header
+in the vcpkg layout `include/vma/`) in `~/Projects/vulkan_tools`; a worktree
+`~/Projects/PuerhLab-vulkan` with links to the dependencies of the main checkout. `VulkanContext`
+logs Vulkan 1.3.357 (`vulkaninfo`: 1.4.357), one queue family, `maxPushConstantsSize` 4096, `shaderFloat64` false.
+
+Commands:
+
+```text
+macOS:  source ~/Projects/vulkan_tools/env.sh
+        cmake --preset macos_debug_tests -B build/macos-vulkan -DALCEDO_ENABLE_VULKAN=ON
+              -DALCEDO_BUILD_TESTS_BY_DEFAULT=OFF -DALCEDO_BUILD_CI_TESTS=OFF
+              -DALCEDO_SLANGC_EXECUTABLE=$HOME/Projects/vulkan_tools/slang/bin/slangc
+              -DCMAKE_PREFIX_PATH=$HOME/Projects/vulkan_tools/vma
+              -DALCEDO_FILM_PRINT_RESOURCE_DIR=$HOME/Projects/film_print_resources
+        cmake --build build/macos-vulkan --target AlcedoVulkanKernels VulkanRequirementsTest
+              VulkanContextTest VulkanShaderModuleRegistryTest VulkanComputePipelineCacheTest
+              GpuDagVulkanWorkspaceTest PipelineAcceleratorTest VulkanDevelopTest alcedo_gpu_check
+        ctest --test-dir build/macos-vulkan -R "Vulkan|PipelineAccelerator" -j 1     86/86
+        build/macos-vulkan/.../alcedo-gpu-check --vulkan                            exit 0
+Windows: cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels
+              VulkanContextTest GpuDagVulkanWorkspaceTest VulkanDevelopTest alcedo_gpu_check
+```
+
+The OpenCL, CUDA, and Metal tests did not run: VK6 changes no OpenCL, CUDA, Metal, or shared
+kernel source and no shared C++ code outside the Vulkan targets.
+
+**Finding outside this phase.** The product Metal RAW kernels (RCD, X-Trans) give results that
+differ from the strict form by up to 0.47 at a few texels near the image edge and by 1e-4 rms,
+because of fast math and FMA contraction. The CUDA and OpenCL forms are strict. VK6 changes
+nothing in Metal.
+
+**Checklist / exit condition:** the first and third exit criteria are met. The second is open:
+the Windows runs did not take place.
+
+**LOC note:** about 1080 lines of code: 410 lines of production C++, headers, and CMake (the Develop pass 331, the macOS part of `VulkanContext` 85), 537 lines of tests, and the CMake rules. Below the estimate of 1400 to 1800: the kernels and encode functions came with VK4 and VK5.
+
+**Remaining gaps:** the Windows runs of `VulkanDevelopTest` against OpenCL on the RTX 3080 Laptop
+GPU and Iris Xe (B9), and of the VK0 to VK5 suites after the `VulkanContext` change.
+
 ### Phases VK3 to VK23: scope of each phase
 
 Each entry gives the objective, the OpenCL model, and the main tests. The detailed section replaces
@@ -1966,7 +2218,7 @@ the entry before the implementation.
 | VK3 | Detailed section above | | |
 | VK4 | Detailed section above | | |
 | VK5 | Detailed section above | | |
-| VK6 | `PassEncoder<VulkanBackend, UploadRaw>` with the Develop steps and the scratch lifetime rule of `PlanExecutor` | `opencl_develop_pass.cpp` | `develop.sensor_linear` equals OpenCL. A stable render allocates nothing. |
+| VK6 | Detailed section above | | |
 | VK7 | GeometryResample, CameraToAp1, UploadRgb, DisplayToAp1 | `geometry_camera.cl`, `display_to_ap1.cl`, `opencl_display_to_ap1_pass.cpp` | `develop.image` equals OpenCL for a RAW and for a raster input. |
 | VK8 | `VulkanGradeOps` point kernels, LUT images by content key | `opencl_primary_grade_pass.cpp`, `primary_grade.cl` | Each adjustment equals OpenCL. LUT resources are reused by content key. |
 | VK9 | Neighbor kernels of the primary grade | `primary_grade_neighbor.cl` | Detail adjustments equal OpenCL. |
@@ -2553,6 +2805,10 @@ Update this plan before the implementation continues.
   build directory. The experiment worktree uses its own `build/debug` with the dependency setup of
   a worktree.
 - MSVC commands run through the PowerShell tool with `scripts\msvc_env.cmd`.
+- macOS (development check from VK6): the Mac worktree `~/Projects/PuerhLab-vulkan`, the build
+  folder `build/macos-vulkan` (preset `macos_debug_tests` with `ALCEDO_ENABLE_VULKAN=ON`), the tools
+  and the test environment of `~/Projects/vulkan_tools` (`env.sh`). The comparison tests that need
+  OpenCL are not built there; the reference backend of the Develop test is Metal.
 - GPU tests run with `ctest -j 1`. Only the targeted Vulkan suites and the suites of their direct
   callers run. The full suite is the decision of the user.
 - Each Vulkan test runs on the RTX 3080 Laptop GPU and on Iris Xe
@@ -2611,6 +2867,9 @@ Remaining defects or unavailable platforms:
 | Highlight tolerance | Largest `ScaledDifference` of the Vulkan highlight reconstruction from OpenCL | 1e-5 | phase VK5 record (measured 9.3e-7) |
 | DNG warp tolerance | Largest difference on the position ramp: footprint inside the source; footprint at the border | 1e-5; 8 ulp of the largest coordinate | `OpenClGeometryUtilsTest`; phase VK5 record |
 | Lens tolerance | Largest difference on the position ramp: Lanczos footprint inside the source; every texel | 1e-5; 5e-4 (8 ulp of 640) | phase VK5 record |
+| Develop tolerance | Largest `ScaledDifference` of `develop.sensor_linear` from OpenCL; the linear DNG and the lens against Metal | 1e-4 (the RCD tolerance of VK4); 1e-4 and 5e-4 | phase VK6 record |
+| Develop tolerance against product Metal | Demosaic cases on the Apple M4: root mean square; largest value | 2.5e-4; 0.5 | phase VK6 record (fast math and contraction of the Metal RAW kernels; measured 1.3e-4 and 0.468) |
+| MoltenVK fast math | `MVK_CONFIG_FAST_MATH_ENABLED` of the instance on macOS | 0 (never) | phase VK6 record |
 | `slangc` arguments | Arguments of each kernel group build | `-target spirv -profile spirv_1_6 -fvk-use-scalar-layout -fvk-use-entrypoint-name -O2` | VX1 (section 9.1) |
 | `spirv-val` arguments | Validation of each module in the build | `--target-env vulkan1.3 --scalar-block-layout` | VX1 |
 | `cbrt` Newton steps | Steps after `exp2(log2(\|x\|) / 3)` in the Slang `cbrt` | 1 | VX1 |
