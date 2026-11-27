@@ -623,6 +623,16 @@ auto ImageController::DeleteResultMap(const DeleteExecutionResult& result) -> QV
 }
 
 auto ImageController::StartDeleteImages(const QVariantList& targetEntries) -> QVariantMap {
+  return StartDeleteBatch(targetEntries, std::nullopt);
+}
+
+auto ImageController::StartDeleteImagesInFolder(const QVariantList& targetEntries,
+                                                sl_element_id_t     folder_id) -> QVariantMap {
+  return StartDeleteBatch(targetEntries, folder_id);
+}
+
+auto ImageController::StartDeleteBatch(const QVariantList&            targetEntries,
+                                       std::optional<sl_element_id_t> folder_id) -> QVariantMap {
   QVariantMap result{{QStringLiteral("started"), false}, {QStringLiteral("message"), QString{}}};
   auto        targets = CollectDeleteTargets(targetEntries);
   std::vector<sl_element_id_t> locked_ids;
@@ -654,7 +664,7 @@ auto ImageController::StartDeleteImages(const QVariantList& targetEntries) -> QV
     }
   }
   QString refusal;
-  auto    batch = PrepareDeleteBatch(targets, &refusal);
+  auto    batch = PrepareDeleteBatch(targets, folder_id, &refusal);
   if (!batch.has_value()) {
     result[QStringLiteral("message")] = refusal;
     return result;
@@ -758,7 +768,25 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
     result["message"] = refusal;
     return result;
   }
+  const auto target_folder_id = folders_->FolderElementIdForUiId(targetFolderId);
+  if (!target_folder_id.has_value() || target_folder_id.value() == 0) {
+    const auto msg    = PL_TEXT("Select an album folder.");
+    result["message"] = msg.Render();
+    return result;
+  }
+  return LinkImagesToFolder(targetEntries, target_folder_id.value());
+}
 
+auto ImageController::LinkImagesToFolder(const QVariantList& targetEntries,
+                                         sl_element_id_t     folder_id) -> QVariantMap {
+  QVariantMap result{{"success", false},
+                     {"addedCount", 0},
+                     {"failedCount", 0},
+                     {"addedElementIds", QVariantList{}},
+                     {"failedElementIds", QVariantList{}},
+                     {"alreadyLinkedElementIds", QVariantList{}},
+                     {"refusal", QString{}},
+                     {"message", QString{}}};
   auto&       ph = project_->handler();
   if (ph.project_loading()) {
     const auto msg    = PL_TEXT("Project is loading. Please wait.");
@@ -778,8 +806,8 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
     return result;
   }
 
-  const auto target_folder_id = folders_->FolderElementIdForUiId(targetFolderId);
-  if (!target_folder_id.has_value() || target_folder_id.value() == 0) {
+  const std::optional<sl_element_id_t> target_folder_id = folder_id;
+  if (folder_id == kLibraryRootFolderId) {
     const auto msg    = PL_TEXT("Select an album folder.");
     result["message"] = msg.Render();
     return result;
@@ -836,6 +864,9 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
   auto      msg          = i18n::LocalizedText{};
   if (added_count == 0 && link_result.refusal_.has_value()) {
     msg = SleeveRefusalText(*link_result.refusal_);
+  } else if (added_count == 0 && failed_count == 0 &&
+             !link_result.already_linked_element_ids_.empty()) {
+    msg = PL_TEXT("The album already holds these images.");
   } else if (added_count == 0) {
     msg = PL_TEXT("No images were added.");
   } else if (failed_count == 0) {
@@ -858,6 +889,7 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
   result["failedCount"]      = failed_count;
   result["addedElementIds"]  = ToVariantIdList(added_ids);
   result["failedElementIds"] = ToVariantIdList(link_result.failed_element_ids_);
+  result["alreadyLinkedElementIds"] = ToVariantIdList(link_result.already_linked_element_ids_);
   result["refusal"]          = link_result.refusal_.has_value()
                                    ? QString::fromLatin1(SleeveErrorName(*link_result.refusal_))
                                    : QString{};
@@ -865,8 +897,9 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
   return result;
 }
 
-auto ImageController::PrepareDeleteBatch(const std::vector<DeleteTarget>& targets, QString* refusal)
-    -> std::optional<DeleteBatch> {
+auto ImageController::PrepareDeleteBatch(const std::vector<DeleteTarget>& targets,
+                                         std::optional<sl_element_id_t>   scope_folder_id,
+                                         QString* refusal) -> std::optional<DeleteBatch> {
   const auto refuse = [this,
                        refusal](const i18n::LocalizedText& msg) -> std::optional<DeleteBatch> {
     status_->SetTaskState(msg, 0, false);
@@ -897,7 +930,8 @@ auto ImageController::PrepareDeleteBatch(const std::vector<DeleteTarget>& target
     return refuse(PL_TEXT("No valid images selected for deletion."));
   }
 
-  const auto folder_id = folders_->CurrentFolderElementId();
+  const auto folder_id =
+      scope_folder_id.has_value() ? scope_folder_id : folders_->CurrentFolderElementId();
   if (!folder_id.has_value()) {
     return refuse(PL_TEXT("Folder scope is unavailable."));
   }
@@ -1100,7 +1134,7 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
     return result;
   }
   QString refusal;
-  auto    batch = PrepareDeleteBatch(targets, &refusal);
+  auto    batch = PrepareDeleteBatch(targets, std::nullopt, &refusal);
   if (!batch.has_value()) {
     DeleteExecutionResult result;
     result.message_ = refusal;

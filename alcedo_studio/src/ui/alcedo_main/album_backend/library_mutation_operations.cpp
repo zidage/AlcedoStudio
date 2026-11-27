@@ -124,6 +124,16 @@ auto LibraryMutationOperations::StartDeleteTargets(const QVariantList& targets) 
   return images_->StartDeleteImages(targets);
 }
 
+auto LibraryMutationOperations::StartDeleteTargetsInFolder(const QVariantList& targets,
+                                                           sl_element_id_t     folder_id)
+    -> QVariantMap {
+  if (images_ == nullptr) {
+    return QVariantMap{{QStringLiteral("started"), false},
+                       {QStringLiteral("message"), tr("No valid image was selected.")}};
+  }
+  return images_->StartDeleteImagesInFolder(targets, folder_id);
+}
+
 void LibraryMutationOperations::OnDeleteImagesFinished(const QVariantMap& result) {
   const QVariantList deleted = result.value(QStringLiteral("deletedElementIds")).toList();
   if (!deleted.isEmpty()) {

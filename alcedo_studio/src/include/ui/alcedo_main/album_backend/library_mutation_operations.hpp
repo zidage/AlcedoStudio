@@ -60,6 +60,10 @@ class LibraryMutationOperations final : public QObject {
    * ElementsDeleted (when an element was deleted) and then DeleteTargetsFinished.
    */
   Q_INVOKABLE QVariantMap  StartDeleteTargets(const QVariantList& targets);
+  /// StartDeleteTargets with the folder @p folder_id as the scope instead of the current folder
+  /// (ImageController::StartDeleteImagesInFolder, #1190).
+  auto StartDeleteTargetsInFolder(const QVariantList& targets, sl_element_id_t folder_id)
+      -> QVariantMap;
   /// Sets the star rating of @p targets. One target uses ImageController::SetImageRating and
   /// returns its result (success, rating, message). Several targets use the batch path
   /// ImageController::StartSetImageRatings and return its result (started, taskId, message)

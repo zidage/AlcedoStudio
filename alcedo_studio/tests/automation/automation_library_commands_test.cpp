@@ -13,7 +13,9 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStringList>
+#include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -793,6 +795,335 @@ TEST_F(AutomationLibraryCommandsTest, FoldersListsEachFolderAfterItsParentWithPa
   expect_row(2, day, trip, 2);
   expect_row(3, selects, day, 3);
   expect_row(4, archive, root_id, 1);
+}
+
+/// The `data.error` of a -32002 answer, or an empty text for another answer.
+auto RefusalName(const std::optional<AutomationResponse>& response) -> QString {
+  if (ErrorCode(response) != AutomationErrorCode::Rejected) {
+    return {};
+  }
+  return response->error->data.toObject().value("error").toString();
+}
+
+/// The path of each folder of library.folders, in its order.
+auto FolderPaths(InProcessAutomationSession& session) -> QStringList {
+  QStringList paths;
+  for (const auto& value :
+       session.CallResult(QStringLiteral("library.folders")).value("folders").toArray()) {
+    paths.push_back(value.toObject().value("path").toString());
+  }
+  return paths;
+}
+
+auto PhotoTotal(InProcessAutomationSession& session, double folder_id) -> int {
+  return session.CallResult(QStringLiteral("library.list"), QJsonObject{{"folder_id", folder_id}})
+      .value("total")
+      .toInt();
+}
+
+/// The sorted element ids of @p values.
+auto SortedIds(const QJsonArray& values) -> std::vector<double> {
+  std::vector<double> ids;
+  for (const auto& value : values) {
+    ids.push_back(value.toDouble());
+  }
+  std::sort(ids.begin(), ids.end());
+  return ids;
+}
+
+/// Imports the files @p paths into the folder @p folder_id and waits for the import.
+void ImportInto(InProcessAutomationSession& session, const QStringList& paths, double folder_id) {
+  const QString task_id = session
+                              .CallResult(QStringLiteral("library.import"),
+                                          QJsonObject{{"paths", QJsonArray::fromStringList(paths)},
+                                                      {"folder_id", folder_id}})
+                              .value("task_id")
+                              .toString();
+  ASSERT_FALSE(task_id.isEmpty());
+  EXPECT_EQ(session
+                .CallResult(QStringLiteral("tasks.wait"),
+                            QJsonObject{{"task_id", task_id}, {"timeout_ms", 600000}})
+                .value("state")
+                .toString(),
+            QStringLiteral("succeeded"));
+}
+
+// #1190: the folder commands change the tree through the FolderController edits and answer with
+// the folder as library.folders lists it.
+TEST_F(AutomationLibraryCommandsTest, FolderCommandsChangeTheTreeAndReturnTheFolder) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "folder_edits"}})
+                   .isEmpty());
+  const QJsonObject trip    = session.CallResult(QStringLiteral("library.folder.create"),
+                                                 QJsonObject{{"parent_id", 0}, {"name", "Trip"}});
+  const double      trip_id = trip.value("folder_id").toDouble();
+  ASSERT_GT(trip_id, 0);
+  EXPECT_EQ(trip.value("parent_id").toDouble(), 0);
+  EXPECT_EQ(trip.value("name").toString(), QStringLiteral("Trip"));
+  EXPECT_EQ(trip.value("path").toString(), QStringLiteral("/Trip"));
+
+  // The name is trimmed; the result holds the stored name.
+  const QJsonObject day =
+      session.CallResult(QStringLiteral("library.folder.create"),
+                         QJsonObject{{"parent_id", trip_id}, {"name", "  Day 1 "}});
+  const double day_id = day.value("folder_id").toDouble();
+  EXPECT_EQ(day.value("parent_id").toDouble(), trip_id);
+  EXPECT_EQ(day.value("name").toString(), QStringLiteral("Day 1"));
+  EXPECT_EQ(day.value("path").toString(), QStringLiteral("/Trip/Day 1"));
+
+  const QJsonObject renamed =
+      session.CallResult(QStringLiteral("library.folder.rename"),
+                         QJsonObject{{"folder_id", day_id}, {"name", "Day One"}});
+  EXPECT_EQ(renamed.value("folder_id").toDouble(), day_id);
+  EXPECT_EQ(renamed.value("parent_id").toDouble(), trip_id);
+  EXPECT_EQ(renamed.value("path").toString(), QStringLiteral("/Trip/Day One"));
+  // A rename to the current name changes nothing.
+  EXPECT_EQ(session
+                .CallResult(QStringLiteral("library.folder.rename"),
+                            QJsonObject{{"folder_id", day_id}, {"name", "Day One"}})
+                .value("path")
+                .toString(),
+            QStringLiteral("/Trip/Day One"));
+
+  const QJsonObject moved = session.CallResult(
+      QStringLiteral("library.folder.move"), QJsonObject{{"folder_id", day_id}, {"parent_id", 0}});
+  EXPECT_EQ(moved.value("folder_id").toDouble(), day_id);
+  EXPECT_EQ(moved.value("parent_id").toDouble(), 0);
+  EXPECT_EQ(moved.value("path").toString(), QStringLiteral("/Day One"));
+  // A move to the current parent changes nothing.
+  EXPECT_EQ(session
+                .CallResult(QStringLiteral("library.folder.move"),
+                            QJsonObject{{"folder_id", day_id}, {"parent_id", 0}})
+                .value("path")
+                .toString(),
+            QStringLiteral("/Day One"));
+  EXPECT_EQ(FolderPaths(session), (QStringList{"/", "/Trip", "/Day One"}));
+
+  const QJsonObject deleted = session.CallResult(QStringLiteral("library.folder.delete"),
+                                                 QJsonObject{{"folder_id", trip_id}});
+  EXPECT_EQ(deleted.value("folder_id").toDouble(), trip_id);
+  EXPECT_TRUE(deleted.value("deleted").toBool());
+  EXPECT_EQ(FolderPaths(session), (QStringList{"/", "/Day One"}));
+}
+
+// #1190: each refusal of a folder edit answers -32002 with its data.error and changes nothing.
+TEST_F(AutomationLibraryCommandsTest, FolderEditRefusalsAnswerTheNamedErrorAndChangeNothing) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "folder_refusals"}})
+                   .isEmpty());
+  const auto create = [&session](double parent_id, const QString& name) {
+    return session.Call(QStringLiteral("library.folder.create"),
+                        QJsonObject{{"parent_id", parent_id}, {"name", name}});
+  };
+  const double a_id =
+      create(0, QStringLiteral("A"))->result.toObject().value("folder_id").toDouble();
+  const double inner_id =
+      create(a_id, QStringLiteral("Inner"))->result.toObject().value("folder_id").toDouble();
+  const double b_id =
+      create(0, QStringLiteral("B"))->result.toObject().value("folder_id").toDouble();
+  ASSERT_GT(a_id, 0);
+  ASSERT_GT(inner_id, 0);
+  ASSERT_GT(b_id, 0);
+  // The same name under another parent is accepted.
+  EXPECT_EQ(create(a_id, QStringLiteral("B"))->result.toObject().value("path").toString(),
+            QStringLiteral("/A/B"));
+  const auto project = session.host().project()->handler().project();
+  ASSERT_NE(project, nullptr);
+  auto [mount_root, sync] = project->GetSleeveService()->CreateMountRootFolder(L"Trip", 1);
+  ASSERT_TRUE(sync.success_) << sync.message_;
+  const double      mount_root_id = static_cast<double>(mount_root->element_id_);
+  const QStringList tree_before   = FolderPaths(session);
+
+  for (const QString& name : {QString(), QStringLiteral("   "), QStringLiteral("."),
+                              QStringLiteral(".."), QStringLiteral("x/y"), QStringLiteral("x\\y"),
+                              QStringLiteral("tab\there"), QString(QChar(0x7F))}) {
+    EXPECT_EQ(RefusalName(create(0, name)), QStringLiteral("invalid_folder_name"))
+        << name.toStdString();
+    EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.folder.rename"),
+                                       QJsonObject{{"folder_id", b_id}, {"name", name}})),
+              QStringLiteral("invalid_folder_name"))
+        << name.toStdString();
+  }
+
+  // A sibling has the name.
+  EXPECT_EQ(RefusalName(create(0, QStringLiteral("A"))), QStringLiteral("folder_name_taken"));
+  EXPECT_EQ(RefusalName(create(0, QStringLiteral(" A "))), QStringLiteral("folder_name_taken"));
+  EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.folder.rename"),
+                                     QJsonObject{{"folder_id", b_id}, {"name", "A"}})),
+            QStringLiteral("folder_name_taken"));
+  EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.folder.move"),
+                                     QJsonObject{{"folder_id", b_id}, {"parent_id", a_id}})),
+            QStringLiteral("folder_name_taken"));
+
+  // An id that no folder has.
+  for (const QJsonObject& params :
+       {QJsonObject{{"folder_id", 999999}, {"name", "X"}}, QJsonObject{{"folder_id", 999999}}}) {
+    const QString method = params.contains("name") ? QStringLiteral("library.folder.rename")
+                                                   : QStringLiteral("library.folder.delete");
+    EXPECT_EQ(RefusalName(session.Call(method, params)), QStringLiteral("unknown_folder"))
+        << method.toStdString();
+  }
+  EXPECT_EQ(RefusalName(create(999999, QStringLiteral("X"))), QStringLiteral("unknown_folder"));
+  EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.folder.move"),
+                                     QJsonObject{{"folder_id", b_id}, {"parent_id", 999999}})),
+            QStringLiteral("unknown_folder"));
+
+  // The root does not change.
+  EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.folder.rename"),
+                                     QJsonObject{{"folder_id", 0}, {"name", "Root"}})),
+            QStringLiteral("root_folder_cannot_change"));
+  EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.folder.move"),
+                                     QJsonObject{{"folder_id", 0}, {"parent_id", a_id}})),
+            QStringLiteral("root_folder_cannot_change"));
+  EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.folder.delete"),
+                                     QJsonObject{{"folder_id", 0}})),
+            QStringLiteral("root_folder_cannot_change"));
+
+  // A move into the folder itself or into a descendant.
+  for (const double parent_id : {a_id, inner_id}) {
+    EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.folder.move"),
+                                       QJsonObject{{"folder_id", a_id}, {"parent_id", parent_id}})),
+              QStringLiteral("move_into_own_subtree"))
+        << parent_id;
+  }
+
+  // The structure of a mounted folder follows its disk directory.
+  const QString mounted = QStringLiteral("mounted_folder_structure_is_read_only");
+  EXPECT_EQ(RefusalName(create(mount_root_id, QStringLiteral("New"))), mounted);
+  EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.folder.rename"),
+                                     QJsonObject{{"folder_id", mount_root_id}, {"name", "Japan"}})),
+            mounted);
+  EXPECT_EQ(
+      RefusalName(session.Call(QStringLiteral("library.folder.move"),
+                               QJsonObject{{"folder_id", b_id}, {"parent_id", mount_root_id}})),
+      mounted);
+  EXPECT_EQ(
+      RefusalName(session.Call(QStringLiteral("library.folder.move"),
+                               QJsonObject{{"folder_id", mount_root_id}, {"parent_id", a_id}})),
+      mounted);
+  EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.folder.delete"),
+                                     QJsonObject{{"folder_id", mount_root_id}})),
+            mounted);
+
+  EXPECT_EQ(FolderPaths(session), tree_before);
+}
+
+// #1190: library.link adds photos to a folder and reports the photos that it already held; an
+// import and a delete with folder_id use that folder instead of the current folder.
+TEST_F(AutomationLibraryCommandsTest, LinkImportAndDeleteWithFolderIdUseThatFolder) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "folder_membership"}})
+                   .isEmpty());
+  const double album_id = session
+                              .CallResult(QStringLiteral("library.folder.create"),
+                                          QJsonObject{{"parent_id", 0}, {"name", "Album"}})
+                              .value("folder_id")
+                              .toDouble();
+  const double other_id = session
+                              .CallResult(QStringLiteral("library.folder.create"),
+                                          QJsonObject{{"parent_id", 0}, {"name", "Other"}})
+                              .value("folder_id")
+                              .toDouble();
+  ASSERT_GT(album_id, 0);
+  ASSERT_GT(other_id, 0);
+
+  const QString disk = QDir(Folder()).filePath(QStringLiteral("disk"));
+  WriteJpeg(disk + QStringLiteral("/a.jpg"), 1);
+  WriteJpeg(disk + QStringLiteral("/b.jpg"), 2);
+  WriteJpeg(disk + QStringLiteral("/more/c.jpg"), 3);
+  ImportInto(session, {disk + QStringLiteral("/a.jpg"), disk + QStringLiteral("/b.jpg")}, album_id);
+  EXPECT_EQ(PhotoTotal(session, album_id), 2);
+  EXPECT_EQ(PhotoTotal(session, other_id), 0);
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(), 2);
+
+  // A folder import with folder_id.
+  const QString folder_task =
+      session
+          .CallResult(QStringLiteral("library.import"),
+                      QJsonObject{{"folder", disk + QStringLiteral("/more")},
+                                  {"recursive", true},
+                                  {"folder_id", other_id}})
+          .value("task_id")
+          .toString();
+  ASSERT_FALSE(folder_task.isEmpty());
+  session.CallResult(QStringLiteral("tasks.wait"),
+                     QJsonObject{{"task_id", folder_task}, {"timeout_ms", 600000}});
+  EXPECT_EQ(PhotoTotal(session, other_id), 1);
+  EXPECT_EQ(PhotoTotal(session, album_id), 2);
+  EXPECT_EQ(
+      RefusalName(session.Call(QStringLiteral("library.import"),
+                               QJsonObject{{"paths", QJsonArray{disk + QStringLiteral("/a.jpg")}},
+                                           {"folder_id", 999999}})),
+      QStringLiteral("unknown_folder"));
+
+  QJsonArray album_items =
+      session.CallResult(QStringLiteral("library.list"), QJsonObject{{"folder_id", album_id}})
+          .value("items")
+          .toArray();
+  ASSERT_EQ(album_items.size(), 2);
+  const double      first  = album_items.at(0).toObject().value("element_id").toDouble();
+  const double      second = album_items.at(1).toObject().value("element_id").toDouble();
+
+  const QJsonObject linked =
+      session.CallResult(QStringLiteral("library.link"),
+                         QJsonObject{{"element_ids", QJsonArray{first}}, {"folder_id", other_id}});
+  EXPECT_EQ(SortedIds(linked.value("linked_ids").toArray()), std::vector<double>{first});
+  EXPECT_TRUE(linked.value("already_linked_ids").toArray().isEmpty());
+  const QJsonObject again = session.CallResult(
+      QStringLiteral("library.link"),
+      QJsonObject{{"element_ids", QJsonArray{first, second}}, {"folder_id", other_id}});
+  EXPECT_EQ(SortedIds(again.value("linked_ids").toArray()), std::vector<double>{second});
+  EXPECT_EQ(SortedIds(again.value("already_linked_ids").toArray()), std::vector<double>{first});
+  EXPECT_TRUE(again.value("failed_ids").toArray().isEmpty());
+  EXPECT_EQ(PhotoTotal(session, other_id), 3);
+  // Every photo is in the root already; an unknown folder and a mounted folder refuse a link.
+  EXPECT_EQ(
+      RefusalName(session.Call(QStringLiteral("library.link"),
+                               QJsonObject{{"element_ids", QJsonArray{first}}, {"folder_id", 0}})),
+      QStringLiteral("root_folder_cannot_change"));
+  EXPECT_EQ(RefusalName(session.Call(
+                QStringLiteral("library.link"),
+                QJsonObject{{"element_ids", QJsonArray{first}}, {"folder_id", 999999}})),
+            QStringLiteral("unknown_folder"));
+  const auto project = session.host().project()->handler().project();
+  ASSERT_NE(project, nullptr);
+  auto [mount_root, sync] = project->GetSleeveService()->CreateMountRootFolder(L"Trip", 1);
+  ASSERT_TRUE(sync.success_) << sync.message_;
+  EXPECT_EQ(RefusalName(session.Call(
+                QStringLiteral("library.link"),
+                QJsonObject{{"element_ids", QJsonArray{first}},
+                            {"folder_id", static_cast<double>(mount_root->element_id_)}})),
+            QStringLiteral("mounted_folder_structure_is_read_only"));
+
+  // A delete from the album 'Album' while the root is the current folder: the photo stays in
+  // the project and in 'Other'.
+  const QJsonObject removed = session.CallResult(
+      QStringLiteral("library.delete"),
+      QJsonObject{{"element_ids", QJsonArray{first}}, {"scope", "album"}, {"folder_id", album_id}});
+  EXPECT_EQ(SortedIds(removed.value("deleted_ids").toArray()), std::vector<double>{first});
+  EXPECT_EQ(PhotoTotal(session, album_id), 1);
+  EXPECT_EQ(PhotoTotal(session, other_id), 3);
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(), 3);
+
+  const auto project_scope =
+      session.Call(QStringLiteral("library.delete"), QJsonObject{{"element_ids", QJsonArray{first}},
+                                                                 {"scope", "project"},
+                                                                 {"folder_id", album_id}});
+  ASSERT_EQ(ErrorCode(project_scope), AutomationErrorCode::InvalidParams);
+  EXPECT_EQ(project_scope->error->data.toObject().value("pointer").toString(),
+            QStringLiteral("/folder_id"));
+  EXPECT_EQ(RefusalName(session.Call(QStringLiteral("library.delete"),
+                                     QJsonObject{{"element_ids", QJsonArray{second}},
+                                                 {"scope", "album"},
+                                                 {"folder_id", 999999}})),
+            QStringLiteral("unknown_folder"));
+  EXPECT_EQ(PhotoTotal(session, album_id), 1);
 }
 
 }  // namespace

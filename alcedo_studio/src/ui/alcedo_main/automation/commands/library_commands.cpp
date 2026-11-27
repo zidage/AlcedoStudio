@@ -428,17 +428,27 @@ auto PhotoInfoItem(ImagePoolService* image_pool, const SearchResultRow& row) -> 
   return item;
 }
 
-/// Starts the import of @p paths and answers with its task id, or with the owner message when
-/// ImportExportHandler does not start it.
+/// The folder of a library.import with `folder_id`: its id and its library path.
+struct ImportTargetFolder {
+  sl_element_id_t       folder_id_ = kLibraryRootFolderId;
+  std::filesystem::path path_;
+};
+
+/// Starts the import of @p paths into @p target, or into the current folder without it, and
+/// answers with its task id, or with the owner message when ImportExportHandler does not start
+/// it. The caller checked that no import runs: the target of a running import stays as it is.
 void StartImportAndAnswer(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracker,
                           const std::vector<image_path_t>& paths, ImportCategoryMask allowed,
-                          AutomationReply& reply) {
+                          const std::optional<ImportTargetFolder>& target, AutomationReply& reply) {
   if (paths.empty()) {
     // An import of zero supported files finishes with counts, not with an error.
     reply.SendResult(QJsonObject{{"task_id", tracker->RecordEmptyImport()}});
     return;
   }
-  host->import_export()->StartImportPaths(paths, false, allowed);
+  if (target.has_value()) {
+    host->import_export()->SetImportTarget(target->folder_id_, target->path_);
+  }
+  host->import_export()->StartImportPaths(paths, target.has_value(), allowed);
   if (!host->import_export()->ImportRunning()) {
     SendAutomationOwnerError(reply, AutomationErrorCode::Rejected, host->project()->TaskStatus());
     return;
@@ -447,7 +457,8 @@ void StartImportAndAnswer(ui::ApplicationModuleHost* host, AutomationTaskTracker
 }
 
 void ImportFolder(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracker,
-                  const QString& folder, bool recursive, AutomationReply reply) {
+                  const QString& folder, bool recursive,
+                  const std::optional<ImportTargetFolder>& target, AutomationReply reply) {
   if (!recursive) {
     std::vector<image_path_t> paths;
     const QFileInfoList       entries =
@@ -458,14 +469,15 @@ void ImportFolder(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracke
         paths.push_back(path);
       }
     }
-    StartImportAndAnswer(host, tracker, paths, kAllImportCategories, reply);
+    StartImportAndAnswer(host, tracker, paths, kAllImportCategories, target, reply);
     return;
   }
   // The recursive folder import of the GUI: the folder scan model, then StartFolderImport.
   ui::FolderImportScanModel* scan = host->import_export()->FolderScan();
   auto*                      wait = new AutomationCommandWait(std::move(reply), host);
   QObject::connect(
-      scan, &ui::FolderImportScanModel::ScanStateChanged, wait, [host, tracker, scan, wait]() {
+      scan, &ui::FolderImportScanModel::ScanStateChanged, wait,
+      [host, tracker, scan, wait, target]() {
         if (scan->Scanning()) {
           return;
         }
@@ -480,7 +492,21 @@ void ImportFolder(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracke
           wait->SendResult(QJsonObject{{"task_id", tracker->RecordEmptyImport()}});
           return;
         }
-        host->import_export()->StartFolderImport();
+        if (host->import_export()->ImportRunning()) {
+          // An import that started during the scan keeps its target.
+          (void)scan->TakeFilePaths();
+          wait->SendOwnerError(AutomationErrorCode::Busy,
+                               QStringLiteral("An import is already running."));
+          return;
+        }
+        if (target.has_value()) {
+          host->import_export()->SetImportTarget(target->folder_id_, target->path_);
+          host->import_export()->StartImportPaths(
+              scan->TakeFilePaths(), true,
+              static_cast<ImportCategoryMask>(scan->AllowedCategories()));
+        } else {
+          host->import_export()->StartFolderImport();
+        }
         if (!host->import_export()->ImportRunning()) {
           wait->SendOwnerError(AutomationErrorCode::Rejected, host->project()->TaskStatus());
           return;
@@ -786,10 +812,12 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   import_files.method      = QStringLiteral("library.import");
   import_files.description = QStringLiteral(
       "Imports the files 'paths', or the supported files of 'folder' (with its subfolders when "
-      "'recursive', the default), into the current folder of the open project. Returns a task "
-      "id for tasks.wait as soon as the import starts. A mounted current folder answers -32002 "
-      "(rejected) with data.error 'mounted_folder_structure_is_read_only': a mounted folder "
-      "takes its files from its disk directory.");
+      "'recursive', the default), into the folder 'folder_id' of the open project, or into the "
+      "current folder without it. Returns a task id for tasks.wait as soon as the import "
+      "starts. A mounted target folder answers -32002 (rejected) with data.error "
+      "'mounted_folder_structure_is_read_only': a mounted folder takes its files from its disk "
+      "directory. A 'folder_id' that no folder has answers -32002 with data.error "
+      "'unknown_folder'.");
   import_files.changes_state = true;
   import_files.params_schema = AutomationClosedParamsSchema(QJsonObject{
       {"paths", QJsonObject{{"type", "array"},
@@ -799,7 +827,11 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
       {"folder", QJsonObject{{"type", "string"}, {"description", "A folder to import."}}},
       {"recursive", QJsonObject{{"type", "boolean"},
                                 {"default", true},
-                                {"description", "Include the subfolders of 'folder'."}}}});
+                                {"description", "Include the subfolders of 'folder'."}}},
+      {"folder_id",
+       AutomationElementIdSchema(
+           0, QStringLiteral("The library folder of the photos, from library.folders; the "
+                             "current folder by default."))}});
   import_files.result_schema = AutomationObjectSchema(
       QJsonObject{{"task_id", QJsonObject{{"type", "string"}}}}, QJsonArray{"task_id"});
   import_files.handler = [host, tracker](const QJsonObject& params, AutomationReply reply) {
@@ -833,9 +865,19 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     if (!project) {
       return;
     }
+    std::optional<ImportTargetFolder> target;
+    if (params.contains("folder_id")) {
+      const auto location =
+          AutomationFolderOfParam(*project, params, QStringLiteral("folder_id"), reply);
+      if (!location.has_value()) {
+        return;
+      }
+      target = ImportTargetFolder{.folder_id_ = *AutomationElementIdOf(params.value("folder_id")),
+                                  .path_      = location->path_};
+    }
     try {
       project->GetSleeveService()->CheckFolderStructureEditable(
-          host->folders()->CurrentFolderFsPath());
+          target.has_value() ? target->path_ : host->folders()->CurrentFolderFsPath());
     } catch (const SleeveOperationError& refusal) {
       const QString message = QString::fromUtf8(refusal.what());
       reply.SendError(
@@ -850,10 +892,11 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     }
     if (has_paths) {
       // The caller named these files, so every importable category is allowed.
-      StartImportAndAnswer(host, tracker, paths, kAllImportCategories, reply);
+      StartImportAndAnswer(host, tracker, paths, kAllImportCategories, target, reply);
       return;
     }
-    ImportFolder(host, tracker, folder, params.value("recursive").toBool(true), std::move(reply));
+    ImportFolder(host, tracker, folder, params.value("recursive").toBool(true), target,
+                 std::move(reply));
   };
   RegisterOrFail(registry, std::move(import_files), &ok, error);
 
@@ -1479,7 +1522,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   remove.method      = QStringLiteral("library.delete");
   remove.description = QStringLiteral(
       "Deletes 'element_ids'. With scope 'project' the photos leave the project; this needs the "
-      "root folder as the current folder. With scope 'album' they leave the current album. "
+      "root folder as the current folder. With scope 'album' they leave the album 'folder_id', "
+      "or the current album without it; a 'folder_id' that no folder has answers -32002 with "
+      "data.error 'unknown_folder'. "
       "A photo that a task holds (a mark, rating, or paste adjustments batch that is saving) "
       "and a mounted photo in a delete from the project stay; 'skipped_ids' lists them, and the "
       "other photos are deleted. Answers -32002 (rejected) when a task holds every photo or "
@@ -1492,7 +1537,11 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   remove.params_schema = AutomationClosedParamsSchema(
       QJsonObject{
           {"element_ids", ElementIdsParam()},
-          {"scope", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"project", "album"}}}}},
+          {"scope", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"project", "album"}}}},
+          {"folder_id",
+           AutomationElementIdSchema(
+               1, QStringLiteral("Scope 'album' only: the album, from library.folders; the "
+                                 "current album by default."))}},
       QJsonArray{"element_ids", "scope"});
   remove.result_schema =
       AutomationObjectSchema(QJsonObject{{"deleted_ids", QJsonObject{{"type", "array"}}},
@@ -1510,7 +1559,19 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     }
     ui::LibraryMutationOperations* mutations = host->library_mutations();
     const QString                  scope     = params.value("scope").toString();
-    if (scope != mutations->DeleteScope()) {
+    std::optional<sl_element_id_t> album_id;
+    if (params.contains("folder_id")) {
+      if (scope != QStringLiteral("album")) {
+        SendAutomationParamError(reply, QStringLiteral("/folder_id"),
+                                 QStringLiteral("'folder_id' needs the scope 'album'"));
+        return;
+      }
+      if (!AutomationFolderOfParam(*project, params, QStringLiteral("folder_id"), reply)
+               .has_value()) {
+        return;
+      }
+      album_id = AutomationElementIdOf(params.value("folder_id"));
+    } else if (scope != mutations->DeleteScope()) {
       SendAutomationOwnerError(
           reply, AutomationErrorCode::Rejected,
           QStringLiteral("The current folder gives the delete scope '%1', not '%2'.")
@@ -1526,7 +1587,10 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                                    QObject::disconnect(*finished);
                                    AnswerDelete(wait, result);
                                  });
-    const QVariantMap started = mutations->StartDeleteTargets(TargetEntries(*rows));
+    const QVariantMap started =
+        album_id.has_value()
+            ? mutations->StartDeleteTargetsInFolder(TargetEntries(*rows), *album_id)
+            : mutations->StartDeleteTargets(TargetEntries(*rows));
     if (!started.value(QStringLiteral("started")).toBool()) {
       QObject::disconnect(*finished);
       // A task that holds the photos (a mark, rating, or paste adjustments batch, another
@@ -1541,6 +1605,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   RegisterOrFail(registry, std::move(remove), &ok, error);
 
   if (ok && !RegisterAutomationMountCommands(registry, host, error)) {
+    ok = false;
+  }
+  if (ok && !RegisterAutomationFolderCommands(registry, host, error)) {
     ok = false;
   }
   return ok;
