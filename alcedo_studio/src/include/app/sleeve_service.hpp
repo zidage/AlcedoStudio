@@ -63,6 +63,10 @@ class SleeveServiceImpl final : public SleeveService {
   mutable std::mutex fs_lock_;  // Use a fat lock for now, but I have no plan to design a
                                 // fine-grained concurrency model for FS
 
+  /// The sync itself. The caller holds `fs_lock_`: it reads the dirty list of the node cache and
+  /// moves the written elements to the clean list.
+  auto SyncLocked() -> SyncResult;
+
  public:
   SleeveServiceImpl() = delete;
   SleeveServiceImpl(std::shared_ptr<Storage> storage_service,
@@ -95,12 +99,12 @@ class SleeveServiceImpl final : public SleeveService {
 
     if constexpr (std::is_void_v<TResult>) {
       operation(*fs_);
-      SyncResult sync_result = Sync();  // void: only return SyncResult
+      SyncResult sync_result = SyncLocked();  // void: only return SyncResult
       fs_->EvictToLimit();
       return sync_result;
     } else {
       TResult    result      = operation(*fs_);
-      SyncResult sync_result = Sync();
+      SyncResult sync_result = SyncLocked();
       fs_->EvictToLimit();
       return {result, sync_result};
     }
@@ -122,6 +126,8 @@ class SleeveServiceImpl final : public SleeveService {
   }
 
 
+  /// Writes the changed elements to the database in one `fs_lock_` scope. A caller on any
+  /// thread can call it; a caller that holds `fs_lock_` uses SyncLocked.
   auto Sync() -> SyncResult override;
 
   /**

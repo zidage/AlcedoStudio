@@ -153,6 +153,14 @@ SleeveServiceImpl::SleeveServiceImpl(std::shared_ptr<Storage> storage_service,
 }
 
 auto SleeveServiceImpl::Sync() -> SyncResult {
+  std::lock_guard<std::mutex> lock(fs_lock_);
+  SyncResult                  result = SyncLocked();
+  // The end of this fs_lock_ scope, as in Read and Write (SN7).
+  fs_->EvictToLimit();
+  return result;
+}
+
+auto SleeveServiceImpl::SyncLocked() -> SyncResult {
   SyncResult result{true, 0, ""};
   try {
     // The dirty list holds each changed element once with its current flag, so the three
@@ -364,7 +372,7 @@ auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,
 
   RequireEditableFolder(*fs_, folder_id);
   auto       duplicated  = fs_->DuplicateFileToFolder(file_id, folder_id);
-  SyncResult sync_result = Sync();
+  SyncResult sync_result = SyncLocked();
   if (duplicated && sync_result.success_) {
     try {
       ClonePipelineForDuplicate(*storage_, file_id, duplicated->element_id_);

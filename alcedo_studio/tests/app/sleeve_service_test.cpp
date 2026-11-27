@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <ctime>
 #include <filesystem>
 #include <map>
@@ -18,6 +19,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -1529,6 +1531,57 @@ TEST_F(SleeveServiceTests, EvictedFileReloadsItsStoredFieldsAndHeldFileKeepsItsI
                 [folder_id](FileSystem& fs) { return fs.ListFileIds(folder_id); }),
             ids);
   EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().DirtyCount(); }), 0u);
+}
+
+// Issue #1177: Sync takes fs_lock_, so a caller on another thread (the import finalize thread)
+// does not change the lists of the node cache during a Read or a Write_NoSync. With a small
+// limit each Read moves and evicts clean files while the other thread syncs. A build with
+// ThreadSanitizer reports a race here when Sync runs without the lock.
+TEST_F(SleeveServiceTests, SyncOnASecondThreadKeepsTheNodeCacheWhole) {
+  constexpr int  kRounds = 200;
+  ProjectService project(db_path_, meta_path_);
+  auto           service = project.GetSleeveService();
+  service->Read<void>([](FileSystem& fs) { fs.SetCleanFileLimit(4); });
+  const auto [folder, created] = service->CreateFolder(L"/", L"Trip");
+  ASSERT_TRUE(created.success_) << created.message_;
+  const auto folder_id = folder->element_id_;
+
+  std::atomic<bool> done{false};
+  std::atomic<bool> sync_failed{false};
+  std::thread       sync_thread([&service, &done, &sync_failed] {
+    while (!done.load()) {
+      if (!service->Sync().success_) {
+        sync_failed.store(true);
+      }
+    }
+  });
+
+  std::vector<sl_element_id_t> ids;
+  for (int i = 0; i < kRounds; ++i) {
+    ids.push_back(service->Write_NoSync<sl_element_id_t>([folder_id, i](FileSystem& fs) {
+      const auto file = fs.CreateFileInLibrary(L"IMG_" + std::to_wstring(i) + L".ARW");
+      fs.LinkFileToFolder(file->element_id_, folder_id);
+      return file->element_id_;
+    }));
+    service->Read<void>([&ids](FileSystem& fs) {
+      for (const auto id : ids) {
+        (void)fs.Get(id);
+      }
+    });
+  }
+  done.store(true);
+  sync_thread.join();
+  ASSERT_FALSE(sync_failed.load());
+
+  const auto last_sync = service->Sync();
+  ASSERT_TRUE(last_sync.success_) << last_sync.message_;
+  const auto [dirty, clean_files] = service->Read<std::pair<std::size_t, std::size_t>>(
+      [](FileSystem& fs) { return std::pair{fs.Nodes().DirtyCount(), fs.Nodes().CleanFileCount()}; });
+  EXPECT_EQ(dirty, 0u);
+  EXPECT_LE(clean_files, 4u) << "Sync ends with the eviction";
+  EXPECT_EQ(service->Read<std::vector<sl_element_id_t>>(
+                [folder_id](FileSystem& fs) { return fs.ListFileIds(folder_id); }),
+            ids);
 }
 
 TEST_F(SleeveServiceTests, FailedSyncLeavesDatabaseUnchangedAndRetrySucceeds) {
