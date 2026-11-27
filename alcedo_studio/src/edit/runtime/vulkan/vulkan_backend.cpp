@@ -801,6 +801,11 @@ void VulkanBackend::Wait(CommandContext& command_context) {
   }
 }
 
+void VulkanBackend::SynchronizeRecordedWork(CommandContext& command_context) {
+  SubmitRecording(command_context);
+  WaitBatches(command_context);
+}
+
 void VulkanBackend::ResetCounters() {
   malloc_count_         = 0;
   free_count_           = 0;

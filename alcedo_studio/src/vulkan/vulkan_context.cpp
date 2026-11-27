@@ -14,6 +14,13 @@
 #include <utility>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
+
+#include <filesystem>
+#endif
+
 #include "utils/logging/log.hpp"
 #include "vulkan/vulkan_device_selection.hpp"
 #include "vulkan/vulkan_requirements.hpp"
@@ -23,6 +30,69 @@ namespace alcedo::vulkan {
 namespace {
 
 constexpr const char* kValidationLayerName = "VK_LAYER_KHRONOS_validation";
+
+#if defined(__APPLE__)
+/// The Vulkan loader files that macOS can have outside the dlopen search path: the loader of an
+/// application bundle (Contents/Frameworks) and the Homebrew loader (Apple silicon, then Intel).
+/// dlopen of a bare file name searches neither folder, so volkInitialize does not find them.
+auto MacVulkanLoaderCandidates() -> std::vector<std::filesystem::path> {
+  std::vector<std::filesystem::path> candidates;
+  uint32_t                           size = 0;
+  _NSGetExecutablePath(nullptr, &size);
+  std::string executable(size, '\0');
+  if (size > 0 && _NSGetExecutablePath(executable.data(), &size) == 0) {
+    executable.resize(std::char_traits<char>::length(executable.c_str()));
+    candidates.push_back(std::filesystem::path(executable).parent_path() / ".." / "Frameworks" /
+                         "libvulkan.1.dylib");
+  }
+  candidates.emplace_back("/opt/homebrew/lib/libvulkan.1.dylib");
+  candidates.emplace_back("/usr/local/lib/libvulkan.1.dylib");
+  return candidates;
+}
+#endif
+
+/// Loads the Vulkan loader into volk. Throws with the names that were tried when no loader loads.
+void InitializeVulkanLoader() {
+  const VkResult result = volkInitialize();
+  if (result == VK_SUCCESS) {
+    return;
+  }
+#if defined(__APPLE__)
+  std::string tried = "the dlopen search path";
+  for (const auto& candidate : MacVulkanLoaderCandidates()) {
+    tried += ", " + candidate.string();
+    // The library stays loaded for the lifetime of the process, as the loader that volkInitialize
+    // loads does until volkFinalize.
+    void* library = dlopen(candidate.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (library == nullptr) {
+      continue;
+    }
+    auto* get_instance_proc_addr =
+        reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(library, "vkGetInstanceProcAddr"));
+    if (get_instance_proc_addr == nullptr) {
+      dlclose(library);
+      continue;
+    }
+    volkInitializeCustom(get_instance_proc_addr);
+    return;
+  }
+  throw std::runtime_error("Vulkan: no Vulkan loader was found (tried " + tried + ").");
+#else
+  ThrowIfVulkanError(result, "volkInitialize (load the Vulkan loader)");
+#endif
+}
+
+auto IsInstanceExtensionAvailable(const char* extension_name) -> bool {
+  uint32_t count = 0;
+  vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+  std::vector<VkExtensionProperties> extensions(count);
+  vkEnumerateInstanceExtensionProperties(nullptr, &count, extensions.data());
+  extensions.resize(count);
+  return std::any_of(extensions.begin(), extensions.end(),
+                     [extension_name](const VkExtensionProperties& extension) {
+                       return std::string_view(extension.extensionName) == extension_name;
+                     });
+}
 
 std::atomic<uint64_t> g_validation_error_count{0};
 
@@ -180,7 +250,7 @@ auto VulkanContext::ValidationErrorCount() -> uint64_t {
 VulkanContext::~VulkanContext() { Release(); }
 
 void VulkanContext::CreateInstance(const VulkanInitializationOptions& options) {
-  ThrowIfVulkanError(volkInitialize(), "volkInitialize (load the Vulkan loader)");
+  InitializeVulkanLoader();
   loader_initialized_           = true;
 
   const uint32_t loader_version = volkGetInstanceVersion();
@@ -216,6 +286,34 @@ void VulkanContext::CreateInstance(const VulkanInitializationOptions& options) {
     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     create_info.pNext = &messenger_info;
   }
+  // A loader with portability drivers (MoltenVK on macOS) lists them only for an instance that
+  // enables the portability enumeration.
+  if (IsInstanceExtensionAvailable(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    create_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+  }
+#if defined(__APPLE__)
+  // MoltenVK compiles each kernel with the Metal fast math option by default. The kernels need the
+  // float rules of the OpenCL programs (decision B9): with fast math the RCD result of a Bayer RAW
+  // differed from the strict result by up to 0.47, and without it the result was equal to strict
+  // Metal bit for bit (phase VK6 record). 0 is MVK_CONFIG_FAST_MATH_NEVER.
+  const uint32_t    fast_math_never = 0;
+  VkLayerSettingEXT fast_math{};
+  fast_math.pLayerName   = "MoltenVK";
+  fast_math.pSettingName = "MVK_CONFIG_FAST_MATH_ENABLED";
+  fast_math.type         = VK_LAYER_SETTING_TYPE_UINT32_EXT;
+  fast_math.valueCount   = 1;
+  fast_math.pValues      = &fast_math_never;
+  VkLayerSettingsCreateInfoEXT layer_settings{};
+  layer_settings.sType        = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
+  layer_settings.settingCount = 1;
+  layer_settings.pSettings    = &fast_math;
+  if (IsInstanceExtensionAvailable(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME)) {
+    extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+    layer_settings.pNext = create_info.pNext;
+    create_info.pNext    = &layer_settings;
+  }
+#endif
   create_info.enabledLayerCount       = static_cast<uint32_t>(layers.size());
   create_info.ppEnabledLayerNames     = layers.data();
   create_info.enabledExtensionCount   = static_cast<uint32_t>(extensions.size());
@@ -263,6 +361,13 @@ void VulkanContext::CreatePipelineDevice() {
   const bool enable_memory_priority = capabilities_.features.memory_priority;
   if (enable_memory_priority) {
     pipeline_device_extensions_.emplace_back(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
+  }
+  // The specification requires the portability subset to be enabled on a device that lists it
+  // (MoltenVK).
+  // (MoltenVK). The name macro is in the beta extension header, so the name is written here.
+  constexpr const char* kPortabilitySubsetExtensionName = "VK_KHR_portability_subset";
+  if (capabilities_.HasExtension(kPortabilitySubsetExtensionName)) {
+    pipeline_device_extensions_.emplace_back(kPortabilitySubsetExtensionName);
   }
   std::sort(pipeline_device_extensions_.begin(), pipeline_device_extensions_.end());
   std::vector<const char*> extension_names;

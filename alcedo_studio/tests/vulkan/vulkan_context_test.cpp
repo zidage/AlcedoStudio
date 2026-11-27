@@ -15,6 +15,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -44,7 +45,21 @@ auto ListLocalDevices() -> std::vector<LocalDevice> {
   VkInstanceCreateInfo create_info{};
   create_info.sType            = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   create_info.pApplicationInfo = &application;
-  VkInstance instance          = VK_NULL_HANDLE;
+  // A portability driver (MoltenVK) is listed only with the portability enumeration, as in
+  // VulkanContext.
+  uint32_t extension_count     = 0;
+  vkEnumerateInstanceExtensionProperties(nullptr, &extension_count, nullptr);
+  std::vector<VkExtensionProperties> instance_extensions(extension_count);
+  vkEnumerateInstanceExtensionProperties(nullptr, &extension_count, instance_extensions.data());
+  const char* portability_enumeration = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+  for (uint32_t index = 0; index < extension_count; ++index) {
+    if (std::string_view(instance_extensions[index].extensionName) == portability_enumeration) {
+      create_info.enabledExtensionCount   = 1;
+      create_info.ppEnabledExtensionNames = &portability_enumeration;
+      create_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
+  }
+  VkInstance instance = VK_NULL_HANDLE;
   if (vkCreateInstance(&create_info, nullptr, &instance) != VK_SUCCESS) {
     volkFinalize();
     return {};
