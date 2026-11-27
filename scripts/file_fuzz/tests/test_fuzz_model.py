@@ -352,6 +352,16 @@ class ScanPredictionTest(unittest.TestCase):
         self.assertEqual(self.photo_at("a.jpg").state, "present")
         self.assertEqual(self.model.mounts["m1"].state, "offline")
 
+    def test_listed_file_without_image_content_is_not_imported_at_each_scan(self):
+        self.write("a.jpg")
+        self.mount()
+        (self.root / "text.jpg").write_bytes(b"plain text, not an image")
+        for _ in range(2):
+            prediction = self.model.predict_scan("m1")
+            self.assertEqual((prediction.new, prediction.not_imported), (0, 1))
+            prediction.apply()
+        self.assertEqual(len(self.model.photos), 1)
+
     def test_batch_limits_import_every_new_file(self):
         self.mount()
         for index in range(501):
