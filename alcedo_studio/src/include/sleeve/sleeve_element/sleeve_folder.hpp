@@ -28,13 +28,38 @@ namespace alcedo {
  * name is a label with no uniqueness rule.
  */
 class SleeveFolder : public SleeveElement {
+ private:
+  /**
+   * @brief The child folders of one folder: by name, in the order of their entries, and as an id
+   *        set. Only the functions of this class change the three members, so they hold the same
+   *        folders.
+   */
+  class ChildFolders {
+   public:
+    /// Adds @p id under @p name. @pre No child folder holds @p name or @p id.
+    void Insert(const file_name_t& name, sl_element_id_t id);
+    /// Removes the child folder named @p name and returns its id. @pre A child folder holds it.
+    auto Erase(const file_name_t& name) -> sl_element_id_t;
+    /// Puts @p new_id under @p name in place of @p old_id, at the same entry position.
+    void Replace(const file_name_t& name, sl_element_id_t old_id, sl_element_id_t new_id);
+    void Clear();
+
+    auto IdByName(const file_name_t& name) const -> std::optional<sl_element_id_t>;
+    auto ContainsName(const file_name_t& name) const -> bool { return by_name_.contains(name); }
+    auto ContainsId(sl_element_id_t id) const -> bool { return ids_.contains(id); }
+    auto InEntryOrder() const -> const std::vector<sl_element_id_t>& { return in_entry_order_; }
+
+   private:
+    std::unordered_map<file_name_t, sl_element_id_t> by_name_;
+    std::vector<sl_element_id_t>                     in_entry_order_;
+    std::unordered_set<sl_element_id_t>              ids_;
+  };
+
+  ChildFolders child_folders_;
+
  protected:
-  /// The child folders by name.
-  std::unordered_map<file_name_t, sl_element_id_t>              contents_;
-  /// The default index holds the child folder ids in the order of their entries. Other filter
-  /// ids hold the file ids of a filter result (ApplyFilterToFolder).
+  /// The file ids of each filter result (ApplyFilterToFolder), by filter id.
   std::unordered_map<filter_id_t, std::vector<sl_element_id_t>> indicies_cache_;
-  filter_id_t                                                   default_filter_ = 0;
 
   uint32_t                                                      file_count_;
   uint32_t                                                      folder_count_;
