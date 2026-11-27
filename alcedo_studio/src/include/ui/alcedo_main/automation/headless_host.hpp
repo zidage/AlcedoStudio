@@ -9,6 +9,7 @@
 #include <optional>
 
 #include "edit/pipeline/pipeline_accelerator.hpp"
+#include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 
 namespace alcedo::automation {
@@ -48,6 +49,10 @@ struct HeadlessHostOptions {
   QString                                  settings_dir;
   /// `--log-file <path>`: the application log file.
   QString                                  log_file;
+  /// `--mount-watcher on|off`, a test entry point of the file management fuzz (#1191). With
+  /// `off` a change notification of a mount directory starts no scan; the scans of the project
+  /// open, `library.sync`, and the volume events stay (MountWatcherMode).
+  ui::MountWatcherMode                     mount_watcher = ui::MountWatcherMode::kOn;
 };
 
 /// The pipeline accelerator preference that matches @p backend.

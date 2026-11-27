@@ -2,13 +2,17 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Headless session tests. The first test drives the real alcedo-cli and alcedo_main --headless
-// processes. The second test runs ApplicationModuleHost with the headless sink in this process
-// and opens a CI RAW file through the editor session.
+// Headless session tests. The first two tests drive the real alcedo-cli and alcedo_main
+// --headless processes. The last test runs ApplicationModuleHost with the headless sink in this
+// process and opens a CI RAW file through the editor session.
 
+#include <OpenImageIO/imageio.h>
 #include <gtest/gtest.h>
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
@@ -16,6 +20,7 @@
 #include <QTemporaryDir>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -24,6 +29,7 @@
 #include "app/editor_session_types.hpp"
 #include "automation/automation_session_file.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/alcedo_main/automation/headless_frame_sink.hpp"
 #include "ui/alcedo_main/automation/headless_host.hpp"
 
@@ -127,6 +133,81 @@ TEST_F(AutomationHeadlessSessionTest, StartPingStopRemovesSessionFile) {
   EXPECT_EQ(reopened.json.value("project").toObject().value("loaded"), QJsonValue(true));
   EXPECT_EQ(RunCli(session_options + QStringList{"session", "stop"}).exit_code, 0);
   EXPECT_FALSE(QFile::exists(session_file));
+}
+
+/// Encode a 24x16 JPEG whose pixels depend on @p seed at @p path.
+void WriteJpeg(const QString& path, int seed) {
+  ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+  constexpr int             kWidth = 24, kHeight = 16, kChannels = 3;
+  std::vector<std::uint8_t> pixels(kWidth * kHeight * kChannels);
+  for (std::size_t index = 0; index < pixels.size(); ++index) {
+    pixels[index] = static_cast<std::uint8_t>(index * 7 + seed * 31);
+  }
+  const std::string file   = path.toStdString();
+  auto              output = OIIO::ImageOutput::create(file);
+  ASSERT_TRUE(output);
+  const OIIO::ImageSpec spec(kWidth, kHeight, kChannels, OIIO::TypeDesc::UINT8);
+  ASSERT_TRUE(output->open(file, spec));
+  ASSERT_TRUE(output->write_image(OIIO::TypeDesc::UINT8, pixels.data()));
+  ASSERT_TRUE(output->close());
+}
+
+auto CompactJson(const QJsonObject& object) -> QString {
+  return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+}
+
+// #1191: with `--mount-watcher off` a file added to a mounted directory changes nothing until
+// library.sync, so the file management fuzz knows the counts of each sync. The wait passes the
+// watcher delay, after which the watcher would start a scan.
+TEST_F(AutomationHeadlessSessionTest, MountWatcherOffLeavesAnAddedFileUntilLibrarySync) {
+  QTemporaryDir dir;
+  ASSERT_TRUE(dir.isValid());
+  const QStringList session_options{"--session-dir", dir.filePath(QStringLiteral("sessions")),
+                                    "--session", "watcher_off", "--json"};
+  const QStringList start_options{"session", "start", "--headless", "--create",
+                                  dir.path() + ",watcher_off", "--mount-watcher", "off",
+                                  "--settings-dir", dir.filePath(QStringLiteral("settings")),
+                                  "--log-file", dir.filePath(QStringLiteral("host.log")),
+                                  "--host-binary", QStringLiteral(ALCEDO_MAIN_PATH)};
+  const CliRun      start = RunCli(session_options + start_options);
+  ASSERT_EQ(start.exit_code, 0) << start.stderr_text.toStdString();
+
+  const QString trip = dir.filePath(QStringLiteral("disk/Trip"));
+  WriteJpeg(trip + QStringLiteral("/a.jpg"), 1);
+  ASSERT_FALSE(HasFatalFailure());
+  const CliRun mounted = RunCli(session_options + QStringList{"call", "library.mount",
+                                                              CompactJson({{"path", trip}})});
+  ASSERT_EQ(mounted.exit_code, 0) << mounted.stderr_text.toStdString();
+  EXPECT_EQ(mounted.json.value("scan").toObject().value("new").toInt(), 1);
+
+  const auto present_count = [&session_options] {
+    const CliRun mounts = RunCli(session_options + QStringList{"call", "library.mounts"});
+    EXPECT_EQ(mounts.exit_code, 0) << mounts.stderr_text.toStdString();
+    return mounts.json.value("mounts").toArray().at(0).toObject().value("present_count").toInt();
+  };
+  const auto library_total = [&session_options] {
+    const CliRun list = RunCli(session_options + QStringList{"call", "library.list"});
+    EXPECT_EQ(list.exit_code, 0) << list.stderr_text.toStdString();
+    return list.json.value("total").toInt();
+  };
+  ASSERT_EQ(present_count(), 1);
+
+  WriteJpeg(trip + QStringLiteral("/b.jpg"), 2);
+  ASSERT_FALSE(HasFatalFailure());
+  // The session runs in another process, so a blocking wait is correct here.
+  std::this_thread::sleep_for(ui::kMountScanWatcherDelay + std::chrono::seconds(3));
+  EXPECT_EQ(present_count(), 1) << "a change notification started a scan";
+  EXPECT_EQ(library_total(), 1);
+
+  const CliRun synced = RunCli(session_options + QStringList{"call", "library.sync"});
+  ASSERT_EQ(synced.exit_code, 0) << synced.stderr_text.toStdString();
+  const QJsonArray scans = synced.json.value("scans").toArray();
+  ASSERT_EQ(scans.size(), 1);
+  EXPECT_EQ(scans.at(0).toObject().value("new").toInt(), 1);
+  EXPECT_EQ(present_count(), 2);
+  EXPECT_EQ(library_total(), 2);
+
+  EXPECT_EQ(RunCli(session_options + QStringList{"session", "stop"}).exit_code, 0);
 }
 
 auto CollectCiRawFiles() -> std::vector<std::filesystem::path> {

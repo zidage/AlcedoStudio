@@ -247,6 +247,7 @@ MountScanCoordinator::MountScanCoordinator(MountScanCoordinatorDependencies depe
       tasks_(dependencies.tasks),
       clock_(std::move(dependencies.clock)),
       watcher_(std::move(dependencies.watcher)),
+      watcher_mode_(dependencies.watcher_mode),
       watcher_delay_(dependencies.watcher_delay),
       activation_interval_(dependencies.activation_interval),
       volume_arrival_delay_(dependencies.volume_arrival_delay),
@@ -640,7 +641,7 @@ auto MountScanCoordinator::SynchronizeTaskId(mount_id_t mount_id) const -> QStri
 }
 
 void MountScanCoordinator::HandleDirectoryChanged(mount_id_t mount_id) {
-  if (!port_ || !mounts_.contains(mount_id)) {
+  if (watcher_mode_ == MountWatcherMode::kOff || !port_ || !mounts_.contains(mount_id)) {
     return;
   }
   // Each notification restarts the delay; the scan starts after the last one.

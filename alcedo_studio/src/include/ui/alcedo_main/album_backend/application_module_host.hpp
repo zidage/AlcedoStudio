@@ -164,8 +164,11 @@ class ApplicationModuleHost final : public QObject {
     std::function<alcedo::PresetLibraryServiceOptions()>  preset_library_options;
   };
 
+  /// @param mount_watcher The mode of the mount directory watcher (MountWatcherMode). Only the
+  ///        headless host passes kOff (`--mount-watcher off`).
   explicit ApplicationModuleHost(QObject* parent = nullptr, LifecycleObserver observer = {},
-                                 PackageServiceFactories package_services = {});
+                                 PackageServiceFactories package_services = {},
+                                 MountWatcherMode        mount_watcher    = MountWatcherMode::kOn);
   ~ApplicationModuleHost() override;
 
   // Typed accessors (C++ / tests).

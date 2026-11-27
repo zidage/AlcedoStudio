@@ -118,7 +118,7 @@ auto RunHostSession(QCoreApplication& app, const HeadlessHostOptions& options,
                     editor_rhi::EditorBackend backend, const QString& session_dir) -> int {
   // The sink outlives the host, whose shutdown waits for the in-flight frame.
   HeadlessFrameSink         frame_sink;
-  ui::ApplicationModuleHost host;
+  ui::ApplicationModuleHost host(nullptr, {}, {}, options.mount_watcher);
   host.project()->SetRuntimeAcceleratorPreference(HeadlessAcceleratorPreference(backend));
 
   if (!host.editor_session()->BindHeadlessPresentationSink(&frame_sink, options.viewport_width,
@@ -260,6 +260,17 @@ auto ParseHeadlessHostOptions(const QStringList& arguments, HeadlessHostOptions*
       options->editor_backend = ParseBackendToken(value);
       if (!options->editor_backend.has_value()) {
         *error = QStringLiteral("--editor-backend must be cuda, opencl, or metal");
+        return false;
+      }
+    } else if (argument == QLatin1String("--mount-watcher")) {
+      QString value;
+      if (!take_value(&value)) return false;
+      if (value == QLatin1String("on")) {
+        options->mount_watcher = ui::MountWatcherMode::kOn;
+      } else if (value == QLatin1String("off")) {
+        options->mount_watcher = ui::MountWatcherMode::kOff;
+      } else {
+        *error = QStringLiteral("--mount-watcher must be on or off");
         return false;
       }
     } else if (argument == QLatin1String("--viewport")) {
