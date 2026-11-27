@@ -25,15 +25,19 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 
 #if defined(HAVE_OPENCL)
 #include "../../vulkan/vulkan_opencl_comparison.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
+#include "edit/runtime/opencl/opencl_primary_grade_pass.hpp"
 #elif defined(HAVE_METAL)
 #include "edit/runtime/metal/metal_backend.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 #else
 #error "The Vulkan pass tests need OpenCL or Metal as their reference backend."
 #endif
@@ -66,6 +70,15 @@ inline void ExecuteReferenceDisplayToAp1(ReferenceRenderDevice& device, const Ex
   ExecuteOpenClDisplayToAp1(device, plan, input, document);
 }
 
+/// Every Color Grade of @p plan; the scene location of the last Grade output.
+inline auto ExecuteReferencePrimaryGrade(ReferenceRenderDevice& device, const ExecutionPlan& plan,
+                                         const PreparedRawInput&    input,
+                                         const PipelineDocument&    document,
+                                         CurveInputHistogramRecord* histogram = nullptr)
+    -> FrameSceneBinding {
+  return ExecuteOpenClPrimaryGrade(device, plan, input, document, histogram).output_binding;
+}
+
 /// OpenCL on the GPU of the Vulkan context; an empty text when it is available.
 inline auto PrepareReferenceBackend() -> std::string {
   return vulkan_opencl_comparison::PrepareOpenClOnTheVulkanDevice();
@@ -96,6 +109,15 @@ inline void ExecuteReferenceDisplayToAp1(ReferenceRenderDevice& device, const Ex
   ExecuteMetalDisplayToAp1(device, plan, input, document);
 }
 
+/// Every Color Grade of @p plan; the scene location of the last Grade output.
+inline auto ExecuteReferencePrimaryGrade(ReferenceRenderDevice& device, const ExecutionPlan& plan,
+                                         const PreparedRawInput&    input,
+                                         const PipelineDocument&    document,
+                                         CurveInputHistogramRecord* histogram = nullptr)
+    -> FrameSceneBinding {
+  return ExecuteMetalPrimaryGrade(device, plan, input, document, histogram).output_binding;
+}
+
 /// The system default Metal device: the GPU of MoltenVK on a computer with one GPU.
 inline auto PrepareReferenceBackend() -> std::string {
   try {
@@ -121,6 +143,25 @@ auto DownloadImage(Device& device, const GraphValueId& id) -> std::vector<float>
   std::vector<float> values(static_cast<std::size_t>(texture.Width()) * texture.Height() * 4);
   device.Workspace().Device().DownloadTexture2D(
       texture, std::as_writable_bytes(std::span<float>(values)), device.CommandContext());
+  return values;
+}
+
+/// The RGBA32F values of the scene location @p binding of @p device after the render: a cached
+/// image, or a scene-work member (a buffer on Vulkan and OpenCL, a texture on Metal).
+template <class Device>
+auto DownloadScene(Device& device, const FrameSceneBinding& binding) -> std::vector<float> {
+  if (!binding.IsWorkImage()) {
+    return DownloadImage(device, binding.graph_id);
+  }
+  auto&              member = device.Workspace().SceneWork().Member(binding.member);
+  std::vector<float> values(static_cast<std::size_t>(member.Width()) * member.Height() * 4);
+  auto               bytes = std::as_writable_bytes(std::span<float>(values));
+  if constexpr (requires { member.Storage(); }) {
+    device.Workspace().Device().DownloadBufferRange(member.Storage(), 0, bytes,
+                                                    device.CommandContext());
+  } else {
+    device.Workspace().Device().DownloadTexture2D(member, bytes, device.CommandContext());
+  }
   return values;
 }
 

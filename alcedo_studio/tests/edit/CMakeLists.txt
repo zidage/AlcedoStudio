@@ -249,6 +249,26 @@ if(ALCEDO_VULKAN_ENABLED AND (ALCEDO_OPENCL_ENABLED OR ALCEDO_METAL_ENABLED))
     DISCOVERY_TIMEOUT 60
     PROPERTIES LABELS "gpu;edit;runtime;vulkan;color")
   alcedo_register_test_target(VulkanGeometryColorTest gpu)
+
+  # The point stages of the Color Grade on Vulkan against the reference backend, the host curve
+  # input histogram, and the LUT cache (#1036, phase VK8).
+  add_executable(VulkanPrimaryGradeTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_primary_grade_test.cpp)
+  target_include_directories(VulkanPrimaryGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(VulkanPrimaryGradeTest PRIVATE
+    GTest::gtest_main EditRuntimeVulkanPasses EditInput EditGraph)
+  if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(VulkanPrimaryGradeTest PRIVATE EditRuntimeOpenCl OpenClProgramLibrary)
+  else()
+    target_link_libraries(VulkanPrimaryGradeTest PRIVATE
+      EditRuntimeMetal EditRuntimeLens RawProcessorOp)
+    add_dependencies(VulkanPrimaryGradeTest GpuDagMetalShaders RawProcessorOpMetalShaders)
+  endif()
+  add_dependencies(VulkanPrimaryGradeTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanPrimaryGradeTest TEST_PREFIX "VulkanPrimaryGradeTest."
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan;grade")
+  alcedo_register_test_target(VulkanPrimaryGradeTest gpu)
 endif()
 
 # Vulkan against OpenCL on the same GPU (#1036, phase VK3, decision B9): the shared color math

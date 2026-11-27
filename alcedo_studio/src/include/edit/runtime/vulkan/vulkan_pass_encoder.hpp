@@ -10,6 +10,7 @@
 #include "edit/runtime/vulkan/vulkan_develop_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_display_to_ap1_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_geometry_camera_pass.hpp"
+#include "edit/runtime/vulkan/vulkan_primary_grade_pass.hpp"
 
 namespace alcedo {
 
@@ -53,6 +54,18 @@ struct PassEncoder<VulkanBackend, GpuPassKind::DisplayToAp1> {
   static void Encode(VulkanRenderDevice& device, const ExecutionPlan& plan,
                      const PreparedRawInput& input, const PipelineDocument& document) {
     ExecuteVulkanDisplayToAp1(device, plan, input, document);
+  }
+};
+
+template <>
+struct PassEncoder<VulkanBackend, GpuPassKind::PrimaryColorGrade> {
+  static auto Encode(VulkanRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput& prepared, const PipelineDocument& document,
+                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene,
+                     CurveInputHistogramRecord* histogram = nullptr) -> FrameSceneBinding {
+    return ExecuteVulkanPrimaryGrade(device, plan, prepared, document, compiled_grade, scene,
+                                     histogram)
+        .output_binding;
   }
 };
 

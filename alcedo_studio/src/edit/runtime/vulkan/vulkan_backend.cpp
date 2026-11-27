@@ -204,6 +204,11 @@ VulkanBackend::~VulkanBackend() {
     // A recording that was never submitted uses no GPU time; its context forgets it.
     recording_context_->DropRecording();
   }
+  // The cached and dummy resources go to the retired list first, so the loop destroys them.
+  lut_cache_.clear();
+  dummy_lut_.Reset();
+  dummy_rgba32f_image_.Reset();
+  dummy_r8_image_.Reset();
   for (auto& resource : retired_) {
     DestroyResource(resource);
   }
@@ -292,6 +297,10 @@ auto VulkanBackend::ConsumeInjectedFailure(std::optional<std::uint32_t>& calls_t
 }
 
 auto VulkanBackend::CreateBuffer(std::size_t bytes) -> Buffer {
+  return CreateBufferWithPriority(bytes, kWorkingSetPriority);
+}
+
+auto VulkanBackend::CreateBufferWithPriority(std::size_t bytes, float priority) -> Buffer {
   if (bytes == 0) {
     return {};
   }
@@ -312,7 +321,7 @@ auto VulkanBackend::CreateBuffer(std::size_t bytes) -> Buffer {
                       VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   VmaAllocationCreateInfo allocation_info{};
   allocation_info.usage        = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-  allocation_info.priority     = kWorkingSetPriority;
+  allocation_info.priority     = priority;
   VkBuffer          buffer     = VK_NULL_HANDLE;
   VmaAllocation     allocation = VK_NULL_HANDLE;
   VmaAllocationInfo result{};
@@ -755,6 +764,80 @@ void VulkanBackend::CopyImageToBuffer(const Texture2D& src, Buffer& dst, std::ui
   command_context.NoteWrite();
 }
 
+// ---- LUT cache and pass resources -------------------------------------------------------------
+
+auto VulkanBackend::AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
+                               std::uint32_t edge, CommandContext& command_context)
+    -> VulkanLutBinding {
+  if (key.Empty() || edge <= 1 || packed_rgba.empty()) {
+    return DummyLut();
+  }
+  for (auto& entry : lut_cache_) {
+    if (entry.key == key && entry.edge_size == edge) {
+      entry.lru_tick        = ++lut_lru_clock_;
+      last_lut_resource_id_ = entry.buffer.ResourceId();
+      return VulkanLutBinding{entry.buffer.DeviceAddress(), entry.buffer.ResourceId(), edge};
+    }
+  }
+  EvictLutsFor(packed_rgba.size());
+  auto buffer = CreateBufferWithPriority(packed_rgba.size(), kCachePriority);
+  UploadBufferRange(buffer, 0, packed_rgba, command_context);
+  lut_upload_bytes_ += packed_rgba.size();
+  LutCacheEntry entry;
+  entry.key       = key;
+  entry.edge_size = edge;
+  entry.lru_tick  = ++lut_lru_clock_;
+  entry.buffer    = std::move(buffer);
+  lut_cache_bytes_ += entry.buffer.Bytes();
+  lut_cache_.push_back(std::move(entry));
+  const auto& stored    = lut_cache_.back().buffer;
+  last_lut_resource_id_ = stored.ResourceId();
+  return VulkanLutBinding{stored.DeviceAddress(), stored.ResourceId(), edge};
+}
+
+void VulkanBackend::EvictLutsFor(std::size_t incoming) {
+  if (lut_byte_budget_ == 0) {
+    return;
+  }
+  // A recording that uses an entry keeps it: Reset gives the buffer back by the lifetime rule.
+  while (!lut_cache_.empty() && lut_cache_bytes_ + incoming > lut_byte_budget_) {
+    const auto oldest = std::min_element(
+        lut_cache_.begin(), lut_cache_.end(),
+        [](const LutCacheEntry& a, const LutCacheEntry& b) { return a.lru_tick < b.lru_tick; });
+    lut_cache_bytes_ -= oldest->buffer.Bytes();
+    lut_cache_.erase(oldest);
+  }
+}
+
+auto VulkanBackend::DummyLut() -> VulkanLutBinding {
+  if (dummy_lut_.Empty()) {
+    dummy_lut_ = CreateBuffer(16);
+  }
+  return VulkanLutBinding{dummy_lut_.DeviceAddress(), dummy_lut_.ResourceId(), 0};
+}
+
+void VulkanBackend::SetLutByteBudget(std::size_t bytes) {
+  lut_byte_budget_ = bytes;
+  EvictLutsFor(0);
+}
+
+auto VulkanBackend::DummyStorageImage(TextureFormat format) -> const Texture2D& {
+  Texture2D* image = nullptr;
+  if (format == TextureFormat::Rgba32f) {
+    image = &dummy_rgba32f_image_;
+  } else if (format == TextureFormat::R8) {
+    image = &dummy_r8_image_;
+  } else {
+    throw std::invalid_argument(
+        std::string("VulkanBackend::DummyStorageImage: no dummy image of ") +
+        TextureFormatName(format));
+  }
+  if (image->Empty()) {
+    *image = CreateTexture2D(1, 1, format);
+  }
+  return *image;
+}
+
 void VulkanBackend::RecordAiMaskEdge(const AiMaskEdgeDispatch& /*dispatch*/,
                                      const AiMaskEdgeTextures<Texture2D>& /*textures*/,
                                      CommandContext& /*command_context*/) {
@@ -816,6 +899,7 @@ void VulkanBackend::ResetCounters() {
   h2d_copy_count_       = 0;
   h2d_bytes_            = 0;
   d2h_copy_count_       = 0;
+  lut_upload_bytes_     = 0;
   last_h2d_ranges_.clear();
   last_texture_rectangles_.clear();
 }
