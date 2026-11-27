@@ -75,6 +75,14 @@ If the plan requires measured numbers, write those numbers.
 Then list every executed test. After each test name, write one sentence that
 states the behavior the test checks.
 
+## Issue lines
+
+After Verification, without a heading, write one `Closes #<number>` line for
+each issue that the pull request resolves. `Issue: #<number>` and
+`Tracking issue: #<number>` close nothing (AGENTS.md, "Issue links and stacked
+pull requests"). A stacked pull request also names the pull request below it in
+Why or Changes.
+
 ## Forbidden text
 
 Do not write any of the following:
