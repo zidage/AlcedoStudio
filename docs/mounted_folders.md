@@ -110,6 +110,12 @@ A scan that changes the library shows a task with its counts, for example `12 ne
 changes nothing leaves the project file as it is. When the save fails, the task shows
 `The project could not be saved.`; the changes stay in the library, and the next save writes them.
 
+**Synchronize** shows its task at once. When the scan waits (for the scan of another mount, for
+the end of the running scan of the same mount, or for an import or a delete), the task is queued
+with `Waiting`, and the scan runs in that task when its turn comes. The cancel of a queued task
+drops that scan, and a running scan continues. The cancel of a running scan keeps a queued
+**Synchronize** of the same mount.
+
 Imports and deletes take turns with the scans. While an import or a delete runs, the scans wait.
 A scan that runs when an import or a delete starts completes the batch in work first; its task
 shows `Paused`, and the scan runs again when the import or the delete has ended. An import of a
@@ -177,8 +183,12 @@ photos included.
 
 ## Automation
 
-The `alcedo-cli` commands `library.mounts`, `library.mount`, `library.sync`, and
-`library.unmount` run the same operations as the Collections panel. The
+The `alcedo-cli` commands `library.mounts`, `library.mount`, `library.sync`, `library.unmount`,
+`library.mount.locate` (Locate Folder), `library.mount.locate_photo` (Locate),
+`library.mount.remove_missing` (Remove Missing Photos), and `tasks.cancel` run the same
+operations as the Collections panel, the image menu, and the task list.
+`library.mounts.wait_idle` waits until no scan runs or waits, and `library.volumes.arrived`
+returns the card of an arrived volume. The
 [alcedo-skills command reference](https://github.com/zidage/alcedo-skills/blob/main/skills/alcedo/references/reference/library.md)
 describes them.
 

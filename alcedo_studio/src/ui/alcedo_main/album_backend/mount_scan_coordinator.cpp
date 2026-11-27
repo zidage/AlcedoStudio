@@ -61,6 +61,11 @@ class SteadyMountScanClock final : public MountScanClock {
     }
   }
 
+  [[nodiscard]] auto HasRunningTimer() const -> bool override {
+    return std::any_of(timers_.begin(), timers_.end(),
+                       [](const auto& entry) { return entry.second->isActive(); });
+  }
+
  private:
   std::unordered_map<mount_id_t, std::unique_ptr<QTimer>> timers_;
 };
@@ -348,7 +353,7 @@ auto MountScanCoordinator::BeginStop() -> std::shared_future<void> {
   operations_.clear();
   for (auto& [mount_id, state] : mounts_) {
     (void)mount_id;
-    CancelPausedTask(state);
+    CancelNextScanTask(state);
     for (auto& callback : state.on_next_scan_ended) {
       ended_callbacks.push_back(std::move(callback));
     }
@@ -399,7 +404,7 @@ void MountScanCoordinator::ReloadMounts() {
     clock_->StopTimer(it->first);
     watcher_->Unwatch(it->first);
     std::erase(queue_, it->first);
-    CancelPausedTask(it->second);
+    CancelNextScanTask(it->second);
     CallScanEnded(it->second.on_next_scan_ended, CanceledScanResult());
     it = mounts_.erase(it);
   }
@@ -422,21 +427,37 @@ auto MountScanCoordinator::RequestScan(mount_id_t mount_id, MountScanTrigger tri
   if (on_ended) {
     state.on_next_scan_ended.push_back(std::move(on_ended));
   }
+  const bool synchronize = trigger == MountScanTrigger::kSynchronize;
   if (running_ && running_->mount_id == mount_id) {
+    // The request waits for the scan that runs after this one.
     state.scan_again = MergeTrigger(state.scan_again, trigger);
-    if (trigger == MountScanTrigger::kSynchronize && running_->task_id.isEmpty()) {
-      running_->task_id = RegisterTask(mount_id, state, Tr("Reading the folder"), -1);
+    if (synchronize) {
+      RegisterWaitingSynchronizeTask(mount_id, state);
     }
     return true;
   }
   if (state.queued) {
     state.queued = MergeTrigger(state.queued, trigger);
+    if (synchronize) {
+      RegisterWaitingSynchronizeTask(mount_id, state);
+    }
     return true;
   }
   state.queued = trigger;
   queue_.push_back(mount_id);
   StartNextScan();
+  // StartNextScan does not remove mounts, so `state` is still valid.
+  if (synchronize && state.queued) {
+    RegisterWaitingSynchronizeTask(mount_id, state);
+  }
   return true;
+}
+
+void MountScanCoordinator::RegisterWaitingSynchronizeTask(mount_id_t mount_id, MountState& state) {
+  if (state.next_scan_task_id.isEmpty()) {
+    state.next_scan_task_id =
+        RegisterTask(mount_id, state, Tr("Waiting"), -1, BackgroundTaskState::Queued);
+  }
 }
 
 auto MountScanCoordinator::RunMountOperation(std::function<void()>      operation,
@@ -596,6 +617,28 @@ auto MountScanCoordinator::HasPendingScans() const -> bool {
          !operations_.empty() || stopped_worker_.has_value();
 }
 
+auto MountScanCoordinator::ScanActivity(mount_id_t mount_id) const -> MountScanActivity {
+  if (running_ && running_->mount_id == mount_id) {
+    return MountScanActivity::kRunning;
+  }
+  const auto it = mounts_.find(mount_id);
+  if (it == mounts_.end() || !it->second.queued) {
+    return MountScanActivity::kIdle;
+  }
+  return it->second.next_scan_paused ? MountScanActivity::kPaused : MountScanActivity::kQueued;
+}
+
+auto MountScanCoordinator::SynchronizeTaskId(mount_id_t mount_id) const -> QString {
+  if (const auto it = mounts_.find(mount_id);
+      it != mounts_.end() && !it->second.next_scan_task_id.isEmpty()) {
+    return it->second.next_scan_task_id;
+  }
+  if (running_ && running_->mount_id == mount_id) {
+    return running_->task_id;
+  }
+  return {};
+}
+
 void MountScanCoordinator::HandleDirectoryChanged(mount_id_t mount_id) {
   if (!port_ || !mounts_.contains(mount_id)) {
     return;
@@ -697,9 +740,12 @@ void MountScanCoordinator::StartNextScan() {
     running_->ended = ended.get_future().share();
     state.on_next_scan_ended.clear();
     state.queued.reset();
-    if (!state.paused_task_id.isEmpty()) {
-      // The scan that a hold stopped runs again in its task.
-      running_->task_id = std::exchange(state.paused_task_id, QString{});
+    state.next_scan_paused = false;
+    if (!state.next_scan_task_id.isEmpty()) {
+      // The scan that a hold stopped runs again in its task; a waiting Synchronize request
+      // starts in its Queued task.
+      running_->task_id = std::exchange(state.next_scan_task_id, QString{});
+      tasks_->UpdateTaskState(running_->task_id, BackgroundTaskState::Running);
       tasks_->UpdateTask(running_->task_id, state.title, Tr("Reading the folder"), -1);
     } else if (running_->trigger == MountScanTrigger::kSynchronize) {
       running_->task_id = RegisterTask(mount_id, state, Tr("Reading the folder"), -1);
@@ -807,28 +853,39 @@ void MountScanCoordinator::HandleScanEnded(quint64 generation, mount_id_t mount_
                                                                      : MountReachability::kOnline;
     if (resume_after_hold && !save_failed) {
       if (!run.task_id.isEmpty()) {
-        state.paused_task_id = run.task_id;
-        tasks_->UpdateTask(run.task_id, state.title, Tr("Paused"), -1);
+        if (state.next_scan_task_id.isEmpty()) {
+          state.next_scan_task_id = run.task_id;
+        } else {
+          // A Synchronize request waits in its own task, and the scan that runs again serves it
+          // and this scan: that task stays, and the task of this scan ends.
+          tasks_->FinishTask(run.task_id, BackgroundTaskState::Canceled,
+                             MountScanResultDetail(result));
+        }
+        tasks_->UpdateTask(state.next_scan_task_id, state.title, Tr("Paused"), -1);
       }
     } else {
       ReportScanEnd(run, state, result, previous, save_failed);
     }
     UpdateWatch(mount_id, state, result);
     if (resume_after_hold) {
-      state.scan_again = MergeTrigger(state.scan_again, run.trigger);
+      state.next_scan_paused = true;
+      state.scan_again       = MergeTrigger(state.scan_again, run.trigger);
       // The requests that waited for this scan get the result of the scan that runs again.
       state.on_next_scan_ended.insert(state.on_next_scan_ended.begin(),
                                       std::make_move_iterator(run.on_ended.begin()),
                                       std::make_move_iterator(run.on_ended.end()));
       run.on_ended.clear();
     }
-    if (!run.canceled_by_user) {
+    // A user cancel drops the requests that came during the scan, except a Synchronize request
+    // that waits in its own task (CancelRunningScanByUser kept its scan_again).
+    if (!run.canceled_by_user || !state.next_scan_task_id.isEmpty()) {
       again = state.scan_again;
     }
     state.scan_again.reset();
     if (!again) {
       // A user cancel dropped the scan that these requests waited for.
       CallScanEnded(state.on_next_scan_ended, CanceledScanResult());
+      CancelNextScanTask(state);
     }
   }
 
@@ -911,66 +968,77 @@ void MountScanCoordinator::UpdateWatch(mount_id_t mount_id, MountState& state,
 }
 
 auto MountScanCoordinator::RegisterTask(mount_id_t mount_id, const MountState& state,
-                                        const QString& detail, int progress_percent) -> QString {
+                                        const QString& detail, int progress_percent,
+                                        BackgroundTaskState task_state) -> QString {
   BackgroundTaskSnapshot snapshot;
   snapshot.kind_             = BackgroundTaskKind::MountScan;
-  snapshot.state_            = BackgroundTaskState::Running;
+  snapshot.state_            = task_state;
   snapshot.title_            = state.title;
   snapshot.detail_           = detail;
   snapshot.progress_percent_ = progress_percent;
   snapshot.cancelable_       = true;
   snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::CancelAndWait;
-  // Stop finishes the task, which clears the cancel callback before the coordinator ends.
-  return tasks_->RegisterTask(
-      snapshot, [this, generation = generation_, mount_id] { CancelByUser(generation, mount_id); });
+  // The cancel callback runs after RegisterTask returned, so it reads the assigned id. Stop
+  // finishes the task, which clears the cancel callback before the coordinator ends.
+  auto task_id               = std::make_shared<QString>();
+  *task_id = tasks_->RegisterTask(snapshot, [this, generation = generation_, mount_id, task_id] {
+    CancelByUser(generation, mount_id, *task_id);
+  });
+  return *task_id;
 }
 
-void MountScanCoordinator::CancelPausedTask(MountState& state) {
-  if (!state.paused_task_id.isEmpty()) {
-    tasks_->FinishTask(std::exchange(state.paused_task_id, QString{}),
+void MountScanCoordinator::CancelNextScanTask(MountState& state) {
+  state.next_scan_paused = false;
+  if (!state.next_scan_task_id.isEmpty()) {
+    tasks_->FinishTask(std::exchange(state.next_scan_task_id, QString{}),
                        BackgroundTaskState::Canceled);
   }
 }
 
-void MountScanCoordinator::CancelByUser(quint64 generation, mount_id_t mount_id) {
+void MountScanCoordinator::CancelByUser(quint64 generation, mount_id_t mount_id,
+                                        const QString& task_id) {
   if (generation != generation_) {
     return;
   }
-  if (!running_ || running_->mount_id != mount_id) {
-    // The task of a scan that a hold stopped: the scan does not run again. The end of the task
-    // can remove task records, so it runs after the cancel loop of the task list. A scan that
-    // took the task over in the meantime gets the cancel of a running scan.
-    QMetaObject::invokeMethod(
-        this,
-        [this, generation, mount_id] {
-          if (generation != generation_) {
-            return;
-          }
-          if (running_ && running_->mount_id == mount_id) {
-            CancelRunningScanByUser();
-            return;
-          }
-          const auto it = mounts_.find(mount_id);
-          if (it == mounts_.end() || it->second.paused_task_id.isEmpty()) {
-            return;
-          }
-          auto& state = it->second;
-          CancelPausedTask(state);
-          state.queued.reset();
-          state.scan_again.reset();
-          std::erase(queue_, mount_id);
-          CallScanEnded(state.on_next_scan_ended, CanceledScanResult());
-        },
-        Qt::QueuedConnection);
+  if (running_ && running_->mount_id == mount_id && running_->task_id == task_id) {
+    CancelRunningScanByUser();
     return;
   }
-  CancelRunningScanByUser();
+  // The task of the next scan of the mount (a scan that a hold stopped, or a Synchronize request
+  // that waits): that scan does not run, and a running scan of the mount continues. The end of
+  // the task can remove task records, so it runs after the cancel loop of the task list. A scan
+  // that took the task over in the meantime gets the cancel of a running scan.
+  QMetaObject::invokeMethod(
+      this,
+      [this, generation, mount_id, task_id] {
+        if (generation != generation_) {
+          return;
+        }
+        if (running_ && running_->mount_id == mount_id && running_->task_id == task_id) {
+          CancelRunningScanByUser();
+          return;
+        }
+        const auto it = mounts_.find(mount_id);
+        if (it == mounts_.end() || it->second.next_scan_task_id != task_id) {
+          return;
+        }
+        auto& state = it->second;
+        CancelNextScanTask(state);
+        state.queued.reset();
+        state.scan_again.reset();
+        std::erase(queue_, mount_id);
+        CallScanEnded(state.on_next_scan_ended, CanceledScanResult());
+      },
+      Qt::QueuedConnection);
 }
 
 void MountScanCoordinator::CancelRunningScanByUser() {
   running_->canceled_by_user = true;
   running_->stop_requested->store(true);
-  if (const auto it = mounts_.find(running_->mount_id); it != mounts_.end()) {
+  if (const auto it = mounts_.find(running_->mount_id);
+      it != mounts_.end() && it->second.next_scan_task_id.isEmpty()) {
+    // The automatic requests that came during the scan end with it; a Synchronize request that
+    // waits in its own task still runs.
     it->second.scan_again.reset();
   }
   if (!running_->task_id.isEmpty()) {

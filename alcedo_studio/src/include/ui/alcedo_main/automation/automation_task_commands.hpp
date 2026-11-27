@@ -12,8 +12,10 @@
 
 namespace alcedo::automation {
 
-/// Registers `tasks.list` and `tasks.wait`. `tasks.wait` waits on the owner signals
-/// (ImportStateChanged, ExportStateChanged, TasksChanged), never on a sleep loop. @p host and
+/// Registers `tasks.list`, `tasks.wait`, and `tasks.cancel`. `tasks.wait` waits on the owner
+/// signals (ImportStateChanged, ExportStateChanged, TasksChanged), never on a sleep loop.
+/// `tasks.cancel` calls the cancel of the task list (BackgroundTaskController::CancelTask), or
+/// ImportExportHandler::CancelImport for the running import (#1189). @p host and
 /// @p tracker must outlive every dispatch. Returns false and writes @p error when a registration
 /// fails.
 [[nodiscard]] auto RegisterAutomationTaskCommands(AutomationCommandRegistry& registry,

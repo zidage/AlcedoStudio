@@ -29,10 +29,13 @@ namespace alcedo::automation {
                                                      const QString&             host_mode,
                                                      QString* error = nullptr) -> bool;
 
-/// Registers `library.mount`, `library.mounts`, `library.sync`, and `library.unmount` (Mounted
-/// Folder Plan, MF8). They call the FolderController mount commands that the Collections panel
-/// calls, and MountService::ListMounts for `library.mounts`. RegisterAutomationLibraryCommands
-/// calls it. @p host must outlive every dispatch.
+/// Registers `library.mount`, `library.mounts`, `library.sync`, `library.unmount` (Mounted Folder
+/// Plan, MF8), `library.mount.locate`, `library.mount.locate_photo`,
+/// `library.mount.remove_missing`, `library.mounts.wait_idle`, and `library.volumes.arrived`
+/// (#1189). They call the FolderController mount commands that the Collections panel and the image
+/// menu call, MountService::ListMounts for `library.mounts`, and MountScanCoordinator for the scan
+/// states and the idle wait. RegisterAutomationLibraryCommands calls it. @p host must outlive every
+/// dispatch.
 [[nodiscard]] auto RegisterAutomationMountCommands(AutomationCommandRegistry& registry,
                                                    ui::ApplicationModuleHost* host,
                                                    QString* error = nullptr) -> bool;

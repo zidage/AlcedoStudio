@@ -116,7 +116,61 @@ auto RegisterAutomationTaskCommands(AutomationCommandRegistry& registry,
                        }
                      });
   };
-  return registry.Register(std::move(wait), error);
+  if (!registry.Register(std::move(wait), error)) {
+    return false;
+  }
+
+  AutomationCommandSpec cancel;
+  cancel.method      = QStringLiteral("tasks.cancel");
+  cancel.description = QStringLiteral(
+      "Cancels the task 'task_id' as its cancel button in the task list does, and returns the "
+      "task after the cancel: the state 'canceling' while its work stops, or 'canceled' for a "
+      "task whose work had not started (a queued scan). tasks.wait returns the final state. A "
+      "finished task is returned unchanged. An export, or another task that has no cancel, "
+      "answers -32002 (rejected) with data.error 'not_cancelable'.");
+  cancel.changes_state = true;
+  cancel.params_schema = AutomationClosedParamsSchema(
+      QJsonObject{{"task_id",
+                   QJsonObject{{"type", "string"}, {"description", "A task id from a command."}}}},
+      QJsonArray{"task_id"});
+  cancel.result_schema = TaskSchema();
+  cancel.handler       = [host, tracker](const QJsonObject& params, AutomationReply reply) {
+    const QString task_id = params.value("task_id").toString();
+    const auto    task    = tracker->Task(task_id);
+    if (!task.has_value()) {
+      SendAutomationParamError(reply, QStringLiteral("/task_id"),
+                                     QStringLiteral("unknown task id: %1").arg(task_id));
+      return;
+    }
+    if (AutomationTaskTracker::IsTerminalState(task->value("state").toString())) {
+      reply.SendResult(*task);
+      return;
+    }
+    const bool import = task_id == tracker->RunningImportId();
+    if (import) {
+      host->import_export()->CancelImport();
+    } else if (task_id == tracker->RunningExportId() ||
+               !host->background_tasks()->CancelTask(task_id)) {
+      const QString message = QStringLiteral("The task %1 cannot be canceled.").arg(task_id);
+      reply.SendError(AutomationErrorCode::Rejected, message,
+                            QJsonObject{{"reason", message}, {"error", "not_cancelable"}});
+      return;
+    }
+    // A task owner can end the task in a queued call after the cancel (a queued mount scan does).
+    auto* pending = new AutomationCommandWait(std::move(reply), host);
+    QMetaObject::invokeMethod(
+        pending,
+        [pending, tracker, task_id, import, before = *task] {
+          QJsonObject after = tracker->Task(task_id).value_or(before);
+          // The import task reads "running" until the import stops; its cancel is requested.
+          if (import && !AutomationTaskTracker::IsTerminalState(after.value("state").toString())) {
+            after.insert("state", QStringLiteral("canceling"));
+          }
+          pending->SendResult(after);
+        },
+        Qt::QueuedConnection);
+  };
+  return registry.Register(std::move(cancel), error);
 }
 
 }  // namespace alcedo::automation
