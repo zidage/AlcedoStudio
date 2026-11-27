@@ -73,6 +73,9 @@ if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(AcceleratorBackend PUBLIC HAVE_OPENCL)
     target_link_libraries(AcceleratorBackend PRIVATE OpenClProgramLibrary)
 endif()
+if(ALCEDO_VULKAN_ENABLED)
+    target_link_libraries(AcceleratorBackend PRIVATE VulkanContext)
+endif()
 
 # --- Edit Pipeline ---
 # The executor binds a PipelineDocument and dispatches to the GPU DAG renderer of the resolved

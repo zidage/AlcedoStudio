@@ -432,6 +432,19 @@ elseif(ALCEDO_ENABLE_OPENCL)
     message(STATUS "OpenCL SDK/ICD loader not found; building without OpenCL support.")
 endif()
 
+# Vulkan compute backend (#1036, docs/roadmap/alcedo_studio/edit/vulkan_compute_backend_plan.md).
+# A development backend: OFF in release builds until the release phase of the plan. The volk
+# loader and VulkanMemoryAllocator come from vcpkg; volk loads vulkan-1.dll at run time, so the
+# build does not link the Vulkan loader.
+option(ALCEDO_ENABLE_VULKAN "Enable the Vulkan compute backend (in development)." OFF)
+set(ALCEDO_VULKAN_ENABLED OFF)
+if(ALCEDO_ENABLE_VULKAN)
+    find_package(volk CONFIG REQUIRED)
+    find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+    add_compile_definitions(HAVE_VULKAN)
+    set(ALCEDO_VULKAN_ENABLED ON)
+endif()
+
 # Dependencies
 # GTest
 if(ALCEDO_BUILD_TESTS)

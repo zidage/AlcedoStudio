@@ -179,6 +179,17 @@ target_link_libraries(PipelineFrameSinkTest PRIVATE GTest::gtest_main Accelerato
 gtest_discover_tests(PipelineFrameSinkTest TEST_PREFIX "PipelineFrameSinkTest.")
 alcedo_register_test_target(PipelineFrameSinkTest edit)
 
+# Accelerator preference resolve rule, including the Vulkan preference (#1036).
+add_executable(PipelineAcceleratorTest
+    ${ALCEDO_TEST_ROOT}/edit/pipeline/pipeline_accelerator_test.cpp)
+target_include_directories(PipelineAcceleratorTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineAcceleratorTest PRIVATE GTest::gtest_main AcceleratorBackend)
+if(ALCEDO_VULKAN_ENABLED)
+  target_link_libraries(PipelineAcceleratorTest PRIVATE VulkanContext)
+endif()
+gtest_discover_tests(PipelineAcceleratorTest TEST_PREFIX "PipelineAcceleratorTest.")
+alcedo_register_test_target(PipelineAcceleratorTest edit)
+
 add_executable(PipelineSchedulerRequestIdTest
     ${ALCEDO_TEST_ROOT}/renderer/pipeline_scheduler_request_id_test.cpp)
 target_include_directories(PipelineSchedulerRequestIdTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})

@@ -5,8 +5,8 @@ Date: 2026-11-22
 Status: planned. Experiments VX1 to VX5 come first. VX1, VX2, VX3, and VX5 are complete
 (2026-11-22, sections 9.1, 9.2, 9.3, and 9.5); VX5 has no restore run of a lost device (section
 9.5). VX4 does not run: the neural networks use ONNX Runtime (user decision 2026-11-22, A5). VX2
-changed B5 to two devices and stopped VK18 until the plan has a new resize design (section 9.2). No
-implementation phase has started.
+changed B5 to two devices and stopped VK18 until the plan has a new resize design (section 9.2).
+VK0 is complete (2026-11-23, #1063).
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -544,7 +544,7 @@ test of its kernels (B9).
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
-| VK0 | Build option, dependencies, `VulkanContext`, enum values | root CMake, `src/vulkan/`, `pipeline_accelerator` | VX1, VX2 | 1300 to 1700 | planned |
+| VK0 | Build option, dependencies, `VulkanContext`, enum values | root CMake, `src/vulkan/`, `pipeline_accelerator` | VX1, VX2 | 1300 to 1700 | complete (#1063) |
 | VK1 | Slang build rule, shader module registry, compute pipeline cache, kernel check tool | `src/vulkan/`, `tools/gpu_kernel_check.cpp` | VK0 | 1300 to 1700 | planned |
 | VK2 | `VulkanBackend`, `VulkanCommandContext`, workspace instance | `edit/runtime/vulkan/` | VK1, VX3, VX5 | 1600 to 1900 | planned |
 | VK3 | Shared kernel modules, geometry utilities, comparison test support | `edit/runtime/vulkan/shader/`, `src/vulkan/` | VK2 | 1500 to 1900 | planned |
@@ -677,13 +677,112 @@ ctest --test-dir build/debug -R "Vulkan(Context|Requirements)Test" -j 1 --output
 
 **Exit criteria.**
 
-- [ ] A build with the option `OFF` has no Vulkan symbol and no new dependency.
-- [ ] The listed tests pass on the RTX 3080 Laptop GPU and on Iris Xe.
-- [ ] The validation layer reports no error during the context tests.
+- [x] A build with the option `OFF` has no Vulkan symbol and no new dependency.
+- [x] The listed tests pass on the RTX 3080 Laptop GPU and on Iris Xe.
+- [x] The validation layer reports no error during the context tests.
 
 **Expected diff.** 1300 to 1700 lines.
 
-**Completion record.** (empty)
+**Completion record.**
+
+##### Phase VK0 completion record (2026-11-23)
+
+**Status:** complete. Issue #1063. Branch `feature/vulkan-vk0-context` on the plan branch
+`docs/vulkan-compute-backend-plan` (pull request #1037).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Packages | `find_package(Vulkan)`, volk, VulkanMemoryAllocator | `find_package(volk CONFIG REQUIRED)` and `find_package(VulkanMemoryAllocator CONFIG REQUIRED)` from vcpkg (classic mode: `vcpkg install volk vulkan-memory-allocator`, volk 1.4.341.0, VMA 3.3.0). The Vulkan headers are the vcpkg port `vulkan-headers` 1.4.328 that volk uses. No `find_package(Vulkan)`. | volk loads `vulkan-1.dll` at run time, so the build links no Vulkan loader and needs no SDK. VK1 adds `find_package(Vulkan)` for `slangc` and `spirv-val`. A missing package with the option `ON` stops the configure (`REQUIRED`). |
+| Definition | `HAVE_VULKAN` | `add_compile_definitions(HAVE_VULKAN)` in the root, as `HAVE_OPENCL` | Same form as OpenCL. |
+| Target form | `VulkanContext` | Static library, or a DLL with `WINDOWS_EXPORT_ALL_SYMBOLS` when the CUDA targets are DLLs (`ALCEDO_BUILD_CUDA_DLLS`) | The rule of `OpenClContext`: a static singleton in each DLL gives each module its own context. |
+| Device functions | none | `VulkanContext::PipelineDeviceFunctions()` gives a `VolkDeviceTable`. VMA gets its functions from `vmaImportVulkanFunctionsFromVolk`. | The volk globals are data of the DLL and are not exported. A table per device also serves the display device of VK18. |
+| Capability record | `VulkanCapabilities` | `VulkanDeviceCapabilities` (`vulkan_device_capabilities.hpp`): name, ids, type, API version, LUID, extensions, features, queue families, format features, limits, largest device-local heap. `ReadVulkanDeviceCapabilities` fills it. | One record serves the requirement check, the selection, and `Capabilities()`. The LUID is for the DXGI match of VK18. |
+| Device selection | VX2 rule | `SelectVulkanDevice` (`vulkan_device_selection.hpp`), a pure function: name filter (case-insensitive), then requirements, then discrete, integrated, other. A filter that matches no device, or only devices without the requirements, throws; no other device is selected (B8). | Testable without a GPU. |
+| Queue requirement | "a compute queue with `timestampValidBits` above 0" | The first family with graphics, compute, and timestamps (`FindPipelineQueueFamily`) | B5: the pipeline device and the display device use queue 0 of one graphics family. |
+| Optional extension | none | `VK_EXT_memory_priority` is enabled when the device has it (section 4.2 rule of VK2). `shaderFloat16` is read, not enabled. | VK2 sets the priority of each allocation. |
+| Create twice | "one context for each process" | `Create` throws `std::logic_error` when a context exists. `InstanceOrCreate` checks and creates under one lock; `ResolveAcceleratorBackend(Vulkan)` uses it with `VulkanInitializationOptions::FromEnvironment()`. `Destroy` ends the context. | A resolve from two executors must not create two contexts. |
+| Process exit | none | The context slot is never destroyed by a static destructor; only `Destroy` releases the context. | A static destructor in the DLL would call Vulkan and unload the loader under the Windows loader lock. |
+| Validation | "enable the validation layer when it is installed" | `enable_validation_layer` (on in a debug build through `FromEnvironment`). The messenger is also chained into `vkCreateInstance`. `VulkanContext::ValidationErrorCount()` counts ERROR messages of type VALIDATION. Loader messages (type GENERAL) go to the `alcedo.gpu` log as warnings and are not counted. | This computer has two loader errors that are not API use: the registered layer file of Rockstar Social Club is missing, and the EOS overlay layer is registered twice. |
+| `GpuImageWrapper` | VK2 decides about a `VulkanImage` member | `ResolveGpuBackend` throws for `GpuBackendKind::Vulkan` before the wrapper changes; each switch has a `Vulkan` case with the `None` cases. | The wrapper has no Vulkan image; the DAG path uses textures. |
+| Preference text | none | `AcceleratorBackendPreferenceToString(Vulkan)` is `vulkan`; the Settings key and label of `project_module.cpp` are `vulkan` and `Vulkan`. The key is not parsed and the option list does not have Vulkan. | The setting value comes with VK17 (section 2.1). |
+| Test name | `VulkanContextTest.SingleQueueDeviceGivesOneQueueForPipelineAndQt` | `VulkanContextTest.SingleQueueDeviceGivesThePipelineQueueZeroOfItsGraphicsFamily` | B5 changed to two devices: Qt gets its own device and queue in VK18, so no queue is shared. |
+
+**Primary success call chain:**
+
+```text
+ResolveAcceleratorBackend(AcceleratorBackendPreference::Vulkan)
+  -> PrepareExplicitVulkanRuntime
+  -> VulkanContext::InstanceOrCreate(VulkanInitializationOptions::FromEnvironment())
+       (lock) -> CreateUnlocked
+  -> CreateInstance: volkInitialize -> loader version >= 1.3 -> vkCreateInstance
+       (+ VK_LAYER_KHRONOS_validation, VK_EXT_debug_utils) -> volkLoadInstanceOnly
+  -> SelectPhysicalDevice: vkEnumeratePhysicalDevices -> ReadVulkanDeviceCapabilities (each)
+       -> SelectVulkanDevice -> CheckVulkanDeviceRequirements
+  -> CreatePipelineDevice: FindPipelineQueueFamily -> vkCreateDevice (1 queue, features)
+       -> volkLoadDeviceTable -> vkGetDeviceQueue(family, 0)
+  -> CreatePipelineAllocator: vmaImportVulkanFunctionsFromVolk -> vmaCreateAllocator
+  -> GpuBackendKind::Vulkan; VulkanContext::Capabilities() / PipelineQueue() / PipelineAllocator()
+```
+
+**Primary failure call chain:**
+
+```text
+SelectVulkanDevice: the filter accepts only devices without a requirement
+  -> std::runtime_error "Vulkan: no device has the requirements of the Vulkan backend.
+     <device> does not have: VK_KHR_push_descriptor."
+  -> CreateUnlocked: the unique_ptr destroys the partial context (instance, messenger, loader)
+  -> InstanceOrCreate / Create: the slot stays empty
+  -> ResolveAcceleratorBackend(Vulkan) passes the exception to the caller
+  -> a later Create runs again (VulkanContextTest.FilterThatMatchesNoDeviceThrowsAndLeavesNoContext)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `VulkanRequirementsTest.DeviceWithoutPushDescriptorReportsTheExtensionName` | `VulkanRequirementsTest` | PASS |
+| `VulkanRequirementsTest.Vulkan12DeviceReportsTheApiVersion` | `VulkanRequirementsTest` | PASS |
+| 7 more requirement tests: all requirements pass; memory budget and scalar layout; linear filtering; absent format record; no timestamps; compute-only family; one-queue family | `VulkanRequirementsTest` | PASS |
+| 7 `VulkanDeviceSelectionTest` tests: discrete first, integrated before CPU, filter with any letter case, no match names the devices, a matching device without a requirement is not replaced, a failing device is skipped by the default rule, no device | `VulkanRequirementsTest` | PASS |
+| `VulkanContextTest.CreateOnLocalGpuReportsVulkan13AndAComputeQueue` | `VulkanContextTest` | PASS (RTX 3080 Laptop GPU and Iris Xe) |
+| `VulkanContextTest.DeviceNameFilterSelectsTheMatchingDevice` | `VulkanContextTest` | PASS (selects Iris Xe in the default run, RTX 3080 in the Iris Xe run) |
+| `VulkanContextTest.SingleQueueDeviceGivesThePipelineQueueZeroOfItsGraphicsFamily` | `VulkanContextTest` | PASS (Iris Xe, family 0) |
+| `VulkanContextTest.FilterThatMatchesNoDeviceThrowsAndLeavesNoContext`, `SecondCreateThrowsAndKeepsTheFirstContext` | `VulkanContextTest` | PASS |
+| `VulkanContextTest.InvalidApiUseIsCountedAsAValidationError` (a wrong `sType` gives one counted error, so the zero count of the other tests is a real result) | `VulkanContextTest` | PASS |
+| `PipelineAcceleratorTest.AutoOnWindowsDoesNotResolveToVulkan` | `PipelineAcceleratorTest` | PASS (option `OFF` and `ON`) |
+| `PipelineAcceleratorTest.VulkanPreferenceThrowsWhenTheBuildHasNoVulkan` | `PipelineAcceleratorTest` | PASS with `OFF` (skipped with `ON`) |
+| `PipelineAcceleratorTest.VulkanPreferenceResolvesToVulkanAndCreatesTheContext` | `PipelineAcceleratorTest` | PASS with `ON` (skipped with `OFF`) |
+| Validation errors during the context tests | `VulkanContextTest` fixture (`TearDown`) | 0 on both devices, except the one error that the test above makes |
+| Option `OFF`: no Vulkan symbol, no new dependency | `AcceleratorBackend.lib`, `Image.lib`, `PipelineAcceleratorTest.exe`; `CMakeCache.txt`; `build.ninja` | No `vkCreateInstance`, `volkInitialize`, `vmaCreateAllocator`, `VulkanContext`, or `vulkan-1` string; no volk or VMA cache entry; no `VulkanContext` target |
+
+Commands (worktree `build/debug`, one configure with the option `OFF`, then `ON`):
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug <vcpkg, Qt, CUDA arguments of the main build>
+cmd /c scripts\msvc_env.cmd --build build\debug --target PipelineAcceleratorTest
+ctest --test-dir build/debug -R "PipelineAcceleratorTest" -j 1 --output-on-failure      4/4 (1 skipped)
+cmd /c scripts\msvc_env.cmd -S . -B build\debug -DALCEDO_ENABLE_VULKAN=ON
+cmd /c scripts\msvc_env.cmd --build build\debug --target VulkanRequirementsTest VulkanContextTest PipelineAcceleratorTest
+ctest --test-dir build/debug -R "Vulkan(Context|Requirements)Test|PipelineAcceleratorTest" -j 1 --output-on-failure
+    default device: 26/26 (1 skipped); ALCEDO_VULKAN_DEVICE=Iris: 26/26 (1 skipped)
+VulkanContextTest.exe (all tests in one process): 6/6 with each device
+```
+
+The full test suite was not run (repository rule). The application and the CUDA, OpenCL, and Metal
+tests were not built in the worktree; the shared files have only added `Vulkan` cases.
+
+**Checklist / exit condition:** all three exit criteria are met.
+
+**LOC note:** 1989 added lines in 26 files (estimate 1300 to 1700): 1264 lines of new production
+code, headers, and `src/vulkan/CMakeLists.txt`, 634 lines of tests and their CMake file, 91 lines
+in shared files. The largest file is
+`vulkan_context.cpp` (364 lines).
+
+**Remaining gaps:** none for VK0. The display device (B5) is VK18. `FromEnvironment` reads
+`ALCEDO_VULKAN_DEVICE`; no application path calls `ResolveAcceleratorBackend(Vulkan)` before VK17.
 
 ### Phase VK1: Slang build rule, shader module registry, compute pipeline cache, kernel check tool
 

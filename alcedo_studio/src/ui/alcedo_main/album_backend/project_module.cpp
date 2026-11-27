@@ -120,6 +120,8 @@ auto AcceleratorPreferenceKey(AcceleratorBackendPreference preference) -> QStrin
       return QStringLiteral("opencl");
     case AcceleratorBackendPreference::Metal:
       return QStringLiteral("metal");
+    case AcceleratorBackendPreference::Vulkan:
+      return QStringLiteral("vulkan");
   }
   return QStringLiteral("auto");
 }
@@ -132,6 +134,8 @@ auto AcceleratorPreferenceLabel(AcceleratorBackendPreference preference) -> QStr
       return QStringLiteral("OpenCL");
     case AcceleratorBackendPreference::Metal:
       return QStringLiteral("Metal");
+    case AcceleratorBackendPreference::Vulkan:
+      return QStringLiteral("Vulkan");
     case AcceleratorBackendPreference::CPU:
       return Tr("CPU");
     case AcceleratorBackendPreference::Auto:

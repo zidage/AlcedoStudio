@@ -33,6 +33,7 @@ add_subdirectory(nn)
 
 add_subdirectory(opencl)
 
+add_subdirectory(vulkan)
 
 add_subdirectory(cuda)
 
