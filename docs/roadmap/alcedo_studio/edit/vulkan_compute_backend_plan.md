@@ -597,7 +597,7 @@ test of its kernels (B9).
 | VK5 | RAW operators: highlight reconstruction, lens calibration, DNG warp | `decoders/processor/operators/gpu/`, `edit/runtime/lens/vulkan/` | VK4 | 1500 to 1900 | complete (#1203) |
 | VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | complete (#1209) |
 | VK7 | GeometryResample, CameraToAp1, raster input (UploadRgb), DisplayToAp1 | `edit/runtime/vulkan/`, shared color headers | VK6 | 1100 to 1500 | complete (#1211) |
-| VK8 | Primary grade point kernels and LUT resources | `edit/runtime/vulkan/` | VK7 | 1400 to 1800 | planned |
+| VK8 | Primary grade point kernels and LUT resources | `edit/runtime/vulkan/` | VK7 | 1400 to 1800 | complete (#1219) |
 | VK9 | Primary grade neighbor kernels | `edit/runtime/vulkan/` | VK8 | 800 to 1200 | planned |
 | VK10 | Local tone | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | planned |
 | VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | planned |
@@ -2480,6 +2480,208 @@ adds kernels rebuilds every Vulkan test target, not only its own.
 
 **Remaining gaps:** none.
 
+### Phase VK8: primary grade point kernels and LUT
+
+**Objective and deliverables.** The Vulkan backend encodes the point stages of each Color Grade
+in the order of the OpenCL pass: `PassEncoder<VulkanBackend, PrimaryColorGrade>` through the
+shared `GradeExecutor`, with the White Balance, Exposure, Contrast, Whites, Blacks, Curve (RGB and
+channel curves), HLS, Saturation, Vibrance, color wheel, and LMT LUT adjustments, the mix with the
+Grade input, the Grade mask, and the curve input histogram (#888). LUT tables come from a LUT cache
+of `VulkanBackend` by content key. The Grade neighborhood stage belongs to VK9 and the Local
+Laplacian stage (Shadows, Highlights) to VK10; in this phase they stop the render with a message
+that names their phase. Issue #1219.
+
+**Inputs and prerequisites.** VK7 (`develop.image`). VK2 (the parameter arena, the node value
+cache, the scene-work members as RGBA32F buffers). VK3 (`color_encoding_math.h` in Slang,
+`oklab.slangh`, `math.slangh`).
+
+**Source audit of the VK8 entry (2026-11-27).**
+
+| OpenCL entry | Kernels and shared code | VK8 decision |
+| --- | --- | --- |
+| `OpenClGradeOps::DispatchPointwise`, `DispatchPointwiseWithMix` (`opencl_primary_grade_pass.cpp`) | `primary_grade_pointwise_scene_rgba32f` (`primary_grade.cl`): the records of the fused command list on a scene image (cached image or scene-work buffer), then the mix with the Grade input times the R8 mask | VK8 |
+| `OpenClGradeOps::DispatchCurveInputHistogram` | `primary_grade_curve_input_histogram`: the records before the Curve on a sample grid, 768 bins in local memory, one atomic add for each bin of a workgroup | VK8 |
+| `OpenClGradeOps::UploadFusedCommands`, `LoadLut` | the node value `runtime.order`, `TryPackGradeLut`, `OpenClBackend::AcquireLut` | VK8: the same upload rule; `VulkanBackend::AcquireLut` |
+| `EnqueueGradePointwise`, `EnqueueGradeMix` | `primary_grade_pointwise_rgba32f`, `primary_grade_mix_rgba32f`, `primary_grade_mix_masked_rgba32f` | Out of the port: the three kernels have no product caller; `WarmUpPlan` warms them in place of the two dispatched kernels (#1220) |
+| `OpenClGradeOps::DispatchHorizontal`, `DispatchVerticalApply` | `primary_grade_neighbor.cl` | VK9 |
+| `OpenClGradeOps::ExecuteLocalTone` | `local_tone.cl` | VK10 |
+
+**Modules, files, and APIs.**
+
+- `edit/runtime/vulkan/shader/primary_grade.slang` (group `primary_grade`: kernels
+  `primary_grade_pointwise_scene_rgba32f`, `primary_grade_curve_input_histogram`).
+- `include/vulkan/vulkan_primary_grade_kernels.hpp`: names, bindings, push constant layouts; the
+  descriptors go into `VulkanKernelCatalog()`.
+- `inc/edit/runtime/vulkan/vulkan_scene_view.hpp`: `VulkanSceneView` and `VulkanBindScene`, the
+  Vulkan form of `OpenClSceneView` for the Grade and the later scene passes.
+- `inc/edit/runtime/vulkan/vulkan_primary_grade_pass.hpp`, `edit/runtime/vulkan/vulkan_primary_grade_pass.cpp`
+  (target `EditRuntimeVulkanPasses`): `VulkanPrimaryGradeResult`, the two `ExecuteVulkanPrimaryGrade`
+  overloads of the OpenCL pass, `VulkanGradeOps`.
+- `VulkanBackend`: `AcquireLut`, `DummyLut`, `SetLutByteBudget`, `LutCacheBytes`,
+  `LutCacheEntryCount`, `LutUploadBytes`, `LastLutResourceId`, `DummyStorageImage`,
+  `GradeCommandTopologyHash`, and the struct `VulkanLutBinding`.
+- `vulkan_pass_encoder.hpp`: the `PrimaryColorGrade` specialization.
+- Test: `tests/edit/runtime/vulkan_primary_grade_test.cpp` (`VulkanPrimaryGradeTest`); the reference
+  backend support gets `ExecuteReferencePrimaryGrade` and `DownloadScene`.
+
+**Data rules and invariants.**
+
+- A scene image is a cached RGBA32F storage image or a scene-work member (an RGBA32F row-major
+  buffer). The kernel reads the buffer when its address in the push constants is set, else the
+  storage image of its binding. A binding that the dispatch leaves unread holds the 1x1 dummy image
+  of its format (RGBA32F or R8).
+- The Grade writes a scene-work member (`DestinationWorkMember`), as in OpenCL.
+- The adjustment records (`GradeAdjustmentParams`, 208 bytes) and the command offsets are read by
+  address arithmetic: the parameter arena address plus the slot offset (VK4 rule for Intel).
+- LUT cache: an entry is the buffer of one `PackedGradeLut` for its content key and edge, with the
+  memory priority 0.2 (section 4.2). A miss removes the least recently used entries until the table
+  fits in the byte budget (64 MiB, the OpenCL value). An entry that leaves the cache returns its
+  buffer by the lifetime rule of `VulkanBackend`, so a recording that uses it stays valid.
+- Every pass records into the open recording and submits nothing.
+- Kernel math: `exp2`, `log2`, `pow`, `sin`, `cos` map to the `math.slangh` functions (VK3, VK5
+  rules); `tanh` of the Contrast is `(1 - e^(-2|x|)) / (1 + e^(-2|x|))` with `AlcedoExp`; the LUT
+  interpolation is `a + (b - a) t`, the OpenCL `mix`.
+
+**Implementation steps.**
+
+1. The kernel group and its header; the catalog.
+2. The LUT cache, the dummy images, and the command topology hash of `VulkanBackend`.
+3. `VulkanSceneView`, the pass, the pass encoder.
+4. `VulkanPrimaryGradeTest`.
+5. Runs: RTX 3080 Laptop GPU and Iris Xe against OpenCL; Apple M4 (MoltenVK) against Metal.
+
+**Tests and evidence.**
+
+- `VulkanPrimaryGradeTest.EachPointAdjustmentEqualsTheReferenceBackend` (16 cases: each point
+  adjustment alone, the LUT at strength 1 and 0.5, and all together)
+- `VulkanPrimaryGradeTest.GradeMixAndMaskEqualTheReferenceBackend`
+- `VulkanPrimaryGradeTest.ThreeGradesComposeLikeTheReferenceBackend`
+- `VulkanPrimaryGradeTest.DisabledAndZeroMixGradesAliasTheirInput`
+- `VulkanPrimaryGradeTest.CurveInputHistogramCountsTheGradeInputOnTheCurveAxis`
+- `VulkanPrimaryGradeTest.LutResourceIsReusedByContentKey`
+- `VulkanPrimaryGradeTest.StableGradeUploadsNoCommandsAndCreatesNoResource`
+- `VulkanPrimaryGradeTest.GradeRecordsIntoTheOpenRecordingWithoutASubmission`
+- `VulkanPrimaryGradeTest.InvalidRequestsAndLaterStagesFail`
+
+**Build and run commands.**
+
+```text
+Windows: cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanPrimaryGradeTest
+         set ALCEDO_VULKAN_DEVICE=RTX (or Iris)
+         ctest --test-dir build/debug -R "Vulkan|PipelineAccelerator" -j 1 --output-on-failure
+macOS:   source ~/Projects/vulkan_tools/env.sh
+         cmake --build build/macos-vulkan --target AlcedoVulkanKernels VulkanPrimaryGradeTest
+         ctest --test-dir build/macos-vulkan -R "Vulkan|PipelineAccelerator" -j 1 --output-on-failure
+```
+
+**Exit criteria.**
+
+- [x] The listed tests pass on the RTX 3080 Laptop GPU and Iris Xe against OpenCL with no
+      validation error.
+- [x] The listed tests pass on the Apple M4 against Metal with no validation error.
+- [x] The OpenCL, CUDA, and Metal results are unchanged: the phase changes no shared header and no
+      source of those backends.
+
+**Expected diff.** 1400 to 1800 lines.
+
+##### Phase VK8 completion record (2026-11-27)
+
+**Status:** complete on the RTX 3080 Laptop GPU, Iris Xe, and the Apple M4 (MoltenVK). Issue
+#1219. Branch `feature/vulkan-vk8-primary-grade` on the VK7 branch
+`feature/vulkan-vk7-geometry-camera-raster` (pull request #1212).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Scene images | Not in the plan | `VulkanSceneView` holds the storage image of a cached image or the device address of a scene-work buffer; the kernel selects the buffer by a nonzero address. Unread bindings hold `VulkanBackend::DummyStorageImage` of their format. | `RecordKernelDispatch` binds one texture for each binding; the address in the push constants replaces the OpenCL `is_buffer` argument. One dummy of each format serves every unread binding (Vulkan reads a storage image twice in one dispatch without a hazard). |
+| Destination | The OpenCL kernel writes an image or a buffer | The destination is a scene-work buffer; another destination stops the pass with `std::runtime_error`. | `GradeExecutor` writes only scene-work members. |
+| LUT cache eviction | The OpenCL rule skips entries of unfinished submissions | The least recently used entry leaves the cache at once. | The lifetime rule of `VulkanBackend` keeps a returned buffer until its last batch completes. |
+| LUT cache priority | 0.2 (section 4.2) | `CreateBufferWithPriority(bytes, kCachePriority)`; the other allocations keep 0.8. | Section 4.2. |
+| Contrast `tanh` | `math.slangh` functions | A local `AlcedoTanhLocal` from `AlcedoExp` in `primary_grade.slang` | Only the Contrast reads `tanh`; the function moves to `math.slangh` when a second kernel needs it. |
+| Neighborhood and Local Laplacian stages | VK9, VK10 | `VulkanGradeOps` stops the render with `std::runtime_error` that names phase VK9 or VK10. | `GradeExecutor` needs the operations; the message names the missing phase. The default Grade has its neighborhood adjustments in the DRT finish (Sharpen, Clarity, Halation), so the test covers the VK10 message. |
+| Mask input of the tests | MaskEvaluate | The test writes a synthetic R8 mask into the mask output of the Grade on both backends. | The Vulkan MaskEvaluate pass is VK11. |
+
+**Measured differences** (logs `build/tmp/vulkan_backend/vk8/`; relative difference
+`|vulkan - reference| / max(1, |reference|)` in ACEScc; the reference backend runs on the same GPU;
+input 64 x 48, scene-linear 2^-7 to 2^2 with saturated and neutral texels, through Develop,
+GeometryResample, and CameraToAp1 of each backend):
+
+| Case | RTX 3080 (OpenCL): largest, rms | Iris Xe (OpenCL): largest, rms | Apple M4 (Metal): largest, rms | Tolerance |
+| --- | --- | --- | --- | --- |
+| White balance 4300 K | 3.3e-7, 5.8e-8 | 3.6e-7, 5.9e-8 | 2.8e-7, 3.2e-8 | 2e-4 |
+| Exposure +1.3 | 2.5e-7, 3.6e-8 | 1.9e-7, 3.3e-8 | 2.4e-7, 2.4e-8 | 2e-4 |
+| Contrast +100 | 6.1e-6, 1.8e-7 | 1.3e-5, 2.3e-7 | 7.9e-6, 2.2e-7 | 2e-4 |
+| Contrast -40 | 5.4e-7, 7.3e-8 | 6.0e-7, 7.3e-8 | 5.7e-7, 5.7e-8 | 2e-4 |
+| Whites +60; Whites -70; Blacks -45 | 3.6e-7; 2.4e-7; 3.0e-7 | 2.4e-7; 1.9e-7; 2.1e-7 | 3.3e-7; 2.4e-7; 2.5e-7 | 2e-4 |
+| Curve, 16 points; RGB with red and blue | 3.9e-7; 3.9e-7 | 3.3e-7; 5.1e-7 | 3.7e-7; 5.8e-7 | 1e-5 |
+| HLS | 3.0e-7, 3.9e-8 | 2.7e-7, 3.7e-8 | 3.3e-7, 3.0e-8 | 2e-4 |
+| Saturation 1.6; Vibrance +50 | 2.5e-7; 2.7e-7 | 2.7e-7; 2.5e-7 | 3.6e-7; 3.0e-7 | 2e-4 |
+| Color wheels | 3.3e-7, 3.9e-8 | 2.7e-7, 4.5e-8 | 2.8e-7, 4.3e-8 | 2e-4 |
+| LUT 17^3, strength 1; 0.5 | 3.1e-7; 2.8e-7 | 3.0e-7; 2.5e-7 | 3.2e-7; 2.7e-7 | 2e-4 |
+| Every point adjustment | 1.0e-5, 3.8e-7 | 9.0e-6, 3.7e-7 | 2.6e-5, 4.6e-7 | 2e-4 |
+| Mix 0.6 | 2.0e-5, 2.2e-7 | 3.1e-5, 3.8e-7 | 1.7e-5, 2.1e-7 | 2e-4 |
+| Mix 0.8 with an R8 mask | 3.0e-6, 1.0e-7 | 2.9e-5, 2.8e-7 | 1.6e-5, 1.8e-7 | 2e-4 |
+| Three Grades (Exposure; Contrast at mix 0.5; Saturation) | 3.4e-6, 1.2e-7 | 4.8e-6, 1.3e-7 | 6.7e-6, 1.3e-7 | 2e-4 |
+| Curve input histogram, 640 x 480, neutral; Exposure +0.7 | host counts, equal; in the bin edge margin | equal; in the margin | equal; in the margin | `curve_input_histogram_test_support.hpp` |
+
+The largest differences are at near-black texels after the OkLab round trip of the Contrast, where
+the float32 cube root and the ACEScc encode amplify one ulp.
+
+**Primary success call chain:**
+
+```text
+PlanExecutor<VulkanBackend> (VK17) or VulkanPrimaryGradeTest
+  -> PassEncoder<VulkanBackend, PrimaryColorGrade>::Encode -> ExecuteVulkanPrimaryGrade
+       -> GradeExecutor<VulkanGradeOps>::Execute
+            -> BindAndScheduleGrade -> ParameterArena::UploadDirty
+            -> (histogram) RecordCurveInputHistogram -> VulkanGradeOps::DispatchCurveInputHistogram
+                 -> RecordKernelDispatch(primary_grade_curve_input_histogram)
+            -> UploadFusedCommands (node value runtime.order, when the topology hash changes)
+            -> LoadLut -> TryPackGradeLut -> VulkanBackend::AcquireLut (cache hit, or upload)
+            -> for each point stage: DispatchPointwise or DispatchPointwiseWithMix
+                 -> EncodePointwise -> VulkanBindScene (source, destination, mix source), mask
+                 -> RecordKernelDispatch(primary_grade_pointwise_scene_rgba32f) into a scene-work member
+       -> the output binding of the last Grade
+  -> nothing is submitted; EndRender submits the recording
+```
+
+**Primary failure call chain:**
+
+```text
+render not open, a plan without a Color Grade, a missing Grade node
+  -> std::runtime_error "ExecuteVulkanPrimaryGrade: ..." before a command
+a mask output that is missing or is not an R8 image of the Grade size, a scene image that is
+missing or is not RGBA32F, a missing command buffer
+  -> std::runtime_error before the dispatch of that stage; the caller cancels the render
+a neighborhood stage, a Local Laplacian stage
+  -> std::runtime_error "... (plan phase VK9, #1036)" or "(plan phase VK10, #1036)"
+```
+
+**What was proven (executed tests, validation layer on):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| The nine tests of the section | `VulkanPrimaryGradeTest` | PASS on RTX 3080, Iris Xe, Apple M4 |
+| VK0 to VK8 suites, Windows | `ctest -R "Vulkan\|PipelineAccelerator"` | RTX 3080: 140 tests, 139 PASS, 1 skipped (a test for a build without Vulkan); Iris Xe: the same |
+| VK0 to VK8 suites, Apple M4 | `ctest -R "Vulkan\|PipelineAccelerator"` | 104 tests, 102 PASS, 2 skipped (Windows only); `VulkanDevelopTest` needs the three test RAWs, copied for the run |
+| `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | `gpu.kernels.ok=vulkan kernels=34` on the three devices |
+| Validation errors | `TearDown` of each GPU test | 0 |
+| Windows MSVC build of every Vulkan target | `scripts\msvc_env.cmd --build build\debug` | PASS, no warning |
+
+**Finding outside this phase.** Three OpenCL Grade kernels have no product caller, and
+`OpenClBackend::WarmUpPlan` warms them in place of `primary_grade_pointwise_scene_rgba32f` and
+`primary_grade_curve_input_histogram` (#1220).
+
+**LOC note:** about 1900 added and 6 removed lines without the plan: the kernels 407, the pass,
+the scene view, the kernel header, and the pass encoder 612, the backend LUT cache and dummies 174,
+CMake and the catalog 14, the tests 695 (the new test 634, the reference support 41, CMake 20).
+Above the estimate of 1400 to 1800: the test file holds sixteen comparison cases and the LUT cache
+tests.
+
+**Remaining gaps:** none.
+
 ### Phases VK3 to VK23: scope of each phase
 
 Each entry gives the objective, the OpenCL model, and the main tests. The detailed section replaces
@@ -2492,7 +2694,7 @@ the entry before the implementation.
 | VK5 | Detailed section above | | |
 | VK6 | Detailed section above | | |
 | VK7 | Detailed section above | | |
-| VK8 | `VulkanGradeOps` point kernels, LUT images by content key | `opencl_primary_grade_pass.cpp`, `primary_grade.cl` | Each adjustment equals OpenCL. LUT resources are reused by content key. |
+| VK8 | Detailed section above | | |
 | VK9 | Neighbor kernels of the primary grade | `primary_grade_neighbor.cl` | Detail adjustments equal OpenCL. |
 | VK10 | `VulkanLocalToneOps` | `opencl_local_tone_pass.cpp`, `local_tone.cl` | Local tone equals OpenCL at full size and for a region of interest. |
 | VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `opencl_mask_pass.cpp`, `mask.cl`, `opencl_ai_mask_coverage.cpp` | Mask values and coverage equal OpenCL. |
@@ -3130,6 +3332,10 @@ Remaining defects or unavailable platforms:
 | Image formats | Formats of pipeline images | RGBA32F, R32F, R8 | current OpenCL backend |
 | Comparison tolerance | Maximum difference between Vulkan and OpenCL in a test | the tolerance of the matching OpenCL test | this plan (B9) |
 | Grade tolerance | Largest difference of the primary grade point kernel, ACEScc | 2.0e-4 | `opencl_grade_test.cpp` |
+| Curve tolerance | Largest difference of the Tone Curve, ACEScc | 1.0e-5 | `kGpuCurveTolerance`, `tone_curve_test_curves.hpp` |
+| LUT cache budget | Byte budget of the LUT cache of `VulkanBackend` | 64 MiB | the OpenCL value; phase VK8 |
+| LUT cache priority | `VK_EXT_memory_priority` of a LUT cache entry | 0.2 | section 4.2 (VX5); phase VK8 |
+| Histogram dispatch | Workgroup size and largest workgroup count of the curve input histogram | 256; 128 | the OpenCL dispatch; phase VK8 |
 | Film tolerance | Largest difference of the film print output, 8-bit codes | 0.5 | `kRampLimitCodes`, `opencl_film_print_test.cpp` |
 | Transfer function tolerance | Largest difference of a Vulkan transfer function from OpenCL, `\|a - b\| / max(0.01, \|b\|)` | 1e-5 | `CurvesMatchOcioBuiltinsOn4096CodeValues`; phase VK3 record |
 | OkLab tolerance | Largest `ScaledDifference` of the Vulkan ACEScc and OkLab functions from OpenCL; `OkLabToLinearAp1` | 1e-6; 4e-6 | `ColorEncodingOpenCl`; phase VK3 record (float32 limit 3.2e-6) |
