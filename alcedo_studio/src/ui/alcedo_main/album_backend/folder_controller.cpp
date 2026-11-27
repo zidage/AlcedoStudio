@@ -521,63 +521,124 @@ void FolderController::ReloadSelectedScope() {
   if (search_) emit search_->SearchStateChanged();
 }
 
-bool FolderController::CheckFolderEditAllowed(FolderEdit edit) const {
+auto FolderController::RefuseFolderEdit(FolderEditRefusal          refusal,
+                                        const i18n::LocalizedText& message) const
+    -> FolderEditOutcome {
+  status_->SetTaskState(message, 0, false);
+  return FolderEditOutcome{.refusal_ = refusal, .message_ = message.Render(), .folder_ = {}};
+}
+
+auto FolderController::FolderEditRefusalOfState(FolderEdit edit) const
+    -> std::optional<FolderEditOutcome> {
   auto& ph = project_->handler();
   if (ph.project_loading()) {
-    status_->SetTaskState(PL_TEXT("Project is loading. Please wait."), 0, false);
-    return false;
+    return RefuseFolderEdit(FolderEditRefusal::kProjectUnavailable,
+                            PL_TEXT("Project is loading. Please wait."));
   }
   if (!ph.project()) {
-    status_->SetTaskState(PL_TEXT("No project is loaded."), 0, false);
-    return false;
+    return RefuseFolderEdit(FolderEditRefusal::kProjectUnavailable,
+                            PL_TEXT("No project is loaded."));
   }
   auto*      ie            = import_export_;
   const bool import_active =
       ie && ie->current_import_job() && !ie->current_import_job()->IsCancelationAcked();
   const bool export_active = ie && ie->export_inflight();
   if (!import_active && !export_active) {
-    return true;
+    return std::nullopt;
   }
+  const auto refuse = [this](const i18n::LocalizedText& message) {
+    return RefuseFolderEdit(FolderEditRefusal::kTaskRunning, message);
+  };
   switch (edit) {
     case FolderEdit::Create:
-      status_->SetTaskState(import_active
-                                ? PL_TEXT("Cannot create folder while import is running.")
-                                : PL_TEXT("Cannot create folder while export is running."),
-                            0, false);
-      break;
+      return refuse(import_active ? PL_TEXT("Cannot create folder while import is running.")
+                                  : PL_TEXT("Cannot create folder while export is running."));
     case FolderEdit::Rename:
-      status_->SetTaskState(import_active
-                                ? PL_TEXT("Cannot rename folder while import is running.")
-                                : PL_TEXT("Cannot rename folder while export is running."),
-                            0, false);
-      break;
+      return refuse(import_active ? PL_TEXT("Cannot rename folder while import is running.")
+                                  : PL_TEXT("Cannot rename folder while export is running."));
     case FolderEdit::Move:
-      status_->SetTaskState(import_active
-                                ? PL_TEXT("Cannot move folder while import is running.")
-                                : PL_TEXT("Cannot move folder while export is running."),
-                            0, false);
-      break;
+      return refuse(import_active ? PL_TEXT("Cannot move folder while import is running.")
+                                  : PL_TEXT("Cannot move folder while export is running."));
     case FolderEdit::Delete:
-      status_->SetTaskState(import_active
-                                ? PL_TEXT("Cannot delete folder while import is running.")
-                                : PL_TEXT("Cannot delete folder while export is running."),
-                            0, false);
-      break;
+      return refuse(import_active ? PL_TEXT("Cannot delete folder while import is running.")
+                                  : PL_TEXT("Cannot delete folder while export is running."));
   }
-  return false;
+  return refuse(PL_TEXT("Cannot delete folder while import is running."));
 }
 
-auto FolderController::ValidatedFolderName(const QString& name) const -> std::optional<QString> {
+auto FolderController::ValidatedFolderName(const QString& name, FolderEditOutcome* refusal) const
+    -> std::optional<QString> {
   const QString trimmed = name.trimmed();
   if (trimmed.isEmpty()) {
-    status_->SetTaskState(PL_TEXT("Folder name cannot be empty."), 0, false);
+    *refusal =
+        RefuseFolderEdit(FolderEditRefusal::kInvalidName, PL_TEXT("Folder name cannot be empty."));
     return std::nullopt;
   }
   if (trimmed.contains('/') || trimmed.contains('\\')) {
-    status_->SetTaskState(PL_TEXT("Folder name cannot contain '/' or '\\'."), 0, false);
+    *refusal = RefuseFolderEdit(FolderEditRefusal::kInvalidName,
+                                PL_TEXT("Folder name cannot contain '/' or '\\'."));
+    return std::nullopt;
+  }
+  if (!AlbumBrowseService::IsValidFolderName(trimmed.toStdWString())) {
+    *refusal =
+        RefuseFolderEdit(FolderEditRefusal::kInvalidName, PL_TEXT("Folder name is not valid."));
     return std::nullopt;
   }
   return trimmed;
+}
+
+auto FolderController::RefuseFolderEditStatus(FolderEdit edit, AlbumFolderEditStatus status,
+                                              const QString& name) const -> FolderEditOutcome {
+  const auto failed = [edit]() {
+    switch (edit) {
+      case FolderEdit::Create:
+        return PL_TEXT("Failed to create folder.");
+      case FolderEdit::Rename:
+        return PL_TEXT("Failed to rename folder.");
+      case FolderEdit::Move:
+        return PL_TEXT("Failed to move folder.");
+      case FolderEdit::Delete:
+        return PL_TEXT("Failed to delete folder.");
+    }
+    return PL_TEXT("Failed to delete folder.");
+  };
+  switch (status) {
+    case AlbumFolderEditStatus::Done:
+    case AlbumFolderEditStatus::Failed:
+      break;
+    case AlbumFolderEditStatus::NameTaken:
+      return RefuseFolderEdit(FolderEditRefusal::kNameTaken,
+                              edit == FolderEdit::Move
+                                  ? PL_TEXT("The destination already has a folder with this name.")
+                                  : PL_TEXT("A folder named %1 already exists here.", name));
+    case AlbumFolderEditStatus::InvalidName:
+      return RefuseFolderEdit(FolderEditRefusal::kInvalidName,
+                              PL_TEXT("Folder name is not valid."));
+    case AlbumFolderEditStatus::UnknownFolder:
+      return RefuseFolderEdit(FolderEditRefusal::kUnknownFolder, failed());
+    case AlbumFolderEditStatus::RootFolder:
+      switch (edit) {
+        case FolderEdit::Rename:
+          return RefuseFolderEdit(FolderEditRefusal::kRootFolder,
+                                  PL_TEXT("Root folder cannot be renamed."));
+        case FolderEdit::Move:
+          return RefuseFolderEdit(FolderEditRefusal::kRootFolder,
+                                  PL_TEXT("Root folder cannot be moved."));
+        case FolderEdit::Delete:
+          return RefuseFolderEdit(FolderEditRefusal::kRootFolder,
+                                  PL_TEXT("Root folder cannot be deleted."));
+        case FolderEdit::Create:
+          break;
+      }
+      break;
+    case AlbumFolderEditStatus::MoveIntoOwnSubtree:
+      return RefuseFolderEdit(FolderEditRefusal::kMoveIntoOwnSubtree,
+                              PL_TEXT("A folder cannot move into itself or into its subfolder."));
+    case AlbumFolderEditStatus::StructureIsReadOnly:
+      return RefuseFolderEdit(FolderEditRefusal::kMountedFolder,
+                              PL_TEXT("The structure of a mounted folder is read-only."));
+  }
+  return RefuseFolderEdit(FolderEditRefusal::kFailed, failed());
 }
 
 bool FolderController::SaveProjectState() const {
@@ -640,172 +701,162 @@ void FolderController::CreateFolder(const QString& folderName) {
 }
 
 uint FolderController::CreateFolderIn(uint parentFolderUiId, const QString& folderName) {
-  if (!CheckFolderEditAllowed(FolderEdit::Create)) {
-    return 0;
-  }
-  const auto name = ValidatedFolderName(folderName);
-  if (!name.has_value()) {
-    return 0;
-  }
   const auto parent_path = TryGetPathForUiId(parentFolderUiId);
   if (!parent_path.has_value()) {
-    status_->SetTaskState(PL_TEXT("Failed to create folder."), 0, false);
+    static_cast<void>(
+        RefuseFolderEdit(FolderEditRefusal::kUnknownFolder, PL_TEXT("Failed to create folder.")));
     return 0;
   }
+  const auto outcome = CreateFolderAt(parent_path.value(), folderName);
+  return outcome.Done() ? static_cast<uint>(outcome.folder_.folder_id_) : 0;
+}
 
+auto FolderController::CreateFolderAt(const std::filesystem::path& parent_path, const QString& name)
+    -> FolderEditOutcome {
+  if (auto refusal = FolderEditRefusalOfState(FolderEdit::Create)) {
+    return *refusal;
+  }
+  FolderEditOutcome refusal;
+  const auto        trimmed = ValidatedFolderName(name, &refusal);
+  if (!trimmed.has_value()) {
+    return refusal;
+  }
   auto browse = project_->handler().project()->GetAlbumBrowseService();
   if (!browse) {
-    status_->SetTaskState(PL_TEXT("Folder service is unavailable."), 0, false);
-    return 0;
+    return RefuseFolderEdit(FolderEditRefusal::kFailed, PL_TEXT("Folder service is unavailable."));
   }
 
-  std::optional<AlbumFolderView> created;
-  try {
-    created = browse->CreateFolder(parent_path.value(), name->toStdWString());
-  } catch (const SleeveOperationError&) {
-    status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
-    return 0;
-  }
-  if (!created.has_value()) {
-    status_->SetTaskState(PL_TEXT("Failed to create folder."), 0, false);
-    return 0;
+  const auto result = browse->CreateFolder(parent_path, trimmed->toStdWString());
+  if (result.status_ != AlbumFolderEditStatus::Done) {
+    return RefuseFolderEditStatus(FolderEdit::Create, result.status_, trimmed.value());
   }
 
   const bool save_ok = SaveProjectState();
   library_->ReloadFolderTree();
-  ReportFolderEditDone(
-      PL_TEXT("Created folder %1", album_util::WStringToQString(created->folder_name_)),
-      save_ok);
-  return static_cast<uint>(created->folder_id_);
+  const auto message =
+      PL_TEXT("Created folder %1", album_util::WStringToQString(result.folder_.folder_name_));
+  ReportFolderEditDone(message, save_ok);
+  return FolderEditOutcome{.refusal_ = FolderEditRefusal::kNone,
+                           .message_ = message.Render(),
+                           .folder_  = result.folder_};
 }
 
 bool FolderController::RenameFolder(uint folderUiId, const QString& newName) {
-  if (!CheckFolderEditAllowed(FolderEdit::Rename)) {
-    return false;
-  }
-  const auto name = ValidatedFolderName(newName);
-  if (!name.has_value()) {
-    return false;
-  }
   const auto path_opt = TryGetPathForUiId(folderUiId);
-  if (!path_opt.has_value() || folderUiId == 0) {
-    status_->SetTaskState(PL_TEXT("Root folder cannot be renamed."), 0, false);
+  if (!path_opt.has_value()) {
+    static_cast<void>(
+        RefuseFolderEdit(FolderEditRefusal::kUnknownFolder, PL_TEXT("Failed to rename folder.")));
     return false;
   }
+  return RenameFolderAt(path_opt.value(), newName).Done();
+}
 
+auto FolderController::RenameFolderAt(const std::filesystem::path& folder_path,
+                                      const QString&               new_name) -> FolderEditOutcome {
+  if (auto refusal = FolderEditRefusalOfState(FolderEdit::Rename)) {
+    return *refusal;
+  }
+  FolderEditOutcome refusal;
+  const auto        name = ValidatedFolderName(new_name, &refusal);
+  if (!name.has_value()) {
+    return refusal;
+  }
   auto browse = project_->handler().project()->GetAlbumBrowseService();
   if (!browse) {
-    status_->SetTaskState(PL_TEXT("Folder service is unavailable."), 0, false);
-    return false;
+    return RefuseFolderEdit(FolderEditRefusal::kFailed, PL_TEXT("Folder service is unavailable."));
   }
 
-  const auto result = browse->RenameFolder(path_opt.value(), name->toStdWString());
-  switch (result.status_) {
-    case AlbumFolderEditStatus::Done:
-      break;
-    case AlbumFolderEditStatus::NameTaken:
-      status_->SetTaskState(PL_TEXT("A folder named %1 already exists here.", name.value()), 0,
-                            false);
-      return false;
-    case AlbumFolderEditStatus::InvalidTarget:
-    case AlbumFolderEditStatus::Failed:
-      status_->SetTaskState(PL_TEXT("Failed to rename folder."), 0, false);
-      return false;
-    case AlbumFolderEditStatus::StructureIsReadOnly:
-      status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
-      return false;
+  const auto result = browse->RenameFolder(folder_path, name->toStdWString());
+  if (result.status_ != AlbumFolderEditStatus::Done) {
+    return RefuseFolderEditStatus(FolderEdit::Rename, result.status_, name.value());
   }
 
   const bool save_ok = SaveProjectState();
   library_->ReloadFolderTree(
-      RemapFolderPath(current_folder_path_, path_opt.value(), result.folder_path_));
-  ReportFolderEditDone(PL_TEXT("Renamed folder to %1", name.value()), save_ok);
-  return true;
+      RemapFolderPath(current_folder_path_, folder_path, result.folder_.folder_path_));
+  const auto message = PL_TEXT("Renamed folder to %1", name.value());
+  ReportFolderEditDone(message, save_ok);
+  return FolderEditOutcome{.refusal_ = FolderEditRefusal::kNone,
+                           .message_ = message.Render(),
+                           .folder_  = result.folder_};
 }
 
 bool FolderController::MoveFolder(uint folderUiId, uint newParentFolderUiId) {
-  if (!CheckFolderEditAllowed(FolderEdit::Move)) {
-    return false;
-  }
   const auto path_opt   = TryGetPathForUiId(folderUiId);
   const auto parent_opt = TryGetPathForUiId(newParentFolderUiId);
-  if (!path_opt.has_value() || folderUiId == 0) {
-    status_->SetTaskState(PL_TEXT("Root folder cannot be moved."), 0, false);
+  if (!path_opt.has_value() || !parent_opt.has_value()) {
+    static_cast<void>(
+        RefuseFolderEdit(FolderEditRefusal::kUnknownFolder, PL_TEXT("Failed to move folder.")));
     return false;
   }
-  if (!parent_opt.has_value()) {
-    status_->SetTaskState(PL_TEXT("Failed to move folder."), 0, false);
-    return false;
-  }
+  return MoveFolderAt(path_opt.value(), parent_opt.value()).Done();
+}
 
+auto FolderController::MoveFolderAt(const std::filesystem::path& folder_path,
+                                    const std::filesystem::path& new_parent_path)
+    -> FolderEditOutcome {
+  if (auto refusal = FolderEditRefusalOfState(FolderEdit::Move)) {
+    return *refusal;
+  }
   auto browse = project_->handler().project()->GetAlbumBrowseService();
   if (!browse) {
-    status_->SetTaskState(PL_TEXT("Folder service is unavailable."), 0, false);
-    return false;
+    return RefuseFolderEdit(FolderEditRefusal::kFailed, PL_TEXT("Folder service is unavailable."));
   }
 
-  const auto result = browse->MoveFolder(path_opt.value(), parent_opt.value());
-  switch (result.status_) {
-    case AlbumFolderEditStatus::Done:
-      break;
-    case AlbumFolderEditStatus::NameTaken:
-      status_->SetTaskState(PL_TEXT("The destination already has a folder with this name."), 0,
-                            false);
-      return false;
-    case AlbumFolderEditStatus::InvalidTarget:
-      status_->SetTaskState(PL_TEXT("A folder cannot move into itself or into its subfolder."),
-                            0, false);
-      return false;
-    case AlbumFolderEditStatus::Failed:
-      status_->SetTaskState(PL_TEXT("Failed to move folder."), 0, false);
-      return false;
-    case AlbumFolderEditStatus::StructureIsReadOnly:
-      status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
-      return false;
+  const auto result = browse->MoveFolder(folder_path, new_parent_path);
+  if (result.status_ != AlbumFolderEditStatus::Done) {
+    return RefuseFolderEditStatus(FolderEdit::Move, result.status_, QString());
   }
 
   const bool save_ok = SaveProjectState();
   library_->ReloadFolderTree(
-      RemapFolderPath(current_folder_path_, path_opt.value(), result.folder_path_));
-  ReportFolderEditDone(PL_TEXT("Folder moved."), save_ok);
-  return true;
+      RemapFolderPath(current_folder_path_, folder_path, result.folder_.folder_path_));
+  const auto message = PL_TEXT("Folder moved.");
+  ReportFolderEditDone(message, save_ok);
+  return FolderEditOutcome{.refusal_ = FolderEditRefusal::kNone,
+                           .message_ = message.Render(),
+                           .folder_  = result.folder_};
 }
 
 void FolderController::DeleteFolder(uint folderUiId) {
-  if (!CheckFolderEditAllowed(FolderEdit::Delete)) {
+  const auto path_opt = TryGetPathForUiId(folderUiId);
+  if (!path_opt.has_value()) {
+    static_cast<void>(
+        RefuseFolderEdit(FolderEditRefusal::kUnknownFolder, PL_TEXT("Failed to delete folder.")));
     return;
   }
-  const auto path_opt = TryGetPathForUiId(folderUiId);
-  if (!path_opt.has_value() || path_opt.value() == album_util::RootFsPath()) {
-    status_->SetTaskState(PL_TEXT("Root folder cannot be deleted."), 0, false);
-    return;
+  static_cast<void>(DeleteFolderAt(path_opt.value()));
+}
+
+auto FolderController::DeleteFolderAt(const std::filesystem::path& folder_path)
+    -> FolderEditOutcome {
+  if (auto refusal = FolderEditRefusalOfState(FolderEdit::Delete)) {
+    return *refusal;
+  }
+  auto browse = project_->handler().project()->GetAlbumBrowseService();
+  if (!browse) {
+    return RefuseFolderEdit(FolderEditRefusal::kFailed, PL_TEXT("Folder service is unavailable."));
   }
 
-  const auto folder_path = path_opt.value();
-  const auto parent_path =
-      folder_path.parent_path().empty() ? album_util::RootFsPath() : folder_path.parent_path();
   // Deleting a folder that holds the current folder selects its parent; any other folder keeps
   // the current selection. The tree read then clears the filters and reloads the Library when
   // the selection moves (ApplyTree).
+  const auto parent_path =
+      folder_path.parent_path().empty() ? album_util::RootFsPath() : folder_path.parent_path();
   const bool deleted_holds_current = IsAtOrBelow(current_folder_path_, folder_path);
   const auto next_path             = deleted_holds_current ? parent_path : std::filesystem::path{};
 
-  auto       browse                = project_->handler().project()->GetAlbumBrowseService();
-  bool       deleted               = false;
-  try {
-    deleted = browse && browse->DeleteFolder(folder_path);
-  } catch (const SleeveOperationError&) {
-    status_->SetTaskState(PL_TEXT("The structure of a mounted folder is read-only."), 0, false);
-    return;
-  }
-  if (!deleted) {
-    status_->SetTaskState(PL_TEXT("Failed to delete folder."), 0, false);
-    return;
+  const auto result                = browse->DeleteFolder(folder_path);
+  if (result.status_ != AlbumFolderEditStatus::Done) {
+    return RefuseFolderEditStatus(FolderEdit::Delete, result.status_, QString());
   }
 
   const bool save_ok = SaveProjectState();
   library_->ReloadFolderTree(next_path);
-  ReportFolderEditDone(PL_TEXT("Folder deleted."), save_ok);
+  const auto message = PL_TEXT("Folder deleted.");
+  ReportFolderEditDone(message, save_ok);
+  return FolderEditOutcome{
+      .refusal_ = FolderEditRefusal::kNone, .message_ = message.Render(), .folder_ = {}};
 }
 
 void FolderController::ClearState() {

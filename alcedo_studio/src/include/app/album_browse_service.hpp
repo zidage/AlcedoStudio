@@ -51,20 +51,27 @@ struct AlbumFileView {
   std::filesystem::path file_path_{};
 };
 
-/// Outcome of a folder rename or move.
+/// Outcome of a folder create, rename, move, or delete. Each status other than Done changed
+/// nothing.
 enum class AlbumFolderEditStatus {
-  Done,           ///< The change is applied and synced (or it changes nothing).
-  NameTaken,      ///< The destination folder holds another element with the same name.
-  InvalidTarget,  ///< Root folder, empty name, missing folder, or a move into its own subtree.
-  Failed,         ///< The storage write or the sync failed.
-  /// The folder or the destination is mounted (SleeveError::kMountedFolderStructureIsReadOnly).
+  Done,                ///< The change is applied and synced (or it changes nothing).
+  NameTaken,           ///< The parent or the destination holds another child folder with the name.
+  InvalidName,         ///< The name fails AlbumBrowseService::IsValidFolderName.
+  UnknownFolder,       ///< The folder, the parent, or the destination is not a live folder.
+  RootFolder,          ///< A rename, move, or delete of the library root.
+  MoveIntoOwnSubtree,  ///< The destination of a move is the folder itself or lies inside it.
+  Failed,              ///< The storage write or the sync failed.
+  /// The folder, the parent, or the destination is mounted
+  /// (SleeveError::kMountedFolderStructureIsReadOnly).
   StructureIsReadOnly,
 };
 
 struct AlbumFolderEditResult {
   AlbumFolderEditStatus status_ = AlbumFolderEditStatus::Failed;
-  /// Path of the folder after the change; set only when the status is Done.
-  std::filesystem::path folder_path_{};
+  /// The folder after a create, rename, or move; set only when the status is Done. The values
+  /// come from the request and from the write under the file system lock, not from a live node
+  /// (#1185).
+  AlbumFolderView       folder_{};
 };
 
 struct AlbumDeleteResult {
@@ -76,6 +83,9 @@ struct AlbumDeleteResult {
   /// Set when SleeveServiceImpl refused the request (Mounted Folder Plan, MF5). The refused
   /// request changed nothing; each of its ids is in failed_element_ids_.
   std::optional<SleeveError>         refusal_{};
+  /// A link (LinkFilesToFolder): the requested photos that the target folder already held. The
+  /// link leaves them as they are; they are not in failed_element_ids_ (#1190).
+  std::vector<sl_element_id_t>       already_linked_element_ids_{};
 };
 
 class AlbumBrowseService {
@@ -169,12 +179,19 @@ class AlbumBrowseService {
   using QueryThreadObserver = std::function<void(std::string_view operation)>;
   void               SetQueryThreadObserver(QueryThreadObserver observer);
 
-  /// Empty when the folder cannot be created.
-  /// @throws SleeveOperationError when the parent is mounted; nothing changed.
-  [[nodiscard]] auto CreateFolder(const std::filesystem::path& parent_folder_path,
-                                  const file_name_t& name) -> std::optional<AlbumFolderView>;
-  /// @throws SleeveOperationError when the folder is mounted; nothing changed.
-  [[nodiscard]] bool DeleteFolder(const std::filesystem::path& folder_path);
+  /// True when @p name can name a folder: not empty, not `.` or `..`, and without `/`, `\`, or
+  /// a control character (U+0000 to U+001F, U+007F). A name is a label of the library tree, so
+  /// no other rule of a disk file system applies (#1190).
+  [[nodiscard]] static auto IsValidFolderName(const file_name_t& name) -> bool;
+
+  /// Creates a folder named @p name in the folder at @p parent_folder_path. A child folder of
+  /// the parent that holds @p name refuses it with NameTaken (#1190).
+  [[nodiscard]] auto        CreateFolder(const std::filesystem::path& parent_folder_path,
+                                         const file_name_t&           name) -> AlbumFolderEditResult;
+  /// Removes the folder at @p folder_path and the child folders that no other parent holds; the
+  /// photos stay in the library.
+  [[nodiscard]] auto        DeleteFolder(const std::filesystem::path& folder_path)
+      -> AlbumFolderEditResult;
   /// Renames the folder at @p folder_path; it keeps its id, children, and album membership.
   [[nodiscard]] auto RenameFolder(const std::filesystem::path& folder_path,
                                   const file_name_t& new_name) -> AlbumFolderEditResult;
@@ -188,6 +205,8 @@ class AlbumBrowseService {
   [[nodiscard]] auto DeleteFilesInFolderByElementIds(
       sl_element_id_t folder_id, const std::vector<sl_element_id_t>& element_ids)
       -> AlbumDeleteResult;
+  /// Links each photo of @p element_ids to the folder @p target_folder_id. deleted_files_ holds
+  /// the linked photos and already_linked_element_ids_ the photos that the folder already held.
   [[nodiscard]] auto LinkFilesToFolder(const std::vector<sl_element_id_t>& element_ids,
                                        sl_element_id_t target_folder_id) -> AlbumDeleteResult;
 

@@ -956,8 +956,8 @@ class LibraryReferenceModelTest : public ::testing::TestWithParam<uint64_t> {
   void CreateAlbum() {
     const auto name   = std::format(L"Album {}", next_album_++);
     const auto folder = Browse().CreateFolder(L"/", name);
-    ASSERT_TRUE(folder.has_value());
-    model_.albums.emplace(folder->folder_id_, ModelAlbum{.name = name, .files = {}});
+    ASSERT_EQ(folder.status_, AlbumFolderEditStatus::Done);
+    model_.albums.emplace(folder.folder_.folder_id_, ModelAlbum{.name = name, .files = {}});
   }
 
   void LinkToAlbum(sl_element_id_t album, const std::vector<sl_element_id_t>& ids) {
@@ -985,7 +985,9 @@ class LibraryReferenceModelTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   void DeleteAlbum(sl_element_id_t album) {
-    ASSERT_TRUE(Browse().DeleteFolder(std::filesystem::path(L"/") / model_.albums.at(album).name));
+    ASSERT_EQ(
+        Browse().DeleteFolder(std::filesystem::path(L"/") / model_.albums.at(album).name).status_,
+        AlbumFolderEditStatus::Done);
     model_.albums.erase(album);
   }
 

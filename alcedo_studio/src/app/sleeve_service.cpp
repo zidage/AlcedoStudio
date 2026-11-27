@@ -282,6 +282,30 @@ auto SleeveServiceImpl::CreateFolder(const std::filesystem::path& parent_path,
   return result;
 }
 
+auto SleeveServiceImpl::CreateFolderEntry(const std::filesystem::path& parent_path,
+                                          const file_name_t&           name)
+    -> std::pair<std::optional<FolderTreeEntry>, SyncResult> {
+  return Write<std::optional<FolderTreeEntry>>(
+      [&parent_path, &name](FileSystem& fs) -> std::optional<FolderTreeEntry> {
+        const auto parent = fs.Get(parent_path, false);
+        if (!parent || parent->type_ != ElementType::FOLDER || !parent->IsLive()) {
+          throw std::runtime_error("SleeveService: The parent path is not a folder.");
+        }
+        RequireEditableStructure(*parent);
+        if (std::static_pointer_cast<SleeveFolder>(parent)->Contains(name)) {
+          return std::nullopt;
+        }
+        const auto created = fs.Create(parent_path, name, ElementType::FOLDER);
+        if (!created || created->type_ != ElementType::FOLDER) {
+          throw std::runtime_error("SleeveService: Failed to create folder.");
+        }
+        return FolderTreeEntry{.path_      = parent_path / created->element_name_,
+                               .folder_id_ = created->element_id_,
+                               .name_      = created->element_name_,
+                               .mount_id_  = created->mount_id_};
+      });
+}
+
 auto SleeveServiceImpl::CreateFileInLibrary(const file_name_t& name)
     -> std::pair<std::shared_ptr<SleeveFile>, SyncResult> {
   return Write<std::shared_ptr<SleeveFile>>(
