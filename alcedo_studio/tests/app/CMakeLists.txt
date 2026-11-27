@@ -617,7 +617,8 @@ add_executable(StorageInvariantCheck ${ALCEDO_TEST_ROOT}/app/storage_invariant_c
 target_include_directories(StorageInvariantCheck PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(StorageInvariantCheck PRIVATE StorageInvariantsTestSupport)
 alcedo_copy_duckdb_extensions(StorageInvariantCheck)
-alcedo_register_test_target(StorageInvariantCheck app)
+# ci_core: the macOS CI build tree holds it for the scheduled fuzz step (#1193).
+alcedo_register_test_target(StorageInvariantCheck app ci_core)
 
 add_executable(StorageInvariantCheckTest ${ALCEDO_TEST_ROOT}/app/storage_invariant_check_test.cpp)
 target_include_directories(StorageInvariantCheckTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
