@@ -37,6 +37,7 @@
 #include "edit/runtime/texture_format.hpp"
 #include "edit/runtime/vulkan/vulkan_develop_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_pass_encoder.hpp"
+#include "vulkan/vulkan_context.hpp"
 #include "vulkan_reference_backend_support.hpp"
 #include "vulkan_workspace_test_support.hpp"
 
@@ -139,17 +140,30 @@ class VulkanDevelopTest : public vulkan_workspace_test::VulkanWorkspaceFixture {
 };
 
 // The tolerances of the measurement of this phase (plan, VK6 completion record).
+/// The demosaic and highlight cases where the two backends round the RCD steps differently: the
+/// bound is the root mean square; the largest value only catches a gross error.
+constexpr Tolerance kRoundingDemosaicTolerance = {0.5, 0.5, 0, 2.5e-4};
+
+/// The tolerance of the demosaic and highlight cases on the GPU of the Vulkan context.
+auto                DemosaicTolerance() -> Tolerance {
 #if defined(HAVE_OPENCL)
-/// The demosaic and highlight cases against OpenCL (B9): the RCD tolerance of VK4.
-constexpr Tolerance kDemosaicTolerance = Uniform(1.0e-4);
+  // Intel Iris Xe: on a clipped Bayer RAW the red and blue RCD steps of the Intel Vulkan and
+  // OpenCL drivers differ by up to 0.058 at about 2600 of 24 million texels (rms 1.4e-5; 1.2e-4
+  // with the highlight reconstruction, which spreads them). Accepted by the user 2026-11-27
+  // (#1213). Other GPUs: the RCD tolerance of VK4 against OpenCL (B9).
+  constexpr std::uint32_t kIntelVendorId = 0x8086;
+  if (vulkan::VulkanContext::Instance().Capabilities().vendor_id == kIntelVendorId) {
+    return kRoundingDemosaicTolerance;
+  }
+  return Uniform(1.0e-4);
 #else
-/// The demosaic and highlight cases against Metal. The Metal RAW kernels have fast math and
-/// contract products into FMAs, the OpenCL and Vulkan kernels do not: on the Apple M4 the RCD and
-/// X-Trans results of Metal differ from Vulkan by up to 0.47 (rms 1.3e-4) at a few edges of the
-/// image. With Metal built without fast math and contraction, the two were equal bit for bit
-/// (VK6 record). The bound is the root mean square; the largest value only catches a gross error.
-constexpr Tolerance kDemosaicTolerance = {0.5, 0.5, 0, 2.5e-4};
+  // Metal: the Metal RAW kernels have fast math and contract products into FMAs, the OpenCL and
+  // Vulkan kernels do not: on the Apple M4 the RCD and X-Trans results of Metal differ from Vulkan
+  // by up to 0.47 (rms 1.3e-4) at a few edges of the image. With Metal built without fast math and
+  // contraction, the two were equal bit for bit (VK6 record).
+  return kRoundingDemosaicTolerance;
 #endif
+}
 constexpr Tolerance kDevelopTolerance = Uniform(1.0e-4);
 constexpr Tolerance kLensTolerance    = Uniform(5.0e-4);
 /// 1e-5 inside (the DNG warp tolerance of VK5); 8 ulp of a coordinate below 16384 in the border
@@ -161,14 +175,14 @@ TEST_F(VulkanDevelopTest, BayerRawEqualsTheReferenceBackend) {
   const auto input = RequireSample(kClippedBayerRaw);
   ASSERT_NE(input, nullptr);
   ASSERT_EQ(input->cfa_pattern.kind, RawCfaKind::Bayer2x2);
-  ExpectBothHighlightModesEqual("Bayer NEF", *input, kDemosaicTolerance);
+  ExpectBothHighlightModesEqual("Bayer NEF", *input, DemosaicTolerance());
 }
 
 TEST_F(VulkanDevelopTest, XTransRawEqualsTheReferenceBackend) {
   const auto input = RequireSample(kXTransRaw);
   ASSERT_NE(input, nullptr);
   ASSERT_EQ(input->cfa_pattern.kind, RawCfaKind::XTrans6x6);
-  ExpectBothHighlightModesEqual("X-Trans RAF", *input, kDemosaicTolerance);
+  ExpectBothHighlightModesEqual("X-Trans RAF", *input, DemosaicTolerance());
 }
 
 TEST_F(VulkanDevelopTest, LinearDngEqualsTheReferenceBackend) {
