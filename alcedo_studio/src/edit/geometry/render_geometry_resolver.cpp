@@ -6,8 +6,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "edit/geometry/crop_frame.hpp"
 
@@ -15,10 +18,17 @@ namespace alcedo {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
+constexpr auto  kMaxPixelExtent = std::numeric_limits<std::int32_t>::max();
 
+/// Require source dimensions that the signed pixel rectangles can represent.
 void            ThrowIfInvalidExtent(const Extent2D& extent, const char* name) {
   if (extent.Empty()) {
     throw std::runtime_error(std::string("ResolveRenderGeometry: ") + name + " must be positive");
+  }
+  if (extent.width > static_cast<std::uint32_t>(kMaxPixelExtent) ||
+      extent.height > static_cast<std::uint32_t>(kMaxPixelExtent)) {
+    throw std::runtime_error(std::string("ResolveRenderGeometry: ") + name +
+                             " exceeds the signed pixel range");
   }
 }
 
@@ -34,10 +44,14 @@ auto ClampNormalizedRect(NormalizedRect rect, const char* name) -> NormalizedRec
   return rect;
 }
 
-auto RoundExtent(float width, float height) -> Extent2D {
+/// Round a positive size to at least one pixel without exceeding the signed pixel range.
+auto RoundExtent(double width, double height) -> Extent2D {
   if (!std::isfinite(width) || !std::isfinite(height) || width <= 0.0f || height <= 0.0f) {
     throw std::runtime_error(
         "ResolveRenderGeometry: extent components must be positive and finite");
+  }
+  if (width > kMaxPixelExtent || height > kMaxPixelExtent) {
+    throw std::runtime_error("ResolveRenderGeometry: extent exceeds the signed pixel range");
   }
   const auto rounded_w = static_cast<std::uint32_t>(std::max(1L, std::lround(width)));
   const auto rounded_h = static_cast<std::uint32_t>(std::max(1L, std::lround(height)));
@@ -91,44 +105,29 @@ auto AabbOfTransformedCorners(const Matrix3x3& matrix, Vector2 a, Vector2 b, Vec
   return box;
 }
 
-auto ClampRectI(std::int32_t x0, std::int32_t y0, std::int32_t x1, std::int32_t y1, Extent2D extent)
-    -> RectI {
-  const auto max_x = static_cast<std::int32_t>(extent.width);
-  const auto max_y = static_cast<std::int32_t>(extent.height);
-  x0               = std::clamp(x0, 0, max_x);
-  x1               = std::clamp(x1, 0, max_x);
-  y0               = std::clamp(y0, 0, max_y);
-  y1               = std::clamp(y1, 0, max_y);
-  if (x1 < x0) {
-    std::swap(x0, x1);
-  }
-  if (y1 < y0) {
-    std::swap(y0, y1);
-  }
-  if (x1 == x0) {
-    if (x0 > 0) {
-      --x0;
-    } else if (x1 < max_x) {
-      ++x1;
+/// Expand sorted bounds by a sampling radius, clamp to the source, and keep at least one pixel.
+auto RequiredPixelSpan(float low, float high, float radius, std::uint32_t extent)
+    -> std::pair<std::int32_t, std::int32_t> {
+  const auto limit = static_cast<double>(extent);
+  const auto lower = std::clamp(static_cast<double>(low) - radius, 0.0, limit);
+  const auto upper = std::clamp(static_cast<double>(high) + radius, 0.0, limit);
+  auto       first = static_cast<std::int32_t>(std::floor(lower));
+  auto       last  = static_cast<std::int32_t>(std::ceil(upper));
+  if (first == last) {
+    if (first > 0) {
+      --first;
+    } else {
+      ++last;
     }
   }
-  if (y1 == y0) {
-    if (y0 > 0) {
-      --y0;
-    } else if (y1 < max_y) {
-      ++y1;
-    }
-  }
-  return RectI{x0, y0, x1 - x0, y1 - y0};
+  return {first, last};
 }
 
 auto RequiredRegionFromAabb(const Aabb& box, float radius_x, float radius_y, Extent2D extent)
     -> RectI {
-  const auto x0 = static_cast<std::int32_t>(std::floor(box.min_x - radius_x));
-  const auto y0 = static_cast<std::int32_t>(std::floor(box.min_y - radius_y));
-  const auto x1 = static_cast<std::int32_t>(std::ceil(box.max_x + radius_x));
-  const auto y1 = static_cast<std::int32_t>(std::ceil(box.max_y + radius_y));
-  return ClampRectI(x0, y0, x1, y1, extent);
+  const auto [x0, x1] = RequiredPixelSpan(box.min_x, box.max_x, radius_x, extent.width);
+  const auto [y0, y1] = RequiredPixelSpan(box.min_y, box.max_y, radius_y, extent.height);
+  return RectI{x0, y0, x1 - x0, y1 - y0};
 }
 
 void FillGpuData(ResolvedRenderGeometry& geometry) {
@@ -144,6 +143,32 @@ void FillGpuData(ResolvedRenderGeometry& geometry) {
   geometry.gpu_data.border_rgba[2] = 0.0f;
   geometry.gpu_data.border_rgba[3] = 1.0f;
   geometry.gpu_data.filter         = static_cast<std::uint32_t>(geometry.filter);
+}
+
+/// Map the framed canvas edges [0, width] x [0, height] to their oriented coordinates.
+/// Using edge coordinates maps every half-integer pixel center to another pixel center.
+auto FrameOrientationTransform(FrameOrientation orientation, Extent2D extent) -> Matrix3x3 {
+  const auto width  = static_cast<float>(extent.width);
+  const auto height = static_cast<float>(extent.height);
+  switch (orientation) {
+    case FrameOrientation::Identity:
+      return Matrix3x3::Identity();
+    case FrameOrientation::Rotate90Clockwise:
+      return Matrix3x3{{0, -1, height, 1, 0, 0, 0, 0, 1}};
+    case FrameOrientation::Rotate180:
+      return Matrix3x3{{-1, 0, width, 0, -1, height, 0, 0, 1}};
+    case FrameOrientation::Rotate90Counterclockwise:
+      return Matrix3x3{{0, 1, 0, -1, 0, width, 0, 0, 1}};
+    case FrameOrientation::FlipHorizontal:
+      return Matrix3x3{{-1, 0, width, 0, 1, 0, 0, 0, 1}};
+    case FrameOrientation::FlipVertical:
+      return Matrix3x3{{1, 0, 0, 0, -1, height, 0, 0, 1}};
+    case FrameOrientation::Transpose:
+      return Matrix3x3{{0, 1, 0, 1, 0, 0, 0, 0, 1}};
+    case FrameOrientation::Transverse:
+      return Matrix3x3{{0, -1, height, -1, 0, width, 0, 0, 1}};
+  }
+  throw std::runtime_error("ResolveRenderGeometry: invalid frame orientation");
 }
 
 }  // namespace
@@ -185,12 +210,7 @@ auto ResolveRenderGeometry(const SourceGeometry& source, const ImageGeometryPara
 
   const auto  to_center = Matrix3x3::Translate(-cx, -cy);
   const auto  rotate    = Matrix3x3::Rotate(theta);
-  const auto  centered  = rotate * to_center;
-  const auto  rotated_box =
-      AabbOfTransformedCorners(centered, Vector2{left, top}, Vector2{right, top},
-                               Vector2{right, bottom}, Vector2{left, bottom});
-  const float aabb_w = std::max(rotated_box.max_x - rotated_box.min_x, kGeometryMinNormalizedSize);
-  const float aabb_h = std::max(rotated_box.max_y - rotated_box.min_y, kGeometryMinNormalizedSize);
+  const auto             centered  = rotate * to_center;
 
   ResolvedRenderGeometry geometry;
   geometry.decoded_extent        = source.decoded_extent;
@@ -199,6 +219,12 @@ auto ResolveRenderGeometry(const SourceGeometry& source, const ImageGeometryPara
       MakeDecodedToReference(source.decoded_extent, source.full_reference_extent);
 
   if (image.output_frame == GeometryOutputFrame::RotatedSourceBounds) {
+    const auto  rotated_box = AabbOfTransformedCorners(centered, {left, top}, {right, top},
+                                                       {right, bottom}, {left, bottom});
+    const float aabb_w =
+        std::max(rotated_box.max_x - rotated_box.min_x, kGeometryMinNormalizedSize);
+    const float aabb_h =
+        std::max(rotated_box.max_y - rotated_box.min_y, kGeometryMinNormalizedSize);
     geometry.edit_extent       = RoundExtent(aabb_w, aabb_h);
     const float sx             = static_cast<float>(geometry.edit_extent.width) / aabb_w;
     const float sy             = static_cast<float>(geometry.edit_extent.height) / aabb_h;
@@ -213,6 +239,15 @@ auto ResolveRenderGeometry(const SourceGeometry& source, const ImageGeometryPara
         Matrix3x3::Translate(static_cast<float>(geometry.edit_extent.width) * 0.5f,
                              static_cast<float>(geometry.edit_extent.height) * 0.5f) *
         Matrix3x3::Scale(sx, sy) * centered;
+  }
+
+  geometry.orientation = image.orientation;
+  if (image.orientation != FrameOrientation::Identity) {
+    const auto orient          = FrameOrientationTransform(image.orientation, geometry.edit_extent);
+    geometry.reference_to_edit = orient * geometry.reference_to_edit;
+    if (orient.m[0] == 0.0f) {
+      std::swap(geometry.edit_extent.width, geometry.edit_extent.height);
+    }
   }
 
   const float edit_w   = static_cast<float>(geometry.edit_extent.width);
@@ -255,15 +290,6 @@ auto ResolveRenderGeometry(const SourceGeometry& source, const ImageGeometryPara
   geometry.filter         = resolution.quality == RenderQuality::Export ? TextureFilter::Bicubic
                                                                         : TextureFilter::Bilinear;
 
-  const float render_w    = static_cast<float>(geometry.render_extent.width);
-  const float render_h    = static_cast<float>(geometry.render_extent.height);
-  const auto  decoded_box = AabbOfTransformedCorners(
-      geometry.render_to_decoded, Vector2{0.0f, 0.0f}, Vector2{render_w, 0.0f},
-      Vector2{render_w, render_h}, Vector2{0.0f, render_h});
-  const auto reference_box = AabbOfTransformedCorners(
-      geometry.render_to_reference, Vector2{0.0f, 0.0f}, Vector2{render_w, 0.0f},
-      Vector2{render_w, render_h}, Vector2{0.0f, render_h});
-
   if (footprint.requires_full_reference) {
     geometry.required_decoded_region =
         RectI{0, 0, static_cast<std::int32_t>(geometry.decoded_extent.width),
@@ -272,6 +298,14 @@ auto ResolveRenderGeometry(const SourceGeometry& source, const ImageGeometryPara
         RectI{0, 0, static_cast<std::int32_t>(geometry.full_reference_extent.width),
               static_cast<std::int32_t>(geometry.full_reference_extent.height)};
   } else {
+    const float render_w = static_cast<float>(geometry.render_extent.width);
+    const float render_h = static_cast<float>(geometry.render_extent.height);
+    const auto  decoded_box =
+        AabbOfTransformedCorners(geometry.render_to_decoded, {0.0f, 0.0f}, {render_w, 0.0f},
+                                 {render_w, render_h}, {0.0f, render_h});
+    const auto reference_box =
+        AabbOfTransformedCorners(geometry.render_to_reference, {0.0f, 0.0f}, {render_w, 0.0f},
+                                 {render_w, render_h}, {0.0f, render_h});
     geometry.required_decoded_region = RequiredRegionFromAabb(
         decoded_box, footprint.radius_x, footprint.radius_y, geometry.decoded_extent);
     geometry.required_reference_region = RequiredRegionFromAabb(

@@ -8,8 +8,10 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace alcedo {
@@ -60,6 +62,78 @@ TEST(GpuDagGeometry, FullCropZeroRotationMapsReferenceCornersToRenderCorners) {
   const auto bottom_right = TransformPoint(geometry.render_to_reference, PixelCenter(63, 47));
   EXPECT_NEAR(bottom_right.x, 63.5f, kPxEps);
   EXPECT_NEAR(bottom_right.y, 47.5f, kPxEps);
+}
+
+TEST(GpuDagGeometry, AllEightOrientationsMapLabeledCornersExactly) {
+  constexpr Extent2D   source{5, 3};
+  constexpr std::array corners{Vector2{0.5f, 0.5f}, Vector2{4.5f, 0.5f}, Vector2{4.5f, 2.5f},
+                               Vector2{0.5f, 2.5f}};
+  struct Case {
+    FrameOrientation           orientation;
+    Extent2D                   extent;
+    std::array<std::size_t, 4> source_corner;
+  };
+  constexpr Case cases[] = {
+      {FrameOrientation::Identity, {5, 3}, {0, 1, 2, 3}},
+      {FrameOrientation::Rotate90Clockwise, {3, 5}, {3, 0, 1, 2}},
+      {FrameOrientation::Rotate180, {5, 3}, {2, 3, 0, 1}},
+      {FrameOrientation::Rotate90Counterclockwise, {3, 5}, {1, 2, 3, 0}},
+      {FrameOrientation::FlipHorizontal, {5, 3}, {1, 0, 3, 2}},
+      {FrameOrientation::FlipVertical, {5, 3}, {3, 2, 1, 0}},
+      {FrameOrientation::Transpose, {3, 5}, {0, 3, 2, 1}},
+      {FrameOrientation::Transverse, {3, 5}, {2, 1, 0, 3}},
+  };
+  for (const auto& c : cases) {
+    SCOPED_TRACE(static_cast<int>(c.orientation));
+    const auto geometry = ResolveSimple(MakeSourceGeometry(source, source),
+                                        ImageGeometryParams{.orientation = c.orientation});
+    ASSERT_EQ(geometry.edit_extent, c.extent);
+    ASSERT_EQ(geometry.render_extent, c.extent);
+    EXPECT_EQ(geometry.full_reference_extent, source);
+    EXPECT_EQ(geometry.orientation, c.orientation);
+    EXPECT_EQ(IsIdentityResample(geometry), c.orientation == FrameOrientation::Identity);
+    const float      last_x = static_cast<float>(c.extent.width) - 0.5f;
+    const float      last_y = static_cast<float>(c.extent.height) - 0.5f;
+    const std::array displayed{Vector2{0.5f, 0.5f}, Vector2{last_x, 0.5f}, Vector2{last_x, last_y},
+                               Vector2{0.5f, last_y}};
+    for (std::size_t i = 0; i < displayed.size(); ++i) {
+      EXPECT_EQ(TransformPoint(geometry.render_to_decoded, displayed[i]),
+                corners[c.source_corner[i]]);
+      EXPECT_EQ(TransformPoint(geometry.reference_to_render, corners[c.source_corner[i]]),
+                displayed[i]);
+    }
+  }
+}
+
+TEST(GpuDagGeometry, OrientationAppliesAfterCropAndStraighteningBeforeViewCrop) {
+  const auto          source = MakeSourceGeometry({45, 31}, {45, 31});
+  ImageGeometryParams image{.crop_rect = {0.2f, 0.15f, 0.55f, 0.5f}, .rotation_degrees = 12.0f};
+  const auto          original = ResolveSimple(source, image);
+  image.orientation            = FrameOrientation::Rotate90Clockwise;
+  const auto oriented          = ResolveSimple(source, image);
+  ASSERT_EQ(oriented.edit_extent,
+            (Extent2D{original.edit_extent.height, original.edit_extent.width}));
+  const auto original_height = static_cast<float>(original.edit_extent.height);
+  for (const Vector2 point : {Vector2{0.5f, 0.5f}, Vector2{9.5f, 12.5f}}) {
+    const auto actual = TransformPoint(oriented.render_to_reference, point);
+    const auto expected =
+        TransformPoint(original.render_to_reference, {point.y, original_height - point.x});
+    EXPECT_NEAR(actual.x, expected.x, kPxEps);
+    EXPECT_NEAR(actual.y, expected.y, kPxEps);
+  }
+
+  const auto roi = ResolveSimple(
+      source, image, ViewRequest{.visible_rect_in_edit_space = {0.0f, 0.5f, 1.0f, 0.5f}});
+  const auto actual   = TransformPoint(roi.render_to_reference, {0, 0});
+  const auto expected = TransformPoint(oriented.render_to_reference,
+                                       {0, static_cast<float>(oriented.edit_extent.height) * 0.5f});
+  EXPECT_NEAR(actual.x, expected.x, kPxEps);
+  EXPECT_NEAR(actual.y, expected.y, kPxEps);
+}
+
+TEST(GpuDagGeometry, ResolveRenderGeometryRejectsUnknownFrameOrientation) {
+  ImageGeometryParams image{.orientation = static_cast<FrameOrientation>(255)};
+  EXPECT_THROW(ResolveSimple(MakeSourceGeometry({5, 3}, {5, 3}), image), std::runtime_error);
 }
 
 TEST(GpuDagGeometry, RotatedCropOutputIsTheCropFrameAndSamplesOnlyTheSource) {
@@ -244,6 +318,28 @@ TEST(GpuDagGeometry, ResolveRenderGeometryRejectsZeroExtent) {
   bad.render_scale = 0.0f;
   EXPECT_THROW(ResolveSimple(MakeSourceGeometry({10, 10}, {10, 10}), {}, {}, bad, {}),
                std::runtime_error);
+}
+
+TEST(GpuDagGeometry, OrientedRenderRejectsExtentsOutsideTheSignedPixelRange) {
+  constexpr auto oversized =
+      static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) + 1u;
+  const ImageGeometryParams image{.orientation = FrameOrientation::Rotate90Clockwise};
+  EXPECT_THROW(ResolveSimple(MakeSourceGeometry({5, 3}, {oversized, 3}), image),
+               std::runtime_error);
+  EXPECT_THROW(ResolveSimple(MakeSourceGeometry({5, 3}, {5, 3}), image, {},
+                             ResolutionRequest{.render_scale = 1.0e10f}),
+               std::runtime_error);
+}
+
+TEST(GpuDagGeometry, WideOrientedSamplingFootprintClampsToBothSourceExtents) {
+  const auto                source = MakeSourceGeometry({25, 15}, {50, 30});
+  const ImageGeometryParams image{.orientation = FrameOrientation::Transverse};
+  const ViewRequest         view{.visible_rect_in_edit_space = {0.25f, 0.25f, 0.50f, 0.50f}};
+  constexpr auto            radius = std::numeric_limits<float>::max();
+  const auto geometry = ResolveSimple(source, image, view, {},
+                                      SamplingFootprint{.radius_x = radius, .radius_y = radius});
+  EXPECT_EQ(geometry.required_decoded_region, (RectI{0, 0, 25, 15}));
+  EXPECT_EQ(geometry.required_reference_region, (RectI{0, 0, 50, 30}));
 }
 
 }  // namespace alcedo

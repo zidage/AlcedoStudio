@@ -47,6 +47,7 @@
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_kernel_cache.hpp"
 #include "opencl/opencl_runtime.hpp"
+#include "orientation_resample_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -619,6 +620,11 @@ TEST_F(OpenClDevelopFixture, OpenClHundredMegapixelBayerFixturesCompleteAndProdu
     EXPECT_TRUE(std::isfinite(pixel.b));
     EXPECT_LT(elapsed, std::chrono::minutes(8));
   }
+}
+
+TEST_F(OpenClDevelopFixture, QuarterTurnSwapsCanvasAndPreservesEverySourcePixel) {
+  gpu_dag_test::VerifyExactOrientationPixels<OpenClRenderDevice>(ExecuteOpenClDevelop,
+                                                                 ExecuteOpenClGeometryResample);
 }
 
 TEST_F(OpenClDevelopFixture, OpenClGeometryUsesOneResampleForCropRotationViewportAndScale) {

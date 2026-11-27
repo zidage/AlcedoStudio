@@ -369,6 +369,81 @@ TEST(EditorCropInteractionTest, CropFrameIsAxisAlignedOnTheRotatedGeometryPanelF
   EXPECT_LT(c[0].y(), c[3].y());
 }
 
+TEST(EditorCropInteractionTest, QuarterTurnFitsUncroppedSourceAndUsesMappedCropEdges) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  PresentResolvedFrame(controller, 401, 301,
+                       ImageGeometryParams{.output_frame = GeometryOutputFrame::RotatedSourceBounds,
+                                           .orientation  = FrameOrientation::Rotate90Clockwise});
+  OpenCropTool(controller);
+  const QRectF initial(0.25, 0.25, 0.5, 0.5);
+  controller.setCropRectNormalized(initial);
+  const auto overlay = controller.overlayGeometry();
+  ASSERT_TRUE(overlay.crop_corners_valid);
+  EXPECT_NEAR(overlay.image_rect.height(), 600.0, 0.01);
+  EXPECT_NEAR(overlay.image_rect.width(), 600.0 * 301.0 / 401.0, 0.01);
+  const auto& corners = overlay.crop_corners_widget;
+  EXPECT_GT(corners[0].x(), corners[3].x());
+  EXPECT_LT(corners[0].y(), corners[1].y());
+  const QPointF right = (corners[0] + corners[1]) * 0.5;
+  EXPECT_NEAR(overlay.angle_badge_widget.y(), right.y(), 0.01);
+  EXPECT_GT(overlay.angle_badge_widget.x(), right.x());
+
+  // The displayed right edge is the stored top edge.
+  Drag(controller, right, {right + QPointF(30, 0)});
+  const auto result = controller.cropRectNormalized();
+  EXPECT_NEAR(result.left(), initial.left(), 1e-4);
+  EXPECT_NEAR(result.right(), initial.right(), 1e-4);
+  EXPECT_NEAR(result.bottom(), initial.bottom(), 1e-4);
+  EXPECT_LT(result.top(), initial.top());
+}
+
+TEST(EditorCropInteractionTest, ClockwisePointerRotationReversesStoredAngleUnderReflection) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  PresentResolvedFrame(controller, 400, 300,
+                       ImageGeometryParams{.output_frame = GeometryOutputFrame::RotatedSourceBounds,
+                                           .orientation  = FrameOrientation::FlipHorizontal});
+  OpenCropTool(controller);
+  controller.setCropRectNormalized(QRectF(0.2, 0.2, 0.6, 0.6));
+
+  const QPointF center(400, 300);
+  const QPointF press(654, 492);
+  const QPointF lever   = press - center;
+  const auto    degrees = std::atan2(lever.y(), lever.x()) * 180.0 / 3.14159265358979323846;
+  Drag(controller, press, {PointOnCircle(center, std::hypot(lever.x(), lever.y()), degrees + 12)});
+  EXPECT_NEAR(controller.cropRotationDegrees(), -12.0, 0.02);
+}
+
+TEST(EditorCropInteractionTest, AngleBadgeUpdatesWhenOrientationChangesWithTheSamePixelMapping) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  PresentGeometryPanelFrame(controller, 400, 300, 0.0f);
+  OpenCropTool(controller);
+  controller.setCropRectNormalized(QRectF(0.25, 0.25, 0.5, 0.5));
+  const auto initial_badge = controller.overlayGeometry().angle_badge_widget;
+
+  // Two half turns give the original pixel mapping. The crop corners are still
+  // in stored order, so the badge needs the orientation of the new frame.
+  const ImageGeometryParams image{.rotation_degrees = 180.0f,
+                                  .output_frame     = GeometryOutputFrame::RotatedSourceBounds,
+                                  .orientation      = FrameOrientation::Rotate180};
+  const auto current = controller.maskEditViewMapping().geometry;
+  const auto source  = MakeSourceGeometry({400, 300}, {400, 300});
+  const auto next    = ResolveRenderGeometry(source, image, {}, {}, {});
+  ASSERT_EQ(next.render_extent, current.render_extent);
+  ASSERT_TRUE(MatrixApproxEqual(next.reference_to_edit, current.reference_to_edit));
+  ASSERT_TRUE(MatrixApproxEqual(next.render_to_reference, current.render_to_reference));
+
+  controller.setCropRotationDegrees(180.0f);
+  controller.setDisplayedMaskGeometry(next);
+  EXPECT_EQ(controller.maskEditViewMapping().geometry.orientation, FrameOrientation::Rotate180);
+  const auto overlay = controller.overlayGeometry();
+  ASSERT_TRUE(overlay.crop_corners_valid);
+  EXPECT_NEAR(overlay.angle_badge_widget.x(), initial_badge.x(), 0.01);
+  EXPECT_NEAR(overlay.angle_badge_widget.y(), initial_badge.y(), 0.01);
+}
+
 TEST(EditorCropInteractionTest, CropEdgeDragUnderRotationMovesOnlyThatFrameEdge) {
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);

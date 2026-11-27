@@ -185,8 +185,13 @@ auto CropInteractionController::HandleMove(ViewerState& state, const MaskEditVie
       drag_last_pointer_angle_ = current_angle;
       return result;
     }
-    const float step_degrees = CropGeometry::NormalizeAngleDegrees(
+    float step_degrees = CropGeometry::NormalizeAngleDegrees(
         (current_angle - drag_last_pointer_angle_) * (180.0f / kPi));
+    // A reflection reverses the pointer angle relative to the stored crop axes.
+    const auto& to_edit = mapping.geometry.reference_to_edit.m;
+    if (to_edit[0] * to_edit[4] < to_edit[1] * to_edit[3]) {
+      step_degrees = -step_degrees;
+    }
     drag_last_pointer_angle_ = current_angle;
     drag_rotation_delta_ =
         std::clamp(drag_rotation_delta_ + step_degrees, -CropGeometry::kCropRotateMaxDragDegrees,

@@ -26,8 +26,10 @@
 #include <stdexcept>
 
 #include "editor_comparison_test_support.hpp"
+#include "edit/geometry/render_geometry_resolver.hpp"
 #include "ui/alcedo_main/album_backend/comparison_presentation_image.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/edit_viewer/mask_edit_geometry.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -96,6 +98,47 @@ auto ExpectNear(QPointF actual, QPointF expected, const char* what) {
 }
 
 }  // namespace
+
+TEST(EditorComparisonGeometryTest, OrientationPreviewMasksComparisonAndExportShareMapping) {
+  constexpr Extent2D        source_extent{5, 3};
+  const auto                source = MakeSourceGeometry(source_extent, source_extent);
+  const ImageGeometryParams image{.orientation = FrameOrientation::Rotate90Clockwise};
+  const auto                preview  = ResolveRenderGeometry(source, image, {}, {}, {});
+  const auto                exported = ResolveRenderGeometry(
+      source, image, {}, ResolutionRequest{.quality = RenderQuality::Export}, {});
+  ASSERT_EQ(preview.render_extent, (Extent2D{3, 5}));
+  ASSERT_EQ(exported.render_extent, preview.render_extent);
+  EXPECT_EQ(exported.filter, TextureFilter::Bicubic);
+
+  MaskEditViewMapping mapping;
+  mapping.widget     = {300, 500, 1.0f};
+  mapping.photograph = {3, 5};
+  mapping.geometry   = MaskEditGeometry::MakeDocumentPhotographGeometry(source_extent, image);
+  ASSERT_TRUE(MaskEditGeometry::IsValid(mapping));
+  ASSERT_EQ(mapping.geometry.render_extent, preview.render_extent);
+
+  CanvasHarness canvas(ComparisonPlacementFromGeometry(preview), 500, 300);
+  ASSERT_NE(canvas.canvas(), nullptr) << canvas.errors().toStdString();
+  ASSERT_NE(canvas.image(), nullptr);
+  for (std::uint32_t y = 0; y < 5; ++y) {
+    for (std::uint32_t x = 0; x < 3; ++x) {
+      const Vector2 render = PixelCenter(x, y);
+      const Vector2 reference{render.y, 3.0f - render.x};
+      EXPECT_EQ(TransformPoint(preview.render_to_reference, render), reference);
+      EXPECT_EQ(TransformPoint(exported.render_to_reference, render), reference);
+      ExpectNear(canvas.MapRenderPoint(render.x, render.y),
+                 QPointF(reference.x * 100.0, reference.y * 100.0), "comparison pixel center");
+      const QPointF item(render.x * 100.0, render.y * 100.0);
+      const auto    mask_point = MaskEditGeometry::MapItemToReference(mapping, item, false);
+      ASSERT_TRUE(mask_point.has_value());
+      EXPECT_NEAR(mask_point->reference_pixels.x, reference.x, 1e-5);
+      EXPECT_NEAR(mask_point->reference_pixels.y, reference.y, 1e-5);
+      const auto mask_item = MaskEditGeometry::MapReferenceToItem(mapping, reference);
+      ASSERT_TRUE(mask_item.has_value());
+      ExpectNear(*mask_item, item, "mask pixel center");
+    }
+  }
+}
 
 TEST(EditorComparisonGeometryTest, SourceAlignmentPlacesHalfCropInHalfOfReferenceCanvas) {
   struct Case {
