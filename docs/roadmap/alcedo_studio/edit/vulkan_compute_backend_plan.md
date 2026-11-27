@@ -7,7 +7,7 @@ Status: planned. Experiments VX1 to VX5 come first. VX1, VX2, VX3, and VX5 are c
 9.5). VX4 does not run: the neural networks use ONNX Runtime (user decision 2026-11-22, A5). VX2
 changed B5 to two devices and stopped VK18 until the plan has a new resize design (section 9.2).
 VK0 is complete (2026-11-23, #1063). VK1 is complete (2026-11-23, #1065). VK2 is complete
-(2026-11-23, #1067).
+(2026-11-23, #1067). VK3 is complete (2026-11-23, #1080).
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -366,6 +366,12 @@ SPIR-V has no `cbrt`. The Slang form is `exp2(log2(|x|) / 3)` and one Newton ste
 from a double-precision `cbrt` has the size of the difference of the OpenCL `cbrt` (VX1). A second
 Newton step changes the result by little.
 
+The GLSL.std.450 `exp`, `exp2`, `log`, `log2`, and `pow` are less precise than the OpenCL
+functions, and the shared curves amplify the difference. The `__SLANG__` branch of
+`color_encoding_math.h` maps its `CE_*` macros to the functions of `vulkan/shader/math.slangh`
+(about 1 ulp; VK3 record), so each kernel group that includes the header has `src/` and
+`src/include/` in its include folders.
+
 ### 4.4 Primary call chains
 
 Success, host output (export, thumbnail, test):
@@ -553,7 +559,7 @@ test of its kernels (B9).
 | VK0 | Build option, dependencies, `VulkanContext`, enum values | root CMake, `src/vulkan/`, `pipeline_accelerator` | VX1, VX2 | 1300 to 1700 | complete (#1063) |
 | VK1 | Slang build rule, shader module registry, compute pipeline cache, kernel check tool | `src/vulkan/`, `tools/gpu_kernel_check.cpp` | VK0 | 1300 to 1700 | complete (#1065) |
 | VK2 | `VulkanBackend`, `VulkanCommandContext`, workspace instance | `edit/runtime/vulkan/` | VK1, VX3, VX5 | 1600 to 1900 | complete (#1067) |
-| VK3 | Shared kernel modules, geometry utilities, comparison test support | `edit/runtime/vulkan/shader/`, `src/vulkan/` | VK2 | 1500 to 1900 | planned |
+| VK3 | Kernel dispatch, shared color math, geometry utilities, comparison test support | `edit/runtime/vulkan/`, `src/vulkan/shader/`, `color_encoding_math.h` | VK2 | 1300 to 1700 | complete (#1080) |
 | VK4 | RAW operators: linearize, CFA clamp, reference space, RCD, X-Trans, pack | `decoders/processor/operators/gpu/` | VK3 | 1400 to 1800 | planned |
 | VK5 | RAW operators: highlight reconstruction, lens calibration, DNG warp | `decoders/processor/operators/gpu/`, `edit/runtime/lens/vulkan/` | VK4 | 1500 to 1900 | planned |
 | VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | planned |
@@ -1176,6 +1182,260 @@ lifetime, transfers, submission) share the state of the backend, so it stays one
 is in VK17. The 0.2 memory priority of cache entries comes with the caches that allocate their own
 entries (VK8, VK11).
 
+### Phase VK3: kernel dispatch, shared color math, geometry utilities, comparison test support
+
+**Objective and deliverables.** A pass encoder records a kernel of the catalog with one call. The
+color encodings and OkLab of the OpenCL kernels compile as Slang and give the OpenCL values. The
+crop and resize of the Develop pass run on Vulkan images. A test runs one input on Vulkan and on
+OpenCL on the same GPU and compares the results with a stated tolerance; each later phase uses
+this support for its comparison test (B9).
+
+**Inputs and prerequisites.** VK2 (`VulkanBackend`, `VulkanCommandContext`). The VX1 record:
+the `__SLANG__` branch of `color_encoding_math.h`, the `cbrt` form, the kernel rules of sections
+4.2 and 4.3.
+
+**Source audit of the VK3 entry (2026-11-23).** The scope entry of VK3 named `common.cl`,
+`cst.cl`, `oklab.cl`, `prng.cl`, and the geometry utilities. The source on the VK2 branch shows:
+
+| Item of the entry | Source | Users in OpenCL programs | VK3 decision |
+| --- | --- | --- | --- |
+| Color encodings | `color/color_encoding_math.h` | every program of `opencl_gpu_dag_programs.cpp` | VK3: the `__SLANG__` branch |
+| OkLab | `oklab.cl` | `primary_grade.cl`, `mask.cl` | VK3: `oklab.slangh` |
+| `common.cl` helpers without parameters (matrix, RGC curve, sigmoid, contrast on luma, luma) | `common.cl` | none: no kernel calls them | not ported |
+| `common.cl` tone curves, `cst.cl` (ACES 2.0, OpenDRT, LMT, LUT sample), `drt_params.cl` | DRT program | `drt.cl` through `OpenClDrtParams` | VK12, with the host packing of the DRT parameters (`opencl_drt_params.cpp`) that their test needs |
+| Counter PRNG | `opencl/opencl_shader/prng.cl` | none: no program lists `ALCEDO_OPENCL_PRNG_CL`. The film grain uses `FilmGrainHash3` of `film_grain_field.h`. | not ported; [#1081](https://github.com/zidage/AlcedoStudio/issues/1081). The grain hash comes with VK14. |
+| Crop and bilinear resize | `geometry_utils.cl` (`opencl_geometry_crop_resize_linear`), `OpenCL::Geometry::ResizeLinear` and `CropResize` | `ResizeLinear` in `opencl_develop_pass.cpp` (after the lens calibration) | VK3 |
+| Area resize | `geometry_utils.cl` (`opencl_geometry_crop_resize_area`) | none: `CropResize` with `Area` has test callers only (the `Area` default argument of the OpenCL function) | not ported (completion record: its loop breaks the workgroup limit) |
+| Affine warp, rotate, DNG warp of `geometry_utils.cl` | `geometry_utils.cl` | tests only. The DNG warp of the graph is `warp_rectilinear_rgba32f` of `geometry_camera.cl` (VK7). | not ported |
+
+So the PRNG test of the entry is replaced by the encoding and OkLab tests below.
+
+**Modules, files, and APIs.**
+
+- `inc/edit/runtime/vulkan/vulkan_kernel_dispatch.hpp`, `edit/runtime/vulkan/vulkan_kernel_dispatch.cpp`
+  (target `EditRuntimeVulkan`): `RecordKernelDispatch(backend, command_context, kernel descriptor,
+  image bindings, push constant bytes, workgroup count)`. It gets the pipeline from
+  `VulkanComputePipelineCache`, prepares each image (`PrepareImage`), pushes the descriptors and the
+  push constants, records `vkCmdDispatch`, and notes the write. `PushConstantBytes(value)` gives the
+  bytes of a push constant struct.
+- `inc/color/color_encoding_math.h`: a `__SLANG__` branch of the `CE_*` macros (VX1).
+- `vulkan/shader/math.slangh`: `AlcedoCbrt` (section 4.3), and `AlcedoExp`, `AlcedoExp2`,
+  `AlcedoLog`, `AlcedoLog2`, `AlcedoPow`: exact argument reduction and polynomials of plain
+  arithmetic, about 1 ulp. The `__SLANG__` branch of `color_encoding_math.h` maps the `CE_*`
+  macros to them (completion record).
+- `edit/runtime/vulkan/shader/oklab.slangh`: `AcesccToLinearAp1`, `LinearAp1ToAcescc`,
+  `LinearAp1ToOkLab`, `OkLabToLinearAp1`, with the coefficients of `oklab.cl`.
+- `edit/runtime/vulkan/shader/color_math_check.slang` and `inc/vulkan/vulkan_color_math_check_kernels.hpp`:
+  the kernel group `color_math_check`. One kernel evaluates every transfer function in one
+  direction for a list of values (the kernel of `color_encoding_opencl_test.cpp`); one kernel
+  evaluates one OkLab or ACEScc function for a list of colors. They are check kernels as
+  `test_fill`: the comparison tests and `alcedo-gpu-check --vulkan` use them.
+- `vulkan/shader/geometry_utils.slang` and `inc/vulkan/vulkan_geometry_kernels.hpp`: the kernel
+  group `geometry_utils` with `geometry_crop_resize_linear`, the form of
+  `opencl_geometry_crop_resize_linear` on RGBA32F storage images (binding 0 source, binding 1
+  destination).
+- `inc/edit/runtime/vulkan/vulkan_geometry.hpp`, `edit/runtime/vulkan/vulkan_geometry.cpp`:
+  `vulkan::geometry::EncodeCropResize(backend, command_context, source, destination, crop)`, the
+  form of `OpenCL::Geometry::ResizeLinear` and of `CropResize` with `Bilinear`. The size of the
+  destination is the output size. The full source at its own size is a `CopyTexture2D`.
+- `VulkanKernelCatalog()`: the descriptors of the two new groups.
+- `tests/vulkan/vulkan_opencl_comparison.hpp`: initializes the OpenCL runtime on the device of the
+  Vulkan context (preferred device = Vulkan device name) and fails when the two device names
+  differ; compares two value lists by a stated rule and tolerance and reports the largest
+  difference, its index, both values, and the count above the tolerance; builds an OpenCL program
+  from product source files and a test kernel text.
+- Tests: `tests/edit/runtime/vulkan_kernel_dispatch_test.cpp` (in `GpuDagVulkanWorkspaceTest`),
+  `tests/edit/runtime/vulkan_color_math_test.cpp` (`VulkanColorMathTest`),
+  `tests/edit/runtime/vulkan_geometry_test.cpp` (`VulkanGeometryTest`). The last two exist when
+  Vulkan and OpenCL are both enabled.
+
+**Data rules and invariants.**
+
+- A pass encoder does not submit and does not wait (section 4.2). `RecordKernelDispatch` records
+  into the open recording of the command context.
+- The images of a dispatch equal the bindings of its descriptor (same numbers), and the push
+  constant bytes equal its `push_constant_bytes`. A mismatch fails before a command is recorded.
+- A dispatch with a workgroup count of zero on an axis records nothing.
+- `EncodeCropResize` takes RGBA32F textures only (the images of the graph). The 1 and 3 channel
+  forms of the OpenCL buffer function serve the `ImageBuffer` path, which Vulkan does not have.
+- The bilinear kernel reads 4 texels for each destination texel at each scale, so its workgroup
+  time does not grow with the scale (section 4.2).
+- The comparison input has the value range of the input of the matching OpenCL test (VX1).
+
+**Implementation steps.**
+
+1. Add `RecordKernelDispatch` and its tests with the `test_fill_image` kernel.
+2. Add the `__SLANG__` branch, `math.slangh`, `oklab.slangh`, the `color_math_check` group, and
+   their catalog entries.
+3. Add the comparison support and `VulkanColorMathTest`.
+4. Add the `geometry_utils` group, `EncodeCropResize`, the catalog entries, and
+   `VulkanGeometryTest`.
+5. Run the tests on both devices with the validation layer.
+
+**Primary success call chain.**
+
+```text
+vulkan::geometry::EncodeCropResize(backend, command_context, source, destination, crop)
+  -> check formats, two textures, crop inside the source
+  -> RecordKernelDispatch(geometry_kernels::CropResizeLinearDescriptor(),
+                          {0: source, 1: destination}, push constants, 16 x 16 groups)
+       -> VulkanComputePipelineCache::Pipeline (cache hit after the first use)
+       -> VulkanBackend::BeginCommand (barrier after an earlier write) -> PrepareImage (each image)
+       -> vkCmdBindPipeline -> vkCmdPushDescriptorSetKHR -> vkCmdPushConstants -> vkCmdDispatch
+       -> VulkanCommandContext::NoteWrite, NoteVulkanDispatch
+  -> caller: VulkanBackend::Submit or DownloadTexture2D (the barrier of the next command covers the
+     write)
+```
+
+**Primary failure call chain.**
+
+```text
+EncodeCropResize with a crop outside the source, a non-RGBA32F texture, or one texture
+  -> std::invalid_argument with the values -> no command, no pipeline request
+RecordKernelDispatch with an image for a binding that the kernel does not have
+  -> std::invalid_argument with the kernel name and the binding -> no command recorded
+```
+
+**Tests and evidence.**
+
+- `GpuDagVulkanWorkspaceTest.DispatchWritesEachTexelAndCountsOneDispatch`
+- `GpuDagVulkanWorkspaceTest.CopyAfterADispatchReadsTheWrittenTexels`
+- `GpuDagVulkanWorkspaceTest.DispatchWithAnImageForAnotherBindingIsRejected`
+- `GpuDagVulkanWorkspaceTest.DispatchWithAnotherPushConstantSizeIsRejected`
+- `GpuDagVulkanWorkspaceTest.SecondDispatchOfOneKernelCreatesNoPipeline`
+- `GpuDagVulkanWorkspaceTest.DispatchOfZeroWorkgroupsRecordsNoCommand`
+- `VulkanColorMathTest.EveryTransferFunctionDecodesToTheOpenClValues` (1e-5 relative, the rule of
+  `CurvesMatchOcioBuiltinsOn4096CodeValues`; completion record)
+- `VulkanColorMathTest.EveryTransferFunctionEncodesToTheOpenClValues`
+- `VulkanColorMathTest.OkLabFunctionsGiveTheOpenClValues` (the grade input range of VX1;
+  `ScaledDifference` 1e-6, the tolerance of `ColorEncodingOpenCl`, and 4e-6 for
+  `OkLabToLinearAp1`)
+- `VulkanGeometryTest.CropAtItsOwnSizeCopiesTheRegionExactly` (tolerance 0)
+- `VulkanGeometryTest.ResizeOfACropEqualsOpenCl` (1e-5, the tolerance of
+  `OpenClGeometryUtilsTest`)
+- `VulkanGeometryTest.ResizeOfTheFullSourceEqualsOpenCl` (1e-5)
+- `VulkanGeometryTest.FullSourceAtItsOwnSizeIsACopyWithNoDispatch`
+- `VulkanGeometryTest.InvalidRequestIsRejectedBeforeACommand`
+
+**Build and run commands.**
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagVulkanWorkspaceTest VulkanColorMathTest VulkanGeometryTest alcedo_gpu_check
+ctest --test-dir build/debug -R "GpuDagVulkanWorkspaceTest|VulkanColorMathTest|VulkanGeometryTest" -j 1 --output-on-failure
+ALCEDO_VULKAN_DEVICE=Iris: the same ctest command
+```
+
+**Exit criteria.**
+
+- [x] The listed tests pass on both local devices with no validation error.
+- [x] `alcedo-gpu-check --vulkan` creates the pipeline of each catalog kernel.
+- [x] The OpenCL, CUDA, and Metal results are unchanged: `ColorEncodingOpenClTest` and the host
+      color encoding tests pass with the changed header.
+
+**Expected diff.** 1300 to 1700 lines.
+
+##### Phase VK3 completion record (2026-11-23)
+
+**Status:** complete. Issue #1080. Branch `feature/vulkan-vk3-shared-kernels` on the VK2 branch
+`feature/vulkan-vk2-backend` (pull request #1068).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Math functions of the Slang branch | VX1: `CE_POW pow`, `CE_EXP exp`, `CE_EXP2 exp2`, `CE_LOG log`, `CE_LOG2 log2` (GLSL.std.450) | `math.slangh` has `AlcedoExp`, `AlcedoExp2` (Cody and Waite reduction, 2^n from the exponent bits, Taylor series of expm1 to r^9), `AlcedoLog`, `AlcedoLog2` (mantissa and exponent from the bits, 2 atanh series to s^11), and `AlcedoPow` = `AlcedoExp(y AlcedoLog(x))`; a base that is not positive keeps the GLSL.std.450 result. The `__SLANG__` branch of `color_encoding_math.h` includes `math.slangh` and maps the `CE_*` macros to them. A kernel group that includes the header has `src/` in its include folders. | With the GLSL.std.450 functions the ST 2084 decode differs from OpenCL by 3.7e-5 (RTX 3080 Laptop GPU) and 5.2e-5 (Iris Xe), above the 1e-5 that the host curves have against OCIO, and the LogC4 decode by 1.5e-6 (about 12 ulp, `exp2` of an argument near 19). The Vulkan precision of `exp2` is 3 + 2\|x\| ulp and of `log2` an absolute 2^-21 in [0.5, 2]; the ST 2084 decode subtracts a constant from a power near 1, so one ulp of that power is about 4e-5 of the light near the peak. With the functions of `math.slangh` the ST 2084 decode differs by 2.4e-6 at most, and both devices give the same values. HLSL `ldexp` and `frexp` take a float exponent, so the scale by 2^n and the mantissa come from the bits. |
+| Transfer function tolerance | `ScaledDifference` at most 1e-6 (the tolerance of `ColorEncodingOpenCl`) | 1e-5 relative to `max(0.01, \|OpenCL\|)`, the rule of `CurvesMatchOcioBuiltinsOn4096CodeValues` (`DifferenceRule::RelativeAboveOneHundredth`). The ACEScc and OkLab functions keep `ScaledDifference` 1e-6. | The 1e-6 of `ColorEncodingOpenCl` holds because OpenCL and the host round each intermediate value of a curve in the same way. A separate implementation of the functions differs by one ulp of an intermediate value, and the shared formula amplifies it: the ST 2084 encode raises a base near 1 to m2 = 78.84, so one ulp of the base is 78.84 x 6e-8 = 4.7e-6 (measured 4.8e-6); the LogC4 decode is exp2 of an argument near 19, so one ulp of the argument is 1.3e-6 (measured 1.5e-6). The repository rule for a separate implementation of a curve is the OCIO comparison. With the `ScaledDifference` rule, 37 of the 39 decode curves and 38 of the 39 encode curves are inside 1e-6 (outside: ST 2084 and LogC4 decode, ST 2084 encode). |
+| `OkLabToLinearAp1` tolerance | `ScaledDifference` 1e-6 | 4e-6 | The function is arithmetic only, and the two compilers fuse other multiply-adds: about 2 ulp in l_, m_, s_, 3 times that after the cube, and the output matrix sums terms of about 3.35 times the result, a float32 limit of about 3.2e-6 of the result. Measured 1.6e-6 on both devices. The other three color functions are inside 1e-6. |
+| Area resize | `geometry_crop_resize_area` with a scale limit of 64 | Not ported. `EncodeCropResize` has no algorithm argument: it is the bilinear crop and resize. | No product path calls the area kernel: in OpenCL, `CropResize` with `Area` has test callers only (the default argument of the function), and the Develop pass calls `ResizeLinear`. The loop of the area kernel grows with the scale and breaks the workgroup limit of section 4.2: at the limit of 64 (4096 x 4096 to 64 x 64, 16 workgroups, each texel reads 65 x 65 texels) one dispatch took 123 to 129 ms on Iris Xe and 4.2 to 5.6 ms on the RTX 3080 Laptop GPU, so one workgroup ran for about that time. A later phase with an area caller divides the footprint over dispatches. |
+| Dispatch recording | `RecordKernelDispatch(backend, command_context, descriptor, image bindings, push constant bytes, workgroup count)` | As planned, in `vulkan_kernel_dispatch.hpp/.cpp`. The pipeline comes from `VulkanContext::Instance().ComputePipelines()`. A request with images that do not match the bindings (count, binding number, binding used two times, empty texture) or another push constant size throws before the pipeline request. At most 8 images for each kernel. `WorkgroupsCovering` and `PushConstantBytes` are helpers of the caller. The device functions come from the context (`PipelineDeviceFunctions`), not from the backend. | One owner of the recording of a dispatch for each pass encoder. A pass encoder with a kernel of more than 8 images changes the limit. |
+| Check kernels | `color_math_check` group | Two kernels on buffers (device addresses in the push constants, no image), float arrays with `uint` index arithmetic (no struct pointer arithmetic, section 4.2). The group is in the catalog, as `test_fill`. | `alcedo-gpu-check --vulkan` requires that the inventory and the catalog have the same kernels. |
+| Comparison support | `tests/vulkan/vulkan_opencl_comparison.hpp` | `PrepareOpenClOnTheVulkanDevice` sets the Vulkan device name as the preferred OpenCL device (`TryInitializeOpenClRuntime`, no warm-up of the product programs) and fails when the two device names differ. `ExpectEqualWithinTolerance` prints one line for each case with both device names and the largest difference. `OpenClTestProgram` builds product sources with a test kernel; the test kernels have the arguments `(input, output, count, mode)`. Three difference rules: absolute, `ScaledDifference`, relative above 0.01. | `ALCEDO_VULKAN_DEVICE` alone selects the GPU of both backends, so a run on Iris Xe compares Intel with Intel. |
+| Shared math of the scope entry | `common.cl`, `cst.cl`, `prng.cl`, DRT parameters | Not in VK3: source audit above. `common.cl` tone curves, `cst.cl`, and `drt_params.cl` go to VK12; the grain hash to VK14. Issue #1081 for the PRNG sources without a caller. | No kernel of VK3 to VK11 calls them; their tests need the host packing of VK12. |
+
+**Primary success call chain:**
+
+```text
+build: alcedo_add_slang_kernels(AlcedoVulkanKernels GROUP color_math_check ...
+         INCLUDE_DIRS src/include src) -> slangc includes color_encoding_math.h (__SLANG__ branch
+         -> vulkan/shader/math.slangh) and oklab.slangh -> spirv-val -> color_math_check.spv
+run (VulkanGeometryTest):
+  VulkanRenderDevice -> VulkanBackend::CreateTexture2D (source, destination) -> UploadTexture2D
+  -> vulkan::geometry::EncodeCropResize(backend, command_context, source, destination, crop)
+       -> RequireRgba32f (both), two textures, crop inside the source; full source at its own size
+          -> CopyTexture2D
+       -> RecordKernelDispatch(CropResizeLinearDescriptor(), {0: source, 1: destination},
+                               CropResizePushConstants, WorkgroupsCovering(width, height, 16, 16))
+            -> check images and push constant size
+            -> VulkanComputePipelineCache::Pipeline (creation at the first use, then a cache hit)
+            -> VulkanBackend::BeginCommand (memory barrier after the upload) -> PrepareImage (each)
+            -> vkCmdBindPipeline -> vkCmdPushDescriptorSetKHR -> vkCmdPushConstants
+            -> vkCmdDispatch -> VulkanCommandContext::NoteWrite -> NoteVulkanDispatch
+  -> VulkanBackend::DownloadTexture2D (barrier after the dispatch, submit, wait, copy)
+  -> ExpectEqualWithinTolerance(OpenCL::Geometry::CropResize result, Vulkan result, 1e-5)
+```
+
+**Primary failure call chain:**
+
+```text
+EncodeCropResize with an R32F texture, one texture for both, an empty crop, or a crop outside
+the source
+  -> std::invalid_argument with the values -> no command, no pipeline request, no recording
+RecordKernelDispatch with an image for binding 3 of a kernel with binding 0, an empty texture, or
+16 push constant bytes for a kernel of 24
+  -> std::invalid_argument with the kernel name and the values -> no command, no recording
+PrepareOpenClOnTheVulkanDevice with an OpenCL device of another name
+  -> the reason names both devices -> ASSERT in SetUp fails the comparison test
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `DispatchWritesEachTexelAndCountsOneDispatch` (37 x 21, not a multiple of the group; 1 dispatch, 0 submissions before the download) | `GpuDagVulkanWorkspaceTest` | PASS (RTX 3080 Laptop GPU and Iris Xe) |
+| `CopyAfterADispatchReadsTheWrittenTexels` (dispatch, copy, dispatch in one recording: the copy has the first value, the image the second) | `GpuDagVulkanWorkspaceTest` | PASS (both) |
+| `DispatchWithAnImageForAnotherBindingIsRejected`, `DispatchWithAnotherPushConstantSizeIsRejected` (0 dispatches, 0 pipeline requests, no recording) | `GpuDagVulkanWorkspaceTest` | PASS (both) |
+| `SecondDispatchOfOneKernelCreatesNoPipeline` (0 creations, 0 module loads, 1 cache hit), `DispatchOfZeroWorkgroupsRecordsNoCommand` | `GpuDagVulkanWorkspaceTest` | PASS (both) |
+| `EveryTransferFunctionDecodesToTheOpenClValues` (4096 code values, 39 curves) | `VulkanColorMathTest` | PASS (both). Largest difference by the rule 2.1e-6 (RTX 3080) and 2.4e-6 (Iris Xe), ST 2084; LogC4 1.5e-6; 4 more curves from 1.0e-6 to 1.5e-6 (values below 1, which this rule compares relatively above 0.01) |
+| `EveryTransferFunctionEncodesToTheOpenClValues` (0 and 2^-14 to 2^6) | `VulkanColorMathTest` | PASS (both). Largest 4.8e-6, ST 2084 (both); ACEScc 3.0e-6 near its zero crossing (linear 2^-9.72, absolute 3e-8); 2 more curves at 1.0e-6 and 1.2e-6 |
+| `OkLabFunctionsGiveTheOpenClValues` (4096 colors of the VX1 photo range) | `VulkanColorMathTest` | PASS (both). `AcesccToLinearAp1` 1.2e-7 and 1.6e-7, `LinearAp1ToAcescc` 6.0e-8, `LinearAp1ToOkLab` 5.4e-7 and 7.2e-7, `OkLabToLinearAp1` 1.6e-6 (both) |
+| `CropAtItsOwnSizeCopiesTheRegionExactly` | `VulkanGeometryTest` | PASS (both): 0 against OpenCL and equal to the source region |
+| `ResizeOfACropEqualsOpenCl`, `ResizeOfTheFullSourceEqualsOpenCl` (6 cases: 2x and fractional downsample of a crop, one axis upsampled, upsample, downsample, 640 x 427 to 160 x 107) | `VulkanGeometryTest` | PASS (both). Largest 1.8e-7 (RTX 3080), 1.2e-7 (Iris Xe) |
+| `FullSourceAtItsOwnSizeIsACopyWithNoDispatch`, `InvalidRequestIsRejectedBeforeACommand` (5 requests) | `VulkanGeometryTest` | PASS (both) |
+| Validation errors | `TearDown` of each GPU test | 0 on both devices |
+| `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | PASS on both devices: `gpu.kernels.ok=vulkan kernels=5`, exit 0 |
+| VK0 to VK2 suites and the build rule after the catalog change | `ctest -R Vulkan` (83 tests) | PASS on both devices (1 skipped: the accelerator test for a build without Vulkan) |
+| The changed header in the other backends | `ColorEncodingOpenClTest`, `ColorEncodingCudaTest`, `ColorEncodingCatalogTest` (23 tests) | PASS |
+
+Commands (worktree `build/debug`, `ALCEDO_ENABLE_VULKAN=ON`, logs in
+`build/tmp/vulkan_backend/vk3/`):
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels GpuDagVulkanWorkspaceTest VulkanColorMathTest VulkanGeometryTest VulkanComputePipelineCacheTest VulkanShaderModuleRegistryTest alcedo_gpu_check
+ctest --test-dir build/debug -R "Vulkan" -j 1 --output-on-failure        default device: 83/83 (1 skipped)
+ALCEDO_VULKAN_DEVICE=Iris ctest --test-dir build/debug -R "Vulkan" -j 1  83/83 (1 skipped)
+build/debug/alcedo_studio/src/alcedo-gpu-check.exe --vulkan              both devices: exit 0
+VulkanColorMathTest.exe, VulkanGeometryTest.exe (direct runs for the measured differences)
+cmd /c scripts\msvc_env.cmd --build build\debug --target ColorEncodingOpenClTest ColorEncodingCudaTest ColorEncodingCatalogTest PipelineAcceleratorTest
+ctest --test-dir build/debug -R "ColorEncoding" -j 1: 23/23
+```
+
+The OpenCL, CUDA, and Metal pass tests did not run: the only shared file with a change of code
+is `color_encoding_math.h`, and its change is a new `#elif defined(__SLANG__)` branch that only
+`slangc` reads; the color encoding tests of OpenCL, CUDA, and the host pass with it. The Metal
+build was not run (no Mac in this phase); the Metal shaders do not define `__SLANG__`. The full
+test suite was not run (repository rule).
+
+**Checklist / exit condition:** all three exit criteria are met.
+
+**LOC note:** 1637 lines in 14 new files (771 lines of production code, headers, and kernels; 866
+lines of tests and test support) and 62 lines in 5 existing files; inside the estimate of 1300
+to 1700. The largest file is `vulkan_opencl_comparison.hpp` (247 lines).
+
+**Remaining gaps:** none for VK3. The area resize has no product caller (decision above). The
+DRT modules of the scope entry are in VK12, the grain hash in VK14. The PRNG sources without a
+caller are issue #1081.
+
 ### Phases VK3 to VK23: scope of each phase
 
 Each entry gives the objective, the OpenCL model, and the main tests. The detailed section replaces
@@ -1183,7 +1443,7 @@ the entry before the implementation.
 
 | Phase | Objective | OpenCL model | Main tests |
 | --- | --- | --- | --- |
-| VK3 | Slang modules for the shared math (color space transforms, OKLab, PRNG, DRT parameters), geometry utilities (crop, resize, warp), and a test helper that renders one input on Vulkan and on OpenCL and compares with a tolerance | `common.cl`, `cst.cl`, `oklab.cl`, `prng.cl`, `opencl_geometry_utils.cpp`, `geometry_utils.cl` | Geometry results equal OpenCL. The PRNG sequence equals the OpenCL sequence. |
+| VK3 | Detailed section above | | |
 | VK4 | RAW encode entry points: `EncodeLinearizeRgb`, `EncodeToLinearRef`, `EncodeCfaClamp01`, `EncodeBayerRcd`, `EncodeXTrans`, pack and copy with crop and orientation | `opencl_encode.cpp`, `to_linear_ref.cl`, `cvt_ref_space.cl`, `debayer_rcd.cl`, `xtrans_interpolate.cl` | Each stage equals OpenCL on a real Bayer RAW and a real X-Trans RAW. |
 | VK5 | Highlight reconstruction, lens calibration, DNG rectilinear warp | `highlight_reconstruct.cl`, `opencl_lens_calib_ops.cpp`, `lens_calib.cl` | Clipped highlights equal OpenCL. Lens results equal `opencl_lens_calib_test.cpp` cases. |
 | VK6 | `PassEncoder<VulkanBackend, UploadRaw>` with the Develop steps and the scratch lifetime rule of `PlanExecutor` | `opencl_develop_pass.cpp` | `develop.sensor_linear` equals OpenCL. A stable render allocates nothing. |
@@ -1192,9 +1452,9 @@ the entry before the implementation.
 | VK9 | Neighbor kernels of the primary grade | `primary_grade_neighbor.cl` | Detail adjustments equal OpenCL. |
 | VK10 | `VulkanLocalToneOps` | `opencl_local_tone_pass.cpp`, `local_tone.cl` | Local tone equals OpenCL at full size and for a region of interest. |
 | VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `opencl_mask_pass.cpp`, `mask.cl`, `opencl_ai_mask_coverage.cpp` | Mask values and coverage equal OpenCL. |
-| VK12 | DiffusionFilter, `VulkanDrtOps`, DRT parameters | `opencl_drt_pass.cpp`, `opencl_diffusion_filter_pass.cpp`, `drt.cl` | Product output equals OpenCL for ACES and OpenDRT. |
+| VK12 | DiffusionFilter, `VulkanDrtOps`, DRT parameters, the tone curves of `common.cl`, the ACES 2.0 and OpenDRT math of `cst.cl` (moved from VK3) | `opencl_drt_pass.cpp`, `opencl_diffusion_filter_pass.cpp`, `drt.cl`, `drt_params.cl`, `common.cl`, `cst.cl` | Product output equals OpenCL for ACES and OpenDRT. |
 | VK13 | Film print stage kernels | `opencl_film_print_pass.cpp`, `film_print.cl` | Negative to print output equals OpenCL. Reversal output equals OpenCL. |
-| VK14 | Film print scan, film grain negative and post | `film_print_scan.cl`, `film_grain_*.cl`, `opencl_film_grain_pass.cpp` | Negative scan and grain equal OpenCL. |
+| VK14 | Film print scan, film grain negative and post, the `__SLANG__` branch of the grain hash (`film_grain_field.h`) | `film_print_scan.cl`, `film_grain_*.cl`, `opencl_film_grain_pass.cpp` | Negative scan and grain equal OpenCL. |
 | VK15 | Convolution layers, activation storage, workspace, stage profiler | `opencl/nn/*.cpp`, `demosaicnet_conv.cl` | Each layer equals the expected output of the weights file in the tolerance of the OpenCL layer tests. |
 | VK16 | Bayer and X-Trans DemosaicNet modules, tiles, cache, the neural branch of Develop | `opencl_demosaicnet_*.cpp`, `demosaicnet_structural.cl` | Neural demosaic equals OpenCL. The time agrees with the VX4 record. |
 | VK17 | Scope analyzer on the final DRT image, `FramePresenter<VulkanBackend>::Download`, `PipelineExecutor::vulkan_renderers_`, preference `vulkan` in the setting and in `alcedo-cli`, the export split of section 4.2 in `VulkanCommandContext` (8 ms submissions, one in flight, bands of rows, time per row from timestamps; moved from VK2) | `opencl_scope_analyzer.cpp`, `opencl_frame_presenter.cpp` | Export of one RAW on Vulkan equals the OpenCL export in tolerance. Scope data equals OpenCL. A 45 megapixel export has no submission above 8 ms of measured GPU time. |
@@ -1813,6 +2073,10 @@ Remaining defects or unavailable platforms:
 | Comparison tolerance | Maximum difference between Vulkan and OpenCL in a test | the tolerance of the matching OpenCL test | this plan (B9) |
 | Grade tolerance | Largest difference of the primary grade point kernel, ACEScc | 2.0e-4 | `opencl_grade_test.cpp` |
 | Film tolerance | Largest difference of the film print output, 8-bit codes | 0.5 | `kRampLimitCodes`, `opencl_film_print_test.cpp` |
+| Transfer function tolerance | Largest difference of a Vulkan transfer function from OpenCL, `\|a - b\| / max(0.01, \|b\|)` | 1e-5 | `CurvesMatchOcioBuiltinsOn4096CodeValues`; phase VK3 record |
+| OkLab tolerance | Largest `ScaledDifference` of the Vulkan ACEScc and OkLab functions from OpenCL; `OkLabToLinearAp1` | 1e-6; 4e-6 | `ColorEncodingOpenCl`; phase VK3 record (float32 limit 3.2e-6) |
+| Geometry tolerance | Largest difference of the Vulkan crop and bilinear resize from OpenCL; crop at its own size | 1e-5; 0 | `OpenClGeometryUtilsTest` |
+| Vulkan math functions | `CE_POW`, `CE_EXP`, `CE_EXP2`, `CE_LOG`, `CE_LOG2` of the Slang branch | `AlcedoPow`, `AlcedoExp`, `AlcedoExp2`, `AlcedoLog`, `AlcedoLog2` of `math.slangh`, about 1 ulp | phase VK3 record |
 | `slangc` arguments | Arguments of each kernel group build | `-target spirv -profile spirv_1_6 -fvk-use-scalar-layout -fvk-use-entrypoint-name -O2` | VX1 (section 9.1) |
 | `spirv-val` arguments | Validation of each module in the build | `--target-env vulkan1.3 --scalar-block-layout` | VX1 |
 | `cbrt` Newton steps | Steps after `exp2(log2(\|x\|) / 3)` in the Slang `cbrt` | 1 | VX1 |

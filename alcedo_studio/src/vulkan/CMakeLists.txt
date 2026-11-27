@@ -18,6 +18,19 @@ alcedo_add_slang_kernels(AlcedoVulkanKernels
     SOURCE "${ALCEDO_SRC_ROOT}/vulkan/shader/test_fill.slang"
     KERNELS test_fill test_fill_image
 )
+# Phase VK3: the check kernels of the shared color math, and the crop and bilinear resize of the
+# Develop pass. A kernel includes the shared headers by their paths under src/include and src/.
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP color_math_check
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/color_math_check.slang"
+    KERNELS color_math_check_transfer color_math_check_color
+    INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
+)
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP geometry_utils
+    SOURCE "${ALCEDO_SRC_ROOT}/vulkan/shader/geometry_utils.slang"
+    KERNELS geometry_crop_resize_linear
+)
 
 set(_alcedo_vulkan_context_sources
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_api_counters.cpp"

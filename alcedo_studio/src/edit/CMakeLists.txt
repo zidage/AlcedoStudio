@@ -418,6 +418,8 @@ if(ALCEDO_VULKAN_ENABLED)
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_backend.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_command_context.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_geometry.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_kernel_dispatch.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_staging_buffers.cpp
         PUBLIC_DEPS EditRuntime VulkanContext
         PRIVATE_DEPS AlcedoLog
