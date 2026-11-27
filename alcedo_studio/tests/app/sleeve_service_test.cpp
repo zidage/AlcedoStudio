@@ -1912,6 +1912,49 @@ TEST_F(SleeveServiceTests, LinkIntoFolderWithTenThousandFilesLoadsNoFileElement)
   EXPECT_EQ(FolderContentRowIds(reopened, album_id).size(), static_cast<std::size_t>(kFileCount));
 }
 
+// Sleeve Node Cache Plan SN5: a batch link and a batch unlink take the live files of their ids,
+// decide each id from the cache or from one membership read, and load no file element.
+TEST_F(SleeveServiceTests, BatchLinkAndUnlinkTakeLiveFilesOnlyAndLoadNoFileElement) {
+  sl_element_id_t album_id = 0;
+  sl_element_id_t first    = 0;
+  sl_element_id_t second   = 0;
+  sl_element_id_t gone     = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    album_id               = service->CreateFolder(L"/", L"Album").first->element_id_;
+    first                  = service->CreateFileInLibrary(L"A.ARW").first->element_id_;
+    second                 = service->CreateFileInLibrary(L"B.ARW").first->element_id_;
+    gone                   = service->CreateFileInLibrary(L"C.ARW").first->element_id_;
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService               reopened(db_path_, meta_path_);
+  auto                         service    = reopened.GetSleeveService();
+  constexpr sl_element_id_t    kNoElement = 900'000;
+  std::vector<sl_element_id_t> linked;
+  std::vector<sl_element_id_t> unlinked;
+  const auto                   sync = service->Write<void>([&](FileSystem& fs) {
+    fs.DeleteFileEverywhere(gone);
+    const std::vector<sl_element_id_t> ids{second, gone, album_id, kNoElement, first, second, 0};
+    linked = fs.LinkFilesToFolder(ids, album_id);
+    EXPECT_FALSE(fs.Nodes().Contains(first));
+    EXPECT_FALSE(fs.Nodes().Contains(second));
+    // The pending links decide the unlink from memory.
+    unlinked =
+        fs.UnlinkFilesFromFolder(std::vector<sl_element_id_t>{first, gone, kNoElement}, album_id);
+  });
+  ASSERT_TRUE(sync.success_) << sync.message_;
+  EXPECT_EQ(linked, (std::vector<sl_element_id_t>{second, first}));
+  EXPECT_EQ(unlinked, std::vector<sl_element_id_t>{first});
+  EXPECT_FALSE(service->Read<bool>(
+      [&](FileSystem& fs) { return fs.Nodes().Contains(first) || fs.Nodes().Contains(second); }));
+  EXPECT_EQ(FolderFileIds(*service, album_id), std::vector<sl_element_id_t>{second});
+  const auto rows = FolderContentRowIds(reopened, album_id);
+  EXPECT_EQ(rows.size(), 1u);
+  EXPECT_TRUE(rows.contains(second));
+}
+
 // Sleeve Node Cache Plan SN4: a failed membership read of an unlink changes nothing; the file
 // stays a member and no element becomes dirty.
 TEST_F(SleeveServiceTests, FailedMembershipReadLeavesTheUnlinkUndone) {

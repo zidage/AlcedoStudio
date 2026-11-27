@@ -88,13 +88,27 @@ class FileSystem {
   void UnlinkFileFromFolder(sl_element_id_t file_id, sl_element_id_t folder_id);
   /**
    * @brief Unlinks each live file of @p file_ids that the folder holds, with at most one store
-   *        read for the whole batch. Ids that name no live file or no member are ignored.
+   *        read for the whole batch. Ids that name no live file or no member are ignored. Loads
+   *        no element (NodeStorageHandler::HeldFiles gives live files only).
    * @return The unlinked ids, in the order of @p file_ids.
    * @throws std::runtime_error when @p folder_id is the root or not a live folder, and the store
    *         error of the read. A throw changes nothing.
    */
   auto UnlinkFilesFromFolder(std::span<const sl_element_id_t> file_ids,
                              sl_element_id_t folder_id) -> std::vector<sl_element_id_t>;
+  /**
+   * @brief Links each live file of @p file_ids to the folder @p folder_id, as LinkFileToFolder
+   *        does, and loads no file element (Sleeve Node Cache Plan, SN5).
+   *
+   * @details NodeStorageHandler::LiveFileIds decides the ids: the cache decides an id that it
+   * holds, and one membership read of the library root decides the others. Ids that name no
+   * live file are ignored.
+   * @return The linked ids, in the order of @p file_ids, without repeats.
+   * @throws std::runtime_error when @p folder_id is not a live folder, and the store error of
+   *         the read. A throw changes nothing.
+   */
+  auto LinkFilesToFolder(std::span<const sl_element_id_t> file_ids, sl_element_id_t folder_id)
+      -> std::vector<sl_element_id_t>;
   /// A new file with the name and the image of the file @p file_id, linked to @p folder_id and
   /// to the library root.
   auto DuplicateFileToFolder(sl_element_id_t file_id, sl_element_id_t folder_id)
@@ -157,6 +171,16 @@ class FileSystem {
    * @throws std::runtime_error when @p folder_id is not a live folder, and the store error.
    */
   auto ListFileIds(sl_element_id_t folder_id) -> std::vector<sl_element_id_t>;
+  /**
+   * @brief The links of the live files with the mount id @p mount_id into the folders
+   *        @p folder_ids, ordered by file id and then by folder id: one store read with the
+   *        pending changes of the current write applied (NodeStorageHandler::MountFileLinks).
+   *        Loads no file element of a stored link.
+   * @throws std::runtime_error when an id of @p folder_ids is not a live folder, and the store
+   *         error. Nothing changes.
+   */
+  auto ListMountFileLinks(mount_id_t mount_id, std::span<const sl_element_id_t> folder_ids)
+      -> std::vector<FileLink>;
   /**
    * @brief The live child folders of the folder at @p folder_path, in the order of its entries.
    *        Reads memory only: all folders are resident (Sleeve Node Cache Plan, SN3).

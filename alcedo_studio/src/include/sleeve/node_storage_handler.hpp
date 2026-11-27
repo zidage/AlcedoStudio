@@ -27,6 +27,15 @@ struct FolderTreeEntry {
   std::shared_ptr<SleeveFolder> folder_;
 };
 
+/// One link of a file into a folder (Sleeve Node Cache Plan, SN5).
+struct FileLink {
+  sl_element_id_t file_id                                   = 0;
+  sl_element_id_t folder_id                                 = 0;
+
+  auto            operator==(const FileLink&) const -> bool = default;
+  auto            operator<=>(const FileLink&) const        = default;
+};
+
 /**
  * @brief Loads the elements that the NodeCache of a FileSystem does not hold.
  *
@@ -78,6 +87,31 @@ class NodeStorageHandler {
    */
   auto HeldFiles(const SleeveFolder& folder, std::span<const sl_element_id_t> file_ids) const
       -> std::unordered_set<sl_element_id_t>;
+  /**
+   * @brief The ids of @p ids that name live files, in their first order, without repeats.
+   *        Loads no element (Sleeve Node Cache Plan, SN5).
+   *
+   * @details The cache decides an id that it holds. The other ids go to one HeldFiles read of
+   * @p root, the library root, which holds a link of each live file (D2).
+   * @throws The store error of the read. Nothing changes.
+   */
+  auto LiveFileIds(const SleeveFolder& root, std::span<const sl_element_id_t> ids) const
+      -> std::vector<sl_element_id_t>;
+  /**
+   * @brief The links of the live files with the mount id @p mount_id into @p folders, ordered by
+   *        file id and then by folder id (Sleeve Node Cache Plan, SN5).
+   *
+   * @details One FolderEntryStore::ReadMountFileFolders statement gives the stored links; none
+   * when each folder of @p folders is UNSYNC. A stored link counts when its folder is in
+   * @p folders and has no pending change for the file. The file of a link is decided from the
+   * cache when the cache holds it (its mount id, a DELETED flag), and from its stored mount id
+   * otherwise, so no stored link loads an element. Each pending file link of a folder counts
+   * when its file has the mount id; a file that the cache does not hold is then loaded.
+   * @param folders Live folders; the caller gives the folders of one mount.
+   * @throws The store error of the read or of a load. Nothing changes.
+   */
+  auto MountFileLinks(mount_id_t mount_id, std::span<const std::shared_ptr<SleeveFolder>> folders)
+      -> std::vector<FileLink>;
   /**
    * @brief The element @p id: the cached element, or the stored element, which then goes into
    *        the cache.

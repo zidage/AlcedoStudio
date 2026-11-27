@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -26,9 +27,19 @@ struct FolderTreeRows {
   std::vector<std::pair<sl_element_id_t, sl_element_id_t>> edges_;
 };
 
+/// One stored link of a file into a mounted folder (FolderEntryStore::ReadMountFileFolders).
+struct MountFileFolderRow {
+  sl_element_id_t           file_id                                             = 0;
+  sl_element_id_t           folder_id                                           = 0;
+  /// The stored `Element.mount_id` of the file: empty for an ordinary file.
+  std::optional<mount_id_t> file_mount_id                                       = std::nullopt;
+
+  auto                      operator==(const MountFileFolderRow&) const -> bool = default;
+};
+
 /**
  * @brief Reads of the folder structure (`Element` joined with `FolderContent`) that load no
- *        file element (Sleeve Node Cache Plan, SN1, SN3, and SN4).
+ *        file element (Sleeve Node Cache Plan, SN1, SN3, SN4, and SN5).
  *
  * @details The store has no state. Each operation takes the connection and the database lock of
  * the Database owner for the whole operation, so it is safe to call from any thread. A
@@ -64,6 +75,18 @@ class FolderEntryStore {
    */
   auto ReadHeldFiles(sl_element_id_t folder_id, std::span<const sl_element_id_t> file_ids) const
       -> std::vector<sl_element_id_t>;
+
+  /**
+   * @brief Every stored link of a file element into a folder element with the mount id
+   *        @p mount_id, ordered by file id and then by folder id, with one statement (Sleeve
+   *        Node Cache Plan, SN5). Loads no element.
+   *
+   * @details Each row carries the stored mount id of the file, so the caller can decide a file
+   * that the node cache holds from memory and another file from its row. A file of another mount
+   * or an ordinary file that a mounted folder holds is in the result too.
+   * @throws std::runtime_error with the DuckDB message when the statement fails.
+   */
+  auto ReadMountFileFolders(mount_id_t mount_id) const -> std::vector<MountFileFolderRow>;
 
  private:
   /// The file ids of the rows of @p folder_id that @p condition also selects (an extra
