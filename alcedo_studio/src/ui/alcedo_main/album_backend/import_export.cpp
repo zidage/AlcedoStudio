@@ -23,7 +23,7 @@
 
 #include "edit/input/ai_denoise_error.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
-#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/library_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
@@ -455,6 +455,8 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   import_raw_total_     = 0;
   import_raw_completed_ = 0;
   import_raw_failed_    = 0;
+  import_duplicates_     = 0;
+  import_raw_duplicates_ = 0;
   import_status_text_ = PL_TEXT("Preparing %1 file(s)...", import_total_);
   import_progress_queued_->store(false);
   emit ImportStateChanged();
@@ -493,6 +495,7 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   ImportOptions options;
   options.allowed_categories_ = allowedCategories;
   options.any_category_paths_ = std::move(anyCategoryPaths);
+  options.skip_duplicates_    = LibraryBehaviorPreferences::LoadSkipDuplicateImports();
   // #1016: no scan batch writes the project from here to CompleteImport. The job starts when the
   // running scan has completed its batch; a cancel before that start reads no file.
   import_scan_hold_           = mount_scans_ != nullptr ? mount_scans_->Hold() : MountScanHold{};
@@ -548,6 +551,8 @@ void ImportExportHandler::ApplyImportProgress() {
   const uint32_t        canceled    = progress.canceled_.load();
   const uint32_t        raw_failed  = progress.raw_failed_.load();
   const uint32_t        raw_done    = progress.raw_imported_.load();
+  const uint32_t        raw_duplicates = progress.raw_duplicates_.load();
+  const uint32_t        duplicates     = progress.duplicates_.load();
   const uint32_t        failed      = progress.failed_.load();
   const uint32_t        imported    = progress.metadata_done_.load();
   const uint32_t        prepared    = progress.placeholders_created_.load();
@@ -562,6 +567,8 @@ void ImportExportHandler::ApplyImportProgress() {
   import_raw_total_                 = static_cast<int>(progress.raw_total_);
   import_raw_completed_             = static_cast<int>(raw_done);
   import_raw_failed_                = static_cast<int>(raw_failed);
+  import_duplicates_                   = static_cast<int>(duplicates);
+  import_raw_duplicates_               = static_cast<int>(raw_duplicates);
   import_phase_       = job->submission_closed_.load() ? ImportPhaseState::Reading
                                                        : ImportPhaseState::Preparing;
   if (!job->IsCancelled()) {
@@ -570,7 +577,7 @@ void ImportExportHandler::ApplyImportProgress() {
   emit ImportStateChanged();
   emit importStateChanged();
 
-  const int processed_percent = static_cast<int>(((imported + failed) * 100U) / total);
+  const int processed_percent = static_cast<int>(((imported + failed + duplicates) * 100U) / total);
   status_->SetTaskState(import_status_text_, processed_percent, true);
   if (nikon_ && nikon_->is_reimporting()) {
     nikon_->UpdateReimportProgress(imported, total, failed);
@@ -914,6 +921,8 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   import_raw_total_     = static_cast<int>(result.raw_requested_);
   import_raw_completed_ = static_cast<int>(result.raw_imported_);
   import_raw_failed_    = static_cast<int>(result.raw_failed_);
+  import_duplicates_     = static_cast<int>(result.duplicates_);
+  import_raw_duplicates_ = static_cast<int>(result.raw_duplicates_);
   import_status_text_ = PL_TEXT("Saving %1 imported photo(s) to the library...", result.imported_);
   emit ImportStateChanged();
   emit importStateChanged();
@@ -987,13 +996,16 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
 
   const uint32_t skipped     = result.unsupported_ + result.excluded_type_ + result.canceled_;
   const uint32_t errors      = result.failed_ - std::min(result.failed_, skipped);
-  auto           task_text =
-      PL_TEXT("Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed",
-              result.imported_, result.excluded_type_, result.unsupported_, errors);
+  auto           task_text   = PL_TEXT(
+      "Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 "
+      "failed",
+      result.imported_, result.duplicates_, result.excluded_type_, result.unsupported_, errors);
   if (result.canceled_ > 0) {
     task_text = PL_TEXT(
-        "Import canceled: %1 imported, %2 not read, %3 not selected, %4 unsupported, %5 failed",
-        result.imported_, result.canceled_, result.excluded_type_, result.unsupported_, errors);
+        "Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 "
+        "unsupported, %6 failed",
+        result.imported_, result.duplicates_, result.canceled_, result.excluded_type_,
+        result.unsupported_, errors);
   }
   if (!outcome.state_saved_) {
     status_->SetServiceMessage(PL_TEXT("Import finished, but saving project state failed."));
@@ -1013,6 +1025,8 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
   import_raw_total_     = static_cast<int>(result.raw_requested_);
   import_raw_completed_ = static_cast<int>(result.raw_imported_);
   import_raw_failed_    = static_cast<int>(result.raw_failed_);
+  import_duplicates_     = static_cast<int>(result.duplicates_);
+  import_raw_duplicates_ = static_cast<int>(result.raw_duplicates_);
   import_status_text_ = task_text;
   emit ImportStateChanged();
   emit importStateChanged();

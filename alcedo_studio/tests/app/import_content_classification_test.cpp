@@ -15,14 +15,17 @@
 #include <cstdint>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <system_error>
 #include <vector>
 
+#include "../support/storage_test_access.hpp"
 #include "app/image_pool_service.hpp"
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
@@ -32,6 +35,7 @@
 #include "image/raster_color_description.hpp"
 #include "library_search_test_support.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
+#include "storage/store/mount/mount_store.hpp"
 #include "support/non_raw_import_files.hpp"
 #include "support/storage_invariants.hpp"
 #include "support/test_temp_directory.hpp"
@@ -40,7 +44,6 @@
 #include "utils/import/import_error_code.hpp"
 #include "utils/import/import_log.hpp"
 #include "utils/string/convert.hpp"
-#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -141,19 +144,20 @@ struct ImportOutcome {
 /// in which the library UI keeps reading the image pool.
 auto ImportToLibraryRoot(ProjectService& project, const std::vector<image_path_t>& paths,
                          const std::function<void()>& before_sync = {},
-                         const ImportOptions&         options     = {}) -> ImportOutcome {
+                         const ImportOptions& options = {}, const image_path_t& dest = {})
+    -> ImportOutcome {
   ImportServiceImpl import_service(project.GetSleeveService(), project.GetImagePoolService(),
                                    std::make_shared<PipelineMgmtService>(project.GetStorage()));
   auto              job = std::make_shared<ImportJob>();
   std::promise<ImportResult> finished;
   auto                       finished_future = finished.get_future();
   job->on_finished_ = [&finished](const ImportResult& result) { finished.set_value(result); };
-  job = import_service.ImportToFolder(paths, L"", options, job);
+  job = import_service.ImportToFolder(paths, dest, options, job);
   ImportOutcome outcome;
   outcome.result_   = finished_future.get();
   outcome.snapshot_ = job->import_log_->Snapshot();
   if (before_sync) before_sync();
-  import_service.SyncImports(outcome.snapshot_, L"");
+  import_service.SyncImports(outcome.snapshot_, dest);
   return outcome;
 }
 
@@ -201,6 +205,116 @@ class ImportContentClassificationTest : public ::testing::Test {
   std::filesystem::path meta_path_;
   std::filesystem::path scratch_dir_;
 };
+
+TEST_F(ImportContentClassificationTest, OrdinaryCollectionSkipsRepeatedSourceAcrossProjectReopen) {
+  const auto photo = scratch_dir_ / "photo.jpg";
+  const auto copy  = scratch_dir_ / "copy.jpg";
+  test_support::WriteRgbRaster(photo, ".jpg");
+  std::filesystem::copy_file(photo, copy);
+  sl_element_id_t original_id = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    const auto     created = project.GetSleeveService()->CreateFolder(L"/", L"Imports");
+    ASSERT_TRUE(created.second.success_);
+    const auto imported = ImportToLibraryRoot(project, {photo, photo, copy}, {}, {}, L"/Imports");
+    EXPECT_EQ(imported.result_.imported_, 2u);
+    EXPECT_EQ(imported.result_.duplicates_, 1u);
+    EXPECT_EQ(imported.result_.failed_, 0u);
+    original_id       = ElementOf(imported, "photo.jpg");
+    const auto source = project.GetStorage()->GetMountStore().ReadSourceFile(original_id);
+    ASSERT_TRUE(source.has_value());
+    EXPECT_EQ(source->byte_size, std::filesystem::file_size(photo));
+    EXPECT_NE(source->fingerprint_version, 0u);
+  }
+
+  ProjectService reopened(db_path_, meta_path_);
+  const auto     repeated =
+      ImportToLibraryRoot(reopened, {scratch_dir_ / "." / photo.filename()}, {}, {}, L"/Imports");
+  EXPECT_EQ(repeated.result_.imported_, 0u);
+  EXPECT_EQ(repeated.result_.duplicates_, 1u);
+  EXPECT_EQ(repeated.result_.failed_, 0u);
+  EXPECT_TRUE(repeated.snapshot_.created_.empty());
+  EXPECT_TRUE(reopened.GetStorage()->GetMountStore().ReadSourceFile(original_id));
+  EXPECT_EQ(CountRows(reopened, "Image"), 2);
+}
+
+TEST_F(ImportContentClassificationTest, SameSizeAndTimeWithDifferentFingerprintImportsNewEntry) {
+  const auto photo = scratch_dir_ / "photo.jpg";
+  test_support::WriteRgbRaster(photo, ".jpg");
+  std::ofstream(photo, std::ios::binary | std::ios::app).put('\0');
+  const auto     original_time = std::filesystem::last_write_time(photo);
+  const auto     size          = std::filesystem::file_size(photo);
+  ProjectService project(db_path_, meta_path_);
+  const auto     initial = ImportToLibraryRoot(project, {photo});
+  ASSERT_EQ(initial.result_.imported_, 1u);
+  auto&      store    = project.GetStorage()->GetMountStore();
+  const auto original = store.ReadSourceFile(ElementOf(initial, "photo.jpg"));
+  ASSERT_TRUE(original.has_value());
+
+  {
+    std::fstream stream(photo, std::ios::binary | std::ios::in | std::ios::out);
+    stream.seekp(-1, std::ios::end);
+    ASSERT_TRUE(stream.put('\1'));
+  }
+  std::filesystem::last_write_time(photo, original_time);
+  ASSERT_EQ(std::filesystem::file_size(photo), size);
+  const auto changed = ImportToLibraryRoot(project, {photo});
+  EXPECT_EQ(changed.result_.imported_, 1u);
+  EXPECT_EQ(changed.result_.duplicates_, 0u);
+  const auto replacement = store.ReadSourceFile(ElementOf(changed, "photo.jpg"));
+  ASSERT_TRUE(replacement.has_value());
+  EXPECT_EQ(replacement->byte_size, original->byte_size);
+  EXPECT_EQ(replacement->modified_ns, original->modified_ns);
+  EXPECT_NE(replacement->fingerprint, original->fingerprint);
+  EXPECT_EQ(store.ReadSourceFile(original->element_id), original);
+  EXPECT_EQ(ImportToLibraryRoot(project, {photo}).result_.duplicates_, 1u);
+}
+
+TEST_F(ImportContentClassificationTest, ExistingEntryWithoutSourceRecordIsRecordedOnReimport) {
+  const auto photo = scratch_dir_ / "photo.jpg";
+  test_support::WriteRgbRaster(photo, ".jpg");
+  ProjectService project(db_path_, meta_path_);
+  const auto     initial = ImportToLibraryRoot(project, {photo});
+  ASSERT_EQ(initial.result_.imported_, 1u);
+  const auto id    = ElementOf(initial, "photo.jpg");
+  auto&      store = project.GetStorage()->GetMountStore();
+  store.RemoveSourceFiles(std::span(&id, 1));
+  ASSERT_FALSE(store.ReadSourceFile(id));
+
+  const auto repeated = ImportToLibraryRoot(project, {photo});
+  EXPECT_EQ(repeated.result_.duplicates_, 1u);
+  EXPECT_TRUE(repeated.snapshot_.created_.empty());
+  EXPECT_TRUE(store.ReadSourceFile(id));
+  EXPECT_EQ(CountRows(project, "Image"), 1);
+}
+
+TEST_F(ImportContentClassificationTest, DisabledSkippingImportsBothOccurrences) {
+  const auto photo = scratch_dir_ / "photo.jpg";
+  test_support::WriteRgbRaster(photo, ".jpg");
+  ProjectService project(db_path_, meta_path_);
+  ImportOptions  options;
+  options.skip_duplicates_ = false;
+  const auto imported      = ImportToLibraryRoot(project, {photo, photo}, {}, options);
+  EXPECT_EQ(imported.result_.imported_, 2u);
+  EXPECT_EQ(imported.result_.duplicates_, 0u);
+  EXPECT_EQ(CountRows(project, "Image"), 2);
+  EXPECT_EQ(CountRows(project, "SourceFile"), 2);
+}
+
+TEST_F(ImportContentClassificationTest, ExcludedOccurrenceDoesNotHideAcceptedImportOfSamePath) {
+  const auto photo = scratch_dir_ / "photo.jpg";
+  const auto alias = scratch_dir_ / "." / photo.filename();
+  test_support::WriteRgbRaster(photo, ".jpg");
+  ProjectService project(db_path_, meta_path_);
+  ImportOptions  options;
+  options.allowed_categories_ = ImportCategoryBit(ImportFileCategory::Tiff);
+  options.any_category_paths_.insert(alias.native());
+  const auto imported = ImportToLibraryRoot(project, {photo, alias}, {}, options);
+  EXPECT_EQ(imported.result_.imported_, 1u);
+  EXPECT_EQ(imported.result_.duplicates_, 0u);
+  EXPECT_EQ(imported.result_.excluded_type_, 1u);
+  EXPECT_EQ(CountRows(project, "SourceFile"), 1);
+}
 
 TEST_F(ImportContentClassificationTest, NikonCfaAndCameraTaggedRgbTiffImportAsDistinctTypes) {
   const auto raw        = RasterFixturePath("nikon_cfa_without_color_matrix.tif");

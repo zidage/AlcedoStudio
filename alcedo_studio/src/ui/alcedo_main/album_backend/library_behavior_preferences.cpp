@@ -8,6 +8,9 @@
 #include <QSettings>
 
 namespace alcedo::ui {
+namespace {
+constexpr auto kSkipDuplicateImportsKey = "import/skipDuplicates";
+}
 
 LibraryBehaviorPreferences::LibraryBehaviorPreferences(QObject* parent) : QObject(parent) {
   const QString stored =
@@ -33,6 +36,17 @@ bool LibraryBehaviorPreferences::setImportFolderAction(const QString& action) {
   QSettings{}.setValue(QLatin1String(kImportFolderActionSettingKey), import_folder_action_);
   emit importFolderActionChanged();
   return true;
+}
+
+auto LibraryBehaviorPreferences::LoadSkipDuplicateImports() -> bool {
+  return QSettings{}.value(QLatin1String(kSkipDuplicateImportsKey), true).toBool();
+}
+
+void LibraryBehaviorPreferences::setSkipDuplicateImports(bool enabled) {
+  if (LoadSkipDuplicateImports() != enabled) {
+    QSettings{}.setValue(QLatin1String(kSkipDuplicateImportsKey), enabled);
+    emit skipDuplicateImportsChanged();
+  }
 }
 
 }  // namespace alcedo::ui

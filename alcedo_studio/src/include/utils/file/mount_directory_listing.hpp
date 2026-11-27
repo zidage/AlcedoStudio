@@ -13,6 +13,18 @@
 
 namespace alcedo {
 
+/// Size and Unix modification time of a regular source file.
+struct SourceFileAttributes {
+  std::uint64_t byte_size                                             = 0;
+  std::int64_t  modified_ns                                           = 0;
+
+  auto          operator==(const SourceFileAttributes&) const -> bool = default;
+};
+
+/// Read attributes of an ordinary import source, following symbolic links.
+[[nodiscard]] auto ReadSourceFileAttributes(const std::filesystem::path& path)
+    -> std::optional<SourceFileAttributes>;
+
 /// How ListMountDirectory ended.
 enum class MountDirectoryListingStatus : std::uint8_t {
   /// Every readable directory below the root is in the listing.

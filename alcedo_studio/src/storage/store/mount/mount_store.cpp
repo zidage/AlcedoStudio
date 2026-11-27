@@ -255,6 +255,11 @@ auto MountStore::ReadOrdinaryFileLocations() const -> std::vector<FileLocationRe
   return ReadFileLocations(expr::raw("e.mount_id IS NULL"));
 }
 
+auto MountStore::ReadImportedFileLocations() const -> std::vector<FileLocationRecord> {
+  return ReadFileLocations(
+      expr::raw("EXISTS (SELECT 1 FROM PipelineRoot r WHERE r.element_id = e.id)"));
+}
+
 auto MountStore::ReadFileLocations(const duckorm::SqlFragment& condition) const
     -> std::vector<FileLocationRecord> {
   auto query = expr::raw(

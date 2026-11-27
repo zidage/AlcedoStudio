@@ -45,6 +45,7 @@ Dialog {
     property string pendingLockedNodeMaskAction: appModules.editorBehavior.lockedNodeMaskAction
     // Default action of Import Folder: "ask", "import", or "mount" (#1077).
     property string pendingImportFolderAction: appModules.libraryBehavior.importFolderAction
+    property bool pendingSkipDuplicateImports: appModules.libraryBehavior.skipDuplicateImports
     // The card that unchecking Ask every time selects: the last card choice of this run, or
     // Import into Collection when there was none.
     property string lastImportFolderCard: "import"
@@ -129,6 +130,7 @@ Dialog {
         pendingAcceleratorBackend = appModules.project.acceleratorBackend
         pendingLockedNodeMaskAction = appModules.editorBehavior.lockedNodeMaskAction
         pendingImportFolderAction = appModules.libraryBehavior.importFolderAction
+        pendingSkipDuplicateImports = appModules.libraryBehavior.skipDuplicateImports
         if (pendingImportFolderAction !== "ask")
             lastImportFolderCard = pendingImportFolderAction
         pendingLibraryGridLayout = appModules.libraryView.gridLayout
@@ -261,6 +263,7 @@ Dialog {
         if (appModules.libraryBehavior.importFolderAction !== pendingImportFolderAction) {
             appModules.libraryBehavior.setImportFolderAction(pendingImportFolderAction)
         }
+        appModules.libraryBehavior.setSkipDuplicateImports(pendingSkipDuplicateImports)
         if (appModules.libraryView.gridLayout !== pendingLibraryGridLayout) {
             appModules.libraryView.setGridLayout(pendingLibraryGridLayout)
         }
@@ -867,6 +870,16 @@ Dialog {
                                                     dialog.selectImportFolderCard(action)
                                                 }
                                             }
+                                        }
+                                    }
+
+                                    ThemeCheckBox {
+                                        objectName: "settingsSkipDuplicateImports"
+                                        text: qsTr("Skip duplicate imports")
+                                        alwaysPrimaryText: true
+                                        checked: dialog.pendingSkipDuplicateImports
+                                        onToggled: function(checked) {
+                                            dialog.pendingSkipDuplicateImports = checked
                                         }
                                     }
                                 }

@@ -113,6 +113,9 @@ class MountStore {
   /// element id order. The mount scan takes the adoption candidates from it.
   auto ReadOrdinaryFileLocations() const -> std::vector<FileLocationRecord>;
 
+  /// The locations of library files with a stored edit history root.
+  auto ReadImportedFileLocations() const -> std::vector<FileLocationRecord>;
+
  private:
   /// The location of each file element that @p condition (on `Element e`) selects.
   auto ReadFileLocations(const duckorm::SqlFragment& condition) const

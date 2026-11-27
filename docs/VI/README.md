@@ -634,8 +634,8 @@ image root, star overlay, editing tile ink).
 ### `ImportProgressOverlay.qml`
 
 - Ring and large count measure photos imported out of photos expected
-  (`importTotal - importFailed`); rejected files leave the expected total, so
-  the total shrinks as the import runs.
+  (`importTotal - importFailed - importDuplicates`). Rejected files and
+  duplicates leave the expected total as the import runs.
 - The phase caption and the `ThemedProgressBar` below it measure files checked
   out of all files. Phases: `Preparing files... a of b`, `Reading photos... a of
   b files checked`, `Saving to the library...`.

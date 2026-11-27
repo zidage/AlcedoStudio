@@ -50,6 +50,9 @@ struct ImportOptions {
   /// Paths (native form) that import accepts in every category, whatever allowed_categories_
   /// says: the dropped files of a Library drop that also holds folders (issue #757).
   ImportPathSet      any_category_paths_{};
+
+  /// Ordinary imports skip an existing entry for the same source by default.
+  bool               skip_duplicates_ = true;
 };
 
 struct ImportProgress {
@@ -85,6 +88,9 @@ struct ImportProgress {
 
   /// Subset of failed_: failed files with a RAW extension.
   std::atomic<uint32_t> raw_failed_           = 0;
+
+  std::atomic<uint32_t> duplicates_           = 0;
+  std::atomic<uint32_t> raw_duplicates_       = 0;
 };
 
 struct ImportError {
@@ -109,6 +115,8 @@ struct ImportResult {
   uint32_t raw_imported_  = 0;
   /// Subset of failed_: files with a RAW extension.
   uint32_t raw_failed_    = 0;
+  uint32_t duplicates_     = 0;
+  uint32_t raw_duplicates_ = 0;
 };
 
 class ImportJob {
@@ -232,21 +240,21 @@ class ImportServiceImpl final : public ImportService, public MountFileImporter {
 
  private:
   /// Creates the library element of the file @p index of an import, with the name @p file_name,
-  /// inside the lock of the sleeve service. Throws when the element cannot be created; the file
-  /// then counts as failed and leaves no element.
+  /// inside the lock of the sleeve service. When create_file is false, validate the ordinary
+  /// destination without creating an element. Throws when the destination or placement is invalid.
   using FilePlacement = std::function<std::shared_ptr<SleeveElement>(
-      FileSystem& fs, std::size_t index, const file_name_t& file_name)>;
+      FileSystem& fs, std::size_t index, const file_name_t& file_name, bool create_file)>;
 
   void StartImport(const std::vector<image_path_t>& paths, FilePlacement placement,
-                   const ImportOptions& options, const std::shared_ptr<ImportJob>& job);
+                   ImportOptions options, const std::shared_ptr<ImportJob>& job,
+                   bool ordinary_import);
 
-  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>&            paths,
-                                   const FilePlacement&                        placement,
-                                   const std::shared_ptr<ImportJob>&           job,
-                                   const std::shared_ptr<ImportLog>&           import_log,
-                                   const std::shared_ptr<ImportProgress>&      progress,
-                                   ImportCategoryMask                          allowed_categories,
-                                   const ImportPathSet&                        any_category_paths,
+  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>&       paths,
+                                   const FilePlacement&                   placement,
+                                   const std::shared_ptr<ImportJob>&      job,
+                                   const std::shared_ptr<ImportLog>&      import_log,
+                                   const std::shared_ptr<ImportProgress>& progress,
+                                   const ImportOptions& options, bool ordinary_import,
                                    const std::shared_ptr<const RawImportLook>& raw_import_look);
 };
 };  // namespace alcedo

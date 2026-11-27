@@ -6,13 +6,16 @@
 
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include "utils/import/import_error_code.hpp"
+#include "type/mount_records.hpp"
 #include "type/type.hpp"
+#include "utils/import/import_error_code.hpp"
 
 namespace alcedo {
 
@@ -31,10 +34,23 @@ struct ImportLogSnapshot {
   std::vector<image_id_t>     metadata_ok_{};
   std::vector<ImportLogEntry> metadata_failed_{};
   std::vector<ImportLogEntry> unsupported_nikon_he_{};
+  /// Source records measured by this import, awaiting the library write in SyncImports.
+  std::vector<SourceFileRecord> source_records_{};
 };
 
 class ImportLog {
  public:
+  void RecordSource(SourceFileRecord record) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    sources_.insert_or_assign(record.element_id, std::move(record));
+  }
+
+  auto FindRecordedSource(sl_element_id_t element_id) const -> std::optional<SourceFileRecord> {
+    std::lock_guard<std::mutex> lock(mtx_);
+    const auto                  it = sources_.find(element_id);
+    return it == sources_.end() ? std::nullopt : std::optional{it->second};
+  }
+
   void AddPlaceholder(const image_id_t image_id, const sl_element_id_t element_id,
                       const file_name_t& file_name, const std::filesystem::path& source_path) {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -76,6 +92,10 @@ class ImportLog {
     snapshot.metadata_ok_.reserve(metadata_ok_.size());
     snapshot.metadata_failed_.reserve(entries_.size());
     snapshot.unsupported_nikon_he_.reserve(entries_.size());
+    snapshot.source_records_.reserve(sources_.size());
+    for (const auto& [id, source] : sources_) {
+      snapshot.source_records_.push_back(source);
+    }
 
     for (const auto& [id, entry] : entries_) {
       snapshot.created_.push_back(entry);
@@ -94,6 +114,7 @@ class ImportLog {
   mutable std::mutex                                      mtx_{};
   std::unordered_map<image_id_t, ImportLogEntry>          entries_{};
   std::unordered_set<image_id_t>                          metadata_ok_{};
+  std::unordered_map<sl_element_id_t, SourceFileRecord>   sources_{};
 };
 
 }  // namespace alcedo

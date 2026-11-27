@@ -45,11 +45,6 @@ auto JoinRelative(const std::wstring& parent, const std::wstring& name) -> std::
   return parent.empty() ? name : parent + L'/' + name;
 }
 
-struct FileAttributes {
-  std::uint64_t byte_size   = 0;
-  std::int64_t  modified_ns = 0;
-};
-
 /// Byte size and modification time of a regular file entry.
 ///
 /// Windows: the directory entry holds both values from the directory read
@@ -57,7 +52,8 @@ struct FileAttributes {
 /// ticks from 1601-01-01.
 /// POSIX: one `lstat` reads both values. The directory entry would run one `stat` for each
 /// value.
-auto ReadFileAttributes(const stdfs::directory_entry& entry) -> std::optional<FileAttributes> {
+auto ReadFileAttributes(const stdfs::directory_entry& entry, [[maybe_unused]] bool follow = false)
+    -> std::optional<SourceFileAttributes> {
 #ifdef _WIN32
   std::error_code ec;
   const auto      byte_size = entry.file_size(ec);
@@ -66,11 +62,13 @@ auto ReadFileAttributes(const stdfs::directory_entry& entry) -> std::optional<Fi
   if (ec) return std::nullopt;
   constexpr std::int64_t kTicksFrom1601To1970 = 116444736000000000LL;
   const std::int64_t     ticks                = write_time.time_since_epoch().count();
-  return FileAttributes{.byte_size   = byte_size,
-                        .modified_ns = (ticks - kTicksFrom1601To1970) * 100};
+  return SourceFileAttributes{.byte_size   = byte_size,
+                              .modified_ns = (ticks - kTicksFrom1601To1970) * 100};
 #else
   struct stat info{};
-  if (::lstat(entry.path().c_str(), &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < 0) {
+  const auto  read_stat =
+      follow ? ::stat(entry.path().c_str(), &info) : ::lstat(entry.path().c_str(), &info);
+  if (read_stat != 0 || !S_ISREG(info.st_mode) || info.st_size < 0) {
     return std::nullopt;
   }
 #ifdef __APPLE__
@@ -78,7 +76,7 @@ auto ReadFileAttributes(const stdfs::directory_entry& entry) -> std::optional<Fi
 #else
   const auto& time = info.st_mtim;
 #endif
-  return FileAttributes{
+  return SourceFileAttributes{
       .byte_size   = static_cast<std::uint64_t>(info.st_size),
       .modified_ns = static_cast<std::int64_t>(time.tv_sec) * 1'000'000'000LL + time.tv_nsec};
 #endif
@@ -95,6 +93,15 @@ auto StoppedListing() -> MountDirectoryListing {
 }
 
 }  // namespace
+
+auto ReadSourceFileAttributes(const stdfs::path& path) -> std::optional<SourceFileAttributes> {
+  std::error_code              ec;
+  const stdfs::directory_entry entry(path, ec);
+  if (ec || !entry.is_regular_file(ec)) {
+    return std::nullopt;
+  }
+  return ReadFileAttributes(entry, true);
+}
 
 auto ListMountDirectory(const stdfs::path& root, const std::atomic<bool>* stop_requested)
     -> MountDirectoryListing {

@@ -807,6 +807,7 @@ def_library(ImportService
     # Import creates each image's history root through InitializeImageRoot on the
     # PipelineMgmtService injected at construction; it constructs no executor.
     PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService
+    PRIVATE_DEPS SourceFileUtils
 )
 
 def_library(ThumbnailService
