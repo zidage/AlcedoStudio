@@ -13,7 +13,7 @@ namespace alcedo::editor_rhi {
 // Startup-only graphics/pipeline pair. No hot-switch after the first QQuickWindow.
 enum class EditorBackend {
   Cuda,    // Windows: CUDA pipeline + Qt Quick Direct3D 11
-  OpenCl,  // Windows: OpenCL pipeline + Qt Quick OpenGL
+  OpenCl,  // Windows/Linux: OpenCL pipeline + Qt Quick OpenGL
   Metal,   // macOS: Metal pipeline + Qt Quick Metal
 };
 
@@ -23,7 +23,7 @@ struct EditorBackendParseResult {
   bool                         present = false;  // true when --editor-backend was provided
 };
 
-// Accepts "cuda", "opencl", "metal" (case-insensitive). Empty string is invalid.
+// Accepts "cuda", "opencl", and "metal" (case-insensitive). Empty string is invalid.
 [[nodiscard]] auto ParseEditorBackendToken(std::string_view token)
     -> std::optional<EditorBackend>;
 
@@ -35,8 +35,8 @@ struct EditorBackendParseResult {
 [[nodiscard]] auto IsBackendSupportedOnThisPlatform(EditorBackend backend) -> bool;
 [[nodiscard]] auto IsBackendAvailableInThisBuild(EditorBackend backend) -> bool;
 
-// Default when packaging does not pass an explicit flag. CUDA preferred on Windows
-// when built; Metal on macOS; OpenCL as Windows secondary.
+// Default when packaging does not pass an explicit flag. OpenCL is preferred on
+// Windows/Linux when built; Metal on macOS. No GPU backend means no default.
 [[nodiscard]] auto DefaultEditorBackendForPlatform() -> std::optional<EditorBackend>;
 
 // Process-wide backend selected by ApplyEditorBackendBeforeWindow / production
