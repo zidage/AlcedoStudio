@@ -440,7 +440,11 @@ if(ALCEDO_ENABLE_OPENCL AND (WIN32 OR (UNIX AND NOT APPLE)) AND OpenCL_FOUND)
         endif()
     endif()
     list(REMOVE_DUPLICATES _alcedo_opencl_include_dirs)
-    if(_alcedo_opencl_include_dirs)
+    # Not on Windows (#1197): there the OpenCL headers are in the vcpkg include directory, which
+    # also holds the headers of the vcpkg LibRaw port. A directory-scope include comes before the
+    # bundled LibRaw of every target, so the code would compile against the wrong LibRaw. Windows
+    # targets get the OpenCL headers through OpenCL::OpenCL.
+    if(_alcedo_opencl_include_dirs AND NOT WIN32)
         include_directories(SYSTEM ${_alcedo_opencl_include_dirs})
     endif()
     unset(_alcedo_opencl_include_dirs)
