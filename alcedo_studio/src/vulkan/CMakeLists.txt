@@ -97,6 +97,14 @@ alcedo_add_slang_kernels(AlcedoVulkanKernels
     INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
 )
 
+# Phase VK8: the point kernels of the Color Grade (OpenCL program opencl_dag_primary_grade).
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP primary_grade
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/primary_grade.slang"
+    KERNELS primary_grade_pointwise_scene_rgba32f primary_grade_curve_input_histogram
+    INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
+)
+
 set(_alcedo_vulkan_context_sources
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_api_counters.cpp"
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_compute_pipeline_cache.cpp"
